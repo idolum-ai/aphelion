@@ -2,7 +2,7 @@
 
 ## Overview
 
-Aphelion's core is an async event loop that routes messages between **channels** (Telegram, WhatsApp) and an **agent** (LLM + tools). It is deliberately simple: a single process, single agent, no clustering.
+Aphelion's core is an async event loop that routes messages between **Telegram** and an **agent** (LLM + tools). It is deliberately simple: a single process, single agent, Linux only, no clustering.
 
 ## Design Principles
 
@@ -14,10 +14,10 @@ Aphelion's core is an async event loop that routes messages between **channels**
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────┐     ┌──────────────┐
-│  Channel    │────▶│  Router  │────▶│    Agent     │
-│  (Telegram) │◀────│          │◀────│  (LLM+Tools) │
-└─────────────┘     └──────────┘     └──────────────┘
+┌───────────┐     ┌──────────┐     ┌──────────────┐
+│ Telegram  │────▶│  Router  │────▶│    Agent     │
+│           │◀────│          │◀────│  (LLM+Tools) │
+└───────────┘     └──────────┘     └──────────────┘
                          │
                     ┌────┴────┐
                     │ Session │
@@ -27,7 +27,7 @@ Aphelion's core is an async event loop that routes messages between **channels**
 
 ### Components
 
-- **Channel**: Receives inbound messages, sends outbound messages. Knows message format (Telegram markdown, WhatsApp, etc). Does NOT know about LLMs.
+- **Telegram**: Receives inbound messages, sends outbound messages. Knows Telegram message format. Does NOT know about LLMs.
 - **Router**: Maps inbound messages to sessions, dispatches to the agent, routes responses back. Handles concurrency (one agent turn at a time per session, queue overflow).
 - **Agent**: Runs a single conversational turn. Takes a session (messages + system prompt), produces a response (text + tool calls). Stateless between turns — all state lives in the session.
 - **Session Store**: Persists conversation history, session metadata, system prompt snapshot. SQLite.
@@ -38,9 +38,8 @@ Aphelion's core is an async event loop that routes messages between **channels**
 @dataclass
 class InboundMessage:
     """A message arriving from a channel."""
-    channel: str            # "telegram", "whatsapp"
-    chat_id: str            # channel-specific chat identifier
-    sender_id: str          # channel-specific sender identifier
+    chat_id: str            # Telegram chat id
+    sender_id: str          # Telegram user id
     sender_name: str        # display name
     text: str               # message text (may be empty for media-only)
     media: list[Media]      # attached images, audio, files
@@ -54,7 +53,7 @@ class OutboundMessage:
     text: str
     media: list[Media]
     reply_to: str | None    # reply to a specific inbound message
-    parse_mode: str | None  # "markdown", "html", None
+    parse_mode: str | None  # "MarkdownV2", "HTML", None
     reactions: list[str]    # emoji reactions to add to the inbound message
 
 @dataclass
@@ -134,11 +133,10 @@ aphelion/
 │   ├── __init__.py
 │   ├── turn.py          # run_turn(): the agent turn logic
 │   └── budget.py        # iteration budget tracking
-├── channels/
+├── telegram/
 │   ├── __init__.py
-│   ├── base.py          # Channel protocol/ABC
-│   ├── telegram.py
-│   └── whatsapp.py
+│   ├── bot.py           # Telegram Bot API client
+│   └── formatting.py    # message formatting, markdown conversion
 ├── providers/
 │   ├── __init__.py
 │   ├── base.py          # Provider protocol/ABC
@@ -174,8 +172,10 @@ aphelion/
 - **No plugin system.** If you need something, add it to the codebase.
 - **No multi-node.** Single process, single machine.
 - **No multi-agent orchestration.** One agent. Sub-agents are spawned as child processes.
-- **No WebSocket gateway.** Channels connect directly. No intermediary server for UIs.
-- **No web dashboard.** CLI + messaging channels are the interface.
+- **No WebSocket gateway.** Telegram is the interface. No intermediary server for UIs.
+- **No web dashboard.** Telegram is the interface.
+- **No multi-channel.** Telegram only. No WhatsApp, Discord, Slack, Matrix, etc.
+- **No cross-platform.** Linux only. No macOS/Windows.
 - **No OpenAI Responses API compat layer.** We talk native Anthropic, Gemini, OpenAI Chat Completions, and Ollama.
 
 ## Language & Dependencies
@@ -189,7 +189,5 @@ aphelion/
 
 ## Open Questions
 
-- [ ] Do we want a CLI interface at all, or purely messaging-channel driven?
-- [ ] WebSocket/SSE for local dev/debug, or just tail logs?
 - [ ] Should the router be a simple async function or a proper class with lifecycle?
 - [ ] Pydantic vs dataclasses for types?

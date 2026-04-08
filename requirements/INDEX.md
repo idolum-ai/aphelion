@@ -13,7 +13,6 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 
 ## Channels
 6. ⬜ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
-7. ⬜ [`whatsapp.md`](whatsapp.md) — Business API or bridge, message types, media
 
 ## Agent
 8. ⬜ [`tools.md`](tools.md) — Tool definition, dispatch, sandboxing, exec, file ops, web fetch
