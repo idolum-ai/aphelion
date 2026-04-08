@@ -146,6 +146,19 @@ CREATE TABLE messages (
 CREATE INDEX idx_messages_session ON messages(chat_id, user_id, turn_index);
 CREATE INDEX idx_messages_active ON messages(chat_id, user_id, compacted, turn_index);
 
+CREATE TABLE outbound_messages (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id         INTEGER NOT NULL,
+    user_id         INTEGER NOT NULL DEFAULT 0,
+    turn_index      INTEGER NOT NULL,
+    telegram_msg_id INTEGER NOT NULL,
+    msg_type        TEXT NOT NULL,  -- 'response', 'progress', 'streaming', 'keyboard'
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_outbound_session ON outbound_messages(chat_id, user_id, turn_index);
+
 CREATE TABLE compaction_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id    INTEGER NOT NULL,
