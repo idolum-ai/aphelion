@@ -48,6 +48,26 @@ workspace = "/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion"
 If `agent.workspace` points somewhere broader such as your home directory, the `exec`
 tool will use that broader directory as its default shell scope.
 
+Workspace prompt files are read from `agent.workspace` on every turn. Current
+supported files and defaults:
+
+- Stable bootstrap files: `SOUL.md`, `IDENTITY.md`, `USER.md`, `AGENTS.md`, `TOOLS.md`, `BOOTSTRAP.md`
+- Dynamic files: `MEMORY.md`, `HEARTBEAT.md`
+- Daily notes: `memory/YYYY-MM-DD.md` for today and yesterday when `daily_notes = true`
+- `MEMORY.md` falls back to `memory.md` if the uppercase file is missing
+
+These are configured via:
+
+```toml
+[agent]
+bootstrap_files = ["SOUL.md", "IDENTITY.md", "USER.md", "AGENTS.md", "TOOLS.md", "BOOTSTRAP.md"]
+dynamic_files = ["MEMORY.md", "HEARTBEAT.md"]
+bootstrap_max_chars = 20000
+bootstrap_total_max_chars = 150000
+daily_notes = true
+daily_notes_dir = "memory"
+```
+
 Build and run:
 
 ```bash

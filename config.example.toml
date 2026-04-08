@@ -20,3 +20,16 @@ db_path = "~/.config/aphelion/sessions.db"
 workspace = "/absolute/path/to/workspace"
 max_iterations = 50
 tool_timeout = 300
+bootstrap_files = [
+  "SOUL.md",
+  "IDENTITY.md",
+  "USER.md",
+  "AGENTS.md",
+  "TOOLS.md",
+  "BOOTSTRAP.md",
+]
+dynamic_files = ["MEMORY.md", "HEARTBEAT.md"]
+bootstrap_max_chars = 20000
+bootstrap_total_max_chars = 150000
+daily_notes = true
+daily_notes_dir = "memory"

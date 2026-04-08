@@ -4,11 +4,21 @@
 
 Aphelion's config is a single TOML file that controls the entire runtime. Every identifiable string — project name, user-agent headers, system prompt markers — is either configurable or absent. The goal: no provider can fingerprint the harness from the traffic it sees.
 
+The schema is intentionally broader than the first runnable surface. Aphelion is a system tool, not a narrowly productized bot, so the config must preserve architectural headroom for alternate providers, stronger sandboxing, transport tuning, and operational policies before every knob is wired. The rule is: the architecture should have a natural home for these knobs early, while implementation can land in stages.
+
+This spec therefore distinguishes between:
+
+- **Schema breadth**: the configuration surface we intentionally reserve so the design does not collapse around the first working path.
+- **Implemented behavior**: the subset currently honored by the runtime.
+- **Future knobs**: sections that may parse before they are enforced, but must never silently misrepresent active behavior.
+
 ## Config File
 
 Default location: `~/.config/aphelion/config.toml`
 
 Override via `APHELION_CONFIG` env var or `--config` flag.
+
+Implementation is staged. A minimal daemon only needs the small subset required to boot, authenticate, route turns, and manage prompt context. The wider schema remains part of the contract so later hardening does not require redesigning config layout or ownership boundaries.
 
 ```toml
 # ─── Identity ───
@@ -129,10 +139,12 @@ bootstrap_files = [
     "USER.md",
     "AGENTS.md",
     "TOOLS.md",
+    "BOOTSTRAP.md",
 ]
 
 # Dynamic context files — loaded each turn but placed after cache boundary.
 # These change frequently and should NOT be part of the cached prefix.
+# MEMORY.md is durable on disk but still dynamic in prompt placement.
 dynamic_files = [
     "MEMORY.md",
     "HEARTBEAT.md",
@@ -417,10 +429,17 @@ func Load(path string) (*Config, error) {
 
 Not supported in v1. Restart is cheap (<100ms cold start).
 
+## Staging
+
+- **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, session storage, workspace prompt files, and the agent execution limits that bound a turn.
+- **Required for a hardened local system tool**: sandbox controls, HTTP transport tuning, failover policy, and credential sealing.
+- **Reserved architectural surface**: additional providers, embeddings, voice, cron, and deeper Linux controls. These should have stable config ownership even before they are fully wired.
+
 ## Decisions
 
 - **TOML.** Human-friendly, comment-friendly, Go ecosystem default.
 - **Single file.** No `config.d/`, no merge logic. One file, one truth.
+- **Broad schema by design.** Config breadth is intentional architectural headroom, not accidental scope creep. The system should remain adaptable instead of freezing around the first successful surface.
 - **memfd with F_SEAL for credentials.** Immutable in-memory secrets. Defense in depth.
 - **No hot reload.** Simplicity. Single-binary restart is fast.
 - **Bootstrap vs dynamic files.** Bootstrap files (SOUL.md, IDENTITY.md, etc.) are stable and go in the cached prefix. Dynamic files (MEMORY.md, HEARTBEAT.md, daily notes) change often and go after the cache boundary. This maximizes cache hit rate.
