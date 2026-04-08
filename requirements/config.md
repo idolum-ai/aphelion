@@ -125,6 +125,21 @@ api_key = ""               # Falls back to providers.openai.api_key if empty
 dimensions = 1536
 batch_size = 100           # Max texts per embedding API call
 
+# ─── OpenAI Platform Services ───
+# These are distinct from OpenAI inference in [providers.openai].
+[openai.files]
+enabled = false
+purpose = "assistants"
+
+[openai.vector_stores]
+enabled = false
+default_store = ""
+
+[openai.transcription]
+enabled = false
+model = "whisper-1"
+translation_model = "whisper-1"
+
 # ─── Agent ───
 [agent]
 workspace = "~/.config/aphelion/workspace"

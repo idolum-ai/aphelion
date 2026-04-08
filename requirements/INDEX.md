@@ -8,7 +8,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 3. ✅ [`sessions.md`](sessions.md) — Conversation state, context window, compaction, cache-aware truncation
 
 ## LLM
-4. ✅ [`providers.md`](providers.md) — Anthropic, Gemini, OpenAI, Ollama adapters. Streaming. Prompt caching. Failover.
+4. ✅ [`providers.md`](providers.md) — Inference adapters only. Streaming, retries, and failover staging.
 5. ⬜ [`thinking.md`](thinking.md) — Extended thinking / reasoning mode handling across providers
 
 ## Channels
@@ -16,7 +16,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 
 ## Agent
 8. ⬜ [`tools.md`](tools.md) — Tool definition, dispatch, sandboxing, exec, file ops, web fetch
-9. ⬜ [`memory.md`](memory.md) — Workspace files, bootstrap sequence, vector search, embeddings
+9. ✅ [`memory.md`](memory.md) — Workspace files, shared/per-user memory, OpenAI files, vector stores
 10. ⬜ [`system-prompt.md`](system-prompt.md) — Prompt assembly, cache boundary, dynamic vs stable sections
 11. ⬜ [`subagents.md`](subagents.md) — Spawning, communication, completion, isolation
 
@@ -26,7 +26,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 
 ## Media
 14. ⬜ [`voice.md`](voice.md) — ElevenLabs TTS, when to speak vs text
-15. ⬜ [`media.md`](media.md) — Image/audio/video handling, upload/download across channels
+15. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
 
 ## Operations
 16. ⬜ [`deployment.md`](deployment.md) — Systemd, process management, logging, restart behavior
