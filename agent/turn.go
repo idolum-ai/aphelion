@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"log"
 	"strings"
 	"time"
 
@@ -51,7 +51,7 @@ type Response struct {
 const (
 	maxProviderRetries   = 3
 	initialRetryBackoff  = 100 * time.Millisecond
-	providerFailureReply = "I’m having trouble reaching the model right now. Please try again."
+	providerFailureReply = "I'm having trouble reaching the model right now. Please try again."
 	budgetExhaustedReply = "Iteration budget exhausted before final response."
 )
 
@@ -87,7 +87,7 @@ func RunTurn(
 		if budget != nil {
 			warning, exhausted := budget.Tick()
 			if exhausted {
-				slog.Warn("turn budget exhausted", "used", budget.Used, "max", budget.Max)
+				log.Printf("WARN turn budget exhausted used=%d max=%d", budget.Used, budget.Max)
 				return &core.TurnResult{
 					Text:       budgetExhaustedReply,
 					ToolLog:    toolLog,
@@ -105,7 +105,7 @@ func RunTurn(
 				return nil, history, ctxErr
 			}
 
-			slog.Error("provider failed after retries", "error", err)
+			log.Printf("ERROR provider failed after retries err=%v", err)
 			return &core.TurnResult{
 				Text:       providerFailureReply,
 				ToolLog:    toolLog,
@@ -120,7 +120,7 @@ func RunTurn(
 		})
 
 		if len(resp.ToolCalls) == 0 {
-			slog.Info("turn completed", "tool_calls", len(toolLog))
+			log.Printf("INFO turn completed tool_calls=%d", len(toolLog))
 			return &core.TurnResult{
 				Text:       resp.Content,
 				ToolLog:    toolLog,
@@ -135,9 +135,9 @@ func RunTurn(
 		for _, call := range resp.ToolCalls {
 			out, toolErr := tools.Execute(ctx, call.Name, call.Input)
 			if toolErr != nil {
-				slog.Warn("tool execution failed", "tool", call.Name, "id", call.ID, "error", toolErr)
+				log.Printf("WARN tool execution failed tool=%s id=%s err=%v", call.Name, call.ID, toolErr)
 			} else {
-				slog.Info("tool execution completed", "tool", call.Name, "id", call.ID)
+				log.Printf("INFO tool execution completed tool=%s id=%s", call.Name, call.ID)
 			}
 
 			content := out
@@ -194,7 +194,7 @@ func completeWithRetry(
 		}
 
 		attempt++
-		slog.Warn("provider call failed; retrying", "attempt", attempt, "max_retries", maxProviderRetries, "error", err)
+		log.Printf("WARN provider call failed; retrying attempt=%d max_retries=%d err=%v", attempt, maxProviderRetries, err)
 		if sleepErr := sleepWithContextFn(ctx, backoff); sleepErr != nil {
 			return nil, sleepErr
 		}
