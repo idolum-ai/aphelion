@@ -34,26 +34,30 @@ failover = ["gemini", "ollama"]
 
 [providers.anthropic]
 api_key = ""
-model = "claude-sonnet-4-6"
-max_tokens = 16384
-context_window = 200000    # Model's actual context window
-cache_ttl = "1h"           # "5m" (1.25x write cost) or "1h" (2x write cost, but 10x cheaper reads amortized over long sessions)
-cache_strategy = "auto"    # "auto" (top-level cache_control) | "explicit" (manual breakpoints on system + last 3)
-# Anthropic-specific headers
+model = "claude-sonnet-4-6"     # Current flagship: claude-opus-4-6 (1M ctx), claude-sonnet-4-6 (1M ctx), claude-haiku-4-5 (200K ctx)
+max_tokens = 64000               # Sonnet 4.6 max output: 64K. Opus 4.6: 128K.
+context_window = 1000000         # Opus 4.6 and Sonnet 4.6: 1M tokens. Haiku 4.5: 200K.
+cache_ttl = "1h"                 # "5m" (1.25x write cost) or "1h" (2x write cost, 10x cheaper reads)
+cache_strategy = "hybrid"        # "auto" | "explicit" | "hybrid" (explicit on system+tools, auto on conversation)
+# Anthropic-specific
 anthropic_version = "2023-06-01"
-# Minimum cacheable tokens per model (for validation):
-# Opus 4.6/4.5: 4096, Sonnet 4.6: 2048, Sonnet 4.5/4: 1024, Haiku 4.5: 4096
-min_cache_tokens = 4096
+# Minimum cacheable tokens (varies by model):
+# Opus 4.6/4.5: 4096, Sonnet 4.6: 2048, Sonnet 4.5/4/Opus 4.1/4: 1024, Haiku 4.5: 4096
+min_cache_tokens = 2048          # For Sonnet 4.6; adjust per model
+# Cache-aware session pruning: trim old tool results after cache TTL to shrink re-cache writes
+cache_ttl_pruning = true
+# Heartbeat keep-warm: if heartbeat.every < cache_ttl, heartbeats keep the cache alive
+# (55m heartbeat + 1h cache = cache never expires during active use)
 
 [providers.gemini]
 api_key = ""
-model = "gemini-2.5-pro"
+model = "gemini-3.1-pro"         # Gemini 3.1 Pro (1M+ ctx), Gemini 3 Flash, 3.1 Flash-Lite
 max_tokens = 16384
-context_window = 1048576   # Gemini's 1M context
+context_window = 1048576         # 1M tokens
 
 [providers.openai]
 api_key = ""
-model = "gpt-4.1"
+model = "gpt-5.4"                # gpt-5.4, gpt-5.4-mini, gpt-5.4-nano
 max_tokens = 16384
 context_window = 128000
 
@@ -104,8 +108,10 @@ daily_notes_dir = "memory"
 db_path = "~/.config/aphelion/sessions.db"
 # Context management thresholds — push close to the provider's actual limit.
 # These are in tokens. Compaction kicks in when the assembled prompt exceeds max_context_tokens.
-max_context_tokens = 190000   # ~95% of Anthropic's 200K. Leave headroom for response.
-compaction_target = 140000    # Compact down to this. Aggressive enough to avoid re-compacting soon.
+# These are per-provider — resolved at runtime from the active provider's context_window.
+# Expressed as ratios of the provider's context_window.
+max_context_ratio = 0.92      # Trigger compaction at 92% of context_window (leaves room for response + tool results)
+compaction_ratio = 0.65       # Compact down to 65% of context_window (aggressive enough to avoid re-compacting soon)
 compaction_strategy = "summarize"  # "summarize" (LLM-assisted) | "truncate" (drop oldest turns)
 # Session expiry
 idle_expiry = "24h"           # Expire sessions after this much inactivity
