@@ -230,3 +230,34 @@ Not supported in v1. Change config → restart the daemon. The single-binary, fa
 - **Single file.** No `config.d/` directory, no merging multiple sources. One file, one truth.
 - **memfd for credentials.** Defense in depth. Not paranoid — practical for a long-running daemon on a shared machine.
 - **No hot reload.** Simplicity. Restart is cheap.
+
+## Tests
+
+### config loading
+
+- **TestLoadMinimal**: TOML with only `[telegram]` bot_token and `[providers.anthropic]` api_key → loads without error, defaults are correct (workspace path, max_iterations=50, etc.).
+- **TestLoadFull**: TOML with every field populated → all fields parsed correctly.
+- **TestMissingRequired**: TOML without telegram.bot_token → returns descriptive error.
+- **TestExpandTilde**: Paths like `~/workspace` expand to absolute paths.
+- **TestEnvOverride**: Set `APHELION_PROVIDERS__ANTHROPIC__API_KEY=sk-test` → overrides config file value.
+- **TestEnvFile**: Write `.env` file with `ANTHROPIC_API_KEY=sk-env` → loaded when config file value is empty.
+- **TestPrecedence**: Config file has key A, env file has key B, env var has key C → env var wins.
+
+### credential sealing (memfd)
+
+- **TestSealCredential**: Seal a string → read it back → matches original.
+- **TestSealZerosOriginal**: Seal a byte slice → original slice is all zeros after sealing.
+- **TestSealedNotInEnviron**: Seal from env var → `os.Getenv()` returns empty after sealing.
+- **TestMemfdCloexec**: Sealed fd has CLOEXEC flag set (via `fcntl` check).
+
+### anonymization
+
+- **TestDefaultUserAgent**: Default config → User-Agent header is Go's default, not "aphelion".
+- **TestNoProjectNameInHeaders**: Build an HTTP request with default config → no header contains "aphelion".
+- **TestCustomUserAgent**: Set `identity.user_agent = "MyBot/1.0"` → User-Agent header matches.
+
+### validation
+
+- **TestInvalidProvider**: `providers.default = "nonexistent"` → error.
+- **TestInvalidCacheTTL**: `providers.anthropic.cache_ttl = "10m"` → error (only "5m" or "1h" allowed).
+- **TestInvalidLogLevel**: `logging.level = "verbose"` → error.

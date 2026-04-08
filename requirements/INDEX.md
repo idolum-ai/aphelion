@@ -3,8 +3,8 @@
 Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 
 ## Foundation
-1. 🟡 [`core.md`](core.md) — Event loop, message lifecycle, error handling, shutdown
-2. 🟡 [`config.md`](config.md) — Config system, string anonymization, environment variables
+1. ✅ [`core.md`](core.md) — Event loop, message lifecycle, error handling, shutdown
+2. ✅ [`config.md`](config.md) — Config system, string anonymization, environment variables
 3. ⬜ [`sessions.md`](sessions.md) — Conversation state, context window, compaction, cache-aware truncation
 
 ## LLM
