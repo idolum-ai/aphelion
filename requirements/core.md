@@ -4,34 +4,37 @@
 
 Aphelion's core is a Go daemon that routes messages between Telegram and an LLM agent. Single binary, single process, Linux only. The runtime leans on Go's goroutine scheduler and Linux kernel primitives instead of frameworks.
 
+This spec is **staged**. The initial "core runnable" milestone is the minimal end-to-end daemon: transport in, session load/save, agent turn loop, transport out. Linux-native hardening features (pidfd, memfd, sandbox assembly, sub-agent sockets) remain part of the target architecture, but they are not required for the first usable runtime.
+
 ## Design Principles
 
 1. **Goroutines are the concurrency model.** No event loop library. Each session turn runs in its own goroutine. The Go scheduler multiplexes on epoll.
 2. **Linux-native.** Use kernel APIs directly: pidfd for process management, cgroups for sandboxing, memfd for secrets, unix sockets for sub-agents.
-3. **No god objects.** Each concern is its own package. The core wires them together at startup and gets out of the way.
+3. **No god objects.** Each concern is its own package. `main.go` stays thin: flags, config, dependency wiring, signal handling. Runtime orchestration lives in its own package. The core wires things together and gets out of the way.
 4. **Message-oriented.** The core routes typed messages between components. It doesn't know what Telegram is or what Claude is.
 5. **Single static binary.** `go build` → `scp aphelion phosphor:~/` → done.
 
 ## Architecture
 
 ```
-┌───────────┐     ┌──────────┐     ┌──────────────┐
-│ Telegram  │────▶│  Router  │────▶│    Agent     │
-│           │◀────│          │◀────│  (LLM+Tools) │
-└───────────┘     └──────────┘     └──────────────┘
-                       │
-                  ┌────┴────┐
-                  │ Session │
-                  │  Store  │
-                  └─────────┘
+┌───────────┐     ┌──────────┐     ┌──────────────┐     ┌──────────────┐
+│ Telegram  │────▶│  Router  │────▶│   Runtime    │────▶│    Agent     │
+│           │◀────│          │◀────│ (orchestr.)  │◀────│  (LLM+Tools) │
+└───────────┘     └──────────┘     └──────┬───────┘     └──────────────┘
+                                          │
+                                     ┌────┴────┐
+                                     │ Session │
+                                     │  Store  │
+                                     └─────────┘
 ```
 
 ### Components
 
 - **Telegram**: Long-polls the Bot API. Normalizes updates into `InboundMessage`. Sends `OutboundMessage` back. Knows Telegram formatting. Doesn't know about LLMs.
 - **Router**: Maps inbound messages to sessions by chat ID. Dispatches agent turns as goroutines. Enforces one-turn-at-a-time per session via per-session mutexes. Queues overflow.
+- **Runtime**: Owns the lifecycle for one inbound event: load session, assemble prompt context, run the agent turn, persist new messages, and send outbound results. This keeps `main.go` thin without pushing transport/store logic into `core.Router`.
 - **Agent**: Runs a single conversational turn. Stateless — takes session state in, returns a response. The turn loop (call LLM → execute tools → repeat) is a plain `for` loop in a goroutine.
-- **Session Store**: SQLite via CGo. Persists conversation history, system prompt snapshots, metadata. Accessed through a single writer goroutine (SQLite's concurrency model).
+- **Session Store**: SQLite via CGo. Persists conversation history, system prompt snapshots, metadata. Start with a single-connection SQLite access model (`SetMaxOpenConns(1)`); add a dedicated writer goroutine only if contention or correctness requires it.
 
 ## Message Types
 
@@ -74,17 +77,18 @@ type Media struct {
 2. Normalizes → InboundMessage
 3. Router resolves session (by ChatID)
 4. Router acquires per-session mutex
-5. Router loads session state from SQLite
-6. Router spawns goroutine: agent.RunTurn(ctx, session, inbound)
-7. Agent turn loop:
+5. Runtime loads session state from SQLite
+6. Runtime assembles prompt context and input messages
+7. Runtime calls `agent.RunTurn(ctx, provider, tools, messages)`
+8. Agent turn loop:
    a. Assemble API messages (system prompt + history + new message)
    b. HTTP call to LLM provider (streaming via httpx-style chunked read)
    c. If response has tool calls → execute tools → append results → goto 7b
    d. If response is text → done
-8. Agent returns TurnResult (text, media, tool log, token usage)
-9. Router persists updated session to SQLite
-10. Router sends TurnResult → OutboundMessage via Telegram
-11. Router releases per-session mutex
+9. Agent returns TurnResult (text, media, tool log, token usage)
+10. Runtime persists updated session to SQLite
+11. Runtime sends TurnResult → OutboundMessage via Telegram
+12. Router releases per-session mutex
 ```
 
 ### Concurrency
@@ -94,7 +98,16 @@ type Media struct {
 - **Tool execution is sequential within a turn.** Tools run in the agent's goroutine. Sub-agents are separate (see below).
 - **Context cancellation.** Every turn gets a `context.Context` with a timeout. SIGTERM cancels all active contexts → graceful drain.
 
+### Ownership Boundaries
+
+- **`main.go` is boot only.** Parse flags, load config, construct dependencies, install signal handling, start transport/runtime.
+- **`core.Router` is transport/provider agnostic.** It should not know about SQLite schema, Telegram formatting, or provider request shapes.
+- **Runtime owns orchestration.** Session load/save, prompt assembly, and outbound reply translation belong in `runtime/`, not in `main.go` or `core/`.
+- **Adapters live at the edges.** Transport normalization, provider wire formats, and persistence-to-agent transcript conversion live in dedicated packages.
+
 ## Linux-Native Primitives
+
+These are target architecture features and should be introduced incrementally after the runnable core is stable. They remain part of the design because they fit the project's Linux-only philosophy, but they are not a prerequisite for the first usable daemon.
 
 ### Process management: pidfd
 
@@ -206,7 +219,7 @@ defer stop()
 // 1. Stop accepting new Telegram updates
 // 2. Cancel all active turn contexts (30s grace period)
 // 3. Wait for in-flight turns to drain
-// 4. Flush session store
+// 4. Flush session store / pending writes
 // 5. Close SQLite
 // 6. Exit
 ```
@@ -216,7 +229,7 @@ defer stop()
 - **LLM provider errors**: Retry 429/500/503 with exponential backoff (max 3 retries). Surface persistent errors to user via Telegram.
 - **Tool exec errors**: Capture combined stdout+stderr, return to LLM as error-flagged tool result.
 - **Telegram send errors**: Retry once, then log and drop.
-- **Panics**: `recover()` in the turn goroutine. Log stack trace, send generic error to user, session survives.
+- **Panics**: `recover()` at the runtime turn boundary. Log stack trace, send generic error to user, session survives.
 
 ## Module Structure
 
@@ -228,6 +241,9 @@ aphelion/
 ├── core/
 │   ├── router.go        # message routing, session dispatch, per-session mutex
 │   └── types.go         # InboundMessage, OutboundMessage, Media, TurnResult
+├── runtime/
+│   ├── runtime.go       # inbound message lifecycle orchestration
+│   └── turn.go          # load session, assemble prompt, run turn, persist, send
 ├── agent/
 │   ├── turn.go          # RunTurn(): the agent turn loop
 │   └── budget.go        # iteration budget
@@ -247,9 +263,11 @@ aphelion/
 │   └── web.go           # HTTP fetch
 ├── session/
 │   ├── store.go         # SQLite session store
+│   ├── adapter.go       # session.Message <-> agent.Message conversion
 │   └── compact.go       # context window compaction
+├── workspace/
+│   └── prompt.go        # workspace bootstrap/dynamic file loading
 ├── memory/
-│   ├── workspace.go     # file-based workspace (SOUL.md, etc.)
 │   └── vectors.go       # embedding search (optional)
 ├── automation/
 │   ├── heartbeat.go     # periodic agent turns
