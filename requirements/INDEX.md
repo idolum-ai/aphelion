@@ -12,7 +12,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 5. ⬜ [`thinking.md`](thinking.md) — Extended thinking / reasoning mode handling across providers
 
 ## Channels
-6. ⬜ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
+6. ✅ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
 
 ## Agent
 8. ⬜ [`tools.md`](tools.md) — Tool definition, dispatch, sandboxing, exec, file ops, web fetch
