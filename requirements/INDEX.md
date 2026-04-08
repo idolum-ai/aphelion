@@ -30,4 +30,4 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 
 ## Operations
 16. ⬜ [`deployment.md`](deployment.md) — Systemd, process management, logging, restart behavior
-17. ⬜ [`security.md`](security.md) — Credential storage, API key management, exec sandboxing, permissions
+17. ⬜ [`security.md`](security.md) — Sandbox assembly (cgroups + namespaces + seccomp + nftables firewall), credential lifecycle, permission model

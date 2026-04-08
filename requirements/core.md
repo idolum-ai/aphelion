@@ -121,23 +121,19 @@ fd, err := unix.MemfdCreate("credentials", unix.MFD_CLOEXEC)
 
 Credentials are loaded from environment variables or a single encrypted config at startup, written to memfd, and the original sources are zeroed.
 
-### Tool sandboxing: cgroups v2
+### Tool sandboxing: full stack
 
-Each tool exec runs in a transient cgroup with resource limits:
+Tool exec processes run inside a multi-layer sandbox. The primitives are Linux-native:
 
-```go
-// Create cgroup for this exec invocation
-cgroupPath := fmt.Sprintf("/sys/fs/cgroup/aphelion/exec-%s", execID)
-os.MkdirAll(cgroupPath, 0755)
-os.WriteFile(filepath.Join(cgroupPath, "memory.max"), []byte("512M"), 0644)
-os.WriteFile(filepath.Join(cgroupPath, "cpu.max"), []byte("100000 100000"), 0644) // 1 CPU
-os.WriteFile(filepath.Join(cgroupPath, "pids.max"), []byte("64"), 0644)
+- **cgroups v2**: Memory, CPU, PID, IO limits. Transient cgroup per exec, cleaned up on exit.
+- **Network namespaces**: `unshare(CLONE_NEWNET)` + veth pair + nftables allow-list firewall. Three modes: `none` / `full` (blank) / `firewall`.
+- **seccomp-bpf**: Restrict available syscalls. `moderate` blocks ptrace/mount/bpf/etc.
+- **Capabilities**: Drop CAP_SYS_ADMIN, CAP_NET_ADMIN, etc.
+- **User namespaces**: Map exec to nobody:nogroup.
+- **Filesystem**: `hidden_paths` makes config/SSH/GPG invisible. Optional read-only root.
 
-// Move child process into cgroup
-os.WriteFile(filepath.Join(cgroupPath, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0644)
-```
-
-Cgroup is cleaned up when the exec completes. A runaway tool can't OOM the host.
+Full sandbox configuration: see `config.md` `[sandbox]` section.
+Full sandbox assembly logic: see `security.md`.
 
 ### Sub-agent communication: unix domain sockets
 
