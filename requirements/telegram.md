@@ -575,6 +575,132 @@ type PhotoSize struct {
 // Document, Audio, Voice, Video, VideoNote, Sticker — similar shape with FileID
 ```
 
+## Interruption Handling — Message While Busy
+
+When a user sends a message while the agent is mid-turn (tools running, LLM streaming), we don't silently queue it. We give the user control.
+
+### Flow
+
+```
+1. User sends message while agent is busy
+2. Aphelion immediately replies with an inline keyboard:
+   
+   "I'm still working on the previous request. What would you like to do?"
+   
+   [ 🛑 Stop & reassess ]  [ ⏳ Let it finish ]
+
+3a. User taps "Stop & reassess":
+    - Cancel the current turn's context (ctx.Cancel())
+    - Agent turn exits cleanly (context cancellation is already handled)
+    - Delete the inline keyboard message
+    - Route the new message as a fresh turn
+    - The new message includes context: "[Previous request was interrupted. Last tool output: ...]"
+
+3b. User taps "Let it finish":
+    - Queue the new message (latest-wins, cap 1)
+    - Edit the keyboard message to: "Got it — I'll process your message next. ⏳"
+    - After current turn completes, process the queued message as the next turn
+
+3c. No tap (timeout 30s):
+    - Default to "Let it finish" (queue the message)
+    - Edit keyboard message to: "Queued your message — processing after current task."
+```
+
+### Implementation
+
+```go
+type InterruptHandler struct {
+    sender   *Sender
+    router   *core.Router
+}
+
+func (h *InterruptHandler) OnMessageWhileBusy(ctx context.Context, msg core.InboundMessage, cancelFn context.CancelFunc) {
+    // Send inline keyboard
+    kbMsgID := h.sender.SendInlineKeyboard(ctx, msg.ChatID, 
+        "I'm still working on the previous request. What would you like to do?",
+        []InlineButton{
+            {Text: "🛑 Stop & reassess", CallbackData: "interrupt:stop"},
+            {Text: "⏳ Let it finish", CallbackData: "interrupt:queue"},
+        },
+        &msg.MessageID, // Reply to the user's new message
+    )
+    
+    // Wait for callback or timeout
+    select {
+    case cb := <-h.awaitCallback(ctx, kbMsgID, 30*time.Second):
+        switch cb {
+        case "interrupt:stop":
+            cancelFn() // Cancel current turn
+            h.sender.DeleteMessage(ctx, msg.ChatID, kbMsgID)
+            h.router.RouteImmediate(ctx, msg) // Process new message now
+        case "interrupt:queue":
+            h.router.Enqueue(msg)
+            h.sender.EditText(msg.ChatID, kbMsgID, "Got it — I'll process your message next. ⏳")
+        }
+    case <-time.After(30 * time.Second):
+        // Default: queue it
+        h.router.Enqueue(msg)
+        h.sender.EditText(msg.ChatID, kbMsgID, "Queued your message — processing after current task.")
+    }
+}
+```
+
+### Callback query handling
+
+Telegram sends `callback_query` updates when users tap inline buttons. We need to handle these:
+
+```go
+func (p *Poller) handleUpdate(update Update) {
+    if update.CallbackQuery != nil {
+        p.callbackHandler(update.CallbackQuery)
+        return
+    }
+    if update.Message != nil {
+        p.messageHandler(normalizeUpdate(update))
+    }
+}
+```
+
+Update `allowed_updates` to include `"callback_query"`.
+
+### Router integration
+
+The router's `Route()` method changes slightly:
+
+```go
+func (r *Router) Route(ctx context.Context, msg InboundMessage) {
+    lock, queue, session := r.resolveSession(msg.ChatID)
+    
+    if !lock.TryLock() {
+        // Session is busy — trigger interrupt handler instead of silent queue
+        if r.interruptHandler != nil {
+            r.interruptHandler.OnMessageWhileBusy(ctx, msg, r.activeCancels[msg.ChatID])
+        } else {
+            r.enqueueLatest(queue, msg) // Fallback: silent queue
+        }
+        return
+    }
+    // ... rest unchanged
+}
+```
+
+### Config
+
+```toml
+[telegram]
+# Interruption handling
+interrupt_buttons = true          # Show stop/continue buttons when busy
+interrupt_timeout = "30s"         # Auto-queue after this timeout
+```
+
+### Tests
+
+- **TestInterruptStop**: User sends message while busy → taps Stop → current turn cancelled, new message processed.
+- **TestInterruptQueue**: User sends message while busy → taps Let it finish → message queued, processed after current turn.
+- **TestInterruptTimeout**: No tap → message auto-queued after 30s.
+- **TestInterruptKeyboardSent**: Message while busy → inline keyboard reply sent to user.
+- **TestInterruptCallbackAck**: Callback query → answerCallbackQuery sent (Telegram requires this).
+
 ## Config (in config.md)
 
 ```toml
