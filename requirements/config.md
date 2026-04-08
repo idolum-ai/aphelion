@@ -32,20 +32,50 @@ parse_mode = "MarkdownV2" # Default parse mode
 default = "anthropic"
 failover = ["gemini", "ollama"]
 
+# Failover behavior
+[providers.failover]
+max_retries = 3                  # Per-provider retries before failover
+retry_backoff_base = 1.0         # Seconds, doubled each retry
+retry_backoff_max = 30.0         # Cap on backoff delay
+restore_primary = true           # Try primary again on next turn after failover
+
+# Token estimation (for pre-flight context checks, not billing)
+chars_per_token = 4              # Rough estimate; actual usage from provider response
+
 [providers.anthropic]
 api_key = ""
 model = "claude-sonnet-4-6"     # Current flagship: claude-opus-4-6 (1M ctx), claude-sonnet-4-6 (1M ctx), claude-haiku-4-5 (200K ctx)
 max_tokens = 64000               # Sonnet 4.6 max output: 64K. Opus 4.6: 128K.
 context_window = 1000000         # Opus 4.6 and Sonnet 4.6: 1M tokens. Haiku 4.5: 200K.
-cache_ttl = "1h"                 # "5m" (1.25x write cost) or "1h" (2x write cost, 10x cheaper reads)
-cache_strategy = "hybrid"        # "auto" | "explicit" | "hybrid" (explicit on system+tools, auto on conversation)
-# Anthropic-specific
 anthropic_version = "2023-06-01"
-# Minimum cacheable tokens (varies by model):
-# Opus 4.6/4.5: 4096, Sonnet 4.6: 2048, Sonnet 4.5/4/Opus 4.1/4: 1024, Haiku 4.5: 4096
-min_cache_tokens = 2048          # For Sonnet 4.6; adjust per model
-# Cache-aware session pruning: trim old tool results after cache TTL to shrink re-cache writes
+
+# Cache strategy (see providers.md for full architecture)
+cache_strategy = "hybrid"        # "auto" | "explicit" | "hybrid" | "off"
+cache_ttl = "1h"                 # "5m" (1.25x write cost) or "1h" (2x write cost, 10x cheaper reads)
+min_cache_tokens = 2048          # Minimum cacheable prefix. Opus 4.6/4.5: 4096, Sonnet 4.6: 2048, Haiku 4.5: 4096
+
+# Cache-TTL pruning: trim old tool results after TTL to shrink re-cache writes
 cache_ttl_pruning = true
+pruning_soft_age = 10            # Soft-trim tool results older than N turns (head+tail with ...)
+pruning_hard_age = 20            # Hard-clear tool results older than N turns ([trimmed])
+
+# Block lookback safety: auto-inject breakpoint before hitting Anthropic's 20-block window
+lookback_safety = true
+lookback_threshold = 16          # Inject safety breakpoint after this many blocks since last cache write
+
+# Cache cost tracking
+cache_tracking = true            # Log cache hit/miss/cost per turn
+cache_hit_warning = 0.5          # Warn if hit rate drops below this (0.0-1.0)
+
+# Cache stability
+normalize_system_prompt = true   # Normalize whitespace/line endings before hashing
+sort_tools = true                # Sort tool definitions by name for cache stability
+
+# Extended thinking
+[providers.anthropic.thinking]
+mode = "adaptive"                # "off" | "adaptive" | "extended"
+budget = 0                       # 0 = provider default, or explicit token budget
+
 # Heartbeat keep-warm: if heartbeat.every < cache_ttl, heartbeats keep the cache alive
 # (55m heartbeat + 1h cache = cache never expires during active use)
 
