@@ -1,0 +1,22 @@
+[identity]
+user_agent = ""
+
+[telegram]
+bot_token = "telegram-bot-token"
+poll_timeout = 30
+
+[providers]
+default = "anthropic"
+
+[providers.anthropic]
+api_key = "anthropic-api-key"
+model = "claude-sonnet-4-6"
+max_tokens = 4096
+
+[sessions]
+db_path = "~/.config/aphelion/sessions.db"
+
+[agent]
+workspace = "/absolute/path/to/workspace"
+max_iterations = 50
+tool_timeout = 300

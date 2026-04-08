@@ -25,4 +25,50 @@ See `requirements/` for component specs. Each spec is designed, reviewed, then i
 
 ## Status
 
-Design phase. Specs in progress.
+Runnable v0:
+
+- Telegram DM-only polling
+- Anthropic inference
+- SQLite session persistence
+- Shell execution tool (`exec`)
+
+## Run
+
+Config file default:
+
+`~/.config/aphelion/config.toml`
+
+Build and run:
+
+```bash
+make build
+./bin/aphelion --config ~/.config/aphelion/config.toml
+```
+
+Or:
+
+```bash
+make run
+```
+
+## Background Service
+
+Install as a user service:
+
+```bash
+make install-user-service
+```
+
+Useful commands:
+
+```bash
+systemctl --user status aphelion
+systemctl --user restart aphelion
+journalctl --user -u aphelion -f
+```
+
+Update after pulling new changes:
+
+```bash
+make update
+```
