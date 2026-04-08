@@ -701,6 +701,162 @@ interrupt_timeout = "30s"         # Auto-queue after this timeout
 - **TestInterruptKeyboardSent**: Message while busy → inline keyboard reply sent to user.
 - **TestInterruptCallbackAck**: Callback query → answerCallbackQuery sent (Telegram requires this).
 
+## Message Edit — Session Fork
+
+When a user edits a previous message, everything after that point was based on stale input. We treat this as a **fork point**: rewind the session to the edited message and replay from there.
+
+### Flow
+
+```
+1. User edits message N (Telegram sends edited_message update)
+2. Aphelion identifies the message in session history by Telegram message_id
+3. Cancel any in-progress turn for this session
+4. Fork the session:
+   a. Find the turn_index of the edited message in the DB
+   b. Mark all messages AFTER that turn_index as compacted=1 (soft delete)
+   c. Update the edited message's content in the DB to the new text
+   d. Session now looks like history ended at the edited message
+5. Delete stale Telegram messages:
+   a. We track outbound message IDs (bot responses, tool progress) per turn
+   b. Delete all bot messages that came after the edited message
+   c. This visually "rewinds" the chat for the user
+6. Process the edited message as a new turn:
+   a. The LLM sees the corrected history and responds fresh
+   b. New response appears right after the edited message in the chat
+```
+
+### Message ID Tracking
+
+To delete stale bot messages, we need to track which Telegram message IDs we sent per turn:
+
+```go
+// In the messages table, add outbound tracking
+type OutboundRecord struct {
+    TurnIndex    int
+    TelegramMsgID int64   // The message_id Telegram returned from sendMessage/editMessage
+    Type         string   // "response", "progress", "streaming", "keyboard"
+}
+```
+
+```sql
+CREATE TABLE outbound_messages (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id         INTEGER NOT NULL,
+    user_id         INTEGER NOT NULL DEFAULT 0,
+    turn_index      INTEGER NOT NULL,
+    telegram_msg_id INTEGER NOT NULL,
+    msg_type        TEXT NOT NULL,  -- 'response', 'progress', 'streaming', 'keyboard'
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_outbound_session ON outbound_messages(chat_id, user_id, turn_index);
+```
+
+### Implementation
+
+```go
+func (h *EditHandler) OnMessageEdit(ctx context.Context, edit *EditedMessage) {
+    key := session.SessionKey{ChatID: edit.Chat.ID, UserID: resolveUserID(edit)}
+    
+    // 1. Cancel any in-progress turn
+    if cancel, ok := h.router.ActiveCancel(key); ok {
+        cancel()
+    }
+    
+    // 2. Find the original message in session history
+    turnIndex, err := h.store.FindTurnByTelegramMsgID(key, edit.MessageID)
+    if err != nil {
+        // Message not found in history (too old, or not tracked)
+        // Fall back: treat as a new message
+        h.router.Route(ctx, normalizeEditAsNew(edit))
+        return
+    }
+    
+    // 3. Fork: mark everything after turnIndex as compacted
+    err = h.store.ForkAt(key, turnIndex, edit.Text)
+    
+    // 4. Delete stale bot messages from Telegram
+    staleIDs, _ := h.store.OutboundAfterTurn(key, turnIndex)
+    for _, msgID := range staleIDs {
+        h.sender.DeleteMessage(ctx, edit.Chat.ID, msgID)
+    }
+    
+    // 5. Process the edited message as a fresh turn
+    h.router.Route(ctx, normalizeEditAsNew(edit))
+}
+```
+
+### Store methods for fork
+
+```go
+// ForkAt marks all messages after turnIndex as compacted and updates the message at turnIndex
+func (s *SQLiteStore) ForkAt(key SessionKey, turnIndex int, newContent string) error {
+    return s.inTransaction(func(tx *sql.Tx) error {
+        // Mark subsequent messages as compacted (soft delete)
+        _, err := tx.Exec(
+            `UPDATE messages SET compacted = 1 
+             WHERE chat_id = ? AND user_id = ? AND turn_index > ?`,
+            key.ChatID, key.UserID, turnIndex,
+        )
+        if err != nil {
+            return err
+        }
+        
+        // Update the edited message content
+        _, err = tx.Exec(
+            `UPDATE messages SET content = ?, content_chars = ? 
+             WHERE chat_id = ? AND user_id = ? AND turn_index = ? AND role = 'user'`,
+            newContent, len(newContent), key.ChatID, key.UserID, turnIndex,
+        )
+        return err
+    })
+}
+
+// OutboundAfterTurn returns Telegram message IDs sent after a given turn
+func (s *SQLiteStore) OutboundAfterTurn(key SessionKey, turnIndex int) ([]int64, error) {
+    rows, err := s.db.Query(
+        `SELECT telegram_msg_id FROM outbound_messages 
+         WHERE chat_id = ? AND user_id = ? AND turn_index > ? 
+         ORDER BY telegram_msg_id`,
+        key.ChatID, key.UserID, turnIndex,
+    )
+    // ... collect and return IDs
+}
+```
+
+### Edge cases
+
+- **Edit a very old message**: If the turn_index is far back, this effectively rewinds a lot of history. The compacted messages are preserved on disk for audit. The visual cleanup deletes bot messages (Telegram allows deleting bot messages within 48 hours).
+- **Edit while agent is mid-turn on that message**: Cancel first, then fork. The cancel is context-based and clean.
+- **Edit a message we don't track**: Fall back to treating the edited text as a new message.
+- **Multiple rapid edits**: Each edit forks from the latest edit position. The intermediate forks are no-ops if no turns ran between them.
+
+### Telegram limitations
+
+- `deleteMessage` only works for messages sent within the last 48 hours
+- In groups, bots can only delete their own messages (not user messages)
+- `edited_message` updates include the full new text but not a diff
+
+### Config
+
+```toml
+[telegram]
+# Message edit behavior
+edit_fork = true                  # Fork session on message edit (vs ignore edits)
+edit_cleanup = true               # Delete stale bot messages after fork
+```
+
+### Tests
+
+- **TestEditForkSession**: Edit message at turn 5 of 10 → turns 6-10 marked compacted, session continues from turn 5.
+- **TestEditUpdatesContent**: After fork, the edited message has new content in DB.
+- **TestEditDeletesStaleMessages**: Bot messages after the edit point → deleteMessage called for each.
+- **TestEditCancelsActiveTurn**: Edit during active turn → turn cancelled before fork.
+- **TestEditUnknownMessage**: Edit a message not in history → treated as new message.
+- **TestEditOldMessage48h**: Edit message older than 48h → fork works but cleanup skips (can't delete).
+- **TestEditPreservesHistory**: After fork, compacted messages still exist in DB (audit trail).
+
 ## Config (in config.md)
 
 ```toml
