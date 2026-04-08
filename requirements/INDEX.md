@@ -8,7 +8,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 3. ⬜ [`sessions.md`](sessions.md) — Conversation state, context window, compaction, cache-aware truncation
 
 ## LLM
-4. ⬜ [`providers.md`](providers.md) — Anthropic, Gemini, OpenAI, Ollama adapters. Streaming. Prompt caching. Failover.
+4. ✅ [`providers.md`](providers.md) — Anthropic, Gemini, OpenAI, Ollama adapters. Streaming. Prompt caching. Failover.
 5. ⬜ [`thinking.md`](thinking.md) — Extended thinking / reasoning mode handling across providers
 
 ## Channels
