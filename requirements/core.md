@@ -281,8 +281,8 @@ aphelion/
 - `golang.org/x/sys/unix` — Linux syscalls (pidfd, memfd, cgroup)
 - Standard library for everything else (net/http, encoding/json, os/exec, crypto/tls)
 
-## Open Questions
+## Decisions
 
-- [ ] TOML vs YAML vs JSON for config? (Leaning TOML — human-friendly, no indent wars)
-- [ ] Pebble/bbolt as an alternative to SQLite for session store?
-- [ ] Do we want structured logging (slog) or just plain stderr?
+- **Config format: TOML.** Human-readable, supports comments, Go ecosystem default. `BurntSushi/toml` (zero transitive deps).
+- **Session store: SQLite.** Relational queries (by chat ID, by timestamp), CLI-inspectable (`sqlite3 sessions.db`), single-writer model matches our per-session mutex. `mattn/go-sqlite3` via CGo.
+- **Logging: `log/slog` (stdlib).** Structured, zero-dependency, JSON handler for production (journald-friendly), text handler for dev. Filter by session, chat ID, provider without regex.
