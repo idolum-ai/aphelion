@@ -281,6 +281,50 @@ aphelion/
 - `golang.org/x/sys/unix` — Linux syscalls (pidfd, memfd, cgroup)
 - Standard library for everything else (net/http, encoding/json, os/exec, crypto/tls)
 
+## Tests
+
+Each test should be a standalone Go test in the corresponding package.
+
+### core/router
+
+- **TestRouteToSession**: Inbound message with ChatID X → router creates/retrieves session X, dispatches to agent.
+- **TestSessionMutex**: Two concurrent inbound messages for the same ChatID → second blocks until first turn completes. Verify sequential execution (no interleaving).
+- **TestConcurrentSessions**: Two concurrent inbound messages for different ChatIDs → both turns run in parallel. Verify wall-clock time < 2x single turn.
+- **TestQueueOverflow**: Three messages arrive for the same ChatID while a turn is running → only the latest queued message is processed after the current turn. Earlier queued messages are dropped.
+- **TestSessionResolution**: Messages from different ChatIDs map to different sessions. Same ChatID always maps to same session.
+
+### agent/turn
+
+- **TestSimpleTurn**: Mock provider returns text response → TurnResult contains that text, no tool calls logged.
+- **TestToolCallLoop**: Mock provider returns tool call → tool executes → result fed back → provider returns text → done. Verify the loop ran exactly 2 LLM calls.
+- **TestMultipleToolCalls**: Mock provider returns tool calls for 3 iterations before final text. Verify iteration count = 4.
+- **TestProviderError**: Mock provider returns 500 → retry with backoff → succeeds on retry 2. Verify retry count and backoff delay.
+- **TestProviderPersistentError**: Mock provider returns 500 on all retries → TurnResult contains user-facing error message.
+- **TestToolError**: Tool returns error → error is included in tool result message → provider gets it and responds with text.
+- **TestContextCancellation**: Cancel context mid-turn → turn exits cleanly, no goroutine leak.
+
+### agent/budget
+
+- **TestBudgetCaution**: At 70% of max → returns caution warning string.
+- **TestBudgetWarning**: At 90% → returns urgent warning.
+- **TestBudgetExhausted**: At 100% → returns exhausted=true.
+- **TestBudgetUnderLimit**: Below 70% → no warning, not exhausted.
+
+### core/types
+
+- **TestInboundMessageDefaults**: Construct InboundMessage with minimal fields → zero values are correct.
+- **TestMediaTypes**: Construct Media with each type → type string matches.
+
+### Shutdown
+
+- **TestGracefulShutdown**: Send SIGTERM → verify in-flight turn completes, session is persisted, Telegram poller stops, SQLite closes.
+- **TestShutdownTimeout**: In-flight turn takes >30s → verify it's force-cancelled after grace period.
+
+### Integration (requires SQLite)
+
+- **TestFullTurnCycle**: Inbound message → router → agent (mock provider) → outbound message → session persisted in SQLite. End-to-end with real SQLite.
+- **TestSessionPersistence**: Run a turn, kill the process, restart, send another message → history from first turn is loaded from SQLite.
+
 ## Decisions
 
 - **Config format: TOML.** Human-readable, supports comments, Go ecosystem default. `BurntSushi/toml` (zero transitive deps).
