@@ -138,13 +138,75 @@ model = "eleven_turbo_v2_5"
 # ─── Exec Sandbox ───
 [sandbox]
 enabled = true
-memory_limit = "512M"
-cpu_limit = 1.0
-pid_limit = 64
 timeout = 300
-# Network isolation: use unshare(CLONE_NEWNET) to give exec a blank network namespace
-# unless the tool explicitly requests network (e.g., web_fetch runs without sandbox net isolation)
-network_isolation = true
+
+# Resource limits (cgroups v2)
+memory_limit = "512M"
+cpu_limit = 1.0              # Number of CPUs
+pid_limit = 64
+io_weight = 100              # IO priority (1-10000, default 100)
+
+# Filesystem isolation
+readonly_root = false        # Mount / as read-only for exec (bind-mount workspace as writable)
+writable_paths = []          # Additional writable paths beyond workspace and /tmp
+hidden_paths = [             # Paths invisible to exec processes
+    "/home/*/.ssh",
+    "/home/*/.gnupg",
+    "/home/*/.config/aphelion/config.toml",  # Don't let exec see our config
+]
+
+# Network isolation
+[sandbox.network]
+isolation = "firewall"       # "none" | "full" (blank namespace) | "firewall" (allow-list)
+# When isolation = "firewall", only these destinations are reachable.
+# Uses nftables rules inside a network namespace with a veth pair.
+allow = [
+    # LLM providers (for sub-agents that need API access)
+    "api.anthropic.com:443",
+    "generativelanguage.googleapis.com:443",
+    "api.openai.com:443",
+    # Package managers (for tool exec that installs deps)
+    "pypi.org:443",
+    "registry.npmjs.org:443",
+    "proxy.golang.org:443",
+    # Git
+    "github.com:443",
+    "github.com:22",
+]
+# Deny takes precedence over allow (for blocking specific IPs within allowed ranges)
+deny = []
+# DNS: resolve through host by default, or specify a DNS server
+dns = "host"                 # "host" (use host's resolver) | "1.1.1.1" | "8.8.8.8"
+# Rate limiting: prevent exec from flooding the network
+rate_limit = "1mbit"         # tc rate limit on the veth interface
+conn_limit = 50              # Max concurrent connections via conntrack
+
+# Process security
+[sandbox.security]
+# seccomp-bpf: restrict syscalls available to exec processes
+seccomp = "moderate"         # "off" | "moderate" (block dangerous syscalls) | "strict" (minimal syscall set)
+# Dangerous syscalls blocked in "moderate":
+# - ptrace (no debugging other processes)
+# - mount/umount (no filesystem changes)
+# - reboot, swapon/swapoff, init_module
+# - keyctl (no kernel keyring access)
+# - bpf (no eBPF programs)
+
+# Capabilities: Linux capabilities to DROP from exec processes
+drop_capabilities = [
+    "CAP_SYS_ADMIN",
+    "CAP_NET_ADMIN",         # Even with firewall mode, exec doesn't get to change rules
+    "CAP_SYS_PTRACE",
+    "CAP_SYS_RAWIO",
+    "CAP_MKNOD",
+    "CAP_SYS_MODULE",
+    "CAP_DAC_OVERRIDE",
+]
+
+# User namespace: run exec as nobody/nogroup inside a user namespace
+user_namespace = true
+uid_map = "65534"            # Map to nobody
+gid_map = "65534"            # Map to nogroup
 
 # ─── Logging ───
 [logging]
@@ -177,8 +239,9 @@ cgroup_root = "/sys/fs/cgroup/aphelion"
 use_memfd = true
 # Use pidfd for child process management
 use_pidfd = true
-# seccomp-bpf profile for tool exec (future)
-# seccomp_profile = ""
+# Namespace features (requires CAP_SYS_ADMIN or unprivileged user namespaces)
+user_namespaces = true       # Required for sandbox.security.user_namespace
+network_namespaces = true    # Required for sandbox.network.isolation != "none"
 ```
 
 ## String Anonymization
@@ -348,6 +411,18 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 - **TestNoProjectNameInHeaders**: Build an HTTP request with default config → no header contains "aphelion".
 - **TestCustomUserAgent**: Set `identity.user_agent = "MyBot/1.0"` → User-Agent header matches.
 - **TestSystemPromptNoMarkers**: Assemble a system prompt from bootstrap files → no cache boundary markers, no project name strings.
+
+### sandbox & security
+
+- **TestCgroupCreation**: With sandbox enabled, exec creates cgroup under configured root with correct memory/cpu/pid limits.
+- **TestNetworkFirewall**: With `isolation = "firewall"`, exec can reach `api.anthropic.com:443` but not `evil.com:443`.
+- **TestNetworkFull**: With `isolation = "full"`, exec cannot reach any network address.
+- **TestNetworkNone**: With `isolation = "none"`, exec has full network access.
+- **TestHiddenPaths**: With `hidden_paths` set, exec cannot read `~/.config/aphelion/config.toml`.
+- **TestSeccompModerate**: With `seccomp = "moderate"`, exec cannot call `ptrace()` or `mount()`.
+- **TestUserNamespace**: With `user_namespace = true`, exec runs as uid 65534 (nobody).
+- **TestDropCapabilities**: Exec process does not have CAP_SYS_ADMIN or CAP_NET_ADMIN.
+- **TestResourceLimits**: Exec process that exceeds memory_limit is OOM-killed by cgroup.
 
 ### validation
 
