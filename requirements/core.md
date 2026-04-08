@@ -2,14 +2,15 @@
 
 ## Overview
 
-Aphelion's core is an async event loop that routes messages between **Telegram** and an **agent** (LLM + tools). It is deliberately simple: a single process, single agent, Linux only, no clustering.
+Aphelion's core is a Go daemon that routes messages between Telegram and an LLM agent. Single binary, single process, Linux only. The runtime leans on Go's goroutine scheduler and Linux kernel primitives instead of frameworks.
 
 ## Design Principles
 
-1. **Async-first.** Everything is `asyncio`. Channels, providers, tools — all async.
-2. **No god objects.** Hermes puts everything in a 9,400-line `AIAgent` class. We don't. Each concern gets its own module.
-3. **Message-oriented.** The core doesn't know about LLMs or Telegram. It routes typed messages between pluggable components.
-4. **Fail loud, recover quiet.** Errors are logged with full context. Recovery is automatic where safe (retry transient failures), explicit where not (surface to user).
+1. **Goroutines are the concurrency model.** No event loop library. Each session turn runs in its own goroutine. The Go scheduler multiplexes on epoll.
+2. **Linux-native.** Use kernel APIs directly: pidfd for process management, cgroups for sandboxing, memfd for secrets, unix sockets for sub-agents.
+3. **No god objects.** Each concern is its own package. The core wires them together at startup and gets out of the way.
+4. **Message-oriented.** The core routes typed messages between components. It doesn't know what Telegram is or what Claude is.
+5. **Single static binary.** `go build` → `scp aphelion phosphor:~/` → done.
 
 ## Architecture
 
@@ -18,176 +19,270 @@ Aphelion's core is an async event loop that routes messages between **Telegram**
 │ Telegram  │────▶│  Router  │────▶│    Agent     │
 │           │◀────│          │◀────│  (LLM+Tools) │
 └───────────┘     └──────────┘     └──────────────┘
-                         │
-                    ┌────┴────┐
-                    │ Session │
-                    │  Store  │
-                    └─────────┘
+                       │
+                  ┌────┴────┐
+                  │ Session │
+                  │  Store  │
+                  └─────────┘
 ```
 
 ### Components
 
-- **Telegram**: Receives inbound messages, sends outbound messages. Knows Telegram message format. Does NOT know about LLMs.
-- **Router**: Maps inbound messages to sessions, dispatches to the agent, routes responses back. Handles concurrency (one agent turn at a time per session, queue overflow).
-- **Agent**: Runs a single conversational turn. Takes a session (messages + system prompt), produces a response (text + tool calls). Stateless between turns — all state lives in the session.
-- **Session Store**: Persists conversation history, session metadata, system prompt snapshot. SQLite.
+- **Telegram**: Long-polls the Bot API. Normalizes updates into `InboundMessage`. Sends `OutboundMessage` back. Knows Telegram formatting. Doesn't know about LLMs.
+- **Router**: Maps inbound messages to sessions by chat ID. Dispatches agent turns as goroutines. Enforces one-turn-at-a-time per session via per-session mutexes. Queues overflow.
+- **Agent**: Runs a single conversational turn. Stateless — takes session state in, returns a response. The turn loop (call LLM → execute tools → repeat) is a plain `for` loop in a goroutine.
+- **Session Store**: SQLite via CGo. Persists conversation history, system prompt snapshots, metadata. Accessed through a single writer goroutine (SQLite's concurrency model).
 
 ## Message Types
 
-```python
-@dataclass
-class InboundMessage:
-    """A message arriving from a channel."""
-    chat_id: str            # Telegram chat id
-    sender_id: str          # Telegram user id
-    sender_name: str        # display name
-    text: str               # message text (may be empty for media-only)
-    media: list[Media]      # attached images, audio, files
-    reply_to: str | None    # message id being replied to
-    metadata: dict          # channel-specific extras (message_id, timestamp, etc.)
+```go
+type InboundMessage struct {
+    ChatID     int64
+    SenderID   int64
+    SenderName string
+    Text       string
+    Media      []Media
+    ReplyTo    *int64          // message ID being replied to
+    MessageID  int64
+    Timestamp  time.Time
+    Raw        json.RawMessage // full Telegram update, for anything we didn't extract
+}
 
-@dataclass
-class OutboundMessage:
-    """A message going out to a channel."""
-    chat_id: str
-    text: str
-    media: list[Media]
-    reply_to: str | None    # reply to a specific inbound message
-    parse_mode: str | None  # "MarkdownV2", "HTML", None
-    reactions: list[str]    # emoji reactions to add to the inbound message
+type OutboundMessage struct {
+    ChatID    int64
+    Text      string
+    Media     []Media
+    ReplyTo   *int64
+    ParseMode string // "MarkdownV2", "HTML", ""
+    Reactions []string
+}
 
-@dataclass
-class Media:
-    """An attachment."""
-    type: str               # "image", "audio", "video", "document"
-    data: bytes | None      # raw bytes (for small inline media)
-    path: str | None        # local file path (for large media)
-    url: str | None         # remote URL
-    mime_type: str
-    filename: str | None
+type Media struct {
+    Type     string // "photo", "audio", "video", "document", "voice"
+    Data     []byte // small inline media
+    Path     string // local file path
+    URL      string // remote URL
+    MimeType string
+    Filename string
+}
 ```
 
 ## Turn Lifecycle
 
-A "turn" is one complete cycle: user message in → agent processing → response out.
-
 ```
-1. Channel receives raw message
-2. Channel normalizes → InboundMessage
-3. Router resolves session (by chat_id + channel)
-4. Router acquires session lock (one turn at a time)
-5. Router loads session state (history, system prompt)
-6. Router calls Agent.run_turn(session, inbound)
-7. Agent loop:
+1. Telegram goroutine receives update from long-poll
+2. Normalizes → InboundMessage
+3. Router resolves session (by ChatID)
+4. Router acquires per-session mutex
+5. Router loads session state from SQLite
+6. Router spawns goroutine: agent.RunTurn(ctx, session, inbound)
+7. Agent turn loop:
    a. Assemble API messages (system prompt + history + new message)
-   b. Call LLM provider
+   b. HTTP call to LLM provider (streaming via httpx-style chunked read)
    c. If response has tool calls → execute tools → append results → goto 7b
    d. If response is text → done
-8. Agent returns AgentResponse (text, media, tool calls made, token usage)
-9. Router persists updated session
-10. Router converts AgentResponse → OutboundMessage(s)
-11. Channel sends outbound message(s)
-12. Router releases session lock
+8. Agent returns TurnResult (text, media, tool log, token usage)
+9. Router persists updated session to SQLite
+10. Router sends TurnResult → OutboundMessage via Telegram
+11. Router releases per-session mutex
 ```
 
 ### Concurrency
 
-- **One turn at a time per session.** If a message arrives while a turn is in progress, it's queued. Queue depth = 1 (latest message wins, older queued messages are dropped with a "I'm still thinking" ack).
-- **Multiple sessions can run concurrently.** Different chat_ids don't block each other.
-- **Tool execution is sequential within a turn.** No parallel tool calls (simplicity over speed for v1).
+- **One turn at a time per session.** Per-session `sync.Mutex`. If a message arrives during a turn, it's buffered in a channel (cap 1, latest wins).
+- **Multiple sessions run concurrently.** Different ChatIDs don't block each other. Each turn is its own goroutine.
+- **Tool execution is sequential within a turn.** Tools run in the agent's goroutine. Sub-agents are separate (see below).
+- **Context cancellation.** Every turn gets a `context.Context` with a timeout. SIGTERM cancels all active contexts → graceful drain.
 
-### Error Handling
+## Linux-Native Primitives
 
-- **LLM provider errors**: Retry transient (429, 500, 503) with exponential backoff. Surface persistent errors to user ("I'm having trouble reaching my brain right now").
-- **Tool execution errors**: Capture stderr/stdout, feed back to LLM as tool result with error flag. Let the LLM decide what to do.
-- **Channel send errors**: Retry once, then log and drop. Don't crash the event loop.
-- **Unhandled exceptions**: Log full traceback, send generic error to user, continue event loop.
+### Process management: pidfd
+
+Tool exec and sub-agents spawn child processes. We manage them via `pidfd_open(2)`:
+
+```go
+// pidfd gives us a file descriptor for a child process.
+// Race-free: no PID reuse bugs. Pollable via epoll (Go runtime handles this).
+fd, err := unix.PidfdOpen(pid, 0)
+// Wait via pidfd — integrates with Go's netpoller
+unix.PidfdSendSignal(fd, unix.SIGTERM, nil, 0)
+```
+
+### Secrets: memfd_create
+
+API keys and tokens live in anonymous memory, never on disk:
+
+```go
+// Create anonymous memory-backed fd. MFD_CLOEXEC = invisible after exec.
+fd, err := unix.MemfdCreate("credentials", unix.MFD_CLOEXEC)
+// Write credentials, seek back to 0, read when needed.
+// /proc/self/fd/<N> exists but the file has no name on disk.
+```
+
+Credentials are loaded from environment variables or a single encrypted config at startup, written to memfd, and the original sources are zeroed.
+
+### Tool sandboxing: cgroups v2
+
+Each tool exec runs in a transient cgroup with resource limits:
+
+```go
+// Create cgroup for this exec invocation
+cgroupPath := fmt.Sprintf("/sys/fs/cgroup/aphelion/exec-%s", execID)
+os.MkdirAll(cgroupPath, 0755)
+os.WriteFile(filepath.Join(cgroupPath, "memory.max"), []byte("512M"), 0644)
+os.WriteFile(filepath.Join(cgroupPath, "cpu.max"), []byte("100000 100000"), 0644) // 1 CPU
+os.WriteFile(filepath.Join(cgroupPath, "pids.max"), []byte("64"), 0644)
+
+// Move child process into cgroup
+os.WriteFile(filepath.Join(cgroupPath, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0644)
+```
+
+Cgroup is cleaned up when the exec completes. A runaway tool can't OOM the host.
+
+### Sub-agent communication: unix domain sockets
+
+Sub-agents are child processes that communicate over `AF_UNIX`:
+
+```go
+// Parent creates socketpair
+fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+// Child inherits one fd, parent keeps the other.
+// SO_PEERCRED gives us the child's PID/UID for free.
+```
+
+Zero network overhead. No port allocation. No localhost exposure.
+
+## HTTP Client
+
+We don't use provider SDKs. All LLM providers are REST APIs over HTTPS. One shared HTTP client:
+
+```go
+// Shared transport with connection pooling and keep-alive.
+// Provider adapters build requests, parse responses.
+transport := &http.Transport{
+    MaxIdleConns:        10,
+    MaxIdleConnsPerHost: 5,
+    IdleConnTimeout:     90 * time.Second,
+    // TLS config as needed
+}
+client := &http.Client{Transport: transport}
+```
+
+Streaming responses are read via `resp.Body` as `io.Reader` — chunked transfer encoding is handled by the HTTP stack. We parse SSE lines ourselves (trivial).
 
 ## Iteration Budget
 
-Each turn has a configurable maximum number of LLM calls (default: 50). This prevents runaway tool-calling loops.
+Each turn has a max LLM call count (default: 50).
 
-- At 70% budget: inject a warning into the next tool result ("You're running low on iterations, start wrapping up.")
-- At 90% budget: inject urgent warning.
-- At 100%: force stop, return whatever the last assistant message was.
+```go
+type Budget struct {
+    Max      int
+    Used     int
+    Caution  float64 // 0.7 — inject "wrapping up" nudge
+    Warning  float64 // 0.9 — inject "stop now" nudge
+}
+
+func (b *Budget) Tick() (warning string, exhausted bool) {
+    b.Used++
+    ratio := float64(b.Used) / float64(b.Max)
+    switch {
+    case ratio >= 1.0:
+        return "", true
+    case ratio >= b.Warning:
+        return "⚠️ Last iteration. Return your final response now.", false
+    case ratio >= b.Caution:
+        return "You're running low on iterations. Start wrapping up.", false
+    default:
+        return "", false
+    }
+}
+```
+
+Budget warnings are injected into the next tool result content, not as separate messages (preserves cache prefix).
 
 ## Shutdown
 
-- SIGTERM / SIGINT → graceful shutdown.
-- Finish any in-progress turn (up to 30s timeout).
-- Persist all session state.
-- Close channel connections.
-- Exit.
+```go
+ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+defer stop()
+
+// On signal:
+// 1. Stop accepting new Telegram updates
+// 2. Cancel all active turn contexts (30s grace period)
+// 3. Wait for in-flight turns to drain
+// 4. Flush session store
+// 5. Close SQLite
+// 6. Exit
+```
+
+## Error Handling
+
+- **LLM provider errors**: Retry 429/500/503 with exponential backoff (max 3 retries). Surface persistent errors to user via Telegram.
+- **Tool exec errors**: Capture combined stdout+stderr, return to LLM as error-flagged tool result.
+- **Telegram send errors**: Retry once, then log and drop.
+- **Panics**: `recover()` in the turn goroutine. Log stack trace, send generic error to user, session survives.
 
 ## Module Structure
 
 ```
 aphelion/
+├── main.go              # entrypoint, wiring, signal handling
+├── config/
+│   └── config.go        # TOML config loading, memfd credential storage
 ├── core/
-│   ├── __init__.py
-│   ├── loop.py          # async event loop, signal handlers
-│   ├── router.py        # message routing, session resolution, concurrency
-│   ├── types.py         # InboundMessage, OutboundMessage, Media, AgentResponse
-│   └── errors.py        # error types, retry logic
+│   ├── router.go        # message routing, session dispatch, per-session mutex
+│   └── types.go         # InboundMessage, OutboundMessage, Media, TurnResult
 ├── agent/
-│   ├── __init__.py
-│   ├── turn.py          # run_turn(): the agent turn logic
-│   └── budget.py        # iteration budget tracking
+│   ├── turn.go          # RunTurn(): the agent turn loop
+│   └── budget.go        # iteration budget
 ├── telegram/
-│   ├── __init__.py
-│   ├── bot.py           # Telegram Bot API client
-│   └── formatting.py    # message formatting, markdown conversion
-├── providers/
-│   ├── __init__.py
-│   ├── base.py          # Provider protocol/ABC
-│   ├── anthropic.py
-│   ├── gemini.py
-│   ├── openai.py
-│   └── ollama.py
-├── tools/
-│   ├── __init__.py
-│   ├── registry.py
-│   ├── exec.py
-│   ├── files.py
-│   └── web.py
-├── sessions/
-│   ├── __init__.py
-│   ├── store.py         # SQLite session store
-│   └── compaction.py    # context window management
+│   ├── bot.go           # Bot API client, long-polling, send
+│   └── format.go        # MarkdownV2 conversion, message splitting
+├── provider/
+│   ├── provider.go      # Provider interface
+│   ├── anthropic.go     # Anthropic Messages API + caching
+│   ├── gemini.go        # Gemini API
+│   ├── openai.go        # OpenAI Chat Completions
+│   └── ollama.go        # Ollama local
+├── tool/
+│   ├── registry.go      # tool registration and dispatch
+│   ├── exec.go          # shell exec with cgroup sandboxing
+│   ├── files.go         # read, write, edit
+│   └── web.go           # HTTP fetch
+├── session/
+│   ├── store.go         # SQLite session store
+│   └── compact.go       # context window compaction
 ├── memory/
-│   ├── __init__.py
-│   ├── workspace.py     # file-based memory
-│   └── vectors.py       # embedding search
+│   ├── workspace.go     # file-based workspace (SOUL.md, etc.)
+│   └── vectors.go       # embedding search (optional)
 ├── automation/
-│   ├── __init__.py
-│   ├── heartbeat.py
-│   └── cron.py
+│   ├── heartbeat.go     # periodic agent turns
+│   └── cron.go          # scheduled jobs
 ├── voice/
-│   └── elevenlabs.py
-└── config.py            # configuration loading
+│   └── elevenlabs.go    # TTS
+└── internal/
+    ├── linux.go         # pidfd, memfd, cgroup helpers
+    └── sse.go           # SSE stream parser
 ```
 
-## What We're NOT Doing (vs OpenClaw / Hermes)
+## What We're NOT Doing
 
-- **No plugin system.** If you need something, add it to the codebase.
-- **No multi-node.** Single process, single machine.
-- **No multi-agent orchestration.** One agent. Sub-agents are spawned as child processes.
-- **No WebSocket gateway.** Telegram is the interface. No intermediary server for UIs.
-- **No web dashboard.** Telegram is the interface.
-- **No multi-channel.** Telegram only. No WhatsApp, Discord, Slack, Matrix, etc.
-- **No cross-platform.** Linux only. No macOS/Windows.
-- **No OpenAI Responses API compat layer.** We talk native Anthropic, Gemini, OpenAI Chat Completions, and Ollama.
+- **No plugin system.** Add it to the codebase or don't.
+- **No multi-node.** Single binary, single machine.
+- **No multi-channel.** Telegram only.
+- **No cross-platform.** Linux only. `//go:build linux` on the whole project.
+- **No web dashboard.** Telegram is the UI. Logs go to stderr/journald.
+- **No provider SDKs.** Direct HTTP. We own every byte on the wire.
+- **No ORM.** Raw SQL via `database/sql` + `mattn/go-sqlite3`.
 
-## Language & Dependencies
+## Dependencies (minimal)
 
-- **Python 3.12+**
-- **asyncio** for concurrency
-- **httpx** for HTTP (async, connection pooling)
-- **SQLite** (via aiosqlite) for session persistence
-- **pydantic** for config validation (maybe — could also just be dataclasses)
-- Minimal dependencies. No frameworks. No ORMs.
+- `mattn/go-sqlite3` — SQLite via CGo
+- `golang.org/x/sys/unix` — Linux syscalls (pidfd, memfd, cgroup)
+- Standard library for everything else (net/http, encoding/json, os/exec, crypto/tls)
 
 ## Open Questions
 
-- [ ] Should the router be a simple async function or a proper class with lifecycle?
-- [ ] Pydantic vs dataclasses for types?
+- [ ] TOML vs YAML vs JSON for config? (Leaning TOML — human-friendly, no indent wars)
+- [ ] Pebble/bbolt as an alternative to SQLite for session store?
+- [ ] Do we want structured logging (slog) or just plain stderr?

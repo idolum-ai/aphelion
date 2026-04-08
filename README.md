@@ -7,7 +7,7 @@ A minimal, focused agent runtime for personal AI assistants.
 - **Only what we need.** No plugin marketplace, no multi-channel support, no enterprise features.
 - **Linux only.** No macOS/Windows compat. Single target, no conditionals.
 - **Undetectable by design.** Every identifiable string — project name, user-agent, system prompt markers — is configurable or absent.
-- **Python.** Hackable, readable, forkable.
+- **Go.** Single static binary. Linux-native syscalls. Goroutines for concurrency. Deploy = `scp`.
 - **Anthropic-first caching.** Prompt caching done right: cache boundary splitting, 1h TTL, compaction that preserves prefixes.
 - **File-based memory.** Workspace files are the source of truth. Vector search optional.
 
