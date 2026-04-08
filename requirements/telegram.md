@@ -502,6 +502,183 @@ func splitMessage(text string, maxLen int) []string {
 
 **MarkdownV2 splitting caveat**: Splitting inside a formatting construct (e.g., mid-code-block) breaks the message. The splitter must be aware of open/close markers and prefer split points outside formatting.
 
+## Attachment Processing Pipeline
+
+When a user sends media, it needs to be converted into something the LLM can use. Each media type has a different pipeline.
+
+### Photos → Vision input
+
+Photos are passed directly to the LLM as image content blocks (Anthropic, Gemini, OpenAI all support this).
+
+```go
+func processPhoto(ctx context.Context, client *Client, fileID string) (*ContentBlock, error) {
+    // 1. Download via getFile + HTTP GET
+    data, mimeType, err := client.DownloadFile(ctx, fileID)
+    // 2. Base64 encode for API
+    b64 := base64.StdEncoding.EncodeToString(data)
+    // 3. Return as image content block
+    return &ContentBlock{
+        Type: "image",
+        Source: &ImageSource{
+            Type:      "base64",
+            MediaType: mimeType, // "image/jpeg", "image/png"
+            Data:      b64,
+        },
+    }, nil
+}
+```
+
+The content block is inserted into the user message alongside the text. If the message has both text and a photo, the user message becomes a multi-content-block message:
+```json
+{"role": "user", "content": [
+    {"type": "image", "source": {"type": "base64", ...}},
+    {"type": "text", "text": "What's in this image?"}
+]}
+```
+
+### Documents → Text extraction or vision
+
+```go
+func processDocument(ctx context.Context, client *Client, doc *Document) (*ContentBlock, error) {
+    data, _, err := client.DownloadFile(ctx, doc.FileID)
+    
+    switch {
+    case isTextFile(doc.MimeType, doc.FileName):
+        // .txt, .md, .py, .go, .js, .json, .csv, .yaml, .toml, .sh, .log
+        return &ContentBlock{Type: "text", Text: string(data)}, nil
+        
+    case doc.MimeType == "application/pdf":
+        // Extract text via pdftotext (exec tool) or pass as document to Anthropic
+        // Anthropic supports PDF input natively as base64 document blocks
+        return &ContentBlock{
+            Type: "document",
+            Source: &DocumentSource{
+                Type:      "base64",
+                MediaType: "application/pdf",
+                Data:      base64.StdEncoding.EncodeToString(data),
+            },
+        }, nil
+        
+    case isImageFile(doc.MimeType):
+        // Uncompressed images sent as documents (PNG, JPG without Telegram compression)
+        return processAsImage(data, doc.MimeType)
+        
+    default:
+        // Binary files: just note the metadata
+        return &ContentBlock{
+            Type: "text",
+            Text: fmt.Sprintf("[File attached: %s (%s, %d bytes)]", 
+                doc.FileName, doc.MimeType, len(data)),
+        }, nil
+    }
+}
+
+func isTextFile(mime string, name string) bool {
+    textMimes := []string{"text/", "application/json", "application/xml", 
+        "application/yaml", "application/toml", "application/x-sh"}
+    for _, t := range textMimes {
+        if strings.HasPrefix(mime, t) { return true }
+    }
+    textExts := []string{".txt", ".md", ".py", ".go", ".js", ".ts", ".rs",
+        ".json", ".yaml", ".yml", ".toml", ".csv", ".sh", ".log", ".html", ".css"}
+    ext := strings.ToLower(filepath.Ext(name))
+    for _, e := range textExts {
+        if ext == e { return true }
+    }
+    return false
+}
+```
+
+### Voice messages → Transcription
+
+Voice messages (OGG/Opus) are transcribed to text, then included as a text content block with a marker.
+
+```go
+func processVoice(ctx context.Context, client *Client, voice *Voice, transcriber Transcriber) (*ContentBlock, error) {
+    data, _, err := client.DownloadFile(ctx, voice.FileID)
+    
+    // Transcribe via configured provider (OpenAI Whisper API, or local whisper)
+    transcript, err := transcriber.Transcribe(ctx, data, "audio/ogg")
+    
+    return &ContentBlock{
+        Type: "text",
+        Text: fmt.Sprintf("[Voice message, %ds]\n%s", voice.Duration, transcript),
+    }, nil
+}
+```
+
+The Transcriber interface is defined in the voice/media spec. For v1, we use OpenAI's Whisper API.
+
+### Video → Metadata only (v1)
+
+Video processing is expensive. For v1, we extract metadata only:
+
+```go
+func processVideo(ctx context.Context, video *Video) *ContentBlock {
+    return &ContentBlock{
+        Type: "text",
+        Text: fmt.Sprintf("[Video attached: %ds, %dx%d, %s]",
+            video.Duration, video.Width, video.Height, video.MimeType),
+    }
+}
+```
+
+Future: extract keyframes and pass as vision input.
+
+### Stickers → Description
+
+```go
+func processSticker(sticker *Sticker) *ContentBlock {
+    text := fmt.Sprintf("[Sticker: %s", sticker.Emoji)
+    if sticker.SetName != "" {
+        text += fmt.Sprintf(" from set '%s'", sticker.SetName)
+    }
+    text += "]"
+    return &ContentBlock{Type: "text", Text: text}
+}
+```
+
+### Size limits
+
+- Telegram Bot API: max 20MB download
+- Anthropic image input: max 20MB per image, max 5 images per message
+- We check size before download and skip with a note if too large
+
+```go
+const maxDownloadSize = 20 * 1024 * 1024 // 20MB
+
+func (c *Client) DownloadFileChecked(ctx context.Context, fileID string, maxSize int) ([]byte, string, error) {
+    info, err := c.GetFile(ctx, fileID)
+    if info.FileSize > maxSize {
+        return nil, "", fmt.Errorf("file too large: %d bytes (max %d)", info.FileSize, maxSize)
+    }
+    return c.downloadFromPath(ctx, info.FilePath)
+}
+```
+
+### Config
+
+```toml
+[telegram.media]
+download_max_size = "20MB"        # Max file download size
+auto_transcribe_voice = true       # Automatically transcribe voice messages
+auto_vision_photos = true          # Automatically include photos as vision input
+pdf_as_document = true             # Send PDFs as Anthropic document blocks (vs text extraction)
+```
+
+### Tests
+
+- **TestProcessPhoto**: Photo file_id → downloaded, base64 encoded, returned as image content block.
+- **TestProcessDocumentText**: .py file → content returned as text block.
+- **TestProcessDocumentPDF**: PDF → returned as document content block.
+- **TestProcessDocumentImage**: .png sent as document → processed as image.
+- **TestProcessDocumentBinary**: .zip → metadata-only text block.
+- **TestProcessVoice**: OGG voice → transcribed, returned as text with duration marker.
+- **TestProcessVideo**: Video → metadata-only text block.
+- **TestProcessSticker**: Sticker with emoji → description text block.
+- **TestFileTooLarge**: 25MB file → error, not downloaded.
+- **TestMultiContentMessage**: Photo + caption → multi-block user message (image + text).
+
 ## File Download
 
 For media the agent needs to process (images for vision, audio for transcription):
