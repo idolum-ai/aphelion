@@ -701,6 +701,97 @@ interrupt_timeout = "30s"         # Auto-queue after this timeout
 - **TestInterruptKeyboardSent**: Message while busy → inline keyboard reply sent to user.
 - **TestInterruptCallbackAck**: Callback query → answerCallbackQuery sent (Telegram requires this).
 
+## Stop Words — Confirmation, Not Assumption
+
+OpenClaw silently aborts agent turns on trigger words like "wait", "stop", "cancel". This is fragile — "wait" often means "hold on, I'm adding more" not "abort everything."
+
+Aphelion never silently acts on ambiguous intent. Instead, we show a confirmation button.
+
+### Flow
+
+```
+1. User sends a message matching a stop pattern while agent is busy
+   Patterns: "wait", "stop", "cancel", "nevermind", "nvm", "hold on", "abort"
+   (case-insensitive, whole-message or message starts with)
+
+2. Aphelion immediately replies with an inline keyboard:
+   
+   "🛑 Stop the current task?"
+   
+   [ Yes, stop ]  [ No, keep going ]
+   
+   (And the user's message is preserved — it might contain follow-up context)
+
+3a. User taps "Yes, stop":
+    - Cancel current turn
+    - Delete the keyboard message
+    - If the user's message was ONLY a stop word ("wait", "stop"), discard it
+    - If the user's message had additional content ("wait, actually do X instead"),
+      route the full message as a new turn
+
+3b. User taps "No, keep going":
+    - Queue the user's message for after the current turn
+    - Edit keyboard to "Got it — I'll process your message next. ⏳"
+
+3c. No tap (timeout 15s):
+    - Default: keep going (non-destructive)
+    - Queue the message
+```
+
+### Stop pattern detection
+
+```go
+var stopPatterns = []string{
+    "wait", "stop", "cancel", "nevermind", "nvm", "hold on", "abort", "halt",
+}
+
+func isStopWord(text string) bool {
+    lower := strings.ToLower(strings.TrimSpace(text))
+    for _, p := range stopPatterns {
+        if lower == p || strings.HasPrefix(lower, p+" ") || strings.HasPrefix(lower, p+",") {
+            return true
+        }
+    }
+    return false
+}
+
+func isOnlyStopWord(text string) bool {
+    lower := strings.ToLower(strings.TrimSpace(text))
+    for _, p := range stopPatterns {
+        if lower == p {
+            return true
+        }
+    }
+    return false
+}
+```
+
+### Why confirm instead of auto-stop
+
+- "Wait" is ambiguous — could mean "pause" or "I have more to say"
+- "Stop" during a 10-minute coding task could lose significant work
+- A button takes 0.5s to tap and removes all ambiguity
+- The non-destructive default (keep going on timeout) means accidental stop words don't kill work
+- This is consistent with the interrupt button pattern above
+
+### Config
+
+```toml
+[telegram]
+stop_word_confirm = true          # Show confirmation button on stop words (vs auto-stop)
+stop_word_timeout = "15s"         # Auto-continue after this timeout
+```
+
+### Tests
+
+- **TestStopWordDetection**: "wait", "Stop", "CANCEL", "nvm" → detected. "waiting", "I'm stopping by" → not detected.
+- **TestStopWordConfirmStop**: Send "wait" while busy → tap Yes → turn cancelled.
+- **TestStopWordConfirmContinue**: Send "wait" while busy → tap No → message queued.
+- **TestStopWordTimeout**: Send "stop" while busy → no tap → auto-continue.
+- **TestStopWordWithContent**: Send "wait, do X instead" → tap Yes → turn cancelled, full message routed as new turn.
+- **TestStopWordOnlyDiscard**: Send "stop" (nothing else) → tap Yes → turn cancelled, no new turn started.
+- **TestStopWordNotBusy**: Send "wait" when agent is idle → no button, treated as normal message.
+
 ## Message Edit — Session Fork
 
 When a user edits a previous message, everything after that point was based on stale input. We treat this as a **fork point**: rewind the session to the edited message and replay from there.
