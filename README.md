@@ -38,6 +38,16 @@ Config file default:
 
 `~/.config/aphelion/config.toml`
 
+Recommended workspace setting for this repo:
+
+```toml
+[agent]
+workspace = "/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion"
+```
+
+If `agent.workspace` points somewhere broader such as your home directory, the `exec`
+tool will use that broader directory as its default shell scope.
+
 Build and run:
 
 ```bash
