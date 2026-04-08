@@ -150,11 +150,14 @@ db_path = "~/.config/aphelion/sessions.db"
 # These are in tokens. Compaction kicks in when the assembled prompt exceeds max_context_tokens.
 # These are per-provider — resolved at runtime from the active provider's context_window.
 # Expressed as ratios of the provider's context_window.
-max_context_ratio = 0.92      # Trigger compaction at 92% of context_window (leaves room for response + tool results)
-compaction_ratio = 0.65       # Compact down to 65% of context_window (aggressive enough to avoid re-compacting soon)
+max_context_ratio = 0.75      # Trigger compaction at 75% of context_window. Models degrade near limits (anxiety, hallucination).
+compaction_ratio = 0.55       # Compact down to 55% of context_window. Gives ~20% headroom before next compaction.
 compaction_strategy = "summarize"  # "summarize" (LLM-assisted) | "truncate" (drop oldest turns)
 # Session expiry
 idle_expiry = "24h"           # Expire sessions after this much inactivity
+
+[sessions.groups]
+scope = "per_user"            # "per_user" (one session per user per group) | "shared" (one session per group)
 
 # ─── Automation ───
 [heartbeat]

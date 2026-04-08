@@ -6,19 +6,35 @@ A session is a conversation between one Telegram chat and the agent. It holds me
 
 ## Session Identity
 
-Sessions are keyed by **Telegram chat ID** (int64). One session per chat.
+Sessions are keyed by a composite of **chat ID + scope**.
 
-- DMs: one session per user.
-- Groups: one session per group chat. All users in the group share the session.
-- If we later need per-user sessions in groups, we can extend the key to `chat_id:user_id`. Not needed for v1.
+### DMs
+One session per user. Key: `chat_id`.
+
+### Groups
+Configurable via `session.group_scope`:
+
+- `"shared"` — One session per group. All users share history. The LLM sees `[sender_name]: message` prefixes to distinguish speakers. Simpler, cheaper (one context window), but messages from all users accumulate in one history.
+- `"per_user"` (default) — One session per user per group. Key: `chat_id:user_id`. Each user gets their own conversation history with the agent, even within the same group. This is what Hermes does by default (`group_sessions_per_user=True`) and avoids context pollution from unrelated users.
+
+Both OpenClaw and Hermes support per-user group sessions. OpenClaw calls it `dmScope: "per-channel-peer"`. We default to `per_user` because:
+- It prevents one user's long tool-heavy session from blowing up context for everyone
+- It avoids exposing one user's conversation to another in the same group
+- It matches the mental model: talking to the bot in a group feels like a DM that happens to be visible
+
+In shared mode, the system prompt notes this is a multi-user context and does NOT pin a single user name (which would bust the prompt cache — the name changes per turn). Instead, each user message is prefixed with the sender name by the Telegram handler.
+
+### Group mention behavior
+In groups, the agent only responds when mentioned (or replied to). This is hardcoded for v1 — no `requireMention` config needed since we only have one channel.
 
 ## Session State
 
 ```go
 type Session struct {
     ChatID        int64
+    UserID        int64           // 0 for shared group sessions
     Messages      []Message       // Full conversation history
-    SystemPrompt  string          // Snapshot of the assembled system prompt
+    SystemPrompt  string          // Snapshot of the assembled system prompt (for cache reuse)
     CreatedAt     time.Time
     UpdatedAt     time.Time
     TurnCount     int
@@ -29,11 +45,24 @@ type Session struct {
     // Compaction
     CompactionLog []CompactionEntry  // Record of what was compacted and when
     
-    // Token accounting
+    // Token accounting (cumulative across all turns)
     TotalInputTokens   int64
     TotalOutputTokens  int64
     TotalCacheRead     int64
     TotalCacheWrite    int64
+    
+    // Provider state
+    LastProvider  string          // Which provider was used last (for failover tracking)
+    LastModel     string          // Which model was used last
+    
+    // Agent state
+    ActiveToolCalls int           // Tool calls in progress (for crash recovery)
+    LastError       string        // Last error message (for debugging)
+    
+    // Metadata
+    ChatType      string          // "dm" or "group"
+    ChatTitle     string          // Group title (for logging/display)
+    UserName      string          // Sender display name
 }
 
 type CacheState struct {
@@ -57,59 +86,92 @@ type CompactionEntry struct {
 ## SQLite Schema
 
 ```sql
+-- Schema version tracking for migrations
+CREATE TABLE schema_version (
+    version    INTEGER NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT INTO schema_version (version) VALUES (1);
+
 CREATE TABLE sessions (
-    chat_id       INTEGER PRIMARY KEY,
+    -- Composite key: chat_id + user_id (user_id=0 for shared group sessions)
+    chat_id       INTEGER NOT NULL,
+    user_id       INTEGER NOT NULL DEFAULT 0,
     system_prompt TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
     turn_count    INTEGER NOT NULL DEFAULT 0,
+    -- Chat metadata
+    chat_type     TEXT NOT NULL DEFAULT 'dm',  -- 'dm', 'group'
+    chat_title    TEXT,
+    user_name     TEXT,
     -- Cache state
     cache_last_write_block  INTEGER NOT NULL DEFAULT 0,
     cache_blocks_since      INTEGER NOT NULL DEFAULT 0,
     cache_last_write_time   TEXT,
     cache_hit_rate          REAL NOT NULL DEFAULT 0.0,
-    -- Token totals
+    -- Token totals (cumulative)
     total_input_tokens    INTEGER NOT NULL DEFAULT 0,
     total_output_tokens   INTEGER NOT NULL DEFAULT 0,
     total_cache_read      INTEGER NOT NULL DEFAULT 0,
-    total_cache_write     INTEGER NOT NULL DEFAULT 0
+    total_cache_write     INTEGER NOT NULL DEFAULT 0,
+    -- Provider state
+    last_provider TEXT,
+    last_model    TEXT,
+    -- Error tracking
+    last_error    TEXT,
+    PRIMARY KEY (chat_id, user_id)
 );
 
 CREATE TABLE messages (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id    INTEGER NOT NULL REFERENCES sessions(chat_id),
-    role       TEXT NOT NULL,  -- "user", "assistant", "tool"
+    chat_id    INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL DEFAULT 0,
+    role       TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
     content    TEXT NOT NULL,  -- JSON-encoded content blocks
-    tool_calls TEXT,           -- JSON-encoded tool calls (assistant messages)
+    tool_calls TEXT,           -- JSON-encoded tool calls (assistant only)
     tool_id    TEXT,           -- Tool call ID (tool result messages)
-    thinking   TEXT,           -- Extended thinking content (assistant messages)
+    tool_name  TEXT,           -- Tool name (tool result messages, for pruning decisions)
+    thinking   TEXT,           -- Extended thinking content (assistant only)
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     turn_index INTEGER NOT NULL,
-    -- Pruning metadata
-    pruned     INTEGER NOT NULL DEFAULT 0,  -- 0=full, 1=soft-trimmed, 2=hard-cleared
-    CONSTRAINT fk_chat FOREIGN KEY (chat_id) REFERENCES sessions(chat_id) ON DELETE CASCADE
+    -- Content size tracking (for fast token estimation without parsing JSON)
+    content_chars INTEGER NOT NULL DEFAULT 0,
+    -- Pruning metadata (applied in-memory, not mutated here)
+    -- The pruned column records if this message was part of a compaction.
+    compacted  INTEGER NOT NULL DEFAULT 0,  -- 0=active, 1=compacted (replaced by summary)
+    FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_messages_chat ON messages(chat_id, turn_index);
+CREATE INDEX idx_messages_session ON messages(chat_id, user_id, turn_index);
+CREATE INDEX idx_messages_active ON messages(chat_id, user_id, compacted, turn_index);
 
 CREATE TABLE compaction_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id    INTEGER NOT NULL REFERENCES sessions(chat_id),
+    chat_id    INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL DEFAULT 0,
     timestamp  TEXT NOT NULL DEFAULT (datetime('now')),
     turns_before  INTEGER,
     turns_after   INTEGER,
     tokens_before INTEGER,
     tokens_after  INTEGER,
     summary    TEXT,
-    CONSTRAINT fk_chat_compact FOREIGN KEY (chat_id) REFERENCES sessions(chat_id) ON DELETE CASCADE
+    strategy   TEXT NOT NULL DEFAULT 'summarize',  -- 'summarize', 'truncate'
+    FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
 );
 ```
 
 ### Why this schema
 
-- **Messages in a separate table**: Allows efficient range queries (load last N turns), selective pruning (update `pruned` flag without rewriting), and fast append (INSERT, not UPDATE of a growing JSON blob).
+- **Composite primary key** `(chat_id, user_id)`: Supports both DM sessions (user_id=0) and per-user group sessions naturally. No schema change needed when switching group scope.
+- **Schema versioning**: `schema_version` table tracks migrations. Future schema changes are applied incrementally at startup.
+- **Messages in a separate table**: Allows efficient range queries (load last N turns), fast append (INSERT, not UPDATE of a growing JSON blob), and index-based filtering.
 - **turn_index**: Monotonically increasing per session. Used for pruning age calculations and compaction boundaries.
-- **pruned flag**: 0=full content, 1=soft-trimmed (head+tail), 2=hard-cleared (placeholder only). Pruning is applied at query time — the original content is preserved in the `content` column, and the pruned version is computed when assembling the prompt.
+- **content_chars**: Stored alongside content for fast token estimation (`chars / 4`) without parsing JSON. Updated on INSERT.
+- **compacted flag**: 0=active message, 1=replaced by compaction summary. Compacted messages are kept on disk (for audit) but excluded from context assembly via the `idx_messages_active` index.
+- **CHECK constraint on role**: Prevents invalid role values at the DB level.
+- **tool_name on tool results**: Enables pruning decisions based on tool type (e.g., never prune `memory_search` results, aggressively prune `exec` output).
+- **Two indexes on messages**: `idx_messages_session` for full history load, `idx_messages_active` for fast context assembly (skips compacted messages).
 - **No message content in the sessions table**: Avoids the "one giant row" problem that SQLite handles poorly.
 
 ## Session Lifecycle
@@ -216,6 +278,8 @@ If the fingerprint matches the previous turn's, the system prompt bytes are reus
 
 Compaction is triggered when the assembled prompt (system prompt + messages + new user message) exceeds `max_context_ratio * context_window` tokens.
 
+**Why 75%, not 92%.** Models degrade as they approach context limits — increased hallucination, anxiety-like behavior, repetitive loops, and reduced instruction-following. The Mythos system card documents "context anxiety" explicitly. Compacting at 75% gives the model breathing room and keeps response quality high. The 65% compaction target means we drop ~10% of context, which is a modest compaction that preserves most history.
+
 ### Strategy: Summarize (default)
 
 ```
@@ -282,12 +346,19 @@ User messages and assistant text responses are always sent in full. They're the 
 ## Session Store Interface
 
 ```go
+// SessionKey identifies a session uniquely.
+type SessionKey struct {
+    ChatID int64
+    UserID int64 // 0 for shared group sessions or DMs
+}
+
 type Store interface {
-    Load(chatID int64) (*Session, error)
+    Load(key SessionKey) (*Session, error)
     Save(session *Session, newMessages []Message, usage TokenUsage) error
-    UpdateCacheState(chatID int64, state CacheState) error
-    Compact(chatID int64, summary string, keepFromTurn int) error
+    UpdateCacheState(key SessionKey, state CacheState) error
+    Compact(key SessionKey, summary string, keepFromTurn int) error
     ExpireIdle(maxIdle time.Duration) (int, error)
+    ListActive(since time.Duration) ([]SessionKey, error)
     Close() error
 }
 ```
@@ -319,11 +390,14 @@ func (s *SQLiteStore) init() {
 ```toml
 [sessions]
 db_path = "~/.config/aphelion/sessions.db"
-max_context_ratio = 0.92
-compaction_ratio = 0.65
-compaction_strategy = "summarize"   # "summarize" | "truncate"
-compaction_model = ""               # Empty = default. Or specific model for cheap compaction.
+max_context_ratio = 0.75            # Compact at 75%. Models degrade near limits.
+compaction_ratio = 0.55             # Compact down to 55%. ~20% headroom before next compaction.
+compaction_strategy = "summarize"    # "summarize" | "truncate"
+compaction_model = ""                # Empty = default. Or "anthropic:claude-haiku-4-5" for cheap compaction.
 idle_expiry = "24h"
+
+[sessions.groups]
+scope = "per_user"                   # "per_user" | "shared"
 ```
 
 Pruning config lives under the Anthropic provider section (since it's cache-aware):
@@ -369,6 +443,19 @@ pruning_hard_age = 20
 - **TestCompactionPreservesSystemPrompt**: After compaction, system prompt cache breakpoints are still valid.
 - **TestCompactionCacheStateReset**: After compaction, blocks_since_write is reset to 0.
 - **TestCompactionMinCacheTokens**: After compaction, remaining tokens still exceed min_cache_tokens (or warning logged).
+
+### Group sessions
+
+- **TestPerUserGroupSession**: Two users in same group → separate sessions, separate histories.
+- **TestSharedGroupSession**: scope=shared, two users → same session, messages prefixed with sender names.
+- **TestGroupSessionKey**: Per-user key is `chat_id:user_id`, shared key is `chat_id:0`.
+
+### Schema
+
+- **TestSchemaVersion**: After init, schema_version table has version=1.
+- **TestRoleConstraint**: INSERT message with role="invalid" → CHECK constraint error.
+- **TestContentChars**: INSERT message → content_chars matches len(content).
+- **TestCompactedIndex**: Compacted messages excluded from active index query.
 
 ### Integration
 
