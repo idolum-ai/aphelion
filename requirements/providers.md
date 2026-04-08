@@ -104,6 +104,37 @@ No custom headers. No user-agent override (Go default). No telemetry.
 
 **Caching**: Automatic prefix caching on supported models. No explicit markers needed. Reports `prompt_tokens_details.cached_tokens` in usage.
 
+### OpenRouter (unified gateway)
+
+**Endpoint**: `https://openrouter.ai/api/v1/chat/completions`
+
+OpenRouter is an OpenAI-compatible gateway to hundreds of models from every provider. Useful for:
+- Models we don't have direct API keys for
+- Fallback when a direct provider is down
+- Anthropic Claude models with `cache_control` pass-through (OpenRouter supports this)
+- Trying new models without adding a new provider adapter
+
+**Auth**: `Authorization: Bearer <key>`
+
+**Model format**: `provider/model` — e.g. `anthropic/claude-sonnet-4-6`, `google/gemini-3.1-pro`, `openai/gpt-5.4`
+
+**Streaming**: SSE, OpenAI-compatible format.
+
+**Caching**: For Anthropic models via OpenRouter, `cache_control` markers are passed through. Our explicit breakpoint strategy works. TTL is 5m only (1h is direct Anthropic only). The `cache_strategy` should auto-detect OpenRouter and downgrade to 5m TTL.
+
+**Headers** (minimal, anonymous):
+```
+Authorization: Bearer <key>
+Content-Type: application/json
+```
+
+We deliberately omit the optional `HTTP-Referer` and `X-OpenRouter-Title` headers — those would identify the harness on OpenRouter's leaderboard.
+
+**Implementation**: Reuses the OpenAI adapter since OpenRouter is OpenAI-compatible. The provider detects `openrouter.ai` in the base URL and:
+- Passes `cache_control` markers for Anthropic models
+- Adjusts cache TTL to 5m (1h not available via OpenRouter)
+- Skips OpenAI-specific features like `prompt_cache_key`
+
 ### Ollama (local)
 
 **Endpoint**: `http://localhost:11434/api/chat`
@@ -246,6 +277,7 @@ budget = 0                       # 0 = provider default, or explicit token budge
 | **Anthropic** | Explicit + automatic breakpoints, 5m/1h TTL, usage counters | Full hybrid strategy with all 7 techniques |
 | **OpenAI** | Automatic prefix caching, no explicit control | Sort tools, normalize prompt. Track `cached_tokens` from usage. No breakpoints to manage. |
 | **Gemini** | `cachedContents` resource (server-side), separate from request | Create + refresh cached content handle for system prompt. Less granular than Anthropic. |
+| **OpenRouter** | Anthropic `cache_control` pass-through (5m only), OpenAI auto-prefix | Reuse OpenAI adapter. Auto-detect OpenRouter URL, inject `cache_control` for Anthropic models, downgrade TTL to 5m. |
 | **Ollama** | None | No caching. Local latency is low enough that it doesn't matter. |
 
 ---
@@ -361,6 +393,10 @@ chars_per_token = 4              # Rough estimate for pre-flight checks
 - **TestAnthropicThinking**: `thinking.mode = "extended"` → request includes `thinking` field.
 - **TestGeminiComplete**: Mock HTTP server returns valid Gemini response → parsed correctly.
 - **TestOpenAIComplete**: Mock HTTP server returns valid OpenAI response → parsed correctly.
+- **TestOpenRouterComplete**: Mock HTTP server returns OpenAI-compatible response via OpenRouter → parsed correctly.
+- **TestOpenRouterAnthropicCache**: OpenRouter + Anthropic model → `cache_control` markers injected, TTL forced to 5m.
+- **TestOpenRouterNoIdentHeaders**: Request to OpenRouter → no `HTTP-Referer` or `X-OpenRouter-Title` headers.
+- **TestOpenRouterDetection**: Base URL contains `openrouter.ai` → provider auto-detects OpenRouter mode.
 - **TestOllamaComplete**: Mock HTTP server returns Ollama NDJSON → parsed correctly.
 
 ### Caching

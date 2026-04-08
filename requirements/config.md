@@ -91,6 +91,16 @@ model = "gpt-5.4"                # gpt-5.4, gpt-5.4-mini, gpt-5.4-nano
 max_tokens = 16384
 context_window = 128000
 
+[providers.openrouter]
+api_key = ""
+base_url = "https://openrouter.ai/api/v1"  # OpenAI-compatible
+model = "anthropic/claude-sonnet-4-6"       # provider/model format
+max_tokens = 64000
+context_window = 1000000
+# OpenRouter-specific: cache_control pass-through for Anthropic models (5m only)
+# 1h TTL is NOT available via OpenRouter — auto-downgrades to 5m
+# No HTTP-Referer or X-OpenRouter-Title headers (anonymization)
+
 [providers.ollama]
 base_url = "http://localhost:11434"
 model = "llama3.2"
