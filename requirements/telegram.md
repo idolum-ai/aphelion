@@ -143,6 +143,49 @@ func extractMedia(msg *Message) []core.Media {
 
 Media files need a two-step download: `getFile` to get `file_path`, then `https://api.telegram.org/file/bot<token>/<file_path>` to download. We do this lazily — only when the agent actually needs the file content.
 
+## DM Admission
+
+Telegram is the ingress path for all v0 conversations, so admission starts here.
+
+For private chats:
+
+- if the sender is `approved`, route the message into the DM session
+- if the sender is `pending`, do not create a session yet
+- if the sender is `banned`, ignore or send a fixed denial response
+
+In v0, admission may be bootstrapped from config rather than a durable principal registry. The Telegram layer should still treat admission as explicit policy, not as “all private chats are valid.”
+
+```go
+type DMDecision struct {
+    Route      bool
+    SendNotice bool
+    NoticeText string
+}
+
+func shouldHandleDM(msg *Message, principal *Principal) DMDecision {
+    if principal == nil {
+        return DMDecision{
+            Route:      false,
+            SendNotice: true,
+            NoticeText: "Your request is pending approval.",
+        }
+    }
+
+    switch principal.Admission {
+    case "approved":
+        return DMDecision{Route: true}
+    case "banned":
+        return DMDecision{Route: false}
+    default:
+        return DMDecision{
+            Route:      false,
+            SendNotice: true,
+            NoticeText: "Your request is pending approval.",
+        }
+    }
+}
+```
+
 ## Group Behavior
 
 ### Mention detection
@@ -154,7 +197,7 @@ In groups, the bot only responds when:
 
 ```go
 func shouldRespond(msg *Message, botUsername string) bool {
-    // Always respond in private chats
+    // Private chats are further filtered by admission policy.
     if msg.Chat.Type == "private" {
         return true
     }
@@ -276,6 +319,22 @@ func (s *Sender) SendDocument(ctx context.Context, chatID int64, doc core.Media,
 func (s *Sender) SendAudio(ctx context.Context, chatID int64, audio core.Media, caption string) error { /* ... */ }
 func (s *Sender) SendVoice(ctx context.Context, chatID int64, voice core.Media, caption string) error { /* ... */ }
 ```
+
+### Review digests to the admin DM
+
+When `review_events` are delivered, they are sent as normal Telegram text messages to the admin DM. No separate dashboard is required.
+
+The text should be clearly labeled, for example:
+
+```text
+[Review digest]
+User: alice
+Turns: 12-18
+Summary:
+...
+```
+
+These messages should also be recorded into the admin session history so the admin can respond naturally in the same DM.
 
 ## Live Feedback — Streaming & Tool Progress
 
@@ -1188,6 +1247,8 @@ max_message_length = 4096
 parse_mode = "MarkdownV2"
 ```
 
+`allowed_chats` is only a coarse pre-filter. It is not a replacement for principal approval.
+
 ## Module Structure
 
 ```
@@ -1217,12 +1278,19 @@ telegram/
 
 ### Group behavior
 
-- **TestShouldRespondDM**: Private chat → always true.
+- **TestShouldRespondDMApproved**: Approved private chat → routed.
+- **TestShouldRespondDMPending**: Pending private chat → no session created, pending notice sent once or at bounded intervals.
+- **TestShouldRespondDMBanned**: Banned private chat → not routed.
 - **TestShouldRespondMention**: Group message with @botname → true.
 - **TestShouldRespondReply**: Group message replying to bot → true.
 - **TestShouldRespondIgnore**: Group message, no mention, no reply → false.
 - **TestSenderPrefixShared**: Shared group scope → message prefixed with sender name.
 - **TestSenderPrefixPerUser**: Per-user group scope → no prefix.
+
+### Review delivery
+
+- **TestDeliverReviewDigest**: Pending review digest is sent to the configured admin DM.
+- **TestReviewDigestLabeling**: Delivered digest text includes source user and turn range.
 
 ### MarkdownV2
 

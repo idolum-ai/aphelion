@@ -18,7 +18,7 @@ Default location: `~/.config/aphelion/config.toml`
 
 Override via `APHELION_CONFIG` env var or `--config` flag.
 
-Implementation is staged. A minimal daemon only needs the small subset required to boot, authenticate, route DM turns, and manage prompt context. The wider schema remains part of the contract so later hardening does not require redesigning config layout or ownership boundaries.
+Implementation is staged. A minimal daemon only needs the small subset required to boot, authenticate, admit DM principals, route DM turns, and manage prompt context. The wider schema remains part of the contract so later hardening does not require redesigning config layout or ownership boundaries.
 
 ```toml
 # ─── Identity ───
@@ -162,6 +162,12 @@ db_path = "~/.config/aphelion/sessions.db"
 # runtime may reach it slightly after basic turn handling is stable.
 idle_expiry = "24h"           # Expire sessions after this much inactivity
 
+# v0 admission bootstrap:
+[users]
+bootstrap_admin_chat_id = 123456789
+bootstrap_approved_chat_ids = [123456789]
+auto_approve = false
+
 # Deferred after v0:
 # Context management thresholds — push close to the provider's actual limit.
 # These are in tokens. Compaction kicks in when the assembled prompt exceeds max_context_tokens.
@@ -176,10 +182,6 @@ compaction_strategy = "summarize"  # "summarize" (LLM-assisted) | "truncate" (dr
 scope = "per_user"            # "per_user" (one session per user per group) | "shared" (one session per group)
 
 # v0.5 approved multi-user DMs:
-[users]
-admin_chat_id = 123456789
-approved_chat_ids = [123456789, 222222222]
-
 [reviews]
 enabled = true
 digest_every = "30m"
@@ -187,9 +189,25 @@ digest_on_idle = true
 max_summary_chars = 1200
 
 [sessions.isolation]
-root = "~/.config/aphelion/workspaces"
-shared_memory_dir = "~/.config/aphelion/memory/shared"
-per_user_memory_dir = "~/.config/aphelion/memory/users"
+global_root = "~/.config/aphelion/workspace"
+shared_memory_root = "~/.config/aphelion/memory/shared"
+user_workspace_root = "~/.config/aphelion/workspaces"
+user_memory_root = "~/.config/aphelion/memory/users"
+
+[sandbox.profiles.admin]
+mode = "trusted"               # "trusted" | "isolated"
+
+[sandbox.profiles.approved_user]
+mode = "isolated"
+readonly_root = true
+writable_paths = ["{user_workspace}", "{user_memory}", "/tmp"]
+readonly_paths = ["{global_root}", "{shared_memory_root}"]
+hidden_paths = [
+    "~/.config/aphelion/config.toml",
+    "~/.ssh",
+    "~/.gnupg",
+]
+network = "deny"               # "deny" | "allowlist"
 
 # ─── Automation ───
 [heartbeat]
@@ -451,8 +469,8 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 
 ## Staging
 
-- **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, DM-only session storage, workspace prompt files, and the agent execution limits that bound a turn.
-- **Required for DM approval and authority**: an admission model for DMs, an admin principal, and clear config ownership for later user roles and isolated workspaces.
+- **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, DM-only session storage, DM admission bootstrap, workspace prompt files, and the agent execution limits that bound a turn.
+- **Required for DM approval and authority**: an admission model for DM principals, an admin principal, and clear config ownership for later authority roles and isolated roots.
 - **Required for a hardened local system tool**: sandbox controls, HTTP transport tuning, failover policy, and credential sealing.
 - **Reserved architectural surface**: group-session controls, approved multi-user DM reviews, additional providers, embeddings, voice, cron, and deeper Linux controls. These should have stable config ownership even before they are fully wired.
 
@@ -461,6 +479,7 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 - **TOML.** Human-friendly, comment-friendly, Go ecosystem default.
 - **Single file.** No `config.d/`, no merge logic. One file, one truth.
 - **Broad schema by design.** Config breadth is intentional architectural headroom, not accidental scope creep. The system should remain adaptable instead of freezing around the first successful surface.
+- **Admission and authority are first-class config concerns.** Even in DM-only mode, once more than one approved user exists, the system needs explicit ownership of admin bootstrap, review cadence, and isolated roots.
 - **memfd with F_SEAL for credentials.** Immutable in-memory secrets. Defense in depth.
 - **No hot reload.** Simplicity. Single-binary restart is fast.
 - **Bootstrap vs dynamic files.** Bootstrap files (SOUL.md, IDENTITY.md, etc.) are stable and go in the cached prefix. Dynamic files (MEMORY.md, HEARTBEAT.md, daily notes) change often and go after the cache boundary. This maximizes cache hit rate.

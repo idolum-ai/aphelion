@@ -1,17 +1,23 @@
-# Sessions — Conversation State, Compaction & Context Management
+# Sessions — Conversation State, Admission, Isolation & Review Flow
 
 ## Overview
 
-A session is a persisted conversation between one Telegram chat and the agent. It holds message history, assembled system prompt state, token/accounting metadata, and enough information to continue the conversation on the next turn.
+A session is the durable conversation ledger for one agent conversation. It stores message history, token/accounting metadata, compaction markers, and enough information to continue the conversation on the next turn.
 
-This spec is staged. The immediate goal is a correct DM-only v0 with explicit admission control. After that, the next stage is approved multi-user DMs with hard isolation and digest forwarding into the admin DM. Group semantics, deeper context management, and provider-specific cache behavior remain part of the architecture, but they are explicitly deferred rather than folded into the first acceptance bar.
+This spec separates three concerns that were previously blurred together:
+
+- **principal policy**: who is allowed to talk to the system, and at what authority level
+- **session ledger**: the durable append-only transcript for a conversation
+- **review flow**: the bounded summaries that move information from isolated non-admin sessions into the admin DM
+
+This separation matters because approval and authority outlive any one session, while the session itself should remain a clean conversation ledger.
 
 ## Scope
 
 ### v0 required
 
 - DM-only sessions
-- Explicit approval before a DM can create or resume a session
+- Explicit admission before a DM can create or resume a session
 - At least one admin principal
 - SQLite-backed append-only message history
 - Per-turn load, run, and save
@@ -21,11 +27,11 @@ This spec is staged. The immediate goal is a correct DM-only v0 with explicit ad
 
 ### v0.5: approved multi-user DMs
 
-- `admin` and `approved_user` roles
+- `admin` and `approved_user` principal roles
 - Hard isolation for non-admin writable state
 - Read-only access to global persona and shared memory for non-admins
-- Automatic digest forwarding from non-admin sessions into the admin DM
-- Admin DM acts as the review surface; no separate UI required
+- Automatic bounded digests forwarded from non-admin sessions into the admin DM
+- The admin DM acts as the review UI; no separate dashboard is required
 
 ### Deferred after v0.5
 
@@ -37,59 +43,66 @@ This spec is staged. The immediate goal is a correct DM-only v0 with explicit ad
 - Cache-aware prompt fingerprinting and exact-byte prompt reuse
 - Provider-specific cache heuristics coupled to session state
 
-## Session Identity
+## Principals, Admission & Authority
 
-### v0: DMs
+### Principal model
 
-For v0, the runtime is DM-only.
+For DM-only operation, the principal is the Telegram user reached through a private chat. In practice, v0 may key this by DM `chat_id`, because a Telegram private chat is already a stable peer identity for the bot.
 
-- One session per Telegram DM
-- Key: `chat_id`
-- Persist `user_id = 0`
-- Persist `chat_type = "dm"`
-- No session exists until the DM is approved
+Admission and authority are principal policy, not session state.
 
-The store still uses a composite `(chat_id, user_id)` key so later group support does not require redesigning schema or APIs.
-
-### v0 admission
-
-Admission is required before a user can create or continue a session.
-
-The implementation may begin with a simple allow-list, but the design target is explicit approval state:
+### Admission states
 
 - `pending`
 - `approved`
 - `banned`
 
-For v0, admission happens only for DMs.
+No session should be created or resumed until the principal is `approved`.
 
-### v0.5 authority
-
-After v0, approved users split into two roles:
+### Authority roles
 
 - `admin`: trusted to mutate global state
 - `approved_user`: trusted to talk to the system, but not to mutate global state directly
 
-This distinction matters even in DM-only mode, because multiple approved DMs still interact with the same underlying system unless isolation is explicit.
+### v0 bootstrap
+
+The simplest correct v0 may bootstrap principal policy from config:
+
+- one configured admin principal
+- optional pre-approved principals
+- manual approval required by default
+
+This is sufficient for the first runnable system.
+
+### v0.5 durable principal policy
+
+Once multiple approved users exist, principal policy should become durable rather than config-only. Session expiry must not erase approval state.
+
+## Session Identity
+
+Sessions are keyed by a composite of `chat_id + user_id`.
+
+### v0: DMs
+
+- one session per Telegram DM
+- key: `chat_id`
+- persist `user_id = 0`
+- persist `chat_type = "dm"`
+
+The composite key remains because it is the right long-term shape for later group support.
 
 ### Deferred: Groups
 
-Later group behavior should be configurable via `sessions.groups.scope`:
+Later group behavior should support:
 
 - `"shared"`: one session per group, key `chat_id:0`
 - `"per_user"`: one session per user per group, key `chat_id:user_id`
-
-In shared mode, user messages should be prefixed with the sender name by the channel adapter. The system prompt should not pin a single user name, because that would destabilize the prompt prefix.
-
-### Deferred: Group mention behavior
-
-When group support lands, the agent should only respond when mentioned or replied to. This is a channel-policy concern, not part of DM-only v0.
 
 ## Authority & Isolation
 
 ### v0
 
-The simplest correct v0 is a single admin DM plus explicit admission for any future users. If only the admin is approved, the session may operate directly on the real workspace and shared memory.
+If only the admin is approved, the session may operate directly on the real workspace and shared memory.
 
 ### v0.5
 
@@ -102,25 +115,82 @@ Once more than one approved user exists, authority must split from admission.
 
 The key rule is:
 
-- **global mutation authority** belongs only to admin sessions
-- **local work authority** belongs to each approved user's isolated session
+- **global mutation authority** belongs only to admin principals
+- **local work authority** belongs to each approved non-admin principal inside isolated state
 - **cross-session knowledge transfer** happens only through bounded digests into the admin DM
 
-## Session State
+### Isolation roots
 
-The session struct can be broader than v0 as long as the extra fields are honest architectural headroom rather than fake live behavior.
+The design target is to stop treating one workspace path as both global identity and per-user writable state.
+
+Instead, resolve four roots:
+
+- `global_root`: shared persona/bootstrap files, admin-writable
+- `shared_memory_root`: shared memory, admin-writable, non-admin read-only
+- `user_workspace_root/<principal>`: writable isolated workspace for a non-admin principal
+- `user_memory_root/<principal>`: writable isolated memory for a non-admin principal
+
+For admin sessions:
+
+- exec tools run in the real/global workspace
+- shared memory is writable
+
+For non-admin sessions:
+
+- exec tools run only inside the isolated per-user workspace
+- per-user memory is writable
+- global persona and shared memory are read-only prompt context
+
+### Process isolation
+
+Storage isolation is not enough on its own. Tool execution must also run under a role-aware sandbox.
+
+For `approved_user` sessions, the target model is:
+
+- the process starts in an isolated execution root
+- `/` is read-only, hidden, or replaced by a minimal root
+- writable paths are limited to:
+  - that principal's isolated workspace
+  - that principal's isolated memory
+  - `/tmp`
+- global persona and shared memory are mounted read-only if exposed at all
+- config, SSH keys, GPG material, and similar secrets are hidden
+- Linux capabilities are dropped
+- a user namespace is enabled
+- cgroup limits are enforced
+- network access is either disabled or explicitly allow-listed
+
+For `admin` sessions, the process may use a more permissive profile, but it should still retain bounded time/resource controls. The key distinction is that admin execution may target the real/global workspace, while non-admin execution must never do so.
+
+## Data Model
+
+### Principal
+
+```go
+type Principal struct {
+    ChatID       int64
+    Admission    string    // "pending" | "approved" | "banned"
+    Role         string    // "admin" | "approved_user"
+    DisplayName  string
+    ApprovedAt   time.Time
+    UpdatedAt    time.Time
+}
+```
+
+### Session
 
 ```go
 type Session struct {
     ChatID       int64
     UserID       int64           // 0 in v0
-    Role         string          // "admin" | "approved_user"
-    Approved     bool
     Messages     []Message
-    SystemPrompt string          // Snapshot of the assembled system prompt
+    SystemPrompt string
     CreatedAt    time.Time
     UpdatedAt    time.Time
     TurnCount    int
+
+    // Snapshot of the resolved execution root for audit/debugging.
+    ResolvedWorkspaceRoot string
 
     // Cache tracking
     CacheState CacheState
@@ -146,9 +216,30 @@ type Session struct {
     ChatType  string // "dm" or "group"
     ChatTitle string
     UserName  string
-    WorkspaceRoot string         // Real workspace for admin, isolated workspace for non-admin
 }
+```
 
+### ReviewEvent
+
+```go
+type ReviewEvent struct {
+    ID               int64
+    SourceChatID     int64
+    SourceUserID     int64
+    SourceRole       string
+    TargetAdminChatID int64
+    TurnFrom         int
+    TurnTo           int
+    Summary          string
+    Status           string    // "pending" | "delivered" | "dismissed"
+    CreatedAt        time.Time
+    DeliveredAt      time.Time
+}
+```
+
+### CacheState and CompactionEntry
+
+```go
 type CacheState struct {
     LastWriteBlock    int
     BlocksSinceWrite  int
@@ -177,11 +268,21 @@ CREATE TABLE schema_version (
 );
 INSERT INTO schema_version (version) VALUES (1);
 
+-- v0 may bootstrap principal policy from config.
+-- v0.5 should persist it here.
+CREATE TABLE principals (
+    chat_id       INTEGER PRIMARY KEY,
+    admission     TEXT NOT NULL CHECK(admission IN ('pending', 'approved', 'banned')),
+    role          TEXT NOT NULL CHECK(role IN ('admin', 'approved_user')),
+    display_name  TEXT,
+    approved_at   TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE sessions (
     chat_id       INTEGER NOT NULL,
     user_id       INTEGER NOT NULL DEFAULT 0,
-    role          TEXT NOT NULL DEFAULT 'approved_user',
-    approved      INTEGER NOT NULL DEFAULT 0,
     system_prompt TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
@@ -189,7 +290,7 @@ CREATE TABLE sessions (
     chat_type     TEXT NOT NULL DEFAULT 'dm',
     chat_title    TEXT,
     user_name     TEXT,
-    workspace_root TEXT,
+    resolved_workspace_root TEXT,
     cache_last_write_block  INTEGER NOT NULL DEFAULT 0,
     cache_blocks_since      INTEGER NOT NULL DEFAULT 0,
     cache_last_write_time   TEXT,
@@ -239,19 +340,20 @@ CREATE TABLE outbound_messages (
 CREATE INDEX idx_outbound_session ON outbound_messages(chat_id, user_id, turn_index);
 
 CREATE TABLE review_events (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_chat_id INTEGER NOT NULL,
-    source_user_id INTEGER NOT NULL DEFAULT 0,
-    source_role    TEXT NOT NULL,
-    target_chat_id INTEGER NOT NULL,       -- admin DM chat_id
-    turn_from      INTEGER,
-    turn_to        INTEGER,
-    summary        TEXT NOT NULL,
-    delivered      INTEGER NOT NULL DEFAULT 0,
-    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_chat_id   INTEGER NOT NULL,
+    source_user_id   INTEGER NOT NULL DEFAULT 0,
+    source_role      TEXT NOT NULL,
+    target_chat_id   INTEGER NOT NULL, -- admin DM chat_id
+    turn_from        INTEGER,
+    turn_to          INTEGER,
+    summary          TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'dismissed')),
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    delivered_at     TEXT
 );
 
-CREATE INDEX idx_review_events_target ON review_events(target_chat_id, delivered, created_at);
+CREATE INDEX idx_review_events_target ON review_events(target_chat_id, status, created_at);
 
 CREATE TABLE compaction_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -270,18 +372,24 @@ CREATE TABLE compaction_log (
 
 ### Why this schema
 
-- **Composite primary key** `(chat_id, user_id)`: v0 only uses `user_id=0`, but the schema is already shaped for later group support.
-- **Schema versioning**: future changes are applied incrementally at startup.
+- **Principal policy is separate from sessions**: admission and role outlive session expiry and should not be stored only on a conversation row.
+- **Composite session key** `(chat_id, user_id)`: v0 only uses `user_id=0`, but the shape is already correct for later group support.
 - **Messages in a separate table**: supports efficient load, append, and filtering without rewriting a giant blob.
-- **turn_index**: provides a stable turn boundary for later pruning and compaction.
-- **content_chars**: allows cheap token estimation.
-- **compacted flag**: compacted messages remain on disk for audit but can be excluded from active prompt assembly.
+- **resolved_workspace_root**: records the actual execution root used for that session.
 - **outbound_messages**: keeps a durable mapping between agent turns and Telegram message IDs.
-- **role + approved**: lets session admission and authority remain explicit rather than inferred from chat IDs alone.
-- **workspace_root**: allows the runtime to bind a session to either the real workspace or an isolated per-user workspace.
-- **review_events**: gives non-admin sessions a one-way path into the admin DM without merging raw history or raw tool output.
+- **review_events**: creates a one-way, bounded bridge from isolated sessions into the admin DM.
+- **compacted flag**: compacted messages remain on disk for audit but can be excluded from active prompt assembly.
 
 ## Session Lifecycle
+
+### Resolve principal
+
+Before routing a DM:
+
+1. resolve the principal from config/bootstrap or the `principals` table
+2. if `pending`, do not create a session yet
+3. if `banned`, ignore or send a fixed denial response
+4. if `approved`, continue into session load
 
 ### Load
 
@@ -295,8 +403,6 @@ func (s *Store) Load(key SessionKey) (*Session, error) {
 }
 ```
 
-Load is called at the start of every turn.
-
 ### Save
 
 ```go
@@ -308,7 +414,7 @@ func (s *Store) Save(session *Session, newMessages []Message, usage TokenUsage) 
 }
 ```
 
-Save is called after each turn completes. The persistent history is append-only. Existing rows are not rewritten during the normal turn path.
+The persistent history is append-only. Existing rows are not rewritten during the normal turn path.
 
 ### Delete / Expire
 
@@ -321,25 +427,32 @@ func (s *Store) ExpireIdle(maxIdle time.Duration) (int, error) {
 
 Expiry is useful in v0 even before compaction exists.
 
-## Digest Forwarding
+## Review Flow
 
-### v0.5 review membrane
+### v0.5 digest membrane
 
 The admin DM is the review surface. No separate UI is required.
 
 Non-admin sessions stay isolated, but they periodically emit bounded digests into the admin DM:
 
-1. compact or summarize a bounded slice of the non-admin session
+1. summarize a bounded slice of the non-admin session
 2. store it as a `review_event`
 3. forward it to the admin DM on a cadence or when the session goes idle
-4. let the admin react naturally in the same DM
+4. append the delivered digest to the admin DM as a labeled bot-generated message
+5. let the admin react naturally in the same DM
 
 The digest itself is the membrane:
 
 - raw session history does not cross the boundary
 - raw tool output does not cross the boundary
 - global state is not mutated by the non-admin session directly
-- the admin can still ask the system to ban the user, delete the session, or forget the forwarded digest
+- the admin can still ban the user, delete the session, or dismiss the digest
+
+The review flow is intentionally one-way:
+
+- non-admin session -> bounded digest -> admin DM
+
+The reverse direction is ordinary admin action in the admin DM, not silent state sharing back into non-admin sessions.
 
 No explicit promotion workflow is required. The digest is already a reduced, bounded transfer of context.
 
@@ -349,39 +462,40 @@ No explicit promotion workflow is required. The digest is already a reduced, bou
 
 Every turn:
 
-1. Render the base system instruction.
-2. Load workspace bootstrap files.
-3. Load workspace dynamic files (`MEMORY.md`, `HEARTBEAT.md`, daily notes).
-4. Load persisted messages for the session.
-5. Exclude compacted messages from active history.
-6. Append the new user message.
-7. Run the model turn.
-8. Persist new messages.
+1. render the base system instruction
+2. load workspace bootstrap files
+3. load workspace dynamic files (`MEMORY.md`, `HEARTBEAT.md`, daily notes)
+4. load persisted messages for the session
+5. exclude compacted messages from active history
+6. append the new user message
+7. run the model turn
+8. persist new messages
 
 v0 does **not** require:
 
+- multi-user isolation
+- digest forwarding
 - pruning tool outputs
 - automatic compaction triggers
 - prompt fingerprinting
 - exact-byte prompt reuse
 - provider cache breakpoints in the session layer
-- multi-user isolation
-- digest forwarding
 
-The only requirement is correctness: workspace files must be reflected on the next turn, and active persisted history must be replayed in order.
+The only v0 requirement is correctness: workspace files must be reflected on the next turn, and active persisted history must be replayed in order.
 
 ### v0.5 isolated prompt assembly
 
 For non-admin sessions:
 
-1. use the isolated workspace root
-2. inject shared persona and shared memory as read-only context
-3. inject per-user local memory as writable local context
-4. never grant direct write access to global persona or shared memory
+1. use the isolated per-user workspace root for tool execution
+2. inject global persona/bootstrap files as read-only context
+3. inject shared memory as read-only context
+4. inject per-user local memory as writable local context
+5. never grant direct write access to global persona or shared memory
 
 For the admin session:
 
-1. use the real workspace root
+1. use the real/global workspace root
 2. receive forwarded digests from other sessions as labeled bot messages
 3. treat those digests as normal conversational context inside the admin DM
 
@@ -412,7 +526,7 @@ Compacted messages should remain on disk for audit. They should not be deleted a
 
 ## Pruning
 
-Pruning is also deferred after v0.
+Pruning is deferred after v0.
 
 When implemented, pruning is applied only in memory during prompt assembly:
 
@@ -422,9 +536,9 @@ When implemented, pruning is applied only in memory during prompt assembly:
 
 SQLite remains the source of truth for the full original transcript.
 
-## Session Store Interface
+## Store Interfaces
 
-### v0 required
+### v0 session ledger
 
 ```go
 type SessionKey struct {
@@ -440,7 +554,19 @@ type Store interface {
 }
 ```
 
-### Extended interface after v0
+### v0 principal policy
+
+v0 may keep principal policy in config. If it becomes durable earlier, expose a separate principal-policy interface rather than overloading the session ledger.
+
+```go
+type PrincipalPolicy interface {
+    Resolve(chatID int64) (*Principal, error)
+    Approve(chatID int64, role string) error
+    Ban(chatID int64) error
+}
+```
+
+### Extended interfaces after v0
 
 ```go
 type ExtendedStore interface {
@@ -466,15 +592,16 @@ Single-connection SQLite with WAL mode is sufficient for v0. A dedicated writer 
 [sessions]
 db_path = "~/.config/aphelion/sessions.db"
 idle_expiry = "24h"
+
+[users]
+bootstrap_admin_chat_id = 123456789
+bootstrap_approved_chat_ids = [123456789]
+auto_approve = false
 ```
 
 ### v0.5
 
 ```toml
-[users]
-admin_chat_id = 123456789
-approved_chat_ids = [123456789, 222222222]
-
 [reviews]
 enabled = true
 digest_every = "30m"
@@ -482,9 +609,10 @@ digest_on_idle = true
 max_summary_chars = 1200
 
 [sessions.isolation]
-root = "~/.config/aphelion/workspaces"
-shared_memory_dir = "~/.config/aphelion/memory/shared"
-per_user_memory_dir = "~/.config/aphelion/memory/users"
+global_root = "~/.config/aphelion/workspace"
+shared_memory_root = "~/.config/aphelion/memory/shared"
+user_workspace_root = "~/.config/aphelion/workspaces"
+user_memory_root = "~/.config/aphelion/memory/users"
 ```
 
 ### Deferred after v0.5
@@ -500,37 +628,45 @@ compaction_model = ""
 scope = "per_user"
 ```
 
-Provider-specific pruning knobs remain provider config, not session-store config.
+Provider-specific pruning knobs remain provider config, not session-ledger config.
 
 ## Tests
 
-### v0 store
+### v0 admission and ledger
 
-- **TestCreateSession**: Load nonexistent DM session → new session created with defaults.
-- **TestAdmissionRequired**: Unapproved DM cannot create or resume a session.
-- **TestSaveAndLoad**: Save messages → load → messages match.
-- **TestAppendOnly**: Save 3 messages, then save 2 more → load returns all 5 in order.
-- **TestTurnIndex**: Messages have monotonically increasing `turn_index`.
-- **TestExpireIdle**: Idle session is deleted.
-- **TestExpireKeepsActive**: Active session survives expiry sweep.
-- **TestCascadeDelete**: Session deletion cascades to messages and compaction log tables.
-- **TestConcurrentReads**: Concurrent reads succeed under WAL mode.
-- **TestWALMode**: `PRAGMA journal_mode` returns `wal`.
+- **TestAdmissionRequired**: unapproved DM cannot create or resume a session
+- **TestBootstrapAdminApproved**: configured admin principal is treated as approved on startup
+- **TestCreateSession**: load nonexistent approved DM session → new session created with defaults
+- **TestSaveAndLoad**: save messages → load → messages match
+- **TestAppendOnly**: save 3 messages, then save 2 more → load returns all 5 in order
+- **TestTurnIndex**: messages have monotonically increasing `turn_index`
+- **TestExpireIdle**: idle session is deleted
+- **TestExpireKeepsActive**: active session survives expiry sweep
+- **TestConcurrentReads**: concurrent reads succeed under WAL mode
+- **TestWALMode**: `PRAGMA journal_mode` returns `wal`
 
 ### v0 context assembly
 
-- **TestAssembleBasic**: System prompt + persisted messages assemble in order.
-- **TestCompactMessagesExcluded**: `compacted=1` messages are excluded from active history.
-- **TestWorkspaceFilesReloadedEachTurn**: updated `MEMORY.md` / `HEARTBEAT.md` content appears on the next turn.
+- **TestAssembleBasic**: system prompt + persisted messages assemble in order
+- **TestCompactMessagesExcluded**: `compacted=1` messages are excluded from active history
+- **TestWorkspaceFilesReloadedEachTurn**: updated `MEMORY.md` / `HEARTBEAT.md` content appears on the next turn
 
 ### v0.5 isolation and digests
 
-- **TestAdminUsesRealWorkspace**: admin session binds to the real workspace root.
-- **TestApprovedUserUsesIsolatedWorkspace**: non-admin session binds to its isolated workspace root.
-- **TestApprovedUserReadOnlySharedPersona**: non-admin session can read but not write shared persona and shared memory.
-- **TestDigestEnqueuedForAdmin**: non-admin session produces a bounded summary stored as `review_event`.
-- **TestDigestDeliveredToAdminDM**: pending `review_events` are forwarded into the admin DM.
-- **TestDigestIsBounded**: long non-admin session becomes a bounded digest under configured limits.
+- **TestAdminUsesGlobalRoots**: admin session binds to the real/global roots
+- **TestApprovedUserUsesIsolatedRoots**: non-admin session binds to isolated workspace and memory roots
+- **TestApprovedUserReadOnlySharedMemory**: non-admin can read but not write shared memory/persona surfaces
+- **TestApprovedUserExecUsesIsolatedRoot**: non-admin tool execution starts inside the isolated execution root
+- **TestApprovedUserCannotWriteGlobalRoot**: non-admin exec cannot modify the global workspace
+- **TestApprovedUserCannotWriteSharedMemory**: non-admin exec cannot modify shared memory or persona files
+- **TestApprovedUserCannotReadHiddenSecrets**: non-admin exec cannot read config, SSH, or GPG paths exposed on the host
+- **TestApprovedUserSandboxHasDroppedCaps**: non-admin exec lacks elevated Linux capabilities
+- **TestApprovedUserSandboxHasNamespaceIsolation**: non-admin exec runs inside the expected namespace profile
+- **TestApprovedUserSandboxNetworkPolicy**: non-admin exec is denied or restricted according to sandbox policy
+- **TestDigestEnqueuedForAdmin**: non-admin session produces a bounded `review_event`
+- **TestDigestDeliveredToAdminDM**: pending `review_events` are forwarded into the admin DM
+- **TestDigestAppendedToAdminSession**: delivered digest becomes a labeled bot-generated message in the admin DM history
+- **TestDigestIsBounded**: long non-admin session becomes a bounded digest under configured limits
 
 ### Deferred compaction and pruning
 
@@ -549,15 +685,3 @@ Provider-specific pruning knobs remain provider config, not session-store config
 - **TestPerUserGroupSession**
 - **TestSharedGroupSession**
 - **TestGroupSessionKey**
-
-### Schema
-
-- **TestSchemaVersion**
-- **TestRoleConstraint**
-- **TestContentChars**
-- **TestCompactedIndex**
-
-### Integration
-
-- **TestFullSessionLifecycle**: DM session can continue across many turns, survive restarts, and expire cleanly.
-- **TestAdminReviewFlow**: non-admin work stays isolated but periodic digests appear in the admin DM without requiring a separate UI.
