@@ -277,6 +277,155 @@ func (s *Sender) SendAudio(ctx context.Context, chatID int64, audio core.Media, 
 func (s *Sender) SendVoice(ctx context.Context, chatID int64, voice core.Media, caption string) error { /* ... */ }
 ```
 
+## Live Feedback — Streaming & Tool Progress
+
+When the agent is working, the user should see what's happening — not just a typing indicator.
+
+### Streaming text (edit-in-place)
+
+As the LLM streams tokens, we progressively edit a single Telegram message:
+
+1. **First chunk arrives** → `sendMessage` with initial text + cursor `▉`
+2. **Every ~300ms** → `editMessageText` with accumulated text + cursor
+3. **Stream complete** → final `editMessageText` without cursor
+
+This gives a "typing in real time" feel. The cursor makes it obvious the message is still generating.
+
+```go
+type StreamEditor struct {
+    sender    *Sender
+    chatID    int64
+    replyTo   *int64
+    messageID int64     // ID of the message being edited
+    buffer    string    // Accumulated text
+    lastEdit  time.Time
+    interval  time.Duration // 300ms default
+    cursor    string        // " \u2589" (block cursor)
+    done      bool
+}
+
+func (e *StreamEditor) OnChunk(text string) {
+    e.buffer += text
+    if time.Since(e.lastEdit) >= e.interval {
+        e.flush()
+    }
+}
+
+func (e *StreamEditor) Finish() {
+    e.done = true
+    e.flush() // Final edit without cursor
+}
+
+func (e *StreamEditor) flush() {
+    display := e.buffer
+    if !e.done {
+        display += e.cursor
+    }
+    formatted := formatMarkdownV2(display)
+    if e.messageID == 0 {
+        // First chunk: send new message
+        e.messageID = e.sender.SendText(...)
+    } else {
+        // Edit existing message
+        e.sender.EditText(e.chatID, e.messageID, formatted)
+    }
+    e.lastEdit = time.Now()
+}
+```
+
+**Overflow handling**: If accumulated text exceeds 4096 chars, finalize the current message (edit without cursor) and start a new one for overflow.
+
+**Fallback**: If `editMessageText` fails (some edge cases), fall back to sending a new message instead.
+
+### Tool progress (accumulated edit)
+
+While the agent is in the tool-call loop, a separate progress message shows what tools are running:
+
+```
+🔍 web_fetch: "https://example.com"
+💻 exec: "git status"
+📝 write_file: "output.md"
+```
+
+Each new tool call adds a line. The message is edited in-place (one message, growing).
+
+```go
+type ToolProgressReporter struct {
+    sender    *Sender
+    chatID    int64
+    messageID int64       // Progress message ID (0 = not sent yet)
+    lines     []string    // Accumulated tool lines
+    mode      string      // "all" | "new" | "off"
+    lastTool  string      // For "new" mode dedup
+}
+
+func (r *ToolProgressReporter) OnToolStart(name string, argsPreview string) {
+    if r.mode == "off" {
+        return
+    }
+    if r.mode == "new" && name == r.lastTool {
+        return
+    }
+    r.lastTool = name
+    
+    emoji := toolEmoji(name)
+    line := fmt.Sprintf("%s %s", emoji, name)
+    if argsPreview != "" {
+        if len(argsPreview) > 40 {
+            argsPreview = argsPreview[:37] + "..."
+        }
+        line += fmt.Sprintf(": \"%s\"", argsPreview)
+    }
+    r.lines = append(r.lines, line)
+    
+    text := strings.Join(r.lines, "\n")
+    if r.messageID == 0 {
+        r.messageID = r.sender.SendPlainText(r.chatID, text)
+    } else {
+        r.sender.EditPlainText(r.chatID, r.messageID, text)
+    }
+}
+
+func toolEmoji(name string) string {
+    switch name {
+    case "exec":
+        return "💻"
+    case "read_file":
+        return "📖"
+    case "write_file":
+        return "📝"
+    case "web_fetch":
+        return "🔍"
+    case "memory_search":
+        return "🧠"
+    default:
+        return "⚙️"
+    }
+}
+```
+
+**Modes** (configurable):
+- `"all"` — Show every tool call (default)
+- `"new"` — Only show when tool name changes (dedup consecutive same-tool calls)
+- `"off"` — No tool progress messages
+
+**Cleanup**: After the turn completes, optionally delete the progress message (or leave it for context). Configurable.
+
+### Config
+
+```toml
+[telegram]
+# ... existing fields ...
+
+# Streaming
+stream_edit_interval = "300ms"    # How often to edit the streaming message
+stream_cursor = " \u2589"         # Cursor shown during streaming
+
+# Tool progress
+tool_progress = "all"             # "all" | "new" | "off"
+tool_progress_cleanup = false     # Delete progress message after turn completes
+```
+
 ## MarkdownV2 Formatting
 
 LLMs output standard markdown. Telegram expects MarkdownV2. The conversion is non-trivial.
@@ -497,6 +646,22 @@ telegram/
 - **TestSendTextFallback**: MarkdownV2 fails → retried as plain text.
 - **TestSendTyping**: sendChatAction called with "typing".
 - **TestSetReaction**: setMessageReaction called with correct emoji.
+
+### Streaming
+
+- **TestStreamFirstChunk**: First chunk → sendMessage called (not editMessageText).
+- **TestStreamEdit**: Multiple chunks → editMessageText called with accumulated text + cursor.
+- **TestStreamFinish**: Finish() → final edit without cursor.
+- **TestStreamOverflow**: Text exceeds 4096 → current message finalized, new message started.
+- **TestStreamEditFallback**: editMessageText fails → falls back to new sendMessage.
+
+### Tool progress
+
+- **TestToolProgressAll**: Mode=all, 3 tool calls → 3 lines in progress message.
+- **TestToolProgressNew**: Mode=new, same tool 3x → only 1 line (dedup).
+- **TestToolProgressOff**: Mode=off → no progress message sent.
+- **TestToolProgressEmoji**: Each tool name maps to correct emoji.
+- **TestToolProgressCleanup**: cleanup=true → progress message deleted after turn.
 
 ### File download
 
