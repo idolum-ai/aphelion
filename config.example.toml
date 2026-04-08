@@ -15,6 +15,7 @@ max_tokens = 4096
 
 [sessions]
 db_path = "~/.config/aphelion/sessions.db"
+idle_expiry = "24h"
 
 [agent]
 workspace = "/absolute/path/to/workspace"

@@ -39,6 +39,9 @@ workspace = "./workspace"
 	if cfg.Providers.Anthropic.Model != "claude-sonnet-4-6" {
 		t.Fatalf("model = %q", cfg.Providers.Anthropic.Model)
 	}
+	if cfg.Sessions.IdleExpiry != "24h" {
+		t.Fatalf("idle_expiry = %q, want 24h", cfg.Sessions.IdleExpiry)
+	}
 	if !strings.HasSuffix(cfg.Agent.Workspace, "/workspace") {
 		t.Fatalf("workspace = %q, want expanded relative path", cfg.Agent.Workspace)
 	}
@@ -117,6 +120,7 @@ max_tokens = 8192
 
 [sessions]
 db_path = "~/tmp/sessions.db"
+idle_expiry = "36h"
 
 [agent]
 workspace = "~/workspace"
@@ -149,6 +153,9 @@ daily_notes_dir = "notes"
 	}
 	if cfg.Agent.MaxIterations != 77 || cfg.Agent.ToolTimeout != 9 {
 		t.Fatalf("agent limits = %d/%d, want 77/9", cfg.Agent.MaxIterations, cfg.Agent.ToolTimeout)
+	}
+	if cfg.Sessions.IdleExpiry != "36h" {
+		t.Fatalf("idle_expiry = %q, want 36h", cfg.Sessions.IdleExpiry)
 	}
 	if cfg.Agent.DailyNotes {
 		t.Fatal("daily_notes = true, want false")
@@ -228,6 +235,31 @@ api_key = "sk-ant-test"
 	_, err := Load(configPath)
 	if err == nil {
 		t.Fatal("Load() err = nil, want parse error")
+	}
+}
+
+func TestLoadRejectsInvalidIdleExpiry(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[sessions]
+idle_expiry = "definitely-not-a-duration"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want idle_expiry validation error")
 	}
 }
 

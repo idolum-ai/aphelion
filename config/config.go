@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -40,7 +41,8 @@ type AnthropicConfig struct {
 }
 
 type SessionsConfig struct {
-	DBPath string `toml:"db_path"`
+	DBPath     string `toml:"db_path"`
+	IdleExpiry string `toml:"idle_expiry"`
 }
 
 type AgentConfig struct {
@@ -68,7 +70,8 @@ func Default() Config {
 			},
 		},
 		Sessions: SessionsConfig{
-			DBPath: "~/.config/aphelion/sessions.db",
+			DBPath:     "~/.config/aphelion/sessions.db",
+			IdleExpiry: "24h",
 		},
 		Agent: AgentConfig{
 			Workspace:     ".",
@@ -141,6 +144,12 @@ func validate(cfg *Config) error {
 	}
 	if strings.TrimSpace(cfg.Sessions.DBPath) == "" {
 		return fmt.Errorf("sessions.db_path is required")
+	}
+	if strings.TrimSpace(cfg.Sessions.IdleExpiry) == "" {
+		return fmt.Errorf("sessions.idle_expiry is required")
+	}
+	if _, err := time.ParseDuration(strings.TrimSpace(cfg.Sessions.IdleExpiry)); err != nil {
+		return fmt.Errorf("sessions.idle_expiry must be a valid duration: %w", err)
 	}
 	if strings.TrimSpace(cfg.Agent.Workspace) == "" {
 		return fmt.Errorf("agent.workspace is required")

@@ -2,91 +2,175 @@
 
 ## Overview
 
-A session is a conversation between one Telegram chat and the agent. It holds message history, system prompt state, and cache metadata. Sessions are persisted in SQLite and loaded into memory for each turn.
+A session is a persisted conversation between one Telegram chat and the agent. It holds message history, assembled system prompt state, token/accounting metadata, and enough information to continue the conversation on the next turn.
+
+This spec is staged. The immediate goal is a correct DM-only v0 with explicit admission control. After that, the next stage is approved multi-user DMs with hard isolation and digest forwarding into the admin DM. Group semantics, deeper context management, and provider-specific cache behavior remain part of the architecture, but they are explicitly deferred rather than folded into the first acceptance bar.
+
+## Scope
+
+### v0 required
+
+- DM-only sessions
+- Explicit approval before a DM can create or resume a session
+- At least one admin principal
+- SQLite-backed append-only message history
+- Per-turn load, run, and save
+- Stable Telegram DM session identity
+- Session expiry support
+- Prompt assembly from workspace files plus persisted active history
+
+### v0.5: approved multi-user DMs
+
+- `admin` and `approved_user` roles
+- Hard isolation for non-admin writable state
+- Read-only access to global persona and shared memory for non-admins
+- Automatic digest forwarding from non-admin sessions into the admin DM
+- Admin DM acts as the review surface; no separate UI required
+
+### Deferred after v0.5
+
+- Group sessions
+- Shared vs per-user group scope
+- Mention/reply gating in groups
+- In-memory pruning policies
+- Automatic compaction triggers and summary generation
+- Cache-aware prompt fingerprinting and exact-byte prompt reuse
+- Provider-specific cache heuristics coupled to session state
 
 ## Session Identity
 
-Sessions are keyed by a composite of **chat ID + scope**.
+### v0: DMs
 
-### DMs
-One session per user. Key: `chat_id`.
+For v0, the runtime is DM-only.
 
-### Groups
-Configurable via `session.group_scope`:
+- One session per Telegram DM
+- Key: `chat_id`
+- Persist `user_id = 0`
+- Persist `chat_type = "dm"`
+- No session exists until the DM is approved
 
-- `"shared"` — One session per group. All users share history. The LLM sees `[sender_name]: message` prefixes to distinguish speakers. Simpler, cheaper (one context window), but messages from all users accumulate in one history.
-- `"per_user"` (default) — One session per user per group. Key: `chat_id:user_id`. Each user gets their own conversation history with the agent, even within the same group. This is what Hermes does by default (`group_sessions_per_user=True`) and avoids context pollution from unrelated users.
+The store still uses a composite `(chat_id, user_id)` key so later group support does not require redesigning schema or APIs.
 
-Both OpenClaw and Hermes support per-user group sessions. OpenClaw calls it `dmScope: "per-channel-peer"`. We default to `per_user` because:
-- It prevents one user's long tool-heavy session from blowing up context for everyone
-- It avoids exposing one user's conversation to another in the same group
-- It matches the mental model: talking to the bot in a group feels like a DM that happens to be visible
+### v0 admission
 
-In shared mode, the system prompt notes this is a multi-user context and does NOT pin a single user name (which would bust the prompt cache — the name changes per turn). Instead, each user message is prefixed with the sender name by the Telegram handler.
+Admission is required before a user can create or continue a session.
 
-### Group mention behavior
-In groups, the agent only responds when mentioned (or replied to). This is hardcoded for v1 — no `requireMention` config needed since we only have one channel.
+The implementation may begin with a simple allow-list, but the design target is explicit approval state:
+
+- `pending`
+- `approved`
+- `banned`
+
+For v0, admission happens only for DMs.
+
+### v0.5 authority
+
+After v0, approved users split into two roles:
+
+- `admin`: trusted to mutate global state
+- `approved_user`: trusted to talk to the system, but not to mutate global state directly
+
+This distinction matters even in DM-only mode, because multiple approved DMs still interact with the same underlying system unless isolation is explicit.
+
+### Deferred: Groups
+
+Later group behavior should be configurable via `sessions.groups.scope`:
+
+- `"shared"`: one session per group, key `chat_id:0`
+- `"per_user"`: one session per user per group, key `chat_id:user_id`
+
+In shared mode, user messages should be prefixed with the sender name by the channel adapter. The system prompt should not pin a single user name, because that would destabilize the prompt prefix.
+
+### Deferred: Group mention behavior
+
+When group support lands, the agent should only respond when mentioned or replied to. This is a channel-policy concern, not part of DM-only v0.
+
+## Authority & Isolation
+
+### v0
+
+The simplest correct v0 is a single admin DM plus explicit admission for any future users. If only the admin is approved, the session may operate directly on the real workspace and shared memory.
+
+### v0.5
+
+Once more than one approved user exists, authority must split from admission.
+
+- `admin` can write to the global workspace, global memory, and persona files
+- `approved_user` can only write to isolated per-user state
+- `approved_user` can read global persona and shared memory, but only as read-only prompt context
+- `approved_user` cannot directly mutate shared memory, persona files, or the real workspace
+
+The key rule is:
+
+- **global mutation authority** belongs only to admin sessions
+- **local work authority** belongs to each approved user's isolated session
+- **cross-session knowledge transfer** happens only through bounded digests into the admin DM
 
 ## Session State
 
+The session struct can be broader than v0 as long as the extra fields are honest architectural headroom rather than fake live behavior.
+
 ```go
 type Session struct {
-    ChatID        int64
-    UserID        int64           // 0 for shared group sessions
-    Messages      []Message       // Full conversation history
-    SystemPrompt  string          // Snapshot of the assembled system prompt (for cache reuse)
-    CreatedAt     time.Time
-    UpdatedAt     time.Time
-    TurnCount     int
-    
+    ChatID       int64
+    UserID       int64           // 0 in v0
+    Role         string          // "admin" | "approved_user"
+    Approved     bool
+    Messages     []Message
+    SystemPrompt string          // Snapshot of the assembled system prompt
+    CreatedAt    time.Time
+    UpdatedAt    time.Time
+    TurnCount    int
+
     // Cache tracking
-    CacheState    CacheState
-    
+    CacheState CacheState
+
     // Compaction
-    CompactionLog []CompactionEntry  // Record of what was compacted and when
-    
-    // Token accounting (cumulative across all turns)
-    TotalInputTokens   int64
-    TotalOutputTokens  int64
-    TotalCacheRead     int64
-    TotalCacheWrite    int64
-    
+    CompactionLog []CompactionEntry
+
+    // Token accounting
+    TotalInputTokens  int64
+    TotalOutputTokens int64
+    TotalCacheRead    int64
+    TotalCacheWrite   int64
+
     // Provider state
-    LastProvider  string          // Which provider was used last (for failover tracking)
-    LastModel     string          // Which model was used last
-    
+    LastProvider string
+    LastModel    string
+
     // Agent state
-    ActiveToolCalls int           // Tool calls in progress (for crash recovery)
-    LastError       string        // Last error message (for debugging)
-    
-    // Metadata
-    ChatType      string          // "dm" or "group"
-    ChatTitle     string          // Group title (for logging/display)
-    UserName      string          // Sender display name
+    ActiveToolCalls int
+    LastError       string
+
+    // Chat metadata
+    ChatType  string // "dm" or "group"
+    ChatTitle string
+    UserName  string
+    WorkspaceRoot string         // Real workspace for admin, isolated workspace for non-admin
 }
 
 type CacheState struct {
-    LastWriteBlock    int       // Block index of the last cache write
-    BlocksSinceWrite  int       // Blocks accumulated since last write
-    LastWriteTime     time.Time // When the last cache write happened
-    HitRate           float64   // Running cache hit rate
-    ConsecutiveMisses int       // For adaptive strategy switching
+    LastWriteBlock    int
+    BlocksSinceWrite  int
+    LastWriteTime     time.Time
+    HitRate           float64
+    ConsecutiveMisses int
 }
 
 type CompactionEntry struct {
-    Timestamp     time.Time
-    TurnsBefore   int    // Number of turns before compaction
-    TurnsAfter    int    // Number of turns preserved
-    TokensBefore  int    // Estimated tokens before
-    TokensAfter   int    // Estimated tokens after
-    Summary       string // The compaction summary (if summarize strategy)
+    Timestamp    time.Time
+    TurnsBefore  int
+    TurnsAfter   int
+    TokensBefore int
+    TokensAfter  int
+    Summary      string
+    Strategy     string // "summarize" or "truncate"
 }
 ```
 
 ## SQLite Schema
 
 ```sql
--- Schema version tracking for migrations
 CREATE TABLE schema_version (
     version    INTEGER NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -94,31 +178,29 @@ CREATE TABLE schema_version (
 INSERT INTO schema_version (version) VALUES (1);
 
 CREATE TABLE sessions (
-    -- Composite key: chat_id + user_id (user_id=0 for shared group sessions)
     chat_id       INTEGER NOT NULL,
     user_id       INTEGER NOT NULL DEFAULT 0,
+    role          TEXT NOT NULL DEFAULT 'approved_user',
+    approved      INTEGER NOT NULL DEFAULT 0,
     system_prompt TEXT,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
     turn_count    INTEGER NOT NULL DEFAULT 0,
-    -- Chat metadata
-    chat_type     TEXT NOT NULL DEFAULT 'dm',  -- 'dm', 'group'
+    chat_type     TEXT NOT NULL DEFAULT 'dm',
     chat_title    TEXT,
     user_name     TEXT,
-    -- Cache state
+    workspace_root TEXT,
     cache_last_write_block  INTEGER NOT NULL DEFAULT 0,
     cache_blocks_since      INTEGER NOT NULL DEFAULT 0,
     cache_last_write_time   TEXT,
     cache_hit_rate          REAL NOT NULL DEFAULT 0.0,
-    -- Token totals (cumulative)
     total_input_tokens    INTEGER NOT NULL DEFAULT 0,
     total_output_tokens   INTEGER NOT NULL DEFAULT 0,
     total_cache_read      INTEGER NOT NULL DEFAULT 0,
     total_cache_write     INTEGER NOT NULL DEFAULT 0,
-    -- Provider state
     last_provider TEXT,
     last_model    TEXT,
-    -- Error tracking
+    active_tool_calls INTEGER NOT NULL DEFAULT 0,
     last_error    TEXT,
     PRIMARY KEY (chat_id, user_id)
 );
@@ -128,18 +210,15 @@ CREATE TABLE messages (
     chat_id    INTEGER NOT NULL,
     user_id    INTEGER NOT NULL DEFAULT 0,
     role       TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
-    content    TEXT NOT NULL,  -- JSON-encoded content blocks
-    tool_calls TEXT,           -- JSON-encoded tool calls (assistant only)
-    tool_id    TEXT,           -- Tool call ID (tool result messages)
-    tool_name  TEXT,           -- Tool name (tool result messages, for pruning decisions)
-    thinking   TEXT,           -- Extended thinking content (assistant only)
+    content    TEXT NOT NULL,
+    tool_calls TEXT,
+    tool_id    TEXT,
+    tool_name  TEXT,
+    thinking   TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     turn_index INTEGER NOT NULL,
-    -- Content size tracking (for fast token estimation without parsing JSON)
     content_chars INTEGER NOT NULL DEFAULT 0,
-    -- Pruning metadata (applied in-memory, not mutated here)
-    -- The pruned column records if this message was part of a compaction.
-    compacted  INTEGER NOT NULL DEFAULT 0,  -- 0=active, 1=compacted (replaced by summary)
+    compacted  INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
 );
 
@@ -152,12 +231,27 @@ CREATE TABLE outbound_messages (
     user_id         INTEGER NOT NULL DEFAULT 0,
     turn_index      INTEGER NOT NULL,
     telegram_msg_id INTEGER NOT NULL,
-    msg_type        TEXT NOT NULL,  -- 'response', 'progress', 'streaming', 'keyboard'
+    msg_type        TEXT NOT NULL,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_outbound_session ON outbound_messages(chat_id, user_id, turn_index);
+
+CREATE TABLE review_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_chat_id INTEGER NOT NULL,
+    source_user_id INTEGER NOT NULL DEFAULT 0,
+    source_role    TEXT NOT NULL,
+    target_chat_id INTEGER NOT NULL,       -- admin DM chat_id
+    turn_from      INTEGER,
+    turn_to        INTEGER,
+    summary        TEXT NOT NULL,
+    delivered      INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_review_events_target ON review_events(target_chat_id, delivered, created_at);
 
 CREATE TABLE compaction_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,307 +263,301 @@ CREATE TABLE compaction_log (
     tokens_before INTEGER,
     tokens_after  INTEGER,
     summary    TEXT,
-    strategy   TEXT NOT NULL DEFAULT 'summarize',  -- 'summarize', 'truncate'
+    strategy   TEXT NOT NULL DEFAULT 'summarize',
     FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
 );
 ```
 
 ### Why this schema
 
-- **Composite primary key** `(chat_id, user_id)`: Supports both DM sessions (user_id=0) and per-user group sessions naturally. No schema change needed when switching group scope.
-- **Schema versioning**: `schema_version` table tracks migrations. Future schema changes are applied incrementally at startup.
-- **Messages in a separate table**: Allows efficient range queries (load last N turns), fast append (INSERT, not UPDATE of a growing JSON blob), and index-based filtering.
-- **turn_index**: Monotonically increasing per session. Used for pruning age calculations and compaction boundaries.
-- **content_chars**: Stored alongside content for fast token estimation (`chars / 4`) without parsing JSON. Updated on INSERT.
-- **compacted flag**: 0=active message, 1=replaced by compaction summary. Compacted messages are kept on disk (for audit) but excluded from context assembly via the `idx_messages_active` index.
-- **CHECK constraint on role**: Prevents invalid role values at the DB level.
-- **tool_name on tool results**: Enables pruning decisions based on tool type (e.g., never prune `memory_search` results, aggressively prune `exec` output).
-- **Two indexes on messages**: `idx_messages_session` for full history load, `idx_messages_active` for fast context assembly (skips compacted messages).
-- **No message content in the sessions table**: Avoids the "one giant row" problem that SQLite handles poorly.
+- **Composite primary key** `(chat_id, user_id)`: v0 only uses `user_id=0`, but the schema is already shaped for later group support.
+- **Schema versioning**: future changes are applied incrementally at startup.
+- **Messages in a separate table**: supports efficient load, append, and filtering without rewriting a giant blob.
+- **turn_index**: provides a stable turn boundary for later pruning and compaction.
+- **content_chars**: allows cheap token estimation.
+- **compacted flag**: compacted messages remain on disk for audit but can be excluded from active prompt assembly.
+- **outbound_messages**: keeps a durable mapping between agent turns and Telegram message IDs.
+- **role + approved**: lets session admission and authority remain explicit rather than inferred from chat IDs alone.
+- **workspace_root**: allows the runtime to bind a session to either the real workspace or an isolated per-user workspace.
+- **review_events**: gives non-admin sessions a one-way path into the admin DM without merging raw history or raw tool output.
 
 ## Session Lifecycle
 
 ### Load
 
 ```go
-func (s *Store) Load(chatID int64) (*Session, error) {
-    // 1. SELECT from sessions WHERE chat_id = ?
+func (s *Store) Load(key SessionKey) (*Session, error) {
+    // 1. SELECT from sessions WHERE chat_id = ? AND user_id = ?
     // 2. If not found, create new session
-    // 3. SELECT messages WHERE chat_id = ? ORDER BY turn_index
+    // 3. SELECT messages WHERE chat_id = ? AND user_id = ? ORDER BY turn_index, id
     // 4. Assemble Session struct
     // 5. Return
 }
 ```
 
-Load is called at the start of every turn by the router.
+Load is called at the start of every turn.
 
-### Save (after each turn)
+### Save
 
 ```go
 func (s *Store) Save(session *Session, newMessages []Message, usage TokenUsage) error {
-    // In a single transaction:
+    // In one transaction:
     // 1. INSERT new messages
-    // 2. UPDATE sessions SET updated_at, turn_count, cache state, token totals
+    // 2. UPDATE sessions SET updated_at, turn_count, token totals, metadata
     // 3. COMMIT
 }
 ```
 
-Save is called after each turn completes. Only new messages are inserted — we never rewrite existing messages (append-only).
+Save is called after each turn completes. The persistent history is append-only. Existing rows are not rewritten during the normal turn path.
 
 ### Delete / Expire
 
 ```go
 func (s *Store) ExpireIdle(maxIdle time.Duration) (int, error) {
-    // DELETE FROM sessions WHERE updated_at < datetime('now', '-' || maxIdle)
-    // CASCADE deletes messages and compaction_log
-    // Return count of expired sessions
+    // DELETE idle sessions
+    // CASCADE deletes messages, outbound_messages, and compaction_log
 }
 ```
 
-Called periodically (e.g., on heartbeat) to clean up idle sessions.
+Expiry is useful in v0 even before compaction exists.
+
+## Digest Forwarding
+
+### v0.5 review membrane
+
+The admin DM is the review surface. No separate UI is required.
+
+Non-admin sessions stay isolated, but they periodically emit bounded digests into the admin DM:
+
+1. compact or summarize a bounded slice of the non-admin session
+2. store it as a `review_event`
+3. forward it to the admin DM on a cadence or when the session goes idle
+4. let the admin react naturally in the same DM
+
+The digest itself is the membrane:
+
+- raw session history does not cross the boundary
+- raw tool output does not cross the boundary
+- global state is not mutated by the non-admin session directly
+- the admin can still ask the system to ban the user, delete the session, or forget the forwarded digest
+
+No explicit promotion workflow is required. The digest is already a reduced, bounded transfer of context.
 
 ## Context Assembly
 
-Every turn, the full prompt is assembled from the session state:
+### v0 prompt assembly
 
-```
-1. System prompt (stable prefix):
-   a. Tool definitions (sorted, cache_control breakpoint #1)
-   b. Bootstrap files — SOUL.md, IDENTITY.md, USER.md, AGENTS.md, TOOLS.md (cache_control breakpoint #2)
+Every turn:
 
-2. System prompt (dynamic suffix):
-   a. MEMORY.md, HEARTBEAT.md, daily notes
-   b. Runtime metadata (timestamp, etc.)
+1. Render the base system instruction.
+2. Load workspace bootstrap files.
+3. Load workspace dynamic files (`MEMORY.md`, `HEARTBEAT.md`, daily notes).
+4. Load persisted messages for the session.
+5. Exclude compacted messages from active history.
+6. Append the new user message.
+7. Run the model turn.
+8. Persist new messages.
 
-3. Messages:
-   a. Load all messages from SQLite
-   b. Apply pruning:
-      - Messages older than pruning_soft_age turns: soft-trim tool results
-      - Messages older than pruning_hard_age turns: hard-clear tool results
-      - Non-tool messages are never pruned
-   c. Check total token estimate
-   d. If over max_context_ratio * context_window → trigger compaction
-   e. Automatic cache_control on the request (breakpoint auto-advances)
+v0 does **not** require:
 
-4. New user message appended at the end
-```
+- pruning tool outputs
+- automatic compaction triggers
+- prompt fingerprinting
+- exact-byte prompt reuse
+- provider cache breakpoints in the session layer
+- multi-user isolation
+- digest forwarding
 
-### System Prompt Caching
+The only requirement is correctness: workspace files must be reflected on the next turn, and active persisted history must be replayed in order.
 
-The system prompt is split into two parts:
+### v0.5 isolated prompt assembly
 
-**Stable prefix** (cached):
-- Tool definitions
-- Bootstrap files (SOUL.md, IDENTITY.md, USER.md, AGENTS.md, TOOLS.md)
-- These rarely change. Explicit `cache_control` breakpoints here.
+For non-admin sessions:
 
-**Dynamic suffix** (not cached):
-- MEMORY.md, HEARTBEAT.md
-- Daily notes (memory/YYYY-MM-DD.md for today + yesterday)
-- Timestamp, runtime info
-- These change every turn or every few minutes. Placed AFTER the cache breakpoints.
+1. use the isolated workspace root
+2. inject shared persona and shared memory as read-only context
+3. inject per-user local memory as writable local context
+4. never grant direct write access to global persona or shared memory
 
-The system prompt is re-rendered only if bootstrap files change (detected via content hash). Otherwise, the exact bytes from the previous turn are reused to preserve the cache prefix.
+For the admin session:
 
-### System Prompt Fingerprinting
+1. use the real workspace root
+2. receive forwarded digests from other sessions as labeled bot messages
+3. treat those digests as normal conversational context inside the admin DM
 
-```go
-func fingerprintSystemPrompt(blocks []ContentBlock) string {
-    h := sha256.New()
-    for _, b := range blocks {
-        // Normalize: trim trailing whitespace, LF-only, collapse blank lines
-        normalized := normalizeText(b.Text)
-        h.Write([]byte(normalized))
-    }
-    return hex.EncodeToString(h.Sum(nil))
-}
-```
+### Deferred: Cache-aware prompt reuse
 
-If the fingerprint matches the previous turn's, the system prompt bytes are reused exactly. No re-rendering, no cache busting.
+Later, prompt assembly should distinguish:
+
+- **stable prefix**: bootstrap files and other rarely changing instructions
+- **dynamic suffix**: `MEMORY.md`, `HEARTBEAT.md`, daily notes, runtime metadata
+
+When this lands, unchanged stable content should be reused byte-for-byte to preserve provider cache prefixes.
 
 ## Compaction
 
-Compaction is triggered when the assembled prompt (system prompt + messages + new user message) exceeds `max_context_ratio * context_window` tokens.
+Compaction is deferred after v0, but becomes more useful in v0.5 because digests are the mechanism for carrying bounded information from isolated non-admin sessions into the admin DM.
 
-**Why 75%, not 92%.** Models degrade as they approach context limits — increased hallucination, anxiety-like behavior, repetitive loops, and reduced instruction-following. The Mythos system card documents "context anxiety" explicitly. Compacting at 75% gives the model breathing room and keeps response quality high. The 65% compaction target means we drop ~10% of context, which is a modest compaction that preserves most history.
+The design target is:
 
-### Strategy: Summarize (default)
+1. detect when assembled context exceeds `max_context_ratio * context_window`
+2. summarize or truncate older turns
+3. mark replaced messages as `compacted = 1`
+4. insert a summary message at the compaction boundary
+5. record the event in `compaction_log`
 
-```
-1. Select messages from the oldest up to the compaction boundary
-   (keep the most recent messages that fit in compaction_ratio * context_window)
-2. Send those messages to the LLM with a compaction prompt:
-   "Summarize this conversation concisely, preserving key decisions, 
-    facts, tool outputs, and context the assistant needs to continue."
-3. Replace the selected messages with a single "system" message containing the summary
-4. Log the compaction in compaction_log
-5. Delete the replaced messages from SQLite
-```
+For non-admin sessions, the same summarization machinery can also produce `review_events` for the admin DM.
 
-### Strategy: Truncate (simple)
+Compacted messages should remain on disk for audit. They should not be deleted as part of normal compaction.
 
-Just drop the oldest messages. No LLM call. Cheaper but loses context.
+## Pruning
 
-### Cache-Aware Compaction
+Pruning is also deferred after v0.
 
-Compaction invalidates the message-history cache (the message content changes). To minimize cost:
+When implemented, pruning is applied only in memory during prompt assembly:
 
-1. **Time it with TTL expiry.** If we know the cache will expire in the next few minutes anyway, compact now rather than paying for a cache write that'll be invalidated.
-2. **Preserve the system prompt prefix.** Compaction only touches messages, not the system prompt. The system prompt cache breakpoints remain valid after compaction.
-3. **Check min_cache_tokens.** After compaction, the remaining messages must still exceed `min_cache_tokens` for caching to kick in. If not, warn (but don't pad — the system prompt alone should exceed min_cache_tokens).
-4. **Update cache state.** Reset `blocks_since_write` after compaction since the message structure has changed.
+- older tool results may be soft-trimmed
+- older tool results may later be hard-cleared
+- user and assistant conversational messages are never pruned
 
-### Compaction Budget
-
-The compaction LLM call itself counts against cost. Use a cheaper model if configured:
-
-```toml
-[sessions]
-compaction_model = ""  # Empty = use default provider. Or "anthropic:claude-haiku-4-5" for cheap compaction.
-```
-
-## Pruning (In-Memory Only)
-
-Pruning is applied when assembling the prompt, NOT when saving to SQLite. The original messages are always preserved on disk.
-
-### Soft-trim (pruning_soft_age)
-
-For tool results older than `pruning_soft_age` turns:
-```
-Original: "total 42\ndrwxr-xr-x  5 user user 4096 Apr  8 ...\n[500 more lines]"
-Trimmed:  "total 42\ndrwxr-xr-x  5 user user 4096 Apr  8 ...\n... [498 lines trimmed] ...\n-rw-r--r--  1 user user  231 Apr  8 08:00 README.md"
-```
-
-Keep first 3 lines + last 2 lines. This preserves enough context for the LLM to understand what the tool did without paying for the full output.
-
-### Hard-clear (pruning_hard_age)
-
-For tool results older than `pruning_hard_age` turns:
-```
-Original: [any tool result]
-Cleared:  "[tool output from turn N, trimmed for context]"
-```
-
-Single-line placeholder. The LLM knows a tool was called and roughly when, but not the output.
-
-### Non-tool messages are never pruned
-
-User messages and assistant text responses are always sent in full. They're the conversation — pruning them would lose context that can't be recovered.
+SQLite remains the source of truth for the full original transcript.
 
 ## Session Store Interface
 
+### v0 required
+
 ```go
-// SessionKey identifies a session uniquely.
 type SessionKey struct {
     ChatID int64
-    UserID int64 // 0 for shared group sessions or DMs
+    UserID int64 // always 0 in v0
 }
 
 type Store interface {
     Load(key SessionKey) (*Session, error)
     Save(session *Session, newMessages []Message, usage TokenUsage) error
-    UpdateCacheState(key SessionKey, state CacheState) error
-    Compact(key SessionKey, summary string, keepFromTurn int) error
     ExpireIdle(maxIdle time.Duration) (int, error)
-    ListActive(since time.Duration) ([]SessionKey, error)
     Close() error
 }
 ```
 
-Implementation: `session/store.go` with `mattn/go-sqlite3`.
-
-Single writer goroutine pattern: all writes go through a channel to a dedicated goroutine. Reads can happen concurrently (SQLite WAL mode).
+### Extended interface after v0
 
 ```go
-type SQLiteStore struct {
-    db      *sql.DB
-    writeCh chan writeOp
-}
-
-func (s *SQLiteStore) init() {
-    // Enable WAL mode for concurrent reads
-    s.db.Exec("PRAGMA journal_mode=WAL")
-    s.db.Exec("PRAGMA synchronous=NORMAL")
-    // Foreign keys
-    s.db.Exec("PRAGMA foreign_keys=ON")
-    
-    // Start single writer goroutine
-    go s.writeLoop()
+type ExtendedStore interface {
+    Store
+    UpdateCacheState(key SessionKey, state CacheState) error
+    Compact(key SessionKey, summary string, keepFromTurn int) error
+    ListActive(since time.Duration) ([]SessionKey, error)
+    EnqueueReviewEvent(event ReviewEvent) error
+    PendingReviewEvents(targetChatID int64, limit int) ([]ReviewEvent, error)
+    MarkReviewDelivered(ids []int64) error
 }
 ```
 
-## Config (in config.md)
+Implementation lives in `session/store.go` with `mattn/go-sqlite3`.
+
+Single-connection SQLite with WAL mode is sufficient for v0. A dedicated writer goroutine is an acceptable later refinement if write contention shows up, but it is not required for the first usable system.
+
+## Config (see `config.md`)
+
+### v0 required
 
 ```toml
 [sessions]
 db_path = "~/.config/aphelion/sessions.db"
-max_context_ratio = 0.75            # Compact at 75%. Models degrade near limits.
-compaction_ratio = 0.55             # Compact down to 55%. ~20% headroom before next compaction.
-compaction_strategy = "summarize"    # "summarize" | "truncate"
-compaction_model = ""                # Empty = default. Or "anthropic:claude-haiku-4-5" for cheap compaction.
 idle_expiry = "24h"
+```
+
+### v0.5
+
+```toml
+[users]
+admin_chat_id = 123456789
+approved_chat_ids = [123456789, 222222222]
+
+[reviews]
+enabled = true
+digest_every = "30m"
+digest_on_idle = true
+max_summary_chars = 1200
+
+[sessions.isolation]
+root = "~/.config/aphelion/workspaces"
+shared_memory_dir = "~/.config/aphelion/memory/shared"
+per_user_memory_dir = "~/.config/aphelion/memory/users"
+```
+
+### Deferred after v0.5
+
+```toml
+[sessions]
+max_context_ratio = 0.75
+compaction_ratio = 0.55
+compaction_strategy = "summarize"
+compaction_model = ""
 
 [sessions.groups]
-scope = "per_user"                   # "per_user" | "shared"
+scope = "per_user"
 ```
 
-Pruning config lives under the Anthropic provider section (since it's cache-aware):
-```toml
-[providers.anthropic]
-cache_ttl_pruning = true
-pruning_soft_age = 10
-pruning_hard_age = 20
-```
+Provider-specific pruning knobs remain provider config, not session-store config.
 
 ## Tests
 
-### Store
+### v0 store
 
-- **TestCreateSession**: Load nonexistent chat_id → new session created with defaults.
+- **TestCreateSession**: Load nonexistent DM session → new session created with defaults.
+- **TestAdmissionRequired**: Unapproved DM cannot create or resume a session.
 - **TestSaveAndLoad**: Save messages → load → messages match.
 - **TestAppendOnly**: Save 3 messages, then save 2 more → load returns all 5 in order.
-- **TestTurnIndex**: Messages have monotonically increasing turn_index.
-- **TestCacheStateUpdate**: Update cache state → load → state matches.
-- **TestExpireIdle**: Create session, advance time past idle_expiry → expired and deleted.
-- **TestExpireKeepsActive**: Create two sessions, advance time → only idle one expires.
-- **TestCascadeDelete**: Delete session → messages and compaction_log also deleted.
-- **TestConcurrentReads**: 10 goroutines read same session simultaneously → no errors (WAL mode).
-- **TestWALMode**: After init, PRAGMA journal_mode returns "wal".
+- **TestTurnIndex**: Messages have monotonically increasing `turn_index`.
+- **TestExpireIdle**: Idle session is deleted.
+- **TestExpireKeepsActive**: Active session survives expiry sweep.
+- **TestCascadeDelete**: Session deletion cascades to messages and compaction log tables.
+- **TestConcurrentReads**: Concurrent reads succeed under WAL mode.
+- **TestWALMode**: `PRAGMA journal_mode` returns `wal`.
 
-### Context Assembly
+### v0 context assembly
 
-- **TestAssembleBasic**: System prompt + 3 messages → assembled correctly in order.
-- **TestPruningSoft**: Tool result at turn 0, current turn 15 (soft_age=10) → result is soft-trimmed.
-- **TestPruningHard**: Tool result at turn 0, current turn 25 (hard_age=20) → result is hard-cleared.
-- **TestPruningPreservesNonTool**: User message at turn 0, current turn 25 → NOT pruned.
-- **TestPruningInMemoryOnly**: After assembly with pruning, reload from DB → original content intact.
-- **TestSystemPromptFingerprint**: Same bootstrap files → same fingerprint. Modified file → different fingerprint.
-- **TestSystemPromptReuse**: Fingerprint unchanged → exact same bytes used (no re-render).
-- **TestDynamicSuffixAfterCacheBoundary**: MEMORY.md content appears after the last explicit cache breakpoint.
+- **TestAssembleBasic**: System prompt + persisted messages assemble in order.
+- **TestCompactMessagesExcluded**: `compacted=1` messages are excluded from active history.
+- **TestWorkspaceFilesReloadedEachTurn**: updated `MEMORY.md` / `HEARTBEAT.md` content appears on the next turn.
 
-### Compaction
+### v0.5 isolation and digests
 
-- **TestCompactionTrigger**: Messages exceed max_context_ratio → compaction triggered.
-- **TestCompactionSummarize**: After compaction, oldest messages replaced with summary. Recent messages preserved.
-- **TestCompactionTruncate**: Strategy=truncate → oldest messages dropped, no LLM call.
-- **TestCompactionLog**: After compaction, compaction_log has entry with correct token counts.
-- **TestCompactionPreservesSystemPrompt**: After compaction, system prompt cache breakpoints are still valid.
-- **TestCompactionCacheStateReset**: After compaction, blocks_since_write is reset to 0.
-- **TestCompactionMinCacheTokens**: After compaction, remaining tokens still exceed min_cache_tokens (or warning logged).
+- **TestAdminUsesRealWorkspace**: admin session binds to the real workspace root.
+- **TestApprovedUserUsesIsolatedWorkspace**: non-admin session binds to its isolated workspace root.
+- **TestApprovedUserReadOnlySharedPersona**: non-admin session can read but not write shared persona and shared memory.
+- **TestDigestEnqueuedForAdmin**: non-admin session produces a bounded summary stored as `review_event`.
+- **TestDigestDeliveredToAdminDM**: pending `review_events` are forwarded into the admin DM.
+- **TestDigestIsBounded**: long non-admin session becomes a bounded digest under configured limits.
 
-### Group sessions
+### Deferred compaction and pruning
 
-- **TestPerUserGroupSession**: Two users in same group → separate sessions, separate histories.
-- **TestSharedGroupSession**: scope=shared, two users → same session, messages prefixed with sender names.
-- **TestGroupSessionKey**: Per-user key is `chat_id:user_id`, shared key is `chat_id:0`.
+- **TestPruningSoft**
+- **TestPruningHard**
+- **TestPruningPreservesNonTool**
+- **TestPruningInMemoryOnly**
+- **TestCompactionTrigger**
+- **TestCompactionSummarize**
+- **TestCompactionTruncate**
+- **TestCompactionLog**
+- **TestCompactionCacheStateReset**
+
+### Deferred group sessions
+
+- **TestPerUserGroupSession**
+- **TestSharedGroupSession**
+- **TestGroupSessionKey**
 
 ### Schema
 
-- **TestSchemaVersion**: After init, schema_version table has version=1.
-- **TestRoleConstraint**: INSERT message with role="invalid" → CHECK constraint error.
-- **TestContentChars**: INSERT message → content_chars matches len(content).
-- **TestCompactedIndex**: Compacted messages excluded from active index query.
+- **TestSchemaVersion**
+- **TestRoleConstraint**
+- **TestContentChars**
+- **TestCompactedIndex**
 
 ### Integration
 
-- **TestFullSessionLifecycle**: Create session → 50 turns → pruning kicks in → compaction triggers → session continues → expire.
+- **TestFullSessionLifecycle**: DM session can continue across many turns, survive restarts, and expire cleanly.
+- **TestAdminReviewFlow**: non-admin work stays isolated but periodic digests appear in the admin DM without requiring a separate UI.

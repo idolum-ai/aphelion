@@ -18,7 +18,7 @@ Default location: `~/.config/aphelion/config.toml`
 
 Override via `APHELION_CONFIG` env var or `--config` flag.
 
-Implementation is staged. A minimal daemon only needs the small subset required to boot, authenticate, route turns, and manage prompt context. The wider schema remains part of the contract so later hardening does not require redesigning config layout or ownership boundaries.
+Implementation is staged. A minimal daemon only needs the small subset required to boot, authenticate, route DM turns, and manage prompt context. The wider schema remains part of the contract so later hardening does not require redesigning config layout or ownership boundaries.
 
 ```toml
 # ─── Identity ───
@@ -158,6 +158,11 @@ daily_notes_dir = "memory"
 # ─── Sessions ───
 [sessions]
 db_path = "~/.config/aphelion/sessions.db"
+# v0: DM-only runtime. idle_expiry is part of the intended v0 surface, but the
+# runtime may reach it slightly after basic turn handling is stable.
+idle_expiry = "24h"           # Expire sessions after this much inactivity
+
+# Deferred after v0:
 # Context management thresholds — push close to the provider's actual limit.
 # These are in tokens. Compaction kicks in when the assembled prompt exceeds max_context_tokens.
 # These are per-provider — resolved at runtime from the active provider's context_window.
@@ -165,11 +170,26 @@ db_path = "~/.config/aphelion/sessions.db"
 max_context_ratio = 0.75      # Trigger compaction at 75% of context_window. Models degrade near limits (anxiety, hallucination).
 compaction_ratio = 0.55       # Compact down to 55% of context_window. Gives ~20% headroom before next compaction.
 compaction_strategy = "summarize"  # "summarize" (LLM-assisted) | "truncate" (drop oldest turns)
-# Session expiry
-idle_expiry = "24h"           # Expire sessions after this much inactivity
 
+# Deferred after v0 group support:
 [sessions.groups]
 scope = "per_user"            # "per_user" (one session per user per group) | "shared" (one session per group)
+
+# v0.5 approved multi-user DMs:
+[users]
+admin_chat_id = 123456789
+approved_chat_ids = [123456789, 222222222]
+
+[reviews]
+enabled = true
+digest_every = "30m"
+digest_on_idle = true
+max_summary_chars = 1200
+
+[sessions.isolation]
+root = "~/.config/aphelion/workspaces"
+shared_memory_dir = "~/.config/aphelion/memory/shared"
+per_user_memory_dir = "~/.config/aphelion/memory/users"
 
 # ─── Automation ───
 [heartbeat]
@@ -431,9 +451,10 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 
 ## Staging
 
-- **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, session storage, workspace prompt files, and the agent execution limits that bound a turn.
+- **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, DM-only session storage, workspace prompt files, and the agent execution limits that bound a turn.
+- **Required for DM approval and authority**: an admission model for DMs, an admin principal, and clear config ownership for later user roles and isolated workspaces.
 - **Required for a hardened local system tool**: sandbox controls, HTTP transport tuning, failover policy, and credential sealing.
-- **Reserved architectural surface**: additional providers, embeddings, voice, cron, and deeper Linux controls. These should have stable config ownership even before they are fully wired.
+- **Reserved architectural surface**: group-session controls, approved multi-user DM reviews, additional providers, embeddings, voice, cron, and deeper Linux controls. These should have stable config ownership even before they are fully wired.
 
 ## Decisions
 
