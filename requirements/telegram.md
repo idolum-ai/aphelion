@@ -589,43 +589,73 @@ func isTextFile(mime string, name string) bool {
 }
 ```
 
-### Voice messages → Transcription
+### Voice messages → User chooses
 
-Voice messages (OGG/Opus) are transcribed to text, then included as a text content block with a marker.
+Voice messages are ambiguous — could be speech to transcribe, a melody to analyze, or ambient audio. Show the user options:
+
+```
+User sends a voice message (15s, OGG/Opus)
+
+Aphelion replies with inline keyboard:
+
+"🎤 Voice message received (15s). How should I process it?"
+
+[ 📝 Transcribe ]  [ 🎵 Analyze audio ]
+[ 🤖 Let agent decide ]  [ ❌ Skip ]
+```
+
+**Button actions:**
+- **📝 Transcribe** → Send to Whisper API, include transcript as text: `[Voice message, 15s]\nTranscript here`
+- **🎵 Analyze audio** → Send to Gemini (supports audio input natively) with prompt "Describe this audio"
+- **🤖 Let agent decide** → Download the file, tell the agent it has a voice message and let it choose tools
+- **❌ Skip** → Include only metadata: `[Voice message, 15s, skipped]`
 
 ```go
-func processVoice(ctx context.Context, client *Client, voice *Voice, transcriber Transcriber) (*ContentBlock, error) {
-    data, _, err := client.DownloadFile(ctx, voice.FileID)
+func (h *MediaHandler) OnVoiceMessage(ctx context.Context, msg *core.InboundMessage, voice *Voice) {
+    kbMsgID := h.sender.SendInlineKeyboard(ctx, msg.ChatID,
+        fmt.Sprintf("🎤 Voice message received (%ds). How should I process it?", voice.Duration),
+        []InlineButton{
+            {Text: "📝 Transcribe", CallbackData: fmt.Sprintf("media:voice:transcribe:%s", voice.FileID)},
+            {Text: "🎵 Analyze audio", CallbackData: fmt.Sprintf("media:voice:analyze:%s", voice.FileID)},
+            {Text: "🤖 Let agent decide", CallbackData: fmt.Sprintf("media:voice:agent:%s", voice.FileID)},
+            {Text: "❌ Skip", CallbackData: fmt.Sprintf("media:voice:skip:%s", voice.FileID)},
+        },
+        &msg.MessageID,
+    )
     
-    // Transcribe via configured provider (OpenAI Whisper API, or local whisper)
-    transcript, err := transcriber.Transcribe(ctx, data, "audio/ogg")
-    
-    return &ContentBlock{
-        Type: "text",
-        Text: fmt.Sprintf("[Voice message, %ds]\n%s", voice.Duration, transcript),
-    }, nil
+    // Auto-timeout: default to "Let agent decide" after 30s
 }
 ```
 
-The Transcriber interface is defined in the voice/media spec. For v1, we use OpenAI's Whisper API.
+### Video → User chooses
 
-### Video → Metadata only (v1)
+Same pattern as voice:
 
-Video processing is expensive. For v1, we extract metadata only:
+```
+"🎬 Video received (30s, 1920x1080). How should I process it?"
 
-```go
-func processVideo(ctx context.Context, video *Video) *ContentBlock {
-    return &ContentBlock{
-        Type: "text",
-        Text: fmt.Sprintf("[Video attached: %ds, %dx%d, %s]",
-            video.Duration, video.Width, video.Height, video.MimeType),
-    }
-}
+[ 🖼 Extract frames ]  [ 🎵 Analyze audio track ]
+[ 🤖 Let agent decide ]  [ ❌ Skip ]
 ```
 
-Future: extract keyframes and pass as vision input.
+**Button actions:**
+- **🖼 Extract frames** → Use ffmpeg to extract keyframes, pass as vision input
+- **🎵 Analyze audio track** → Extract audio, send to Gemini or transcribe
+- **🤖 Let agent decide** → Download, let agent choose
+- **❌ Skip** → Metadata only: `[Video attached: 30s, 1920x1080]`
 
-### Stickers → Description
+### Audio files → User chooses
+
+```
+"🎶 Audio file received (song.mp3, 3:42). How should I process it?"
+
+[ 📝 Transcribe ]  [ 🎵 Analyze music ]
+[ 🤖 Let agent decide ]  [ ❌ Skip ]
+```
+
+### Stickers → Auto-process (unambiguous)
+
+Stickers are simple enough to always auto-process:
 
 ```go
 func processSticker(sticker *Sticker) *ContentBlock {
@@ -636,6 +666,23 @@ func processSticker(sticker *Sticker) *ContentBlock {
     text += "]"
     return &ContentBlock{Type: "text", Text: text}
 }
+```
+
+### The principle
+
+| Media type | Intent clear? | Action |
+|---|---|---|
+| Photo | Yes (vision) | Auto-process |
+| Text document | Yes (read it) | Auto-process |
+| PDF | Yes (read it) | Auto-process |
+| Image-as-document | Yes (vision) | Auto-process |
+| Sticker | Yes (emoji) | Auto-process |
+| Voice | Ambiguous | Show buttons |
+| Video | Ambiguous | Show buttons |
+| Audio file | Ambiguous | Show buttons |
+| Binary file | Ambiguous | Show buttons (or just metadata) |
+
+Consistent with our design principle: **buttons over assumptions** when intent is ambiguous. Max 4 buttons per keyboard (2x2 grid fits well on mobile).
 ```
 
 ### Size limits
@@ -673,9 +720,14 @@ pdf_as_document = true             # Send PDFs as Anthropic document blocks (vs 
 - **TestProcessDocumentPDF**: PDF → returned as document content block.
 - **TestProcessDocumentImage**: .png sent as document → processed as image.
 - **TestProcessDocumentBinary**: .zip → metadata-only text block.
-- **TestProcessVoice**: OGG voice → transcribed, returned as text with duration marker.
-- **TestProcessVideo**: Video → metadata-only text block.
-- **TestProcessSticker**: Sticker with emoji → description text block.
+- **TestVoiceShowsButtons**: Voice message → inline keyboard with 4 options.
+- **TestVoiceTranscribe**: Tap Transcribe → Whisper called, transcript as text block.
+- **TestVoiceAnalyze**: Tap Analyze → sent to Gemini, analysis as text block.
+- **TestVoiceSkip**: Tap Skip → metadata-only text block.
+- **TestVoiceTimeout**: No tap → defaults to "Let agent decide".
+- **TestVideoShowsButtons**: Video → inline keyboard with 4 options.
+- **TestAudioShowsButtons**: Audio file → inline keyboard with 4 options.
+- **TestProcessSticker**: Sticker with emoji → auto-processed, description text block.
 - **TestFileTooLarge**: 25MB file → error, not downloaded.
 - **TestMultiContentMessage**: Photo + caption → multi-block user message (image + text).
 
