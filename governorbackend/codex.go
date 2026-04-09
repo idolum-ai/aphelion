@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,15 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+)
+
+const maxCodexResponseBytes = 1 << 20 // 1 MiB
+
+var (
+	ErrCodexUnauthorized = errors.New("codex unauthorized")
+	ErrCodexForbidden    = errors.New("codex forbidden")
+	ErrCodexRateLimited  = errors.New("codex rate limited")
+	ErrCodexServer       = errors.New("codex upstream failure")
 )
 
 type CodexOptions struct {
@@ -75,18 +85,19 @@ func (c *Codex) Complete(ctx context.Context, messages []agent.Message, tools []
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("codex: request: %w", err)
+		return nil, fmt.Errorf("codex: request: %w", redactError(err, c.accessToken))
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCodexResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("codex: read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, apiError{
+		return nil, codexAPIError{
 			statusCode: resp.StatusCode,
-			message:    fmt.Sprintf("codex: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))),
+			message:    codexStatusMessage(resp.StatusCode),
+			cause:      codexStatusCause(resp.StatusCode),
 		}
 	}
 
@@ -208,15 +219,63 @@ func parseCodexResponse(raw []byte) (*agent.Response, error) {
 	}, nil
 }
 
-type apiError struct {
-	statusCode int
-	message    string
+func codexStatusMessage(statusCode int) string {
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return "codex: status 401 unauthorized"
+	case http.StatusForbidden:
+		return "codex: status 403 forbidden"
+	case http.StatusTooManyRequests:
+		return "codex: status 429 rate_limited"
+	default:
+		if statusCode >= 500 {
+			return fmt.Sprintf("codex: status %d server_error", statusCode)
+		}
+		return fmt.Sprintf("codex: status %d request_failed", statusCode)
+	}
 }
 
-func (e apiError) Error() string {
+func codexStatusCause(statusCode int) error {
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return ErrCodexUnauthorized
+	case http.StatusForbidden:
+		return ErrCodexForbidden
+	case http.StatusTooManyRequests:
+		return ErrCodexRateLimited
+	default:
+		if statusCode >= 500 {
+			return ErrCodexServer
+		}
+		return nil
+	}
+}
+
+func redactError(err error, secret string) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if secret != "" {
+		msg = strings.ReplaceAll(msg, secret, "[REDACTED]")
+	}
+	return errors.New(msg)
+}
+
+type codexAPIError struct {
+	statusCode int
+	message    string
+	cause      error
+}
+
+func (e codexAPIError) Error() string {
 	return e.message
 }
 
-func (e apiError) StatusCode() int {
+func (e codexAPIError) StatusCode() int {
 	return e.statusCode
+}
+
+func (e codexAPIError) Unwrap() error {
+	return e.cause
 }

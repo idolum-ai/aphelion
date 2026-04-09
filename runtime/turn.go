@@ -13,6 +13,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/workspace"
@@ -21,11 +22,11 @@ import (
 const maxReviewEventsPerTurn = 10
 
 func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
-	principal, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
+	actor, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
 	if !ok {
 		return nil, ErrPrincipalDenied
 	}
-	tools := r.toolsForPrincipal(principal)
+	tools := r.toolsForPrincipal(actor)
 
 	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
 	sess, err := r.store.Load(key)
@@ -40,7 +41,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	systemPrompt := prompt.BuildGovernorPrompt(prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
-		PrincipalRole:   string(principal.Role),
+		PrincipalRole:   string(actor.Role),
 		WorkspaceRoot:   r.cfg.Agent.Workspace,
 		ToolManifest:    toolManifest(tools),
 		Workspace:       promptContext,
@@ -88,7 +89,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
 			Channel:         "telegram",
-			PrincipalRole:   string(principal.Role),
+			PrincipalRole:   string(actor.Role),
 			WorkspaceRoot:   r.cfg.Agent.Workspace,
 			CanonicalReply:  canonicalReply,
 			LatestUserInput: userText,
@@ -123,7 +124,13 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		return result, fmt.Errorf("send outbound reply: %w", sendErr)
 	}
 
-	if principal.Role == "admin" {
+	if shouldGenerateReviewEvent(actor, key) {
+		if err := r.enqueueReviewEventsForTurn(actor, msg, sess.TurnCount, userText, replyText, result.ToolLog); err != nil {
+			return result, fmt.Errorf("enqueue review events: %w", err)
+		}
+	}
+
+	if actor.Role == principal.RoleAdmin {
 		if err := r.deliverReviewEvents(ctx, msg.ChatID); err != nil {
 			return result, fmt.Errorf("deliver review events: %w", err)
 		}
@@ -158,6 +165,53 @@ func replaceLastAssistantWithRenderedReply(messages []session.Message, renderedR
 	})
 }
 
+func shouldGenerateReviewEvent(actor principal.Principal, key session.SessionKey) bool {
+	if actor.Role != principal.RoleAdmin {
+		return true
+	}
+	// Future-compatible hook: subordinate sessions from admin principals still produce digests.
+	return key.UserID != 0
+}
+
+func (r *Runtime) enqueueReviewEventsForTurn(
+	actor principal.Principal,
+	msg core.InboundMessage,
+	turnIndex int,
+	userText string,
+	renderedReply string,
+	toolLog []string,
+) error {
+	targets := uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)
+	if len(targets) == 0 {
+		return nil
+	}
+
+	summary := session.BuildReviewSummary(session.ReviewSummaryInput{
+		SourceChatID:  msg.ChatID,
+		SourceUserID:  msg.SenderID,
+		SourceRole:    string(actor.Role),
+		TurnIndex:     turnIndex,
+		UserText:      userText,
+		RenderedReply: renderedReply,
+		ToolLog:       toolLog,
+	}, session.DefaultReviewSummaryMaxChars)
+
+	for _, adminChatID := range targets {
+		if err := r.store.EnqueueReviewEvent(session.ReviewEvent{
+			SourceChatID:      msg.ChatID,
+			SourceUserID:      msg.SenderID,
+			SourceRole:        string(actor.Role),
+			TargetAdminChatID: adminChatID,
+			TurnFrom:          turnIndex,
+			TurnTo:            turnIndex,
+			Summary:           summary,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Runtime) deliverReviewEvents(ctx context.Context, adminChatID int64) error {
 	events, err := r.store.PendingReviewEvents(adminChatID, maxReviewEventsPerTurn)
 	if err != nil {
@@ -175,6 +229,22 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, adminChatID int64) er
 		}
 	}
 	return nil
+}
+
+func uniquePositiveIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func formatReviewEventMessage(event session.ReviewEvent) string {

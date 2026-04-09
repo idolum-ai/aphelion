@@ -26,6 +26,7 @@ type Registry struct {
 	timeout        time.Duration
 	maxOutputBytes int
 	sandbox        *sandbox.Resolver
+	runner         *sandbox.Runner
 }
 
 type execInput struct {
@@ -45,6 +46,7 @@ func NewRegistry(workspace string, timeout time.Duration) *Registry {
 func NewRegistryWithSandbox(workspace string, timeout time.Duration, resolver *sandbox.Resolver) *Registry {
 	registry := NewRegistry(workspace, timeout)
 	registry.sandbox = resolver
+	registry.runner = sandbox.NewRunner()
 	return registry
 }
 
@@ -52,12 +54,15 @@ func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
 	if r == nil || r.sandbox == nil {
 		return false
 	}
-	switch p.Role {
-	case principal.RoleAdmin, principal.RoleApprovedUser:
-		return true
-	default:
+
+	scope, err := r.sandbox.Resolve(p)
+	if err != nil {
 		return false
 	}
+	if r.runner == nil {
+		return p.Role == principal.RoleAdmin
+	}
+	return r.runner.Supports(scope)
 }
 
 func (r *Registry) Definitions() []agent.ToolDef {
@@ -92,19 +97,29 @@ func (r *Registry) ExecuteForPrincipal(ctx context.Context, p principal.Principa
 	if err := ensureScopeReady(scope); err != nil {
 		return "", err
 	}
-	return r.executeWithRoot(ctx, name, input, scope.WorkingRoot)
+	if r.runner == nil {
+		return "", fmt.Errorf("principal-aware execution requires sandbox runner")
+	}
+	if !r.runner.Supports(scope) {
+		return "", fmt.Errorf("no supported sandbox backend for principal role %q", p.Role)
+	}
+	return r.executeWithScope(ctx, name, input, scope)
 }
 
 func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.RawMessage, root string) (string, error) {
+	return r.executeWithScope(ctx, name, input, sandbox.Scope{WorkingRoot: root})
+}
+
+func (r *Registry) executeWithScope(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope) (string, error) {
 	switch name {
 	case "exec":
-		return r.exec(ctx, input, root)
+		return r.exec(ctx, input, scope)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
 }
 
-func (r *Registry) exec(ctx context.Context, input json.RawMessage, root string) (string, error) {
+func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
 	var in execInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode exec input: %w", err)
@@ -113,7 +128,7 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, root string)
 		return "", fmt.Errorf("exec command is required")
 	}
 
-	workdir, err := resolveWorkdir(root, in.Workdir)
+	workdir, err := resolveWorkdir(scope.WorkingRoot, in.Workdir)
 	if err != nil {
 		return "", err
 	}
@@ -127,16 +142,8 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, root string)
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "bash", "-lc", in.Command)
-	cmd.Dir = workdir
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
-	out := renderOutput(stdout.String(), stderr.String(), r.maxOutputBytes)
+	stdout, stderr, err := r.runCommand(runCtx, scope, in.Command, workdir)
+	out := renderOutput(stdout, stderr, r.maxOutputBytes)
 	if err == nil {
 		return out, nil
 	}
@@ -151,6 +158,28 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, root string)
 	}
 
 	return out, fmt.Errorf("run command: %w", err)
+}
+
+func (r *Registry) runCommand(ctx context.Context, scope sandbox.Scope, command string, workdir string) (string, string, error) {
+	if r.runner != nil && strings.TrimSpace(string(scope.Principal.Role)) != "" {
+		res, err := r.runner.Run(ctx, sandbox.ExecRequest{
+			Scope:   scope,
+			Command: command,
+			Workdir: workdir,
+		})
+		return res.Stdout, res.Stderr, err
+	}
+
+	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+	cmd.Dir = workdir
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
 }
 
 func defaultTimeout(timeout time.Duration) time.Duration {

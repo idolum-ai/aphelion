@@ -775,6 +775,71 @@ func TestHandleInboundDoesNotDeliverReviewEventsForApprovedUser(t *testing.T) {
 	}
 }
 
+func TestHandleInboundGeneratesReviewEventForApprovedUser(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "governor canonical"
+	provider.faceReplyText = "host rendered"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     222,
+		SenderID:   1002,
+		SenderName: "member",
+		Text:       "please summarize what happened",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	pending, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending len = %d, want 1", len(pending))
+	}
+	event := pending[0]
+	if event.SourceChatID != 222 {
+		t.Fatalf("source chat = %d, want 222", event.SourceChatID)
+	}
+	if event.SourceUserID != 1002 {
+		t.Fatalf("source user = %d, want 1002", event.SourceUserID)
+	}
+	if event.SourceRole != "approved_user" {
+		t.Fatalf("source role = %q, want approved_user", event.SourceRole)
+	}
+	if event.TurnFrom != 1 || event.TurnTo != 1 {
+		t.Fatalf("turn range = %d-%d, want 1-1", event.TurnFrom, event.TurnTo)
+	}
+	if !strings.Contains(event.Summary, "provenance chat=222 user=1002 role=approved_user turn=1") {
+		t.Fatalf("summary missing provenance: %q", event.Summary)
+	}
+	if len([]rune(event.Summary)) > session.DefaultReviewSummaryMaxChars {
+		t.Fatalf("summary len = %d, want <= %d", len([]rune(event.Summary)), session.DefaultReviewSummaryMaxChars)
+	}
+}
+
+func TestShouldGenerateReviewEvent(t *testing.T) {
+	t.Parallel()
+
+	if !shouldGenerateReviewEvent(principal.Principal{Role: principal.RoleApprovedUser}, session.SessionKey{ChatID: 1, UserID: 0}) {
+		t.Fatal("approved_user should generate review event")
+	}
+	if shouldGenerateReviewEvent(principal.Principal{Role: principal.RoleAdmin}, session.SessionKey{ChatID: 1, UserID: 0}) {
+		t.Fatal("admin top-level session should not generate review event")
+	}
+	if !shouldGenerateReviewEvent(principal.Principal{Role: principal.RoleAdmin}, session.SessionKey{ChatID: 1, UserID: 7}) {
+		t.Fatal("admin subordinate session should generate review event")
+	}
+}
+
 func TestNewRejectsInvalidIdleExpiry(t *testing.T) {
 	t.Parallel()
 
@@ -867,6 +932,102 @@ func TestHandleInboundUsesCodexGovernorBackend(t *testing.T) {
 	}
 	if strings.Contains(sess.SystemPrompt, accessToken) {
 		t.Fatalf("system prompt leaked token: %q", sess.SystemPrompt)
+	}
+}
+
+func TestNewAutoFallsBackToNativeWhenCodexCredentialsMissing(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Governor.Backend = "auto"
+	cfg.Governor.Codex.AuthSource = "codex_cli"
+	cfg.Governor.Codex.CodexHome = t.TempDir()
+
+	origFactory := newCodexProvider
+	defer func() { newCodexProvider = origFactory }()
+
+	var codexFactoryCalls int32
+	newCodexProvider = func(_ governorauth.Bundle, _ *config.Config) (agent.Provider, error) {
+		atomic.AddInt32(&codexFactoryCalls, 1)
+		return &fakeProvider{replyText: "codex"}, nil
+	}
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendGovernorPassthrough
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     405,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "hi",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	if got := atomic.LoadInt32(&codexFactoryCalls); got != 0 {
+		t.Fatalf("codex factory calls = %d, want 0 in native fallback", got)
+	}
+	provider.mu.Lock()
+	callCount := provider.callCount
+	provider.mu.Unlock()
+	if callCount == 0 {
+		t.Fatal("native provider was not used in auto fallback")
+	}
+}
+
+func TestNewAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Governor.Backend = "auto"
+	cfg.Governor.Codex.AuthSource = "codex_cli"
+	cfg.Governor.Codex.CodexHome = t.TempDir()
+
+	authPath := filepath.Join(cfg.Governor.Codex.CodexHome, "auth.json")
+	rawAuth := `{"tokens":{"access_token":"codex-access","refresh_token":"refresh-secret"}}`
+	if err := os.WriteFile(authPath, []byte(rawAuth), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	origFactory := newCodexProvider
+	defer func() { newCodexProvider = origFactory }()
+	newCodexProvider = func(_ governorauth.Bundle, _ *config.Config) (agent.Provider, error) {
+		return &fakeProvider{replyText: "codex auto"}, nil
+	}
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendGovernorPassthrough
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     406,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "hi",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	callCount := provider.callCount
+	provider.mu.Unlock()
+	if callCount != 0 {
+		t.Fatalf("native provider call count = %d, want 0 when codex selected", callCount)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 || sender.sent[0].Text != "codex auto" {
+		t.Fatalf("outbound = %#v, want codex auto", sender.sent)
 	}
 }
 

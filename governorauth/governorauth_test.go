@@ -3,6 +3,7 @@
 package governorauth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,9 +21,9 @@ func TestDetectCodexCLIAuthFile(t *testing.T) {
 		t.Fatalf("write auth.json: %v", err)
 	}
 
-	creds, ok := detectCodexCLICredentials(dir, defaultLookups())
-	if !ok {
-		t.Fatal("detectCodexCLICredentials() = false, want true")
+	creds, err := detectCodexCLICredentials(dir, defaultLookups())
+	if err != nil {
+		t.Fatalf("detectCodexCLICredentials() err = %v, want nil", err)
 	}
 	if creds.AccessToken != "acc" || creds.RefreshToken != "ref" {
 		t.Fatalf("credentials = %#v, want access+refresh", creds)
@@ -39,8 +40,8 @@ func TestIgnoreMalformedCodexCLIAuthFile(t *testing.T) {
 		t.Fatalf("write auth.json: %v", err)
 	}
 
-	if _, ok := detectCodexCLICredentials(dir, defaultLookups()); ok {
-		t.Fatal("detectCodexCLICredentials() = true, want false for malformed payload")
+	if _, err := detectCodexCLICredentials(dir, defaultLookups()); !errors.Is(err, ErrCodexAuthIncomplete) {
+		t.Fatalf("detectCodexCLICredentials() err = %v, want ErrCodexAuthIncomplete", err)
 	}
 }
 
@@ -112,8 +113,36 @@ func TestGovernorBackendCodexFailsWithoutCredentials(t *testing.T) {
 	if err == nil {
 		t.Fatal("ResolveFromConfig() err = nil, want codex auth unavailable")
 	}
-	if err != ErrCodexAuthUnavailable {
-		t.Fatalf("err = %v, want %v", err, ErrCodexAuthUnavailable)
+	if !errors.Is(err, ErrCodexAuthUnavailable) {
+		t.Fatalf("err = %v, want wrapped %v", err, ErrCodexAuthUnavailable)
+	}
+	if !errors.Is(err, ErrCodexAuthNotFound) {
+		t.Fatalf("err = %v, want wrapped %v", err, ErrCodexAuthNotFound)
+	}
+}
+
+func TestGovernorBackendCodexReportsMalformedAuth(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{`), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	_, err := ResolveFromConfig(config.GovernorConfig{
+		Backend:        "codex",
+		NativeProvider: "anthropic",
+		Codex: config.GovernorCodexConfig{
+			AuthSource: "codex_cli",
+			CodexHome:  dir,
+		},
+	})
+	if err == nil {
+		t.Fatal("ResolveFromConfig() err = nil, want malformed auth failure")
+	}
+	if !errors.Is(err, ErrCodexAuthUnavailable) || !errors.Is(err, ErrCodexAuthMalformed) {
+		t.Fatalf("err = %v, want unavailable+malformed classification", err)
 	}
 }
 

@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,41 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
+
+func setFakeBubblewrapRunner(t *testing.T, registry *Registry) {
+	t.Helper()
+
+	dir := t.TempDir()
+	fakeBwrapPath := filepath.Join(dir, "bwrap")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+workdir=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --chdir)
+      shift
+      workdir="$1"
+      ;;
+    --)
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+if [[ -n "$workdir" ]]; then
+  cd "$workdir"
+fi
+exec "$@"
+`
+	if err := os.WriteFile(fakeBwrapPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake bwrap: %v", err)
+	}
+
+	registry.runner = sandbox.NewRunnerWithLookPath(func(_ string) (string, error) {
+		return fakeBwrapPath, nil
+	})
+}
 
 func TestExecSuccess(t *testing.T) {
 	t.Parallel()
@@ -72,6 +108,7 @@ func TestExecuteForPrincipalUsesApprovedUserRoot(t *testing.T) {
 	}
 
 	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver)
+	setFakeBubblewrapRunner(t, registry)
 	out, err := registry.ExecuteForPrincipal(
 		context.Background(),
 		principal.Principal{TelegramUserID: 42, Role: principal.RoleApprovedUser},
@@ -111,6 +148,7 @@ func TestExecuteForPrincipalRejectsEscapedWorkdir(t *testing.T) {
 	}
 
 	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver)
+	setFakeBubblewrapRunner(t, registry)
 	_, err = registry.ExecuteForPrincipal(
 		context.Background(),
 		principal.Principal{TelegramUserID: 42, Role: principal.RoleApprovedUser},
@@ -178,6 +216,43 @@ func TestExecuteForPrincipalRequiresResolver(t *testing.T) {
 	}
 }
 
+func TestExecuteForPrincipalApprovedUserRequiresIsolatedBackend(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			SharedMemoryRoot:  filepath.Join(tmp, "shared-memory"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+
+	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver)
+	registry.runner = sandbox.NewRunnerWithLookPath(func(string) (string, error) {
+		return "", os.ErrNotExist
+	})
+
+	_, err = registry.ExecuteForPrincipal(
+		context.Background(),
+		principal.Principal{TelegramUserID: 42, Role: principal.RoleApprovedUser},
+		"exec",
+		json.RawMessage(`{"command":"pwd"}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForPrincipal() err = nil, want isolated backend requirement")
+	}
+	if !strings.Contains(err.Error(), "no supported sandbox backend") {
+		t.Fatalf("err = %v, want isolated backend error", err)
+	}
+}
+
 func TestSupportsPrincipal(t *testing.T) {
 	t.Parallel()
 
@@ -201,10 +276,19 @@ func TestSupportsPrincipal(t *testing.T) {
 	}
 
 	withSandbox := NewRegistryWithSandbox(filepath.Join(tmp, "global"), 2*time.Second, resolver)
+	withSandbox.runner = sandbox.NewRunnerWithLookPath(func(string) (string, error) {
+		return "", os.ErrNotExist
+	})
+	approved := principal.Principal{TelegramUserID: 42, Role: principal.RoleApprovedUser}
+	if withSandbox.SupportsPrincipal(approved) {
+		t.Fatal("SupportsPrincipal(approved_user) = true, want false when isolated backend is unavailable")
+	}
+	setFakeBubblewrapRunner(t, withSandbox)
+
 	if !withSandbox.SupportsPrincipal(principal.Principal{Role: principal.RoleAdmin}) {
 		t.Fatal("SupportsPrincipal(admin) = false, want true with resolver")
 	}
-	if !withSandbox.SupportsPrincipal(principal.Principal{Role: principal.RoleApprovedUser}) {
+	if !withSandbox.SupportsPrincipal(approved) {
 		t.Fatal("SupportsPrincipal(approved_user) = false, want true with resolver")
 	}
 }

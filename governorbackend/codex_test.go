@@ -5,6 +5,7 @@ package governorbackend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -119,6 +120,9 @@ func TestCodexCompleteStatusError(t *testing.T) {
 	if !strings.Contains(err.Error(), "status 401") {
 		t.Fatalf("error = %v, want status code", err)
 	}
+	if !errors.Is(err, ErrCodexUnauthorized) {
+		t.Fatalf("error = %v, want ErrCodexUnauthorized", err)
+	}
 }
 
 type testTransport struct {
@@ -129,4 +133,39 @@ func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	rec := httptest.NewRecorder()
 	t.handler.ServeHTTP(rec, req)
 	return rec.Result(), nil
+}
+
+type errTransport struct {
+	err error
+}
+
+func (t errTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, t.err
+}
+
+func TestCodexCompleteRedactsSecretInTransportError(t *testing.T) {
+	t.Parallel()
+
+	const token = "super-secret-token"
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api/codex",
+		AccessToken: token,
+		HTTPClient: &http.Client{
+			Transport: errTransport{err: errors.New("dial failed using token " + token)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("Complete() err = nil, want transport failure")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error leaked secret token: %v", err)
+	}
+	if !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("error = %v, want redacted marker", err)
+	}
 }

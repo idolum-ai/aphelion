@@ -28,8 +28,31 @@ const (
 var (
 	ErrUnsupportedBackend    = errors.New("unsupported governor backend")
 	ErrCodexAuthUnavailable  = errors.New("codex credentials unavailable")
+	ErrCodexAuthNotFound     = errors.New("codex auth file not found")
+	ErrCodexAuthMalformed    = errors.New("codex auth file is malformed")
+	ErrCodexAuthIncomplete   = errors.New("codex auth payload is incomplete")
+	ErrUnsupportedAuthSource = errors.New("unsupported governor auth source")
 	ErrAphelionAuthStoreTODO = errors.New("aphelion governor auth store is not implemented")
 )
+
+type codexUnavailableError struct {
+	cause error
+}
+
+func (e codexUnavailableError) Error() string {
+	if e.cause == nil {
+		return ErrCodexAuthUnavailable.Error()
+	}
+	return ErrCodexAuthUnavailable.Error() + ": " + e.cause.Error()
+}
+
+func (e codexUnavailableError) Unwrap() error {
+	return e.cause
+}
+
+func (e codexUnavailableError) Is(target error) bool {
+	return target == ErrCodexAuthUnavailable
+}
 
 type Bundle struct {
 	Backend      string
@@ -67,7 +90,7 @@ func resolveFromConfig(cfg config.GovernorConfig, l lookups) (Bundle, error) {
 	case BackendNative:
 		return nativeBundle(cfg), nil
 	case BackendAuto, BackendCodex:
-		bundle, ok, err := resolveCodexBundle(cfg, l)
+		bundle, ok, cause, err := resolveCodexBundle(cfg, l)
 		if err != nil {
 			return Bundle{}, err
 		}
@@ -77,13 +100,16 @@ func resolveFromConfig(cfg config.GovernorConfig, l lookups) (Bundle, error) {
 		if backend == BackendAuto {
 			return nativeBundle(cfg), nil
 		}
+		if cause != nil {
+			return Bundle{}, codexUnavailableError{cause: cause}
+		}
 		return Bundle{}, ErrCodexAuthUnavailable
 	default:
 		return Bundle{}, fmt.Errorf("%w: %s", ErrUnsupportedBackend, backend)
 	}
 }
 
-func resolveCodexBundle(cfg config.GovernorConfig, l lookups) (Bundle, bool, error) {
+func resolveCodexBundle(cfg config.GovernorConfig, l lookups) (Bundle, bool, error, error) {
 	authSource := strings.ToLower(strings.TrimSpace(cfg.Codex.AuthSource))
 	if authSource == "" {
 		authSource = AuthSourceAuto
@@ -91,9 +117,9 @@ func resolveCodexBundle(cfg config.GovernorConfig, l lookups) (Bundle, bool, err
 
 	switch authSource {
 	case AuthSourceAuto, AuthSourceCodexCLI:
-		creds, ok := detectCodexCLICredentials(cfg.Codex.CodexHome, l)
-		if !ok {
-			return Bundle{}, false, nil
+		creds, err := detectCodexCLICredentials(cfg.Codex.CodexHome, l)
+		if err != nil {
+			return Bundle{}, false, err, nil
 		}
 		baseURL := strings.TrimSpace(cfg.Codex.BaseURL)
 		if baseURL == "" {
@@ -105,11 +131,11 @@ func resolveCodexBundle(cfg config.GovernorConfig, l lookups) (Bundle, bool, err
 			AccessToken:  creds.AccessToken,
 			RefreshToken: creds.RefreshToken,
 			Source:       "codex-cli-auth-json",
-		}, true, nil
+		}, true, nil, nil
 	case AuthSourceAphelion:
-		return Bundle{}, false, ErrAphelionAuthStoreTODO
+		return Bundle{}, false, nil, ErrAphelionAuthStoreTODO
 	default:
-		return Bundle{}, false, nil
+		return Bundle{}, false, fmt.Errorf("%w: %s", ErrUnsupportedAuthSource, authSource), nil
 	}
 }
 
@@ -132,32 +158,35 @@ type codexCredentials struct {
 	RefreshToken string
 }
 
-func detectCodexCLICredentials(codexHomeOverride string, l lookups) (codexCredentials, bool) {
+func detectCodexCLICredentials(codexHomeOverride string, l lookups) (codexCredentials, error) {
 	authPath, ok := resolveCodexAuthPath(codexHomeOverride, l)
 	if !ok {
-		return codexCredentials{}, false
+		return codexCredentials{}, ErrCodexAuthNotFound
 	}
 
 	raw, err := l.readFile(authPath)
 	if err != nil {
-		return codexCredentials{}, false
+		if os.IsNotExist(err) {
+			return codexCredentials{}, ErrCodexAuthNotFound
+		}
+		return codexCredentials{}, ErrCodexAuthMalformed
 	}
 
 	var parsed codexCLIAuth
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return codexCredentials{}, false
+		return codexCredentials{}, ErrCodexAuthMalformed
 	}
 
 	access := strings.TrimSpace(parsed.Tokens.AccessToken)
 	refresh := strings.TrimSpace(parsed.Tokens.RefreshToken)
 	if access == "" || refresh == "" {
-		return codexCredentials{}, false
+		return codexCredentials{}, ErrCodexAuthIncomplete
 	}
 
 	return codexCredentials{
 		AccessToken:  access,
 		RefreshToken: refresh,
-	}, true
+	}, nil
 }
 
 func resolveCodexAuthPath(codexHomeOverride string, l lookups) (string, bool) {
