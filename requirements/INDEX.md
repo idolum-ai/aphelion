@@ -18,7 +18,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 9. ✅ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
 
 ## Agent
-10. ⬜ [`tools.md`](tools.md) — Tool definition, dispatch, sandboxing, exec, file ops, web fetch
+10. ✅ [`tools.md`](tools.md) — Tool definition, per-run manifest shaping, sandboxing, exec, file ops, web fetch
 11. ✅ [`memory.md`](memory.md) — Workspace files, shared/per-user memory, OpenAI files, vector stores
 12. ✅ [`system-prompt.md`](system-prompt.md) — Governor prompt, face prompt, cache boundary, dynamic vs stable sections
 13. ✅ [`host.md`](host.md) — Face identity, anti-drift, Host-specific prompt files

@@ -23,6 +23,32 @@ The security floor matters here:
 - it is not a real sandbox
 - `approved_user` tool execution should remain off until the v0.5 isolation floor is actually enforced
 
+## Design Lineage
+
+Aphelion's tool model should be read against two nearby patterns:
+
+- **OpenClaw**
+  - layered per-run tool policy
+  - owner-only tools
+  - sandbox-aware filtering
+  - lighter tool/context surfaces for cron and subagent runs
+- **Hermes**
+  - central registry and toolset model
+  - simpler global availability model
+  - strong special-case restrictions for delegated children
+
+Aphelion should end up closer to OpenClaw on **enforcement shape**, but with a different constitutional split:
+
+- `Aphelion` governs tool availability and side effects
+- `Host` never owns tools
+- principal role and run kind are first-class manifest inputs
+
+So the intended synthesis is:
+
+- OpenClaw-style layered runtime enforcement
+- Hermes-style registry clarity
+- Aphelion-specific governor/Host and principal/isolation boundaries
+
 ## Philosophy
 
 1. **Reality in code.** The registry, schemas, sandbox, and permissions live in Go.
@@ -31,6 +57,7 @@ The security floor matters here:
 4. **Audit first.** Every tool call is durable session data.
 5. **One registry.** The agent sees a single normalized tool surface even if implementation backends differ.
 6. **Governor-only execution.** The face never receives tools or authority to invoke them.
+7. **Per-run truth.** The manifest may change by principal, session kind, and run kind; stale static tool lists are not acceptable.
 
 ## Tool Layers
 
@@ -46,6 +73,8 @@ There are four distinct layers:
    - Optional workspace-authored `TOOLS.md`, appended to the prompt to describe operator preferences or local norms.
 
 Only the first two layers are authoritative.
+
+The key difference from a simpler Hermes-style registry is that Aphelion's authoritative surface is resolved **per run**, not just per process.
 
 ## `TOOLS.md`
 
@@ -74,6 +103,8 @@ Unlike Hermes, which largely treats tool behavior as built-in instruction, Aphel
 - bypass sandbox policy
 - override config or code-level limits
 
+This is closer to OpenClaw than Hermes: `TOOLS.md` is a local note surface, not the thing that makes tools real.
+
 ## Prompt Assembly
 
 Per turn, tool guidance is assembled in this order:
@@ -85,6 +116,32 @@ Per turn, tool guidance is assembled in this order:
 The model should never be shown stale tool definitions copied by hand into prompt text when the real registry differs.
 
 Tool guidance belongs to the **governor prompt**, not the face prompt.
+
+## Per-Run Manifest Shaping
+
+The active tool manifest should be resolved from:
+
+- principal role
+- session kind
+- run kind
+- sandbox profile
+- provider/runtime constraints
+
+At minimum, these run kinds should be distinguished:
+
+- `default`
+- `heartbeat`
+- `cron`
+- `subagent`
+
+This is the major place where Aphelion should follow OpenClaw more than Hermes.
+
+Examples:
+
+- `heartbeat` may omit ordinary user-facing messaging tools
+- `cron` should usually get a lighter, narrower tool surface
+- `subagent` runs should inherit stricter ceilings than their parent
+- `approved_user` runs should not merely receive warnings; they should receive a different actual manifest
 
 ## Core Interfaces
 
@@ -114,6 +171,8 @@ type Result struct {
 ```
 
 The current repo has a smaller interface. This spec describes the target shape.
+
+An eventual implementation may also pass explicit `RunKind` and `SessionKind` fields rather than inferring them indirectly.
 
 ## v0 Tool Surface
 
@@ -161,6 +220,31 @@ For clarity: v0 `exec` is not sufficient for non-admin use. Restricting `workdir
 - network policy follows the configured non-admin sandbox profile
 
 The difference between admin and non-admin must be enforced in code, not merely described in `TOOLS.md`.
+
+## Run-Kind Policy
+
+### Default turns
+
+- normal interactive tool surface
+- principal-aware filtering still applies
+
+### Heartbeat turns
+
+- governor-owned maintenance tool surface
+- may be narrower than ordinary interactive turns
+- should not silently inherit tools that only make sense for live user interaction
+
+### Cron turns
+
+- scheduled-job tool surface
+- lightweight and explicit by default
+- should not encourage improvised timers, sleep loops, or broad inherited context
+
+### Subagent turns
+
+- inherited principal ceiling
+- explicit deny list for control-plane or escalation tools
+- narrower than parent by default unless explicitly configured otherwise
 
 ## Execution Roots
 
@@ -213,6 +297,13 @@ These are useful because they can be more constrained and auditable than a shell
 
 Every new tool should justify its existence against the question: why is this better than a narrowly sandboxed `exec`?
 
+Aphelion should generally prefer specialized tools when they provide one of:
+
+- tighter sandboxability
+- clearer audit shape
+- lower prompt ambiguity
+- less authority than shell access
+
 ## Audit and Persistence
 
 Every tool call should record:
@@ -259,6 +350,8 @@ Tool-related config lives primarily in `config.md` under:
 - **TestRegistryDefinitionsMatchManifest**: machine-generated manifest reflects actual registered tools
 - **TestToolsMDIsAdvisoryOnly**: changing `TOOLS.md` changes prompt text but not actual tool availability
 - **TestRoleSpecificDefinitions**: admin and non-admin see different effective tool surfaces when configured
+- **TestRunKindSpecificDefinitions**: `default`, `heartbeat`, `cron`, and `subagent` runs can receive different effective manifests
+- **TestFacePromptOmitsTools**: tool manifest and tool policy stay in the governor layer, not the face layer
 
 ### `exec`
 
