@@ -1,9 +1,9 @@
 APP := aphelion
 BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP)
-CONFIG ?= $(HOME)/.config/aphelion/config.toml
+CONFIG ?= $(HOME)/.aphelion/aphelion.toml
 
-.PHONY: build run test check-config install-user-service restart-user-service logs-user-service update install-release update-release
+.PHONY: build run test check-config install-user-service restart-user-service logs-user-service update install-release update-release paths gc
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -17,6 +17,12 @@ test:
 
 check-config: build
 	./$(BIN) --config $(CONFIG) --check-config
+
+paths: build
+	./$(BIN) paths --config $(CONFIG)
+
+gc: build
+	./$(BIN) gc --config $(CONFIG)
 
 install-user-service: build
 	./scripts/install-user-service.sh

@@ -42,7 +42,7 @@ type configStartupError struct {
 }
 
 func (e *configStartupError) Error() string {
-	return fmt.Sprintf("config %s: %v", e.Path, e.Err)
+	return fmt.Sprintf("config %s: %v (run 'aphelion --config %s --check-config' to validate)", e.Path, e.Err, e.Path)
 }
 
 func (e *configStartupError) Unwrap() error {
@@ -57,20 +57,36 @@ func main() {
 }
 
 func run() error {
-	configPath := flag.String("config", defaultConfigPath(), "path to config.toml")
-	checkConfig := flag.Bool("check-config", false, "validate config and exit")
-	flag.Parse()
-
-	cfg, err := config.Load(*configPath)
+	handled, err := runMaintenanceCommand(os.Args[1:])
 	if err != nil {
-		return &configStartupError{Path: *configPath, Err: err}
+		return err
+	}
+	if handled {
+		return nil
+	}
+
+	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	configPathFlag := flags.String("config", "", "path to config.toml")
+	checkConfig := flags.Bool("check-config", false, "validate config and exit")
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		return err
+	}
+
+	configPath, err := config.ResolveConfigPath(*configPathFlag)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return &configStartupError{Path: configPath, Err: err}
 	}
 
 	if err := prepareFilesystem(cfg); err != nil {
-		return &configStartupError{Path: *configPath, Err: err}
+		return &configStartupError{Path: configPath, Err: err}
 	}
 	if *checkConfig {
-		log.Printf("INFO config ok path=%s", *configPath)
+		log.Printf("INFO config ok path=%s", configPath)
 		return nil
 	}
 
@@ -95,15 +111,18 @@ func run() error {
 		}
 	}
 
-	sandboxRoots, err := sandbox.DefaultRoots(cfg.Agent.Workspace, cfg.Sessions.DBPath)
-	if err != nil {
-		return err
+	sandboxRoots := sandbox.Roots{
+		GlobalRoot:        cfg.Agent.PromptRoot,
+		AdminExecRoot:     cfg.Agent.ExecRoot,
+		SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+		UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+		UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
 	}
 	sandboxResolver, err := sandbox.NewResolver(sandboxRoots, sandbox.DefaultProfiles())
 	if err != nil {
 		return err
 	}
-	tools := tool.NewRegistryWithSandbox(cfg.Agent.Workspace, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver)
+	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver)
 	principalResolver := principal.NewResolver(
 		cfg.Principals.Telegram.AdminUserIDs,
 		cfg.Principals.Telegram.ApprovedUserIDs,
@@ -150,6 +169,12 @@ func run() error {
 
 	router := core.NewRouter(rt.AgentFunc())
 
+	registerCtx, cancelRegister := context.WithTimeout(context.Background(), 15*time.Second)
+	if err := registerTelegramCommands(registerCtx, tgClient); err != nil {
+		log.Printf("WARN telegram command registration failed: %v", err)
+	}
+	cancelRegister()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	rt.StartStartupRecovery(ctx, log.Printf)
@@ -158,6 +183,14 @@ func run() error {
 	rt.StartCronLoop(ctx, log.Printf)
 
 	poller := telegram.NewPoller(tgClient, func(parent context.Context, msg core.InboundMessage) error {
+		handled, err := handleTelegramCommand(parent, tgClient, router, msg)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
+
 		turnCtx, cancel := context.WithTimeout(parent, turnTimeout)
 		go func() {
 			defer cancel()
@@ -169,24 +202,37 @@ func run() error {
 		telegram.WithPrincipalResolver(principalResolver),
 	)
 
-	log.Printf("INFO aphelion started workspace=%s db_path=%s model=%s", cfg.Agent.Workspace, cfg.Sessions.DBPath, cfg.Providers.Anthropic.Model)
+	log.Printf(
+		"INFO aphelion started config_path=%s prompt_root=%s exec_root=%s shared_memory_root=%s user_workspace_root=%s user_memory_root=%s db_path=%s model=%s",
+		configPath,
+		cfg.Agent.PromptRoot,
+		cfg.Agent.ExecRoot,
+		cfg.Agent.SharedMemoryRoot,
+		cfg.Agent.UserWorkspaceRoot,
+		cfg.Agent.UserMemoryRoot,
+		cfg.Sessions.DBPath,
+		cfg.Providers.Anthropic.Model,
+	)
 	return poller.Run(ctx)
-}
-
-func defaultConfigPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "config.toml"
-	}
-	return filepath.Join(home, ".config", "aphelion", "config.toml")
 }
 
 func prepareFilesystem(cfg *config.Config) error {
 	if err := os.MkdirAll(filepath.Dir(cfg.Sessions.DBPath), 0o700); err != nil {
 		return fmt.Errorf("create sessions directory: %w", err)
 	}
-	if err := os.MkdirAll(cfg.Agent.Workspace, 0o755); err != nil {
-		return fmt.Errorf("create workspace directory: %w", err)
+	for _, root := range []string{
+		cfg.Agent.PromptRoot,
+		cfg.Agent.ExecRoot,
+		cfg.Agent.SharedMemoryRoot,
+		cfg.Agent.UserWorkspaceRoot,
+		cfg.Agent.UserMemoryRoot,
+	} {
+		if root == "" {
+			continue
+		}
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return fmt.Errorf("create root %s: %w", root, err)
+		}
 	}
 	return nil
 }

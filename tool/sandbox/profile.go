@@ -49,6 +49,7 @@ func DefaultProfiles() Profiles {
 			WritablePaths: []string{"{user_workspace}", "{user_memory}", "/tmp"},
 			ReadonlyPaths: []string{"{global_root}", "{shared_memory_root}"},
 			HiddenPaths: []string{
+				"~/.aphelion/aphelion.toml",
 				"~/.config/aphelion/config.toml",
 				"~/.ssh",
 				"~/.gnupg",

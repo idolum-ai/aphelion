@@ -34,15 +34,23 @@ func (r *Runtime) lockSession(key session.SessionKey) func() {
 
 func (r *Runtime) scopeForPrincipal(p principal.Principal) (sandbox.Scope, error) {
 	if r.scopeResolver == nil {
-		root := strings.TrimSpace(r.cfg.Agent.Workspace)
-		if root == "" {
-			return sandbox.Scope{}, fmt.Errorf("agent.workspace is required")
+		promptRoot := strings.TrimSpace(r.cfg.Agent.PromptRoot)
+		execRoot := strings.TrimSpace(r.cfg.Agent.ExecRoot)
+		sharedMemoryRoot := strings.TrimSpace(r.cfg.Agent.SharedMemoryRoot)
+		if promptRoot == "" {
+			return sandbox.Scope{}, fmt.Errorf("agent.prompt_root is required")
+		}
+		if execRoot == "" {
+			return sandbox.Scope{}, fmt.Errorf("agent.exec_root is required")
+		}
+		if sharedMemoryRoot == "" {
+			return sandbox.Scope{}, fmt.Errorf("agent.shared_memory_root is required")
 		}
 		return sandbox.Scope{
 			Principal:        p,
-			GlobalRoot:       root,
-			SharedMemoryRoot: root,
-			WorkingRoot:      root,
+			GlobalRoot:       promptRoot,
+			SharedMemoryRoot: sharedMemoryRoot,
+			WorkingRoot:      execRoot,
 		}, nil
 	}
 	return r.scopeResolver.Resolve(p)
@@ -98,7 +106,7 @@ func voiceTempRoot(scope sandbox.Scope, cfg config.AgentConfig) string {
 		base = scope.UserMemory
 	}
 	if base == "" {
-		base = strings.TrimSpace(cfg.Workspace)
+		base = strings.TrimSpace(cfg.ExecRoot)
 	}
 	return filepath.Join(base, ".aphelion", "tmp")
 }

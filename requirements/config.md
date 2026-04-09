@@ -14,7 +14,9 @@ This spec therefore distinguishes between:
 
 ## Config File
 
-Default location: `~/.config/aphelion/config.toml`
+Default location: `~/.aphelion/aphelion.toml`
+
+Legacy fallback: `~/.config/aphelion/config.toml`
 
 Override via `APHELION_CONFIG` env var or `--config` flag.
 
@@ -161,12 +163,16 @@ persist_canonical = true      # Keep canonical governor reply as sidecar audit d
 
 # ─── Agent ───
 [agent]
-workspace = "~/.config/aphelion/workspace"
+prompt_root = "~/.aphelion/agent"
+exec_root = "~/.aphelion/workspace"
+shared_memory_root = "~/.aphelion/agent"
+user_workspace_root = "~/.aphelion/state/isolated/workspaces"
+user_memory_root = "~/.aphelion/state/isolated/memory"
 max_iterations = 50
 tool_timeout = 300         # Max seconds per tool execution
 
 # Bootstrap files loaded into system prompt (in order).
-# Paths relative to workspace. Files that don't exist are silently skipped.
+# Paths relative to prompt_root. Files that don't exist are silently skipped.
 bootstrap_files = [
     "SOUL.md",
     "IDENTITY.md",
@@ -185,13 +191,13 @@ dynamic_files = [
 ]
 
 # Daily memory notes — auto-resolved to today + yesterday.
-# Pattern: memory/YYYY-MM-DD.md in workspace.
+# Pattern: memory/YYYY-MM-DD.md in shared_memory_root or user_memory_root.
 daily_notes = true
 daily_notes_dir = "memory"
 
 # ─── Sessions ───
 [sessions]
-db_path = "~/.config/aphelion/sessions.db"
+db_path = "~/.aphelion/state/sessions.db"
 # v0: DM-only runtime. idle_expiry is part of the intended v0 surface, but the
 # runtime may reach it slightly after basic turn handling is stable.
 idle_expiry = "24h"           # Expire sessions after this much inactivity
@@ -222,10 +228,10 @@ digest_on_idle = true
 max_summary_chars = 1200
 
 [sessions.isolation]
-global_root = "~/.config/aphelion/workspace"
-shared_memory_root = "~/.config/aphelion/memory/shared"
-user_workspace_root = "~/.config/aphelion/workspaces"
-user_memory_root = "~/.config/aphelion/memory/users"
+global_root = "~/.aphelion/agent"
+shared_memory_root = "~/.aphelion/agent"
+user_workspace_root = "~/.aphelion/state/isolated/workspaces"
+user_memory_root = "~/.aphelion/state/isolated/memory"
 
 [sandbox.profiles.admin]
 mode = "trusted"               # "trusted" | "isolated"
@@ -236,6 +242,7 @@ readonly_root = true
 writable_paths = ["{user_workspace}", "{user_memory}", "/tmp"]
 readonly_paths = ["{global_root}", "{shared_memory_root}"]
 hidden_paths = [
+    "~/.aphelion/aphelion.toml",
     "~/.config/aphelion/config.toml",
     "~/.ssh",
     "~/.gnupg",
@@ -278,7 +285,8 @@ writable_paths = []          # Additional writable paths beyond workspace and /t
 hidden_paths = [             # Paths invisible to exec processes
     "/home/*/.ssh",
     "/home/*/.gnupg",
-    "/home/*/.config/aphelion/config.toml",  # Don't let exec see our config
+    "/home/*/.aphelion/aphelion.toml",       # Don't let exec see our config
+    "/home/*/.config/aphelion/config.toml",  # Legacy config fallback
 ]
 
 # Network isolation
@@ -555,7 +563,7 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 - **TestNetworkFirewall**: With `isolation = "firewall"`, exec can reach `api.anthropic.com:443` but not `evil.com:443`.
 - **TestNetworkFull**: With `isolation = "full"`, exec cannot reach any network address.
 - **TestNetworkNone**: With `isolation = "none"`, exec has full network access.
-- **TestHiddenPaths**: With `hidden_paths` set, exec cannot read `~/.config/aphelion/config.toml`.
+- **TestHiddenPaths**: With `hidden_paths` set, exec cannot read `~/.aphelion/aphelion.toml` or the legacy fallback config.
 - **TestSeccompModerate**: With `seccomp = "moderate"`, exec cannot call `ptrace()` or `mount()`.
 - **TestUserNamespace**: With `user_namespace = true`, exec runs as uid 65534 (nobody).
 - **TestDropCapabilities**: Exec process does not have CAP_SYS_ADMIN or CAP_NET_ADMIN.

@@ -27,13 +27,13 @@ func (r *Registry) Manifest() string {
 	defs := r.Definitions()
 	lines := []string{RenderManifest(defs), "", "exec constraints:"}
 
-	workspace := r.workspace
+	execRoot := r.workspace
 	if abs, err := filepath.Abs(r.workspace); err == nil {
-		workspace = abs
+		execRoot = abs
 	}
 
 	lines = append(lines,
-		fmt.Sprintf("- workspace: %s", workspace),
+		fmt.Sprintf("- exec_root: %s", execRoot),
 		fmt.Sprintf("- default_timeout_sec: %d", int(defaultTimeout(r.timeout).Seconds())),
 		fmt.Sprintf("- max_output_bytes: %d", r.maxOutputBytes),
 	)

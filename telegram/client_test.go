@@ -180,6 +180,50 @@ func TestSendChatActionPayload(t *testing.T) {
 	}
 }
 
+func TestSetMyCommandsPayload(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/setMyCommands" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, setMyCommandsResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	err := client.SetMyCommands(context.Background(), []BotCommand{
+		{Command: "start", Description: "Show intro"},
+		{Command: "stop", Description: "Stop current work"},
+	})
+	if err != nil {
+		t.Fatalf("SetMyCommands() err = %v", err)
+	}
+
+	rawCommands, ok := requestBody["commands"].([]interface{})
+	if !ok || len(rawCommands) != 2 {
+		t.Fatalf("commands = %#v, want two commands", requestBody["commands"])
+	}
+	first, ok := rawCommands[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("first command = %#v, want object", rawCommands[0])
+	}
+	if first["command"] != "start" {
+		t.Fatalf("first command = %v, want start", first["command"])
+	}
+}
+
 func TestEditMessageTextPayload(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{

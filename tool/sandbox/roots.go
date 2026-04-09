@@ -13,6 +13,7 @@ import (
 
 type Roots struct {
 	GlobalRoot        string
+	AdminExecRoot     string
 	SharedMemoryRoot  string
 	UserWorkspaceRoot string
 	UserMemoryRoot    string
@@ -63,7 +64,7 @@ func (r *Resolver) Resolve(p principal.Principal) (Scope, error) {
 
 	switch p.Role {
 	case principal.RoleAdmin:
-		scope.WorkingRoot = r.roots.GlobalRoot
+		scope.WorkingRoot = r.roots.AdminExecRoot
 	case principal.RoleApprovedUser:
 		if p.TelegramUserID <= 0 {
 			return Scope{}, fmt.Errorf("approved_user principal requires positive telegram user id")
@@ -80,7 +81,14 @@ func (r *Resolver) Resolve(p principal.Principal) (Scope, error) {
 }
 
 func resolveRoots(roots Roots) (Roots, error) {
+	if strings.TrimSpace(roots.AdminExecRoot) == "" {
+		roots.AdminExecRoot = roots.GlobalRoot
+	}
 	globalRoot, err := resolveRootPath("global_root", roots.GlobalRoot)
+	if err != nil {
+		return Roots{}, err
+	}
+	adminExecRoot, err := resolveRootPath("admin_exec_root", roots.AdminExecRoot)
 	if err != nil {
 		return Roots{}, err
 	}
@@ -98,6 +106,7 @@ func resolveRoots(roots Roots) (Roots, error) {
 	}
 	return Roots{
 		GlobalRoot:        globalRoot,
+		AdminExecRoot:     adminExecRoot,
 		SharedMemoryRoot:  sharedMemoryRoot,
 		UserWorkspaceRoot: userWorkspaceRoot,
 		UserMemoryRoot:    userMemoryRoot,
@@ -117,6 +126,7 @@ func DefaultRoots(workspaceRoot, sessionsDBPath string) (Roots, error) {
 	stateRoot := filepath.Join(filepath.Dir(sessionsDBPath), "isolated")
 	return Roots{
 		GlobalRoot:        workspaceRoot,
+		AdminExecRoot:     workspaceRoot,
 		SharedMemoryRoot:  workspaceRoot,
 		UserWorkspaceRoot: filepath.Join(stateRoot, "workspaces"),
 		UserMemoryRoot:    filepath.Join(stateRoot, "memory"),

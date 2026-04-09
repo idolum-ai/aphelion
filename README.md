@@ -36,10 +36,15 @@ Runnable v0:
 - Telegram typing + real tool-backed progress feedback
 - Heartbeat and config-driven cron
 - Telegram voice transcription + optional TTS replies
+- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`
 
 ## Run
 
 Config file default:
+
+`~/.aphelion/aphelion.toml`
+
+Legacy fallback:
 
 `~/.config/aphelion/config.toml`
 
@@ -51,18 +56,24 @@ admin_user_ids = [123456789]
 approved_user_ids = []
 ```
 
-Recommended workspace setting for this repo:
+Recommended root layout for this repo:
 
 ```toml
 [agent]
-workspace = "/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion"
+prompt_root = "~/.aphelion/agent"
+exec_root = "/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion"
+shared_memory_root = "~/.aphelion/agent"
+user_workspace_root = "~/.aphelion/state/isolated/workspaces"
+user_memory_root = "~/.aphelion/state/isolated/memory"
 ```
 
-If `agent.workspace` points somewhere broader such as your home directory, the `exec`
-tool will use that broader directory as its default shell scope.
+If `agent.exec_root` points somewhere broader such as your home directory, the `exec`
+tool will use that broader directory as its default shell scope. Keep `prompt_root`
+and `exec_root` separate.
 
-Workspace prompt files are read from `agent.workspace` on every turn. Current
-supported files and defaults:
+Prompt files are read from `agent.prompt_root` on every turn. Dynamic memory files
+are read from `agent.shared_memory_root` for admin turns and from the isolated
+per-user memory root for approved-user turns. Current supported files and defaults:
 
 - Stable bootstrap files: `SOUL.md`, `IDENTITY.md`, `USER.md`, `AGENTS.md`, `TOOLS.md`, `BOOTSTRAP.md`
 - Dynamic files: `MEMORY.md`, `HEARTBEAT.md`
@@ -85,7 +96,7 @@ Build and run:
 
 ```bash
 make build
-./bin/aphelion --config ~/.config/aphelion/config.toml
+./bin/aphelion --config ~/.aphelion/aphelion.toml
 ```
 
 Or:
@@ -98,6 +109,34 @@ Validate config only:
 
 ```bash
 make check-config
+```
+
+Inspect effective paths and loaded prompt files:
+
+```bash
+make paths
+```
+
+Safe maintenance cleanup:
+
+```bash
+make gc
+```
+
+Targeted cleanup:
+
+```bash
+./bin/aphelion forget --config ~/.aphelion/aphelion.toml --chat 123456789
+./bin/aphelion forget --config ~/.aphelion/aphelion.toml --principal 123456789
+./bin/aphelion forget --config ~/.aphelion/aphelion.toml --shared-memory
+```
+
+Reset runtime or memory state without touching constitution files or config:
+
+```bash
+./bin/aphelion reset --config ~/.aphelion/aphelion.toml --scope runtime
+./bin/aphelion reset --config ~/.aphelion/aphelion.toml --scope memory
+./bin/aphelion reset --config ~/.aphelion/aphelion.toml --scope all
 ```
 
 Install the latest GitHub Release binary:
@@ -127,6 +166,13 @@ systemctl --user status aphelion
 systemctl --user restart aphelion
 journalctl --user -u aphelion -f
 ```
+
+Inside Telegram:
+
+- `/start` shows the intro and command help
+- `/help` shows the command list
+- `/status` reports whether the current chat is idle or working
+- `/stop` cancels the current turn and clears any queued latest message for that chat
 
 Config failures now exit once with a dedicated config error and the service will not
 crash-loop. `make install-user-service`, `make update`, and `make update-release`

@@ -528,3 +528,103 @@ api_key = "sk-ant-test"
 		t.Fatalf("error = %v, want overlap message", err)
 	}
 }
+
+func TestResolveConfigPathPrefersPrimaryThenLegacyAndEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("APHELION_CONFIG", "")
+
+	primary := filepath.Join(home, ".aphelion", "aphelion.toml")
+	legacy := filepath.Join(home, ".config", "aphelion", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(primary), 0o755); err != nil {
+		t.Fatalf("mkdir primary dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatalf("mkdir legacy dir: %v", err)
+	}
+	if err := os.WriteFile(legacy, []byte("legacy"), 0o600); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	got, err := ResolveConfigPath("")
+	if err != nil {
+		t.Fatalf("ResolveConfigPath() err = %v", err)
+	}
+	if got != legacy {
+		t.Fatalf("config path = %q, want legacy %q when primary is absent", got, legacy)
+	}
+
+	if err := os.WriteFile(primary, []byte("primary"), 0o600); err != nil {
+		t.Fatalf("write primary config: %v", err)
+	}
+	got, err = ResolveConfigPath("")
+	if err != nil {
+		t.Fatalf("ResolveConfigPath() err = %v", err)
+	}
+	if got != primary {
+		t.Fatalf("config path = %q, want primary %q", got, primary)
+	}
+
+	custom := filepath.Join(home, "custom.toml")
+	t.Setenv("APHELION_CONFIG", custom)
+	got, err = ResolveConfigPath("")
+	if err != nil {
+		t.Fatalf("ResolveConfigPath() err = %v", err)
+	}
+	if got != custom {
+		t.Fatalf("config path = %q, want env override %q", got, custom)
+	}
+}
+
+func TestLoadLegacyWorkspaceBackfillsSplitRoots(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[sessions]
+db_path = "./state/sessions.db"
+
+[agent]
+workspace = "./workspace"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	wantWorkspace := filepath.Join(dir, "workspace")
+	if cfg.Agent.PromptRoot != wantWorkspace {
+		t.Fatalf("prompt_root = %q, want %q", cfg.Agent.PromptRoot, wantWorkspace)
+	}
+	if cfg.Agent.ExecRoot != wantWorkspace {
+		t.Fatalf("exec_root = %q, want %q", cfg.Agent.ExecRoot, wantWorkspace)
+	}
+	if cfg.Agent.SharedMemoryRoot != wantWorkspace {
+		t.Fatalf("shared_memory_root = %q, want %q", cfg.Agent.SharedMemoryRoot, wantWorkspace)
+	}
+	wantUserWorkspaceRoot := filepath.Join(dir, "state", "isolated", "workspaces")
+	if cfg.Agent.UserWorkspaceRoot != wantUserWorkspaceRoot {
+		t.Fatalf("user_workspace_root = %q, want %q", cfg.Agent.UserWorkspaceRoot, wantUserWorkspaceRoot)
+	}
+	wantUserMemoryRoot := filepath.Join(dir, "state", "isolated", "memory")
+	if cfg.Agent.UserMemoryRoot != wantUserMemoryRoot {
+		t.Fatalf("user_memory_root = %q, want %q", cfg.Agent.UserMemoryRoot, wantUserMemoryRoot)
+	}
+	if cfg.Agent.Workspace != wantWorkspace {
+		t.Fatalf("workspace = %q, want legacy root preserved", cfg.Agent.Workspace)
+	}
+}

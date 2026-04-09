@@ -150,6 +150,37 @@ For outbound DM turns, Telegram is the visible surface of the face layer:
 3. face renders the visible reply
 4. Telegram sends the rendered reply
 
+## Bot Commands
+
+Telegram command discovery should be explicit. On startup, Aphelion should register its command list with `setMyCommands` so Telegram clients can show the available slash commands.
+
+At minimum for v0:
+
+- `/start`
+- `/help`
+- `/status`
+- `/stop`
+
+These commands should be handled directly by the Telegram/runtime boundary rather than routed through the ordinary governor turn path.
+
+### `/start`
+
+Show a short intro and the command list.
+
+### `/help`
+
+Show the current command list and what each command does.
+
+### `/status`
+
+Show whether the current DM session is idle or actively processing a turn, and whether a newer message is queued behind the current turn.
+
+### `/stop`
+
+Cancel the in-flight turn for the current DM session and drop any queued latest-wins message that has not started yet.
+
+This command must be real, not decorative. If Telegram advertises `/stop`, the user should not have to wait for the current turn to finish before the stop takes effect.
+
 ## DM Admission
 
 Telegram is the ingress path for all v0 conversations, so admission starts here.

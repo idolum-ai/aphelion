@@ -112,6 +112,24 @@ func (c *Client) SendMessage(ctx context.Context, msg core.OutboundMessage) (int
 	return resp.Result.MessageID, nil
 }
 
+func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error {
+	if len(commands) == 0 {
+		return errors.New("commands are required")
+	}
+
+	body := map[string]interface{}{
+		"commands": commands,
+	}
+	var resp setMyCommandsResponse
+	if err := c.post(ctx, "setMyCommands", body, &resp); err != nil {
+		return err
+	}
+	if !resp.Ok {
+		return fmt.Errorf("telegram setMyCommands failed: %s", resp.Description)
+	}
+	return nil
+}
+
 func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string) error {
 	if chatID == 0 {
 		return errors.New("chat_id is required")

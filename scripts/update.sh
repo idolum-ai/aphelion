@@ -2,7 +2,15 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-config_path="${APHELION_CONFIG:-$HOME/.config/aphelion/config.toml}"
+if [[ -n "${APHELION_CONFIG:-}" ]]; then
+  config_path="${APHELION_CONFIG}"
+elif [[ -f "$HOME/.aphelion/aphelion.toml" ]]; then
+  config_path="$HOME/.aphelion/aphelion.toml"
+elif [[ -f "$HOME/.config/aphelion/config.toml" ]]; then
+  config_path="$HOME/.config/aphelion/config.toml"
+else
+  config_path="$HOME/.aphelion/aphelion.toml"
+fi
 
 cd "${repo_root}"
 git pull --ff-only

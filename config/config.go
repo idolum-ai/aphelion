@@ -77,6 +77,11 @@ type SessionsConfig struct {
 
 type AgentConfig struct {
 	Workspace              string   `toml:"workspace"`
+	PromptRoot             string   `toml:"prompt_root"`
+	ExecRoot               string   `toml:"exec_root"`
+	SharedMemoryRoot       string   `toml:"shared_memory_root"`
+	UserWorkspaceRoot      string   `toml:"user_workspace_root"`
+	UserMemoryRoot         string   `toml:"user_memory_root"`
 	MaxIterations          int      `toml:"max_iterations"`
 	ToolTimeout            int      `toml:"tool_timeout"`
 	BootstrapFiles         []string `toml:"bootstrap_files"`
@@ -128,6 +133,26 @@ type VoiceConfig struct {
 	ElevenLabsModelID string `toml:"elevenlabs_model_id"`
 }
 
+func (a AgentConfig) EffectivePromptRoot() string {
+	return firstNonEmpty(strings.TrimSpace(a.PromptRoot), strings.TrimSpace(a.Workspace))
+}
+
+func (a AgentConfig) EffectiveExecRoot() string {
+	return firstNonEmpty(strings.TrimSpace(a.ExecRoot), strings.TrimSpace(a.Workspace), strings.TrimSpace(a.PromptRoot))
+}
+
+func (a AgentConfig) EffectiveSharedMemoryRoot() string {
+	return firstNonEmpty(strings.TrimSpace(a.SharedMemoryRoot), strings.TrimSpace(a.PromptRoot), strings.TrimSpace(a.Workspace))
+}
+
+func (a AgentConfig) EffectiveUserWorkspaceRoot() string {
+	return strings.TrimSpace(a.UserWorkspaceRoot)
+}
+
+func (a AgentConfig) EffectiveUserMemoryRoot() string {
+	return strings.TrimSpace(a.UserMemoryRoot)
+}
+
 func Default() Config {
 	return Config{
 		Telegram: TelegramConfig{
@@ -151,11 +176,15 @@ func Default() Config {
 			},
 		},
 		Sessions: SessionsConfig{
-			DBPath:     "~/.config/aphelion/sessions.db",
+			DBPath:     "~/.aphelion/state/sessions.db",
 			IdleExpiry: "24h",
 		},
 		Agent: AgentConfig{
-			Workspace:     ".",
+			PromptRoot:    "~/.aphelion/agent",
+			ExecRoot:      "~/.aphelion/workspace",
+			SharedMemoryRoot: "~/.aphelion/agent",
+			UserWorkspaceRoot: "~/.aphelion/state/isolated/workspaces",
+			UserMemoryRoot: "~/.aphelion/state/isolated/memory",
 			MaxIterations: 50,
 			ToolTimeout:   300,
 			BootstrapFiles: []string{
@@ -191,25 +220,77 @@ func Default() Config {
 	}
 }
 
+func DefaultConfigPath() string {
+	return defaultHomePath(".aphelion", "aphelion.toml")
+}
+
+func LegacyConfigPath() string {
+	return defaultHomePath(".config", "aphelion", "config.toml")
+}
+
+func ResolveConfigPath(override string) (string, error) {
+	if strings.TrimSpace(override) != "" {
+		return expandPath(override)
+	}
+	if envPath := strings.TrimSpace(os.Getenv("APHELION_CONFIG")); envPath != "" {
+		return expandPath(envPath)
+	}
+
+	primary := DefaultConfigPath()
+	if fileExists(primary) {
+		return primary, nil
+	}
+	legacy := LegacyConfigPath()
+	if fileExists(legacy) {
+		return legacy, nil
+	}
+	return primary, nil
+}
+
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	baseDir := filepath.Dir(path)
 
 	cfg := Default()
-	if _, err := toml.Decode(string(raw), &cfg); err != nil {
+	md, err := toml.Decode(string(raw), &cfg)
+	if err != nil {
 		return nil, fmt.Errorf("decode toml: %w", err)
 	}
 
-	cfg.Sessions.DBPath, err = expandPath(cfg.Sessions.DBPath)
+	applyLegacyAgentRoots(&cfg, md)
+
+	cfg.Sessions.DBPath, err = expandConfiguredPath(cfg.Sessions.DBPath, baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("expand sessions.db_path: %w", err)
 	}
-	cfg.Agent.Workspace, err = expandPath(cfg.Agent.Workspace)
+	cfg.Agent.Workspace, err = expandConfiguredPath(cfg.Agent.Workspace, baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("expand agent.workspace: %w", err)
 	}
+	cfg.Agent.PromptRoot, err = expandConfiguredPath(cfg.Agent.PromptRoot, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand agent.prompt_root: %w", err)
+	}
+	cfg.Agent.ExecRoot, err = expandConfiguredPath(cfg.Agent.ExecRoot, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand agent.exec_root: %w", err)
+	}
+	cfg.Agent.SharedMemoryRoot, err = expandConfiguredPath(cfg.Agent.SharedMemoryRoot, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand agent.shared_memory_root: %w", err)
+	}
+	cfg.Agent.UserWorkspaceRoot, err = expandConfiguredPath(cfg.Agent.UserWorkspaceRoot, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand agent.user_workspace_root: %w", err)
+	}
+	cfg.Agent.UserMemoryRoot, err = expandConfiguredPath(cfg.Agent.UserMemoryRoot, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand agent.user_memory_root: %w", err)
+	}
+	normalizeAgentRoots(&cfg)
 
 	if err := validate(&cfg); err != nil {
 		return nil, err
@@ -264,8 +345,20 @@ func validate(cfg *Config) error {
 	if _, err := time.ParseDuration(strings.TrimSpace(cfg.Sessions.IdleExpiry)); err != nil {
 		return fmt.Errorf("sessions.idle_expiry must be a valid duration: %w", err)
 	}
-	if strings.TrimSpace(cfg.Agent.Workspace) == "" {
-		return fmt.Errorf("agent.workspace is required")
+	if strings.TrimSpace(cfg.Agent.EffectivePromptRoot()) == "" {
+		return fmt.Errorf("agent.prompt_root is required")
+	}
+	if strings.TrimSpace(cfg.Agent.EffectiveExecRoot()) == "" {
+		return fmt.Errorf("agent.exec_root is required")
+	}
+	if strings.TrimSpace(cfg.Agent.EffectiveSharedMemoryRoot()) == "" {
+		return fmt.Errorf("agent.shared_memory_root is required")
+	}
+	if strings.TrimSpace(cfg.Agent.EffectiveUserWorkspaceRoot()) == "" {
+		return fmt.Errorf("agent.user_workspace_root is required")
+	}
+	if strings.TrimSpace(cfg.Agent.EffectiveUserMemoryRoot()) == "" {
+		return fmt.Errorf("agent.user_memory_root is required")
 	}
 	if len(cfg.Agent.BootstrapFiles) == 0 {
 		return fmt.Errorf("agent.bootstrap_files must not be empty")
@@ -402,6 +495,10 @@ func parsePositiveInt64(raw string) (int64, error) {
 }
 
 func expandPath(path string) (string, error) {
+	return expandConfiguredPath(path, "")
+}
+
+func expandConfiguredPath(path string, baseDir string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
@@ -414,6 +511,65 @@ func expandPath(path string) (string, error) {
 			return "", err
 		}
 		path = filepath.Join(home, path[2:])
+	} else if !filepath.IsAbs(path) && strings.TrimSpace(baseDir) != "" {
+		path = filepath.Join(baseDir, path)
 	}
 	return filepath.Abs(path)
+}
+
+func applyLegacyAgentRoots(cfg *Config, md toml.MetaData) {
+	if cfg == nil || !md.IsDefined("agent", "workspace") {
+		return
+	}
+	if !md.IsDefined("agent", "prompt_root") {
+		cfg.Agent.PromptRoot = cfg.Agent.Workspace
+	}
+	if !md.IsDefined("agent", "exec_root") {
+		cfg.Agent.ExecRoot = cfg.Agent.Workspace
+	}
+	if !md.IsDefined("agent", "shared_memory_root") {
+		cfg.Agent.SharedMemoryRoot = cfg.Agent.Workspace
+	}
+	if !md.IsDefined("agent", "user_workspace_root") {
+		cfg.Agent.UserWorkspaceRoot = filepath.Join(filepath.Dir(cfg.Sessions.DBPath), "isolated", "workspaces")
+	}
+	if !md.IsDefined("agent", "user_memory_root") {
+		cfg.Agent.UserMemoryRoot = filepath.Join(filepath.Dir(cfg.Sessions.DBPath), "isolated", "memory")
+	}
+}
+
+func normalizeAgentRoots(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.Agent.PromptRoot = cfg.Agent.EffectivePromptRoot()
+	cfg.Agent.ExecRoot = cfg.Agent.EffectiveExecRoot()
+	cfg.Agent.SharedMemoryRoot = cfg.Agent.EffectiveSharedMemoryRoot()
+	cfg.Agent.UserWorkspaceRoot = cfg.Agent.EffectiveUserWorkspaceRoot()
+	cfg.Agent.UserMemoryRoot = cfg.Agent.EffectiveUserMemoryRoot()
+	if strings.TrimSpace(cfg.Agent.Workspace) == "" {
+		cfg.Agent.Workspace = cfg.Agent.ExecRoot
+	}
+}
+
+func defaultHomePath(parts ...string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return filepath.Join(parts...)
+	}
+	return filepath.Join(append([]string{home}, parts...)...)
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

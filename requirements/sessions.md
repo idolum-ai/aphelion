@@ -687,7 +687,7 @@ Single-connection SQLite with WAL mode is sufficient for v0. A dedicated writer 
 
 ```toml
 [sessions]
-db_path = "~/.config/aphelion/sessions.db"
+db_path = "~/.aphelion/state/sessions.db"
 idle_expiry = "24h"
 
 [principals.telegram]
@@ -705,10 +705,10 @@ digest_on_idle = true
 max_summary_chars = 1200
 
 [sessions.isolation]
-global_root = "~/.config/aphelion/workspace"
-shared_memory_root = "~/.config/aphelion/memory/shared"
-user_workspace_root = "~/.config/aphelion/workspaces"
-user_memory_root = "~/.config/aphelion/memory/users"
+global_root = "~/.aphelion/agent"
+shared_memory_root = "~/.aphelion/agent"
+user_workspace_root = "~/.aphelion/state/isolated/workspaces"
+user_memory_root = "~/.aphelion/state/isolated/memory"
 ```
 
 ### Deferred after v0.5

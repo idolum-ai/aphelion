@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -114,6 +115,7 @@ func New(
 	if outbound == nil {
 		return nil, fmt.Errorf("outbound sender is nil")
 	}
+	cfg = normalizeRuntimeConfig(cfg)
 
 	governorAuth, err := resolveGovernorAuth(cfg.Governor)
 	if err != nil {
@@ -152,15 +154,18 @@ func New(
 		GovernorName:  prompt.DefaultGovernorName,
 		FaceName:      face.DefaultFaceName,
 		Channel:       "telegram",
-		WorkspaceRoot: cfg.Agent.Workspace,
+		WorkspaceRoot: cfg.Agent.PromptRoot,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("init face renderer: %w", err)
 	}
 
-	sandboxRoots, err := sandbox.DefaultRoots(cfg.Agent.Workspace, cfg.Sessions.DBPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve sandbox roots: %w", err)
+	sandboxRoots := sandbox.Roots{
+		GlobalRoot:        cfg.Agent.PromptRoot,
+		AdminExecRoot:     cfg.Agent.ExecRoot,
+		SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+		UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+		UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
 	}
 	scopeResolver, err := sandbox.NewResolver(sandboxRoots, sandbox.DefaultProfiles())
 	if err != nil {
@@ -198,6 +203,32 @@ func New(
 		scopeResolver:       scopeResolver,
 		sessionLocks:        make(map[string]*sync.Mutex),
 	}, nil
+}
+
+func normalizeRuntimeConfig(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return nil
+	}
+	copy := *cfg
+	copy.Agent = cfg.Agent
+	copy.Agent.PromptRoot = cfg.Agent.EffectivePromptRoot()
+	copy.Agent.ExecRoot = cfg.Agent.EffectiveExecRoot()
+	copy.Agent.SharedMemoryRoot = cfg.Agent.EffectiveSharedMemoryRoot()
+	copy.Agent.UserWorkspaceRoot = cfg.Agent.EffectiveUserWorkspaceRoot()
+	copy.Agent.UserMemoryRoot = cfg.Agent.EffectiveUserMemoryRoot()
+	if strings.TrimSpace(copy.Agent.UserWorkspaceRoot) == "" || strings.TrimSpace(copy.Agent.UserMemoryRoot) == "" {
+		stateRoot := filepath.Join(filepath.Dir(copy.Sessions.DBPath), "isolated")
+		if strings.TrimSpace(copy.Agent.UserWorkspaceRoot) == "" {
+			copy.Agent.UserWorkspaceRoot = filepath.Join(stateRoot, "workspaces")
+		}
+		if strings.TrimSpace(copy.Agent.UserMemoryRoot) == "" {
+			copy.Agent.UserMemoryRoot = filepath.Join(stateRoot, "memory")
+		}
+	}
+	if strings.TrimSpace(copy.Agent.Workspace) == "" {
+		copy.Agent.Workspace = copy.Agent.ExecRoot
+	}
+	return &copy
 }
 
 func (r *Runtime) AgentFunc() core.AgentFunc {

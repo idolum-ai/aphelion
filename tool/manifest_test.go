@@ -71,8 +71,8 @@ func TestRegistryManifestReflectsExecConstraints(t *testing.T) {
 	if !strings.Contains(manifest, "exec constraints:") {
 		t.Fatalf("manifest missing constraints section:\n%s", manifest)
 	}
-	if !strings.Contains(manifest, "- workspace: "+absWorkspace) {
-		t.Fatalf("manifest missing workspace:\n%s", manifest)
+	if !strings.Contains(manifest, "- exec_root: "+absWorkspace) {
+		t.Fatalf("manifest missing exec_root:\n%s", manifest)
 	}
 	if !strings.Contains(manifest, "- default_timeout_sec: 7") {
 		t.Fatalf("manifest missing timeout:\n%s", manifest)

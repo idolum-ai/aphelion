@@ -156,9 +156,9 @@ type RetrievalHit struct {
 
 ```toml
 [sessions.isolation]
-global_root = "~/.config/aphelion/workspace"
-shared_memory_root = "~/.config/aphelion/memory/shared"
-user_memory_root = "~/.config/aphelion/memory/users"
+global_root = "~/.aphelion/agent"
+shared_memory_root = "~/.aphelion/agent"
+user_memory_root = "~/.aphelion/state/isolated/memory"
 
 [openai.files]
 enabled = false

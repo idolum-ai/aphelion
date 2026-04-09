@@ -20,6 +20,12 @@ type sendMessageResponse struct {
 
 type sendVoiceResponse = sendMessageResponse
 type editMessageResponse = sendMessageResponse
+type setMyCommandsResponse = telegramOKResponse
+
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
 
 type telegramOKResponse struct {
 	Ok          bool   `json:"ok"`

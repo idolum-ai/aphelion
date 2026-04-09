@@ -49,7 +49,7 @@ For operators and ordinary users:
 
 - download the correct binary from GitHub Releases
 - place it on `PATH` or under a managed install directory
-- point it at `~/.config/aphelion/config.toml`
+- point it at `~/.aphelion/aphelion.toml`
 
 GitHub Releases should be the preferred binary-distribution mechanism once release automation exists.
 
@@ -169,7 +169,7 @@ Deployment must not confuse:
 At minimum, these should stay clearly separated:
 
 - binary
-- `~/.config/aphelion/config.toml`
+- `~/.aphelion/aphelion.toml`
 - session DB
 - workspace files
 

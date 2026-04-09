@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -217,5 +218,74 @@ func TestSessionResolution(t *testing.T) {
 	}
 	if a.ChatID != 99 || c.ChatID != 100 {
 		t.Fatalf("unexpected session ChatIDs: a=%d c=%d", a.ChatID, c.ChatID)
+	}
+}
+
+func TestStopCancelsActiveTurnAndClearsQueue(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{}, 1)
+	canceled := make(chan struct{}, 1)
+	var calls atomic.Int32
+
+	router := NewRouter(func(ctx context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+		calls.Add(1)
+		started <- struct{}{}
+		<-ctx.Done()
+		canceled <- struct{}{}
+		return nil, ctx.Err()
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		router.Route(context.Background(), InboundMessage{ChatID: 7, Text: "first"})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("active turn did not start")
+	}
+
+	router.Route(context.Background(), InboundMessage{ChatID: 7, Text: "queued"})
+
+	status := router.Status(7)
+	if !status.Active || !status.Queued {
+		t.Fatalf("status before stop = %+v, want active+queued", status)
+	}
+
+	stopped := router.Stop(7)
+	if !stopped.ActiveCanceled || !stopped.QueuedDropped {
+		t.Fatalf("stop result = %+v, want active canceled and queued dropped", stopped)
+	}
+
+	select {
+	case <-canceled:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("active turn was not canceled")
+	}
+	<-done
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("agent call count = %d, want 1", got)
+	}
+
+	status = router.Status(7)
+	if status.Active || status.Queued {
+		t.Fatalf("status after stop = %+v, want idle", status)
+	}
+}
+
+func TestStopReturnsIdleWhenNothingRunning(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(func(context.Context, *SessionState, InboundMessage) (*TurnResult, error) {
+		return &TurnResult{}, nil
+	})
+
+	got := router.Stop(42)
+	if got.ActiveCanceled || got.QueuedDropped {
+		t.Fatalf("stop result = %+v, want no-op", got)
 	}
 }

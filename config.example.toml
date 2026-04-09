@@ -29,11 +29,18 @@ model = "claude-sonnet-4-6"
 max_tokens = 4096
 
 [sessions]
-db_path = "~/.config/aphelion/sessions.db"
+db_path = "~/.aphelion/state/sessions.db"
 idle_expiry = "24h"
 
 [agent]
-workspace = "/absolute/path/to/workspace"
+prompt_root = "~/.aphelion/agent"
+exec_root = "/absolute/path/to/workspace"
+shared_memory_root = "~/.aphelion/agent"
+user_workspace_root = "~/.aphelion/state/isolated/workspaces"
+user_memory_root = "~/.aphelion/state/isolated/memory"
+# Deprecated legacy alias. If present without the split roots above, it is used
+# as prompt_root + exec_root + shared_memory_root.
+# workspace = "/absolute/path/to/workspace"
 max_iterations = 50
 tool_timeout = 300
 bootstrap_files = [
