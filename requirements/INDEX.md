@@ -33,4 +33,4 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 
 ## Operations
 18. ⬜ [`deployment.md`](deployment.md) — Systemd, process management, logging, restart behavior
-19. ⬜ [`security.md`](security.md) — Sandbox assembly (cgroups + namespaces + seccomp + nftables firewall), credential lifecycle, permission model
+19. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model

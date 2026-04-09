@@ -17,6 +17,12 @@ This spec is **staged**.
 - **v0.5**: role-aware tools and sandboxed non-admin execution
 - **later**: broader toolset (`read_file`, `write_file`, web/media helpers, OpenAI-backed storage/media helpers, sub-agents)
 
+The security floor matters here:
+
+- v0 `exec` is a trusted-admin tool
+- it is not a real sandbox
+- `approved_user` tool execution should remain off until the v0.5 isolation floor is actually enforced
+
 ## Philosophy
 
 1. **Reality in code.** The registry, schemas, sandbox, and permissions live in Go.
@@ -135,6 +141,8 @@ Behavior:
 
 For v0, `exec` may target the configured admin workspace and remain simpler than the target sandbox architecture, but the interface and audit shape should leave room for role-aware sandboxing.
 
+For clarity: v0 `exec` is not sufficient for non-admin use. Restricting `workdir` is useful, but it does not stop a process from referencing other host paths or using host networking.
+
 ## v0.5 Role-Aware Execution
 
 ### Admin
@@ -145,6 +153,7 @@ For v0, `exec` may target the configured admin workspace and remain simpler than
 
 ### `approved_user`
 
+- by default, no tools should be exposed until the isolation floor is enforced
 - tool execution starts inside the isolated per-user execution root
 - writable roots are limited to that user’s isolated workspace and isolated memory
 - global persona/shared memory are mounted or exposed read-only
