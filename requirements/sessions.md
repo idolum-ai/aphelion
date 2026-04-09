@@ -12,7 +12,12 @@ This spec separates three concerns that were previously blurred together:
 
 This separation matters because authority is not the same thing as conversation history. The session itself should remain a clean conversation ledger.
 
-In the governor/face architecture, the session ledger primarily stores the user-visible conversation. Governor-internal decisions may later be recorded as audit metadata, but they should not silently replace the visible transcript.
+In the governor/face architecture, the session ledger primarily stores the user-visible conversation. Governor-internal decisions may later be recorded as sidecar audit metadata, but they should not silently replace the visible transcript.
+
+The key rule is:
+
+- rendered `Host` reply = visible conversation record
+- canonical governor reply = audit record
 
 ## Scope
 
@@ -179,6 +184,10 @@ type Session struct {
 
     // Snapshot of the resolved execution root for audit/debugging.
     ResolvedWorkspaceRoot string
+
+    // Sidecar audit artifact for the most recent canonical governor output.
+    // The visible ledger still stores the rendered assistant reply.
+    LastCanonicalReply string
 
     // Cache tracking
     CacheState CacheState
@@ -533,6 +542,8 @@ type Store interface {
 }
 ```
 
+For v0, `Save(...)` should preserve the rendered assistant reply in the visible transcript. Canonical governor output should be stored alongside the session as audit data rather than appended as a second visible assistant message.
+
 ### v0 principal policy
 
 v0 may keep principal policy in config. If it becomes durable earlier, expose a separate principal-policy interface rather than overloading the session ledger.
@@ -623,6 +634,8 @@ Provider-specific pruning knobs remain provider config, not session-ledger confi
 - **TestExpireKeepsActive**: active session survives expiry sweep
 - **TestConcurrentReads**: concurrent reads succeed under WAL mode
 - **TestWALMode**: `PRAGMA journal_mode` returns `wal`
+- **TestVisibleLedgerStoresRenderedReply**: visible assistant history stores the delivered Host reply
+- **TestCanonicalReplyStoredAsSidecarAudit**: canonical governor reply is stored alongside the session without polluting the visible transcript
 
 ### v0 context assembly
 

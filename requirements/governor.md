@@ -125,6 +125,11 @@ type RenderedReply struct {
 
 The exact types may evolve, but the ownership boundary should remain stable.
 
+The key distinction is:
+
+- canonical governor reply = decision artifact
+- rendered face reply = delivered conversation artifact
+
 ## Lifecycle
 
 For each inbound DM turn:
@@ -137,7 +142,8 @@ For each inbound DM turn:
 6. apply any governor-owned side effects
 7. run face backend or passthrough rendering
 8. persist the visible assistant reply to the session ledger
-9. send outbound channel message
+9. persist canonical governor reply as sidecar audit data
+10. send outbound channel message
 
 ## Codex-First Governor
 
@@ -215,6 +221,7 @@ profile = "host"
 - **The governor is named `Aphelion`.** That identity belongs to the core, not to any single face style.
 - **The default face is `Host`.** That identity belongs to the visible conversational layer.
 - **Face is presentational.** It is allowed to decorate, not decide.
+- **Canonical and rendered replies are different artifacts.** The governor decides one; the face delivers the other.
 - **Codex-first is intentional.** If the user already has Codex access, Aphelion should be able to use it as the governing core.
 - **Fallback matters.** Native governor support keeps the system usable without Codex.
 
@@ -226,3 +233,5 @@ profile = "host"
 - **TestGovernorBackendAutoPrefersCodex**: with Codex available and `backend = "auto"`, Codex governor is selected
 - **TestGovernorBackendFallsBackNative**: without Codex, native governor is selected
 - **TestFaceFailureFallsBackCanonical**: face backend failure can degrade to canonical governor reply under configured policy
+- **TestVisibleLedgerStoresRenderedReply**: session history replays the delivered face-rendered reply
+- **TestCanonicalReplyStoredAsAuditArtifact**: canonical governor reply is stored alongside the session without polluting the visible transcript

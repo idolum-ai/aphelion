@@ -3,8 +3,12 @@
 package session
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
+
+	"github.com/idolum-ai/aphelion/core"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestSQLiteStoreCreatesReviewEventsTable(t *testing.T) {
@@ -162,4 +166,126 @@ func newTestSQLiteStore(t *testing.T) *SQLiteStore {
 		t.Fatalf("NewSQLiteStore() err = %v", err)
 	}
 	return store
+}
+
+func TestSaveAndLoadCanonicalReplySidecar(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1234, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	sess.TurnCount = 1
+	sess.LastCanonicalReply = "governor canonical"
+	if err := store.Save(sess, []Message{
+		{
+			Role:      "user",
+			Content:   "hello",
+			TurnIndex: 1,
+		},
+		{
+			Role:      "assistant",
+			Content:   "host rendered",
+			TurnIndex: 1,
+		},
+	}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	got, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() after save err = %v", err)
+	}
+	if got.LastCanonicalReply != "governor canonical" {
+		t.Fatalf("LastCanonicalReply = %q, want governor canonical", got.LastCanonicalReply)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(got.Messages))
+	}
+	if got.Messages[1].Content != "host rendered" {
+		t.Fatalf("assistant visible content = %q, want host rendered", got.Messages[1].Content)
+	}
+}
+
+func TestInitMigratesLegacySessionsWithCanonicalColumn(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	legacyDDL := []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (1)`,
+		`CREATE TABLE sessions (
+			chat_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			system_prompt TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			turn_count INTEGER NOT NULL DEFAULT 0,
+			chat_type TEXT NOT NULL DEFAULT 'dm',
+			chat_title TEXT,
+			user_name TEXT,
+			cache_last_write_block INTEGER NOT NULL DEFAULT 0,
+			cache_blocks_since INTEGER NOT NULL DEFAULT 0,
+			cache_last_write_time TEXT,
+			cache_hit_rate REAL NOT NULL DEFAULT 0.0,
+			cache_consecutive_misses INTEGER NOT NULL DEFAULT 0,
+			total_input_tokens INTEGER NOT NULL DEFAULT 0,
+			total_output_tokens INTEGER NOT NULL DEFAULT 0,
+			total_cache_read INTEGER NOT NULL DEFAULT 0,
+			total_cache_write INTEGER NOT NULL DEFAULT 0,
+			last_provider TEXT,
+			last_model TEXT,
+			active_tool_calls INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT,
+			PRIMARY KEY (chat_id, user_id)
+		)`,
+	}
+	for _, ddl := range legacyDDL {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatalf("apply legacy ddl: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() migration err = %v", err)
+	}
+	defer store.Close()
+
+	var hasColumn int
+	err = store.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM pragma_table_info('sessions')
+		WHERE name = 'last_canonical_reply'
+	`).Scan(&hasColumn)
+	if err != nil {
+		t.Fatalf("query pragma_table_info: %v", err)
+	}
+	if hasColumn != 1 {
+		t.Fatalf("last_canonical_reply column count = %d, want 1", hasColumn)
+	}
+
+	var maxVersion int
+	if err := store.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&maxVersion); err != nil {
+		t.Fatalf("query schema_version: %v", err)
+	}
+	if maxVersion != schemaVersion {
+		t.Fatalf("schema version max = %d, want %d", maxVersion, schemaVersion)
+	}
 }

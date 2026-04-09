@@ -13,7 +13,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -66,6 +66,7 @@ func (s *SQLiteStore) init() error {
 			chat_id INTEGER NOT NULL,
 			user_id INTEGER NOT NULL DEFAULT 0,
 			system_prompt TEXT,
+			last_canonical_reply TEXT,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			turn_count INTEGER NOT NULL DEFAULT 0,
@@ -151,14 +152,8 @@ func (s *SQLiteStore) init() error {
 		}
 	}
 
-	var versions int
-	if err := tx.QueryRow(`SELECT COUNT(1) FROM schema_version`).Scan(&versions); err != nil {
-		return fmt.Errorf("count schema versions: %w", err)
-	}
-	if versions == 0 {
-		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {
-			return fmt.Errorf("insert schema version: %w", err)
-		}
+	if err := applyMigrations(tx); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -170,7 +165,7 @@ func (s *SQLiteStore) init() error {
 func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	row := s.db.QueryRow(`
 		SELECT
-			chat_id, user_id, system_prompt, created_at, updated_at, turn_count,
+			chat_id, user_id, system_prompt, last_canonical_reply, created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
 			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
@@ -185,6 +180,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		updatedAtRaw         string
 		cacheLastWriteRaw    sql.NullString
 		systemPrompt         sql.NullString
+		lastCanonicalReply   sql.NullString
 		chatType             sql.NullString
 		chatTitle            sql.NullString
 		userName             sql.NullString
@@ -195,7 +191,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	)
 
 	err := row.Scan(
-		&sess.ChatID, &sess.UserID, &systemPrompt, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
+		&sess.ChatID, &sess.UserID, &systemPrompt, &lastCanonicalReply, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
 		&chatType, &chatTitle, &userName,
 		&sess.CacheState.LastWriteBlock, &sess.CacheState.BlocksSinceWrite, &cacheLastWriteRaw, &sess.CacheState.HitRate, &consecutiveMissesRaw,
 		&sess.TotalInputTokens, &sess.TotalOutputTokens, &sess.TotalCacheRead, &sess.TotalCacheWrite,
@@ -209,6 +205,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	}
 
 	sess.SystemPrompt = nullToString(systemPrompt)
+	sess.LastCanonicalReply = nullToString(lastCanonicalReply)
 	sess.ChatType = nullToString(chatType)
 	sess.ChatTitle = nullToString(chatTitle)
 	sess.UserName = nullToString(userName)
@@ -752,10 +749,10 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 
 	if _, err := s.db.Exec(`
 		INSERT INTO sessions(
-			chat_id, user_id, system_prompt, created_at, updated_at, turn_count, chat_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			chat_id, user_id, system_prompt, last_canonical_reply, created_at, updated_at, turn_count, chat_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		key.ChatID, key.UserID, "", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), 0, sess.ChatType,
+		key.ChatID, key.UserID, "", "", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), 0, sess.ChatType,
 	); err != nil {
 		return nil, fmt.Errorf("insert empty session: %w", err)
 	}
@@ -765,14 +762,15 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 	_, err := tx.Exec(`
 		INSERT INTO sessions(
-			chat_id, user_id, system_prompt, created_at, updated_at, turn_count,
+			chat_id, user_id, system_prompt, last_canonical_reply, created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
 			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
 			last_provider, last_model, active_tool_calls, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_id, user_id) DO UPDATE SET
 			system_prompt = excluded.system_prompt,
+			last_canonical_reply = excluded.last_canonical_reply,
 			updated_at = excluded.updated_at,
 			turn_count = excluded.turn_count,
 			chat_type = excluded.chat_type,
@@ -792,7 +790,7 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 			active_tool_calls = excluded.active_tool_calls,
 			last_error = excluded.last_error
 	`,
-		session.ChatID, session.UserID, session.SystemPrompt,
+		session.ChatID, session.UserID, session.SystemPrompt, nullableString(session.LastCanonicalReply),
 		nonZeroTimeOrNow(session.CreatedAt, now).UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), session.TurnCount,
 		defaultChatType(session.ChatType), nullableString(session.ChatTitle), nullableString(session.UserName),
 		session.CacheState.LastWriteBlock, session.CacheState.BlocksSinceWrite, nullableTime(session.CacheState.LastWriteTime), session.CacheState.HitRate, session.CacheState.ConsecutiveMisses,
@@ -801,6 +799,72 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 	)
 	if err != nil {
 		return fmt.Errorf("upsert session row: %w", err)
+	}
+	return nil
+}
+
+func applyMigrations(tx *sql.Tx) error {
+	if err := ensureSessionColumn(tx, "last_canonical_reply", "TEXT"); err != nil {
+		return fmt.Errorf("ensure sessions.last_canonical_reply: %w", err)
+	}
+
+	currentVersion, err := currentSchemaVersion(tx)
+	if err != nil {
+		return err
+	}
+	if currentVersion >= schemaVersion {
+		return nil
+	}
+
+	for version := currentVersion + 1; version <= schemaVersion; version++ {
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, version); err != nil {
+			return fmt.Errorf("insert schema version %d: %w", version, err)
+		}
+	}
+	return nil
+}
+
+func currentSchemaVersion(tx *sql.Tx) (int, error) {
+	var maxVersion sql.NullInt64
+	if err := tx.QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&maxVersion); err != nil {
+		return 0, fmt.Errorf("query schema version: %w", err)
+	}
+	if !maxVersion.Valid {
+		return 0, nil
+	}
+	return int(maxVersion.Int64), nil
+}
+
+func ensureSessionColumn(tx *sql.Tx, name string, columnType string) error {
+	rows, err := tx.Query(`PRAGMA table_info(sessions)`)
+	if err != nil {
+		return fmt.Errorf("query table_info(sessions): %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid      int
+			column   string
+			typ      string
+			notNull  int
+			defaultV sql.NullString
+			primaryK int
+		)
+		if err := rows.Scan(&cid, &column, &typ, &notNull, &defaultV, &primaryK); err != nil {
+			return fmt.Errorf("scan table_info(sessions): %w", err)
+		}
+		if strings.EqualFold(column, name) {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table_info(sessions): %w", err)
+	}
+
+	stmt := fmt.Sprintf(`ALTER TABLE sessions ADD COLUMN %s %s`, name, columnType)
+	if _, err := tx.Exec(stmt); err != nil {
+		return fmt.Errorf("alter sessions add column %s: %w", name, err)
 	}
 	return nil
 }

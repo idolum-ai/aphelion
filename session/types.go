@@ -16,9 +16,12 @@ type Session struct {
 	UserID       int64 // 0 for shared group sessions
 	Messages     []Message
 	SystemPrompt string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	TurnCount    int
+	// LastCanonicalReply stores the governor-canonical assistant text for audit.
+	// The visible transcript in Messages stores the rendered Host reply.
+	LastCanonicalReply string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	TurnCount          int
 
 	// Cache tracking
 	CacheState CacheState

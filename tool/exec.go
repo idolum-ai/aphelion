@@ -48,6 +48,18 @@ func NewRegistryWithSandbox(workspace string, timeout time.Duration, resolver *s
 	return registry
 }
 
+func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
+	if r == nil || r.sandbox == nil {
+		return false
+	}
+	switch p.Role {
+	case principal.RoleAdmin, principal.RoleApprovedUser:
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *Registry) Definitions() []agent.ToolDef {
 	return []agent.ToolDef{{
 		Name:        "exec",

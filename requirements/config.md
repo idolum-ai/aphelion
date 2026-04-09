@@ -157,6 +157,7 @@ model_override = ""
 profile = "host"
 bootstrap_files = ["HOST.md"]
 dynamic_files = ["QUESTIONS-TO-HOST.md"]
+persist_canonical = true      # Keep canonical governor reply as sidecar audit data
 
 # ─── Agent ───
 [agent]

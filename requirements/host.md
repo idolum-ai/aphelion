@@ -138,6 +138,8 @@ The clean boundary is:
 
 If `Host` is unavailable, Aphelion may fall back to direct governor passthrough.
 
+The visible conversation should store what `Host` actually delivered. The canonical governor reply remains separate audit state.
+
 ## Config Surface
 
 See `config.md`, but the intended face-specific surface includes:
@@ -155,6 +157,7 @@ See `config.md`, but the intended face-specific surface includes:
 - **Warmth is allowed.** Performative friendliness is not required.
 - **Drift should be inspectable.** `QUESTIONS-TO-HOST.md` exists so the face can notice its own bad habits.
 - **Face files are face-only.** They must not leak upward into governor authority.
+- **Rendered reply is the visible transcript artifact.** `Host` owns what the user actually sees.
 
 ## Test Plan
 
@@ -163,3 +166,4 @@ See `config.md`, but the intended face-specific surface includes:
 - **TestFacePromptIncludesAntiDriftNotes**: `QUESTIONS-TO-HOST.md` content appears in the face prompt
 - **TestFaceCannotOverrideGovernorAuthority**: face wording cannot change the governor's action or permission result
 - **TestGovernorPassthroughWhenHostUnavailable**: when face rendering fails, canonical governor reply can be sent directly under configured policy
+- **TestSessionStoresRenderedHostReply**: visible assistant history stores the delivered Host reply

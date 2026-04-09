@@ -139,6 +139,11 @@ Review digests, bot notices, and face-rendered replies should enter the session 
 
 Canonical governor artifacts may later be stored alongside the session for audit, but they are not a replacement for the visible ledger.
 
+The replay rule is:
+
+- visible transcript replays rendered replies
+- canonical governor artifacts remain sidecar audit state
+
 ## Config Surface
 
 See `config.md`, but prompt-related ownership should include:
@@ -169,3 +174,4 @@ See `config.md`, but prompt-related ownership should include:
 - **TestFacePromptOmitsToolDefinitions**: face prompt does not include tool schemas or authority rules
 - **TestFacePromptLoadsHostFilesOnly**: `HOST.md` and `QUESTIONS-TO-HOST.md` are loaded into the face prompt and excluded from the governor prompt
 - **TestReviewDigestStoredAsHistoryNotHiddenPrompt**: delivered review digest enters conversation history instead of hidden prompt state
+- **TestVisibleReplayUsesRenderedReply**: visible session replay uses the delivered face-rendered reply rather than the canonical sidecar artifact

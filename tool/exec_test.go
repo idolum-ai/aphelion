@@ -177,3 +177,34 @@ func TestExecuteForPrincipalRequiresResolver(t *testing.T) {
 		t.Fatal("ExecuteForPrincipal() err = nil, want resolver requirement")
 	}
 }
+
+func TestSupportsPrincipal(t *testing.T) {
+	t.Parallel()
+
+	base := NewRegistry(t.TempDir(), 2*time.Second)
+	if base.SupportsPrincipal(principal.Principal{Role: principal.RoleAdmin}) {
+		t.Fatal("SupportsPrincipal(admin) = true, want false without resolver")
+	}
+
+	tmp := t.TempDir()
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        filepath.Join(tmp, "global"),
+			SharedMemoryRoot:  filepath.Join(tmp, "shared-memory"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+
+	withSandbox := NewRegistryWithSandbox(filepath.Join(tmp, "global"), 2*time.Second, resolver)
+	if !withSandbox.SupportsPrincipal(principal.Principal{Role: principal.RoleAdmin}) {
+		t.Fatal("SupportsPrincipal(admin) = false, want true with resolver")
+	}
+	if !withSandbox.SupportsPrincipal(principal.Principal{Role: principal.RoleApprovedUser}) {
+		t.Fatal("SupportsPrincipal(approved_user) = false, want true with resolver")
+	}
+}

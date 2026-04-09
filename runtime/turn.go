@@ -25,6 +25,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	if !ok {
 		return nil, ErrPrincipalDenied
 	}
+	tools := r.toolsForPrincipal(principal)
 
 	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
 	sess, err := r.store.Load(key)
@@ -41,7 +42,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   string(principal.Role),
 		WorkspaceRoot:   r.cfg.Agent.Workspace,
-		ToolManifest:    toolManifest(r.tools),
+		ToolManifest:    toolManifest(tools),
 		Workspace:       promptContext,
 	})
 
@@ -66,7 +67,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	input = append(input, history...)
 	input = append(input, agent.Message{Role: "user", Content: userText})
 
-	result, outHistory, err := agent.RunTurn(ctx, r.provider, r.tools, &agent.Budget{
+	result, outHistory, err := agent.RunTurn(ctx, r.provider, tools, &agent.Budget{
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
@@ -80,15 +81,6 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	}
 
 	sess.TurnCount++
-	newMessages, err := session.NewMessagesForTurn(userText, outHistory[len(input):], sess.TurnCount)
-	if err != nil {
-		return nil, fmt.Errorf("convert new messages: %w", err)
-	}
-
-	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
-		return nil, fmt.Errorf("save session: %w", err)
-	}
-
 	canonicalReply := face.CanonicalOrFallback(result.Text)
 	replyText := canonicalReply
 	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
@@ -111,6 +103,17 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		}
 	}
 
+	newMessages, err := session.NewMessagesForTurn(userText, outHistory[len(input):], sess.TurnCount)
+	if err != nil {
+		return nil, fmt.Errorf("convert new messages: %w", err)
+	}
+	newMessages = replaceLastAssistantWithRenderedReply(newMessages, replyText)
+	sess.LastCanonicalReply = canonicalReply
+
+	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
+		return nil, fmt.Errorf("save session: %w", err)
+	}
+
 	_, sendErr := r.outbound.SendMessage(ctx, core.OutboundMessage{
 		ChatID:  msg.ChatID,
 		Text:    replyText,
@@ -127,6 +130,32 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	}
 
 	return result, nil
+}
+
+func replaceLastAssistantWithRenderedReply(messages []session.Message, renderedReply string) []session.Message {
+	trimmed := strings.TrimSpace(renderedReply)
+	if trimmed == "" {
+		return messages
+	}
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" {
+			messages[i].Content = trimmed
+			messages[i].ContentChars = len(trimmed)
+			return messages
+		}
+	}
+
+	turnIndex := 0
+	if len(messages) > 0 {
+		turnIndex = messages[len(messages)-1].TurnIndex
+	}
+	return append(messages, session.Message{
+		Role:         "assistant",
+		Content:      trimmed,
+		ContentChars: len(trimmed),
+		TurnIndex:    turnIndex,
+	})
 }
 
 func (r *Runtime) deliverReviewEvents(ctx context.Context, adminChatID int64) error {

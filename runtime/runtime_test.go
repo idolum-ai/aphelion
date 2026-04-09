@@ -18,6 +18,8 @@ import (
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/governorauth"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -75,6 +77,83 @@ func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (i
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, msg)
 	return int64(len(f.sent)), nil
+}
+
+type toolRequestingProvider struct {
+	mu             sync.Mutex
+	callCount      int
+	firstToolCount int
+}
+
+func (p *toolRequestingProvider) Complete(_ context.Context, _ []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.callCount++
+	if p.callCount == 1 {
+		p.firstToolCount = len(tools)
+		if len(tools) == 0 {
+			return &agent.Response{Content: "no tools"}, nil
+		}
+		return &agent.Response{
+			ToolCalls: []agent.ToolCall{{
+				ID:    "tool-call-1",
+				Name:  tools[0].Name,
+				Input: json.RawMessage(`{"command":"echo hi"}`),
+			}},
+		}, nil
+	}
+
+	return &agent.Response{Content: "done"}, nil
+}
+
+type legacyRecordingTools struct {
+	defs         []agent.ToolDef
+	executeCalls int
+}
+
+func (t *legacyRecordingTools) Definitions() []agent.ToolDef {
+	return append([]agent.ToolDef(nil), t.defs...)
+}
+
+func (t *legacyRecordingTools) Execute(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+	t.executeCalls++
+	return "legacy execution", nil
+}
+
+type principalRecordingTools struct {
+	defs                     []agent.ToolDef
+	executeCalls             int
+	executeForPrincipalCalls int
+	supportsPrincipal        bool
+	lastPrincipal            principal.Principal
+}
+
+func (t *principalRecordingTools) Definitions() []agent.ToolDef {
+	return append([]agent.ToolDef(nil), t.defs...)
+}
+
+func (t *principalRecordingTools) Execute(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+	t.executeCalls++
+	return "legacy execution", nil
+}
+
+func (t *principalRecordingTools) ExecuteForPrincipal(_ context.Context, p principal.Principal, _ string, _ json.RawMessage) (string, error) {
+	t.executeForPrincipalCalls++
+	t.lastPrincipal = p
+	return "principal execution", nil
+}
+
+func (t *principalRecordingTools) SupportsPrincipal(_ principal.Principal) bool {
+	return t.supportsPrincipal
+}
+
+func testExecToolDef() agent.ToolDef {
+	return agent.ToolDef{
+		Name:        "exec",
+		Description: "test exec",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}`),
+	}
 }
 
 func TestHandleInboundPersistsAndSends(t *testing.T) {
@@ -323,6 +402,131 @@ func TestHandleInboundRejectsUnknownPrincipal(t *testing.T) {
 	}
 }
 
+func TestHandleInboundApprovedUserDisablesToolsWithoutIsolationFloor(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &toolRequestingProvider{}
+	tools := &legacyRecordingTools{
+		defs: []agent.ToolDef{testExecToolDef()},
+	}
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendGovernorPassthrough
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     501,
+		SenderID:   1002,
+		SenderName: "approved",
+		Text:       "run pwd",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	if provider.firstToolCount != 0 {
+		t.Fatalf("first tool count = %d, want 0", provider.firstToolCount)
+	}
+	if tools.executeCalls != 0 {
+		t.Fatalf("execute calls = %d, want 0", tools.executeCalls)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != "no tools" {
+		t.Fatalf("outbound text = %q, want no tools", sender.sent[0].Text)
+	}
+}
+
+func TestHandleInboundApprovedUserUsesPrincipalAwareToolsWhenSupported(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &toolRequestingProvider{}
+	tools := &principalRecordingTools{
+		defs:              []agent.ToolDef{testExecToolDef()},
+		supportsPrincipal: true,
+	}
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendGovernorPassthrough
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     502,
+		SenderID:   1002,
+		SenderName: "approved",
+		Text:       "run pwd",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	if provider.firstToolCount != 1 {
+		t.Fatalf("first tool count = %d, want 1", provider.firstToolCount)
+	}
+	if tools.executeForPrincipalCalls != 1 {
+		t.Fatalf("executeForPrincipal calls = %d, want 1", tools.executeForPrincipalCalls)
+	}
+	if tools.executeCalls != 0 {
+		t.Fatalf("legacy execute calls = %d, want 0", tools.executeCalls)
+	}
+	if tools.lastPrincipal.Role != principal.RoleApprovedUser {
+		t.Fatalf("last principal role = %q, want approved_user", tools.lastPrincipal.Role)
+	}
+	if tools.lastPrincipal.TelegramUserID != 1002 {
+		t.Fatalf("last principal user id = %d, want 1002", tools.lastPrincipal.TelegramUserID)
+	}
+}
+
+func TestHandleInboundAdminFallsBackToLegacyToolsWhenPrincipalAwareNotReady(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &toolRequestingProvider{}
+	tools := &principalRecordingTools{
+		defs:              []agent.ToolDef{testExecToolDef()},
+		supportsPrincipal: false,
+	}
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendGovernorPassthrough
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     503,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "run pwd",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	if provider.firstToolCount != 1 {
+		t.Fatalf("first tool count = %d, want 1", provider.firstToolCount)
+	}
+	if tools.executeCalls != 1 {
+		t.Fatalf("legacy execute calls = %d, want 1", tools.executeCalls)
+	}
+	if tools.executeForPrincipalCalls != 0 {
+		t.Fatalf("executeForPrincipal calls = %d, want 0", tools.executeForPrincipalCalls)
+	}
+}
+
 func TestHandleInboundRendersViaFaceByDefault(t *testing.T) {
 	t.Parallel()
 
@@ -362,8 +566,11 @@ func TestHandleInboundRendersViaFaceByDefault(t *testing.T) {
 	if len(sess.Messages) < 2 {
 		t.Fatalf("session messages len = %d, want >= 2", len(sess.Messages))
 	}
-	if sess.Messages[1].Content != "governor canonical" {
-		t.Fatalf("session assistant text = %q, want canonical", sess.Messages[1].Content)
+	if sess.Messages[1].Content != "host rendered" {
+		t.Fatalf("session assistant text = %q, want rendered reply", sess.Messages[1].Content)
+	}
+	if sess.LastCanonicalReply != "governor canonical" {
+		t.Fatalf("session canonical sidecar = %q, want canonical", sess.LastCanonicalReply)
 	}
 }
 
@@ -398,6 +605,17 @@ func TestHandleInboundFaceFailureFallsBackToGovernorPassthrough(t *testing.T) {
 	if sender.sent[0].Text != "governor canonical" {
 		t.Fatalf("outbound text = %q, want canonical fallback", sender.sent[0].Text)
 	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 902, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if sess.LastCanonicalReply != "governor canonical" {
+		t.Fatalf("session canonical sidecar = %q, want canonical", sess.LastCanonicalReply)
+	}
+	if len(sess.Messages) < 2 || sess.Messages[1].Content != "governor canonical" {
+		t.Fatalf("visible transcript assistant content = %q, want canonical fallback", sess.Messages[1].Content)
+	}
 }
 
 func TestHandleInboundGovernorPassthroughBackendSkipsFaceRender(t *testing.T) {
@@ -431,6 +649,17 @@ func TestHandleInboundGovernorPassthroughBackendSkipsFaceRender(t *testing.T) {
 	}
 	if sender.sent[0].Text != "governor canonical" {
 		t.Fatalf("outbound text = %q, want canonical passthrough", sender.sent[0].Text)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 903, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if sess.LastCanonicalReply != "governor canonical" {
+		t.Fatalf("session canonical sidecar = %q, want canonical", sess.LastCanonicalReply)
+	}
+	if len(sess.Messages) < 2 || sess.Messages[1].Content != "governor canonical" {
+		t.Fatalf("visible transcript assistant content = %q, want canonical passthrough", sess.Messages[1].Content)
 	}
 
 	provider.mu.Lock()
@@ -569,6 +798,75 @@ func TestNewRejectsCodexBackendWithoutCredentials(t *testing.T) {
 	_, err := New(cfg, store, provider, nil, sender)
 	if err == nil {
 		t.Fatal("New() err = nil, want codex credential failure")
+	}
+}
+
+func TestHandleInboundUsesCodexGovernorBackend(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Governor.Backend = "codex"
+	cfg.Governor.Codex.AuthSource = "codex_cli"
+	cfg.Governor.Codex.CodexHome = t.TempDir()
+
+	const accessToken = "codex-access-secret"
+	authPath := filepath.Join(cfg.Governor.Codex.CodexHome, "auth.json")
+	rawAuth := `{"tokens":{"access_token":"` + accessToken + `","refresh_token":"refresh-secret"}}`
+	if err := os.WriteFile(authPath, []byte(rawAuth), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+	cfg.Governor.Codex.BaseURL = "https://chatgpt.com/backend-api/codex"
+
+	origFactory := newCodexProvider
+	defer func() { newCodexProvider = origFactory }()
+	newCodexProvider = func(_ governorauth.Bundle, _ *config.Config) (agent.Provider, error) {
+		return &fakeProvider{
+			replyText: "codex canonical",
+			responseUsage: core.TokenUsage{
+				InputTokens:  12,
+				OutputTokens: 7,
+				TotalTokens:  19,
+			},
+		}, nil
+	}
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendGovernorPassthrough
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     404,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "hi",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	callCount := provider.callCount
+	provider.mu.Unlock()
+	if callCount != 0 {
+		t.Fatalf("native provider call count = %d, want 0", callCount)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != "codex canonical" {
+		t.Fatalf("outbound text = %q, want codex canonical", sender.sent[0].Text)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 404, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if strings.Contains(sess.SystemPrompt, accessToken) {
+		t.Fatalf("system prompt leaked token: %q", sess.SystemPrompt)
 	}
 }
 

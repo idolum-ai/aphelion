@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/governorauth"
+	"github.com/idolum-ai/aphelion/governorbackend"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
@@ -43,6 +45,15 @@ type Runtime struct {
 
 var ErrPrincipalDenied = errors.New("principal is not admitted")
 
+var newCodexProvider = func(bundle governorauth.Bundle, cfg *config.Config) (agent.Provider, error) {
+	return governorbackend.NewCodex(governorbackend.CodexOptions{
+		BaseURL:     bundle.BaseURL,
+		AccessToken: bundle.AccessToken,
+		HTTPClient:  &http.Client{Timeout: 90 * time.Second},
+		UserAgent:   cfg.Identity.UserAgent,
+	})
+}
+
 func New(
 	cfg *config.Config,
 	store *session.SQLiteStore,
@@ -67,7 +78,16 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("resolve governor auth: %w", err)
 	}
-	faceModel, err := face.NewProviderRenderer(provider, face.ProviderRendererConfig{
+	activeProvider := provider
+	if governorAuth.Backend == governorauth.BackendCodex {
+		codexProvider, err := newCodexProvider(governorAuth, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("init codex governor backend: %w", err)
+		}
+		activeProvider = codexProvider
+	}
+
+	faceModel, err := face.NewProviderRenderer(activeProvider, face.ProviderRendererConfig{
 		GovernorName:  prompt.DefaultGovernorName,
 		FaceName:      face.DefaultFaceName,
 		Channel:       "telegram",
@@ -91,7 +111,7 @@ func New(
 	return &Runtime{
 		cfg:      cfg,
 		store:    store,
-		provider: provider,
+		provider: activeProvider,
 		tools:    tools,
 		outbound: outbound,
 		resolver: principal.NewResolver(

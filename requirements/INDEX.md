@@ -22,7 +22,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 11. ✅ [`memory.md`](memory.md) — Workspace files, shared/per-user memory, OpenAI files, vector stores
 12. ✅ [`system-prompt.md`](system-prompt.md) — Governor prompt, face prompt, cache boundary, dynamic vs stable sections
 13. ✅ [`host.md`](host.md) — Face identity, anti-drift, Host-specific prompt files
-14. ⬜ [`subagents.md`](subagents.md) — Spawning, communication, completion, isolation
+14. ✅ [`subagents.md`](subagents.md) — First-class subordinate sessions, capability depth, completion, isolation
 
 ## Automation
 15. ⬜ [`heartbeat.md`](heartbeat.md) — Periodic agent turns, HEARTBEAT.md, task blocks, active hours
