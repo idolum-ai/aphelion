@@ -12,11 +12,11 @@ import (
 )
 
 var (
-	defaultStableFiles  = []string{"HOST.md"}
-	defaultDynamicFiles = []string{"QUESTIONS-TO-HOST.md"}
+	defaultStableFiles  = []string{"IDOLUM.md"}
+	defaultDynamicFiles = []string{"QUESTIONS-TO-IDOLUM.md"}
 )
 
-func LoadHostPromptFiles(workspaceRoot string) ([]workspace.LoadedFile, []workspace.LoadedFile, error) {
+func LoadIdolumPromptFiles(workspaceRoot string) ([]workspace.LoadedFile, []workspace.LoadedFile, error) {
 	root := strings.TrimSpace(workspaceRoot)
 	if root == "" {
 		return nil, nil, nil

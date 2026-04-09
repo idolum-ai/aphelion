@@ -39,7 +39,7 @@ func NewProviderRenderer(provider agent.Provider, cfg ProviderRendererConfig) (*
 
 func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (string, error) {
 	workspaceRoot := firstNonEmpty(req.WorkspaceRoot, r.cfg.WorkspaceRoot)
-	stableFiles, dynamicFiles, err := LoadHostPromptFiles(workspaceRoot)
+	stableFiles, dynamicFiles, err := LoadIdolumPromptFiles(workspaceRoot)
 	if err != nil {
 		return "", err
 	}
@@ -54,6 +54,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 		LatestUserInput: req.LatestUserInput,
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
+		Mode:            "render",
 	})
 
 	resp, err := r.provider.Complete(ctx, []agent.Message{
@@ -69,6 +70,36 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 		return "", ErrEmptyRender
 	}
 	return rendered, nil
+}
+
+func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (string, error) {
+	workspaceRoot := firstNonEmpty(req.WorkspaceRoot, r.cfg.WorkspaceRoot)
+	stableFiles, dynamicFiles, err := LoadIdolumPromptFiles(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+
+	systemPrompt := prompt.BuildFacePrompt(prompt.FaceRequest{
+		GovernorName:    firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName),
+		FaceName:        firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName),
+		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
+		Style:           firstNonEmpty(req.Style, r.cfg.Style),
+		PrincipalRole:   req.PrincipalRole,
+		LatestUserInput: req.LatestUserInput,
+		StableFiles:     stableFiles,
+		DynamicFiles:    dynamicFiles,
+		Mode:            "proposal",
+	})
+
+	resp, err := r.provider.Complete(ctx, []agent.Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: "Tell the hidden executor what it should do, ask, or prioritize next. Return only the advisory note, or nothing if you have no useful push."},
+	}, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(resp.Content), nil
 }
 
 func firstNonEmpty(values ...string) string {

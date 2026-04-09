@@ -1,4 +1,4 @@
-# System Prompt — Governor Base, Host Face, and Dynamic Updates
+# System Prompt — Governor Base, Idolum Face, and Dynamic Updates
 
 ## Overview
 
@@ -7,11 +7,11 @@ Aphelion does not use one undifferentiated prompt blob.
 Prompt assembly has two distinct targets:
 
 - **governor prompt**
-- **face prompt**
+- **face prompt(s)**
 
 The governor prompt carries authority, execution reality, and tool policy. The face prompt carries interaction style and rendering guidance.
 
-The governor prompt defines **Aphelion**. The default face prompt defines **Host**. Host may vary in tone or style over time, but it must not replace or contradict the governor's identity.
+The governor prompt defines **Aphelion**. The default face prompt defines **Idolum**. Idolum may vary in tone or style over time, but it must not replace or contradict the governor's identity.
 
 ## Governor Prompt
 
@@ -95,6 +95,11 @@ This mirrors the useful part of Codex's approach: keep a stable base, add explic
 
 The face prompt is separate from the governor prompt.
 
+There are two useful face artifacts:
+
+- a **proposal prompt** that lets `Idolum` push the governor before it decides
+- a **render prompt** that lets `Idolum` shape what the user actually sees after the governor decides
+
 It should receive:
 
 - canonical governor reply
@@ -117,17 +122,18 @@ The default face prompt should be assembled in layers.
 
 The machine-generated face header should state that:
 
-- the face is `Host`
-- `Host` is presentational, not sovereign
-- `Aphelion` remains the decision core
+- the face is `Idolum`
+- `Idolum` is the apparent lead of the conversation
+- structural ratification happens below the prompt layer
+- `Idolum` should not present itself as a subordinate translator
 
 ### Stable face files
 
-- `HOST.md`
+- `IDOLUM.md`
 
 ### Dynamic face files
 
-- `QUESTIONS-TO-HOST.md`
+- `QUESTIONS-TO-IDOLUM.md`
 
 These files are face-only and must not be loaded into the governor prompt.
 
@@ -160,10 +166,11 @@ See `config.md`, but prompt-related ownership should include:
 - **Machine-owned instructions come first.** Authority and permissions must outrank workspace files.
 - **Stable and dynamic content are separate by design.** This is for both clarity and cache behavior.
 - **Governor and face prompts are different artifacts.** They should not be collapsed into one text blob once the architecture is split.
+- **Idolum should feel primary from inside the conversation.** The hard boundary should live in code and machine-owned reality, not in constant self-subordination cues.
 - **`Aphelion` belongs to the governor layer.** Face personas may vary without replacing the governor's identity.
-- **`Host` is the default face.** It owns presentation, not authority.
+- **`Idolum` is the default face.** It owns presentation, not authority.
 - **`USER.md` is operator-facing in v0.** Per-user memory belongs elsewhere.
-- **Face files are separate from governor files.** `HOST.md` and `QUESTIONS-TO-HOST.md` must not leak into governor authority.
+- **Face files are separate from governor files.** `IDOLUM.md` and `QUESTIONS-TO-IDOLUM.md` must not leak into governor authority.
 
 ## Test Plan
 
@@ -172,6 +179,6 @@ See `config.md`, but prompt-related ownership should include:
 - **TestDynamicFilesAfterCacheBoundary**: `MEMORY.md` and `HEARTBEAT.md` appear after stable sections
 - **TestUserMDTreatedAsOperatorProfile**: global `USER.md` is not treated as shared mutable user memory
 - **TestFacePromptOmitsToolDefinitions**: face prompt does not include tool schemas or authority rules
-- **TestFacePromptLoadsHostFilesOnly**: `HOST.md` and `QUESTIONS-TO-HOST.md` are loaded into the face prompt and excluded from the governor prompt
+- **TestFacePromptLoadsIdolumFilesOnly**: `IDOLUM.md` and `QUESTIONS-TO-IDOLUM.md` are loaded into the face prompt and excluded from the governor prompt
 - **TestReviewDigestStoredAsHistoryNotHiddenPrompt**: delivered review digest enters conversation history instead of hidden prompt state
 - **TestVisibleReplayUsesRenderedReply**: visible session replay uses the delivered face-rendered reply rather than the canonical sidecar artifact

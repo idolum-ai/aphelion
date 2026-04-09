@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -21,11 +22,16 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/voice"
 )
 
 type OutboundSender interface {
 	SendMessage(ctx context.Context, msg core.OutboundMessage) (int64, error)
+}
+
+type chatActionSender interface {
+	SendChatAction(ctx context.Context, chatID int64, action string) error
 }
 
 type Runtime struct {
@@ -42,10 +48,16 @@ type Runtime struct {
 	transcriber media.TranscriptionProvider
 	synth       voice.Synthesizer
 
-	governorBackend string
+	governorBackend     string
+	toolProgressMode    string
+	toolProgressCleanup bool
 
 	idleExpiry time.Duration
 	expireIdle func(maxIdle time.Duration) (int, error)
+
+	scopeResolver *sandbox.Resolver
+	sessionMu     sync.Mutex
+	sessionLocks  map[string]*sync.Mutex
 }
 
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
@@ -99,9 +111,6 @@ func New(
 	if store == nil {
 		return nil, fmt.Errorf("session store is nil")
 	}
-	if provider == nil {
-		return nil, fmt.Errorf("provider is nil")
-	}
 	if outbound == nil {
 		return nil, fmt.Errorf("outbound sender is nil")
 	}
@@ -110,6 +119,16 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("resolve governor auth: %w", err)
 	}
+
+	faceBackend := face.Backend(strings.ToLower(strings.TrimSpace(cfg.Face.Backend)))
+	if faceBackend == "" {
+		faceBackend = face.BackendProvider
+	}
+
+	if provider == nil && (governorAuth.Backend == governorauth.BackendNative || faceBackend == face.BackendProvider) {
+		return nil, fmt.Errorf("native provider is required for configured governor/face backends")
+	}
+
 	activeProvider := provider
 	if governorAuth.Backend == governorauth.BackendCodex {
 		codexProvider, err := newCodexProvider(governorAuth, cfg)
@@ -117,11 +136,6 @@ func New(
 			return nil, fmt.Errorf("init codex governor backend: %w", err)
 		}
 		activeProvider = codexProvider
-	}
-
-	faceBackend := face.Backend(strings.ToLower(strings.TrimSpace(cfg.Face.Backend)))
-	if faceBackend == "" {
-		faceBackend = face.BackendProvider
 	}
 
 	var faceProvider agent.Provider
@@ -142,6 +156,15 @@ func New(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("init face renderer: %w", err)
+	}
+
+	sandboxRoots, err := sandbox.DefaultRoots(cfg.Agent.Workspace, cfg.Sessions.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve sandbox roots: %w", err)
+	}
+	scopeResolver, err := sandbox.NewResolver(sandboxRoots, sandbox.DefaultProfiles())
+	if err != nil {
+		return nil, fmt.Errorf("init sandbox scope resolver: %w", err)
 	}
 
 	idleExpiry := 24 * time.Hour
@@ -165,11 +188,15 @@ func New(
 			cfg.Principals.Telegram.AdminUserIDs,
 			cfg.Principals.Telegram.ApprovedUserIDs,
 		),
-		faceBackend:     faceBackend,
-		faceModel:       faceModel,
-		governorBackend: governorAuth.Backend,
-		idleExpiry:      idleExpiry,
-		expireIdle:      store.ExpireIdle,
+		faceBackend:         faceBackend,
+		faceModel:           faceModel,
+		governorBackend:     governorAuth.Backend,
+		toolProgressMode:    strings.ToLower(strings.TrimSpace(cfg.Telegram.ToolProgress)),
+		toolProgressCleanup: cfg.Telegram.ToolProgressCleanup,
+		idleExpiry:          idleExpiry,
+		expireIdle:          store.ExpireIdle,
+		scopeResolver:       scopeResolver,
+		sessionLocks:        make(map[string]*sync.Mutex),
 	}, nil
 }
 
@@ -239,4 +266,36 @@ func idleExpirySweepCadence(idleExpiry time.Duration) time.Duration {
 		return time.Hour
 	}
 	return cadence
+}
+
+func (r *Runtime) startChatActionLoop(ctx context.Context, chatID int64, action string) func() {
+	sender, ok := r.outbound.(chatActionSender)
+	if !ok || chatID == 0 || strings.TrimSpace(action) == "" {
+		return func() {}
+	}
+
+	loopCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		send := func() {
+			if err := sender.SendChatAction(loopCtx, chatID, action); err != nil && loopCtx.Err() == nil {
+				log.Printf("WARN telegram chat action failed chat_id=%d action=%s err=%v", chatID, action, err)
+			}
+		}
+
+		send()
+
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-ticker.C:
+				send()
+			}
+		}
+	}()
+
+	return cancel
 }

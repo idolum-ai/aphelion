@@ -13,7 +13,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 2
+const schemaVersion = 4
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -89,15 +89,16 @@ func (s *SQLiteStore) init() error {
 			PRIMARY KEY (chat_id, user_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS messages (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			chat_id INTEGER NOT NULL,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
-			content TEXT NOT NULL,
-			tool_calls TEXT,
-			tool_id TEXT,
-			tool_name TEXT,
-			thinking TEXT,
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				chat_id INTEGER NOT NULL,
+				user_id INTEGER NOT NULL DEFAULT 0,
+				role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
+				content TEXT NOT NULL,
+				canonical_content TEXT,
+				tool_calls TEXT,
+				tool_id TEXT,
+				tool_name TEXT,
+				thinking TEXT,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			turn_index INTEGER NOT NULL,
 			content_chars INTEGER NOT NULL DEFAULT 0,
@@ -131,6 +132,27 @@ func (s *SQLiteStore) init() error {
 			delivered_at TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_review_events_target ON review_events(target_chat_id, status, created_at, id)`,
+		`CREATE TABLE IF NOT EXISTS turn_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			kind TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'interrupted')),
+			request_text TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			completed_at TEXT,
+			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+			last_tool_name TEXT,
+			last_tool_preview TEXT,
+			tool_calls_started INTEGER NOT NULL DEFAULT 0,
+			progress_message_id INTEGER,
+			error_text TEXT,
+			recovery_summary TEXT,
+			recovery_logged_at TEXT,
+			FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(chat_id, user_id, started_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
 		`CREATE TABLE IF NOT EXISTS compaction_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			chat_id INTEGER NOT NULL,
@@ -235,10 +257,10 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	}
 
 	msgRows, err := s.db.Query(`
-		SELECT id, chat_id, user_id, role, content, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
-		FROM messages
-		WHERE chat_id = ? AND user_id = ?
-		ORDER BY turn_index, id
+			SELECT id, chat_id, user_id, role, content, canonical_content, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
+			FROM messages
+			WHERE chat_id = ? AND user_id = ?
+			ORDER BY turn_index, id
 	`, key.ChatID, key.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
@@ -249,6 +271,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		var (
 			m            Message
 			createdRaw   string
+			canonicalRaw sql.NullString
 			toolCallsRaw sql.NullString
 			toolIDRaw    sql.NullString
 			toolNameRaw  sql.NullString
@@ -257,12 +280,13 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		)
 
 		if err := msgRows.Scan(
-			&m.ID, &m.ChatID, &m.UserID, &m.Role, &m.Content, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
+			&m.ID, &m.ChatID, &m.UserID, &m.Role, &m.Content, &canonicalRaw, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
 			&createdRaw, &m.TurnIndex, &m.ContentChars, &compactedRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 
+		m.CanonicalContent = nullToString(canonicalRaw)
 		m.ToolCalls = nullToString(toolCallsRaw)
 		m.ToolID = nullToString(toolIDRaw)
 		m.ToolName = nullToString(toolNameRaw)
@@ -354,12 +378,12 @@ func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.T
 		}
 
 		_, err := tx.Exec(`
-			INSERT INTO messages(
-				chat_id, user_id, role, content, tool_calls, tool_id, tool_name, thinking,
-				created_at, turn_index, content_chars, compacted
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`,
-			msg.ChatID, msg.UserID, msg.Role, msg.Content,
+				INSERT INTO messages(
+					chat_id, user_id, role, content, canonical_content, tool_calls, tool_id, tool_name, thinking,
+					created_at, turn_index, content_chars, compacted
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`,
+			msg.ChatID, msg.UserID, msg.Role, msg.Content, nullableString(msg.CanonicalContent),
 			nullableString(msg.ToolCalls), nullableString(msg.ToolID), nullableString(msg.ToolName), nullableString(msg.Thinking),
 			msg.CreatedAt.UTC().Format(time.RFC3339Nano), msg.TurnIndex, msg.ContentChars, boolToInt(msg.Compacted),
 		)
@@ -591,6 +615,24 @@ func (s *SQLiteStore) OutboundAfterTurn(key SessionKey, turnIndex int) ([]int64,
 	return ids, nil
 }
 
+func (s *SQLiteStore) RecordOutbound(key SessionKey, turnIndex int, telegramMsgID int64, msgType string) error {
+	if telegramMsgID == 0 {
+		return fmt.Errorf("record outbound: telegram_msg_id is required")
+	}
+	if strings.TrimSpace(msgType) == "" {
+		msgType = "text"
+	}
+
+	_, err := s.db.Exec(`
+		INSERT INTO outbound_messages(chat_id, user_id, turn_index, telegram_msg_id, msg_type)
+		VALUES (?, ?, ?, ?, ?)
+	`, key.ChatID, key.UserID, turnIndex, telegramMsgID, msgType)
+	if err != nil {
+		return fmt.Errorf("record outbound: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
 	if event.SourceChatID == 0 {
 		return fmt.Errorf("enqueue review event: source_chat_id is required")
@@ -733,6 +775,310 @@ func (s *SQLiteStore) MarkReviewDelivered(ids []int64) error {
 	return nil
 }
 
+func (s *SQLiteStore) BeginTurnRun(key SessionKey, kind TurnRunKind, requestText string) (*TurnRun, error) {
+	now := time.Now().UTC()
+	kind = TurnRunKind(strings.TrimSpace(string(kind)))
+	if kind == "" {
+		kind = TurnRunKindInteractive
+	}
+
+	res, err := s.db.Exec(`
+		INSERT INTO turn_runs(
+			chat_id, user_id, kind, status, request_text, started_at, last_activity_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`,
+		key.ChatID, key.UserID, string(kind), string(TurnRunStatusRunning), requestText,
+		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("begin turn run: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("begin turn run last insert id: %w", err)
+	}
+
+	return &TurnRun{
+		ID:             id,
+		ChatID:         key.ChatID,
+		UserID:         key.UserID,
+		Kind:           kind,
+		Status:         TurnRunStatusRunning,
+		RequestText:    requestText,
+		StartedAt:      now,
+		LastActivityAt: now,
+	}, nil
+}
+
+func (s *SQLiteStore) NoteTurnRunToolStart(id int64, name string, preview string) error {
+	if id == 0 {
+		return fmt.Errorf("turn run id is required")
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE turn_runs
+		SET
+			last_activity_at = ?,
+			last_tool_name = ?,
+			last_tool_preview = ?,
+			tool_calls_started = tool_calls_started + 1
+		WHERE id = ?
+	`,
+		time.Now().UTC().Format(time.RFC3339Nano), nullableString(name), nullableString(preview), id,
+	)
+	if err != nil {
+		return fmt.Errorf("note turn run tool start: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) UpdateTurnRunProgressMessage(id int64, progressMessageID int64) error {
+	if id == 0 {
+		return fmt.Errorf("turn run id is required")
+	}
+	if progressMessageID == 0 {
+		return fmt.Errorf("progress_message_id is required")
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE turn_runs
+		SET
+			last_activity_at = ?,
+			progress_message_id = ?
+		WHERE id = ?
+	`,
+		time.Now().UTC().Format(time.RFC3339Nano), progressMessageID, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update turn run progress message: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) CompleteTurnRun(id int64, status TurnRunStatus, errorText string) error {
+	if id == 0 {
+		return fmt.Errorf("turn run id is required")
+	}
+	switch status {
+	case TurnRunStatusCompleted, TurnRunStatusFailed, TurnRunStatusInterrupted:
+	default:
+		return fmt.Errorf("invalid turn run completion status %q", status)
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE turn_runs
+		SET
+			status = ?,
+			completed_at = ?,
+			last_activity_at = ?,
+			error_text = ?
+		WHERE id = ?
+	`,
+		string(status),
+		time.Now().UTC().Format(time.RFC3339Nano),
+		time.Now().UTC().Format(time.RFC3339Nano),
+		nullableString(errorText),
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("complete turn run: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) InterruptRunningTurnRuns() ([]TurnRun, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin interrupt turn runs tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	rows, err := tx.Query(`
+		SELECT
+			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
+			progress_message_id, error_text, recovery_summary, recovery_logged_at
+		FROM turn_runs
+		WHERE status = ?
+		ORDER BY started_at ASC, id ASC
+	`, string(TurnRunStatusRunning))
+	if err != nil {
+		return nil, fmt.Errorf("query running turn runs: %w", err)
+	}
+	defer rows.Close()
+
+	var interrupted []TurnRun
+	for rows.Next() {
+		run, err := scanTurnRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		interrupted = append(interrupted, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate running turn runs: %w", err)
+	}
+	if len(interrupted) == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit empty interrupt turn runs tx: %w", err)
+		}
+		return nil, nil
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`
+		UPDATE turn_runs
+		SET
+			status = ?,
+			completed_at = ?,
+			last_activity_at = ?,
+			error_text = COALESCE(error_text, 'process restarted before turn completed')
+		WHERE status = ?
+	`,
+		string(TurnRunStatusInterrupted), now, now, string(TurnRunStatusRunning),
+	); err != nil {
+		return nil, fmt.Errorf("interrupt running turn runs: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit interrupt turn runs tx: %w", err)
+	}
+
+	for i := range interrupted {
+		interrupted[i].Status = TurnRunStatusInterrupted
+		interrupted[i].CompletedAt = mustParseSQLiteTime(now)
+		interrupted[i].LastActivityAt = interrupted[i].CompletedAt
+		if strings.TrimSpace(interrupted[i].ErrorText) == "" {
+			interrupted[i].ErrorText = "process restarted before turn completed"
+		}
+	}
+	return interrupted, nil
+}
+
+func (s *SQLiteStore) PendingRecoveryTurnRuns(limit int) ([]TurnRun, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := s.db.Query(`
+		SELECT
+			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
+			progress_message_id, error_text, recovery_summary, recovery_logged_at
+		FROM turn_runs
+		WHERE status = ? AND recovery_logged_at IS NULL
+		ORDER BY started_at ASC, id ASC
+		LIMIT ?
+	`, string(TurnRunStatusInterrupted), limit)
+	if err != nil {
+		return nil, fmt.Errorf("query pending recovery turn runs: %w", err)
+	}
+	defer rows.Close()
+
+	runs := make([]TurnRun, 0, limit)
+	for rows.Next() {
+		run, err := scanTurnRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending recovery turn runs: %w", err)
+	}
+	return runs, nil
+}
+
+func (s *SQLiteStore) MarkTurnRunsRecovered(ids []int64, summary string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin mark turn runs recovered tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	stmt, err := tx.Prepare(`
+		UPDATE turn_runs
+		SET
+			recovery_summary = ?,
+			recovery_logged_at = ?
+		WHERE id = ? AND recovery_logged_at IS NULL
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare mark turn runs recovered statement: %w", err)
+	}
+	defer stmt.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, err := stmt.Exec(nullableString(summary), now, id); err != nil {
+			return fmt.Errorf("mark turn run recovered id=%d: %w", id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit mark turn runs recovered tx: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) LatestTurnRun(key SessionKey) (*TurnRun, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
+			progress_message_id, error_text, recovery_summary, recovery_logged_at
+		FROM turn_runs
+		WHERE chat_id = ? AND user_id = ?
+		ORDER BY id DESC
+		LIMIT 1
+	`, key.ChatID, key.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("query latest turn run: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, sql.ErrNoRows
+	}
+	run, err := scanTurnRun(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
+func (s *SQLiteStore) TurnRun(id int64) (*TurnRun, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
+			progress_message_id, error_text, recovery_summary, recovery_logged_at
+		FROM turn_runs
+		WHERE id = ?
+	`, id)
+	if err != nil {
+		return nil, fmt.Errorf("query turn run: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, sql.ErrNoRows
+	}
+	run, err := scanTurnRun(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
@@ -807,6 +1153,9 @@ func applyMigrations(tx *sql.Tx) error {
 	if err := ensureSessionColumn(tx, "last_canonical_reply", "TEXT"); err != nil {
 		return fmt.Errorf("ensure sessions.last_canonical_reply: %w", err)
 	}
+	if err := ensureTableColumn(tx, "messages", "canonical_content", "TEXT"); err != nil {
+		return fmt.Errorf("ensure messages.canonical_content: %w", err)
+	}
 
 	currentVersion, err := currentSchemaVersion(tx)
 	if err != nil {
@@ -836,9 +1185,13 @@ func currentSchemaVersion(tx *sql.Tx) (int, error) {
 }
 
 func ensureSessionColumn(tx *sql.Tx, name string, columnType string) error {
-	rows, err := tx.Query(`PRAGMA table_info(sessions)`)
+	return ensureTableColumn(tx, "sessions", name, columnType)
+}
+
+func ensureTableColumn(tx *sql.Tx, table string, name string, columnType string) error {
+	rows, err := tx.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
 	if err != nil {
-		return fmt.Errorf("query table_info(sessions): %w", err)
+		return fmt.Errorf("query table_info(%s): %w", table, err)
 	}
 	defer rows.Close()
 
@@ -852,19 +1205,19 @@ func ensureSessionColumn(tx *sql.Tx, name string, columnType string) error {
 			primaryK int
 		)
 		if err := rows.Scan(&cid, &column, &typ, &notNull, &defaultV, &primaryK); err != nil {
-			return fmt.Errorf("scan table_info(sessions): %w", err)
+			return fmt.Errorf("scan table_info(%s): %w", table, err)
 		}
 		if strings.EqualFold(column, name) {
 			return nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate table_info(sessions): %w", err)
+		return fmt.Errorf("iterate table_info(%s): %w", table, err)
 	}
 
-	stmt := fmt.Sprintf(`ALTER TABLE sessions ADD COLUMN %s %s`, name, columnType)
+	stmt := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, name, columnType)
 	if _, err := tx.Exec(stmt); err != nil {
-		return fmt.Errorf("alter sessions add column %s: %w", name, err)
+		return fmt.Errorf("alter %s add column %s: %w", table, name, err)
 	}
 	return nil
 }
@@ -888,6 +1241,71 @@ func nullableString(v string) any {
 		return nil
 	}
 	return v
+}
+
+func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) {
+	var (
+		run                 TurnRun
+		kindRaw             string
+		statusRaw           string
+		startedAtRaw        string
+		completedAtRaw      sql.NullString
+		lastActivityAtRaw   string
+		lastToolNameRaw     sql.NullString
+		lastToolPreviewRaw  sql.NullString
+		progressMessageRaw  sql.NullInt64
+		errorTextRaw        sql.NullString
+		recoverySummaryRaw  sql.NullString
+		recoveryLoggedAtRaw sql.NullString
+	)
+
+	if err := scanner.Scan(
+		&run.ID, &run.ChatID, &run.UserID, &kindRaw, &statusRaw, &run.RequestText, &startedAtRaw, &completedAtRaw,
+		&lastActivityAtRaw, &lastToolNameRaw, &lastToolPreviewRaw, &run.ToolCallsStarted,
+		&progressMessageRaw, &errorTextRaw, &recoverySummaryRaw, &recoveryLoggedAtRaw,
+	); err != nil {
+		return TurnRun{}, fmt.Errorf("scan turn run: %w", err)
+	}
+
+	var err error
+	run.Kind = TurnRunKind(kindRaw)
+	run.Status = TurnRunStatus(statusRaw)
+	run.StartedAt, err = parseSQLiteTime(startedAtRaw)
+	if err != nil {
+		return TurnRun{}, fmt.Errorf("parse turn run started_at: %w", err)
+	}
+	run.LastActivityAt, err = parseSQLiteTime(lastActivityAtRaw)
+	if err != nil {
+		return TurnRun{}, fmt.Errorf("parse turn run last_activity_at: %w", err)
+	}
+	if completedAtRaw.Valid && completedAtRaw.String != "" {
+		run.CompletedAt, err = parseSQLiteTime(completedAtRaw.String)
+		if err != nil {
+			return TurnRun{}, fmt.Errorf("parse turn run completed_at: %w", err)
+		}
+	}
+	if recoveryLoggedAtRaw.Valid && recoveryLoggedAtRaw.String != "" {
+		run.RecoveryLoggedAt, err = parseSQLiteTime(recoveryLoggedAtRaw.String)
+		if err != nil {
+			return TurnRun{}, fmt.Errorf("parse turn run recovery_logged_at: %w", err)
+		}
+	}
+	if progressMessageRaw.Valid {
+		run.ProgressMessageID = progressMessageRaw.Int64
+	}
+	run.LastToolName = nullToString(lastToolNameRaw)
+	run.LastToolPreview = nullToString(lastToolPreviewRaw)
+	run.ErrorText = nullToString(errorTextRaw)
+	run.RecoverySummary = nullToString(recoverySummaryRaw)
+	return run, nil
+}
+
+func mustParseSQLiteTime(raw string) time.Time {
+	t, err := parseSQLiteTime(raw)
+	if err != nil {
+		return time.Now().UTC()
+	}
+	return t
 }
 
 func nullableTime(t time.Time) any {

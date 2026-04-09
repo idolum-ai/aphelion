@@ -32,8 +32,10 @@ type IdentityConfig struct {
 }
 
 type TelegramConfig struct {
-	BotToken    string `toml:"bot_token"`
-	PollTimeout int    `toml:"poll_timeout"`
+	BotToken            string `toml:"bot_token"`
+	PollTimeout         int    `toml:"poll_timeout"`
+	ToolProgress        string `toml:"tool_progress"`
+	ToolProgressCleanup bool   `toml:"tool_progress_cleanup"`
 }
 
 type PrincipalsConfig struct {
@@ -90,9 +92,9 @@ type FaceConfig struct {
 }
 
 type HeartbeatConfig struct {
-	Enabled     bool                      `toml:"enabled"`
-	Every       string                    `toml:"every"`
-	Target      string                    `toml:"target"`
+	Enabled     bool                       `toml:"enabled"`
+	Every       string                     `toml:"every"`
+	Target      string                     `toml:"target"`
 	ActiveHours HeartbeatActiveHoursConfig `toml:"active_hours"`
 }
 
@@ -116,20 +118,22 @@ type CronJobConfig struct {
 }
 
 type VoiceConfig struct {
-	Mode               string `toml:"mode"`
-	OpenAIAPIKey       string `toml:"openai_api_key"`
-	OpenAIBaseURL      string `toml:"openai_base_url"`
-	OpenAIModel        string `toml:"openai_model"`
-	ElevenLabsAPIKey   string `toml:"elevenlabs_api_key"`
-	ElevenLabsBaseURL  string `toml:"elevenlabs_base_url"`
-	ElevenLabsVoiceID  string `toml:"elevenlabs_voice_id"`
-	ElevenLabsModelID  string `toml:"elevenlabs_model_id"`
+	Mode              string `toml:"mode"`
+	OpenAIAPIKey      string `toml:"openai_api_key"`
+	OpenAIBaseURL     string `toml:"openai_base_url"`
+	OpenAIModel       string `toml:"openai_model"`
+	ElevenLabsAPIKey  string `toml:"elevenlabs_api_key"`
+	ElevenLabsBaseURL string `toml:"elevenlabs_base_url"`
+	ElevenLabsVoiceID string `toml:"elevenlabs_voice_id"`
+	ElevenLabsModelID string `toml:"elevenlabs_model_id"`
 }
 
 func Default() Config {
 	return Config{
 		Telegram: TelegramConfig{
-			PollTimeout: 30,
+			PollTimeout:         30,
+			ToolProgress:        "all",
+			ToolProgressCleanup: false,
 		},
 		Governor: GovernorConfig{
 			Backend:        "auto",
@@ -217,13 +221,16 @@ func validate(cfg *Config) error {
 	if strings.TrimSpace(cfg.Telegram.BotToken) == "" {
 		return fmt.Errorf("telegram.bot_token is required")
 	}
-	if strings.TrimSpace(cfg.Providers.Anthropic.APIKey) == "" {
-		return fmt.Errorf("providers.anthropic.api_key is required")
-	}
 	if cfg.Telegram.PollTimeout <= 0 {
 		return fmt.Errorf("telegram.poll_timeout must be > 0")
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.Governor.Backend)) {
+	switch strings.ToLower(strings.TrimSpace(cfg.Telegram.ToolProgress)) {
+	case "", "all", "new", "off":
+	default:
+		return fmt.Errorf("telegram.tool_progress must be one of all|new|off")
+	}
+	governorBackend := strings.ToLower(strings.TrimSpace(cfg.Governor.Backend))
+	switch governorBackend {
 	case "auto", "codex", "native":
 	default:
 		return fmt.Errorf("governor.backend must be one of auto|codex|native")
@@ -232,9 +239,6 @@ func validate(cfg *Config) error {
 	case "auto", "codex_cli", "aphelion":
 	default:
 		return fmt.Errorf("governor.codex.auth_source must be one of auto|codex_cli|aphelion")
-	}
-	if strings.TrimSpace(cfg.Governor.NativeProvider) == "" {
-		return fmt.Errorf("governor.native_provider is required")
 	}
 	if strings.TrimSpace(cfg.Governor.Codex.BaseURL) == "" {
 		return fmt.Errorf("governor.codex.base_url is required")
@@ -269,10 +273,18 @@ func validate(cfg *Config) error {
 	if strings.TrimSpace(cfg.Agent.DailyNotesDir) == "" {
 		return fmt.Errorf("agent.daily_notes_dir is required")
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.Face.Backend)) {
+	faceBackend := strings.ToLower(strings.TrimSpace(cfg.Face.Backend))
+	switch faceBackend {
 	case "", "provider", "governor_passthrough":
 	default:
 		return fmt.Errorf("face.backend must be one of provider|governor_passthrough")
+	}
+	needsNativeProvider := governorBackend == "native" || faceBackend == "" || faceBackend == "provider"
+	if needsNativeProvider && strings.TrimSpace(cfg.Governor.NativeProvider) == "" {
+		return fmt.Errorf("governor.native_provider is required when native provider access is enabled")
+	}
+	if needsNativeProvider && strings.TrimSpace(cfg.Providers.Anthropic.APIKey) == "" {
+		return fmt.Errorf("providers.anthropic.api_key is required when native provider access is enabled")
 	}
 	if strings.TrimSpace(cfg.Heartbeat.Every) == "" {
 		return fmt.Errorf("heartbeat.every is required")
@@ -337,7 +349,7 @@ func validate(cfg *Config) error {
 		}
 	}
 	if len(cfg.Principals.Telegram.AdminUserIDs) == 0 {
-		return fmt.Errorf("principals.telegram.admin_user_ids must contain at least one user id")
+		return fmt.Errorf("principals.telegram.admin_user_ids must contain at least one user id; add [principals.telegram] admin_user_ids = [123456789]")
 	}
 
 	admin := make(map[int64]struct{}, len(cfg.Principals.Telegram.AdminUserIDs))

@@ -6,17 +6,17 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
-	"github.com/idolum-ai/aphelion/workspace"
 )
 
 const heartbeatSessionChatID int64 = -1
@@ -42,7 +42,7 @@ func (r *Runtime) StartHeartbeatLoop(ctx context.Context, logger func(string, ..
 	})
 }
 
-func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) error {
+func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err error) {
 	targetChatID, deliver := r.resolveHeartbeatTarget(now)
 	if targetChatID == 0 {
 		return nil
@@ -56,12 +56,21 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) error {
 		return nil
 	}
 
-	maintenanceSession, err := r.store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0})
+	scope, err := r.scopeForPrincipal(principal.Principal{Role: principal.RoleAdmin})
+	if err != nil {
+		return fmt.Errorf("resolve heartbeat scope: %w", err)
+	}
+
+	maintenanceKey := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0}
+	unlockMaintenance := r.lockSession(maintenanceKey)
+	defer unlockMaintenance()
+
+	maintenanceSession, err := r.store.Load(maintenanceKey)
 	if err != nil {
 		return fmt.Errorf("load heartbeat session: %w", err)
 	}
 
-	promptContext, err := workspace.LoadPromptContext(r.cfg.Agent, now)
+	promptContext, err := r.promptContextForScope(scope, now)
 	if err != nil {
 		return fmt.Errorf("load workspace prompt context: %w", err)
 	}
@@ -69,7 +78,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) error {
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   "admin",
-		WorkspaceRoot:   r.cfg.Agent.Workspace,
+		WorkspaceRoot:   scope.WorkingRoot,
 		Workspace:       promptContext,
 	})
 
@@ -78,12 +87,15 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("assemble heartbeat history: %w", err)
 	}
 
+	requestText := renderHeartbeatRequest(targetChatID, events, deliver)
+	monitor := r.startTurnMonitor(maintenanceKey, session.TurnRunKindHeartbeat, requestText, nil)
+	defer monitor.Finish(ctx, err)
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {
 		input = append(input, agent.Message{Role: "system", Content: systemPrompt})
 	}
 	input = append(input, history...)
-	input = append(input, agent.Message{Role: "user", Content: renderHeartbeatRequest(targetChatID, events, deliver)})
+	input = append(input, agent.Message{Role: "user", Content: requestText})
 
 	result, outHistory, err := agent.RunTurn(ctx, r.provider, nil, &agent.Budget{
 		Max:     r.cfg.Agent.MaxIterations,
@@ -107,12 +119,12 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) error {
 	maintenanceSession.SystemPrompt = systemPrompt
 	maintenanceSession.TurnCount++
 	maintenanceSession.LastCanonicalReply = canonicalReply
-	if err := r.store.Save(maintenanceSession, []session.Message{{
-		Role:         "assistant",
-		Content:      canonicalReply,
-		ContentChars: len(canonicalReply),
-		TurnIndex:    maintenanceSession.TurnCount,
-	}}, result.TokenUsage); err != nil {
+	newMessages, err := session.NewMessagesForTurn(requestText, outHistory[len(input):], maintenanceSession.TurnCount)
+	if err != nil {
+		return fmt.Errorf("convert heartbeat messages: %w", err)
+	}
+	newMessages = setLastAssistantCanonical(newMessages, canonicalReply)
+	if err := r.store.Save(maintenanceSession, newMessages, result.TokenUsage); err != nil {
 		return fmt.Errorf("save heartbeat session: %w", err)
 	}
 
@@ -127,7 +139,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) error {
 			FaceName:        face.DefaultFaceName,
 			Channel:         "telegram",
 			PrincipalRole:   "admin",
-			WorkspaceRoot:   r.cfg.Agent.Workspace,
+			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			CanonicalReply:  canonicalReply,
 			LatestUserInput: "[heartbeat]",
 		})
@@ -138,28 +150,29 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) error {
 		}
 	}
 
-	if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
+	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
 		ChatID: targetChatID,
 		Text:   replyText,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("send heartbeat outbound: %w", err)
 	}
 
-	adminSession, err := r.store.Load(session.SessionKey{ChatID: targetChatID, UserID: 0})
+	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0}
+	unlockAdmin := r.lockSession(adminKey)
+	defer unlockAdmin()
+
+	adminSession, err := r.store.Load(adminKey)
 	if err != nil {
 		return fmt.Errorf("load admin target session: %w", err)
 	}
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
-	adminSession.TurnCount++
-	adminSession.LastCanonicalReply = canonicalReply
-	if err := r.store.Save(adminSession, []session.Message{{
-		Role:         "assistant",
-		Content:      replyText,
-		ContentChars: len(replyText),
-		TurnIndex:    adminSession.TurnCount,
-	}}, core.TokenUsage{}); err != nil {
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, canonicalReply), core.TokenUsage{}); err != nil {
 		return fmt.Errorf("save heartbeat admin session: %w", err)
+	}
+	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "heartbeat"); err != nil {
+		return fmt.Errorf("record heartbeat outbound: %w", err)
 	}
 
 	ids := make([]int64, 0, len(events))

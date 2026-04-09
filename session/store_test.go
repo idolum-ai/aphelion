@@ -189,9 +189,10 @@ func TestSaveAndLoadCanonicalReplySidecar(t *testing.T) {
 			TurnIndex: 1,
 		},
 		{
-			Role:      "assistant",
-			Content:   "host rendered",
-			TurnIndex: 1,
+			Role:             "assistant",
+			Content:          "idolum rendered",
+			CanonicalContent: "governor canonical",
+			TurnIndex:        1,
 		},
 	}, core.TokenUsage{}); err != nil {
 		t.Fatalf("Save() err = %v", err)
@@ -207,8 +208,11 @@ func TestSaveAndLoadCanonicalReplySidecar(t *testing.T) {
 	if len(got.Messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(got.Messages))
 	}
-	if got.Messages[1].Content != "host rendered" {
-		t.Fatalf("assistant visible content = %q, want host rendered", got.Messages[1].Content)
+	if got.Messages[1].Content != "idolum rendered" {
+		t.Fatalf("assistant visible content = %q, want idolum rendered", got.Messages[1].Content)
+	}
+	if got.Messages[1].CanonicalContent != "governor canonical" {
+		t.Fatalf("assistant canonical content = %q, want governor canonical", got.Messages[1].CanonicalContent)
 	}
 }
 
@@ -270,15 +274,39 @@ func TestInitMigratesLegacySessionsWithCanonicalColumn(t *testing.T) {
 
 	var hasColumn int
 	err = store.db.QueryRow(`
-		SELECT COUNT(1)
-		FROM pragma_table_info('sessions')
-		WHERE name = 'last_canonical_reply'
-	`).Scan(&hasColumn)
+			SELECT COUNT(1)
+			FROM pragma_table_info('sessions')
+			WHERE name = 'last_canonical_reply'
+		`).Scan(&hasColumn)
 	if err != nil {
 		t.Fatalf("query pragma_table_info: %v", err)
 	}
 	if hasColumn != 1 {
 		t.Fatalf("last_canonical_reply column count = %d, want 1", hasColumn)
+	}
+
+	err = store.db.QueryRow(`
+			SELECT COUNT(1)
+			FROM pragma_table_info('messages')
+			WHERE name = 'canonical_content'
+		`).Scan(&hasColumn)
+	if err != nil {
+		t.Fatalf("query pragma_table_info(messages): %v", err)
+	}
+	if hasColumn != 1 {
+		t.Fatalf("canonical_content column count = %d, want 1", hasColumn)
+	}
+
+	err = store.db.QueryRow(`
+			SELECT COUNT(1)
+			FROM sqlite_master
+			WHERE type = 'table' AND name = 'turn_runs'
+		`).Scan(&hasColumn)
+	if err != nil {
+		t.Fatalf("query sqlite_master(turn_runs): %v", err)
+	}
+	if hasColumn != 1 {
+		t.Fatalf("turn_runs table count = %d, want 1", hasColumn)
 	}
 
 	var maxVersion int
@@ -287,5 +315,150 @@ func TestInitMigratesLegacySessionsWithCanonicalColumn(t *testing.T) {
 	}
 	if maxVersion != schemaVersion {
 		t.Fatalf("schema version max = %d, want %d", maxVersion, schemaVersion)
+	}
+}
+
+func TestRecordOutboundAndQueryAfterTurn(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 77, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.TurnCount = 2
+	if err := store.Save(sess, nil, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	if err := store.RecordOutbound(key, 1, 100, "text"); err != nil {
+		t.Fatalf("RecordOutbound(turn=1) err = %v", err)
+	}
+	if err := store.RecordOutbound(key, 3, 101, "voice"); err != nil {
+		t.Fatalf("RecordOutbound(turn=3) err = %v", err)
+	}
+
+	got, err := store.OutboundAfterTurn(key, 1)
+	if err != nil {
+		t.Fatalf("OutboundAfterTurn() err = %v", err)
+	}
+	if len(got) != 1 || got[0] != 101 {
+		t.Fatalf("OutboundAfterTurn() = %#v, want [101]", got)
+	}
+}
+
+func TestTurnRunLifecycleAndRecovery(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 900, UserID: 0}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	run, err := store.BeginTurnRun(key, TurnRunKindInteractive, "inspect repo")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if run.Status != TurnRunStatusRunning {
+		t.Fatalf("begin status = %q, want running", run.Status)
+	}
+
+	if err := store.NoteTurnRunToolStart(run.ID, "exec", `{"command":"rg foo"}`); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+	if err := store.UpdateTurnRunProgressMessage(run.ID, 12345); err != nil {
+		t.Fatalf("UpdateTurnRunProgressMessage() err = %v", err)
+	}
+
+	interrupted, err := store.InterruptRunningTurnRuns()
+	if err != nil {
+		t.Fatalf("InterruptRunningTurnRuns() err = %v", err)
+	}
+	if len(interrupted) != 1 {
+		t.Fatalf("interrupted len = %d, want 1", len(interrupted))
+	}
+	if interrupted[0].ID != run.ID {
+		t.Fatalf("interrupted run id = %d, want %d", interrupted[0].ID, run.ID)
+	}
+	if interrupted[0].ToolCallsStarted != 1 {
+		t.Fatalf("tool_calls_started = %d, want 1", interrupted[0].ToolCallsStarted)
+	}
+	if interrupted[0].ProgressMessageID != 12345 {
+		t.Fatalf("progress_message_id = %d, want 12345", interrupted[0].ProgressMessageID)
+	}
+
+	pending, err := store.PendingRecoveryTurnRuns(10)
+	if err != nil {
+		t.Fatalf("PendingRecoveryTurnRuns() err = %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending len = %d, want 1", len(pending))
+	}
+	if pending[0].Status != TurnRunStatusInterrupted {
+		t.Fatalf("pending status = %q, want interrupted", pending[0].Status)
+	}
+
+	if err := store.MarkTurnRunsRecovered([]int64{run.ID}, "check logs before retry"); err != nil {
+		t.Fatalf("MarkTurnRunsRecovered() err = %v", err)
+	}
+
+	pending, err = store.PendingRecoveryTurnRuns(10)
+	if err != nil {
+		t.Fatalf("PendingRecoveryTurnRuns() after recovery err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending len after recovery = %d, want 0", len(pending))
+	}
+}
+
+func TestCompleteTurnRun(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 901, UserID: 0}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	run, err := store.BeginTurnRun(key, TurnRunKindCron, "cron work")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.CompleteTurnRun(run.ID, TurnRunStatusCompleted, ""); err != nil {
+		t.Fatalf("CompleteTurnRun() err = %v", err)
+	}
+
+	rows, err := store.db.Query(`
+		SELECT
+			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
+			progress_message_id, error_text, recovery_summary, recovery_logged_at
+		FROM turn_runs
+		WHERE id = ?
+	`, run.ID)
+	if err != nil {
+		t.Fatalf("query completed turn run: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("expected completed turn run row")
+	}
+	got, err := scanTurnRun(rows)
+	if err != nil {
+		t.Fatalf("scanTurnRun() err = %v", err)
+	}
+	if got.Status != TurnRunStatusCompleted {
+		t.Fatalf("status = %q, want completed", got.Status)
+	}
+	if got.CompletedAt.IsZero() {
+		t.Fatal("completed_at is zero, want populated timestamp")
 	}
 }

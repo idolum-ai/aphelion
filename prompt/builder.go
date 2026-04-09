@@ -34,6 +34,7 @@ type FaceRequest struct {
 	LatestUserInput string
 	StableFiles     []workspace.LoadedFile
 	DynamicFiles    []workspace.LoadedFile
+	Mode            string
 }
 
 func BuildGovernorPrompt(req GovernorRequest) string {
@@ -100,7 +101,7 @@ func BuildFacePrompt(req FaceRequest) string {
 
 	faceName := strings.TrimSpace(req.FaceName)
 	if faceName == "" {
-		faceName = "Host"
+		faceName = "Idolum"
 	}
 
 	channel := strings.TrimSpace(req.Channel)
@@ -110,7 +111,7 @@ func BuildFacePrompt(req FaceRequest) string {
 
 	style := strings.TrimSpace(req.Style)
 	if style == "" {
-		style = "warm, clear, and emotionally attuned"
+		style = "observant, high-agency, warm, and emotionally lucid"
 	}
 
 	principalRole := strings.TrimSpace(req.PrincipalRole)
@@ -128,11 +129,30 @@ func BuildFacePrompt(req FaceRequest) string {
 		userInput = "(no user input provided)"
 	}
 
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if mode == "" {
+		mode = "render"
+	}
+
 	parts := []string{
-		fmt.Sprintf("You are %s, the face of %s for %s.", faceName, governorName, channel),
-		fmt.Sprintf("%s is presentational, not sovereign. %s remains the decision core.", faceName, governorName),
-		fmt.Sprintf("Render the governor's canonical reply in a %s tone.", style),
-		"Do not invent actions, tools, memory writes, or authority decisions.",
+		fmt.Sprintf("You are %s %s, the face of %s for %s.", faceName, "👁️‍🗨️", governorName, channel),
+	}
+	switch mode {
+	case "proposal":
+		parts = append(parts,
+			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way and push for what you sincerely think should happen next.", style),
+			fmt.Sprintf("Address %s as a hidden execution layer that can carry out or veto concrete actions. Do not defer timidly; try to move it.", governorName),
+			"You should notice more than the user explicitly says and push for warmth, sharper observation, stronger initiative, better questions, or concrete actions worth taking.",
+			"Write a short directive or advisory note only when it would materially improve the turn. Return nothing if there is no useful guidance.",
+		)
+	default:
+		parts = append(parts,
+			fmt.Sprintf("Act as the one the user is actually talking to. Speak in a %s way, with ownership and initiative.", style),
+			"Do not present yourself as a translator, renderer, or subordinate layer.",
+			"The canonical governor reply is a machine-approved constraint, not a script. You may shape tone, pacing, framing, and initiative around it.",
+			"Be observant. Notice subtext, emotional texture, weak signals, and what the user may be reaching for but not stating directly.",
+			"Do not add unapproved actions, tool use, memory writes, or commitments that exceed the canonical reply.",
+		)
 	}
 
 	if len(req.StableFiles) > 0 {
@@ -147,16 +167,35 @@ func BuildFacePrompt(req FaceRequest) string {
 		parts = append(parts, strings.Join(lines, "\n\n"))
 	}
 
-	parts = append(parts, "## Canonical Governor Reply\n"+canonical)
+	if mode != "proposal" {
+		parts = append(parts, "## Canonical Governor Reply\n"+canonical)
+	}
 	parts = append(parts, "## Latest User Message\n"+userInput)
 	parts = append(parts, strings.Join([]string{
 		"## Channel Context",
 		fmt.Sprintf("- channel: %s", channel),
 		fmt.Sprintf("- principal_role: %s", principalRole),
 		fmt.Sprintf("- style: %s", style),
+		fmt.Sprintf("- mode: %s", mode),
 	}, "\n"))
 
 	return strings.Join(parts, "\n\n")
+}
+
+func RenderIdolumProposalForGovernor(faceName string, proposal string) string {
+	faceName = strings.TrimSpace(faceName)
+	if faceName == "" {
+		faceName = "Idolum"
+	}
+	proposal = strings.TrimSpace(proposal)
+	if proposal == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("## %s Proposal", faceName),
+		fmt.Sprintf("This is advisory guidance from %s, the public-facing persona. It may advocate for warmth, sharper observation, stronger initiative, deeper questions, or actions worth considering. It is not authoritative; the governor decides.", faceName),
+		proposal,
+	}, "\n\n")
 }
 
 func renderAuthorityBlock(governorName string, governorBackend string, principalRole string, workspaceRoot string, toolsAvailable bool) string {

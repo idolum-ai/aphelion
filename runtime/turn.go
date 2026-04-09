@@ -16,25 +16,33 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
-	"github.com/idolum-ai/aphelion/workspace"
 )
 
 const maxReviewEventsPerTurn = 10
 
-func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
+func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (result *core.TurnResult, err error) {
 	actor, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
 	if !ok {
 		return nil, ErrPrincipalDenied
 	}
-	tools := r.toolsForPrincipal(actor)
+	stopTyping := r.startChatActionLoop(ctx, msg.ChatID, "typing")
+	defer stopTyping()
 
 	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
+	unlock := r.lockSession(key)
+	defer unlock()
+
+	tools := r.toolsForPrincipal(actor)
 	sess, err := r.store.Load(key)
 	if err != nil {
 		return nil, fmt.Errorf("load session: %w", err)
 	}
 
-	promptContext, err := workspace.LoadPromptContext(r.cfg.Agent, time.Now())
+	scope, err := r.scopeForPrincipal(actor)
+	if err != nil {
+		return nil, fmt.Errorf("resolve principal scope: %w", err)
+	}
+	promptContext, err := r.promptContextForScope(scope, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
@@ -42,7 +50,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   string(actor.Role),
-		WorkspaceRoot:   r.cfg.Agent.Workspace,
+		WorkspaceRoot:   scope.WorkingRoot,
 		ToolManifest:    toolManifest(tools),
 		Workspace:       promptContext,
 	})
@@ -56,14 +64,37 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		return nil, fmt.Errorf("assemble history: %w", err)
 	}
 
-	userText, inboundWasVoice, err := r.transcribeVoiceIfNeeded(ctx, msg)
+	userText, inboundWasVoice, err := r.transcribeVoiceIfNeeded(ctx, scope, msg)
 	if err != nil {
 		return nil, err
 	}
+	idolumProposal := ""
+	if proposer, ok := r.faceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
+		proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
+			GovernorName:    prompt.DefaultGovernorName,
+			FaceName:        face.DefaultFaceName,
+			Channel:         "telegram",
+			PrincipalRole:   string(actor.Role),
+			WorkspaceRoot:   faceWorkspaceRoot(scope),
+			LatestUserInput: userText,
+		})
+		if proposalErr != nil {
+			log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
+		} else {
+			idolumProposal = strings.TrimSpace(proposal)
+		}
+	}
+	progress := r.newToolProgressReporter(msg)
+	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, userText, progress)
+	defer monitor.Finish(ctx, err)
+	tools = monitor.observeTools(tools)
 
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {
 		input = append(input, agent.Message{Role: "system", Content: systemPrompt})
+	}
+	if advisory := prompt.RenderIdolumProposalForGovernor(face.DefaultFaceName, idolumProposal); advisory != "" {
+		input = append(input, agent.Message{Role: "system", Content: advisory})
 	}
 	input = append(input, history...)
 	input = append(input, agent.Message{Role: "user", Content: userText})
@@ -90,7 +121,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 			FaceName:        face.DefaultFaceName,
 			Channel:         "telegram",
 			PrincipalRole:   string(actor.Role),
-			WorkspaceRoot:   r.cfg.Agent.Workspace,
+			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			CanonicalReply:  canonicalReply,
 			LatestUserInput: userText,
 		})
@@ -109,14 +140,19 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		return nil, fmt.Errorf("convert new messages: %w", err)
 	}
 	newMessages = replaceLastAssistantWithRenderedReply(newMessages, replyText)
+	newMessages = setLastAssistantCanonical(newMessages, canonicalReply)
 	sess.LastCanonicalReply = canonicalReply
 
 	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
 		return nil, fmt.Errorf("save session: %w", err)
 	}
 
-	if err := r.sendReply(ctx, msg, replyText, inboundWasVoice); err != nil {
+	outboundID, outboundType, err := r.sendReply(ctx, msg, replyText, inboundWasVoice)
+	if err != nil {
 		return result, fmt.Errorf("send outbound reply: %w", err)
+	}
+	if err := r.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
+		return result, fmt.Errorf("record outbound reply: %w", err)
 	}
 
 	if shouldGenerateReviewEvent(actor, key) {
@@ -126,7 +162,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	}
 
 	if actor.Role == principal.RoleAdmin {
-		if err := r.deliverReviewEvents(ctx, msg.ChatID); err != nil {
+		if err := r.deliverReviewEvents(ctx, key, sess); err != nil {
 			return result, fmt.Errorf("deliver review events: %w", err)
 		}
 	}
@@ -207,16 +243,25 @@ func (r *Runtime) enqueueReviewEventsForTurn(
 	return nil
 }
 
-func (r *Runtime) deliverReviewEvents(ctx context.Context, adminChatID int64) error {
-	events, err := r.store.PendingReviewEvents(adminChatID, maxReviewEventsPerTurn)
+func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKey, sess *session.Session) error {
+	events, err := r.store.PendingReviewEvents(key.ChatID, maxReviewEventsPerTurn)
 	if err != nil {
 		return err
 	}
 	for _, event := range events {
-		if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
-			ChatID: adminChatID,
-			Text:   formatReviewEventMessage(event),
-		}); err != nil {
+		text := formatReviewEventMessage(event)
+		msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
+			ChatID: key.ChatID,
+			Text:   text,
+		})
+		if err != nil {
+			return err
+		}
+		newMessages := appendAssistantTurn(sess, text, text)
+		if err := r.store.Save(sess, newMessages, core.TokenUsage{}); err != nil {
+			return err
+		}
+		if err := r.store.RecordOutbound(key, sess.TurnCount, msgID, "review_digest"); err != nil {
 			return err
 		}
 		if err := r.store.MarkReviewDelivered([]int64{event.ID}); err != nil {

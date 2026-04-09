@@ -16,8 +16,13 @@ In the governor/face architecture, the session ledger primarily stores the user-
 
 The key rule is:
 
-- rendered `Host` reply = visible conversation record
+- rendered `Idolum` reply = visible conversation record
 - canonical governor reply = audit record
+
+Interrupted execution follows the same pattern:
+
+- structured turn-run facts = machine-authored source of truth
+- governor recovery analysis = maintenance interpretation layered on top
 
 ## Scope
 
@@ -234,6 +239,38 @@ type ReviewEvent struct {
 }
 ```
 
+### TurnRun
+
+Structured turn-run records are sidecar execution artifacts, not visible conversation messages.
+
+```go
+type TurnRun struct {
+    ID                int64
+    ChatID            int64
+    UserID            int64
+    Kind              string    // "interactive" | "heartbeat" | "cron" | "recovery"
+    Status            string    // "running" | "completed" | "failed" | "interrupted"
+    RequestText       string
+    StartedAt         time.Time
+    CompletedAt       time.Time
+    LastActivityAt    time.Time
+    LastToolName      string
+    LastToolPreview   string
+    ToolCallsStarted  int
+    ProgressMessageID int64
+    ErrorText         string
+    RecoverySummary   string
+    RecoveryLoggedAt  time.Time
+}
+```
+
+These records answer questions the visible transcript cannot:
+
+- what was in flight when the host restarted
+- whether real tool execution had started
+- which progress UI artifacts existed
+- what the governor later concluded about recovery
+
 ### CacheState and CompactionEntry
 
 ```go
@@ -342,6 +379,27 @@ CREATE TABLE review_events (
 
 CREATE INDEX idx_review_events_target ON review_events(target_chat_id, status, created_at);
 
+CREATE TABLE turn_runs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id             INTEGER NOT NULL,
+    user_id             INTEGER NOT NULL DEFAULT 0,
+    kind                TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    request_text        TEXT,
+    started_at          TEXT NOT NULL,
+    completed_at        TEXT,
+    last_activity_at    TEXT NOT NULL,
+    last_tool_name      TEXT,
+    last_tool_preview   TEXT,
+    tool_calls_started  INTEGER NOT NULL DEFAULT 0,
+    progress_message_id INTEGER,
+    error_text          TEXT,
+    recovery_summary    TEXT,
+    recovery_logged_at  TEXT
+);
+
+CREATE INDEX idx_turn_runs_status ON turn_runs(status, started_at);
+
 CREATE TABLE compaction_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id    INTEGER NOT NULL,
@@ -365,6 +423,7 @@ CREATE TABLE compaction_log (
 - **resolved_workspace_root**: records the actual execution root used for that session.
 - **outbound_messages**: keeps a durable mapping between agent turns and Telegram message IDs.
 - **review_events**: creates a one-way, bounded bridge from isolated sessions into the admin DM.
+- **turn_runs**: preserves machine-authored facts about in-flight work, progress artifacts, and recovery state across restarts.
 - **compacted flag**: compacted messages remain on disk for audit but can be excluded from active prompt assembly.
 
 ## Session Lifecycle
@@ -401,6 +460,18 @@ func (s *Store) Save(session *Session, newMessages []Message, usage TokenUsage) 
 ```
 
 The persistent history is append-only. Existing rows are not rewritten during the normal turn path.
+
+### Turn-run tracking
+
+Interactive, heartbeat, cron, and recovery turns should also create a structured `turn_run` sidecar row.
+
+Normal lifecycle:
+
+1. insert `turn_runs.status = "running"` before the governor turn begins
+2. update `last_tool_name`, `last_tool_preview`, and `progress_message_id` as work happens
+3. mark the row `completed` or `failed` when the turn ends normally
+
+If the process disappears before step 3, the next startup should mark the row `interrupted` and feed it into maintenance recovery analysis.
 
 ### Delete / Expire
 
@@ -439,6 +510,42 @@ The review flow is intentionally one-way:
 - non-admin session -> bounded digest -> admin DM
 
 The reverse direction is ordinary admin action in the admin DM, not silent state sharing back into non-admin sessions.
+
+## Disruption Recovery
+
+Service restarts, crashes, deploys, and operator interruptions can cut a turn off mid-execution.
+
+Aphelion should handle that in two phases:
+
+1. **machine phase**
+   - detect `turn_runs.status = "running"` on startup
+   - mark them `interrupted`
+   - preserve the raw structured facts
+2. **governor phase**
+   - run a maintenance analysis over those facts
+   - append the analysis to the maintenance ledger
+   - optionally surface a summarized recovery note later
+
+The governor should analyze interruptions, but it should not be the only witness of them.
+
+### Recovery note location
+
+The default place for disruption analysis is the maintenance ledger, not the interrupted user DM.
+
+That keeps:
+
+- user transcripts clean
+- recovery inspectable
+- startup recovery aligned with heartbeat and other maintenance work
+
+### Recovery content
+
+Recovery analysis should focus on:
+
+- what was interrupted
+- whether any tool work had started
+- which progress artifacts were visible
+- what likely needs retry, resume, or manual inspection
 
 No explicit promotion workflow is required. The digest is already a reduced, bounded transfer of context.
 
@@ -634,7 +741,7 @@ Provider-specific pruning knobs remain provider config, not session-ledger confi
 - **TestExpireKeepsActive**: active session survives expiry sweep
 - **TestConcurrentReads**: concurrent reads succeed under WAL mode
 - **TestWALMode**: `PRAGMA journal_mode` returns `wal`
-- **TestVisibleLedgerStoresRenderedReply**: visible assistant history stores the delivered Host reply
+- **TestVisibleLedgerStoresRenderedReply**: visible assistant history stores the delivered Idolum reply
 - **TestCanonicalReplyStoredAsSidecarAudit**: canonical governor reply is stored alongside the session without polluting the visible transcript
 
 ### v0 context assembly

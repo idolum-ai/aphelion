@@ -32,7 +32,8 @@ Runnable v0:
 - SQLite session persistence
 - Shell execution tool (`exec`)
 - Config-assigned principals
-- Host-rendered replies
+- Idolum-rendered replies
+- Telegram typing + real tool-backed progress feedback
 - Heartbeat and config-driven cron
 - Telegram voice transcription + optional TTS replies
 
@@ -93,6 +94,12 @@ Or:
 make run
 ```
 
+Validate config only:
+
+```bash
+make check-config
+```
+
 Install the latest GitHub Release binary:
 
 ```bash
@@ -120,6 +127,10 @@ systemctl --user status aphelion
 systemctl --user restart aphelion
 journalctl --user -u aphelion -f
 ```
+
+Config failures now exit once with a dedicated config error and the service will not
+crash-loop. `make install-user-service`, `make update`, and `make update-release`
+also run a config preflight before restarting the service.
 
 Update after pulling new changes:
 

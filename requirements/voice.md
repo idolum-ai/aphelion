@@ -9,10 +9,10 @@ For the first serious voice path, the intended stack is:
 - **speech-to-text**: Whisper / OpenAI transcription
 - **text-to-speech**: ElevenLabs
 
-Voice is a channel behavior layered on top of the governor/Host split:
+Voice is a channel behavior layered on top of the governor/Idolum split:
 
 - the governor decides what to say
-- `Host` renders the wording
+- `Idolum` renders the wording
 - the voice subsystem turns that wording into audio when voice output is enabled
 
 ## Scope
@@ -42,7 +42,7 @@ Voice handling should follow this flow:
 4. transcribe via the configured STT backend
 5. inject transcript as ordinary user content
 6. run governor turn
-7. run Host rendering
+7. run Idolum rendering
 8. synthesize spoken reply when voice mode says to do so
 9. send audio reply, with text fallback if needed
 
@@ -70,10 +70,10 @@ The preferred first premium TTS path is ElevenLabs.
 Why:
 
 - high-quality natural voice
-- good fit for a warm `Host` layer
+- good fit for a warm `Idolum` layer
 - simpler than inventing a local TTS story first
 
-Voice generation should be treated as a rendering step after Host text exists. TTS must not replace the visible text artifact; it is an additional delivery format.
+Voice generation should be treated as a rendering step after Idolum text exists. TTS must not replace the visible text artifact; it is an additional delivery format.
 
 ## Reply Modes
 
@@ -118,7 +118,7 @@ The visible session ledger should still be text-first.
 Rules:
 
 - store the transcribed user text as the visible user message
-- store the rendered Host text as the visible assistant message
+- store the rendered Idolum text as the visible assistant message
 - keep voice/audio metadata as sidecar media artifacts
 - do not make raw audio blobs the primary session transcript format
 
@@ -139,17 +139,17 @@ Voice/media handling must respect the same role boundaries as text.
 - transcripts remain isolated unless summarized upward through review flow
 - voice/TTS generation must not leak isolated artifacts into shared/global state
 
-## Host and Voice
+## Idolum and Voice
 
-`Host` should be the voice-facing persona by default.
+`Idolum` should be the voice-facing persona by default.
 
 That means:
 
-- spoken output uses Host-rendered wording
-- TTS voice selection should aim to match Host's relational style
+- spoken output uses Idolum-rendered wording
+- TTS voice selection should aim to match Idolum's relational style
 - voice reply is a rendering mode, not a second decision layer
 
-The voice subsystem does not get to rewrite governor intent; it only renders the already-approved Host output into speech.
+The voice subsystem does not get to rewrite governor intent; it only renders the already-approved Idolum output into speech.
 
 ## Failure Behavior
 
@@ -194,7 +194,7 @@ Additional per-channel or per-principal voice overrides may come later.
 - **Voice mode is explicit.** `voice_only` is the best default for messaging.
 - **Voice replies follow voice input by default.** If the user sends voice and voice mode is enabled, reply with voice unless configured otherwise.
 - **The session ledger stays text-first.** Audio remains sidecar media state.
-- **Voice is rendering, not authority.** The governor decides; Host speaks; voice renders the speech form.
+- **Voice is rendering, not authority.** The governor decides; Idolum speaks; voice renders the speech form.
 
 ## Test Plan
 
@@ -202,7 +202,7 @@ Additional per-channel or per-principal voice overrides may come later.
 - **TestVoiceOnlyRepliesToVoiceInput**: `voice_only` sends spoken replies only for voice-originated turns
 - **TestAllModeSpeaksForTextInput**: `all` mode also produces spoken replies for text turns
 - **TestOffModeUsesTextOnly**: `off` mode never emits TTS output
-- **TestVoiceReplyUsesHostRenderedText**: spoken output is synthesized from Host-rendered reply text
+- **TestVoiceReplyUsesIdolumRenderedText**: spoken output is synthesized from Idolum-rendered reply text
 - **TestTTSFallbackToText**: TTS failure still sends the text reply
 - **TestApprovedUserVoiceArtifactsStayIsolated**: non-admin audio/transcripts remain in isolated roots
 - **TestVisibleLedgerStoresTranscriptAndRenderedReply**: session replay remains text-first even when voice media is used

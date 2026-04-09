@@ -72,7 +72,7 @@ At minimum:
 
 - `admin` may operate on global roots
 - `approved_user` may only operate on isolated roots
-- `Host` has no authority of its own
+- `Idolum` has no authority of its own
 
 ### 3. Storage Isolation
 
@@ -124,7 +124,7 @@ The honest v0 security floor is:
 
 - unknown Telegram users denied before session creation
 - `admin` role resolved in code
-- `Host` has no tool authority
+- `Idolum` has no tool authority
 - prompt files cannot widen permissions
 - tool calls are persisted in the session ledger
 - `exec` is available only to the trusted admin path
@@ -261,7 +261,7 @@ Config may describe the intended security shape, but runtime must not silently p
 ### Admission and Authority
 
 - **TestUnknownPrincipalDeniedBeforeSessionCreation**: unknown Telegram user is denied before session load
-- **TestHostCannotInvokeTools**: face layer never receives tool authority
+- **TestIdolumCannotInvokeTools**: face layer never receives tool authority
 - **TestPromptCannotOverrideRole**: workspace prompt files cannot widen principal authority
 
 ### Trusted Admin Floor
@@ -281,4 +281,4 @@ Config may describe the intended security shape, but runtime must not silently p
 ### Drift Resistance
 
 - **TestToolsMDIsAdvisoryOnly**: prompt changes do not widen tool permissions
-- **TestHostFilesDoNotAffectSandboxPolicy**: `HOST.md` and `QUESTIONS-TO-HOST.md` cannot change security behavior
+- **TestIdolumFilesDoNotAffectSandboxPolicy**: `IDOLUM.md` and `QUESTIONS-TO-IDOLUM.md` cannot change security behavior

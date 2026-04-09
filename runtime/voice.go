@@ -6,17 +6,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/media"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 type voiceSender interface {
 	SendVoiceMessage(ctx context.Context, chatID int64, media core.Media, replyTo *int64) (int64, error)
 }
 
-func (r *Runtime) transcribeVoiceIfNeeded(ctx context.Context, msg core.InboundMessage) (string, bool, error) {
+func (r *Runtime) transcribeVoiceIfNeeded(ctx context.Context, scope sandbox.Scope, msg core.InboundMessage) (string, bool, error) {
 	text := strings.TrimSpace(msg.Text)
 	if text != "" {
 		return text, false, nil
@@ -30,11 +32,15 @@ func (r *Runtime) transcribeVoiceIfNeeded(ctx context.Context, msg core.InboundM
 		return "", true, fmt.Errorf("voice transcription is not configured")
 	}
 
-	tmp, err := os.CreateTemp("", "aphelion-voice-*.ogg")
+	tmpRoot := voiceTempRoot(scope, r.cfg.Agent)
+	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
+		return "", true, fmt.Errorf("create voice temp root: %w", err)
+	}
+	tmp, err := os.CreateTemp(tmpRoot, "aphelion-voice-*.ogg")
 	if err != nil {
 		return "", true, fmt.Errorf("create temp voice file: %w", err)
 	}
-	path := tmp.Name()
+	path := filepath.Clean(tmp.Name())
 	defer os.Remove(path)
 	if _, err := tmp.Write(voiceMedia.Data); err != nil {
 		_ = tmp.Close()
@@ -66,25 +72,29 @@ func (r *Runtime) shouldReplyWithVoice(inboundWasVoice bool) bool {
 	}
 }
 
-func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text string, inboundWasVoice bool) error {
+func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text string, inboundWasVoice bool) (int64, string, error) {
 	if r.shouldReplyWithVoice(inboundWasVoice) && r.synth != nil {
 		if sender, ok := r.outbound.(voiceSender); ok {
 			audio, err := r.synth.Synthesize(ctx, text)
 			if err == nil {
-				_, err = sender.SendVoiceMessage(ctx, msg.ChatID, audio, replyToMessageID(msg.MessageID))
-			}
-			if err == nil {
-				return nil
+				msgID, sendErr := sender.SendVoiceMessage(ctx, msg.ChatID, audio, replyToMessageID(msg.MessageID))
+				if sendErr == nil {
+					return msgID, "voice", nil
+				}
+				err = sendErr
 			}
 		}
 	}
 
-	_, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
+	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
 		ChatID:  msg.ChatID,
 		Text:    text,
 		ReplyTo: replyToMessageID(msg.MessageID),
 	})
-	return err
+	if err != nil {
+		return 0, "", err
+	}
+	return msgID, "text", nil
 }
 
 func firstVoiceMedia(items []core.Media) (core.Media, bool) {

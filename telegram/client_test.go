@@ -146,6 +146,111 @@ func TestSendMessagePayload(t *testing.T) {
 	}
 }
 
+func TestSendChatActionPayload(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/sendChatAction" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, telegramOKResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	if err := client.SendChatAction(context.Background(), 5, "typing"); err != nil {
+		t.Fatalf("SendChatAction() err = %v", err)
+	}
+	if requestBody["chat_id"] != float64(5) {
+		t.Fatalf("chat_id = %v, want 5", requestBody["chat_id"])
+	}
+	if requestBody["action"] != "typing" {
+		t.Fatalf("action = %v, want typing", requestBody["action"])
+	}
+}
+
+func TestEditMessageTextPayload(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/editMessageText" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, editMessageResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	if err := client.EditMessageText(context.Background(), 5, 42, "working..."); err != nil {
+		t.Fatalf("EditMessageText() err = %v", err)
+	}
+	if requestBody["chat_id"] != float64(5) {
+		t.Fatalf("chat_id = %v, want 5", requestBody["chat_id"])
+	}
+	if requestBody["message_id"] != float64(42) {
+		t.Fatalf("message_id = %v, want 42", requestBody["message_id"])
+	}
+	if requestBody["text"] != "working..." {
+		t.Fatalf("text = %v, want working...", requestBody["text"])
+	}
+}
+
+func TestDeleteMessagePayload(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/deleteMessage" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, telegramOKResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	if err := client.DeleteMessage(context.Background(), 5, 42); err != nil {
+		t.Fatalf("DeleteMessage() err = %v", err)
+	}
+	if requestBody["chat_id"] != float64(5) {
+		t.Fatalf("chat_id = %v, want 5", requestBody["chat_id"])
+	}
+	if requestBody["message_id"] != float64(42) {
+		t.Fatalf("message_id = %v, want 42", requestBody["message_id"])
+	}
+}
+
 func TestSendVoiceMessagePayload(t *testing.T) {
 	var contentType string
 	var payload string

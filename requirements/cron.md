@@ -120,7 +120,7 @@ Cron should default toward artifacts and events first, not chatty conversational
 If a cron run does produce a user-visible message:
 
 1. the scheduled job produces a canonical governor result
-2. `Host` may propose the user-facing phrasing
+2. `Idolum` may propose the user-facing phrasing
 3. the governor authorizes the outward message
 4. the delivered message enters the visible ledger of the target session
 5. the canonical cron output remains sidecar audit state
@@ -148,7 +148,7 @@ The face layer may supply a warmer or more relational wording for scheduled outr
 
 The rule remains:
 
-- `Host` may propose
+- `Idolum` may propose
 - `Aphelion` ratifies
 
 ## Relationship to Heartbeat
@@ -224,7 +224,7 @@ Later config may add:
 - **Cron sessions are explicit.** Scheduled work should not accidentally inherit arbitrary conversational continuity.
 - **Cron context is lightweight by default.** Scheduled jobs should be narrow unless they intentionally target a richer session.
 - **Cron may still feel spontaneous.** User perception of proactivity does not change the internal causal source.
-- **`Host` may propose cron outreach.** The governor still authorizes delivery.
+- **`Idolum` may propose cron outreach.** The governor still authorizes delivery.
 - **Cron and heartbeat stay separate.** Shared outward effect does not mean shared internal mechanism.
 
 ## Test Plan
@@ -233,7 +233,7 @@ Later config may add:
 - **TestCronUsesDedicatedSessionForIsolatedJobs**: isolated jobs do not pollute the main session
 - **TestCronMainTargetDoesNotCollapseIntoHeartbeatSemantics**: main-target cron work remains identifiable as cron-originated
 - **TestCronUsesLightContextByDefault**: isolated cron jobs do not load the full workspace prompt surface
-- **TestCronHostSuggestionStillNeedsGovernorAuthorization**: Host-generated outreach candidates do not bypass the governor
+- **TestCronIdolumSuggestionStillNeedsGovernorAuthorization**: Idolum-generated outreach candidates do not bypass the governor
 - **TestCronVisibleLedgerStoresRenderedReply**: delivered cron messages enter the visible ledger as rendered output
 - **TestCronCanonicalOutputStoredAsSidecar**: canonical cron result is stored separately from the visible transcript
 - **TestCronRetryAndFailureStatePersist**: failures and retries are inspectable across runs

@@ -196,13 +196,17 @@ Deployment should assume:
 - config mistakes happen
 - bad releases happen
 - service restarts happen
+- in-flight turns may be interrupted by deploys or operator restarts
 
 The deployment model should therefore prefer:
 
 - restart-on-failure
 - durable session DB
+- structured interruption records
 - stateless binary replacement
 - operator-visible failure logs
+
+A restart should not silently erase knowledge of interrupted work. The runtime should retain machine-authored facts about in-flight turns so the governor can analyze them after startup.
 
 ## Config Surface
 

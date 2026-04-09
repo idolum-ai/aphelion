@@ -112,6 +112,74 @@ func (c *Client) SendMessage(ctx context.Context, msg core.OutboundMessage) (int
 	return resp.Result.MessageID, nil
 }
 
+func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string) error {
+	if chatID == 0 {
+		return errors.New("chat_id is required")
+	}
+	action = strings.TrimSpace(action)
+	if action == "" {
+		return errors.New("action is required")
+	}
+
+	body := map[string]interface{}{
+		"chat_id": chatID,
+		"action":  action,
+	}
+	var resp telegramOKResponse
+	if err := c.post(ctx, "sendChatAction", body, &resp); err != nil {
+		return err
+	}
+	if !resp.Ok {
+		return fmt.Errorf("telegram sendChatAction failed: %s", resp.Description)
+	}
+	return nil
+}
+
+func (c *Client) EditMessageText(ctx context.Context, chatID int64, messageID int64, text string) error {
+	if chatID == 0 {
+		return errors.New("chat_id is required")
+	}
+	if messageID == 0 {
+		return errors.New("message_id is required")
+	}
+
+	body := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       text,
+	}
+	var resp editMessageResponse
+	if err := c.post(ctx, "editMessageText", body, &resp); err != nil {
+		return err
+	}
+	if !resp.Ok {
+		return fmt.Errorf("telegram editMessageText failed: %s", resp.Description)
+	}
+	return nil
+}
+
+func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int64) error {
+	if chatID == 0 {
+		return errors.New("chat_id is required")
+	}
+	if messageID == 0 {
+		return errors.New("message_id is required")
+	}
+
+	body := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	}
+	var resp telegramOKResponse
+	if err := c.post(ctx, "deleteMessage", body, &resp); err != nil {
+		return err
+	}
+	if !resp.Ok {
+		return fmt.Errorf("telegram deleteMessage failed: %s", resp.Description)
+	}
+	return nil
+}
+
 func (c *Client) SendVoiceMessage(ctx context.Context, chatID int64, media core.Media, replyTo *int64) (int64, error) {
 	if chatID == 0 {
 		return 0, errors.New("chat_id is required")

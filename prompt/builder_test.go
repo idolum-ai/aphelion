@@ -86,7 +86,7 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 
 	got := BuildFacePrompt(FaceRequest{
 		GovernorName:    "Aphelion",
-		FaceName:        "Host",
+		FaceName:        "Idolum",
 		Channel:         "telegram",
 		CanonicalReply:  "I changed the file.",
 		LatestUserInput: "please update it",
@@ -98,34 +98,37 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	if !strings.Contains(got, "## Canonical Governor Reply") {
 		t.Fatalf("face prompt missing canonical reply section: %q", got)
 	}
+	if !strings.Contains(got, "Do not present yourself as a translator") {
+		t.Fatalf("face prompt missing ownership boundary: %q", got)
+	}
 }
 
-func TestBuildFacePromptIncludesHostFilesAndOrder(t *testing.T) {
+func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 	t.Parallel()
 
 	got := BuildFacePrompt(FaceRequest{
 		GovernorName:    "Aphelion",
-		FaceName:        "Host",
+		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",
 		CanonicalReply:  "Canonical answer",
 		LatestUserInput: "What changed?",
 		StableFiles: []workspace.LoadedFile{
-			{Path: "HOST.md", Content: "host defaults"},
+			{Path: "IDOLUM.md", Content: "idolum defaults"},
 		},
 		DynamicFiles: []workspace.LoadedFile{
-			{Path: "QUESTIONS-TO-HOST.md", Content: "avoid flattery"},
+			{Path: "QUESTIONS-TO-IDOLUM.md", Content: "avoid flattery"},
 		},
 	})
 
-	if !strings.Contains(got, "## Stable Face Files") || !strings.Contains(got, "### HOST.md") {
-		t.Fatalf("face prompt missing stable host files: %q", got)
+	if !strings.Contains(got, "## Stable Face Files") || !strings.Contains(got, "### IDOLUM.md") {
+		t.Fatalf("face prompt missing stable idolum files: %q", got)
 	}
-	if !strings.Contains(got, "## Dynamic Face Files") || !strings.Contains(got, "### QUESTIONS-TO-HOST.md") {
-		t.Fatalf("face prompt missing dynamic host files: %q", got)
+	if !strings.Contains(got, "## Dynamic Face Files") || !strings.Contains(got, "### QUESTIONS-TO-IDOLUM.md") {
+		t.Fatalf("face prompt missing dynamic idolum files: %q", got)
 	}
-	if !strings.Contains(got, "Host is presentational, not sovereign.") {
-		t.Fatalf("face prompt missing sovereignty boundary: %q", got)
+	if !strings.Contains(got, "Act as the one the user is actually talking to.") {
+		t.Fatalf("face prompt missing phenomenological primary guidance: %q", got)
 	}
 
 	stableIdx := strings.Index(got, "## Stable Face Files")
@@ -137,5 +140,40 @@ func TestBuildFacePromptIncludesHostFilesAndOrder(t *testing.T) {
 	}
 	if !(stableIdx < dynamicIdx && dynamicIdx < canonicalIdx && canonicalIdx < userIdx) {
 		t.Fatalf("face prompt sections are out of order: %q", got)
+	}
+}
+
+func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		GovernorName:    "Aphelion",
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		PrincipalRole:   "admin",
+		LatestUserInput: "help me",
+		Mode:            "proposal",
+	})
+
+	if strings.Contains(got, "## Canonical Governor Reply") {
+		t.Fatalf("proposal prompt should not include canonical reply section: %q", got)
+	}
+	if !strings.Contains(got, "hidden execution layer") {
+		t.Fatalf("proposal prompt missing hidden executor framing: %q", got)
+	}
+	if !strings.Contains(got, "try to move it") {
+		t.Fatalf("proposal prompt missing assertive Idolum guidance: %q", got)
+	}
+}
+
+func TestRenderIdolumProposalForGovernorWrapsAdvisory(t *testing.T) {
+	t.Parallel()
+
+	got := RenderIdolumProposalForGovernor("Idolum", "Push for more initiative.")
+	if !strings.Contains(got, "## Idolum Proposal") {
+		t.Fatalf("wrapped proposal missing heading: %q", got)
+	}
+	if !strings.Contains(got, "Push for more initiative.") {
+		t.Fatalf("wrapped proposal missing content: %q", got)
 	}
 }

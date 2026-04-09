@@ -152,7 +152,7 @@ The system must ensure:
 
 - credential files are never injected into prompts
 - `exec` cannot casually expose them to non-admin sessions
-- `Host` never receives raw governor credentials
+- `Idolum` never receives raw governor credentials
 - logs do not print tokens
 - malformed auth sources fail closed
 

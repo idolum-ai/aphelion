@@ -10,6 +10,8 @@ workdir="${APHELION_WORKDIR:-${repo_root}}"
 
 mkdir -p "${service_dir}"
 
+"${exec_path}" --config "${config_path}" --check-config
+
 sed \
   -e "s|@WORKDIR@|${workdir}|g" \
   -e "s|@EXEC_PATH@|${exec_path}|g" \

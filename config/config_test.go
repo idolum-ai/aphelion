@@ -39,6 +39,9 @@ workspace = "./workspace"
 	if cfg.Telegram.PollTimeout != 30 {
 		t.Fatalf("poll timeout = %d, want 30", cfg.Telegram.PollTimeout)
 	}
+	if cfg.Telegram.ToolProgress != "all" || cfg.Telegram.ToolProgressCleanup {
+		t.Fatalf("telegram progress defaults = %#v, want all/false", cfg.Telegram)
+	}
 	if cfg.Governor.Backend != "auto" {
 		t.Fatalf("governor.backend = %q, want auto", cfg.Governor.Backend)
 	}
@@ -133,6 +136,8 @@ func TestLoadParsesBasicTypedFields(t *testing.T) {
 [telegram]
 bot_token = "tg-test"
 poll_timeout = 11
+tool_progress = "new"
+tool_progress_cleanup = true
 
 [principals.telegram]
 admin_user_ids = [123]
@@ -208,6 +213,9 @@ elevenlabs_voice_id = "voice-123"
 
 	if cfg.Telegram.PollTimeout != 11 {
 		t.Fatalf("poll_timeout = %d, want 11", cfg.Telegram.PollTimeout)
+	}
+	if cfg.Telegram.ToolProgress != "new" || !cfg.Telegram.ToolProgressCleanup {
+		t.Fatalf("telegram progress = %#v, want new/true", cfg.Telegram)
 	}
 	if cfg.Providers.Anthropic.Model != "claude-opus-4-6" {
 		t.Fatalf("model = %q, want claude-opus-4-6", cfg.Providers.Anthropic.Model)
@@ -422,6 +430,36 @@ api_key = "sk-ant-test"
 	}
 }
 
+func TestLoadAllowsCodexGovernorPassthroughWithoutAnthropicKey(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[governor]
+backend = "codex"
+
+[face]
+backend = "governor_passthrough"
+
+[agent]
+workspace = "./workspace"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(configPath); err != nil {
+		t.Fatalf("Load() err = %v, want codex passthrough config to validate without Anthropic key", err)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -456,6 +494,9 @@ api_key = "sk-ant-test"
 	}
 	if !strings.Contains(err.Error(), "principals.telegram.admin_user_ids") {
 		t.Fatalf("error = %v, want principals.telegram.admin_user_ids message", err)
+	}
+	if !strings.Contains(err.Error(), "add [principals.telegram] admin_user_ids") {
+		t.Fatalf("error = %v, want actionable principal bootstrap hint", err)
 	}
 }
 

@@ -12,9 +12,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
 
@@ -26,20 +23,20 @@ jobs:
         env:
           CGO_ENABLED: "1"
           GOOS: linux
-          GOARCH: ${{ matrix.arch }}
+          GOARCH: amd64
         run: |
           mkdir -p dist
           go build -o dist/aphelion .
 
       - name: Package tarball
         run: |
-          tar -czf "aphelion-linux-${{ matrix.arch }}.tar.gz" -C dist aphelion
+          tar -czf "aphelion-linux-amd64.tar.gz" -C dist aphelion
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aphelion-linux-${{ matrix.arch }}
-          path: aphelion-linux-${{ matrix.arch }}.tar.gz
+          name: aphelion-linux-amd64
+          path: aphelion-linux-amd64.tar.gz
 
   release:
     needs: build

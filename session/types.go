@@ -4,6 +4,24 @@ package session
 
 import "time"
 
+type TurnRunKind string
+
+const (
+	TurnRunKindInteractive TurnRunKind = "interactive"
+	TurnRunKindHeartbeat   TurnRunKind = "heartbeat"
+	TurnRunKindCron        TurnRunKind = "cron"
+	TurnRunKindRecovery    TurnRunKind = "recovery"
+)
+
+type TurnRunStatus string
+
+const (
+	TurnRunStatusRunning     TurnRunStatus = "running"
+	TurnRunStatusCompleted   TurnRunStatus = "completed"
+	TurnRunStatusFailed      TurnRunStatus = "failed"
+	TurnRunStatusInterrupted TurnRunStatus = "interrupted"
+)
+
 // SessionKey identifies a unique session.
 type SessionKey struct {
 	ChatID int64
@@ -17,7 +35,7 @@ type Session struct {
 	Messages     []Message
 	SystemPrompt string
 	// LastCanonicalReply stores the governor-canonical assistant text for audit.
-	// The visible transcript in Messages stores the rendered Host reply.
+	// The visible transcript in Messages stores the rendered Idolum reply.
 	LastCanonicalReply string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
@@ -84,19 +102,40 @@ type ReviewEvent struct {
 	DeliveredAt       time.Time
 }
 
+// TurnRun stores machine-authored facts about a turn lifecycle for recovery.
+type TurnRun struct {
+	ID                int64
+	ChatID            int64
+	UserID            int64
+	Kind              TurnRunKind
+	Status            TurnRunStatus
+	RequestText       string
+	StartedAt         time.Time
+	CompletedAt       time.Time
+	LastActivityAt    time.Time
+	LastToolName      string
+	LastToolPreview   string
+	ToolCallsStarted  int
+	ProgressMessageID int64
+	ErrorText         string
+	RecoverySummary   string
+	RecoveryLoggedAt  time.Time
+}
+
 // Message is one persisted conversation message.
 type Message struct {
-	ID           int64
-	ChatID       int64
-	UserID       int64
-	Role         string
-	Content      string
-	ToolCalls    string
-	ToolID       string
-	ToolName     string
-	Thinking     string
-	CreatedAt    time.Time
-	TurnIndex    int
-	ContentChars int
-	Compacted    bool
+	ID               int64
+	ChatID           int64
+	UserID           int64
+	Role             string
+	Content          string
+	CanonicalContent string
+	ToolCalls        string
+	ToolID           string
+	ToolName         string
+	Thinking         string
+	CreatedAt        time.Time
+	TurnIndex        int
+	ContentChars     int
+	Compacted        bool
 }

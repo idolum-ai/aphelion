@@ -68,17 +68,17 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 
 		for _, upd := range updates {
+			if p.resolver != nil && shouldResolvePrincipal(upd.Message) {
+				if _, ok := p.resolver.ResolveTelegramUser(senderID(upd.Message.From)); !ok {
+					if next := upd.UpdateID + 1; next > offset {
+						offset = next
+					}
+					continue
+				}
+			}
 			if inbound, err := p.normalizeUpdate(ctx, upd); err != nil {
 				return err
 			} else if inbound != nil {
-				if p.resolver != nil {
-					if _, ok := p.resolver.ResolveTelegramUser(inbound.SenderID); !ok {
-						if next := upd.UpdateID + 1; next > offset {
-							offset = next
-						}
-						continue
-					}
-				}
 				if err := p.handler(ctx, *inbound); err != nil {
 					if errors.Is(err, context.Canceled) {
 						return nil
@@ -140,4 +140,8 @@ func senderID(user *User) int64 {
 		return 0
 	}
 	return user.ID
+}
+
+func shouldResolvePrincipal(msg *Message) bool {
+	return msg != nil && msg.Chat != nil && msg.Chat.Type == "private"
 }

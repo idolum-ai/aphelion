@@ -28,10 +28,12 @@ type fakeProvider struct {
 	mu                 sync.Mutex
 	callCount          int
 	replyText          string
+	proposalReplyText  string
 	faceReplyText      string
 	faceErr            error
 	seenGovernorSystem []string
 	seenFaceSystem     []string
+	seenProposalSystem []string
 	responseUsage      core.TokenUsage
 }
 
@@ -42,6 +44,11 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 
 	isFaceCall := len(messages) > 0 && messages[0].Role == "system" && strings.Contains(messages[0].Content, "the face of")
 	if isFaceCall {
+		if strings.Contains(messages[0].Content, "- mode: proposal") {
+			f.seenProposalSystem = append(f.seenProposalSystem, messages[0].Content)
+			reply := strings.TrimSpace(f.proposalReplyText)
+			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
+		}
 		f.seenFaceSystem = append(f.seenFaceSystem, messages[0].Content)
 		if f.faceErr != nil {
 			return nil, f.faceErr
@@ -56,11 +63,13 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 		}, nil
 	}
 
-	if len(messages) > 0 && messages[0].Role == "system" {
-		f.seenGovernorSystem = append(f.seenGovernorSystem, messages[0].Content)
-	} else {
-		f.seenGovernorSystem = append(f.seenGovernorSystem, "")
+	var systemParts []string
+	for _, msg := range messages {
+		if msg.Role == "system" && strings.TrimSpace(msg.Content) != "" {
+			systemParts = append(systemParts, msg.Content)
+		}
 	}
+	f.seenGovernorSystem = append(f.seenGovernorSystem, strings.Join(systemParts, "\n\n"))
 
 	return &agent.Response{
 		Content: f.replyText,
@@ -69,9 +78,13 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 }
 
 type fakeSender struct {
-	mu   sync.Mutex
-	sent []core.OutboundMessage
-	voice []voiceSend
+	mu       sync.Mutex
+	sent     []core.OutboundMessage
+	voice    []voiceSend
+	actions  []chatAction
+	edits    []messageEdit
+	deletes  []messageDelete
+	actionCh chan chatAction
 }
 
 func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (int64, error) {
@@ -81,9 +94,53 @@ func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (i
 	return int64(len(f.sent)), nil
 }
 
-type voiceSend struct {
+type chatAction struct {
 	ChatID int64
-	Media  core.Media
+	Action string
+}
+
+type messageEdit struct {
+	ChatID    int64
+	MessageID int64
+	Text      string
+}
+
+type messageDelete struct {
+	ChatID    int64
+	MessageID int64
+}
+
+func (f *fakeSender) SendChatAction(_ context.Context, chatID int64, action string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry := chatAction{ChatID: chatID, Action: action}
+	f.actions = append(f.actions, entry)
+	if f.actionCh != nil {
+		select {
+		case f.actionCh <- entry:
+		default:
+		}
+	}
+	return nil
+}
+
+func (f *fakeSender) EditMessageText(_ context.Context, chatID int64, messageID int64, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.edits = append(f.edits, messageEdit{ChatID: chatID, MessageID: messageID, Text: text})
+	return nil
+}
+
+func (f *fakeSender) DeleteMessage(_ context.Context, chatID int64, messageID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletes = append(f.deletes, messageDelete{ChatID: chatID, MessageID: messageID})
+	return nil
+}
+
+type voiceSend struct {
+	ChatID  int64
+	Media   core.Media
 	ReplyTo *int64
 }
 
@@ -147,6 +204,38 @@ func (p *toolRequestingProvider) Complete(_ context.Context, _ []agent.Message, 
 		}, nil
 	}
 
+	return &agent.Response{Content: "done"}, nil
+}
+
+type multiToolRequestingProvider struct {
+	mu        sync.Mutex
+	callCount int
+}
+
+func (p *multiToolRequestingProvider) Complete(_ context.Context, _ []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.callCount++
+	if p.callCount == 1 {
+		if len(tools) == 0 {
+			return &agent.Response{Content: "no tools"}, nil
+		}
+		return &agent.Response{
+			ToolCalls: []agent.ToolCall{
+				{
+					ID:    "tool-call-1",
+					Name:  tools[0].Name,
+					Input: json.RawMessage(`{"command":"rg first"}`),
+				},
+				{
+					ID:    "tool-call-2",
+					Name:  tools[0].Name,
+					Input: json.RawMessage(`{"command":"rg second"}`),
+				},
+			},
+		}, nil
+	}
 	return &agent.Response{Content: "done"}, nil
 }
 
@@ -241,6 +330,41 @@ func TestHandleInboundPersistsAndSends(t *testing.T) {
 	if sess.Messages[0].Role != "user" || sess.Messages[1].Role != "assistant" {
 		t.Fatalf("roles = %#v %#v", sess.Messages[0], sess.Messages[1])
 	}
+	if sess.Messages[1].CanonicalContent != "ok" {
+		t.Fatalf("assistant canonical = %q, want ok", sess.Messages[1].CanonicalContent)
+	}
+	outboundIDs, err := store.OutboundAfterTurn(session.SessionKey{ChatID: 42, UserID: 0}, 0)
+	if err != nil {
+		t.Fatalf("OutboundAfterTurn() err = %v", err)
+	}
+	if len(outboundIDs) != 1 || outboundIDs[0] != 1 {
+		t.Fatalf("outbound ids = %#v, want [1]", outboundIDs)
+	}
+}
+
+func TestStartChatActionLoopSendsTyping(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{actionCh: make(chan chatAction, 1)}
+	rt := &Runtime{outbound: sender}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stop := rt.startChatActionLoop(ctx, 42, "typing")
+	defer stop()
+
+	select {
+	case got := <-sender.actionCh:
+		if got.ChatID != 42 {
+			t.Fatalf("chat id = %d, want 42", got.ChatID)
+		}
+		if got.Action != "typing" {
+			t.Fatalf("action = %q, want typing", got.Action)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected typing action to be sent")
+	}
 }
 
 func TestHandleInboundReloadsPromptContextEachTurn(t *testing.T) {
@@ -299,6 +423,88 @@ func TestHandleInboundReloadsPromptContextEachTurn(t *testing.T) {
 	}
 }
 
+func TestHandleInboundApprovedUserDoesNotLoadGlobalDynamicMemory(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	if err := os.WriteFile(filepath.Join(cfg.Agent.Workspace, "MEMORY.md"), []byte("GLOBAL-MEMORY-SECRET"), 0o600); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendGovernorPassthrough
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     71,
+		SenderID:   1002,
+		SenderName: "approved",
+		Text:       "hello",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenGovernorSystem) == 0 {
+		t.Fatal("seenGovernorSystem empty, want at least one prompt")
+	}
+	if !strings.Contains(provider.seenGovernorSystem[0], "agent rules") {
+		t.Fatalf("approved user prompt missing shared bootstrap: %q", provider.seenGovernorSystem[0])
+	}
+	if strings.Contains(provider.seenGovernorSystem[0], "GLOBAL-MEMORY-SECRET") {
+		t.Fatalf("approved user prompt leaked global dynamic memory: %q", provider.seenGovernorSystem[0])
+	}
+	if !strings.Contains(provider.seenGovernorSystem[0], "principal_role: approved_user") {
+		t.Fatalf("approved user prompt missing principal role: %q", provider.seenGovernorSystem[0])
+	}
+}
+
+func TestHandleInboundIncludesIdolumProposalInGovernorInput(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.proposalReplyText = "Push for a warmer reply and consider inspecting the repo before answering."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     72,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "please look into the codebase",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenProposalSystem) == 0 {
+		t.Fatal("seenProposalSystem empty, want Idolum proposal prompt call")
+	}
+	if !strings.Contains(provider.seenProposalSystem[0], "mode: proposal") {
+		t.Fatalf("proposal prompt missing proposal mode: %q", provider.seenProposalSystem[0])
+	}
+	if len(provider.seenGovernorSystem) == 0 {
+		t.Fatal("seenGovernorSystem empty, want governor prompt")
+	}
+	if !strings.Contains(provider.seenGovernorSystem[0], "## Idolum Proposal") {
+		t.Fatalf("governor input missing Idolum proposal block: %q", provider.seenGovernorSystem[0])
+	}
+	if !strings.Contains(provider.seenGovernorSystem[0], "Push for a warmer reply") {
+		t.Fatalf("governor input missing concrete Idolum push: %q", provider.seenGovernorSystem[0])
+	}
+}
+
 func TestHeartbeatTargetNoneStoresMaintenanceWithoutOutbound(t *testing.T) {
 	t.Parallel()
 
@@ -343,6 +549,9 @@ func TestHeartbeatTargetNoneStoresMaintenanceWithoutOutbound(t *testing.T) {
 	}
 	if len(maintenance.Messages) == 0 || maintenance.Messages[len(maintenance.Messages)-1].Content != "heartbeat canonical" {
 		t.Fatalf("maintenance messages = %#v, want canonical heartbeat entry", maintenance.Messages)
+	}
+	if len(maintenance.Messages) != 2 || maintenance.Messages[0].Role != "user" || maintenance.Messages[1].Role != "assistant" {
+		t.Fatalf("maintenance message roles = %#v, want synthetic user + assistant", maintenance.Messages)
 	}
 
 	events, err := store.PendingReviewEvents(1001, 10)
@@ -403,6 +612,9 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "heartbeat rendered" {
 		t.Fatalf("admin messages = %#v, want rendered heartbeat entry", adminSession.Messages)
 	}
+	if adminSession.Messages[len(adminSession.Messages)-1].CanonicalContent != "heartbeat canonical" {
+		t.Fatalf("admin canonical content = %q, want heartbeat canonical", adminSession.Messages[len(adminSession.Messages)-1].CanonicalContent)
+	}
 
 	events, err := store.PendingReviewEvents(1001, 10)
 	if err != nil {
@@ -449,6 +661,9 @@ func TestCronJobNoneStoresDedicatedSessionWithoutOutbound(t *testing.T) {
 	if len(cronSession.Messages) == 0 || cronSession.Messages[len(cronSession.Messages)-1].Content != "cron canonical" {
 		t.Fatalf("cron messages = %#v, want canonical cron entry", cronSession.Messages)
 	}
+	if len(cronSession.Messages) != 2 || cronSession.Messages[0].Role != "user" || cronSession.Messages[1].Role != "assistant" {
+		t.Fatalf("cron message roles = %#v, want synthetic user + assistant", cronSession.Messages)
+	}
 }
 
 func TestCronJobAnnounceUsesFaceAndUpdatesAdminSession(t *testing.T) {
@@ -491,13 +706,16 @@ func TestCronJobAnnounceUsesFaceAndUpdatesAdminSession(t *testing.T) {
 	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "cron rendered" {
 		t.Fatalf("admin messages = %#v, want rendered cron entry", adminSession.Messages)
 	}
+	if adminSession.Messages[len(adminSession.Messages)-1].CanonicalContent != "cron canonical" {
+		t.Fatalf("admin canonical content = %q, want cron canonical", adminSession.Messages[len(adminSession.Messages)-1].CanonicalContent)
+	}
 }
 
 func TestHandleInboundVoiceOnlyTranscribesAndRepliesWithVoice(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.replyText = "host text"
+	provider.replyText = "idolum text"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -569,6 +787,63 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 	}
 	if len(sender.sent) != 1 || sender.sent[0].Text != "voice fallback text" {
 		t.Fatalf("text sends = %#v, want text fallback", sender.sent)
+	}
+}
+
+func TestStartupRecoveryLogsMaintenanceAnalysis(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Recovered: rerun the interrupted inspection if still needed."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 1500, UserID: 0}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "study the codebase")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.NoteTurnRunToolStart(run.ID, "exec", `{"command":"rg aphelion"}`); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+	if err := store.UpdateTurnRunProgressMessage(run.ID, 55); err != nil {
+		t.Fatalf("UpdateTurnRunProgressMessage() err = %v", err)
+	}
+
+	if err := rt.runStartupRecoveryOnce(context.Background(), time.Date(2026, time.April, 9, 20, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
+	}
+
+	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(maintenance) err = %v", err)
+	}
+	if maintenance.LastCanonicalReply != provider.replyText {
+		t.Fatalf("maintenance canonical = %q, want %q", maintenance.LastCanonicalReply, provider.replyText)
+	}
+	if len(maintenance.Messages) != 2 || maintenance.Messages[0].Role != "user" || maintenance.Messages[1].Role != "assistant" {
+		t.Fatalf("maintenance messages = %#v, want synthetic user + assistant", maintenance.Messages)
+	}
+
+	pending, err := store.PendingRecoveryTurnRuns(10)
+	if err != nil {
+		t.Fatalf("PendingRecoveryTurnRuns() err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending recovery runs = %d, want 0", len(pending))
+	}
+
+	storedRun, err := store.TurnRun(run.ID)
+	if err != nil {
+		t.Fatalf("TurnRun() err = %v", err)
+	}
+	if storedRun.RecoverySummary != provider.replyText {
+		t.Fatalf("recovery summary = %q, want %q", storedRun.RecoverySummary, provider.replyText)
 	}
 }
 
@@ -667,6 +942,7 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 			},
 		},
 		Sessions: config.SessionsConfig{
+			DBPath:     dbPath,
 			IdleExpiry: "24h",
 		},
 		Agent: config.AgentConfig{
@@ -728,6 +1004,32 @@ func TestNewRejectsNilDependencies(t *testing.T) {
 	}
 	if _, err := New(cfg, store, provider, nil, nil); err == nil {
 		t.Fatal("expected nil outbound error")
+	}
+}
+
+func TestNewAllowsNilProviderForCodexGovernorPassthrough(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	cfg.Governor.Backend = "codex"
+	cfg.Governor.Codex.AuthSource = "codex_cli"
+	cfg.Governor.Codex.CodexHome = t.TempDir()
+	cfg.Face.Backend = "governor_passthrough"
+
+	authPath := filepath.Join(cfg.Governor.Codex.CodexHome, "auth.json")
+	rawAuth := `{"tokens":{"access_token":"codex-access","refresh_token":"refresh-secret"}}`
+	if err := os.WriteFile(authPath, []byte(rawAuth), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	origFactory := newCodexProvider
+	defer func() { newCodexProvider = origFactory }()
+	newCodexProvider = func(_ governorauth.Bundle, _ *config.Config) (agent.Provider, error) {
+		return &fakeProvider{replyText: "codex canonical"}, nil
+	}
+
+	if _, err := New(cfg, store, nil, nil, sender); err != nil {
+		t.Fatalf("New() err = %v, want nil native provider to be allowed for codex passthrough", err)
 	}
 }
 
@@ -878,6 +1180,65 @@ func TestHandleInboundApprovedUserUsesPrincipalAwareToolsWhenSupported(t *testin
 	}
 }
 
+func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &multiToolRequestingProvider{}
+	tools := &legacyRecordingTools{
+		defs: []agent.ToolDef{testExecToolDef()},
+	}
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendGovernorPassthrough
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     503,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "inspect",
+		MessageID:  99,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	if len(sender.sent) != 2 {
+		t.Fatalf("sent len = %d, want 2 (progress + reply)", len(sender.sent))
+	}
+	if !strings.Contains(sender.sent[0].Text, "Working with tools") {
+		t.Fatalf("progress text = %q, want tool progress message", sender.sent[0].Text)
+	}
+	if sender.sent[0].ReplyTo == nil || *sender.sent[0].ReplyTo != 99 {
+		t.Fatalf("progress reply_to = %#v, want 99", sender.sent[0].ReplyTo)
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edit count = %d, want 1", len(sender.edits))
+	}
+	if !strings.Contains(sender.edits[0].Text, "rg second") {
+		t.Fatalf("edit text = %q, want second tool preview", sender.edits[0].Text)
+	}
+	sender.mu.Unlock()
+
+	run, err := store.LatestTurnRun(session.SessionKey{ChatID: 503, UserID: 0})
+	if err != nil {
+		t.Fatalf("LatestTurnRun() err = %v", err)
+	}
+	if run.Status != session.TurnRunStatusCompleted {
+		t.Fatalf("turn run status = %q, want completed", run.Status)
+	}
+	if run.ToolCallsStarted != 2 {
+		t.Fatalf("tool_calls_started = %d, want 2", run.ToolCallsStarted)
+	}
+	if run.ProgressMessageID != 1 {
+		t.Fatalf("progress_message_id = %d, want 1", run.ProgressMessageID)
+	}
+}
+
 func TestHandleInboundAdminFallsBackToLegacyToolsWhenPrincipalAwareNotReady(t *testing.T) {
 	t.Parallel()
 
@@ -921,7 +1282,7 @@ func TestHandleInboundRendersViaFaceByDefault(t *testing.T) {
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "governor canonical"
-	provider.faceReplyText = "host rendered"
+	provider.faceReplyText = "idolum rendered"
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -944,8 +1305,8 @@ func TestHandleInboundRendersViaFaceByDefault(t *testing.T) {
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want 1", len(sender.sent))
 	}
-	if sender.sent[0].Text != "host rendered" {
-		t.Fatalf("outbound text = %q, want host rendered", sender.sent[0].Text)
+	if sender.sent[0].Text != "idolum rendered" {
+		t.Fatalf("outbound text = %q, want idolum rendered", sender.sent[0].Text)
 	}
 
 	sess, err := store.Load(session.SessionKey{ChatID: 901, UserID: 0})
@@ -955,7 +1316,7 @@ func TestHandleInboundRendersViaFaceByDefault(t *testing.T) {
 	if len(sess.Messages) < 2 {
 		t.Fatalf("session messages len = %d, want >= 2", len(sess.Messages))
 	}
-	if sess.Messages[1].Content != "host rendered" {
+	if sess.Messages[1].Content != "idolum rendered" {
 		t.Fatalf("session assistant text = %q, want rendered reply", sess.Messages[1].Content)
 	}
 	if sess.LastCanonicalReply != "governor canonical" {
@@ -1012,7 +1373,7 @@ func TestHandleInboundGovernorPassthroughBackendSkipsFaceRender(t *testing.T) {
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "governor canonical"
-	provider.faceReplyText = "host rendered"
+	provider.faceReplyText = "idolum rendered"
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -1112,6 +1473,17 @@ func TestHandleInboundDeliversPendingReviewEventsForAdmin(t *testing.T) {
 	if len(pending) != 0 {
 		t.Fatalf("pending len = %d, want 0 after delivery", len(pending))
 	}
+
+	adminSession, err := store.Load(session.SessionKey{ChatID: 42, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(admin session) err = %v", err)
+	}
+	if len(adminSession.Messages) != 3 {
+		t.Fatalf("admin session messages len = %d, want 3", len(adminSession.Messages))
+	}
+	if !strings.Contains(adminSession.Messages[2].Content, "[Review Digest]") {
+		t.Fatalf("admin digest content = %q, want persisted review digest", adminSession.Messages[2].Content)
+	}
 }
 
 func TestHandleInboundDoesNotDeliverReviewEventsForApprovedUser(t *testing.T) {
@@ -1169,7 +1541,7 @@ func TestHandleInboundGeneratesReviewEventForApprovedUser(t *testing.T) {
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "governor canonical"
-	provider.faceReplyText = "host rendered"
+	provider.faceReplyText = "idolum rendered"
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {

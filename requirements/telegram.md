@@ -392,7 +392,7 @@ func (e *StreamEditor) flush() {
 
 ### Tool progress (accumulated edit)
 
-While the agent is in the tool-call loop, a separate progress message shows what tools are running:
+While the agent is in the tool-call loop, a separate progress message shows what tools are actually running:
 
 ```
 🔍 web_fetch: "https://example.com"
@@ -401,6 +401,8 @@ While the agent is in the tool-call loop, a separate progress message shows what
 ```
 
 Each new tool call adds a line. The message is edited in-place (one message, growing).
+
+This feedback must be driven by real tool lifecycle events, not by assistant narration. If no tool has actually started, the system should not claim that it is "studying the codebase", "inspecting files", or doing any other background work. Typing alone is not enough to justify those claims.
 
 ```go
 type ToolProgressReporter struct {
@@ -464,6 +466,16 @@ func toolEmoji(name string) string {
 
 **Cleanup**: After the turn completes, optionally delete the progress message (or leave it for context). Configurable.
 
+### Truthfulness rule
+
+Telegram feedback should preserve the distinction between:
+
+- **model-only reasoning**: typing indicator only
+- **real tool-backed activity**: progress message driven by actual tool starts
+- **detached background work**: watcher-style updates tied to a persisted process/task record
+
+The user should never be left to infer that background work is happening merely because the assistant said so.
+
 ### Config
 
 ```toml
@@ -478,6 +490,14 @@ stream_cursor = " \u2589"         # Cursor shown during streaming
 tool_progress = "all"             # "all" | "new" | "off"
 tool_progress_cleanup = false     # Delete progress message after turn completes
 ```
+
+### Restart-aware progress
+
+If a restart or hard interruption happens while a progress message is active:
+
+1. the system should retain a structured machine-authored record of the interrupted run
+2. the governor should later analyze the interruption in the maintenance ledger
+3. future progress/watcher systems may edit or supersede the stale progress message, but the source of truth remains the structured run record rather than the UI artifact
 
 ## MarkdownV2 Formatting
 

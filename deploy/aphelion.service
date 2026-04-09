@@ -9,6 +9,7 @@ WorkingDirectory=@WORKDIR@
 ExecStart=@EXEC_PATH@ --config @CONFIG_PATH@
 Restart=on-failure
 RestartSec=5
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=default.target

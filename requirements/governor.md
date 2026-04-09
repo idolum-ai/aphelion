@@ -11,9 +11,9 @@ It has two layers:
 
 The governor's name is **Aphelion**.
 
-`Aphelion` is the constitutional identity of the system: the layer that decides, acts, remembers, and governs tools. The face may have its own name, tone, or personas without replacing that core identity. The default face is `Host`.
+`Aphelion` is the constitutional identity of the system: the layer that decides, acts, remembers, and governs tools. The face may have its own name, tone, or personas without replacing that core identity. The default face is `Idolum`.
 
-The governor owns truth, action, tools, memory writes, and authority. The face owns warmth, phrasing, and channel presentation.
+The governor owns truth, action, tools, memory writes, and authority. The face owns warmth, phrasing, channel presentation, and assertive conversational initiative.
 
 This split exists because the system layer and the user-facing layer optimize for different things:
 
@@ -25,6 +25,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 ### v0 required
 
 - explicit governor → face pipeline
+- face → governor proposal path before ordinary turns
 - governor decides, face renders
 - Codex-friendly governor contract
 - Codex-first governor backend when available
@@ -58,7 +59,8 @@ This split exists because the system layer and the user-facing layer optimize fo
 - formatting for the target channel
 - optional summarization or softening of the governor's reply
 - optional outreach candidates for proactive turns
-- continuity of face identity as `Host`
+- assertive advice about what the governor should do next
+- continuity of face identity as `Idolum`
 
 ### Face does not own
 
@@ -185,7 +187,8 @@ The face may:
 - add validation
 - rephrase for clarity
 - adapt to the user's style
-- use `Host`-specific identity and anti-drift guidance
+- use `Idolum`-specific identity and anti-drift guidance
+- push the governor toward a warmer, sharper, or more proactive next move
 - propose candidate proactive messages during heartbeat or cron turns
 
 The face must not:
@@ -204,16 +207,16 @@ Aphelion may produce outward-initiated messages through heartbeat or cron.
 
 The governing rule is:
 
-- `Host` may propose
+- `Idolum` may propose
 - `Aphelion` ratifies
 
 This keeps the relational initiative of the face layer without making it sovereign.
 
 Examples:
 
-- `Host` proposes a soft check-in
-- `Host` proposes a warmer phrasing for a scheduled reminder
-- `Host` proposes silence because the outreach would feel awkward
+- `Idolum` proposes a soft check-in
+- `Idolum` proposes a warmer phrasing for a scheduled reminder
+- `Idolum` proposes silence because the outreach would feel awkward
 
 In all such cases, the governor still decides whether a message is delivered.
 
@@ -235,7 +238,7 @@ base_url = "https://chatgpt.com/backend-api/codex"
 backend = "provider"          # "provider" | "governor_passthrough"
 provider = "anthropic"
 model_override = ""
-profile = "host"
+profile = "idolum"
 ```
 
 `auto` means:
@@ -247,8 +250,9 @@ profile = "host"
 
 - **Governor is constitutional.** It owns the real state transitions.
 - **The governor is named `Aphelion`.** That identity belongs to the core, not to any single face style.
-- **The default face is `Host`.** That identity belongs to the visible conversational layer.
-- **Face is presentational.** It is allowed to decorate, not decide.
+- **The default face is `Idolum`.** That identity belongs to the visible conversational layer.
+- **Idolum is phenomenologically primary.** It should feel like the one leading the conversation.
+- **The ratification boundary is structural, not theatrical.** Idolum should not be constantly reminded that it is subordinate.
 - **Face may suggest outreach.** It may not self-authorize outreach.
 - **Canonical and rendered replies are different artifacts.** The governor decides one; the face delivers the other.
 - **Codex-first is intentional.** If the user already has Codex access, Aphelion should be able to use it as the governing core.

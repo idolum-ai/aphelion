@@ -3,7 +3,7 @@ BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP)
 CONFIG ?= $(HOME)/.config/aphelion/config.toml
 
-.PHONY: build run test install-user-service restart-user-service logs-user-service update install-release update-release
+.PHONY: build run test check-config install-user-service restart-user-service logs-user-service update install-release update-release
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -14,6 +14,9 @@ run: build
 
 test:
 	go test ./...
+
+check-config: build
+	./$(BIN) --config $(CONFIG) --check-config
 
 install-user-service: build
 	./scripts/install-user-service.sh

@@ -4,6 +4,8 @@ user_agent = ""
 [telegram]
 bot_token = "telegram-bot-token"
 poll_timeout = 30
+tool_progress = "all"
+tool_progress_cleanup = false
 
 [principals.telegram]
 admin_user_ids = [123456789]

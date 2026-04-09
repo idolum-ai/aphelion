@@ -21,7 +21,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 10. ✅ [`tools.md`](tools.md) — Tool definition, per-run manifest shaping, sandboxing, exec, file ops, web fetch
 11. ✅ [`memory.md`](memory.md) — Workspace files, shared/per-user memory, OpenAI files, vector stores
 12. ✅ [`system-prompt.md`](system-prompt.md) — Governor prompt, face prompt, cache boundary, dynamic vs stable sections
-13. ✅ [`host.md`](host.md) — Face identity, anti-drift, Host-specific prompt files
+13. ✅ [`idolum.md`](idolum.md) — Face identity, anti-drift, Idolum-specific prompt files
 14. ✅ [`subagents.md`](subagents.md) — First-class subordinate sessions, capability depth, completion, isolation
 
 ## Automation

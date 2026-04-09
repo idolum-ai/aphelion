@@ -155,8 +155,8 @@ backend = "provider"          # "provider" | "governor_passthrough"
 provider = "anthropic"
 model_override = ""
 profile = "host"
-bootstrap_files = ["HOST.md"]
-dynamic_files = ["QUESTIONS-TO-HOST.md"]
+bootstrap_files = ["IDOLUM.md"]
+dynamic_files = ["QUESTIONS-TO-IDOLUM.md"]
 persist_canonical = true      # Keep canonical governor reply as sidecar audit data
 
 # ─── Agent ───

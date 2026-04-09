@@ -14,6 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -44,17 +45,25 @@ func (r *Runtime) StartCronLoop(ctx context.Context, logger func(string, ...any)
 	}
 }
 
-func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) error {
+func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) (err error) {
 	key := session.SessionKey{ChatID: cronSessionChatID(job.ID), UserID: 0}
+	unlockCron := r.lockSession(key)
+	defer unlockCron()
+
 	cronSession, err := r.store.Load(key)
 	if err != nil {
 		return fmt.Errorf("load cron session: %w", err)
 	}
 
+	scope, err := r.scopeForPrincipal(principal.Principal{Role: principal.RoleAdmin})
+	if err != nil {
+		return fmt.Errorf("resolve cron scope: %w", err)
+	}
 	systemPrompt := prompt.BuildGovernorPrompt(prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   "admin",
+		WorkspaceRoot:   scope.WorkingRoot,
 	})
 
 	history, err := session.ToAgentHistory(cronSession.Messages)
@@ -62,12 +71,15 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		return fmt.Errorf("assemble cron history: %w", err)
 	}
 
+	requestText := renderCronRequest(job)
+	monitor := r.startTurnMonitor(key, session.TurnRunKindCron, requestText, nil)
+	defer monitor.Finish(ctx, err)
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {
 		input = append(input, agent.Message{Role: "system", Content: systemPrompt})
 	}
 	input = append(input, history...)
-	input = append(input, agent.Message{Role: "user", Content: renderCronRequest(job)})
+	input = append(input, agent.Message{Role: "user", Content: requestText})
 
 	result, outHistory, err := agent.RunTurn(ctx, r.provider, nil, &agent.Budget{
 		Max:     r.cfg.Agent.MaxIterations,
@@ -91,12 +103,12 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	cronSession.SystemPrompt = systemPrompt
 	cronSession.TurnCount++
 	cronSession.LastCanonicalReply = canonicalReply
-	if err := r.store.Save(cronSession, []session.Message{{
-		Role:         "assistant",
-		Content:      canonicalReply,
-		ContentChars: len(canonicalReply),
-		TurnIndex:    cronSession.TurnCount,
-	}}, result.TokenUsage); err != nil {
+	newMessages, err := session.NewMessagesForTurn(requestText, outHistory[len(input):], cronSession.TurnCount)
+	if err != nil {
+		return fmt.Errorf("convert cron messages: %w", err)
+	}
+	newMessages = setLastAssistantCanonical(newMessages, canonicalReply)
+	if err := r.store.Save(cronSession, newMessages, result.TokenUsage); err != nil {
 		return fmt.Errorf("save cron session: %w", err)
 	}
 
@@ -116,7 +128,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 			FaceName:        face.DefaultFaceName,
 			Channel:         "telegram",
 			PrincipalRole:   "admin",
-			WorkspaceRoot:   r.cfg.Agent.Workspace,
+			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			CanonicalReply:  canonicalReply,
 			LatestUserInput: "[cron:" + job.ID + "]",
 		})
@@ -127,28 +139,29 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		}
 	}
 
-	if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
+	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
 		ChatID: targetChatID,
 		Text:   replyText,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("send cron outbound: %w", err)
 	}
 
-	adminSession, err := r.store.Load(session.SessionKey{ChatID: targetChatID, UserID: 0})
+	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0}
+	unlockAdmin := r.lockSession(adminKey)
+	defer unlockAdmin()
+
+	adminSession, err := r.store.Load(adminKey)
 	if err != nil {
 		return fmt.Errorf("load cron target session: %w", err)
 	}
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
-	adminSession.TurnCount++
-	adminSession.LastCanonicalReply = canonicalReply
-	if err := r.store.Save(adminSession, []session.Message{{
-		Role:         "assistant",
-		Content:      replyText,
-		ContentChars: len(replyText),
-		TurnIndex:    adminSession.TurnCount,
-	}}, core.TokenUsage{}); err != nil {
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, canonicalReply), core.TokenUsage{}); err != nil {
 		return fmt.Errorf("save cron admin session: %w", err)
+	}
+	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "cron"); err != nil {
+		return fmt.Errorf("record cron outbound: %w", err)
 	}
 
 	return nil

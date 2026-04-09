@@ -165,7 +165,7 @@ Plan-mode or operator-specific overrides may be added later, but these are the c
 
 ## Decisions
 
-- **Thinking is governor-owned.** Host does not control reasoning depth.
+- **Thinking is governor-owned.** Idolum does not control reasoning depth.
 - **Effort and summary are separate.** One controls depth; the other controls external artifact policy.
 - **Stable effort levels matter.** Aphelion should present one cross-backend reasoning vocabulary.
 - **Per-run defaults matter.** Heartbeat and cron should not silently inherit expensive reasoning settings meant for interactive turns.
@@ -178,4 +178,4 @@ Plan-mode or operator-specific overrides may be added later, but these are the c
 - **TestCodexReasoningEffortMapping**: Codex backend receives the expected effort setting
 - **TestUnsupportedProviderReasoningDowngrade**: unsupported providers degrade honestly rather than pretending the setting applied
 - **TestReasoningSummaryNotStoredAsVisibleTranscript**: summaries remain sidecar artifacts, not ordinary chat history
-- **TestHostPromptOmitsReasoningControls**: face prompt does not own or redefine governor reasoning policy
+- **TestIdolumPromptOmitsReasoningControls**: face prompt does not own or redefine governor reasoning policy

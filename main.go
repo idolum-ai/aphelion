@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -11,9 +12,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/openai"
@@ -27,29 +30,48 @@ import (
 	"github.com/idolum-ai/aphelion/voice"
 )
 
-const turnTimeout = 10 * time.Minute
+const (
+	turnTimeout     = 10 * time.Minute
+	exitCodeFailure = 1
+	exitCodeConfig  = 78
+)
+
+type configStartupError struct {
+	Path string
+	Err  error
+}
+
+func (e *configStartupError) Error() string {
+	return fmt.Sprintf("config %s: %v", e.Path, e.Err)
+}
+
+func (e *configStartupError) Unwrap() error {
+	return e.Err
+}
 
 func main() {
 	if err := run(); err != nil {
 		log.Printf("ERROR aphelion exited with error: %v", err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
 func run() error {
 	configPath := flag.String("config", defaultConfigPath(), "path to config.toml")
+	checkConfig := flag.Bool("check-config", false, "validate config and exit")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		return err
+		return &configStartupError{Path: *configPath, Err: err}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(cfg.Sessions.DBPath), 0o700); err != nil {
-		return fmt.Errorf("create sessions directory: %w", err)
+	if err := prepareFilesystem(cfg); err != nil {
+		return &configStartupError{Path: *configPath, Err: err}
 	}
-	if err := os.MkdirAll(cfg.Agent.Workspace, 0o755); err != nil {
-		return fmt.Errorf("create workspace directory: %w", err)
+	if *checkConfig {
+		log.Printf("INFO config ok path=%s", *configPath)
+		return nil
 	}
 
 	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
@@ -59,15 +81,18 @@ func run() error {
 	defer store.Close()
 
 	httpClient := &http.Client{Timeout: 90 * time.Second}
-	llm, err := provider.NewAnthropic(provider.AnthropicOptions{
-		APIKey:     cfg.Providers.Anthropic.APIKey,
-		Model:      cfg.Providers.Anthropic.Model,
-		MaxTokens:  cfg.Providers.Anthropic.MaxTokens,
-		HTTPClient: httpClient,
-		UserAgent:  cfg.Identity.UserAgent,
-	})
-	if err != nil {
-		return err
+	var llm agent.Provider
+	if strings.TrimSpace(cfg.Providers.Anthropic.APIKey) != "" {
+		llm, err = provider.NewAnthropic(provider.AnthropicOptions{
+			APIKey:     cfg.Providers.Anthropic.APIKey,
+			Model:      cfg.Providers.Anthropic.Model,
+			MaxTokens:  cfg.Providers.Anthropic.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	sandboxRoots, err := sandbox.DefaultRoots(cfg.Agent.Workspace, cfg.Sessions.DBPath)
@@ -127,6 +152,7 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	rt.StartStartupRecovery(ctx, log.Printf)
 	rt.StartIdleExpiryLoop(ctx, log.Printf)
 	rt.StartHeartbeatLoop(ctx, log.Printf)
 	rt.StartCronLoop(ctx, log.Printf)
@@ -153,4 +179,22 @@ func defaultConfigPath() string {
 		return "config.toml"
 	}
 	return filepath.Join(home, ".config", "aphelion", "config.toml")
+}
+
+func prepareFilesystem(cfg *config.Config) error {
+	if err := os.MkdirAll(filepath.Dir(cfg.Sessions.DBPath), 0o700); err != nil {
+		return fmt.Errorf("create sessions directory: %w", err)
+	}
+	if err := os.MkdirAll(cfg.Agent.Workspace, 0o755); err != nil {
+		return fmt.Errorf("create workspace directory: %w", err)
+	}
+	return nil
+}
+
+func exitCode(err error) int {
+	var cfgErr *configStartupError
+	if errors.As(err, &cfgErr) {
+		return exitCodeConfig
+	}
+	return exitCodeFailure
 }
