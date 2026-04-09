@@ -81,9 +81,7 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage) (string, err
 	if in.TimeoutSec > 0 {
 		timeout = time.Duration(in.TimeoutSec) * time.Second
 	}
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
+	timeout = defaultTimeout(timeout)
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -112,6 +110,13 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage) (string, err
 	}
 
 	return out, fmt.Errorf("run command: %w", err)
+}
+
+func defaultTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return 60 * time.Second
+	}
+	return timeout
 }
 
 func (r *Registry) resolveWorkdir(raw string) (string, error) {
