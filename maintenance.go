@@ -3,6 +3,7 @@
 package main
 
 import (
+	"embed"
 	"flag"
 	"fmt"
 	"os"
@@ -17,11 +18,29 @@ import (
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
+//go:embed defaults/agent/*
+var defaultAgentFilesFS embed.FS
+
+var defaultSeedFiles = []string{
+	"SOUL.md",
+	"IDENTITY.md",
+	"USER.md",
+	"AGENTS.md",
+	"TOOLS.md",
+	"BOOTSTRAP.md",
+	"MEMORY.md",
+	"HEARTBEAT.md",
+	"IDOLUM.md",
+	"QUESTIONS-TO-IDOLUM.md",
+}
+
 func runMaintenanceCommand(args []string) (bool, error) {
 	if len(args) == 0 {
 		return false, nil
 	}
 	switch args[0] {
+	case "init":
+		return true, runInitCommand(args[1:])
 	case "paths":
 		return true, runPathsCommand(args[1:])
 	case "gc":
@@ -33,6 +52,30 @@ func runMaintenanceCommand(args []string) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+func runInitCommand(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, _, err := loadConfigForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	created, err := seedAgentPromptFiles(cfg)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "prompt_root: %s\n", cfg.Agent.PromptRoot)
+	fmt.Fprintf(os.Stdout, "created_files: %d\n", len(created))
+	for _, path := range created {
+		fmt.Fprintf(os.Stdout, "  - %s\n", path)
+	}
+	return nil
 }
 
 func runPathsCommand(args []string) error {
@@ -65,6 +108,46 @@ func runPathsCommand(args []string) error {
 	printPathGroup("loaded_idolum_stable_files", idolumStable)
 	printPathGroup("loaded_idolum_dynamic_files", idolumDynamic)
 	return nil
+}
+
+func seedAgentPromptFiles(cfg *config.Config) ([]string, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+
+	promptRoot := strings.TrimSpace(cfg.Agent.PromptRoot)
+	if promptRoot == "" {
+		return nil, fmt.Errorf("agent.prompt_root is required")
+	}
+	if err := os.MkdirAll(promptRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create prompt_root %s: %w", promptRoot, err)
+	}
+	if cfg.Agent.DailyNotes {
+		if err := os.MkdirAll(filepath.Join(promptRoot, filepath.FromSlash(cfg.Agent.DailyNotesDir)), 0o755); err != nil {
+			return nil, fmt.Errorf("create daily_notes_dir: %w", err)
+		}
+	}
+
+	created := make([]string, 0, len(defaultSeedFiles))
+	for _, name := range defaultSeedFiles {
+		target := filepath.Join(promptRoot, name)
+		if _, err := os.Stat(target); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat %s: %w", target, err)
+		}
+
+		raw, err := defaultAgentFilesFS.ReadFile(filepath.ToSlash(filepath.Join("defaults", "agent", name)))
+		if err != nil {
+			return nil, fmt.Errorf("read default %s: %w", name, err)
+		}
+		if err := os.WriteFile(target, raw, 0o600); err != nil {
+			return nil, fmt.Errorf("write default %s: %w", target, err)
+		}
+		created = append(created, target)
+	}
+	sort.Strings(created)
+	return created, nil
 }
 
 func runGCCommand(args []string) error {

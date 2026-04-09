@@ -19,6 +19,7 @@ workdir="${APHELION_WORKDIR:-${repo_root}}"
 mkdir -p "${service_dir}"
 
 "${exec_path}" --config "${config_path}" --check-config
+"${exec_path}" init --config "${config_path}"
 
 sed \
   -e "s|@WORKDIR@|${workdir}|g" \

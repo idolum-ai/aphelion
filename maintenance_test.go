@@ -51,6 +51,47 @@ func TestRunPathsCommandReportsEffectiveRootsAndFiles(t *testing.T) {
 	}
 }
 
+func TestRunInitCommandSeedsMissingPromptFilesWithoutOverwriting(t *testing.T) {
+	root, configPath := writeMaintenanceConfig(t)
+	agentRoot := filepath.Join(root, "agent")
+	customIdentity := filepath.Join(agentRoot, "IDENTITY.md")
+	if err := os.WriteFile(customIdentity, []byte("custom identity"), 0o600); err != nil {
+		t.Fatalf("write custom identity: %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if err := runInitCommand([]string{"--config", configPath}); err != nil {
+			t.Fatalf("runInitCommand() err = %v", err)
+		}
+	})
+
+	for _, name := range []string{
+		"SOUL.md",
+		"AGENTS.md",
+		"TOOLS.md",
+		"BOOTSTRAP.md",
+		"MEMORY.md",
+		"HEARTBEAT.md",
+		"IDOLUM.md",
+		"QUESTIONS-TO-IDOLUM.md",
+	} {
+		if _, err := os.Stat(filepath.Join(agentRoot, name)); err != nil {
+			t.Fatalf("expected %s to be created: %v", name, err)
+		}
+	}
+
+	raw, err := os.ReadFile(customIdentity)
+	if err != nil {
+		t.Fatalf("read custom identity: %v", err)
+	}
+	if got := string(raw); got != "custom identity" {
+		t.Fatalf("IDENTITY.md = %q, want preserved custom content", got)
+	}
+	if !strings.Contains(output, "created_files:") {
+		t.Fatalf("output missing created_files summary:\n%s", output)
+	}
+}
+
 func TestRunResetCommandClearsRuntimeAndMemoryButKeepsConstitution(t *testing.T) {
 	root, configPath := writeMaintenanceConfig(t)
 

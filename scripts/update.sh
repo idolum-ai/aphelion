@@ -17,6 +17,7 @@ git pull --ff-only
 mkdir -p bin
 go build -o bin/aphelion .
 "${repo_root}/bin/aphelion" --config "${config_path}" --check-config
+"${repo_root}/bin/aphelion" init --config "${config_path}"
 systemctl --user restart aphelion
 
 echo "Updated and restarted aphelion using ${config_path}"

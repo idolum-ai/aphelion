@@ -15,6 +15,7 @@ fi
 
 "${repo_root}/scripts/install-release.sh" "${1:-}"
 "${exec_path}" --config "${config_path}" --check-config
+"${exec_path}" init --config "${config_path}"
 systemctl --user restart aphelion
 
 echo "Updated release binary at ${exec_path} and restarted aphelion using ${config_path}"

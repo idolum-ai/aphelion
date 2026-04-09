@@ -9,6 +9,7 @@ The default deployment story should be:
 - prebuilt binaries published via GitHub Releases
 - simple source build path for developers
 - `systemd` service support for normal operation
+- automatic seeding of missing prompt files on install/update
 - straightforward update and rollback flow
 
 This is closer to the practical Codex-style binary distribution model than to a source-only workflow.
@@ -134,6 +135,12 @@ At minimum, Aphelion should support:
 
 The update path should be one command or one short script, not a hand-maintained ritual.
 
+Install and update flows should also run an initialization step that:
+
+- creates the prompt root if missing
+- seeds bundled starter prompt files if they are absent
+- never overwrites operator-edited prompt files
+
 Typical source update flow:
 
 1. update repo
@@ -172,6 +179,10 @@ At minimum, these should stay clearly separated:
 - `~/.aphelion/aphelion.toml`
 - session DB
 - workspace files
+
+Starter prompt files under `agent.prompt_root` should be treated as operator-owned
+after first creation. Deployment may seed them when missing, but must not overwrite
+them during updates.
 
 Updates should not overwrite operator-edited config or workspace files.
 

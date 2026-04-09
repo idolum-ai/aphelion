@@ -111,6 +111,12 @@ Validate config only:
 make check-config
 ```
 
+Seed any missing prompt files under `agent.prompt_root`:
+
+```bash
+make init
+```
+
 Inspect effective paths and loaded prompt files:
 
 ```bash
@@ -122,6 +128,10 @@ Safe maintenance cleanup:
 ```bash
 make gc
 ```
+
+`make install-user-service`, `make update`, and `make update-release` also run
+`aphelion init` automatically. Missing starter files are created under
+`agent.prompt_root`, but existing files are never overwritten.
 
 Targeted cleanup:
 

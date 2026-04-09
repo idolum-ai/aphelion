@@ -20,6 +20,10 @@ Legacy fallback: `~/.config/aphelion/config.toml`
 
 Override via `APHELION_CONFIG` env var or `--config` flag.
 
+Operators should also have an explicit initialization path, e.g. `aphelion init`,
+that seeds missing prompt files under `agent.prompt_root` without overwriting
+existing files.
+
 Implementation is staged. A minimal daemon only needs the small subset required to boot, authenticate, admit DM principals, route DM turns, and manage prompt context. The wider schema remains part of the contract so later hardening does not require redesigning config layout or ownership boundaries.
 
 ```toml
