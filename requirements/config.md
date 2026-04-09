@@ -145,6 +145,11 @@ translation_model = "whisper-1"
 backend = "auto"              # "auto" | "codex" | "native"
 native_provider = "anthropic" # Used when backend resolves to native
 
+[governor.codex]
+auth_source = "auto"          # "auto" | "codex_cli" | "aphelion"
+codex_home = ""               # Empty = CODEX_HOME or ~/.codex
+base_url = "https://chatgpt.com/backend-api/codex"
+
 [face]
 backend = "provider"          # "provider" | "governor_passthrough"
 provider = "anthropic"

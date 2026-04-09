@@ -16,6 +16,8 @@ Security is staged on purpose. Aphelion must be honest about the difference betw
 
 - a trusted admin tool runtime
 - an actually isolated multi-user system
+- borrowed external credentials
+- Aphelion-owned credentials
 
 ## Core Principle
 
@@ -184,6 +186,7 @@ Minimum requirements:
 
 - config file path should be hidden from non-admin execution
 - home-secret paths such as `~/.ssh` and `~/.gnupg` should be hidden from non-admin execution
+- Codex credential files such as `CODEX_HOME/auth.json` or `~/.codex/auth.json` should be treated as secret material
 - secret material must never be injected into prompts
 - tool output should be assumed sensitive and stored durably but carefully
 
@@ -238,6 +241,7 @@ Security-relevant config lives primarily in:
 - `sandbox.*`
 - role-specific sandbox profiles
 - governor backend selection
+- governor auth source selection
 - review delivery policy
 
 Config may describe the intended security shape, but runtime must not silently pretend a profile is enforced when it is not.
@@ -250,6 +254,7 @@ Config may describe the intended security shape, but runtime must not silently p
 - **Approved-user tools stay off until the isolation floor is real.**
 - **Editable identity is allowed. Editable permissions are not.**
 - **The important boundary is editable soul vs non-editable floor.**
+- **Borrowed governor credentials are still secrets.**
 
 ## Test Plan
 

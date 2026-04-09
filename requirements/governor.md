@@ -152,6 +152,8 @@ That means:
 
 Codex is therefore not just another inference provider. It is a possible governor runtime.
 
+Credential sourcing and backend selection rules are defined in `governor-auth.md`.
+
 ## Native Governor Fallback
 
 The existing provider/tool loop remains valid as the native governor path:
@@ -189,6 +191,11 @@ See `config.md`, but the intended ownership is:
 [governor]
 backend = "auto"              # "auto" | "codex" | "native"
 native_provider = "anthropic" # used when backend resolves to native
+
+[governor.codex]
+auth_source = "auto"          # "auto" | "codex_cli" | "aphelion"
+codex_home = ""
+base_url = "https://chatgpt.com/backend-api/codex"
 
 [face]
 backend = "provider"          # "provider" | "governor_passthrough"
