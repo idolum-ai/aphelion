@@ -5,14 +5,15 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 ## Foundation
 1. ✅ [`core.md`](core.md) — Event loop, message lifecycle, error handling, shutdown
 2. ✅ [`config.md`](config.md) — Config system, string anonymization, environment variables
-3. ✅ [`sessions.md`](sessions.md) — Conversation state, context window, compaction, cache-aware truncation
+3. ✅ [`principals.md`](principals.md) — Config-assigned Telegram DM principals, admission, authority
+4. ✅ [`sessions.md`](sessions.md) — Conversation state, context window, compaction, cache-aware truncation
 
 ## LLM
-4. ✅ [`providers.md`](providers.md) — Inference adapters only. Streaming, retries, and failover staging.
-5. ⬜ [`thinking.md`](thinking.md) — Extended thinking / reasoning mode handling across providers
+5. ✅ [`providers.md`](providers.md) — Inference adapters only. Streaming, retries, and failover staging.
+6. ⬜ [`thinking.md`](thinking.md) — Extended thinking / reasoning mode handling across providers
 
 ## Channels
-6. ✅ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
+7. ✅ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
 
 ## Agent
 8. ⬜ [`tools.md`](tools.md) — Tool definition, dispatch, sandboxing, exec, file ops, web fetch

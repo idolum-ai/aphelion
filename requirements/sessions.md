@@ -10,14 +10,14 @@ This spec separates three concerns that were previously blurred together:
 - **session ledger**: the durable append-only transcript for a conversation
 - **review flow**: the bounded summaries that move information from isolated non-admin sessions into the admin DM
 
-This separation matters because approval and authority outlive any one session, while the session itself should remain a clean conversation ledger.
+This separation matters because authority is not the same thing as conversation history. The session itself should remain a clean conversation ledger.
 
 ## Scope
 
 ### v0 required
 
 - DM-only sessions
-- Explicit admission before a DM can create or resume a session
+- Explicit principal resolution before a DM can create or resume a session
 - At least one admin principal
 - SQLite-backed append-only message history
 - Per-turn load, run, and save
@@ -47,17 +47,11 @@ This separation matters because approval and authority outlive any one session, 
 
 ### Principal model
 
-For DM-only operation, the principal is the Telegram user reached through a private chat. In practice, v0 may key this by DM `chat_id`, because a Telegram private chat is already a stable peer identity for the bot.
+For v0, the principal is the Telegram user reached through a private chat and resolved by Telegram `from.id`.
 
-Admission and authority are principal policy, not session state.
+Principal policy is config-owned and defined in `principals.md`.
 
-### Admission states
-
-- `pending`
-- `approved`
-- `banned`
-
-No session should be created or resumed until the principal is `approved`.
+Unknown users are denied at ingress. There is no pending workflow in v0.
 
 ### Authority roles
 
@@ -66,17 +60,12 @@ No session should be created or resumed until the principal is `approved`.
 
 ### v0 bootstrap
 
-The simplest correct v0 may bootstrap principal policy from config:
+The simplest correct v0 bootstraps principal policy from config:
 
 - one configured admin principal
-- optional pre-approved principals
-- manual approval required by default
+- optional configured `approved_user` principals
 
 This is sufficient for the first runnable system.
-
-### v0.5 durable principal policy
-
-Once multiple approved users exist, principal policy should become durable rather than config-only. Session expiry must not erase approval state.
 
 ## Session Identity
 
@@ -168,12 +157,9 @@ For `admin` sessions, the process may use a more permissive profile, but it shou
 
 ```go
 type Principal struct {
-    ChatID       int64
-    Admission    string    // "pending" | "approved" | "banned"
-    Role         string    // "admin" | "approved_user"
-    DisplayName  string
-    ApprovedAt   time.Time
-    UpdatedAt    time.Time
+    TelegramUserID int64
+    Role           string // "admin" | "approved_user"
+    DisplayName    string
 }
 ```
 
@@ -268,17 +254,7 @@ CREATE TABLE schema_version (
 );
 INSERT INTO schema_version (version) VALUES (1);
 
--- v0 may bootstrap principal policy from config.
--- v0.5 should persist it here.
-CREATE TABLE principals (
-    chat_id       INTEGER PRIMARY KEY,
-    admission     TEXT NOT NULL CHECK(admission IN ('pending', 'approved', 'banned')),
-    role          TEXT NOT NULL CHECK(role IN ('admin', 'approved_user')),
-    display_name  TEXT,
-    approved_at   TEXT,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
+-- v0 principal policy is config-owned, not persisted in SQLite.
 
 CREATE TABLE sessions (
     chat_id       INTEGER NOT NULL,
@@ -372,7 +348,7 @@ CREATE TABLE compaction_log (
 
 ### Why this schema
 
-- **Principal policy is separate from sessions**: admission and role outlive session expiry and should not be stored only on a conversation row.
+- **Principal policy is separate from sessions**: principal resolution happens before session load and is defined outside the session ledger.
 - **Composite session key** `(chat_id, user_id)`: v0 only uses `user_id=0`, but the shape is already correct for later group support.
 - **Messages in a separate table**: supports efficient load, append, and filtering without rewriting a giant blob.
 - **resolved_workspace_root**: records the actual execution root used for that session.
@@ -387,9 +363,8 @@ CREATE TABLE compaction_log (
 Before routing a DM:
 
 1. resolve the principal from config/bootstrap or the `principals` table
-2. if `pending`, do not create a session yet
-3. if `banned`, ignore or send a fixed denial response
-4. if `approved`, continue into session load
+2. if no principal is configured for that Telegram user, deny and do not create a session
+3. if a principal is configured, continue into session load
 
 ### Load
 
@@ -593,10 +568,9 @@ Single-connection SQLite with WAL mode is sufficient for v0. A dedicated writer 
 db_path = "~/.config/aphelion/sessions.db"
 idle_expiry = "24h"
 
-[users]
-bootstrap_admin_chat_id = 123456789
-bootstrap_approved_chat_ids = [123456789]
-auto_approve = false
+[principals.telegram]
+admin_user_ids = [123456789]
+approved_user_ids = [234567890]
 ```
 
 ### v0.5
@@ -634,8 +608,9 @@ Provider-specific pruning knobs remain provider config, not session-ledger confi
 
 ### v0 admission and ledger
 
-- **TestAdmissionRequired**: unapproved DM cannot create or resume a session
-- **TestBootstrapAdminApproved**: configured admin principal is treated as approved on startup
+- **TestAdmissionRequired**: unknown DM cannot create or resume a session
+- **TestBootstrapAdminConfigured**: configured admin principal is available on startup
+- **TestConfiguredApprovedUserAllowed**: configured approved user can create or resume a DM session
 - **TestCreateSession**: load nonexistent approved DM session → new session created with defaults
 - **TestSaveAndLoad**: save messages → load → messages match
 - **TestAppendOnly**: save 3 messages, then save 2 more → load returns all 5 in order

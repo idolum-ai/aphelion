@@ -149,11 +149,10 @@ Telegram is the ingress path for all v0 conversations, so admission starts here.
 
 For private chats:
 
-- if the sender is `approved`, route the message into the DM session
-- if the sender is `pending`, do not create a session yet
-- if the sender is `banned`, ignore or send a fixed denial response
+- if the sender resolves to a configured principal, route the message into the DM session
+- if the sender does not resolve to a configured principal, do not create a session and optionally send a fixed denial response
 
-In v0, admission may be bootstrapped from config rather than a durable principal registry. The Telegram layer should still treat admission as explicit policy, not as “all private chats are valid.”
+In v0, admission is config-owned. The Telegram layer should treat it as explicit principal policy, not as “all private chats are valid.”
 
 ```go
 type DMDecision struct {
@@ -167,22 +166,10 @@ func shouldHandleDM(msg *Message, principal *Principal) DMDecision {
         return DMDecision{
             Route:      false,
             SendNotice: true,
-            NoticeText: "Your request is pending approval.",
+            NoticeText: "This bot is not enabled for your account.",
         }
     }
-
-    switch principal.Admission {
-    case "approved":
-        return DMDecision{Route: true}
-    case "banned":
-        return DMDecision{Route: false}
-    default:
-        return DMDecision{
-            Route:      false,
-            SendNotice: true,
-            NoticeText: "Your request is pending approval.",
-        }
-    }
+    return DMDecision{Route: true}
 }
 ```
 
@@ -1247,7 +1234,7 @@ max_message_length = 4096
 parse_mode = "MarkdownV2"
 ```
 
-`allowed_chats` is only a coarse pre-filter. It is not a replacement for principal approval.
+`allowed_chats` is only a coarse pre-filter. It is not a replacement for principal resolution from config.
 
 ## Module Structure
 
@@ -1278,9 +1265,9 @@ telegram/
 
 ### Group behavior
 
-- **TestShouldRespondDMApproved**: Approved private chat → routed.
-- **TestShouldRespondDMPending**: Pending private chat → no session created, pending notice sent once or at bounded intervals.
-- **TestShouldRespondDMBanned**: Banned private chat → not routed.
+- **TestShouldRespondDMAdmin**: Configured admin private chat → routed.
+- **TestShouldRespondDMApprovedUser**: Configured approved-user private chat → routed.
+- **TestShouldRespondDMUnknownDenied**: Unknown private chat → no session created, denial notice optionally sent.
 - **TestShouldRespondMention**: Group message with @botname → true.
 - **TestShouldRespondReply**: Group message replying to bot → true.
 - **TestShouldRespondIgnore**: Group message, no mention, no reply → false.

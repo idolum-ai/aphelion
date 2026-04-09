@@ -177,11 +177,10 @@ db_path = "~/.config/aphelion/sessions.db"
 # runtime may reach it slightly after basic turn handling is stable.
 idle_expiry = "24h"           # Expire sessions after this much inactivity
 
-# v0 admission bootstrap:
-[users]
-bootstrap_admin_chat_id = 123456789
-bootstrap_approved_chat_ids = [123456789]
-auto_approve = false
+# v0 principal bootstrap:
+[principals.telegram]
+admin_user_ids = [123456789]
+approved_user_ids = [234567890]
 
 # Deferred after v0:
 # Context management thresholds — push close to the provider's actual limit.
@@ -484,8 +483,8 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 
 ## Staging
 
-- **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, DM-only session storage, DM admission bootstrap, workspace prompt files, and the agent execution limits that bound a turn.
-- **Required for DM approval and authority**: an admission model for DM principals, an admin principal, and clear config ownership for later authority roles and isolated roots.
+- **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, DM-only session storage, config-assigned Telegram DM principals, workspace prompt files, and the agent execution limits that bound a turn.
+- **Required for DM admission and authority**: a config-owned principal model for Telegram DMs, at least one admin principal, and clear config ownership for later authority roles and isolated roots.
 - **Required for a hardened local system tool**: sandbox controls, HTTP transport tuning, failover policy, and credential sealing.
 - **Reserved architectural surface**: group-session controls, approved multi-user DM reviews, additional providers, embeddings, voice, cron, and deeper Linux controls. These should have stable config ownership even before they are fully wired.
 
@@ -494,7 +493,7 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 - **TOML.** Human-friendly, comment-friendly, Go ecosystem default.
 - **Single file.** No `config.d/`, no merge logic. One file, one truth.
 - **Broad schema by design.** Config breadth is intentional architectural headroom, not accidental scope creep. The system should remain adaptable instead of freezing around the first successful surface.
-- **Admission and authority are first-class config concerns.** Even in DM-only mode, once more than one approved user exists, the system needs explicit ownership of admin bootstrap, review cadence, and isolated roots.
+- **Admission and authority are first-class config concerns.** In v0, config is the source of truth for which Telegram users may use the bot and whether they are `admin` or `approved_user`.
 - **memfd with F_SEAL for credentials.** Immutable in-memory secrets. Defense in depth.
 - **No hot reload.** Simplicity. Single-binary restart is fast.
 - **Bootstrap vs dynamic files.** Bootstrap files (SOUL.md, IDENTITY.md, etc.) are stable and go in the cached prefix. Dynamic files (MEMORY.md, HEARTBEAT.md, daily notes) change often and go after the cache boundary. This maximizes cache hit rate.
