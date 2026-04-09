@@ -150,7 +150,7 @@ func TestHandleInboundReloadsPromptContextEachTurn(t *testing.T) {
 	if !strings.Contains(provider.seenSystem[1], "v2") {
 		t.Fatalf("second system prompt missing v2: %q", provider.seenSystem[1])
 	}
-	if !strings.Contains(provider.seenSystem[0], `role is "admin"`) {
+	if !strings.Contains(provider.seenSystem[0], "principal_role: admin") {
 		t.Fatalf("first system prompt missing principal role: %q", provider.seenSystem[0])
 	}
 }

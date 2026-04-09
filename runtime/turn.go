@@ -10,7 +10,9 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
@@ -30,7 +32,14 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	if err != nil {
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
-	systemPrompt := promptContext.Render(BaseSystemInstruction(r.cfg.Agent.Workspace, string(principal.Role)))
+	systemPrompt := prompt.BuildGovernorPrompt(prompt.GovernorRequest{
+		GovernorName:    prompt.DefaultGovernorName,
+		GovernorBackend: prompt.DefaultGovernorBackend,
+		PrincipalRole:   string(principal.Role),
+		WorkspaceRoot:   r.cfg.Agent.Workspace,
+		ToolManifest:    toolManifest(r.tools),
+		Workspace:       promptContext,
+	})
 
 	sess.ChatType = "dm"
 	sess.UserName = msg.SenderName
@@ -92,13 +101,15 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 
 	return result, nil
 }
-
-func BaseSystemInstruction(workspaceRoot string, principalRole string) string {
-	if strings.TrimSpace(principalRole) == "" {
-		principalRole = "unknown"
+func toolManifest(registry agent.ToolRegistry) string {
+	if registry == nil {
+		return ""
 	}
-	return fmt.Sprintf(
-		"You are a Linux personal assistant operating inside the workspace %q. The active principal role is %q. Use the exec tool whenever shell interaction is useful. Inspect before changing, prefer concise answers, and only claim work you actually completed.",
-		workspaceRoot, principalRole,
-	)
+	type manifestProvider interface {
+		Manifest() string
+	}
+	if provider, ok := registry.(manifestProvider); ok {
+		return provider.Manifest()
+	}
+	return toolpkg.RenderManifest(registry.Definitions())
 }
