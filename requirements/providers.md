@@ -8,12 +8,19 @@ Aphelion talks to inference backends via direct HTTP. No SDKs. We own every byte
 
 This spec intentionally does **not** cover:
 
+- the governor contract
+- Codex-backed governor execution
 - file storage
 - vector stores / retrieval storage
 - audio transcription / translation
 - speech generation
 
 Those are platform services, not inference adapters. OpenAI may satisfy both the inference interface here and the platform-service interfaces defined in `memory.md` and `media.md`.
+
+The governor contract is defined separately in `governor.md`. Native inference providers are used by:
+
+- the native governor backend
+- optional provider-backed face rendering
 
 ## Scope
 
@@ -170,7 +177,7 @@ Transient retry handling should exist even in v0:
 
 ### Failover
 
-Failover is **not** a provider concern. It is a runtime/orchestration concern layered above providers.
+Failover is **not** a provider concern. It is a runtime/orchestration concern layered above providers and governor backend selection.
 
 The provider adapter should:
 

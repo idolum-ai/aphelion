@@ -143,6 +143,13 @@ func extractMedia(msg *Message) []core.Media {
 
 Media files need a two-step download: `getFile` to get `file_path`, then `https://api.telegram.org/file/bot<token>/<file_path>` to download. We do this lazily — only when the agent actually needs the file content.
 
+For outbound DM turns, Telegram is the visible surface of the face layer:
+
+1. user message enters raw
+2. governor decides
+3. face renders the visible reply
+4. Telegram sends the rendered reply
+
 ## DM Admission
 
 Telegram is the ingress path for all v0 conversations, so admission starts here.

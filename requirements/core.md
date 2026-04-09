@@ -4,7 +4,7 @@
 
 Aphelion's core is a Go daemon that routes messages between Telegram and an LLM agent. Single binary, single process, Linux only. The runtime leans on Go's goroutine scheduler and Linux kernel primitives instead of frameworks.
 
-This spec is **staged**. The initial "core runnable" milestone is the minimal end-to-end daemon: transport in, session load/save, agent turn loop, transport out. Linux-native hardening features (pidfd, memfd, sandbox assembly, sub-agent sockets) remain part of the target architecture, but they are not required for the first usable runtime.
+This spec is **staged**. The initial "core runnable" milestone is the minimal end-to-end daemon: transport in, session load/save, governor decision, face rendering, transport out. Linux-native hardening features (pidfd, memfd, sandbox assembly, sub-agent sockets) remain part of the target architecture, but they are not required for the first usable runtime.
 
 ## Design Principles
 
@@ -18,22 +18,24 @@ This spec is **staged**. The initial "core runnable" milestone is the minimal en
 
 ```
 ┌───────────┐     ┌──────────┐     ┌──────────────┐     ┌──────────────┐
-│ Telegram  │────▶│  Router  │────▶│   Runtime    │────▶│    Agent     │
-│           │◀────│          │◀────│ (orchestr.)  │◀────│  (LLM+Tools) │
-└───────────┘     └──────────┘     └──────┬───────┘     └──────────────┘
-                                          │
-                                     ┌────┴────┐
-                                     │ Session │
-                                     │  Store  │
-                                     └─────────┘
+│ Telegram  │────▶│  Router  │────▶│   Runtime    │────▶│  Governor    │
+│           │◀────│          │◀────│ (orchestr.)  │◀────│ (decisions)  │
+└───────────┘     └──────────┘     └──────┬───────┘     └──────┬───────┘
+                                          │                    │
+                                     ┌────┴────┐         ┌─────┴─────┐
+                                     │ Session │         │   Face    │
+                                     │  Store  │         │ (render)  │
+                                     └─────────┘         └───────────┘
 ```
 
 ### Components
 
 - **Telegram**: Long-polls the Bot API. Normalizes updates into `InboundMessage`. Sends `OutboundMessage` back. Knows Telegram formatting. Doesn't know about LLMs.
 - **Router**: Maps inbound messages to sessions by chat ID. Dispatches agent turns as goroutines. Enforces one-turn-at-a-time per session via per-session mutexes. Queues overflow.
-- **Runtime**: Owns the lifecycle for one inbound event: load session, assemble prompt context, run the agent turn, persist new messages, and send outbound results. This keeps `main.go` thin without pushing transport/store logic into `core.Router`.
-- **Agent**: Runs a single conversational turn. Stateless — takes session state in, returns a response. The turn loop (call LLM → execute tools → repeat) is a plain `for` loop in a goroutine.
+- **Runtime**: Owns the lifecycle for one inbound event: load session, assemble prompt context, run the governor, run the face, persist new messages, and send outbound results. This keeps `main.go` thin without pushing transport/store logic into `core.Router`.
+- **Governor**: Owns the canonical decision for a turn. This layer is named `Aphelion`. It may be backed by Codex or by the native provider/tool loop.
+- **Face**: Renders the governor's canonical result into the user-visible channel reply.
+- **Agent**: The native governor path. Runs a single conversational turn via the provider/tool loop.
 - **Session Store**: SQLite via CGo. Persists conversation history, system prompt snapshots, metadata. Start with a single-connection SQLite access model (`SetMaxOpenConns(1)`); add a dedicated writer goroutine only if contention or correctness requires it.
 
 ## Message Types
@@ -78,16 +80,16 @@ type Media struct {
 3. Router resolves session (by ChatID)
 4. Router acquires per-session mutex
 5. Runtime loads session state from SQLite
-6. Runtime assembles prompt context and input messages
-7. Runtime calls `agent.RunTurn(ctx, provider, tools, messages)`
-8. Agent turn loop:
-   a. Assemble API messages (system prompt + history + new message)
-   b. HTTP call to LLM provider (streaming via httpx-style chunked read)
-   c. If response has tool calls → execute tools → append results → goto 7b
-   d. If response is text → done
-9. Agent returns TurnResult (text, media, tool log, token usage)
+6. Runtime assembles governor context and input messages
+7. Runtime calls the selected governor backend
+8. Governor turn:
+   a. If backend is native: assemble API messages (governor prompt + history + new message)
+   b. HTTP call to inference provider
+   c. If response has tool calls → execute tools → append results → goto 8b
+   d. If response is text → canonical decision complete
+9. Runtime calls face backend or passthrough rendering
 10. Runtime persists updated session to SQLite
-11. Runtime sends TurnResult → OutboundMessage via Telegram
+11. Runtime sends rendered reply → OutboundMessage via Telegram
 12. Router releases per-session mutex
 ```
 
@@ -102,8 +104,8 @@ type Media struct {
 
 - **`main.go` is boot only.** Parse flags, load config, construct dependencies, install signal handling, start transport/runtime.
 - **`core.Router` is transport/provider agnostic.** It should not know about SQLite schema, Telegram formatting, or provider request shapes.
-- **Runtime owns orchestration.** Session load/save, prompt assembly, and outbound reply translation belong in `runtime/`, not in `main.go` or `core/`.
-- **Adapters live at the edges.** Transport normalization, provider wire formats, and persistence-to-agent transcript conversion live in dedicated packages.
+- **Runtime owns orchestration.** Session load/save, governor selection, prompt assembly, face rendering, and outbound reply translation belong in `runtime/`, not in `main.go` or `core/`.
+- **Adapters live at the edges.** Transport normalization, provider wire formats, Codex/native governor adapters, face adapters, and persistence-to-agent transcript conversion live in dedicated packages.
 
 ## Linux-Native Primitives
 
@@ -243,9 +245,16 @@ aphelion/
 │   └── types.go         # InboundMessage, OutboundMessage, Media, TurnResult
 ├── runtime/
 │   ├── runtime.go       # inbound message lifecycle orchestration
-│   └── turn.go          # load session, assemble prompt, run turn, persist, send
+│   └── turn.go          # load session, assemble prompt, run governor/face, persist, send
+├── governor/
+│   ├── governor.go      # governor interface
+│   ├── codex.go         # Codex-backed governor adapter
+│   └── native.go        # native provider/tool-loop governor
+├── face/
+│   ├── face.go          # face interface
+│   └── provider.go      # provider-backed face renderer
 ├── agent/
-│   ├── turn.go          # RunTurn(): the agent turn loop
+│   ├── turn.go          # RunTurn(): the native governor turn loop
 │   └── budget.go        # iteration budget
 ├── telegram/
 │   ├── bot.go           # Bot API client, long-polling, send
@@ -286,7 +295,7 @@ aphelion/
 - **No multi-channel.** Telegram only.
 - **No cross-platform.** Linux only. `//go:build linux` on the whole project.
 - **No web dashboard.** Telegram is the UI. Logs go to stderr/journald.
-- **No provider SDKs.** Direct HTTP. We own every byte on the wire.
+- **No provider SDKs in the native path.** Direct HTTP. We own every byte on the wire. Codex-backed governor support is a separate governor concern, not a reason to distort the native provider interface.
 - **No ORM.** Raw SQL via `database/sql` + `mattn/go-sqlite3`.
 
 ## Dependencies (minimal)

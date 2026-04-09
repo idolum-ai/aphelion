@@ -24,6 +24,7 @@ This spec is **staged**.
 3. **Least privilege.** Non-admin sessions only get tools and writable roots needed for their isolated scope.
 4. **Audit first.** Every tool call is durable session data.
 5. **One registry.** The agent sees a single normalized tool surface even if implementation backends differ.
+6. **Governor-only execution.** The face never receives tools or authority to invoke them.
 
 ## Tool Layers
 
@@ -76,6 +77,8 @@ Per turn, tool guidance is assembled in this order:
 3. optional workspace `TOOLS.md`
 
 The model should never be shown stale tool definitions copied by hand into prompt text when the real registry differs.
+
+Tool guidance belongs to the **governor prompt**, not the face prompt.
 
 ## Core Interfaces
 

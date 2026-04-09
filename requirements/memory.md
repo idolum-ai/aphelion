@@ -11,6 +11,8 @@ This spec covers memory-bearing storage surfaces:
 
 This is not the inference-provider spec. OpenAI appears here because its file and retrieval APIs are storage primitives for Aphelion, not merely model backends.
 
+Memory writes are governor-owned. The face may consume memory-derived context for rendering, but it must not commit durable memory on its own.
+
 ## Scope
 
 ### v0 required

@@ -12,6 +12,8 @@ This spec separates three concerns that were previously blurred together:
 
 This separation matters because authority is not the same thing as conversation history. The session itself should remain a clean conversation ledger.
 
+In the governor/face architecture, the session ledger primarily stores the user-visible conversation. Governor-internal decisions may later be recorded as audit metadata, but they should not silently replace the visible transcript.
+
 ## Scope
 
 ### v0 required
@@ -457,6 +459,8 @@ v0 does **not** require:
 - provider cache breakpoints in the session layer
 
 The only v0 requirement is correctness: workspace files must be reflected on the next turn, and active persisted history must be replayed in order.
+
+Governor prompt and face prompt are separate logical artifacts, even if v0 initially keeps the face thin.
 
 ### v0.5 isolated prompt assembly
 

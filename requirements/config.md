@@ -140,6 +140,16 @@ enabled = false
 model = "whisper-1"
 translation_model = "whisper-1"
 
+# ─── Governor / Face ───
+[governor]
+backend = "auto"              # "auto" | "codex" | "native"
+native_provider = "anthropic" # Used when backend resolves to native
+
+[face]
+backend = "provider"          # "provider" | "governor_passthrough"
+provider = "anthropic"
+model_override = ""
+
 # ─── Agent ───
 [agent]
 workspace = "~/.config/aphelion/workspace"
@@ -484,6 +494,7 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 ## Staging
 
 - **Required for a runnable daemon**: identity strings, active channel credentials, one working provider, DM-only session storage, config-assigned Telegram DM principals, workspace prompt files, and the agent execution limits that bound a turn.
+- **Required for the governor/face architecture**: a governor backend selection policy, Codex-friendly governor ownership boundaries, and an explicit face rendering slot even if the first implementation is thin.
 - **Required for DM admission and authority**: a config-owned principal model for Telegram DMs, at least one admin principal, and clear config ownership for later authority roles and isolated roots.
 - **Required for a hardened local system tool**: sandbox controls, HTTP transport tuning, failover policy, and credential sealing.
 - **Reserved architectural surface**: group-session controls, approved multi-user DM reviews, additional providers, embeddings, voice, cron, and deeper Linux controls. These should have stable config ownership even before they are fully wired.
@@ -494,6 +505,7 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 - **Single file.** No `config.d/`, no merge logic. One file, one truth.
 - **Broad schema by design.** Config breadth is intentional architectural headroom, not accidental scope creep. The system should remain adaptable instead of freezing around the first successful surface.
 - **Admission and authority are first-class config concerns.** In v0, config is the source of truth for which Telegram users may use the bot and whether they are `admin` or `approved_user`.
+- **Governor and face are separate config concerns.** Decision-making and presentation should be independently configurable even if one implementation path is initially minimal.
 - **memfd with F_SEAL for credentials.** Immutable in-memory secrets. Defense in depth.
 - **No hot reload.** Simplicity. Single-binary restart is fast.
 - **Bootstrap vs dynamic files.** Bootstrap files (SOUL.md, IDENTITY.md, etc.) are stable and go in the cached prefix. Dynamic files (MEMORY.md, HEARTBEAT.md, daily notes) change often and go after the cache boundary. This maximizes cache hit rate.

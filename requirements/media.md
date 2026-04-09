@@ -11,6 +11,7 @@ OpenAI belongs here for:
 - media-file preprocessing inputs
 
 This is separate from inference-provider concerns.
+Media services are also separate from the face layer. The governor may invoke transcription or extraction services; the face may only present the resulting content.
 
 ## Scope
 
