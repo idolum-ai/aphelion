@@ -1,4 +1,4 @@
-# System Prompt — Governor Base, Face Style, and Dynamic Updates
+# System Prompt — Governor Base, Host Face, and Dynamic Updates
 
 ## Overview
 
@@ -11,7 +11,7 @@ Prompt assembly has two distinct targets:
 
 The governor prompt carries authority, execution reality, and tool policy. The face prompt carries interaction style and rendering guidance.
 
-The governor prompt defines **Aphelion**. The face prompt may define a distinct user-facing persona, but it must not replace or contradict the governor's identity.
+The governor prompt defines **Aphelion**. The default face prompt defines **Host**. Host may vary in tone or style over time, but it must not replace or contradict the governor's identity.
 
 ## Governor Prompt
 
@@ -100,9 +100,36 @@ It should receive:
 - canonical governor reply
 - channel information
 - interaction style
-- face-specific safety/rendering rules
+- face-specific identity and anti-drift rules
 
 The face prompt should not receive tool definitions or permission rules as if they were its responsibility.
+
+### Face layers
+
+The default face prompt should be assembled in layers.
+
+1. machine-generated face header
+2. stable face files
+3. dynamic face files
+4. canonical governor reply
+5. latest user message
+6. channel/rendering context
+
+The machine-generated face header should state that:
+
+- the face is `Host`
+- `Host` is presentational, not sovereign
+- `Aphelion` remains the decision core
+
+### Stable face files
+
+- `HOST.md`
+
+### Dynamic face files
+
+- `QUESTIONS-TO-HOST.md`
+
+These files are face-only and must not be loaded into the governor prompt.
 
 ## Transcript Boundary
 
@@ -120,6 +147,7 @@ See `config.md`, but prompt-related ownership should include:
 - dynamic file list
 - tool-manifest inclusion
 - face rendering profile
+- face file lists
 - cache-boundary rules
 
 ## Decisions
@@ -128,7 +156,9 @@ See `config.md`, but prompt-related ownership should include:
 - **Stable and dynamic content are separate by design.** This is for both clarity and cache behavior.
 - **Governor and face prompts are different artifacts.** They should not be collapsed into one text blob once the architecture is split.
 - **`Aphelion` belongs to the governor layer.** Face personas may vary without replacing the governor's identity.
+- **`Host` is the default face.** It owns presentation, not authority.
 - **`USER.md` is operator-facing in v0.** Per-user memory belongs elsewhere.
+- **Face files are separate from governor files.** `HOST.md` and `QUESTIONS-TO-HOST.md` must not leak into governor authority.
 
 ## Test Plan
 
@@ -137,4 +167,5 @@ See `config.md`, but prompt-related ownership should include:
 - **TestDynamicFilesAfterCacheBoundary**: `MEMORY.md` and `HEARTBEAT.md` appear after stable sections
 - **TestUserMDTreatedAsOperatorProfile**: global `USER.md` is not treated as shared mutable user memory
 - **TestFacePromptOmitsToolDefinitions**: face prompt does not include tool schemas or authority rules
+- **TestFacePromptLoadsHostFilesOnly**: `HOST.md` and `QUESTIONS-TO-HOST.md` are loaded into the face prompt and excluded from the governor prompt
 - **TestReviewDigestStoredAsHistoryNotHiddenPrompt**: delivered review digest enters conversation history instead of hidden prompt state

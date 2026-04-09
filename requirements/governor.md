@@ -11,7 +11,7 @@ It has two layers:
 
 The governor's name is **Aphelion**.
 
-`Aphelion` is the constitutional identity of the system: the layer that decides, acts, remembers, and governs tools. The face may have its own name, tone, or personas without replacing that core identity.
+`Aphelion` is the constitutional identity of the system: the layer that decides, acts, remembers, and governs tools. The face may have its own name, tone, or personas without replacing that core identity. The default face is `Host`.
 
 The governor owns truth, action, tools, memory writes, and authority. The face owns warmth, phrasing, and channel presentation.
 
@@ -56,6 +56,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 - warmth and validation style
 - formatting for the target channel
 - optional summarization or softening of the governor's reply
+- continuity of face identity as `Host`
 
 ### Face does not own
 
@@ -169,6 +170,7 @@ The face may:
 - add validation
 - rephrase for clarity
 - adapt to the user's style
+- use `Host`-specific identity and anti-drift guidance
 
 The face must not:
 
@@ -192,6 +194,7 @@ native_provider = "anthropic" # used when backend resolves to native
 backend = "provider"          # "provider" | "governor_passthrough"
 provider = "anthropic"
 model_override = ""
+profile = "host"
 ```
 
 `auto` means:
@@ -203,6 +206,7 @@ model_override = ""
 
 - **Governor is constitutional.** It owns the real state transitions.
 - **The governor is named `Aphelion`.** That identity belongs to the core, not to any single face style.
+- **The default face is `Host`.** That identity belongs to the visible conversational layer.
 - **Face is presentational.** It is allowed to decorate, not decide.
 - **Codex-first is intentional.** If the user already has Codex access, Aphelion should be able to use it as the governing core.
 - **Fallback matters.** Native governor support keeps the system usable without Codex.

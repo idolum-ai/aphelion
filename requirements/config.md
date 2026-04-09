@@ -149,6 +149,9 @@ native_provider = "anthropic" # Used when backend resolves to native
 backend = "provider"          # "provider" | "governor_passthrough"
 provider = "anthropic"
 model_override = ""
+profile = "host"
+bootstrap_files = ["HOST.md"]
+dynamic_files = ["QUESTIONS-TO-HOST.md"]
 
 # ─── Agent ───
 [agent]

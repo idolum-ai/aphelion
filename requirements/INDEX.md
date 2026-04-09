@@ -20,16 +20,17 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 9. ⬜ [`tools.md`](tools.md) — Tool definition, dispatch, sandboxing, exec, file ops, web fetch
 10. ✅ [`memory.md`](memory.md) — Workspace files, shared/per-user memory, OpenAI files, vector stores
 11. ✅ [`system-prompt.md`](system-prompt.md) — Governor prompt, face prompt, cache boundary, dynamic vs stable sections
-12. ⬜ [`subagents.md`](subagents.md) — Spawning, communication, completion, isolation
+12. ✅ [`host.md`](host.md) — Face identity, anti-drift, Host-specific prompt files
+13. ⬜ [`subagents.md`](subagents.md) — Spawning, communication, completion, isolation
 
 ## Automation
-13. ⬜ [`heartbeat.md`](heartbeat.md) — Periodic agent turns, HEARTBEAT.md, task blocks, active hours
-14. ⬜ [`cron.md`](cron.md) — Scheduled jobs, isolated sessions, delivery routing
+14. ⬜ [`heartbeat.md`](heartbeat.md) — Periodic agent turns, HEARTBEAT.md, task blocks, active hours
+15. ⬜ [`cron.md`](cron.md) — Scheduled jobs, isolated sessions, delivery routing
 
 ## Media
-15. ⬜ [`voice.md`](voice.md) — ElevenLabs TTS, when to speak vs text
-16. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
+16. ⬜ [`voice.md`](voice.md) — ElevenLabs TTS, when to speak vs text
+17. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
 
 ## Operations
-17. ⬜ [`deployment.md`](deployment.md) — Systemd, process management, logging, restart behavior
-18. ⬜ [`security.md`](security.md) — Sandbox assembly (cgroups + namespaces + seccomp + nftables firewall), credential lifecycle, permission model
+18. ⬜ [`deployment.md`](deployment.md) — Systemd, process management, logging, restart behavior
+19. ⬜ [`security.md`](security.md) — Sandbox assembly (cgroups + namespaces + seccomp + nftables firewall), credential lifecycle, permission model
