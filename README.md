@@ -31,6 +31,10 @@ Runnable v0:
 - Anthropic inference
 - SQLite session persistence
 - Shell execution tool (`exec`)
+- Config-assigned principals
+- Host-rendered replies
+- Heartbeat and config-driven cron
+- Telegram voice transcription + optional TTS replies
 
 ## Run
 
@@ -89,6 +93,18 @@ Or:
 make run
 ```
 
+Install the latest GitHub Release binary:
+
+```bash
+make install-release
+```
+
+Update a release-installed binary and restart the user service:
+
+```bash
+make update-release
+```
+
 ## Background Service
 
 Install as a user service:
@@ -109,4 +125,10 @@ Update after pulling new changes:
 
 ```bash
 make update
+```
+
+If you install from GitHub Releases instead of source, point the service at the installed binary:
+
+```bash
+APHELION_EXEC=$HOME/.local/bin/aphelion APHELION_WORKDIR=$HOME ./scripts/install-user-service.sh
 ```

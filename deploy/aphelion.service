@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=@REPO_ROOT@
-ExecStart=@REPO_ROOT@/bin/aphelion --config @CONFIG_PATH@
+WorkingDirectory=@WORKDIR@
+ExecStart=@EXEC_PATH@ --config @CONFIG_PATH@
 Restart=on-failure
 RestartSec=5
 
