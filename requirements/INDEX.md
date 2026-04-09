@@ -26,7 +26,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 
 ## Automation
 15. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
-16. ⬜ [`cron.md`](cron.md) — Scheduled jobs, isolated sessions, delivery routing
+16. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
 
 ## Media
 17. ⬜ [`voice.md`](voice.md) — ElevenLabs TTS, when to speak vs text

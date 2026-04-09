@@ -48,6 +48,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 - memory writes
 - review-event creation
 - canonical assistant decision for the turn
+- authorization of proactive outreach
 - continuity of identity as `Aphelion`
 
 ### Face owns
@@ -56,6 +57,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 - warmth and validation style
 - formatting for the target channel
 - optional summarization or softening of the governor's reply
+- optional outreach candidates for proactive turns
 - continuity of face identity as `Host`
 
 ### Face does not own
@@ -130,6 +132,11 @@ The key distinction is:
 - canonical governor reply = decision artifact
 - rendered face reply = delivered conversation artifact
 
+For proactive turns, a second distinction matters:
+
+- face may suggest outreach
+- governor authorizes delivery
+
 ## Lifecycle
 
 For each inbound DM turn:
@@ -179,6 +186,7 @@ The face may:
 - rephrase for clarity
 - adapt to the user's style
 - use `Host`-specific identity and anti-drift guidance
+- propose candidate proactive messages during heartbeat or cron turns
 
 The face must not:
 
@@ -186,8 +194,28 @@ The face must not:
 - change action decisions
 - widen authority
 - claim writes or memory changes the governor did not make
+- send proactive messages without governor authorization
 
 If the face backend is unavailable, Aphelion may send the governor's canonical reply directly.
+
+## Proactive Outreach
+
+Aphelion may produce outward-initiated messages through heartbeat or cron.
+
+The governing rule is:
+
+- `Host` may propose
+- `Aphelion` ratifies
+
+This keeps the relational initiative of the face layer without making it sovereign.
+
+Examples:
+
+- `Host` proposes a soft check-in
+- `Host` proposes a warmer phrasing for a scheduled reminder
+- `Host` proposes silence because the outreach would feel awkward
+
+In all such cases, the governor still decides whether a message is delivered.
 
 ## Config Surface
 
@@ -221,6 +249,7 @@ profile = "host"
 - **The governor is named `Aphelion`.** That identity belongs to the core, not to any single face style.
 - **The default face is `Host`.** That identity belongs to the visible conversational layer.
 - **Face is presentational.** It is allowed to decorate, not decide.
+- **Face may suggest outreach.** It may not self-authorize outreach.
 - **Canonical and rendered replies are different artifacts.** The governor decides one; the face delivers the other.
 - **Codex-first is intentional.** If the user already has Codex access, Aphelion should be able to use it as the governing core.
 - **Fallback matters.** Native governor support keeps the system usable without Codex.
@@ -229,6 +258,7 @@ profile = "host"
 
 - **TestGovernorDecidesBeforeFaceRender**: face receives canonical reply from governor rather than raw user input only
 - **TestFaceCannotInvokeTools**: tool execution remains governor-only
+- **TestFaceCannotSelfAuthorizeProactiveMessage**: proactive delivery still requires governor authorization
 - **TestGovernorPassthroughFallback**: with `face.backend = "governor_passthrough"`, canonical reply is sent directly
 - **TestGovernorBackendAutoPrefersCodex**: with Codex available and `backend = "auto"`, Codex governor is selected
 - **TestGovernorBackendFallsBackNative**: without Codex, native governor is selected

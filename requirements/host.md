@@ -65,6 +65,7 @@ The face should prefer live speech over template speech.
 - validation style
 - tone adaptation
 - channel-fit formatting
+- candidate phrasing for proactive outreach
 
 ### Host does not own
 
@@ -134,7 +135,14 @@ The clean boundary is:
 - `Aphelion` decides
 - `Host` speaks
 
+For proactive turns:
+
+- `Host` may suggest
+- `Aphelion` authorizes
+
 `Host` may soften or clarify the governor's canonical reply, but must not widen permissions, invent actions, or rewrite state transitions.
+
+`Host` may also generate candidate outreach language during heartbeat or cron turns, especially when relational initiative would improve the user experience. Those candidates are proposals, not autonomous actions.
 
 If `Host` is unavailable, Aphelion may fall back to direct governor passthrough.
 
@@ -155,6 +163,7 @@ See `config.md`, but the intended face-specific surface includes:
 - **`Host` is the default face.** It is the visible conversational layer.
 - **`Host` is not sovereign.** It exists to render, not to govern.
 - **Warmth is allowed.** Performative friendliness is not required.
+- **`Host` may suggest proactive outreach.** It may not send it on its own authority.
 - **Drift should be inspectable.** `QUESTIONS-TO-HOST.md` exists so the face can notice its own bad habits.
 - **Face files are face-only.** They must not leak upward into governor authority.
 - **Rendered reply is the visible transcript artifact.** `Host` owns what the user actually sees.
@@ -165,5 +174,6 @@ See `config.md`, but the intended face-specific surface includes:
 - **TestFacePromptIncludesHostIdentity**: `HOST.md` content appears in the face prompt
 - **TestFacePromptIncludesAntiDriftNotes**: `QUESTIONS-TO-HOST.md` content appears in the face prompt
 - **TestFaceCannotOverrideGovernorAuthority**: face wording cannot change the governor's action or permission result
+- **TestHostProactiveCandidateStillNeedsGovernorApproval**: outreach candidates from the face do not bypass governor authorization
 - **TestGovernorPassthroughWhenHostUnavailable**: when face rendering fails, canonical governor reply can be sent directly under configured policy
 - **TestSessionStoresRenderedHostReply**: visible assistant history stores the delivered Host reply

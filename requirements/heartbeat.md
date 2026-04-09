@@ -11,6 +11,8 @@ Heartbeat is not cron.
 
 Heartbeat belongs to **Aphelion** the governor. If a heartbeat turn produces a user-visible message, `Host` may render it for delivery. If nothing is worth surfacing, heartbeat should stay quiet.
 
+Heartbeat is one of Aphelion's mechanisms for **reflective proactivity**.
+
 ## Scope
 
 ### v0 required
@@ -132,14 +134,20 @@ Delivery should be bounded and selective. Heartbeat should not emit routine chat
 If heartbeat emits an outward message:
 
 1. the governor produces a canonical maintenance reply
-2. `Host` may render that reply for the target channel
-3. the delivered message enters the visible ledger of the target session
-4. the canonical heartbeat output remains sidecar audit state
+2. `Host` may propose user-facing outreach language for the target channel
+3. the governor authorizes the final outward message
+4. the delivered message enters the visible ledger of the target session
+5. the canonical heartbeat output remains sidecar audit state
 
 This follows the same rule as ordinary turns:
 
 - visible ledger stores rendered output
 - canonical governor output remains auditable sidecar state
+
+The proactive rule is:
+
+- `Host` may suggest outreach
+- `Aphelion` decides whether that outreach is sent
 
 ## Session Routing Rules
 
@@ -166,6 +174,8 @@ Heartbeat is the natural place to:
 Heartbeat may summarize, notice, and surface.
 
 Heartbeat should not automatically convert everything it observes into durable shared memory. Memory mutation must remain governed by explicit policy.
+
+Heartbeat may also create opportunities for warm or relational check-ins that would feel unnatural from the governor alone. Those outreach candidates should come from `Host`, but still require governor authorization.
 
 ## Relationship to Cron
 
@@ -226,11 +236,13 @@ The implementation may later add more knobs, but the contract should preserve:
 ## Decisions
 
 - **Heartbeat is a governor maintenance turn.** It belongs to `Aphelion`, not to cron.
+- **Heartbeat is reflective proactivity.** It may surface things Aphelion noticed, not just things it was told to schedule.
 - **Heartbeat runs in its own session.** Maintenance continuity should not pollute user DM transcripts.
 - **`HEARTBEAT.md` is dynamic.** It belongs after the stable cache boundary.
 - **Silence is a valid result.** Heartbeat should not speak merely because it woke up.
 - **Admin DM is the normal outward surface.** Heartbeat is for maintenance and review, not arbitrary user interruption.
 - **Rendered and canonical outputs stay separate.** Delivered heartbeat messages use `Host`; canonical maintenance output remains sidecar audit state.
+- **`Host` may propose heartbeat outreach.** The governor still authorizes delivery.
 - **Heartbeat must not route into subagent sessions.** Maintenance and subordinate execution are distinct concerns.
 - **Cron remains separate.** Procedural scheduled jobs must not absorb the reflective maintenance role of heartbeat.
 
@@ -243,6 +255,7 @@ The implementation may later add more knobs, but the contract should preserve:
 - **TestHeartbeatTargetLastRoutesOnlyToEligibleAdminSurface**: `target = "last"` does not pick arbitrary user or subagent sessions
 - **TestHeartbeatDoesNotRouteToSubagentSession**: subordinate sessions are excluded from heartbeat delivery
 - **TestHeartbeatUsesHostForDeliveredMessage**: delivered heartbeat output is rendered through the face layer
+- **TestHeartbeatHostSuggestionStillNeedsGovernorAuthorization**: Host-generated outreach candidates do not bypass the governor
 - **TestHeartbeatStoresCanonicalAsSidecar**: canonical maintenance output is stored separately from visible delivered text
 - **TestHeartbeatBatchesReviewEvents**: pending review events can be surfaced as a bounded admin digest
 - **TestHeartbeatDoesNotAutoPersistObservedStateToMemory**: mere observation during heartbeat does not silently mutate durable memory
