@@ -116,6 +116,20 @@ func (s *SQLiteStore) init() error {
 			FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_outbound_session ON outbound_messages(chat_id, user_id, turn_index)`,
+		`CREATE TABLE IF NOT EXISTS review_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_chat_id INTEGER NOT NULL,
+			source_user_id INTEGER NOT NULL DEFAULT 0,
+			source_role TEXT NOT NULL,
+			target_chat_id INTEGER NOT NULL,
+			turn_from INTEGER,
+			turn_to INTEGER,
+			summary TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'dismissed')),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			delivered_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_review_events_target ON review_events(target_chat_id, status, created_at, id)`,
 		`CREATE TABLE IF NOT EXISTS compaction_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			chat_id INTEGER NOT NULL,
@@ -578,6 +592,148 @@ func (s *SQLiteStore) OutboundAfterTurn(key SessionKey, turnIndex int) ([]int64,
 		return nil, fmt.Errorf("iterate outbound message ids: %w", err)
 	}
 	return ids, nil
+}
+
+func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
+	if event.SourceChatID == 0 {
+		return fmt.Errorf("enqueue review event: source_chat_id is required")
+	}
+	if strings.TrimSpace(event.SourceRole) == "" {
+		return fmt.Errorf("enqueue review event: source_role is required")
+	}
+	if event.TargetAdminChatID == 0 {
+		return fmt.Errorf("enqueue review event: target_chat_id is required")
+	}
+	if strings.TrimSpace(event.Summary) == "" {
+		return fmt.Errorf("enqueue review event: summary is required")
+	}
+
+	status := strings.TrimSpace(event.Status)
+	if status == "" {
+		status = "pending"
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.Exec(`
+		INSERT INTO review_events(
+			source_chat_id, source_user_id, source_role, target_chat_id,
+			turn_from, turn_to, summary, status, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		event.SourceChatID, event.SourceUserID, event.SourceRole, event.TargetAdminChatID,
+		event.TurnFrom, event.TurnTo, event.Summary, status, now,
+	)
+	if err != nil {
+		return fmt.Errorf("enqueue review event: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]ReviewEvent, error) {
+	if targetChatID == 0 {
+		return nil, fmt.Errorf("pending review events: target_chat_id is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := s.db.Query(`
+		SELECT
+			id, source_chat_id, source_user_id, source_role, target_chat_id,
+			turn_from, turn_to, summary, status, created_at, delivered_at
+		FROM review_events
+		WHERE target_chat_id = ? AND status = 'pending'
+		ORDER BY created_at ASC, id ASC
+		LIMIT ?
+	`, targetChatID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query pending review events: %w", err)
+	}
+	defer rows.Close()
+
+	events := make([]ReviewEvent, 0, limit)
+	for rows.Next() {
+		var (
+			event           ReviewEvent
+			createdAtRaw    string
+			deliveredAtRaw  sql.NullString
+			turnFromRaw     sql.NullInt64
+			turnToRaw       sql.NullInt64
+			targetChatIDRaw int64
+		)
+
+		if err := rows.Scan(
+			&event.ID, &event.SourceChatID, &event.SourceUserID, &event.SourceRole, &targetChatIDRaw,
+			&turnFromRaw, &turnToRaw, &event.Summary, &event.Status, &createdAtRaw, &deliveredAtRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan pending review event: %w", err)
+		}
+
+		event.TargetAdminChatID = targetChatIDRaw
+		if turnFromRaw.Valid {
+			event.TurnFrom = int(turnFromRaw.Int64)
+		}
+		if turnToRaw.Valid {
+			event.TurnTo = int(turnToRaw.Int64)
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse review event created_at: %w", err)
+		}
+		event.CreatedAt = createdAt
+		if deliveredAtRaw.Valid && deliveredAtRaw.String != "" {
+			deliveredAt, err := parseSQLiteTime(deliveredAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse review event delivered_at: %w", err)
+			}
+			event.DeliveredAt = deliveredAt
+		}
+
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending review events: %w", err)
+	}
+	return events, nil
+}
+
+func (s *SQLiteStore) MarkReviewDelivered(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin mark review delivered tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	stmt, err := tx.Prepare(`
+		UPDATE review_events
+		SET status = 'delivered', delivered_at = ?
+		WHERE id = ? AND status = 'pending'
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare mark review delivered statement: %w", err)
+	}
+	defer stmt.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, err := stmt.Exec(now, id); err != nil {
+			return fmt.Errorf("mark review delivered id=%d: %w", id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit mark review delivered tx: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) Close() error {

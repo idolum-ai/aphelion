@@ -66,6 +66,21 @@ type CompactionEntry struct {
 	Strategy     string // "summarize" or "truncate"
 }
 
+// ReviewEvent is a bounded digest from a source session to the admin DM.
+type ReviewEvent struct {
+	ID                int64
+	SourceChatID      int64
+	SourceUserID      int64
+	SourceRole        string
+	TargetAdminChatID int64
+	TurnFrom          int
+	TurnTo            int
+	Summary           string
+	Status            string // "pending" | "delivered" | "dismissed"
+	CreatedAt         time.Time
+	DeliveredAt       time.Time
+}
+
 // Message is one persisted conversation message.
 type Message struct {
 	ID           int64
