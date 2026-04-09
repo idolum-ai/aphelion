@@ -1,0 +1,248 @@
+# Heartbeat — Governor Maintenance Turns, Delivery, and Quiet Reflection
+
+## Overview
+
+Heartbeat is a first-class subsystem for periodic governor-owned maintenance turns.
+
+Heartbeat is not cron.
+
+- **heartbeat** is reflective, stateful, and selective
+- **cron** is scheduled task execution
+
+Heartbeat belongs to **Aphelion** the governor. If a heartbeat turn produces a user-visible message, `Host` may render it for delivery. If nothing is worth surfacing, heartbeat should stay quiet.
+
+## Scope
+
+### v0 required
+
+- dedicated heartbeat subsystem
+- configurable cadence
+- dedicated heartbeat session
+- `HEARTBEAT.md` as a dynamic prompt surface
+- active-hours gating
+- delivery targeting
+- quiet-by-default behavior
+- explicit separation from cron
+
+### Deferred after v0
+
+- provider-specific heartbeat cost optimization
+- heartbeat-triggered subagent spawning
+- richer maintenance dashboards
+- per-principal heartbeat policies beyond admin-focused defaults
+
+## Core Model
+
+Heartbeat is a periodic **governor maintenance turn**.
+
+It should run as a real Aphelion turn with:
+
+- a session identity
+- assembled governor prompt context
+- bounded maintenance inputs
+- auditability
+- optional outbound delivery
+
+Heartbeat must not be modeled as an invisible shell script or a generic timer callback.
+
+## Heartbeat Session
+
+Heartbeat should run in a dedicated maintenance session, separate from ordinary user DM sessions.
+
+The goals are:
+
+- keep maintenance reasoning out of normal user transcripts
+- preserve continuity of maintenance state across runs
+- make heartbeat activity inspectable
+- avoid polluting the admin DM with internal maintenance-only deliberation
+
+This session is governor-owned. It is not a face session, and it is not a subagent session.
+
+## Heartbeat Context
+
+Heartbeat may read a bounded maintenance context assembled from:
+
+- `HEARTBEAT.md`
+- pending review events
+- recent maintenance notes or prior heartbeat artifacts
+- recent session-health summaries
+- stale subagent/session metadata
+- selected memory reflection inputs
+- current runtime health information
+
+It should not read or replay entire unrelated session histories by default. Heartbeat is a maintenance turn, not a covert full-transcript batch processor.
+
+## HEARTBEAT.md
+
+`HEARTBEAT.md` is a dynamic governor file.
+
+It should be used for:
+
+- maintenance priorities
+- standing reflection questions
+- reminder heuristics
+- delivery preferences
+- guardrails for proactive behavior
+
+If `HEARTBEAT.md` is absent or empty, heartbeat may still run for low-level maintenance, but it should avoid speculative proactive messaging.
+
+`HEARTBEAT.md` belongs after the stable cache boundary with other dynamic files.
+
+## Active Hours
+
+Heartbeat should support active-hours gating.
+
+Outside active hours, heartbeat may:
+
+- skip entirely
+- perform only internal maintenance with no delivery
+- defer user-visible delivery until the next active window
+
+The default philosophy is:
+
+- maintenance may continue quietly
+- human-facing interruption should be time-aware
+
+## Delivery Targets
+
+Heartbeat delivery must be explicit.
+
+Supported targets should include:
+
+- `none`
+- `last`
+- explicit admin DM target
+
+### `none`
+
+Run the maintenance turn and persist its internal results, but do not deliver a message.
+
+### `last`
+
+Deliver to the last eligible admin-facing session when heartbeat decides there is something worth surfacing.
+
+### Explicit admin DM
+
+Deliver to a configured admin DM regardless of recent conversational activity.
+
+Delivery should be bounded and selective. Heartbeat should not emit routine chatter simply because a cadence elapsed.
+
+## Delivery Semantics
+
+If heartbeat emits an outward message:
+
+1. the governor produces a canonical maintenance reply
+2. `Host` may render that reply for the target channel
+3. the delivered message enters the visible ledger of the target session
+4. the canonical heartbeat output remains sidecar audit state
+
+This follows the same rule as ordinary turns:
+
+- visible ledger stores rendered output
+- canonical governor output remains auditable sidecar state
+
+## Session Routing Rules
+
+Heartbeat must not route into:
+
+- subordinate subagent sessions
+- isolated non-admin user sessions by default
+- arbitrary stale user conversations just because they were recent
+
+Heartbeat is a governor maintenance facility, not a broadcast mechanism.
+
+Its normal outward surface is the admin DM or no delivery at all.
+
+## Review Events and Reflection
+
+Heartbeat is the natural place to:
+
+- digest pending review events
+- batch low-urgency admin updates
+- reflect on stale tasks
+- notice repeated failures or degrading patterns
+- decide whether silence is still the right action
+
+Heartbeat may summarize, notice, and surface.
+
+Heartbeat should not automatically convert everything it observes into durable shared memory. Memory mutation must remain governed by explicit policy.
+
+## Relationship to Cron
+
+Heartbeat and cron are separate subsystems.
+
+### Heartbeat
+
+- periodic maintenance turn
+- reflective
+- may choose silence
+- session-aware
+- prompt-driven by `HEARTBEAT.md`
+
+### Cron
+
+- scheduled execution of configured jobs
+- procedural
+- job-defined
+- isolated from conversational continuity unless explicitly bridged
+
+Cron may produce events that heartbeat later notices, but cron is not heartbeat and heartbeat is not cron.
+
+## Authority and Security
+
+Heartbeat is governor-owned and must obey the same machine-owned floor as any other governor turn.
+
+That means:
+
+- no authority widening
+- no prompt-authored permission escalation
+- no bypass of principal ceilings
+- no bypass of sandbox rules
+- no hidden mutation of global state simply because the turn was periodic
+
+If heartbeat touches tool execution, it must do so through the same governed tool path as any other turn.
+
+## Config Surface
+
+See `config.md`, but heartbeat ownership should include:
+
+```toml
+[heartbeat]
+enabled = true
+every = "30m"
+model = "anthropic"
+model_override = ""
+active_hours = { start = "08:00", end = "24:00", timezone = "America/New_York" }
+target = "last"               # "last" | "none" | explicit admin target
+```
+
+The implementation may later add more knobs, but the contract should preserve:
+
+- cadence
+- active-hours policy
+- backend/model override
+- delivery target
+
+## Decisions
+
+- **Heartbeat is a governor maintenance turn.** It belongs to `Aphelion`, not to cron.
+- **Heartbeat runs in its own session.** Maintenance continuity should not pollute user DM transcripts.
+- **`HEARTBEAT.md` is dynamic.** It belongs after the stable cache boundary.
+- **Silence is a valid result.** Heartbeat should not speak merely because it woke up.
+- **Admin DM is the normal outward surface.** Heartbeat is for maintenance and review, not arbitrary user interruption.
+- **Rendered and canonical outputs stay separate.** Delivered heartbeat messages use `Host`; canonical maintenance output remains sidecar audit state.
+- **Heartbeat must not route into subagent sessions.** Maintenance and subordinate execution are distinct concerns.
+- **Cron remains separate.** Procedural scheduled jobs must not absorb the reflective maintenance role of heartbeat.
+
+## Test Plan
+
+- **TestHeartbeatRunsInDedicatedSession**: heartbeat creates or reuses a maintenance session rather than polluting ordinary DM sessions
+- **TestHeartbeatLoadsHeartbeatMDAsDynamicFile**: `HEARTBEAT.md` is included after stable prompt sections
+- **TestHeartbeatRespectsActiveHours**: outside active hours, delivery is suppressed or deferred according to policy
+- **TestHeartbeatTargetNoneProducesNoOutboundMessage**: heartbeat may run without sending anything
+- **TestHeartbeatTargetLastRoutesOnlyToEligibleAdminSurface**: `target = "last"` does not pick arbitrary user or subagent sessions
+- **TestHeartbeatDoesNotRouteToSubagentSession**: subordinate sessions are excluded from heartbeat delivery
+- **TestHeartbeatUsesHostForDeliveredMessage**: delivered heartbeat output is rendered through the face layer
+- **TestHeartbeatStoresCanonicalAsSidecar**: canonical maintenance output is stored separately from visible delivered text
+- **TestHeartbeatBatchesReviewEvents**: pending review events can be surfaced as a bounded admin digest
+- **TestHeartbeatDoesNotAutoPersistObservedStateToMemory**: mere observation during heartbeat does not silently mutate durable memory

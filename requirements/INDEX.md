@@ -25,7 +25,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 14. ✅ [`subagents.md`](subagents.md) — First-class subordinate sessions, capability depth, completion, isolation
 
 ## Automation
-15. ⬜ [`heartbeat.md`](heartbeat.md) — Periodic agent turns, HEARTBEAT.md, task blocks, active hours
+15. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
 16. ⬜ [`cron.md`](cron.md) — Scheduled jobs, isolated sessions, delivery routing
 
 ## Media
