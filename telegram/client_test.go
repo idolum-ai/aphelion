@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +78,25 @@ func TestNormalizeMessageSkipsNonPrivate(t *testing.T) {
 	}
 }
 
+func TestNormalizeMessageVoiceOnly(t *testing.T) {
+	now := time.Now().Unix()
+	msg := &Message{
+		MessageID: 11,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		Voice:     &Voice{FileID: "voice-file", MimeType: "audio/ogg"},
+	}
+
+	got := NormalizeMessage(msg)
+	if got == nil {
+		t.Fatal("expected voice message to be normalized")
+	}
+	if got.Text != "" {
+		t.Fatalf("text = %q, want empty for voice-only input", got.Text)
+	}
+}
+
 func TestSendMessagePayload(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{
@@ -123,6 +143,88 @@ func TestSendMessagePayload(t *testing.T) {
 	}
 	if _, ok := requestBody["reply_to_message_id"]; !ok {
 		t.Fatal("missing reply_to_message_id")
+	}
+}
+
+func TestSendVoiceMessagePayload(t *testing.T) {
+	var contentType string
+	var payload string
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/sendVoice" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			contentType = req.Header.Get("Content-Type")
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			payload = string(data)
+			resp := sendVoiceResponse{Ok: true}
+			resp.Result.MessageID = 456
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	got, err := client.SendVoiceMessage(context.Background(), 5, core.Media{
+		Type:     "voice",
+		Data:     []byte("voice-bytes"),
+		MimeType: "audio/mpeg",
+		Filename: "reply.mp3",
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendVoiceMessage() err = %v", err)
+	}
+	if got != 456 {
+		t.Fatalf("message id = %d, want 456", got)
+	}
+	if !strings.Contains(contentType, "multipart/form-data") {
+		t.Fatalf("content-type = %q, want multipart", contentType)
+	}
+	if !strings.Contains(payload, "voice-bytes") {
+		t.Fatalf("payload missing voice bytes: %s", payload)
+	}
+}
+
+func TestDownloadFile(t *testing.T) {
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			switch req.URL.String() {
+			case "https://api.telegram.org/botTOKEN/getFile":
+				return encodeJSONResponse(t, getFileResponse{
+					Ok: true,
+					Result: struct {
+						FilePath string `json:"file_path"`
+					}{FilePath: "voice/file.ogg"},
+				}), nil
+			case "https://api.telegram.org/file/botTOKEN/voice/file.ogg":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("voice-bytes")),
+				}, nil
+			default:
+				t.Fatalf("unexpected url %s", req.URL.String())
+				return nil, nil
+			}
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	data, err := client.DownloadFile(context.Background(), "file123")
+	if err != nil {
+		t.Fatalf("DownloadFile() err = %v", err)
+	}
+	if string(data) != "voice-bytes" {
+		t.Fatalf("data = %q, want voice-bytes", string(data))
 	}
 }
 

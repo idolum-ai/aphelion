@@ -135,13 +135,12 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 		if err != nil {
 			return ExecutionPlan{}, err
 		}
-		env := withEnv(os.Environ(), "HOME", req.Scope.UserWorkspace)
 		return ExecutionPlan{
 			Stage:  stage,
 			Binary: bwrapPath,
 			Args:   args,
 			Dir:    "/",
-			Env:    env,
+			Env:    nil,
 		}, nil
 	default:
 		return ExecutionPlan{}, fmt.Errorf("no supported execution backend for role %q", req.Scope.Principal.Role)
@@ -171,10 +170,21 @@ func buildBwrapArgs(scope Scope, workdir, command string) ([]string, error) {
 	args := []string{
 		"--die-with-parent",
 		"--new-session",
+		"--unshare-user",
+		"--uid", "65534",
+		"--gid", "65534",
 		"--unshare-pid",
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
+		"--cap-drop", "ALL",
+		"--clearenv",
+		"--setenv", "HOME", scope.UserWorkspace,
+		"--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
+		"--setenv", "TMPDIR", "/tmp",
+	}
+	if scope.Profile.Network == NetworkDeny {
+		args = append(args, "--unshare-net")
 	}
 
 	exposedRoots := make([]string, 0, len(runtimeRO)+len(writablePaths)+len(readonlyPaths))
@@ -360,19 +370,6 @@ func pathWithinAny(path string, roots []string) bool {
 		}
 	}
 	return false
-}
-
-func withEnv(env []string, key, value string) []string {
-	prefix := key + "="
-	out := make([]string, 0, len(env)+1)
-	for _, current := range env {
-		if strings.HasPrefix(current, prefix) {
-			continue
-		}
-		out = append(out, current)
-	}
-	out = append(out, prefix+value)
-	return out
 }
 
 func (r *Runner) bwrapBinary() string {

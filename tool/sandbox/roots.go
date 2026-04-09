@@ -104,6 +104,25 @@ func resolveRoots(roots Roots) (Roots, error) {
 	}, nil
 }
 
+func DefaultRoots(workspaceRoot, sessionsDBPath string) (Roots, error) {
+	workspaceRoot, err := resolveRootPath("workspace_root", workspaceRoot)
+	if err != nil {
+		return Roots{}, err
+	}
+	sessionsDBPath, err = resolveRootPath("sessions_db_path", sessionsDBPath)
+	if err != nil {
+		return Roots{}, err
+	}
+
+	stateRoot := filepath.Join(filepath.Dir(sessionsDBPath), "isolated")
+	return Roots{
+		GlobalRoot:        workspaceRoot,
+		SharedMemoryRoot:  workspaceRoot,
+		UserWorkspaceRoot: filepath.Join(stateRoot, "workspaces"),
+		UserMemoryRoot:    filepath.Join(stateRoot, "memory"),
+	}, nil
+}
+
 func resolveRootPath(name, value string) (string, error) {
 	if strings.TrimSpace(value) == "" {
 		return "", fmt.Errorf("%s is required", name)

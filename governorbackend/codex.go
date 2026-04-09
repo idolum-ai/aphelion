@@ -11,12 +11,17 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/governorauth"
 )
 
 const maxCodexResponseBytes = 1 << 20 // 1 MiB
+
+const codexRefreshClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
 var (
 	ErrCodexUnauthorized = errors.New("codex unauthorized")
@@ -28,15 +33,27 @@ var (
 type CodexOptions struct {
 	BaseURL     string
 	AccessToken string
+	RefreshToken string
+	RefreshURL  string
 	HTTPClient  *http.Client
 	UserAgent   string
+	LoadTokens  func() (governorauth.CodexTokens, error)
+	SaveTokens  func(governorauth.CodexTokens, time.Time) error
+	Now         func() time.Time
 }
 
 type Codex struct {
 	baseURL     string
-	accessToken string
+	refreshURL  string
 	client      *http.Client
 	userAgent   string
+	loadTokens  func() (governorauth.CodexTokens, error)
+	saveTokens  func(governorauth.CodexTokens, time.Time) error
+	now         func() time.Time
+
+	mu           sync.Mutex
+	accessToken  string
+	refreshToken string
 }
 
 var _ agent.Provider = (*Codex)(nil)
@@ -53,15 +70,33 @@ func NewCodex(opts CodexOptions) (*Codex, error) {
 		client = http.DefaultClient
 	}
 
+	refreshURL := strings.TrimSpace(opts.RefreshURL)
+	if refreshURL == "" {
+		refreshURL = governorauth.DefaultCodexRefreshURL
+	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+
 	return &Codex{
 		baseURL:     opts.BaseURL,
+		refreshURL:  refreshURL,
 		accessToken: opts.AccessToken,
+		refreshToken: strings.TrimSpace(opts.RefreshToken),
 		client:      client,
 		userAgent:   opts.UserAgent,
+		loadTokens:  opts.LoadTokens,
+		saveTokens:  opts.SaveTokens,
+		now:         now,
 	}, nil
 }
 
 func (c *Codex) Complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	return c.complete(ctx, messages, tools, true)
+}
+
+func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, allowRetry bool) (*agent.Response, error) {
 	reqBody := codexRequest{
 		Messages: toCodexMessages(messages),
 		Tools:    toCodexTools(tools),
@@ -73,19 +108,38 @@ func (c *Codex) Complete(ctx context.Context, messages []agent.Message, tools []
 		return nil, fmt.Errorf("codex: encode request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, &body)
+	accessToken := c.currentAccessToken()
+	resp, err := c.doRequest(ctx, &body, accessToken)
+	if err != nil {
+		var apiErr codexAPIError
+		if allowRetry && errors.As(err, &apiErr) && apiErr.statusCode == http.StatusUnauthorized {
+			reauthorized, reauthErr := c.reauthorize(ctx, accessToken)
+			if reauthorized {
+				return c.complete(ctx, messages, tools, false)
+			}
+			if reauthErr != nil {
+				return nil, fmt.Errorf("%w: reauthorization failed: %v", err, reauthErr)
+			}
+		}
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken string) (*agent.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("codex: new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("codex: request: %w", redactError(err, c.accessToken))
+		return nil, fmt.Errorf("codex: request: %w", redactError(err, accessToken))
 	}
 	defer resp.Body.Close()
 
@@ -106,6 +160,116 @@ func (c *Codex) Complete(ctx context.Context, messages []agent.Message, tools []
 		return nil, fmt.Errorf("codex: decode response: %w", err)
 	}
 	return res, nil
+}
+
+func (c *Codex) currentAccessToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.accessToken
+}
+
+func (c *Codex) reauthorize(ctx context.Context, staleAccessToken string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.accessToken != "" && c.accessToken != staleAccessToken {
+		return true, nil
+	}
+
+	var reloadErr error
+	if c.loadTokens != nil {
+		tokens, err := c.loadTokens()
+		switch {
+		case err == nil:
+			if strings.TrimSpace(tokens.AccessToken) != "" && tokens.AccessToken != c.accessToken {
+				c.accessToken = strings.TrimSpace(tokens.AccessToken)
+				if strings.TrimSpace(tokens.RefreshToken) != "" {
+					c.refreshToken = strings.TrimSpace(tokens.RefreshToken)
+				}
+				return true, nil
+			}
+			if strings.TrimSpace(tokens.RefreshToken) != "" {
+				c.refreshToken = strings.TrimSpace(tokens.RefreshToken)
+			}
+		case !errors.Is(err, governorauth.ErrCodexAuthNotFound):
+			reloadErr = fmt.Errorf("reload codex auth: %w", err)
+		}
+	}
+
+	refreshToken := strings.TrimSpace(c.refreshToken)
+	if refreshToken == "" {
+		return false, reloadErr
+	}
+
+	tokens, err := c.refreshTokens(ctx, refreshToken)
+	if err != nil {
+		if reloadErr != nil {
+			return false, fmt.Errorf("%w after %v", err, reloadErr)
+		}
+		return false, err
+	}
+	c.accessToken = tokens.AccessToken
+	c.refreshToken = tokens.RefreshToken
+	if c.saveTokens != nil {
+		_ = c.saveTokens(tokens, c.now())
+	}
+	return true, nil
+}
+
+func (c *Codex) refreshTokens(ctx context.Context, refreshToken string) (governorauth.CodexTokens, error) {
+	reqBody := map[string]string{
+		"client_id":     codexRefreshClientID,
+		"grant_type":    "refresh_token",
+		"refresh_token": refreshToken,
+	}
+
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(reqBody); err != nil {
+		return governorauth.CodexTokens{}, fmt.Errorf("codex refresh: encode request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.refreshURL, &body)
+	if err != nil {
+		return governorauth.CodexTokens{}, fmt.Errorf("codex refresh: new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.userAgent != "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return governorauth.CodexTokens{}, fmt.Errorf("codex refresh: request: %w", redactError(err, refreshToken))
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCodexResponseBytes))
+	if err != nil {
+		return governorauth.CodexTokens{}, fmt.Errorf("codex refresh: read response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return governorauth.CodexTokens{}, fmt.Errorf("codex refresh: status %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return governorauth.CodexTokens{}, fmt.Errorf("codex refresh: decode response: %w", err)
+	}
+	access := strings.TrimSpace(parsed.AccessToken)
+	refresh := strings.TrimSpace(parsed.RefreshToken)
+	if access == "" {
+		return governorauth.CodexTokens{}, fmt.Errorf("codex refresh: missing access token")
+	}
+	if refresh == "" {
+		refresh = strings.TrimSpace(refreshToken)
+	}
+	return governorauth.CodexTokens{
+		AccessToken:  access,
+		RefreshToken: refresh,
+	}, nil
 }
 
 type codexRequest struct {

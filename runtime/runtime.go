@@ -17,9 +17,11 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/governorauth"
 	"github.com/idolum-ai/aphelion/governorbackend"
+	"github.com/idolum-ai/aphelion/media"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/voice"
 )
 
 type OutboundSender interface {
@@ -36,6 +38,9 @@ type Runtime struct {
 
 	faceBackend face.Backend
 	faceModel   face.Renderer
+	voiceMode   string
+	transcriber media.TranscriptionProvider
+	synth       voice.Synthesizer
 
 	governorBackend string
 
@@ -43,16 +48,43 @@ type Runtime struct {
 	expireIdle func(maxIdle time.Duration) (int, error)
 }
 
+func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
+	if r == nil {
+		return
+	}
+	r.voiceMode = strings.ToLower(strings.TrimSpace(cfg.Mode))
+	r.transcriber = transcriber
+	r.synth = synth
+}
+
 var ErrPrincipalDenied = errors.New("principal is not admitted")
 
 var newCodexProvider = func(bundle governorauth.Bundle, cfg *config.Config) (agent.Provider, error) {
+	var loadTokens func() (governorauth.CodexTokens, error)
+	var saveTokens func(governorauth.CodexTokens, time.Time) error
+	if strings.TrimSpace(bundle.AuthPath) != "" {
+		authPath := bundle.AuthPath
+		loadTokens = func() (governorauth.CodexTokens, error) {
+			return governorauth.LoadCodexCLIAuth(authPath)
+		}
+		saveTokens = func(tokens governorauth.CodexTokens, refreshedAt time.Time) error {
+			return governorauth.SaveCodexCLIAuth(authPath, tokens, refreshedAt)
+		}
+	}
 	return governorbackend.NewCodex(governorbackend.CodexOptions{
-		BaseURL:     bundle.BaseURL,
-		AccessToken: bundle.AccessToken,
-		HTTPClient:  &http.Client{Timeout: 90 * time.Second},
-		UserAgent:   cfg.Identity.UserAgent,
+		BaseURL:      bundle.BaseURL,
+		AccessToken:  bundle.AccessToken,
+		RefreshToken: bundle.RefreshToken,
+		RefreshURL:   bundle.RefreshURL,
+		HTTPClient:   &http.Client{Timeout: 90 * time.Second},
+		UserAgent:    cfg.Identity.UserAgent,
+		LoadTokens:   loadTokens,
+		SaveTokens:   saveTokens,
 	})
 }
+
+var resolveGovernorAuth = governorauth.ResolveFromConfig
+var newFaceRenderer = face.NewProviderRenderer
 
 func New(
 	cfg *config.Config,
@@ -74,7 +106,7 @@ func New(
 		return nil, fmt.Errorf("outbound sender is nil")
 	}
 
-	governorAuth, err := governorauth.ResolveFromConfig(cfg.Governor)
+	governorAuth, err := resolveGovernorAuth(cfg.Governor)
 	if err != nil {
 		return nil, fmt.Errorf("resolve governor auth: %w", err)
 	}
@@ -87,7 +119,22 @@ func New(
 		activeProvider = codexProvider
 	}
 
-	faceModel, err := face.NewProviderRenderer(activeProvider, face.ProviderRendererConfig{
+	faceBackend := face.Backend(strings.ToLower(strings.TrimSpace(cfg.Face.Backend)))
+	if faceBackend == "" {
+		faceBackend = face.BackendProvider
+	}
+
+	var faceProvider agent.Provider
+	switch faceBackend {
+	case face.BackendProvider:
+		faceProvider = provider
+	case face.BackendGovernorPassthrough:
+		faceProvider = activeProvider
+	default:
+		return nil, fmt.Errorf("unsupported face backend: %q", cfg.Face.Backend)
+	}
+
+	faceModel, err := newFaceRenderer(faceProvider, face.ProviderRendererConfig{
 		GovernorName:  prompt.DefaultGovernorName,
 		FaceName:      face.DefaultFaceName,
 		Channel:       "telegram",
@@ -118,7 +165,7 @@ func New(
 			cfg.Principals.Telegram.AdminUserIDs,
 			cfg.Principals.Telegram.ApprovedUserIDs,
 		),
-		faceBackend:     face.BackendProvider,
+		faceBackend:     faceBackend,
 		faceModel:       faceModel,
 		governorBackend: governorAuth.Backend,
 		idleExpiry:      idleExpiry,

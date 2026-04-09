@@ -57,6 +57,18 @@ workspace = "./workspace"
 	if !cfg.Agent.DailyNotes {
 		t.Fatal("daily notes should default to enabled")
 	}
+	if cfg.Face.Backend != "provider" {
+		t.Fatalf("face.backend = %q, want provider", cfg.Face.Backend)
+	}
+	if !(!cfg.Heartbeat.Enabled && cfg.Heartbeat.Every == "30m" && cfg.Heartbeat.Target == "last") {
+		t.Fatalf("heartbeat defaults = %#v, want disabled 30m last", cfg.Heartbeat)
+	}
+	if cfg.Cron.Enabled || len(cfg.Cron.Jobs) != 0 {
+		t.Fatalf("cron defaults = %#v, want disabled with no jobs", cfg.Cron)
+	}
+	if cfg.Voice.Mode != "off" {
+		t.Fatalf("voice.mode = %q, want off", cfg.Voice.Mode)
+	}
 }
 
 func TestLoadParsesMultilineArrays(t *testing.T) {
@@ -154,6 +166,36 @@ bootstrap_max_chars = 500
 bootstrap_total_max_chars = 600
 daily_notes = false
 daily_notes_dir = "notes"
+
+[face]
+backend = "governor_passthrough"
+
+[heartbeat]
+enabled = true
+every = "45m"
+target = "123"
+
+[heartbeat.active_hours]
+start = "08:00"
+end = "23:00"
+timezone = "America/New_York"
+
+[cron]
+enabled = true
+
+[[cron.jobs]]
+id = "check-in"
+every = "2h"
+prompt = "Ping the admin if there is anything worth surfacing."
+delivery = "announce"
+enabled = true
+
+[voice]
+mode = "voice_only"
+openai_api_key = "sk-openai"
+openai_model = "whisper-1"
+elevenlabs_api_key = "xi-test"
+elevenlabs_voice_id = "voice-123"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -187,6 +229,21 @@ daily_notes_dir = "notes"
 	}
 	if cfg.Agent.DailyNotes {
 		t.Fatal("daily_notes = true, want false")
+	}
+	if cfg.Face.Backend != "governor_passthrough" {
+		t.Fatalf("face.backend = %q, want governor_passthrough", cfg.Face.Backend)
+	}
+	if !cfg.Heartbeat.Enabled || cfg.Heartbeat.Every != "45m" || cfg.Heartbeat.Target != "123" {
+		t.Fatalf("heartbeat = %#v, want enabled 45m target 123", cfg.Heartbeat)
+	}
+	if !cfg.Cron.Enabled || len(cfg.Cron.Jobs) != 1 {
+		t.Fatalf("cron = %#v, want enabled with 1 job", cfg.Cron)
+	}
+	if cfg.Cron.Jobs[0].ID != "check-in" || cfg.Cron.Jobs[0].Every != "2h" || cfg.Cron.Jobs[0].Delivery != "announce" {
+		t.Fatalf("cron job = %#v, want parsed job", cfg.Cron.Jobs[0])
+	}
+	if cfg.Voice.Mode != "voice_only" || cfg.Voice.OpenAIModel != "whisper-1" || cfg.Voice.ElevenLabsVoiceID != "voice-123" {
+		t.Fatalf("voice = %#v, want parsed voice config", cfg.Voice)
 	}
 }
 

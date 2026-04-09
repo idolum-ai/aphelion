@@ -47,3 +47,36 @@ bootstrap_max_chars = 20000
 bootstrap_total_max_chars = 150000
 daily_notes = true
 daily_notes_dir = "memory"
+
+[face]
+backend = "provider"
+
+[heartbeat]
+enabled = false
+every = "30m"
+target = "last"
+
+[heartbeat.active_hours]
+start = ""
+end = ""
+timezone = ""
+
+[cron]
+enabled = false
+
+[[cron.jobs]]
+id = "sample"
+every = "2h"
+prompt = "Summarize anything worth surfacing to the admin."
+delivery = "none"
+enabled = false
+
+[voice]
+mode = "off"
+openai_api_key = ""
+openai_base_url = ""
+openai_model = "whisper-1"
+elevenlabs_api_key = ""
+elevenlabs_base_url = ""
+elevenlabs_voice_id = ""
+elevenlabs_model_id = "eleven_multilingual_v2"

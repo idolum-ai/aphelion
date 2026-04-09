@@ -18,6 +18,16 @@ type sendMessageResponse struct {
 	} `json:"result"`
 }
 
+type sendVoiceResponse = sendMessageResponse
+
+type getFileResponse struct {
+	Ok          bool   `json:"ok"`
+	Description string `json:"description"`
+	Result      struct {
+		FilePath string `json:"file_path"`
+	} `json:"result"`
+}
+
 type Update struct {
 	UpdateID int64    `json:"update_id"`
 	Message  *Message `json:"message"`
@@ -30,6 +40,7 @@ type Message struct {
 	From           *User           `json:"from"`
 	Text           string          `json:"text"`
 	Caption        string          `json:"caption"`
+	Voice          *Voice          `json:"voice"`
 	Entities       []MessageEntity `json:"entities"`
 	ReplyToMessage *Message        `json:"reply_to_message"`
 	Raw            json.RawMessage `json:"-"`
@@ -52,4 +63,11 @@ type MessageEntity struct {
 	Type   string `json:"type"`
 	Offset int    `json:"offset"`
 	Length int    `json:"length"`
+}
+
+type Voice struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
 }

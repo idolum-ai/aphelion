@@ -5,6 +5,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -67,7 +68,9 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 
 		for _, upd := range updates {
-			if inbound := NormalizeMessage(upd.Message); inbound != nil {
+			if inbound, err := p.normalizeUpdate(ctx, upd); err != nil {
+				return err
+			} else if inbound != nil {
 				if p.resolver != nil {
 					if _, ok := p.resolver.ResolveTelegramUser(inbound.SenderID); !ok {
 						if next := upd.UpdateID + 1; next > offset {
@@ -90,6 +93,26 @@ func (p *Poller) Run(ctx context.Context) error {
 	}
 }
 
+func (p *Poller) normalizeUpdate(ctx context.Context, upd Update) (*core.InboundMessage, error) {
+	inbound := NormalizeMessage(upd.Message)
+	if inbound == nil {
+		return nil, nil
+	}
+	if upd.Message != nil && upd.Message.Voice != nil && p.client != nil {
+		data, err := p.client.DownloadFile(ctx, upd.Message.Voice.FileID)
+		if err != nil {
+			return nil, fmt.Errorf("download telegram voice %s: %w", upd.Message.Voice.FileID, err)
+		}
+		inbound.Media = append(inbound.Media, core.Media{
+			Type:     "voice",
+			Data:     data,
+			MimeType: upd.Message.Voice.MimeType,
+			Filename: "voice.ogg",
+		})
+	}
+	return inbound, nil
+}
+
 func NormalizeMessage(msg *Message) *core.InboundMessage {
 	if msg == nil || msg.Chat == nil || msg.Chat.Type != "private" {
 		return nil
@@ -98,7 +121,7 @@ func NormalizeMessage(msg *Message) *core.InboundMessage {
 	if text == "" {
 		text = msg.Caption
 	}
-	if text == "" {
+	if text == "" && msg.Voice == nil {
 		return nil
 	}
 	return &core.InboundMessage{

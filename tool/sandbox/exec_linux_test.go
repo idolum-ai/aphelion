@@ -95,6 +95,21 @@ func TestRunnerPlanForApprovedIncludesBubblewrapAndChdir(t *testing.T) {
 	if !strings.Contains(args, "--ro-bind "+scope.GlobalRoot+" "+scope.GlobalRoot) {
 		t.Fatalf("args missing readonly bind for global root: %v", plan.Args)
 	}
+	if !strings.Contains(args, "--unshare-user") || !strings.Contains(args, "--uid 65534") || !strings.Contains(args, "--gid 65534") {
+		t.Fatalf("args missing user namespace remap: %v", plan.Args)
+	}
+	if !strings.Contains(args, "--cap-drop ALL") {
+		t.Fatalf("args missing cap drop: %v", plan.Args)
+	}
+	if !strings.Contains(args, "--unshare-net") {
+		t.Fatalf("args missing network namespace isolation: %v", plan.Args)
+	}
+	if !strings.Contains(args, "--clearenv") || !strings.Contains(args, "--setenv HOME "+scope.UserWorkspace) {
+		t.Fatalf("args missing isolated environment setup: %v", plan.Args)
+	}
+	if len(plan.Env) != 0 {
+		t.Fatalf("env = %#v, want empty host env for isolated runner", plan.Env)
+	}
 }
 
 func TestRunnerPlanRejectsHiddenPathShadowingWritableRoot(t *testing.T) {

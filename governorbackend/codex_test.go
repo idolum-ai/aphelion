@@ -6,12 +6,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/governorauth"
 )
 
 func TestCodexCompleteText(t *testing.T) {
@@ -125,6 +128,114 @@ func TestCodexCompleteStatusError(t *testing.T) {
 	}
 }
 
+func TestCodexCompleteReloadsAuthFileAfterUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	var seenAuth []string
+	client, err := NewCodex(CodexOptions{
+		BaseURL:      "https://chatgpt.com/backend-api/codex",
+		AccessToken:  "stale-token",
+		RefreshToken: "refresh-token",
+		LoadTokens: func() (governorauth.CodexTokens, error) {
+			return governorauth.CodexTokens{
+				AccessToken:  "fresh-token",
+				RefreshToken: "refresh-token",
+			}, nil
+		},
+		HTTPClient: &http.Client{Transport: &testTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seenAuth = append(seenAuth, r.Header.Get("Authorization"))
+			if len(seenAuth) == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"content": "recovered"})
+		})}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "recovered" {
+		t.Fatalf("content = %q, want recovered", resp.Content)
+	}
+	if got, want := strings.Join(seenAuth, ","), "Bearer stale-token,Bearer fresh-token"; got != want {
+		t.Fatalf("authorization sequence = %q, want %q", got, want)
+	}
+}
+
+func TestCodexCompleteRefreshesAndPersistsTokensAfterUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	var seenAuth []string
+	var saved governorauth.CodexTokens
+	var savedAt time.Time
+	client, err := NewCodex(CodexOptions{
+		BaseURL:      "https://chatgpt.com/backend-api/codex",
+		AccessToken:  "stale-token",
+		RefreshToken: "refresh-token",
+		RefreshURL:   "https://auth.openai.com/oauth/token",
+		SaveTokens: func(tokens governorauth.CodexTokens, refreshedAt time.Time) error {
+			saved = tokens
+			savedAt = refreshedAt
+			return nil
+		},
+		Now: func() time.Time {
+			return time.Date(2026, time.April, 9, 1, 2, 3, 0, time.UTC)
+		},
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.String() {
+			case "https://chatgpt.com/backend-api/codex":
+				seenAuth = append(seenAuth, req.Header.Get("Authorization"))
+				rec := httptest.NewRecorder()
+				if len(seenAuth) == 1 {
+					rec.WriteHeader(http.StatusUnauthorized)
+				} else {
+					_ = json.NewEncoder(rec).Encode(map[string]any{"content": "after-refresh"})
+				}
+				return rec.Result(), nil
+			case "https://auth.openai.com/oauth/token":
+				raw, _ := io.ReadAll(req.Body)
+				if !strings.Contains(string(raw), `"grant_type":"refresh_token"`) {
+					t.Fatalf("refresh payload = %s, want refresh_token grant", string(raw))
+				}
+				rec := httptest.NewRecorder()
+				_ = json.NewEncoder(rec).Encode(map[string]any{
+					"access_token":  "fresh-access",
+					"refresh_token": "fresh-refresh",
+				})
+				return rec.Result(), nil
+			default:
+				t.Fatalf("unexpected request url: %s", req.URL.String())
+				return nil, nil
+			}
+		})},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "after-refresh" {
+		t.Fatalf("content = %q, want after-refresh", resp.Content)
+	}
+	if got, want := strings.Join(seenAuth, ","), "Bearer stale-token,Bearer fresh-access"; got != want {
+		t.Fatalf("authorization sequence = %q, want %q", got, want)
+	}
+	if saved.AccessToken != "fresh-access" || saved.RefreshToken != "fresh-refresh" {
+		t.Fatalf("saved tokens = %#v, want refreshed pair", saved)
+	}
+	if savedAt.IsZero() {
+		t.Fatal("save timestamp was not set")
+	}
+}
+
 type testTransport struct {
 	handler http.Handler
 }
@@ -137,6 +248,12 @@ func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 type errTransport struct {
 	err error
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
 
 func (t errTransport) RoundTrip(*http.Request) (*http.Response, error) {

@@ -19,6 +19,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/governorauth"
+	"github.com/idolum-ai/aphelion/media"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -70,6 +71,7 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 type fakeSender struct {
 	mu   sync.Mutex
 	sent []core.OutboundMessage
+	voice []voiceSend
 }
 
 func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (int64, error) {
@@ -77,6 +79,47 @@ func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (i
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, msg)
 	return int64(len(f.sent)), nil
+}
+
+type voiceSend struct {
+	ChatID int64
+	Media  core.Media
+	ReplyTo *int64
+}
+
+func (f *fakeSender) SendVoiceMessage(_ context.Context, chatID int64, media core.Media, replyTo *int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.voice = append(f.voice, voiceSend{ChatID: chatID, Media: media, ReplyTo: replyTo})
+	return int64(len(f.voice)), nil
+}
+
+type fakeTranscriber struct {
+	text string
+	err  error
+}
+
+func (f fakeTranscriber) Transcribe(_ context.Context, _ *media.TranscriptionRequest) (*media.Transcription, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &media.Transcription{Text: f.text}, nil
+}
+
+func (f fakeTranscriber) Translate(_ context.Context, _ *media.TranscriptionRequest) (*media.Transcription, error) {
+	return nil, errors.New("not implemented")
+}
+
+type fakeSynth struct {
+	media core.Media
+	err   error
+}
+
+func (f fakeSynth) Synthesize(_ context.Context, _ string) (core.Media, error) {
+	if f.err != nil {
+		return core.Media{}, f.err
+	}
+	return f.media, nil
 }
 
 type toolRequestingProvider struct {
@@ -253,6 +296,352 @@ func TestHandleInboundReloadsPromptContextEachTurn(t *testing.T) {
 	}
 	if !strings.Contains(provider.seenGovernorSystem[0], "principal_role: admin") {
 		t.Fatalf("first governor prompt missing principal role: %q", provider.seenGovernorSystem[0])
+	}
+}
+
+func TestHeartbeatTargetNoneStoresMaintenanceWithoutOutbound(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.Target = "none"
+	provider.replyText = "heartbeat canonical"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      222,
+		SourceUserID:      1002,
+		SourceRole:        "approved_user",
+		TargetAdminChatID: 1001,
+		TurnFrom:          1,
+		TurnTo:            1,
+		Summary:           "user is asking for help",
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent len = %d, want 0", len(sender.sent))
+	}
+	sender.mu.Unlock()
+
+	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(heartbeat session) err = %v", err)
+	}
+	if maintenance.LastCanonicalReply != "heartbeat canonical" {
+		t.Fatalf("maintenance canonical = %q, want heartbeat canonical", maintenance.LastCanonicalReply)
+	}
+	if len(maintenance.Messages) == 0 || maintenance.Messages[len(maintenance.Messages)-1].Content != "heartbeat canonical" {
+		t.Fatalf("maintenance messages = %#v, want canonical heartbeat entry", maintenance.Messages)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events len = %d, want 1", len(events))
+	}
+}
+
+func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.Target = "last"
+	provider.replyText = "heartbeat canonical"
+	provider.faceReplyText = "heartbeat rendered"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      333,
+		SourceUserID:      1002,
+		SourceRole:        "approved_user",
+		TargetAdminChatID: 1001,
+		TurnFrom:          2,
+		TurnTo:            2,
+		Summary:           "needs review",
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "heartbeat rendered" {
+		t.Fatalf("sent = %#v, want rendered heartbeat to admin", sender.sent[0])
+	}
+	sender.mu.Unlock()
+
+	adminSession, err := store.Load(session.SessionKey{ChatID: 1001, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(admin session) err = %v", err)
+	}
+	if adminSession.LastCanonicalReply != "heartbeat canonical" {
+		t.Fatalf("admin canonical = %q, want heartbeat canonical", adminSession.LastCanonicalReply)
+	}
+	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "heartbeat rendered" {
+		t.Fatalf("admin messages = %#v, want rendered heartbeat entry", adminSession.Messages)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("pending review events len = %d, want 0 after delivery", len(events))
+	}
+}
+
+func TestCronJobNoneStoresDedicatedSessionWithoutOutbound(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "cron canonical"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := rt.runCronJobOnce(context.Background(), config.CronJobConfig{
+		ID:       "sample",
+		Every:    "2h",
+		Prompt:   "Summarize pending maintenance state.",
+		Delivery: "none",
+		Enabled:  true,
+	}); err != nil {
+		t.Fatalf("runCronJobOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent len = %d, want 0", len(sender.sent))
+	}
+	sender.mu.Unlock()
+
+	cronSession, err := store.Load(session.SessionKey{ChatID: cronSessionChatID("sample"), UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(cron session) err = %v", err)
+	}
+	if cronSession.LastCanonicalReply != "cron canonical" {
+		t.Fatalf("cron canonical = %q, want cron canonical", cronSession.LastCanonicalReply)
+	}
+	if len(cronSession.Messages) == 0 || cronSession.Messages[len(cronSession.Messages)-1].Content != "cron canonical" {
+		t.Fatalf("cron messages = %#v, want canonical cron entry", cronSession.Messages)
+	}
+}
+
+func TestCronJobAnnounceUsesFaceAndUpdatesAdminSession(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "cron canonical"
+	provider.faceReplyText = "cron rendered"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := rt.runCronJobOnce(context.Background(), config.CronJobConfig{
+		ID:       "announce",
+		Every:    "1h",
+		Prompt:   "Tell the admin something useful.",
+		Delivery: "announce",
+		Enabled:  true,
+	}); err != nil {
+		t.Fatalf("runCronJobOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "cron rendered" {
+		t.Fatalf("sent = %#v, want rendered cron to admin", sender.sent[0])
+	}
+	sender.mu.Unlock()
+
+	adminSession, err := store.Load(session.SessionKey{ChatID: 1001, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(admin session) err = %v", err)
+	}
+	if adminSession.LastCanonicalReply != "cron canonical" {
+		t.Fatalf("admin canonical = %q, want cron canonical", adminSession.LastCanonicalReply)
+	}
+	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "cron rendered" {
+		t.Fatalf("admin messages = %#v, want rendered cron entry", adminSession.Messages)
+	}
+}
+
+func TestHandleInboundVoiceOnlyTranscribesAndRepliesWithVoice(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "host text"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "voice_only"}, fakeTranscriber{text: "transcribed hello"}, fakeSynth{
+		media: core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+	})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1200,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  77,
+		Media:      []core.Media{{Type: "voice", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("text sends = %d, want 0 in voice_only mode", len(sender.sent))
+	}
+	if len(sender.voice) != 1 {
+		t.Fatalf("voice sends = %d, want 1", len(sender.voice))
+	}
+	if sender.voice[0].ChatID != 1200 {
+		t.Fatalf("voice chat id = %d, want 1200", sender.voice[0].ChatID)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 1200, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if len(sess.Messages) < 2 || sess.Messages[0].Content != "transcribed hello" {
+		t.Fatalf("session messages = %#v, want transcribed user text", sess.Messages)
+	}
+}
+
+func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "voice fallback text"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "voice_only"}, fakeTranscriber{text: "transcribed hello"}, fakeSynth{
+		err: errors.New("tts down"),
+	})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1201,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  78,
+		Media:      []core.Media{{Type: "voice", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.voice) != 0 {
+		t.Fatalf("voice sends = %d, want 0 on synth failure", len(sender.voice))
+	}
+	if len(sender.sent) != 1 || sender.sent[0].Text != "voice fallback text" {
+		t.Fatalf("text sends = %#v, want text fallback", sender.sent)
+	}
+}
+
+func TestFaceProviderSelection(t *testing.T) {
+	origFaceRenderer := newFaceRenderer
+	origResolveAuth := resolveGovernorAuth
+	origCodexProvider := newCodexProvider
+	defer func() {
+		newFaceRenderer = origFaceRenderer
+		resolveGovernorAuth = origResolveAuth
+		newCodexProvider = origCodexProvider
+	}()
+
+	codexProvider := &fakeProvider{replyText: "codex"}
+	newCodexProvider = func(bundle governorauth.Bundle, cfg *config.Config) (agent.Provider, error) {
+		return codexProvider, nil
+	}
+
+	tests := []struct {
+		name        string
+		faceBackend face.Backend
+		resolveAuth func(config.GovernorConfig) (governorauth.Bundle, error)
+		want        func(agent.Provider, agent.Provider) agent.Provider
+	}{
+		{
+			name:        "provider backend uses supplied provider",
+			faceBackend: face.BackendProvider,
+			resolveAuth: func(cfg config.GovernorConfig) (governorauth.Bundle, error) {
+				return governorauth.Bundle{Backend: governorauth.BackendNative}, nil
+			},
+			want: func(providerArg, codexAgent agent.Provider) agent.Provider {
+				return providerArg
+			},
+		},
+		{
+			name:        "governor_passthrough uses governor provider",
+			faceBackend: face.BackendGovernorPassthrough,
+			resolveAuth: func(cfg config.GovernorConfig) (governorauth.Bundle, error) {
+				return governorauth.Bundle{Backend: governorauth.BackendCodex, BaseURL: "https://codex", AccessToken: "token"}, nil
+			},
+			want: func(providerArg, codexAgent agent.Provider) agent.Provider {
+				return codexAgent
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Helper()
+			cfg, store, _, sender := buildRuntimeFixtures(t)
+			cfg.Face.Backend = string(tt.faceBackend)
+
+			var captured agent.Provider
+			newFaceRenderer = func(p agent.Provider, cfg face.ProviderRendererConfig) (*face.ProviderRenderer, error) {
+				captured = p
+				return origFaceRenderer(p, cfg)
+			}
+			t.Cleanup(func() { newFaceRenderer = origFaceRenderer })
+
+			resolveGovernorAuth = tt.resolveAuth
+			t.Cleanup(func() { resolveGovernorAuth = origResolveAuth })
+
+			providerArg := &fakeProvider{replyText: "face"}
+			if _, err := New(cfg, store, providerArg, nil, sender); err != nil {
+				t.Fatalf("New() err = %v", err)
+			}
+
+			want := tt.want(providerArg, codexProvider)
+			if captured != want {
+				t.Fatalf("got face provider %T, want %T", captured, want)
+			}
+		})
 	}
 }
 
@@ -936,8 +1325,6 @@ func TestHandleInboundUsesCodexGovernorBackend(t *testing.T) {
 }
 
 func TestNewAutoFallsBackToNativeWhenCodexCredentialsMissing(t *testing.T) {
-	t.Parallel()
-
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	cfg.Governor.Backend = "auto"
 	cfg.Governor.Codex.AuthSource = "codex_cli"
@@ -981,8 +1368,6 @@ func TestNewAutoFallsBackToNativeWhenCodexCredentialsMissing(t *testing.T) {
 }
 
 func TestNewAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
-	t.Parallel()
-
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	cfg.Governor.Backend = "auto"
 	cfg.Governor.Codex.AuthSource = "codex_cli"

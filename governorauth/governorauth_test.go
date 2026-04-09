@@ -3,10 +3,12 @@
 package governorauth
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/config"
 )
@@ -72,6 +74,12 @@ func TestGovernorBackendAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
 	}
 	if bundle.Source != "codex-cli-auth-json" {
 		t.Fatalf("source = %q, want codex-cli-auth-json", bundle.Source)
+	}
+	if bundle.AuthPath != authPath {
+		t.Fatalf("auth path = %q, want %q", bundle.AuthPath, authPath)
+	}
+	if bundle.RefreshURL != DefaultCodexRefreshURL {
+		t.Fatalf("refresh url = %q, want %q", bundle.RefreshURL, DefaultCodexRefreshURL)
 	}
 }
 
@@ -169,5 +177,63 @@ func TestResolveCodexAuthPathPrefersCODEXHOME(t *testing.T) {
 	want := filepath.Join(codeHome, "auth.json")
 	if got != want {
 		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
+
+func TestLoadCodexCLIAuth(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"acc","refresh_token":"ref"}}`), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	got, err := LoadCodexCLIAuth(authPath)
+	if err != nil {
+		t.Fatalf("LoadCodexCLIAuth() err = %v", err)
+	}
+	if got.AccessToken != "acc" || got.RefreshToken != "ref" {
+		t.Fatalf("tokens = %#v, want acc/ref", got)
+	}
+}
+
+func TestSaveCodexCLIAuthPreservesUnknownFields(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"chatgpt","extra":{"k":"v"},"tokens":{"access_token":"old","refresh_token":"old"}}`), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	refreshedAt := time.Date(2026, time.April, 9, 12, 34, 56, 0, time.UTC)
+	if err := SaveCodexCLIAuth(authPath, CodexTokens{
+		AccessToken:  "new-access",
+		RefreshToken: "new-refresh",
+	}, refreshedAt); err != nil {
+		t.Fatalf("SaveCodexCLIAuth() err = %v", err)
+	}
+
+	raw, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatalf("read auth.json: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal saved auth: %v", err)
+	}
+	if payload["auth_mode"] != "chatgpt" {
+		t.Fatalf("auth_mode = %#v, want chatgpt", payload["auth_mode"])
+	}
+	if payload["last_refresh"] != refreshedAt.Format(time.RFC3339) {
+		t.Fatalf("last_refresh = %#v, want %q", payload["last_refresh"], refreshedAt.Format(time.RFC3339))
+	}
+	tokens, ok := payload["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("tokens = %#v, want object", payload["tokens"])
+	}
+	if tokens["access_token"] != "new-access" || tokens["refresh_token"] != "new-refresh" {
+		t.Fatalf("tokens = %#v, want updated tokens", tokens)
 	}
 }

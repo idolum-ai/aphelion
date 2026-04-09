@@ -56,9 +56,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		return nil, fmt.Errorf("assemble history: %w", err)
 	}
 
-	userText := strings.TrimSpace(msg.Text)
-	if userText == "" {
-		userText = "[empty message]"
+	userText, inboundWasVoice, err := r.transcribeVoiceIfNeeded(ctx, msg)
+	if err != nil {
+		return nil, err
 	}
 
 	input := make([]agent.Message, 0, len(history)+2)
@@ -115,13 +115,8 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		return nil, fmt.Errorf("save session: %w", err)
 	}
 
-	_, sendErr := r.outbound.SendMessage(ctx, core.OutboundMessage{
-		ChatID:  msg.ChatID,
-		Text:    replyText,
-		ReplyTo: &msg.MessageID,
-	})
-	if sendErr != nil {
-		return result, fmt.Errorf("send outbound reply: %w", sendErr)
+	if err := r.sendReply(ctx, msg, replyText, inboundWasVoice); err != nil {
+		return result, fmt.Errorf("send outbound reply: %w", err)
 	}
 
 	if shouldGenerateReviewEvent(actor, key) {

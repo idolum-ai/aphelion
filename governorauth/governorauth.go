@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/config"
 )
@@ -23,6 +24,7 @@ const (
 	AuthSourceAphelion = "aphelion"
 
 	DefaultCodexBaseURL = "https://chatgpt.com/backend-api/codex"
+	DefaultCodexRefreshURL = "https://auth.openai.com/oauth/token"
 )
 
 var (
@@ -59,6 +61,8 @@ type Bundle struct {
 	BaseURL      string
 	AccessToken  string
 	RefreshToken string
+	AuthPath     string
+	RefreshURL   string
 	Source       string
 }
 
@@ -130,6 +134,8 @@ func resolveCodexBundle(cfg config.GovernorConfig, l lookups) (Bundle, bool, err
 			BaseURL:      baseURL,
 			AccessToken:  creds.AccessToken,
 			RefreshToken: creds.RefreshToken,
+			AuthPath:     creds.AuthPath,
+			RefreshURL:   DefaultCodexRefreshURL,
 			Source:       "codex-cli-auth-json",
 		}, true, nil, nil
 	case AuthSourceAphelion:
@@ -156,6 +162,7 @@ type codexCLIAuth struct {
 type codexCredentials struct {
 	AccessToken  string
 	RefreshToken string
+	AuthPath     string
 }
 
 func detectCodexCLICredentials(codexHomeOverride string, l lookups) (codexCredentials, error) {
@@ -186,6 +193,7 @@ func detectCodexCLICredentials(codexHomeOverride string, l lookups) (codexCreden
 	return codexCredentials{
 		AccessToken:  access,
 		RefreshToken: refresh,
+		AuthPath:     authPath,
 	}, nil
 }
 
@@ -205,4 +213,74 @@ func resolveCodexAuthPath(codexHomeOverride string, l lookups) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(codexHome, "auth.json"), true
+}
+
+type CodexTokens struct {
+	AccessToken  string
+	RefreshToken string
+}
+
+func LoadCodexCLIAuth(path string) (CodexTokens, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return CodexTokens{}, ErrCodexAuthNotFound
+		}
+		return CodexTokens{}, ErrCodexAuthMalformed
+	}
+
+	var parsed codexCLIAuth
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return CodexTokens{}, ErrCodexAuthMalformed
+	}
+
+	access := strings.TrimSpace(parsed.Tokens.AccessToken)
+	refresh := strings.TrimSpace(parsed.Tokens.RefreshToken)
+	if access == "" || refresh == "" {
+		return CodexTokens{}, ErrCodexAuthIncomplete
+	}
+	return CodexTokens{
+		AccessToken:  access,
+		RefreshToken: refresh,
+	}, nil
+}
+
+func SaveCodexCLIAuth(path string, tokens CodexTokens, refreshedAt time.Time) error {
+	access := strings.TrimSpace(tokens.AccessToken)
+	refresh := strings.TrimSpace(tokens.RefreshToken)
+	if access == "" || refresh == "" {
+		return ErrCodexAuthIncomplete
+	}
+
+	payload := map[string]any{}
+	if raw, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return ErrCodexAuthMalformed
+		}
+	} else if !os.IsNotExist(err) {
+		return ErrCodexAuthMalformed
+	}
+
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["tokens"] = map[string]any{
+		"access_token":  access,
+		"refresh_token": refresh,
+	}
+	payload["last_refresh"] = refreshedAt.UTC().Format(time.RFC3339)
+
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal codex auth: %w", err)
+	}
+	data = append(data, '\n')
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("mkdir codex auth dir: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write codex auth: %w", err)
+	}
+	return nil
 }

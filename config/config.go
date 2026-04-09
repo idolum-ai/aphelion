@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,10 @@ type Config struct {
 	Providers  ProvidersConfig  `toml:"providers"`
 	Sessions   SessionsConfig   `toml:"sessions"`
 	Agent      AgentConfig      `toml:"agent"`
+	Face       FaceConfig       `toml:"face"`
+	Heartbeat  HeartbeatConfig  `toml:"heartbeat"`
+	Cron       CronConfig       `toml:"cron"`
+	Voice      VoiceConfig      `toml:"voice"`
 }
 
 type IdentityConfig struct {
@@ -80,6 +85,47 @@ type AgentConfig struct {
 	DailyNotesDir          string   `toml:"daily_notes_dir"`
 }
 
+type FaceConfig struct {
+	Backend string `toml:"backend"`
+}
+
+type HeartbeatConfig struct {
+	Enabled     bool                      `toml:"enabled"`
+	Every       string                    `toml:"every"`
+	Target      string                    `toml:"target"`
+	ActiveHours HeartbeatActiveHoursConfig `toml:"active_hours"`
+}
+
+type HeartbeatActiveHoursConfig struct {
+	Start    string `toml:"start"`
+	End      string `toml:"end"`
+	Timezone string `toml:"timezone"`
+}
+
+type CronConfig struct {
+	Enabled bool            `toml:"enabled"`
+	Jobs    []CronJobConfig `toml:"jobs"`
+}
+
+type CronJobConfig struct {
+	ID       string `toml:"id"`
+	Every    string `toml:"every"`
+	Prompt   string `toml:"prompt"`
+	Delivery string `toml:"delivery"`
+	Enabled  bool   `toml:"enabled"`
+}
+
+type VoiceConfig struct {
+	Mode               string `toml:"mode"`
+	OpenAIAPIKey       string `toml:"openai_api_key"`
+	OpenAIBaseURL      string `toml:"openai_base_url"`
+	OpenAIModel        string `toml:"openai_model"`
+	ElevenLabsAPIKey   string `toml:"elevenlabs_api_key"`
+	ElevenLabsBaseURL  string `toml:"elevenlabs_base_url"`
+	ElevenLabsVoiceID  string `toml:"elevenlabs_voice_id"`
+	ElevenLabsModelID  string `toml:"elevenlabs_model_id"`
+}
+
 func Default() Config {
 	return Config{
 		Telegram: TelegramConfig{
@@ -121,6 +167,22 @@ func Default() Config {
 			BootstrapTotalMaxChars: 150000,
 			DailyNotes:             true,
 			DailyNotesDir:          "memory",
+		},
+		Face: FaceConfig{
+			Backend: "provider",
+		},
+		Heartbeat: HeartbeatConfig{
+			Enabled: false,
+			Every:   "30m",
+			Target:  "last",
+		},
+		Cron: CronConfig{
+			Enabled: false,
+		},
+		Voice: VoiceConfig{
+			Mode:              "off",
+			OpenAIModel:       "whisper-1",
+			ElevenLabsModelID: "eleven_multilingual_v2",
 		},
 	}
 }
@@ -207,6 +269,73 @@ func validate(cfg *Config) error {
 	if strings.TrimSpace(cfg.Agent.DailyNotesDir) == "" {
 		return fmt.Errorf("agent.daily_notes_dir is required")
 	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Face.Backend)) {
+	case "", "provider", "governor_passthrough":
+	default:
+		return fmt.Errorf("face.backend must be one of provider|governor_passthrough")
+	}
+	if strings.TrimSpace(cfg.Heartbeat.Every) == "" {
+		return fmt.Errorf("heartbeat.every is required")
+	}
+	if _, err := time.ParseDuration(strings.TrimSpace(cfg.Heartbeat.Every)); err != nil {
+		return fmt.Errorf("heartbeat.every must be a valid duration: %w", err)
+	}
+	switch target := strings.TrimSpace(cfg.Heartbeat.Target); target {
+	case "", "none", "last":
+	default:
+		if _, err := parsePositiveInt64(target); err != nil {
+			return fmt.Errorf("heartbeat.target must be one of none|last|<admin_chat_id>")
+		}
+	}
+	if _, err := validateClock(cfg.Heartbeat.ActiveHours.Start, "heartbeat.active_hours.start"); err != nil {
+		return err
+	}
+	if _, err := validateClock(cfg.Heartbeat.ActiveHours.End, "heartbeat.active_hours.end"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.Heartbeat.ActiveHours.Timezone) != "" {
+		if _, err := time.LoadLocation(strings.TrimSpace(cfg.Heartbeat.ActiveHours.Timezone)); err != nil {
+			return fmt.Errorf("heartbeat.active_hours.timezone must be a valid IANA timezone: %w", err)
+		}
+	}
+	for i, job := range cfg.Cron.Jobs {
+		if strings.TrimSpace(job.ID) == "" {
+			return fmt.Errorf("cron.jobs[%d].id is required", i)
+		}
+		if strings.TrimSpace(job.Every) == "" {
+			return fmt.Errorf("cron.jobs[%d].every is required", i)
+		}
+		if _, err := time.ParseDuration(strings.TrimSpace(job.Every)); err != nil {
+			return fmt.Errorf("cron.jobs[%d].every must be a valid duration: %w", i, err)
+		}
+		if strings.TrimSpace(job.Prompt) == "" {
+			return fmt.Errorf("cron.jobs[%d].prompt is required", i)
+		}
+		switch strings.ToLower(strings.TrimSpace(job.Delivery)) {
+		case "", "none", "announce":
+		default:
+			return fmt.Errorf("cron.jobs[%d].delivery must be one of none|announce", i)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Voice.Mode)) {
+	case "", "off", "voice_only", "all":
+	default:
+		return fmt.Errorf("voice.mode must be one of off|voice_only|all")
+	}
+	if strings.TrimSpace(cfg.Voice.Mode) != "" && !strings.EqualFold(strings.TrimSpace(cfg.Voice.Mode), "off") {
+		if strings.TrimSpace(cfg.Voice.OpenAIAPIKey) == "" {
+			return fmt.Errorf("voice.openai_api_key is required when voice.mode is enabled")
+		}
+		if strings.TrimSpace(cfg.Voice.OpenAIModel) == "" {
+			return fmt.Errorf("voice.openai_model is required when voice.mode is enabled")
+		}
+		if strings.TrimSpace(cfg.Voice.ElevenLabsAPIKey) == "" {
+			return fmt.Errorf("voice.elevenlabs_api_key is required when voice.mode is enabled")
+		}
+		if strings.TrimSpace(cfg.Voice.ElevenLabsVoiceID) == "" {
+			return fmt.Errorf("voice.elevenlabs_voice_id is required when voice.mode is enabled")
+		}
+	}
 	if len(cfg.Principals.Telegram.AdminUserIDs) == 0 {
 		return fmt.Errorf("principals.telegram.admin_user_ids must contain at least one user id")
 	}
@@ -236,6 +365,28 @@ func validate(cfg *Config) error {
 		approved[id] = struct{}{}
 	}
 	return nil
+}
+
+func validateClock(raw string, field string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	if _, err := time.Parse("15:04", trimmed); err != nil {
+		return "", fmt.Errorf("%s must be in HH:MM format: %w", field, err)
+	}
+	return trimmed, nil
+}
+
+func parsePositiveInt64(raw string) (int64, error) {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("must be positive")
+	}
+	return value, nil
 }
 
 func expandPath(path string) (string, error) {

@@ -116,3 +116,25 @@ func TestNewResolverRejectsMissingRoots(t *testing.T) {
 		t.Fatal("NewResolver() err = nil, want missing root validation")
 	}
 }
+
+func TestDefaultRoots(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	got, err := DefaultRoots(filepath.Join(tmp, "workspace"), filepath.Join(tmp, "state", "sessions.db"))
+	if err != nil {
+		t.Fatalf("DefaultRoots() err = %v", err)
+	}
+	if got.GlobalRoot != filepath.Join(tmp, "workspace") {
+		t.Fatalf("global root = %q, want %q", got.GlobalRoot, filepath.Join(tmp, "workspace"))
+	}
+	if got.SharedMemoryRoot != filepath.Join(tmp, "workspace") {
+		t.Fatalf("shared memory root = %q, want workspace root", got.SharedMemoryRoot)
+	}
+	if got.UserWorkspaceRoot != filepath.Join(tmp, "state", "isolated", "workspaces") {
+		t.Fatalf("user workspace root = %q", got.UserWorkspaceRoot)
+	}
+	if got.UserMemoryRoot != filepath.Join(tmp, "state", "isolated", "memory") {
+		t.Fatalf("user memory root = %q", got.UserMemoryRoot)
+	}
+}
