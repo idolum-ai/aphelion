@@ -12,7 +12,7 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 
 ## LLM
 7. ✅ [`providers.md`](providers.md) — Inference adapters only. Streaming, retries, and failover staging.
-8. ⬜ [`thinking.md`](thinking.md) — Extended thinking / reasoning mode handling across providers
+8. ✅ [`thinking.md`](thinking.md) — Reasoning effort, summaries, run-kind defaults, governor-owned budgeting
 
 ## Channels
 9. ✅ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
@@ -29,9 +29,9 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 16. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
 
 ## Media
-17. ⬜ [`voice.md`](voice.md) — ElevenLabs TTS, when to speak vs text
+17. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
 18. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
 
 ## Operations
-19. ⬜ [`deployment.md`](deployment.md) — Systemd, process management, logging, restart behavior
+19. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
 20. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
