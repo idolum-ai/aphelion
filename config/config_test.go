@@ -39,6 +39,9 @@ workspace = "./workspace"
 	if cfg.Telegram.PollTimeout != 30 {
 		t.Fatalf("poll timeout = %d, want 30", cfg.Telegram.PollTimeout)
 	}
+	if cfg.Governor.Backend != "auto" {
+		t.Fatalf("governor.backend = %q, want auto", cfg.Governor.Backend)
+	}
 	if cfg.Providers.Anthropic.Model != "claude-sonnet-4-6" {
 		t.Fatalf("model = %q", cfg.Providers.Anthropic.Model)
 	}
@@ -123,6 +126,15 @@ poll_timeout = 11
 admin_user_ids = [123]
 approved_user_ids = [456]
 
+[governor]
+backend = "native"
+native_provider = "anthropic"
+
+[governor.codex]
+auth_source = "codex_cli"
+codex_home = "~/codex-home"
+base_url = "https://chatgpt.com/backend-api/codex"
+
 [providers.anthropic]
 api_key = "sk-ant-test"
 model = "claude-opus-4-6"
@@ -163,6 +175,12 @@ daily_notes_dir = "notes"
 	}
 	if cfg.Agent.MaxIterations != 77 || cfg.Agent.ToolTimeout != 9 {
 		t.Fatalf("agent limits = %d/%d, want 77/9", cfg.Agent.MaxIterations, cfg.Agent.ToolTimeout)
+	}
+	if cfg.Governor.Backend != "native" {
+		t.Fatalf("governor.backend = %q, want native", cfg.Governor.Backend)
+	}
+	if cfg.Governor.Codex.AuthSource != "codex_cli" {
+		t.Fatalf("governor.codex.auth_source = %q, want codex_cli", cfg.Governor.Codex.AuthSource)
 	}
 	if cfg.Sessions.IdleExpiry != "36h" {
 		t.Fatalf("idle_expiry = %q, want 36h", cfg.Sessions.IdleExpiry)
@@ -282,6 +300,68 @@ idle_expiry = "definitely-not-a-duration"
 	_, err := Load(configPath)
 	if err == nil {
 		t.Fatal("Load() err = nil, want idle_expiry validation error")
+	}
+}
+
+func TestLoadRejectsInvalidGovernorBackend(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[governor]
+backend = "wild"
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want governor backend validation error")
+	}
+	if !strings.Contains(err.Error(), "governor.backend") {
+		t.Fatalf("error = %v, want governor.backend message", err)
+	}
+}
+
+func TestLoadRejectsInvalidGovernorCodexAuthSource(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[governor.codex]
+auth_source = "mystery"
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want governor codex auth_source validation error")
+	}
+	if !strings.Contains(err.Error(), "governor.codex.auth_source") {
+		t.Fatalf("error = %v, want governor.codex.auth_source message", err)
 	}
 }
 

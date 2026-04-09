@@ -87,6 +87,7 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	rt.StartIdleExpiryLoop(ctx, log.Printf)
 
 	poller := telegram.NewPoller(tgClient, func(parent context.Context, msg core.InboundMessage) error {
 		turnCtx, cancel := context.WithTimeout(parent, turnTimeout)

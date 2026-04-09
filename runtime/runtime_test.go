@@ -5,25 +5,31 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 )
 
 type fakeProvider struct {
-	mu            sync.Mutex
-	callCount     int
-	replyText     string
-	seenSystem    []string
-	responseUsage core.TokenUsage
+	mu                 sync.Mutex
+	callCount          int
+	replyText          string
+	faceReplyText      string
+	faceErr            error
+	seenGovernorSystem []string
+	seenFaceSystem     []string
+	responseUsage      core.TokenUsage
 }
 
 func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
@@ -31,10 +37,26 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 	defer f.mu.Unlock()
 	f.callCount++
 
+	isFaceCall := len(messages) > 0 && messages[0].Role == "system" && strings.Contains(messages[0].Content, "the face of")
+	if isFaceCall {
+		f.seenFaceSystem = append(f.seenFaceSystem, messages[0].Content)
+		if f.faceErr != nil {
+			return nil, f.faceErr
+		}
+		reply := strings.TrimSpace(f.faceReplyText)
+		if reply == "" {
+			reply = f.replyText
+		}
+		return &agent.Response{
+			Content: reply,
+			Usage:   f.responseUsage,
+		}, nil
+	}
+
 	if len(messages) > 0 && messages[0].Role == "system" {
-		f.seenSystem = append(f.seenSystem, messages[0].Content)
+		f.seenGovernorSystem = append(f.seenGovernorSystem, messages[0].Content)
 	} else {
-		f.seenSystem = append(f.seenSystem, "")
+		f.seenGovernorSystem = append(f.seenGovernorSystem, "")
 	}
 
 	return &agent.Response{
@@ -141,17 +163,17 @@ func TestHandleInboundReloadsPromptContextEachTurn(t *testing.T) {
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if len(provider.seenSystem) < 2 {
-		t.Fatalf("seen system len = %d, want >=2", len(provider.seenSystem))
+	if len(provider.seenGovernorSystem) < 2 {
+		t.Fatalf("seen governor system len = %d, want >=2", len(provider.seenGovernorSystem))
 	}
-	if !strings.Contains(provider.seenSystem[0], "v1") {
-		t.Fatalf("first system prompt missing v1: %q", provider.seenSystem[0])
+	if !strings.Contains(provider.seenGovernorSystem[0], "v1") {
+		t.Fatalf("first governor prompt missing v1: %q", provider.seenGovernorSystem[0])
 	}
-	if !strings.Contains(provider.seenSystem[1], "v2") {
-		t.Fatalf("second system prompt missing v2: %q", provider.seenSystem[1])
+	if !strings.Contains(provider.seenGovernorSystem[1], "v2") {
+		t.Fatalf("second governor prompt missing v2: %q", provider.seenGovernorSystem[1])
 	}
-	if !strings.Contains(provider.seenSystem[0], "principal_role: admin") {
-		t.Fatalf("first system prompt missing principal role: %q", provider.seenSystem[0])
+	if !strings.Contains(provider.seenGovernorSystem[0], "principal_role: admin") {
+		t.Fatalf("first governor prompt missing principal role: %q", provider.seenGovernorSystem[0])
 	}
 }
 
@@ -167,6 +189,17 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 				AdminUserIDs:    []int64{1001},
 				ApprovedUserIDs: []int64{1002},
 			},
+		},
+		Governor: config.GovernorConfig{
+			Backend:        "native",
+			NativeProvider: "anthropic",
+			Codex: config.GovernorCodexConfig{
+				AuthSource: "auto",
+				BaseURL:    "https://chatgpt.com/backend-api/codex",
+			},
+		},
+		Sessions: config.SessionsConfig{
+			IdleExpiry: "24h",
 		},
 		Agent: config.AgentConfig{
 			Workspace:              root,
@@ -287,5 +320,338 @@ func TestHandleInboundRejectsUnknownPrincipal(t *testing.T) {
 	defer sender.mu.Unlock()
 	if len(sender.sent) != 0 {
 		t.Fatalf("sent len = %d, want 0", len(sender.sent))
+	}
+}
+
+func TestHandleInboundRendersViaFaceByDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "governor canonical"
+	provider.faceReplyText = "host rendered"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     901,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "hello",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != "host rendered" {
+		t.Fatalf("outbound text = %q, want host rendered", sender.sent[0].Text)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 901, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if len(sess.Messages) < 2 {
+		t.Fatalf("session messages len = %d, want >= 2", len(sess.Messages))
+	}
+	if sess.Messages[1].Content != "governor canonical" {
+		t.Fatalf("session assistant text = %q, want canonical", sess.Messages[1].Content)
+	}
+}
+
+func TestHandleInboundFaceFailureFallsBackToGovernorPassthrough(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "governor canonical"
+	provider.faceErr = errors.New("face unavailable")
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     902,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "hello",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != "governor canonical" {
+		t.Fatalf("outbound text = %q, want canonical fallback", sender.sent[0].Text)
+	}
+}
+
+func TestHandleInboundGovernorPassthroughBackendSkipsFaceRender(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "governor canonical"
+	provider.faceReplyText = "host rendered"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendGovernorPassthrough
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     903,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "hello",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != "governor canonical" {
+		t.Fatalf("outbound text = %q, want canonical passthrough", sender.sent[0].Text)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenFaceSystem) != 0 {
+		t.Fatalf("face should not be called in passthrough mode; calls=%d", len(provider.seenFaceSystem))
+	}
+}
+
+func TestHandleInboundDeliversPendingReviewEventsForAdmin(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      44,
+		SourceRole:        "approved_user",
+		TargetAdminChatID: 42,
+		TurnFrom:          1,
+		TurnTo:            3,
+		Summary:           "user requested package install in isolated workspace",
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     42,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "status",
+		MessageID:  99,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 2 {
+		t.Fatalf("sent len = %d, want 2", len(sender.sent))
+	}
+	if sender.sent[0].Text != "ok" {
+		t.Fatalf("first message = %q, want model reply", sender.sent[0].Text)
+	}
+	if !strings.Contains(sender.sent[1].Text, "[Review Digest]") {
+		t.Fatalf("second message missing digest label: %q", sender.sent[1].Text)
+	}
+	if !strings.Contains(sender.sent[1].Text, "source_chat=7001") {
+		t.Fatalf("second message missing source chat: %q", sender.sent[1].Text)
+	}
+
+	pending, err := store.PendingReviewEvents(42, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending len = %d, want 0 after delivery", len(pending))
+	}
+}
+
+func TestHandleInboundDoesNotDeliverReviewEventsForApprovedUser(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      8001,
+		SourceUserID:      77,
+		SourceRole:        "approved_user",
+		TargetAdminChatID: 42,
+		TurnFrom:          3,
+		TurnTo:            4,
+		Summary:           "requires admin review",
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     99,
+		SenderID:   1002,
+		SenderName: "member",
+		Text:       "hello",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1 (only model reply)", len(sender.sent))
+	}
+	if sender.sent[0].Text != "ok" {
+		t.Fatalf("message = %q, want ok", sender.sent[0].Text)
+	}
+
+	pending, err := store.PendingReviewEvents(42, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending len = %d, want 1 (not delivered in non-admin turn)", len(pending))
+	}
+}
+
+func TestNewRejectsInvalidIdleExpiry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Sessions.IdleExpiry = "not-a-duration"
+
+	_, err := New(cfg, store, provider, nil, sender)
+	if err == nil {
+		t.Fatal("New() err = nil, want idle_expiry parse error")
+	}
+}
+
+func TestNewRejectsCodexBackendWithoutCredentials(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Governor.Backend = "codex"
+	cfg.Governor.Codex.AuthSource = "codex_cli"
+	cfg.Governor.Codex.CodexHome = t.TempDir()
+
+	_, err := New(cfg, store, provider, nil, sender)
+	if err == nil {
+		t.Fatal("New() err = nil, want codex credential failure")
+	}
+}
+
+func TestStartIdleExpiryLoopRunsAndStopsWithContext(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	var calls int32
+	rt.expireIdle = func(_ time.Duration) (int, error) {
+		atomic.AddInt32(&calls, 1)
+		return 0, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	rt.startIdleExpiryLoop(ctx, 20*time.Millisecond, func(string, ...any) {})
+
+	time.Sleep(75 * time.Millisecond)
+	beforeCancel := atomic.LoadInt32(&calls)
+	if beforeCancel < 2 {
+		t.Fatalf("expire calls before cancel = %d, want >= 2", beforeCancel)
+	}
+
+	cancel()
+	time.Sleep(60 * time.Millisecond)
+	afterCancel := atomic.LoadInt32(&calls)
+	if afterCancel != beforeCancel {
+		t.Fatalf("expire calls changed after cancel: before=%d after=%d", beforeCancel, afterCancel)
+	}
+}
+
+func TestStartIdleExpiryLoopLogsErrorsAndContinues(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	var calls int32
+	rt.expireIdle = func(_ time.Duration) (int, error) {
+		atomic.AddInt32(&calls, 1)
+		return 0, errors.New("boom")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt.startIdleExpiryLoop(ctx, 20*time.Millisecond, func(string, ...any) {})
+	time.Sleep(70 * time.Millisecond)
+
+	if got := atomic.LoadInt32(&calls); got < 2 {
+		t.Fatalf("expire calls = %d, want >= 2 despite errors", got)
+	}
+}
+
+func TestIdleExpirySweepCadence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		idleExpiry time.Duration
+		want       time.Duration
+	}{
+		{name: "negative defaults to minute", idleExpiry: -time.Second, want: time.Minute},
+		{name: "tiny floors at minute", idleExpiry: 30 * time.Second, want: time.Minute},
+		{name: "quarter duration", idleExpiry: 4 * time.Hour, want: time.Hour},
+		{name: "caps at hour", idleExpiry: 24 * time.Hour, want: time.Hour},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := idleExpirySweepCadence(tc.idleExpiry)
+			if got != tc.want {
+				t.Fatalf("idleExpirySweepCadence(%s) = %s, want %s", tc.idleExpiry, got, tc.want)
+			}
+		})
 	}
 }

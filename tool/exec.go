@@ -8,12 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 const defaultMaxOutputBytes = 32 * 1024
@@ -22,6 +25,7 @@ type Registry struct {
 	workspace      string
 	timeout        time.Duration
 	maxOutputBytes int
+	sandbox        *sandbox.Resolver
 }
 
 type execInput struct {
@@ -36,6 +40,12 @@ func NewRegistry(workspace string, timeout time.Duration) *Registry {
 		timeout:        timeout,
 		maxOutputBytes: defaultMaxOutputBytes,
 	}
+}
+
+func NewRegistryWithSandbox(workspace string, timeout time.Duration, resolver *sandbox.Resolver) *Registry {
+	registry := NewRegistry(workspace, timeout)
+	registry.sandbox = resolver
+	return registry
 }
 
 func (r *Registry) Definitions() []agent.ToolDef {
@@ -55,15 +65,34 @@ func (r *Registry) Definitions() []agent.ToolDef {
 }
 
 func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
+	return r.executeWithRoot(ctx, name, input, r.workspace)
+}
+
+func (r *Registry) ExecuteForPrincipal(ctx context.Context, p principal.Principal, name string, input json.RawMessage) (string, error) {
+	if r.sandbox == nil {
+		return "", fmt.Errorf("principal-aware execution requires sandbox resolver")
+	}
+
+	scope, err := r.sandbox.Resolve(p)
+	if err != nil {
+		return "", err
+	}
+	if err := ensureScopeReady(scope); err != nil {
+		return "", err
+	}
+	return r.executeWithRoot(ctx, name, input, scope.WorkingRoot)
+}
+
+func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.RawMessage, root string) (string, error) {
 	switch name {
 	case "exec":
-		return r.exec(ctx, input)
+		return r.exec(ctx, input, root)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
 }
 
-func (r *Registry) exec(ctx context.Context, input json.RawMessage) (string, error) {
+func (r *Registry) exec(ctx context.Context, input json.RawMessage, root string) (string, error) {
 	var in execInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode exec input: %w", err)
@@ -72,7 +101,7 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage) (string, err
 		return "", fmt.Errorf("exec command is required")
 	}
 
-	workdir, err := r.resolveWorkdir(in.Workdir)
+	workdir, err := resolveWorkdir(root, in.Workdir)
 	if err != nil {
 		return "", err
 	}
@@ -119,10 +148,22 @@ func defaultTimeout(timeout time.Duration) time.Duration {
 	return timeout
 }
 
-func (r *Registry) resolveWorkdir(raw string) (string, error) {
-	base, err := filepath.Abs(r.workspace)
+func ensureScopeReady(scope sandbox.Scope) error {
+	if err := os.MkdirAll(scope.WorkingRoot, 0o755); err != nil {
+		return fmt.Errorf("prepare working root %q: %w", scope.WorkingRoot, err)
+	}
+	if strings.TrimSpace(scope.UserMemory) != "" {
+		if err := os.MkdirAll(scope.UserMemory, 0o755); err != nil {
+			return fmt.Errorf("prepare user memory root %q: %w", scope.UserMemory, err)
+		}
+	}
+	return nil
+}
+
+func resolveWorkdir(root, raw string) (string, error) {
+	base, err := filepath.Abs(root)
 	if err != nil {
-		return "", fmt.Errorf("resolve workspace: %w", err)
+		return "", fmt.Errorf("resolve workspace root: %w", err)
 	}
 
 	target := base

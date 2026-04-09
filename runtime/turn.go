@@ -5,16 +5,20 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
-	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/workspace"
 )
+
+const maxReviewEventsPerTurn = 10
 
 func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
 	principal, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
@@ -34,7 +38,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	}
 	systemPrompt := prompt.BuildGovernorPrompt(prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
-		GovernorBackend: prompt.DefaultGovernorBackend,
+		GovernorBackend: r.governorBackend,
 		PrincipalRole:   string(principal.Role),
 		WorkspaceRoot:   r.cfg.Agent.Workspace,
 		ToolManifest:    toolManifest(r.tools),
@@ -85,9 +89,26 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		return nil, fmt.Errorf("save session: %w", err)
 	}
 
-	replyText := strings.TrimSpace(result.Text)
-	if replyText == "" {
-		replyText = "(no response)"
+	canonicalReply := face.CanonicalOrFallback(result.Text)
+	replyText := canonicalReply
+	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
+		renderedReply, renderErr := r.faceModel.Render(ctx, face.RenderRequest{
+			GovernorName:    prompt.DefaultGovernorName,
+			FaceName:        face.DefaultFaceName,
+			Channel:         "telegram",
+			PrincipalRole:   string(principal.Role),
+			WorkspaceRoot:   r.cfg.Agent.Workspace,
+			CanonicalReply:  canonicalReply,
+			LatestUserInput: userText,
+		})
+		if renderErr != nil {
+			log.Printf("WARN face render failed backend=%s err=%v; using governor_passthrough", r.faceBackend, renderErr)
+		} else {
+			replyText = strings.TrimSpace(renderedReply)
+			if replyText == "" {
+				replyText = canonicalReply
+			}
+		}
 	}
 
 	_, sendErr := r.outbound.SendMessage(ctx, core.OutboundMessage{
@@ -99,8 +120,52 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 		return result, fmt.Errorf("send outbound reply: %w", sendErr)
 	}
 
+	if principal.Role == "admin" {
+		if err := r.deliverReviewEvents(ctx, msg.ChatID); err != nil {
+			return result, fmt.Errorf("deliver review events: %w", err)
+		}
+	}
+
 	return result, nil
 }
+
+func (r *Runtime) deliverReviewEvents(ctx context.Context, adminChatID int64) error {
+	events, err := r.store.PendingReviewEvents(adminChatID, maxReviewEventsPerTurn)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
+			ChatID: adminChatID,
+			Text:   formatReviewEventMessage(event),
+		}); err != nil {
+			return err
+		}
+		if err := r.store.MarkReviewDelivered([]int64{event.ID}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatReviewEventMessage(event session.ReviewEvent) string {
+	turnRange := "n/a"
+	if event.TurnFrom > 0 && event.TurnTo >= event.TurnFrom {
+		turnRange = fmt.Sprintf("%d-%d", event.TurnFrom, event.TurnTo)
+	} else if event.TurnFrom > 0 {
+		turnRange = fmt.Sprintf("%d", event.TurnFrom)
+	}
+
+	return fmt.Sprintf(
+		"[Review Digest]\nsource_chat=%d source_user=%d source_role=%s turns=%s\n\n%s",
+		event.SourceChatID,
+		event.SourceUserID,
+		event.SourceRole,
+		turnRange,
+		strings.TrimSpace(event.Summary),
+	)
+}
+
 func toolManifest(registry agent.ToolRegistry) string {
 	if registry == nil {
 		return ""
@@ -111,5 +176,25 @@ func toolManifest(registry agent.ToolRegistry) string {
 	if provider, ok := registry.(manifestProvider); ok {
 		return provider.Manifest()
 	}
-	return toolpkg.RenderManifest(registry.Definitions())
+	return renderToolManifest(registry.Definitions())
+}
+
+func renderToolManifest(defs []agent.ToolDef) string {
+	if len(defs) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		name := strings.TrimSpace(def.Name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }

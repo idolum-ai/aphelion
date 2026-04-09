@@ -26,10 +26,14 @@ type GovernorRequest struct {
 
 type FaceRequest struct {
 	GovernorName    string
+	FaceName        string
 	Channel         string
 	Style           string
+	PrincipalRole   string
 	CanonicalReply  string
 	LatestUserInput string
+	StableFiles     []workspace.LoadedFile
+	DynamicFiles    []workspace.LoadedFile
 }
 
 func BuildGovernorPrompt(req GovernorRequest) string {
@@ -94,6 +98,11 @@ func BuildFacePrompt(req FaceRequest) string {
 		governorName = DefaultGovernorName
 	}
 
+	faceName := strings.TrimSpace(req.FaceName)
+	if faceName == "" {
+		faceName = "Host"
+	}
+
 	channel := strings.TrimSpace(req.Channel)
 	if channel == "" {
 		channel = "telegram"
@@ -102,6 +111,11 @@ func BuildFacePrompt(req FaceRequest) string {
 	style := strings.TrimSpace(req.Style)
 	if style == "" {
 		style = "warm, clear, and emotionally attuned"
+	}
+
+	principalRole := strings.TrimSpace(req.PrincipalRole)
+	if principalRole == "" {
+		principalRole = "unknown"
 	}
 
 	canonical := strings.TrimSpace(req.CanonicalReply)
@@ -114,13 +128,35 @@ func BuildFacePrompt(req FaceRequest) string {
 		userInput = "(no user input provided)"
 	}
 
-	return strings.Join([]string{
-		fmt.Sprintf("You are the face of %s for %s.", governorName, channel),
+	parts := []string{
+		fmt.Sprintf("You are %s, the face of %s for %s.", faceName, governorName, channel),
+		fmt.Sprintf("%s is presentational, not sovereign. %s remains the decision core.", faceName, governorName),
 		fmt.Sprintf("Render the governor's canonical reply in a %s tone.", style),
-		"Do not invent actions, tools, or memory writes that the governor did not decide.",
-		"## Latest User Message\n" + userInput,
-		"## Canonical Governor Reply\n" + canonical,
-	}, "\n\n")
+		"Do not invent actions, tools, memory writes, or authority decisions.",
+	}
+
+	if len(req.StableFiles) > 0 {
+		parts = append(parts, renderFileSection("Stable Face Files", req.StableFiles))
+	}
+	if len(req.DynamicFiles) > 0 {
+		lines := []string{
+			"## Dynamic Face Files",
+			"These files are face-only drift monitors and may change between turns.",
+		}
+		lines = append(lines, renderFiles(req.DynamicFiles)...)
+		parts = append(parts, strings.Join(lines, "\n\n"))
+	}
+
+	parts = append(parts, "## Canonical Governor Reply\n"+canonical)
+	parts = append(parts, "## Latest User Message\n"+userInput)
+	parts = append(parts, strings.Join([]string{
+		"## Channel Context",
+		fmt.Sprintf("- channel: %s", channel),
+		fmt.Sprintf("- principal_role: %s", principalRole),
+		fmt.Sprintf("- style: %s", style),
+	}, "\n"))
+
+	return strings.Join(parts, "\n\n")
 }
 
 func renderAuthorityBlock(governorName string, governorBackend string, principalRole string, workspaceRoot string, toolsAvailable bool) string {

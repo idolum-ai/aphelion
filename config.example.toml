@@ -9,6 +9,15 @@ poll_timeout = 30
 admin_user_ids = [123456789]
 approved_user_ids = []
 
+[governor]
+backend = "auto"
+native_provider = "anthropic"
+
+[governor.codex]
+auth_source = "auto"
+codex_home = ""
+base_url = "https://chatgpt.com/backend-api/codex"
+
 [providers]
 default = "anthropic"
 

@@ -6,11 +6,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/governorauth"
 	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -25,6 +31,14 @@ type Runtime struct {
 	tools    agent.ToolRegistry
 	outbound OutboundSender
 	resolver *principal.Resolver
+
+	faceBackend face.Backend
+	faceModel   face.Renderer
+
+	governorBackend string
+
+	idleExpiry time.Duration
+	expireIdle func(maxIdle time.Duration) (int, error)
 }
 
 var ErrPrincipalDenied = errors.New("principal is not admitted")
@@ -49,6 +63,31 @@ func New(
 		return nil, fmt.Errorf("outbound sender is nil")
 	}
 
+	governorAuth, err := governorauth.ResolveFromConfig(cfg.Governor)
+	if err != nil {
+		return nil, fmt.Errorf("resolve governor auth: %w", err)
+	}
+	faceModel, err := face.NewProviderRenderer(provider, face.ProviderRendererConfig{
+		GovernorName:  prompt.DefaultGovernorName,
+		FaceName:      face.DefaultFaceName,
+		Channel:       "telegram",
+		WorkspaceRoot: cfg.Agent.Workspace,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("init face renderer: %w", err)
+	}
+
+	idleExpiry := 24 * time.Hour
+	if raw := strings.TrimSpace(cfg.Sessions.IdleExpiry); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse sessions.idle_expiry: %w", err)
+		}
+		if d > 0 {
+			idleExpiry = d
+		}
+	}
+
 	return &Runtime{
 		cfg:      cfg,
 		store:    store,
@@ -59,6 +98,11 @@ func New(
 			cfg.Principals.Telegram.AdminUserIDs,
 			cfg.Principals.Telegram.ApprovedUserIDs,
 		),
+		faceBackend:     face.BackendProvider,
+		faceModel:       faceModel,
+		governorBackend: governorAuth.Backend,
+		idleExpiry:      idleExpiry,
+		expireIdle:      store.ExpireIdle,
 	}, nil
 }
 
@@ -66,4 +110,66 @@ func (r *Runtime) AgentFunc() core.AgentFunc {
 	return func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
 		return r.HandleInbound(ctx, msg)
 	}
+}
+
+func (r *Runtime) StartIdleExpiryLoop(ctx context.Context, logger func(string, ...any)) {
+	if logger == nil {
+		logger = log.Printf
+	}
+	cadence := idleExpirySweepCadence(r.idleExpiry)
+	r.startIdleExpiryLoop(ctx, cadence, logger)
+}
+
+func (r *Runtime) startIdleExpiryLoop(ctx context.Context, cadence time.Duration, logger func(string, ...any)) {
+	go runPeriodic(ctx, cadence, func(runCtx context.Context) {
+		select {
+		case <-runCtx.Done():
+			return
+		default:
+		}
+
+		expired, err := r.expireIdle(r.idleExpiry)
+		if err != nil {
+			logger("WARN idle expiry sweep failed: %v", err)
+			return
+		}
+		if expired > 0 {
+			logger("INFO expired %d idle session(s)", expired)
+		}
+	})
+}
+
+func runPeriodic(ctx context.Context, cadence time.Duration, fn func(context.Context)) {
+	if fn == nil {
+		return
+	}
+	if cadence <= 0 {
+		cadence = time.Minute
+	}
+
+	ticker := time.NewTicker(cadence)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fn(ctx)
+		}
+	}
+}
+
+func idleExpirySweepCadence(idleExpiry time.Duration) time.Duration {
+	if idleExpiry <= 0 {
+		return time.Minute
+	}
+	cadence := idleExpiry / 4
+	if cadence < time.Minute {
+		return time.Minute
+	}
+	if cadence > time.Hour {
+		return time.Hour
+	}
+	return cadence
 }

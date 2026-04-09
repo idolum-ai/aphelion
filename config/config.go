@@ -16,6 +16,7 @@ type Config struct {
 	Identity   IdentityConfig   `toml:"identity"`
 	Telegram   TelegramConfig   `toml:"telegram"`
 	Principals PrincipalsConfig `toml:"principals"`
+	Governor   GovernorConfig   `toml:"governor"`
 	Providers  ProvidersConfig  `toml:"providers"`
 	Sessions   SessionsConfig   `toml:"sessions"`
 	Agent      AgentConfig      `toml:"agent"`
@@ -37,6 +38,18 @@ type PrincipalsConfig struct {
 type TelegramPrincipalsConfig struct {
 	AdminUserIDs    []int64 `toml:"admin_user_ids"`
 	ApprovedUserIDs []int64 `toml:"approved_user_ids"`
+}
+
+type GovernorConfig struct {
+	Backend        string              `toml:"backend"`
+	NativeProvider string              `toml:"native_provider"`
+	Codex          GovernorCodexConfig `toml:"codex"`
+}
+
+type GovernorCodexConfig struct {
+	AuthSource string `toml:"auth_source"`
+	CodexHome  string `toml:"codex_home"`
+	BaseURL    string `toml:"base_url"`
 }
 
 type ProvidersConfig struct {
@@ -71,6 +84,14 @@ func Default() Config {
 	return Config{
 		Telegram: TelegramConfig{
 			PollTimeout: 30,
+		},
+		Governor: GovernorConfig{
+			Backend:        "auto",
+			NativeProvider: "anthropic",
+			Codex: GovernorCodexConfig{
+				AuthSource: "auto",
+				BaseURL:    "https://chatgpt.com/backend-api/codex",
+			},
 		},
 		Providers: ProvidersConfig{
 			Default: "anthropic",
@@ -139,6 +160,22 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Telegram.PollTimeout <= 0 {
 		return fmt.Errorf("telegram.poll_timeout must be > 0")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Governor.Backend)) {
+	case "auto", "codex", "native":
+	default:
+		return fmt.Errorf("governor.backend must be one of auto|codex|native")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Governor.Codex.AuthSource)) {
+	case "auto", "codex_cli", "aphelion":
+	default:
+		return fmt.Errorf("governor.codex.auth_source must be one of auto|codex_cli|aphelion")
+	}
+	if strings.TrimSpace(cfg.Governor.NativeProvider) == "" {
+		return fmt.Errorf("governor.native_provider is required")
+	}
+	if strings.TrimSpace(cfg.Governor.Codex.BaseURL) == "" {
+		return fmt.Errorf("governor.codex.base_url is required")
 	}
 	if cfg.Agent.MaxIterations <= 0 {
 		return fmt.Errorf("agent.max_iterations must be > 0")
