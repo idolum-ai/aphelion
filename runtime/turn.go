@@ -15,6 +15,11 @@ import (
 )
 
 func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
+	principal, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
+	if !ok {
+		return nil, ErrPrincipalDenied
+	}
+
 	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
 	sess, err := r.store.Load(key)
 	if err != nil {
@@ -25,7 +30,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	if err != nil {
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
-	systemPrompt := promptContext.Render(BaseSystemInstruction(r.cfg.Agent.Workspace))
+	systemPrompt := promptContext.Render(BaseSystemInstruction(r.cfg.Agent.Workspace, string(principal.Role)))
 
 	sess.ChatType = "dm"
 	sess.UserName = msg.SenderName
@@ -88,9 +93,12 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (*
 	return result, nil
 }
 
-func BaseSystemInstruction(workspaceRoot string) string {
+func BaseSystemInstruction(workspaceRoot string, principalRole string) string {
+	if strings.TrimSpace(principalRole) == "" {
+		principalRole = "unknown"
+	}
 	return fmt.Sprintf(
-		"You are a Linux personal assistant operating inside the workspace %q. Use the exec tool whenever shell interaction is useful. Inspect before changing, prefer concise answers, and only claim work you actually completed.",
-		workspaceRoot,
+		"You are a Linux personal assistant operating inside the workspace %q. The active principal role is %q. Use the exec tool whenever shell interaction is useful. Inspect before changing, prefer concise answers, and only claim work you actually completed.",
+		workspaceRoot, principalRole,
 	)
 }

@@ -5,6 +5,10 @@ user_agent = ""
 bot_token = "telegram-bot-token"
 poll_timeout = 30
 
+[principals.telegram]
+admin_user_ids = [123456789]
+approved_user_ids = []
+
 [providers]
 default = "anthropic"
 

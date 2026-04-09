@@ -38,6 +38,14 @@ Config file default:
 
 `~/.config/aphelion/config.toml`
 
+Required principal bootstrap:
+
+```toml
+[principals.telegram]
+admin_user_ids = [123456789]
+approved_user_ids = []
+```
+
 Recommended workspace setting for this repo:
 
 ```toml

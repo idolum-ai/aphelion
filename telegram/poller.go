@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 )
 
 type UpdateHandler func(context.Context, core.InboundMessage) error
@@ -18,6 +19,7 @@ type Poller struct {
 	client             *Client
 	handler            UpdateHandler
 	pollTimeoutSeconds int
+	resolver           *principal.Resolver
 }
 
 func NewPoller(client *Client, handler UpdateHandler, opts ...PollerOption) *Poller {
@@ -37,6 +39,12 @@ func WithPollerTimeout(seconds int) PollerOption {
 		if seconds > 0 {
 			p.pollTimeoutSeconds = seconds
 		}
+	}
+}
+
+func WithPrincipalResolver(resolver *principal.Resolver) PollerOption {
+	return func(p *Poller) {
+		p.resolver = resolver
 	}
 }
 
@@ -60,6 +68,14 @@ func (p *Poller) Run(ctx context.Context) error {
 
 		for _, upd := range updates {
 			if inbound := NormalizeMessage(upd.Message); inbound != nil {
+				if p.resolver != nil {
+					if _, ok := p.resolver.ResolveTelegramUser(inbound.SenderID); !ok {
+						if next := upd.UpdateID + 1; next > offset {
+							offset = next
+						}
+						continue
+					}
+				}
 				if err := p.handler(ctx, *inbound); err != nil {
 					if errors.Is(err, context.Canceled) {
 						return nil

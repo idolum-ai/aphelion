@@ -4,11 +4,13 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -22,7 +24,10 @@ type Runtime struct {
 	provider agent.Provider
 	tools    agent.ToolRegistry
 	outbound OutboundSender
+	resolver *principal.Resolver
 }
+
+var ErrPrincipalDenied = errors.New("principal is not admitted")
 
 func New(
 	cfg *config.Config,
@@ -50,6 +55,10 @@ func New(
 		provider: provider,
 		tools:    tools,
 		outbound: outbound,
+		resolver: principal.NewResolver(
+			cfg.Principals.Telegram.AdminUserIDs,
+			cfg.Principals.Telegram.ApprovedUserIDs,
+		),
 	}, nil
 }
 

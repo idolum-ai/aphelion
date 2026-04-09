@@ -16,6 +16,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/provider"
 	"github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
@@ -67,6 +68,10 @@ func run() error {
 	}
 
 	tools := tool.NewRegistry(cfg.Agent.Workspace, time.Duration(cfg.Agent.ToolTimeout)*time.Second)
+	principalResolver := principal.NewResolver(
+		cfg.Principals.Telegram.AdminUserIDs,
+		cfg.Principals.Telegram.ApprovedUserIDs,
+	)
 	tgClient := telegram.NewClient(
 		cfg.Telegram.BotToken,
 		telegram.WithHTTPClient(httpClient),
@@ -90,7 +95,10 @@ func run() error {
 			router.Route(turnCtx, msg)
 		}()
 		return nil
-	}, telegram.WithPollerTimeout(cfg.Telegram.PollTimeout))
+	},
+		telegram.WithPollerTimeout(cfg.Telegram.PollTimeout),
+		telegram.WithPrincipalResolver(principalResolver),
+	)
 
 	log.Printf("INFO aphelion started workspace=%s db_path=%s model=%s", cfg.Agent.Workspace, cfg.Sessions.DBPath, cfg.Providers.Anthropic.Model)
 	return poller.Run(ctx)

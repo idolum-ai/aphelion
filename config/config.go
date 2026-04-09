@@ -13,11 +13,12 @@ import (
 )
 
 type Config struct {
-	Identity  IdentityConfig  `toml:"identity"`
-	Telegram  TelegramConfig  `toml:"telegram"`
-	Providers ProvidersConfig `toml:"providers"`
-	Sessions  SessionsConfig  `toml:"sessions"`
-	Agent     AgentConfig     `toml:"agent"`
+	Identity   IdentityConfig   `toml:"identity"`
+	Telegram   TelegramConfig   `toml:"telegram"`
+	Principals PrincipalsConfig `toml:"principals"`
+	Providers  ProvidersConfig  `toml:"providers"`
+	Sessions   SessionsConfig   `toml:"sessions"`
+	Agent      AgentConfig      `toml:"agent"`
 }
 
 type IdentityConfig struct {
@@ -27,6 +28,15 @@ type IdentityConfig struct {
 type TelegramConfig struct {
 	BotToken    string `toml:"bot_token"`
 	PollTimeout int    `toml:"poll_timeout"`
+}
+
+type PrincipalsConfig struct {
+	Telegram TelegramPrincipalsConfig `toml:"telegram"`
+}
+
+type TelegramPrincipalsConfig struct {
+	AdminUserIDs    []int64 `toml:"admin_user_ids"`
+	ApprovedUserIDs []int64 `toml:"approved_user_ids"`
 }
 
 type ProvidersConfig struct {
@@ -159,6 +169,34 @@ func validate(cfg *Config) error {
 	}
 	if strings.TrimSpace(cfg.Agent.DailyNotesDir) == "" {
 		return fmt.Errorf("agent.daily_notes_dir is required")
+	}
+	if len(cfg.Principals.Telegram.AdminUserIDs) == 0 {
+		return fmt.Errorf("principals.telegram.admin_user_ids must contain at least one user id")
+	}
+
+	admin := make(map[int64]struct{}, len(cfg.Principals.Telegram.AdminUserIDs))
+	for _, id := range cfg.Principals.Telegram.AdminUserIDs {
+		if id <= 0 {
+			return fmt.Errorf("principals.telegram.admin_user_ids must contain positive user ids")
+		}
+		if _, exists := admin[id]; exists {
+			return fmt.Errorf("principals.telegram.admin_user_ids contains duplicate user id %d", id)
+		}
+		admin[id] = struct{}{}
+	}
+
+	approved := make(map[int64]struct{}, len(cfg.Principals.Telegram.ApprovedUserIDs))
+	for _, id := range cfg.Principals.Telegram.ApprovedUserIDs {
+		if id <= 0 {
+			return fmt.Errorf("principals.telegram.approved_user_ids must contain positive user ids")
+		}
+		if _, exists := approved[id]; exists {
+			return fmt.Errorf("principals.telegram.approved_user_ids contains duplicate user id %d", id)
+		}
+		if _, exists := admin[id]; exists {
+			return fmt.Errorf("principals.telegram user id %d cannot be both admin and approved_user", id)
+		}
+		approved[id] = struct{}{}
 	}
 	return nil
 }

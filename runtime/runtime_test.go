@@ -20,6 +20,7 @@ import (
 
 type fakeProvider struct {
 	mu            sync.Mutex
+	callCount     int
 	replyText     string
 	seenSystem    []string
 	responseUsage core.TokenUsage
@@ -28,6 +29,7 @@ type fakeProvider struct {
 func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.callCount++
 
 	if len(messages) > 0 && messages[0].Role == "system" {
 		f.seenSystem = append(f.seenSystem, messages[0].Content)
@@ -64,6 +66,7 @@ func TestHandleInboundPersistsAndSends(t *testing.T) {
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     42,
+		SenderID:   1001,
 		SenderName: "daniel",
 		Text:       "hello",
 		MessageID:  99,
@@ -112,6 +115,7 @@ func TestHandleInboundReloadsPromptContextEachTurn(t *testing.T) {
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     7,
+		SenderID:   1001,
 		SenderName: "daniel",
 		Text:       "first",
 		MessageID:  1,
@@ -126,6 +130,7 @@ func TestHandleInboundReloadsPromptContextEachTurn(t *testing.T) {
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     7,
+		SenderID:   1001,
 		SenderName: "daniel",
 		Text:       "second",
 		MessageID:  2,
@@ -145,6 +150,9 @@ func TestHandleInboundReloadsPromptContextEachTurn(t *testing.T) {
 	if !strings.Contains(provider.seenSystem[1], "v2") {
 		t.Fatalf("second system prompt missing v2: %q", provider.seenSystem[1])
 	}
+	if !strings.Contains(provider.seenSystem[0], `role is "admin"`) {
+		t.Fatalf("first system prompt missing principal role: %q", provider.seenSystem[0])
+	}
 }
 
 func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *fakeProvider, *fakeSender) {
@@ -154,6 +162,12 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 	dbPath := filepath.Join(root, "sessions.db")
 
 	cfg := &config.Config{
+		Principals: config.PrincipalsConfig{
+			Telegram: config.TelegramPrincipalsConfig{
+				AdminUserIDs:    []int64{1001},
+				ApprovedUserIDs: []int64{1002},
+			},
+		},
 		Agent: config.AgentConfig{
 			Workspace:              root,
 			MaxIterations:          10,
@@ -228,6 +242,7 @@ func TestAgentFuncDelegates(t *testing.T) {
 	fn := rt.AgentFunc()
 	_, err = fn(context.Background(), nil, core.InboundMessage{
 		ChatID:     8,
+		SenderID:   1001,
 		SenderName: "daniel",
 		Text:       "hello",
 		MessageID:  1,
@@ -236,5 +251,41 @@ func TestAgentFuncDelegates(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("AgentFunc() err = %v", err)
+	}
+}
+
+func TestHandleInboundRejectsUnknownPrincipal(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     123,
+		SenderID:   999999,
+		SenderName: "intruder",
+		Text:       "hello",
+		MessageID:  1,
+	})
+	if err == nil {
+		t.Fatal("HandleInbound() err = nil, want principal denied error")
+	}
+	if !strings.Contains(err.Error(), ErrPrincipalDenied.Error()) {
+		t.Fatalf("error = %v, want %q", err, ErrPrincipalDenied)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.callCount != 0 {
+		t.Fatalf("provider call count = %d, want 0", provider.callCount)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent len = %d, want 0", len(sender.sent))
 	}
 }

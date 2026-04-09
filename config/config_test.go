@@ -18,6 +18,9 @@ func TestLoadMinimalConfig(t *testing.T) {
 [telegram]
 bot_token = "tg-test"
 
+[principals.telegram]
+admin_user_ids = [123]
+
 [providers.anthropic]
 api_key = "sk-ant-test"
 
@@ -61,6 +64,9 @@ func TestLoadParsesMultilineArrays(t *testing.T) {
 	raw := `
 [telegram]
 bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
 
 [providers.anthropic]
 api_key = "sk-ant-test"
@@ -112,6 +118,10 @@ func TestLoadParsesBasicTypedFields(t *testing.T) {
 [telegram]
 bot_token = "tg-test"
 poll_timeout = 11
+
+[principals.telegram]
+admin_user_ids = [123]
+approved_user_ids = [456]
 
 [providers.anthropic]
 api_key = "sk-ant-test"
@@ -171,6 +181,9 @@ func TestLoadIgnoresUnknownKeys(t *testing.T) {
 [telegram]
 bot_token = "tg-test"
 
+[principals.telegram]
+admin_user_ids = [123]
+
 [providers]
 default = "anthropic"
 failover = ["gemini", "openai"]
@@ -203,6 +216,9 @@ func TestLoadRejectsMissingSecrets(t *testing.T) {
 [telegram]
 bot_token = ""
 
+[principals.telegram]
+admin_user_ids = [123]
+
 [providers.anthropic]
 api_key = ""
 `
@@ -225,6 +241,9 @@ func TestLoadRejectsInvalidTOML(t *testing.T) {
 [telegram]
 bot_token = "tg-test
 
+[principals.telegram]
+admin_user_ids = [123]
+
 [providers.anthropic]
 api_key = "sk-ant-test"
 `
@@ -246,6 +265,9 @@ func TestLoadRejectsInvalidIdleExpiry(t *testing.T) {
 	raw := `
 [telegram]
 bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
 
 [providers.anthropic]
 api_key = "sk-ant-test"
@@ -273,4 +295,58 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestLoadRejectsMissingAdminPrincipal(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want principal validation error")
+	}
+	if !strings.Contains(err.Error(), "principals.telegram.admin_user_ids") {
+		t.Fatalf("error = %v, want principals.telegram.admin_user_ids message", err)
+	}
+}
+
+func TestLoadRejectsPrincipalOverlap(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+approved_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want overlap validation error")
+	}
+	if !strings.Contains(err.Error(), "both admin and approved_user") {
+		t.Fatalf("error = %v, want overlap message", err)
+	}
 }

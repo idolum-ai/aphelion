@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 )
 
 type testTransport struct {
@@ -189,5 +190,83 @@ func TestPollerProcessesPrivateMessagesOnly(t *testing.T) {
 	}
 	if handled[0].Text != "private" {
 		t.Fatalf("handled text = %q, want %q", handled[0].Text, "private")
+	}
+}
+
+func TestPollerDropsUnknownPrincipalMessages(t *testing.T) {
+	now := time.Now().Unix()
+	updates := []Update{
+		{
+			UpdateID: 1,
+			Message: &Message{
+				MessageID: 10,
+				Chat:      &Chat{ID: 11, Type: "private"},
+				From:      &User{ID: 999, Username: "unknown"},
+				Text:      "blocked",
+				Date:      now,
+			},
+		},
+		{
+			UpdateID: 2,
+			Message: &Message{
+				MessageID: 20,
+				Chat:      &Chat{ID: 21, Type: "private"},
+				From:      &User{ID: 123, Username: "admin"},
+				Text:      "allowed",
+				Date:      now + 1,
+			},
+		},
+	}
+
+	call := 0
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/getUpdates" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			call++
+			resp := getUpdatesResponse{Ok: true}
+			if call == 1 {
+				resp.Result = updates
+			}
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	resolver := principal.NewResolver([]int64{123}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handled := make([]core.InboundMessage, 0, 1)
+	handler := func(ctx context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	}
+
+	poller := NewPoller(
+		client,
+		handler,
+		WithPollerTimeout(1),
+		WithPrincipalResolver(resolver),
+	)
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("poller failed: %v", err)
+	}
+
+	if len(handled) != 1 {
+		t.Fatalf("handled %d messages, want 1", len(handled))
+	}
+	if handled[0].SenderID != 123 {
+		t.Fatalf("sender id = %d, want 123", handled[0].SenderID)
+	}
+	if handled[0].Text != "allowed" {
+		t.Fatalf("text = %q, want allowed", handled[0].Text)
 	}
 }
