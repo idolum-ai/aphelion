@@ -18,7 +18,7 @@ func TestDetectCodexCLIAuthFile(t *testing.T) {
 
 	dir := t.TempDir()
 	authPath := filepath.Join(dir, "auth.json")
-	raw := `{"tokens":{"access_token":"acc","refresh_token":"ref"}}`
+	raw := `{"tokens":{"access_token":"acc","refresh_token":"ref","account_id":"acct"}}`
 	if err := os.WriteFile(authPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestDetectCodexCLIAuthFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detectCodexCLICredentials() err = %v, want nil", err)
 	}
-	if creds.AccessToken != "acc" || creds.RefreshToken != "ref" {
+	if creds.AccessToken != "acc" || creds.RefreshToken != "ref" || creds.AccountID != "acct" {
 		t.Fatalf("credentials = %#v, want access+refresh", creds)
 	}
 }
@@ -37,7 +37,7 @@ func TestIgnoreMalformedCodexCLIAuthFile(t *testing.T) {
 
 	dir := t.TempDir()
 	authPath := filepath.Join(dir, "auth.json")
-	raw := `{"tokens":{"access_token":"acc"}}`
+	raw := `{"tokens":{"access_token":"acc","account_id":"acct"}}`
 	if err := os.WriteFile(authPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestGovernorBackendAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
 
 	dir := t.TempDir()
 	authPath := filepath.Join(dir, "auth.json")
-	raw := `{"tokens":{"access_token":"acc","refresh_token":"ref"}}`
+	raw := `{"tokens":{"access_token":"acc","refresh_token":"ref","account_id":"acct"}}`
 	if err := os.WriteFile(authPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
@@ -80,6 +80,9 @@ func TestGovernorBackendAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
 	}
 	if bundle.RefreshURL != DefaultCodexRefreshURL {
 		t.Fatalf("refresh url = %q, want %q", bundle.RefreshURL, DefaultCodexRefreshURL)
+	}
+	if bundle.AccountID != "acct" {
+		t.Fatalf("account id = %q, want acct", bundle.AccountID)
 	}
 }
 
@@ -185,7 +188,7 @@ func TestLoadCodexCLIAuth(t *testing.T) {
 
 	dir := t.TempDir()
 	authPath := filepath.Join(dir, "auth.json")
-	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"acc","refresh_token":"ref"}}`), 0o600); err != nil {
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"acc","refresh_token":"ref","account_id":"acct"}}`), 0o600); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
 
@@ -193,8 +196,8 @@ func TestLoadCodexCLIAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCodexCLIAuth() err = %v", err)
 	}
-	if got.AccessToken != "acc" || got.RefreshToken != "ref" {
-		t.Fatalf("tokens = %#v, want acc/ref", got)
+	if got.AccessToken != "acc" || got.RefreshToken != "ref" || got.AccountID != "acct" {
+		t.Fatalf("tokens = %#v, want acc/ref/acct", got)
 	}
 }
 
@@ -203,7 +206,7 @@ func TestSaveCodexCLIAuthPreservesUnknownFields(t *testing.T) {
 
 	dir := t.TempDir()
 	authPath := filepath.Join(dir, "auth.json")
-	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"chatgpt","extra":{"k":"v"},"tokens":{"access_token":"old","refresh_token":"old"}}`), 0o600); err != nil {
+	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"chatgpt","extra":{"k":"v"},"tokens":{"access_token":"old","refresh_token":"old","account_id":"acct"}}`), 0o600); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
 
@@ -211,6 +214,7 @@ func TestSaveCodexCLIAuthPreservesUnknownFields(t *testing.T) {
 	if err := SaveCodexCLIAuth(authPath, CodexTokens{
 		AccessToken:  "new-access",
 		RefreshToken: "new-refresh",
+		AccountID:    "acct",
 	}, refreshedAt); err != nil {
 		t.Fatalf("SaveCodexCLIAuth() err = %v", err)
 	}
@@ -233,7 +237,7 @@ func TestSaveCodexCLIAuthPreservesUnknownFields(t *testing.T) {
 	if !ok {
 		t.Fatalf("tokens = %#v, want object", payload["tokens"])
 	}
-	if tokens["access_token"] != "new-access" || tokens["refresh_token"] != "new-refresh" {
+	if tokens["access_token"] != "new-access" || tokens["refresh_token"] != "new-refresh" || tokens["account_id"] != "acct" {
 		t.Fatalf("tokens = %#v, want updated tokens", tokens)
 	}
 }

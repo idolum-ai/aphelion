@@ -283,7 +283,7 @@ func Default() Config {
 			NativeProvider: "anthropic",
 			Codex: GovernorCodexConfig{
 				AuthSource:    "auto",
-				BaseURL:       "https://chatgpt.com/backend-api/codex",
+				BaseURL:       "https://chatgpt.com/backend-api",
 				ContextWindow: 200000,
 			},
 		},

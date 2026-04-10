@@ -5,6 +5,7 @@ package governorbackend
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,9 +20,12 @@ import (
 	"github.com/idolum-ai/aphelion/governorauth"
 )
 
-const maxCodexResponseBytes = 1 << 20 // 1 MiB
-
-const codexRefreshClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+const (
+	maxCodexResponseBytes = 1 << 20 // 1 MiB
+	codexRefreshClientID  = "app_EMoamEEZ73f0CkXaXp7hrann"
+	defaultCodexModel     = "gpt-5.4"
+	defaultCodexPrompt    = "You are Codex, a coding agent. Help the user directly and use tools when needed."
+)
 
 var (
 	ErrCodexUnauthorized = errors.New("codex unauthorized")
@@ -34,6 +38,7 @@ type CodexOptions struct {
 	BaseURL      string
 	AccessToken  string
 	RefreshToken string
+	AccountID    string
 	RefreshURL   string
 	HTTPClient   *http.Client
 	UserAgent    string
@@ -43,7 +48,7 @@ type CodexOptions struct {
 }
 
 type Codex struct {
-	baseURL    string
+	endpoint   string
 	refreshURL string
 	client     *http.Client
 	userAgent  string
@@ -54,9 +59,11 @@ type Codex struct {
 	mu           sync.Mutex
 	accessToken  string
 	refreshToken string
+	accountID    string
 }
 
 var _ agent.Provider = (*Codex)(nil)
+var _ agent.ProviderWithOptions = (*Codex)(nil)
 
 func NewCodex(opts CodexOptions) (*Codex, error) {
 	if strings.TrimSpace(opts.BaseURL) == "" {
@@ -65,6 +72,10 @@ func NewCodex(opts CodexOptions) (*Codex, error) {
 	if strings.TrimSpace(opts.AccessToken) == "" {
 		return nil, fmt.Errorf("codex: access token is required")
 	}
+	if strings.TrimSpace(opts.AccountID) == "" {
+		return nil, fmt.Errorf("codex: account id is required")
+	}
+
 	client := opts.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
@@ -80,10 +91,11 @@ func NewCodex(opts CodexOptions) (*Codex, error) {
 	}
 
 	return &Codex{
-		baseURL:      opts.BaseURL,
+		endpoint:     codexResponsesEndpoint(opts.BaseURL),
 		refreshURL:   refreshURL,
-		accessToken:  opts.AccessToken,
+		accessToken:  strings.TrimSpace(opts.AccessToken),
 		refreshToken: strings.TrimSpace(opts.RefreshToken),
+		accountID:    strings.TrimSpace(opts.AccountID),
 		client:       client,
 		userAgent:    opts.UserAgent,
 		loadTokens:   opts.LoadTokens,
@@ -93,29 +105,29 @@ func NewCodex(opts CodexOptions) (*Codex, error) {
 }
 
 func (c *Codex) Complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
-	return c.complete(ctx, messages, tools, true)
+	return c.CompleteWithOptions(ctx, messages, tools, agent.CompleteOptions{})
 }
 
-func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, allowRetry bool) (*agent.Response, error) {
-	reqBody := codexRequest{
-		Messages: toCodexMessages(messages),
-		Tools:    toCodexTools(tools),
-		Stream:   false,
-	}
+func (c *Codex) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
+	return c.complete(ctx, messages, tools, opts, true)
+}
+
+func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, allowRetry bool) (*agent.Response, error) {
+	reqBody := buildCodexRequest(messages, tools, opts)
 
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(reqBody); err != nil {
 		return nil, fmt.Errorf("codex: encode request: %w", err)
 	}
 
-	accessToken := c.currentAccessToken()
-	resp, err := c.doRequest(ctx, &body, accessToken)
+	accessToken, accountID := c.currentCredentials()
+	resp, err := c.doRequest(ctx, &body, accessToken, accountID)
 	if err != nil {
 		var apiErr codexAPIError
 		if allowRetry && errors.As(err, &apiErr) && apiErr.statusCode == http.StatusUnauthorized {
 			reauthorized, reauthErr := c.reauthorize(ctx, accessToken)
 			if reauthorized {
-				return c.complete(ctx, messages, tools, false)
+				return c.complete(ctx, messages, tools, opts, false)
 			}
 			if reauthErr != nil {
 				return nil, fmt.Errorf("%w: reauthorization failed: %v", err, reauthErr)
@@ -126,13 +138,14 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 	return resp, nil
 }
 
-func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken string) (*agent.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, body)
+func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken string, accountID string) (*agent.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, body)
 	if err != nil {
 		return nil, fmt.Errorf("codex: new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("ChatGPT-Account-ID", accountID)
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
@@ -148,7 +161,7 @@ func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken s
 		return nil, fmt.Errorf("codex: read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyMessage := redactBodyExcerpt(raw, accessToken, refreshTokenForRedaction(c))
+		bodyMessage := redactBodyExcerpt(raw, accessToken, refreshTokenForRedaction(c), accountID)
 		return nil, codexAPIError{
 			statusCode: resp.StatusCode,
 			message:    codexStatusMessage(resp.StatusCode, bodyMessage),
@@ -163,10 +176,10 @@ func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken s
 	return res, nil
 }
 
-func (c *Codex) currentAccessToken() string {
+func (c *Codex) currentCredentials() (string, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.accessToken
+	return c.accessToken, c.accountID
 }
 
 func (c *Codex) reauthorize(ctx context.Context, staleAccessToken string) (bool, error) {
@@ -187,10 +200,16 @@ func (c *Codex) reauthorize(ctx context.Context, staleAccessToken string) (bool,
 				if strings.TrimSpace(tokens.RefreshToken) != "" {
 					c.refreshToken = strings.TrimSpace(tokens.RefreshToken)
 				}
+				if strings.TrimSpace(tokens.AccountID) != "" {
+					c.accountID = strings.TrimSpace(tokens.AccountID)
+				}
 				return true, nil
 			}
 			if strings.TrimSpace(tokens.RefreshToken) != "" {
 				c.refreshToken = strings.TrimSpace(tokens.RefreshToken)
+			}
+			if strings.TrimSpace(tokens.AccountID) != "" {
+				c.accountID = strings.TrimSpace(tokens.AccountID)
 			}
 		case !errors.Is(err, governorauth.ErrCodexAuthNotFound):
 			reloadErr = fmt.Errorf("reload codex auth: %w", err)
@@ -211,6 +230,9 @@ func (c *Codex) reauthorize(ctx context.Context, staleAccessToken string) (bool,
 	}
 	c.accessToken = tokens.AccessToken
 	c.refreshToken = tokens.RefreshToken
+	if strings.TrimSpace(tokens.AccountID) != "" {
+		c.accountID = strings.TrimSpace(tokens.AccountID)
+	}
 	if c.saveTokens != nil {
 		_ = c.saveTokens(tokens, c.now())
 	}
@@ -270,76 +292,218 @@ func (c *Codex) refreshTokens(ctx context.Context, refreshToken string) (governo
 	return governorauth.CodexTokens{
 		AccessToken:  access,
 		RefreshToken: refresh,
+		AccountID:    c.accountID,
 	}, nil
 }
 
-type codexRequest struct {
-	Messages []codexMessage `json:"messages"`
-	Tools    []codexTool    `json:"tools,omitempty"`
-	Stream   bool           `json:"stream"`
-}
-
-type codexMessage struct {
-	Role       string           `json:"role"`
-	Content    string           `json:"content,omitempty"`
-	ToolCalls  []agent.ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-}
-
-type codexTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-}
-
-func toCodexMessages(messages []agent.Message) []codexMessage {
-	out := make([]codexMessage, 0, len(messages))
+func buildCodexRequest(messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) map[string]any {
+	instructions := collectCodexInstructions(messages)
+	input := make([]map[string]any, 0, len(messages))
 	for _, msg := range messages {
 		role := strings.ToLower(strings.TrimSpace(msg.Role))
-		if role == "" {
+		if role == "" || role == "system" {
 			continue
 		}
-		out = append(out, codexMessage{
-			Role:       role,
-			Content:    msg.Content,
-			ToolCalls:  append([]agent.ToolCall(nil), msg.ToolCalls...),
-			ToolCallID: msg.ToolCallID,
+
+		switch role {
+		case "user", "assistant":
+			if item, ok := codexMessageInputItem(role, msg); ok {
+				input = append(input, item)
+			}
+			if role == "assistant" {
+				for _, call := range msg.ToolCalls {
+					input = append(input, map[string]any{
+						"type":      "function_call",
+						"name":      call.Name,
+						"arguments": normalizeArguments(call.Input),
+						"call_id":   firstNonEmpty(strings.TrimSpace(call.ID), strings.TrimSpace(msg.ToolCallID)),
+					})
+				}
+			}
+		case "tool":
+			input = append(input, map[string]any{
+				"type":    "function_call_output",
+				"call_id": strings.TrimSpace(msg.ToolCallID),
+				"output":  strings.TrimSpace(msg.Content),
+			})
+		}
+	}
+
+	reqBody := map[string]any{
+		"model":        defaultCodexModel,
+		"instructions": instructions,
+		"input":        input,
+		"store":        false,
+	}
+	if defs := toCodexTools(tools); len(defs) > 0 {
+		reqBody["tools"] = defs
+		reqBody["tool_choice"] = "auto"
+	}
+	if reasoning := mapCodexReasoning(opts.Reasoning); len(reasoning) > 0 {
+		reqBody["reasoning"] = reasoning
+	}
+	return reqBody
+}
+
+func collectCodexInstructions(messages []agent.Message) string {
+	parts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "system") {
+			continue
+		}
+		text := strings.TrimSpace(msg.Content)
+		if text == "" && len(msg.SystemBlocks) > 0 {
+			text = renderSystemBlocks(msg.SystemBlocks)
+		}
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if len(parts) == 0 {
+		return defaultCodexPrompt
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func renderSystemBlocks(blocks []agent.SystemBlock) string {
+	parts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		text := strings.TrimSpace(block.Text)
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func codexMessageInputItem(role string, msg agent.Message) (map[string]any, bool) {
+	content := make([]map[string]any, 0, len(msg.Media)+1)
+	for _, media := range msg.Media {
+		if part, ok := mediaToCodexInputItem(media); ok {
+			content = append(content, part)
+		}
+	}
+	if text := strings.TrimSpace(msg.Content); text != "" || len(content) == 0 {
+		content = append(content, map[string]any{
+			"type": "input_text",
+			"text": msg.Content,
 		})
+	}
+	if len(content) == 0 {
+		return nil, false
+	}
+	return map[string]any{
+		"type":    "message",
+		"role":    role,
+		"content": content,
+	}, true
+}
+
+func mediaToCodexInputItem(media core.Media) (map[string]any, bool) {
+	mimeType := strings.TrimSpace(media.MimeType)
+	if mimeType == "" && len(media.Data) > 0 {
+		mimeType = http.DetectContentType(media.Data)
+	}
+	if !strings.HasPrefix(strings.ToLower(mimeType), "image/") || len(media.Data) == 0 {
+		return nil, false
+	}
+	return map[string]any{
+		"type":      "input_image",
+		"image_url": fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(media.Data)),
+	}, true
+}
+
+func normalizeArguments(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "{}"
+	}
+	if json.Valid(trimmed) {
+		return string(trimmed)
+	}
+	quoted, err := json.Marshal(string(trimmed))
+	if err != nil {
+		return "{}"
+	}
+	return string(quoted)
+}
+
+func toCodexTools(tools []agent.ToolDef) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		name := strings.TrimSpace(tool.Name)
+		if name == "" {
+			continue
+		}
+		entry := map[string]any{
+			"type": "function",
+			"name": name,
+		}
+		if desc := strings.TrimSpace(tool.Description); desc != "" {
+			entry["description"] = desc
+		}
+		if len(bytes.TrimSpace(tool.Parameters)) > 0 {
+			entry["parameters"] = json.RawMessage(tool.Parameters)
+		}
+		out = append(out, entry)
 	}
 	return out
 }
 
-func toCodexTools(tools []agent.ToolDef) []codexTool {
-	out := make([]codexTool, 0, len(tools))
-	for _, tool := range tools {
-		if strings.TrimSpace(tool.Name) == "" {
-			continue
-		}
-		out = append(out, codexTool{
-			Name:        tool.Name,
-			Description: tool.Description,
-			Parameters:  tool.Parameters,
-		})
+func mapCodexReasoning(cfg agent.ReasoningConfig) map[string]any {
+	out := map[string]any{}
+	switch cfg.Effort {
+	case agent.ReasoningEffortLow:
+		out["effort"] = "low"
+	case agent.ReasoningEffortMedium:
+		out["effort"] = "medium"
+	case agent.ReasoningEffortHigh:
+		out["effort"] = "high"
+	case agent.ReasoningEffortXHigh:
+		out["effort"] = "xhigh"
+	}
+	switch cfg.Summary {
+	case agent.ReasoningSummaryAuto:
+		out["summary"] = "auto"
+	case agent.ReasoningSummaryCompact:
+		out["summary"] = "concise"
 	}
 	return out
 }
 
 type codexResponse struct {
-	Content    string           `json:"content"`
-	OutputText string           `json:"output_text"`
-	ToolCalls  []agent.ToolCall `json:"tool_calls"`
-	Usage      struct {
-		InputTokens  int64 `json:"input_tokens"`
-		OutputTokens int64 `json:"output_tokens"`
-		TotalTokens  int64 `json:"total_tokens"`
-	} `json:"usage"`
-	Output []struct {
-		Type    string `json:"type"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	} `json:"output"`
+	OutputText string            `json:"output_text"`
+	Output     []codexOutputItem `json:"output"`
+	Usage      codexUsage        `json:"usage"`
+}
+
+type codexOutputItem struct {
+	Type      string               `json:"type"`
+	Role      string               `json:"role"`
+	Name      string               `json:"name"`
+	CallID    string               `json:"call_id"`
+	Arguments string               `json:"arguments"`
+	Content   []codexContentItem   `json:"content"`
+	Summary   []codexReasoningText `json:"summary"`
+}
+
+type codexContentItem struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type codexReasoningText struct {
+	Text string `json:"text"`
+}
+
+type codexUsage struct {
+	InputTokens        int64 `json:"input_tokens"`
+	OutputTokens       int64 `json:"output_tokens"`
+	TotalTokens        int64 `json:"total_tokens"`
+	InputTokensDetails struct {
+		CachedTokens     int64 `json:"cached_tokens"`
+		CacheWriteTokens int64 `json:"cache_write_tokens"`
+	} `json:"input_tokens_details"`
 }
 
 func parseCodexResponse(raw []byte) (*agent.Response, error) {
@@ -348,40 +512,88 @@ func parseCodexResponse(raw []byte) (*agent.Response, error) {
 		return nil, err
 	}
 
-	content := strings.TrimSpace(parsed.OutputText)
-	if content == "" {
-		content = strings.TrimSpace(parsed.Content)
+	var (
+		contentParts   []string
+		thinkingParts  []string
+		thinkingBlocks []agent.ThinkingBlock
+		toolCalls      []agent.ToolCall
+	)
+
+	haveRootOutputText := false
+	if text := strings.TrimSpace(parsed.OutputText); text != "" {
+		contentParts = append(contentParts, text)
+		haveRootOutputText = true
 	}
-	if content == "" {
-		for _, item := range parsed.Output {
+
+	for _, item := range parsed.Output {
+		switch item.Type {
+		case "message":
+			if haveRootOutputText {
+				continue
+			}
 			for _, block := range item.Content {
 				if strings.EqualFold(block.Type, "output_text") || strings.EqualFold(block.Type, "text") {
-					if strings.TrimSpace(block.Text) != "" {
-						content = block.Text
-						break
+					if text := strings.TrimSpace(block.Text); text != "" {
+						contentParts = append(contentParts, text)
 					}
 				}
 			}
-			if content != "" {
-				break
+		case "function_call":
+			toolCalls = append(toolCalls, agent.ToolCall{
+				ID:    strings.TrimSpace(item.CallID),
+				Name:  strings.TrimSpace(item.Name),
+				Input: json.RawMessage(normalizeArguments(json.RawMessage(item.Arguments))),
+			})
+		case "reasoning":
+			for _, summary := range item.Summary {
+				if text := strings.TrimSpace(summary.Text); text != "" {
+					thinkingParts = append(thinkingParts, text)
+					thinkingBlocks = append(thinkingBlocks, agent.ThinkingBlock{
+						Type:    "summary_text",
+						Content: text,
+					})
+				}
 			}
 		}
 	}
 
+	content := strings.TrimSpace(strings.Join(contentParts, "\n\n"))
 	usage := core.TokenUsage{
-		InputTokens:  parsed.Usage.InputTokens,
-		OutputTokens: parsed.Usage.OutputTokens,
-		TotalTokens:  parsed.Usage.TotalTokens,
+		InputTokens:      parsed.Usage.InputTokens,
+		OutputTokens:     parsed.Usage.OutputTokens,
+		TotalTokens:      parsed.Usage.TotalTokens,
+		CacheReadTokens:  parsed.Usage.InputTokensDetails.CachedTokens,
+		CacheWriteTokens: parsed.Usage.InputTokensDetails.CacheWriteTokens,
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
 
 	return &agent.Response{
-		Content:   content,
-		ToolCalls: parsed.ToolCalls,
-		Usage:     usage,
+		Content:      content,
+		Thinking:     strings.TrimSpace(strings.Join(thinkingParts, "\n\n")),
+		ThinkingMeta: thinkingBlocks,
+		ToolCalls:    toolCalls,
+		Usage:        usage,
 	}, nil
+}
+
+func codexResponsesEndpoint(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	switch {
+	case baseURL == "":
+		return "/codex/responses"
+	case strings.HasSuffix(baseURL, "/codex/responses"):
+		return baseURL
+	case strings.HasSuffix(baseURL, "/responses"):
+		return baseURL
+	case strings.HasSuffix(baseURL, "/codex"):
+		return baseURL + "/responses"
+	case strings.Contains(baseURL, "/backend-api"):
+		return baseURL + "/codex/responses"
+	default:
+		return baseURL + "/responses"
+	}
 }
 
 func codexStatusMessage(statusCode int, body string) string {
@@ -455,6 +667,15 @@ func redactBodyExcerpt(raw []byte, secrets ...string) string {
 		text = strings.TrimSpace(text[:maxLen]) + "…"
 	}
 	return text
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 type codexAPIError struct {

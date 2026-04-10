@@ -212,7 +212,7 @@ native_provider = "anthropic"
 [governor.codex]
 auth_source = "codex_cli"
 codex_home = "~/codex-home"
-base_url = "https://chatgpt.com/backend-api/codex"
+base_url = "https://chatgpt.com/backend-api"
 context_window = 180000
 
 [providers.anthropic]

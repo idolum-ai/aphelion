@@ -1424,7 +1424,7 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 			NativeProvider: "anthropic",
 			Codex: config.GovernorCodexConfig{
 				AuthSource:    "auto",
-				BaseURL:       "https://chatgpt.com/backend-api/codex",
+				BaseURL:       "https://chatgpt.com/backend-api",
 				ContextWindow: 200000,
 			},
 		},
@@ -1527,7 +1527,7 @@ func TestNewAllowsNilProviderForCodexGovernorPassthrough(t *testing.T) {
 	cfg.Face.Backend = "governor_passthrough"
 
 	authPath := filepath.Join(cfg.Governor.Codex.CodexHome, "auth.json")
-	rawAuth := `{"tokens":{"access_token":"codex-access","refresh_token":"refresh-secret"}}`
+	rawAuth := `{"tokens":{"access_token":"codex-access","refresh_token":"refresh-secret","account_id":"acct"}}`
 	if err := os.WriteFile(authPath, []byte(rawAuth), 0o600); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
@@ -2163,11 +2163,11 @@ func TestHandleInboundUsesCodexGovernorBackend(t *testing.T) {
 
 	const accessToken = "codex-access-secret"
 	authPath := filepath.Join(cfg.Governor.Codex.CodexHome, "auth.json")
-	rawAuth := `{"tokens":{"access_token":"` + accessToken + `","refresh_token":"refresh-secret"}}`
+	rawAuth := `{"tokens":{"access_token":"` + accessToken + `","refresh_token":"refresh-secret","account_id":"acct"}}`
 	if err := os.WriteFile(authPath, []byte(rawAuth), 0o600); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
-	cfg.Governor.Codex.BaseURL = "https://chatgpt.com/backend-api/codex"
+	cfg.Governor.Codex.BaseURL = "https://chatgpt.com/backend-api"
 
 	origFactory := newCodexProvider
 	defer func() { newCodexProvider = origFactory }()
@@ -2274,7 +2274,7 @@ func TestNewAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
 	cfg.Governor.Codex.CodexHome = t.TempDir()
 
 	authPath := filepath.Join(cfg.Governor.Codex.CodexHome, "auth.json")
-	rawAuth := `{"tokens":{"access_token":"codex-access","refresh_token":"refresh-secret"}}`
+	rawAuth := `{"tokens":{"access_token":"codex-access","refresh_token":"refresh-secret","account_id":"acct"}}`
 	if err := os.WriteFile(authPath, []byte(rawAuth), 0o600); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}

@@ -17,25 +17,47 @@ import (
 	"github.com/idolum-ai/aphelion/governorauth"
 )
 
-func TestCodexCompleteText(t *testing.T) {
+func TestCodexCompleteTextUsesResponsesProtocol(t *testing.T) {
 	t.Parallel()
 
-	var seenAuth string
+	var (
+		seenAuth         string
+		seenAccountID    string
+		seenPath         string
+		seenInstructions string
+	)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seenAuth = r.Header.Get("Authorization")
+		seenAccountID = r.Header.Get("ChatGPT-Account-ID")
+		seenPath = r.URL.Path
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seenInstructions, _ = payload["instructions"].(string)
+		if payload["model"] != defaultCodexModel {
+			t.Fatalf("model = %#v, want %q", payload["model"], defaultCodexModel)
+		}
+
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"content": "hello from codex",
+			"output_text": "hello from codex",
 			"usage": map[string]any{
 				"input_tokens":  10,
 				"output_tokens": 5,
 				"total_tokens":  15,
+				"input_tokens_details": map[string]any{
+					"cached_tokens":      3,
+					"cache_write_tokens": 2,
+				},
 			},
 		})
 	})
 
 	client, err := NewCodex(CodexOptions{
-		BaseURL:     "https://chatgpt.com/backend-api/codex",
+		BaseURL:     "https://chatgpt.com/backend-api",
 		AccessToken: "secret-token",
+		AccountID:   "acct-123",
 		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
@@ -43,7 +65,7 @@ func TestCodexCompleteText(t *testing.T) {
 	}
 
 	resp, err := client.Complete(context.Background(), []agent.Message{
-		{Role: "system", Content: "sys"},
+		{Role: "system", Content: "system instructions"},
 		{Role: "user", Content: "hi"},
 	}, nil)
 	if err != nil {
@@ -52,32 +74,43 @@ func TestCodexCompleteText(t *testing.T) {
 	if resp.Content != "hello from codex" {
 		t.Fatalf("content = %q, want hello from codex", resp.Content)
 	}
-	if resp.Usage.TotalTokens != 15 {
-		t.Fatalf("total tokens = %d, want 15", resp.Usage.TotalTokens)
+	if resp.Usage.TotalTokens != 15 || resp.Usage.CacheReadTokens != 3 || resp.Usage.CacheWriteTokens != 2 {
+		t.Fatalf("usage = %#v, want totals and cache tokens", resp.Usage)
 	}
 	if seenAuth != "Bearer secret-token" {
 		t.Fatalf("authorization = %q, want bearer token", seenAuth)
 	}
+	if seenAccountID != "acct-123" {
+		t.Fatalf("account id = %q, want acct-123", seenAccountID)
+	}
+	if seenPath != "/backend-api/codex/responses" {
+		t.Fatalf("path = %q, want /backend-api/codex/responses", seenPath)
+	}
+	if seenInstructions != "system instructions" {
+		t.Fatalf("instructions = %q, want system instructions", seenInstructions)
+	}
 }
 
-func TestCodexCompleteToolCall(t *testing.T) {
+func TestCodexCompleteToolCallViaResponsesOutput(t *testing.T) {
 	t.Parallel()
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"tool_calls": []map[string]any{
+			"output": []map[string]any{
 				{
-					"id":    "tc1",
-					"name":  "exec",
-					"input": map[string]any{"command": "pwd"},
+					"type":      "function_call",
+					"name":      "exec",
+					"call_id":   "tc1",
+					"arguments": `{"command":"pwd"}`,
 				},
 			},
 		})
 	})
 
 	client, err := NewCodex(CodexOptions{
-		BaseURL:     "https://chatgpt.com/backend-api/codex",
+		BaseURL:     "https://chatgpt.com/backend-api",
 		AccessToken: "secret-token",
+		AccountID:   "acct-123",
 		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
@@ -97,6 +130,9 @@ func TestCodexCompleteToolCall(t *testing.T) {
 	if resp.ToolCalls[0].ID != "tc1" || resp.ToolCalls[0].Name != "exec" {
 		t.Fatalf("tool call = %#v", resp.ToolCalls[0])
 	}
+	if got := string(resp.ToolCalls[0].Input); got != `{"command":"pwd"}` {
+		t.Fatalf("tool input = %q, want pwd payload", got)
+	}
 }
 
 func TestCodexCompleteStatusError(t *testing.T) {
@@ -108,8 +144,9 @@ func TestCodexCompleteStatusError(t *testing.T) {
 	})
 
 	client, err := NewCodex(CodexOptions{
-		BaseURL:     "https://chatgpt.com/backend-api/codex",
+		BaseURL:     "https://chatgpt.com/backend-api",
 		AccessToken: "secret-token",
+		AccountID:   "acct-123",
 		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
@@ -131,18 +168,19 @@ func TestCodexCompleteStatusError(t *testing.T) {
 	}
 }
 
-func TestCodexCompleteStatusErrorRedactsTokenInBody(t *testing.T) {
+func TestCodexCompleteStatusErrorRedactsSecretsInBody(t *testing.T) {
 	t.Parallel()
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"error":"token secret-token forbidden"}`))
+		_, _ = w.Write([]byte(`{"error":"token secret-token forbidden for acct-123"}`))
 	})
 
 	client, err := NewCodex(CodexOptions{
-		BaseURL:      "https://chatgpt.com/backend-api/codex",
+		BaseURL:      "https://chatgpt.com/backend-api",
 		AccessToken:  "secret-token",
 		RefreshToken: "refresh-token",
+		AccountID:    "acct-123",
 		HTTPClient:   &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
@@ -153,8 +191,8 @@ func TestCodexCompleteStatusErrorRedactsTokenInBody(t *testing.T) {
 	if err == nil {
 		t.Fatal("Complete() err = nil, want status error")
 	}
-	if strings.Contains(err.Error(), "secret-token") {
-		t.Fatalf("error = %v, secret token leaked", err)
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "acct-123") {
+		t.Fatalf("error = %v, secret leaked", err)
 	}
 	if !strings.Contains(err.Error(), "[REDACTED]") {
 		t.Fatalf("error = %v, want redacted marker", err)
@@ -166,22 +204,24 @@ func TestCodexCompleteReloadsAuthFileAfterUnauthorized(t *testing.T) {
 
 	var seenAuth []string
 	client, err := NewCodex(CodexOptions{
-		BaseURL:      "https://chatgpt.com/backend-api/codex",
+		BaseURL:      "https://chatgpt.com/backend-api",
 		AccessToken:  "stale-token",
 		RefreshToken: "refresh-token",
+		AccountID:    "acct-123",
 		LoadTokens: func() (governorauth.CodexTokens, error) {
 			return governorauth.CodexTokens{
 				AccessToken:  "fresh-token",
 				RefreshToken: "refresh-token",
+				AccountID:    "acct-456",
 			}, nil
 		},
 		HTTPClient: &http.Client{Transport: &testTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			seenAuth = append(seenAuth, r.Header.Get("Authorization"))
+			seenAuth = append(seenAuth, r.Header.Get("Authorization")+"|"+r.Header.Get("ChatGPT-Account-ID"))
 			if len(seenAuth) == 1 {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"content": "recovered"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"output_text": "recovered"})
 		})}},
 	})
 	if err != nil {
@@ -195,8 +235,8 @@ func TestCodexCompleteReloadsAuthFileAfterUnauthorized(t *testing.T) {
 	if resp.Content != "recovered" {
 		t.Fatalf("content = %q, want recovered", resp.Content)
 	}
-	if got, want := strings.Join(seenAuth, ","), "Bearer stale-token,Bearer fresh-token"; got != want {
-		t.Fatalf("authorization sequence = %q, want %q", got, want)
+	if got, want := strings.Join(seenAuth, ","), "Bearer stale-token|acct-123,Bearer fresh-token|acct-456"; got != want {
+		t.Fatalf("auth sequence = %q, want %q", got, want)
 	}
 }
 
@@ -207,9 +247,10 @@ func TestCodexCompleteRefreshesAndPersistsTokensAfterUnauthorized(t *testing.T) 
 	var saved governorauth.CodexTokens
 	var savedAt time.Time
 	client, err := NewCodex(CodexOptions{
-		BaseURL:      "https://chatgpt.com/backend-api/codex",
+		BaseURL:      "https://chatgpt.com/backend-api",
 		AccessToken:  "stale-token",
 		RefreshToken: "refresh-token",
+		AccountID:    "acct-123",
 		RefreshURL:   "https://auth.openai.com/oauth/token",
 		SaveTokens: func(tokens governorauth.CodexTokens, refreshedAt time.Time) error {
 			saved = tokens
@@ -221,13 +262,13 @@ func TestCodexCompleteRefreshesAndPersistsTokensAfterUnauthorized(t *testing.T) 
 		},
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			switch req.URL.String() {
-			case "https://chatgpt.com/backend-api/codex":
-				seenAuth = append(seenAuth, req.Header.Get("Authorization"))
+			case "https://chatgpt.com/backend-api/codex/responses":
+				seenAuth = append(seenAuth, req.Header.Get("Authorization")+"|"+req.Header.Get("ChatGPT-Account-ID"))
 				rec := httptest.NewRecorder()
 				if len(seenAuth) == 1 {
 					rec.WriteHeader(http.StatusUnauthorized)
 				} else {
-					_ = json.NewEncoder(rec).Encode(map[string]any{"content": "after-refresh"})
+					_ = json.NewEncoder(rec).Encode(map[string]any{"output_text": "after-refresh"})
 				}
 				return rec.Result(), nil
 			case "https://auth.openai.com/oauth/token":
@@ -258,14 +299,42 @@ func TestCodexCompleteRefreshesAndPersistsTokensAfterUnauthorized(t *testing.T) 
 	if resp.Content != "after-refresh" {
 		t.Fatalf("content = %q, want after-refresh", resp.Content)
 	}
-	if got, want := strings.Join(seenAuth, ","), "Bearer stale-token,Bearer fresh-access"; got != want {
-		t.Fatalf("authorization sequence = %q, want %q", got, want)
+	if got, want := strings.Join(seenAuth, ","), "Bearer stale-token|acct-123,Bearer fresh-access|acct-123"; got != want {
+		t.Fatalf("auth sequence = %q, want %q", got, want)
 	}
-	if saved.AccessToken != "fresh-access" || saved.RefreshToken != "fresh-refresh" {
-		t.Fatalf("saved tokens = %#v, want refreshed pair", saved)
+	if saved.AccessToken != "fresh-access" || saved.RefreshToken != "fresh-refresh" || saved.AccountID != "acct-123" {
+		t.Fatalf("saved tokens = %#v, want refreshed pair plus account id", saved)
 	}
 	if savedAt.IsZero() {
 		t.Fatal("save timestamp was not set")
+	}
+}
+
+func TestCodexCompleteRedactsSecretInTransportError(t *testing.T) {
+	t.Parallel()
+
+	const token = "super-secret-token"
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: token,
+		AccountID:   "acct-123",
+		HTTPClient: &http.Client{
+			Transport: errTransport{err: errors.New("dial failed using token " + token)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("Complete() err = nil, want transport failure")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error leaked secret token: %v", err)
+	}
+	if !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("error = %v, want redacted marker", err)
 	}
 }
 
@@ -291,31 +360,4 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func (t errTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, t.err
-}
-
-func TestCodexCompleteRedactsSecretInTransportError(t *testing.T) {
-	t.Parallel()
-
-	const token = "super-secret-token"
-	client, err := NewCodex(CodexOptions{
-		BaseURL:     "https://chatgpt.com/backend-api/codex",
-		AccessToken: token,
-		HTTPClient: &http.Client{
-			Transport: errTransport{err: errors.New("dial failed using token " + token)},
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewCodex() err = %v", err)
-	}
-
-	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
-	if err == nil {
-		t.Fatal("Complete() err = nil, want transport failure")
-	}
-	if strings.Contains(err.Error(), token) {
-		t.Fatalf("error leaked secret token: %v", err)
-	}
-	if !strings.Contains(err.Error(), "[REDACTED]") {
-		t.Fatalf("error = %v, want redacted marker", err)
-	}
 }

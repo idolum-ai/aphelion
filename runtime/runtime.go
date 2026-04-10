@@ -96,6 +96,7 @@ var newCodexProvider = func(bundle governorauth.Bundle, cfg *config.Config) (age
 		BaseURL:      bundle.BaseURL,
 		AccessToken:  bundle.AccessToken,
 		RefreshToken: bundle.RefreshToken,
+		AccountID:    bundle.AccountID,
 		RefreshURL:   bundle.RefreshURL,
 		HTTPClient:   &http.Client{Timeout: 90 * time.Second},
 		UserAgent:    cfg.Identity.UserAgent,

@@ -244,7 +244,7 @@ native_provider = "anthropic" # used when backend resolves to native
 [governor.codex]
 auth_source = "auto"          # "auto" | "codex_cli" | "aphelion"
 codex_home = ""
-base_url = "https://chatgpt.com/backend-api/codex"
+base_url = "https://chatgpt.com/backend-api"
 
 [face]
 backend = "provider"          # "provider" | "governor_passthrough"

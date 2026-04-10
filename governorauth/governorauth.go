@@ -23,7 +23,7 @@ const (
 	AuthSourceCodexCLI = "codex_cli"
 	AuthSourceAphelion = "aphelion"
 
-	DefaultCodexBaseURL = "https://chatgpt.com/backend-api/codex"
+	DefaultCodexBaseURL    = "https://chatgpt.com/backend-api"
 	DefaultCodexRefreshURL = "https://auth.openai.com/oauth/token"
 )
 
@@ -61,6 +61,7 @@ type Bundle struct {
 	BaseURL      string
 	AccessToken  string
 	RefreshToken string
+	AccountID    string
 	AuthPath     string
 	RefreshURL   string
 	Source       string
@@ -134,6 +135,7 @@ func resolveCodexBundle(cfg config.GovernorConfig, l lookups) (Bundle, bool, err
 			BaseURL:      baseURL,
 			AccessToken:  creds.AccessToken,
 			RefreshToken: creds.RefreshToken,
+			AccountID:    creds.AccountID,
 			AuthPath:     creds.AuthPath,
 			RefreshURL:   DefaultCodexRefreshURL,
 			Source:       "codex-cli-auth-json",
@@ -156,12 +158,14 @@ type codexCLIAuth struct {
 	Tokens struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
+		AccountID    string `json:"account_id"`
 	} `json:"tokens"`
 }
 
 type codexCredentials struct {
 	AccessToken  string
 	RefreshToken string
+	AccountID    string
 	AuthPath     string
 }
 
@@ -186,13 +190,15 @@ func detectCodexCLICredentials(codexHomeOverride string, l lookups) (codexCreden
 
 	access := strings.TrimSpace(parsed.Tokens.AccessToken)
 	refresh := strings.TrimSpace(parsed.Tokens.RefreshToken)
-	if access == "" || refresh == "" {
+	accountID := strings.TrimSpace(parsed.Tokens.AccountID)
+	if access == "" || refresh == "" || accountID == "" {
 		return codexCredentials{}, ErrCodexAuthIncomplete
 	}
 
 	return codexCredentials{
 		AccessToken:  access,
 		RefreshToken: refresh,
+		AccountID:    accountID,
 		AuthPath:     authPath,
 	}, nil
 }
@@ -218,6 +224,7 @@ func resolveCodexAuthPath(codexHomeOverride string, l lookups) (string, bool) {
 type CodexTokens struct {
 	AccessToken  string
 	RefreshToken string
+	AccountID    string
 }
 
 func LoadCodexCLIAuth(path string) (CodexTokens, error) {
@@ -236,18 +243,21 @@ func LoadCodexCLIAuth(path string) (CodexTokens, error) {
 
 	access := strings.TrimSpace(parsed.Tokens.AccessToken)
 	refresh := strings.TrimSpace(parsed.Tokens.RefreshToken)
-	if access == "" || refresh == "" {
+	accountID := strings.TrimSpace(parsed.Tokens.AccountID)
+	if access == "" || refresh == "" || accountID == "" {
 		return CodexTokens{}, ErrCodexAuthIncomplete
 	}
 	return CodexTokens{
 		AccessToken:  access,
 		RefreshToken: refresh,
+		AccountID:    accountID,
 	}, nil
 }
 
 func SaveCodexCLIAuth(path string, tokens CodexTokens, refreshedAt time.Time) error {
 	access := strings.TrimSpace(tokens.AccessToken)
 	refresh := strings.TrimSpace(tokens.RefreshToken)
+	accountID := strings.TrimSpace(tokens.AccountID)
 	if access == "" || refresh == "" {
 		return ErrCodexAuthIncomplete
 	}
@@ -261,12 +271,21 @@ func SaveCodexCLIAuth(path string, tokens CodexTokens, refreshedAt time.Time) er
 		return ErrCodexAuthMalformed
 	}
 
+	if accountID == "" {
+		if existingTokens, ok := payload["tokens"].(map[string]any); ok {
+			if existingAccountID, ok := existingTokens["account_id"].(string); ok {
+				accountID = strings.TrimSpace(existingAccountID)
+			}
+		}
+	}
+
 	if payload == nil {
 		payload = map[string]any{}
 	}
 	payload["tokens"] = map[string]any{
 		"access_token":  access,
 		"refresh_token": refresh,
+		"account_id":    accountID,
 	}
 	payload["last_refresh"] = refreshedAt.UTC().Format(time.RFC3339)
 

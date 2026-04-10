@@ -110,6 +110,7 @@ type GovernorAuth struct {
     Backend   string
     BaseURL   string
     AccessKey string
+    AccountID string
     Source    string
 }
 ```
@@ -120,6 +121,14 @@ For Codex, the source may be:
 - later `aphelion-auth-store`
 
 The exact type may evolve, but the rest of the governor path should depend on a normalized bundle rather than directly reading `auth.json`.
+
+For Codex CLI auth, the normalized bundle should carry:
+
+- access token
+- refresh token
+- ChatGPT account id
+
+If `account_id` is missing, Codex auth should be treated as incomplete and should not be selected in `auto`.
 
 ## Expiry and Refresh
 
@@ -170,7 +179,7 @@ native_provider = "anthropic"
 [governor.codex]
 auth_source = "auto"            # "auto" | "codex_cli" | "aphelion"
 codex_home = ""                 # empty = CODEX_HOME or ~/.codex
-base_url = "https://chatgpt.com/backend-api/codex"
+base_url = "https://chatgpt.com/backend-api"
 ```
 
 `auth_source = "auto"` means:
