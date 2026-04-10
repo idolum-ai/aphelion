@@ -30,6 +30,7 @@ type fakeProvider struct {
 	replyText           string
 	thinkingText        string
 	reflectionReplyText string
+	compactionReplyText string
 	proposalReplyText   string
 	faceReplyText       string
 	streamFaceText      string
@@ -80,6 +81,13 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 	}
 	f.seenGovernorSystem = append(f.seenGovernorSystem, strings.Join(systemParts, "\n\n"))
 	for _, userText := range userParts {
+		if strings.Contains(strings.Join(systemParts, "\n\n"), "You are compacting an existing session ledger.") {
+			reply := strings.TrimSpace(f.compactionReplyText)
+			if reply == "" {
+				reply = "Compacted summary of earlier turns."
+			}
+			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
+		}
 		if strings.Contains(userText, heartbeatReflectionMarker) {
 			reply := strings.TrimSpace(f.reflectionReplyText)
 			if reply == "" {
@@ -622,6 +630,151 @@ func TestHandleInboundIncludesIdolumProposalInGovernorInput(t *testing.T) {
 	}
 }
 
+func TestHandleInboundSkipsIdolumForSimpleFactualTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "The current time is 12:00 UTC."
+	provider.faceReplyText = "Idolum should not be called."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     73,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "what time is it?",
+		MessageID:  1,
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenProposalSystem) != 0 {
+		t.Fatalf("seenProposalSystem len = %d, want 0", len(provider.seenProposalSystem))
+	}
+	if len(provider.seenFaceSystem) != 0 {
+		t.Fatalf("seenFaceSystem len = %d, want 0", len(provider.seenFaceSystem))
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 || sender.sent[0].Text != "The current time is 12:00 UTC." {
+		t.Fatalf("sent = %#v, want canonical passthrough reply", sender.sent)
+	}
+}
+
+func TestHandleInboundCompactsLongSessionBeforeGovernorTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Sessions.MaxContextRatio = 0.40
+	cfg.Sessions.CompactionRatio = 0.20
+	cfg.Governor.Codex.ContextWindow = 120
+	provider.replyText = "fresh reply"
+	provider.compactionReplyText = "Compacted summary of the earlier conversation."
+
+	key := session.SessionKey{ChatID: 74, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.TurnCount = 4
+	long := strings.Repeat("memory-rich content ", 20)
+	if err := store.Save(sess, []session.Message{
+		{Role: "user", Content: "turn one " + long, TurnIndex: 1},
+		{Role: "assistant", Content: "reply one " + long, CanonicalContent: "reply one " + long, TurnIndex: 1},
+		{Role: "user", Content: "turn two " + long, TurnIndex: 2},
+		{Role: "assistant", Content: "reply two " + long, CanonicalContent: "reply two " + long, TurnIndex: 2},
+		{Role: "user", Content: "turn three " + long, TurnIndex: 3},
+		{Role: "assistant", Content: "reply three " + long, CanonicalContent: "reply three " + long, TurnIndex: 3},
+		{Role: "user", Content: "turn four " + long, TurnIndex: 4},
+		{Role: "assistant", Content: "reply four " + long, CanonicalContent: "reply four " + long, TurnIndex: 4},
+	}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(seed) err = %v", err)
+	}
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.governorBackend = "codex"
+
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     74,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "continue",
+		MessageID:  1,
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	reloaded, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(reloaded) err = %v", err)
+	}
+	if len(reloaded.CompactionLog) == 0 {
+		t.Fatal("compaction log empty, want at least one entry")
+	}
+	if reloaded.CompactionLog[len(reloaded.CompactionLog)-1].Strategy != "summarize" {
+		t.Fatalf("compaction strategy = %q, want summarize", reloaded.CompactionLog[len(reloaded.CompactionLog)-1].Strategy)
+	}
+	foundSummary := false
+	compactedCount := 0
+	for _, msg := range reloaded.Messages {
+		if msg.Compacted {
+			compactedCount++
+		}
+		if msg.Role == "assistant" && strings.Contains(msg.Content, "Compacted summary of the earlier conversation.") {
+			foundSummary = true
+		}
+	}
+	if compactedCount == 0 {
+		t.Fatal("compactedCount = 0, want some old messages compacted")
+	}
+	if !foundSummary {
+		t.Fatal("compaction summary message not found in reloaded session")
+	}
+}
+
+func TestHandleInboundSkipsIdolumRenderForCodeHeavyReply(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "```go\nfmt.Println(\"hi\")\n```"
+	provider.proposalReplyText = "Push harder"
+	provider.faceReplyText = "Idolum should not render code-heavy output."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     75,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "please look into why this code is written this way",
+		MessageID:  1,
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenProposalSystem) == 0 {
+		t.Fatal("seenProposalSystem empty, want proposal call for open-ended request")
+	}
+	if len(provider.seenFaceSystem) != 0 {
+		t.Fatalf("seenFaceSystem len = %d, want 0 for code-heavy passthrough", len(provider.seenFaceSystem))
+	}
+}
+
 func TestHeartbeatTargetNoneStoresMaintenanceWithoutOutbound(t *testing.T) {
 	t.Parallel()
 
@@ -1147,13 +1300,17 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 			Backend:        "native",
 			NativeProvider: "anthropic",
 			Codex: config.GovernorCodexConfig{
-				AuthSource: "auto",
-				BaseURL:    "https://chatgpt.com/backend-api/codex",
+				AuthSource:    "auto",
+				BaseURL:       "https://chatgpt.com/backend-api/codex",
+				ContextWindow: 200000,
 			},
 		},
 		Sessions: config.SessionsConfig{
-			DBPath:     dbPath,
-			IdleExpiry: "24h",
+			DBPath:             dbPath,
+			IdleExpiry:         "24h",
+			MaxContextRatio:    0.75,
+			CompactionRatio:    0.55,
+			CompactionStrategy: "summarize",
 		},
 		Agent: config.AgentConfig{
 			Workspace:              root,

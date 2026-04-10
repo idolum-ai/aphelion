@@ -61,32 +61,34 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	sess.UserName = msg.SenderName
 	sess.SystemPrompt = systemPrompt
 
-	history, err := session.ToAgentHistory(sess.Messages)
-	if err != nil {
-		return nil, fmt.Errorf("assemble history: %w", err)
-	}
-
 	userText, inboundWasVoice, err := r.transcribeVoiceIfNeeded(ctx, scope, msg)
 	if err != nil {
 		return nil, err
 	}
+	facePolicy := decideInteractiveFacePolicy(sess, userText)
 	idolumProposal := ""
 	extraUsage := core.TokenUsage{}
-	if proposer, ok := r.faceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
-		proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
-			GovernorName:    prompt.DefaultGovernorName,
-			FaceName:        face.DefaultFaceName,
-			Channel:         "telegram",
-			PrincipalRole:   string(actor.Role),
-			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			LatestUserInput: userText,
-		})
-		if proposalErr != nil {
-			log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
-		} else {
-			idolumProposal = strings.TrimSpace(proposal)
-			extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
+	if facePolicy.Proposal {
+		if proposer, ok := r.faceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
+			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
+				GovernorName:    prompt.DefaultGovernorName,
+				FaceName:        face.DefaultFaceName,
+				Channel:         "telegram",
+				PrincipalRole:   string(actor.Role),
+				WorkspaceRoot:   faceWorkspaceRoot(scope),
+				LatestUserInput: userText,
+			})
+			if proposalErr != nil {
+				log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
+			} else {
+				idolumProposal = strings.TrimSpace(proposal)
+				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
+			}
 		}
+	}
+	sess, history, err := r.maybeCompactSession(ctx, key, sess, systemBlocks, userText, idolumProposal)
+	if err != nil {
+		return nil, fmt.Errorf("maybe compact session: %w", err)
 	}
 	progress := r.newToolProgressReporter(msg)
 	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, userText, progress)
@@ -133,8 +135,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			CanonicalReply:  canonicalReply,
 			LatestUserInput: userText,
 		}
+		shouldRender := shouldRenderIdolumReply(facePolicy, userText, canonicalReply, result.ToolLog, outHistory[len(input):])
 
-		if !r.shouldReplyWithVoice(inboundWasVoice) {
+		if shouldRender && !r.shouldReplyWithVoice(inboundWasVoice) {
 			if streamer, ok := r.faceModel.(face.StreamRenderer); ok {
 				editor := r.newStreamEditor(msg)
 				if editor != nil {
@@ -164,7 +167,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			}
 		}
 
-		if !faceRendered {
+		if shouldRender && !faceRendered {
 			renderedReply, renderErr := r.faceModel.Render(ctx, renderReq)
 			if renderErr != nil {
 				log.Printf("WARN face render failed backend=%s err=%v; using governor_passthrough", r.faceBackend, renderErr)

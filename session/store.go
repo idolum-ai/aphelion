@@ -500,6 +500,11 @@ func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) 
 	if keepFromTurn < 0 {
 		return fmt.Errorf("keepFromTurn must be >= 0")
 	}
+	summary = strings.TrimSpace(summary)
+	strategy := "truncate"
+	if summary != "" {
+		strategy = "summarize"
+	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -526,7 +531,7 @@ func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) 
 		return fmt.Errorf("compact old messages: %w", err)
 	}
 
-	if strings.TrimSpace(summary) != "" {
+	if summary != "" {
 		_, err := tx.Exec(`
 			INSERT INTO messages(
 				chat_id, user_id, role, content, created_at, turn_index, content_chars, compacted
@@ -549,10 +554,10 @@ func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) 
 	if _, err := tx.Exec(`
 		INSERT INTO compaction_log(
 			chat_id, user_id, timestamp, turns_before, turns_after, tokens_before, tokens_after, summary, strategy
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'summarize')
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		key.ChatID, key.UserID, time.Now().UTC().Format(time.RFC3339Nano),
-		turnsBefore, turnsAfter, charsBefore/4, charsAfter/4, summary,
+		turnsBefore, turnsAfter, charsBefore/4, charsAfter/4, summary, strategy,
 	); err != nil {
 		return fmt.Errorf("insert compaction log: %w", err)
 	}
@@ -560,7 +565,10 @@ func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) 
 	if _, err := tx.Exec(`
 		UPDATE sessions
 		SET
+			cache_last_write_block = 0,
 			cache_blocks_since = 0,
+			cache_hit_rate = 0,
+			cache_consecutive_misses = 0,
 			updated_at = ?
 		WHERE chat_id = ? AND user_id = ?
 	`, time.Now().UTC().Format(time.RFC3339Nano), key.ChatID, key.UserID); err != nil {

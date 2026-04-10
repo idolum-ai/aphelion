@@ -58,9 +58,10 @@ type GovernorConfig struct {
 }
 
 type GovernorCodexConfig struct {
-	AuthSource string `toml:"auth_source"`
-	CodexHome  string `toml:"codex_home"`
-	BaseURL    string `toml:"base_url"`
+	AuthSource    string `toml:"auth_source"`
+	CodexHome     string `toml:"codex_home"`
+	BaseURL       string `toml:"base_url"`
+	ContextWindow int    `toml:"context_window"`
 }
 
 type ProvidersConfig struct {
@@ -69,14 +70,18 @@ type ProvidersConfig struct {
 }
 
 type AnthropicConfig struct {
-	APIKey    string `toml:"api_key"`
-	Model     string `toml:"model"`
-	MaxTokens int    `toml:"max_tokens"`
+	APIKey        string `toml:"api_key"`
+	Model         string `toml:"model"`
+	MaxTokens     int    `toml:"max_tokens"`
+	ContextWindow int    `toml:"context_window"`
 }
 
 type SessionsConfig struct {
-	DBPath     string `toml:"db_path"`
-	IdleExpiry string `toml:"idle_expiry"`
+	DBPath             string  `toml:"db_path"`
+	IdleExpiry         string  `toml:"idle_expiry"`
+	MaxContextRatio    float64 `toml:"max_context_ratio"`
+	CompactionRatio    float64 `toml:"compaction_ratio"`
+	CompactionStrategy string  `toml:"compaction_strategy"`
 }
 
 type AgentConfig struct {
@@ -207,20 +212,25 @@ func Default() Config {
 			Backend:        "auto",
 			NativeProvider: "anthropic",
 			Codex: GovernorCodexConfig{
-				AuthSource: "auto",
-				BaseURL:    "https://chatgpt.com/backend-api/codex",
+				AuthSource:    "auto",
+				BaseURL:       "https://chatgpt.com/backend-api/codex",
+				ContextWindow: 200000,
 			},
 		},
 		Providers: ProvidersConfig{
 			Default: "anthropic",
 			Anthropic: AnthropicConfig{
-				Model:     "claude-sonnet-4-6",
-				MaxTokens: 4096,
+				Model:         "claude-sonnet-4-6",
+				MaxTokens:     4096,
+				ContextWindow: 200000,
 			},
 		},
 		Sessions: SessionsConfig{
-			DBPath:     "~/.aphelion/state/sessions.db",
-			IdleExpiry: "24h",
+			DBPath:             "~/.aphelion/state/sessions.db",
+			IdleExpiry:         "24h",
+			MaxContextRatio:    0.75,
+			CompactionRatio:    0.55,
+			CompactionStrategy: "summarize",
 		},
 		Agent: AgentConfig{
 			PromptRoot:        "~/.aphelion/agent",
@@ -425,6 +435,9 @@ func validate(cfg *Config) error {
 	if strings.TrimSpace(cfg.Governor.Codex.BaseURL) == "" {
 		return fmt.Errorf("governor.codex.base_url is required")
 	}
+	if cfg.Governor.Codex.ContextWindow <= 0 {
+		return fmt.Errorf("governor.codex.context_window must be > 0")
+	}
 	if cfg.Agent.MaxIterations <= 0 {
 		return fmt.Errorf("agent.max_iterations must be > 0")
 	}
@@ -445,6 +458,20 @@ func validate(cfg *Config) error {
 	}
 	if _, err := time.ParseDuration(strings.TrimSpace(cfg.Sessions.IdleExpiry)); err != nil {
 		return fmt.Errorf("sessions.idle_expiry must be a valid duration: %w", err)
+	}
+	if cfg.Sessions.MaxContextRatio <= 0 || cfg.Sessions.MaxContextRatio >= 1 {
+		return fmt.Errorf("sessions.max_context_ratio must be > 0 and < 1")
+	}
+	if cfg.Sessions.CompactionRatio <= 0 || cfg.Sessions.CompactionRatio >= 1 {
+		return fmt.Errorf("sessions.compaction_ratio must be > 0 and < 1")
+	}
+	if cfg.Sessions.CompactionRatio >= cfg.Sessions.MaxContextRatio {
+		return fmt.Errorf("sessions.compaction_ratio must be < max_context_ratio")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Sessions.CompactionStrategy)) {
+	case "", "summarize", "truncate":
+	default:
+		return fmt.Errorf("sessions.compaction_strategy must be one of summarize|truncate")
 	}
 	if strings.TrimSpace(cfg.Agent.EffectivePromptRoot()) == "" {
 		return fmt.Errorf("agent.prompt_root is required")
@@ -503,6 +530,9 @@ func validate(cfg *Config) error {
 	}
 	if needsNativeProvider && strings.TrimSpace(cfg.Providers.Anthropic.APIKey) == "" {
 		return fmt.Errorf("providers.anthropic.api_key is required when native provider access is enabled")
+	}
+	if cfg.Providers.Anthropic.ContextWindow <= 0 {
+		return fmt.Errorf("providers.anthropic.context_window must be > 0")
 	}
 	if strings.TrimSpace(cfg.Heartbeat.Every) == "" {
 		return fmt.Errorf("heartbeat.every is required")

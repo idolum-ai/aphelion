@@ -271,6 +271,62 @@ func TestSaveUpdatesCacheTotalsAndState(t *testing.T) {
 	}
 }
 
+func TestCompactMarksOldMessagesAndResetsCacheState(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 99, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.TurnCount = 3
+	sess.CacheState.LastWriteBlock = 3
+	sess.CacheState.BlocksSinceWrite = 2
+	sess.CacheState.HitRate = 0.5
+	sess.CacheState.ConsecutiveMisses = 2
+	if err := store.Save(sess, []Message{
+		{Role: "user", Content: "turn 1", TurnIndex: 1},
+		{Role: "assistant", Content: "reply 1", TurnIndex: 1},
+		{Role: "user", Content: "turn 2", TurnIndex: 2},
+		{Role: "assistant", Content: "reply 2", TurnIndex: 2},
+		{Role: "user", Content: "turn 3", TurnIndex: 3},
+		{Role: "assistant", Content: "reply 3", TurnIndex: 3},
+	}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	if err := store.Compact(key, "summary block", 3); err != nil {
+		t.Fatalf("Compact() err = %v", err)
+	}
+
+	reloaded, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(reloaded) err = %v", err)
+	}
+	if len(reloaded.CompactionLog) != 1 {
+		t.Fatalf("compaction log len = %d, want 1", len(reloaded.CompactionLog))
+	}
+	if reloaded.CompactionLog[0].Strategy != "summarize" {
+		t.Fatalf("compaction strategy = %q, want summarize", reloaded.CompactionLog[0].Strategy)
+	}
+	if reloaded.CacheState.LastWriteBlock != 0 || reloaded.CacheState.BlocksSinceWrite != 0 || reloaded.CacheState.HitRate != 0 || reloaded.CacheState.ConsecutiveMisses != 0 {
+		t.Fatalf("cache state after compact = %#v, want reset", reloaded.CacheState)
+	}
+
+	compacted := 0
+	for _, msg := range reloaded.Messages {
+		if msg.Compacted {
+			compacted++
+		}
+	}
+	if compacted == 0 {
+		t.Fatal("compacted message count = 0, want old messages soft-deleted")
+	}
+}
+
 func TestRhizomeEventRecordingAndProjectionEdges(t *testing.T) {
 	t.Parallel()
 

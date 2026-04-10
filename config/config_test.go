@@ -54,6 +54,15 @@ workspace = "./workspace"
 	if cfg.Sessions.IdleExpiry != "24h" {
 		t.Fatalf("idle_expiry = %q, want 24h", cfg.Sessions.IdleExpiry)
 	}
+	if cfg.Sessions.MaxContextRatio != 0.75 || cfg.Sessions.CompactionRatio != 0.55 || cfg.Sessions.CompactionStrategy != "summarize" {
+		t.Fatalf("session compaction defaults = %#v, want 0.75/0.55/summarize", cfg.Sessions)
+	}
+	if cfg.Governor.Codex.ContextWindow != 200000 {
+		t.Fatalf("governor.codex.context_window = %d, want 200000", cfg.Governor.Codex.ContextWindow)
+	}
+	if cfg.Providers.Anthropic.ContextWindow != 200000 {
+		t.Fatalf("providers.anthropic.context_window = %d, want 200000", cfg.Providers.Anthropic.ContextWindow)
+	}
 	if !strings.HasSuffix(cfg.Agent.Workspace, "/workspace") {
 		t.Fatalf("workspace = %q, want expanded relative path", cfg.Agent.Workspace)
 	}
@@ -171,15 +180,20 @@ native_provider = "anthropic"
 auth_source = "codex_cli"
 codex_home = "~/codex-home"
 base_url = "https://chatgpt.com/backend-api/codex"
+context_window = 180000
 
 [providers.anthropic]
 api_key = "sk-ant-test"
 model = "claude-opus-4-6"
 max_tokens = 8192
+context_window = 190000
 
 [sessions]
 db_path = "~/tmp/sessions.db"
 idle_expiry = "36h"
+max_context_ratio = 0.7
+compaction_ratio = 0.5
+compaction_strategy = "truncate"
 
 [agent]
 workspace = "~/workspace"
@@ -278,8 +292,17 @@ elevenlabs_voice_id = "voice-123"
 	if cfg.Governor.Codex.AuthSource != "codex_cli" {
 		t.Fatalf("governor.codex.auth_source = %q, want codex_cli", cfg.Governor.Codex.AuthSource)
 	}
+	if cfg.Governor.Codex.ContextWindow != 180000 {
+		t.Fatalf("governor.codex.context_window = %d, want 180000", cfg.Governor.Codex.ContextWindow)
+	}
 	if cfg.Sessions.IdleExpiry != "36h" {
 		t.Fatalf("idle_expiry = %q, want 36h", cfg.Sessions.IdleExpiry)
+	}
+	if cfg.Sessions.MaxContextRatio != 0.7 || cfg.Sessions.CompactionRatio != 0.5 || cfg.Sessions.CompactionStrategy != "truncate" {
+		t.Fatalf("sessions compaction = %#v, want 0.7/0.5/truncate", cfg.Sessions)
+	}
+	if cfg.Providers.Anthropic.ContextWindow != 190000 {
+		t.Fatalf("providers.anthropic.context_window = %d, want 190000", cfg.Providers.Anthropic.ContextWindow)
 	}
 	if cfg.Agent.DailyNotes {
 		t.Fatal("daily_notes = true, want false")
@@ -426,6 +449,38 @@ idle_expiry = "definitely-not-a-duration"
 	_, err := Load(configPath)
 	if err == nil {
 		t.Fatal("Load() err = nil, want idle_expiry validation error")
+	}
+}
+
+func TestLoadRejectsInvalidCompactionRatios(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[sessions]
+max_context_ratio = 0.50
+compaction_ratio = 0.60
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want compaction ratio validation error")
+	}
+	if !strings.Contains(err.Error(), "sessions.compaction_ratio") {
+		t.Fatalf("error = %v, want sessions.compaction_ratio message", err)
 	}
 }
 

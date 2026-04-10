@@ -21,6 +21,7 @@ native_provider = "anthropic"
 auth_source = "auto"
 codex_home = ""
 base_url = "https://chatgpt.com/backend-api/codex"
+context_window = 200000
 
 [providers]
 default = "anthropic"
@@ -29,10 +30,14 @@ default = "anthropic"
 api_key = "anthropic-api-key"
 model = "claude-sonnet-4-6"
 max_tokens = 4096
+context_window = 200000
 
 [sessions]
 db_path = "~/.aphelion/state/sessions.db"
 idle_expiry = "24h"
+max_context_ratio = 0.75
+compaction_ratio = 0.55
+compaction_strategy = "summarize"
 
 [agent]
 prompt_root = "~/.aphelion/agent"
