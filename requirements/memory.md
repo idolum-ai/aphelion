@@ -147,6 +147,8 @@ These are useful for corpus search, durable attachments, and semantic recall, bu
 
 Semantic retrieval is a query-driven layer over curated memory and other approved corpora.
 
+See also: [`semantic-store.md`](semantic-store.md) for the Aphelion-owned local semantic substrate, provenance-preserving import rules, and retrieval-mode split.
+
 It is not ambient prompt injection.
 
 Use it when the system needs to answer questions like:
