@@ -35,6 +35,7 @@ type Registry struct {
 	filePurpose    string
 	retrievalStore memstore.RetrievalStore
 	defaultStore   string
+	semantic       *memstore.SemanticEngine
 }
 
 type execInput struct {
@@ -54,6 +55,12 @@ type memoryInput struct {
 }
 
 type sessionSearchInput struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+	Scope string `json:"scope,omitempty"`
+}
+
+type semanticSearchInput struct {
 	Query string `json:"query"`
 	Limit int    `json:"limit,omitempty"`
 	Scope string `json:"scope,omitempty"`
@@ -104,6 +111,11 @@ func (r *Registry) WithFileStore(store memstore.FileStore, purpose string) *Regi
 func (r *Registry) WithRetrievalStore(store memstore.RetrievalStore, defaultStore string) *Registry {
 	r.retrievalStore = store
 	r.defaultStore = strings.TrimSpace(defaultStore)
+	return r
+}
+
+func (r *Registry) WithSemanticEngine(engine *memstore.SemanticEngine) *Registry {
+	r.semantic = engine
 	return r
 }
 
@@ -167,6 +179,21 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				"required": ["query"]
 			}`),
 		},
+	}
+	if r.semantic != nil && r.semantic.Enabled() {
+		defs = append(defs, agent.ToolDef{
+			Name:        "semantic_search",
+			Description: "Search curated memory semantically. Use this for related prior knowledge, decisions, or notes without ambient prompt injection.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Semantic search query"},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum number of hits"},
+					"scope": {"type": "string", "enum": ["shared", "principal"], "description": "Shared curated memory for admin, or principal-local memory for isolated users"}
+				},
+				"required": ["query"]
+			}`),
+		})
 	}
 	if r.fileStore != nil {
 		defs = append(defs, agent.ToolDef{
@@ -253,6 +280,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.memory(ctx, input, scope)
 	case "session_search":
 		return r.sessionSearch(ctx, input, p, key)
+	case "semantic_search":
+		return r.semanticSearch(ctx, input, scope)
 	case "openai_file":
 		return r.openAIFile(ctx, input, scope, p)
 	case "openai_vector_store":
@@ -462,6 +491,40 @@ func resolveMemoryRoot(scope sandbox.Scope, requested string) (string, string, e
 	}
 }
 
+func resolveSemanticRoot(scope sandbox.Scope, requested string) (string, string, error) {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	if requested == "" {
+		if scope.Principal.Role == principal.RoleApprovedUser && strings.TrimSpace(scope.UserMemory) != "" {
+			requested = "principal"
+		} else {
+			requested = "shared"
+		}
+	}
+
+	switch requested {
+	case "shared":
+		if scope.Principal.Role == principal.RoleApprovedUser {
+			return "", "", fmt.Errorf("approved users may not read shared semantic memory")
+		}
+		root := strings.TrimSpace(scope.SharedMemoryRoot)
+		if root == "" {
+			root = strings.TrimSpace(scope.WorkingRoot)
+		}
+		if root == "" {
+			return "", "", fmt.Errorf("shared memory root is not configured")
+		}
+		return root, requested, nil
+	case "principal":
+		root := strings.TrimSpace(scope.UserMemory)
+		if root == "" {
+			return "", "", fmt.Errorf("principal memory root is not available for this principal")
+		}
+		return root, requested, nil
+	default:
+		return "", "", fmt.Errorf("semantic_search scope must be shared or principal")
+	}
+}
+
 func (r *Registry) sessionSearch(_ context.Context, input json.RawMessage, p principal.Principal, key session.SessionKey) (string, error) {
 	if r.store == nil {
 		return "", fmt.Errorf("session search requires transcript store")
@@ -497,6 +560,38 @@ func (r *Registry) sessionSearch(_ context.Context, input json.RawMessage, p pri
 	return renderSessionSearchResults(scope, in.Query, hits), nil
 }
 
+func (r *Registry) semanticSearch(ctx context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+	if r.semantic == nil || !r.semantic.Enabled() {
+		return "", fmt.Errorf("semantic search is not configured")
+	}
+
+	var in semanticSearchInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return "", fmt.Errorf("decode semantic_search input: %w", err)
+	}
+	if strings.TrimSpace(in.Query) == "" {
+		return "", fmt.Errorf("semantic_search query is required")
+	}
+
+	root, effectiveScope, err := resolveMemoryRoot(scope, in.Scope)
+	if err != nil {
+		return "", err
+	}
+
+	hits, err := r.semantic.Search(ctx, memstore.SemanticSearchRequest{
+		Root:  root,
+		Scope: effectiveScope,
+		Query: in.Query,
+		Mode:  memstore.SemanticModeInteractive,
+		Limit: in.Limit,
+		Now:   time.Now(),
+	})
+	if err != nil {
+		return "", err
+	}
+	return renderSemanticSearchResults(effectiveScope, in.Query, hits), nil
+}
+
 func renderSessionSearchResults(scope string, query string, hits []session.SearchHit) string {
 	var b strings.Builder
 	b.WriteString("[SESSION_RECALL]\n")
@@ -516,6 +611,28 @@ func renderSessionSearchResults(scope string, query string, hits []session.Searc
 		b.WriteString("\n")
 	}
 	b.WriteString("[/SESSION_RECALL]")
+	return b.String()
+}
+
+func renderSemanticSearchResults(scope string, query string, hits []memstore.SemanticHit) string {
+	var b strings.Builder
+	b.WriteString("[SEMANTIC_RECALL]\n")
+	b.WriteString("scope: ")
+	b.WriteString(scope)
+	b.WriteString("\nquery: ")
+	b.WriteString(strings.TrimSpace(query))
+	b.WriteString("\n")
+	if len(hits) == 0 {
+		b.WriteString("no_hits\n[/SEMANTIC_RECALL]")
+		return b.String()
+	}
+	for i, hit := range hits {
+		fmt.Fprintf(&b, "\n%d. source=%s kind=%s score=%.2f\n", i+1, hit.Source, hit.Kind, hit.Score)
+		b.WriteString("excerpt: ")
+		b.WriteString(truncate(strings.TrimSpace(hit.Excerpt), 600))
+		b.WriteString("\n")
+	}
+	b.WriteString("[/SEMANTIC_RECALL]")
 	return b.String()
 }
 

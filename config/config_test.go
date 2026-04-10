@@ -96,6 +96,9 @@ workspace = "./workspace"
 	if !cfg.Memory.Reflection.Enabled || cfg.Memory.Reflection.Every != "6h" {
 		t.Fatalf("memory.reflection defaults = %#v, want enabled/6h", cfg.Memory.Reflection)
 	}
+	if cfg.Memory.Semantic.Enabled || cfg.Memory.Semantic.Backend != "local" || cfg.Memory.Semantic.Refresh != "manual" {
+		t.Fatalf("memory.semantic defaults = %#v, want disabled/local/manual", cfg.Memory.Semantic)
+	}
 	if !cfg.Memory.Decay.Enabled || cfg.Memory.Decay.HotDays != 3 || cfg.Memory.Decay.WarmDays != 14 || cfg.Memory.Decay.ColdDays != 30 {
 		t.Fatalf("memory.decay defaults = %#v, want enabled 3/14/30", cfg.Memory.Decay)
 	}
@@ -255,6 +258,19 @@ daily_notes_dir = "notes"
 enabled = false
 every = "12h"
 
+[memory.semantic]
+enabled = true
+backend = "local"
+refresh = "heartbeat"
+sources = ["MEMORY.md", "memory/knowledge.md"]
+include_daily_notes = true
+include_questions = true
+include_rhizome = false
+interactive_top_k = 7
+heartbeat_top_k = 15
+interactive_max_chars = 5000
+heartbeat_max_chars = 14000
+
 [memory.decay]
 enabled = true
 hot_days = 2
@@ -366,6 +382,12 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Memory.Reflection.Enabled || cfg.Memory.Reflection.Every != "12h" {
 		t.Fatalf("memory.reflection = %#v, want disabled/12h", cfg.Memory.Reflection)
+	}
+	if !cfg.Memory.Semantic.Enabled || cfg.Memory.Semantic.Backend != "local" || cfg.Memory.Semantic.Refresh != "heartbeat" {
+		t.Fatalf("memory.semantic = %#v, want enabled/local/heartbeat", cfg.Memory.Semantic)
+	}
+	if got, want := cfg.Memory.Semantic.Sources, []string{"MEMORY.md", "memory/knowledge.md"}; !equalStrings(got, want) {
+		t.Fatalf("memory.semantic.sources = %#v, want %#v", got, want)
 	}
 	if !cfg.Memory.Decay.Enabled || cfg.Memory.Decay.HotDays != 2 || cfg.Memory.Decay.WarmDays != 7 || cfg.Memory.Decay.ColdDays != 21 {
 		t.Fatalf("memory.decay = %#v, want enabled 2/7/21", cfg.Memory.Decay)

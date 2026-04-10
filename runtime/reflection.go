@@ -32,8 +32,9 @@ const (
 )
 
 type reflectionInput struct {
-	Notes  []string
-	Events []session.ReviewEvent
+	Notes    []string
+	Events   []session.ReviewEvent
+	Semantic []memstore.SemanticHit
 }
 
 func (r *Runtime) reflectCuratedMemory(
@@ -48,7 +49,7 @@ func (r *Runtime) reflectCuratedMemory(
 	if err != nil {
 		return "", err
 	}
-	if len(input.Notes) == 0 && len(input.Events) == 0 {
+	if len(input.Notes) == 0 && len(input.Events) == 0 && len(input.Semantic) == 0 {
 		return "", nil
 	}
 
@@ -188,7 +189,44 @@ func (r *Runtime) loadReflectionInput(scopeRoot string, since time.Time, now tim
 	for _, note := range notes {
 		out.Notes = append(out.Notes, "### "+note.path+"\n"+note.content)
 	}
+	if r.semantic != nil && r.semantic.Enabled() {
+		query := semanticReflectionQuery(out)
+		if strings.TrimSpace(query) != "" {
+			hits, err := r.semantic.Search(context.Background(), memstore.SemanticSearchRequest{
+				Root:  scopeRoot,
+				Scope: dynamicScopeName(scopeRoot),
+				Query: query,
+				Mode:  memstore.SemanticModeHeartbeat,
+				Now:   now,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("semantic reflection search: %w", err)
+			}
+			out.Semantic = hits
+		}
+	}
 	return out, nil
+}
+
+func semanticReflectionQuery(input *reflectionInput) string {
+	if input == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(input.Notes)+len(input.Events))
+	for _, note := range input.Notes {
+		parts = append(parts, note)
+	}
+	for _, event := range input.Events {
+		if summary := strings.TrimSpace(event.Summary); summary != "" {
+			parts = append(parts, summary)
+		}
+	}
+	joined := strings.Join(parts, "\n")
+	joined = strings.TrimSpace(joined)
+	if len(joined) > 3000 {
+		joined = joined[:3000]
+	}
+	return joined
 }
 
 func renderReflectionRequest(input *reflectionInput) string {
@@ -215,6 +253,14 @@ func renderReflectionRequest(input *reflectionInput) string {
 			b.WriteString("- ")
 			b.WriteString(strings.TrimSpace(event.Summary))
 			b.WriteString("\n")
+		}
+	}
+	if len(input.Semantic) > 0 {
+		b.WriteString("\n## Semantic Context\n")
+		for i, hit := range input.Semantic {
+			fmt.Fprintf(&b, "%d. source=%s kind=%s score=%.2f\n", i+1, hit.Source, hit.Kind, hit.Score)
+			b.WriteString(hit.Excerpt)
+			b.WriteString("\n\n")
 		}
 	}
 	return strings.TrimSpace(b.String())

@@ -96,6 +96,36 @@ bootstrap_total_max_chars = 150000
 daily_notes = true
 daily_notes_dir = "memory/daily"
 
+[memory]
+session_search = false
+semantic_indexing = false
+
+[memory.semantic]
+enabled = false
+backend = "local"
+refresh = "manual"
+sources = ["MEMORY.md", "memory/knowledge.md", "memory/decisions.md"]
+include_daily_notes = true
+include_questions = false
+include_rhizome = false
+interactive_top_k = 5
+heartbeat_top_k = 12
+interactive_max_chars = 4000
+heartbeat_max_chars = 12000
+
+[memory.reflection]
+enabled = true
+every = "6h"
+
+[memory.decay]
+enabled = true
+hot_days = 3
+warm_days = 14
+cold_days = 30
+
+[memory.identity]
+preserve = ["SOUL.md", "IDENTITY.md", "IDOLUM.md", "MEMORY.md"]
+
 [thinking]
 effort = "medium"
 summary = "auto"

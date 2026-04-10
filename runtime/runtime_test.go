@@ -1050,6 +1050,61 @@ func TestHeartbeatReflectionWritesCuratedMemoryFromDailyNotes(t *testing.T) {
 	}
 }
 
+func TestHeartbeatReflectionAddsSemanticContext(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.Target = "none"
+	cfg.Agent.DailyNotes = true
+	cfg.Memory.Semantic.Enabled = true
+	cfg.Memory.Semantic.Sources = []string{"memory/knowledge.md"}
+	cfg.Memory.Semantic.IncludeDailyNotes = true
+	cfg.Memory.Semantic.HeartbeatTopK = 12
+	cfg.Memory.Semantic.HeartbeatMaxChars = 12000
+
+	noteDir := filepath.Join(cfg.Agent.SharedMemoryRoot, cfg.Agent.DailyNotesDir)
+	if err := os.MkdirAll(noteDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(noteDir) err = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(memory) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(noteDir, "2026-04-09.md"), []byte("Need to preserve the user's preference for concise progress updates."), 0o600); err != nil {
+		t.Fatalf("write daily note: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "knowledge.md"), []byte("# knowledge.md\n\n- Prefers concise progress updates [observed, confidence: 0.90]"), 0o600); err != nil {
+		t.Fatalf("write knowledge: %v", err)
+	}
+	provider.reflectionReplyText = strings.Join([]string{
+		"[MEMORY]", "[/MEMORY]",
+		"[KNOWLEDGE]", "[/KNOWLEDGE]",
+		"[DECISIONS]", "[/DECISIONS]",
+		"[QUESTIONS]", "[/QUESTIONS]",
+		"[RHIZOME]", "[/RHIZOME]",
+	}, "\n")
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce() err = %v", err)
+	}
+
+	if len(provider.lastGovernorMsgs) == 0 {
+		t.Fatal("lastGovernorMsgs empty, want reflection request")
+	}
+	request := provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content
+	if !strings.Contains(request, "## Semantic Context") {
+		t.Fatalf("reflection request = %q, want semantic context section", request)
+	}
+	if !strings.Contains(request, "Prefers concise progress updates") {
+		t.Fatalf("reflection request = %q, want semantic knowledge hit", request)
+	}
+}
+
 func TestCronJobNoneStoresDedicatedSessionWithoutOutbound(t *testing.T) {
 	t.Parallel()
 

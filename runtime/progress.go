@@ -307,6 +307,8 @@ func semanticToolProgressEntry(name string, input json.RawMessage) toolProgressE
 		return toolProgressEntry{Key: "memory:update", Text: "Updating memory"}
 	case "session_search":
 		return toolProgressEntry{Key: "session:search", Text: "Searching past sessions"}
+	case "semantic_search":
+		return toolProgressEntry{Key: "memory:semantic", Text: "Searching semantic memory"}
 	case "openai_file":
 		return semanticOpenAIFileProgressEntry(input)
 	case "openai_vector_store":

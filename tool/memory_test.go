@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -208,6 +209,101 @@ func TestSessionSearchApprovedUserIsForcedToCurrentSession(t *testing.T) {
 	}
 	if !strings.Contains(out, "scope: session") {
 		t.Fatalf("output = %q, want forced session scope", out)
+	}
+}
+
+func TestSemanticSearchAdminSearchesSharedCuratedMemory(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	sharedRoot := filepath.Join(tmp, "shared-memory")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			SharedMemoryRoot:  sharedRoot,
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(sharedRoot, "memory"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(shared memory) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedRoot, "memory", "knowledge.md"), []byte("# knowledge.md\n\n- Prefers concise progress updates [observed]"), 0o600); err != nil {
+		t.Fatalf("WriteFile(knowledge.md) err = %v", err)
+	}
+
+	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver).
+		WithSemanticEngine(memstore.NewSemanticEngine(memstore.SemanticOptions{
+			Enabled:             true,
+			Sources:             []string{"memory/knowledge.md"},
+			InteractiveTopK:     5,
+			HeartbeatTopK:       12,
+			InteractiveMaxChars: 4000,
+			HeartbeatMaxChars:   12000,
+			DailyNotesDir:       "memory/daily",
+		}))
+	setFakeBubblewrapRunner(t, registry)
+
+	out, err := registry.ExecuteForPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		"semantic_search",
+		json.RawMessage(`{"query":"brief progress updates","scope":"shared"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForPrincipal(semantic_search) err = %v", err)
+	}
+	if !strings.Contains(out, "[SEMANTIC_RECALL]") || !strings.Contains(out, "memory/knowledge.md") {
+		t.Fatalf("output = %q, want fenced semantic recall hit", out)
+	}
+}
+
+func TestSemanticSearchApprovedUserCannotReadSharedCuratedMemory(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			SharedMemoryRoot:  filepath.Join(tmp, "shared-memory"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+
+	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver).
+		WithSemanticEngine(memstore.NewSemanticEngine(memstore.SemanticOptions{
+			Enabled:             true,
+			Sources:             []string{"memory/knowledge.md"},
+			InteractiveTopK:     5,
+			HeartbeatTopK:       12,
+			InteractiveMaxChars: 4000,
+			HeartbeatMaxChars:   12000,
+			DailyNotesDir:       "memory/daily",
+		}))
+	setFakeBubblewrapRunner(t, registry)
+
+	_, err = registry.ExecuteForPrincipal(
+		context.Background(),
+		principal.Principal{TelegramUserID: 42, Role: principal.RoleApprovedUser},
+		"semantic_search",
+		json.RawMessage(`{"query":"brief progress updates","scope":"shared"}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForPrincipal(semantic_search) err = nil, want shared-memory denial")
+	}
+	if !strings.Contains(err.Error(), "shared memory") {
+		t.Fatalf("err = %v, want scope denial", err)
 	}
 }
 

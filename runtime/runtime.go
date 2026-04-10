@@ -20,6 +20,7 @@ import (
 	"github.com/idolum-ai/aphelion/governorauth"
 	"github.com/idolum-ai/aphelion/governorbackend"
 	"github.com/idolum-ai/aphelion/media"
+	"github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	providerpkg "github.com/idolum-ai/aphelion/provider"
@@ -50,6 +51,7 @@ type Runtime struct {
 	voiceMode   string
 	transcriber media.TranscriptionProvider
 	synth       voice.Synthesizer
+	semantic    *memory.SemanticEngine
 
 	governorBackend     string
 	streamEditInterval  time.Duration
@@ -232,8 +234,20 @@ func New(
 			cfg.Principals.Telegram.AdminUserIDs,
 			cfg.Principals.Telegram.ApprovedUserIDs,
 		),
-		faceBackend:         faceBackend,
-		faceModel:           faceModel,
+		faceBackend: faceBackend,
+		faceModel:   faceModel,
+		semantic: memory.NewSemanticEngine(memory.SemanticOptions{
+			Enabled:             cfg.Memory.Semantic.Enabled,
+			Sources:             cfg.Memory.Semantic.Sources,
+			IncludeDailyNotes:   cfg.Memory.Semantic.IncludeDailyNotes,
+			IncludeQuestions:    cfg.Memory.Semantic.IncludeQuestions,
+			IncludeRhizome:      cfg.Memory.Semantic.IncludeRhizome,
+			InteractiveTopK:     cfg.Memory.Semantic.InteractiveTopK,
+			HeartbeatTopK:       cfg.Memory.Semantic.HeartbeatTopK,
+			InteractiveMaxChars: cfg.Memory.Semantic.InteractiveMaxChars,
+			HeartbeatMaxChars:   cfg.Memory.Semantic.HeartbeatMaxChars,
+			DailyNotesDir:       cfg.Agent.DailyNotesDir,
+		}),
 		governorBackend:     governorAuth.Backend,
 		streamEditInterval:  streamEditInterval,
 		streamCursor:        streamCursor,

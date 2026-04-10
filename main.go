@@ -115,6 +115,18 @@ func run() error {
 		return err
 	}
 	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
+	tools.WithSemanticEngine(memory.NewSemanticEngine(memory.SemanticOptions{
+		Enabled:             cfg.Memory.Semantic.Enabled,
+		Sources:             cfg.Memory.Semantic.Sources,
+		IncludeDailyNotes:   cfg.Memory.Semantic.IncludeDailyNotes,
+		IncludeQuestions:    cfg.Memory.Semantic.IncludeQuestions,
+		IncludeRhizome:      cfg.Memory.Semantic.IncludeRhizome,
+		InteractiveTopK:     cfg.Memory.Semantic.InteractiveTopK,
+		HeartbeatTopK:       cfg.Memory.Semantic.HeartbeatTopK,
+		InteractiveMaxChars: cfg.Memory.Semantic.InteractiveMaxChars,
+		HeartbeatMaxChars:   cfg.Memory.Semantic.HeartbeatMaxChars,
+		DailyNotesDir:       cfg.Agent.DailyNotesDir,
+	}))
 	fileStore, retrievalStore, err := buildOpenAIPlatformServices(cfg, httpClient)
 	if err != nil {
 		return err

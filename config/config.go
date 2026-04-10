@@ -35,23 +35,23 @@ type IdentityConfig struct {
 }
 
 type TelegramConfig struct {
-	BotToken            string `toml:"bot_token"`
-	PollTimeout         int    `toml:"poll_timeout"`
-	StreamEditInterval  string `toml:"stream_edit_interval"`
-	StreamCursor        string `toml:"stream_cursor"`
-	ToolProgress        string `toml:"tool_progress"`
-	ToolProgressStyle   string `toml:"tool_progress_style"`
-	ToolProgressWindow  int    `toml:"tool_progress_window"`
-	ToolProgressCleanup bool   `toml:"tool_progress_cleanup"`
+	BotToken            string              `toml:"bot_token"`
+	PollTimeout         int                 `toml:"poll_timeout"`
+	StreamEditInterval  string              `toml:"stream_edit_interval"`
+	StreamCursor        string              `toml:"stream_cursor"`
+	ToolProgress        string              `toml:"tool_progress"`
+	ToolProgressStyle   string              `toml:"tool_progress_style"`
+	ToolProgressWindow  int                 `toml:"tool_progress_window"`
+	ToolProgressCleanup bool                `toml:"tool_progress_cleanup"`
 	Media               TelegramMediaConfig `toml:"media"`
 }
 
 type TelegramMediaConfig struct {
-	DownloadMaxSize    string `toml:"download_max_size"`
-	AutoVisionPhotos   bool   `toml:"auto_vision_photos"`
-	AutoVisionDocs     bool   `toml:"auto_vision_documents"`
-	ExtractPDFText     bool   `toml:"extract_pdf_text"`
-	MaxPDFBytes        string `toml:"max_pdf_bytes"`
+	DownloadMaxSize  string `toml:"download_max_size"`
+	AutoVisionPhotos bool   `toml:"auto_vision_photos"`
+	AutoVisionDocs   bool   `toml:"auto_vision_documents"`
+	ExtractPDFText   bool   `toml:"extract_pdf_text"`
+	MaxPDFBytes      string `toml:"max_pdf_bytes"`
 }
 
 type PrincipalsConfig struct {
@@ -150,9 +150,24 @@ type AgentConfig struct {
 type MemoryConfig struct {
 	SessionSearch    bool                   `toml:"session_search"`
 	SemanticIndexing bool                   `toml:"semantic_indexing"`
+	Semantic         MemorySemanticConfig   `toml:"semantic"`
 	Reflection       MemoryReflectionConfig `toml:"reflection"`
 	Decay            MemoryDecayConfig      `toml:"decay"`
 	Identity         MemoryIdentityConfig   `toml:"identity"`
+}
+
+type MemorySemanticConfig struct {
+	Enabled             bool     `toml:"enabled"`
+	Backend             string   `toml:"backend"`
+	Refresh             string   `toml:"refresh"`
+	Sources             []string `toml:"sources"`
+	IncludeDailyNotes   bool     `toml:"include_daily_notes"`
+	IncludeQuestions    bool     `toml:"include_questions"`
+	IncludeRhizome      bool     `toml:"include_rhizome"`
+	InteractiveTopK     int      `toml:"interactive_top_k"`
+	HeartbeatTopK       int      `toml:"heartbeat_top_k"`
+	InteractiveMaxChars int      `toml:"interactive_max_chars"`
+	HeartbeatMaxChars   int      `toml:"heartbeat_max_chars"`
 }
 
 type MemoryReflectionConfig struct {
@@ -334,6 +349,19 @@ func Default() Config {
 		Memory: MemoryConfig{
 			SessionSearch:    false,
 			SemanticIndexing: false,
+			Semantic: MemorySemanticConfig{
+				Enabled:             false,
+				Backend:             "local",
+				Refresh:             "manual",
+				Sources:             []string{"MEMORY.md", "memory/knowledge.md", "memory/decisions.md"},
+				IncludeDailyNotes:   true,
+				IncludeQuestions:    false,
+				IncludeRhizome:      false,
+				InteractiveTopK:     5,
+				HeartbeatTopK:       12,
+				InteractiveMaxChars: 4000,
+				HeartbeatMaxChars:   12000,
+			},
 			Reflection: MemoryReflectionConfig{
 				Enabled: true,
 				Every:   "6h",
@@ -608,6 +636,31 @@ func validate(cfg *Config) error {
 	}
 	if len(cfg.Memory.Identity.Preserve) == 0 {
 		return fmt.Errorf("memory.identity.preserve must not be empty")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Memory.Semantic.Backend)) {
+	case "", "local":
+	default:
+		return fmt.Errorf("memory.semantic.backend must be one of local")
+	}
+	refresh := strings.ToLower(strings.TrimSpace(cfg.Memory.Semantic.Refresh))
+	switch refresh {
+	case "", "manual", "heartbeat":
+	default:
+		if _, err := time.ParseDuration(strings.TrimSpace(cfg.Memory.Semantic.Refresh)); err != nil {
+			return fmt.Errorf("memory.semantic.refresh must be manual|heartbeat|<duration>: %w", err)
+		}
+	}
+	if cfg.Memory.Semantic.InteractiveTopK <= 0 {
+		return fmt.Errorf("memory.semantic.interactive_top_k must be > 0")
+	}
+	if cfg.Memory.Semantic.HeartbeatTopK <= 0 {
+		return fmt.Errorf("memory.semantic.heartbeat_top_k must be > 0")
+	}
+	if cfg.Memory.Semantic.InteractiveMaxChars <= 0 {
+		return fmt.Errorf("memory.semantic.interactive_max_chars must be > 0")
+	}
+	if cfg.Memory.Semantic.HeartbeatMaxChars <= 0 {
+		return fmt.Errorf("memory.semantic.heartbeat_max_chars must be > 0")
 	}
 	faceBackend := strings.ToLower(strings.TrimSpace(cfg.Face.Backend))
 	switch faceBackend {

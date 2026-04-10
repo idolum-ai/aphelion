@@ -92,3 +92,12 @@ func TestToolProgressReporterSemanticWindowOmitsEarlierSteps(t *testing.T) {
 		t.Fatalf("progress = %q, want last two semantic steps", got)
 	}
 }
+
+func TestSemanticToolProgressLabel(t *testing.T) {
+	t.Parallel()
+
+	got := semanticToolProgressEntry("semantic_search", json.RawMessage(`{"query":"operator preference"}`))
+	if got.Text != "Searching semantic memory" {
+		t.Fatalf("semanticToolProgressEntry() = %q, want semantic search label", got.Text)
+	}
+}
