@@ -54,8 +54,9 @@ func renderTelegramHTMLSubset(input string) (string, bool) {
 		case strings.HasPrefix(input[i:], "```"):
 			body, next, ok := parseFencedCodeBlock(input, i)
 			if !ok {
-				out.WriteString(html.EscapeString(string(input[i])))
-				i++
+				r, size := utf8.DecodeRuneInString(input[i:])
+				out.WriteString(html.EscapeString(string(r)))
+				i += size
 				continue
 			}
 			out.WriteString("<pre><code>")
@@ -68,8 +69,9 @@ func renderTelegramHTMLSubset(input string) (string, bool) {
 				return "<code>" + html.EscapeString(content) + "</code>"
 			})
 			if !ok {
-				out.WriteString(html.EscapeString(string(input[i])))
-				i++
+				r, size := utf8.DecodeRuneInString(input[i:])
+				out.WriteString(html.EscapeString(string(r)))
+				i += size
 				continue
 			}
 			out.WriteString(body)
@@ -80,8 +82,9 @@ func renderTelegramHTMLSubset(input string) (string, bool) {
 				return "<b>" + html.EscapeString(content) + "</b>"
 			})
 			if !ok {
-				out.WriteString(html.EscapeString(string(input[i])))
-				i++
+				r, size := utf8.DecodeRuneInString(input[i:])
+				out.WriteString(html.EscapeString(string(r)))
+				i += size
 				continue
 			}
 			out.WriteString(body)
@@ -92,16 +95,18 @@ func renderTelegramHTMLSubset(input string) (string, bool) {
 				return "<i>" + html.EscapeString(content) + "</i>"
 			})
 			if !ok {
-				out.WriteString(html.EscapeString(string(input[i])))
-				i++
+				r, size := utf8.DecodeRuneInString(input[i:])
+				out.WriteString(html.EscapeString(string(r)))
+				i += size
 				continue
 			}
 			out.WriteString(body)
 			changed = true
 			i = next
 		default:
-			out.WriteString(html.EscapeString(string(input[i])))
-			i++
+			r, size := utf8.DecodeRuneInString(input[i:])
+			out.WriteString(html.EscapeString(string(r)))
+			i += size
 		}
 	}
 	return out.String(), changed
