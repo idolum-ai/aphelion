@@ -22,6 +22,7 @@ type Config struct {
 	Sessions   SessionsConfig   `toml:"sessions"`
 	Agent      AgentConfig      `toml:"agent"`
 	Memory     MemoryConfig     `toml:"memory"`
+	Thinking   ThinkingConfig   `toml:"thinking"`
 	Face       FaceConfig       `toml:"face"`
 	Heartbeat  HeartbeatConfig  `toml:"heartbeat"`
 	Cron       CronConfig       `toml:"cron"`
@@ -117,6 +118,19 @@ type MemoryDecayConfig struct {
 
 type MemoryIdentityConfig struct {
 	Preserve []string `toml:"preserve"`
+}
+
+type ThinkingConfig struct {
+	Effort   string                 `toml:"effort"`
+	Summary  string                 `toml:"summary"`
+	Defaults ThinkingDefaultsConfig `toml:"defaults"`
+}
+
+type ThinkingDefaultsConfig struct {
+	Default   string `toml:"default"`
+	Heartbeat string `toml:"heartbeat"`
+	Cron      string `toml:"cron"`
+	Recovery  string `toml:"recovery"`
 }
 
 type FaceConfig struct {
@@ -247,6 +261,16 @@ func Default() Config {
 				Preserve: []string{"SOUL.md", "IDENTITY.md", "IDOLUM.md", "MEMORY.md"},
 			},
 		},
+		Thinking: ThinkingConfig{
+			Effort:  "medium",
+			Summary: "auto",
+			Defaults: ThinkingDefaultsConfig{
+				Default:   "medium",
+				Heartbeat: "low",
+				Cron:      "low",
+				Recovery:  "medium",
+			},
+		},
 		Face: FaceConfig{
 			Backend: "provider",
 		},
@@ -364,6 +388,28 @@ func validate(cfg *Config) error {
 	case "", "all", "new", "off":
 	default:
 		return fmt.Errorf("telegram.tool_progress must be one of all|new|off")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Thinking.Effort)) {
+	case "", "none", "low", "medium", "high", "xhigh":
+	default:
+		return fmt.Errorf("thinking.effort must be one of none|low|medium|high|xhigh")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Thinking.Summary)) {
+	case "", "none", "auto", "compact":
+	default:
+		return fmt.Errorf("thinking.summary must be one of none|auto|compact")
+	}
+	for name, value := range map[string]string{
+		"thinking.defaults.default":   cfg.Thinking.Defaults.Default,
+		"thinking.defaults.heartbeat": cfg.Thinking.Defaults.Heartbeat,
+		"thinking.defaults.cron":      cfg.Thinking.Defaults.Cron,
+		"thinking.defaults.recovery":  cfg.Thinking.Defaults.Recovery,
+	} {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "", "none", "low", "medium", "high", "xhigh":
+		default:
+			return fmt.Errorf("%s must be one of none|low|medium|high|xhigh", name)
+		}
 	}
 	governorBackend := strings.ToLower(strings.TrimSpace(cfg.Governor.Backend))
 	switch governorBackend {

@@ -28,6 +28,7 @@ type fakeProvider struct {
 	mu                  sync.Mutex
 	callCount           int
 	replyText           string
+	thinkingText        string
 	reflectionReplyText string
 	proposalReplyText   string
 	faceReplyText       string
@@ -37,6 +38,8 @@ type fakeProvider struct {
 	seenFaceSystem      []string
 	seenProposalSystem  []string
 	responseUsage       core.TokenUsage
+	lastReasoning       agent.ReasoningConfig
+	reasoningBySystem   map[string]agent.ReasoningConfig
 }
 
 func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
@@ -87,9 +90,23 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 	}
 
 	return &agent.Response{
-		Content: f.replyText,
-		Usage:   f.responseUsage,
+		Content:  f.replyText,
+		Thinking: f.thinkingText,
+		Usage:    f.responseUsage,
 	}, nil
+}
+
+func (f *fakeProvider) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
+	f.mu.Lock()
+	f.lastReasoning = opts.Reasoning
+	if f.reasoningBySystem == nil {
+		f.reasoningBySystem = make(map[string]agent.ReasoningConfig)
+	}
+	if len(messages) > 0 && messages[0].Role == "system" {
+		f.reasoningBySystem[messages[0].Content] = opts.Reasoning
+	}
+	f.mu.Unlock()
+	return f.Complete(ctx, messages, tools)
 }
 
 func (f *fakeProvider) Stream(_ context.Context, messages []agent.Message, _ []agent.ToolDef, cb agent.StreamCallback) (*agent.Response, error) {
@@ -121,7 +138,7 @@ func (f *fakeProvider) Stream(_ context.Context, messages []agent.Message, _ []a
 			return nil, err
 		}
 	}
-	return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
+	return &agent.Response{Content: reply, Thinking: f.thinkingText, Usage: f.responseUsage}, nil
 }
 
 type fakeSender struct {
@@ -339,6 +356,7 @@ func TestHandleInboundPersistsAndSends(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.thinkingText = "Reasoning summary"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -383,6 +401,9 @@ func TestHandleInboundPersistsAndSends(t *testing.T) {
 	}
 	if sess.Messages[1].CanonicalContent != "ok" {
 		t.Fatalf("assistant canonical = %q, want ok", sess.Messages[1].CanonicalContent)
+	}
+	if sess.Messages[1].Thinking != "Reasoning summary" {
+		t.Fatalf("assistant thinking = %q, want reasoning summary", sess.Messages[1].Thinking)
 	}
 	outboundIDs, err := store.OutboundAfterTurn(session.SessionKey{ChatID: 42, UserID: 0}, 0)
 	if err != nil {

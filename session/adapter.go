@@ -46,6 +46,7 @@ func NewMessagesForTurn(userText string, generated []agent.Message, turnIndex in
 		entry := Message{
 			Role:         msg.Role,
 			Content:      msg.Content,
+			Thinking:     strings.TrimSpace(msg.Thinking),
 			ContentChars: len(msg.Content),
 			TurnIndex:    turnIndex,
 			ToolID:       msg.ToolCallID,

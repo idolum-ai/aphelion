@@ -59,6 +59,16 @@ bootstrap_total_max_chars = 150000
 daily_notes = true
 daily_notes_dir = "memory"
 
+[thinking]
+effort = "medium"
+summary = "auto"
+
+[thinking.defaults]
+default = "medium"
+heartbeat = "low"
+cron = "low"
+recovery = "medium"
+
 [face]
 backend = "provider"
 

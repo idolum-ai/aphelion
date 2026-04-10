@@ -107,7 +107,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
-	}, input)
+	}, reasoningOptionsForRun(r.cfg, session.TurnRunKindInteractive), input)
 	if err != nil {
 		return nil, fmt.Errorf("run turn: %w", err)
 	}

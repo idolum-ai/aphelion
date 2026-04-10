@@ -24,6 +24,7 @@ const (
 
 var _ agent.Provider = (*Anthropic)(nil)
 var _ agent.StreamingProvider = (*Anthropic)(nil)
+var _ agent.ProviderWithOptions = (*Anthropic)(nil)
 
 // AnthropicOptions configures the Anthropic provider client.
 type AnthropicOptions struct {
@@ -81,7 +82,11 @@ func NewAnthropic(opts AnthropicOptions) (*Anthropic, error) {
 
 // Complete sends the assembled history to Anthropic and returns the response.
 func (a *Anthropic) Complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
-	reqBody := a.buildRequest(messages, tools, false)
+	return a.CompleteWithOptions(ctx, messages, tools, agent.CompleteOptions{})
+}
+
+func (a *Anthropic) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
+	reqBody := a.buildRequest(messages, tools, false, opts)
 	resp, err := a.doRequest(ctx, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: request: %w", err)
@@ -105,11 +110,11 @@ func (a *Anthropic) Complete(ctx context.Context, messages []agent.Message, tool
 		return nil, fmt.Errorf("anthropic: decode response: %w", err)
 	}
 
-	return mapAnthropicResponse(anthRes), nil
+	return mapAnthropicResponse(anthRes, opts.Reasoning.Summary), nil
 }
 
 func (a *Anthropic) Stream(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, cb agent.StreamCallback) (*agent.Response, error) {
-	reqBody := a.buildRequest(messages, tools, true)
+	reqBody := a.buildRequest(messages, tools, true, agent.CompleteOptions{})
 	resp, err := a.doRequest(ctx, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: request: %w", err)
@@ -139,13 +144,24 @@ func (a *Anthropic) Stream(ctx context.Context, messages []agent.Message, tools 
 	return parser.response(), parser.err()
 }
 
-func mapAnthropicResponse(res anthropicResponse) *agent.Response {
+func mapAnthropicResponse(res anthropicResponse, summaryMode agent.ReasoningSummaryMode) *agent.Response {
 	var text strings.Builder
+	var thinkingSummary strings.Builder
+	var thinkingBlocks []agent.ThinkingBlock
 	var toolCalls []agent.ToolCall
 	for _, block := range res.Content {
 		switch block.Type {
 		case "text":
 			text.WriteString(block.Text)
+		case "thinking":
+			summary := firstNonEmpty(block.Thinking, block.Text)
+			thinkingSummary.WriteString(summary)
+			thinkingBlocks = append(thinkingBlocks, agent.ThinkingBlock{
+				Type:      block.Type,
+				Content:   summary,
+				Signature: block.Signature,
+				Raw:       mustMarshalRaw(block),
+			})
 		case "tool_use", "tool_call":
 			if block.ID == "" || block.Name == "" {
 				continue
@@ -157,6 +173,7 @@ func mapAnthropicResponse(res anthropicResponse) *agent.Response {
 			})
 		}
 	}
+	summary := summarizeThinking(strings.TrimSpace(thinkingSummary.String()), summaryMode)
 
 	usage := core.TokenUsage{
 		InputTokens:      res.Usage.InputTokens,
@@ -170,13 +187,15 @@ func mapAnthropicResponse(res anthropicResponse) *agent.Response {
 	}
 
 	return &agent.Response{
-		Content:   text.String(),
-		ToolCalls: toolCalls,
-		Usage:     usage,
+		Content:      text.String(),
+		Thinking:     summary,
+		ThinkingMeta: thinkingBlocks,
+		ToolCalls:    toolCalls,
+		Usage:        usage,
 	}
 }
 
-func (a *Anthropic) buildRequest(messages []agent.Message, tools []agent.ToolDef, stream bool) anthropicRequest {
+func (a *Anthropic) buildRequest(messages []agent.Message, tools []agent.ToolDef, stream bool, opts agent.CompleteOptions) anthropicRequest {
 	systemPrompt, reqMessages := splitMessages(messages)
 	reqBody := anthropicRequest{
 		Model:     a.model,
@@ -187,6 +206,9 @@ func (a *Anthropic) buildRequest(messages []agent.Message, tools []agent.ToolDef
 	}
 	if toolDefs := toAnthropicTools(tools); len(toolDefs) > 0 {
 		reqBody.Tools = toolDefs
+	}
+	if thinking := anthropicThinkingForOptions(opts.Reasoning, a.maxTokens); thinking != nil {
+		reqBody.Thinking = thinking
 	}
 	return reqBody
 }
@@ -217,6 +239,7 @@ type anthropicRequest struct {
 	System    []anthropicContent `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicToolDef `json:"tools,omitempty"`
+	Thinking  *anthropicThinking `json:"thinking,omitempty"`
 	Stream    bool               `json:"stream,omitempty"`
 }
 
@@ -248,6 +271,8 @@ type anthropicUsage struct {
 type anthropicContent struct {
 	Type         string                 `json:"type"`
 	Text         string                 `json:"text,omitempty"`
+	Thinking     string                 `json:"thinking,omitempty"`
+	Signature    string                 `json:"signature,omitempty"`
 	ID           string                 `json:"id,omitempty"`
 	Name         string                 `json:"name,omitempty"`
 	Input        json.RawMessage        `json:"input,omitempty"`
@@ -284,6 +309,11 @@ type anthropicStreamFailure struct {
 
 type anthropicCacheControl struct {
 	Type string `json:"type"`
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
 }
 
 type anthropicStreamBlock struct {
@@ -356,6 +386,11 @@ func messageToContent(msg agent.Message) []anthropicContent {
 		return []anthropicContent{block}
 	}
 	content := make([]anthropicContent, 0, 1+len(msg.ToolCalls))
+	for _, block := range msg.ThinkingMeta {
+		if thinkingBlock, ok := thinkingBlockToAnthropic(block); ok {
+			content = append(content, thinkingBlock)
+		}
+	}
 	if msg.Content != "" {
 		content = append(content, anthropicContent{Type: "text", Text: msg.Content})
 	}
@@ -371,6 +406,28 @@ func messageToContent(msg agent.Message) []anthropicContent {
 		content = append(content, anthropicContent{Type: "text", Text: ""})
 	}
 	return content
+}
+
+func thinkingBlockToAnthropic(block agent.ThinkingBlock) (anthropicContent, bool) {
+	if len(block.Raw) > 0 {
+		var decoded anthropicContent
+		if err := json.Unmarshal(block.Raw, &decoded); err == nil {
+			return decoded, true
+		}
+	}
+
+	kind := strings.TrimSpace(block.Type)
+	if kind == "" {
+		kind = "thinking"
+	}
+	if kind != "thinking" && kind != "redacted_thinking" {
+		return anthropicContent{}, false
+	}
+	return anthropicContent{
+		Type:      kind,
+		Thinking:  block.Content,
+		Signature: block.Signature,
+	}, true
 }
 
 func rawString(v string) json.RawMessage {
@@ -394,6 +451,46 @@ func toAnthropicTools(tools []agent.ToolDef) []anthropicToolDef {
 		out[len(out)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
 	}
 	return out
+}
+
+func anthropicThinkingForOptions(reasoning agent.ReasoningConfig, maxTokens int) *anthropicThinking {
+	effort := agent.ReasoningEffort(strings.ToLower(strings.TrimSpace(string(reasoning.Effort))))
+	if effort == "" || effort == agent.ReasoningEffortNone {
+		return nil
+	}
+
+	usable := maxTokens - 1
+	if usable < 1024 {
+		return nil
+	}
+
+	ratio := 0.5
+	switch effort {
+	case agent.ReasoningEffortLow:
+		ratio = 0.25
+	case agent.ReasoningEffortMedium:
+		ratio = 0.5
+	case agent.ReasoningEffortHigh:
+		ratio = 0.75
+	case agent.ReasoningEffortXHigh:
+		ratio = 0.9
+	default:
+		ratio = 0.5
+	}
+	budget := int(float64(maxTokens) * ratio)
+	if budget < 1024 {
+		budget = 1024
+	}
+	if budget >= maxTokens {
+		budget = usable
+	}
+	if budget < 1024 {
+		return nil
+	}
+	return &anthropicThinking{
+		Type:         "enabled",
+		BudgetTokens: budget,
+	}
 }
 
 func splitMessages(messages []agent.Message) ([]anthropicContent, []agent.Message) {
@@ -436,6 +533,50 @@ func systemMessageToContent(msg agent.Message) []anthropicContent {
 		Type: "text",
 		Text: text,
 	}}
+}
+
+func mustMarshalRaw(v anthropicContent) json.RawMessage {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func summarizeThinking(raw string, mode agent.ReasoningSummaryMode) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	switch agent.ReasoningSummaryMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
+	case agent.ReasoningSummaryNone:
+		return ""
+	case agent.ReasoningSummaryCompact:
+		return truncateSummary(raw, 1800)
+	default:
+		return truncateSummary(raw, 600)
+	}
+}
+
+func truncateSummary(raw string, limit int) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) <= limit || limit <= 0 {
+		return raw
+	}
+	if limit <= 3 {
+		return raw[:limit]
+	}
+	return raw[:limit-3] + "..."
 }
 
 func (p *anthropicStreamParser) consume(event internal.Event) error {

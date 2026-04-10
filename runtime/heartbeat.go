@@ -126,7 +126,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
-	}, input)
+	}, reasoningOptionsForRun(r.cfg, session.TurnRunKindHeartbeat), input)
 	if err != nil {
 		return fmt.Errorf("run heartbeat turn: %w", err)
 	}

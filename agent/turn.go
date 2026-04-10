@@ -22,6 +22,10 @@ type StreamingProvider interface {
 	Stream(ctx context.Context, messages []Message, tools []ToolDef, cb StreamCallback) (*Response, error)
 }
 
+type ProviderWithOptions interface {
+	CompleteWithOptions(ctx context.Context, messages []Message, tools []ToolDef, opts CompleteOptions) (*Response, error)
+}
+
 type ToolRegistry interface {
 	Execute(ctx context.Context, name string, input json.RawMessage) (string, error)
 	Definitions() []ToolDef
@@ -31,6 +35,8 @@ type Message struct {
 	Role         string
 	Content      string
 	SystemBlocks []SystemBlock
+	Thinking     string
+	ThinkingMeta []ThinkingBlock
 	ToolCalls    []ToolCall
 	ToolCallID   string
 }
@@ -52,10 +58,19 @@ type ToolCall struct {
 	Input json.RawMessage
 }
 
-type Response struct {
+type ThinkingBlock struct {
+	Type      string
 	Content   string
-	ToolCalls []ToolCall
-	Usage     core.TokenUsage
+	Signature string
+	Raw       json.RawMessage
+}
+
+type Response struct {
+	Content      string
+	Thinking     string
+	ThinkingMeta []ThinkingBlock
+	ToolCalls    []ToolCall
+	Usage        core.TokenUsage
 }
 
 type StreamChunk struct {
@@ -66,6 +81,33 @@ type StreamChunk struct {
 }
 
 type StreamCallback func(StreamChunk) error
+
+type CompleteOptions struct {
+	Reasoning ReasoningConfig
+}
+
+type ReasoningConfig struct {
+	Effort  ReasoningEffort
+	Summary ReasoningSummaryMode
+}
+
+type ReasoningEffort string
+
+const (
+	ReasoningEffortNone   ReasoningEffort = "none"
+	ReasoningEffortLow    ReasoningEffort = "low"
+	ReasoningEffortMedium ReasoningEffort = "medium"
+	ReasoningEffortHigh   ReasoningEffort = "high"
+	ReasoningEffortXHigh  ReasoningEffort = "xhigh"
+)
+
+type ReasoningSummaryMode string
+
+const (
+	ReasoningSummaryNone    ReasoningSummaryMode = "none"
+	ReasoningSummaryAuto    ReasoningSummaryMode = "auto"
+	ReasoningSummaryCompact ReasoningSummaryMode = "compact"
+)
 
 const (
 	maxProviderRetries   = 3
@@ -81,6 +123,7 @@ func RunTurn(
 	provider Provider,
 	tools ToolRegistry,
 	budget *Budget,
+	opts *CompleteOptions,
 	messages []Message,
 ) (*core.TurnResult, []Message, error) {
 	if provider == nil {
@@ -118,7 +161,7 @@ func RunTurn(
 			}
 		}
 
-		resp, err := completeWithRetry(ctx, provider, history, toolDefs)
+		resp, err := completeWithRetry(ctx, provider, history, toolDefs, opts)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, history, ctxErr
@@ -133,9 +176,11 @@ func RunTurn(
 		}
 
 		history = append(history, Message{
-			Role:      "assistant",
-			Content:   resp.Content,
-			ToolCalls: append([]ToolCall(nil), resp.ToolCalls...),
+			Role:         "assistant",
+			Content:      resp.Content,
+			Thinking:     resp.Thinking,
+			ThinkingMeta: append([]ThinkingBlock(nil), resp.ThinkingMeta...),
+			ToolCalls:    append([]ToolCall(nil), resp.ToolCalls...),
 		})
 
 		if len(resp.ToolCalls) == 0 {
@@ -194,12 +239,13 @@ func completeWithRetry(
 	provider Provider,
 	messages []Message,
 	tools []ToolDef,
+	opts *CompleteOptions,
 ) (*Response, error) {
 	backoff := initialRetryBackoff
 	attempt := 0
 
 	for {
-		resp, err := provider.Complete(ctx, messages, tools)
+		resp, err := completeOnce(ctx, provider, messages, tools, opts)
 		if err == nil {
 			return resp, nil
 		}
@@ -220,6 +266,21 @@ func completeWithRetry(
 
 		backoff *= 2
 	}
+}
+
+func completeOnce(
+	ctx context.Context,
+	provider Provider,
+	messages []Message,
+	tools []ToolDef,
+	opts *CompleteOptions,
+) (*Response, error) {
+	if opts != nil {
+		if providerWithOptions, ok := provider.(ProviderWithOptions); ok {
+			return providerWithOptions.CompleteWithOptions(ctx, messages, tools, *opts)
+		}
+	}
+	return provider.Complete(ctx, messages, tools)
 }
 
 type statusCoder interface {

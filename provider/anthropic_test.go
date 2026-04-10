@@ -234,6 +234,91 @@ func TestAnthropicCompletePreservesSystemCacheBreakpoints(t *testing.T) {
 	}
 }
 
+func TestAnthropicCompleteWithThinkingOptions(t *testing.T) {
+	var seen anthropicRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(anthropicResponse{
+			Content: []anthropicContent{
+				{Type: "thinking", Thinking: "first reason", Signature: "sig-1"},
+				{Type: "text", Text: "ok"},
+			},
+		})
+	})
+
+	client, err := NewAnthropic(AnthropicOptions{
+		APIKey:     "test-key",
+		Model:      "claude-2",
+		MaxTokens:  4096,
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	resp, err := client.CompleteWithOptions(context.Background(), []agent.Message{{Role: "user", Content: "think"}}, nil, agent.CompleteOptions{
+		Reasoning: agent.ReasoningConfig{
+			Effort:  agent.ReasoningEffortMedium,
+			Summary: agent.ReasoningSummaryCompact,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions() err = %v", err)
+	}
+
+	if seen.Thinking == nil || seen.Thinking.Type != "enabled" {
+		t.Fatalf("thinking request = %#v, want enabled", seen.Thinking)
+	}
+	if seen.Thinking.BudgetTokens != 2048 {
+		t.Fatalf("budget_tokens = %d, want 2048", seen.Thinking.BudgetTokens)
+	}
+	if resp.Thinking != "first reason" {
+		t.Fatalf("resp.Thinking = %q, want first reason", resp.Thinking)
+	}
+	if len(resp.ThinkingMeta) != 1 || resp.ThinkingMeta[0].Signature != "sig-1" {
+		t.Fatalf("thinking meta = %#v, want one block with signature", resp.ThinkingMeta)
+	}
+}
+
+func TestAnthropicCompleteWithThinkingSummaryNone(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(anthropicResponse{
+			Content: []anthropicContent{
+				{Type: "thinking", Thinking: "hidden reason", Signature: "sig-1"},
+				{Type: "text", Text: "ok"},
+			},
+		})
+	})
+
+	client, err := NewAnthropic(AnthropicOptions{
+		APIKey:     "test-key",
+		Model:      "claude-2",
+		MaxTokens:  4096,
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	resp, err := client.CompleteWithOptions(context.Background(), []agent.Message{{Role: "user", Content: "think"}}, nil, agent.CompleteOptions{
+		Reasoning: agent.ReasoningConfig{
+			Effort:  agent.ReasoningEffortLow,
+			Summary: agent.ReasoningSummaryNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions() err = %v", err)
+	}
+	if resp.Thinking != "" {
+		t.Fatalf("resp.Thinking = %q, want empty", resp.Thinking)
+	}
+	if len(resp.ThinkingMeta) != 1 {
+		t.Fatalf("thinking meta len = %d, want 1", len(resp.ThinkingMeta))
+	}
+}
+
 func TestAnthropicStreamText(t *testing.T) {
 	var seen anthropicRequest
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

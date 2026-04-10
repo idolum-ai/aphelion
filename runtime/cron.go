@@ -87,7 +87,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
-	}, input)
+	}, reasoningOptionsForRun(r.cfg, session.TurnRunKindCron), input)
 	if err != nil {
 		return fmt.Errorf("run cron turn: %w", err)
 	}

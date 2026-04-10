@@ -107,6 +107,7 @@ func TestSimpleTurn(t *testing.T) {
 		provider,
 		tools,
 		defaultBudget(),
+		nil,
 		[]Message{{Role: "user", Content: "hello"}},
 	)
 	if err != nil {
@@ -167,7 +168,7 @@ func TestToolCallLoop(t *testing.T) {
 		},
 	}
 
-	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil)
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTurn() err = %v", err)
 	}
@@ -208,7 +209,7 @@ func TestMultipleToolCalls(t *testing.T) {
 		},
 	}
 
-	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil)
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTurn() err = %v", err)
 	}
@@ -257,7 +258,7 @@ func TestProviderError(t *testing.T) {
 		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
 			return "", nil
 		},
-	}, defaultBudget(), nil)
+	}, defaultBudget(), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTurn() err = %v", err)
 	}
@@ -296,7 +297,7 @@ func TestProviderPersistentError(t *testing.T) {
 		exec: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
 			return "", nil
 		},
-	}, defaultBudget(), nil)
+	}, defaultBudget(), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTurn() err = %v", err)
 	}
@@ -342,7 +343,7 @@ func TestToolError(t *testing.T) {
 		},
 	}
 
-	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil)
+	result, _, err := RunTurn(context.Background(), provider, tools, defaultBudget(), nil, nil)
 	if err != nil {
 		t.Fatalf("RunTurn() err = %v", err)
 	}
@@ -377,7 +378,7 @@ func TestContextCancellation(t *testing.T) {
 	}
 	done := make(chan out, 1)
 	go func() {
-		result, _, err := RunTurn(ctx, provider, tools, defaultBudget(), nil)
+		result, _, err := RunTurn(ctx, provider, tools, defaultBudget(), nil, nil)
 		done <- out{result: result, err: err}
 	}()
 

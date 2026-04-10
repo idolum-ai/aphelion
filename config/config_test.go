@@ -72,6 +72,12 @@ workspace = "./workspace"
 	if len(cfg.Memory.Identity.Preserve) == 0 || cfg.Memory.Identity.Preserve[0] != "SOUL.md" {
 		t.Fatalf("memory.identity.preserve = %#v, want defaults", cfg.Memory.Identity.Preserve)
 	}
+	if cfg.Thinking.Effort != "medium" || cfg.Thinking.Summary != "auto" {
+		t.Fatalf("thinking defaults = %#v, want medium/auto", cfg.Thinking)
+	}
+	if cfg.Thinking.Defaults.Default != "medium" || cfg.Thinking.Defaults.Heartbeat != "low" || cfg.Thinking.Defaults.Cron != "low" || cfg.Thinking.Defaults.Recovery != "medium" {
+		t.Fatalf("thinking.defaults = %#v, want medium/low/low/medium", cfg.Thinking.Defaults)
+	}
 	if cfg.Face.Backend != "provider" {
 		t.Fatalf("face.backend = %q, want provider", cfg.Face.Backend)
 	}
@@ -199,6 +205,16 @@ cold_days = 21
 [memory.identity]
 preserve = ["SOUL.md", "IDENTITY.md"]
 
+[thinking]
+effort = "high"
+summary = "compact"
+
+[thinking.defaults]
+default = "high"
+heartbeat = "medium"
+cron = "low"
+recovery = "high"
+
 [face]
 backend = "governor_passthrough"
 
@@ -276,6 +292,12 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if got, want := cfg.Memory.Identity.Preserve, []string{"SOUL.md", "IDENTITY.md"}; !equalStrings(got, want) {
 		t.Fatalf("memory.identity.preserve = %#v, want %#v", got, want)
+	}
+	if cfg.Thinking.Effort != "high" || cfg.Thinking.Summary != "compact" {
+		t.Fatalf("thinking = %#v, want high/compact", cfg.Thinking)
+	}
+	if cfg.Thinking.Defaults.Default != "high" || cfg.Thinking.Defaults.Heartbeat != "medium" || cfg.Thinking.Defaults.Cron != "low" || cfg.Thinking.Defaults.Recovery != "high" {
+		t.Fatalf("thinking.defaults = %#v", cfg.Thinking.Defaults)
 	}
 	if cfg.Face.Backend != "governor_passthrough" {
 		t.Fatalf("face.backend = %q, want governor_passthrough", cfg.Face.Backend)
