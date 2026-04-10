@@ -179,6 +179,9 @@ func TestSendMessagePayload(t *testing.T) {
 	if _, ok := requestBody["reply_to_message_id"]; !ok {
 		t.Fatal("missing reply_to_message_id")
 	}
+	if _, ok := requestBody["parse_mode"]; ok {
+		t.Fatalf("parse_mode = %v, want omitted", requestBody["parse_mode"])
+	}
 }
 
 func TestSendChatActionPayload(t *testing.T) {
@@ -282,7 +285,7 @@ func TestEditMessageTextPayload(t *testing.T) {
 		WithHTTPClient(&http.Client{Transport: transport}),
 	)
 
-	if err := client.EditMessageText(context.Background(), 5, 42, "working..."); err != nil {
+	if err := client.EditMessageText(context.Background(), 5, 42, "working...", ""); err != nil {
 		t.Fatalf("EditMessageText() err = %v", err)
 	}
 	if requestBody["chat_id"] != float64(5) {
@@ -293,6 +296,131 @@ func TestEditMessageTextPayload(t *testing.T) {
 	}
 	if requestBody["text"] != "working..." {
 		t.Fatalf("text = %v, want working...", requestBody["text"])
+	}
+	if _, ok := requestBody["parse_mode"]; ok {
+		t.Fatalf("parse_mode = %v, want omitted", requestBody["parse_mode"])
+	}
+}
+
+func TestSendMessageAutoFormatsMarkdownSubset(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = 124
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	_, err := client.SendMessage(context.Background(), core.OutboundMessage{
+		ChatID: 5,
+		Text:   "try *this* and `that`",
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() err = %v", err)
+	}
+	if requestBody["parse_mode"] != ParseModeHTML {
+		t.Fatalf("parse_mode = %v, want %s", requestBody["parse_mode"], ParseModeHTML)
+	}
+	if requestBody["text"] != "try <i>this</i> and <code>that</code>" {
+		t.Fatalf("text = %v, want transformed HTML", requestBody["text"])
+	}
+}
+
+func TestSendMessageFallsBackToPlainTextOnParseError(t *testing.T) {
+	call := 0
+	var bodies []map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var body map[string]interface{}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			bodies = append(bodies, body)
+			if call == 1 {
+				return encodeJSONResponse(t, sendMessageResponse{Ok: false, Description: "Bad Request: can't parse entities"}), nil
+			}
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = 125
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	_, err := client.SendMessage(context.Background(), core.OutboundMessage{
+		ChatID: 5,
+		Text:   "try *this*",
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() err = %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("request count = %d, want 2", len(bodies))
+	}
+	if _, ok := bodies[0]["parse_mode"]; !ok {
+		t.Fatal("first request missing parse_mode")
+	}
+	if _, ok := bodies[1]["parse_mode"]; ok {
+		t.Fatal("fallback request should omit parse_mode")
+	}
+	if bodies[1]["text"] != "try *this*" {
+		t.Fatalf("fallback text = %v, want original plain text", bodies[1]["text"])
+	}
+}
+
+func TestEditMessageTextFallsBackToPlainTextOnParseError(t *testing.T) {
+	call := 0
+	var bodies []map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var body map[string]interface{}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			bodies = append(bodies, body)
+			if call == 1 {
+				return encodeJSONResponse(t, editMessageResponse{Ok: false, Description: "Bad Request: can't parse entities"}), nil
+			}
+			return encodeJSONResponse(t, editMessageResponse{Ok: true}), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	if err := client.EditMessageText(context.Background(), 5, 42, "try `this`", ""); err != nil {
+		t.Fatalf("EditMessageText() err = %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("request count = %d, want 2", len(bodies))
+	}
+	if _, ok := bodies[0]["parse_mode"]; !ok {
+		t.Fatal("first request missing parse_mode")
+	}
+	if _, ok := bodies[1]["parse_mode"]; ok {
+		t.Fatal("fallback request should omit parse_mode")
 	}
 }
 

@@ -211,7 +211,7 @@ func (f *fakeSender) SendChatAction(_ context.Context, chatID int64, action stri
 	return nil
 }
 
-func (f *fakeSender) EditMessageText(_ context.Context, chatID int64, messageID int64, text string) error {
+func (f *fakeSender) EditMessageText(_ context.Context, chatID int64, messageID int64, text string, parseMode string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.edits = append(f.edits, messageEdit{ChatID: chatID, MessageID: messageID, Text: text})

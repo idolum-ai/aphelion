@@ -16,7 +16,7 @@ import (
 )
 
 type messageEditor interface {
-	EditMessageText(ctx context.Context, chatID int64, messageID int64, text string) error
+	EditMessageText(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
 }
 
 type messageDeleter interface {
@@ -224,7 +224,7 @@ func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, inp
 	if p.editor == nil {
 		return
 	}
-	if err := p.editor.EditMessageText(ctx, p.chatID, p.messageID, text); err != nil {
+	if err := p.editor.EditMessageText(ctx, p.chatID, p.messageID, text, ""); err != nil {
 		log.Printf("WARN edit tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 	}
 }

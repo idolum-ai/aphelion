@@ -106,7 +106,7 @@ func (s *streamEditor) flush(ctx context.Context, done bool) error {
 		return nil
 	}
 
-	if err := s.editor.EditMessageText(ctx, s.chatID, s.messageID, text); err != nil {
+	if err := s.editor.EditMessageText(ctx, s.chatID, s.messageID, text, ""); err != nil {
 		msgID, sendErr := s.sender.SendMessage(ctx, core.OutboundMessage{
 			ChatID:  s.chatID,
 			Text:    text,

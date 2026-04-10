@@ -97,21 +97,25 @@ func (c *Client) SendMessage(ctx context.Context, msg core.OutboundMessage) (int
 	if msg.ChatID == 0 {
 		return 0, errors.New("chat_id is required")
 	}
+	formatted := prepareFormattedText(msg.Text, msg.ParseMode)
 	body := map[string]interface{}{
 		"chat_id": msg.ChatID,
-		"text":    msg.Text,
+		"text":    formatted.Text,
 	}
-	if msg.ParseMode != "" {
-		body["parse_mode"] = msg.ParseMode
+	if formatted.ParseMode != "" {
+		body["parse_mode"] = formatted.ParseMode
 	}
 	if msg.ReplyTo != nil {
 		body["reply_to_message_id"] = *msg.ReplyTo
 	}
-	var resp sendMessageResponse
-	if err := c.post(ctx, "sendMessage", body, &resp); err != nil {
+	resp, err := c.sendMessageRequest(ctx, body)
+	if err != nil {
 		return 0, err
 	}
 	if !resp.Ok {
+		if formatted.ParseMode != "" && isTelegramParseError(resp.Description) {
+			return c.sendMessageFallback(ctx, msg.ChatID, formatted.PlainText, msg.ReplyTo)
+		}
 		return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
 	}
 	return resp.Result.MessageID, nil
@@ -158,24 +162,33 @@ func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string
 	return nil
 }
 
-func (c *Client) EditMessageText(ctx context.Context, chatID int64, messageID int64, text string) error {
+func (c *Client) EditMessageText(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error {
 	if chatID == 0 {
 		return errors.New("chat_id is required")
 	}
 	if messageID == 0 {
 		return errors.New("message_id is required")
 	}
-
+	formatted := prepareFormattedText(text, parseMode)
 	body := map[string]interface{}{
 		"chat_id":    chatID,
 		"message_id": messageID,
-		"text":       text,
+		"text":       formatted.Text,
 	}
-	var resp editMessageResponse
-	if err := c.post(ctx, "editMessageText", body, &resp); err != nil {
+	if formatted.ParseMode != "" {
+		body["parse_mode"] = formatted.ParseMode
+	}
+	resp, err := c.editMessageTextRequest(ctx, body)
+	if err != nil {
 		return err
 	}
 	if !resp.Ok {
+		if isTelegramMessageNotModified(resp.Description) {
+			return nil
+		}
+		if formatted.ParseMode != "" && isTelegramParseError(resp.Description) {
+			return c.editMessageTextFallback(ctx, chatID, messageID, formatted.PlainText)
+		}
 		return fmt.Errorf("telegram editMessageText failed: %s", resp.Description)
 	}
 	return nil
@@ -335,6 +348,56 @@ func (c *Client) post(ctx context.Context, method string, body interface{}, out 
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("decode %s response: %w", method, err)
+	}
+	return nil
+}
+
+func (c *Client) sendMessageRequest(ctx context.Context, body map[string]interface{}) (*sendMessageResponse, error) {
+	var resp sendMessageResponse
+	if err := c.post(ctx, "sendMessage", body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) sendMessageFallback(ctx context.Context, chatID int64, text string, replyTo *int64) (int64, error) {
+	body := map[string]interface{}{
+		"chat_id": chatID,
+		"text":    text,
+	}
+	if replyTo != nil {
+		body["reply_to_message_id"] = *replyTo
+	}
+	resp, err := c.sendMessageRequest(ctx, body)
+	if err != nil {
+		return 0, err
+	}
+	if !resp.Ok {
+		return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
+	}
+	return resp.Result.MessageID, nil
+}
+
+func (c *Client) editMessageTextRequest(ctx context.Context, body map[string]interface{}) (*editMessageResponse, error) {
+	var resp editMessageResponse
+	if err := c.post(ctx, "editMessageText", body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) editMessageTextFallback(ctx context.Context, chatID int64, messageID int64, text string) error {
+	body := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       text,
+	}
+	resp, err := c.editMessageTextRequest(ctx, body)
+	if err != nil {
+		return err
+	}
+	if !resp.Ok && !isTelegramMessageNotModified(resp.Description) {
+		return fmt.Errorf("telegram editMessageText failed: %s", resp.Description)
 	}
 	return nil
 }
