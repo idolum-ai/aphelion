@@ -28,6 +28,7 @@ type fakeProvider struct {
 	mu                 sync.Mutex
 	callCount          int
 	replyText          string
+	reflectionReplyText string
 	proposalReplyText  string
 	faceReplyText      string
 	faceErr            error
@@ -64,12 +65,25 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 	}
 
 	var systemParts []string
+	var userParts []string
 	for _, msg := range messages {
 		if msg.Role == "system" && strings.TrimSpace(msg.Content) != "" {
 			systemParts = append(systemParts, msg.Content)
 		}
+		if msg.Role == "user" && strings.TrimSpace(msg.Content) != "" {
+			userParts = append(userParts, msg.Content)
+		}
 	}
 	f.seenGovernorSystem = append(f.seenGovernorSystem, strings.Join(systemParts, "\n\n"))
+	for _, userText := range userParts {
+		if strings.Contains(userText, heartbeatReflectionMarker) {
+			reply := strings.TrimSpace(f.reflectionReplyText)
+			if reply == "" {
+				reply = "[MEMORY]\n[/MEMORY]\n[KNOWLEDGE]\n[/KNOWLEDGE]\n[DECISIONS]\n[/DECISIONS]\n[QUESTIONS]\n[/QUESTIONS]\n[RHIZOME]\n[/RHIZOME]"
+			}
+			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
+		}
+	}
 
 	return &agent.Response{
 		Content: f.replyText,
@@ -625,6 +639,88 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	}
 }
 
+func TestHeartbeatReflectionWritesCuratedMemoryFromDailyNotes(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.Target = "none"
+	cfg.Agent.DailyNotes = true
+	noteDir := filepath.Join(cfg.Agent.SharedMemoryRoot, cfg.Agent.DailyNotesDir)
+	if err := os.MkdirAll(noteDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(noteDir) err = %v", err)
+	}
+	notePath := filepath.Join(noteDir, "2026-04-09.md")
+	if err := os.WriteFile(notePath, []byte("Daniel prefers concise updates and wants durable memory."), 0o600); err != nil {
+		t.Fatalf("write daily note: %v", err)
+	}
+	provider.reflectionReplyText = strings.Join([]string{
+		"[MEMORY]",
+		"Keep concise progress updates near the top of long tasks.",
+		"[/MEMORY]",
+		"[KNOWLEDGE]",
+		"- Prefers concise progress updates [observed, confidence: 0.90]",
+		"[/KNOWLEDGE]",
+		"[DECISIONS]",
+		"- Use heartbeat reflection for durable note distillation.",
+		"[/DECISIONS]",
+		"[QUESTIONS]",
+		"- Should session search surface recalled snippets by default?",
+		"[/QUESTIONS]",
+		"[RHIZOME]",
+		"- heartbeat <-> memory distillation <-> continuity",
+		"[/RHIZOME]",
+	}, "\n")
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce() err = %v", err)
+	}
+
+	for _, check := range []struct {
+		path string
+		want string
+	}{
+		{filepath.Join(cfg.Agent.SharedMemoryRoot, "MEMORY.md"), "Keep concise progress updates near the top of long tasks."},
+		{filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "knowledge.md"), "Prefers concise progress updates"},
+		{filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "decisions.md"), "Use heartbeat reflection"},
+		{filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "questions.md"), "Should session search"},
+		{filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "rhizome.md"), "heartbeat <-> memory distillation"},
+	} {
+		raw, err := os.ReadFile(check.path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) err = %v", check.path, err)
+		}
+		if !strings.Contains(string(raw), check.want) {
+			t.Fatalf("%s = %q, want substring %q", check.path, string(raw), check.want)
+		}
+	}
+
+	sender.mu.Lock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent len = %d, want 0 for reflection-only heartbeat", len(sender.sent))
+	}
+	sender.mu.Unlock()
+
+	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(heartbeat session) err = %v", err)
+	}
+	if len(maintenance.Messages) != 2 {
+		t.Fatalf("maintenance messages len = %d, want 2", len(maintenance.Messages))
+	}
+	if maintenance.Messages[0].Content != "[heartbeat reflection]" {
+		t.Fatalf("maintenance user content = %q, want reflection marker", maintenance.Messages[0].Content)
+	}
+	if !strings.Contains(maintenance.Messages[1].Content, "Reflected curated memory updates for:") {
+		t.Fatalf("maintenance reply = %q, want reflection summary", maintenance.Messages[1].Content)
+	}
+}
+
 func TestCronJobNoneStoresDedicatedSessionWithoutOutbound(t *testing.T) {
 	t.Parallel()
 
@@ -947,6 +1043,11 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 		},
 		Agent: config.AgentConfig{
 			Workspace:              root,
+			PromptRoot:             root,
+			ExecRoot:               root,
+			SharedMemoryRoot:       root,
+			UserWorkspaceRoot:      filepath.Join(root, "isolated", "workspaces"),
+			UserMemoryRoot:         filepath.Join(root, "isolated", "memory"),
 			MaxIterations:          10,
 			ToolTimeout:            10,
 			BootstrapFiles:         []string{"AGENTS.md"},

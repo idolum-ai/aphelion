@@ -145,3 +145,34 @@ func appendAssistantTurn(sess *session.Session, text string, canonical string) [
 		TurnIndex:        sess.TurnCount,
 	}}
 }
+
+func appendSyntheticTurn(sess *session.Session, requestText string, replyText string, canonical string) []session.Message {
+	requestText = strings.TrimSpace(requestText)
+	replyText = strings.TrimSpace(replyText)
+	if requestText == "" || replyText == "" {
+		return nil
+	}
+
+	sess.TurnCount++
+	canonical = strings.TrimSpace(canonical)
+	if canonical == "" {
+		canonical = replyText
+	}
+	sess.LastCanonicalReply = canonical
+
+	return []session.Message{
+		{
+			Role:         "user",
+			Content:      requestText,
+			ContentChars: len(requestText),
+			TurnIndex:    sess.TurnCount,
+		},
+		{
+			Role:             "assistant",
+			Content:          replyText,
+			CanonicalContent: canonical,
+			ContentChars:     len(replyText),
+			TurnIndex:        sess.TurnCount,
+		},
+	}
+}

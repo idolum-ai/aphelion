@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
@@ -33,6 +34,16 @@ type execInput struct {
 	Command    string `json:"command"`
 	Workdir    string `json:"workdir,omitempty"`
 	TimeoutSec int    `json:"timeout_sec,omitempty"`
+}
+
+type memoryInput struct {
+	Action     string   `json:"action"`
+	Scope      string   `json:"scope,omitempty"`
+	Store      string   `json:"store"`
+	Content    string   `json:"content,omitempty"`
+	Match      string   `json:"match,omitempty"`
+	SourceTag  string   `json:"source_tag,omitempty"`
+	Confidence *float64 `json:"confidence,omitempty"`
 }
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
@@ -66,19 +77,38 @@ func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
 }
 
 func (r *Registry) Definitions() []agent.ToolDef {
-	return []agent.ToolDef{{
-		Name:        "exec",
-		Description: "Run a shell command in the configured workspace. Use this for git, file inspection, builds, tests, and repository edits.",
-		Parameters: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"command": {"type": "string", "description": "Shell command to run with bash -lc"},
-				"workdir": {"type": "string", "description": "Optional subdirectory within the workspace"},
-				"timeout_sec": {"type": "integer", "minimum": 1, "description": "Optional per-command timeout in seconds"}
-			},
-			"required": ["command"]
-		}`),
-	}}
+	return []agent.ToolDef{
+		{
+			Name:        "exec",
+			Description: "Run a shell command in the configured workspace. Use this for git, file inspection, builds, tests, and repository edits.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"command": {"type": "string", "description": "Shell command to run with bash -lc"},
+					"workdir": {"type": "string", "description": "Optional subdirectory within the workspace"},
+					"timeout_sec": {"type": "integer", "minimum": 1, "description": "Optional per-command timeout in seconds"}
+				},
+				"required": ["command"]
+			}`),
+		},
+		{
+			Name:        "memory",
+			Description: "Write curated memory for the current principal. Use this for compact durable notes, knowledge, decisions, questions, or rhizome associations.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["add", "replace", "remove"], "description": "Memory write operation"},
+					"scope": {"type": "string", "enum": ["shared", "principal"], "description": "Shared memory for admin, or principal-local memory for isolated users"},
+					"store": {"type": "string", "enum": ["memory", "knowledge", "decisions", "questions", "rhizome"], "description": "Curated memory store to edit"},
+					"content": {"type": "string", "description": "Content to add or replacement content"},
+					"match": {"type": "string", "description": "Exact existing text to replace or remove"},
+					"source_tag": {"type": "string", "enum": ["direct", "observed", "inferred", "hypothesized", "shared"], "description": "Optional provenance tag for added or replaced entries"},
+					"confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional confidence for added or replaced entries"}
+				},
+				"required": ["action", "store"]
+			}`),
+		},
+	}
 }
 
 func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
@@ -107,13 +137,18 @@ func (r *Registry) ExecuteForPrincipal(ctx context.Context, p principal.Principa
 }
 
 func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.RawMessage, root string) (string, error) {
-	return r.executeWithScope(ctx, name, input, sandbox.Scope{WorkingRoot: root})
+	return r.executeWithScope(ctx, name, input, sandbox.Scope{
+		WorkingRoot:      root,
+		SharedMemoryRoot: root,
+	})
 }
 
 func (r *Registry) executeWithScope(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope) (string, error) {
 	switch name {
 	case "exec":
 		return r.exec(ctx, input, scope)
+	case "memory":
+		return r.memory(ctx, input, scope)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
@@ -158,6 +193,33 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 	}
 
 	return out, fmt.Errorf("run command: %w", err)
+}
+
+func (r *Registry) memory(_ context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+	var in memoryInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return "", fmt.Errorf("decode memory input: %w", err)
+	}
+
+	root, effectiveScope, err := resolveMemoryRoot(scope, in.Scope)
+	if err != nil {
+		return "", err
+	}
+
+	result, err := memstore.ApplyWrite(memstore.WriteRequest{
+		Root:       root,
+		Store:      in.Store,
+		Action:     in.Action,
+		Content:    in.Content,
+		Match:      in.Match,
+		SourceTag:  in.SourceTag,
+		Confidence: in.Confidence,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("memory_%s_ok scope=%s store=%s path=%s", result.Action, effectiveScope, result.Store, result.Path), nil
 }
 
 func (r *Registry) runCommand(ctx context.Context, scope sandbox.Scope, command string, workdir string) (string, string, error) {
@@ -256,4 +318,38 @@ func truncate(raw string, limit int) string {
 	head := limit / 2
 	tail := limit / 2
 	return raw[:head] + "\n...[truncated]...\n" + raw[len(raw)-tail:]
+}
+
+func resolveMemoryRoot(scope sandbox.Scope, requested string) (string, string, error) {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	if requested == "" {
+		if scope.Principal.Role == principal.RoleApprovedUser && strings.TrimSpace(scope.UserMemory) != "" {
+			requested = "principal"
+		} else {
+			requested = "shared"
+		}
+	}
+
+	switch requested {
+	case "shared":
+		if scope.Principal.Role == principal.RoleApprovedUser {
+			return "", "", fmt.Errorf("approved users may not write shared memory")
+		}
+		root := strings.TrimSpace(scope.SharedMemoryRoot)
+		if root == "" {
+			root = strings.TrimSpace(scope.WorkingRoot)
+		}
+		if root == "" {
+			return "", "", fmt.Errorf("shared memory root is not configured")
+		}
+		return root, requested, nil
+	case "principal":
+		root := strings.TrimSpace(scope.UserMemory)
+		if root == "" {
+			return "", "", fmt.Errorf("principal memory root is not available for this principal")
+		}
+		return root, requested, nil
+	default:
+		return "", "", fmt.Errorf("memory scope must be shared or principal")
+	}
 }

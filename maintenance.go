@@ -18,20 +18,27 @@ import (
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
-//go:embed defaults/agent/*
+//go:embed defaults/agent/* defaults/agent/memory/*
 var defaultAgentFilesFS embed.FS
 
-var defaultSeedFiles = []string{
+var defaultPromptSeedFiles = []string{
 	"SOUL.md",
 	"IDENTITY.md",
 	"USER.md",
 	"AGENTS.md",
 	"TOOLS.md",
 	"BOOTSTRAP.md",
-	"MEMORY.md",
-	"HEARTBEAT.md",
 	"IDOLUM.md",
 	"QUESTIONS-TO-IDOLUM.md",
+}
+
+var defaultSharedMemorySeedFiles = []string{
+	"MEMORY.md",
+	"HEARTBEAT.md",
+	"memory/knowledge.md",
+	"memory/decisions.md",
+	"memory/questions.md",
+	"memory/rhizome.md",
 }
 
 func runMaintenanceCommand(args []string) (bool, error) {
@@ -116,25 +123,60 @@ func seedAgentPromptFiles(cfg *config.Config) ([]string, error) {
 	}
 
 	promptRoot := strings.TrimSpace(cfg.Agent.PromptRoot)
+	sharedMemoryRoot := strings.TrimSpace(cfg.Agent.SharedMemoryRoot)
 	if promptRoot == "" {
 		return nil, fmt.Errorf("agent.prompt_root is required")
 	}
-	if err := os.MkdirAll(promptRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create prompt_root %s: %w", promptRoot, err)
+	if sharedMemoryRoot == "" {
+		return nil, fmt.Errorf("agent.shared_memory_root is required")
 	}
-	if cfg.Agent.DailyNotes {
-		if err := os.MkdirAll(filepath.Join(promptRoot, filepath.FromSlash(cfg.Agent.DailyNotesDir)), 0o755); err != nil {
-			return nil, fmt.Errorf("create daily_notes_dir: %w", err)
+
+	roots := []string{promptRoot}
+	if sharedMemoryRoot != promptRoot {
+		roots = append(roots, sharedMemoryRoot)
+	}
+	for _, root := range roots {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return nil, fmt.Errorf("create root %s: %w", root, err)
 		}
 	}
 
-	created := make([]string, 0, len(defaultSeedFiles))
-	for _, name := range defaultSeedFiles {
-		target := filepath.Join(promptRoot, name)
+	created := make([]string, 0, len(defaultPromptSeedFiles)+len(defaultSharedMemorySeedFiles))
+	promptCreated, err := seedDefaultFiles(promptRoot, defaultPromptSeedFiles)
+	if err != nil {
+		return nil, err
+	}
+	created = append(created, promptCreated...)
+
+	sharedCreated, err := seedDefaultFiles(sharedMemoryRoot, defaultSharedMemorySeedFiles)
+	if err != nil {
+		return nil, err
+	}
+	created = append(created, sharedCreated...)
+
+	if cfg.Agent.DailyNotes {
+		notesRoot := filepath.Join(sharedMemoryRoot, filepath.FromSlash(cfg.Agent.DailyNotesDir))
+		if err := os.MkdirAll(notesRoot, 0o755); err != nil {
+			return nil, fmt.Errorf("create daily_notes_dir %s: %w", notesRoot, err)
+		}
+	}
+
+	sort.Strings(created)
+	return uniqueStrings(created), nil
+}
+
+func seedDefaultFiles(root string, names []string) ([]string, error) {
+	created := make([]string, 0, len(names))
+	for _, name := range names {
+		target := filepath.Join(root, filepath.FromSlash(name))
 		if _, err := os.Stat(target); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("stat %s: %w", target, err)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return nil, fmt.Errorf("create parent directory for %s: %w", target, err)
 		}
 
 		raw, err := defaultAgentFilesFS.ReadFile(filepath.ToSlash(filepath.Join("defaults", "agent", name)))
@@ -146,7 +188,6 @@ func seedAgentPromptFiles(cfg *config.Config) ([]string, error) {
 		}
 		created = append(created, target)
 	}
-	sort.Strings(created)
 	return created, nil
 }
 
