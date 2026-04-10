@@ -123,8 +123,41 @@ func TestCodexCompleteStatusError(t *testing.T) {
 	if !strings.Contains(err.Error(), "status 401") {
 		t.Fatalf("error = %v, want status code", err)
 	}
+	if !strings.Contains(err.Error(), `{"error":"unauthorized"}`) {
+		t.Fatalf("error = %v, want body excerpt", err)
+	}
 	if !errors.Is(err, ErrCodexUnauthorized) {
 		t.Fatalf("error = %v, want ErrCodexUnauthorized", err)
+	}
+}
+
+func TestCodexCompleteStatusErrorRedactsTokenInBody(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"token secret-token forbidden"}`))
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:      "https://chatgpt.com/backend-api/codex",
+		AccessToken:  "secret-token",
+		RefreshToken: "refresh-token",
+		HTTPClient:   &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("Complete() err = nil, want status error")
+	}
+	if strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("error = %v, secret token leaked", err)
+	}
+	if !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("error = %v, want redacted marker", err)
 	}
 }
 

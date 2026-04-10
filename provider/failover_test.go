@@ -78,6 +78,30 @@ func TestFailoverChainFallsBackToSecondary(t *testing.T) {
 	}
 }
 
+func TestFailoverChainFallsBackOnForbidden(t *testing.T) {
+	primary := &stubChainProvider{err: stubStatusError{code: 403, msg: "forbidden"}}
+	secondary := &stubChainProvider{reply: "fallback reply"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "codex", Provider: primary},
+		{Name: "native", Provider: secondary},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "fallback reply" {
+		t.Fatalf("content = %q, want fallback reply", resp.Content)
+	}
+	if secondary.callCount == 0 {
+		t.Fatal("secondary provider was not called after forbidden primary error")
+	}
+}
+
 func TestFailoverChainDoesNotCascadeClientErrors(t *testing.T) {
 	primary := &stubChainProvider{err: stubStatusError{code: 400, msg: "bad request"}}
 	secondary := &stubChainProvider{reply: "should not run"}

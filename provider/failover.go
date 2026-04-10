@@ -112,7 +112,7 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 			return nil, err
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
-		if !isRetryableProviderError(err) {
+		if !shouldFailoverOnError(err) {
 			return nil, err
 		}
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
@@ -137,7 +137,7 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 			return nil, ctxErr
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
-		if !isRetryableProviderError(err) {
+		if !shouldFailoverOnError(err) {
 			return nil, err
 		}
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
@@ -256,4 +256,17 @@ func isRetryableProviderError(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "429") || strings.Contains(msg, "500") || strings.Contains(msg, "503")
+}
+
+func shouldFailoverOnError(err error) bool {
+	var sc statusCoder
+	if errors.As(err, &sc) {
+		switch sc.StatusCode() {
+		case 401, 403, 429, 500, 503:
+			return true
+		default:
+			return false
+		}
+	}
+	return isRetryableProviderError(err)
 }

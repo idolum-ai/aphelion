@@ -31,25 +31,25 @@ var (
 )
 
 type CodexOptions struct {
-	BaseURL     string
-	AccessToken string
+	BaseURL      string
+	AccessToken  string
 	RefreshToken string
-	RefreshURL  string
-	HTTPClient  *http.Client
-	UserAgent   string
-	LoadTokens  func() (governorauth.CodexTokens, error)
-	SaveTokens  func(governorauth.CodexTokens, time.Time) error
-	Now         func() time.Time
+	RefreshURL   string
+	HTTPClient   *http.Client
+	UserAgent    string
+	LoadTokens   func() (governorauth.CodexTokens, error)
+	SaveTokens   func(governorauth.CodexTokens, time.Time) error
+	Now          func() time.Time
 }
 
 type Codex struct {
-	baseURL     string
-	refreshURL  string
-	client      *http.Client
-	userAgent   string
-	loadTokens  func() (governorauth.CodexTokens, error)
-	saveTokens  func(governorauth.CodexTokens, time.Time) error
-	now         func() time.Time
+	baseURL    string
+	refreshURL string
+	client     *http.Client
+	userAgent  string
+	loadTokens func() (governorauth.CodexTokens, error)
+	saveTokens func(governorauth.CodexTokens, time.Time) error
+	now        func() time.Time
 
 	mu           sync.Mutex
 	accessToken  string
@@ -80,15 +80,15 @@ func NewCodex(opts CodexOptions) (*Codex, error) {
 	}
 
 	return &Codex{
-		baseURL:     opts.BaseURL,
-		refreshURL:  refreshURL,
-		accessToken: opts.AccessToken,
+		baseURL:      opts.BaseURL,
+		refreshURL:   refreshURL,
+		accessToken:  opts.AccessToken,
 		refreshToken: strings.TrimSpace(opts.RefreshToken),
-		client:      client,
-		userAgent:   opts.UserAgent,
-		loadTokens:  opts.LoadTokens,
-		saveTokens:  opts.SaveTokens,
-		now:         now,
+		client:       client,
+		userAgent:    opts.UserAgent,
+		loadTokens:   opts.LoadTokens,
+		saveTokens:   opts.SaveTokens,
+		now:          now,
 	}, nil
 }
 
@@ -148,9 +148,10 @@ func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken s
 		return nil, fmt.Errorf("codex: read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyMessage := redactBodyExcerpt(raw, accessToken, refreshTokenForRedaction(c))
 		return nil, codexAPIError{
 			statusCode: resp.StatusCode,
-			message:    codexStatusMessage(resp.StatusCode),
+			message:    codexStatusMessage(resp.StatusCode, bodyMessage),
 			cause:      codexStatusCause(resp.StatusCode),
 		}
 	}
@@ -383,19 +384,23 @@ func parseCodexResponse(raw []byte) (*agent.Response, error) {
 	}, nil
 }
 
-func codexStatusMessage(statusCode int) string {
+func codexStatusMessage(statusCode int, body string) string {
+	suffix := ""
+	if strings.TrimSpace(body) != "" {
+		suffix = ": " + body
+	}
 	switch statusCode {
 	case http.StatusUnauthorized:
-		return "codex: status 401 unauthorized"
+		return "codex: status 401 unauthorized" + suffix
 	case http.StatusForbidden:
-		return "codex: status 403 forbidden"
+		return "codex: status 403 forbidden" + suffix
 	case http.StatusTooManyRequests:
-		return "codex: status 429 rate_limited"
+		return "codex: status 429 rate_limited" + suffix
 	default:
 		if statusCode >= 500 {
-			return fmt.Sprintf("codex: status %d server_error", statusCode)
+			return fmt.Sprintf("codex: status %d server_error%s", statusCode, suffix)
 		}
-		return fmt.Sprintf("codex: status %d request_failed", statusCode)
+		return fmt.Sprintf("codex: status %d request_failed%s", statusCode, suffix)
 	}
 }
 
@@ -424,6 +429,32 @@ func redactError(err error, secret string) error {
 		msg = strings.ReplaceAll(msg, secret, "[REDACTED]")
 	}
 	return errors.New(msg)
+}
+
+func refreshTokenForRedaction(c *Codex) string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refreshToken
+}
+
+func redactBodyExcerpt(raw []byte, secrets ...string) string {
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return ""
+	}
+	for _, secret := range secrets {
+		if strings.TrimSpace(secret) != "" {
+			text = strings.ReplaceAll(text, secret, "[REDACTED]")
+		}
+	}
+	const maxLen = 300
+	if len(text) > maxLen {
+		text = strings.TrimSpace(text[:maxLen]) + "…"
+	}
+	return text
 }
 
 type codexAPIError struct {
