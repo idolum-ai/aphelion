@@ -42,12 +42,15 @@ This spec follows Aphelion's broader telos:
 - **governor authority over face appearance**
 - **machine facts first, governor interpretation second**
 
+Reliability therefore depends on the system being explicitly aware of its own degraded or recovered state. See `self-awareness.md`.
+
 In reliability terms, that means:
 
 - runtime should record what actually happened before asking Aphelion to interpret it
 - `Idolum` may soften or explain failures, but may not hide them
 - fallback should preserve the authority model
 - disaster recovery should restore coherence, not just restart processes
+- degraded runtime truth should be injected, not left implicit
 
 ## Reliability Principles
 
@@ -82,6 +85,8 @@ Every important failure should first become a machine-authored fact:
 
 Only after that should Aphelion generate a maintenance or recovery interpretation.
 
+Those machine-authored facts should also be available to the governor as part of runtime self-awareness when they affect the current turn.
+
 ### 3. Degrade before aborting the whole system
 
 If a component fails, the system should prefer a narrower truthful mode over total collapse.
@@ -104,6 +109,7 @@ That means:
 - logs must distinguish normal path from degraded path
 - turn metadata should eventually distinguish canonical path from fallback path
 - maintenance recovery should be able to reason over fallback history
+- the live governor should know when it is on a degraded path if that affects decision quality or user honesty
 
 ### 5. Protect the ledger
 

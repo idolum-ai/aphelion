@@ -100,6 +100,13 @@ func TestFailoverChainFallsBackOnForbidden(t *testing.T) {
 	if secondary.callCount == 0 {
 		t.Fatal("secondary provider was not called after forbidden primary error")
 	}
+	state := chain.RuntimeState()
+	if !state.FallbackActive {
+		t.Fatalf("FallbackActive = false, want true")
+	}
+	if state.ActiveProvider != "native" {
+		t.Fatalf("ActiveProvider = %q, want native", state.ActiveProvider)
+	}
 }
 
 func TestFailoverChainDoesNotCascadeClientErrors(t *testing.T) {

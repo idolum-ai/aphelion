@@ -75,12 +75,14 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	if err != nil {
 		return fmt.Errorf("load workspace prompt context: %w", err)
 	}
+	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system")
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   "admin",
 		WorkspaceRoot:   scope.WorkingRoot,
 		Workspace:       promptContext,
+		Runtime:         governorAwareness,
 	}
 	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
@@ -159,6 +161,8 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 
 	replyText := canonicalReply
 	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
+		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram")
+		faceAwareness.DeliveryMode = "heartbeat_delivery"
 		renderedReply, renderErr := r.faceModel.Render(ctx, face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
@@ -167,6 +171,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			CanonicalReply:  canonicalReply,
 			LatestUserInput: "[heartbeat]",
+			Runtime:         faceAwareness,
 		})
 		if renderErr != nil {
 			log.Printf("WARN heartbeat face render failed backend=%s err=%v; using governor_passthrough", r.faceBackend, renderErr)

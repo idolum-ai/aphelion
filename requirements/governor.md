@@ -15,6 +15,8 @@ The governor's name is **Aphelion**.
 
 The governor owns truth, action, tools, memory writes, and authority. The face owns warmth, phrasing, channel presentation, and assertive conversational initiative.
 
+The governor must also be the layer with the fullest machine-authored **self-awareness** of the system. See `self-awareness.md`.
+
 This split exists because the system layer and the user-facing layer optimize for different things:
 
 - the governor should be precise, explicit, and disciplined
@@ -46,6 +48,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 - principal-aware authority
 - tool availability and invocation
 - sandbox and execution policy
+- machine-authored runtime self-description
 - memory writes
 - review-event creation
 - canonical assistant decision for the turn
@@ -61,6 +64,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 - optional outreach candidates for proactive turns
 - assertive advice about what the governor should do next
 - continuity of face identity as `Idolum`
+- user-visible honesty about degraded or constrained operation
 
 ### Face does not own
 
@@ -181,6 +185,8 @@ This path should continue to satisfy the same governor contract so the rest of A
 
 When Codex is active and a native provider chain is configured, runtime may degrade from Codex into that native chain on retryable live-turn failures. This is a continuity-preserving fallback, not a silent change of constitutional role.
 
+When that happens, the governor should be made aware of the degraded path explicitly rather than inferring it from behavior.
+
 ## Face Behavior
 
 The face may:
@@ -251,6 +257,7 @@ profile = "idolum"
 ## Decisions
 
 - **Governor is constitutional.** It owns the real state transitions.
+- **Governor self-awareness is machine-authored.** It should know its current authority, backend, and constraints explicitly.
 - **The governor is named `Aphelion`.** That identity belongs to the core, not to any single face style.
 - **The default face is `Idolum`.** That identity belongs to the visible conversational layer.
 - **Idolum is phenomenologically primary.** It should feel like the one leading the conversation.

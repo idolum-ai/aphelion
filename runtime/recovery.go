@@ -64,12 +64,14 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err != nil {
 		return fmt.Errorf("load recovery prompt context: %w", err)
 	}
+	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindRecovery, "system")
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   "admin",
 		WorkspaceRoot:   scope.WorkingRoot,
 		Workspace:       promptContext,
+		Runtime:         governorAwareness,
 	}
 	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)

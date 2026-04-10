@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -60,6 +61,14 @@ type failoverEntry struct {
 
 type FailoverChain struct {
 	entries []failoverEntry
+	mu      sync.Mutex
+	state   RuntimeState
+}
+
+type RuntimeState struct {
+	ConfiguredChain []string
+	ActiveProvider  string
+	FallbackActive  bool
 }
 
 func NewFailoverChain(entries []NamedProvider) (*FailoverChain, error) {
@@ -77,7 +86,33 @@ func NewFailoverChain(entries []NamedProvider) (*FailoverChain, error) {
 	if len(normalized) == 0 {
 		return nil, fmt.Errorf("provider failover chain is empty")
 	}
-	return &FailoverChain{entries: normalized}, nil
+	chainNames := make([]string, 0, len(normalized))
+	for _, entry := range normalized {
+		chainNames = append(chainNames, entry.name)
+	}
+	active := ""
+	if len(normalized) > 0 {
+		active = normalized[0].name
+	}
+	return &FailoverChain{
+		entries: normalized,
+		state: RuntimeState{
+			ConfiguredChain: chainNames,
+			ActiveProvider:  active,
+			FallbackActive:  false,
+		},
+	}, nil
+}
+
+func (c *FailoverChain) RuntimeState() RuntimeState {
+	if c == nil {
+		return RuntimeState{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := c.state
+	out.ConfiguredChain = append([]string(nil), out.ConfiguredChain...)
+	return out
 }
 
 func (c *FailoverChain) Complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
@@ -100,6 +135,7 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 	for idx, entry := range c.entries {
 		resp, started, err := c.streamWithRetry(ctx, entry, messages, tools, cb)
 		if err == nil {
+			c.recordSuccess(idx)
 			if idx > 0 {
 				log.Printf("WARN provider failover engaged from=%s to=%s", c.entries[0].name, entry.name)
 			}
@@ -128,6 +164,7 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 	for idx, entry := range c.entries {
 		resp, err := c.completeWithRetry(ctx, entry, messages, tools, opts)
 		if err == nil {
+			c.recordSuccess(idx)
 			if idx > 0 {
 				log.Printf("WARN provider failover engaged from=%s to=%s", c.entries[0].name, entry.name)
 			}
@@ -143,6 +180,19 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
 	}
 	return nil, ExhaustedError{Attempts: attempts}
+}
+
+func (c *FailoverChain) recordSuccess(idx int) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if idx < 0 || idx >= len(c.entries) {
+		return
+	}
+	c.state.ActiveProvider = c.entries[idx].name
+	c.state.FallbackActive = idx > 0
 }
 
 func (c *FailoverChain) completeWithRetry(ctx context.Context, entry failoverEntry, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {

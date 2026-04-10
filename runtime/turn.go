@@ -42,10 +42,16 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if err != nil {
 		return nil, fmt.Errorf("resolve principal scope: %w", err)
 	}
+	userText, inboundWasVoice, err := r.transcribeVoiceIfNeeded(ctx, scope, msg)
+	if err != nil {
+		return nil, err
+	}
+	facePolicy := decideInteractiveFacePolicy(sess, userText)
 	promptContext, err := r.promptContextForScope(scope, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
+	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram")
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
@@ -53,6 +59,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		WorkspaceRoot:   scope.WorkingRoot,
 		ToolManifest:    toolManifest(tools),
 		Workspace:       promptContext,
+		Runtime:         governorAwareness,
 	}
 	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
@@ -60,12 +67,6 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	sess.ChatType = "dm"
 	sess.UserName = msg.SenderName
 	sess.SystemPrompt = systemPrompt
-
-	userText, inboundWasVoice, err := r.transcribeVoiceIfNeeded(ctx, scope, msg)
-	if err != nil {
-		return nil, err
-	}
-	facePolicy := decideInteractiveFacePolicy(sess, userText)
 	idolumProposal := ""
 	extraUsage := core.TokenUsage{}
 	if facePolicy.Proposal {
@@ -77,6 +78,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 				PrincipalRole:   string(actor.Role),
 				WorkspaceRoot:   faceWorkspaceRoot(scope),
 				LatestUserInput: userText,
+				Runtime:         governorAwareness,
 			})
 			if proposalErr != nil {
 				log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
@@ -125,6 +127,14 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	outboundType := ""
 	streamedReply := false
 	faceRendered := false
+	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram")
+	faceAwareness.DeliveryMode = "text"
+	faceAwareness.StreamReply = false
+	if r.shouldReplyWithVoice(inboundWasVoice) {
+		faceAwareness.DeliveryMode = "voice"
+	} else if facePolicy.Render {
+		faceAwareness.DeliveryMode = "idolum_render"
+	}
 	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
 		renderReq := face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
@@ -134,13 +144,21 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			CanonicalReply:  canonicalReply,
 			LatestUserInput: userText,
+			Runtime:         faceAwareness,
 		}
 		shouldRender := shouldRenderIdolumReply(facePolicy, userText, canonicalReply, result.ToolLog, outHistory[len(input):])
+		if !shouldRender && !r.shouldReplyWithVoice(inboundWasVoice) {
+			faceAwareness.DeliveryMode = "governor_passthrough"
+			renderReq.Runtime = faceAwareness
+		}
 
 		if shouldRender && !r.shouldReplyWithVoice(inboundWasVoice) {
 			if streamer, ok := r.faceModel.(face.StreamRenderer); ok {
 				editor := r.newStreamEditor(msg)
 				if editor != nil {
+					faceAwareness.DeliveryMode = "stream"
+					faceAwareness.StreamReply = true
+					renderReq.Runtime = faceAwareness
 					renderedReply, streamErr := streamer.RenderStream(ctx, renderReq, func(chunk string) error {
 						return editor.OnChunk(ctx, chunk)
 					})
@@ -168,6 +186,11 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		}
 
 		if shouldRender && !faceRendered {
+			if !r.shouldReplyWithVoice(inboundWasVoice) {
+				faceAwareness.DeliveryMode = "idolum_render"
+				faceAwareness.StreamReply = false
+				renderReq.Runtime = faceAwareness
+			}
 			renderedReply, renderErr := r.faceModel.Render(ctx, renderReq)
 			if renderErr != nil {
 				log.Printf("WARN face render failed backend=%s err=%v; using governor_passthrough", r.faceBackend, renderErr)

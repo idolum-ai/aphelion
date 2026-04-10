@@ -32,6 +32,9 @@ func TestBuildGovernorPromptPlacesAuthorityFirst(t *testing.T) {
 	if authorityIdx > soulIdx {
 		t.Fatalf("authority block should precede workspace files: %q", got)
 	}
+	if !strings.Contains(got, "## Runtime Awareness") {
+		t.Fatalf("prompt missing runtime awareness block: %q", got)
+	}
 }
 
 func TestBuildGovernorPromptPlacesManifestBeforeToolsPolicy(t *testing.T) {
@@ -124,6 +127,9 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	if !strings.Contains(got, "## Canonical Governor Reply") {
 		t.Fatalf("face prompt missing canonical reply section: %q", got)
 	}
+	if !strings.Contains(got, "## Delivery Awareness") {
+		t.Fatalf("face prompt missing delivery awareness block: %q", got)
+	}
 	if !strings.Contains(got, "Do not present yourself as a translator") {
 		t.Fatalf("face prompt missing ownership boundary: %q", got)
 	}
@@ -158,13 +164,14 @@ func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 	}
 
 	stableIdx := strings.Index(got, "## Stable Face Files")
+	awarenessIdx := strings.Index(got, "## Delivery Awareness")
 	dynamicIdx := strings.Index(got, "## Dynamic Face Files")
 	canonicalIdx := strings.Index(got, "## Canonical Governor Reply")
 	userIdx := strings.Index(got, "## Latest User Message")
-	if stableIdx == -1 || dynamicIdx == -1 || canonicalIdx == -1 || userIdx == -1 {
+	if awarenessIdx == -1 || stableIdx == -1 || dynamicIdx == -1 || canonicalIdx == -1 || userIdx == -1 {
 		t.Fatalf("face prompt missing expected layered sections: %q", got)
 	}
-	if !(stableIdx < dynamicIdx && dynamicIdx < canonicalIdx && canonicalIdx < userIdx) {
+	if !(awarenessIdx < stableIdx && stableIdx < dynamicIdx && dynamicIdx < canonicalIdx && canonicalIdx < userIdx) {
 		t.Fatalf("face prompt sections are out of order: %q", got)
 	}
 }
@@ -212,11 +219,99 @@ func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 	if len(blocks) < 4 {
 		t.Fatalf("block count = %d, want at least 4", len(blocks))
 	}
-	if !blocks[1].CacheBreakpoint {
-		t.Fatalf("stable face files block should be cache breakpoint: %#v", blocks[1])
+	if !blocks[2].CacheBreakpoint {
+		t.Fatalf("stable face files block should be cache breakpoint: %#v", blocks[2])
 	}
-	if blocks[2].CacheBreakpoint {
-		t.Fatalf("dynamic face block should not be cache breakpoint: %#v", blocks[2])
+	if blocks[3].CacheBreakpoint {
+		t.Fatalf("dynamic face block should not be cache breakpoint: %#v", blocks[3])
+	}
+}
+
+func TestBuildGovernorPromptIncludesResolvedRuntimeFacts(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		GovernorName:    "Aphelion",
+		GovernorBackend: "codex",
+		PrincipalRole:   "approved_user",
+		WorkspaceRoot:   "/tmp/user-work",
+		Runtime: RuntimeAwareness{
+			SessionKind:          "interactive",
+			RunKind:              "interactive",
+			Channel:              "telegram",
+			GovernorProvider:     "codex",
+			GovernorModel:        "codex",
+			GovernorProviderPath: []string{"codex", "anthropic", "openrouter"},
+			ActiveProvider:       "codex",
+			FallbackActive:       false,
+			ReasoningEffort:      "medium",
+			ReasoningSummary:     "auto",
+			PromptRoot:           "/tmp/prompt",
+			ExecRoot:             "/tmp/exec",
+			SharedMemoryRoot:     "/tmp/shared",
+			UserWorkspaceRoot:    "/tmp/users/42/work",
+			UserMemoryRoot:       "/tmp/users/42/memory",
+			WorkingRoot:          "/tmp/users/42/work",
+			SandboxMode:          "isolated",
+			NetworkPolicy:        "deny",
+		},
+	})
+
+	for _, want := range []string{
+		"- run_kind: interactive",
+		"- channel: telegram",
+		"- governor_provider: codex",
+		"- configured_provider_path: codex -> anthropic -> openrouter",
+		"- prompt_root: /tmp/prompt",
+		"- sandbox_mode: isolated",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestBuildFacePromptKeepsAwarenessNarrow(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		GovernorName:    "Aphelion",
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		PrincipalRole:   "admin",
+		CanonicalReply:  "done",
+		LatestUserInput: "hello",
+		Runtime: RuntimeAwareness{
+			SessionKind:      "interactive",
+			RunKind:          "interactive",
+			Channel:          "telegram",
+			GovernorBackend:  "codex",
+			GovernorProvider: "codex",
+			GovernorModel:    "codex",
+			ActiveProvider:   "anthropic",
+			FallbackActive:   true,
+			ReasoningEffort:  "medium",
+			ReasoningSummary: "auto",
+			FaceBackend:      "provider",
+			FaceProvider:     "anthropic",
+			DeliveryMode:     "stream",
+			StreamReply:      true,
+			ExecRoot:         "/tmp/exec",
+		},
+	})
+
+	for _, want := range []string{
+		"- active_provider: anthropic",
+		"- fallback_active: true",
+		"- delivery_mode: stream",
+		"- stream_reply: true",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("face prompt missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "exec_root") {
+		t.Fatalf("face prompt should not expose exec roots: %q", got)
 	}
 }
 

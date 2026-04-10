@@ -23,6 +23,7 @@ type GovernorRequest struct {
 	WorkspaceRoot   string
 	ToolManifest    string
 	Workspace       *workspace.PromptContext
+	Runtime         RuntimeAwareness
 }
 
 type FaceRequest struct {
@@ -36,6 +37,7 @@ type FaceRequest struct {
 	StableFiles     []workspace.LoadedFile
 	DynamicFiles    []workspace.LoadedFile
 	Mode            string
+	Runtime         RuntimeAwareness
 }
 
 func BuildGovernorPrompt(req GovernorRequest) string {
@@ -74,6 +76,7 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		Text: strings.Join([]string{
 			fmt.Sprintf("You are %s, the governor of this system.", governorName),
 			renderAuthorityBlock(governorName, governorBackend, principalRole, workspaceRoot, strings.TrimSpace(req.ToolManifest) != ""),
+			renderGovernorRuntimeAwarenessBlock(req.Runtime),
 		}, "\n\n"),
 	})
 
@@ -179,6 +182,9 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		)
 	}
 	parts = append(parts, agent.SystemBlock{Text: strings.Join(intro, "\n\n")})
+	parts = append(parts, agent.SystemBlock{
+		Text: renderFaceAwarenessBlock(req.Runtime, principalRole, mode),
+	})
 
 	if len(req.StableFiles) > 0 {
 		parts = append(parts, agent.SystemBlock{

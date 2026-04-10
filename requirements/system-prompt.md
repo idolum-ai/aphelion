@@ -13,6 +13,8 @@ The governor prompt carries authority, execution reality, and tool policy. The f
 
 The governor prompt defines **Aphelion**. The default face prompt defines **Idolum**. Idolum may vary in tone or style over time, but it must not replace or contradict the governor's identity.
 
+The machine-owned part of prompt assembly is also the primary **self-awareness surface** of the system. See `self-awareness.md`.
+
 ## Governor Prompt
 
 The governor prompt should be assembled in layers.
@@ -40,6 +42,9 @@ It should state:
 
 - resolved principal role
 - active governor backend
+- active run kind and session kind
+- active provider/model and reasoning mode
+- delivery/runtime capabilities relevant to the turn
 - writable vs read-only roots
 - whether tools are available
 - the rule that prompt text cannot override code-enforced permissions
@@ -88,6 +93,9 @@ Examples:
 - tool availability changes
 - collaboration-mode-like changes
 - realtime/heartbeat notices
+- degradation or fallback state
+- recovery/interruption notices
+- streamed vs non-streamed delivery state
 
 This mirrors the useful part of Codex's approach: keep a stable base, add explicit updates for changing machine state.
 
@@ -108,6 +116,12 @@ It should receive:
 - face-specific identity and anti-drift rules
 
 The face prompt should not receive tool definitions or permission rules as if they were its responsibility.
+
+It should still receive enough machine-authored runtime awareness to remain honest about:
+
+- channel and delivery mode
+- visible degraded state
+- whether the turn is passthrough, voiced, silent, or rendered
 
 ### Face layers
 
@@ -166,6 +180,7 @@ See `config.md`, but prompt-related ownership should include:
 - **Machine-owned instructions come first.** Authority and permissions must outrank workspace files.
 - **Stable and dynamic content are separate by design.** This is for both clarity and cache behavior.
 - **Governor and face prompts are different artifacts.** They should not be collapsed into one text blob once the architecture is split.
+- **Prompt assembly is the main self-awareness mechanism.** Runtime truth should be injected, not inferred.
 - **Idolum should feel primary from inside the conversation.** The hard boundary should live in code and machine-owned reality, not in constant self-subordination cues.
 - **`Aphelion` belongs to the governor layer.** Face personas may vary without replacing the governor's identity.
 - **`Idolum` is the default face.** It owns presentation, not authority.

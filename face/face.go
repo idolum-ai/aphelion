@@ -5,6 +5,8 @@ package face
 import (
 	"context"
 	"strings"
+
+	"github.com/idolum-ai/aphelion/prompt"
 )
 
 const (
@@ -28,6 +30,7 @@ type RenderRequest struct {
 	WorkspaceRoot   string
 	CanonicalReply  string
 	LatestUserInput string
+	Runtime         prompt.RuntimeAwareness
 }
 
 type Renderer interface {
@@ -46,6 +49,7 @@ type ProposalRequest struct {
 	PrincipalRole   string
 	WorkspaceRoot   string
 	LatestUserInput string
+	Runtime         prompt.RuntimeAwareness
 }
 
 type Proposer interface {

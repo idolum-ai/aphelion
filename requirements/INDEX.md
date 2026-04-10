@@ -23,16 +23,17 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 12. ✅ [`system-prompt.md`](system-prompt.md) — Governor prompt, face prompt, cache boundary, dynamic vs stable sections
 13. ✅ [`idolum.md`](idolum.md) — Face identity, anti-drift, Idolum-specific prompt files
 14. ✅ [`subagents.md`](subagents.md) — First-class subordinate sessions, capability depth, completion, isolation
+15. ✅ [`self-awareness.md`](self-awareness.md) — Machine-authored runtime self-description, authority awareness, degraded-state awareness
 
 ## Automation
-15. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
-16. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
+16. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
+17. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
 
 ## Media
-17. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
-18. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
+18. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
+19. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
 
 ## Operations
-19. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
-20. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
-21. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
+20. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
+21. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
+22. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline

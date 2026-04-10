@@ -59,6 +59,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
 		Mode:            "render",
+		Runtime:         req.Runtime,
 	}
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
@@ -102,6 +103,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
 		Mode:            "render",
+		Runtime:         req.Runtime,
 	}
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
@@ -154,6 +156,7 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
 		Mode:            "proposal",
+		Runtime:         req.Runtime,
 	}
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)

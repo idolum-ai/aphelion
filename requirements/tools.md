@@ -11,6 +11,8 @@ Aphelion treats tools as a **system surface**, not just an LLM convenience:
 - tool policy may be explained to the model via prompt text
 - prompt text is never the source of truth for security
 
+The same is true for tool self-awareness: the model should be told its actual tool surface by machine-generated manifest, not by inference or stale prose. See `self-awareness.md`.
+
 This spec is **staged**.
 
 - **v0**: one real tool, `exec`, for the admin DM only
@@ -117,6 +119,8 @@ The model should never be shown stale tool definitions copied by hand into promp
 
 Tool guidance belongs to the **governor prompt**, not the face prompt.
 
+This tool section is also a major part of the governor's runtime self-awareness.
+
 ## Per-Run Manifest Shaping
 
 The active tool manifest should be resolved from:
@@ -142,6 +146,8 @@ Examples:
 - `cron` should usually get a lighter, narrower tool surface
 - `subagent` runs should inherit stricter ceilings than their parent
 - `approved_user` runs should not merely receive warnings; they should receive a different actual manifest
+
+The manifest should make those differences legible to the governor as runtime facts.
 
 ## Core Interfaces
 

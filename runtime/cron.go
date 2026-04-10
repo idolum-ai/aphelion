@@ -59,11 +59,13 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	if err != nil {
 		return fmt.Errorf("resolve cron scope: %w", err)
 	}
+	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "system")
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   "admin",
 		WorkspaceRoot:   scope.WorkingRoot,
+		Runtime:         governorAwareness,
 	}
 	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
@@ -125,6 +127,8 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 
 	replyText := canonicalReply
 	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
+		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram")
+		faceAwareness.DeliveryMode = "cron_delivery"
 		renderedReply, renderErr := r.faceModel.Render(ctx, face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
@@ -133,6 +137,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			CanonicalReply:  canonicalReply,
 			LatestUserInput: "[cron:" + job.ID + "]",
+			Runtime:         faceAwareness,
 		})
 		if renderErr != nil {
 			log.Printf("WARN cron face render failed backend=%s job=%s err=%v; using governor_passthrough", r.faceBackend, job.ID, renderErr)

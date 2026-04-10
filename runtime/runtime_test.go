@@ -602,6 +602,53 @@ func TestHandleInboundApprovedUserDoesNotLoadGlobalDynamicMemory(t *testing.T) {
 	}
 }
 
+func TestHandleInboundThreadsRuntimeAwarenessToGovernorAndIdolum(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "canonical"
+	provider.faceReplyText = "rendered"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     711,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "I feel overwhelmed and need help thinking this through",
+		MessageID:  1,
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenGovernorSystem) == 0 {
+		t.Fatal("seenGovernorSystem empty, want governor prompt")
+	}
+	if !strings.Contains(provider.seenGovernorSystem[0], "## Runtime Awareness") {
+		t.Fatalf("governor prompt missing runtime awareness: %q", provider.seenGovernorSystem[0])
+	}
+	if !strings.Contains(provider.seenGovernorSystem[0], "- run_kind: interactive") {
+		t.Fatalf("governor prompt missing run kind: %q", provider.seenGovernorSystem[0])
+	}
+	if !strings.Contains(provider.seenGovernorSystem[0], "- prompt_root: "+cfg.Agent.PromptRoot) {
+		t.Fatalf("governor prompt missing prompt root: %q", provider.seenGovernorSystem[0])
+	}
+	if len(provider.seenFaceSystem) == 0 {
+		t.Fatal("seenFaceSystem empty, want face prompt")
+	}
+	if !strings.Contains(provider.seenFaceSystem[0], "## Delivery Awareness") {
+		t.Fatalf("face prompt missing delivery awareness: %q", provider.seenFaceSystem[0])
+	}
+	if strings.Contains(provider.seenFaceSystem[0], "exec_root") {
+		t.Fatalf("face prompt leaked exec root: %q", provider.seenFaceSystem[0])
+	}
+}
+
 func TestHandleInboundIncludesIdolumProposalInGovernorInput(t *testing.T) {
 	t.Parallel()
 
