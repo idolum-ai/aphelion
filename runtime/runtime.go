@@ -50,6 +50,8 @@ type Runtime struct {
 	synth       voice.Synthesizer
 
 	governorBackend     string
+	streamEditInterval  time.Duration
+	streamCursor        string
 	toolProgressMode    string
 	toolProgressCleanup bool
 
@@ -182,6 +184,20 @@ func New(
 			idleExpiry = d
 		}
 	}
+	streamEditInterval := 300 * time.Millisecond
+	if raw := strings.TrimSpace(cfg.Telegram.StreamEditInterval); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse telegram.stream_edit_interval: %w", err)
+		}
+		if d > 0 {
+			streamEditInterval = d
+		}
+	}
+	streamCursor := cfg.Telegram.StreamCursor
+	if strings.TrimSpace(streamCursor) == "" {
+		streamCursor = " ▉"
+	}
 
 	return &Runtime{
 		cfg:      cfg,
@@ -196,6 +212,8 @@ func New(
 		faceBackend:         faceBackend,
 		faceModel:           faceModel,
 		governorBackend:     governorAuth.Backend,
+		streamEditInterval:  streamEditInterval,
+		streamCursor:        streamCursor,
 		toolProgressMode:    strings.ToLower(strings.TrimSpace(cfg.Telegram.ToolProgress)),
 		toolProgressCleanup: cfg.Telegram.ToolProgressCleanup,
 		idleExpiry:          idleExpiry,

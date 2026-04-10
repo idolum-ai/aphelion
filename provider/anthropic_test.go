@@ -5,8 +5,10 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -229,6 +231,69 @@ func TestAnthropicCompletePreservesSystemCacheBreakpoints(t *testing.T) {
 	}
 	if seen.System[2].CacheControl != nil {
 		t.Fatalf("dynamic block cache control = %#v, want nil", seen.System[2].CacheControl)
+	}
+}
+
+func TestAnthropicStreamText(t *testing.T) {
+	var seen anthropicRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			"event: message_start",
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":12,"cache_creation_input_tokens":40}}}`,
+			"",
+			"event: content_block_start",
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			"",
+			"event: content_block_delta",
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel"}}`,
+			"",
+			"event: content_block_delta",
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}`,
+			"",
+			"event: message_delta",
+			`data: {"type":"message_delta","usage":{"output_tokens":5,"cache_read_input_tokens":22}}`,
+			"",
+			"event: message_stop",
+			`data: {"type":"message_stop"}`,
+			"",
+		}, "\n"))
+	})
+
+	client, err := NewAnthropic(AnthropicOptions{
+		APIKey:     "test-key",
+		Model:      "claude-2",
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var chunks []string
+	resp, err := client.Stream(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, func(chunk agent.StreamChunk) error {
+		chunks = append(chunks, chunk.Text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	if !seen.Stream {
+		t.Fatalf("stream flag = false, want true")
+	}
+	if strings.Join(chunks, "") != "hello" {
+		t.Fatalf("chunks = %#v, want hello", chunks)
+	}
+	if resp.Content != "hello" {
+		t.Fatalf("resp.Content = %q, want hello", resp.Content)
+	}
+	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want input 12 output 5", resp.Usage)
+	}
+	if resp.Usage.CacheReadTokens != 22 || resp.Usage.CacheWriteTokens != 40 {
+		t.Fatalf("cache usage = %+v, want read 22 write 40", resp.Usage)
 	}
 }
 

@@ -4,6 +4,8 @@ user_agent = ""
 [telegram]
 bot_token = "telegram-bot-token"
 poll_timeout = 30
+stream_edit_interval = "300ms"
+stream_cursor = " ▉"
 tool_progress = "all"
 tool_progress_cleanup = false
 

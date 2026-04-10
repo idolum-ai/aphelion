@@ -119,8 +119,12 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	sess.TurnCount++
 	canonicalReply := face.CanonicalOrFallback(result.Text)
 	replyText := canonicalReply
+	outboundID := int64(0)
+	outboundType := ""
+	streamedReply := false
+	faceRendered := false
 	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
-		renderedReply, renderErr := r.faceModel.Render(ctx, face.RenderRequest{
+		renderReq := face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
 			Channel:         "telegram",
@@ -128,15 +132,49 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			CanonicalReply:  canonicalReply,
 			LatestUserInput: userText,
-		})
-		if renderErr != nil {
-			log.Printf("WARN face render failed backend=%s err=%v; using governor_passthrough", r.faceBackend, renderErr)
-		} else {
-			replyText = strings.TrimSpace(renderedReply)
-			if replyText == "" {
-				replyText = canonicalReply
+		}
+
+		if !r.shouldReplyWithVoice(inboundWasVoice) {
+			if streamer, ok := r.faceModel.(face.StreamRenderer); ok {
+				editor := r.newStreamEditor(msg)
+				if editor != nil {
+					renderedReply, streamErr := streamer.RenderStream(ctx, renderReq, func(chunk string) error {
+						return editor.OnChunk(ctx, chunk)
+					})
+					if streamErr != nil {
+						editor.Abort(ctx)
+						log.Printf("WARN face stream render failed backend=%s err=%v; falling back to non-stream render", r.faceBackend, streamErr)
+					} else {
+						faceRendered = true
+						replyText = strings.TrimSpace(renderedReply)
+						if replyText == "" {
+							replyText = canonicalReply
+						}
+						extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
+						outboundID, err = editor.Finish(ctx)
+						if err != nil {
+							return result, fmt.Errorf("finish streamed reply: %w", err)
+						}
+						if outboundID != 0 {
+							outboundType = "streaming"
+							streamedReply = true
+						}
+					}
+				}
 			}
-			extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
+		}
+
+		if !faceRendered {
+			renderedReply, renderErr := r.faceModel.Render(ctx, renderReq)
+			if renderErr != nil {
+				log.Printf("WARN face render failed backend=%s err=%v; using governor_passthrough", r.faceBackend, renderErr)
+			} else {
+				replyText = strings.TrimSpace(renderedReply)
+				if replyText == "" {
+					replyText = canonicalReply
+				}
+				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
+			}
 		}
 	}
 	result.TokenUsage = addTokenUsage(result.TokenUsage, extraUsage)
@@ -153,9 +191,11 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return nil, fmt.Errorf("save session: %w", err)
 	}
 
-	outboundID, outboundType, err := r.sendReply(ctx, msg, replyText, inboundWasVoice)
-	if err != nil {
-		return result, fmt.Errorf("send outbound reply: %w", err)
+	if !streamedReply {
+		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, inboundWasVoice)
+		if err != nil {
+			return result, fmt.Errorf("send outbound reply: %w", err)
+		}
 	}
 	if err := r.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
 		return result, fmt.Errorf("record outbound reply: %w", err)

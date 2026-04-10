@@ -18,6 +18,10 @@ type Provider interface {
 	Complete(ctx context.Context, messages []Message, tools []ToolDef) (*Response, error)
 }
 
+type StreamingProvider interface {
+	Stream(ctx context.Context, messages []Message, tools []ToolDef, cb StreamCallback) (*Response, error)
+}
+
 type ToolRegistry interface {
 	Execute(ctx context.Context, name string, input json.RawMessage) (string, error)
 	Definitions() []ToolDef
@@ -53,6 +57,15 @@ type Response struct {
 	ToolCalls []ToolCall
 	Usage     core.TokenUsage
 }
+
+type StreamChunk struct {
+	Type     string
+	Text     string
+	ToolCall *ToolCall
+	Usage    *core.TokenUsage
+}
+
+type StreamCallback func(StreamChunk) error
 
 const (
 	maxProviderRetries   = 3

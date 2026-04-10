@@ -35,6 +35,8 @@ type IdentityConfig struct {
 type TelegramConfig struct {
 	BotToken            string `toml:"bot_token"`
 	PollTimeout         int    `toml:"poll_timeout"`
+	StreamEditInterval  string `toml:"stream_edit_interval"`
+	StreamCursor        string `toml:"stream_cursor"`
 	ToolProgress        string `toml:"tool_progress"`
 	ToolProgressCleanup bool   `toml:"tool_progress_cleanup"`
 }
@@ -182,6 +184,8 @@ func Default() Config {
 	return Config{
 		Telegram: TelegramConfig{
 			PollTimeout:         30,
+			StreamEditInterval:  "300ms",
+			StreamCursor:        " ▉",
 			ToolProgress:        "all",
 			ToolProgressCleanup: false,
 		},
@@ -346,6 +350,15 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Telegram.PollTimeout <= 0 {
 		return fmt.Errorf("telegram.poll_timeout must be > 0")
+	}
+	if raw := strings.TrimSpace(cfg.Telegram.StreamEditInterval); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("telegram.stream_edit_interval must be a valid duration: %w", err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("telegram.stream_edit_interval must be > 0")
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Telegram.ToolProgress)) {
 	case "", "all", "new", "off":

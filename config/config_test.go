@@ -39,6 +39,9 @@ workspace = "./workspace"
 	if cfg.Telegram.PollTimeout != 30 {
 		t.Fatalf("poll timeout = %d, want 30", cfg.Telegram.PollTimeout)
 	}
+	if cfg.Telegram.StreamEditInterval != "300ms" || cfg.Telegram.StreamCursor != " ▉" {
+		t.Fatalf("telegram streaming defaults = %#v, want 300ms/block cursor", cfg.Telegram)
+	}
 	if cfg.Telegram.ToolProgress != "all" || cfg.Telegram.ToolProgressCleanup {
 		t.Fatalf("telegram progress defaults = %#v, want all/false", cfg.Telegram)
 	}
@@ -145,6 +148,8 @@ func TestLoadParsesBasicTypedFields(t *testing.T) {
 [telegram]
 bot_token = "tg-test"
 poll_timeout = 11
+stream_edit_interval = "450ms"
+stream_cursor = " .."
 tool_progress = "new"
 tool_progress_cleanup = true
 
@@ -235,6 +240,9 @@ elevenlabs_voice_id = "voice-123"
 
 	if cfg.Telegram.PollTimeout != 11 {
 		t.Fatalf("poll_timeout = %d, want 11", cfg.Telegram.PollTimeout)
+	}
+	if cfg.Telegram.StreamEditInterval != "450ms" || cfg.Telegram.StreamCursor != " .." {
+		t.Fatalf("telegram stream config = %#v, want 450ms/' ..'", cfg.Telegram)
 	}
 	if cfg.Telegram.ToolProgress != "new" || !cfg.Telegram.ToolProgressCleanup {
 		t.Fatalf("telegram progress = %#v, want new/true", cfg.Telegram)
@@ -396,6 +404,32 @@ idle_expiry = "definitely-not-a-duration"
 	_, err := Load(configPath)
 	if err == nil {
 		t.Fatal("Load() err = nil, want idle_expiry validation error")
+	}
+}
+
+func TestLoadRejectsInvalidStreamEditInterval(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+stream_edit_interval = "later"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want validation error")
 	}
 }
 

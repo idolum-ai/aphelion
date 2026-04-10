@@ -11,10 +11,12 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 )
 
 type stubProvider struct {
 	reply      string
+	streamText string
 	err        error
 	lastCalls  int
 	lastPrompt string
@@ -29,6 +31,34 @@ func (s *stubProvider) Complete(_ context.Context, messages []agent.Message, _ [
 		return nil, s.err
 	}
 	return &agent.Response{Content: s.reply}, nil
+}
+
+func (s *stubProvider) Stream(_ context.Context, messages []agent.Message, _ []agent.ToolDef, cb agent.StreamCallback) (*agent.Response, error) {
+	s.lastCalls++
+	if len(messages) > 0 && messages[0].Role == "system" {
+		s.lastPrompt = messages[0].Content
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	streamText := s.streamText
+	if streamText == "" {
+		streamText = s.reply
+	}
+	for _, chunk := range []string{"Rendered ", "idolum ", "reply"} {
+		if streamText != "Rendered idolum reply" {
+			break
+		}
+		if err := cb(agent.StreamChunk{Type: "text", Text: chunk}); err != nil {
+			return nil, err
+		}
+	}
+	if streamText != "Rendered idolum reply" && streamText != "" {
+		if err := cb(agent.StreamChunk{Type: "text", Text: streamText}); err != nil {
+			return nil, err
+		}
+	}
+	return &agent.Response{Content: streamText, Usage: core.TokenUsage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}}, nil
 }
 
 func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
@@ -126,5 +156,47 @@ func TestProviderRendererReturnsErrEmptyRender(t *testing.T) {
 	})
 	if !errors.Is(err, ErrEmptyRender) {
 		t.Fatalf("Render() err = %v, want ErrEmptyRender", err)
+	}
+}
+
+func TestProviderRendererRenderStream(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "IDOLUM.md"), []byte("idolum identity"), 0o600); err != nil {
+		t.Fatalf("write IDOLUM.md: %v", err)
+	}
+
+	provider := &stubProvider{streamText: "Rendered idolum reply"}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
+		GovernorName:  "Aphelion",
+		FaceName:      "Idolum",
+		Channel:       "telegram",
+		WorkspaceRoot: root,
+	})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	var chunks []string
+	got, err := renderer.RenderStream(context.Background(), RenderRequest{
+		CanonicalReply:  "Canonical text",
+		LatestUserInput: "How are you?",
+		PrincipalRole:   "admin",
+	}, func(text string) error {
+		chunks = append(chunks, text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RenderStream() err = %v", err)
+	}
+	if got != "Rendered idolum reply" {
+		t.Fatalf("RenderStream() = %q, want rendered idolum text", got)
+	}
+	if strings.Join(chunks, "") != "Rendered idolum reply" {
+		t.Fatalf("chunks = %#v, want rendered idolum reply", chunks)
+	}
+	if usage := renderer.ConsumeLastUsage(); usage.TotalTokens != 3 {
+		t.Fatalf("usage = %+v, want total 3", usage)
 	}
 }

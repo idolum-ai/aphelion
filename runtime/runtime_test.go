@@ -31,6 +31,7 @@ type fakeProvider struct {
 	reflectionReplyText string
 	proposalReplyText   string
 	faceReplyText       string
+	streamFaceText      string
 	faceErr             error
 	seenGovernorSystem  []string
 	seenFaceSystem      []string
@@ -89,6 +90,38 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 		Content: f.replyText,
 		Usage:   f.responseUsage,
 	}, nil
+}
+
+func (f *fakeProvider) Stream(_ context.Context, messages []agent.Message, _ []agent.ToolDef, cb agent.StreamCallback) (*agent.Response, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.callCount++
+
+	isFaceCall := len(messages) > 0 && messages[0].Role == "system" && strings.Contains(messages[0].Content, "the face of")
+	if !isFaceCall {
+		return &agent.Response{Content: f.replyText, Usage: f.responseUsage}, nil
+	}
+	f.seenFaceSystem = append(f.seenFaceSystem, messages[0].Content)
+	if f.faceErr != nil {
+		return nil, f.faceErr
+	}
+	reply := strings.TrimSpace(f.streamFaceText)
+	if reply == "" {
+		reply = strings.TrimSpace(f.faceReplyText)
+	}
+	if reply == "" {
+		reply = f.replyText
+	}
+	for _, part := range strings.Fields(reply) {
+		text := part
+		if !strings.HasSuffix(reply, part) {
+			text += " "
+		}
+		if err := cb(agent.StreamChunk{Type: "text", Text: text}); err != nil {
+			return nil, err
+		}
+	}
+	return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 }
 
 type fakeSender struct {
@@ -327,8 +360,12 @@ func TestHandleInboundPersistsAndSends(t *testing.T) {
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want 1", len(sender.sent))
 	}
-	if sender.sent[0].Text != "ok" {
-		t.Fatalf("sent text = %q, want ok", sender.sent[0].Text)
+	finalText := sender.sent[0].Text
+	if len(sender.edits) > 0 {
+		finalText = sender.edits[len(sender.edits)-1].Text
+	}
+	if finalText != "ok" {
+		t.Fatalf("final text = %q, want ok", finalText)
 	}
 
 	sess, err := store.Load(session.SessionKey{ChatID: 42, UserID: 0})
@@ -353,6 +390,51 @@ func TestHandleInboundPersistsAndSends(t *testing.T) {
 	}
 	if len(outboundIDs) != 1 || outboundIDs[0] != 1 {
 		t.Fatalf("outbound ids = %#v, want [1]", outboundIDs)
+	}
+}
+
+func TestHandleInboundStreamsFaceReply(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.streamFaceText = "streamed idolum reply"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     52,
+		SenderID:   1001,
+		SenderName: "daniel",
+		Text:       "hello",
+		MessageID:  99,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) == 0 {
+		t.Fatal("expected at least one streamed send")
+	}
+	if sender.sent[len(sender.sent)-1].Text == "ok" {
+		t.Fatalf("final streamed send = %q, want streamed reply path", sender.sent[len(sender.sent)-1].Text)
+	}
+	if len(sender.edits) == 0 {
+		t.Fatal("expected editMessageText calls during streaming")
+	}
+	if sender.edits[len(sender.edits)-1].Text != "streamed idolum reply" {
+		t.Fatalf("final edited text = %q, want streamed idolum reply", sender.edits[len(sender.edits)-1].Text)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 52, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if got := sess.Messages[len(sess.Messages)-1].Content; got != "streamed idolum reply" {
+		t.Fatalf("stored rendered reply = %q, want streamed idolum reply", got)
 	}
 }
 
@@ -1432,8 +1514,12 @@ func TestHandleInboundRendersViaFaceByDefault(t *testing.T) {
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want 1", len(sender.sent))
 	}
-	if sender.sent[0].Text != "idolum rendered" {
-		t.Fatalf("outbound text = %q, want idolum rendered", sender.sent[0].Text)
+	finalText := sender.sent[0].Text
+	if len(sender.edits) > 0 {
+		finalText = sender.edits[len(sender.edits)-1].Text
+	}
+	if finalText != "idolum rendered" {
+		t.Fatalf("outbound text = %q, want idolum rendered", finalText)
 	}
 
 	sess, err := store.Load(session.SessionKey{ChatID: 901, UserID: 0})
@@ -1583,8 +1669,12 @@ func TestHandleInboundDeliversPendingReviewEventsForAdmin(t *testing.T) {
 	if len(sender.sent) != 2 {
 		t.Fatalf("sent len = %d, want 2", len(sender.sent))
 	}
-	if sender.sent[0].Text != "ok" {
-		t.Fatalf("first message = %q, want model reply", sender.sent[0].Text)
+	finalText := sender.sent[0].Text
+	if len(sender.edits) > 0 {
+		finalText = sender.edits[len(sender.edits)-1].Text
+	}
+	if finalText != "ok" {
+		t.Fatalf("first message = %q, want model reply", finalText)
 	}
 	if !strings.Contains(sender.sent[1].Text, "[Review Digest]") {
 		t.Fatalf("second message missing digest label: %q", sender.sent[1].Text)
@@ -1650,8 +1740,12 @@ func TestHandleInboundDoesNotDeliverReviewEventsForApprovedUser(t *testing.T) {
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want 1 (only model reply)", len(sender.sent))
 	}
-	if sender.sent[0].Text != "ok" {
-		t.Fatalf("message = %q, want ok", sender.sent[0].Text)
+	finalText := sender.sent[0].Text
+	if len(sender.edits) > 0 {
+		finalText = sender.edits[len(sender.edits)-1].Text
+	}
+	if finalText != "ok" {
+		t.Fatalf("message = %q, want ok", finalText)
 	}
 
 	pending, err := store.PendingReviewEvents(42, 10)

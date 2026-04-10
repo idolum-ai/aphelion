@@ -34,6 +34,10 @@ type Renderer interface {
 	Render(ctx context.Context, req RenderRequest) (string, error)
 }
 
+type StreamRenderer interface {
+	RenderStream(ctx context.Context, req RenderRequest, onChunk func(string) error) (string, error)
+}
+
 type ProposalRequest struct {
 	GovernorName    string
 	FaceName        string

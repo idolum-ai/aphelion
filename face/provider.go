@@ -79,6 +79,64 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 	return rendered, nil
 }
 
+func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, onChunk func(string) error) (string, error) {
+	streamingProvider, ok := r.provider.(agent.StreamingProvider)
+	if !ok {
+		return r.Render(ctx, req)
+	}
+
+	workspaceRoot := firstNonEmpty(req.WorkspaceRoot, r.cfg.WorkspaceRoot)
+	stableFiles, dynamicFiles, err := LoadIdolumPromptFiles(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+
+	facePrompt := prompt.FaceRequest{
+		GovernorName:    firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName),
+		FaceName:        firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName),
+		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
+		Style:           firstNonEmpty(req.Style, r.cfg.Style),
+		PrincipalRole:   req.PrincipalRole,
+		CanonicalReply:  CanonicalOrFallback(req.CanonicalReply),
+		LatestUserInput: req.LatestUserInput,
+		StableFiles:     stableFiles,
+		DynamicFiles:    dynamicFiles,
+		Mode:            "render",
+	}
+	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
+	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
+
+	var rendered strings.Builder
+	resp, err := streamingProvider.Stream(ctx, []agent.Message{
+		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
+		{Role: "user", Content: "Render the final reply for delivery. Return only the reply text."},
+	}, nil, func(chunk agent.StreamChunk) error {
+		if chunk.Text == "" {
+			return nil
+		}
+		rendered.WriteString(chunk.Text)
+		if onChunk != nil {
+			return onChunk(chunk.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if resp != nil {
+		r.recordUsage(resp.Usage)
+	}
+
+	text := strings.TrimSpace(rendered.String())
+	if text == "" && resp != nil {
+		text = strings.TrimSpace(resp.Content)
+	}
+	if text == "" {
+		return "", ErrEmptyRender
+	}
+	return text, nil
+}
+
 func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (string, error) {
 	workspaceRoot := firstNonEmpty(req.WorkspaceRoot, r.cfg.WorkspaceRoot)
 	stableFiles, dynamicFiles, err := LoadIdolumPromptFiles(workspaceRoot)
