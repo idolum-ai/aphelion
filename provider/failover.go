@@ -304,6 +304,9 @@ func isRetryableProviderError(err error) bool {
 			return false
 		}
 	}
+	if isTransientStreamError(err) {
+		return true
+	}
 	msg := err.Error()
 	return strings.Contains(msg, "429") || strings.Contains(msg, "500") || strings.Contains(msg, "503")
 }
@@ -319,4 +322,29 @@ func shouldFailoverOnError(err error) bool {
 		}
 	}
 	return isRetryableProviderError(err)
+}
+
+func isTransientStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	markers := []string{
+		"stream closed before response.completed",
+		"unexpected eof",
+		"connection reset by peer",
+		"broken pipe",
+		"stream terminated",
+		"incomplete event stream",
+		"stream closed",
+	}
+	for _, marker := range markers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }

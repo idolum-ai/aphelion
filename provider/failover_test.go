@@ -158,3 +158,36 @@ func TestFailoverChainExhaustedErrorHasUserFacingFailure(t *testing.T) {
 		t.Fatal("UserFacingFailure() = empty, want guidance")
 	}
 }
+
+func TestFailoverChainFallsBackOnInterruptedStreamError(t *testing.T) {
+	primary := &stubChainProvider{err: errors.New("codex: stream closed before response.completed")}
+	secondary := &stubChainProvider{reply: "fallback after stream interruption"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "codex", Provider: primary},
+		{Name: "native", Provider: secondary},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "fallback after stream interruption" {
+		t.Fatalf("content = %q, want fallback after stream interruption", resp.Content)
+	}
+	if secondary.callCount == 0 {
+		t.Fatal("secondary provider was not called after interrupted stream error")
+	}
+}
+
+func TestIsRetryableProviderErrorTreatsInterruptedStreamsAsRetryable(t *testing.T) {
+	if !isRetryableProviderError(errors.New("codex: stream closed before response.completed")) {
+		t.Fatal("interrupted stream error not treated as retryable")
+	}
+	if !shouldFailoverOnError(errors.New("unexpected EOF while reading event stream")) {
+		t.Fatal("unexpected EOF stream error not treated as failover-eligible")
+	}
+}
