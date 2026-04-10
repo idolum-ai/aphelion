@@ -1270,6 +1270,52 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 	}
 }
 
+func TestStartupRecoverySendsAdminCatchupMessage(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Recovered: inspect the interrupted turn before resuming."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 1500, UserID: 0}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "resume semantic substrate implementation")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.NoteTurnRunToolStart(run.ID, "exec", `{"command":"go test ./provider"}`); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+
+	if err := rt.runStartupRecoveryOnce(context.Background(), time.Date(2026, time.April, 10, 13, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) == 0 {
+		t.Fatal("no startup recovery catch-up message was sent")
+	}
+	got := sender.sent[len(sender.sent)-1]
+	if got.ChatID != 1001 {
+		t.Fatalf("catch-up chat id = %d, want 1001", got.ChatID)
+	}
+	if !strings.Contains(got.Text, "Restart catch-up.") {
+		t.Fatalf("catch-up text = %q, want restart heading", got.Text)
+	}
+	if !strings.Contains(got.Text, "resume semantic substrate implementation") {
+		t.Fatalf("catch-up text = %q, want interrupted request", got.Text)
+	}
+	if !strings.Contains(got.Text, provider.replyText) {
+		t.Fatalf("catch-up text = %q, want recovery summary", got.Text)
+	}
+}
+
 func TestStartupRecoveryLogsMaintenanceAnalysis(t *testing.T) {
 	t.Parallel()
 

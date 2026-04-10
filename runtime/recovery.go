@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
@@ -132,6 +133,9 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err := r.store.MarkTurnRunsRecovered(ids, canonicalReply); err != nil {
 		return fmt.Errorf("mark turn runs recovered: %w", err)
 	}
+	if err := r.deliverStartupRecoveryCatchup(ctx, systemPrompt, runs, canonicalReply); err != nil {
+		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
+	}
 	return nil
 }
 
@@ -184,5 +188,64 @@ func fallbackRecoverySummary(runs []session.TurnRun) string {
 		}
 		lines = append(lines, line)
 	}
+	return strings.Join(lines, "\n")
+}
+
+func (r *Runtime) deliverStartupRecoveryCatchup(ctx context.Context, systemPrompt string, runs []session.TurnRun, canonicalReply string) error {
+	adminIDs := uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)
+	if len(adminIDs) == 0 {
+		return nil
+	}
+	targetChatID := r.lastActiveAdminChat(adminIDs)
+	if targetChatID == 0 {
+		targetChatID = adminIDs[0]
+	}
+	text := renderStartupRecoveryCatchup(runs, canonicalReply)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: targetChatID, Text: text})
+	if err != nil {
+		return err
+	}
+	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0}
+	unlockAdmin := r.lockSession(adminKey)
+	defer unlockAdmin()
+	adminSession, err := r.store.Load(adminKey)
+	if err != nil {
+		return fmt.Errorf("load startup recovery target session: %w", err)
+	}
+	adminSession.ChatType = "dm"
+	adminSession.SystemPrompt = systemPrompt
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, text, canonicalReply), core.TokenUsage{}); err != nil {
+		return fmt.Errorf("save startup recovery admin session: %w", err)
+	}
+	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "startup_recovery"); err != nil {
+		return fmt.Errorf("record startup recovery outbound: %w", err)
+	}
+	return nil
+}
+
+func renderStartupRecoveryCatchup(runs []session.TurnRun, canonicalReply string) string {
+	lines := []string{
+		"Restart catch-up.",
+		fmt.Sprintf("Recovered %d interrupted turn(s).", len(runs)),
+	}
+	if len(runs) > 0 {
+		last := runs[0]
+		for _, run := range runs[1:] {
+			if run.LastActivityAt.After(last.LastActivityAt) {
+				last = run
+			}
+		}
+		lines = append(lines, "Most recent interrupted request: "+strconv.Quote(truncatePreview(strings.TrimSpace(last.RequestText), 180)))
+		if strings.TrimSpace(last.LastToolName) != "" {
+			lines = append(lines, "Last tool in flight: "+strings.TrimSpace(last.LastToolName))
+		}
+	}
+	if summary := strings.TrimSpace(canonicalReply); summary != "" {
+		lines = append(lines, "Recovery note: "+summary)
+	}
+	lines = append(lines, "Next: resume from the interrupted point or inspect the failure before continuing.")
 	return strings.Join(lines, "\n")
 }
