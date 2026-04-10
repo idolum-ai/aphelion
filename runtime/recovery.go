@@ -247,11 +247,70 @@ func renderStartupRecoveryCatchup(runs []session.TurnRun, canonicalReply string)
 			parts = append(parts, "Last tool in flight: "+tool+".")
 		}
 	}
-	if summary := strings.TrimSpace(canonicalReply); summary != "" {
-		summary = strings.TrimSpace(strings.TrimPrefix(summary, "Cannot write the maintenance ledger from this session. Append:"))
-		summary = strings.TrimSpace(strings.Trim(summary, "`"))
-		parts = append(parts, "Recovery note: "+truncatePreview(summary, 240))
+	if summary := sanitizeStartupRecoveryCatchupSummary(canonicalReply); summary != "" {
+		parts = append(parts, "Recovery note: "+sentenceAwareSummary(summary, 240))
 	}
 	parts = append(parts, "Next: investigate the interruption before returning to deferred work.")
 	return strings.Join(parts, " ")
+}
+
+func sanitizeStartupRecoveryCatchupSummary(raw string) string {
+	summary := strings.TrimSpace(raw)
+	if summary == "" {
+		return ""
+	}
+	summary = strings.TrimSpace(strings.TrimPrefix(summary, "Cannot write the maintenance ledger from this session. Append:"))
+	summary = strings.ReplaceAll(summary, "```text", "")
+	summary = strings.ReplaceAll(summary, "```", "")
+	summary = strings.ReplaceAll(summary, "[MEMORY]", "")
+	summary = strings.ReplaceAll(summary, "[/MEMORY]", "")
+	summary = strings.ReplaceAll(summary, "[KNOWLEDGE]", "")
+	summary = strings.ReplaceAll(summary, "[/KNOWLEDGE]", "")
+	summary = strings.ReplaceAll(summary, "[DECISIONS]", "")
+	summary = strings.ReplaceAll(summary, "[/DECISIONS]", "")
+	summary = strings.ReplaceAll(summary, "[QUESTIONS]", "")
+	summary = strings.ReplaceAll(summary, "[/QUESTIONS]", "")
+	summary = strings.ReplaceAll(summary, "[RHIZOME]", "")
+	summary = strings.ReplaceAll(summary, "[/RHIZOME]", "")
+	summary = strings.TrimSpace(summary)
+	if idx := strings.Index(summary, "\n"); idx >= 0 {
+		first := strings.TrimSpace(summary[:idx])
+		rest := strings.TrimSpace(summary[idx+1:])
+		if first == "" || strings.HasPrefix(first, "[") || strings.HasPrefix(first, "run_id=") {
+			summary = rest
+		}
+	}
+	summary = strings.Join(strings.Fields(summary), " ")
+	return strings.TrimSpace(summary)
+}
+
+func sentenceAwareSummary(text string, max int) string {
+	text = strings.TrimSpace(text)
+	if text == "" || max <= 0 {
+		return text
+	}
+	if len(text) <= max {
+		return text
+	}
+	window := text
+	if len(window) > max {
+		window = window[:max]
+	}
+	lastStop := -1
+	for i, r := range window {
+		if r == '.' || r == '!' || r == '?' {
+			lastStop = i
+		}
+	}
+	if lastStop >= 0 {
+		trimmed := strings.TrimSpace(window[:lastStop+1])
+		if len(trimmed) >= max/2 {
+			return trimmed
+		}
+	}
+	lastSpace := strings.LastIndex(window, " ")
+	if lastSpace > 0 {
+		return strings.TrimSpace(window[:lastSpace]) + " ..."
+	}
+	return strings.TrimSpace(window) + " ..."
 }

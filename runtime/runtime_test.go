@@ -1274,7 +1274,7 @@ func TestStartupRecoverySendsAdminCatchupMessage(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.replyText = "Recovered: inspect the interrupted turn before resuming."
+	provider.replyText = "Cannot write the maintenance ledger from this session. Append:\n\n```text\n[2026-04-10] run_id=90 recovery\n  Recovered: inspect the interrupted turn before resuming.\n```"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -1311,8 +1311,11 @@ func TestStartupRecoverySendsAdminCatchupMessage(t *testing.T) {
 	if !strings.Contains(got.Text, "resume semantic substrate implementation") {
 		t.Fatalf("catch-up text = %q, want interrupted request", got.Text)
 	}
-	if !strings.Contains(got.Text, provider.replyText) {
-		t.Fatalf("catch-up text = %q, want recovery summary", got.Text)
+	if strings.Contains(got.Text, "Cannot write the maintenance ledger") || strings.Contains(got.Text, "```") || strings.Contains(got.Text, "run_id=90") {
+		t.Fatalf("catch-up text = %q, want sanitized operator-facing summary", got.Text)
+	}
+	if !strings.Contains(got.Text, "Recovered: inspect the interrupted turn before resuming.") {
+		t.Fatalf("catch-up text = %q, want sanitized recovery summary", got.Text)
 	}
 }
 

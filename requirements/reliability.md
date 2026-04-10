@@ -237,6 +237,16 @@ Required behavior:
 - keep machine facts
 - run startup recovery opportunistically
 - never claim completion of interrupted work
+- after successful startup recovery, send the admin a concise operator-facing restart catch-up message when interrupted runs existed
+
+The operator-facing restart catch-up message should:
+
+- summarize the interruption in plain speech rather than replaying raw recovery ledger text
+- include the most recent interrupted request when available
+- include the last tool in flight when available
+- include a sanitized recovery note if one exists
+- point to the next priority or safest next move
+- avoid leaking maintenance-only scaffolding such as fenced ledger blocks, section tags, or raw `run_id=` prefixes unless no cleaner summary is available
 
 ### F. Disaster scenarios
 
@@ -704,6 +714,8 @@ Not all of this must be implemented immediately. But the spec should reserve the
 
 - **TestInterruptRunningTurnRunsOnStartup**
 - **TestStartupRecoveryWritesMaintenanceNote**
+- **TestStartupRecoverySendsAdminCatchupMessage**
+- **TestStartupRecoveryCatchupSanitizesLedgerScaffolding**
 - **TestRecoveryDoesNotClaimCompletedWork**
 - **TestRecoveryFactThenInterpretationOrder**
 
