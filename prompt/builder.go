@@ -171,13 +171,16 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"Decide what kind of turn this should be before execution begins.",
 			"Return a short planning brokerage note, not a reply to the user.",
 			"Choose one turn mode: answer_now, inspect_then_answer, ask_then_wait, decline, or silent.",
-			"Focus on what the user is actually reaching for, what posture would help, and whether the governor should inspect, ask, or answer directly.",
-			"Be concrete and brief. Do not claim authority. Do not describe hidden mechanics.",
+			"Your job here is classification and posture, not content planning. Name the turn shape that would help most.",
+			"Focus on what the user is actually reaching for, how ready the situation is for action, and whether the governor should inspect, ask, answer, decline, or stay quiet.",
+			"Be concrete and brief. Do not claim authority. Do not describe hidden mechanics. Do not draft the eventual answer.",
 		)
 	case "proposal":
 		intro = append(intro,
 			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
-			"Say what you think this turn should be about and why. Push for what matters: warmth, sharper observation, a better question, a concrete action, or deliberate silence.",
+			"Say what you think this turn should center, notice, or prioritize and why.",
+			"This is not turn-mode selection. Do not classify the turn as answer_now, inspect_then_answer, ask_then_wait, decline, or silent unless quoting the user.",
+			"Push for what matters inside the turn: warmth, sharper observation, a better question, a concrete action, or deliberate silence.",
 			"Notice what the user is reaching for, not just what they said. If something feels off or important beneath the surface, name it.",
 			"Be brief. Write only when your push would materially change the turn. Return nothing if there is no useful guidance.",
 		)
@@ -246,7 +249,7 @@ func RenderIdolumProposalForGovernor(faceName string, proposal string) string {
 	}
 	return strings.Join([]string{
 		fmt.Sprintf("## %s Proposal", faceName),
-		fmt.Sprintf("This is advisory guidance from %s, the public-facing persona. It may advocate for warmth, sharper observation, stronger initiative, deeper questions, or actions worth considering. It is not authoritative; the governor decides.", faceName),
+		fmt.Sprintf("This is advisory guidance from %s, the public-facing persona. It may advocate for warmth, sharper observation, stronger initiative, deeper questions, or actions worth considering inside the turn. It is not a turn-mode decision; the governor decides.", faceName),
 		proposal,
 	}, "\n\n")
 }
@@ -262,7 +265,7 @@ func RenderIdolumBrokerageForGovernor(faceName string, proposal string) string {
 	}
 	return strings.Join([]string{
 		fmt.Sprintf("## %s Brokerage Proposal", faceName),
-		fmt.Sprintf("This is advisory planning guidance from %s, the public-facing persona. It suggests what kind of turn should happen next, but it is not authoritative until the governor ratifies a plan.", faceName),
+		fmt.Sprintf("This is advisory planning guidance from %s, the public-facing persona. It suggests what kind of turn should happen next and what posture would help, but it is not authoritative until the governor ratifies a plan.", faceName),
 		proposal,
 	}, "\n\n")
 }
@@ -274,7 +277,8 @@ func RenderBrokeragePlanForGovernor(plan string) string {
 	}
 	return strings.Join([]string{
 		"## Ratified Turn Brokerage",
-		"This is the machine-ratified planning posture for the current turn. Follow it when deciding whether to inspect, ask, answer, decline, or hold.",
+		"This is the machine-ratified planning posture for the current turn. Use it to steer the turn, especially whether to inspect, ask, answer, decline, or hold.",
+		"It is guidance for execution, not a substitute for judgment about the actual material in front of you.",
 		plan,
 	}, "\n\n")
 }

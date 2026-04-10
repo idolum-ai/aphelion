@@ -191,8 +191,8 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	if strings.Contains(got, "## Canonical Governor Reply") {
 		t.Fatalf("proposal prompt should not include canonical reply section: %q", got)
 	}
-	if !strings.Contains(got, "what you think this turn should be about") {
-		t.Fatalf("proposal prompt missing turn-shaping guidance: %q", got)
+	if !strings.Contains(got, "This is not turn-mode selection") {
+		t.Fatalf("proposal prompt missing boundary from brokerage: %q", got)
 	}
 	if !strings.Contains(got, "reaching for") {
 		t.Fatalf("proposal prompt missing subtext observation guidance: %q", got)
@@ -216,6 +216,9 @@ func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
 	}
 	if !strings.Contains(got, "Choose one turn mode") {
 		t.Fatalf("brokerage prompt missing turn mode guidance: %q", got)
+	}
+	if !strings.Contains(got, "classification and posture") {
+		t.Fatalf("brokerage prompt missing classification boundary: %q", got)
 	}
 	if !strings.Contains(got, "inspect_then_answer") {
 		t.Fatalf("brokerage prompt missing brokerage mode vocabulary: %q", got)
