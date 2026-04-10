@@ -135,7 +135,7 @@ func (r *Runtime) buildCompactionSummary(ctx context.Context, sess *session.Sess
 		},
 	}
 
-	resp, err := completeProvider(ctx, r.provider, messages, nil, reasoningOptionsForRun(r.cfg, session.TurnRunKindHeartbeat))
+	resp, err := completeProvider(ctx, r.provider, messages, nil, r.reasoningOptionsForRun(session.TurnRunKindHeartbeat))
 	if err != nil {
 		return "", err
 	}

@@ -96,7 +96,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
-	}, reasoningOptionsForRun(r.cfg, session.TurnRunKindRecovery), input)
+	}, r.reasoningOptionsForRun(session.TurnRunKindRecovery), input)
 	if err != nil {
 		return fmt.Errorf("run startup recovery turn: %w", err)
 	}

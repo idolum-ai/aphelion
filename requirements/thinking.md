@@ -27,7 +27,7 @@ Hermes is a decent reference for staged, practical reasoning controls. Codex add
 - provider-specific reasoning adapters
 - richer reasoning summary storage
 - dynamic reasoning escalation within a turn
-- UI controls for live reasoning overrides
+- richer UI controls for live reasoning overrides
 
 ## Core Model
 
@@ -88,6 +88,7 @@ Thinking should vary by run kind.
 
 - default `medium`
 - escalate to `high` when explicitly configured or when a stronger provider/model is selected
+- a narrow runtime-owned operator toggle may temporarily raise interactive/recovery effort from `medium` to `high` without rewriting the base config
 
 ### Heartbeat turns
 
@@ -162,6 +163,17 @@ subagent = "medium"
 ```
 
 Plan-mode or operator-specific overrides may be added later, but these are the core knobs.
+
+## Runtime Override Layer
+
+Aphelion may also expose a narrow runtime-owned override layer for operator controls.
+
+For the current system shape, that layer is intentionally small:
+
+- interactive/recovery governor effort may toggle between `medium` and `high`
+- heartbeat and cron should continue to use their own lower defaults
+
+This is a hardcoded application recipe, not yet a configurable recipe framework.
 
 ## Decisions
 

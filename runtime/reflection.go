@@ -61,7 +61,7 @@ func (r *Runtime) reflectCuratedMemory(
 		Max:     2,
 		Caution: 0.8,
 		Warning: 0.9,
-	}, reasoningOptionsForRun(r.cfg, session.TurnRunKindHeartbeat), messages)
+	}, r.reasoningOptionsForRun(session.TurnRunKindHeartbeat), messages)
 	if err != nil {
 		return "", err
 	}

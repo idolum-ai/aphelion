@@ -70,8 +70,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	sess.SystemPrompt = systemPrompt
 	idolumProposal := ""
 	extraUsage := core.TokenUsage{}
+	currentFaceModel := r.currentFaceRenderer()
 	if facePolicy.Proposal {
-		if proposer, ok := r.faceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
+		if proposer, ok := currentFaceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
 			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
 				GovernorName:    prompt.DefaultGovernorName,
 				FaceName:        face.DefaultFaceName,
@@ -85,7 +86,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 				log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
 			} else {
 				idolumProposal = strings.TrimSpace(proposal)
-				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
+				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 			}
 		}
 	}
@@ -112,7 +113,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
-	}, reasoningOptionsForRun(r.cfg, session.TurnRunKindInteractive), input)
+	}, r.reasoningOptionsForRun(session.TurnRunKindInteractive), input)
 	if err != nil {
 		return nil, fmt.Errorf("run turn: %w", err)
 	}
@@ -136,7 +137,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	} else if facePolicy.Render {
 		faceAwareness.DeliveryMode = "idolum_render"
 	}
-	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
+	if r.faceBackend != face.BackendGovernorPassthrough && currentFaceModel != nil {
 		renderReq := face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
@@ -154,7 +155,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		}
 
 		if shouldRender && !r.shouldReplyWithVoice(prepared.InboundWasVoice) {
-			if streamer, ok := r.faceModel.(face.StreamRenderer); ok {
+			if streamer, ok := currentFaceModel.(face.StreamRenderer); ok {
 				editor := r.newStreamEditor(msg)
 				if editor != nil {
 					faceAwareness.DeliveryMode = "stream"
@@ -172,7 +173,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 						if replyText == "" {
 							replyText = canonicalReply
 						}
-						extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
+						extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 						outboundID, err = editor.Finish(ctx)
 						if err != nil {
 							return result, fmt.Errorf("finish streamed reply: %w", err)
@@ -192,7 +193,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 				faceAwareness.StreamReply = false
 				renderReq.Runtime = faceAwareness
 			}
-			renderedReply, renderErr := r.faceModel.Render(ctx, renderReq)
+			renderedReply, renderErr := currentFaceModel.Render(ctx, renderReq)
 			if renderErr != nil {
 				log.Printf("WARN face render failed backend=%s err=%v; using governor_passthrough", r.faceBackend, renderErr)
 			} else {
@@ -200,7 +201,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 				if replyText == "" {
 					replyText = canonicalReply
 				}
-				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
+				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 			}
 		}
 	}

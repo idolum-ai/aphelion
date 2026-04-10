@@ -43,6 +43,22 @@ func reasoningOptionsForRun(cfg *config.Config, kind session.TurnRunKind) *agent
 	}
 }
 
+func (r *Runtime) reasoningOptionsForRun(kind session.TurnRunKind) *agent.CompleteOptions {
+	opts := reasoningOptionsForRun(r.cfg, kind)
+	if opts == nil {
+		return nil
+	}
+	snapshot := r.currentRecipeSnapshot()
+	if kind == session.TurnRunKindInteractive || kind == session.TurnRunKindRecovery {
+		if snapshot.GovernorEffort == governorEffortHigh {
+			opts.Reasoning.Effort = agent.ReasoningEffortHigh
+		} else if snapshot.GovernorEffort == governorEffortMedium {
+			opts.Reasoning.Effort = agent.ReasoningEffortMedium
+		}
+	}
+	return opts
+}
+
 func firstNonEmptyThinking(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.ToLower(strings.TrimSpace(value)); trimmed != "" {

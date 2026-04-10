@@ -128,7 +128,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
-	}, reasoningOptionsForRun(r.cfg, session.TurnRunKindHeartbeat), input)
+	}, r.reasoningOptionsForRun(session.TurnRunKindHeartbeat), input)
 	if err != nil {
 		return fmt.Errorf("run heartbeat turn: %w", err)
 	}
@@ -160,10 +160,11 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	}
 
 	replyText := canonicalReply
-	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
+	currentFaceModel := r.currentFaceRenderer()
+	if r.faceBackend != face.BackendGovernorPassthrough && currentFaceModel != nil {
 		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", governorExecution{})
 		faceAwareness.DeliveryMode = "heartbeat_delivery"
-		renderedReply, renderErr := r.faceModel.Render(ctx, face.RenderRequest{
+		renderedReply, renderErr := currentFaceModel.Render(ctx, face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
 			Channel:         "telegram",

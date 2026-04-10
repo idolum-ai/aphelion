@@ -22,6 +22,7 @@ Phenomenologically, though, `Idolum` should feel primary. It should speak and st
 - multiple named face profiles
 - per-user face adaptation memory
 - multimodal face rendering beyond text-first channels
+- configurable operator recipe framework for face model switching
 
 ## Identity
 
@@ -154,6 +155,19 @@ During ordinary interactive turns, `Idolum` may also push the governor toward a 
 If `Idolum` is unavailable, Aphelion may fall back to direct governor passthrough.
 
 The visible conversation should store what `Idolum` actually delivered. The canonical governor reply remains separate audit state.
+
+## Runtime Face Effort
+
+Aphelion may expose a narrow runtime-owned Idolum effort toggle.
+
+For the current system shape, that toggle switches between:
+
+- a Sonnet-class default recipe
+- an Opus-class higher-effort recipe
+
+This is not yet a general face-profile system. It is a hardcoded application recipe.
+
+The toggle should affect future face proposal/render calls only. It should not mutate constitutional files or the base config on disk.
 
 ## Config Surface
 

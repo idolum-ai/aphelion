@@ -19,8 +19,11 @@ type RuntimeAwareness struct {
 	FallbackActive       bool
 	ReasoningEffort      string
 	ReasoningSummary     string
+	GovernorEffortRecipe string
 	FaceBackend          string
 	FaceProvider         string
+	FaceModel            string
+	PersonaEffortRecipe  string
 	DeliveryMode         string
 	StreamReply          bool
 	MediaAttached        bool
@@ -50,6 +53,7 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, fmt.Sprintf("- fallback_active: %t", aw.FallbackActive))
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_effort", aw.ReasoningEffort))
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_summary", aw.ReasoningSummary))
+	lines = append(lines, nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe))
 	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
 	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	lines = append(lines, nonEmptyAwarenessLine("prompt_root", aw.PromptRoot))
@@ -77,8 +81,11 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode st
 	lines = append(lines, fmt.Sprintf("- fallback_active: %t", aw.FallbackActive))
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_effort", aw.ReasoningEffort))
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_summary", aw.ReasoningSummary))
+	lines = append(lines, nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe))
 	lines = append(lines, nonEmptyAwarenessLine("face_backend", aw.FaceBackend))
 	lines = append(lines, nonEmptyAwarenessLine("face_provider", aw.FaceProvider))
+	lines = append(lines, nonEmptyAwarenessLine("face_model", aw.FaceModel))
+	lines = append(lines, nonEmptyAwarenessLine("persona_effort_recipe", aw.PersonaEffortRecipe))
 	lines = append(lines, nonEmptyAwarenessLine("delivery_mode", aw.DeliveryMode))
 	lines = append(lines, fmt.Sprintf("- stream_reply: %t", aw.StreamReply))
 	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))

@@ -48,6 +48,7 @@ type Runtime struct {
 
 	faceBackend face.Backend
 	faceModel   face.Renderer
+	faceModels  map[string]face.Renderer
 	voiceMode   string
 	transcriber media.TranscriptionProvider
 	synth       voice.Synthesizer
@@ -67,6 +68,11 @@ type Runtime struct {
 	scopeResolver *sandbox.Resolver
 	sessionMu     sync.Mutex
 	sessionLocks  map[string]*sync.Mutex
+	faceModelsMu  sync.Mutex
+	recipeMu      sync.Mutex
+	recipeFileMu  sync.Mutex
+	recipePath    string
+	recipeState   runtimeRecipeState
 }
 
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
@@ -223,6 +229,16 @@ func New(
 	if toolProgressWindow <= 0 {
 		toolProgressWindow = 4
 	}
+	recipePath := recipeStatePath(cfg)
+	recipeState, err := loadRuntimeRecipeState(recipePath, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("load runtime recipe state: %w", err)
+	}
+
+	faceModels := map[string]face.Renderer{}
+	if recipeState.PersonaEffort == defaultRuntimeRecipeState(cfg).PersonaEffort {
+		faceModels[recipeState.PersonaEffort] = faceModel
+	}
 
 	return &Runtime{
 		cfg:      cfg,
@@ -237,6 +253,7 @@ func New(
 		),
 		faceBackend: faceBackend,
 		faceModel:   faceModel,
+		faceModels:  faceModels,
 		semantic: memory.NewSemanticEngine(memory.SemanticOptions{
 			Enabled:             cfg.Memory.Semantic.Enabled,
 			Sources:             cfg.Memory.Semantic.Sources,
@@ -258,6 +275,8 @@ func New(
 		toolProgressCleanup: cfg.Telegram.ToolProgressCleanup,
 		idleExpiry:          idleExpiry,
 		expireIdle:          store.ExpireIdle,
+		recipePath:          recipePath,
+		recipeState:         recipeState,
 		scopeResolver:       scopeResolver,
 		sessionLocks:        make(map[string]*sync.Mutex),
 	}, nil

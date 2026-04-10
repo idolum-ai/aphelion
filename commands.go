@@ -18,6 +18,9 @@ type commandSender interface {
 type commandRouter interface {
 	Stop(chatID int64) core.StopResult
 	Status(chatID int64) core.SessionStatus
+	TogglePersonaEffort() (string, error)
+	ToggleGovernorEffort() (string, error)
+	CurrentEfforts() (persona string, governor string)
 }
 
 var defaultTelegramCommands = []telegram.BotCommand{
@@ -25,6 +28,8 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "help", Description: "Show available commands"},
 	{Command: "status", Description: "Show current work state"},
 	{Command: "stop", Description: "Stop current work in this chat"},
+	{Command: "toggle_persona_effort", Description: "Switch Idolum between Sonnet and Opus"},
+	{Command: "toggle_governor_effort", Description: "Switch governor effort between medium and high"},
 }
 
 func registerTelegramCommands(ctx context.Context, client *telegram.Client) error {
@@ -43,6 +48,7 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 	var text string
 	switch command {
 	case "start":
+		personaEffort, governorEffort := router.CurrentEfforts()
 		text = strings.Join([]string{
 			"Aphelion is active.",
 			"",
@@ -50,17 +56,29 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			"/help - show command help",
 			"/status - show whether I am currently working",
 			"/stop - stop current work in this chat",
+			"/toggle_persona_effort - switch Idolum between Sonnet and Opus",
+			"/toggle_governor_effort - switch governor effort between medium and high",
+			"",
+			fmt.Sprintf("Current persona effort: %s", personaEffort),
+			fmt.Sprintf("Current governor effort: %s", governorEffort),
 		}, "\n")
 	case "help":
+		personaEffort, governorEffort := router.CurrentEfforts()
 		text = strings.Join([]string{
 			"Commands:",
 			"/start - show intro and command help",
 			"/help - show this help",
 			"/status - show current work state",
 			"/stop - stop current work in this chat",
+			"/toggle_persona_effort - switch Idolum between Sonnet and Opus",
+			"/toggle_governor_effort - switch governor effort between medium and high",
+			"",
+			fmt.Sprintf("Current persona effort: %s", personaEffort),
+			fmt.Sprintf("Current governor effort: %s", governorEffort),
 		}, "\n")
 	case "status":
 		status := router.Status(msg.ChatID)
+		personaEffort, governorEffort := router.CurrentEfforts()
 		state := "idle"
 		if status.Active {
 			state = "working"
@@ -69,6 +87,8 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		if status.Queued {
 			text += "\nA newer message is queued behind the current turn."
 		}
+		text += fmt.Sprintf("\nPersona effort: %s.", personaEffort)
+		text += fmt.Sprintf("\nGovernor effort: %s.", governorEffort)
 	case "stop":
 		stopped := router.Stop(msg.ChatID)
 		switch {
@@ -81,6 +101,18 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		default:
 			text = "There is no active work to stop."
 		}
+	case "toggle_persona_effort":
+		mode, toggleErr := router.TogglePersonaEffort()
+		if toggleErr != nil {
+			return true, toggleErr
+		}
+		text = fmt.Sprintf("Idolum persona effort is now %s. Future rendered turns will use the %s recipe.", mode, titleCaseWord(mode))
+	case "toggle_governor_effort":
+		mode, toggleErr := router.ToggleGovernorEffort()
+		if toggleErr != nil {
+			return true, toggleErr
+		}
+		text = fmt.Sprintf("Governor effort is now %s. Future interactive turns will use %s reasoning.", mode, mode)
 	default:
 		return false, nil
 	}
@@ -137,4 +169,11 @@ func replyToMessageID(id int64) *int64 {
 		return nil
 	}
 	return &id
+}
+
+func titleCaseWord(value string) string {
+	if value == "" {
+		return ""
+	}
+	return strings.ToUpper(value[:1]) + strings.ToLower(value[1:])
 }

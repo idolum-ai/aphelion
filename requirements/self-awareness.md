@@ -75,6 +75,7 @@ Examples:
 - writable roots
 - available tools
 - reasoning mode
+- active runtime effort recipes when temporary operator overrides are in effect
 - delivery mode
 
 These facts should be injected every turn in a machine-authored runtime block.
@@ -108,6 +109,7 @@ At minimum, the governor should be made aware of:
 - active inference provider
 - active model
 - reasoning effort and summary mode
+- current runtime persona/governor effort recipes when toggled
 - stream vs non-stream behavior
 
 ### Authority

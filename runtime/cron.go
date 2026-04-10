@@ -89,7 +89,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
-	}, reasoningOptionsForRun(r.cfg, session.TurnRunKindCron), input)
+	}, r.reasoningOptionsForRun(session.TurnRunKindCron), input)
 	if err != nil {
 		return fmt.Errorf("run cron turn: %w", err)
 	}
@@ -126,10 +126,11 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	}
 
 	replyText := canonicalReply
-	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
+	currentFaceModel := r.currentFaceRenderer()
+	if r.faceBackend != face.BackendGovernorPassthrough && currentFaceModel != nil {
 		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", governorExecution{})
 		faceAwareness.DeliveryMode = "cron_delivery"
-		renderedReply, renderErr := r.faceModel.Render(ctx, face.RenderRequest{
+		renderedReply, renderErr := currentFaceModel.Render(ctx, face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
 			Channel:         "telegram",

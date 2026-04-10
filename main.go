@@ -42,6 +42,31 @@ type configStartupError struct {
 	Err  error
 }
 
+type telegramCommandControl struct {
+	router *core.Router
+	rt     *runtime.Runtime
+}
+
+func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
+	return c.router.Stop(chatID)
+}
+
+func (c telegramCommandControl) Status(chatID int64) core.SessionStatus {
+	return c.router.Status(chatID)
+}
+
+func (c telegramCommandControl) TogglePersonaEffort() (string, error) {
+	return c.rt.TogglePersonaEffort()
+}
+
+func (c telegramCommandControl) ToggleGovernorEffort() (string, error) {
+	return c.rt.ToggleGovernorEffort()
+}
+
+func (c telegramCommandControl) CurrentEfforts() (string, string) {
+	return c.rt.CurrentEfforts()
+}
+
 func (e *configStartupError) Error() string {
 	return fmt.Sprintf("config %s: %v (run 'aphelion --config %s --check-config' to validate)", e.Path, e.Err, e.Path)
 }
@@ -182,6 +207,7 @@ func run() error {
 	}
 
 	router := core.NewRouter(rt.AgentFunc())
+	commandControl := telegramCommandControl{router: router, rt: rt}
 
 	registerCtx, cancelRegister := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := registerTelegramCommands(registerCtx, tgClient); err != nil {
@@ -197,7 +223,7 @@ func run() error {
 	rt.StartCronLoop(ctx, log.Printf)
 
 	poller := telegram.NewPoller(tgClient, func(parent context.Context, msg core.InboundMessage) error {
-		handled, err := handleTelegramCommand(parent, tgClient, router, msg)
+		handled, err := handleTelegramCommand(parent, tgClient, commandControl, msg)
 		if err != nil {
 			return err
 		}

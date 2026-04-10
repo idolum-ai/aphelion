@@ -160,8 +160,12 @@ At minimum for v0:
 - `/help`
 - `/status`
 - `/stop`
+- `/toggle_persona_effort`
+- `/toggle_governor_effort`
 
 These commands should be handled directly by the Telegram/runtime boundary rather than routed through the ordinary governor turn path.
+
+Telegram Bot API command identifiers should use underscore form rather than hyphen form so they remain valid commands and display correctly in Telegram clients.
 
 ### `/start`
 
@@ -180,6 +184,28 @@ Show whether the current DM session is idle or actively processing a turn, and w
 Cancel the in-flight turn for the current DM session and drop any queued latest-wins message that has not started yet.
 
 This command must be real, not decorative. If Telegram advertises `/stop`, the user should not have to wait for the current turn to finish before the stop takes effect.
+
+### `/toggle_persona_effort`
+
+Toggle Idolum's face recipe between:
+
+- `sonnet`
+- `opus`
+
+For now this is a narrow runtime-owned operator control rather than a user-configurable recipe framework.
+
+This command should affect future face proposal/render calls only. It should not rewrite constitutional files, governor authority, or tool policy.
+
+### `/toggle_governor_effort`
+
+Toggle the governor reasoning recipe for interactive work between:
+
+- `medium`
+- `high`
+
+For now this is also a hardcoded runtime-owned operator control rather than a general config surface.
+
+This command should affect ordinary interactive turns and recovery turns. Heartbeat and cron should keep their lower maintenance defaults unless explicitly changed elsewhere later.
 
 ## DM Admission
 

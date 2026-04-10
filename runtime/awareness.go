@@ -43,6 +43,8 @@ func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.Tur
 	if len(exec.ProviderPath) == 0 {
 		exec.ProviderPath = r.configuredGovernorProviderPath()
 	}
+	reasoning := r.reasoningOptionsForRun(kind)
+	snapshot := r.currentRecipeSnapshot()
 	aw := prompt.RuntimeAwareness{
 		SessionKind:          sessionKindForRun(kind),
 		RunKind:              string(kind),
@@ -51,10 +53,13 @@ func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.Tur
 		GovernorProvider:     strings.TrimSpace(exec.ProviderName),
 		GovernorModel:        strings.TrimSpace(exec.ModelName),
 		GovernorProviderPath: append([]string(nil), exec.ProviderPath...),
-		ReasoningEffort:      string(reasoningOptionsForRun(r.cfg, kind).Reasoning.Effort),
-		ReasoningSummary:     string(reasoningOptionsForRun(r.cfg, kind).Reasoning.Summary),
+		ReasoningEffort:      string(reasoning.Reasoning.Effort),
+		ReasoningSummary:     string(reasoning.Reasoning.Summary),
+		GovernorEffortRecipe: snapshot.GovernorEffort,
 		FaceBackend:          string(r.faceBackend),
 		FaceProvider:         r.faceProviderName(),
+		FaceModel:            r.faceModelName(),
+		PersonaEffortRecipe:  snapshot.PersonaEffort,
 		MediaAttached:        exec.MediaAttached,
 		MediaMode:            strings.TrimSpace(exec.MediaMode),
 		PromptRoot:           strings.TrimSpace(r.cfg.Agent.PromptRoot),
