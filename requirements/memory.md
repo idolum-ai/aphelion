@@ -45,8 +45,6 @@ Memory writes are governor-owned. Idolum may consume memory-derived context for 
 
 ### Deferred after v0.5
 
-- OpenAI file storage integration
-- OpenAI vector stores
 - embeddings-backed semantic indexing
 - `file_search`-style retrieval over approved corpora
 - multimodal memory indexing
@@ -586,6 +584,8 @@ Intended uses:
 - stage files for later vector-store attachment
 - keep external copies of memory-related documents when useful
 
+When configured, this should be exposed as an explicit admin-governed tool surface rather than a hidden side channel.
+
 ### Vector stores
 
 OpenAI vector stores are retrieval storage, not constitutional memory.
@@ -595,6 +595,8 @@ Use cases:
 - attach uploaded files to retrieval indexes
 - store parsed/chunked document representations
 - power search over approved corpora
+
+When configured, this should be exposed as an explicit admin-governed retrieval tool surface.
 
 ### Rule
 
@@ -656,6 +658,7 @@ type RetrievalHit struct {
 - session ledgers are the truth of past conversation
 - session recall/search reads ledgers; it does not replace them
 - OpenAI files/vector stores/embeddings are auxiliary infrastructure
+- OpenAI storage tools are admin-facing by default unless a narrower policy is designed later
 
 ## Config
 

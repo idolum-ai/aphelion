@@ -152,6 +152,8 @@ purpose = "assistants"
 enabled = false
 default_store = ""
 
+These sections are runtime-owned feature gates for OpenAI platform storage. When enabled, they should reuse the configured OpenAI API credentials rather than inventing a second hidden auth path.
+
 [openai.transcription]
 enabled = false
 model = "whisper-1"

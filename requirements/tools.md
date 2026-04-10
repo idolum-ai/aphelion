@@ -318,9 +318,20 @@ These are useful because they can be more constrained and auditable than a shell
 
 - `fetch_url`
 - media helpers (`transcribe_audio`, `extract_pdf_text`)
-- OpenAI-backed file storage helpers
-- retrieval/vector-store helpers
 - sub-agent launch/control helpers
+
+### Implemented Optional External-Memory Tools
+
+When configured, Aphelion may expose:
+
+- `openai_file`
+- `openai_vector_store`
+
+These tools are:
+
+- auxiliary to local truth
+- admin-facing by default
+- explicitly provider-backed rather than pretending to be local memory
 
 Every new tool should justify its existence against the question: why is this better than a narrowly sandboxed `exec`?
 

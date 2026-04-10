@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,10 @@ type Registry struct {
 	sandbox        *sandbox.Resolver
 	runner         *sandbox.Runner
 	store          *session.SQLiteStore
+	fileStore      memstore.FileStore
+	filePurpose    string
+	retrievalStore memstore.RetrievalStore
+	defaultStore   string
 }
 
 type execInput struct {
@@ -54,6 +59,22 @@ type sessionSearchInput struct {
 	Scope string `json:"scope,omitempty"`
 }
 
+type openAIFileInput struct {
+	Action  string `json:"action"`
+	Path    string `json:"path,omitempty"`
+	FileID  string `json:"file_id,omitempty"`
+	Purpose string `json:"purpose,omitempty"`
+}
+
+type openAIVectorStoreInput struct {
+	Action  string `json:"action"`
+	StoreID string `json:"store_id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	FileID  string `json:"file_id,omitempty"`
+	Query   string `json:"query,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+}
+
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
 	return &Registry{
 		workspace:      workspace,
@@ -74,6 +95,18 @@ func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
 	return r
 }
 
+func (r *Registry) WithFileStore(store memstore.FileStore, purpose string) *Registry {
+	r.fileStore = store
+	r.filePurpose = strings.TrimSpace(purpose)
+	return r
+}
+
+func (r *Registry) WithRetrievalStore(store memstore.RetrievalStore, defaultStore string) *Registry {
+	r.retrievalStore = store
+	r.defaultStore = strings.TrimSpace(defaultStore)
+	return r
+}
+
 func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
 	if r == nil || r.sandbox == nil {
 		return false
@@ -90,7 +123,7 @@ func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
 }
 
 func (r *Registry) Definitions() []agent.ToolDef {
-	return []agent.ToolDef{
+	defs := []agent.ToolDef{
 		{
 			Name:        "exec",
 			Description: "Run a shell command in the configured workspace. Use this for git, file inspection, builds, tests, and repository edits.",
@@ -135,6 +168,41 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			}`),
 		},
 	}
+	if r.fileStore != nil {
+		defs = append(defs, agent.ToolDef{
+			Name:        "openai_file",
+			Description: "Use OpenAI file storage for durable external file objects. Admin only.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["put", "list", "get_metadata", "delete"], "description": "OpenAI files operation"},
+					"path": {"type": "string", "description": "Local file path to upload when action=put"},
+					"file_id": {"type": "string", "description": "Existing OpenAI file id for get_metadata or delete"},
+					"purpose": {"type": "string", "description": "Optional purpose override for put/list; defaults to openai.files.purpose"}
+				},
+				"required": ["action"]
+			}`),
+		})
+	}
+	if r.retrievalStore != nil {
+		defs = append(defs, agent.ToolDef{
+			Name:        "openai_vector_store",
+			Description: "Create, attach, and search OpenAI vector stores for auxiliary retrieval. Admin only.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["create", "attach", "search"], "description": "OpenAI vector store operation"},
+					"store_id": {"type": "string", "description": "Vector store id. Optional when openai.vector_stores.default_store is configured"},
+					"name": {"type": "string", "description": "Store name when action=create"},
+					"file_id": {"type": "string", "description": "OpenAI file id when action=attach"},
+					"query": {"type": "string", "description": "Search query when action=search"},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum hits when action=search"}
+				},
+				"required": ["action"]
+			}`),
+		})
+	}
+	return defs
 }
 
 func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
@@ -185,6 +253,10 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.memory(ctx, input, scope)
 	case "session_search":
 		return r.sessionSearch(ctx, input, p, key)
+	case "openai_file":
+		return r.openAIFile(ctx, input, scope, p)
+	case "openai_vector_store":
+		return r.openAIVectorStore(ctx, input, p)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
@@ -444,5 +516,285 @@ func renderSessionSearchResults(scope string, query string, hits []session.Searc
 		b.WriteString("\n")
 	}
 	b.WriteString("[/SESSION_RECALL]")
+	return b.String()
+}
+
+func (r *Registry) openAIFile(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal) (string, error) {
+	if r.fileStore == nil {
+		return "", fmt.Errorf("openai file storage is not configured")
+	}
+	if err := requireAdminTool(p, "openai_file"); err != nil {
+		return "", err
+	}
+
+	var in openAIFileInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return "", fmt.Errorf("decode openai_file input: %w", err)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(in.Action)) {
+	case "put":
+		localPath, err := resolveUploadPath(scope, in.Path)
+		if err != nil {
+			return "", err
+		}
+		purpose := firstNonEmpty(strings.TrimSpace(in.Purpose), r.filePurpose)
+		if purpose == "" {
+			return "", fmt.Errorf("openai_file purpose is required")
+		}
+		stored, err := r.fileStore.Put(ctx, localPath, purpose)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("openai_file_put_ok file_id=%s filename=%s bytes=%d purpose=%s", stored.ID, stored.Filename, stored.Bytes, stored.Purpose), nil
+	case "list":
+		purpose := strings.TrimSpace(in.Purpose)
+		if purpose == "" {
+			purpose = r.filePurpose
+		}
+		files, err := r.fileStore.List(ctx, purpose)
+		if err != nil {
+			return "", err
+		}
+		return renderOpenAIFileList(purpose, files), nil
+	case "get_metadata":
+		fileID := strings.TrimSpace(in.FileID)
+		if fileID == "" {
+			return "", fmt.Errorf("openai_file file_id is required for get_metadata")
+		}
+		body, meta, err := r.fileStore.Get(ctx, fileID)
+		if err != nil {
+			return "", err
+		}
+		if body != nil {
+			_, _ = io.Copy(io.Discard, body)
+			_ = body.Close()
+		}
+		return renderOpenAIFileMetadata(meta), nil
+	case "delete":
+		fileID := strings.TrimSpace(in.FileID)
+		if fileID == "" {
+			return "", fmt.Errorf("openai_file file_id is required for delete")
+		}
+		if err := r.fileStore.Delete(ctx, fileID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("openai_file_delete_ok file_id=%s", fileID), nil
+	default:
+		return "", fmt.Errorf("openai_file action must be one of put|list|get_metadata|delete")
+	}
+}
+
+func (r *Registry) openAIVectorStore(ctx context.Context, input json.RawMessage, p principal.Principal) (string, error) {
+	if r.retrievalStore == nil {
+		return "", fmt.Errorf("openai vector store is not configured")
+	}
+	if err := requireAdminTool(p, "openai_vector_store"); err != nil {
+		return "", err
+	}
+
+	var in openAIVectorStoreInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return "", fmt.Errorf("decode openai_vector_store input: %w", err)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(in.Action)) {
+	case "create":
+		name := strings.TrimSpace(in.Name)
+		if name == "" {
+			return "", fmt.Errorf("openai_vector_store name is required for create")
+		}
+		store, err := r.retrievalStore.CreateStore(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("openai_vector_store_create_ok store_id=%s name=%s", store.ID, store.Name), nil
+	case "attach":
+		storeID, err := r.resolveVectorStoreID(in.StoreID)
+		if err != nil {
+			return "", err
+		}
+		fileID := strings.TrimSpace(in.FileID)
+		if fileID == "" {
+			return "", fmt.Errorf("openai_vector_store file_id is required for attach")
+		}
+		if err := r.retrievalStore.AttachFile(ctx, storeID, fileID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("openai_vector_store_attach_ok store_id=%s file_id=%s", storeID, fileID), nil
+	case "search":
+		storeID, err := r.resolveVectorStoreID(in.StoreID)
+		if err != nil {
+			return "", err
+		}
+		query := strings.TrimSpace(in.Query)
+		if query == "" {
+			return "", fmt.Errorf("openai_vector_store query is required for search")
+		}
+		hits, err := r.retrievalStore.Search(ctx, storeID, query, in.Limit)
+		if err != nil {
+			return "", err
+		}
+		return renderOpenAIVectorSearchResults(storeID, query, hits), nil
+	default:
+		return "", fmt.Errorf("openai_vector_store action must be one of create|attach|search")
+	}
+}
+
+func requireAdminTool(p principal.Principal, toolName string) error {
+	if p.Role == "" || p.Role == principal.RoleAdmin {
+		return nil
+	}
+	return fmt.Errorf("%s is admin-only", toolName)
+}
+
+func resolveUploadPath(scope sandbox.Scope, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("openai_file path is required for put")
+	}
+	candidates := make([]string, 0, 3)
+	if filepath.IsAbs(raw) {
+		candidates = append(candidates, filepath.Clean(raw))
+	} else {
+		for _, root := range []string{scope.WorkingRoot, scope.SharedMemoryRoot, scope.UserMemory} {
+			root = strings.TrimSpace(root)
+			if root == "" {
+				continue
+			}
+			candidates = append(candidates, filepath.Join(root, raw))
+		}
+	}
+	allowedRoots := nonEmptyRoots(scope.WorkingRoot, scope.SharedMemoryRoot, scope.UserMemory)
+	for _, candidate := range candidates {
+		resolved, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if !pathWithinAnyRoot(resolved, allowedRoots) {
+			continue
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("openai_file path %q is a directory", raw)
+		}
+		return resolved, nil
+	}
+	return "", fmt.Errorf("openai_file path %q is not readable within the current roots", raw)
+}
+
+func nonEmptyRoots(roots ...string) []string {
+	out := make([]string, 0, len(roots))
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		out = append(out, root)
+	}
+	return out
+}
+
+func pathWithinAnyRoot(target string, roots []string) bool {
+	for _, root := range roots {
+		base, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(base, target)
+		if err != nil {
+			continue
+		}
+		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func renderOpenAIFileList(purpose string, files []memstore.StoredFile) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[OPENAI_FILES]\npurpose: %s\n", strings.TrimSpace(purpose))
+	if len(files) == 0 {
+		b.WriteString("no_files\n[/OPENAI_FILES]")
+		return b.String()
+	}
+	for i, file := range files {
+		fmt.Fprintf(&b, "\n%d. id=%s filename=%s bytes=%d purpose=%s", i+1, file.ID, file.Filename, file.Bytes, file.Purpose)
+		if !file.CreatedAt.IsZero() {
+			fmt.Fprintf(&b, " created_at=%s", file.CreatedAt.UTC().Format(time.RFC3339))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("[/OPENAI_FILES]")
+	return b.String()
+}
+
+func renderOpenAIFileMetadata(meta *memstore.StoredFile) string {
+	if meta == nil {
+		return "[OPENAI_FILE]\nmissing_metadata\n[/OPENAI_FILE]"
+	}
+	var b strings.Builder
+	b.WriteString("[OPENAI_FILE]\n")
+	fmt.Fprintf(&b, "id: %s\nfilename: %s\nbytes: %d\npurpose: %s\n", meta.ID, meta.Filename, meta.Bytes, meta.Purpose)
+	if !meta.CreatedAt.IsZero() {
+		fmt.Fprintf(&b, "created_at: %s\n", meta.CreatedAt.UTC().Format(time.RFC3339))
+	}
+	b.WriteString("[/OPENAI_FILE]")
+	return b.String()
+}
+
+func (r *Registry) resolveVectorStoreID(raw string) (string, error) {
+	storeID := firstNonEmpty(raw, r.defaultStore)
+	if storeID == "" {
+		return "", fmt.Errorf("openai_vector_store store_id is required when no default store is configured")
+	}
+	return storeID, nil
+}
+
+func renderOpenAIVectorSearchResults(storeID string, query string, hits []memstore.RetrievalHit) string {
+	var b strings.Builder
+	b.WriteString("[VECTOR_SEARCH]\n")
+	fmt.Fprintf(&b, "store_id: %s\nquery: %s\n", storeID, strings.TrimSpace(query))
+	if len(hits) == 0 {
+		b.WriteString("no_hits\n[/VECTOR_SEARCH]")
+		return b.String()
+	}
+	for i, hit := range hits {
+		fmt.Fprintf(&b, "\n%d. file_id=%s score=%.3f\n", i+1, hit.FileID, hit.Score)
+		if strings.TrimSpace(hit.Content) != "" {
+			b.WriteString("content: ")
+			b.WriteString(truncate(strings.TrimSpace(hit.Content), 600))
+			b.WriteString("\n")
+		}
+		if len(hit.Metadata) > 0 {
+			b.WriteString("metadata: ")
+			first := true
+			for key, value := range hit.Metadata {
+				if !first {
+					b.WriteString(", ")
+				}
+				first = false
+				b.WriteString(key)
+				b.WriteByte('=')
+				b.WriteString(value)
+			}
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("[/VECTOR_SEARCH]")
 	return b.String()
 }

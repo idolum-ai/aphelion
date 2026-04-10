@@ -19,6 +19,7 @@ type Config struct {
 	Principals PrincipalsConfig `toml:"principals"`
 	Governor   GovernorConfig   `toml:"governor"`
 	Providers  ProvidersConfig  `toml:"providers"`
+	OpenAI     OpenAIConfig     `toml:"openai"`
 	Sessions   SessionsConfig   `toml:"sessions"`
 	Agent      AgentConfig      `toml:"agent"`
 	Memory     MemoryConfig     `toml:"memory"`
@@ -67,10 +68,11 @@ type GovernorCodexConfig struct {
 }
 
 type ProvidersConfig struct {
-	Default       string           `toml:"default"`
-	FallbackChain []string         `toml:"fallback_chain"`
-	Anthropic     AnthropicConfig  `toml:"anthropic"`
-	OpenRouter    OpenRouterConfig `toml:"openrouter"`
+	Default       string               `toml:"default"`
+	FallbackChain []string             `toml:"fallback_chain"`
+	Anthropic     AnthropicConfig      `toml:"anthropic"`
+	OpenAI        OpenAIProviderConfig `toml:"openai"`
+	OpenRouter    OpenRouterConfig     `toml:"openrouter"`
 }
 
 type AnthropicConfig struct {
@@ -86,6 +88,29 @@ type OpenRouterConfig struct {
 	Model         string `toml:"model"`
 	MaxTokens     int    `toml:"max_tokens"`
 	ContextWindow int    `toml:"context_window"`
+}
+
+type OpenAIProviderConfig struct {
+	APIKey        string `toml:"api_key"`
+	BaseURL       string `toml:"base_url"`
+	Model         string `toml:"model"`
+	MaxTokens     int    `toml:"max_tokens"`
+	ContextWindow int    `toml:"context_window"`
+}
+
+type OpenAIConfig struct {
+	Files        OpenAIFilesConfig        `toml:"files"`
+	VectorStores OpenAIVectorStoresConfig `toml:"vector_stores"`
+}
+
+type OpenAIFilesConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Purpose string `toml:"purpose"`
+}
+
+type OpenAIVectorStoresConfig struct {
+	Enabled      bool   `toml:"enabled"`
+	DefaultStore string `toml:"default_store"`
 }
 
 type SessionsConfig struct {
@@ -239,11 +264,26 @@ func Default() Config {
 				MaxTokens:     4096,
 				ContextWindow: 200000,
 			},
+			OpenAI: OpenAIProviderConfig{
+				BaseURL:       "https://api.openai.com/v1",
+				Model:         "gpt-5.4",
+				MaxTokens:     16384,
+				ContextWindow: 128000,
+			},
 			OpenRouter: OpenRouterConfig{
 				BaseURL:       "https://openrouter.ai/api/v1",
 				Model:         "anthropic/claude-sonnet-4-6",
 				MaxTokens:     4096,
 				ContextWindow: 200000,
+			},
+		},
+		OpenAI: OpenAIConfig{
+			Files: OpenAIFilesConfig{
+				Enabled: false,
+				Purpose: "assistants",
+			},
+			VectorStores: OpenAIVectorStoresConfig{
+				Enabled: false,
 			},
 		},
 		Sessions: SessionsConfig{
@@ -584,8 +624,14 @@ func validate(cfg *Config) error {
 	if cfg.Providers.Anthropic.ContextWindow <= 0 {
 		return fmt.Errorf("providers.anthropic.context_window must be > 0")
 	}
+	if cfg.Providers.OpenAI.ContextWindow <= 0 {
+		return fmt.Errorf("providers.openai.context_window must be > 0")
+	}
 	if cfg.Providers.OpenRouter.ContextWindow <= 0 {
 		return fmt.Errorf("providers.openrouter.context_window must be > 0")
+	}
+	if strings.TrimSpace(cfg.Providers.OpenAI.BaseURL) == "" {
+		return fmt.Errorf("providers.openai.base_url is required")
 	}
 	if strings.TrimSpace(cfg.Providers.OpenRouter.BaseURL) == "" {
 		return fmt.Errorf("providers.openrouter.base_url is required")
@@ -665,6 +711,14 @@ func validate(cfg *Config) error {
 		}
 		if strings.TrimSpace(cfg.Voice.ElevenLabsVoiceID) == "" {
 			return fmt.Errorf("voice.elevenlabs_voice_id is required when voice.mode is enabled")
+		}
+	}
+	if cfg.OpenAI.Files.Enabled || cfg.OpenAI.VectorStores.Enabled {
+		if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {
+			return fmt.Errorf("providers.openai.api_key is required when OpenAI platform storage is enabled")
+		}
+		if cfg.OpenAI.Files.Enabled && strings.TrimSpace(cfg.OpenAI.Files.Purpose) == "" {
+			return fmt.Errorf("openai.files.purpose is required when openai.files.enabled = true")
 		}
 	}
 	if len(cfg.Principals.Telegram.AdminUserIDs) == 0 {

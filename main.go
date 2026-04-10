@@ -19,6 +19,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/openai"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/provider"
@@ -114,6 +115,16 @@ func run() error {
 		return err
 	}
 	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
+	fileStore, retrievalStore, err := buildOpenAIPlatformServices(cfg, httpClient)
+	if err != nil {
+		return err
+	}
+	if fileStore != nil {
+		tools.WithFileStore(fileStore, cfg.OpenAI.Files.Purpose)
+	}
+	if retrievalStore != nil {
+		tools.WithRetrievalStore(retrievalStore, cfg.OpenAI.VectorStores.DefaultStore)
+	}
 	principalResolver := principal.NewResolver(
 		cfg.Principals.Telegram.AdminUserIDs,
 		cfg.Principals.Telegram.ApprovedUserIDs,
@@ -264,6 +275,48 @@ func buildNativeProviderChain(cfg *config.Config, httpClient *http.Client) (agen
 		return entries[0].Provider, nil
 	}
 	return provider.NewFailoverChain(entries)
+}
+
+func buildOpenAIPlatformServices(cfg *config.Config, httpClient *http.Client) (memory.FileStore, memory.RetrievalStore, error) {
+	if cfg == nil {
+		return nil, nil, fmt.Errorf("config is nil")
+	}
+	if !cfg.OpenAI.Files.Enabled && !cfg.OpenAI.VectorStores.Enabled {
+		return nil, nil, nil
+	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 90 * time.Second}
+	}
+
+	client, err := openai.NewClient(openai.ClientOptions{
+		APIKey:     cfg.Providers.OpenAI.APIKey,
+		BaseURL:    cfg.Providers.OpenAI.BaseURL,
+		HTTPClient: httpClient,
+		UserAgent:  cfg.Identity.UserAgent,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var fileStore memory.FileStore
+	if cfg.OpenAI.Files.Enabled {
+		files, err := openai.NewFilesClient(client)
+		if err != nil {
+			return nil, nil, err
+		}
+		fileStore = files
+	}
+
+	var retrievalStore memory.RetrievalStore
+	if cfg.OpenAI.VectorStores.Enabled {
+		vectorStores, err := openai.NewVectorStoresClient(client)
+		if err != nil {
+			return nil, nil, err
+		}
+		retrievalStore = vectorStores
+	}
+
+	return fileStore, retrievalStore, nil
 }
 
 func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client) (agent.Provider, error) {

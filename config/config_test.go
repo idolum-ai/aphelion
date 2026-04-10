@@ -69,6 +69,15 @@ workspace = "./workspace"
 	if len(cfg.Providers.FallbackChain) != 0 {
 		t.Fatalf("providers.fallback_chain = %#v, want empty", cfg.Providers.FallbackChain)
 	}
+	if cfg.Providers.OpenAI.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("providers.openai.base_url = %q, want default openai url", cfg.Providers.OpenAI.BaseURL)
+	}
+	if cfg.OpenAI.Files.Enabled || cfg.OpenAI.Files.Purpose != "assistants" {
+		t.Fatalf("openai.files defaults = %#v, want disabled/assistants", cfg.OpenAI.Files)
+	}
+	if cfg.OpenAI.VectorStores.Enabled || cfg.OpenAI.VectorStores.DefaultStore != "" {
+		t.Fatalf("openai.vector_stores defaults = %#v, want disabled/empty", cfg.OpenAI.VectorStores)
+	}
 	if !strings.HasSuffix(cfg.Agent.Workspace, "/workspace") {
 		t.Fatalf("workspace = %q, want expanded relative path", cfg.Agent.Workspace)
 	}
@@ -199,6 +208,21 @@ model = "claude-opus-4-6"
 max_tokens = 8192
 context_window = 190000
 
+[providers.openai]
+api_key = "sk-openai-test"
+base_url = "https://api.openai.test/v1"
+model = "gpt-5.4"
+max_tokens = 12000
+context_window = 128000
+
+[openai.files]
+enabled = true
+purpose = "assistants"
+
+[openai.vector_stores]
+enabled = true
+default_store = "vs_default"
+
 [sessions]
 db_path = "~/tmp/sessions.db"
 idle_expiry = "36h"
@@ -293,6 +317,15 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Providers.Anthropic.MaxTokens != 8192 {
 		t.Fatalf("max_tokens = %d, want 8192", cfg.Providers.Anthropic.MaxTokens)
+	}
+	if cfg.Providers.OpenAI.APIKey != "sk-openai-test" || cfg.Providers.OpenAI.BaseURL != "https://api.openai.test/v1" {
+		t.Fatalf("providers.openai = %#v, want parsed openai provider config", cfg.Providers.OpenAI)
+	}
+	if !cfg.OpenAI.Files.Enabled || cfg.OpenAI.Files.Purpose != "assistants" {
+		t.Fatalf("openai.files = %#v, want enabled assistants", cfg.OpenAI.Files)
+	}
+	if !cfg.OpenAI.VectorStores.Enabled || cfg.OpenAI.VectorStores.DefaultStore != "vs_default" {
+		t.Fatalf("openai.vector_stores = %#v, want enabled/vs_default", cfg.OpenAI.VectorStores)
 	}
 	if cfg.Agent.MaxIterations != 77 || cfg.Agent.ToolTimeout != 9 {
 		t.Fatalf("agent limits = %d/%d, want 77/9", cfg.Agent.MaxIterations, cfg.Agent.ToolTimeout)
@@ -610,6 +643,41 @@ workspace = "./workspace"
 
 	if _, err := Load(configPath); err != nil {
 		t.Fatalf("Load() err = %v, want codex passthrough config to validate without Anthropic key", err)
+	}
+}
+
+func TestLoadRejectsOpenAIStorageWithoutOpenAIAPIKey(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[openai.files]
+enabled = true
+purpose = "assistants"
+
+[agent]
+workspace = "./workspace"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want OpenAI storage validation error")
+	}
+	if !strings.Contains(err.Error(), "providers.openai.api_key") {
+		t.Fatalf("error = %v, want providers.openai.api_key requirement", err)
 	}
 }
 

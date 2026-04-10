@@ -307,6 +307,10 @@ func semanticToolProgressEntry(name string, input json.RawMessage) toolProgressE
 		return toolProgressEntry{Key: "memory:update", Text: "Updating memory"}
 	case "session_search":
 		return toolProgressEntry{Key: "session:search", Text: "Searching past sessions"}
+	case "openai_file":
+		return semanticOpenAIFileProgressEntry(input)
+	case "openai_vector_store":
+		return semanticOpenAIVectorStoreProgressEntry(input)
 	default:
 		return toolProgressEntry{Key: name, Text: fmt.Sprintf("Using %s", name)}
 	}
@@ -316,12 +320,56 @@ type execToolInput struct {
 	Command string `json:"command"`
 }
 
+type openAIFileProgressInput struct {
+	Action string `json:"action"`
+}
+
+type openAIVectorStoreProgressInput struct {
+	Action string `json:"action"`
+}
+
 func semanticExecProgressEntry(input json.RawMessage) toolProgressEntry {
 	var parsed execToolInput
 	if err := json.Unmarshal(input, &parsed); err != nil {
 		return toolProgressEntry{Key: "exec", Text: "Running command"}
 	}
 	return classifyExecCommand(parsed.Command)
+}
+
+func semanticOpenAIFileProgressEntry(input json.RawMessage) toolProgressEntry {
+	var parsed openAIFileProgressInput
+	if err := json.Unmarshal(input, &parsed); err != nil {
+		return toolProgressEntry{Key: "openai:file", Text: "Using OpenAI file storage"}
+	}
+	switch strings.ToLower(strings.TrimSpace(parsed.Action)) {
+	case "put":
+		return toolProgressEntry{Key: "openai:file:put", Text: "Uploading file to OpenAI storage"}
+	case "list":
+		return toolProgressEntry{Key: "openai:file:list", Text: "Listing OpenAI files"}
+	case "get_metadata":
+		return toolProgressEntry{Key: "openai:file:meta", Text: "Inspecting OpenAI file metadata"}
+	case "delete":
+		return toolProgressEntry{Key: "openai:file:delete", Text: "Deleting OpenAI file"}
+	default:
+		return toolProgressEntry{Key: "openai:file", Text: "Using OpenAI file storage"}
+	}
+}
+
+func semanticOpenAIVectorStoreProgressEntry(input json.RawMessage) toolProgressEntry {
+	var parsed openAIVectorStoreProgressInput
+	if err := json.Unmarshal(input, &parsed); err != nil {
+		return toolProgressEntry{Key: "openai:vector", Text: "Using OpenAI vector store"}
+	}
+	switch strings.ToLower(strings.TrimSpace(parsed.Action)) {
+	case "create":
+		return toolProgressEntry{Key: "openai:vector:create", Text: "Creating vector store"}
+	case "attach":
+		return toolProgressEntry{Key: "openai:vector:attach", Text: "Attaching file to vector store"}
+	case "search":
+		return toolProgressEntry{Key: "openai:vector:search", Text: "Searching vector store"}
+	default:
+		return toolProgressEntry{Key: "openai:vector", Text: "Using OpenAI vector store"}
+	}
 }
 
 func classifyExecCommand(command string) toolProgressEntry {
