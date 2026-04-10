@@ -129,7 +129,7 @@ Suggested fields:
 
 - `id`
 - `scope` (`shared`, `principal`)
-- `principal_id` (required when scope is `principal`; identifies the specific principal, not just the scope class; must not be empty for principal-scoped documents)
+- `principal_id` (required when scope is `principal`; identifies the specific principal, not just the scope class; must not be empty for principal-scoped documents; should use the stable principal key rather than a display label)
 - `source_path`
 - `source_kind` (`memory`, `knowledge`, `decision`, `daily_note`, `question`, `rhizome`, `imported`, etc.)
 - `source_class` (`curated`, `daily_note`, `archive`, `imported_archive`)
@@ -244,6 +244,15 @@ One substrate should support two modes.
 
 Used during live turns.
 
+Interactive semantic retrieval should behave like governed recall, not ambient memory.
+
+That means:
+
+- retrieval remains deliberate by default during ordinary interactive turns
+- semantic hits are bounded clues, not recovered transcript truth
+- results must not silently merge into the default prompt world as if they were already established facts
+- the governor should decide when semantic search is worth the latency and ambiguity cost
+
 Needs:
 
 - fast retrieval
@@ -256,6 +265,14 @@ Needs:
 ### 2. Maintenance retrieval
 
 Used by heartbeat/reflection.
+
+Maintenance retrieval may be automatic when the maintenance function itself requires semantic context.
+
+This is different from live-turn retrieval because:
+
+- the runtime is already performing a maintenance-owned query rather than ordinary conversation
+- broader thematic context is often the point of the maintenance pass
+- recurrence, contradiction, and clustering signals are useful even before the governor explicitly asks for them
 
 Needs:
 
@@ -285,6 +302,33 @@ Recommended authority tendency:
 - `knowledge` > `decision` > `memory` > `daily_note` > `question` > `rhizome`
 
 This should be a retrieval heuristic, not a truth override.
+
+Ranking should influence presentation and governor attention, not convert semantic proximity into canonical truth.
+
+
+## Retrieval Result Shape
+
+Semantic hits should be bounded and explicit.
+
+Each hit should carry at least:
+
+- source file or corpus
+- scope (`shared` or `principal`)
+- principal discriminator when scope is `principal` — use the stable principal key, not a display label; `scope = principal` alone is not sufficient to audit which principal corpus a hit came from when searches span multiple principals
+- score
+- excerpt
+- source-kind label such as `memory`, `knowledge`, `decision`, `daily_note`, `question`, `rhizome`
+- provenance label such as `native`, `host_archive`, `openclaw_import` when available
+
+Semantic hits should be presented as retrieved semantic context, not disguised as constitutional truth, transcript truth, or ordinary user messages.
+
+The governor-facing shape should communicate epistemic status clearly:
+
+- this was retrieved because it appears semantically nearby
+- this may help orient judgment
+- this does not become established fact merely by being retrieved
+
+In live turns, retrieval context should feel like bounded clues under review, not hidden memory bleed.
 
 ## Fallback Behavior
 
@@ -338,13 +382,46 @@ Imported documents must enter in `import_state = quarantine`.
 
 Documents in `quarantine` are not eligible for live-turn interactive retrieval.
 
-They may be eligible for maintenance/heartbeat retrieval when explicitly requested.
+Documents in `quarantine` are also not eligible for ordinary maintenance or heartbeat retrieval.
 
-Promotion to `approved` requires an explicit operator or governor action.
+The only maintenance operation that may read quarantined material is an explicit import-audit pass — a dedicated maintenance submode whose purpose is to review the quarantined corpus. The preferred first implementation is a CLI maintenance path such as `aphelion import-audit`, because that keeps quarantine review outside ordinary conversational flow and reduces accidental approval. It may later gain other operator-controlled entry points, but it should run as maintenance rather than as an ordinary interactive tool call. Ordinary heartbeat and reflection must not pull quarantined material, because maintenance retrieval feeds the reflection loop, and reflection can write to curated memory. Allowing quarantined content to reach reflection indirectly defeats the quarantine boundary.
 
-This is the boundary between "this has been imported" and "this has been approved for live search."
+The CLI import-audit flow should be conservative by default:
 
-The distinction matters because imported corpora may contain stale facts, private material from the source system, or content that should not surface in live turns until reviewed.
+- default to read-only listing and review
+- show provenance, scope, principal key when applicable, source path, and bounded excerpts
+- require explicit operator selection for approve/reject decisions
+- record review and promotion decisions in durable local state
+
+Promotion to `approved` requires an explicit operator action.
+
+The governor may surface candidates, observations, or review notes about quarantined material, but the final promotion decision belongs to the operator. Corpus admission is an operator-owned decision, not a model-owned one.
+
+This is the boundary between "this has been imported" and "this has been approved for retrieval."
+
+The distinction matters because imported corpora may contain stale facts, private material from the source system, or content that should not surface in any retrieval path until reviewed.
+
+## Tool Invocation vs Preloaded Context
+
+The boundary between interactive tool use and maintenance preload should stay explicit.
+
+### Interactive turns
+
+During ordinary interactive work, semantic retrieval should normally arrive through an explicit governor action such as `semantic_search`.
+
+This keeps retrieval:
+
+- visible in the turn log
+- scoped to the current question
+- clearly separate from the prompt's constitutional and curated-memory baseline
+
+### Maintenance turns
+
+During heartbeat, reflection, and other maintenance-owned passes, the runtime may preload semantic context when that context is part of the maintenance function itself.
+
+This is allowed because the system is already doing maintenance interpretation rather than live user-facing judgment.
+
+Even then, preloaded semantic context should remain labeled as retrieval output rather than flattened into constitutional or curated truth.
 
 ## External Stores
 
