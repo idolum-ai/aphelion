@@ -158,6 +158,69 @@ func TestCodexCompleteToolCallViaResponsesOutput(t *testing.T) {
 	}
 }
 
+func TestCodexCompleteMapsAssistantHistoryAsOutputText(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		assertStreamRequest(t, payload)
+		input, ok := payload["input"].([]any)
+		if !ok || len(input) < 2 {
+			t.Fatalf("input = %#v, want at least user and assistant items", payload["input"])
+		}
+		assistantItem, ok := input[1].(map[string]any)
+		if !ok {
+			t.Fatalf("assistant item = %#v, want object", input[1])
+		}
+		content, ok := assistantItem["content"].([]any)
+		if !ok || len(content) == 0 {
+			t.Fatalf("assistant content = %#v, want blocks", assistantItem["content"])
+		}
+		block, ok := content[0].(map[string]any)
+		if !ok {
+			t.Fatalf("assistant block = %#v, want object", content[0])
+		}
+		if block["type"] != "output_text" {
+			t.Fatalf("assistant block type = %#v, want output_text", block["type"])
+		}
+
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "ok",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp1",
+				},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "second"},
+		{Role: "user", Content: "third"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+}
+
 func TestCodexCompleteStatusError(t *testing.T) {
 	t.Parallel()
 

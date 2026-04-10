@@ -399,9 +399,13 @@ func codexMessageInputItem(role string, msg agent.Message) (map[string]any, bool
 			content = append(content, part)
 		}
 	}
+	textType := "input_text"
+	if role == "assistant" {
+		textType = "output_text"
+	}
 	if text := strings.TrimSpace(msg.Content); text != "" || len(content) == 0 {
 		content = append(content, map[string]any{
-			"type": "input_text",
+			"type": textType,
 			"text": msg.Content,
 		})
 	}
