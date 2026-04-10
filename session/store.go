@@ -615,6 +615,69 @@ func (s *SQLiteStore) OutboundAfterTurn(key SessionKey, turnIndex int) ([]int64,
 	return ids, nil
 }
 
+func (s *SQLiteStore) SearchMessages(query string, limit int, scope *SessionKey) ([]SearchHit, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("search query is required")
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 20 {
+		limit = 20
+	}
+
+	pattern := "%" + query + "%"
+	base := `
+		SELECT chat_id, user_id, turn_index, role, content, canonical_content, created_at
+		FROM messages
+		WHERE compacted = 0
+			AND (
+				LOWER(content) LIKE LOWER(?)
+				OR LOWER(COALESCE(canonical_content, '')) LIKE LOWER(?)
+			)
+	`
+	args := []any{pattern, pattern}
+	if scope != nil {
+		base += ` AND chat_id = ? AND user_id = ?`
+		args = append(args, scope.ChatID, scope.UserID)
+	}
+	base += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.Query(base, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search messages: %w", err)
+	}
+	defer rows.Close()
+
+	hits := make([]SearchHit, 0, limit)
+	for rows.Next() {
+		var (
+			hit              SearchHit
+			createdAtRaw     string
+			canonicalContent sql.NullString
+		)
+		if err := rows.Scan(
+			&hit.ChatID, &hit.UserID, &hit.TurnIndex, &hit.Role,
+			&hit.Content, &canonicalContent, &createdAtRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan search hit: %w", err)
+		}
+		hit.CanonicalContent = nullToString(canonicalContent)
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse search hit created_at: %w", err)
+		}
+		hit.CreatedAt = createdAt
+		hits = append(hits, hit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate search hits: %w", err)
+	}
+	return hits, nil
+}
+
 func (s *SQLiteStore) RecordOutbound(key SessionKey, turnIndex int, telegramMsgID int64, msgType string) error {
 	if telegramMsgID == 0 {
 		return fmt.Errorf("record outbound: telegram_msg_id is required")

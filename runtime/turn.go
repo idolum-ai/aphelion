@@ -32,7 +32,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	unlock := r.lockSession(key)
 	defer unlock()
 
-	tools := r.toolsForPrincipal(actor)
+	tools := r.toolsForPrincipal(actor, key)
 	sess, err := r.store.Load(key)
 	if err != nil {
 		return nil, fmt.Errorf("load session: %w", err)

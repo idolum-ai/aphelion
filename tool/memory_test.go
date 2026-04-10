@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -129,4 +131,114 @@ func TestMemoryToolApprovedUserCannotWriteSharedMemory(t *testing.T) {
 	if !strings.Contains(err.Error(), "may not write shared memory") {
 		t.Fatalf("err = %v, want shared memory denial", err)
 	}
+}
+
+func TestSessionSearchAdminCanSearchAllSessions(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			SharedMemoryRoot:  filepath.Join(tmp, "shared-memory"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	store := newSessionSearchStore(t)
+	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunner(t, registry)
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 1, UserID: 0},
+		"session_search",
+		json.RawMessage(`{"query":"alpha","scope":"all"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(session_search) err = %v", err)
+	}
+	if !strings.Contains(out, "[SESSION_RECALL]") || !strings.Contains(out, "[/SESSION_RECALL]") {
+		t.Fatalf("output = %q, want fenced recall block", out)
+	}
+	if !strings.Contains(out, "chat=2") {
+		t.Fatalf("output = %q, want cross-session hit for admin", out)
+	}
+}
+
+func TestSessionSearchApprovedUserIsForcedToCurrentSession(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			SharedMemoryRoot:  filepath.Join(tmp, "shared-memory"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	store := newSessionSearchStore(t)
+	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunner(t, registry)
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{TelegramUserID: 42, Role: principal.RoleApprovedUser},
+		session.SessionKey{ChatID: 1, UserID: 0},
+		"session_search",
+		json.RawMessage(`{"query":"alpha","scope":"all"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(session_search) err = %v", err)
+	}
+	if strings.Contains(out, "chat=2") {
+		t.Fatalf("output = %q, want approved user confined to current session", out)
+	}
+	if !strings.Contains(out, "scope: session") {
+		t.Fatalf("output = %q, want forced session scope", out)
+	}
+}
+
+func newSessionSearchStore(t *testing.T) *session.SQLiteStore {
+	t.Helper()
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	for _, tc := range []struct {
+		key      session.SessionKey
+		turn     int
+		userText string
+		reply    string
+	}{
+		{session.SessionKey{ChatID: 1, UserID: 0}, 1, "alpha first", "reply one"},
+		{session.SessionKey{ChatID: 2, UserID: 0}, 1, "alpha second elsewhere", "reply two"},
+	} {
+		sess, err := store.Load(tc.key)
+		if err != nil {
+			t.Fatalf("Load(%v) err = %v", tc.key, err)
+		}
+		sess.TurnCount = tc.turn
+		if err := store.Save(sess, []session.Message{
+			{Role: "user", Content: tc.userText, TurnIndex: tc.turn},
+			{Role: "assistant", Content: tc.reply, CanonicalContent: tc.reply, TurnIndex: tc.turn},
+		}, core.TokenUsage{}); err != nil {
+			t.Fatalf("Save(%v) err = %v", tc.key, err)
+		}
+	}
+	return store
 }

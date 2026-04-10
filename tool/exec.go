@@ -17,6 +17,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -28,6 +29,7 @@ type Registry struct {
 	maxOutputBytes int
 	sandbox        *sandbox.Resolver
 	runner         *sandbox.Runner
+	store          *session.SQLiteStore
 }
 
 type execInput struct {
@@ -46,6 +48,12 @@ type memoryInput struct {
 	Confidence *float64 `json:"confidence,omitempty"`
 }
 
+type sessionSearchInput struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+	Scope string `json:"scope,omitempty"`
+}
+
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
 	return &Registry{
 		workspace:      workspace,
@@ -59,6 +67,11 @@ func NewRegistryWithSandbox(workspace string, timeout time.Duration, resolver *s
 	registry.sandbox = resolver
 	registry.runner = sandbox.NewRunner()
 	return registry
+}
+
+func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
+	r.store = store
+	return r
 }
 
 func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
@@ -108,6 +121,19 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				"required": ["action", "store"]
 			}`),
 		},
+		{
+			Name:        "session_search",
+			Description: "Search prior transcript messages explicitly. Use this to recall earlier conversations without silently flattening history into memory.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Search text"},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum number of hits"},
+					"scope": {"type": "string", "enum": ["session", "all"], "description": "Search only the current session or all visible sessions"}
+				},
+				"required": ["query"]
+			}`),
+		},
 	}
 }
 
@@ -116,6 +142,10 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 }
 
 func (r *Registry) ExecuteForPrincipal(ctx context.Context, p principal.Principal, name string, input json.RawMessage) (string, error) {
+	return r.ExecuteForSessionPrincipal(ctx, p, session.SessionKey{}, name, input)
+}
+
+func (r *Registry) ExecuteForSessionPrincipal(ctx context.Context, p principal.Principal, key session.SessionKey, name string, input json.RawMessage) (string, error) {
 	if r.sandbox == nil {
 		return "", fmt.Errorf("principal-aware execution requires sandbox resolver")
 	}
@@ -133,22 +163,28 @@ func (r *Registry) ExecuteForPrincipal(ctx context.Context, p principal.Principa
 	if !r.runner.Supports(scope) {
 		return "", fmt.Errorf("no supported sandbox backend for principal role %q", p.Role)
 	}
-	return r.executeWithScope(ctx, name, input, scope)
+	return r.executeWithScopeAndPrincipal(ctx, name, input, scope, p, key)
 }
 
 func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.RawMessage, root string) (string, error) {
-	return r.executeWithScope(ctx, name, input, sandbox.Scope{
+	return r.executeWithScopeAndPrincipal(ctx, name, input, sandbox.Scope{
 		WorkingRoot:      root,
 		SharedMemoryRoot: root,
-	})
+	}, principal.Principal{}, session.SessionKey{})
 }
 
 func (r *Registry) executeWithScope(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope) (string, error) {
+	return r.executeWithScopeAndPrincipal(ctx, name, input, scope, scope.Principal, session.SessionKey{})
+}
+
+func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
 	switch name {
 	case "exec":
 		return r.exec(ctx, input, scope)
 	case "memory":
 		return r.memory(ctx, input, scope)
+	case "session_search":
+		return r.sessionSearch(ctx, input, p, key)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
@@ -352,4 +388,61 @@ func resolveMemoryRoot(scope sandbox.Scope, requested string) (string, string, e
 	default:
 		return "", "", fmt.Errorf("memory scope must be shared or principal")
 	}
+}
+
+func (r *Registry) sessionSearch(_ context.Context, input json.RawMessage, p principal.Principal, key session.SessionKey) (string, error) {
+	if r.store == nil {
+		return "", fmt.Errorf("session search requires transcript store")
+	}
+
+	var in sessionSearchInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return "", fmt.Errorf("decode session_search input: %w", err)
+	}
+	if strings.TrimSpace(in.Query) == "" {
+		return "", fmt.Errorf("session_search query is required")
+	}
+
+	scope := strings.ToLower(strings.TrimSpace(in.Scope))
+	var filter *session.SessionKey
+	switch {
+	case p.Role == principal.RoleApprovedUser:
+		filter = &key
+		scope = "session"
+	case scope == "", scope == "all":
+		filter = nil
+		scope = "all"
+	case scope == "session":
+		filter = &key
+	default:
+		return "", fmt.Errorf("session_search scope must be session or all")
+	}
+
+	hits, err := r.store.SearchMessages(in.Query, in.Limit, filter)
+	if err != nil {
+		return "", err
+	}
+	return renderSessionSearchResults(scope, in.Query, hits), nil
+}
+
+func renderSessionSearchResults(scope string, query string, hits []session.SearchHit) string {
+	var b strings.Builder
+	b.WriteString("[SESSION_RECALL]\n")
+	b.WriteString("scope: ")
+	b.WriteString(scope)
+	b.WriteString("\nquery: ")
+	b.WriteString(strings.TrimSpace(query))
+	b.WriteString("\n")
+	if len(hits) == 0 {
+		b.WriteString("no_hits\n[/SESSION_RECALL]")
+		return b.String()
+	}
+	for i, hit := range hits {
+		fmt.Fprintf(&b, "\n%d. chat=%d turn=%d role=%s\n", i+1, hit.ChatID, hit.TurnIndex, hit.Role)
+		b.WriteString("content: ")
+		b.WriteString(truncate(strings.TrimSpace(hit.Content), 600))
+		b.WriteString("\n")
+	}
+	b.WriteString("[/SESSION_RECALL]")
+	return b.String()
 }

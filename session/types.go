@@ -139,3 +139,13 @@ type Message struct {
 	ContentChars     int
 	Compacted        bool
 }
+
+type SearchHit struct {
+	ChatID           int64
+	UserID           int64
+	TurnIndex        int
+	Role             string
+	Content          string
+	CanonicalContent string
+	CreatedAt        time.Time
+}

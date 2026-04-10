@@ -25,17 +25,17 @@ import (
 )
 
 type fakeProvider struct {
-	mu                 sync.Mutex
-	callCount          int
-	replyText          string
+	mu                  sync.Mutex
+	callCount           int
+	replyText           string
 	reflectionReplyText string
-	proposalReplyText  string
-	faceReplyText      string
-	faceErr            error
-	seenGovernorSystem []string
-	seenFaceSystem     []string
-	seenProposalSystem []string
-	responseUsage      core.TokenUsage
+	proposalReplyText   string
+	faceReplyText       string
+	faceErr             error
+	seenGovernorSystem  []string
+	seenFaceSystem      []string
+	seenProposalSystem  []string
+	responseUsage       core.TokenUsage
 }
 
 func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {

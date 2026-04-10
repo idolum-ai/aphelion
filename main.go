@@ -122,7 +122,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver)
+	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
 	principalResolver := principal.NewResolver(
 		cfg.Principals.Telegram.AdminUserIDs,
 		cfg.Principals.Telegram.ApprovedUserIDs,

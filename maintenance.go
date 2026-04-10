@@ -41,6 +41,11 @@ var defaultSharedMemorySeedFiles = []string{
 	"memory/rhizome.md",
 }
 
+const (
+	memoryIdentityBegin = "<!-- APHELION:IDENTITY-BEGIN -->"
+	memoryIdentityEnd   = "<!-- APHELION:IDENTITY-END -->"
+)
+
 func runMaintenanceCommand(args []string) (bool, error) {
 	if len(args) == 0 {
 		return false, nil
@@ -439,22 +444,43 @@ func clearSharedDynamicMemory(cfg *config.Config) (int, error) {
 		return 0, nil
 	}
 
+	removed := 0
+	memoryPath := filepath.Join(root, "MEMORY.md")
+	preserved, err := preserveMemoryIdentitySections(memoryPath)
+	if err != nil {
+		return removed, err
+	}
+	if preserved {
+		removed++
+	}
+
 	paths := make([]string, 0, len(cfg.Agent.DynamicFiles)+2)
 	for _, name := range cfg.Agent.DynamicFiles {
 		trimmed := strings.TrimSpace(name)
 		if trimmed == "" {
 			continue
 		}
-		paths = append(paths, filepath.Join(root, filepath.FromSlash(trimmed)))
 		if strings.EqualFold(trimmed, "MEMORY.md") {
-			paths = append(paths, filepath.Join(root, "memory.md"))
+			continue
 		}
+		paths = append(paths, filepath.Join(root, filepath.FromSlash(trimmed)))
 	}
+	paths = append(paths, filepath.Join(root, "memory.md"))
+	paths = append(paths,
+		filepath.Join(root, "memory", "knowledge.md"),
+		filepath.Join(root, "memory", "decisions.md"),
+		filepath.Join(root, "memory", "questions.md"),
+		filepath.Join(root, "memory", "rhizome.md"),
+	)
 	if strings.TrimSpace(cfg.Agent.DailyNotesDir) != "" {
 		paths = append(paths, filepath.Join(root, filepath.FromSlash(cfg.Agent.DailyNotesDir)))
 	}
 
-	return removeMany(paths)
+	n, err := removeMany(paths)
+	if err != nil {
+		return removed, err
+	}
+	return removed + n, nil
 }
 
 func cleanupTempTrees(cfg *config.Config) (int, error) {
@@ -532,6 +558,49 @@ func removeAllIfExists(path string) (bool, error) {
 		return false, fmt.Errorf("remove %s: %w", path, err)
 	}
 	return true, nil
+}
+
+func preserveMemoryIdentitySections(path string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	preserved := extractMarkedBlock(string(raw), memoryIdentityBegin, memoryIdentityEnd)
+	if strings.TrimSpace(preserved) == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return false, fmt.Errorf("remove %s: %w", path, err)
+		}
+		return true, nil
+	}
+
+	content := strings.TrimSpace(strings.Join([]string{
+		"# MEMORY.md — Shared Curated Memory",
+		"",
+		"Keep this file concise.",
+		"",
+		preserved,
+	}, "\n"))
+	if err := os.WriteFile(path, []byte(content+"\n"), 0o600); err != nil {
+		return false, fmt.Errorf("rewrite %s: %w", path, err)
+	}
+	return true, nil
+}
+
+func extractMarkedBlock(raw string, startMarker string, endMarker string) string {
+	start := strings.Index(raw, startMarker)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(raw[start+len(startMarker):], endMarker)
+	if end < 0 {
+		return ""
+	}
+	end += start + len(startMarker) + len(endMarker)
+	return strings.TrimSpace(raw[start:end])
 }
 
 func printPathGroup(label string, values []string) {

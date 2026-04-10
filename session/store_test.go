@@ -157,6 +157,61 @@ func TestReviewEventsLimitAndMarkDelivered(t *testing.T) {
 	}
 }
 
+func TestSearchMessagesFiltersByScopeAndReturnsNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	for _, tc := range []struct {
+		key      SessionKey
+		turn     int
+		userText string
+		reply    string
+	}{
+		{SessionKey{ChatID: 1, UserID: 0}, 1, "alpha first", "reply one"},
+		{SessionKey{ChatID: 1, UserID: 0}, 2, "alpha second", "reply two"},
+		{SessionKey{ChatID: 2, UserID: 0}, 1, "beta alpha", "reply three"},
+	} {
+		sess, err := store.Load(tc.key)
+		if err != nil {
+			t.Fatalf("Load(%v) err = %v", tc.key, err)
+		}
+		sess.TurnCount = tc.turn
+		if err := store.Save(sess, []Message{
+			{Role: "user", Content: tc.userText, TurnIndex: tc.turn},
+			{Role: "assistant", Content: tc.reply, CanonicalContent: tc.reply, TurnIndex: tc.turn},
+		}, core.TokenUsage{}); err != nil {
+			t.Fatalf("Save(%v) err = %v", tc.key, err)
+		}
+	}
+
+	allHits, err := store.SearchMessages("alpha", 10, nil)
+	if err != nil {
+		t.Fatalf("SearchMessages(all) err = %v", err)
+	}
+	if len(allHits) != 3 {
+		t.Fatalf("all hits len = %d, want 3", len(allHits))
+	}
+	if allHits[0].ChatID != 2 || allHits[1].TurnIndex != 2 {
+		t.Fatalf("all hits ordering = %#v, want newest first", allHits)
+	}
+
+	scope := SessionKey{ChatID: 1, UserID: 0}
+	scopedHits, err := store.SearchMessages("alpha", 10, &scope)
+	if err != nil {
+		t.Fatalf("SearchMessages(scoped) err = %v", err)
+	}
+	if len(scopedHits) != 2 {
+		t.Fatalf("scoped hits len = %d, want 2", len(scopedHits))
+	}
+	for _, hit := range scopedHits {
+		if hit.ChatID != 1 {
+			t.Fatalf("scoped hit chat id = %d, want 1", hit.ChatID)
+		}
+	}
+}
+
 func newTestSQLiteStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 

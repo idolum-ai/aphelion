@@ -8,10 +8,15 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 type principalAwareToolExecutor interface {
 	ExecuteForPrincipal(ctx context.Context, p principal.Principal, name string, input json.RawMessage) (string, error)
+}
+
+type sessionAwareToolExecutor interface {
+	ExecuteForSessionPrincipal(ctx context.Context, p principal.Principal, key session.SessionKey, name string, input json.RawMessage) (string, error)
 }
 
 type principalAwareToolSupport interface {
@@ -21,7 +26,9 @@ type principalAwareToolSupport interface {
 type principalScopedTools struct {
 	base      agent.ToolRegistry
 	executor  principalAwareToolExecutor
+	sessioner sessionAwareToolExecutor
 	principal principal.Principal
+	key       session.SessionKey
 }
 
 func (p *principalScopedTools) Definitions() []agent.ToolDef {
@@ -29,15 +36,19 @@ func (p *principalScopedTools) Definitions() []agent.ToolDef {
 }
 
 func (p *principalScopedTools) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
+	if p.sessioner != nil {
+		return p.sessioner.ExecuteForSessionPrincipal(ctx, p.principal, p.key, name, input)
+	}
 	return p.executor.ExecuteForPrincipal(ctx, p.principal, name, input)
 }
 
-func (r *Runtime) toolsForPrincipal(p principal.Principal) agent.ToolRegistry {
+func (r *Runtime) toolsForPrincipal(p principal.Principal, key session.SessionKey) agent.ToolRegistry {
 	if r.tools == nil {
 		return nil
 	}
 
 	executor, hasExecutor := r.tools.(principalAwareToolExecutor)
+	sessioner, _ := r.tools.(sessionAwareToolExecutor)
 	support, hasSupport := r.tools.(principalAwareToolSupport)
 	principalAwareReady := hasExecutor && hasSupport && support.SupportsPrincipal(p)
 
@@ -49,7 +60,9 @@ func (r *Runtime) toolsForPrincipal(p principal.Principal) agent.ToolRegistry {
 		return &principalScopedTools{
 			base:      r.tools,
 			executor:  executor,
+			sessioner: sessioner,
 			principal: p,
+			key:       key,
 		}
 	}
 
