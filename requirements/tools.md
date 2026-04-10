@@ -25,6 +25,8 @@ The security floor matters here:
 - it is not a real sandbox
 - `approved_user` tool execution should remain off until the v0.5 isolation floor is actually enforced
 
+Semantic retrieval belongs in the later tool surface, not in ambient prompt assembly. It should be reachable deliberately by the governor as a retrieval tool, not silently injected.
+
 ## Design Lineage
 
 Aphelion's tool model should be read against two nearby patterns:
@@ -258,6 +260,51 @@ The difference between admin and non-admin must be enforced in code, not merely 
 ### Heartbeat turns
 
 - governor-owned maintenance tool surface
+
+### `semantic_search`
+
+`semantic_search` is the memory-layer analogue of `session_search`.
+
+It should:
+
+- search a semantic index over approved curated memory corpora
+- return bounded ranked hits
+- remain governor-owned
+- never mutate memory
+
+It should not:
+
+- silently inject itself into every turn
+- outrank constitutional files
+- replace `session_search` for transcript recall
+
+Initial indexed sources should favor curated memory:
+
+- `MEMORY.md`
+- `memory/knowledge.md`
+- `memory/decisions.md`
+- optionally recent daily notes
+
+Advanced practice files such as `memory/questions.md` and `memory/rhizome.md` may be searchable too, but their hits should remain clearly lower-authority.
+
+Suggested result shape:
+
+```json
+{
+  "query": "durable operator preference",
+  "hits": [
+    {
+      "source": "memory/knowledge.md",
+      "scope": "shared",
+      "kind": "knowledge",
+      "score": 0.91,
+      "excerpt": "- Prefers concise progress updates [observed, confidence: 0.90]"
+    }
+  ]
+}
+```
+
+The governor should receive these as explicit retrieved context, not as blended prompt truth.
 - may be narrower than ordinary interactive turns
 - should not silently inherit tools that only make sense for live user interaction
 

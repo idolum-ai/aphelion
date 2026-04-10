@@ -149,6 +149,19 @@ api_key = ""               # Falls back to providers.openai.api_key if empty
 dimensions = 1536
 batch_size = 100           # Max texts per embedding API call
 
+[memory.semantic]
+enabled = false
+backend = "local"          # "local" first; remote/vector-store backends remain auxiliary
+refresh = "manual"         # "manual" | "heartbeat" | duration
+sources = ["MEMORY.md", "memory/knowledge.md", "memory/decisions.md"]
+include_daily_notes = true
+include_questions = false
+include_rhizome = false
+interactive_top_k = 5
+heartbeat_top_k = 12
+interactive_max_chars = 4000
+heartbeat_max_chars = 12000
+
 # ─── OpenAI Platform Services ───
 # These are distinct from OpenAI inference in [providers.openai].
 [openai.files]
@@ -160,6 +173,15 @@ enabled = false
 default_store = ""
 
 These sections are runtime-owned feature gates for OpenAI platform storage. When enabled, they should reuse the configured OpenAI API credentials rather than inventing a second hidden auth path.
+
+Semantic retrieval config should distinguish:
+
+- indexing substrate
+- indexed sources
+- interactive retrieval limits
+- heartbeat/reflection retrieval limits
+
+The turn-time and maintenance retrieval modes should not be forced through one identical set of limits.
 
 [openai.transcription]
 enabled = false

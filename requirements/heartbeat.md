@@ -72,6 +72,7 @@ Heartbeat may read a bounded maintenance context assembled from:
 - stale subagent/session metadata
 - selected memory reflection inputs
 - current runtime health information
+- maintenance semantic-retrieval results
 
 It should not read or replay entire unrelated session histories by default. Heartbeat is a maintenance turn, not a covert full-transcript batch processor.
 
@@ -172,8 +173,21 @@ Heartbeat is the natural place to:
 - reflect on stale tasks
 - notice repeated failures or degrading patterns
 - decide whether silence is still the right action
+- retrieve semantically related memory context for contradiction checks, recurrence, and clustering
 
 Heartbeat may summarize, notice, and surface.
+
+Heartbeat semantic retrieval is not the same thing as live-turn semantic search.
+
+Heartbeat retrieval should favor:
+
+- broader chunking
+- slower cadence
+- thematic recurrence
+- contradiction detection
+- maintenance-oriented clustering
+
+This is a maintenance retrieval mode, not an ordinary interactive tool invocation.
 
 Heartbeat should not automatically convert everything it observes into durable shared memory. Memory mutation must remain governed by explicit policy.
 

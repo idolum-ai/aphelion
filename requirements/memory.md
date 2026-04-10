@@ -48,6 +48,7 @@ Memory writes are governor-owned. Idolum may consume memory-derived context for 
 - embeddings-backed semantic indexing
 - `file_search`-style retrieval over approved corpora
 - multimodal memory indexing
+- separate semantic retrieval modes for live turns vs heartbeat/reflection
 
 ## Memory Layers
 
@@ -142,6 +143,26 @@ Examples:
 
 These are useful for corpus search, durable attachments, and semantic recall, but they are not the living constitution of the system.
 
+### 7. Semantic retrieval layer
+
+Semantic retrieval is a query-driven layer over curated memory and other approved corpora.
+
+It is not ambient prompt injection.
+
+Use it when the system needs to answer questions like:
+
+- "what else in memory is close to this idea?"
+- "does any prior curated note or decision connect to this theme?"
+- "what recurring pattern is semantically nearby even if the keywords differ?"
+
+The semantic layer remains subordinate to:
+
+- constitutional files
+- curated memory files
+- the session ledger
+
+It is a retrieval aid, not a new source of truth.
+
 ## Structured Curated Memory
 
 `MEMORY.md` should remain the primary curated memory file, but it should not be the only durable memory surface forever.
@@ -182,6 +203,8 @@ In runtime prompt assembly, the baseline curated files should be treated as the 
 - `memory/decisions.md`
 
 Optional advanced practice files such as `memory/rhizome.md` and `memory/questions.md` should remain on-demand or maintenance-oriented unless explicitly configured otherwise.
+
+Those files may still participate in semantic indexing even when they are not routine prompt surfaces.
 
 ### Role of each file
 
@@ -442,6 +465,84 @@ The default loading strategy should be:
 This keeps the prompt coherent and prevents memory bloat.
 
 When curated memory files exceed the practical working-set budget, Aphelion should prefer excerpting and archival over silent monotonic growth. The prompt-visible working set should stay bounded even if the underlying memory archive grows over time.
+
+Semantic hits should never be flattened into the default prompt body just because an index exists. They should enter the turn only through explicit retrieval.
+
+## Semantic Retrieval
+
+Aphelion should support semantic retrieval as a deliberate, governor-owned capability.
+
+The first principle is:
+
+- semantic retrieval is query-driven
+- semantic retrieval is not ambient injection
+
+### Turn-time semantic retrieval
+
+Live turns need:
+
+- fast retrieval
+- tight chunking
+- bounded hit counts
+- strong relevance ranking
+- explicit governor invocation
+
+This should look like a tool, analogous to `session_search`, not like always-on memory bleed.
+
+Recommended initial sources:
+
+- `MEMORY.md`
+- `memory/knowledge.md`
+- `memory/decisions.md`
+- optionally recent daily notes
+
+Optional advanced practice files such as `memory/questions.md` and `memory/rhizome.md` may be indexed too, but their hits should remain clearly lower-authority than claims from `knowledge.md` or `decisions.md`.
+
+### Heartbeat / reflection retrieval
+
+Heartbeat and reflection need a different semantic mode:
+
+- broader chunking
+- slower cadence
+- lower sensitivity to exact phrasing
+- better support for recurrence, contradiction detection, and thematic clustering
+
+This mode should not be implemented as a normal turn-time tool call. It is a maintenance retrieval path.
+
+It exists to help heartbeat ask questions like:
+
+- what facts appear semantically redundant or contradictory?
+- what notes keep recurring across days?
+- what decisions connect to recent review events?
+- what themes should be promoted or questioned?
+
+### One substrate, two query modes
+
+Aphelion should prefer:
+
+- one local semantic index substrate
+- two retrieval modes on top of it
+
+Those modes are:
+
+- interactive semantic retrieval
+- maintenance semantic retrieval
+
+That keeps indexing unified while preserving the real difference between fast live recall and slower reflective analysis.
+
+### Retrieval result shape
+
+Semantic results should be bounded and explicit.
+
+Each hit should carry at least:
+
+- source file or corpus
+- scope
+- score
+- excerpt
+- optional type label such as `memory`, `knowledge`, `decision`, `daily_note`, `question`, `rhizome`
+
+Semantic hits should be injected as fenced retrieved context, not disguised as constitutional truth or as normal user messages.
 
 ## Review Events
 

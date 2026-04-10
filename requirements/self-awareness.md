@@ -129,6 +129,7 @@ At minimum, the governor should be made aware of:
 - which memory layers are loaded
 - whether recalled context was injected
 - whether memory is shared, operator-scoped, or principal-scoped
+- whether semantic retrieval results were injected, and from which source class
 
 ### Delivery
 
@@ -193,6 +194,7 @@ Turn-specific facts:
 - capabilities
 - active roots
 - stream/degraded/fallback state
+- retrieved semantic context, when present, labeled as retrieval rather than constitutional truth
 
 This dynamic runtime block belongs after the stable cache boundary where needed, but before volatile user/session material that would make it hard to reason about the current turn.
 
