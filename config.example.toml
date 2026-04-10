@@ -7,6 +7,8 @@ poll_timeout = 30
 stream_edit_interval = "300ms"
 stream_cursor = " ▉"
 tool_progress = "all"
+tool_progress_style = "semantic"
+tool_progress_window = 4
 tool_progress_cleanup = false
 
 [principals.telegram]

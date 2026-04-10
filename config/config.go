@@ -39,6 +39,8 @@ type TelegramConfig struct {
 	StreamEditInterval  string `toml:"stream_edit_interval"`
 	StreamCursor        string `toml:"stream_cursor"`
 	ToolProgress        string `toml:"tool_progress"`
+	ToolProgressStyle   string `toml:"tool_progress_style"`
+	ToolProgressWindow  int    `toml:"tool_progress_window"`
 	ToolProgressCleanup bool   `toml:"tool_progress_cleanup"`
 }
 
@@ -216,6 +218,8 @@ func Default() Config {
 			StreamEditInterval:  "300ms",
 			StreamCursor:        " ▉",
 			ToolProgress:        "all",
+			ToolProgressStyle:   "semantic",
+			ToolProgressWindow:  4,
 			ToolProgressCleanup: false,
 		},
 		Governor: GovernorConfig{
@@ -415,6 +419,14 @@ func validate(cfg *Config) error {
 	case "", "all", "new", "off":
 	default:
 		return fmt.Errorf("telegram.tool_progress must be one of all|new|off")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Telegram.ToolProgressStyle)) {
+	case "", "semantic", "raw":
+	default:
+		return fmt.Errorf("telegram.tool_progress_style must be one of semantic|raw")
+	}
+	if cfg.Telegram.ToolProgressWindow <= 0 {
+		return fmt.Errorf("telegram.tool_progress_window must be > 0")
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Thinking.Effort)) {
 	case "", "none", "low", "medium", "high", "xhigh":

@@ -96,7 +96,7 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 		}
 	}
 	if m.progress != nil {
-		m.progress.ToolStarted(ctx, name, preview)
+		m.progress.ToolStarted(ctx, name, input)
 	}
 }
 
@@ -132,16 +132,19 @@ type toolProgressReporter struct {
 	chatID          int64
 	replyTo         *int64
 	mode            string
+	style           string
+	window          int
 	cleanup         bool
 	messageID       int64
 	entries         []toolProgressEntry
-	seenNames       map[string]struct{}
+	seenKeys        map[string]struct{}
 	recordMessageID func(messageID int64)
 }
 
 type toolProgressEntry struct {
-	Name    string
-	Preview string
+	Key   string
+	Text  string
+	Count int
 }
 
 func (r *Runtime) newToolProgressReporter(msg core.InboundMessage) *toolProgressReporter {
@@ -154,12 +157,20 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage) *toolProgress
 	}
 
 	reporter := &toolProgressReporter{
-		sender:    r.outbound,
-		chatID:    msg.ChatID,
-		replyTo:   replyToMessageID(msg.MessageID),
-		mode:      mode,
-		cleanup:   r.toolProgressCleanup,
-		seenNames: make(map[string]struct{}),
+		sender:   r.outbound,
+		chatID:   msg.ChatID,
+		replyTo:  replyToMessageID(msg.MessageID),
+		mode:     mode,
+		style:    strings.ToLower(strings.TrimSpace(r.toolProgressStyle)),
+		window:   r.toolProgressWindow,
+		cleanup:  r.toolProgressCleanup,
+		seenKeys: make(map[string]struct{}),
+	}
+	if reporter.style == "" {
+		reporter.style = "semantic"
+	}
+	if reporter.window <= 0 {
+		reporter.window = 4
 	}
 	if editor, ok := r.outbound.(messageEditor); ok {
 		reporter.editor = editor
@@ -170,29 +181,24 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage) *toolProgress
 	return reporter
 }
 
-func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, preview string) {
+func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, input json.RawMessage) {
 	if p == nil {
 		return
 	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "tool"
-	}
+	entry := p.makeEntry(name, input)
 
 	update := false
 	switch p.mode {
 	case "all":
-		p.entries = append(p.entries, toolProgressEntry{Name: name, Preview: preview})
-		update = true
+		update = p.addEntry(entry)
 	case "new":
-		if _, ok := p.seenNames[name]; !ok {
-			p.entries = append(p.entries, toolProgressEntry{Name: name, Preview: preview})
-			update = true
+		if _, ok := p.seenKeys[entry.Key]; !ok {
+			update = p.addEntry(entry)
 		}
 	default:
 		return
 	}
-	p.seenNames[name] = struct{}{}
+	p.seenKeys[entry.Key] = struct{}{}
 	if !update {
 		return
 	}
@@ -236,22 +242,211 @@ func (p *toolProgressReporter) Finish(ctx context.Context) {
 }
 
 func (p *toolProgressReporter) render() string {
-	lines := []string{"Working with tools..."}
-	if len(p.entries) > 8 {
-		lines = append(lines, fmt.Sprintf("%d earlier tool starts omitted.", len(p.entries)-8))
+	lines := []string{"Working on it..."}
+	if len(p.entries) > p.window {
+		lines = append(lines, fmt.Sprintf("%d earlier steps omitted.", len(p.entries)-p.window))
 	}
 	start := 0
-	if len(p.entries) > 8 {
-		start = len(p.entries) - 8
+	if len(p.entries) > p.window {
+		start = len(p.entries) - p.window
 	}
 	for i, entry := range p.entries[start:] {
-		line := fmt.Sprintf("%d. %s", start+i+1, entry.Name)
-		if entry.Preview != "" {
-			line += " " + entry.Preview
+		_ = i
+		line := "- " + entry.Text
+		if entry.Count > 1 {
+			line = fmt.Sprintf("- %s (%dx)", entry.Text, entry.Count)
 		}
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (p *toolProgressReporter) addEntry(entry toolProgressEntry) bool {
+	if entry.Key == "" {
+		entry.Key = "tool"
+	}
+	if entry.Text == "" {
+		entry.Text = "Using tool"
+	}
+	entry.Count = 1
+	if n := len(p.entries); n > 0 && p.entries[n-1].Key == entry.Key && p.entries[n-1].Text == entry.Text {
+		p.entries[n-1].Count++
+		return true
+	}
+	p.entries = append(p.entries, entry)
+	return true
+}
+
+func (p *toolProgressReporter) makeEntry(name string, input json.RawMessage) toolProgressEntry {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "tool"
+	}
+	if p.style == "raw" {
+		return rawToolProgressEntry(name, input)
+	}
+	return semanticToolProgressEntry(name, input)
+}
+
+func rawToolProgressEntry(name string, input json.RawMessage) toolProgressEntry {
+	text := name
+	if preview := toolInputPreview(input); preview != "" {
+		text += " " + preview
+	}
+	return toolProgressEntry{
+		Key:  name,
+		Text: text,
+	}
+}
+
+func semanticToolProgressEntry(name string, input json.RawMessage) toolProgressEntry {
+	switch strings.TrimSpace(name) {
+	case "exec":
+		return semanticExecProgressEntry(input)
+	case "memory":
+		return toolProgressEntry{Key: "memory:update", Text: "Updating memory"}
+	case "session_search":
+		return toolProgressEntry{Key: "session:search", Text: "Searching past sessions"}
+	default:
+		return toolProgressEntry{Key: name, Text: fmt.Sprintf("Using %s", name)}
+	}
+}
+
+type execToolInput struct {
+	Command string `json:"command"`
+}
+
+func semanticExecProgressEntry(input json.RawMessage) toolProgressEntry {
+	var parsed execToolInput
+	if err := json.Unmarshal(input, &parsed); err != nil {
+		return toolProgressEntry{Key: "exec", Text: "Running command"}
+	}
+	return classifyExecCommand(parsed.Command)
+}
+
+func classifyExecCommand(command string) toolProgressEntry {
+	lower := strings.ToLower(strings.TrimSpace(command))
+	switch {
+	case lower == "":
+		return toolProgressEntry{Key: "exec", Text: "Running command"}
+	case isServiceRestart(lower):
+		return toolProgressEntry{Key: "service:restart", Text: "Restarting service"}
+	case isServiceStatus(lower):
+		return toolProgressEntry{Key: "service:status", Text: "Checking service status"}
+	case targetsConfig(lower) && commandLooksLikeWrite(lower):
+		return toolProgressEntry{Key: "config:write", Text: "Updating config"}
+	case targetsConfig(lower) && commandLooksLikeRead(lower):
+		return toolProgressEntry{Key: "config:read", Text: "Inspecting config"}
+	case targetsMemory(lower) && commandLooksLikeWrite(lower):
+		return toolProgressEntry{Key: "memory:write", Text: "Writing memory files"}
+	case targetsMemory(lower) && commandLooksLikeRead(lower):
+		return toolProgressEntry{Key: "memory:read", Text: "Inspecting memory files"}
+	case commandLooksLikeTest(lower):
+		return toolProgressEntry{Key: "tests", Text: "Running tests"}
+	case commandLooksLikeBuild(lower):
+		return toolProgressEntry{Key: "build", Text: "Building project"}
+	case commandLooksLikeGitInspect(lower):
+		return toolProgressEntry{Key: "git:inspect", Text: "Inspecting git state"}
+	case commandLooksLikeExternal(lower):
+		return toolProgressEntry{Key: "network", Text: "Calling external service"}
+	case commandLooksLikeRead(lower):
+		return toolProgressEntry{Key: "files:read", Text: "Inspecting files"}
+	case commandLooksLikeWrite(lower):
+		return toolProgressEntry{Key: "files:write", Text: "Updating files"}
+	default:
+		return toolProgressEntry{Key: "exec", Text: "Running command"}
+	}
+}
+
+func isServiceRestart(command string) bool {
+	return strings.Contains(command, "systemctl") && strings.Contains(command, "restart") && strings.Contains(command, "aphelion")
+}
+
+func isServiceStatus(command string) bool {
+	return strings.Contains(command, "systemctl") && strings.Contains(command, "status") && strings.Contains(command, "aphelion")
+}
+
+func targetsConfig(command string) bool {
+	return strings.Contains(command, "aphelion.toml") || strings.Contains(command, "config.toml")
+}
+
+func targetsMemory(command string) bool {
+	return strings.Contains(command, "/memory/") ||
+		strings.Contains(command, "memory/") ||
+		strings.Contains(command, "memory.md") ||
+		strings.Contains(command, "heartbeat.md") ||
+		strings.Contains(command, "knowledge.md") ||
+		strings.Contains(command, "decisions.md") ||
+		strings.Contains(command, "questions.md") ||
+		strings.Contains(command, "rhizome.md") ||
+		strings.Contains(command, "dreams.md")
+}
+
+func commandLooksLikeRead(command string) bool {
+	head := commandHead(command)
+	switch head {
+	case "rg", "grep", "cat", "head", "tail", "ls", "find", "tree", "wc", "stat":
+		return !strings.Contains(command, ">")
+	case "sed":
+		return strings.Contains(command, "-n")
+	default:
+		return false
+	}
+}
+
+func commandLooksLikeWrite(command string) bool {
+	head := commandHead(command)
+	if strings.Contains(command, "cat >") || strings.Contains(command, ">>") || strings.Contains(command, ">") && strings.Contains(command, "cat ") {
+		return true
+	}
+	switch head {
+	case "tee", "mv", "cp", "mkdir", "touch", "chmod", "chown":
+		return true
+	case "sed":
+		return strings.Contains(command, "-i")
+	case "perl":
+		return strings.Contains(command, "-pi")
+	default:
+		return false
+	}
+}
+
+func commandLooksLikeTest(command string) bool {
+	return strings.HasPrefix(command, "go test") ||
+		strings.HasPrefix(command, "pytest") ||
+		strings.HasPrefix(command, "cargo test") ||
+		strings.HasPrefix(command, "npm test") ||
+		strings.HasPrefix(command, "pnpm test") ||
+		strings.HasPrefix(command, "yarn test") ||
+		strings.HasPrefix(command, "make test")
+}
+
+func commandLooksLikeBuild(command string) bool {
+	return strings.HasPrefix(command, "go build") ||
+		strings.HasPrefix(command, "cargo build") ||
+		strings.HasPrefix(command, "npm run build") ||
+		strings.HasPrefix(command, "pnpm build") ||
+		strings.HasPrefix(command, "yarn build") ||
+		strings.HasPrefix(command, "make build")
+}
+
+func commandLooksLikeGitInspect(command string) bool {
+	return strings.HasPrefix(command, "git status") ||
+		strings.HasPrefix(command, "git diff") ||
+		strings.HasPrefix(command, "git show") ||
+		strings.HasPrefix(command, "git log")
+}
+
+func commandLooksLikeExternal(command string) bool {
+	return strings.HasPrefix(command, "curl ") || strings.HasPrefix(command, "wget ")
+}
+
+func commandHead(command string) string {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
 }
 
 func toolInputPreview(input json.RawMessage) string {

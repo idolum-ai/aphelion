@@ -24,6 +24,14 @@ Operators should also have an explicit initialization path, e.g. `aphelion init`
 that seeds missing prompt files under `agent.prompt_root` without overwriting
 existing files.
 
+Telegram progress configuration is intentionally split into:
+
+- **whether** progress appears at all (`tool_progress`)
+- **how** it is rendered (`tool_progress_style`)
+- **how much** of it remains visible (`tool_progress_window`)
+
+The default operator experience should favor semantic, readable progress over raw command dumps.
+
 Implementation is staged. A minimal daemon only needs the small subset required to boot, authenticate, admit DM principals, route DM turns, and manage prompt context. The wider schema remains part of the contract so later hardening does not require redesigning config layout or ownership boundaries.
 
 ```toml
@@ -42,6 +50,9 @@ poll_timeout = 30        # Long-poll timeout in seconds
 # Formatting
 max_message_length = 4096  # Telegram's limit; auto-split longer messages
 parse_mode = "MarkdownV2" # Default parse mode
+tool_progress = "all"      # "all" | "new" | "off"
+tool_progress_style = "semantic"  # "semantic" | "raw"
+tool_progress_window = 4   # Rolling visible steps in the live progress message
 
 # ─── Providers ───
 [providers]

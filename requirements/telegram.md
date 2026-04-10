@@ -426,12 +426,13 @@ func (e *StreamEditor) flush() {
 While the agent is in the tool-call loop, a separate progress message shows what tools are actually running:
 
 ```
-🔍 web_fetch: "https://example.com"
-💻 exec: "git status"
-📝 write_file: "output.md"
+Working on it...
+- Inspecting files
+- Writing memory files
+- Updating config
 ```
 
-Each new tool call adds a line. The message is edited in-place (one message, growing).
+The message is edited in place. Raw tool starts are rewritten into semantic phases by default, and repeated adjacent phases may be aggregated.
 
 This feedback must be driven by real tool lifecycle events, not by assistant narration. If no tool has actually started, the system should not claim that it is "studying the codebase", "inspecting files", or doing any other background work. Typing alone is not enough to justify those claims.
 
@@ -440,60 +441,71 @@ type ToolProgressReporter struct {
     sender    *Sender
     chatID    int64
     messageID int64       // Progress message ID (0 = not sent yet)
-    lines     []string    // Accumulated tool lines
+    entries   []Entry     // Rolling semantic steps
     mode      string      // "all" | "new" | "off"
-    lastTool  string      // For "new" mode dedup
+    style     string      // "semantic" | "raw"
+    window    int         // Visible steps before omission line appears
 }
 
-func (r *ToolProgressReporter) OnToolStart(name string, argsPreview string) {
+func (r *ToolProgressReporter) OnToolStart(name string, input json.RawMessage) {
     if r.mode == "off" {
         return
     }
-    if r.mode == "new" && name == r.lastTool {
+    entry := classifyForProgress(name, input, r.style)
+    if r.mode == "new" && alreadySeen(entry.Key) {
         return
     }
-    r.lastTool = name
-    
-    emoji := toolEmoji(name)
-    line := fmt.Sprintf("%s %s", emoji, name)
-    if argsPreview != "" {
-        if len(argsPreview) > 40 {
-            argsPreview = argsPreview[:37] + "..."
-        }
-        line += fmt.Sprintf(": \"%s\"", argsPreview)
-    }
-    r.lines = append(r.lines, line)
-    
-    text := strings.Join(r.lines, "\n")
+    r.entries = appendOrMerge(r.entries, entry)
+
+    text := renderProgress(r.entries, r.window)
     if r.messageID == 0 {
         r.messageID = r.sender.SendPlainText(r.chatID, text)
     } else {
         r.sender.EditPlainText(r.chatID, r.messageID, text)
     }
 }
-
-func toolEmoji(name string) string {
-    switch name {
-    case "exec":
-        return "💻"
-    case "read_file":
-        return "📖"
-    case "write_file":
-        return "📝"
-    case "web_fetch":
-        return "🔍"
-    case "memory_search":
-        return "🧠"
-    default:
-        return "⚙️"
-    }
-}
 ```
 
 **Modes** (configurable):
-- `"all"` — Show every tool call (default)
-- `"new"` — Only show when tool name changes (dedup consecutive same-tool calls)
+- `"all"` — Show every tool phase transition (default)
+- `"new"` — Only show new tool phases, deduplicating repeats
 - `"off"` — No tool progress messages
+
+### Progress readability
+
+Telegram tool progress should optimize for human readability, not raw argument fidelity.
+
+By default, the live progress message should show semantic phases such as:
+
+- `Inspecting files`
+- `Writing memory files`
+- `Updating config`
+- `Restarting service`
+
+It should not dump raw `exec` payloads or long shell commands into the chat unless the operator explicitly enables a raw/debug mode.
+
+The intended hierarchy is:
+
+1. deterministic local semantic rewriting
+2. bounded aggregation of repeated steps
+3. optional future model-assisted summarization
+
+The semantic progress surface should remain truthful:
+
+- it must still be driven by actual tool starts
+- it may simplify phrasing
+- it must not fabricate work that has not started
+- it must not conceal failure or fallback state
+
+### Progress window
+
+Tool progress is a rolling view, not a full execution log.
+
+- Telegram should show only the most recent semantic steps
+- earlier steps may be summarized as omitted
+- the visible window should be configurable
+
+The full execution/audit trail remains in machine-authored session and turn-run records rather than the Telegram progress artifact.
 
 **Cleanup**: After the turn completes, optionally delete the progress message (or leave it for context). Configurable.
 
@@ -519,6 +531,8 @@ stream_cursor = " \u2589"         # Cursor shown during streaming
 
 # Tool progress
 tool_progress = "all"             # "all" | "new" | "off"
+tool_progress_style = "semantic"  # "semantic" | "raw"
+tool_progress_window = 4          # Visible semantic steps before older ones are omitted
 tool_progress_cleanup = false     # Delete progress message after turn completes
 ```
 

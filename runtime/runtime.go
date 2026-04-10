@@ -54,6 +54,8 @@ type Runtime struct {
 	streamEditInterval  time.Duration
 	streamCursor        string
 	toolProgressMode    string
+	toolProgressStyle   string
+	toolProgressWindow  int
 	toolProgressCleanup bool
 
 	idleExpiry time.Duration
@@ -209,6 +211,14 @@ func New(
 	if strings.TrimSpace(streamCursor) == "" {
 		streamCursor = " ▉"
 	}
+	toolProgressStyle := strings.ToLower(strings.TrimSpace(cfg.Telegram.ToolProgressStyle))
+	if toolProgressStyle == "" {
+		toolProgressStyle = "semantic"
+	}
+	toolProgressWindow := cfg.Telegram.ToolProgressWindow
+	if toolProgressWindow <= 0 {
+		toolProgressWindow = 4
+	}
 
 	return &Runtime{
 		cfg:      cfg,
@@ -226,6 +236,8 @@ func New(
 		streamEditInterval:  streamEditInterval,
 		streamCursor:        streamCursor,
 		toolProgressMode:    strings.ToLower(strings.TrimSpace(cfg.Telegram.ToolProgress)),
+		toolProgressStyle:   toolProgressStyle,
+		toolProgressWindow:  toolProgressWindow,
 		toolProgressCleanup: cfg.Telegram.ToolProgressCleanup,
 		idleExpiry:          idleExpiry,
 		expireIdle:          store.ExpireIdle,

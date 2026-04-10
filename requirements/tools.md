@@ -60,6 +60,7 @@ So the intended synthesis is:
 5. **One registry.** The agent sees a single normalized tool surface even if implementation backends differ.
 6. **Governor-only execution.** The face never receives tools or authority to invoke them.
 7. **Per-run truth.** The manifest may change by principal, session kind, and run kind; stale static tool lists are not acceptable.
+8. **Readable status.** User-visible progress derived from tools should summarize intent and phase, not dump raw payloads by default.
 
 ## Tool Layers
 
@@ -120,6 +121,26 @@ The model should never be shown stale tool definitions copied by hand into promp
 Tool guidance belongs to the **governor prompt**, not the face prompt.
 
 This tool section is also a major part of the governor's runtime self-awareness.
+
+## User-Facing Tool Progress
+
+Tool progress is a transport/UI concern derived from real tool activity.
+
+The runtime may rewrite raw tool starts into bounded semantic status such as:
+
+- `Inspecting files`
+- `Writing memory files`
+- `Updating config`
+- `Restarting service`
+
+This rewriting must remain:
+
+- machine-derived
+- truthful to actual tool starts
+- lower fidelity than the audit log
+- configurable, with a raw/debug mode available when needed
+
+Raw tool payloads should remain in logs and durable records. Telegram progress should default to a human-readable phase view.
 
 ## Per-Run Manifest Shaping
 

@@ -1663,8 +1663,14 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if len(sender.sent) != 2 {
 		t.Fatalf("sent len = %d, want 2 (progress + reply)", len(sender.sent))
 	}
-	if !strings.Contains(sender.sent[0].Text, "Working with tools") {
+	if !strings.Contains(sender.sent[0].Text, "Working on it") {
 		t.Fatalf("progress text = %q, want tool progress message", sender.sent[0].Text)
+	}
+	if !strings.Contains(sender.sent[0].Text, "Inspecting files") {
+		t.Fatalf("progress text = %q, want semantic inspection label", sender.sent[0].Text)
+	}
+	if strings.Contains(sender.sent[0].Text, "rg first") {
+		t.Fatalf("progress text = %q, want semantic progress instead of raw command", sender.sent[0].Text)
 	}
 	if sender.sent[0].ReplyTo == nil || *sender.sent[0].ReplyTo != 99 {
 		t.Fatalf("progress reply_to = %#v, want 99", sender.sent[0].ReplyTo)
@@ -1672,8 +1678,8 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if len(sender.edits) != 1 {
 		t.Fatalf("edit count = %d, want 1", len(sender.edits))
 	}
-	if !strings.Contains(sender.edits[0].Text, "rg second") {
-		t.Fatalf("edit text = %q, want second tool preview", sender.edits[0].Text)
+	if !strings.Contains(sender.edits[0].Text, "Inspecting files (2x)") {
+		t.Fatalf("edit text = %q, want aggregated semantic tool progress", sender.edits[0].Text)
 	}
 	sender.mu.Unlock()
 

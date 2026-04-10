@@ -188,6 +188,7 @@ Required behavior:
 - record the attempted outbound action
 - preserve enough state to reconcile later
 - do not assume the user saw a message that was never acknowledged
+- keep progress artifacts bounded and readable enough that degraded-mode guidance remains legible
 
 ### D. Background loop failures
 
