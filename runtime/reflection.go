@@ -75,7 +75,6 @@ func (r *Runtime) reflectCuratedMemory(
 		memstore.StoreKnowledge,
 		memstore.StoreDecisions,
 		memstore.StoreQuestions,
-		memstore.StoreRhizome,
 	} {
 		content := strings.TrimSpace(sections[store])
 		if content == "" {
@@ -92,10 +91,48 @@ func (r *Runtime) reflectCuratedMemory(
 		updatedStores = append(updatedStores, store)
 	}
 
+	if rhizomeContent := strings.TrimSpace(sections[memstore.StoreRhizome]); rhizomeContent != "" {
+		if err := r.updateRhizome(dynamicScopeName(scopeRoot), scopeRoot, rhizomeContent); err != nil {
+			return "", err
+		}
+		updatedStores = append(updatedStores, memstore.StoreRhizome)
+	}
+
 	if len(updatedStores) == 0 {
 		return "", nil
 	}
 	return "Reflected curated memory updates for: " + strings.Join(updatedStores, ", "), nil
+}
+
+func (r *Runtime) updateRhizome(scopeName string, scopeRoot string, raw string) error {
+	lines := strings.Split(raw, "\n")
+	recorded := false
+	for _, line := range lines {
+		concepts := parseRhizomeConceptLine(line)
+		if len(concepts) < 2 {
+			continue
+		}
+		if err := r.store.RecordRhizomeEvent(scopeName, "heartbeat_reflection", 1.0, concepts); err != nil {
+			return fmt.Errorf("record rhizome event: %w", err)
+		}
+		recorded = true
+	}
+	if !recorded {
+		return nil
+	}
+
+	edges, err := r.store.TopRhizomeEdges(scopeName, 12)
+	if err != nil {
+		return fmt.Errorf("load rhizome projection: %w", err)
+	}
+	path, _, err := memstore.ResolveStorePath(scopeRoot, memstore.StoreRhizome)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create rhizome dir: %w", err)
+	}
+	return os.WriteFile(path, []byte(renderRhizomeProjection(edges)), 0o600)
 }
 
 func (r *Runtime) loadReflectionInput(scopeRoot string, since time.Time, now time.Time, events []session.ReviewEvent) (*reflectionInput, error) {
@@ -190,6 +227,85 @@ func parseReflectionSections(raw string) map[string]string {
 		memstore.StoreQuestions: extractTaggedSection(raw, reflectionQuestionsTag, reflectionQuestionsEndTag),
 		memstore.StoreRhizome:   extractTaggedSection(raw, reflectionRhizomeTag, reflectionRhizomeEndTag),
 	}
+}
+
+func parseRhizomeConceptLine(line string) []string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimPrefix(line, "-")
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil
+	}
+
+	switch {
+	case strings.Contains(line, "<->"):
+		return splitRhizomeConcepts(line, "<->")
+	case strings.Contains(line, "->"):
+		return splitRhizomeConcepts(line, "->")
+	case strings.Contains(line, ";"):
+		return splitRhizomeFields(line, ";")
+	case strings.Contains(line, ","):
+		return splitRhizomeFields(line, ",")
+	default:
+		return nil
+	}
+}
+
+func splitRhizomeConcepts(raw string, sep string) []string {
+	parts := strings.Split(raw, sep)
+	return splitRhizomeParts(parts)
+}
+
+func splitRhizomeFields(raw string, sep string) []string {
+	parts := strings.Split(raw, sep)
+	return splitRhizomeParts(parts)
+}
+
+func splitRhizomeParts(parts []string) []string {
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
+}
+
+func renderRhizomeProjection(edges []session.RhizomeEdge) string {
+	lines := []string{
+		"# rhizome.md",
+		"",
+		"Associative field projected from the internal rhizome graph.",
+		"",
+	}
+	if len(edges) == 0 {
+		lines = append(lines, "No strong associations yet.")
+		return strings.Join(lines, "\n") + "\n"
+	}
+	for _, edge := range edges {
+		lines = append(lines,
+			fmt.Sprintf("- %s <-> %s [strength: %.2f, count: %d, state: %s]",
+				edge.LeftConcept,
+				edge.RightConcept,
+				edge.Strength,
+				edge.RecurrenceCount,
+				edge.DecayState,
+			),
+		)
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func dynamicScopeName(scopeRoot string) string {
+	if strings.TrimSpace(scopeRoot) == "" {
+		return "shared"
+	}
+	return filepath.Clean(scopeRoot)
 }
 
 func extractTaggedSection(raw string, startTag string, endTag string) string {

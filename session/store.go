@@ -4,6 +4,7 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -166,6 +167,37 @@ func (s *SQLiteStore) init() error {
 			strategy TEXT NOT NULL DEFAULT 'summarize',
 			FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS rhizome_nodes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope TEXT NOT NULL,
+			name TEXT NOT NULL,
+			event_count INTEGER NOT NULL DEFAULT 0,
+			last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(scope, name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_rhizome_nodes_scope ON rhizome_nodes(scope, name)`,
+		`CREATE TABLE IF NOT EXISTS rhizome_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope TEXT NOT NULL,
+			source TEXT NOT NULL,
+			salience REAL NOT NULL DEFAULT 1.0,
+			concepts_json TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_rhizome_events_scope ON rhizome_events(scope, created_at, id)`,
+		`CREATE TABLE IF NOT EXISTS rhizome_edges (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope TEXT NOT NULL,
+			left_concept TEXT NOT NULL,
+			right_concept TEXT NOT NULL,
+			strength REAL NOT NULL DEFAULT 0,
+			recurrence_count INTEGER NOT NULL DEFAULT 0,
+			last_reinforced_at TEXT NOT NULL DEFAULT (datetime('now')),
+			decay_state TEXT NOT NULL DEFAULT 'hot',
+			last_source TEXT,
+			UNIQUE(scope, left_concept, right_concept)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_rhizome_edges_scope ON rhizome_edges(scope, strength DESC, recurrence_count DESC)`,
 	}
 
 	for _, stmt := range statements {
@@ -676,6 +708,174 @@ func (s *SQLiteStore) SearchMessages(query string, limit int, scope *SessionKey)
 		return nil, fmt.Errorf("iterate search hits: %w", err)
 	}
 	return hits, nil
+}
+
+func (s *SQLiteStore) RecordRhizomeEvent(scope string, source string, salience float64, concepts []string) error {
+	scope = strings.TrimSpace(scope)
+	source = strings.TrimSpace(source)
+	normalized := normalizeRhizomeConcepts(concepts)
+	if scope == "" {
+		return fmt.Errorf("rhizome scope is required")
+	}
+	if source == "" {
+		source = "reflection"
+	}
+	if len(normalized) < 2 {
+		return nil
+	}
+	if salience <= 0 {
+		salience = 1
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin rhizome event tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, concept := range normalized {
+		if _, err := tx.Exec(`
+			INSERT INTO rhizome_nodes(scope, name, event_count, last_seen_at)
+			VALUES (?, ?, 1, ?)
+			ON CONFLICT(scope, name) DO UPDATE SET
+				event_count = event_count + 1,
+				last_seen_at = excluded.last_seen_at
+		`, scope, concept, now); err != nil {
+			return fmt.Errorf("upsert rhizome node %q: %w", concept, err)
+		}
+	}
+
+	conceptsJSON, err := json.Marshal(normalized)
+	if err != nil {
+		return fmt.Errorf("marshal rhizome concepts: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO rhizome_events(scope, source, salience, concepts_json, created_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, scope, source, salience, string(conceptsJSON), now); err != nil {
+		return fmt.Errorf("insert rhizome event: %w", err)
+	}
+
+	for i := 0; i < len(normalized); i++ {
+		for j := i + 1; j < len(normalized); j++ {
+			left, right := orderedPair(normalized[i], normalized[j])
+			if _, err := tx.Exec(`
+				INSERT INTO rhizome_edges(
+					scope, left_concept, right_concept, strength, recurrence_count, last_reinforced_at, decay_state, last_source
+				) VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+				ON CONFLICT(scope, left_concept, right_concept) DO UPDATE SET
+					strength = rhizome_edges.strength + excluded.strength,
+					recurrence_count = rhizome_edges.recurrence_count + 1,
+					last_reinforced_at = excluded.last_reinforced_at,
+					decay_state = CASE
+						WHEN rhizome_edges.recurrence_count + 1 >= 8 THEN 'frozen'
+						WHEN rhizome_edges.recurrence_count + 1 >= 5 THEN 'cold'
+						WHEN rhizome_edges.recurrence_count + 1 >= 3 THEN 'warm'
+						ELSE 'hot'
+					END,
+					last_source = excluded.last_source
+			`, scope, left, right, salience, now, classifyRhizomeDecayState(1), source); err != nil {
+				return fmt.Errorf("upsert rhizome edge %q/%q: %w", left, right, err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit rhizome event tx: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) TopRhizomeEdges(scope string, limit int) ([]RhizomeEdge, error) {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return nil, fmt.Errorf("rhizome scope is required")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.Query(`
+		SELECT id, scope, left_concept, right_concept, strength, recurrence_count, last_reinforced_at, decay_state, COALESCE(last_source, '')
+		FROM rhizome_edges
+		WHERE scope = ?
+		ORDER BY strength DESC, recurrence_count DESC, last_reinforced_at DESC
+		LIMIT ?
+	`, scope, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query rhizome edges: %w", err)
+	}
+	defer rows.Close()
+
+	edges := make([]RhizomeEdge, 0, limit)
+	for rows.Next() {
+		var edge RhizomeEdge
+		var ts string
+		if err := rows.Scan(&edge.ID, &edge.Scope, &edge.LeftConcept, &edge.RightConcept, &edge.Strength, &edge.RecurrenceCount, &ts, &edge.DecayState, &edge.LastSource); err != nil {
+			return nil, fmt.Errorf("scan rhizome edge: %w", err)
+		}
+		tm, err := parseSQLiteTime(ts)
+		if err != nil {
+			return nil, fmt.Errorf("parse rhizome edge ts: %w", err)
+		}
+		edge.LastReinforcedAt = tm
+		edges = append(edges, edge)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rhizome edges: %w", err)
+	}
+	return edges, nil
+}
+
+func (s *SQLiteStore) ResetRhizome(scope string) error {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return fmt.Errorf("rhizome scope is required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin reset rhizome tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, stmt := range []struct {
+		query string
+		args  []any
+	}{
+		{`DELETE FROM rhizome_edges WHERE scope = ?`, []any{scope}},
+		{`DELETE FROM rhizome_events WHERE scope = ?`, []any{scope}},
+		{`DELETE FROM rhizome_nodes WHERE scope = ?`, []any{scope}},
+	} {
+		if _, err := tx.Exec(stmt.query, stmt.args...); err != nil {
+			return fmt.Errorf("reset rhizome scope %s: %w", scope, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit reset rhizome tx: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ResetAllRhizome() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin reset all rhizome tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, stmt := range []string{
+		`DELETE FROM rhizome_edges`,
+		`DELETE FROM rhizome_events`,
+		`DELETE FROM rhizome_nodes`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("reset all rhizome with %q: %w", stmt, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit reset all rhizome tx: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) RecordOutbound(key SessionKey, turnIndex int, telegramMsgID int64, msgType string) error {
@@ -1426,6 +1626,43 @@ func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) 
 	run.ErrorText = nullToString(errorTextRaw)
 	run.RecoverySummary = nullToString(recoverySummaryRaw)
 	return run, nil
+}
+
+func normalizeRhizomeConcepts(concepts []string) []string {
+	seen := make(map[string]struct{}, len(concepts))
+	out := make([]string, 0, len(concepts))
+	for _, concept := range concepts {
+		normalized := strings.ToLower(strings.TrimSpace(concept))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func orderedPair(a string, b string) (string, string) {
+	if a <= b {
+		return a, b
+	}
+	return b, a
+}
+
+func classifyRhizomeDecayState(recurrence int) string {
+	switch {
+	case recurrence >= 8:
+		return "frozen"
+	case recurrence >= 5:
+		return "cold"
+	case recurrence >= 3:
+		return "warm"
+	default:
+		return "hot"
+	}
 }
 
 func mustParseSQLiteTime(raw string) time.Time {

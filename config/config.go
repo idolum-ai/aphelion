@@ -21,6 +21,7 @@ type Config struct {
 	Providers  ProvidersConfig  `toml:"providers"`
 	Sessions   SessionsConfig   `toml:"sessions"`
 	Agent      AgentConfig      `toml:"agent"`
+	Memory     MemoryConfig     `toml:"memory"`
 	Face       FaceConfig       `toml:"face"`
 	Heartbeat  HeartbeatConfig  `toml:"heartbeat"`
 	Cron       CronConfig       `toml:"cron"`
@@ -90,6 +91,30 @@ type AgentConfig struct {
 	BootstrapTotalMaxChars int      `toml:"bootstrap_total_max_chars"`
 	DailyNotes             bool     `toml:"daily_notes"`
 	DailyNotesDir          string   `toml:"daily_notes_dir"`
+}
+
+type MemoryConfig struct {
+	SessionSearch    bool                   `toml:"session_search"`
+	SemanticIndexing bool                   `toml:"semantic_indexing"`
+	Reflection       MemoryReflectionConfig `toml:"reflection"`
+	Decay            MemoryDecayConfig      `toml:"decay"`
+	Identity         MemoryIdentityConfig   `toml:"identity"`
+}
+
+type MemoryReflectionConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Every   string `toml:"every"`
+}
+
+type MemoryDecayConfig struct {
+	Enabled  bool `toml:"enabled"`
+	HotDays  int  `toml:"hot_days"`
+	WarmDays int  `toml:"warm_days"`
+	ColdDays int  `toml:"cold_days"`
+}
+
+type MemoryIdentityConfig struct {
+	Preserve []string `toml:"preserve"`
 }
 
 type FaceConfig struct {
@@ -180,13 +205,13 @@ func Default() Config {
 			IdleExpiry: "24h",
 		},
 		Agent: AgentConfig{
-			PromptRoot:    "~/.aphelion/agent",
-			ExecRoot:      "~/.aphelion/workspace",
-			SharedMemoryRoot: "~/.aphelion/agent",
+			PromptRoot:        "~/.aphelion/agent",
+			ExecRoot:          "~/.aphelion/workspace",
+			SharedMemoryRoot:  "~/.aphelion/agent",
 			UserWorkspaceRoot: "~/.aphelion/state/isolated/workspaces",
-			UserMemoryRoot: "~/.aphelion/state/isolated/memory",
-			MaxIterations: 50,
-			ToolTimeout:   300,
+			UserMemoryRoot:    "~/.aphelion/state/isolated/memory",
+			MaxIterations:     50,
+			ToolTimeout:       300,
 			BootstrapFiles: []string{
 				"SOUL.md",
 				"IDENTITY.md",
@@ -200,6 +225,23 @@ func Default() Config {
 			BootstrapTotalMaxChars: 150000,
 			DailyNotes:             true,
 			DailyNotesDir:          "memory",
+		},
+		Memory: MemoryConfig{
+			SessionSearch:    false,
+			SemanticIndexing: false,
+			Reflection: MemoryReflectionConfig{
+				Enabled: true,
+				Every:   "6h",
+			},
+			Decay: MemoryDecayConfig{
+				Enabled:  true,
+				HotDays:  3,
+				WarmDays: 14,
+				ColdDays: 30,
+			},
+			Identity: MemoryIdentityConfig{
+				Preserve: []string{"SOUL.md", "IDENTITY.md", "IDOLUM.md", "MEMORY.md"},
+			},
 		},
 		Face: FaceConfig{
 			Backend: "provider",
@@ -365,6 +407,30 @@ func validate(cfg *Config) error {
 	}
 	if strings.TrimSpace(cfg.Agent.DailyNotesDir) == "" {
 		return fmt.Errorf("agent.daily_notes_dir is required")
+	}
+	if strings.TrimSpace(cfg.Memory.Reflection.Every) == "" {
+		return fmt.Errorf("memory.reflection.every is required")
+	}
+	if _, err := time.ParseDuration(strings.TrimSpace(cfg.Memory.Reflection.Every)); err != nil {
+		return fmt.Errorf("memory.reflection.every must be a valid duration: %w", err)
+	}
+	if cfg.Memory.Decay.HotDays <= 0 {
+		return fmt.Errorf("memory.decay.hot_days must be > 0")
+	}
+	if cfg.Memory.Decay.WarmDays <= 0 {
+		return fmt.Errorf("memory.decay.warm_days must be > 0")
+	}
+	if cfg.Memory.Decay.ColdDays <= 0 {
+		return fmt.Errorf("memory.decay.cold_days must be > 0")
+	}
+	if cfg.Memory.Decay.HotDays > cfg.Memory.Decay.WarmDays {
+		return fmt.Errorf("memory.decay.hot_days must be <= warm_days")
+	}
+	if cfg.Memory.Decay.WarmDays > cfg.Memory.Decay.ColdDays {
+		return fmt.Errorf("memory.decay.warm_days must be <= cold_days")
+	}
+	if len(cfg.Memory.Identity.Preserve) == 0 {
+		return fmt.Errorf("memory.identity.preserve must not be empty")
 	}
 	faceBackend := strings.ToLower(strings.TrimSpace(cfg.Face.Backend))
 	switch faceBackend {

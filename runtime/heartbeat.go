@@ -83,9 +83,13 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		Workspace:       promptContext,
 	})
 
-	reflectionSummary, reflectionErr := r.reflectCuratedMemory(ctx, dynamicPromptRoot(scope), systemPrompt, lastMaintenanceAt, now, events)
-	if reflectionErr != nil {
-		log.Printf("WARN heartbeat reflection failed: %v", reflectionErr)
+	reflectionSummary := ""
+	if r.heartbeatShouldReflect(lastMaintenanceAt, now) {
+		var reflectionErr error
+		reflectionSummary, reflectionErr = r.reflectCuratedMemory(ctx, dynamicPromptRoot(scope), systemPrompt, lastMaintenanceAt, now, events)
+		if reflectionErr != nil {
+			log.Printf("WARN heartbeat reflection failed: %v", reflectionErr)
+		}
 	}
 	if len(events) == 0 {
 		if strings.TrimSpace(reflectionSummary) == "" {
@@ -228,6 +232,20 @@ func (r *Runtime) resolveHeartbeatTarget(now time.Time) (int64, bool) {
 		}
 		return id, deliver
 	}
+}
+
+func (r *Runtime) heartbeatShouldReflect(lastMaintenanceAt time.Time, now time.Time) bool {
+	if r == nil || !r.cfg.Memory.Reflection.Enabled {
+		return false
+	}
+	if lastMaintenanceAt.IsZero() {
+		return true
+	}
+	every, err := time.ParseDuration(strings.TrimSpace(r.cfg.Memory.Reflection.Every))
+	if err != nil || every <= 0 {
+		return true
+	}
+	return now.Sub(lastMaintenanceAt) >= every
 }
 
 func (r *Runtime) lastActiveAdminChat(adminIDs []int64) int64 {

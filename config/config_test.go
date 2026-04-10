@@ -60,6 +60,15 @@ workspace = "./workspace"
 	if !cfg.Agent.DailyNotes {
 		t.Fatal("daily notes should default to enabled")
 	}
+	if !cfg.Memory.Reflection.Enabled || cfg.Memory.Reflection.Every != "6h" {
+		t.Fatalf("memory.reflection defaults = %#v, want enabled/6h", cfg.Memory.Reflection)
+	}
+	if !cfg.Memory.Decay.Enabled || cfg.Memory.Decay.HotDays != 3 || cfg.Memory.Decay.WarmDays != 14 || cfg.Memory.Decay.ColdDays != 30 {
+		t.Fatalf("memory.decay defaults = %#v, want enabled 3/14/30", cfg.Memory.Decay)
+	}
+	if len(cfg.Memory.Identity.Preserve) == 0 || cfg.Memory.Identity.Preserve[0] != "SOUL.md" {
+		t.Fatalf("memory.identity.preserve = %#v, want defaults", cfg.Memory.Identity.Preserve)
+	}
 	if cfg.Face.Backend != "provider" {
 		t.Fatalf("face.backend = %q, want provider", cfg.Face.Backend)
 	}
@@ -172,6 +181,19 @@ bootstrap_total_max_chars = 600
 daily_notes = false
 daily_notes_dir = "notes"
 
+[memory.reflection]
+enabled = false
+every = "12h"
+
+[memory.decay]
+enabled = true
+hot_days = 2
+warm_days = 7
+cold_days = 21
+
+[memory.identity]
+preserve = ["SOUL.md", "IDENTITY.md"]
+
 [face]
 backend = "governor_passthrough"
 
@@ -237,6 +259,15 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Agent.DailyNotes {
 		t.Fatal("daily_notes = true, want false")
+	}
+	if cfg.Memory.Reflection.Enabled || cfg.Memory.Reflection.Every != "12h" {
+		t.Fatalf("memory.reflection = %#v, want disabled/12h", cfg.Memory.Reflection)
+	}
+	if !cfg.Memory.Decay.Enabled || cfg.Memory.Decay.HotDays != 2 || cfg.Memory.Decay.WarmDays != 7 || cfg.Memory.Decay.ColdDays != 21 {
+		t.Fatalf("memory.decay = %#v, want enabled 2/7/21", cfg.Memory.Decay)
+	}
+	if got, want := cfg.Memory.Identity.Preserve, []string{"SOUL.md", "IDENTITY.md"}; !equalStrings(got, want) {
+		t.Fatalf("memory.identity.preserve = %#v, want %#v", got, want)
 	}
 	if cfg.Face.Backend != "governor_passthrough" {
 		t.Fatalf("face.backend = %q, want governor_passthrough", cfg.Face.Backend)

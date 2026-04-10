@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/config"
 )
@@ -119,5 +120,55 @@ func TestClearSharedDynamicMemoryPreservesIdentitySectionInMemory(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(root, "memory", "knowledge.md")); !os.IsNotExist(err) {
 		t.Fatalf("knowledge.md still exists, want removed; err=%v", err)
+	}
+}
+
+func TestArchiveColdDailyNotesMovesOldNotesIntoArchive(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := &config.Config{
+		Agent: config.AgentConfig{
+			SharedMemoryRoot: root,
+			UserMemoryRoot:   filepath.Join(root, "users"),
+			DailyNotesDir:    "memory",
+		},
+		Memory: config.MemoryConfig{
+			Decay: config.MemoryDecayConfig{
+				Enabled:  true,
+				HotDays:  3,
+				WarmDays: 7,
+				ColdDays: 30,
+			},
+		},
+	}
+
+	noteRoot := filepath.Join(root, "memory")
+	if err := os.MkdirAll(noteRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(noteRoot) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(noteRoot, "2026-01-01.md"), []byte("old note"), 0o600); err != nil {
+		t.Fatalf("WriteFile(old note) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(noteRoot, "2026-04-09.md"), []byte("recent note"), 0o600); err != nil {
+		t.Fatalf("WriteFile(recent note) err = %v", err)
+	}
+
+	archived, err := archiveColdDailyNotes(cfg, time.Date(2026, time.April, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("archiveColdDailyNotes() err = %v", err)
+	}
+	if archived != 1 {
+		t.Fatalf("archived = %d, want 1", archived)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "memory", "2026-01-01.md")); !os.IsNotExist(err) {
+		t.Fatalf("old note still active, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "memory", "archive", "daily", "2026-01-01.md")); err != nil {
+		t.Fatalf("archived note missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "memory", "2026-04-09.md")); err != nil {
+		t.Fatalf("recent note missing: %v", err)
 	}
 }

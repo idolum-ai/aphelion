@@ -699,6 +699,17 @@ func TestHeartbeatReflectionWritesCuratedMemoryFromDailyNotes(t *testing.T) {
 			t.Fatalf("%s = %q, want substring %q", check.path, string(raw), check.want)
 		}
 	}
+	rhizomeRaw, err := os.ReadFile(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "rhizome.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(rhizome.md) err = %v", err)
+	}
+	rhizomeText := string(rhizomeRaw)
+	if !strings.Contains(rhizomeText, "memory distillation") {
+		t.Fatalf("rhizome.md = %q, want projected association text", rhizomeText)
+	}
+	if !strings.Contains(rhizomeText, "strength:") {
+		t.Fatalf("rhizome.md = %q, want graph projection metadata", rhizomeText)
+	}
 
 	sender.mu.Lock()
 	if len(sender.sent) != 0 {
@@ -1056,6 +1067,21 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 			BootstrapTotalMaxChars: 150000,
 			DailyNotes:             false,
 			DailyNotesDir:          "memory",
+		},
+		Memory: config.MemoryConfig{
+			Reflection: config.MemoryReflectionConfig{
+				Enabled: true,
+				Every:   "6h",
+			},
+			Decay: config.MemoryDecayConfig{
+				Enabled:  true,
+				HotDays:  3,
+				WarmDays: 14,
+				ColdDays: 30,
+			},
+			Identity: config.MemoryIdentityConfig{
+				Preserve: []string{"SOUL.md", "IDENTITY.md", "IDOLUM.md", "MEMORY.md"},
+			},
 		},
 	}
 

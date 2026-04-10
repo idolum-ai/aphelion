@@ -212,6 +212,56 @@ func TestSearchMessagesFiltersByScopeAndReturnsNewestFirst(t *testing.T) {
 	}
 }
 
+func TestRhizomeEventRecordingAndProjectionEdges(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	if err := store.RecordRhizomeEvent("shared", "heartbeat", 1.0, []string{"governor", "memory", "reflection"}); err != nil {
+		t.Fatalf("RecordRhizomeEvent(1) err = %v", err)
+	}
+	if err := store.RecordRhizomeEvent("shared", "heartbeat", 1.0, []string{"memory", "reflection"}); err != nil {
+		t.Fatalf("RecordRhizomeEvent(2) err = %v", err)
+	}
+
+	edges, err := store.TopRhizomeEdges("shared", 10)
+	if err != nil {
+		t.Fatalf("TopRhizomeEdges() err = %v", err)
+	}
+	if len(edges) == 0 {
+		t.Fatal("TopRhizomeEdges() returned no edges, want at least one")
+	}
+	if edges[0].LeftConcept != "memory" || edges[0].RightConcept != "reflection" {
+		t.Fatalf("top edge = %#v, want memory/reflection strongest edge", edges[0])
+	}
+	if edges[0].RecurrenceCount != 2 {
+		t.Fatalf("top edge recurrence = %d, want 2", edges[0].RecurrenceCount)
+	}
+}
+
+func TestResetAllRhizomeClearsGraph(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	if err := store.RecordRhizomeEvent("shared", "heartbeat", 1.0, []string{"a", "b"}); err != nil {
+		t.Fatalf("RecordRhizomeEvent() err = %v", err)
+	}
+	if err := store.ResetAllRhizome(); err != nil {
+		t.Fatalf("ResetAllRhizome() err = %v", err)
+	}
+
+	edges, err := store.TopRhizomeEdges("shared", 10)
+	if err != nil {
+		t.Fatalf("TopRhizomeEdges() err = %v", err)
+	}
+	if len(edges) != 0 {
+		t.Fatalf("edges len = %d, want 0 after reset", len(edges))
+	}
+}
+
 func newTestSQLiteStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 

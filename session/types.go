@@ -149,3 +149,32 @@ type SearchHit struct {
 	CanonicalContent string
 	CreatedAt        time.Time
 }
+
+type RhizomeNode struct {
+	ID         int64
+	Scope      string
+	Name       string
+	EventCount int
+	LastSeenAt time.Time
+}
+
+type RhizomeEvent struct {
+	ID        int64
+	Scope     string
+	Source    string
+	Salience  float64
+	Concepts  []string
+	CreatedAt time.Time
+}
+
+type RhizomeEdge struct {
+	ID               int64
+	Scope            string
+	LeftConcept      string
+	RightConcept     string
+	Strength         float64
+	RecurrenceCount  int
+	LastReinforcedAt time.Time
+	DecayState       string
+	LastSource       string
+}

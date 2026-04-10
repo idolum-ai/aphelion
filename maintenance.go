@@ -229,9 +229,14 @@ func runGCCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	archivedNotes, err := archiveColdDailyNotes(cfg, time.Now())
+	if err != nil {
+		return err
+	}
 
 	fmt.Fprintf(os.Stdout, "expired_sessions: %d\n", expired)
 	fmt.Fprintf(os.Stdout, "removed_temp_dirs: %d\n", removedTemps)
+	fmt.Fprintf(os.Stdout, "archived_daily_notes: %d\n", archivedNotes)
 	return nil
 }
 
@@ -292,6 +297,11 @@ func runForgetCommand(args []string) error {
 				removedPrincipalRoots++
 			}
 		}
+		if store != nil {
+			if err := store.ResetRhizome(filepath.Clean(filepath.Join(cfg.Agent.UserMemoryRoot, fmt.Sprintf("%d", *principalID)))); err != nil {
+				return err
+			}
+		}
 	}
 
 	removedSharedFiles := 0
@@ -299,6 +309,11 @@ func runForgetCommand(args []string) error {
 		removedSharedFiles, err = clearSharedDynamicMemory(cfg)
 		if err != nil {
 			return err
+		}
+		if store != nil {
+			if err := store.ResetRhizome(filepath.Clean(cfg.Agent.SharedMemoryRoot)); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -369,6 +384,16 @@ func runResetCommand(args []string) error {
 		removedUserMemory, err = removeContents(cfg.Agent.UserMemoryRoot)
 		if err != nil {
 			return err
+		}
+		store, err := openStoreIfExists(cfg.Sessions.DBPath)
+		if err != nil {
+			return err
+		}
+		if store != nil {
+			defer store.Close()
+			if err := store.ResetAllRhizome(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -502,6 +527,80 @@ func cleanupTempTrees(cfg *config.Config) (int, error) {
 		}
 	}
 	return removeMany(paths)
+}
+
+func archiveColdDailyNotes(cfg *config.Config, now time.Time) (int, error) {
+	if cfg == nil || !cfg.Memory.Decay.Enabled || cfg.Memory.Decay.ColdDays <= 0 {
+		return 0, nil
+	}
+
+	roots := []string{cfg.Agent.SharedMemoryRoot}
+	entries, err := os.ReadDir(cfg.Agent.UserMemoryRoot)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("read user memory root %s: %w", cfg.Agent.UserMemoryRoot, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			roots = append(roots, filepath.Join(cfg.Agent.UserMemoryRoot, entry.Name()))
+		}
+	}
+
+	archived := 0
+	cutoff := now.AddDate(0, 0, -cfg.Memory.Decay.ColdDays)
+	for _, root := range uniqueStrings(roots) {
+		n, err := archiveNotesUnderRoot(root, cfg.Agent.DailyNotesDir, cutoff)
+		if err != nil {
+			return archived, err
+		}
+		archived += n
+	}
+	return archived, nil
+}
+
+func archiveNotesUnderRoot(root string, notesDir string, cutoff time.Time) (int, error) {
+	root = strings.TrimSpace(root)
+	notesDir = strings.TrimSpace(notesDir)
+	if root == "" || notesDir == "" {
+		return 0, nil
+	}
+
+	sourceRoot := filepath.Join(root, filepath.FromSlash(notesDir))
+	entries, err := os.ReadDir(sourceRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read daily notes dir %s: %w", sourceRoot, err)
+	}
+
+	archiveRoot := filepath.Join(root, "memory", "archive", "daily")
+	archived := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) != ".md" {
+			continue
+		}
+		ts, err := time.Parse("2006-01-02", strings.TrimSuffix(name, ".md"))
+		if err != nil {
+			continue
+		}
+		if !ts.Before(cutoff) {
+			continue
+		}
+		if err := os.MkdirAll(archiveRoot, 0o755); err != nil {
+			return archived, fmt.Errorf("create daily archive dir %s: %w", archiveRoot, err)
+		}
+		src := filepath.Join(sourceRoot, name)
+		dst := filepath.Join(archiveRoot, name)
+		if err := os.Rename(src, dst); err != nil {
+			return archived, fmt.Errorf("archive daily note %s -> %s: %w", src, dst, err)
+		}
+		archived++
+	}
+	return archived, nil
 }
 
 func removeContents(root string) (int, error) {
