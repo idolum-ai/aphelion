@@ -227,9 +227,11 @@ func (r *Runtime) deliverStartupRecoveryCatchup(ctx context.Context, systemPromp
 }
 
 func renderStartupRecoveryCatchup(runs []session.TurnRun, canonicalReply string) string {
-	lines := []string{
-		"Restart catch-up.",
-		fmt.Sprintf("Recovered %d interrupted turn(s).", len(runs)),
+	parts := []string{"Restart catch-up."}
+	if len(runs) == 1 {
+		parts = append(parts, "I recovered 1 interrupted turn.")
+	} else {
+		parts = append(parts, fmt.Sprintf("I recovered %d interrupted turns.", len(runs)))
 	}
 	if len(runs) > 0 {
 		last := runs[0]
@@ -238,14 +240,18 @@ func renderStartupRecoveryCatchup(runs []session.TurnRun, canonicalReply string)
 				last = run
 			}
 		}
-		lines = append(lines, "Most recent interrupted request: "+strconv.Quote(truncatePreview(strings.TrimSpace(last.RequestText), 180)))
-		if strings.TrimSpace(last.LastToolName) != "" {
-			lines = append(lines, "Last tool in flight: "+strings.TrimSpace(last.LastToolName))
+		if request := strings.TrimSpace(last.RequestText); request != "" {
+			parts = append(parts, "Most recent interrupted request: "+strconv.Quote(truncatePreview(request, 160))+".")
+		}
+		if tool := strings.TrimSpace(last.LastToolName); tool != "" {
+			parts = append(parts, "Last tool in flight: "+tool+".")
 		}
 	}
 	if summary := strings.TrimSpace(canonicalReply); summary != "" {
-		lines = append(lines, "Recovery note: "+summary)
+		summary = strings.TrimSpace(strings.TrimPrefix(summary, "Cannot write the maintenance ledger from this session. Append:"))
+		summary = strings.TrimSpace(strings.Trim(summary, "`"))
+		parts = append(parts, "Recovery note: "+truncatePreview(summary, 240))
 	}
-	lines = append(lines, "Next: resume from the interrupted point or inspect the failure before continuing.")
-	return strings.Join(lines, "\n")
+	parts = append(parts, "Next: investigate the interruption before returning to deferred work.")
+	return strings.Join(parts, " ")
 }
