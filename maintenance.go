@@ -497,15 +497,17 @@ func clearSharedDynamicMemory(cfg *config.Config) (int, error) {
 		filepath.Join(root, "memory", "questions.md"),
 		filepath.Join(root, "memory", "rhizome.md"),
 	)
-	if strings.TrimSpace(cfg.Agent.DailyNotesDir) != "" {
-		paths = append(paths, filepath.Join(root, filepath.FromSlash(cfg.Agent.DailyNotesDir)))
-	}
-
 	n, err := removeMany(paths)
 	if err != nil {
 		return removed, err
 	}
-	return removed + n, nil
+	removed += n
+
+	noteRemoved, err := clearDailyNotesUnderRoot(root, cfg.Agent.DailyNotesDir)
+	if err != nil {
+		return removed, err
+	}
+	return removed + noteRemoved, nil
 }
 
 func cleanupTempTrees(cfg *config.Config) (int, error) {
@@ -573,7 +575,7 @@ func archiveNotesUnderRoot(root string, notesDir string, cutoff time.Time) (int,
 		return 0, fmt.Errorf("read daily notes dir %s: %w", sourceRoot, err)
 	}
 
-	archiveRoot := filepath.Join(root, "memory", "archive", "daily")
+	archiveRoot := notesArchiveRoot(root, notesDir)
 	archived := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -601,6 +603,60 @@ func archiveNotesUnderRoot(root string, notesDir string, cutoff time.Time) (int,
 		archived++
 	}
 	return archived, nil
+}
+
+func clearDailyNotesUnderRoot(root string, notesDir string) (int, error) {
+	root = strings.TrimSpace(root)
+	notesDir = strings.TrimSpace(notesDir)
+	if root == "" || notesDir == "" {
+		return 0, nil
+	}
+
+	sourceRoot := filepath.Join(root, filepath.FromSlash(notesDir))
+	entries, err := os.ReadDir(sourceRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read daily notes dir %s: %w", sourceRoot, err)
+	}
+
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !isDailyNoteFilename(name) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(sourceRoot, name)); err != nil && !os.IsNotExist(err) {
+			return removed, fmt.Errorf("remove daily note %s: %w", filepath.Join(sourceRoot, name), err)
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+func notesArchiveRoot(root string, notesDir string) string {
+	clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(notesDir)))
+	dir := filepath.Dir(clean)
+	base := filepath.Base(clean)
+	if base == "." || base == string(filepath.Separator) || strings.TrimSpace(base) == "" {
+		base = "daily"
+	}
+	if dir == "." {
+		return filepath.Join(root, "archive", base)
+	}
+	return filepath.Join(root, dir, "archive", base)
+}
+
+func isDailyNoteFilename(name string) bool {
+	if filepath.Ext(name) != ".md" {
+		return false
+	}
+	_, err := time.Parse("2006-01-02", strings.TrimSuffix(name, ".md"))
+	return err == nil
 }
 
 func removeContents(root string) (int, error) {

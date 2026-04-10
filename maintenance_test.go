@@ -21,7 +21,7 @@ func TestSeedAgentPromptFilesSeedsStructuredMemoryFiles(t *testing.T) {
 			PromptRoot:       filepath.Join(root, "agent"),
 			SharedMemoryRoot: filepath.Join(root, "agent"),
 			DailyNotes:       true,
-			DailyNotesDir:    "memory",
+			DailyNotesDir:    "memory/daily",
 		},
 	}
 
@@ -121,6 +121,9 @@ func TestClearSharedDynamicMemoryPreservesIdentitySectionInMemory(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(root, "memory", "knowledge.md")); !os.IsNotExist(err) {
 		t.Fatalf("knowledge.md still exists, want removed; err=%v", err)
 	}
+	if _, err := os.Stat(filepath.Join(root, "memory", "2026-04-10.md")); !os.IsNotExist(err) {
+		t.Fatalf("daily note still exists, want removed; err=%v", err)
+	}
 }
 
 func TestArchiveColdDailyNotesMovesOldNotesIntoArchive(t *testing.T) {
@@ -131,7 +134,7 @@ func TestArchiveColdDailyNotesMovesOldNotesIntoArchive(t *testing.T) {
 		Agent: config.AgentConfig{
 			SharedMemoryRoot: root,
 			UserMemoryRoot:   filepath.Join(root, "users"),
-			DailyNotesDir:    "memory",
+			DailyNotesDir:    "memory/daily",
 		},
 		Memory: config.MemoryConfig{
 			Decay: config.MemoryDecayConfig{
@@ -143,7 +146,7 @@ func TestArchiveColdDailyNotesMovesOldNotesIntoArchive(t *testing.T) {
 		},
 	}
 
-	noteRoot := filepath.Join(root, "memory")
+	noteRoot := filepath.Join(root, "memory", "daily")
 	if err := os.MkdirAll(noteRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(noteRoot) err = %v", err)
 	}
@@ -162,13 +165,13 @@ func TestArchiveColdDailyNotesMovesOldNotesIntoArchive(t *testing.T) {
 		t.Fatalf("archived = %d, want 1", archived)
 	}
 
-	if _, err := os.Stat(filepath.Join(root, "memory", "2026-01-01.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "memory", "daily", "2026-01-01.md")); !os.IsNotExist(err) {
 		t.Fatalf("old note still active, err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "memory", "archive", "daily", "2026-01-01.md")); err != nil {
 		t.Fatalf("archived note missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "memory", "2026-04-09.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "memory", "daily", "2026-04-09.md")); err != nil {
 		t.Fatalf("recent note missing: %v", err)
 	}
 }

@@ -89,7 +89,7 @@ dynamic_files = ["MEMORY.md", "HEARTBEAT.md"]
 bootstrap_max_chars = 20000
 bootstrap_total_max_chars = 150000
 daily_notes = true
-daily_notes_dir = "memory"
+daily_notes_dir = "memory/daily"
 ```
 
 Build and run:

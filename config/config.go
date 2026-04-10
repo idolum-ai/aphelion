@@ -252,7 +252,7 @@ func Default() Config {
 			BootstrapMaxChars:      20000,
 			BootstrapTotalMaxChars: 150000,
 			DailyNotes:             true,
-			DailyNotesDir:          "memory",
+			DailyNotesDir:          "memory/daily",
 		},
 		Memory: MemoryConfig{
 			SessionSearch:    false,

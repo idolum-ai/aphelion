@@ -1326,7 +1326,7 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 			BootstrapMaxChars:      20000,
 			BootstrapTotalMaxChars: 150000,
 			DailyNotes:             false,
-			DailyNotesDir:          "memory",
+			DailyNotesDir:          "memory/daily",
 		},
 		Memory: config.MemoryConfig{
 			Reflection: config.MemoryReflectionConfig{

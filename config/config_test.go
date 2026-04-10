@@ -72,6 +72,9 @@ workspace = "./workspace"
 	if !cfg.Agent.DailyNotes {
 		t.Fatal("daily notes should default to enabled")
 	}
+	if cfg.Agent.DailyNotesDir != "memory/daily" {
+		t.Fatalf("daily_notes_dir = %q, want memory/daily", cfg.Agent.DailyNotesDir)
+	}
 	if !cfg.Memory.Reflection.Enabled || cfg.Memory.Reflection.Every != "6h" {
 		t.Fatalf("memory.reflection defaults = %#v, want enabled/6h", cfg.Memory.Reflection)
 	}

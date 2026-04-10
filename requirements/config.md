@@ -197,7 +197,7 @@ dynamic_files = [
 # Daily memory notes — auto-resolved to today + yesterday.
 # Pattern: memory/YYYY-MM-DD.md in shared_memory_root or user_memory_root.
 daily_notes = true
-daily_notes_dir = "memory"
+daily_notes_dir = "memory/daily"
 
 # ─── Sessions ───
 [sessions]

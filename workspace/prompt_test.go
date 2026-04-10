@@ -18,7 +18,7 @@ func TestLoadPromptContextLoadsConfiguredFiles(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "AGENTS.md"), "agent rules")
 	writeFile(t, filepath.Join(root, "HEARTBEAT.md"), "check inbox")
-	writeFile(t, filepath.Join(root, "memory", "2026-04-08.md"), "today note")
+	writeFile(t, filepath.Join(root, "memory", "daily", "2026-04-08.md"), "today note")
 
 	ctx, err := LoadPromptContext(config.AgentConfig{
 		Workspace:              root,
@@ -27,7 +27,7 @@ func TestLoadPromptContextLoadsConfiguredFiles(t *testing.T) {
 		BootstrapMaxChars:      1000,
 		BootstrapTotalMaxChars: 1000,
 		DailyNotes:             true,
-		DailyNotesDir:          "memory",
+		DailyNotesDir:          "memory/daily",
 	}, time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("LoadPromptContext() err = %v", err)
@@ -40,7 +40,7 @@ func TestLoadPromptContextLoadsConfiguredFiles(t *testing.T) {
 		t.Fatalf("dynamic len = %d, want 2", len(ctx.Dynamic))
 	}
 	prompt := ctx.Render("base instruction")
-	if !strings.Contains(prompt, "AGENTS.md") || !strings.Contains(prompt, "HEARTBEAT.md") || !strings.Contains(prompt, "memory/2026-04-08.md") {
+	if !strings.Contains(prompt, "AGENTS.md") || !strings.Contains(prompt, "HEARTBEAT.md") || !strings.Contains(prompt, "memory/daily/2026-04-08.md") {
 		t.Fatalf("prompt = %q, want injected files", prompt)
 	}
 }
@@ -57,7 +57,7 @@ func TestLoadPromptContextFallsBackToLowercaseMemory(t *testing.T) {
 		BootstrapMaxChars:      1000,
 		BootstrapTotalMaxChars: 1000,
 		DailyNotes:             false,
-		DailyNotesDir:          "memory",
+		DailyNotesDir:          "memory/daily",
 	}, time.Now())
 	if err != nil {
 		t.Fatalf("LoadPromptContext() err = %v", err)
@@ -81,7 +81,7 @@ func TestLoadPromptContextAppliesSizeCaps(t *testing.T) {
 		BootstrapMaxChars:      25,
 		BootstrapTotalMaxChars: 30,
 		DailyNotes:             false,
-		DailyNotesDir:          "memory",
+		DailyNotesDir:          "memory/daily",
 	}, time.Now())
 	if err != nil {
 		t.Fatalf("LoadPromptContext() err = %v", err)
@@ -108,7 +108,7 @@ func TestLoadPromptContextRejectsEscapes(t *testing.T) {
 		BootstrapMaxChars:      1000,
 		BootstrapTotalMaxChars: 1000,
 		DailyNotes:             false,
-		DailyNotesDir:          "memory",
+		DailyNotesDir:          "memory/daily",
 	}, time.Now())
 	if err == nil {
 		t.Fatal("LoadPromptContext() err = nil, want path escape rejection")
