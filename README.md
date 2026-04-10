@@ -14,8 +14,8 @@ A minimal, focused agent runtime for personal AI assistants.
 ## Target Stack
 
 - **Channels:** Telegram
-- **Providers:** Anthropic (Claude), Google (Gemini), local models (Ollama), OpenAI (embeddings/fallback)
-- **Tools:** exec, file ops, web fetch, memory search, sub-agent spawning
+- **Providers:** Anthropic (Claude), Google (Gemini), local models (Ollama), OpenAI (platform storage/embeddings/fallback)
+- **Tools:** exec, curated memory, session recall, optional OpenAI storage tools
 - **Voice:** ElevenLabs TTS
 - **Automation:** heartbeat, cron
 
@@ -31,6 +31,8 @@ Runnable v0:
 - Anthropic inference
 - SQLite session persistence
 - Shell execution tool (`exec`)
+- Curated memory tool (`memory`) and transcript recall tool (`session_search`)
+- Optional OpenAI file storage and vector-store tools
 - Config-assigned principals
 - Idolum-rendered replies
 - Telegram typing + real tool-backed progress feedback
@@ -98,6 +100,32 @@ Build and run:
 make build
 ./bin/aphelion --config ~/.aphelion/aphelion.toml
 ```
+
+Optional OpenAI platform storage:
+
+```toml
+[providers.openai]
+api_key = "sk-..."
+base_url = "https://api.openai.com/v1"
+model = "gpt-5.4"
+max_tokens = 16384
+context_window = 128000
+
+[openai.files]
+enabled = true
+purpose = "assistants"
+
+[openai.vector_stores]
+enabled = true
+default_store = ""
+```
+
+When enabled, Aphelion exposes two admin-facing auxiliary tools:
+
+- `openai_file`
+- `openai_vector_store`
+
+These do not replace local files, curated memory, or SQLite session history. They extend the system with explicit external storage and retrieval helpers.
 
 Or:
 
