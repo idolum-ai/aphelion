@@ -17,6 +17,8 @@ func TestLoadPromptContextLoadsConfiguredFiles(t *testing.T) {
 
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "AGENTS.md"), "agent rules")
+	writeFile(t, filepath.Join(root, "memory", "knowledge.md"), "# knowledge.md\n\n- durable fact")
+	writeFile(t, filepath.Join(root, "memory", "decisions.md"), "# decisions.md\n\n- durable decision")
 	writeFile(t, filepath.Join(root, "HEARTBEAT.md"), "check inbox")
 	writeFile(t, filepath.Join(root, "memory", "daily", "2026-04-08.md"), "today note")
 
@@ -36,12 +38,15 @@ func TestLoadPromptContextLoadsConfiguredFiles(t *testing.T) {
 	if len(ctx.Stable) != 1 || ctx.Stable[0].Path != "AGENTS.md" {
 		t.Fatalf("stable = %#v", ctx.Stable)
 	}
-	if len(ctx.Dynamic) != 2 {
-		t.Fatalf("dynamic len = %d, want 2", len(ctx.Dynamic))
+	if len(ctx.Dynamic) != 4 {
+		t.Fatalf("dynamic len = %d, want 4", len(ctx.Dynamic))
 	}
 	prompt := ctx.Render("base instruction")
 	if !strings.Contains(prompt, "AGENTS.md") || !strings.Contains(prompt, "HEARTBEAT.md") || !strings.Contains(prompt, "memory/daily/2026-04-08.md") {
 		t.Fatalf("prompt = %q, want injected files", prompt)
+	}
+	if !strings.Contains(prompt, "memory/knowledge.md") || !strings.Contains(prompt, "memory/decisions.md") {
+		t.Fatalf("prompt = %q, want structured memory auto-loaded", prompt)
 	}
 }
 
@@ -112,6 +117,49 @@ func TestLoadPromptContextRejectsEscapes(t *testing.T) {
 	}, time.Now())
 	if err == nil {
 		t.Fatal("LoadPromptContext() err = nil, want path escape rejection")
+	}
+}
+
+func TestLoadPromptContextCompactsLargeMemoryAndStructuredFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "MEMORY.md"), strings.Join([]string{
+		"# MEMORY.md",
+		"",
+		"Intro paragraph that should stay visible.",
+		"",
+		"<!-- APHELION:IDENTITY-BEGIN -->",
+		"## Identity",
+		"- keep this continuity",
+		"<!-- APHELION:IDENTITY-END -->",
+		"",
+		"## Operational Notes",
+		strings.Repeat("long operational note\n", 40),
+	}, "\n"))
+	writeFile(t, filepath.Join(root, "memory", "knowledge.md"), "# knowledge.md\n\n"+strings.Repeat("- fact worth recalling\n\n", 24))
+
+	ctx, err := LoadPromptContext(config.AgentConfig{
+		Workspace:              root,
+		DynamicFiles:           []string{"MEMORY.md"},
+		BootstrapMaxChars:      400,
+		BootstrapTotalMaxChars: 1200,
+		DailyNotes:             false,
+		DailyNotesDir:          "memory/daily",
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("LoadPromptContext() err = %v", err)
+	}
+
+	rendered := ctx.Render("")
+	if !strings.Contains(rendered, "keep this continuity") {
+		t.Fatalf("prompt = %q, want identity-bearing continuity preserved", rendered)
+	}
+	if !strings.Contains(rendered, "Excerpted for prompt efficiency") {
+		t.Fatalf("prompt = %q, want excerpt marker", rendered)
+	}
+	if !strings.Contains(rendered, "memory/knowledge.md") {
+		t.Fatalf("prompt = %q, want structured memory included", rendered)
 	}
 }
 

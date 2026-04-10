@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/config"
+	memstore "github.com/idolum-ai/aphelion/memory"
 )
 
 const (
@@ -17,6 +18,11 @@ const (
 	memoryAltFileName = "memory.md"
 	truncationMarker  = "\n...[truncated]..."
 )
+
+var autoStructuredDynamicFiles = []string{
+	"memory/knowledge.md",
+	"memory/decisions.md",
+}
 
 type LoadedFile struct {
 	Path      string
@@ -44,6 +50,11 @@ func LoadPromptContext(cfg config.AgentConfig, now time.Time) (*PromptContext, e
 	if err != nil {
 		return nil, err
 	}
+	autoDynamic, err := loadConfiguredFiles(cfg.Workspace, autoStructuredDynamicFiles, true, cfg.BootstrapMaxChars, &remaining, seen)
+	if err != nil {
+		return nil, err
+	}
+	dynamic = append(dynamic, autoDynamic...)
 
 	if cfg.DailyNotes {
 		notes, err := loadDailyNotes(cfg.Workspace, cfg.DailyNotesDir, now, cfg.BootstrapMaxChars, &remaining, seen)
@@ -171,7 +182,17 @@ func loadOne(
 	}
 
 	seen[path] = struct{}{}
-	content, truncated := truncateContent(string(raw), perFileLimit, remaining)
+	effectiveLimit := perFileLimit
+	if remaining != nil && (effectiveLimit <= 0 || *remaining < effectiveLimit) {
+		effectiveLimit = *remaining
+	}
+	content, truncated := selectPromptContent(displayPath, string(raw), effectiveLimit)
+	if remaining != nil {
+		*remaining -= len(content)
+		if *remaining < 0 {
+			*remaining = 0
+		}
+	}
 	if strings.TrimSpace(content) == "" {
 		return nil, nil
 	}
@@ -182,6 +203,145 @@ func loadOne(
 		Dynamic:   dynamic,
 		Truncated: truncated,
 	}, nil
+}
+
+func selectPromptContent(displayPath string, raw string, limit int) (string, bool) {
+	content := strings.TrimSpace(raw)
+	if content == "" {
+		return "", false
+	}
+	if limit <= 0 {
+		return "", len(content) > 0
+	}
+
+	switch normalizePromptPath(displayPath) {
+	case "memory.md":
+		return compactMemoryForPrompt(content, limit)
+	case "memory/knowledge.md", "memory/decisions.md", "memory/questions.md", "memory/rhizome.md":
+		compacted := CompactStructuredMemoryForPrompt(displayPath, content, limit)
+		return compacted, len(compacted) < len(content)
+	default:
+		return truncateString(content, limit)
+	}
+}
+
+func CompactStructuredMemoryForPrompt(displayPath string, raw string, limit int) string {
+	content := strings.TrimSpace(raw)
+	if content == "" || limit <= 0 {
+		return ""
+	}
+	if len(content) <= limit {
+		return content
+	}
+
+	paragraphs := splitMarkdownParagraphs(content)
+	if len(paragraphs) == 0 {
+		compacted, _ := truncateString(content, limit)
+		return compacted
+	}
+
+	headCount := 1
+	if normalizePromptPath(displayPath) == "memory/knowledge.md" || normalizePromptPath(displayPath) == "memory/decisions.md" {
+		headCount = 2
+	}
+
+	keep := make([]string, 0, len(paragraphs))
+	keep = append(keep, paragraphs[:min(headCount, len(paragraphs))]...)
+	keep = append(keep, "_Excerpted for prompt efficiency; recent entries prioritized._")
+
+	tailCount := 6
+	if normalizePromptPath(displayPath) == "memory/questions.md" || normalizePromptPath(displayPath) == "memory/rhizome.md" {
+		tailCount = 4
+	}
+	if len(paragraphs) > headCount {
+		start := max(headCount, len(paragraphs)-tailCount)
+		keep = append(keep, paragraphs[start:]...)
+	}
+
+	compacted := strings.TrimSpace(strings.Join(uniqueOrderedStrings(keep), "\n\n"))
+	compacted, _ = truncateString(compacted, limit)
+	return compacted
+}
+
+func compactMemoryForPrompt(raw string, limit int) (string, bool) {
+	if len(raw) <= limit {
+		return raw, false
+	}
+
+	paragraphs := splitMarkdownParagraphs(raw)
+	keep := make([]string, 0, 6)
+	if len(paragraphs) > 0 {
+		keep = append(keep, paragraphs[0])
+	}
+	if len(paragraphs) > 1 {
+		keep = append(keep, paragraphs[1])
+	}
+	if identity := memstore.ExtractIdentityBlock(raw); strings.TrimSpace(identity) != "" {
+		keep = append(keep, identity)
+	}
+	keep = append(keep, "_Excerpted for prompt efficiency; identity-bearing continuity preserved._")
+	if len(paragraphs) > 2 {
+		start := max(2, len(paragraphs)-3)
+		keep = append(keep, paragraphs[start:]...)
+	}
+
+	compacted := strings.TrimSpace(strings.Join(uniqueOrderedStrings(keep), "\n\n"))
+	compacted, truncated := truncateString(compacted, limit)
+	return compacted, truncated || len(compacted) < len(raw)
+}
+
+func normalizePromptPath(path string) string {
+	return filepath.ToSlash(strings.ToLower(strings.TrimSpace(path)))
+}
+
+func splitMarkdownParagraphs(raw string) []string {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	chunks := strings.Split(raw, "\n\n")
+	out := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		out = append(out, chunk)
+	}
+	return out
+}
+
+func uniqueOrderedStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func truncateString(content string, limit int) (string, bool) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", false
+	}
+	if limit <= 0 {
+		return "", len(content) > 0
+	}
+	if len(content) <= limit {
+		return content, false
+	}
+
+	truncated := content[:limit]
+	if limit > len(truncationMarker) {
+		truncated = strings.TrimRight(truncated[:limit-len(truncationMarker)], " \n\r\t") + truncationMarker
+	}
+	return truncated, true
 }
 
 func resolveWorkspacePath(workspaceRoot string, rel string) (string, string, error) {
@@ -227,11 +387,7 @@ func truncateContent(raw string, perFileLimit int, remaining *int) (string, bool
 		return "", len(content) > 0
 	}
 
-	truncated := limit < len(content)
-	content = content[:limit]
-	if truncated && limit > len(truncationMarker) {
-		content = strings.TrimRight(content[:limit-len(truncationMarker)], " \n\r\t") + truncationMarker
-	}
+	content, truncated := truncateString(content, limit)
 
 	if remaining != nil {
 		*remaining -= len(content)
@@ -241,4 +397,18 @@ func truncateContent(raw string, perFileLimit int, remaining *int) (string, bool
 	}
 
 	return content, truncated
+}
+
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

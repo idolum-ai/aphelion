@@ -14,6 +14,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/face"
+	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/workspace"
 )
@@ -40,11 +41,6 @@ var defaultSharedMemorySeedFiles = []string{
 	"memory/questions.md",
 	"memory/rhizome.md",
 }
-
-const (
-	memoryIdentityBegin = "<!-- APHELION:IDENTITY-BEGIN -->"
-	memoryIdentityEnd   = "<!-- APHELION:IDENTITY-END -->"
-)
 
 func runMaintenanceCommand(args []string) (bool, error) {
 	if len(args) == 0 {
@@ -233,10 +229,15 @@ func runGCCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	archivedCurated, err := archiveOversizedCuratedMemory(cfg, time.Now())
+	if err != nil {
+		return err
+	}
 
 	fmt.Fprintf(os.Stdout, "expired_sessions: %d\n", expired)
 	fmt.Fprintf(os.Stdout, "removed_temp_dirs: %d\n", removedTemps)
 	fmt.Fprintf(os.Stdout, "archived_daily_notes: %d\n", archivedNotes)
+	fmt.Fprintf(os.Stdout, "archived_curated_memory: %d\n", archivedCurated)
 	return nil
 }
 
@@ -724,38 +725,112 @@ func preserveMemoryIdentitySections(path string) (bool, error) {
 		return false, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	preserved := extractMarkedBlock(string(raw), memoryIdentityBegin, memoryIdentityEnd)
-	if strings.TrimSpace(preserved) == "" {
+	content, ok := memstore.PreserveMemoryIdentity(string(raw))
+	if !ok {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return false, fmt.Errorf("remove %s: %w", path, err)
 		}
 		return true, nil
 	}
 
-	content := strings.TrimSpace(strings.Join([]string{
-		"# MEMORY.md — Shared Curated Memory",
-		"",
-		"Keep this file concise.",
-		"",
-		preserved,
-	}, "\n"))
-	if err := os.WriteFile(path, []byte(content+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return false, fmt.Errorf("rewrite %s: %w", path, err)
 	}
 	return true, nil
 }
 
-func extractMarkedBlock(raw string, startMarker string, endMarker string) string {
-	start := strings.Index(raw, startMarker)
-	if start < 0 {
-		return ""
+func archiveOversizedCuratedMemory(cfg *config.Config, now time.Time) (int, error) {
+	if cfg == nil || !cfg.Memory.Decay.Enabled {
+		return 0, nil
 	}
-	end := strings.Index(raw[start+len(startMarker):], endMarker)
-	if end < 0 {
-		return ""
+
+	roots := []string{cfg.Agent.SharedMemoryRoot}
+	entries, err := os.ReadDir(cfg.Agent.UserMemoryRoot)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("read user memory root %s: %w", cfg.Agent.UserMemoryRoot, err)
 	}
-	end += start + len(startMarker) + len(endMarker)
-	return strings.TrimSpace(raw[start:end])
+	for _, entry := range entries {
+		if entry.IsDir() {
+			roots = append(roots, filepath.Join(cfg.Agent.UserMemoryRoot, entry.Name()))
+		}
+	}
+
+	archived := 0
+	for _, root := range uniqueStrings(roots) {
+		n, err := archiveOversizedCuratedUnderRoot(root, now)
+		if err != nil {
+			return archived, err
+		}
+		archived += n
+	}
+	return archived, nil
+}
+
+func archiveOversizedCuratedUnderRoot(root string, now time.Time) (int, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return 0, nil
+	}
+
+	type limit struct {
+		store string
+		chars int
+	}
+	limits := []limit{
+		{store: memstore.StoreKnowledge, chars: 12000},
+		{store: memstore.StoreDecisions, chars: 12000},
+		{store: memstore.StoreQuestions, chars: 8000},
+		{store: memstore.StoreRhizome, chars: 8000},
+	}
+
+	archived := 0
+	for _, item := range limits {
+		path, _, err := memstore.ResolveStorePath(root, item.store)
+		if err != nil {
+			return archived, err
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return archived, fmt.Errorf("read curated memory %s: %w", path, err)
+		}
+		content := strings.TrimSpace(string(raw))
+		if len(content) <= item.chars {
+			continue
+		}
+
+		archiveDir := filepath.Join(filepath.Dir(path), "archive")
+		if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+			return archived, fmt.Errorf("create curated archive dir %s: %w", archiveDir, err)
+		}
+		archivePath := filepath.Join(archiveDir, fmt.Sprintf("%s-%s.md", item.store, now.UTC().Format("20060102T150405")))
+		if err := os.WriteFile(archivePath, raw, 0o600); err != nil {
+			return archived, fmt.Errorf("write curated archive %s: %w", archivePath, err)
+		}
+
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return archived, fmt.Errorf("derive curated path %s: %w", path, err)
+		}
+		compacted := workspace.CompactStructuredMemoryForPrompt(filepath.ToSlash(relPath), content, item.chars)
+		if strings.TrimSpace(compacted) == "" {
+			compacted = content[:min(item.chars, len(content))]
+		}
+		if err := os.WriteFile(path, []byte(strings.TrimSpace(compacted)+"\n"), 0o600); err != nil {
+			return archived, fmt.Errorf("rewrite curated memory %s: %w", path, err)
+		}
+		archived++
+	}
+	return archived, nil
+}
+
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func printPathGroup(label string, values []string) {

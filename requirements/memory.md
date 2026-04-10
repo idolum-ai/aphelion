@@ -175,6 +175,14 @@ Recommended stance:
 
 That keeps the core system minimal while leaving room for richer memory practices.
 
+In runtime prompt assembly, the baseline curated files should be treated as the default dynamic curated memory surfaces:
+
+- `MEMORY.md`
+- `memory/knowledge.md`
+- `memory/decisions.md`
+
+Optional advanced practice files such as `memory/rhizome.md` and `memory/questions.md` should remain on-demand or maintenance-oriented unless explicitly configured otherwise.
+
 ### Role of each file
 
 `MEMORY.md` should answer:
@@ -193,6 +201,8 @@ The spec should therefore treat `MEMORY.md` as a mixed file:
 
 - some sections belong to the identity-preservation boundary
 - other sections are just curated long-term memory and may be pruned, archived, or rebalanced
+
+That identity-preservation boundary should be explicit in code as well as in prose. Ordinary `forget` / `reset` flows should preserve explicitly marked identity-bearing sections instead of treating the whole file as disposable runtime state.
 
 `knowledge.md` should answer:
 
@@ -430,6 +440,8 @@ The default loading strategy should be:
 - transcript recall injected only when explicitly retrieved
 
 This keeps the prompt coherent and prevents memory bloat.
+
+When curated memory files exceed the practical working-set budget, Aphelion should prefer excerpting and archival over silent monotonic growth. The prompt-visible working set should stay bounded even if the underlying memory archive grows over time.
 
 ## Review Events
 

@@ -175,3 +175,50 @@ func TestArchiveColdDailyNotesMovesOldNotesIntoArchive(t *testing.T) {
 		t.Fatalf("recent note missing: %v", err)
 	}
 }
+
+func TestArchiveOversizedCuratedMemoryArchivesAndCompacts(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfg := &config.Config{
+		Agent: config.AgentConfig{
+			SharedMemoryRoot: root,
+			UserMemoryRoot:   filepath.Join(root, "users"),
+		},
+		Memory: config.MemoryConfig{
+			Decay: config.MemoryDecayConfig{Enabled: true},
+		},
+	}
+
+	path := filepath.Join(root, "memory", "knowledge.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(memory) err = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("# knowledge.md\n\n"+strings.Repeat("- fact worth keeping around for a long time\n\n", 500)), 0o600); err != nil {
+		t.Fatalf("WriteFile(knowledge.md) err = %v", err)
+	}
+
+	archived, err := archiveOversizedCuratedMemory(cfg, time.Date(2026, time.April, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("archiveOversizedCuratedMemory() err = %v", err)
+	}
+	if archived != 1 {
+		t.Fatalf("archived = %d, want 1", archived)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(knowledge.md) err = %v", err)
+	}
+	if !strings.Contains(string(raw), "Excerpted for prompt efficiency") {
+		t.Fatalf("knowledge.md = %q, want compacted excerpt", string(raw))
+	}
+
+	archiveEntries, err := os.ReadDir(filepath.Join(root, "memory", "archive"))
+	if err != nil {
+		t.Fatalf("ReadDir(archive) err = %v", err)
+	}
+	if len(archiveEntries) != 1 {
+		t.Fatalf("archive entries = %d, want 1", len(archiveEntries))
+	}
+}
