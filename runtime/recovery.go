@@ -64,13 +64,15 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err != nil {
 		return fmt.Errorf("load recovery prompt context: %w", err)
 	}
-	systemPrompt := prompt.BuildGovernorPrompt(prompt.GovernorRequest{
+	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   "admin",
 		WorkspaceRoot:   scope.WorkingRoot,
 		Workspace:       promptContext,
-	})
+	}
+	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
+	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
 	history, err := session.ToAgentHistory(maintenanceSession.Messages)
 	if err != nil {
@@ -83,7 +85,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {
-		input = append(input, agent.Message{Role: "system", Content: systemPrompt})
+		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
 	}
 	input = append(input, history...)
 	input = append(input, agent.Message{Role: "user", Content: requestText})

@@ -24,10 +24,16 @@ type ToolRegistry interface {
 }
 
 type Message struct {
-	Role       string
-	Content    string
-	ToolCalls  []ToolCall
-	ToolCallID string
+	Role         string
+	Content      string
+	SystemBlocks []SystemBlock
+	ToolCalls    []ToolCall
+	ToolCallID   string
+}
+
+type SystemBlock struct {
+	Text            string
+	CacheBreakpoint bool
 }
 
 type ToolDef struct {

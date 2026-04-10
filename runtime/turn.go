@@ -46,14 +46,16 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if err != nil {
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
-	systemPrompt := prompt.BuildGovernorPrompt(prompt.GovernorRequest{
+	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   string(actor.Role),
 		WorkspaceRoot:   scope.WorkingRoot,
 		ToolManifest:    toolManifest(tools),
 		Workspace:       promptContext,
-	})
+	}
+	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
+	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
 	sess.ChatType = "dm"
 	sess.UserName = msg.SenderName
@@ -69,6 +71,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return nil, err
 	}
 	idolumProposal := ""
+	extraUsage := core.TokenUsage{}
 	if proposer, ok := r.faceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
 		proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
 			GovernorName:    prompt.DefaultGovernorName,
@@ -82,6 +85,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
 		} else {
 			idolumProposal = strings.TrimSpace(proposal)
+			extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
 		}
 	}
 	progress := r.newToolProgressReporter(msg)
@@ -91,7 +95,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {
-		input = append(input, agent.Message{Role: "system", Content: systemPrompt})
+		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
 	}
 	if advisory := prompt.RenderIdolumProposalForGovernor(face.DefaultFaceName, idolumProposal); advisory != "" {
 		input = append(input, agent.Message{Role: "system", Content: advisory})
@@ -132,8 +136,10 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			if replyText == "" {
 				replyText = canonicalReply
 			}
+			extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(r.faceModel))
 		}
 	}
+	result.TokenUsage = addTokenUsage(result.TokenUsage, extraUsage)
 
 	newMessages, err := session.NewMessagesForTurn(userText, outHistory[len(input):], sess.TurnCount)
 	if err != nil {
@@ -168,6 +174,27 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 
 	return result, nil
+}
+
+type faceUsageConsumer interface {
+	ConsumeLastUsage() core.TokenUsage
+}
+
+func consumeFaceUsage(model face.Renderer) core.TokenUsage {
+	consumer, ok := model.(faceUsageConsumer)
+	if !ok {
+		return core.TokenUsage{}
+	}
+	return consumer.ConsumeLastUsage()
+}
+
+func addTokenUsage(dst core.TokenUsage, src core.TokenUsage) core.TokenUsage {
+	dst.InputTokens += src.InputTokens
+	dst.OutputTokens += src.OutputTokens
+	dst.TotalTokens += src.TotalTokens
+	dst.CacheReadTokens += src.CacheReadTokens
+	dst.CacheWriteTokens += src.CacheWriteTokens
+	return dst
 }
 
 func replaceLastAssistantWithRenderedReply(messages []session.Message, renderedReply string) []session.Message {

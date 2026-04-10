@@ -46,9 +46,11 @@ type TurnResult struct {
 }
 
 type TokenUsage struct {
-	InputTokens  int64
-	OutputTokens int64
-	TotalTokens  int64
+	InputTokens      int64
+	OutputTokens     int64
+	TotalTokens      int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
 }
 
 type Budget struct {

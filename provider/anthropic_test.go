@@ -34,8 +34,10 @@ func TestAnthropicCompleteText(t *testing.T) {
 				{Type: "text", Text: "hello world"},
 			},
 			Usage: anthropicUsage{
-				InputTokens:  5,
-				OutputTokens: 3,
+				InputTokens:              5,
+				OutputTokens:             3,
+				CacheReadInputTokens:     7,
+				CacheCreationInputTokens: 11,
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -62,8 +64,14 @@ func TestAnthropicCompleteText(t *testing.T) {
 	if got := resp.Usage.TotalTokens; got != 8 {
 		t.Fatalf("total tokens = %d, want %d", got, 8)
 	}
+	if resp.Usage.CacheReadTokens != 7 || resp.Usage.CacheWriteTokens != 11 {
+		t.Fatalf("cache usage = %+v, want read=7 write=11", resp.Usage)
+	}
 	if len(seen.Messages) != 1 {
 		t.Fatalf("messages = %#v", seen.Messages)
+	}
+	if len(seen.System) != 0 {
+		t.Fatalf("system = %#v, want empty", seen.System)
 	}
 	if seen.MaxTokens != 128 {
 		t.Fatalf("max_tokens = %d, want 128", seen.MaxTokens)
@@ -157,8 +165,8 @@ func TestAnthropicCompleteMapsSystemAndToolResults(t *testing.T) {
 		t.Fatalf("complete: %v", err)
 	}
 
-	if seen.System != "system prompt" {
-		t.Fatalf("system = %q, want %q", seen.System, "system prompt")
+	if len(seen.System) != 1 || seen.System[0].Text != "system prompt" {
+		t.Fatalf("system = %#v, want single text block", seen.System)
 	}
 	if len(seen.Messages) != 2 {
 		t.Fatalf("message count = %d, want 2", len(seen.Messages))
@@ -171,6 +179,56 @@ func TestAnthropicCompleteMapsSystemAndToolResults(t *testing.T) {
 	}
 	if len(seen.Tools) != 1 || seen.Tools[0].Name != "exec" {
 		t.Fatalf("tools = %#v", seen.Tools)
+	}
+	if seen.Tools[0].CacheControl == nil || seen.Tools[0].CacheControl.Type != "ephemeral" {
+		t.Fatalf("tool cache control = %#v, want ephemeral", seen.Tools[0].CacheControl)
+	}
+}
+
+func TestAnthropicCompletePreservesSystemCacheBreakpoints(t *testing.T) {
+	var seen anthropicRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(anthropicResponse{
+			Content: []anthropicContent{{Type: "text", Text: "ok"}},
+		})
+	})
+
+	client, err := NewAnthropic(AnthropicOptions{
+		APIKey:     "test-key",
+		Model:      "claude-2",
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{
+		{
+			Role:    "system",
+			Content: "flattened system prompt",
+			SystemBlocks: []agent.SystemBlock{
+				{Text: "stable authority"},
+				{Text: "stable files", CacheBreakpoint: true},
+				{Text: "dynamic memory"},
+			},
+		},
+		{Role: "user", Content: "hi"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if len(seen.System) != 3 {
+		t.Fatalf("system block count = %d, want 3", len(seen.System))
+	}
+	if seen.System[1].CacheControl == nil || seen.System[1].CacheControl.Type != "ephemeral" {
+		t.Fatalf("cache control on stable breakpoint = %#v, want ephemeral", seen.System[1].CacheControl)
+	}
+	if seen.System[2].CacheControl != nil {
+		t.Fatalf("dynamic block cache control = %#v, want nil", seen.System[2].CacheControl)
 	}
 }
 

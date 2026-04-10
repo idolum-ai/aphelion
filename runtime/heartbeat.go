@@ -75,18 +75,20 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	if err != nil {
 		return fmt.Errorf("load workspace prompt context: %w", err)
 	}
-	systemPrompt := prompt.BuildGovernorPrompt(prompt.GovernorRequest{
+	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   "admin",
 		WorkspaceRoot:   scope.WorkingRoot,
 		Workspace:       promptContext,
-	})
+	}
+	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
+	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
 	reflectionSummary := ""
 	if r.heartbeatShouldReflect(lastMaintenanceAt, now) {
 		var reflectionErr error
-		reflectionSummary, reflectionErr = r.reflectCuratedMemory(ctx, dynamicPromptRoot(scope), systemPrompt, lastMaintenanceAt, now, events)
+		reflectionSummary, reflectionErr = r.reflectCuratedMemory(ctx, dynamicPromptRoot(scope), systemBlocks, lastMaintenanceAt, now, events)
 		if reflectionErr != nil {
 			log.Printf("WARN heartbeat reflection failed: %v", reflectionErr)
 		}
@@ -115,7 +117,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	defer monitor.Finish(ctx, err)
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {
-		input = append(input, agent.Message{Role: "system", Content: systemPrompt})
+		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
 	}
 	input = append(input, history...)
 	input = append(input, agent.Message{Role: "user", Content: requestText})

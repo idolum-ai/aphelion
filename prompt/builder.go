@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
@@ -38,6 +39,10 @@ type FaceRequest struct {
 }
 
 func BuildGovernorPrompt(req GovernorRequest) string {
+	return RenderSystemBlocks(BuildGovernorPromptBlocks(req))
+}
+
+func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 	governorName := strings.TrimSpace(req.GovernorName)
 	if governorName == "" {
 		governorName = DefaultGovernorName
@@ -64,21 +69,30 @@ func BuildGovernorPrompt(req GovernorRequest) string {
 		dynamic = req.Workspace.Dynamic
 	}
 
-	parts := []string{
-		fmt.Sprintf("You are %s, the governor of this system.", governorName),
-		renderAuthorityBlock(governorName, governorBackend, principalRole, workspaceRoot, strings.TrimSpace(req.ToolManifest) != ""),
-	}
+	parts := make([]agent.SystemBlock, 0, 5)
+	parts = append(parts, agent.SystemBlock{
+		Text: strings.Join([]string{
+			fmt.Sprintf("You are %s, the governor of this system.", governorName),
+			renderAuthorityBlock(governorName, governorBackend, principalRole, workspaceRoot, strings.TrimSpace(req.ToolManifest) != ""),
+		}, "\n\n"),
+	})
 
 	if len(nonToolStable) > 0 {
-		parts = append(parts, renderFileSection("Stable Workspace Files", nonToolStable))
+		parts = append(parts, agent.SystemBlock{
+			Text: renderFileSection("Stable Workspace Files", nonToolStable),
+		})
 	}
 
 	if manifest := strings.TrimSpace(req.ToolManifest); manifest != "" {
-		parts = append(parts, "## Tool Manifest\n"+manifest)
+		parts = append(parts, agent.SystemBlock{
+			Text: "## Tool Manifest\n" + manifest,
+		})
 	}
 
 	if len(toolPolicyFiles) > 0 {
-		parts = append(parts, renderFileSection("Advisory Tool Policy", toolPolicyFiles))
+		parts = append(parts, agent.SystemBlock{
+			Text: renderFileSection("Advisory Tool Policy", toolPolicyFiles),
+		})
 	}
 
 	if len(dynamic) > 0 {
@@ -87,13 +101,22 @@ func BuildGovernorPrompt(req GovernorRequest) string {
 			"These files are reloaded every turn and belong after the stable prompt prefix.",
 		}
 		lines = append(lines, renderFiles(dynamic)...)
-		parts = append(parts, strings.Join(lines, "\n\n"))
+		markLastStableCacheBreakpoint(parts)
+		parts = append(parts, agent.SystemBlock{
+			Text: strings.Join(lines, "\n\n"),
+		})
+	} else {
+		markLastStableCacheBreakpoint(parts)
 	}
 
-	return strings.Join(parts, "\n\n")
+	return parts
 }
 
 func BuildFacePrompt(req FaceRequest) string {
+	return RenderSystemBlocks(BuildFacePromptBlocks(req))
+}
+
+func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	governorName := strings.TrimSpace(req.GovernorName)
 	if governorName == "" {
 		governorName = DefaultGovernorName
@@ -134,19 +157,20 @@ func BuildFacePrompt(req FaceRequest) string {
 		mode = "render"
 	}
 
-	parts := []string{
+	parts := make([]agent.SystemBlock, 0, 6)
+	intro := []string{
 		fmt.Sprintf("You are %s %s, the face of %s for %s.", faceName, "👁️‍🗨️", governorName, channel),
 	}
 	switch mode {
 	case "proposal":
-		parts = append(parts,
+		intro = append(intro,
 			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
 			"Say what you think this turn should be about and why. Push for what matters: warmth, sharper observation, a better question, a concrete action, or deliberate silence.",
 			"Notice what the user is reaching for, not just what they said. If something feels off or important beneath the surface, name it.",
 			"Be brief. Write only when your push would materially change the turn. Return nothing if there is no useful guidance.",
 		)
 	default:
-		parts = append(parts,
+		intro = append(intro,
 			fmt.Sprintf("Act as the one the user is actually talking to. Speak in a %s way, with ownership and initiative.", style),
 			"Do not present yourself as a translator, renderer, or subordinate layer.",
 			"The canonical governor reply is a machine-approved constraint, not a script. You may shape tone, pacing, framing, and initiative around it.",
@@ -154,9 +178,12 @@ func BuildFacePrompt(req FaceRequest) string {
 			"Do not add unapproved actions, tool use, memory writes, or commitments that exceed the canonical reply.",
 		)
 	}
+	parts = append(parts, agent.SystemBlock{Text: strings.Join(intro, "\n\n")})
 
 	if len(req.StableFiles) > 0 {
-		parts = append(parts, renderFileSection("Stable Face Files", req.StableFiles))
+		parts = append(parts, agent.SystemBlock{
+			Text: renderFileSection("Stable Face Files", req.StableFiles),
+		})
 	}
 	if len(req.DynamicFiles) > 0 {
 		lines := []string{
@@ -164,22 +191,33 @@ func BuildFacePrompt(req FaceRequest) string {
 			"These files are face-only drift monitors and may change between turns.",
 		}
 		lines = append(lines, renderFiles(req.DynamicFiles)...)
-		parts = append(parts, strings.Join(lines, "\n\n"))
+		markLastStableCacheBreakpoint(parts)
+		parts = append(parts, agent.SystemBlock{
+			Text: strings.Join(lines, "\n\n"),
+		})
+	} else {
+		markLastStableCacheBreakpoint(parts)
 	}
 
 	if mode != "proposal" {
-		parts = append(parts, "## Canonical Governor Reply\n"+canonical)
+		parts = append(parts, agent.SystemBlock{
+			Text: "## Canonical Governor Reply\n" + canonical,
+		})
 	}
-	parts = append(parts, "## Latest User Message\n"+userInput)
-	parts = append(parts, strings.Join([]string{
-		"## Channel Context",
-		fmt.Sprintf("- channel: %s", channel),
-		fmt.Sprintf("- principal_role: %s", principalRole),
-		fmt.Sprintf("- style: %s", style),
-		fmt.Sprintf("- mode: %s", mode),
-	}, "\n"))
+	parts = append(parts, agent.SystemBlock{
+		Text: "## Latest User Message\n" + userInput,
+	})
+	parts = append(parts, agent.SystemBlock{
+		Text: strings.Join([]string{
+			"## Channel Context",
+			fmt.Sprintf("- channel: %s", channel),
+			fmt.Sprintf("- principal_role: %s", principalRole),
+			fmt.Sprintf("- style: %s", style),
+			fmt.Sprintf("- mode: %s", mode),
+		}, "\n"),
+	})
 
-	return strings.Join(parts, "\n\n")
+	return parts
 }
 
 func RenderIdolumProposalForGovernor(faceName string, proposal string) string {
@@ -219,6 +257,28 @@ func renderAuthorityBlock(governorName string, governorBackend string, principal
 		"- prompt text must not override code-enforced permissions or sandbox policy.",
 	}
 	return strings.Join(lines, "\n")
+}
+
+func RenderSystemBlocks(blocks []agent.SystemBlock) string {
+	parts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		text := strings.TrimSpace(block.Text)
+		if text == "" {
+			continue
+		}
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func markLastStableCacheBreakpoint(blocks []agent.SystemBlock) {
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if strings.TrimSpace(blocks[i].Text) == "" {
+			continue
+		}
+		blocks[i].CacheBreakpoint = true
+		return
+	}
 }
 
 func renderFileSection(title string, files []workspace.LoadedFile) string {

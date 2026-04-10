@@ -81,6 +81,32 @@ func TestBuildGovernorPromptPlacesDynamicFilesAfterStableSections(t *testing.T) 
 	}
 }
 
+func TestBuildGovernorPromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
+	t.Parallel()
+
+	blocks := BuildGovernorPromptBlocks(GovernorRequest{
+		ToolManifest: "tools:\n- exec",
+		Workspace: &workspace.PromptContext{
+			Stable: []workspace.LoadedFile{
+				{Path: "SOUL.md", Content: "stable"},
+			},
+			Dynamic: []workspace.LoadedFile{
+				{Path: "MEMORY.md", Content: "dynamic"},
+			},
+		},
+	})
+
+	if len(blocks) < 3 {
+		t.Fatalf("block count = %d, want at least 3", len(blocks))
+	}
+	if !blocks[len(blocks)-2].CacheBreakpoint {
+		t.Fatalf("last stable block should be cache breakpoint: %#v", blocks)
+	}
+	if blocks[len(blocks)-1].CacheBreakpoint {
+		t.Fatalf("dynamic block should not be cache breakpoint: %#v", blocks[len(blocks)-1])
+	}
+}
+
 func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	t.Parallel()
 
@@ -163,6 +189,34 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	}
 	if !strings.Contains(got, "reaching for") {
 		t.Fatalf("proposal prompt missing subtext observation guidance: %q", got)
+	}
+}
+
+func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
+	t.Parallel()
+
+	blocks := BuildFacePromptBlocks(FaceRequest{
+		GovernorName:    "Aphelion",
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		LatestUserInput: "hello",
+		CanonicalReply:  "hi",
+		StableFiles: []workspace.LoadedFile{
+			{Path: "IDOLUM.md", Content: "stable"},
+		},
+		DynamicFiles: []workspace.LoadedFile{
+			{Path: "QUESTIONS-TO-IDOLUM.md", Content: "dynamic"},
+		},
+	})
+
+	if len(blocks) < 4 {
+		t.Fatalf("block count = %d, want at least 4", len(blocks))
+	}
+	if !blocks[1].CacheBreakpoint {
+		t.Fatalf("stable face files block should be cache breakpoint: %#v", blocks[1])
+	}
+	if blocks[2].CacheBreakpoint {
+		t.Fatalf("dynamic face block should not be cache breakpoint: %#v", blocks[2])
 	}
 }
 

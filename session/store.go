@@ -378,6 +378,9 @@ func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.T
 	session.UpdatedAt = now
 	session.TotalInputTokens += usage.InputTokens
 	session.TotalOutputTokens += usage.OutputTokens
+	session.TotalCacheRead += usage.CacheReadTokens
+	session.TotalCacheWrite += usage.CacheWriteTokens
+	updateCacheStateForUsage(session, usage, now)
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -428,6 +431,43 @@ func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.T
 		return fmt.Errorf("commit save tx: %w", err)
 	}
 	return nil
+}
+
+func updateCacheStateForUsage(session *Session, usage core.TokenUsage, now time.Time) {
+	if session == nil {
+		return
+	}
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
+		return
+	}
+
+	turnCount := session.TurnCount
+	if turnCount < 1 {
+		turnCount = 1
+	}
+	previousTurns := turnCount - 1
+	previousHits := session.CacheState.HitRate * float64(previousTurns)
+	if usage.CacheReadTokens > 0 {
+		previousHits++
+		session.CacheState.ConsecutiveMisses = 0
+	} else {
+		session.CacheState.ConsecutiveMisses++
+	}
+	session.CacheState.HitRate = previousHits / float64(turnCount)
+
+	if usage.CacheWriteTokens > 0 {
+		session.CacheState.LastWriteBlock = turnCount
+		session.CacheState.BlocksSinceWrite = 0
+		session.CacheState.LastWriteTime = now
+		return
+	}
+
+	if session.CacheState.LastWriteBlock > 0 {
+		session.CacheState.BlocksSinceWrite = turnCount - session.CacheState.LastWriteBlock
+		if session.CacheState.BlocksSinceWrite < 0 {
+			session.CacheState.BlocksSinceWrite = 0
+		}
+	}
 }
 
 func (s *SQLiteStore) UpdateCacheState(key SessionKey, state CacheState) error {

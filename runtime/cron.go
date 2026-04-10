@@ -59,12 +59,14 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	if err != nil {
 		return fmt.Errorf("resolve cron scope: %w", err)
 	}
-	systemPrompt := prompt.BuildGovernorPrompt(prompt.GovernorRequest{
+	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   "admin",
 		WorkspaceRoot:   scope.WorkingRoot,
-	})
+	}
+	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
+	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
 	history, err := session.ToAgentHistory(cronSession.Messages)
 	if err != nil {
@@ -76,7 +78,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	defer monitor.Finish(ctx, err)
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {
-		input = append(input, agent.Message{Role: "system", Content: systemPrompt})
+		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
 	}
 	input = append(input, history...)
 	input = append(input, agent.Message{Role: "user", Content: requestText})

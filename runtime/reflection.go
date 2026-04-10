@@ -13,6 +13,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	memstore "github.com/idolum-ai/aphelion/memory"
+	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -38,7 +39,7 @@ type reflectionInput struct {
 func (r *Runtime) reflectCuratedMemory(
 	ctx context.Context,
 	scopeRoot string,
-	systemPrompt string,
+	systemBlocks []agent.SystemBlock,
 	since time.Time,
 	now time.Time,
 	events []session.ReviewEvent,
@@ -52,7 +53,7 @@ func (r *Runtime) reflectCuratedMemory(
 	}
 
 	messages := []agent.Message{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: prompt.RenderSystemBlocks(systemBlocks), SystemBlocks: systemBlocks},
 		{Role: "user", Content: renderReflectionRequest(input)},
 	}
 	result, _, err := agent.RunTurn(ctx, r.provider, nil, &agent.Budget{

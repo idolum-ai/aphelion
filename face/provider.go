@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/prompt"
 )
 
@@ -23,8 +25,10 @@ type ProviderRendererConfig struct {
 }
 
 type ProviderRenderer struct {
-	provider agent.Provider
-	cfg      ProviderRendererConfig
+	provider  agent.Provider
+	cfg       ProviderRendererConfig
+	mu        sync.Mutex
+	lastUsage core.TokenUsage
 }
 
 func NewProviderRenderer(provider agent.Provider, cfg ProviderRendererConfig) (*ProviderRenderer, error) {
@@ -44,7 +48,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 		return "", err
 	}
 
-	systemPrompt := prompt.BuildFacePrompt(prompt.FaceRequest{
+	facePrompt := prompt.FaceRequest{
 		GovernorName:    firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName),
 		FaceName:        firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName),
 		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
@@ -55,10 +59,12 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
 		Mode:            "render",
-	})
+	}
+	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
+	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
 	resp, err := r.provider.Complete(ctx, []agent.Message{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "user", Content: "Render the final reply for delivery. Return only the reply text."},
 	}, nil)
 	if err != nil {
@@ -69,6 +75,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 	if rendered == "" {
 		return "", ErrEmptyRender
 	}
+	r.recordUsage(resp.Usage)
 	return rendered, nil
 }
 
@@ -79,7 +86,7 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 		return "", err
 	}
 
-	systemPrompt := prompt.BuildFacePrompt(prompt.FaceRequest{
+	facePrompt := prompt.FaceRequest{
 		GovernorName:    firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName),
 		FaceName:        firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName),
 		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
@@ -89,17 +96,37 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
 		Mode:            "proposal",
-	})
+	}
+	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
+	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
 	resp, err := r.provider.Complete(ctx, []agent.Message{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "user", Content: "Tell the hidden executor what it should do, ask, or prioritize next. Return only the advisory note, or nothing if you have no useful push."},
 	}, nil)
 	if err != nil {
 		return "", err
 	}
 
+	r.recordUsage(resp.Usage)
 	return strings.TrimSpace(resp.Content), nil
+}
+
+func (r *ProviderRenderer) ConsumeLastUsage() core.TokenUsage {
+	if r == nil {
+		return core.TokenUsage{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	usage := r.lastUsage
+	r.lastUsage = core.TokenUsage{}
+	return usage
+}
+
+func (r *ProviderRenderer) recordUsage(usage core.TokenUsage) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastUsage = usage
 }
 
 func firstNonEmpty(values ...string) string {

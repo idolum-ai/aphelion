@@ -212,6 +212,65 @@ func TestSearchMessagesFiltersByScopeAndReturnsNewestFirst(t *testing.T) {
 	}
 }
 
+func TestSaveUpdatesCacheTotalsAndState(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 91, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	sess.TurnCount = 1
+	if err := store.Save(sess, []Message{{Role: "assistant", Content: "first", TurnIndex: 1}}, core.TokenUsage{
+		InputTokens:      10,
+		OutputTokens:     2,
+		CacheWriteTokens: 100,
+	}); err != nil {
+		t.Fatalf("Save(first) err = %v", err)
+	}
+
+	reloaded, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(reloaded) err = %v", err)
+	}
+	if reloaded.TotalCacheWrite != 100 {
+		t.Fatalf("TotalCacheWrite = %d, want 100", reloaded.TotalCacheWrite)
+	}
+	if reloaded.CacheState.LastWriteBlock != 1 || reloaded.CacheState.BlocksSinceWrite != 0 {
+		t.Fatalf("cache state after write = %#v", reloaded.CacheState)
+	}
+
+	reloaded.TurnCount = 2
+	if err := store.Save(reloaded, []Message{{Role: "assistant", Content: "second", TurnIndex: 2}}, core.TokenUsage{
+		InputTokens:     8,
+		OutputTokens:    3,
+		CacheReadTokens: 80,
+	}); err != nil {
+		t.Fatalf("Save(second) err = %v", err)
+	}
+
+	finalSession, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(final) err = %v", err)
+	}
+	if finalSession.TotalCacheRead != 80 {
+		t.Fatalf("TotalCacheRead = %d, want 80", finalSession.TotalCacheRead)
+	}
+	if finalSession.CacheState.BlocksSinceWrite != 1 {
+		t.Fatalf("BlocksSinceWrite = %d, want 1", finalSession.CacheState.BlocksSinceWrite)
+	}
+	if finalSession.CacheState.ConsecutiveMisses != 0 {
+		t.Fatalf("ConsecutiveMisses = %d, want 0", finalSession.CacheState.ConsecutiveMisses)
+	}
+	if finalSession.CacheState.HitRate <= 0 {
+		t.Fatalf("HitRate = %f, want positive", finalSession.CacheState.HitRate)
+	}
+}
+
 func TestRhizomeEventRecordingAndProjectionEdges(t *testing.T) {
 	t.Parallel()
 

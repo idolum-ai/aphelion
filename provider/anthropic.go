@@ -151,9 +151,11 @@ func mapAnthropicResponse(res anthropicResponse) *agent.Response {
 	}
 
 	usage := core.TokenUsage{
-		InputTokens:  res.Usage.InputTokens,
-		OutputTokens: res.Usage.OutputTokens,
-		TotalTokens:  res.Usage.TotalTokens,
+		InputTokens:      res.Usage.InputTokens,
+		OutputTokens:     res.Usage.OutputTokens,
+		TotalTokens:      res.Usage.TotalTokens,
+		CacheReadTokens:  res.Usage.CacheReadInputTokens,
+		CacheWriteTokens: res.Usage.CacheCreationInputTokens,
 	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
@@ -169,7 +171,7 @@ func mapAnthropicResponse(res anthropicResponse) *agent.Response {
 type anthropicRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens,omitempty"`
-	System    string             `json:"system,omitempty"`
+	System    []anthropicContent `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicToolDef `json:"tools,omitempty"`
 	Stream    bool               `json:"stream,omitempty"`
@@ -181,9 +183,10 @@ type anthropicMessage struct {
 }
 
 type anthropicToolDef struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description,omitempty"`
+	InputSchema  json.RawMessage        `json:"input_schema"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicResponse struct {
@@ -192,20 +195,27 @@ type anthropicResponse struct {
 }
 
 type anthropicUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	TotalTokens  int64 `json:"total_tokens"`
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	TotalTokens              int64 `json:"total_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 }
 
 type anthropicContent struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`
-	IsError   bool            `json:"is_error,omitempty"`
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text,omitempty"`
+	ID           string                 `json:"id,omitempty"`
+	Name         string                 `json:"name,omitempty"`
+	Input        json.RawMessage        `json:"input,omitempty"`
+	ToolUseID    string                 `json:"tool_use_id,omitempty"`
+	Content      json.RawMessage        `json:"content,omitempty"`
+	IsError      bool                   `json:"is_error,omitempty"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+type anthropicCacheControl struct {
+	Type string `json:"type"`
 }
 
 func toAnthropicMessages(messages []agent.Message) []anthropicMessage {
@@ -285,22 +295,52 @@ func toAnthropicTools(tools []agent.ToolDef) []anthropicToolDef {
 			InputSchema: t.Parameters,
 		})
 	}
+	if len(out) > 0 {
+		out[len(out)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+	}
 	return out
 }
 
-func splitMessages(messages []agent.Message) (string, []agent.Message) {
-	var systemParts []string
+func splitMessages(messages []agent.Message) ([]anthropicContent, []agent.Message) {
+	var systemParts []anthropicContent
 	out := make([]agent.Message, 0, len(messages))
 	for _, msg := range messages {
 		if strings.EqualFold(strings.TrimSpace(msg.Role), "system") {
-			if strings.TrimSpace(msg.Content) != "" {
-				systemParts = append(systemParts, msg.Content)
-			}
+			systemParts = append(systemParts, systemMessageToContent(msg)...)
 			continue
 		}
 		out = append(out, msg)
 	}
-	return strings.Join(systemParts, "\n\n"), out
+	return systemParts, out
+}
+
+func systemMessageToContent(msg agent.Message) []anthropicContent {
+	if len(msg.SystemBlocks) > 0 {
+		out := make([]anthropicContent, 0, len(msg.SystemBlocks))
+		for _, block := range msg.SystemBlocks {
+			text := strings.TrimSpace(block.Text)
+			if text == "" {
+				continue
+			}
+			content := anthropicContent{
+				Type: "text",
+				Text: text,
+			}
+			if block.CacheBreakpoint {
+				content.CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+			}
+			out = append(out, content)
+		}
+		return out
+	}
+	text := strings.TrimSpace(msg.Content)
+	if text == "" {
+		return nil
+	}
+	return []anthropicContent{{
+		Type: "text",
+		Text: text,
+	}}
 }
 
 type apiError struct {
