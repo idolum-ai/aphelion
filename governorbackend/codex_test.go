@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -40,18 +41,28 @@ func TestCodexCompleteTextUsesResponsesProtocol(t *testing.T) {
 			t.Fatalf("model = %#v, want %q", payload["model"], defaultCodexModel)
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"output_text": "hello from codex",
-			"usage": map[string]any{
-				"input_tokens":  10,
-				"output_tokens": 5,
-				"total_tokens":  15,
-				"input_tokens_details": map[string]any{
-					"cached_tokens":      3,
-					"cache_write_tokens": 2,
+		assertStreamRequest(t, payload)
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "hello from codex",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp1",
+					"usage": map[string]any{
+						"input_tokens":  10,
+						"output_tokens": 5,
+						"total_tokens":  15,
+						"input_tokens_details": map[string]any{
+							"cached_tokens":      3,
+							"cache_write_tokens": 2,
+						},
+					},
 				},
-			},
-		})
+			}),
+		)
 	})
 
 	client, err := NewCodex(CodexOptions{
@@ -95,16 +106,28 @@ func TestCodexCompleteToolCallViaResponsesOutput(t *testing.T) {
 	t.Parallel()
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"output": []map[string]any{
-				{
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		assertStreamRequest(t, payload)
+		writeSSE(t, w,
+			sseEvent("response.output_item.done", map[string]any{
+				"type": "response.output_item.done",
+				"item": map[string]any{
 					"type":      "function_call",
 					"name":      "exec",
 					"call_id":   "tc1",
 					"arguments": `{"command":"pwd"}`,
 				},
-			},
-		})
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp1",
+				},
+			}),
+		)
 	})
 
 	client, err := NewCodex(CodexOptions{
@@ -221,7 +244,18 @@ func TestCodexCompleteReloadsAuthFileAfterUnauthorized(t *testing.T) {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"output_text": "recovered"})
+			writeSSE(t, w,
+				sseEvent("response.output_text.delta", map[string]any{
+					"type":  "response.output_text.delta",
+					"delta": "recovered",
+				}),
+				sseEvent("response.completed", map[string]any{
+					"type": "response.completed",
+					"response": map[string]any{
+						"id": "resp1",
+					},
+				}),
+			)
 		})}},
 	})
 	if err != nil {
@@ -268,7 +302,18 @@ func TestCodexCompleteRefreshesAndPersistsTokensAfterUnauthorized(t *testing.T) 
 				if len(seenAuth) == 1 {
 					rec.WriteHeader(http.StatusUnauthorized)
 				} else {
-					_ = json.NewEncoder(rec).Encode(map[string]any{"output_text": "after-refresh"})
+					writeSSE(t, rec,
+						sseEvent("response.output_text.delta", map[string]any{
+							"type":  "response.output_text.delta",
+							"delta": "after-refresh",
+						}),
+						sseEvent("response.completed", map[string]any{
+							"type": "response.completed",
+							"response": map[string]any{
+								"id": "resp1",
+							},
+						}),
+					)
 				}
 				return rec.Result(), nil
 			case "https://auth.openai.com/oauth/token":
@@ -360,4 +405,26 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func (t errTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, t.err
+}
+
+func assertStreamRequest(t *testing.T, payload map[string]any) {
+	t.Helper()
+	if stream, ok := payload["stream"].(bool); !ok || !stream {
+		t.Fatalf("stream = %#v, want true", payload["stream"])
+	}
+}
+
+func sseEvent(kind string, payload map[string]any) string {
+	body, _ := json.Marshal(payload)
+	return fmt.Sprintf("event: %s\ndata: %s\n\n", kind, string(body))
+}
+
+func writeSSE(t *testing.T, w http.ResponseWriter, events ...string) {
+	t.Helper()
+	w.Header().Set("Content-Type", "text/event-stream")
+	for _, event := range events {
+		if _, err := io.WriteString(w, event); err != nil {
+			t.Fatalf("write sse: %v", err)
+		}
+	}
 }

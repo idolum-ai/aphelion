@@ -18,6 +18,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/governorauth"
+	"github.com/idolum-ai/aphelion/internal"
 )
 
 const (
@@ -64,6 +65,7 @@ type Codex struct {
 
 var _ agent.Provider = (*Codex)(nil)
 var _ agent.ProviderWithOptions = (*Codex)(nil)
+var _ agent.StreamingProvider = (*Codex)(nil)
 
 func NewCodex(opts CodexOptions) (*Codex, error) {
 	if strings.TrimSpace(opts.BaseURL) == "" {
@@ -109,11 +111,15 @@ func (c *Codex) Complete(ctx context.Context, messages []agent.Message, tools []
 }
 
 func (c *Codex) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
-	return c.complete(ctx, messages, tools, opts, true)
+	return c.complete(ctx, messages, tools, opts, nil, true)
 }
 
-func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, allowRetry bool) (*agent.Response, error) {
-	reqBody := buildCodexRequest(messages, tools, opts)
+func (c *Codex) Stream(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, cb agent.StreamCallback) (*agent.Response, error) {
+	return c.complete(ctx, messages, tools, agent.CompleteOptions{}, cb, true)
+}
+
+func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*agent.Response, error) {
+	reqBody := buildCodexRequest(messages, tools, opts, true)
 
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(reqBody); err != nil {
@@ -127,7 +133,7 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 		if allowRetry && errors.As(err, &apiErr) && apiErr.statusCode == http.StatusUnauthorized {
 			reauthorized, reauthErr := c.reauthorize(ctx, accessToken)
 			if reauthorized {
-				return c.complete(ctx, messages, tools, opts, false)
+				return c.complete(ctx, messages, tools, opts, cb, false)
 			}
 			if reauthErr != nil {
 				return nil, fmt.Errorf("%w: reauthorization failed: %v", err, reauthErr)
@@ -135,10 +141,11 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 		}
 		return nil, err
 	}
-	return resp, nil
+	defer resp.Body.Close()
+	return consumeCodexStream(resp.Body, cb)
 }
 
-func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken string, accountID string) (*agent.Response, error) {
+func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken string, accountID string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, body)
 	if err != nil {
 		return nil, fmt.Errorf("codex: new request: %w", err)
@@ -154,13 +161,13 @@ func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken s
 	if err != nil {
 		return nil, fmt.Errorf("codex: request: %w", redactError(err, accessToken))
 	}
-	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCodexResponseBytes))
-	if err != nil {
-		return nil, fmt.Errorf("codex: read response: %w", err)
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxCodexResponseBytes))
+		if err != nil {
+			return nil, fmt.Errorf("codex: read response: %w", err)
+		}
 		bodyMessage := redactBodyExcerpt(raw, accessToken, refreshTokenForRedaction(c), accountID)
 		return nil, codexAPIError{
 			statusCode: resp.StatusCode,
@@ -168,12 +175,7 @@ func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken s
 			cause:      codexStatusCause(resp.StatusCode),
 		}
 	}
-
-	res, err := parseCodexResponse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("codex: decode response: %w", err)
-	}
-	return res, nil
+	return resp, nil
 }
 
 func (c *Codex) currentCredentials() (string, string) {
@@ -296,7 +298,7 @@ func (c *Codex) refreshTokens(ctx context.Context, refreshToken string) (governo
 	}, nil
 }
 
-func buildCodexRequest(messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) map[string]any {
+func buildCodexRequest(messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, stream bool) map[string]any {
 	instructions := collectCodexInstructions(messages)
 	input := make([]map[string]any, 0, len(messages))
 	for _, msg := range messages {
@@ -334,6 +336,7 @@ func buildCodexRequest(messages []agent.Message, tools []agent.ToolDef, opts age
 		"instructions": instructions,
 		"input":        input,
 		"store":        false,
+		"stream":       stream,
 	}
 	if defs := toCodexTools(tools); len(defs) > 0 {
 		reqBody["tools"] = defs
@@ -343,6 +346,19 @@ func buildCodexRequest(messages []agent.Message, tools []agent.ToolDef, opts age
 		reqBody["reasoning"] = reasoning
 	}
 	return reqBody
+}
+
+func consumeCodexStream(body io.Reader, cb agent.StreamCallback) (*agent.Response, error) {
+	parser := &codexStreamParser{}
+	for event := range internal.ParseSSE(body) {
+		if strings.EqualFold(strings.TrimSpace(event.Data), "[DONE]") {
+			break
+		}
+		if err := parser.consume(event, cb); err != nil {
+			return nil, err
+		}
+	}
+	return parser.response()
 }
 
 func collectCodexInstructions(messages []agent.Message) string {
@@ -504,6 +520,139 @@ type codexUsage struct {
 		CachedTokens     int64 `json:"cached_tokens"`
 		CacheWriteTokens int64 `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
+}
+
+type codexStreamEnvelope struct {
+	Type         string          `json:"type"`
+	Delta        string          `json:"delta"`
+	Item         json.RawMessage `json:"item"`
+	Response     json.RawMessage `json:"response"`
+	SummaryIndex *int            `json:"summary_index"`
+	ContentIndex *int            `json:"content_index"`
+}
+
+type codexCompletedResponse struct {
+	ID    string      `json:"id"`
+	Usage *codexUsage `json:"usage"`
+}
+
+type codexFailedResponse struct {
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+type codexStreamParser struct {
+	text         strings.Builder
+	thinking     strings.Builder
+	thinkingMeta []agent.ThinkingBlock
+	toolCalls    []agent.ToolCall
+	usage        core.TokenUsage
+	completed    bool
+}
+
+func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallback) error {
+	var env codexStreamEnvelope
+	if err := json.Unmarshal([]byte(event.Data), &env); err != nil {
+		return fmt.Errorf("codex: decode stream event: %w", err)
+	}
+
+	kind := strings.TrimSpace(env.Type)
+	if kind == "" {
+		kind = strings.TrimSpace(event.Type)
+	}
+	switch kind {
+	case "response.created":
+		return nil
+	case "response.output_text.delta":
+		p.text.WriteString(env.Delta)
+		if cb != nil && strings.TrimSpace(env.Delta) != "" {
+			return cb(agent.StreamChunk{Type: "text", Text: env.Delta})
+		}
+		return nil
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		p.thinking.WriteString(env.Delta)
+		return nil
+	case "response.output_item.done":
+		if len(env.Item) == 0 {
+			return nil
+		}
+		var item codexOutputItem
+		if err := json.Unmarshal(env.Item, &item); err != nil {
+			return fmt.Errorf("codex: decode stream item: %w", err)
+		}
+		switch item.Type {
+		case "function_call":
+			call := agent.ToolCall{
+				ID:    strings.TrimSpace(item.CallID),
+				Name:  strings.TrimSpace(item.Name),
+				Input: json.RawMessage(normalizeArguments(json.RawMessage(item.Arguments))),
+			}
+			p.toolCalls = append(p.toolCalls, call)
+			if cb != nil {
+				return cb(agent.StreamChunk{Type: "tool_call", ToolCall: &call})
+			}
+		case "reasoning":
+			for _, summary := range item.Summary {
+				if text := strings.TrimSpace(summary.Text); text != "" {
+					if p.thinking.Len() > 0 {
+						p.thinking.WriteString("\n")
+					}
+					p.thinking.WriteString(text)
+					p.thinkingMeta = append(p.thinkingMeta, agent.ThinkingBlock{
+						Type:    "summary_text",
+						Content: text,
+					})
+				}
+			}
+		case "message":
+			// Text is normally streamed via output_text.delta; ignore here to avoid duplication.
+		}
+		return nil
+	case "response.completed":
+		p.completed = true
+		var completed codexCompletedResponse
+		if len(env.Response) > 0 && json.Unmarshal(env.Response, &completed) == nil && completed.Usage != nil {
+			p.usage = core.TokenUsage{
+				InputTokens:      completed.Usage.InputTokens,
+				OutputTokens:     completed.Usage.OutputTokens,
+				TotalTokens:      completed.Usage.TotalTokens,
+				CacheReadTokens:  completed.Usage.InputTokensDetails.CachedTokens,
+				CacheWriteTokens: completed.Usage.InputTokensDetails.CacheWriteTokens,
+			}
+			if p.usage.TotalTokens == 0 {
+				p.usage.TotalTokens = p.usage.InputTokens + p.usage.OutputTokens
+			}
+			if cb != nil {
+				usage := p.usage
+				return cb(agent.StreamChunk{Type: "usage", Usage: &usage})
+			}
+		}
+		return nil
+	case "response.failed":
+		var failed codexFailedResponse
+		if len(env.Response) > 0 && json.Unmarshal(env.Response, &failed) == nil {
+			if failed.Error != nil && strings.TrimSpace(failed.Error.Message) != "" {
+				return fmt.Errorf("codex: stream failed: %s", strings.TrimSpace(failed.Error.Message))
+			}
+		}
+		return fmt.Errorf("codex: stream failed")
+	default:
+		return nil
+	}
+}
+
+func (p *codexStreamParser) response() (*agent.Response, error) {
+	if !p.completed {
+		return nil, fmt.Errorf("codex: stream closed before response.completed")
+	}
+	return &agent.Response{
+		Content:      strings.TrimSpace(p.text.String()),
+		Thinking:     strings.TrimSpace(p.thinking.String()),
+		ThinkingMeta: append([]agent.ThinkingBlock(nil), p.thinkingMeta...),
+		ToolCalls:    append([]agent.ToolCall(nil), p.toolCalls...),
+		Usage:        p.usage,
+	}, nil
 }
 
 func parseCodexResponse(raw []byte) (*agent.Response, error) {
