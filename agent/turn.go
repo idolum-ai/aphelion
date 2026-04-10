@@ -26,6 +26,10 @@ type ProviderWithOptions interface {
 	CompleteWithOptions(ctx context.Context, messages []Message, tools []ToolDef, opts CompleteOptions) (*Response, error)
 }
 
+type ManagedProvider interface {
+	CompleteManaged(ctx context.Context, messages []Message, tools []ToolDef, opts CompleteOptions) (*Response, error)
+}
+
 type ToolRegistry interface {
 	Execute(ctx context.Context, name string, input json.RawMessage) (string, error)
 	Definitions() []ToolDef
@@ -112,7 +116,7 @@ const (
 const (
 	maxProviderRetries   = 3
 	initialRetryBackoff  = 100 * time.Millisecond
-	providerFailureReply = "I'm having trouble reaching the model right now. Please try again."
+	providerFailureReply = "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
 	budgetExhaustedReply = "Iteration budget exhausted before final response."
 )
 
@@ -168,8 +172,15 @@ func RunTurn(
 			}
 
 			log.Printf("ERROR provider failed after retries err=%v", err)
+			reply := providerFailureReply
+			var userFacing interface{ UserFacingFailure() string }
+			if errors.As(err, &userFacing) {
+				if text := strings.TrimSpace(userFacing.UserFacingFailure()); text != "" {
+					reply = text
+				}
+			}
 			return &core.TurnResult{
-				Text:       providerFailureReply,
+				Text:       reply,
 				ToolLog:    toolLog,
 				TokenUsage: core.TokenUsage{},
 			}, history, nil
@@ -241,6 +252,13 @@ func completeWithRetry(
 	tools []ToolDef,
 	opts *CompleteOptions,
 ) (*Response, error) {
+	if managed, ok := provider.(ManagedProvider); ok {
+		if opts == nil {
+			return managed.CompleteManaged(ctx, messages, tools, CompleteOptions{})
+		}
+		return managed.CompleteManaged(ctx, messages, tools, *opts)
+	}
+
 	backoff := initialRetryBackoff
 	attempt := 0
 

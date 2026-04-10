@@ -249,6 +249,20 @@ func (r *Runtime) governorContextWindow() int {
 			return r.cfg.Governor.Codex.ContextWindow
 		}
 	default:
+		nativeProvider := strings.ToLower(strings.TrimSpace(r.cfg.Governor.NativeProvider))
+		if nativeProvider == "" {
+			nativeProvider = strings.ToLower(strings.TrimSpace(r.cfg.Providers.Default))
+		}
+		switch nativeProvider {
+		case "openrouter":
+			if r.cfg.Providers.OpenRouter.ContextWindow > 0 {
+				return r.cfg.Providers.OpenRouter.ContextWindow
+			}
+		default:
+			if r.cfg.Providers.Anthropic.ContextWindow > 0 {
+				return r.cfg.Providers.Anthropic.ContextWindow
+			}
+		}
 		if r.cfg.Providers.Anthropic.ContextWindow > 0 {
 			return r.cfg.Providers.Anthropic.ContextWindow
 		}

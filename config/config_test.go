@@ -63,6 +63,12 @@ workspace = "./workspace"
 	if cfg.Providers.Anthropic.ContextWindow != 200000 {
 		t.Fatalf("providers.anthropic.context_window = %d, want 200000", cfg.Providers.Anthropic.ContextWindow)
 	}
+	if cfg.Providers.OpenRouter.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Fatalf("providers.openrouter.base_url = %q, want default openrouter url", cfg.Providers.OpenRouter.BaseURL)
+	}
+	if len(cfg.Providers.FallbackChain) != 0 {
+		t.Fatalf("providers.fallback_chain = %#v, want empty", cfg.Providers.FallbackChain)
+	}
 	if !strings.HasSuffix(cfg.Agent.Workspace, "/workspace") {
 		t.Fatalf("workspace = %q, want expanded relative path", cfg.Agent.Workspace)
 	}

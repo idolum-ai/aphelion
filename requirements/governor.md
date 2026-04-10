@@ -179,6 +179,8 @@ The existing provider/tool loop remains valid as the native governor path:
 
 This path should continue to satisfy the same governor contract so the rest of Aphelion does not care which governor backend is active.
 
+When Codex is active and a native provider chain is configured, runtime may degrade from Codex into that native chain on retryable live-turn failures. This is a continuity-preserving fallback, not a silent change of constitutional role.
+
 ## Face Behavior
 
 The face may:

@@ -25,10 +25,18 @@ context_window = 200000
 
 [providers]
 default = "anthropic"
+fallback_chain = []
 
 [providers.anthropic]
 api_key = "anthropic-api-key"
 model = "claude-sonnet-4-6"
+max_tokens = 4096
+context_window = 200000
+
+[providers.openrouter]
+api_key = ""
+base_url = "https://openrouter.ai/api/v1"
+model = "anthropic/claude-sonnet-4-6"
 max_tokens = 4096
 context_window = 200000
 

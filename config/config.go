@@ -65,12 +65,22 @@ type GovernorCodexConfig struct {
 }
 
 type ProvidersConfig struct {
-	Default   string          `toml:"default"`
-	Anthropic AnthropicConfig `toml:"anthropic"`
+	Default       string           `toml:"default"`
+	FallbackChain []string         `toml:"fallback_chain"`
+	Anthropic     AnthropicConfig  `toml:"anthropic"`
+	OpenRouter    OpenRouterConfig `toml:"openrouter"`
 }
 
 type AnthropicConfig struct {
 	APIKey        string `toml:"api_key"`
+	Model         string `toml:"model"`
+	MaxTokens     int    `toml:"max_tokens"`
+	ContextWindow int    `toml:"context_window"`
+}
+
+type OpenRouterConfig struct {
+	APIKey        string `toml:"api_key"`
+	BaseURL       string `toml:"base_url"`
 	Model         string `toml:"model"`
 	MaxTokens     int    `toml:"max_tokens"`
 	ContextWindow int    `toml:"context_window"`
@@ -218,9 +228,16 @@ func Default() Config {
 			},
 		},
 		Providers: ProvidersConfig{
-			Default: "anthropic",
+			Default:       "anthropic",
+			FallbackChain: []string{},
 			Anthropic: AnthropicConfig{
 				Model:         "claude-sonnet-4-6",
+				MaxTokens:     4096,
+				ContextWindow: 200000,
+			},
+			OpenRouter: OpenRouterConfig{
+				BaseURL:       "https://openrouter.ai/api/v1",
+				Model:         "anthropic/claude-sonnet-4-6",
 				MaxTokens:     4096,
 				ContextWindow: 200000,
 			},
@@ -524,15 +541,57 @@ func validate(cfg *Config) error {
 	default:
 		return fmt.Errorf("face.backend must be one of provider|governor_passthrough")
 	}
-	needsNativeProvider := governorBackend == "native" || faceBackend == "" || faceBackend == "provider"
-	if needsNativeProvider && strings.TrimSpace(cfg.Governor.NativeProvider) == "" {
-		return fmt.Errorf("governor.native_provider is required when native provider access is enabled")
+	switch providerName(strings.TrimSpace(cfg.Providers.Default)) {
+	case "", "anthropic", "openrouter":
+	default:
+		return fmt.Errorf("providers.default must be one of anthropic|openrouter")
 	}
-	if needsNativeProvider && strings.TrimSpace(cfg.Providers.Anthropic.APIKey) == "" {
-		return fmt.Errorf("providers.anthropic.api_key is required when native provider access is enabled")
+	for i, name := range cfg.Providers.FallbackChain {
+		switch providerName(name) {
+		case "", "anthropic", "openrouter":
+			if providerName(name) == "" {
+				return fmt.Errorf("providers.fallback_chain[%d] must not be empty", i)
+			}
+		default:
+			return fmt.Errorf("providers.fallback_chain[%d] must be one of anthropic|openrouter", i)
+		}
+	}
+	nativePrimary := providerName(firstNonEmpty(strings.TrimSpace(cfg.Governor.NativeProvider), strings.TrimSpace(cfg.Providers.Default)))
+	if nativePrimary == "" {
+		nativePrimary = "anthropic"
+	}
+	switch nativePrimary {
+	case "anthropic", "openrouter":
+	default:
+		return fmt.Errorf("governor.native_provider must be one of anthropic|openrouter")
+	}
+	needsNativeProvider := governorBackend == "native" || faceBackend == "" || faceBackend == "provider" || len(cfg.Providers.FallbackChain) > 0
+	if needsNativeProvider && nativePrimary == "" {
+		return fmt.Errorf("governor.native_provider is required when native provider access is enabled")
 	}
 	if cfg.Providers.Anthropic.ContextWindow <= 0 {
 		return fmt.Errorf("providers.anthropic.context_window must be > 0")
+	}
+	if cfg.Providers.OpenRouter.ContextWindow <= 0 {
+		return fmt.Errorf("providers.openrouter.context_window must be > 0")
+	}
+	if strings.TrimSpace(cfg.Providers.OpenRouter.BaseURL) == "" {
+		return fmt.Errorf("providers.openrouter.base_url is required")
+	}
+	if needsNativeProvider {
+		required := append([]string{nativePrimary}, cfg.Providers.FallbackChain...)
+		for _, name := range required {
+			switch providerName(name) {
+			case "anthropic":
+				if strings.TrimSpace(cfg.Providers.Anthropic.APIKey) == "" {
+					return fmt.Errorf("providers.anthropic.api_key is required when anthropic is in the native provider chain")
+				}
+			case "openrouter":
+				if strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) == "" {
+					return fmt.Errorf("providers.openrouter.api_key is required when openrouter is in the native provider chain")
+				}
+			}
+		}
 	}
 	if strings.TrimSpace(cfg.Heartbeat.Every) == "" {
 		return fmt.Errorf("heartbeat.every is required")
@@ -718,6 +777,10 @@ func defaultHomePath(parts ...string) string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func providerName(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func firstNonEmpty(values ...string) string {

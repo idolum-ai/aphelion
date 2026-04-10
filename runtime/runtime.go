@@ -22,6 +22,7 @@ import (
 	"github.com/idolum-ai/aphelion/media"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
+	providerpkg "github.com/idolum-ai/aphelion/provider"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/voice"
@@ -140,6 +141,16 @@ func New(
 			return nil, fmt.Errorf("init codex governor backend: %w", err)
 		}
 		activeProvider = codexProvider
+		if provider != nil {
+			chain, err := providerpkg.NewFailoverChain([]providerpkg.NamedProvider{
+				{Name: governorauth.BackendCodex, Provider: codexProvider},
+				{Name: "native", Provider: provider},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("init governor failover chain: %w", err)
+			}
+			activeProvider = chain
+		}
 	}
 
 	var faceProvider agent.Provider

@@ -144,11 +144,11 @@ Ollama belongs here only as a local inference backend.
 ### v0.5
 
 - Anthropic
+- OpenRouter
 - OpenAI inference
 
 ### Deferred after v0.5
 
-- OpenRouter
 - Gemini
 - Ollama
 
@@ -189,6 +189,23 @@ The runtime failover chain should:
 - retry within one provider first
 - fail over only on retryable exhaustion
 - avoid failover on deterministic client/request errors
+
+The native-provider failover chain should be explicit and ordered.
+
+Example:
+
+- governor backend: `codex`
+- native fallback chain: `anthropic -> openrouter`
+
+That means:
+
+1. retry Codex within its own backend logic where appropriate
+2. on bounded retry exhaustion or retryable runtime failure, fall back to the native provider chain
+3. retry Anthropic first
+4. on bounded retry exhaustion, fail over to OpenRouter
+5. on deterministic client/request errors, stop rather than cascading through every provider
+
+OpenRouter should be treated as an inference gateway fallback, not as the canonical primary provider contract for the system.
 
 ## Caching
 
@@ -237,9 +254,11 @@ Strategy:
 
 - **TestProviderRequestMapping**: structured inference request maps correctly into provider payloads
 - **TestAnthropicStream**: SSE stream maps into ordered `StreamChunk` values
+- **TestOpenRouterComplete**: OpenRouter chat-completions response maps correctly
 - **TestOpenAIComplete**: OpenAI inference response maps correctly
 - **TestFailoverToSecondary**: primary inference provider exhausts retries, secondary succeeds
 - **TestFailoverNoClientError**: deterministic request error does not trigger failover
+- **TestCodexFallsBackToNativeChain**: Codex runtime failure falls back to native provider chain when configured
 
 ### Deferred
 

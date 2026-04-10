@@ -97,18 +97,9 @@ func run() error {
 	defer store.Close()
 
 	httpClient := &http.Client{Timeout: 90 * time.Second}
-	var llm agent.Provider
-	if strings.TrimSpace(cfg.Providers.Anthropic.APIKey) != "" {
-		llm, err = provider.NewAnthropic(provider.AnthropicOptions{
-			APIKey:     cfg.Providers.Anthropic.APIKey,
-			Model:      cfg.Providers.Anthropic.Model,
-			MaxTokens:  cfg.Providers.Anthropic.MaxTokens,
-			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
-		})
-		if err != nil {
-			return err
-		}
+	llm, err := buildNativeProviderChain(cfg, httpClient)
+	if err != nil {
+		return err
 	}
 
 	sandboxRoots := sandbox.Roots{
@@ -203,7 +194,7 @@ func run() error {
 	)
 
 	log.Printf(
-		"INFO aphelion started config_path=%s prompt_root=%s exec_root=%s shared_memory_root=%s user_workspace_root=%s user_memory_root=%s db_path=%s model=%s",
+		"INFO aphelion started config_path=%s prompt_root=%s exec_root=%s shared_memory_root=%s user_workspace_root=%s user_memory_root=%s db_path=%s model=%s native_provider=%s fallback_chain=%s",
 		configPath,
 		cfg.Agent.PromptRoot,
 		cfg.Agent.ExecRoot,
@@ -211,7 +202,9 @@ func run() error {
 		cfg.Agent.UserWorkspaceRoot,
 		cfg.Agent.UserMemoryRoot,
 		cfg.Sessions.DBPath,
-		cfg.Providers.Anthropic.Model,
+		activeNativeModel(cfg),
+		resolveNativeProviderName(cfg),
+		strings.Join(cfg.Providers.FallbackChain, ","),
 	)
 	return poller.Run(ctx)
 }
@@ -235,6 +228,127 @@ func prepareFilesystem(cfg *config.Config) error {
 		}
 	}
 	return nil
+}
+
+func buildNativeProviderChain(cfg *config.Config, httpClient *http.Client) (agent.Provider, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 90 * time.Second}
+	}
+
+	names := orderedNativeProviderNames(cfg)
+	entries := make([]provider.NamedProvider, 0, len(names))
+	required := nativeProviderRequired(cfg)
+	for idx, name := range names {
+		if !isConfiguredProvider(name, cfg) {
+			if idx == 0 && required {
+				return nil, fmt.Errorf("native provider %q is enabled but not configured", name)
+			}
+			continue
+		}
+		p, err := buildNamedProvider(name, cfg, httpClient)
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			continue
+		}
+		entries = append(entries, provider.NamedProvider{Name: name, Provider: p})
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	if len(entries) == 1 {
+		return entries[0].Provider, nil
+	}
+	return provider.NewFailoverChain(entries)
+}
+
+func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client) (agent.Provider, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "anthropic":
+		return provider.NewAnthropic(provider.AnthropicOptions{
+			APIKey:     cfg.Providers.Anthropic.APIKey,
+			Model:      cfg.Providers.Anthropic.Model,
+			MaxTokens:  cfg.Providers.Anthropic.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+	case "openrouter":
+		return provider.NewOpenRouter(provider.OpenRouterOptions{
+			APIKey:     cfg.Providers.OpenRouter.APIKey,
+			BaseURL:    cfg.Providers.OpenRouter.BaseURL,
+			Model:      cfg.Providers.OpenRouter.Model,
+			MaxTokens:  cfg.Providers.OpenRouter.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+	case "":
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unsupported provider %q", name)
+	}
+}
+
+func orderedNativeProviderNames(cfg *config.Config) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 1+len(cfg.Providers.FallbackChain))
+	for _, raw := range append([]string{resolveNativeProviderName(cfg)}, cfg.Providers.FallbackChain...) {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func resolveNativeProviderName(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if name := strings.ToLower(strings.TrimSpace(cfg.Governor.NativeProvider)); name != "" {
+		return name
+	}
+	if name := strings.ToLower(strings.TrimSpace(cfg.Providers.Default)); name != "" {
+		return name
+	}
+	return "anthropic"
+}
+
+func activeNativeModel(cfg *config.Config) string {
+	switch resolveNativeProviderName(cfg) {
+	case "openrouter":
+		return cfg.Providers.OpenRouter.Model
+	default:
+		return cfg.Providers.Anthropic.Model
+	}
+}
+
+func nativeProviderRequired(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	governorBackend := strings.ToLower(strings.TrimSpace(cfg.Governor.Backend))
+	faceBackend := strings.ToLower(strings.TrimSpace(cfg.Face.Backend))
+	return governorBackend == "native" || faceBackend == "" || faceBackend == "provider"
+}
+
+func isConfiguredProvider(name string, cfg *config.Config) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "anthropic":
+		return strings.TrimSpace(cfg.Providers.Anthropic.APIKey) != ""
+	case "openrouter":
+		return strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) != ""
+	default:
+		return false
+	}
 }
 
 func exitCode(err error) int {

@@ -21,12 +21,14 @@ import (
 	"github.com/idolum-ai/aphelion/governorauth"
 	"github.com/idolum-ai/aphelion/media"
 	"github.com/idolum-ai/aphelion/principal"
+	providerpkg "github.com/idolum-ai/aphelion/provider"
 	"github.com/idolum-ai/aphelion/session"
 )
 
 type fakeProvider struct {
 	mu                  sync.Mutex
 	callCount           int
+	err                 error
 	replyText           string
 	thinkingText        string
 	reflectionReplyText string
@@ -67,6 +69,9 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 			Content: reply,
 			Usage:   f.responseUsage,
 		}, nil
+	}
+	if f.err != nil {
+		return nil, f.err
 	}
 
 	var systemParts []string
@@ -158,6 +163,14 @@ type fakeSender struct {
 	deletes  []messageDelete
 	actionCh chan chatAction
 }
+
+type stubRuntimeStatusError struct {
+	code int
+	msg  string
+}
+
+func (e stubRuntimeStatusError) Error() string   { return e.msg }
+func (e stubRuntimeStatusError) StatusCode() int { return e.code }
 
 func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (int64, error) {
 	f.mu.Lock()
@@ -1229,7 +1242,7 @@ func TestFaceProviderSelection(t *testing.T) {
 		name        string
 		faceBackend face.Backend
 		resolveAuth func(config.GovernorConfig) (governorauth.Bundle, error)
-		want        func(agent.Provider, agent.Provider) agent.Provider
+		assert      func(*testing.T, agent.Provider, agent.Provider, agent.Provider)
 	}{
 		{
 			name:        "provider backend uses supplied provider",
@@ -1237,8 +1250,11 @@ func TestFaceProviderSelection(t *testing.T) {
 			resolveAuth: func(cfg config.GovernorConfig) (governorauth.Bundle, error) {
 				return governorauth.Bundle{Backend: governorauth.BackendNative}, nil
 			},
-			want: func(providerArg, codexAgent agent.Provider) agent.Provider {
-				return providerArg
+			assert: func(t *testing.T, captured, providerArg, _ agent.Provider) {
+				t.Helper()
+				if captured != providerArg {
+					t.Fatalf("got face provider %T, want supplied provider %T", captured, providerArg)
+				}
 			},
 		},
 		{
@@ -1247,8 +1263,14 @@ func TestFaceProviderSelection(t *testing.T) {
 			resolveAuth: func(cfg config.GovernorConfig) (governorauth.Bundle, error) {
 				return governorauth.Bundle{Backend: governorauth.BackendCodex, BaseURL: "https://codex", AccessToken: "token"}, nil
 			},
-			want: func(providerArg, codexAgent agent.Provider) agent.Provider {
-				return codexAgent
+			assert: func(t *testing.T, captured, _, codexAgent agent.Provider) {
+				t.Helper()
+				if captured == codexAgent {
+					return
+				}
+				if _, ok := captured.(*providerpkg.FailoverChain); !ok {
+					t.Fatalf("got face provider %T, want codex provider or failover chain", captured)
+				}
 			},
 		},
 	}
@@ -1275,10 +1297,7 @@ func TestFaceProviderSelection(t *testing.T) {
 				t.Fatalf("New() err = %v", err)
 			}
 
-			want := tt.want(providerArg, codexProvider)
-			if captured != want {
-				t.Fatalf("got face provider %T, want %T", captured, want)
-			}
+			tt.assert(t, captured, providerArg, codexProvider)
 		})
 	}
 }
@@ -2184,6 +2203,50 @@ func TestNewAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
 	defer sender.mu.Unlock()
 	if len(sender.sent) != 1 || sender.sent[0].Text != "codex auto" {
 		t.Fatalf("outbound = %#v, want codex auto", sender.sent)
+	}
+}
+
+func TestCodexRuntimeFailureFallsBackToNativeProviderChain(t *testing.T) {
+	cfg, store, nativeProvider, sender := buildRuntimeFixtures(t)
+	cfg.Governor.Backend = "codex"
+	cfg.Face.Backend = "governor_passthrough"
+
+	origFactory := newCodexProvider
+	defer func() { newCodexProvider = origFactory }()
+	newCodexProvider = func(_ governorauth.Bundle, _ *config.Config) (agent.Provider, error) {
+		return &fakeProvider{err: stubRuntimeStatusError{code: 503, msg: "codex unavailable"}}, nil
+	}
+
+	rt, err := New(cfg, store, nativeProvider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     407,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "hi",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	nativeProvider.mu.Lock()
+	callCount := nativeProvider.callCount
+	nativeProvider.mu.Unlock()
+	if callCount == 0 {
+		t.Fatal("native provider was not used after codex runtime failure")
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != nativeProvider.replyText {
+		t.Fatalf("outbound text = %q, want %q", sender.sent[0].Text, nativeProvider.replyText)
 	}
 }
 

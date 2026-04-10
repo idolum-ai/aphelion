@@ -46,7 +46,7 @@ parse_mode = "MarkdownV2" # Default parse mode
 # ─── Providers ───
 [providers]
 default = "anthropic"
-failover = ["gemini", "ollama"]
+fallback_chain = ["openrouter"]
 
 # Failover behavior
 [providers.failover]
@@ -150,6 +150,8 @@ translation_model = "whisper-1"
 [governor]
 backend = "auto"              # "auto" | "codex" | "native"
 native_provider = "anthropic" # Used when backend resolves to native
+
+# Runtime failover may still use the native provider chain when Codex fails mid-turn.
 
 [governor.codex]
 auth_source = "auto"          # "auto" | "codex_cli" | "aphelion"
