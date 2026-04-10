@@ -46,6 +46,7 @@ type ProposalRequest struct {
 	FaceName        string
 	Channel         string
 	Style           string
+	Mode            string
 	PrincipalRole   string
 	WorkspaceRoot   string
 	LatestUserInput string

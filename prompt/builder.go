@@ -165,6 +165,15 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		fmt.Sprintf("You are %s %s, the face of %s for %s.", faceName, "👁️‍🗨️", governorName, channel),
 	}
 	switch mode {
+	case "brokerage":
+		intro = append(intro,
+			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
+			"Decide what kind of turn this should be before execution begins.",
+			"Return a short planning brokerage note, not a reply to the user.",
+			"Choose one turn mode: answer_now, inspect_then_answer, ask_then_wait, decline, or silent.",
+			"Focus on what the user is actually reaching for, what posture would help, and whether the governor should inspect, ask, or answer directly.",
+			"Be concrete and brief. Do not claim authority. Do not describe hidden mechanics.",
+		)
 	case "proposal":
 		intro = append(intro,
 			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
@@ -205,7 +214,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		markLastStableCacheBreakpoint(parts)
 	}
 
-	if mode != "proposal" {
+	if mode != "proposal" && mode != "brokerage" {
 		parts = append(parts, agent.SystemBlock{
 			Text: "## Canonical Governor Reply\n" + canonical,
 		})
@@ -239,6 +248,34 @@ func RenderIdolumProposalForGovernor(faceName string, proposal string) string {
 		fmt.Sprintf("## %s Proposal", faceName),
 		fmt.Sprintf("This is advisory guidance from %s, the public-facing persona. It may advocate for warmth, sharper observation, stronger initiative, deeper questions, or actions worth considering. It is not authoritative; the governor decides.", faceName),
 		proposal,
+	}, "\n\n")
+}
+
+func RenderIdolumBrokerageForGovernor(faceName string, proposal string) string {
+	faceName = strings.TrimSpace(faceName)
+	if faceName == "" {
+		faceName = "Idolum"
+	}
+	proposal = strings.TrimSpace(proposal)
+	if proposal == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("## %s Brokerage Proposal", faceName),
+		fmt.Sprintf("This is advisory planning guidance from %s, the public-facing persona. It suggests what kind of turn should happen next, but it is not authoritative until the governor ratifies a plan.", faceName),
+		proposal,
+	}, "\n\n")
+}
+
+func RenderBrokeragePlanForGovernor(plan string) string {
+	plan = strings.TrimSpace(plan)
+	if plan == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Ratified Turn Brokerage",
+		"This is the machine-ratified planning posture for the current turn. Follow it when deciding whether to inspect, ask, answer, decline, or hold.",
+		plan,
 	}, "\n\n")
 }
 

@@ -30,6 +30,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 
 - explicit governor → face pipeline
 - face → governor proposal path before ordinary turns
+- bounded planning brokerage for selected interactive turns
 - governor decides, face renders
 - Codex-friendly governor contract
 - Codex-first governor backend when available
@@ -202,6 +203,7 @@ The face may:
 - use `Idolum`-specific identity and anti-drift guidance
 - push the governor toward a warmer, sharper, or more proactive next move
 - propose candidate proactive messages during heartbeat or cron turns
+- propose a turn posture and mode during planning brokerage
 
 The face must not:
 
@@ -212,6 +214,14 @@ The face must not:
 - send proactive messages without governor authorization
 
 If the face backend is unavailable, Aphelion may send the governor's canonical reply directly.
+
+For brokerage-eligible interactive turns, the ordinary one-way proposal path should become a bounded handshake:
+
+- `Idolum` proposes a turn mode and push
+- `Aphelion` ratifies a concrete plan
+- the main governor/tool turn executes under that plan
+
+See `planning-brokerage.md`.
 
 ## Proactive Outreach
 

@@ -148,6 +148,8 @@ For proactive turns:
 
 During ordinary interactive turns, `Idolum` may also push the governor toward a particular tone, question, action, or initiative before the governor decides. Those pushes are advisory at the system level even if Idolum experiences them as its own intent.
 
+For brokerage-eligible turns, `Idolum` should go further and propose what kind of turn this should be: answer now, inspect first, ask first, decline, or hold. That brokerage proposal remains advisory until Aphelion ratifies it. See `planning-brokerage.md`.
+
 `Idolum` may soften or clarify the governor's canonical reply, but must not widen permissions, invent actions, or rewrite state transitions.
 
 `Idolum` may also generate candidate outreach language during heartbeat or cron turns, especially when relational initiative would improve the user experience. Those candidates are proposals, not autonomous actions.
@@ -186,6 +188,7 @@ See `config.md`, but the intended face-specific surface includes:
 - **`Idolum` is structurally bounded.** The ratification boundary lives below the prompt layer.
 - **Warmth is allowed.** Performative friendliness is not required.
 - **`Idolum` may suggest proactive outreach.** It may not send it on its own authority.
+- **`Idolum` may propose turn posture during brokerage.** It still does not ratify or authorize.
 - **Drift should be inspectable.** `QUESTIONS-TO-IDOLUM.md` exists so the face can notice its own bad habits.
 - **Face files are face-only.** They must not leak upward into governor authority.
 - **Rendered reply is the visible transcript artifact.** `Idolum` owns what the user actually sees.

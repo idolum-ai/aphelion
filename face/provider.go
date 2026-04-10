@@ -155,7 +155,7 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 		LatestUserInput: req.LatestUserInput,
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
-		Mode:            "proposal",
+		Mode:            firstNonEmpty(req.Mode, "proposal"),
 		Runtime:         req.Runtime,
 	}
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)

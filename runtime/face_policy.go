@@ -10,14 +10,18 @@ import (
 )
 
 type faceTurnPolicy struct {
-	Proposal bool
-	Render   bool
+	Brokerage bool
+	Proposal  bool
+	Render    bool
 }
 
 func decideInteractiveFacePolicy(sess *session.Session, userText string) faceTurnPolicy {
 	trimmed := strings.TrimSpace(userText)
 	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
 		return faceTurnPolicy{}
+	}
+	if looksBrokerageTurn(trimmed) {
+		return faceTurnPolicy{Brokerage: true, Render: true}
 	}
 	if looksToolHeavyRequest(trimmed) || lastTurnHadToolMessages(sess.Messages) {
 		return faceTurnPolicy{Render: true}
@@ -119,6 +123,44 @@ func looksToolHeavyRequest(text string) bool {
 		if strings.Contains(trimmed, marker) {
 			return true
 		}
+	}
+	return false
+}
+
+func looksBrokerageTurn(text string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(text))
+	if trimmed == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"come up with",
+		"brainstorm",
+		"feature",
+		"features",
+		"roadmap",
+		"direction",
+		"plan",
+		"what should we build",
+		"what should i build",
+		"how should we proceed",
+		"how should i proceed",
+		"help me think",
+		"thinking this through",
+		"look into the codebase",
+		"look at the codebase",
+		"inspect the repo",
+		"inspect the repository",
+		"review the project",
+		"explore the repo",
+		"repository",
+		"codebase",
+	} {
+		if strings.Contains(trimmed, marker) {
+			return true
+		}
+	}
+	if strings.Contains(trimmed, "not sure") || strings.Contains(trimmed, "unclear") || strings.Contains(trimmed, "torn between") {
+		return true
 	}
 	return false
 }

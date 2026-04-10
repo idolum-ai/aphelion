@@ -53,6 +53,59 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
 	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
+	sess.ChatType = "dm"
+	sess.UserName = msg.SenderName
+	brokerage := turnBrokerage{}
+	extraUsage := core.TokenUsage{}
+	currentFaceModel := r.currentFaceRenderer()
+	if facePolicy.Brokerage {
+		if proposer, ok := currentFaceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
+			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
+				GovernorName:    prompt.DefaultGovernorName,
+				FaceName:        face.DefaultFaceName,
+				Channel:         "telegram",
+				Mode:            "brokerage",
+				PrincipalRole:   string(actor.Role),
+				WorkspaceRoot:   faceWorkspaceRoot(scope),
+				LatestUserInput: prepared.LedgerText,
+				Runtime:         r.withBrokerageAwareness(governorAwareness, turnBrokerage{Active: true, Mode: "brokerage"}),
+			})
+			if proposalErr != nil {
+				log.Printf("WARN idolum brokerage proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
+				facePolicy.Brokerage = false
+				facePolicy.Proposal = true
+			} else {
+				brokerage.IdolumNote = strings.TrimSpace(proposal)
+				brokerage.Active = brokerage.IdolumNote != ""
+				brokerage.Mode = brokerageModeName(brokerage.Active, "brokerage")
+				brokerage.SuggestedTurnMode = parseBrokerageMode(proposal)
+				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
+			}
+		}
+	}
+	if !brokerage.Active && facePolicy.Proposal {
+		if proposer, ok := currentFaceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
+			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
+				GovernorName:    prompt.DefaultGovernorName,
+				FaceName:        face.DefaultFaceName,
+				Channel:         "telegram",
+				Mode:            "proposal",
+				PrincipalRole:   string(actor.Role),
+				WorkspaceRoot:   faceWorkspaceRoot(scope),
+				LatestUserInput: prepared.LedgerText,
+				Runtime:         governorAwareness,
+			})
+			if proposalErr != nil {
+				log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
+			} else {
+				brokerage.IdolumNote = strings.TrimSpace(proposal)
+				brokerage.Active = brokerage.IdolumNote != ""
+				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
+			}
+		}
+	}
+	governorAwareness = r.withBrokerageAwareness(governorAwareness, brokerage)
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: exec.Backend,
@@ -64,35 +117,28 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
-
-	sess.ChatType = "dm"
-	sess.UserName = msg.SenderName
 	sess.SystemPrompt = systemPrompt
-	idolumProposal := ""
-	extraUsage := core.TokenUsage{}
-	currentFaceModel := r.currentFaceRenderer()
-	if facePolicy.Proposal {
-		if proposer, ok := currentFaceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
-			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
-				GovernorName:    prompt.DefaultGovernorName,
-				FaceName:        face.DefaultFaceName,
-				Channel:         "telegram",
-				PrincipalRole:   string(actor.Role),
-				WorkspaceRoot:   faceWorkspaceRoot(scope),
-				LatestUserInput: prepared.LedgerText,
-				Runtime:         governorAwareness,
-			})
-			if proposalErr != nil {
-				log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
-			} else {
-				idolumProposal = strings.TrimSpace(proposal)
-				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
-			}
-		}
-	}
-	sess, history, err := r.maybeCompactSession(ctx, key, sess, systemBlocks, prepared.UserText, idolumProposal)
+
+	sess, history, err := r.maybeCompactSession(ctx, key, sess, systemBlocks, prepared.UserText, brokerage.IdolumNote)
 	if err != nil {
 		return nil, fmt.Errorf("maybe compact session: %w", err)
+	}
+	if brokerage.Active && brokerage.Mode == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" {
+		updated, usage, ratifyErr := r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, prepared.UserText, brokerage)
+		extraUsage = addTokenUsage(extraUsage, usage)
+		if ratifyErr != nil {
+			log.Printf("WARN turn brokerage ratification failed backend=%s err=%v; falling back to plain proposal path", exec.Backend, ratifyErr)
+			brokerage.Mode = brokerageModeName(true, "proposal")
+			brokerage.RatifiedPlan = ""
+			brokerage.RatifiedTurnMode = ""
+		} else {
+			brokerage = updated
+		}
+		governorAwareness = r.withBrokerageAwareness(governorAwareness, brokerage)
+		governorPrompt.Runtime = governorAwareness
+		systemBlocks = prompt.BuildGovernorPromptBlocks(governorPrompt)
+		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
+		sess.SystemPrompt = systemPrompt
 	}
 	progress := r.newToolProgressReporter(msg)
 	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, prepared.LedgerText, progress)
@@ -103,7 +149,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if systemPrompt != "" {
 		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
 	}
-	if advisory := prompt.RenderIdolumProposalForGovernor(face.DefaultFaceName, idolumProposal); advisory != "" {
+	if advisory := brokerageContextForGovernor(brokerage); advisory != "" {
 		input = append(input, agent.Message{Role: "system", Content: advisory})
 	}
 	input = append(input, history...)
@@ -130,6 +176,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	streamedReply := false
 	faceRendered := false
 	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
+	faceAwareness = r.withBrokerageAwareness(faceAwareness, brokerage)
 	faceAwareness.DeliveryMode = "text"
 	faceAwareness.StreamReply = false
 	if r.shouldReplyWithVoice(prepared.InboundWasVoice) {

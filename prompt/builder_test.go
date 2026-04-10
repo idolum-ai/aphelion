@@ -199,6 +199,29 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	}
 }
 
+func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		GovernorName:    "Aphelion",
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		PrincipalRole:   "admin",
+		LatestUserInput: "come up with some features for my codebase",
+		Mode:            "brokerage",
+	})
+
+	if strings.Contains(got, "## Canonical Governor Reply") {
+		t.Fatalf("brokerage prompt should not include canonical reply section: %q", got)
+	}
+	if !strings.Contains(got, "Choose one turn mode") {
+		t.Fatalf("brokerage prompt missing turn mode guidance: %q", got)
+	}
+	if !strings.Contains(got, "inspect_then_answer") {
+		t.Fatalf("brokerage prompt missing brokerage mode vocabulary: %q", got)
+	}
+}
+
 func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 	t.Parallel()
 
@@ -324,5 +347,17 @@ func TestRenderIdolumProposalForGovernorWrapsAdvisory(t *testing.T) {
 	}
 	if !strings.Contains(got, "Push for more initiative.") {
 		t.Fatalf("wrapped proposal missing content: %q", got)
+	}
+}
+
+func TestRenderBrokeragePlanForGovernorWrapsPlan(t *testing.T) {
+	t.Parallel()
+
+	got := RenderBrokeragePlanForGovernor("MODE: inspect_then_answer\nPLAN:\n- Inspect first.")
+	if !strings.Contains(got, "## Ratified Turn Brokerage") {
+		t.Fatalf("wrapped plan missing heading: %q", got)
+	}
+	if !strings.Contains(got, "inspect_then_answer") {
+		t.Fatalf("wrapped plan missing mode: %q", got)
 	}
 }

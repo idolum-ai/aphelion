@@ -68,6 +68,7 @@ Examples:
 - provider and model
 - session kind
 - run kind
+- whether planning brokerage is active
 - principal role
 - channel
 - capabilities
@@ -140,6 +141,7 @@ At minimum, the governor should be made aware of:
 - whether the reply will be rendered by `Idolum`, passed through, voiced, or kept silent
 - whether supported media is attached to the current turn
 - whether that media is being handled as vision input or extracted document text
+- Idolum's suggested turn mode and Aphelion's ratified turn mode when brokerage is active
 
 ## Governor vs Idolum
 

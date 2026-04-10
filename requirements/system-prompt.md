@@ -95,6 +95,7 @@ Examples:
 - realtime/heartbeat notices
 - degradation or fallback state
 - recovery/interruption notices
+- ratified brokerage plan for the current turn
 - streamed vs non-streamed delivery state
 
 This mirrors the useful part of Codex's approach: keep a stable base, add explicit updates for changing machine state.
@@ -106,6 +107,7 @@ The face prompt is separate from the governor prompt.
 There are two useful face artifacts:
 
 - a **proposal prompt** that lets `Idolum` push the governor before it decides
+- a **brokerage prompt** that lets `Idolum` propose the kind of turn that should happen before the governor ratifies a plan
 - a **render prompt** that lets `Idolum` shape what the user actually sees after the governor decides
 
 It should receive:
