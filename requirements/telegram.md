@@ -624,9 +624,35 @@ func splitMessage(text string, maxLen int) []string {
 
 When a user sends media, it needs to be converted into something the LLM can use. Each media type has a different pipeline.
 
+For the current Aphelion runtime, the implemented Telegram media scope is intentionally narrow:
+
+- inbound `photo`
+- inbound image `document`
+- inbound PDF `document`
+- existing inbound `voice`
+
+Deferred:
+
+- video / video note
+- generic audio files beyond the voice path
+- sticker understanding beyond bounded metadata handling
+- generic binary document analysis
+
+The runtime must not silently imply unsupported media was actually processed.
+
 ### Photos → Vision input
 
-Photos are passed directly to the LLM as image content blocks (Anthropic, Gemini, OpenAI all support this).
+Photos are passed directly to the LLM as image content blocks.
+
+Aphelion should use a **vision-first** path:
+
+1. resolve principal before download
+2. bound file size before or during download
+3. download the largest Telegram photo variant
+4. include the image directly in the native inference request
+5. include caption text alongside the image when present
+
+If the default governor backend is Codex and the turn includes supported image media, the runtime may route that turn through the native provider chain for that turn.
 
 ```go
 func processPhoto(ctx context.Context, client *Client, fileID string) (*ContentBlock, error) {
@@ -666,16 +692,9 @@ func processDocument(ctx context.Context, client *Client, doc *Document) (*Conte
         return &ContentBlock{Type: "text", Text: string(data)}, nil
         
     case doc.MimeType == "application/pdf":
-        // Extract text via pdftotext (exec tool) or pass as document to Anthropic
-        // Anthropic supports PDF input natively as base64 document blocks
-        return &ContentBlock{
-            Type: "document",
-            Source: &DocumentSource{
-                Type:      "base64",
-                MediaType: "application/pdf",
-                Data:      base64.StdEncoding.EncodeToString(data),
-            },
-        }, nil
+        // Current Aphelion path: extract text locally first.
+        // Raw provider-native PDF document blocks are deferred.
+        return &ContentBlock{Type: "text", Text: extractPDFText(data)}, nil
         
     case isImageFile(doc.MimeType):
         // Uncompressed images sent as documents (PNG, JPG without Telegram compression)
@@ -706,6 +725,24 @@ func isTextFile(mime string, name string) bool {
     return false
 }
 ```
+
+### Voice messages
+
+Voice continues to use the existing transcription-first runtime path from `voice.md`.
+
+This Telegram media pass does **not** add a button-driven voice workflow.
+
+### Deferred media classes
+
+The following remain intentionally deferred in Aphelion:
+
+- `video`
+- `video_note`
+- `audio` beyond the existing voice path
+- sticker semantics beyond bounded metadata
+- arbitrary binary files
+
+Unsupported inbound media should surface as a clear bounded note rather than being silently dropped when practical.
 
 ### Voice messages → User chooses
 
@@ -791,16 +828,16 @@ func processSticker(sticker *Sticker) *ContentBlock {
 | Media type | Intent clear? | Action |
 |---|---|---|
 | Photo | Yes (vision) | Auto-process |
-| Text document | Yes (read it) | Auto-process |
-| PDF | Yes (read it) | Auto-process |
+| Text document | Deferred in current runtime | Metadata or unsupported note |
+| PDF | Yes (read it) | Extract text, then auto-process |
 | Image-as-document | Yes (vision) | Auto-process |
-| Sticker | Yes (emoji) | Auto-process |
-| Voice | Ambiguous | Show buttons |
-| Video | Ambiguous | Show buttons |
-| Audio file | Ambiguous | Show buttons |
-| Binary file | Ambiguous | Show buttons (or just metadata) |
+| Sticker | Deferred | Metadata or unsupported note |
+| Voice | Yes | Existing transcription path |
+| Video | Deferred | Unsupported note |
+| Audio file | Deferred | Unsupported note |
+| Binary file | Deferred | Metadata or unsupported note |
 
-Consistent with our design principle: **buttons over assumptions** when intent is ambiguous. Max 4 buttons per keyboard (2x2 grid fits well on mobile).
+Consistent with our design principle: **auto-process only where the runtime actually has a coherent path**.
 ```
 
 ### Size limits
@@ -826,9 +863,10 @@ func (c *Client) DownloadFileChecked(ctx context.Context, fileID string, maxSize
 ```toml
 [telegram.media]
 download_max_size = "20MB"        # Max file download size
-auto_transcribe_voice = true       # Automatically transcribe voice messages
 auto_vision_photos = true          # Automatically include photos as vision input
-pdf_as_document = true             # Send PDFs as Anthropic document blocks (vs text extraction)
+auto_vision_documents = true       # Image documents are treated as vision input
+extract_pdf_text = true            # Small PDFs are extracted locally to text
+max_pdf_bytes = "8MB"              # Bound local PDF extraction work
 ```
 
 ### Tests

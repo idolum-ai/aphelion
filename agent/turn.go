@@ -38,6 +38,7 @@ type ToolRegistry interface {
 type Message struct {
 	Role         string
 	Content      string
+	Media        []core.Media
 	SystemBlocks []SystemBlock
 	Thinking     string
 	ThinkingMeta []ThinkingBlock

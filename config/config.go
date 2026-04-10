@@ -43,6 +43,15 @@ type TelegramConfig struct {
 	ToolProgressStyle   string `toml:"tool_progress_style"`
 	ToolProgressWindow  int    `toml:"tool_progress_window"`
 	ToolProgressCleanup bool   `toml:"tool_progress_cleanup"`
+	Media               TelegramMediaConfig `toml:"media"`
+}
+
+type TelegramMediaConfig struct {
+	DownloadMaxSize    string `toml:"download_max_size"`
+	AutoVisionPhotos   bool   `toml:"auto_vision_photos"`
+	AutoVisionDocs     bool   `toml:"auto_vision_documents"`
+	ExtractPDFText     bool   `toml:"extract_pdf_text"`
+	MaxPDFBytes        string `toml:"max_pdf_bytes"`
 }
 
 type PrincipalsConfig struct {
@@ -246,6 +255,13 @@ func Default() Config {
 			ToolProgressStyle:   "semantic",
 			ToolProgressWindow:  4,
 			ToolProgressCleanup: false,
+			Media: TelegramMediaConfig{
+				DownloadMaxSize:  "20MB",
+				AutoVisionPhotos: true,
+				AutoVisionDocs:   true,
+				ExtractPDFText:   true,
+				MaxPDFBytes:      "8MB",
+			},
 		},
 		Governor: GovernorConfig{
 			Backend:        "auto",
@@ -467,6 +483,12 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Telegram.ToolProgressWindow <= 0 {
 		return fmt.Errorf("telegram.tool_progress_window must be > 0")
+	}
+	if _, err := ParseByteSize(strings.TrimSpace(cfg.Telegram.Media.DownloadMaxSize)); err != nil {
+		return fmt.Errorf("telegram.media.download_max_size must be a valid positive size: %w", err)
+	}
+	if _, err := ParseByteSize(strings.TrimSpace(cfg.Telegram.Media.MaxPDFBytes)); err != nil {
+		return fmt.Errorf("telegram.media.max_pdf_bytes must be a valid positive size: %w", err)
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Thinking.Effort)) {
 	case "", "none", "low", "medium", "high", "xhigh":
@@ -772,6 +794,37 @@ func parsePositiveInt64(raw string) (int64, error) {
 		return 0, fmt.Errorf("must be positive")
 	}
 	return value, nil
+}
+
+func ParseByteSize(raw string) (int64, error) {
+	trimmed := strings.ToUpper(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return 0, fmt.Errorf("must not be empty")
+	}
+	multiplier := int64(1)
+	for _, unit := range []struct {
+		Suffix string
+		Mult   int64
+	}{
+		{Suffix: "KB", Mult: 1024},
+		{Suffix: "MB", Mult: 1024 * 1024},
+		{Suffix: "GB", Mult: 1024 * 1024 * 1024},
+		{Suffix: "B", Mult: 1},
+	} {
+		if strings.HasSuffix(trimmed, unit.Suffix) {
+			trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, unit.Suffix))
+			multiplier = unit.Mult
+			break
+		}
+	}
+	value, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("must be positive")
+	}
+	return value * multiplier, nil
 }
 
 func expandPath(path string) (string, error) {

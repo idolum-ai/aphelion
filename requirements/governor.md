@@ -15,6 +15,8 @@ The governor's name is **Aphelion**.
 
 The governor owns truth, action, tools, memory writes, and authority. The face owns warmth, phrasing, channel presentation, and assertive conversational initiative.
 
+For supported media turns, the governor remains the decision layer. The runtime may choose a different execution backend for that turn when the default governor backend cannot actually perceive the attached media.
+
 The governor must also be the layer with the fullest machine-authored **self-awareness** of the system. See `self-awareness.md`.
 
 This split exists because the system layer and the user-facing layer optimize for different things:
@@ -184,6 +186,8 @@ The existing provider/tool loop remains valid as the native governor path:
 This path should continue to satisfy the same governor contract so the rest of Aphelion does not care which governor backend is active.
 
 When Codex is active and a native provider chain is configured, runtime may degrade from Codex into that native chain on retryable live-turn failures. This is a continuity-preserving fallback, not a silent change of constitutional role.
+
+The same principle applies to supported image turns: if the active Codex path cannot consume image input, the runtime may execute that turn through the native provider chain so the governor can still reason over the actual media.
 
 When that happens, the governor should be made aware of the degraded path explicitly rather than inferring it from behavior.
 

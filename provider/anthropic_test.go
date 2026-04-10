@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func TestAnthropicCompleteText(t *testing.T) {
@@ -279,6 +280,59 @@ func TestAnthropicCompleteWithThinkingOptions(t *testing.T) {
 	}
 	if len(resp.ThinkingMeta) != 1 || resp.ThinkingMeta[0].Signature != "sig-1" {
 		t.Fatalf("thinking meta = %#v, want one block with signature", resp.ThinkingMeta)
+	}
+}
+
+func TestAnthropicCompleteMapsImageMediaBlocks(t *testing.T) {
+	var seen anthropicRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(anthropicResponse{
+			Content: []anthropicContent{{Type: "text", Text: "ok"}},
+		})
+	})
+
+	client, err := NewAnthropic(AnthropicOptions{
+		APIKey:     "test-key",
+		Model:      "claude-2",
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{{
+		Role:    "user",
+		Content: "what is in this screenshot?",
+		Media: []core.Media{{
+			Type:     "photo",
+			Data:     []byte("image-bytes"),
+			MimeType: "image/png",
+			Filename: "screenshot.png",
+		}},
+	}}, nil)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if len(seen.Messages) != 1 || len(seen.Messages[0].Content) != 2 {
+		t.Fatalf("messages = %#v", seen.Messages)
+	}
+	if seen.Messages[0].Content[0].Type != "image" {
+		t.Fatalf("first content block = %#v, want image", seen.Messages[0].Content[0])
+	}
+	source, ok := seen.Messages[0].Content[0].Source.(map[string]any)
+	if !ok {
+		raw, _ := json.Marshal(seen.Messages[0].Content[0].Source)
+		t.Fatalf("image source = %s, want object", raw)
+	}
+	if source["media_type"] != "image/png" {
+		t.Fatalf("media_type = %v, want image/png", source["media_type"])
+	}
+	if seen.Messages[0].Content[1].Type != "text" || seen.Messages[0].Content[1].Text != "what is in this screenshot?" {
+		t.Fatalf("text block = %#v", seen.Messages[0].Content[1])
 	}
 }
 

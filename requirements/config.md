@@ -54,6 +54,13 @@ tool_progress = "all"      # "all" | "new" | "off"
 tool_progress_style = "semantic"  # "semantic" | "raw"
 tool_progress_window = 4   # Rolling visible steps in the live progress message
 
+[telegram.media]
+download_max_size = "20MB"
+auto_vision_photos = true
+auto_vision_documents = true
+extract_pdf_text = true
+max_pdf_bytes = "8MB"
+
 # ─── Providers ───
 [providers]
 default = "anthropic"

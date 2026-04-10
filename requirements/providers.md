@@ -146,6 +146,7 @@ Ollama belongs here only as a local inference backend.
 - Anthropic
 - OpenRouter
 - OpenAI inference
+- narrow multimodal native requests for supported image turns
 
 ### Deferred after v0.5
 
@@ -206,6 +207,23 @@ That means:
 5. on deterministic client/request errors, stop rather than cascading through every provider
 
 OpenRouter should be treated as an inference gateway fallback, not as the canonical primary provider contract for the system.
+
+## Multimodal Input
+
+For the current Aphelion runtime, provider multimodality is intentionally narrow:
+
+- Telegram `photo` as image input
+- Telegram image `document` as image input
+- Telegram PDF `document` as extracted text
+
+The provider adapter should map internal content parts into provider-native request shapes:
+
+- Anthropic: `messages[].content` blocks with text and image entries
+- OpenRouter: OpenAI-compatible multimodal content arrays with text and image entries
+
+Raw provider-native PDF document blocks are deferred. PDF support in the current runtime should come from bounded local extraction first.
+
+If a turn requires supported image input and the active text-first governor backend cannot accept it, the runtime may route that turn through the native provider chain instead of failing inside the text-only backend.
 
 ## Caching
 

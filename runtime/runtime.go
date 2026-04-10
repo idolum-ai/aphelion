@@ -40,6 +40,7 @@ type Runtime struct {
 	cfg      *config.Config
 	store    *session.SQLiteStore
 	provider agent.Provider
+	native   agent.Provider
 	tools    agent.ToolRegistry
 	outbound OutboundSender
 	resolver *principal.Resolver
@@ -224,6 +225,7 @@ func New(
 		cfg:      cfg,
 		store:    store,
 		provider: activeProvider,
+		native:   provider,
 		tools:    tools,
 		outbound: outbound,
 		resolver: principal.NewResolver(

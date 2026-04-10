@@ -25,6 +25,11 @@ type Client struct {
 	pollTimeout int
 }
 
+type FileInfo struct {
+	Path string
+	Size int64
+}
+
 type ClientOption func(*Client)
 
 func NewClient(token string, opts ...ClientOption) *Client {
@@ -256,7 +261,7 @@ func (c *Client) SendVoiceMessage(ctx context.Context, chatID int64, media core.
 	return decoded.Result.MessageID, nil
 }
 
-func (c *Client) DownloadFile(ctx context.Context, fileID string) ([]byte, error) {
+func (c *Client) GetFileInfo(ctx context.Context, fileID string) (*FileInfo, error) {
 	if strings.TrimSpace(fileID) == "" {
 		return nil, errors.New("file_id is required")
 	}
@@ -268,8 +273,26 @@ func (c *Client) DownloadFile(ctx context.Context, fileID string) ([]byte, error
 	if !meta.Ok || strings.TrimSpace(meta.Result.FilePath) == "" {
 		return nil, fmt.Errorf("telegram getFile failed: %s", meta.Description)
 	}
+	return &FileInfo{
+		Path: strings.TrimSpace(meta.Result.FilePath),
+		Size: meta.Result.FileSize,
+	}, nil
+}
 
-	url := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", c.token, strings.TrimSpace(meta.Result.FilePath))
+func (c *Client) DownloadFile(ctx context.Context, fileID string) ([]byte, error) {
+	return c.DownloadFileChecked(ctx, fileID, 0)
+}
+
+func (c *Client) DownloadFileChecked(ctx context.Context, fileID string, maxBytes int64) ([]byte, error) {
+	info, err := c.GetFileInfo(ctx, fileID)
+	if err != nil {
+		return nil, err
+	}
+	if maxBytes > 0 && info.Size > 0 && info.Size > maxBytes {
+		return nil, fmt.Errorf("telegram file exceeds configured size limit: %d > %d", info.Size, maxBytes)
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", c.token, info.Path)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create file download request: %w", err)
@@ -285,6 +308,9 @@ func (c *Client) DownloadFile(ctx context.Context, fileID string) ([]byte, error
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read downloaded file: %w", err)
+	}
+	if maxBytes > 0 && int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("telegram downloaded file exceeds configured size limit: %d > %d", len(data), maxBytes)
 	}
 	return data, nil
 }

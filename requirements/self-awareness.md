@@ -135,6 +135,8 @@ At minimum, the governor should be made aware of:
 - channel
 - output capabilities
 - whether the reply will be rendered by `Idolum`, passed through, voiced, or kept silent
+- whether supported media is attached to the current turn
+- whether that media is being handled as vision input or extracted document text
 
 ## Governor vs Idolum
 

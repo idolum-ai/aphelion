@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func TestOpenRouterCompleteTextAndUsage(t *testing.T) {
@@ -130,5 +131,60 @@ func TestOpenRouterCompleteMapsToolsAndToolResults(t *testing.T) {
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "exec" {
 		t.Fatalf("tool calls = %#v", resp.ToolCalls)
+	}
+}
+
+func TestOpenRouterCompleteMapsImageMediaParts(t *testing.T) {
+	var seen openRouterRequest
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(openRouterResponse{
+			Choices: []struct {
+				Message openRouterResponseMessage `json:"message"`
+			}{
+				{Message: openRouterResponseMessage{Content: json.RawMessage(`"ok"`)}},
+			},
+		})
+	})
+
+	client, err := NewOpenRouter(OpenRouterOptions{
+		APIKey:     "test-key",
+		Model:      "anthropic/claude-sonnet-4-6",
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenRouter() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{{
+		Role:    "user",
+		Content: "read this",
+		Media: []core.Media{{
+			Type:     "photo",
+			Data:     []byte("image-bytes"),
+			MimeType: "image/jpeg",
+			Filename: "photo.jpg",
+		}},
+	}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+
+	if len(seen.Messages) != 1 {
+		t.Fatalf("messages = %#v", seen.Messages)
+	}
+	parts, ok := seen.Messages[0].Content.([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("content = %#v, want two-part multimodal array", seen.Messages[0].Content)
+	}
+	imagePart, ok := parts[0].(map[string]any)
+	if !ok || imagePart["type"] != "image_url" {
+		t.Fatalf("image part = %#v", parts[0])
+	}
+	textPart, ok := parts[1].(map[string]any)
+	if !ok || textPart["text"] != "read this" {
+		t.Fatalf("text part = %#v", parts[1])
 	}
 }

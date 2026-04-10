@@ -201,6 +201,7 @@ func run() error {
 		return nil
 	},
 		telegram.WithPollerTimeout(cfg.Telegram.PollTimeout),
+		telegram.WithMediaConfig(cfg.Telegram.Media),
 		telegram.WithPrincipalResolver(principalResolver),
 	)
 

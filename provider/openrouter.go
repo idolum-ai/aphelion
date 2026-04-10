@@ -5,6 +5,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -212,11 +213,47 @@ func toOpenRouterMessages(messages []agent.Message) []openRouterMessage {
 			entry.ToolCallID = msg.ToolCallID
 			entry.Content = msg.Content
 		default:
-			entry.Content = msg.Content
+			entry.Content = openRouterContentFromMessage(msg)
 		}
 		out = append(out, entry)
 	}
 	return out
+}
+
+func openRouterContentFromMessage(msg agent.Message) any {
+	if len(msg.Media) == 0 {
+		return msg.Content
+	}
+	parts := make([]map[string]any, 0, len(msg.Media)+1)
+	for _, media := range msg.Media {
+		if imagePart, ok := mediaToOpenRouterPart(media); ok {
+			parts = append(parts, imagePart)
+		}
+	}
+	if strings.TrimSpace(msg.Content) != "" || len(parts) == 0 {
+		parts = append(parts, map[string]any{
+			"type": "text",
+			"text": msg.Content,
+		})
+	}
+	return parts
+}
+
+func mediaToOpenRouterPart(media core.Media) (map[string]any, bool) {
+	mimeType := strings.TrimSpace(media.MimeType)
+	if mimeType == "" && len(media.Data) > 0 {
+		mimeType = http.DetectContentType(media.Data)
+	}
+	if !strings.HasPrefix(strings.ToLower(mimeType), "image/") || len(media.Data) == 0 {
+		return nil, false
+	}
+	dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(media.Data))
+	return map[string]any{
+		"type": "image_url",
+		"image_url": map[string]any{
+			"url": dataURL,
+		},
+	}, true
 }
 
 func toOpenRouterTools(tools []agent.ToolDef) []openRouterTool {

@@ -23,6 +23,8 @@ type RuntimeAwareness struct {
 	FaceProvider         string
 	DeliveryMode         string
 	StreamReply          bool
+	MediaAttached        bool
+	MediaMode            string
 	PromptRoot           string
 	ExecRoot             string
 	SharedMemoryRoot     string
@@ -48,6 +50,8 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, fmt.Sprintf("- fallback_active: %t", aw.FallbackActive))
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_effort", aw.ReasoningEffort))
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_summary", aw.ReasoningSummary))
+	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
+	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	lines = append(lines, nonEmptyAwarenessLine("prompt_root", aw.PromptRoot))
 	lines = append(lines, nonEmptyAwarenessLine("exec_root", aw.ExecRoot))
 	lines = append(lines, nonEmptyAwarenessLine("shared_memory_root", aw.SharedMemoryRoot))
@@ -77,6 +81,8 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode st
 	lines = append(lines, nonEmptyAwarenessLine("face_provider", aw.FaceProvider))
 	lines = append(lines, nonEmptyAwarenessLine("delivery_mode", aw.DeliveryMode))
 	lines = append(lines, fmt.Sprintf("- stream_reply: %t", aw.StreamReply))
+	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
+	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	return strings.Join(compactLines(lines), "\n")
 }
 

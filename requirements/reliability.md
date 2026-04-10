@@ -388,6 +388,13 @@ For outbound voice:
 2. if synthesis fails, send text fallback
 3. record that the delivered artifact was degraded from voice to text
 
+For inbound image/document turns:
+
+1. resolve admission before any media download
+2. refuse oversized supported media before expensive processing when possible
+3. if a supported image turn cannot reach a vision-capable native provider, fail honestly rather than pretending the image was read
+4. if PDF extraction fails, surface that as a bounded failure or bounded placeholder rather than inventing document contents
+
 ### Tool ladder
 
 For tool execution:

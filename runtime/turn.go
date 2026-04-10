@@ -42,19 +42,20 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if err != nil {
 		return nil, fmt.Errorf("resolve principal scope: %w", err)
 	}
-	userText, inboundWasVoice, err := r.transcribeVoiceIfNeeded(ctx, scope, msg)
+	prepared, err := r.prepareInboundTurn(ctx, scope, msg)
 	if err != nil {
 		return nil, err
 	}
-	facePolicy := decideInteractiveFacePolicy(sess, userText)
+	facePolicy := decideInteractiveFacePolicy(sess, prepared.LedgerText)
+	exec := r.executionForTurn(prepared)
 	promptContext, err := r.promptContextForScope(scope, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
-	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram")
+	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
-		GovernorBackend: r.governorBackend,
+		GovernorBackend: exec.Backend,
 		PrincipalRole:   string(actor.Role),
 		WorkspaceRoot:   scope.WorkingRoot,
 		ToolManifest:    toolManifest(tools),
@@ -77,7 +78,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 				Channel:         "telegram",
 				PrincipalRole:   string(actor.Role),
 				WorkspaceRoot:   faceWorkspaceRoot(scope),
-				LatestUserInput: userText,
+				LatestUserInput: prepared.LedgerText,
 				Runtime:         governorAwareness,
 			})
 			if proposalErr != nil {
@@ -88,12 +89,12 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			}
 		}
 	}
-	sess, history, err := r.maybeCompactSession(ctx, key, sess, systemBlocks, userText, idolumProposal)
+	sess, history, err := r.maybeCompactSession(ctx, key, sess, systemBlocks, prepared.UserText, idolumProposal)
 	if err != nil {
 		return nil, fmt.Errorf("maybe compact session: %w", err)
 	}
 	progress := r.newToolProgressReporter(msg)
-	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, userText, progress)
+	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, prepared.LedgerText, progress)
 	defer monitor.Finish(ctx, err)
 	tools = monitor.observeTools(tools)
 
@@ -105,9 +106,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		input = append(input, agent.Message{Role: "system", Content: advisory})
 	}
 	input = append(input, history...)
-	input = append(input, agent.Message{Role: "user", Content: userText})
+	input = append(input, agent.Message{Role: "user", Content: prepared.UserText, Media: prepared.AgentMedia})
 
-	result, outHistory, err := agent.RunTurn(ctx, r.provider, tools, &agent.Budget{
+	result, outHistory, err := agent.RunTurn(ctx, exec.Provider, tools, &agent.Budget{
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
@@ -127,10 +128,10 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	outboundType := ""
 	streamedReply := false
 	faceRendered := false
-	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram")
+	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
 	faceAwareness.DeliveryMode = "text"
 	faceAwareness.StreamReply = false
-	if r.shouldReplyWithVoice(inboundWasVoice) {
+	if r.shouldReplyWithVoice(prepared.InboundWasVoice) {
 		faceAwareness.DeliveryMode = "voice"
 	} else if facePolicy.Render {
 		faceAwareness.DeliveryMode = "idolum_render"
@@ -143,16 +144,16 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			PrincipalRole:   string(actor.Role),
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			CanonicalReply:  canonicalReply,
-			LatestUserInput: userText,
+			LatestUserInput: prepared.LedgerText,
 			Runtime:         faceAwareness,
 		}
-		shouldRender := shouldRenderIdolumReply(facePolicy, userText, canonicalReply, result.ToolLog, outHistory[len(input):])
-		if !shouldRender && !r.shouldReplyWithVoice(inboundWasVoice) {
+		shouldRender := shouldRenderIdolumReply(facePolicy, prepared.LedgerText, canonicalReply, result.ToolLog, outHistory[len(input):])
+		if !shouldRender && !r.shouldReplyWithVoice(prepared.InboundWasVoice) {
 			faceAwareness.DeliveryMode = "governor_passthrough"
 			renderReq.Runtime = faceAwareness
 		}
 
-		if shouldRender && !r.shouldReplyWithVoice(inboundWasVoice) {
+		if shouldRender && !r.shouldReplyWithVoice(prepared.InboundWasVoice) {
 			if streamer, ok := r.faceModel.(face.StreamRenderer); ok {
 				editor := r.newStreamEditor(msg)
 				if editor != nil {
@@ -186,7 +187,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		}
 
 		if shouldRender && !faceRendered {
-			if !r.shouldReplyWithVoice(inboundWasVoice) {
+			if !r.shouldReplyWithVoice(prepared.InboundWasVoice) {
 				faceAwareness.DeliveryMode = "idolum_render"
 				faceAwareness.StreamReply = false
 				renderReq.Runtime = faceAwareness
@@ -205,7 +206,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 	result.TokenUsage = addTokenUsage(result.TokenUsage, extraUsage)
 
-	newMessages, err := session.NewMessagesForTurn(userText, outHistory[len(input):], sess.TurnCount)
+	newMessages, err := session.NewMessagesForTurn(prepared.LedgerText, outHistory[len(input):], sess.TurnCount)
 	if err != nil {
 		return nil, fmt.Errorf("convert new messages: %w", err)
 	}
@@ -218,7 +219,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 
 	if !streamedReply {
-		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, inboundWasVoice)
+		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, prepared.InboundWasVoice)
 		if err != nil {
 			return result, fmt.Errorf("send outbound reply: %w", err)
 		}
@@ -228,7 +229,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 
 	if shouldGenerateReviewEvent(actor, key) {
-		if err := r.enqueueReviewEventsForTurn(actor, msg, sess.TurnCount, userText, replyText, result.ToolLog); err != nil {
+		if err := r.enqueueReviewEventsForTurn(actor, msg, sess.TurnCount, prepared.LedgerText, replyText, result.ToolLog); err != nil {
 			return result, fmt.Errorf("enqueue review events: %w", err)
 		}
 	}

@@ -97,6 +97,41 @@ func TestNormalizeMessageVoiceOnly(t *testing.T) {
 	}
 }
 
+func TestNormalizeMessagePhotoOnly(t *testing.T) {
+	now := time.Now().Unix()
+	msg := &Message{
+		MessageID: 12,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		Photo:     []PhotoSize{{FileID: "p1", FileSize: 123}, {FileID: "p2", FileSize: 456}},
+	}
+
+	got := NormalizeMessage(msg)
+	if got == nil {
+		t.Fatal("expected photo message to be normalized")
+	}
+	if got.Text != "" {
+		t.Fatalf("text = %q, want empty for photo-only input", got.Text)
+	}
+}
+
+func TestNormalizeMessagePDFDocumentOnly(t *testing.T) {
+	now := time.Now().Unix()
+	msg := &Message{
+		MessageID: 13,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		Document:  &Document{FileID: "doc1", FileName: "notes.pdf", MimeType: "application/pdf"},
+	}
+
+	got := NormalizeMessage(msg)
+	if got == nil {
+		t.Fatal("expected pdf document message to be normalized")
+	}
+}
+
 func TestSendMessagePayload(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{
@@ -349,7 +384,8 @@ func TestDownloadFile(t *testing.T) {
 					Ok: true,
 					Result: struct {
 						FilePath string `json:"file_path"`
-					}{FilePath: "voice/file.ogg"},
+						FileSize int64  `json:"file_size"`
+					}{FilePath: "voice/file.ogg", FileSize: 11},
 				}), nil
 			case "https://api.telegram.org/file/botTOKEN/voice/file.ogg":
 				return &http.Response{
@@ -374,6 +410,35 @@ func TestDownloadFile(t *testing.T) {
 	}
 	if string(data) != "voice-bytes" {
 		t.Fatalf("data = %q, want voice-bytes", string(data))
+	}
+}
+
+func TestDownloadFileCheckedHonorsGetFileSize(t *testing.T) {
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			switch req.URL.String() {
+			case "https://api.telegram.org/botTOKEN/getFile":
+				return encodeJSONResponse(t, getFileResponse{
+					Ok: true,
+					Result: struct {
+						FilePath string `json:"file_path"`
+						FileSize int64  `json:"file_size"`
+					}{FilePath: "docs/file.pdf", FileSize: 30},
+				}), nil
+			default:
+				t.Fatalf("unexpected url %s", req.URL.String())
+				return nil, nil
+			}
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	if _, err := client.DownloadFileChecked(context.Background(), "file123", 20); err == nil {
+		t.Fatal("expected size-limit error")
 	}
 }
 

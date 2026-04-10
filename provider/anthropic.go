@@ -5,6 +5,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -271,6 +272,7 @@ type anthropicUsage struct {
 type anthropicContent struct {
 	Type         string                 `json:"type"`
 	Text         string                 `json:"text,omitempty"`
+	Source       any                    `json:"source,omitempty"`
 	Thinking     string                 `json:"thinking,omitempty"`
 	Signature    string                 `json:"signature,omitempty"`
 	ID           string                 `json:"id,omitempty"`
@@ -314,6 +316,12 @@ type anthropicCacheControl struct {
 type anthropicThinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens"`
+}
+
+type anthropicImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type anthropicStreamBlock struct {
@@ -391,6 +399,11 @@ func messageToContent(msg agent.Message) []anthropicContent {
 			content = append(content, thinkingBlock)
 		}
 	}
+	for _, media := range msg.Media {
+		if mediaBlock, ok := mediaToAnthropicContent(media); ok {
+			content = append(content, mediaBlock)
+		}
+	}
 	if msg.Content != "" {
 		content = append(content, anthropicContent{Type: "text", Text: msg.Content})
 	}
@@ -406,6 +419,24 @@ func messageToContent(msg agent.Message) []anthropicContent {
 		content = append(content, anthropicContent{Type: "text", Text: ""})
 	}
 	return content
+}
+
+func mediaToAnthropicContent(media core.Media) (anthropicContent, bool) {
+	mimeType := strings.TrimSpace(media.MimeType)
+	if mimeType == "" && len(media.Data) > 0 {
+		mimeType = http.DetectContentType(media.Data)
+	}
+	if !strings.HasPrefix(strings.ToLower(mimeType), "image/") || len(media.Data) == 0 {
+		return anthropicContent{}, false
+	}
+	return anthropicContent{
+		Type: "image",
+		Source: anthropicImageSource{
+			Type:      "base64",
+			MediaType: mimeType,
+			Data:      base64.StdEncoding.EncodeToString(media.Data),
+		},
+	}, true
 }
 
 func thinkingBlockToAnthropic(block agent.ThinkingBlock) (anthropicContent, bool) {

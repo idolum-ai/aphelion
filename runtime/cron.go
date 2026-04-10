@@ -59,7 +59,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	if err != nil {
 		return fmt.Errorf("resolve cron scope: %w", err)
 	}
-	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "system")
+	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "system", governorExecution{})
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
@@ -127,7 +127,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 
 	replyText := canonicalReply
 	if r.faceBackend != face.BackendGovernorPassthrough && r.faceModel != nil {
-		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram")
+		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", governorExecution{})
 		faceAwareness.DeliveryMode = "cron_delivery"
 		renderedReply, renderErr := r.faceModel.Render(ctx, face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,

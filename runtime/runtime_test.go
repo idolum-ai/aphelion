@@ -40,6 +40,7 @@ type fakeProvider struct {
 	seenGovernorSystem  []string
 	seenFaceSystem      []string
 	seenProposalSystem  []string
+	lastGovernorMsgs    []agent.Message
 	responseUsage       core.TokenUsage
 	lastReasoning       agent.ReasoningConfig
 	reasoningBySystem   map[string]agent.ReasoningConfig
@@ -73,6 +74,7 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 	if f.err != nil {
 		return nil, f.err
 	}
+	f.lastGovernorMsgs = append([]agent.Message(nil), messages...)
 
 	var systemParts []string
 	var userParts []string
@@ -1174,8 +1176,8 @@ func TestHandleInboundVoiceOnlyTranscribesAndRepliesWithVoice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() err = %v", err)
 	}
-	if len(sess.Messages) < 2 || sess.Messages[0].Content != "transcribed hello" {
-		t.Fatalf("session messages = %#v, want transcribed user text", sess.Messages)
+	if len(sess.Messages) < 2 || sess.Messages[0].Content != "transcribed hello\n\n[voice attached]" {
+		t.Fatalf("session messages = %#v, want transcribed user text plus voice marker", sess.Messages)
 	}
 }
 
@@ -2300,6 +2302,101 @@ func TestCodexRuntimeFailureFallsBackToNativeProviderChain(t *testing.T) {
 	}
 	if sender.sent[0].Text != nativeProvider.replyText {
 		t.Fatalf("outbound text = %q, want %q", sender.sent[0].Text, nativeProvider.replyText)
+	}
+}
+
+func TestImageTurnUsesNativeProviderWhenGovernorBackendIsCodex(t *testing.T) {
+	cfg, store, nativeProvider, sender := buildRuntimeFixtures(t)
+	cfg.Governor.Backend = "codex"
+	cfg.Face.Backend = "governor_passthrough"
+
+	origFactory := newCodexProvider
+	defer func() { newCodexProvider = origFactory }()
+	codexProvider := &fakeProvider{replyText: "codex canonical"}
+	newCodexProvider = func(_ governorauth.Bundle, _ *config.Config) (agent.Provider, error) {
+		return codexProvider, nil
+	}
+
+	rt, err := New(cfg, store, nativeProvider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     408,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  1,
+		Media: []core.Media{{
+			Type:     "photo",
+			Data:     []byte("fake-image"),
+			MimeType: "image/png",
+			Filename: "photo.png",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	codexProvider.mu.Lock()
+	codexCalls := codexProvider.callCount
+	codexProvider.mu.Unlock()
+	if codexCalls != 0 {
+		t.Fatalf("codex call count = %d, want 0 for image turn", codexCalls)
+	}
+
+	nativeProvider.mu.Lock()
+	defer nativeProvider.mu.Unlock()
+	if nativeProvider.callCount == 0 {
+		t.Fatal("native provider was not used for image turn")
+	}
+	if len(nativeProvider.lastGovernorMsgs) == 0 {
+		t.Fatal("native provider saw no governor messages")
+	}
+	last := nativeProvider.lastGovernorMsgs[len(nativeProvider.lastGovernorMsgs)-1]
+	if last.Role != "user" || len(last.Media) != 1 {
+		t.Fatalf("last governor message = %#v, want user message with media", last)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 408, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if len(sess.Messages) == 0 || !strings.Contains(sess.Messages[0].Content, "[image attached]") {
+		t.Fatalf("stored user content = %#v, want image placeholder", sess.Messages)
+	}
+}
+
+func TestPrepareInboundTurnPDFExtractionFailureFallsBackToPlaceholder(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    409,
+		SenderID:  1001,
+		MessageID: 1,
+		Media: []core.Media{{
+			Type:     "document",
+			Data:     []byte("not-a-real-pdf"),
+			MimeType: "application/pdf",
+			Filename: "broken.pdf",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	if !strings.Contains(prepared.UserText, "PDF attached") {
+		t.Fatalf("user text = %q, want PDF placeholder", prepared.UserText)
+	}
+	if !strings.Contains(prepared.LedgerText, "[pdf attached]") {
+		t.Fatalf("ledger text = %q, want pdf attached marker", prepared.LedgerText)
 	}
 }
 

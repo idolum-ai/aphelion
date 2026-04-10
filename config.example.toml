@@ -11,6 +11,13 @@ tool_progress_style = "semantic"
 tool_progress_window = 4
 tool_progress_cleanup = false
 
+[telegram.media]
+download_max_size = "20MB"
+auto_vision_photos = true
+auto_vision_documents = true
+extract_pdf_text = true
+max_pdf_bytes = "8MB"
+
 [principals.telegram]
 admin_user_ids = [123456789]
 approved_user_ids = []

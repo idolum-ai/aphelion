@@ -45,6 +45,9 @@ workspace = "./workspace"
 	if cfg.Telegram.ToolProgress != "all" || cfg.Telegram.ToolProgressStyle != "semantic" || cfg.Telegram.ToolProgressWindow != 4 || cfg.Telegram.ToolProgressCleanup {
 		t.Fatalf("telegram progress defaults = %#v, want all/false", cfg.Telegram)
 	}
+	if cfg.Telegram.Media.DownloadMaxSize != "20MB" || !cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || !cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "8MB" {
+		t.Fatalf("telegram media defaults = %#v, want 20MB + auto vision/pdf extract", cfg.Telegram.Media)
+	}
 	if cfg.Governor.Backend != "auto" {
 		t.Fatalf("governor.backend = %q, want auto", cfg.Governor.Backend)
 	}
@@ -188,6 +191,13 @@ tool_progress_style = "raw"
 tool_progress_window = 6
 tool_progress_cleanup = true
 
+[telegram.media]
+download_max_size = "12MB"
+auto_vision_photos = false
+auto_vision_documents = true
+extract_pdf_text = false
+max_pdf_bytes = "4MB"
+
 [principals.telegram]
 admin_user_ids = [123]
 approved_user_ids = [456]
@@ -305,6 +315,9 @@ elevenlabs_voice_id = "voice-123"
 
 	if cfg.Telegram.PollTimeout != 11 {
 		t.Fatalf("poll_timeout = %d, want 11", cfg.Telegram.PollTimeout)
+	}
+	if cfg.Telegram.Media.DownloadMaxSize != "12MB" || cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "4MB" {
+		t.Fatalf("telegram.media = %#v, want explicit overrides", cfg.Telegram.Media)
 	}
 	if cfg.Telegram.StreamEditInterval != "450ms" || cfg.Telegram.StreamCursor != " .." {
 		t.Fatalf("telegram stream config = %#v, want 450ms/' ..'", cfg.Telegram)

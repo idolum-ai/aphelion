@@ -37,6 +37,7 @@ type getFileResponse struct {
 	Description string `json:"description"`
 	Result      struct {
 		FilePath string `json:"file_path"`
+		FileSize int64  `json:"file_size"`
 	} `json:"result"`
 }
 
@@ -52,6 +53,8 @@ type Message struct {
 	From           *User           `json:"from"`
 	Text           string          `json:"text"`
 	Caption        string          `json:"caption"`
+	Photo          []PhotoSize     `json:"photo"`
+	Document       *Document       `json:"document"`
 	Voice          *Voice          `json:"voice"`
 	Entities       []MessageEntity `json:"entities"`
 	ReplyToMessage *Message        `json:"reply_to_message"`
@@ -80,6 +83,20 @@ type MessageEntity struct {
 type Voice struct {
 	FileID   string `json:"file_id"`
 	Duration int    `json:"duration"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
+}
+
+type PhotoSize struct {
+	FileID   string `json:"file_id"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	FileSize int64  `json:"file_size"`
+}
+
+type Document struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
 	MimeType string `json:"mime_type"`
 	FileSize int64  `json:"file_size"`
 }

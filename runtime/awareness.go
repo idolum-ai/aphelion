@@ -17,19 +17,46 @@ type providerStateReporter interface {
 	RuntimeState() providerpkg.RuntimeState
 }
 
-func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.TurnRunKind, channel string) prompt.RuntimeAwareness {
+type governorExecution struct {
+	Provider      agent.Provider
+	Backend       string
+	ProviderName  string
+	ModelName     string
+	ProviderPath  []string
+	MediaAttached bool
+	MediaMode     string
+}
+
+func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.TurnRunKind, channel string, exec governorExecution) prompt.RuntimeAwareness {
+	if strings.TrimSpace(exec.Backend) == "" {
+		exec.Backend = strings.TrimSpace(r.governorBackend)
+	}
+	if exec.Provider == nil {
+		exec.Provider = r.provider
+	}
+	if strings.TrimSpace(exec.ProviderName) == "" {
+		exec.ProviderName = r.governorProviderName()
+	}
+	if strings.TrimSpace(exec.ModelName) == "" {
+		exec.ModelName = r.governorModelName()
+	}
+	if len(exec.ProviderPath) == 0 {
+		exec.ProviderPath = r.configuredGovernorProviderPath()
+	}
 	aw := prompt.RuntimeAwareness{
 		SessionKind:          sessionKindForRun(kind),
 		RunKind:              string(kind),
 		Channel:              strings.TrimSpace(channel),
-		GovernorBackend:      strings.TrimSpace(r.governorBackend),
-		GovernorProvider:     r.governorProviderName(),
-		GovernorModel:        r.governorModelName(),
-		GovernorProviderPath: r.configuredGovernorProviderPath(),
+		GovernorBackend:      strings.TrimSpace(exec.Backend),
+		GovernorProvider:     strings.TrimSpace(exec.ProviderName),
+		GovernorModel:        strings.TrimSpace(exec.ModelName),
+		GovernorProviderPath: append([]string(nil), exec.ProviderPath...),
 		ReasoningEffort:      string(reasoningOptionsForRun(r.cfg, kind).Reasoning.Effort),
 		ReasoningSummary:     string(reasoningOptionsForRun(r.cfg, kind).Reasoning.Summary),
 		FaceBackend:          string(r.faceBackend),
 		FaceProvider:         r.faceProviderName(),
+		MediaAttached:        exec.MediaAttached,
+		MediaMode:            strings.TrimSpace(exec.MediaMode),
 		PromptRoot:           strings.TrimSpace(r.cfg.Agent.PromptRoot),
 		ExecRoot:             strings.TrimSpace(r.cfg.Agent.ExecRoot),
 		SharedMemoryRoot:     strings.TrimSpace(scope.SharedMemoryRoot),
@@ -42,7 +69,7 @@ func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.Tur
 	if strings.TrimSpace(aw.Channel) == "" {
 		aw.Channel = "system"
 	}
-	if state, ok := currentProviderRuntimeState(r.provider); ok {
+	if state, ok := currentProviderRuntimeState(exec.Provider); ok {
 		aw.ActiveProvider = strings.TrimSpace(state.ActiveProvider)
 		aw.FallbackActive = state.FallbackActive
 	}
