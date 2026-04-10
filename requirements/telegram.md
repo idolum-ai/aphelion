@@ -150,6 +150,8 @@ For outbound DM turns, Telegram is the visible surface of the face layer:
 3. face renders the visible reply
 4. Telegram sends the rendered reply
 
+Outbound delivery must treat Telegram's message size limit as a first-class constraint rather than a rare failure case. Long replies should be split into sequential Telegram messages before delivery instead of attempting one oversized `sendMessage`.
+
 ## Bot Commands
 
 Telegram command discovery should be explicit. On startup, Aphelion should register its command list with `setMyCommands` so Telegram clients can show the available slash commands.
@@ -206,6 +208,48 @@ Toggle the governor reasoning recipe for interactive work between:
 For now this is also a hardcoded runtime-owned operator control rather than a general config surface.
 
 This command should affect ordinary interactive turns and recovery turns. Heartbeat and cron should keep their lower maintenance defaults unless explicitly changed elsewhere later.
+
+## Outbound Delivery
+
+Telegram delivery should be chunk-aware.
+
+### Message size
+
+Telegram text messages have a practical size ceiling of about 4096 characters.
+
+Aphelion should therefore:
+
+- split oversized outbound text into multiple messages before delivery
+- prefer paragraph boundaries before hard length splitting
+- keep `reply_to_message_id` only on the first chunk by default
+- preserve formatting on each chunk when possible
+- fall back to plain text for a chunk if formatted delivery fails
+
+The first delivered chunk should remain the canonical outbound message id for bookkeeping purposes.
+
+### Streaming and edits
+
+Streaming edits should also respect Telegram size limits.
+
+If a live edited message grows past the safe edit size, the delivery layer may finalize that message and continue in a follow-up message rather than failing the turn.
+
+### Error visibility
+
+The Telegram client must not discard API error bodies on non-200 responses.
+
+Returned/logged errors should preserve:
+
+- HTTP status
+- Telegram `description` when present
+- a bounded response-body excerpt when no structured description exists
+
+This matters because delivery failures such as:
+
+- `message is too long`
+- parse-mode/entity failures
+- `message is not modified`
+
+must be distinguishable operationally.
 
 ## DM Admission
 

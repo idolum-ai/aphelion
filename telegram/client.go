@@ -12,11 +12,13 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/idolum-ai/aphelion/core"
 )
 
 const defaultPollTimeoutSeconds = 30
+const telegramTextChunkLimit = 3800
 
 type Client struct {
 	token       string
@@ -97,28 +99,26 @@ func (c *Client) SendMessage(ctx context.Context, msg core.OutboundMessage) (int
 	if msg.ChatID == 0 {
 		return 0, errors.New("chat_id is required")
 	}
-	formatted := prepareFormattedText(msg.Text, msg.ParseMode)
-	body := map[string]interface{}{
-		"chat_id": msg.ChatID,
-		"text":    formatted.Text,
+	chunks := splitTelegramTextChunks(msg.Text, telegramTextChunkLimit)
+	if len(chunks) == 0 {
+		chunks = []string{""}
 	}
-	if formatted.ParseMode != "" {
-		body["parse_mode"] = formatted.ParseMode
-	}
-	if msg.ReplyTo != nil {
-		body["reply_to_message_id"] = *msg.ReplyTo
-	}
-	resp, err := c.sendMessageRequest(ctx, body)
-	if err != nil {
-		return 0, err
-	}
-	if !resp.Ok {
-		if formatted.ParseMode != "" && isTelegramParseError(resp.Description) {
-			return c.sendMessageFallback(ctx, msg.ChatID, formatted.PlainText, msg.ReplyTo)
+
+	firstMessageID := int64(0)
+	for i, chunk := range chunks {
+		replyTo := (*int64)(nil)
+		if i == 0 {
+			replyTo = msg.ReplyTo
 		}
-		return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
+		messageID, err := c.sendMessageChunk(ctx, msg.ChatID, chunk, msg.ParseMode, replyTo)
+		if err != nil {
+			return 0, err
+		}
+		if firstMessageID == 0 {
+			firstMessageID = messageID
+		}
 	}
-	return resp.Result.MessageID, nil
+	return firstMessageID, nil
 }
 
 func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error {
@@ -261,7 +261,7 @@ func (c *Client) SendVoiceMessage(ctx context.Context, chatID int64, media core.
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("sendVoice unexpected status %d", resp.StatusCode)
+		return 0, telegramHTTPError("sendVoice", resp)
 	}
 
 	var decoded sendVoiceResponse
@@ -316,7 +316,7 @@ func (c *Client) DownloadFileChecked(ctx context.Context, fileID string, maxByte
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download file unexpected status %d", resp.StatusCode)
+		return nil, telegramHTTPError("downloadFile", resp)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -343,11 +343,18 @@ func (c *Client) post(ctx context.Context, method string, body interface{}, out 
 		return fmt.Errorf("%s request failed: %w", method, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s unexpected status %d", method, resp.StatusCode)
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read %s response: %w", method, err)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := json.Unmarshal(bodyBytes, out); err != nil {
+		if resp.StatusCode != http.StatusOK {
+			return telegramHTTPErrorFromBody(method, resp.StatusCode, bodyBytes)
+		}
 		return fmt.Errorf("decode %s response: %w", method, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil
 	}
 	return nil
 }
@@ -358,6 +365,31 @@ func (c *Client) sendMessageRequest(ctx context.Context, body map[string]interfa
 		return nil, err
 	}
 	return &resp, nil
+}
+
+func (c *Client) sendMessageChunk(ctx context.Context, chatID int64, text string, parseMode string, replyTo *int64) (int64, error) {
+	formatted := prepareFormattedText(text, parseMode)
+	body := map[string]interface{}{
+		"chat_id": chatID,
+		"text":    formatted.Text,
+	}
+	if formatted.ParseMode != "" {
+		body["parse_mode"] = formatted.ParseMode
+	}
+	if replyTo != nil {
+		body["reply_to_message_id"] = *replyTo
+	}
+	resp, err := c.sendMessageRequest(ctx, body)
+	if err != nil {
+		return 0, err
+	}
+	if !resp.Ok {
+		if formatted.ParseMode != "" && isTelegramParseError(resp.Description) {
+			return c.sendMessageFallback(ctx, chatID, formatted.PlainText, replyTo)
+		}
+		return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
+	}
+	return resp.Result.MessageID, nil
 }
 
 func (c *Client) sendMessageFallback(ctx context.Context, chatID int64, text string, replyTo *int64) (int64, error) {
@@ -417,4 +449,122 @@ func buildSenderName(user *User) string {
 		name += user.LastName
 	}
 	return name
+}
+
+func splitTelegramTextChunks(text string, limit int) []string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if limit <= 0 {
+		limit = telegramTextChunkLimit
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+
+	var chunks []string
+	for len(runes) > 0 {
+		if len(runes) <= limit {
+			chunk := strings.TrimSpace(string(runes))
+			if chunk != "" {
+				chunks = append(chunks, chunk)
+			}
+			break
+		}
+
+		split := bestTelegramChunkBoundary(runes, limit)
+		if split <= 0 || split > len(runes) {
+			split = limit
+		}
+		chunk := strings.TrimSpace(string(runes[:split]))
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		runes = trimLeadingTelegramChunkRunes(runes[split:])
+	}
+	return chunks
+}
+
+func bestTelegramChunkBoundary(runes []rune, limit int) int {
+	if limit <= 0 || len(runes) <= limit {
+		return len(runes)
+	}
+	for i := limit; i > 0; i-- {
+		if i >= 2 && runes[i-2] == '\n' && runes[i-1] == '\n' {
+			return i
+		}
+	}
+	for i := limit; i > 0; i-- {
+		if runes[i-1] == '\n' {
+			return i
+		}
+	}
+	for i := limit; i > 0; i-- {
+		if runes[i-1] == ' ' {
+			return i
+		}
+	}
+	return limit
+}
+
+func trimLeadingTelegramChunkRunes(runes []rune) []rune {
+	start := 0
+	for start < len(runes) {
+		if runes[start] == '\n' || runes[start] == ' ' || runes[start] == '\t' {
+			start++
+			continue
+		}
+		break
+	}
+	return runes[start:]
+}
+
+func telegramHTTPError(method string, resp *http.Response) error {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s unexpected status %d (read body: %v)", method, resp.StatusCode, err)
+	}
+	return telegramHTTPErrorFromBody(method, resp.StatusCode, body)
+}
+
+func telegramHTTPErrorFromBody(method string, status int, body []byte) error {
+	description := telegramErrorDescription(body)
+	if description == "" {
+		description = truncateTelegramErrorBody(body)
+	}
+	if description == "" {
+		return fmt.Errorf("%s unexpected status %d", method, status)
+	}
+	return fmt.Errorf("%s unexpected status %d: %s", method, status, description)
+}
+
+func telegramErrorDescription(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var payload struct {
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Description)
+}
+
+func truncateTelegramErrorBody(body []byte) string {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= 240 {
+		return trimmed
+	}
+	return string(runes[:239]) + "…"
+}
+
+func runeCount(text string) int {
+	return utf8.RuneCountInString(text)
 }

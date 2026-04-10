@@ -37,6 +37,19 @@ func encodeJSONResponse(t *testing.T, v interface{}) *http.Response {
 	}
 }
 
+func encodeHTTPJSONResponse(t *testing.T, status int, v interface{}) *http.Response {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(bytes.NewReader(data)),
+		Header:     http.Header{"Content-Type": {"application/json"}},
+	}
+}
+
 func TestNormalizeMessagePrivate(t *testing.T) {
 	now := time.Now().Unix()
 	msg := &Message{
@@ -181,6 +194,89 @@ func TestSendMessagePayload(t *testing.T) {
 	}
 	if _, ok := requestBody["parse_mode"]; ok {
 		t.Fatalf("parse_mode = %v, want omitted", requestBody["parse_mode"])
+	}
+}
+
+func TestSendMessageChunksLongReplies(t *testing.T) {
+	var bodies []map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var body map[string]interface{}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			bodies = append(bodies, body)
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = int64(100 + len(bodies))
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	longText := strings.Repeat("chunk words ", 500)
+	replyTo := int64(77)
+	got, err := client.SendMessage(context.Background(), core.OutboundMessage{
+		ChatID:  5,
+		Text:    longText,
+		ReplyTo: &replyTo,
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() err = %v", err)
+	}
+	if got != 101 {
+		t.Fatalf("message id = %d, want first chunk id 101", got)
+	}
+	if len(bodies) < 2 {
+		t.Fatalf("request count = %d, want multiple chunks", len(bodies))
+	}
+	if bodies[0]["reply_to_message_id"] != float64(77) {
+		t.Fatalf("first chunk reply_to_message_id = %v, want 77", bodies[0]["reply_to_message_id"])
+	}
+	for i := 1; i < len(bodies); i++ {
+		if _, ok := bodies[i]["reply_to_message_id"]; ok {
+			t.Fatalf("chunk %d unexpectedly carried reply_to_message_id", i+1)
+		}
+	}
+	for i, body := range bodies {
+		text, _ := body["text"].(string)
+		if runeCount(text) > telegramTextChunkLimit {
+			t.Fatalf("chunk %d length = %d, want <= %d", i+1, runeCount(text), telegramTextChunkLimit)
+		}
+	}
+}
+
+func TestSendMessagePreservesTelegramDescriptionOnHTTPError(t *testing.T) {
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			return encodeHTTPJSONResponse(t, http.StatusBadRequest, map[string]interface{}{
+				"ok":          false,
+				"description": "Bad Request: message is too long",
+			}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	_, err := client.SendMessage(context.Background(), core.OutboundMessage{
+		ChatID: 5,
+		Text:   "hello",
+	})
+	if err == nil {
+		t.Fatal("SendMessage() err = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "message is too long") {
+		t.Fatalf("err = %v, want Telegram description", err)
 	}
 }
 
@@ -382,6 +478,51 @@ func TestSendMessageFallsBackToPlainTextOnParseError(t *testing.T) {
 	}
 	if bodies[1]["text"] != "try *this*" {
 		t.Fatalf("fallback text = %v, want original plain text", bodies[1]["text"])
+	}
+}
+
+func TestSendMessageFallsBackToPlainTextOnParseErrorHTTP400(t *testing.T) {
+	call := 0
+	var bodies []map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var body map[string]interface{}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			bodies = append(bodies, body)
+			if call == 1 {
+				return encodeHTTPJSONResponse(t, http.StatusBadRequest, sendMessageResponse{Ok: false, Description: "Bad Request: can't parse entities"}), nil
+			}
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = 126
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	_, err := client.SendMessage(context.Background(), core.OutboundMessage{
+		ChatID: 5,
+		Text:   "try *this*",
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() err = %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("request count = %d, want 2", len(bodies))
+	}
+	if _, ok := bodies[0]["parse_mode"]; !ok {
+		t.Fatal("first request missing parse_mode")
+	}
+	if _, ok := bodies[1]["parse_mode"]; ok {
+		t.Fatal("fallback request should omit parse_mode")
 	}
 }
 
