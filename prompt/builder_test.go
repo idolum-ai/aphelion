@@ -158,11 +158,11 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	if strings.Contains(got, "## Canonical Governor Reply") {
 		t.Fatalf("proposal prompt should not include canonical reply section: %q", got)
 	}
-	if !strings.Contains(got, "hidden execution layer") {
-		t.Fatalf("proposal prompt missing hidden executor framing: %q", got)
+	if !strings.Contains(got, "what you think this turn should be about") {
+		t.Fatalf("proposal prompt missing turn-shaping guidance: %q", got)
 	}
-	if !strings.Contains(got, "try to move it") {
-		t.Fatalf("proposal prompt missing assertive Idolum guidance: %q", got)
+	if !strings.Contains(got, "reaching for") {
+		t.Fatalf("proposal prompt missing subtext observation guidance: %q", got)
 	}
 }
 

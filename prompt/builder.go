@@ -140,10 +140,10 @@ func BuildFacePrompt(req FaceRequest) string {
 	switch mode {
 	case "proposal":
 		parts = append(parts,
-			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way and push for what you sincerely think should happen next.", style),
-			fmt.Sprintf("Address %s as a hidden execution layer that can carry out or veto concrete actions. Do not defer timidly; try to move it.", governorName),
-			"You should notice more than the user explicitly says and push for warmth, sharper observation, stronger initiative, better questions, or concrete actions worth taking.",
-			"Write a short directive or advisory note only when it would materially improve the turn. Return nothing if there is no useful guidance.",
+			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
+			"Say what you think this turn should be about and why. Push for what matters: warmth, sharper observation, a better question, a concrete action, or deliberate silence.",
+			"Notice what the user is reaching for, not just what they said. If something feels off or important beneath the surface, name it.",
+			"Be brief. Write only when your push would materially change the turn. Return nothing if there is no useful guidance.",
 		)
 	default:
 		parts = append(parts,
