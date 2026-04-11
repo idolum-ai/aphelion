@@ -575,6 +575,7 @@ func runImportSemanticCommand(args []string) error {
 		}
 		fmt.Fprintf(os.Stdout, "action: import-semantic\n")
 		fmt.Fprintf(os.Stdout, "source: %s\n", summary.Source)
+		fmt.Fprintf(os.Stdout, "contract: %s\n", summary.Contract)
 		fmt.Fprintf(os.Stdout, "provenance: %s\n", summary.Provenance)
 		fmt.Fprintf(os.Stdout, "scope: %s\n", summary.Scope)
 		if strings.TrimSpace(summary.PrincipalID) != "" {
@@ -582,6 +583,8 @@ func runImportSemanticCommand(args []string) error {
 		}
 		fmt.Fprintf(os.Stdout, "documents: %d\n", summary.Documents)
 		fmt.Fprintf(os.Stdout, "chunks: %d\n", summary.Chunks)
+		fmt.Fprintf(os.Stdout, "embedding_chunks: %d\n", summary.EmbeddedChunkCount)
+		fmt.Fprintf(os.Stdout, "embedding_use: %s\n", summary.EmbeddingUse)
 		fmt.Fprintf(os.Stdout, "state: %s\n", importState)
 		return nil
 	default:

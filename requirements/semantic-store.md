@@ -342,6 +342,8 @@ Fallback path may use:
 
 The system should degrade, not disappear.
 
+If imported embeddings are preserved before vector search is wired into live retrieval, they should be treated as preserved metadata rather than silently active ranking inputs. Operator-facing import output should make that explicit.
+
 ## Importers
 
 Import is a first-class requirement.
@@ -369,6 +371,12 @@ The importer should:
 - record the original embedding model alongside each imported chunk
 - when re-embedding is needed, create new chunks with a new model tag rather than silently overwriting; this keeps ranking behavior auditable across embedding model changes
 - avoid permanent runtime dependency on the foreign DB
+
+The first implementation may target an explicitly observed OpenClaw / Host schema contract rather than pretending to support every historical variation.
+
+If Aphelion only supports one observed foreign layout, it should say so plainly in code, logs, and operator output, for example as an import contract label such as `openclaw_observed_v1`.
+
+Unknown or incompatible foreign layouts should fail closed with an explicit schema-contract error rather than being imported optimistically.
 
 ### Import rule
 
@@ -398,6 +406,12 @@ Promotion to `approved` requires an explicit operator action.
 The governor may surface candidates, observations, or review notes about quarantined material, but the final promotion decision belongs to the operator. Corpus admission is an operator-owned decision, not a model-owned one.
 
 This is the boundary between "this has been imported" and "this has been approved for retrieval."
+
+The first implementation should also keep state transitions narrow:
+
+- approval/rejection should apply only to quarantined imported archives
+- native documents must never flow through the import-audit state machine
+- already approved or rejected imports should not be silently re-transitioned by the same approval path
 
 The distinction matters because imported corpora may contain stale facts, private material from the source system, or content that should not surface in any retrieval path until reviewed.
 

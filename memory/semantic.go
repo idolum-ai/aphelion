@@ -23,6 +23,8 @@ import (
 
 const semanticSchemaVersion = 1
 
+const openClawObservedSchemaContract = "openclaw_observed_v1"
+
 type SemanticMode string
 
 const (
@@ -116,12 +118,15 @@ type SemanticAuditFilter struct {
 }
 
 type SemanticImportSummary struct {
-	Source      string
-	Provenance  string
-	Scope       string
-	PrincipalID string
-	Documents   int
-	Chunks      int
+	Source             string
+	Contract           string
+	Provenance         string
+	Scope              string
+	PrincipalID        string
+	Documents          int
+	Chunks             int
+	EmbeddedChunkCount int
+	EmbeddingUse       string
 }
 
 type SemanticOpenClawImportRequest struct {
@@ -180,6 +185,12 @@ type openClawChunkRow struct {
 	text      string
 	embedding string
 	updatedAt int64
+}
+
+type importedDocumentMetadata struct {
+	ImportContract string `json:"import_contract,omitempty"`
+	ForeignSource  string `json:"foreign_source,omitempty"`
+	Embeddings     string `json:"embeddings,omitempty"`
 }
 
 type semanticChunkDraft struct {
@@ -460,6 +471,9 @@ func (e *SemanticEngine) ImportOpenClaw(ctx context.Context, req SemanticOpenCla
 		return nil, fmt.Errorf("open foreign sqlite db: %w", err)
 	}
 	defer foreignDB.Close()
+	if err := validateOpenClawObservedSchema(ctx, foreignDB); err != nil {
+		return nil, err
+	}
 
 	files, err := loadOpenClawFiles(ctx, foreignDB)
 	if err != nil {
@@ -477,10 +491,12 @@ func (e *SemanticEngine) ImportOpenClaw(ctx context.Context, req SemanticOpenCla
 	defer func() { _ = tx.Rollback() }()
 
 	summary := &SemanticImportSummary{
-		Source:      "openclaw",
-		Provenance:  provenance,
-		Scope:       scope,
-		PrincipalID: principalID,
+		Source:       "openclaw",
+		Contract:     openClawObservedSchemaContract,
+		Provenance:   provenance,
+		Scope:        scope,
+		PrincipalID:  principalID,
+		EmbeddingUse: "preserved_only",
 	}
 	for _, file := range files {
 		chunks, err := loadOpenClawChunks(ctx, foreignDB, file.path)
@@ -490,7 +506,7 @@ func (e *SemanticEngine) ImportOpenClaw(ctx context.Context, req SemanticOpenCla
 		if len(chunks) == 0 {
 			continue
 		}
-		docID, chunkCount, err := importOpenClawDocumentTx(tx, file, chunks, scope, principalID, provenance, importState)
+		docID, chunkCount, embeddedChunkCount, err := importOpenClawDocumentTx(tx, file, chunks, scope, principalID, provenance, importState)
 		if err != nil {
 			return nil, err
 		}
@@ -499,6 +515,7 @@ func (e *SemanticEngine) ImportOpenClaw(ctx context.Context, req SemanticOpenCla
 		}
 		summary.Documents++
 		summary.Chunks += chunkCount
+		summary.EmbeddedChunkCount += embeddedChunkCount
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -526,7 +543,7 @@ func (e *SemanticEngine) ListImportAudit(ctx context.Context, filter SemanticAud
 		limit = 50
 	}
 
-	clauses := []string{"provenance_source <> 'native'", "import_state = ?"}
+	clauses := []string{"provenance_source <> 'native'", "source_class = 'imported_archive'", "import_state = ?"}
 	args := []any{string(state)}
 	if scope != "" {
 		clauses = append(clauses, "scope = ?")
@@ -577,7 +594,7 @@ func (e *SemanticEngine) ReviewImportDocument(ctx context.Context, documentID in
 		SELECT id, scope, principal_id, source_path, source_kind, source_class, provenance_source,
 		       import_state, checksum, mtime, created_at, updated_at, metadata_json
 		FROM semantic_documents
-		WHERE id = ? AND provenance_source <> 'native' AND import_state = ?
+		WHERE id = ? AND provenance_source <> 'native' AND source_class = 'imported_archive' AND import_state = ?
 	`, documentID, string(SemanticImportStateQuarantine))
 	doc, err := scanSemanticDocument(row)
 	if err != nil {
@@ -644,11 +661,32 @@ func (e *SemanticEngine) SetImportState(ctx context.Context, documentID int64, s
 	if err != nil {
 		return err
 	}
+	var (
+		currentState string
+		sourceClass  string
+	)
+	row := db.QueryRowContext(ctx, `
+		SELECT import_state, source_class
+		FROM semantic_documents
+		WHERE id = ? AND provenance_source <> 'native'
+	`, documentID)
+	if err := row.Scan(&currentState, &sourceClass); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("import-audit document %d not found", documentID)
+		}
+		return fmt.Errorf("load import-audit document %d: %w", documentID, err)
+	}
+	if strings.TrimSpace(sourceClass) != "imported_archive" {
+		return fmt.Errorf("import-audit document %d is not an imported archive", documentID)
+	}
+	if SemanticImportState(strings.TrimSpace(currentState)) != SemanticImportStateQuarantine {
+		return fmt.Errorf("import-audit document %d is not in quarantine", documentID)
+	}
 	result, err := db.ExecContext(ctx, `
 		UPDATE semantic_documents
 		SET import_state = ?, updated_at = ?
-		WHERE id = ? AND provenance_source <> 'native'
-	`, string(state), utcTimestamp(time.Now().UTC()), documentID)
+		WHERE id = ? AND provenance_source <> 'native' AND source_class = 'imported_archive' AND import_state = ?
+	`, string(state), utcTimestamp(time.Now().UTC()), documentID, string(SemanticImportStateQuarantine))
 	if err != nil {
 		return fmt.Errorf("update import_state: %w", err)
 	}
@@ -687,6 +725,56 @@ func loadOpenClawFiles(ctx context.Context, db *sql.DB) ([]openClawFileRow, erro
 	return out, nil
 }
 
+func validateOpenClawObservedSchema(ctx context.Context, db *sql.DB) error {
+	if err := requireSQLiteColumns(ctx, db, "files", []string{"path", "source", "hash", "mtime", "size"}); err != nil {
+		return fmt.Errorf("openclaw importer requires %s schema for files table: %w", openClawObservedSchemaContract, err)
+	}
+	if err := requireSQLiteColumns(ctx, db, "chunks", []string{"id", "path", "source", "start_line", "end_line", "hash", "model", "text", "embedding", "updated_at"}); err != nil {
+		return fmt.Errorf("openclaw importer requires %s schema for chunks table: %w", openClawObservedSchemaContract, err)
+	}
+	return nil
+}
+
+func requireSQLiteColumns(ctx context.Context, db *sql.DB, table string, required []string) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return fmt.Errorf("inspect table %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			dataType   string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultVal, &primaryKey); err != nil {
+			return fmt.Errorf("scan table_info(%s): %w", table, err)
+		}
+		columns[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table_info(%s): %w", table, err)
+	}
+	if len(columns) == 0 {
+		return fmt.Errorf("table %s not found", table)
+	}
+	var missing []string
+	for _, column := range required {
+		if _, ok := columns[strings.ToLower(strings.TrimSpace(column))]; !ok {
+			missing = append(missing, column)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("table %s missing columns: %s", table, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 func loadOpenClawChunks(ctx context.Context, db *sql.DB, path string) ([]openClawChunkRow, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
@@ -721,10 +809,10 @@ func importOpenClawDocumentTx(
 	principalID string,
 	provenance string,
 	importState SemanticImportState,
-) (int64, int, error) {
+) (int64, int, int, error) {
 	sourcePath := filepath.ToSlash(strings.TrimSpace(file.path))
 	if sourcePath == "" {
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 	kind := detectImportedSemanticKind(sourcePath, file.source)
 	sourceClass := "imported_archive"
@@ -734,12 +822,16 @@ func importOpenClawDocumentTx(
 	}
 
 	drafts := make([]semanticChunkDraft, 0, len(chunks))
+	embeddedChunkCount := 0
 	for i, chunk := range chunks {
 		text := strings.TrimSpace(chunk.text)
 		if text == "" {
 			continue
 		}
 		embeddingJSON, embeddingDims := normalizeImportedEmbedding(chunk.embedding)
+		if strings.TrimSpace(embeddingJSON) != "" {
+			embeddedChunkCount++
+		}
 		var startLine *int
 		if chunk.startLine > 0 {
 			value := int(chunk.startLine)
@@ -761,12 +853,20 @@ func importOpenClawDocumentTx(
 		})
 	}
 	if len(drafts) == 0 {
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 
 	checksum := strings.TrimSpace(file.hash)
 	if checksum == "" {
 		checksum = checksumText(joinChunkTexts(drafts))
+	}
+	metadataJSON, err := marshalImportedDocumentMetadata(importedDocumentMetadata{
+		ImportContract: openClawObservedSchemaContract,
+		ForeignSource:  strings.TrimSpace(file.source),
+		Embeddings:     "preserved_only",
+	})
+	if err != nil {
+		return 0, 0, 0, err
 	}
 	docID, err := upsertSemanticDocumentTx(tx, SemanticDocument{
 		Scope:            scope,
@@ -778,14 +878,15 @@ func importOpenClawDocumentTx(
 		ImportState:      importState,
 		Checksum:         checksum,
 		MTime:            mtime,
+		MetadataJSON:     metadataJSON,
 	})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	if err := replaceSemanticChunksTx(tx, docID, drafts); err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-	return docID, len(drafts), nil
+	return docID, len(drafts), embeddedChunkCount, nil
 }
 
 func (e *SemanticEngine) syncNativeCorpus(ctx context.Context, root string, scope string, principalID string, now time.Time) error {
@@ -1478,6 +1579,14 @@ func normalizeImportedEmbedding(raw string) (string, int) {
 		return string(normalized), len(values)
 	}
 	return raw, 0
+}
+
+func marshalImportedDocumentMetadata(meta importedDocumentMetadata) (string, error) {
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return "", fmt.Errorf("marshal imported document metadata: %w", err)
+	}
+	return string(raw), nil
 }
 
 func joinChunkTexts(chunks []semanticChunkDraft) string {

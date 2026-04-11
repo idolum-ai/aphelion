@@ -356,6 +356,9 @@ user_memory_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated"
 	if !strings.Contains(out, "documents: 1") || !strings.Contains(out, "chunks: 2") {
 		t.Fatalf("import output = %q, want document/chunk summary", out)
 	}
+	if !strings.Contains(out, "contract: openclaw_observed_v1") || !strings.Contains(out, "embedding_use: preserved_only") || !strings.Contains(out, "embedding_chunks: 2") {
+		t.Fatalf("import output = %q, want contract and embedding summary", out)
+	}
 
 	cfg, _, err := loadConfigForCommand(cfgPath)
 	if err != nil {

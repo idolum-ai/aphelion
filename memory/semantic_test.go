@@ -5,6 +5,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,6 +207,9 @@ func TestSemanticImportAuditApproveMakesDocumentSearchable(t *testing.T) {
 	if _, err := engine.ReviewImportDocument(context.Background(), docID, 4, 2000); err == nil {
 		t.Fatal("ReviewImportDocument() err = nil after approval, want quarantine-only review")
 	}
+	if err := engine.SetImportState(context.Background(), docID, SemanticImportStateRejected); err == nil {
+		t.Fatal("SetImportState() err = nil after approval, want quarantine-only transitions")
+	}
 }
 
 func TestSemanticEngineImportOpenClawPreservesQuarantineAndMetadata(t *testing.T) {
@@ -239,6 +243,9 @@ func TestSemanticEngineImportOpenClawPreservesQuarantineAndMetadata(t *testing.T
 	if summary.Documents != 1 || summary.Chunks != 2 {
 		t.Fatalf("summary = %#v, want 1 document and 2 chunks", summary)
 	}
+	if summary.Contract != openClawObservedSchemaContract || summary.EmbeddingUse != "preserved_only" || summary.EmbeddedChunkCount != 2 {
+		t.Fatalf("summary = %#v, want observed contract and preserved embedding summary", summary)
+	}
 
 	docs, err := engine.ListImportAudit(context.Background(), SemanticAuditFilter{
 		State:       SemanticImportStateQuarantine,
@@ -253,6 +260,13 @@ func TestSemanticEngineImportOpenClawPreservesQuarantineAndMetadata(t *testing.T
 	}
 	if docs[0].SourceKind != "knowledge" || docs[0].PrincipalID != "telegram:42" {
 		t.Fatalf("doc = %#v, want knowledge doc scoped to principal", docs[0])
+	}
+	var meta importedDocumentMetadata
+	if err := json.Unmarshal([]byte(docs[0].MetadataJSON), &meta); err != nil {
+		t.Fatalf("json.Unmarshal(metadata_json) err = %v", err)
+	}
+	if meta.ImportContract != openClawObservedSchemaContract || meta.Embeddings != "preserved_only" || meta.ForeignSource != "memory" {
+		t.Fatalf("metadata = %#v, want observed import contract and preserved embedding metadata", meta)
 	}
 
 	review, err := engine.ReviewImportDocument(context.Background(), docs[0].ID, 4, 2000)
@@ -280,6 +294,62 @@ func TestSemanticEngineImportOpenClawPreservesQuarantineAndMetadata(t *testing.T
 	}
 	if dims != 2 || model != "text-embedding-3-small" || startLine != 1 {
 		t.Fatalf("imported chunk metadata = dims:%d model:%q start:%d, want dims:2 model:text-embedding-3-small start:1", dims, model, startLine)
+	}
+}
+
+func TestSemanticEngineImportOpenClawRejectsUnknownObservedSchema(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	foreignDBPath := filepath.Join(root, "broken-openclaw.db")
+	db, err := sql.Open("sqlite3", foreignDBPath)
+	if err != nil {
+		t.Fatalf("sql.Open(%s) err = %v", foreignDBPath, err)
+	}
+	if _, err := db.Exec(`CREATE TABLE files (path TEXT PRIMARY KEY, source TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create files table err = %v", err)
+	}
+	_ = db.Close()
+
+	engine := NewSemanticEngine(SemanticOptions{
+		Enabled: true,
+		DBPath:  filepath.Join(root, "semantic.db"),
+	})
+	_, err = engine.ImportOpenClaw(context.Background(), SemanticOpenClawImportRequest{
+		DBPath:      foreignDBPath,
+		Scope:       "shared",
+		ImportState: SemanticImportStateQuarantine,
+	})
+	if err == nil {
+		t.Fatal("ImportOpenClaw() err = nil, want observed-schema validation error")
+	}
+	if !strings.Contains(err.Error(), openClawObservedSchemaContract) {
+		t.Fatalf("ImportOpenClaw() err = %v, want observed schema contract in error", err)
+	}
+}
+
+func TestSemanticEngineSetImportStateRejectsNonImportedArchive(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	engine := NewSemanticEngine(SemanticOptions{
+		Enabled: true,
+		DBPath:  filepath.Join(root, "semantic.db"),
+	})
+	docID, err := engine.ImportDocument(context.Background(), SemanticImportRequest{
+		Scope:            "shared",
+		SourcePath:       "imports/manual/notes.md",
+		SourceKind:       "knowledge",
+		SourceClass:      "curated",
+		ProvenanceSource: "manual_import",
+		ImportState:      SemanticImportStateQuarantine,
+		Content:          "- Imported manually without archive classification.",
+	})
+	if err != nil {
+		t.Fatalf("ImportDocument() err = %v", err)
+	}
+	if err := engine.SetImportState(context.Background(), docID, SemanticImportStateApproved); err == nil {
+		t.Fatal("SetImportState() err = nil, want imported-archive guard")
 	}
 }
 
