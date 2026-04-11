@@ -112,8 +112,10 @@ func (r *Runtime) ratifyTurnBrokerage(
 }
 
 func brokerageContextForGovernor(brokerage turnBrokerage) string {
-	if plan := prompt.RenderBrokeragePlanForGovernor(brokerage.RatifiedPlan); plan != "" {
-		return plan
+	if brokerage.Active && brokerage.Mode == "brokerage" && strings.TrimSpace(brokerage.RatifiedPlan) != "" {
+		if block := prompt.RenderBrokeragePlanForGovernor(brokerage.IdolumNote, brokerage.RatifiedPlan); block != "" {
+			return block
+		}
 	}
 	if brokerage.Active && brokerage.Mode == "brokerage" {
 		return prompt.RenderIdolumBrokerageForGovernor("Idolum", brokerage.IdolumNote)

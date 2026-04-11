@@ -20,12 +20,16 @@ type stubProvider struct {
 	err        error
 	lastCalls  int
 	lastPrompt string
+	lastUser   string
 }
 
 func (s *stubProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
 	s.lastCalls++
 	if len(messages) > 0 && messages[0].Role == "system" {
 		s.lastPrompt = messages[0].Content
+	}
+	if len(messages) > 1 {
+		s.lastUser = messages[1].Content
 	}
 	if s.err != nil {
 		return nil, s.err
@@ -37,6 +41,9 @@ func (s *stubProvider) Stream(_ context.Context, messages []agent.Message, _ []a
 	s.lastCalls++
 	if len(messages) > 0 && messages[0].Role == "system" {
 		s.lastPrompt = messages[0].Content
+	}
+	if len(messages) > 1 {
+		s.lastUser = messages[1].Content
 	}
 	if s.err != nil {
 		return nil, s.err
@@ -100,6 +107,9 @@ func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
 	if !strings.Contains(provider.lastPrompt, "### QUESTIONS-TO-IDOLUM.md") {
 		t.Fatalf("face prompt missing QUESTIONS-TO-IDOLUM.md content: %q", provider.lastPrompt)
 	}
+	if !strings.Contains(provider.lastUser, "Idolum") || !strings.Contains(provider.lastUser, "Aphelion-approved") {
+		t.Fatalf("render transport prompt = %q, want resolved face and governor names", provider.lastUser)
+	}
 }
 
 func TestProviderRendererProposalLoadsIdolumFiles(t *testing.T) {
@@ -139,6 +149,44 @@ func TestProviderRendererProposalLoadsIdolumFiles(t *testing.T) {
 	}
 	if !strings.Contains(provider.lastPrompt, "push for initiative") {
 		t.Fatalf("proposal prompt missing dynamic face file: %q", provider.lastPrompt)
+	}
+	if !strings.Contains(provider.lastUser, "Aphelion") {
+		t.Fatalf("proposal transport prompt = %q, want resolved governor name", provider.lastUser)
+	}
+}
+
+func TestProviderRendererUsesResolvedNamesInTransportPrompts(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubProvider{reply: "Rendered reply"}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
+		GovernorName: "Host",
+		FaceName:     "Mada",
+		Channel:      "telegram",
+	})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	if _, err := renderer.Render(context.Background(), RenderRequest{
+		CanonicalReply:  "Canonical text",
+		LatestUserInput: "Hello",
+		PrincipalRole:   "admin",
+	}); err != nil {
+		t.Fatalf("Render() err = %v", err)
+	}
+	if !strings.Contains(provider.lastUser, "Mada") || !strings.Contains(provider.lastUser, "Host-approved") {
+		t.Fatalf("render transport prompt = %q, want configured names", provider.lastUser)
+	}
+
+	if _, err := renderer.Propose(context.Background(), ProposalRequest{
+		LatestUserInput: "Think this through",
+		PrincipalRole:   "admin",
+	}); err != nil {
+		t.Fatalf("Propose() err = %v", err)
+	}
+	if !strings.Contains(provider.lastUser, "Host") || strings.Contains(provider.lastUser, "Aphelion") {
+		t.Fatalf("proposal transport prompt = %q, want configured governor name only", provider.lastUser)
 	}
 }
 

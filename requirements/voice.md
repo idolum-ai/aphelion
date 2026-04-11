@@ -149,7 +149,7 @@ That means:
 - TTS voice selection should aim to match Idolum's relational style
 - voice reply is a rendering mode, not a second decision layer
 
-The voice subsystem does not get to rewrite governor intent; it only renders the already-approved Idolum output into speech.
+The voice subsystem does not get to rewrite governor intent; it only renders the already-spoken Idolum output into speech.
 
 ## Failure Behavior
 
@@ -194,7 +194,7 @@ Additional per-channel or per-principal voice overrides may come later.
 - **Voice mode is explicit.** `voice_only` is the best default for messaging.
 - **Voice replies follow voice input by default.** If the user sends voice and voice mode is enabled, reply with voice unless configured otherwise.
 - **The session ledger stays text-first.** Audio remains sidecar media state.
-- **Voice is rendering, not authority.** The governor decides; Idolum speaks; voice renders the speech form.
+- **Voice is rendering, not authority.** Aphelion authorizes, Idolum speaks, voice renders the speech form.
 
 ## Test Plan
 

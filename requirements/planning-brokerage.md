@@ -6,13 +6,13 @@ Some turns should not move directly from user input to governor execution.
 
 For open-ended, strategic, ambiguous, emotionally charged, or repo-inspection-heavy turns, Aphelion should run a bounded **planning brokerage** before the main turn executes.
 
-This brokerage is not a free-form internal conversation. It is a short handshake:
+This brokerage is not a free-form internal conversation. It is a short negotiation:
 
-1. `Idolum` proposes what kind of turn this should be
-2. `Aphelion` ratifies a concrete turn mode and plan
-3. the normal governor/tool turn executes under that ratified plan
+1. `Idolum` states what conversational pressure it wants to exert
+2. `Aphelion` answers with what system posture it can actually ratify
+3. the normal governor/tool turn executes under the negotiated artifact
 
-This preserves `Idolum`'s initiative without making the runtime a committee.
+This preserves `Idolum`'s initiative without making the runtime a committee, and preserves `Aphelion`'s authority without flattening `Idolum` into polite advice.
 
 ## Telos
 
@@ -88,7 +88,7 @@ It should decide:
 - whether tools are needed
 - whether clarification is required first
 
-The ratified plan is authoritative for the main turn.
+The authoritative execution boundary still belongs to Aphelion, but the main turn should preserve both sides of the brokerage rather than only the final ratified compression.
 
 ## Turn Modes
 
@@ -102,7 +102,7 @@ The brokerage layer should use a small fixed vocabulary.
 
 ## Idolum Brokerage Proposal
 
-The face-side brokerage output should be short and structured.
+The face-side brokerage output should be short and bounded. It may be structured when useful, but it should not feel like bureaucracy by default.
 
 Example shape:
 
@@ -152,7 +152,7 @@ The main turn should receive:
 - compacted history
 - the latest user input
 
-The raw `Idolum` brokerage proposal need not be re-injected once a valid ratification exists.
+The raw `Idolum` brokerage position should survive into the negotiated brokerage block when a valid ratification exists. Disagreement is signal, not noise.
 
 If ratification fails, the runtime may fall back to the older advisory proposal path.
 
@@ -167,11 +167,11 @@ Recommended ordering:
 3. tool manifest
 4. advisory tool policy
 5. dynamic files
-6. brokerage ratification block when present
+6. negotiated brokerage block when present
 7. history
 8. latest user message
 
-The face-side brokerage prompt should remain face-only.
+The face-side brokerage prompt should remain face-only, and should encourage a short dialogue-like push rather than a rigid mini-protocol.
 
 ## Runtime Awareness
 
@@ -203,10 +203,11 @@ The system must not drop or stall a turn merely because brokerage failed.
 ## Decisions
 
 - **Brokerage is bounded.** One face proposal, one governor ratification, then execution.
-- **Idolum proposes posture.** It does not authorize.
-- **Aphelion ratifies the plan.** It remains the action and authority layer.
+- **Idolum proposes posture.** It does not authorize tools or system actions.
+- **Aphelion ratifies execution.** It remains the action and authority layer.
+- **Brokerage preserves both pressures.** The surviving artifact should keep Idolum's push and Aphelion's ratification together.
 - **Brokerage is selective.** It should not run on every turn.
-- **The ratified plan is machine-scoped context.** It is not user-visible by default.
+- **The negotiated brokerage block is machine-scoped context.** It is not user-visible by default.
 - **Fallback is required.** Brokerage failure must degrade to the existing turn path.
 
 ## Test Plan

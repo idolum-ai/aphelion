@@ -47,10 +47,12 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 	if err != nil {
 		return "", err
 	}
+	governorName := firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName)
+	faceName := firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName)
 
 	facePrompt := prompt.FaceRequest{
-		GovernorName:    firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName),
-		FaceName:        firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName),
+		GovernorName:    governorName,
+		FaceName:        faceName,
 		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
 		Style:           firstNonEmpty(req.Style, r.cfg.Style),
 		PrincipalRole:   req.PrincipalRole,
@@ -66,7 +68,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 
 	resp, err := r.provider.Complete(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
-		{Role: "user", Content: "Render the final reply for delivery. Return only the reply text."},
+		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, within %s-approved boundaries below. Return only the reply text.", faceName, governorName)},
 	}, nil)
 	if err != nil {
 		return "", err
@@ -91,10 +93,12 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 	if err != nil {
 		return "", err
 	}
+	governorName := firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName)
+	faceName := firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName)
 
 	facePrompt := prompt.FaceRequest{
-		GovernorName:    firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName),
-		FaceName:        firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName),
+		GovernorName:    governorName,
+		FaceName:        faceName,
 		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
 		Style:           firstNonEmpty(req.Style, r.cfg.Style),
 		PrincipalRole:   req.PrincipalRole,
@@ -111,7 +115,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 	var rendered strings.Builder
 	resp, err := streamingProvider.Stream(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
-		{Role: "user", Content: "Render the final reply for delivery. Return only the reply text."},
+		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, within %s-approved boundaries below. Return only the reply text.", faceName, governorName)},
 	}, nil, func(chunk agent.StreamChunk) error {
 		if chunk.Text == "" {
 			return nil
@@ -145,10 +149,12 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 	if err != nil {
 		return "", err
 	}
+	governorName := firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName)
+	faceName := firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName)
 
 	facePrompt := prompt.FaceRequest{
-		GovernorName:    firstNonEmpty(req.GovernorName, r.cfg.GovernorName, prompt.DefaultGovernorName),
-		FaceName:        firstNonEmpty(req.FaceName, r.cfg.FaceName, DefaultFaceName),
+		GovernorName:    governorName,
+		FaceName:        faceName,
 		Channel:         firstNonEmpty(req.Channel, r.cfg.Channel, "telegram"),
 		Style:           firstNonEmpty(req.Style, r.cfg.Style),
 		PrincipalRole:   req.PrincipalRole,
@@ -163,7 +169,7 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 
 	resp, err := r.provider.Complete(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
-		{Role: "user", Content: "Tell the hidden executor what it should do, ask, or prioritize next. Return only the advisory note, or nothing if you have no useful push."},
+		{Role: "user", Content: fmt.Sprintf("Speak to %s in one short bounded note about how this turn should move next. Return only that note, or nothing if you have no useful push.", governorName)},
 	}, nil)
 	if err != nil {
 		return "", err

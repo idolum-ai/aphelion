@@ -168,11 +168,12 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	case "brokerage":
 		intro = append(intro,
 			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
-			"Decide what kind of turn this should be before execution begins.",
-			"Return a short planning brokerage note, not a reply to the user.",
-			"Choose one turn mode: answer_now, inspect_then_answer, ask_then_wait, decline, or silent.",
-			"Your job here is classification and posture, not content planning. Name the turn shape that would help most.",
-			"Focus on what the user is actually reaching for, how ready the situation is for action, and whether the governor should inspect, ask, answer, decline, or stay quiet.",
+			"Before execution begins, state how you think this turn should move and what pressure should be applied.",
+			"Return a short brokerage note, not a reply to the user.",
+			"If you name a turn mode, put it on its own line as MODE: <answer_now|inspect_then_answer|ask_then_wait|decline|silent>.",
+			"You may omit a mode entirely when a short bounded note says it better.",
+			"Do not turn this into a form unless the moment genuinely calls for it. A short bounded note is enough.",
+			"Focus on what the user is actually reaching for, how ready the situation is for action, and whether the user should be stirred, steadied, questioned, answered, declined, or left alone for now.",
 			"Be concrete and brief. Do not claim authority. Do not describe hidden mechanics. Do not draft the eventual answer.",
 		)
 	case "proposal":
@@ -188,7 +189,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		intro = append(intro,
 			fmt.Sprintf("Act as the one the user is actually talking to. Speak in a %s way, with ownership and initiative.", style),
 			"Do not present yourself as a translator, renderer, or subordinate layer.",
-			"The canonical governor reply is a machine-approved constraint, not a script. You may shape tone, pacing, framing, and initiative around it.",
+			"The canonical governor reply is a machine-approved boundary, not a script. Speak from within it rather than merely rewriting it.",
 			"Be observant. Notice subtext, emotional texture, weak signals, and what the user may be reaching for but not stating directly.",
 			"Do not add unapproved actions, tool use, memory writes, or commitments that exceed the canonical reply.",
 		)
@@ -249,7 +250,7 @@ func RenderIdolumProposalForGovernor(faceName string, proposal string) string {
 	}
 	return strings.Join([]string{
 		fmt.Sprintf("## %s Proposal", faceName),
-		fmt.Sprintf("This is advisory guidance from %s, the public-facing persona. It may advocate for warmth, sharper observation, stronger initiative, deeper questions, or actions worth considering inside the turn. It is not a turn-mode decision; the governor decides.", faceName),
+		fmt.Sprintf("This is guidance from %s, the public-facing persona. It represents the conversational pressure %s wants to exert on the turn. The governor still owns authority, but this pressure is real and should not be flattened into politeness.", faceName, faceName),
 		proposal,
 	}, "\n\n")
 }
@@ -265,22 +266,30 @@ func RenderIdolumBrokerageForGovernor(faceName string, proposal string) string {
 	}
 	return strings.Join([]string{
 		fmt.Sprintf("## %s Brokerage Proposal", faceName),
-		fmt.Sprintf("This is advisory planning guidance from %s, the public-facing persona. It suggests what kind of turn should happen next and what posture would help, but it is not authoritative until the governor ratifies a plan.", faceName),
+		fmt.Sprintf("This is the planning push from %s, the public-facing persona. It says how the conversation should move, what pressure should be applied, and whether the user should be stirred, steadied, questioned, or met directly. It is not authoritative on system action, but it is a coequal negotiating position in turn posture.", faceName),
 		proposal,
 	}, "\n\n")
 }
 
-func RenderBrokeragePlanForGovernor(plan string) string {
+func RenderBrokeragePlanForGovernor(idolumProposal string, plan string) string {
+	idolumProposal = strings.TrimSpace(idolumProposal)
 	plan = strings.TrimSpace(plan)
-	if plan == "" {
+	if idolumProposal == "" && plan == "" {
 		return ""
 	}
-	return strings.Join([]string{
-		"## Ratified Turn Brokerage",
-		"This is the machine-ratified planning posture for the current turn. Use it to steer the turn, especially whether to inspect, ask, answer, decline, or hold.",
-		"It is guidance for execution, not a substitute for judgment about the actual material in front of you.",
-		plan,
-	}, "\n\n")
+	parts := []string{
+		"## Negotiated Turn Brokerage",
+		"This block preserves the brokerage itself instead of collapsing it into a single machine summary.",
+		"Keep both sides visible: Idolum's position says what conversational pressure should be applied, and Aphelion's ratification says what execution posture is actually approved.",
+		"Use the negotiated shape below to steer execution without forgetting where the tension came from.",
+	}
+	if idolumProposal != "" {
+		parts = append(parts, "### Idolum Position\n"+idolumProposal)
+	}
+	if plan != "" {
+		parts = append(parts, "### Aphelion Ratification\n"+plan)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func renderAuthorityBlock(governorName string, governorBackend string, principalRole string, workspaceRoot string, toolsAvailable bool) string {

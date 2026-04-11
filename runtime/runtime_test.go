@@ -39,6 +39,7 @@ type fakeProvider struct {
 	faceReplyText       string
 	streamFaceText      string
 	faceErr             error
+	proposalErr         error
 	seenGovernorSystem  []string
 	seenFaceSystem      []string
 	seenProposalSystem  []string
@@ -90,6 +91,9 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 		}
 		if strings.Contains(messages[0].Content, "- mode: proposal") {
 			f.seenProposalSystem = append(f.seenProposalSystem, messages[0].Content)
+			if f.proposalErr != nil {
+				return nil, f.proposalErr
+			}
 			reply := strings.TrimSpace(f.proposalReplyText)
 			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 		}
@@ -775,11 +779,17 @@ func TestHandleInboundUsesBrokerageForStrategicTurn(t *testing.T) {
 	if !strings.Contains(provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1], "- brokerage_active: true") {
 		t.Fatalf("governor prompt missing brokerage awareness: %q", provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1])
 	}
-	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "## Ratified Turn Brokerage") {
-		t.Fatalf("governor input missing ratified brokerage block: %#v", provider.lastGovernorMsgs)
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "## Negotiated Turn Brokerage") {
+		t.Fatalf("governor input missing negotiated brokerage block: %#v", provider.lastGovernorMsgs)
+	}
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "### Idolum Position") {
+		t.Fatalf("negotiated brokerage block missing idolum position: %q", provider.lastGovernorMsgs[1].Content)
+	}
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "### Aphelion Ratification") {
+		t.Fatalf("negotiated brokerage block missing aphelion ratification: %q", provider.lastGovernorMsgs[1].Content)
 	}
 	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "inspect_then_answer") {
-		t.Fatalf("ratified brokerage block missing turn mode: %q", provider.lastGovernorMsgs[1].Content)
+		t.Fatalf("negotiated brokerage block missing turn mode: %q", provider.lastGovernorMsgs[1].Content)
 	}
 }
 
@@ -788,6 +798,7 @@ func TestHandleInboundFallsBackToPlainProposalWhenBrokerageRatificationFails(t *
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.brokerageReplyText = "MODE: inspect_then_answer\nWHY: Ground the answer.\nPUSH:\n- Inspect first."
+	provider.proposalReplyText = "Push for a concrete answer grounded in what is already known."
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -811,17 +822,63 @@ func TestHandleInboundFallsBackToPlainProposalWhenBrokerageRatificationFails(t *
 	if len(provider.seenBrokerageSystem) == 0 {
 		t.Fatal("seenBrokerageSystem empty, want brokerage prompt call")
 	}
+	if len(provider.seenProposalSystem) == 0 {
+		t.Fatal("seenProposalSystem empty, want explicit proposal rerun after planning failure")
+	}
 	if len(provider.lastGovernorMsgs) < 2 {
 		t.Fatalf("lastGovernorMsgs len = %d, want at least 2", len(provider.lastGovernorMsgs))
 	}
 	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "## Idolum Proposal") {
 		t.Fatalf("governor input should fall back to Idolum proposal block: %q", provider.lastGovernorMsgs[1].Content)
 	}
-	if strings.Contains(provider.lastGovernorMsgs[1].Content, "## Ratified Turn Brokerage") {
-		t.Fatalf("governor input should not contain ratified brokerage after planning failure: %q", provider.lastGovernorMsgs[1].Content)
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "Push for a concrete answer grounded in what is already known.") {
+		t.Fatalf("governor input should use rerun proposal text: %q", provider.lastGovernorMsgs[1].Content)
+	}
+	if strings.Contains(provider.lastGovernorMsgs[1].Content, "## Negotiated Turn Brokerage") {
+		t.Fatalf("governor input should not contain negotiated brokerage after planning failure: %q", provider.lastGovernorMsgs[1].Content)
 	}
 	if !strings.Contains(provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1], "- brokerage_mode: proposal") {
 		t.Fatalf("governor awareness should fall back to proposal mode: %q", provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1])
+	}
+}
+
+func TestHandleInboundPreservesBrokerageWhenProposalRerunAlsoFails(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.brokerageReplyText = "PUSH:\n- Inspect first.\n- Keep the user moving."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.provider = planningErrorProvider{Provider: rt.provider, err: errors.New("planning failed")}
+	provider.proposalErr = errors.New("proposal rerun failed")
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     722,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "come up with some features for my codebase",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.lastGovernorMsgs) < 2 {
+		t.Fatalf("lastGovernorMsgs len = %d, want at least 2", len(provider.lastGovernorMsgs))
+	}
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "## Idolum Brokerage Proposal") {
+		t.Fatalf("governor input should preserve brokerage framing when proposal rerun fails: %q", provider.lastGovernorMsgs[1].Content)
+	}
+	if strings.Contains(provider.lastGovernorMsgs[1].Content, "## Idolum Proposal") {
+		t.Fatalf("governor input should not relabel brokerage as proposal when rerun fails: %q", provider.lastGovernorMsgs[1].Content)
+	}
+	if !strings.Contains(provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1], "- brokerage_mode: brokerage") {
+		t.Fatalf("governor awareness should preserve brokerage mode when proposal rerun fails: %q", provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1])
 	}
 }
 

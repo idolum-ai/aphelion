@@ -53,56 +53,55 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
 	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
+	baseGovernorAwareness := governorAwareness
 	sess.ChatType = "dm"
 	sess.UserName = msg.SenderName
 	brokerage := turnBrokerage{}
 	extraUsage := core.TokenUsage{}
 	currentFaceModel := r.currentFaceRenderer()
+	requestFaceNote := func(mode string, awareness prompt.RuntimeAwareness) (string, core.TokenUsage, error) {
+		proposer, ok := currentFaceModel.(face.Proposer)
+		if !ok || r.faceBackend == face.BackendGovernorPassthrough {
+			return "", core.TokenUsage{}, nil
+		}
+		proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
+			GovernorName:    prompt.DefaultGovernorName,
+			FaceName:        face.DefaultFaceName,
+			Channel:         "telegram",
+			Mode:            mode,
+			PrincipalRole:   string(actor.Role),
+			WorkspaceRoot:   faceWorkspaceRoot(scope),
+			LatestUserInput: prepared.LedgerText,
+			Runtime:         awareness,
+		})
+		if proposalErr != nil {
+			return "", core.TokenUsage{}, proposalErr
+		}
+		return strings.TrimSpace(proposal), consumeFaceUsage(currentFaceModel), nil
+	}
 	if facePolicy.Brokerage {
-		if proposer, ok := currentFaceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
-			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
-				GovernorName:    prompt.DefaultGovernorName,
-				FaceName:        face.DefaultFaceName,
-				Channel:         "telegram",
-				Mode:            "brokerage",
-				PrincipalRole:   string(actor.Role),
-				WorkspaceRoot:   faceWorkspaceRoot(scope),
-				LatestUserInput: prepared.LedgerText,
-				Runtime:         r.withBrokerageAwareness(governorAwareness, turnBrokerage{Active: true, Mode: "brokerage"}),
-			})
-			if proposalErr != nil {
-				log.Printf("WARN idolum brokerage proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
-				facePolicy.Brokerage = false
-				facePolicy.Proposal = true
-			} else {
-				brokerage.IdolumNote = strings.TrimSpace(proposal)
-				brokerage.Active = brokerage.IdolumNote != ""
-				brokerage.Mode = brokerageModeName(brokerage.Active, "brokerage")
-				brokerage.SuggestedTurnMode = parseBrokerageMode(proposal)
-				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
-			}
+		proposal, usage, proposalErr := requestFaceNote("brokerage", r.withBrokerageAwareness(baseGovernorAwareness, turnBrokerage{Active: true, Mode: "brokerage"}))
+		if proposalErr != nil {
+			log.Printf("WARN idolum brokerage proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
+			facePolicy.Brokerage = false
+			facePolicy.Proposal = true
+		} else {
+			brokerage.IdolumNote = proposal
+			brokerage.Active = brokerage.IdolumNote != ""
+			brokerage.Mode = brokerageModeName(brokerage.Active, "brokerage")
+			brokerage.SuggestedTurnMode = parseBrokerageMode(proposal)
+			extraUsage = addTokenUsage(extraUsage, usage)
 		}
 	}
 	if !brokerage.Active && facePolicy.Proposal {
-		if proposer, ok := currentFaceModel.(face.Proposer); ok && r.faceBackend != face.BackendGovernorPassthrough {
-			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
-				GovernorName:    prompt.DefaultGovernorName,
-				FaceName:        face.DefaultFaceName,
-				Channel:         "telegram",
-				Mode:            "proposal",
-				PrincipalRole:   string(actor.Role),
-				WorkspaceRoot:   faceWorkspaceRoot(scope),
-				LatestUserInput: prepared.LedgerText,
-				Runtime:         governorAwareness,
-			})
-			if proposalErr != nil {
-				log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
-			} else {
-				brokerage.IdolumNote = strings.TrimSpace(proposal)
-				brokerage.Active = brokerage.IdolumNote != ""
-				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
-				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
-			}
+		proposal, usage, proposalErr := requestFaceNote("proposal", baseGovernorAwareness)
+		if proposalErr != nil {
+			log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
+		} else {
+			brokerage.IdolumNote = proposal
+			brokerage.Active = brokerage.IdolumNote != ""
+			brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+			extraUsage = addTokenUsage(extraUsage, usage)
 		}
 	}
 	governorAwareness = r.withBrokerageAwareness(governorAwareness, brokerage)
@@ -127,10 +126,19 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		updated, usage, ratifyErr := r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, prepared.UserText, brokerage)
 		extraUsage = addTokenUsage(extraUsage, usage)
 		if ratifyErr != nil {
-			log.Printf("WARN turn brokerage ratification failed backend=%s err=%v; falling back to plain proposal path", exec.Backend, ratifyErr)
-			brokerage.Mode = brokerageModeName(true, "proposal")
+			log.Printf("WARN turn brokerage ratification failed backend=%s err=%v; rerunning plain proposal path", exec.Backend, ratifyErr)
 			brokerage.RatifiedPlan = ""
 			brokerage.RatifiedTurnMode = ""
+			proposal, proposalUsage, proposalErr := requestFaceNote("proposal", baseGovernorAwareness)
+			if proposalErr != nil {
+				log.Printf("WARN idolum proposal rerun failed backend=%s err=%v; preserving brokerage framing", r.faceBackend, proposalErr)
+			} else {
+				brokerage.IdolumNote = proposal
+				brokerage.Active = brokerage.IdolumNote != ""
+				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+				brokerage.SuggestedTurnMode = ""
+				extraUsage = addTokenUsage(extraUsage, proposalUsage)
+			}
 		} else {
 			brokerage = updated
 		}

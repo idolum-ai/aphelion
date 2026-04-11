@@ -214,11 +214,14 @@ func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
 	if strings.Contains(got, "## Canonical Governor Reply") {
 		t.Fatalf("brokerage prompt should not include canonical reply section: %q", got)
 	}
-	if !strings.Contains(got, "Choose one turn mode") {
+	if !strings.Contains(got, "If you name a turn mode, put it on its own line as MODE:") {
 		t.Fatalf("brokerage prompt missing turn mode guidance: %q", got)
 	}
-	if !strings.Contains(got, "classification and posture") {
-		t.Fatalf("brokerage prompt missing classification boundary: %q", got)
+	if !strings.Contains(got, "You may omit a mode entirely") {
+		t.Fatalf("brokerage prompt missing optional-mode guidance: %q", got)
+	}
+	if !strings.Contains(got, "Do not turn this into a form") {
+		t.Fatalf("brokerage prompt missing anti-bureaucracy guidance: %q", got)
 	}
 	if !strings.Contains(got, "inspect_then_answer") {
 		t.Fatalf("brokerage prompt missing brokerage mode vocabulary: %q", got)
@@ -353,14 +356,17 @@ func TestRenderIdolumProposalForGovernorWrapsAdvisory(t *testing.T) {
 	}
 }
 
-func TestRenderBrokeragePlanForGovernorWrapsPlan(t *testing.T) {
+func TestRenderBrokeragePlanForGovernorWrapsNegotiation(t *testing.T) {
 	t.Parallel()
 
-	got := RenderBrokeragePlanForGovernor("MODE: inspect_then_answer\nPLAN:\n- Inspect first.")
-	if !strings.Contains(got, "## Ratified Turn Brokerage") {
+	got := RenderBrokeragePlanForGovernor("MODE: inspect_then_answer\nPUSH:\n- Inspect first.", "MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect prompt, runtime, and memory surfaces first.")
+	if !strings.Contains(got, "## Negotiated Turn Brokerage") {
 		t.Fatalf("wrapped plan missing heading: %q", got)
 	}
-	if !strings.Contains(got, "inspect_then_answer") {
-		t.Fatalf("wrapped plan missing mode: %q", got)
+	if !strings.Contains(got, "### Idolum Position") {
+		t.Fatalf("wrapped plan missing idolum position: %q", got)
+	}
+	if !strings.Contains(got, "### Aphelion Ratification") {
+		t.Fatalf("wrapped plan missing aphelion ratification: %q", got)
 	}
 }

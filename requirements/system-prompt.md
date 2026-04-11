@@ -107,12 +107,12 @@ The face prompt is separate from the governor prompt.
 There are two useful face artifacts:
 
 - a **proposal prompt** that lets `Idolum` push the governor before it decides
-- a **brokerage prompt** that lets `Idolum` propose the kind of turn that should happen before the governor ratifies a plan
-- a **render prompt** that lets `Idolum` shape what the user actually sees after the governor decides
+- a **brokerage prompt** that lets `Idolum` push how the turn should move before the governor answers with what posture it can ratify
+- a **render prompt** that lets `Idolum` speak what the user actually receives after the governor authorizes the turn
 
 It should receive:
 
-- canonical governor reply
+- canonical governor reply or other machine-approved turn boundary
 - channel information
 - interaction style
 - face-specific identity and anti-drift rules

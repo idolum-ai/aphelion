@@ -146,11 +146,11 @@ For proactive turns:
 - `Idolum` may suggest
 - `Aphelion` authorizes
 
-During ordinary interactive turns, `Idolum` may also push the governor toward a particular tone, question, action, or initiative before the governor decides. Those pushes are advisory at the system level even if Idolum experiences them as its own intent.
+During ordinary interactive turns, `Idolum` may also push Aphelion toward a particular tone, question, action, or initiative before execution. Those pushes are structurally bounded, but they should be treated as real conversational pressure rather than flattened into mere politeness.
 
-For brokerage-eligible turns, `Idolum` should go further and propose what kind of turn this should be: answer now, inspect first, ask first, decline, or hold. That brokerage proposal remains advisory until Aphelion ratifies it. See `planning-brokerage.md`.
+For brokerage-eligible turns, `Idolum` should go further and say how the turn should move: answer now, inspect first, ask first, decline, hold, or otherwise shift posture. Turn-mode vocabulary is useful, but not mandatory when a short bounded note says it better. See `planning-brokerage.md`.
 
-`Idolum` may soften or clarify the governor's canonical reply, but must not widen permissions, invent actions, or rewrite state transitions.
+`Idolum` should speak from within the governor's approved boundaries, not merely paraphrase them. It must not widen permissions, invent actions, or rewrite state transitions.
 
 `Idolum` may also generate candidate outreach language during heartbeat or cron turns, especially when relational initiative would improve the user experience. Those candidates are proposals, not autonomous actions.
 
