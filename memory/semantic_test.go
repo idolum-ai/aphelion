@@ -297,6 +297,72 @@ func TestSemanticEngineImportOpenClawPreservesQuarantineAndMetadata(t *testing.T
 	}
 }
 
+func TestSemanticEngineImportOpenClawAcceptsObservedFloatEpochMillis(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	foreignDBPath := filepath.Join(root, "openclaw-float-times.db")
+	db, err := sql.Open("sqlite3", foreignDBPath)
+	if err != nil {
+		t.Fatalf("sql.Open(%s) err = %v", foreignDBPath, err)
+	}
+	defer db.Close()
+
+	for _, stmt := range []string{
+		`CREATE TABLE files (
+			path TEXT PRIMARY KEY,
+			source TEXT NOT NULL,
+			hash TEXT NOT NULL DEFAULT '',
+			mtime INTEGER NOT NULL DEFAULT 0,
+			size INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE chunks (
+			id TEXT PRIMARY KEY,
+			path TEXT NOT NULL,
+			source TEXT NOT NULL,
+			start_line INTEGER NOT NULL DEFAULT 0,
+			end_line INTEGER NOT NULL DEFAULT 0,
+			hash TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			text TEXT NOT NULL,
+			embedding TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL DEFAULT 0
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("Exec(%q) err = %v", stmt, err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO files (path, source, hash, mtime, size)
+		VALUES (?, ?, ?, ?, ?)
+	`, "memory/knowledge.md", "memory", "abc123", 1774795995958.402, 42); err != nil {
+		t.Fatalf("insert files err = %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "chunk-1", "memory/knowledge.md", "memory", 1, 2, "", "text-embedding-3-small", "- Float epoch millis should import.", "[0.1, 0.2]", 1774795996001.125); err != nil {
+		t.Fatalf("insert chunks err = %v", err)
+	}
+
+	engine := NewSemanticEngine(SemanticOptions{
+		Enabled: true,
+		DBPath:  filepath.Join(root, "semantic.db"),
+	})
+	summary, err := engine.ImportOpenClaw(context.Background(), SemanticOpenClawImportRequest{
+		DBPath:      foreignDBPath,
+		Scope:       "shared",
+		ImportState: SemanticImportStateQuarantine,
+	})
+	if err != nil {
+		t.Fatalf("ImportOpenClaw() err = %v", err)
+	}
+	if summary.Documents != 1 || summary.Chunks != 1 || summary.EmbeddedChunkCount != 1 {
+		t.Fatalf("summary = %#v, want one imported float-time document/chunk", summary)
+	}
+}
+
 func TestSemanticEngineImportOpenClawRejectsUnknownObservedSchema(t *testing.T) {
 	t.Parallel()
 

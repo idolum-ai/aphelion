@@ -170,7 +170,7 @@ type openClawFileRow struct {
 	path   string
 	source string
 	hash   string
-	mtime  int64
+	mtime  float64
 	size   int64
 }
 
@@ -184,7 +184,7 @@ type openClawChunkRow struct {
 	model     string
 	text      string
 	embedding string
-	updatedAt int64
+	updatedAt float64
 }
 
 type importedDocumentMetadata struct {
@@ -816,9 +816,9 @@ func importOpenClawDocumentTx(
 	}
 	kind := detectImportedSemanticKind(sourcePath, file.source)
 	sourceClass := "imported_archive"
-	mtime := epochMillisToTime(file.mtime)
+	mtime := epochMillisNumberToTime(file.mtime)
 	if mtime.IsZero() {
-		mtime = epochMillisToTime(latestOpenClawUpdate(chunks))
+		mtime = epochMillisNumberToTime(latestOpenClawUpdate(chunks))
 	}
 
 	drafts := make([]semanticChunkDraft, 0, len(chunks))
@@ -1601,8 +1601,8 @@ func joinChunkTexts(chunks []semanticChunkDraft) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func latestOpenClawUpdate(chunks []openClawChunkRow) int64 {
-	var latest int64
+func latestOpenClawUpdate(chunks []openClawChunkRow) float64 {
+	var latest float64
 	for _, chunk := range chunks {
 		if chunk.updatedAt > latest {
 			latest = chunk.updatedAt
@@ -1611,14 +1611,25 @@ func latestOpenClawUpdate(chunks []openClawChunkRow) int64 {
 	return latest
 }
 
-func epochMillisToTime(raw int64) time.Time {
+func epochMillisNumberToTime(raw float64) time.Time {
 	if raw <= 0 {
 		return time.Time{}
 	}
 	if raw < 1_000_000_000_000 {
-		return time.Unix(raw, 0).UTC()
+		sec := int64(raw)
+		frac := raw - float64(sec)
+		return time.Unix(sec, int64(frac*float64(time.Second))).UTC()
 	}
-	return time.Unix(0, raw*int64(time.Millisecond)).UTC()
+	sec := int64(raw / 1000)
+	fracMillis := raw - float64(sec*1000)
+	return time.Unix(sec, int64(fracMillisToNanos(fracMillis))).UTC()
+}
+
+func fracMillisToNanos(ms float64) int64 {
+	if ms <= 0 {
+		return 0
+	}
+	return int64(ms * float64(time.Millisecond))
 }
 
 func withinDailyWindow(mode SemanticMode, now time.Time, source string, mtime time.Time) bool {
