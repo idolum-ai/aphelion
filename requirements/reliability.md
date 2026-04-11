@@ -385,7 +385,7 @@ Rules:
 6. if plain proposal fails, continue without proposal
 7. try Idolum render when policy says render is useful
 8. if stream render fails, fall back to non-stream render
-9. if non-stream render fails, use canonical governor reply
+9. if non-stream render fails, bypass scene authorship and deliver the governor's current text-shaped canonical sidecar artifact directly for this turn; treat this as degraded governor passthrough during migration, not the preferred architecture
 10. if face backend is `governor_passthrough`, skip face entirely
 
 The face must never block a valid governor reply from being delivered.

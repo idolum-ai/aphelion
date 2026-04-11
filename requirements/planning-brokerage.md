@@ -34,7 +34,7 @@ It should also prevent a silent collapse back into the older shape where the gov
 - bounded pre-turn brokerage for selected interactive turns
 - `Idolum` brokerage proposal
 - `Aphelion` ratification pass
-- ratified plan injected into the main governor turn
+- negotiated brokerage block injected into the main governor turn
 - runtime awareness of brokerage state
 - graceful fallback to the ordinary proposal path when brokerage fails or is not warranted
 
@@ -119,7 +119,7 @@ PUSH:
 - Keep the tone energetic and high-agency.
 ```
 
-This output is advisory only.
+This note is non-authoritative on execution, but it is not disposable. It represents the conversational pressure the runtime should preserve when possible.
 
 ## Aphelion Ratification Pass
 
@@ -132,7 +132,7 @@ Before the main governor/tool turn, `Aphelion` should run a short tool-free plan
 
 It should return a short structured ratification.
 
-This ratification is not just prose. It is the machine-parseable execution contract for the rest of the turn.
+On Aphelion's side, this ratification must be parseable enough for runtime execution. That machine contract belongs to the governor artifact, not to brokerage as a whole.
 
 Example shape:
 
@@ -145,9 +145,11 @@ PLAN:
 - Keep the answer concrete and prioritized.
 ```
 
-This ratification is the authoritative planning artifact for the main turn.
+Aphelion's ratification remains authoritative for execution boundaries, but the main turn should carry the negotiated brokerage block rather than only the ratified compression.
 
 ### Required ratification fields
+
+These constraints apply to Aphelion's ratification artifact so runtime can execute cleanly. They should not be projected backward onto Idolum's side of the brokerage, which may remain more conversational and bounded.
 
 The runtime should parse and carry these fields explicitly:
 
@@ -278,7 +280,7 @@ Still deferred after this tranche:
 
 - **TestBrokerageActivatesForStrategicInteractiveTurn**: feature/codebase-style requests trigger brokerage
 - **TestBrokerageSkipsSimpleFactualTurn**: simple factual questions skip brokerage
-- **TestBrokerageRatificationFeedsMainGovernorTurn**: the ratified plan enters the main governor turn
+- **TestBrokerageNegotiatedBlockFeedsMainGovernorTurn**: the negotiated brokerage block enters the main governor turn
 - **TestBrokerageRatificationParsesDispositionAndSteps**: a valid ratification yields explicit mode, disposition, and bounded steps
 - **TestBrokerageInvalidRatificationFallsBackToProposal**: malformed ratification output triggers the same fallback ladder as a ratification error
 - **TestBrokerageRerunsPlainProposalAfterRatificationFailure**: failed ratification triggers a real proposal rerun
