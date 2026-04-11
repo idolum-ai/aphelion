@@ -4,6 +4,7 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,6 +205,135 @@ func TestSemanticImportAuditApproveMakesDocumentSearchable(t *testing.T) {
 
 	if _, err := engine.ReviewImportDocument(context.Background(), docID, 4, 2000); err == nil {
 		t.Fatal("ReviewImportDocument() err = nil after approval, want quarantine-only review")
+	}
+}
+
+func TestSemanticEngineImportOpenClawPreservesQuarantineAndMetadata(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	foreignDBPath := filepath.Join(root, "openclaw.db")
+	createOpenClawFixtureDB(t, foreignDBPath)
+
+	engine := NewSemanticEngine(SemanticOptions{
+		Enabled:             true,
+		DBPath:              filepath.Join(root, "semantic.db"),
+		Sources:             []string{"memory/knowledge.md"},
+		InteractiveTopK:     5,
+		HeartbeatTopK:       12,
+		InteractiveMaxChars: 4000,
+		HeartbeatMaxChars:   12000,
+		DailyNotesDir:       "memory/daily",
+	})
+
+	summary, err := engine.ImportOpenClaw(context.Background(), SemanticOpenClawImportRequest{
+		DBPath:           foreignDBPath,
+		Scope:            "principal",
+		PrincipalID:      "telegram:42",
+		ProvenanceSource: "openclaw_import",
+		ImportState:      SemanticImportStateQuarantine,
+	})
+	if err != nil {
+		t.Fatalf("ImportOpenClaw() err = %v", err)
+	}
+	if summary.Documents != 1 || summary.Chunks != 2 {
+		t.Fatalf("summary = %#v, want 1 document and 2 chunks", summary)
+	}
+
+	docs, err := engine.ListImportAudit(context.Background(), SemanticAuditFilter{
+		State:       SemanticImportStateQuarantine,
+		Scope:       "principal",
+		PrincipalID: "telegram:42",
+	})
+	if err != nil {
+		t.Fatalf("ListImportAudit() err = %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("ListImportAudit() len = %d, want 1", len(docs))
+	}
+	if docs[0].SourceKind != "knowledge" || docs[0].PrincipalID != "telegram:42" {
+		t.Fatalf("doc = %#v, want knowledge doc scoped to principal", docs[0])
+	}
+
+	review, err := engine.ReviewImportDocument(context.Background(), docs[0].ID, 4, 2000)
+	if err != nil {
+		t.Fatalf("ReviewImportDocument() err = %v", err)
+	}
+	if review.ChunkCount != 2 {
+		t.Fatalf("review.ChunkCount = %d, want 2", review.ChunkCount)
+	}
+
+	db, err := engine.ensureDB()
+	if err != nil {
+		t.Fatalf("ensureDB() err = %v", err)
+	}
+	var dims int
+	var model string
+	var startLine int
+	if err := db.QueryRow(`
+		SELECT embedding_dims, embedding_model, start_line
+		FROM semantic_chunks
+		ORDER BY ordinal
+		LIMIT 1
+	`).Scan(&dims, &model, &startLine); err != nil {
+		t.Fatalf("QueryRow(semantic_chunks) err = %v", err)
+	}
+	if dims != 2 || model != "text-embedding-3-small" || startLine != 1 {
+		t.Fatalf("imported chunk metadata = dims:%d model:%q start:%d, want dims:2 model:text-embedding-3-small start:1", dims, model, startLine)
+	}
+}
+
+func createOpenClawFixtureDB(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("sql.Open(%s) err = %v", path, err)
+	}
+	defer db.Close()
+
+	statements := []string{
+		`CREATE TABLE files (
+			path TEXT PRIMARY KEY,
+			source TEXT NOT NULL,
+			hash TEXT NOT NULL DEFAULT '',
+			mtime INTEGER NOT NULL DEFAULT 0,
+			size INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE chunks (
+			id TEXT PRIMARY KEY,
+			path TEXT NOT NULL,
+			source TEXT NOT NULL,
+			start_line INTEGER NOT NULL DEFAULT 0,
+			end_line INTEGER NOT NULL DEFAULT 0,
+			hash TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			text TEXT NOT NULL,
+			embedding TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL DEFAULT 0
+		)`,
+	}
+	for _, stmt := range statements {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("Exec(%q) err = %v", stmt, err)
+		}
+	}
+
+	if _, err := db.Exec(`
+		INSERT INTO files (path, source, hash, mtime, size)
+		VALUES (?, ?, ?, ?, ?)
+	`, "memory/knowledge.md", "memory", "", int64(1712798400000), 256); err != nil {
+		t.Fatalf("insert files row err = %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+		VALUES
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		"chunk-1", "memory/knowledge.md", "memory", 1, 2, "", "text-embedding-3-small", "- Prefers concise progress updates.", "[0.1, 0.2]", int64(1712798400000),
+		"chunk-2", "memory/knowledge.md", "memory", 4, 5, "", "text-embedding-3-small", "- Values reviewable import boundaries.", "[0.3, 0.4]", int64(1712798460000),
+	); err != nil {
+		t.Fatalf("insert chunks rows err = %v", err)
 	}
 }
 

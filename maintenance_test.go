@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	memstore "github.com/idolum-ai/aphelion/memory"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestSeedAgentPromptFilesSeedsStructuredMemoryFiles(t *testing.T) {
@@ -304,6 +306,133 @@ user_memory_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated"
 	}
 	if !strings.Contains(approvedOut, "state=approved") {
 		t.Fatalf("approved list output = %q, want approved state", approvedOut)
+	}
+}
+
+func TestRunImportSemanticCommandImportsOpenClawCorpus(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "aphelion.toml")
+	configRaw := `
+[telegram]
+bot_token = "token"
+
+[principals.telegram]
+admin_user_ids = [1]
+
+[providers.anthropic]
+api_key = "anthropic-key"
+
+[sessions]
+db_path = "` + filepath.ToSlash(filepath.Join(root, "state", "sessions.db")) + `"
+
+[agent]
+prompt_root = "` + filepath.ToSlash(filepath.Join(root, "agent")) + `"
+exec_root = "` + filepath.ToSlash(filepath.Join(root, "workspace")) + `"
+shared_memory_root = "` + filepath.ToSlash(filepath.Join(root, "agent")) + `"
+user_workspace_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated", "workspaces")) + `"
+user_memory_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated", "memory")) + `"
+`
+	if err := os.WriteFile(cfgPath, []byte(configRaw), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) err = %v", err)
+	}
+
+	foreignDBPath := filepath.Join(root, "openclaw.db")
+	createOpenClawImportFixture(t, foreignDBPath)
+
+	out, err := captureStdout(t, func() error {
+		return runImportSemanticCommand([]string{
+			"--config", cfgPath,
+			"--db", foreignDBPath,
+			"--scope", "principal",
+			"--principal", "telegram:7",
+			"openclaw",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runImportSemanticCommand() err = %v", err)
+	}
+	if !strings.Contains(out, "documents: 1") || !strings.Contains(out, "chunks: 2") {
+		t.Fatalf("import output = %q, want document/chunk summary", out)
+	}
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	engine, err := newSemanticEngineForConfig(cfg, true)
+	if err != nil {
+		t.Fatalf("newSemanticEngineForConfig() err = %v", err)
+	}
+	defer engine.Close()
+
+	docs, err := engine.ListImportAudit(context.Background(), memstore.SemanticAuditFilter{
+		State:       memstore.SemanticImportStateQuarantine,
+		Scope:       "principal",
+		PrincipalID: "telegram:7",
+	})
+	if err != nil {
+		t.Fatalf("ListImportAudit() err = %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("ListImportAudit() len = %d, want 1", len(docs))
+	}
+	if docs[0].ProvenanceSource != "openclaw_import" || docs[0].SourceKind != "knowledge" {
+		t.Fatalf("doc = %#v, want openclaw knowledge import", docs[0])
+	}
+}
+
+func createOpenClawImportFixture(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("sql.Open(%s) err = %v", path, err)
+	}
+	defer db.Close()
+
+	for _, stmt := range []string{
+		`CREATE TABLE files (
+			path TEXT PRIMARY KEY,
+			source TEXT NOT NULL,
+			hash TEXT NOT NULL DEFAULT '',
+			mtime INTEGER NOT NULL DEFAULT 0,
+			size INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE chunks (
+			id TEXT PRIMARY KEY,
+			path TEXT NOT NULL,
+			source TEXT NOT NULL,
+			start_line INTEGER NOT NULL DEFAULT 0,
+			end_line INTEGER NOT NULL DEFAULT 0,
+			hash TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			text TEXT NOT NULL,
+			embedding TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL DEFAULT 0
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("Exec(%q) err = %v", stmt, err)
+		}
+	}
+
+	if _, err := db.Exec(`
+		INSERT INTO files (path, source, hash, mtime, size)
+		VALUES (?, ?, ?, ?, ?)
+	`, "memory/knowledge.md", "memory", "", int64(1712798400000), 128); err != nil {
+		t.Fatalf("insert files row err = %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+		VALUES
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?),
+			(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		"chunk-a", "memory/knowledge.md", "memory", 1, 2, "", "text-embedding-3-small", "- Imported feature preference.", "[0.1, 0.2]", int64(1712798400000),
+		"chunk-b", "memory/knowledge.md", "memory", 4, 5, "", "text-embedding-3-small", "- Imported operational decision.", "[0.3, 0.4]", int64(1712798460000),
+	); err != nil {
+		t.Fatalf("insert chunks rows err = %v", err)
 	}
 }
 

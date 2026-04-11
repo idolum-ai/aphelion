@@ -60,6 +60,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runResetCommand(args[1:])
 	case "import-audit":
 		return true, runImportAuditCommand(args[1:])
+	case "import-semantic":
+		return true, runImportSemanticCommand(args[1:])
 	default:
 		return false, nil
 	}
@@ -518,6 +520,72 @@ func runImportAuditCommand(args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("import-audit action must be one of list|review|approve|reject")
+	}
+}
+
+func runImportSemanticCommand(args []string) error {
+	fs := flag.NewFlagSet("import-semantic", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	dbPath := fs.String("db", "", "path to foreign semantic sqlite db")
+	scope := fs.String("scope", "shared", "target scope: shared|principal")
+	principalID := fs.String("principal", "", "target principal key when scope=principal")
+	provenance := fs.String("provenance", "", "provenance label override")
+	state := fs.String("state", string(memstore.SemanticImportStateQuarantine), "initial import state")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return fmt.Errorf("import-semantic requires a source type such as openclaw or host")
+	}
+	sourceType := strings.ToLower(strings.TrimSpace(fs.Arg(0)))
+	if strings.TrimSpace(*dbPath) == "" {
+		return fmt.Errorf("import-semantic requires --db")
+	}
+
+	cfg, _, err := loadConfigForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	engine, err := newSemanticEngineForConfig(cfg, true)
+	if err != nil {
+		return err
+	}
+	defer engine.Close()
+
+	importState := memstore.SemanticImportState(strings.ToLower(strings.TrimSpace(*state)))
+	switch sourceType {
+	case "openclaw", "host":
+		prov := strings.TrimSpace(*provenance)
+		if prov == "" {
+			if sourceType == "host" {
+				prov = "host_archive"
+			} else {
+				prov = "openclaw_import"
+			}
+		}
+		summary, err := engine.ImportOpenClaw(context.Background(), memstore.SemanticOpenClawImportRequest{
+			DBPath:           *dbPath,
+			Scope:            *scope,
+			PrincipalID:      *principalID,
+			ProvenanceSource: prov,
+			ImportState:      importState,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "action: import-semantic\n")
+		fmt.Fprintf(os.Stdout, "source: %s\n", summary.Source)
+		fmt.Fprintf(os.Stdout, "provenance: %s\n", summary.Provenance)
+		fmt.Fprintf(os.Stdout, "scope: %s\n", summary.Scope)
+		if strings.TrimSpace(summary.PrincipalID) != "" {
+			fmt.Fprintf(os.Stdout, "principal: %s\n", summary.PrincipalID)
+		}
+		fmt.Fprintf(os.Stdout, "documents: %d\n", summary.Documents)
+		fmt.Fprintf(os.Stdout, "chunks: %d\n", summary.Chunks)
+		fmt.Fprintf(os.Stdout, "state: %s\n", importState)
+		return nil
+	default:
+		return fmt.Errorf("import-semantic source must be one of openclaw|host")
 	}
 }
 
