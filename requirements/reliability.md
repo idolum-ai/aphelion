@@ -376,12 +376,16 @@ Rules:
 
 ### Face ladder
 
-1. try proposal when policy says proposal is useful
-2. if proposal fails, continue without proposal
-3. try Idolum render when policy says render is useful
-4. if stream render fails, fall back to non-stream render
-5. if non-stream render fails, use canonical governor reply
-6. if face backend is `governor_passthrough`, skip face entirely
+1. if brokerage policy says brokerage is useful, try brokerage proposal first
+2. if brokerage proposal fails, rerun the ordinary proposal path when proposal policy allows it
+3. if brokerage ratification fails after a brokerage note exists, rerun a true plain proposal instead of relabeling brokerage text as proposal
+4. if that proposal rerun fails too, preserve the brokerage advisory honestly or continue without a face proposal
+5. if no brokerage path is active and proposal policy says proposal is useful, try proposal directly
+6. if plain proposal fails, continue without proposal
+7. try Idolum render when policy says render is useful
+8. if stream render fails, fall back to non-stream render
+9. if non-stream render fails, use canonical governor reply
+10. if face backend is `governor_passthrough`, skip face entirely
 
 The face must never block a valid governor reply from being delivered.
 

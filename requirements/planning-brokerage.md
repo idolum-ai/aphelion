@@ -191,12 +191,13 @@ Brokerage is an optimization, not a dependency.
 If the face-side brokerage proposal fails:
 
 - continue without brokerage
-- optionally fall back to the ordinary Idolum proposal path
+- rerun the ordinary `Idolum` proposal path when proposal policy allows it
 
 If the governor ratification pass fails:
 
 - continue with the ordinary governor turn
-- optionally carry forward the older Idolum advisory proposal
+- rerun a true plain-proposal pass rather than relabeling the brokerage note as proposal
+- if that proposal rerun also fails, preserve the original brokerage note honestly instead of falsifying its type
 
 The system must not drop or stall a turn merely because brokerage failed.
 
@@ -208,12 +209,13 @@ The system must not drop or stall a turn merely because brokerage failed.
 - **Brokerage preserves both pressures.** The surviving artifact should keep Idolum's push and Aphelion's ratification together.
 - **Brokerage is selective.** It should not run on every turn.
 - **The negotiated brokerage block is machine-scoped context.** It is not user-visible by default.
-- **Fallback is required.** Brokerage failure must degrade to the existing turn path.
+- **Fallback is required and honest.** Brokerage failure must degrade to the existing turn path without relabeling brokerage text as some other artifact type.
 
 ## Test Plan
 
 - **TestBrokerageActivatesForStrategicInteractiveTurn**: feature/codebase-style requests trigger brokerage
 - **TestBrokerageSkipsSimpleFactualTurn**: simple factual questions skip brokerage
 - **TestBrokerageRatificationFeedsMainGovernorTurn**: the ratified plan enters the main governor turn
-- **TestBrokerageFallsBackToPlainProposalOnFailure**: failed brokerage degrades to the older advisory path
+- **TestBrokerageRerunsPlainProposalAfterRatificationFailure**: failed ratification triggers a real proposal rerun
+- **TestBrokeragePreservesFramingWhenProposalRerunFails**: failed proposal rerun preserves brokerage framing instead of relabeling it
 - **TestBrokerageAwarenessVisibleToGovernorAndFace**: runtime awareness reflects brokerage mode and ratified turn mode
