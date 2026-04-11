@@ -47,12 +47,16 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return nil, err
 	}
 	facePolicy := decideInteractiveFacePolicy(sess, prepared.LedgerText)
+	useMaterialFloor := shouldUseMaterialFloorContract(r.faceBackend, facePolicy)
 	exec := r.executionForTurn(prepared)
 	promptContext, err := r.promptContextForScope(scope, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
 	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
+	if useMaterialFloor {
+		governorAwareness.ArtifactMode = "floor"
+	}
 	baseGovernorAwareness := governorAwareness
 	sess.ChatType = "dm"
 	sess.UserName = msg.SenderName
@@ -80,7 +84,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return strings.TrimSpace(proposal), consumeFaceUsage(currentFaceModel), nil
 	}
 	if facePolicy.Brokerage {
-		proposal, usage, proposalErr := requestFaceNote("brokerage", r.withBrokerageAwareness(baseGovernorAwareness, turnBrokerage{Active: true, Mode: "brokerage"}))
+		faceProposalAwareness := baseGovernorAwareness
+		faceProposalAwareness.ArtifactMode = "scene"
+		proposal, usage, proposalErr := requestFaceNote("brokerage", r.withBrokerageAwareness(faceProposalAwareness, turnBrokerage{Active: true, Mode: "brokerage"}))
 		if proposalErr != nil {
 			log.Printf("WARN idolum brokerage proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
 			facePolicy.Brokerage = false
@@ -94,7 +100,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		}
 	}
 	if !brokerage.Active && facePolicy.Proposal {
-		proposal, usage, proposalErr := requestFaceNote("proposal", baseGovernorAwareness)
+		faceProposalAwareness := baseGovernorAwareness
+		faceProposalAwareness.ArtifactMode = "scene"
+		proposal, usage, proposalErr := requestFaceNote("proposal", faceProposalAwareness)
 		if proposalErr != nil {
 			log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
 		} else {
@@ -182,7 +190,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 
 	sess.TurnCount++
-	canonicalReply := face.CanonicalOrFallback(result.Text)
+	materialFloor, canonicalReply, _ := governorMaterialArtifact(result.Text, useMaterialFloor)
 	replyText := canonicalReply
 	outboundID := int64(0)
 	outboundType := ""
@@ -190,6 +198,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	faceRendered := false
 	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
 	faceAwareness = r.withBrokerageAwareness(faceAwareness, brokerage)
+	faceAwareness.ArtifactMode = "scene"
 	faceAwareness.DeliveryMode = "text"
 	faceAwareness.StreamReply = false
 	if r.shouldReplyWithVoice(prepared.InboundWasVoice) {
@@ -205,10 +214,15 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			PrincipalRole:   string(actor.Role),
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			CanonicalReply:  canonicalReply,
+			MaterialFloor:   materialFloor,
 			LatestUserInput: prepared.LedgerText,
 			Runtime:         faceAwareness,
 		}
-		shouldRender := shouldRenderIdolumReply(facePolicy, prepared.LedgerText, canonicalReply, result.ToolLog, outHistory[len(input):])
+		renderHeuristicText := canonicalReply
+		if useMaterialFloor {
+			renderHeuristicText = materialFloorHeuristicText(materialFloor, canonicalReply)
+		}
+		shouldRender := shouldRenderIdolumReply(facePolicy, prepared.LedgerText, renderHeuristicText, result.ToolLog, outHistory[len(input):])
 		if !shouldRender && !r.shouldReplyWithVoice(prepared.InboundWasVoice) {
 			faceAwareness.DeliveryMode = "governor_passthrough"
 			renderReq.Runtime = faceAwareness

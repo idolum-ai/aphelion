@@ -20,6 +20,7 @@ type RuntimeAwareness struct {
 	ReasoningEffort       string
 	ReasoningSummary      string
 	GovernorEffortRecipe  string
+	ArtifactMode          string
 	BrokerageActive       bool
 	BrokerageMode         string
 	SuggestedTurnMode     string
@@ -59,6 +60,7 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_effort", aw.ReasoningEffort))
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_summary", aw.ReasoningSummary))
 	lines = append(lines, nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe))
+	lines = append(lines, nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode))
 	lines = append(lines, fmt.Sprintf("- brokerage_active: %t", aw.BrokerageActive))
 	lines = append(lines, nonEmptyAwarenessLine("brokerage_mode", aw.BrokerageMode))
 	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_turn_mode", aw.SuggestedTurnMode))
@@ -92,6 +94,7 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode st
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_effort", aw.ReasoningEffort))
 	lines = append(lines, nonEmptyAwarenessLine("reasoning_summary", aw.ReasoningSummary))
 	lines = append(lines, nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe))
+	lines = append(lines, nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode))
 	lines = append(lines, fmt.Sprintf("- brokerage_active: %t", aw.BrokerageActive))
 	lines = append(lines, nonEmptyAwarenessLine("brokerage_mode", aw.BrokerageMode))
 	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_turn_mode", aw.SuggestedTurnMode))

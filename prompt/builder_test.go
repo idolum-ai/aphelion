@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
@@ -110,6 +111,28 @@ func TestBuildGovernorPromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 	}
 }
 
+func TestBuildGovernorPromptIncludesMaterialFloorContractForInteractiveSceneTurn(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		GovernorName:    "Aphelion",
+		GovernorBackend: "native",
+		PrincipalRole:   "admin",
+		Runtime: RuntimeAwareness{
+			RunKind:      "interactive",
+			ArtifactMode: "floor",
+			FaceBackend:  "provider",
+		},
+	})
+
+	if !strings.Contains(got, "## Output Contract") {
+		t.Fatalf("prompt missing material floor contract: %q", got)
+	}
+	if !strings.Contains(got, "Do not write the final user-facing reply text here.") {
+		t.Fatalf("prompt missing non-scene instruction: %q", got)
+	}
+}
+
 func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	t.Parallel()
 
@@ -173,6 +196,30 @@ func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 	}
 	if !(awarenessIdx < stableIdx && stableIdx < dynamicIdx && dynamicIdx < canonicalIdx && canonicalIdx < userIdx) {
 		t.Fatalf("face prompt sections are out of order: %q", got)
+	}
+}
+
+func TestBuildFacePromptPrefersMaterialFloorWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		GovernorName:    "Aphelion",
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		PrincipalRole:   "admin",
+		CanonicalReply:  "legacy canonical",
+		MaterialFloor:   core.MaterialPacket{Facts: []string{"The repo was inspected."}, SceneConstraints: []string{"Keep the tone grounded."}},
+		LatestUserInput: "What changed?",
+	})
+
+	if !strings.Contains(got, "## Governor Material Floor") {
+		t.Fatalf("face prompt missing material floor section: %q", got)
+	}
+	if strings.Contains(got, "## Canonical Governor Reply") {
+		t.Fatalf("face prompt should prefer material floor over canonical fallback: %q", got)
+	}
+	if !strings.Contains(got, "FACTS:") || !strings.Contains(got, "SCENE_CONSTRAINTS:") {
+		t.Fatalf("face prompt missing rendered material packet: %q", got)
 	}
 }
 

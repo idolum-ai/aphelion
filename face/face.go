@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/prompt"
 )
 
@@ -29,6 +30,7 @@ type RenderRequest struct {
 	PrincipalRole   string
 	WorkspaceRoot   string
 	CanonicalReply  string
+	MaterialFloor   core.MaterialPacket
 	LatestUserInput string
 	Runtime         prompt.RuntimeAwareness
 }

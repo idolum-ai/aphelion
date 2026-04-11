@@ -802,6 +802,66 @@ func TestHandleInboundUsesBrokerageForStrategicTurn(t *testing.T) {
 	}
 }
 
+func TestHandleInboundRendersFromStructuredMaterialFloor(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.proposalReplyText = "Push for a clear, grounded answer."
+	provider.replyText = strings.Join([]string{
+		"FACTS:",
+		"- The user is asking for help thinking through the situation.",
+		"ALLOWED_ACTIONS:",
+		"- Offer grounded next steps.",
+		"SCENE_CONSTRAINTS:",
+		"- Keep the tone steady and direct.",
+		"NOTES:",
+		"- Do not sound like a report.",
+	}, "\n")
+	provider.faceReplyText = "Rendered Idolum scene."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     7201,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "I feel overwhelmed and need help thinking this through",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenGovernorSystem) == 0 {
+		t.Fatal("seenGovernorSystem empty, want governor prompt")
+	}
+	if !strings.Contains(provider.seenGovernorSystem[0], "## Output Contract") {
+		t.Fatalf("governor prompt missing material floor output contract: %q", provider.seenGovernorSystem[0])
+	}
+	if len(provider.seenFaceSystem) == 0 {
+		t.Fatal("seenFaceSystem empty, want face render prompt")
+	}
+	if !strings.Contains(provider.seenFaceSystem[0], "## Governor Material Floor") {
+		t.Fatalf("face prompt missing material floor section: %q", provider.seenFaceSystem[0])
+	}
+	if strings.Contains(provider.seenFaceSystem[0], "## Canonical Governor Reply") {
+		t.Fatalf("face prompt should not use canonical reply section when structured material is available: %q", provider.seenFaceSystem[0])
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 7201, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if !strings.Contains(sess.LastCanonicalReply, "FACTS:") {
+		t.Fatalf("LastCanonicalReply = %q, want text-shaped material floor", sess.LastCanonicalReply)
+	}
+}
+
 func TestHandleInboundFallsBackToPlainProposalWhenBrokerageRatificationFails(t *testing.T) {
 	t.Parallel()
 
@@ -928,6 +988,55 @@ func TestHandleInboundPreservesBrokerageWhenProposalRerunAlsoFails(t *testing.T)
 	}
 	if !strings.Contains(provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1], "- brokerage_mode: brokerage") {
 		t.Fatalf("governor awareness should preserve brokerage mode when proposal rerun fails: %q", provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1])
+	}
+}
+
+func TestHandleInboundFallsBackToGovernorSidecarWhenFaceRenderFailsAfterMaterialFloor(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.proposalReplyText = "Push for a clear, grounded answer."
+	provider.replyText = strings.Join([]string{
+		"FACTS:",
+		"- The repo was inspected.",
+		"ALLOWED_ACTIONS:",
+		"- Propose the strongest next steps.",
+		"SCENE_CONSTRAINTS:",
+		"- Keep the tone practical.",
+	}, "\n")
+	provider.faceErr = errors.New("render failed")
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     7202,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "I feel overwhelmed and need help thinking this through",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 7202, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != sess.LastCanonicalReply {
+		t.Fatalf("sent text = %q, want governor sidecar fallback %q", sender.sent[0].Text, sess.LastCanonicalReply)
+	}
+	if !strings.Contains(sender.sent[0].Text, "FACTS:") {
+		t.Fatalf("sent fallback = %q, want text-shaped material floor", sender.sent[0].Text)
 	}
 }
 

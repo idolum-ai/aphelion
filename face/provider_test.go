@@ -107,7 +107,7 @@ func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
 	if !strings.Contains(provider.lastPrompt, "### QUESTIONS-TO-IDOLUM.md") {
 		t.Fatalf("face prompt missing QUESTIONS-TO-IDOLUM.md content: %q", provider.lastPrompt)
 	}
-	if !strings.Contains(provider.lastUser, "Idolum") || !strings.Contains(provider.lastUser, "Aphelion-approved") {
+	if !strings.Contains(provider.lastUser, "Idolum") || !strings.Contains(provider.lastUser, "Aphelion-authored material") {
 		t.Fatalf("render transport prompt = %q, want resolved face and governor names", provider.lastUser)
 	}
 }
@@ -175,7 +175,7 @@ func TestProviderRendererUsesResolvedNamesInTransportPrompts(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Render() err = %v", err)
 	}
-	if !strings.Contains(provider.lastUser, "Mada") || !strings.Contains(provider.lastUser, "Host-approved") {
+	if !strings.Contains(provider.lastUser, "Mada") || !strings.Contains(provider.lastUser, "Host-authored material") {
 		t.Fatalf("render transport prompt = %q, want configured names", provider.lastUser)
 	}
 
@@ -204,6 +204,38 @@ func TestProviderRendererReturnsErrEmptyRender(t *testing.T) {
 	})
 	if !errors.Is(err, ErrEmptyRender) {
 		t.Fatalf("Render() err = %v, want ErrEmptyRender", err)
+	}
+}
+
+func TestProviderRendererRenderPromptIncludesMaterialFloor(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubProvider{reply: "Rendered reply"}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
+		GovernorName: "Aphelion",
+		FaceName:     "Idolum",
+		Channel:      "telegram",
+	})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	if _, err := renderer.Render(context.Background(), RenderRequest{
+		CanonicalReply: "legacy canonical",
+		MaterialFloor: core.MaterialPacket{
+			Facts:            []string{"The codebase was inspected."},
+			SceneConstraints: []string{"Keep the tone direct."},
+		},
+		LatestUserInput: "What should we build?",
+	}); err != nil {
+		t.Fatalf("Render() err = %v", err)
+	}
+
+	if !strings.Contains(provider.lastPrompt, "## Governor Material Floor") {
+		t.Fatalf("render prompt missing material floor section: %q", provider.lastPrompt)
+	}
+	if strings.Contains(provider.lastPrompt, "## Canonical Governor Reply") {
+		t.Fatalf("render prompt should prefer material floor over canonical fallback: %q", provider.lastPrompt)
 	}
 }
 

@@ -57,6 +57,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 		Style:           firstNonEmpty(req.Style, r.cfg.Style),
 		PrincipalRole:   req.PrincipalRole,
 		CanonicalReply:  CanonicalOrFallback(req.CanonicalReply),
+		MaterialFloor:   req.MaterialFloor,
 		LatestUserInput: req.LatestUserInput,
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
@@ -68,7 +69,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 
 	resp, err := r.provider.Complete(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
-		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, within %s-approved boundaries below. Return only the reply text.", faceName, governorName)},
+		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the %s-authored material below. Return only the reply text.", faceName, governorName)},
 	}, nil)
 	if err != nil {
 		return "", err
@@ -103,6 +104,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 		Style:           firstNonEmpty(req.Style, r.cfg.Style),
 		PrincipalRole:   req.PrincipalRole,
 		CanonicalReply:  CanonicalOrFallback(req.CanonicalReply),
+		MaterialFloor:   req.MaterialFloor,
 		LatestUserInput: req.LatestUserInput,
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
@@ -115,7 +117,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 	var rendered strings.Builder
 	resp, err := streamingProvider.Stream(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
-		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, within %s-approved boundaries below. Return only the reply text.", faceName, governorName)},
+		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the %s-authored material below. Return only the reply text.", faceName, governorName)},
 	}, nil, func(chunk agent.StreamChunk) error {
 		if chunk.Text == "" {
 			return nil

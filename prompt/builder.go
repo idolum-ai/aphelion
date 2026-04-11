@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/workspace"
 )
 
@@ -33,6 +34,7 @@ type FaceRequest struct {
 	Style           string
 	PrincipalRole   string
 	CanonicalReply  string
+	MaterialFloor   core.MaterialPacket
 	LatestUserInput string
 	StableFiles     []workspace.LoadedFile
 	DynamicFiles    []workspace.LoadedFile
@@ -87,6 +89,10 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 			renderGovernorRuntimeAwarenessBlock(req.Runtime),
 		}, "\n\n"),
 	})
+
+	if contract := renderMaterialFloorContractBlock(req.Runtime); contract != "" {
+		parts = append(parts, agent.SystemBlock{Text: contract})
+	}
 
 	if len(nonToolStable) > 0 {
 		parts = append(parts, agent.SystemBlock{
@@ -153,11 +159,6 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		principalRole = "unknown"
 	}
 
-	canonical := strings.TrimSpace(req.CanonicalReply)
-	if canonical == "" {
-		canonical = "(no canonical reply provided)"
-	}
-
 	userInput := strings.TrimSpace(req.LatestUserInput)
 	if userInput == "" {
 		userInput = "(no user input provided)"
@@ -197,9 +198,9 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		intro = append(intro,
 			fmt.Sprintf("Act as the one the user is actually talking to. Speak in a %s way, with ownership and initiative.", style),
 			"Do not present yourself as a translator, renderer, or subordinate layer.",
-			"The canonical governor reply is a machine-approved boundary, not a script. Speak from within it rather than merely rewriting it.",
+			"The governor-authored material floor is a machine-approved boundary, not a script. Stage the visible scene from within it rather than merely rewriting it.",
 			"Be observant. Notice subtext, emotional texture, weak signals, and what the user may be reaching for but not stating directly.",
-			"Do not add unapproved actions, tool use, memory writes, or commitments that exceed the canonical reply.",
+			"Do not add unapproved actions, tool use, memory writes, or commitments that exceed the governor-authored material.",
 		)
 	}
 	parts = append(parts, agent.SystemBlock{Text: strings.Join(intro, "\n\n")})
@@ -227,9 +228,19 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	}
 
 	if mode != "proposal" && mode != "brokerage" {
-		parts = append(parts, agent.SystemBlock{
-			Text: "## Canonical Governor Reply\n" + canonical,
-		})
+		if material := strings.TrimSpace(req.MaterialFloor.Text()); material != "" {
+			parts = append(parts, agent.SystemBlock{
+				Text: "## Governor Material Floor\n" + material,
+			})
+		} else {
+			canonical := strings.TrimSpace(req.CanonicalReply)
+			if canonical == "" {
+				canonical = "(no canonical reply provided)"
+			}
+			parts = append(parts, agent.SystemBlock{
+				Text: "## Canonical Governor Reply\n" + canonical,
+			})
+		}
 	}
 	parts = append(parts, agent.SystemBlock{
 		Text: "## Latest User Message\n" + userInput,
@@ -358,6 +369,30 @@ func RenderSystemBlocks(blocks []agent.SystemBlock) string {
 		parts = append(parts, text)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
+	if strings.TrimSpace(aw.ArtifactMode) != "floor" {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Output Contract",
+		"For this turn, Aphelion is authoring the material floor, not the final user-visible scene.",
+		"Return the final assistant result using these sections when they contain relevant material:",
+		"FACTS:",
+		"- <bounded factual points or tool-established realities>",
+		"ALLOWED_ACTIONS:",
+		"- <approved actions, offers, or next moves>",
+		"COMMITMENTS:",
+		"- <commitments the system is actually making>",
+		"REFUSALS:",
+		"- <things the system will not do or cannot claim>",
+		"SCENE_CONSTRAINTS:",
+		"- <constraints Idolum must respect when staging the visible reply>",
+		"NOTES:",
+		"- <optional bounded notes that matter for delivery>",
+		"Do not write the final user-facing reply text here.",
+	}, "\n")
 }
 
 func markLastStableCacheBreakpoint(blocks []agent.SystemBlock) {
