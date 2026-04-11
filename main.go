@@ -142,6 +142,7 @@ func run() error {
 	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
 	tools.WithSemanticEngine(memory.NewSemanticEngine(memory.SemanticOptions{
 		Enabled:             cfg.Memory.Semantic.Enabled,
+		DBPath:              memory.DefaultSemanticDBPath(cfg.Sessions.DBPath),
 		Sources:             cfg.Memory.Semantic.Sources,
 		IncludeDailyNotes:   cfg.Memory.Semantic.IncludeDailyNotes,
 		IncludeQuestions:    cfg.Memory.Semantic.IncludeQuestions,

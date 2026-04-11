@@ -90,7 +90,15 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	reflectionSummary := ""
 	if r.heartbeatShouldReflect(lastMaintenanceAt, now) {
 		var reflectionErr error
-		reflectionSummary, reflectionErr = r.reflectCuratedMemory(ctx, dynamicPromptRoot(scope), systemBlocks, lastMaintenanceAt, now, events)
+		semanticScope := "shared"
+		semanticPrincipalID := ""
+		if scope.Principal.Role == principal.RoleApprovedUser {
+			semanticScope = "principal"
+			if scope.Principal.TelegramUserID > 0 {
+				semanticPrincipalID = strconv.FormatInt(scope.Principal.TelegramUserID, 10)
+			}
+		}
+		reflectionSummary, reflectionErr = r.reflectCuratedMemory(ctx, dynamicPromptRoot(scope), semanticScope, semanticPrincipalID, systemBlocks, lastMaintenanceAt, now, events)
 		if reflectionErr != nil {
 			log.Printf("WARN heartbeat reflection failed: %v", reflectionErr)
 		}

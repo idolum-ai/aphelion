@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -57,6 +58,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runForgetCommand(args[1:])
 	case "reset":
 		return true, runResetCommand(args[1:])
+	case "import-audit":
+		return true, runImportAuditCommand(args[1:])
 	default:
 		return false, nil
 	}
@@ -411,6 +414,113 @@ func runResetCommand(args []string) error {
 	return nil
 }
 
+func runImportAuditCommand(args []string) error {
+	fs := flag.NewFlagSet("import-audit", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	scope := fs.String("scope", "", "filter by scope: shared|principal")
+	principalID := fs.String("principal", "", "filter by principal key")
+	state := fs.String("state", string(memstore.SemanticImportStateQuarantine), "filter by import state")
+	id := fs.Int64("id", 0, "document id for review/approve/reject")
+	limit := fs.Int("limit", 20, "max documents to list")
+	chunks := fs.Int("chunks", 6, "max chunk excerpts to show during review")
+	maxChars := fs.Int("max_chars", 4000, "max excerpt chars during review")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	action := "list"
+	if fs.NArg() > 0 {
+		action = strings.ToLower(strings.TrimSpace(fs.Arg(0)))
+	}
+
+	cfg, _, err := loadConfigForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	engine, err := newSemanticEngineForConfig(cfg, true)
+	if err != nil {
+		return err
+	}
+	defer engine.Close()
+
+	ctx := context.Background()
+	switch action {
+	case "", "list":
+		docs, err := engine.ListImportAudit(ctx, memstore.SemanticAuditFilter{
+			State:       memstore.SemanticImportState(strings.ToLower(strings.TrimSpace(*state))),
+			Scope:       *scope,
+			PrincipalID: *principalID,
+			Limit:       *limit,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "action: list\n")
+		if len(docs) == 0 {
+			fmt.Fprintf(os.Stdout, "documents: 0\n")
+			return nil
+		}
+		fmt.Fprintf(os.Stdout, "documents: %d\n", len(docs))
+		for _, doc := range docs {
+			fmt.Fprintf(os.Stdout, "- id=%d scope=%s", doc.ID, doc.Scope)
+			if strings.TrimSpace(doc.PrincipalID) != "" {
+				fmt.Fprintf(os.Stdout, " principal=%s", doc.PrincipalID)
+			}
+			fmt.Fprintf(os.Stdout, " state=%s kind=%s provenance=%s source=%s\n",
+				doc.ImportState,
+				doc.SourceKind,
+				doc.ProvenanceSource,
+				doc.SourcePath,
+			)
+		}
+		return nil
+	case "review":
+		if *id <= 0 {
+			return fmt.Errorf("import-audit review requires --id")
+		}
+		review, err := engine.ReviewImportDocument(ctx, *id, *chunks, *maxChars)
+		if err != nil {
+			return err
+		}
+		doc := review.Document
+		fmt.Fprintf(os.Stdout, "action: review\n")
+		fmt.Fprintf(os.Stdout, "id: %d\n", doc.ID)
+		fmt.Fprintf(os.Stdout, "scope: %s\n", doc.Scope)
+		if strings.TrimSpace(doc.PrincipalID) != "" {
+			fmt.Fprintf(os.Stdout, "principal: %s\n", doc.PrincipalID)
+		}
+		fmt.Fprintf(os.Stdout, "state: %s\n", doc.ImportState)
+		fmt.Fprintf(os.Stdout, "kind: %s\n", doc.SourceKind)
+		fmt.Fprintf(os.Stdout, "provenance: %s\n", doc.ProvenanceSource)
+		fmt.Fprintf(os.Stdout, "source: %s\n", doc.SourcePath)
+		fmt.Fprintf(os.Stdout, "chunks: %d\n", review.ChunkCount)
+		for i, excerpt := range review.Excerpts {
+			fmt.Fprintf(os.Stdout, "\n[%d]\n%s\n", i+1, excerpt)
+		}
+		return nil
+	case "approve":
+		if *id <= 0 {
+			return fmt.Errorf("import-audit approve requires --id")
+		}
+		if err := engine.SetImportState(ctx, *id, memstore.SemanticImportStateApproved); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "action: approve\nid: %d\nstate: %s\n", *id, memstore.SemanticImportStateApproved)
+		return nil
+	case "reject":
+		if *id <= 0 {
+			return fmt.Errorf("import-audit reject requires --id")
+		}
+		if err := engine.SetImportState(ctx, *id, memstore.SemanticImportStateRejected); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "action: reject\nid: %d\nstate: %s\n", *id, memstore.SemanticImportStateRejected)
+		return nil
+	default:
+		return fmt.Errorf("import-audit action must be one of list|review|approve|reject")
+	}
+}
+
 func loadConfigForCommand(override string) (*config.Config, string, error) {
 	configPath, err := config.ResolveConfigPath(override)
 	if err != nil {
@@ -421,6 +531,26 @@ func loadConfigForCommand(override string) (*config.Config, string, error) {
 		return nil, "", &configStartupError{Path: configPath, Err: err}
 	}
 	return cfg, configPath, nil
+}
+
+func newSemanticEngineForConfig(cfg *config.Config, force bool) (*memstore.SemanticEngine, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	opts := memstore.SemanticOptions{
+		Enabled:             cfg.Memory.Semantic.Enabled || force,
+		DBPath:              memstore.DefaultSemanticDBPath(cfg.Sessions.DBPath),
+		Sources:             cfg.Memory.Semantic.Sources,
+		IncludeDailyNotes:   cfg.Memory.Semantic.IncludeDailyNotes,
+		IncludeQuestions:    cfg.Memory.Semantic.IncludeQuestions,
+		IncludeRhizome:      cfg.Memory.Semantic.IncludeRhizome,
+		InteractiveTopK:     cfg.Memory.Semantic.InteractiveTopK,
+		HeartbeatTopK:       cfg.Memory.Semantic.HeartbeatTopK,
+		InteractiveMaxChars: cfg.Memory.Semantic.InteractiveMaxChars,
+		HeartbeatMaxChars:   cfg.Memory.Semantic.HeartbeatMaxChars,
+		DailyNotesDir:       cfg.Agent.DailyNotesDir,
+	}
+	return memstore.NewSemanticEngine(opts), nil
 }
 
 func openStoreIfExists(dbPath string) (*session.SQLiteStore, error) {

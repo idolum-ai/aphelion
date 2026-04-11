@@ -256,6 +256,7 @@ func New(
 		faceModels:  faceModels,
 		semantic: memory.NewSemanticEngine(memory.SemanticOptions{
 			Enabled:             cfg.Memory.Semantic.Enabled,
+			DBPath:              memory.DefaultSemanticDBPath(cfg.Sessions.DBPath),
 			Sources:             cfg.Memory.Semantic.Sources,
 			IncludeDailyNotes:   cfg.Memory.Semantic.IncludeDailyNotes,
 			IncludeQuestions:    cfg.Memory.Semantic.IncludeQuestions,

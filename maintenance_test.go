@@ -3,13 +3,17 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/config"
+	memstore "github.com/idolum-ai/aphelion/memory"
 )
 
 func TestSeedAgentPromptFilesSeedsStructuredMemoryFiles(t *testing.T) {
@@ -221,4 +225,106 @@ func TestArchiveOversizedCuratedMemoryArchivesAndCompacts(t *testing.T) {
 	if len(archiveEntries) != 1 {
 		t.Fatalf("archive entries = %d, want 1", len(archiveEntries))
 	}
+}
+
+func TestRunImportAuditCommandListsAndApprovesImportedDocs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "aphelion.toml")
+	configRaw := `
+[telegram]
+bot_token = "token"
+
+[principals.telegram]
+admin_user_ids = [1]
+
+[providers.anthropic]
+api_key = "anthropic-key"
+
+[sessions]
+db_path = "` + filepath.ToSlash(filepath.Join(root, "state", "sessions.db")) + `"
+
+[agent]
+prompt_root = "` + filepath.ToSlash(filepath.Join(root, "agent")) + `"
+exec_root = "` + filepath.ToSlash(filepath.Join(root, "workspace")) + `"
+shared_memory_root = "` + filepath.ToSlash(filepath.Join(root, "agent")) + `"
+user_workspace_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated", "workspaces")) + `"
+user_memory_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated", "memory")) + `"
+`
+	if err := os.WriteFile(cfgPath, []byte(configRaw), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) err = %v", err)
+	}
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	engine, err := newSemanticEngineForConfig(cfg, true)
+	if err != nil {
+		t.Fatalf("newSemanticEngineForConfig() err = %v", err)
+	}
+	defer engine.Close()
+
+	docID, err := engine.ImportDocument(context.Background(), memstore.SemanticImportRequest{
+		Scope:            "shared",
+		SourcePath:       "imports/openclaw/notes.md",
+		SourceKind:       "knowledge",
+		SourceClass:      "imported_archive",
+		ProvenanceSource: "openclaw_import",
+		ImportState:      memstore.SemanticImportStateQuarantine,
+		Content:          "- Imported durable preference",
+		MTime:            time.Date(2026, time.April, 11, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ImportDocument() err = %v", err)
+	}
+
+	listOut, err := captureStdout(t, func() error {
+		return runImportAuditCommand([]string{"--config", cfgPath, "list"})
+	})
+	if err != nil {
+		t.Fatalf("runImportAuditCommand(list) err = %v", err)
+	}
+	if !strings.Contains(listOut, "id="+strconv.FormatInt(docID, 10)) {
+		t.Fatalf("list output = %q, want imported doc id %d", listOut, docID)
+	}
+
+	if _, err := captureStdout(t, func() error {
+		return runImportAuditCommand([]string{"--config", cfgPath, "--id", strconv.FormatInt(docID, 10), "approve"})
+	}); err != nil {
+		t.Fatalf("runImportAuditCommand(approve) err = %v", err)
+	}
+
+	approvedOut, err := captureStdout(t, func() error {
+		return runImportAuditCommand([]string{"--config", cfgPath, "--state", "approved", "list"})
+	})
+	if err != nil {
+		t.Fatalf("runImportAuditCommand(list approved) err = %v", err)
+	}
+	if !strings.Contains(approvedOut, "state=approved") {
+		t.Fatalf("approved list output = %q, want approved state", approvedOut)
+	}
+}
+
+func captureStdout(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() err = %v", err)
+	}
+	defer r.Close()
+
+	os.Stdout = w
+	runErr := fn()
+	_ = w.Close()
+	os.Stdout = orig
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("ReadFrom(pipe) err = %v", err)
+	}
+	return buf.String(), runErr
 }

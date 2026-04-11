@@ -4,15 +4,23 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
+
+	_ "github.com/mattn/go-sqlite3"
 )
+
+const semanticSchemaVersion = 1
 
 type SemanticMode string
 
@@ -21,8 +29,17 @@ const (
 	SemanticModeHeartbeat   SemanticMode = "heartbeat"
 )
 
+type SemanticImportState string
+
+const (
+	SemanticImportStateQuarantine SemanticImportState = "quarantine"
+	SemanticImportStateApproved   SemanticImportState = "approved"
+	SemanticImportStateRejected   SemanticImportState = "rejected"
+)
+
 type SemanticOptions struct {
 	Enabled             bool
+	DBPath              string
 	Sources             []string
 	IncludeDailyNotes   bool
 	IncludeQuestions    bool
@@ -35,36 +52,140 @@ type SemanticOptions struct {
 }
 
 type SemanticSearchRequest struct {
-	Root   string
-	Scope  string
-	Query  string
-	Mode   SemanticMode
-	Limit  int
-	MaxLen int
-	Now    time.Time
+	Root        string
+	Scope       string
+	PrincipalID string
+	Query       string
+	Mode        SemanticMode
+	Limit       int
+	MaxLen      int
+	Now         time.Time
 }
 
 type SemanticHit struct {
-	Source  string
-	Scope   string
-	Kind    string
-	Score   float64
-	Excerpt string
+	Source      string
+	Scope       string
+	PrincipalID string
+	Kind        string
+	Provenance  string
+	Score       float64
+	Excerpt     string
+}
+
+type SemanticDocument struct {
+	ID               int64
+	Scope            string
+	PrincipalID      string
+	SourcePath       string
+	SourceKind       string
+	SourceClass      string
+	ProvenanceSource string
+	ImportState      SemanticImportState
+	Checksum         string
+	MTime            time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	MetadataJSON     string
+}
+
+type SemanticDocumentReview struct {
+	Document   SemanticDocument
+	ChunkCount int
+	Excerpts   []string
+}
+
+type SemanticImportRequest struct {
+	Scope            string
+	PrincipalID      string
+	SourcePath       string
+	SourceKind       string
+	SourceClass      string
+	ProvenanceSource string
+	ImportState      SemanticImportState
+	Content          string
+	MTime            time.Time
+	MetadataJSON     string
+}
+
+type SemanticAuditFilter struct {
+	State       SemanticImportState
+	Scope       string
+	PrincipalID string
+	Limit       int
 }
 
 type SemanticEngine struct {
 	opts SemanticOptions
+
+	mu sync.Mutex
+	db *sql.DB
+}
+
+type semanticChunk struct {
+	source      string
+	scope       string
+	principalID string
+	kind        string
+	provenance  string
+	text        string
+	terms       []string
+	mtime       time.Time
+}
+
+type semanticSource struct {
+	path        string
+	kind        string
+	class       string
+	content     string
+	checksum    string
+	mtime       time.Time
+	provenance  string
+	importState SemanticImportState
+}
+
+type semanticChunkDraft struct {
+	ordinal int
+	text    string
+}
+
+type semanticIndexedDocument struct {
+	ID          int64
+	SourcePath  string
+	Checksum    string
+	MTime       time.Time
+	ImportState SemanticImportState
+}
+
+func DefaultSemanticDBPath(sessionDBPath string) string {
+	if strings.TrimSpace(sessionDBPath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(sessionDBPath), "semantic.db")
 }
 
 func NewSemanticEngine(opts SemanticOptions) *SemanticEngine {
 	return &SemanticEngine{opts: opts}
 }
 
+func (e *SemanticEngine) Close() error {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.db == nil {
+		return nil
+	}
+	err := e.db.Close()
+	e.db = nil
+	return err
+}
+
 func (e *SemanticEngine) Enabled() bool {
 	return e != nil && e.opts.Enabled
 }
 
-func (e *SemanticEngine) Search(_ context.Context, req SemanticSearchRequest) ([]SemanticHit, error) {
+func (e *SemanticEngine) Search(ctx context.Context, req SemanticSearchRequest) ([]SemanticHit, error) {
 	if e == nil || !e.opts.Enabled {
 		return nil, fmt.Errorf("semantic retrieval is not enabled")
 	}
@@ -72,16 +193,29 @@ func (e *SemanticEngine) Search(_ context.Context, req SemanticSearchRequest) ([
 	if root == "" {
 		return nil, fmt.Errorf("semantic search root is required")
 	}
+	scope := normalizeSemanticScope(req.Scope)
+	principalID := normalizePrincipalID(req.PrincipalID)
+	if scope == "principal" && principalID == "" {
+		return nil, fmt.Errorf("semantic search principal_id is required for principal scope")
+	}
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
 		return nil, fmt.Errorf("semantic search query is required")
 	}
+	now := req.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	if err := e.syncNativeCorpus(ctx, root, scope, principalID, now); err != nil {
+		return nil, err
+	}
+
 	mode := req.Mode
 	if mode == "" {
 		mode = SemanticModeInteractive
 	}
-
-	corpus, err := e.buildCorpus(root, req.Scope, mode, req.Now)
+	corpus, err := e.loadApprovedCorpus(ctx, scope, principalID, mode, now)
 	if err != nil {
 		return nil, err
 	}
@@ -117,16 +251,18 @@ func (e *SemanticEngine) Search(_ context.Context, req SemanticSearchRequest) ([
 
 	scored := make([]SemanticHit, 0, len(corpus))
 	for _, chunk := range corpus {
-		score := similarityScore(query, queryVec, totalDocs, df, chunk)
+		score := similarityScore(query, queryVec, totalDocs, df, chunk, mode, now)
 		if score <= 0 {
 			continue
 		}
 		scored = append(scored, SemanticHit{
-			Source:  chunk.source,
-			Scope:   chunk.scope,
-			Kind:    chunk.kind,
-			Score:   score,
-			Excerpt: chunk.text,
+			Source:      chunk.source,
+			Scope:       chunk.scope,
+			PrincipalID: chunk.principalID,
+			Kind:        chunk.kind,
+			Provenance:  chunk.provenance,
+			Score:       score,
+			Excerpt:     chunk.text,
 		})
 	}
 
@@ -165,7 +301,7 @@ func (e *SemanticEngine) Search(_ context.Context, req SemanticSearchRequest) ([
 		if len(out) >= limit {
 			break
 		}
-		nextCost := len(hit.Excerpt) + len(hit.Source) + len(hit.Kind) + 48
+		nextCost := len(hit.Excerpt) + len(hit.Source) + len(hit.Kind) + len(hit.Provenance) + len(hit.PrincipalID) + 64
 		if len(out) > 0 && chars+nextCost > maxChars {
 			break
 		}
@@ -175,15 +311,416 @@ func (e *SemanticEngine) Search(_ context.Context, req SemanticSearchRequest) ([
 	return out, nil
 }
 
-type semanticChunk struct {
-	source string
-	scope  string
-	kind   string
-	text   string
-	terms  []string
+func (e *SemanticEngine) ImportDocument(ctx context.Context, req SemanticImportRequest) (int64, error) {
+	db, err := e.ensureDB()
+	if err != nil {
+		return 0, err
+	}
+	scope := normalizeSemanticScope(req.Scope)
+	principalID := normalizePrincipalID(req.PrincipalID)
+	if scope == "principal" && principalID == "" {
+		return 0, fmt.Errorf("principal_id is required for principal imports")
+	}
+	sourcePath := filepath.ToSlash(strings.TrimSpace(req.SourcePath))
+	if sourcePath == "" {
+		return 0, fmt.Errorf("source_path is required")
+	}
+	sourceKind := strings.TrimSpace(req.SourceKind)
+	if sourceKind == "" {
+		sourceKind = detectSemanticKind(sourcePath)
+	}
+	sourceClass := strings.TrimSpace(req.SourceClass)
+	if sourceClass == "" {
+		sourceClass = classifySemanticSource(sourcePath, sourceKind)
+	}
+	provenance := strings.TrimSpace(req.ProvenanceSource)
+	if provenance == "" {
+		provenance = "imported"
+	}
+	importState := req.ImportState
+	if importState == "" {
+		importState = SemanticImportStateQuarantine
+	}
+	if err := validateImportState(importState); err != nil {
+		return 0, err
+	}
+
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		return 0, fmt.Errorf("import content is required")
+	}
+	mtime := req.MTime
+	if mtime.IsZero() {
+		mtime = time.Now().UTC()
+	}
+	checksum := checksumText(content)
+	chunks := chunkText(sourcePath, sourceKind, content)
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin semantic import tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	docID, err := upsertSemanticDocumentTx(tx, SemanticDocument{
+		Scope:            scope,
+		PrincipalID:      principalID,
+		SourcePath:       sourcePath,
+		SourceKind:       sourceKind,
+		SourceClass:      sourceClass,
+		ProvenanceSource: provenance,
+		ImportState:      importState,
+		Checksum:         checksum,
+		MTime:            mtime,
+		MetadataJSON:     strings.TrimSpace(req.MetadataJSON),
+	})
+	if err != nil {
+		return 0, err
+	}
+	if err := replaceSemanticChunksTx(tx, docID, chunks); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit semantic import tx: %w", err)
+	}
+	return docID, nil
 }
 
-func (e *SemanticEngine) buildCorpus(root string, scope string, mode SemanticMode, now time.Time) ([]semanticChunk, error) {
+func (e *SemanticEngine) ListImportAudit(ctx context.Context, filter SemanticAuditFilter) ([]SemanticDocument, error) {
+	db, err := e.ensureDB()
+	if err != nil {
+		return nil, err
+	}
+	state := filter.State
+	if state == "" {
+		state = SemanticImportStateQuarantine
+	}
+	if err := validateImportState(state); err != nil {
+		return nil, err
+	}
+	scope := strings.ToLower(strings.TrimSpace(filter.Scope))
+	principalID := normalizePrincipalID(filter.PrincipalID)
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	clauses := []string{"provenance_source <> 'native'", "import_state = ?"}
+	args := []any{string(state)}
+	if scope != "" {
+		clauses = append(clauses, "scope = ?")
+		args = append(args, scope)
+	}
+	if principalID != "" {
+		clauses = append(clauses, "principal_id = ?")
+		args = append(args, principalID)
+	}
+	args = append(args, limit)
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, scope, principal_id, source_path, source_kind, source_class, provenance_source,
+		       import_state, checksum, mtime, created_at, updated_at, metadata_json
+		FROM semantic_documents
+		WHERE `+strings.Join(clauses, " AND ")+`
+		ORDER BY updated_at DESC, id DESC
+		LIMIT ?
+	`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list import-audit documents: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SemanticDocument
+	for rows.Next() {
+		doc, err := scanSemanticDocument(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate import-audit documents: %w", err)
+	}
+	return out, nil
+}
+
+func (e *SemanticEngine) ReviewImportDocument(ctx context.Context, documentID int64, chunkLimit int, maxChars int) (*SemanticDocumentReview, error) {
+	if documentID <= 0 {
+		return nil, fmt.Errorf("document id must be > 0")
+	}
+	db, err := e.ensureDB()
+	if err != nil {
+		return nil, err
+	}
+	row := db.QueryRowContext(ctx, `
+		SELECT id, scope, principal_id, source_path, source_kind, source_class, provenance_source,
+		       import_state, checksum, mtime, created_at, updated_at, metadata_json
+		FROM semantic_documents
+		WHERE id = ? AND provenance_source <> 'native' AND import_state = ?
+	`, documentID, string(SemanticImportStateQuarantine))
+	doc, err := scanSemanticDocument(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("import-audit document %d not found", documentID)
+		}
+		return nil, err
+	}
+
+	if chunkLimit <= 0 {
+		chunkLimit = 6
+	}
+	if maxChars <= 0 {
+		maxChars = 4000
+	}
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT text
+		FROM semantic_chunks
+		WHERE document_id = ?
+		ORDER BY ordinal
+	`, documentID)
+	if err != nil {
+		return nil, fmt.Errorf("load import-audit chunks: %w", err)
+	}
+	defer rows.Close()
+
+	review := &SemanticDocumentReview{Document: doc}
+	chars := 0
+	for rows.Next() {
+		var text string
+		if err := rows.Scan(&text); err != nil {
+			return nil, fmt.Errorf("scan import-audit chunk: %w", err)
+		}
+		review.ChunkCount++
+		if len(review.Excerpts) >= chunkLimit {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		next := truncate(text, 900)
+		if len(review.Excerpts) > 0 && chars+len(next) > maxChars {
+			continue
+		}
+		review.Excerpts = append(review.Excerpts, next)
+		chars += len(next)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate import-audit chunks: %w", err)
+	}
+	return review, nil
+}
+
+func (e *SemanticEngine) SetImportState(ctx context.Context, documentID int64, state SemanticImportState) error {
+	if documentID <= 0 {
+		return fmt.Errorf("document id must be > 0")
+	}
+	if err := validateImportState(state); err != nil {
+		return err
+	}
+	db, err := e.ensureDB()
+	if err != nil {
+		return err
+	}
+	result, err := db.ExecContext(ctx, `
+		UPDATE semantic_documents
+		SET import_state = ?, updated_at = ?
+		WHERE id = ? AND provenance_source <> 'native'
+	`, string(state), utcTimestamp(time.Now().UTC()), documentID)
+	if err != nil {
+		return fmt.Errorf("update import_state: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("import-audit document %d not found", documentID)
+	}
+	return nil
+}
+
+func (e *SemanticEngine) syncNativeCorpus(ctx context.Context, root string, scope string, principalID string, now time.Time) error {
+	db, err := e.ensureDB()
+	if err != nil {
+		return err
+	}
+	sources, err := e.collectNativeSources(root, now)
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin semantic sync tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	existing, err := loadIndexedDocumentsTx(tx, scope, principalID, "native")
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(sources))
+	for _, src := range sources {
+		seen[src.path] = struct{}{}
+		doc, ok := existing[src.path]
+		if ok && doc.Checksum == src.checksum && sameInstant(doc.MTime, src.mtime) && doc.ImportState == SemanticImportStateApproved {
+			continue
+		}
+		docID, err := upsertSemanticDocumentTx(tx, SemanticDocument{
+			ID:               doc.ID,
+			Scope:            scope,
+			PrincipalID:      principalID,
+			SourcePath:       src.path,
+			SourceKind:       src.kind,
+			SourceClass:      src.class,
+			ProvenanceSource: src.provenance,
+			ImportState:      src.importState,
+			Checksum:         src.checksum,
+			MTime:            src.mtime,
+		})
+		if err != nil {
+			return err
+		}
+		if err := replaceSemanticChunksTx(tx, docID, chunkText(src.path, src.kind, src.content)); err != nil {
+			return err
+		}
+	}
+
+	for path, doc := range existing {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM semantic_documents WHERE id = ?`, doc.ID); err != nil {
+			return fmt.Errorf("delete removed semantic document %s: %w", path, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit semantic sync tx: %w", err)
+	}
+	return nil
+}
+
+func (e *SemanticEngine) collectNativeSources(root string, now time.Time) ([]semanticSource, error) {
+	var out []semanticSource
+	for _, rel := range e.semanticSourceList() {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		raw, info, err := readSemanticFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read semantic source %s: %w", path, err)
+		}
+		out = append(out, semanticSource{
+			path:        filepath.ToSlash(rel),
+			kind:        detectSemanticKind(rel),
+			class:       classifySemanticSource(rel, detectSemanticKind(rel)),
+			content:     string(raw),
+			checksum:    checksumBytes(raw),
+			mtime:       info.ModTime().UTC(),
+			provenance:  "native",
+			importState: SemanticImportStateApproved,
+		})
+	}
+
+	if e.opts.IncludeDailyNotes {
+		dir := strings.TrimSpace(e.opts.DailyNotesDir)
+		if dir == "" {
+			dir = "memory/daily"
+		}
+		noteRoot := filepath.Join(root, filepath.FromSlash(dir))
+		entries, err := collectMarkdownFiles(noteRoot)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("collect semantic daily notes %s: %w", noteRoot, err)
+			}
+		} else {
+			for _, entry := range entries {
+				rel, err := filepath.Rel(root, entry.Path)
+				if err != nil {
+					return nil, fmt.Errorf("relative daily note path: %w", err)
+				}
+				out = append(out, semanticSource{
+					path:        filepath.ToSlash(rel),
+					kind:        "daily_note",
+					class:       "daily_note",
+					content:     string(entry.Raw),
+					checksum:    checksumBytes(entry.Raw),
+					mtime:       entry.ModTime.UTC(),
+					provenance:  "native",
+					importState: SemanticImportStateApproved,
+				})
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
+	return out, nil
+}
+
+func (e *SemanticEngine) loadApprovedCorpus(ctx context.Context, scope string, principalID string, mode SemanticMode, now time.Time) ([]semanticChunk, error) {
+	db, err := e.ensureDB()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT d.source_path, d.scope, d.principal_id, d.source_kind, d.provenance_source, d.mtime, c.text
+		FROM semantic_documents d
+		JOIN semantic_chunks c ON c.document_id = d.id
+		WHERE d.scope = ? AND d.principal_id = ? AND d.import_state = ?
+		ORDER BY d.source_path, c.ordinal
+	`, scope, principalID, string(SemanticImportStateApproved))
+	if err != nil {
+		return nil, fmt.Errorf("load semantic corpus: %w", err)
+	}
+	defer rows.Close()
+
+	var out []semanticChunk
+	for rows.Next() {
+		var (
+			source      string
+			docScope    string
+			docPID      string
+			kind        string
+			provenance  string
+			mtimeRaw    string
+			text        string
+		)
+		if err := rows.Scan(&source, &docScope, &docPID, &kind, &provenance, &mtimeRaw, &text); err != nil {
+			return nil, fmt.Errorf("scan semantic corpus row: %w", err)
+		}
+		mtime, err := parseOptionalTime(mtimeRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse semantic mtime: %w", err)
+		}
+		if kind == "daily_note" && !withinDailyWindow(mode, now, source, mtime) {
+			continue
+		}
+		terms := tokenize(text)
+		if len(terms) == 0 {
+			continue
+		}
+		out = append(out, semanticChunk{
+			source:      source,
+			scope:       docScope,
+			principalID: docPID,
+			kind:        kind,
+			provenance:  provenance,
+			text:        text,
+			terms:       terms,
+			mtime:       mtime,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate semantic corpus: %w", err)
+	}
+	return out, nil
+}
+
+func (e *SemanticEngine) semanticSourceList() []string {
 	sources := append([]string(nil), e.opts.Sources...)
 	if e.opts.IncludeQuestions {
 		sources = append(sources, "memory/questions.md")
@@ -191,77 +728,481 @@ func (e *SemanticEngine) buildCorpus(root string, scope string, mode SemanticMod
 	if e.opts.IncludeRhizome {
 		sources = append(sources, "memory/rhizome.md")
 	}
-	sources = uniqueStrings(sources)
+	return uniqueStrings(sources)
+}
 
-	out := make([]semanticChunk, 0, len(sources)*4)
-	for _, rel := range sources {
-		path := filepath.Join(root, filepath.FromSlash(rel))
-		raw, err := os.ReadFile(path)
+func (e *SemanticEngine) ensureDB() (*sql.DB, error) {
+	if e == nil {
+		return nil, fmt.Errorf("semantic engine is nil")
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.db != nil {
+		return e.db, nil
+	}
+
+	path := strings.TrimSpace(e.opts.DBPath)
+	if path == "" {
+		return nil, fmt.Errorf("semantic db path is required")
+	}
+	if path != ":memory:" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return nil, fmt.Errorf("create semantic db directory: %w", err)
+		}
+	}
+
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, fmt.Errorf("open semantic sqlite db: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+
+	if err := initSemanticDB(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	e.db = db
+	return e.db, nil
+}
+
+func initSemanticDB(db *sql.DB) error {
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA foreign_keys=ON",
+	}
+	for _, p := range pragmas {
+		if _, err := db.Exec(p); err != nil {
+			return fmt.Errorf("apply semantic pragma %q: %w", p, err)
+		}
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin semantic schema tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS semantic_schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS semantic_documents (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			scope TEXT NOT NULL,
+			principal_id TEXT NOT NULL DEFAULT '',
+			source_path TEXT NOT NULL,
+			source_kind TEXT NOT NULL,
+			source_class TEXT NOT NULL,
+			provenance_source TEXT NOT NULL,
+			import_state TEXT NOT NULL CHECK(import_state IN ('quarantine', 'approved', 'rejected')),
+			checksum TEXT NOT NULL,
+			mtime TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			metadata_json TEXT NOT NULL DEFAULT '',
+			UNIQUE(scope, principal_id, source_path, provenance_source)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_semantic_documents_scope ON semantic_documents(scope, principal_id, import_state, source_kind)`,
+		`CREATE INDEX IF NOT EXISTS idx_semantic_documents_import ON semantic_documents(import_state, provenance_source, updated_at, id)`,
+		`CREATE TABLE IF NOT EXISTS semantic_chunks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			document_id INTEGER NOT NULL,
+			ordinal INTEGER NOT NULL,
+			text TEXT NOT NULL,
+			text_hash TEXT NOT NULL,
+			start_line INTEGER,
+			end_line INTEGER,
+			start_offset INTEGER,
+			end_offset INTEGER,
+			embedding_model TEXT NOT NULL DEFAULT '',
+			embedding_dims INTEGER NOT NULL DEFAULT 0,
+			embedding_json TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (document_id) REFERENCES semantic_documents(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_semantic_chunks_document ON semantic_chunks(document_id, ordinal)`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("apply semantic schema statement: %w", err)
+		}
+	}
+
+	var versionCount int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM semantic_schema_version`).Scan(&versionCount); err != nil {
+		return fmt.Errorf("load semantic schema version: %w", err)
+	}
+	if versionCount == 0 {
+		if _, err := tx.Exec(`INSERT INTO semantic_schema_version (version) VALUES (?)`, semanticSchemaVersion); err != nil {
+			return fmt.Errorf("insert semantic schema version: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit semantic schema tx: %w", err)
+	}
+	return nil
+}
+
+func upsertSemanticDocumentTx(tx *sql.Tx, doc SemanticDocument) (int64, error) {
+	scope := normalizeSemanticScope(doc.Scope)
+	principalID := normalizePrincipalID(doc.PrincipalID)
+	if scope == "principal" && principalID == "" {
+		return 0, fmt.Errorf("principal_id is required for principal documents")
+	}
+	if doc.ImportState == "" {
+		doc.ImportState = SemanticImportStateApproved
+	}
+	if err := validateImportState(doc.ImportState); err != nil {
+		return 0, err
+	}
+	sourcePath := filepath.ToSlash(strings.TrimSpace(doc.SourcePath))
+	if sourcePath == "" {
+		return 0, fmt.Errorf("semantic document source_path is required")
+	}
+
+	now := utcTimestamp(time.Now().UTC())
+	mtime := nullableTimestamp(doc.MTime)
+	result, err := tx.Exec(`
+		INSERT INTO semantic_documents (
+			scope, principal_id, source_path, source_kind, source_class, provenance_source,
+			import_state, checksum, mtime, metadata_json, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(scope, principal_id, source_path, provenance_source)
+		DO UPDATE SET
+			source_kind = excluded.source_kind,
+			source_class = excluded.source_class,
+			import_state = excluded.import_state,
+			checksum = excluded.checksum,
+			mtime = excluded.mtime,
+			metadata_json = excluded.metadata_json,
+			updated_at = excluded.updated_at
+	`,
+		scope,
+		principalID,
+		sourcePath,
+		strings.TrimSpace(doc.SourceKind),
+		strings.TrimSpace(doc.SourceClass),
+		firstNonEmpty(strings.TrimSpace(doc.ProvenanceSource), "native"),
+		string(doc.ImportState),
+		doc.Checksum,
+		mtime,
+		strings.TrimSpace(doc.MetadataJSON),
+		now,
+		now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("upsert semantic document %s: %w", sourcePath, err)
+	}
+	if id, err := result.LastInsertId(); err == nil && id > 0 {
+		return id, nil
+	}
+
+	var id int64
+	if err := tx.QueryRow(`
+		SELECT id
+		FROM semantic_documents
+		WHERE scope = ? AND principal_id = ? AND source_path = ? AND provenance_source = ?
+	`,
+		scope,
+		principalID,
+		sourcePath,
+		firstNonEmpty(strings.TrimSpace(doc.ProvenanceSource), "native"),
+	).Scan(&id); err != nil {
+		return 0, fmt.Errorf("reload semantic document id %s: %w", sourcePath, err)
+	}
+	return id, nil
+}
+
+func replaceSemanticChunksTx(tx *sql.Tx, documentID int64, chunks []semanticChunkDraft) error {
+	if _, err := tx.Exec(`DELETE FROM semantic_chunks WHERE document_id = ?`, documentID); err != nil {
+		return fmt.Errorf("clear semantic chunks for %d: %w", documentID, err)
+	}
+	now := utcTimestamp(time.Now().UTC())
+	for _, chunk := range chunks {
+		text := strings.TrimSpace(chunk.text)
+		if text == "" {
+			continue
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO semantic_chunks (
+				document_id, ordinal, text, text_hash, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?)
+		`, documentID, chunk.ordinal, text, checksumText(text), now, now); err != nil {
+			return fmt.Errorf("insert semantic chunk for document %d: %w", documentID, err)
+		}
+	}
+	return nil
+}
+
+func loadIndexedDocumentsTx(tx *sql.Tx, scope string, principalID string, provenance string) (map[string]semanticIndexedDocument, error) {
+	rows, err := tx.Query(`
+		SELECT id, source_path, checksum, mtime, import_state
+		FROM semantic_documents
+		WHERE scope = ? AND principal_id = ? AND provenance_source = ?
+	`, scope, principalID, provenance)
+	if err != nil {
+		return nil, fmt.Errorf("load indexed semantic documents: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]semanticIndexedDocument)
+	for rows.Next() {
+		var (
+			doc     semanticIndexedDocument
+			mtimeRaw string
+			stateRaw string
+		)
+		if err := rows.Scan(&doc.ID, &doc.SourcePath, &doc.Checksum, &mtimeRaw, &stateRaw); err != nil {
+			return nil, fmt.Errorf("scan indexed semantic document: %w", err)
+		}
+		doc.MTime, err = parseOptionalTime(mtimeRaw)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("read semantic source %s: %w", path, err)
+			return nil, fmt.Errorf("parse indexed semantic mtime: %w", err)
 		}
-		chunks := chunkText(filepath.ToSlash(rel), detectSemanticKind(rel), string(raw), mode)
-		for _, text := range chunks {
-			terms := tokenize(text)
-			if len(terms) == 0 {
-				continue
-			}
-			out = append(out, semanticChunk{
-				source: filepath.ToSlash(rel),
-				scope:  scope,
-				kind:   detectSemanticKind(rel),
-				text:   text,
-				terms:  terms,
-			})
-		}
+		doc.ImportState = SemanticImportState(stateRaw)
+		out[doc.SourcePath] = doc
 	}
-
-	if e.opts.IncludeDailyNotes {
-		for _, rel := range semanticDailyNotePaths(e.opts.DailyNotesDir, mode, now) {
-			path := filepath.Join(root, filepath.FromSlash(rel))
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
-				return nil, fmt.Errorf("read semantic daily note %s: %w", path, err)
-			}
-			for _, text := range chunkText(rel, "daily_note", string(raw), mode) {
-				terms := tokenize(text)
-				if len(terms) == 0 {
-					continue
-				}
-				out = append(out, semanticChunk{
-					source: rel,
-					scope:  scope,
-					kind:   "daily_note",
-					text:   text,
-					terms:  terms,
-				})
-			}
-		}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate indexed semantic documents: %w", err)
 	}
-
 	return out, nil
 }
 
-func semanticDailyNotePaths(notesDir string, mode SemanticMode, now time.Time) []string {
-	dir := strings.TrimSpace(notesDir)
-	if dir == "" {
-		dir = "memory/daily"
+func scanSemanticDocument(scanner interface{ Scan(dest ...any) error }) (SemanticDocument, error) {
+	var (
+		doc         SemanticDocument
+		importRaw   string
+		mtimeRaw    string
+		createdRaw  string
+		updatedRaw  string
+	)
+	if err := scanner.Scan(
+		&doc.ID,
+		&doc.Scope,
+		&doc.PrincipalID,
+		&doc.SourcePath,
+		&doc.SourceKind,
+		&doc.SourceClass,
+		&doc.ProvenanceSource,
+		&importRaw,
+		&doc.Checksum,
+		&mtimeRaw,
+		&createdRaw,
+		&updatedRaw,
+		&doc.MetadataJSON,
+	); err != nil {
+		return SemanticDocument{}, err
 	}
-	days := 2
-	if mode == SemanticModeHeartbeat {
-		days = 7
+	doc.ImportState = SemanticImportState(importRaw)
+	var err error
+	doc.MTime, err = parseOptionalTime(mtimeRaw)
+	if err != nil {
+		return SemanticDocument{}, fmt.Errorf("parse semantic document mtime: %w", err)
 	}
-	out := make([]string, 0, days)
-	for i := 0; i < days; i++ {
-		out = append(out, filepath.ToSlash(filepath.Join(dir, now.AddDate(0, 0, -i).Format("2006-01-02")+".md")))
+	doc.CreatedAt, err = parseOptionalTime(createdRaw)
+	if err != nil {
+		return SemanticDocument{}, fmt.Errorf("parse semantic document created_at: %w", err)
+	}
+	doc.UpdatedAt, err = parseOptionalTime(updatedRaw)
+	if err != nil {
+		return SemanticDocument{}, fmt.Errorf("parse semantic document updated_at: %w", err)
+	}
+	return doc, nil
+}
+
+func readSemanticFile(path string) ([]byte, os.FileInfo, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return raw, info, nil
+}
+
+type markdownFile struct {
+	Path    string
+	Raw     []byte
+	ModTime time.Time
+}
+
+func collectMarkdownFiles(root string) ([]markdownFile, error) {
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", root)
+	}
+	var out []markdownFile
+	err = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if strings.ToLower(filepath.Ext(path)) != ".md" {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		out = append(out, markdownFile{
+			Path:    path,
+			Raw:     raw,
+			ModTime: info.ModTime(),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out, nil
+}
+
+func normalizeSemanticScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "principal":
+		return "principal"
+	default:
+		return "shared"
+	}
+}
+
+func normalizePrincipalID(principalID string) string {
+	return strings.TrimSpace(principalID)
+}
+
+func validateImportState(state SemanticImportState) error {
+	switch state {
+	case SemanticImportStateQuarantine, SemanticImportStateApproved, SemanticImportStateRejected:
+		return nil
+	default:
+		return fmt.Errorf("invalid semantic import_state %q", state)
+	}
+}
+
+func sameInstant(a time.Time, b time.Time) bool {
+	if a.IsZero() && b.IsZero() {
+		return true
+	}
+	return a.UTC().Equal(b.UTC())
+}
+
+func nullableTimestamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return utcTimestamp(t)
+}
+
+func utcTimestamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func parseOptionalTime(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.UTC(), nil
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", raw); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("unsupported time format %q", raw)
+}
+
+func checksumBytes(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func checksumText(raw string) string {
+	return checksumBytes([]byte(raw))
+}
+
+func chunkText(source string, kind string, raw string) []semanticChunkDraft {
+	paragraphs := splitMarkdownParagraphs(raw)
+	if len(paragraphs) == 0 {
+		return nil
+	}
+
+	var chunks []string
+	switch kind {
+	case "knowledge", "decision", "question", "daily_note":
+		chunks = paragraphs
+	case "rhizome":
+		chunks = broaderChunks(paragraphs, 2)
+	default:
+		chunks = broaderChunks(paragraphs, 2)
+	}
+
+	out := make([]semanticChunkDraft, 0, len(chunks))
+	for i, chunk := range chunks {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		out = append(out, semanticChunkDraft{
+			ordinal: i,
+			text:    chunk,
+		})
 	}
 	return out
+}
+
+func classifySemanticSource(source string, kind string) string {
+	switch kind {
+	case "daily_note":
+		return "daily_note"
+	case "memory", "knowledge", "decision", "question", "rhizome":
+		return "curated"
+	default:
+		if strings.Contains(filepath.ToSlash(source), "archive/") {
+			return "archive"
+		}
+		return "curated"
+	}
+}
+
+func withinDailyWindow(mode SemanticMode, now time.Time, source string, mtime time.Time) bool {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	threshold := 48 * time.Hour
+	if mode == SemanticModeHeartbeat {
+		threshold = 7 * 24 * time.Hour
+	}
+	ts := dailyNoteTime(source, mtime)
+	if ts.IsZero() {
+		return true
+	}
+	return ts.After(now.Add(-threshold))
+}
+
+func dailyNoteTime(source string, fallback time.Time) time.Time {
+	base := strings.TrimSuffix(filepath.Base(filepath.ToSlash(source)), filepath.Ext(source))
+	if t, err := time.Parse("2006-01-02", base); err == nil {
+		return t.UTC()
+	}
+	return fallback.UTC()
 }
 
 func detectSemanticKind(source string) string {
@@ -281,24 +1222,6 @@ func detectSemanticKind(source string) string {
 			return "daily_note"
 		}
 		return "memory"
-	}
-}
-
-func chunkText(source string, kind string, raw string, mode SemanticMode) []string {
-	paragraphs := splitMarkdownParagraphs(raw)
-	if len(paragraphs) == 0 {
-		return nil
-	}
-
-	if mode == SemanticModeHeartbeat {
-		return broaderChunks(paragraphs, 3)
-	}
-
-	switch kind {
-	case "knowledge", "decision", "question", "rhizome", "daily_note":
-		return paragraphs
-	default:
-		return broaderChunks(paragraphs, 2)
 	}
 }
 
@@ -331,7 +1254,7 @@ func splitMarkdownParagraphs(raw string) []string {
 	return out
 }
 
-func similarityScore(query string, queryVec map[string]float64, totalDocs float64, df map[string]int, chunk semanticChunk) float64 {
+func similarityScore(query string, queryVec map[string]float64, totalDocs float64, df map[string]int, chunk semanticChunk, mode SemanticMode, now time.Time) float64 {
 	docVec := make(map[string]float64)
 	for _, term := range chunk.terms {
 		docVec[term]++
@@ -362,6 +1285,9 @@ func similarityScore(query string, queryVec map[string]float64, totalDocs float6
 		score += 0.05
 	case "question", "rhizome":
 		score -= 0.02
+	}
+	if chunk.kind == "daily_note" && withinDailyWindow(mode, now, chunk.source, chunk.mtime) {
+		score += 0.01
 	}
 	return score
 }
@@ -439,6 +1365,26 @@ func uniqueStrings(items []string) []string {
 		out = append(out, item)
 	}
 	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func truncate(raw string, max int) string {
+	raw = strings.TrimSpace(raw)
+	if max <= 0 || len(raw) <= max {
+		return raw
+	}
+	if max <= 1 {
+		return raw[:max]
+	}
+	return raw[:max-1] + "…"
 }
 
 func min(a int, b int) int {

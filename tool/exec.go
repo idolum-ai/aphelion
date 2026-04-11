@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -578,13 +579,18 @@ func (r *Registry) semanticSearch(ctx context.Context, input json.RawMessage, sc
 		return "", err
 	}
 
+	principalID := ""
+	if effectiveScope == "principal" && scope.Principal.TelegramUserID > 0 {
+		principalID = strconv.FormatInt(scope.Principal.TelegramUserID, 10)
+	}
 	hits, err := r.semantic.Search(ctx, memstore.SemanticSearchRequest{
-		Root:  root,
-		Scope: effectiveScope,
-		Query: in.Query,
-		Mode:  memstore.SemanticModeInteractive,
-		Limit: in.Limit,
-		Now:   time.Now(),
+		Root:        root,
+		Scope:       effectiveScope,
+		PrincipalID: principalID,
+		Query:       in.Query,
+		Mode:        memstore.SemanticModeInteractive,
+		Limit:       in.Limit,
+		Now:         time.Now(),
 	})
 	if err != nil {
 		return "", err
@@ -627,7 +633,11 @@ func renderSemanticSearchResults(scope string, query string, hits []memstore.Sem
 		return b.String()
 	}
 	for i, hit := range hits {
-		fmt.Fprintf(&b, "\n%d. source=%s kind=%s score=%.2f\n", i+1, hit.Source, hit.Kind, hit.Score)
+		fmt.Fprintf(&b, "\n%d. source=%s scope=%s", i+1, hit.Source, hit.Scope)
+		if strings.TrimSpace(hit.PrincipalID) != "" {
+			fmt.Fprintf(&b, " principal=%s", hit.PrincipalID)
+		}
+		fmt.Fprintf(&b, " kind=%s provenance=%s score=%.2f\n", hit.Kind, firstNonEmpty(strings.TrimSpace(hit.Provenance), "native"), hit.Score)
 		b.WriteString("excerpt: ")
 		b.WriteString(truncate(strings.TrimSpace(hit.Excerpt), 600))
 		b.WriteString("\n")

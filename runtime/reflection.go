@@ -40,12 +40,14 @@ type reflectionInput struct {
 func (r *Runtime) reflectCuratedMemory(
 	ctx context.Context,
 	scopeRoot string,
+	semanticScope string,
+	semanticPrincipalID string,
 	systemBlocks []agent.SystemBlock,
 	since time.Time,
 	now time.Time,
 	events []session.ReviewEvent,
 ) (string, error) {
-	input, err := r.loadReflectionInput(scopeRoot, since, now, events)
+	input, err := r.loadReflectionInput(scopeRoot, semanticScope, semanticPrincipalID, since, now, events)
 	if err != nil {
 		return "", err
 	}
@@ -137,7 +139,7 @@ func (r *Runtime) updateRhizome(scopeName string, scopeRoot string, raw string) 
 	return os.WriteFile(path, []byte(renderRhizomeProjection(edges)), 0o600)
 }
 
-func (r *Runtime) loadReflectionInput(scopeRoot string, since time.Time, now time.Time, events []session.ReviewEvent) (*reflectionInput, error) {
+func (r *Runtime) loadReflectionInput(scopeRoot string, semanticScope string, semanticPrincipalID string, since time.Time, now time.Time, events []session.ReviewEvent) (*reflectionInput, error) {
 	out := &reflectionInput{
 		Events: append([]session.ReviewEvent(nil), events...),
 	}
@@ -193,11 +195,12 @@ func (r *Runtime) loadReflectionInput(scopeRoot string, since time.Time, now tim
 		query := semanticReflectionQuery(out)
 		if strings.TrimSpace(query) != "" {
 			hits, err := r.semantic.Search(context.Background(), memstore.SemanticSearchRequest{
-				Root:  scopeRoot,
-				Scope: dynamicScopeName(scopeRoot),
-				Query: query,
-				Mode:  memstore.SemanticModeHeartbeat,
-				Now:   now,
+				Root:        scopeRoot,
+				Scope:       semanticScope,
+				PrincipalID: semanticPrincipalID,
+				Query:       query,
+				Mode:        memstore.SemanticModeHeartbeat,
+				Now:         now,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("semantic reflection search: %w", err)
@@ -261,7 +264,15 @@ func renderReflectionRequest(input *reflectionInput) string {
 	if len(input.Semantic) > 0 {
 		b.WriteString("\n## Semantic Context\n")
 		for i, hit := range input.Semantic {
-			fmt.Fprintf(&b, "%d. source=%s kind=%s score=%.2f\n", i+1, hit.Source, hit.Kind, hit.Score)
+			provenance := strings.TrimSpace(hit.Provenance)
+			if provenance == "" {
+				provenance = "native"
+			}
+			fmt.Fprintf(&b, "%d. source=%s scope=%s", i+1, hit.Source, hit.Scope)
+			if strings.TrimSpace(hit.PrincipalID) != "" {
+				fmt.Fprintf(&b, " principal=%s", hit.PrincipalID)
+			}
+			fmt.Fprintf(&b, " kind=%s provenance=%s score=%.2f\n", hit.Kind, provenance, hit.Score)
 			b.WriteString(hit.Excerpt)
 			b.WriteString("\n\n")
 		}

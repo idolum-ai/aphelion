@@ -240,6 +240,7 @@ func TestSemanticSearchAdminSearchesSharedCuratedMemory(t *testing.T) {
 	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver).
 		WithSemanticEngine(memstore.NewSemanticEngine(memstore.SemanticOptions{
 			Enabled:             true,
+			DBPath:              filepath.Join(tmp, "semantic.db"),
 			Sources:             []string{"memory/knowledge.md"},
 			InteractiveTopK:     5,
 			HeartbeatTopK:       12,
@@ -284,6 +285,7 @@ func TestSemanticSearchApprovedUserCannotReadSharedCuratedMemory(t *testing.T) {
 	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver).
 		WithSemanticEngine(memstore.NewSemanticEngine(memstore.SemanticOptions{
 			Enabled:             true,
+			DBPath:              filepath.Join(tmp, "semantic.db"),
 			Sources:             []string{"memory/knowledge.md"},
 			InteractiveTopK:     5,
 			HeartbeatTopK:       12,
