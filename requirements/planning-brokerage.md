@@ -10,7 +10,7 @@ This brokerage is not a free-form internal conversation. It is a short negotiati
 
 1. `Idolum` states what conversational pressure it wants to exert
 2. `Aphelion` answers with what system posture it can actually ratify
-3. the normal governor/tool turn executes under the negotiated artifact
+3. the normal governor/tool turn executes under the negotiated artifact and later emits a bounded material floor for Idolum to stage
 
 This preserves `Idolum`'s initiative without making the runtime a committee, and preserves `Aphelion`'s authority without flattening `Idolum` into polite advice.
 
@@ -24,6 +24,8 @@ The brokerage layer exists to improve:
 - tool-use decisions on ambiguous turns
 
 It should not create bureaucracy, self-chat, or a second visible conversation.
+
+It should also prevent a silent collapse back into the older shape where the governor writes most of the visible answer and the face merely softens it afterward.
 
 ## Scope
 
@@ -90,6 +92,8 @@ It should decide:
 
 The authoritative execution boundary still belongs to Aphelion, but the main turn should preserve both sides of the brokerage rather than only the final ratified compression.
 
+Aphelion's post-brokerage task is not just "answer." Its task is to decide the material floor the face is later allowed to stage.
+
 ## Turn Modes
 
 The brokerage layer should use a small fixed vocabulary.
@@ -128,6 +132,8 @@ Before the main governor/tool turn, `Aphelion` should run a short tool-free plan
 
 It should return a short structured ratification.
 
+This ratification is not just prose. It is the machine-parseable execution contract for the rest of the turn.
+
 Example shape:
 
 ```text
@@ -141,6 +147,24 @@ PLAN:
 
 This ratification is the authoritative planning artifact for the main turn.
 
+### Required ratification fields
+
+The runtime should parse and carry these fields explicitly:
+
+- `MODE`
+- `RATIFICATION`
+- `PLAN` steps
+
+`RATIFICATION` uses a small fixed vocabulary:
+
+- `accept`
+- `adapt`
+- `reject`
+
+`PLAN` should usually contain one to three short concrete steps.
+
+If the ratification output is missing required fields or yields no usable steps, the runtime should treat it as an invalid brokerage artifact and fall back through the normal proposal path rather than passing an ambiguous blob into the governor.
+
 ## Main Turn Execution
 
 After ratification, the normal governor/tool turn should run as usual.
@@ -148,11 +172,33 @@ After ratification, the normal governor/tool turn should run as usual.
 The main turn should receive:
 
 - the standard governor prompt
-- the ratified brokerage plan as machine-scoped context
+- the structured negotiated brokerage artifact as machine-scoped context
 - compacted history
 - the latest user input
 
+The main turn should then produce:
+
+- the governor-owned material floor
+- not, by default, the full user-visible scene
+
 The raw `Idolum` brokerage position should survive into the negotiated brokerage block when a valid ratification exists. Disagreement is signal, not noise.
+
+The negotiated brokerage block should preserve both:
+
+- `Idolum`'s raw brokerage push
+- `Aphelion`'s parsed ratification fields and bounded execution steps
+
+That negotiated block exists to constrain both later phases:
+
+- how Aphelion materializes the turn
+- how Idolum stages the visible scene
+
+The governor should be able to see, explicitly:
+
+- the ratified turn mode
+- the ratification disposition
+- the concrete execution steps
+- the original ratification record
 
 If ratification fails, the runtime may fall back to the older advisory proposal path.
 
@@ -181,6 +227,7 @@ The machine-authored runtime awareness surface should expose:
 - whether the current turn used plain proposal or brokerage
 - Idolum's suggested turn mode when available
 - Aphelion's ratified turn mode when available
+- Aphelion's ratification disposition when available
 
 `Idolum` should receive only the subset relevant to speaking honestly about the turn posture.
 
@@ -199,6 +246,11 @@ If the governor ratification pass fails:
 - rerun a true plain-proposal pass rather than relabeling the brokerage note as proposal
 - if that proposal rerun also fails, preserve the original brokerage note honestly instead of falsifying its type
 
+If the governor ratification pass returns an invalid structure:
+
+- treat it the same as a ratification failure
+- do not pass the malformed ratification blob forward as if it were a valid negotiated plan
+
 The system must not drop or stall a turn merely because brokerage failed.
 
 ## Decisions
@@ -207,15 +259,28 @@ The system must not drop or stall a turn merely because brokerage failed.
 - **Idolum proposes posture.** It does not authorize tools or system actions.
 - **Aphelion ratifies execution.** It remains the action and authority layer.
 - **Brokerage preserves both pressures.** The surviving artifact should keep Idolum's push and Aphelion's ratification together.
+- **Ratification must be parseable.** `MODE`, `RATIFICATION`, and `PLAN` are runtime contract fields, not just suggestive formatting.
 - **Brokerage is selective.** It should not run on every turn.
 - **The negotiated brokerage block is machine-scoped context.** It is not user-visible by default.
 - **Fallback is required and honest.** Brokerage failure must degrade to the existing turn path without relabeling brokerage text as some other artifact type.
+
+## Deferred
+
+Still deferred after this tranche:
+
+- mid-turn re-ratification after reconnaissance
+- persistent plan-step tracking during execution
+- user-visible surfaced brokerage plans by default
+- multi-round brokerage loops
+- explicit brokerage constraints for the material-floor output schema
 
 ## Test Plan
 
 - **TestBrokerageActivatesForStrategicInteractiveTurn**: feature/codebase-style requests trigger brokerage
 - **TestBrokerageSkipsSimpleFactualTurn**: simple factual questions skip brokerage
 - **TestBrokerageRatificationFeedsMainGovernorTurn**: the ratified plan enters the main governor turn
+- **TestBrokerageRatificationParsesDispositionAndSteps**: a valid ratification yields explicit mode, disposition, and bounded steps
+- **TestBrokerageInvalidRatificationFallsBackToProposal**: malformed ratification output triggers the same fallback ladder as a ratification error
 - **TestBrokerageRerunsPlainProposalAfterRatificationFailure**: failed ratification triggers a real proposal rerun
 - **TestBrokeragePreservesFramingWhenProposalRerunFails**: failed proposal rerun preserves brokerage framing instead of relabeling it
 - **TestBrokerageAwarenessVisibleToGovernorAndFace**: runtime awareness reflects brokerage mode and ratified turn mode

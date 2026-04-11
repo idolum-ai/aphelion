@@ -359,14 +359,26 @@ func TestRenderIdolumProposalForGovernorWrapsAdvisory(t *testing.T) {
 func TestRenderBrokeragePlanForGovernorWrapsNegotiation(t *testing.T) {
 	t.Parallel()
 
-	got := RenderBrokeragePlanForGovernor("MODE: inspect_then_answer\nPUSH:\n- Inspect first.", "MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect prompt, runtime, and memory surfaces first.")
+	got := RenderBrokeragePlanForGovernor(BrokerageArtifact{
+		IdolumProposal:     "MODE: inspect_then_answer\nPUSH:\n- Inspect first.",
+		RatifiedTurnMode:   "inspect_then_answer",
+		Ratification:       "adapt",
+		RatifiedSteps:      []string{"Inspect prompt, runtime, and memory surfaces first."},
+		RatificationRecord: "MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect prompt, runtime, and memory surfaces first.",
+	})
 	if !strings.Contains(got, "## Negotiated Turn Brokerage") {
 		t.Fatalf("wrapped plan missing heading: %q", got)
+	}
+	if !strings.Contains(got, "- ratification: adapt") {
+		t.Fatalf("wrapped plan missing ratification summary: %q", got)
 	}
 	if !strings.Contains(got, "### Idolum Position") {
 		t.Fatalf("wrapped plan missing idolum position: %q", got)
 	}
-	if !strings.Contains(got, "### Aphelion Ratification") {
-		t.Fatalf("wrapped plan missing aphelion ratification: %q", got)
+	if !strings.Contains(got, "### Aphelion Execution Contract") {
+		t.Fatalf("wrapped plan missing execution contract: %q", got)
+	}
+	if !strings.Contains(got, "### Aphelion Ratification Record") {
+		t.Fatalf("wrapped plan missing ratification record: %q", got)
 	}
 }

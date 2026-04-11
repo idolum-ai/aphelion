@@ -40,6 +40,14 @@ type FaceRequest struct {
 	Runtime         RuntimeAwareness
 }
 
+type BrokerageArtifact struct {
+	IdolumProposal     string
+	RatifiedTurnMode   string
+	Ratification       string
+	RatifiedSteps      []string
+	RatificationRecord string
+}
+
 func BuildGovernorPrompt(req GovernorRequest) string {
 	return RenderSystemBlocks(BuildGovernorPromptBlocks(req))
 }
@@ -271,10 +279,12 @@ func RenderIdolumBrokerageForGovernor(faceName string, proposal string) string {
 	}, "\n\n")
 }
 
-func RenderBrokeragePlanForGovernor(idolumProposal string, plan string) string {
-	idolumProposal = strings.TrimSpace(idolumProposal)
-	plan = strings.TrimSpace(plan)
-	if idolumProposal == "" && plan == "" {
+func RenderBrokeragePlanForGovernor(artifact BrokerageArtifact) string {
+	artifact.IdolumProposal = strings.TrimSpace(artifact.IdolumProposal)
+	artifact.RatifiedTurnMode = strings.TrimSpace(artifact.RatifiedTurnMode)
+	artifact.Ratification = strings.TrimSpace(artifact.Ratification)
+	artifact.RatificationRecord = strings.TrimSpace(artifact.RatificationRecord)
+	if artifact.IdolumProposal == "" && artifact.RatificationRecord == "" && len(artifact.RatifiedSteps) == 0 {
 		return ""
 	}
 	parts := []string{
@@ -283,11 +293,34 @@ func RenderBrokeragePlanForGovernor(idolumProposal string, plan string) string {
 		"Keep both sides visible: Idolum's position says what conversational pressure should be applied, and Aphelion's ratification says what execution posture is actually approved.",
 		"Use the negotiated shape below to steer execution without forgetting where the tension came from.",
 	}
-	if idolumProposal != "" {
-		parts = append(parts, "### Idolum Position\n"+idolumProposal)
+	summary := make([]string, 0, 2)
+	if artifact.RatifiedTurnMode != "" {
+		summary = append(summary, fmt.Sprintf("- ratified_turn_mode: %s", artifact.RatifiedTurnMode))
 	}
-	if plan != "" {
-		parts = append(parts, "### Aphelion Ratification\n"+plan)
+	if artifact.Ratification != "" {
+		summary = append(summary, fmt.Sprintf("- ratification: %s", artifact.Ratification))
+	}
+	if len(summary) > 0 {
+		parts = append(parts, strings.Join(summary, "\n"))
+	}
+	if artifact.IdolumProposal != "" {
+		parts = append(parts, "### Idolum Position\n"+artifact.IdolumProposal)
+	}
+	if len(artifact.RatifiedSteps) > 0 {
+		lines := []string{"### Aphelion Execution Contract"}
+		for _, step := range artifact.RatifiedSteps {
+			step = strings.TrimSpace(step)
+			if step == "" {
+				continue
+			}
+			lines = append(lines, "- "+step)
+		}
+		if len(lines) > 1 {
+			parts = append(parts, strings.Join(lines, "\n"))
+		}
+	}
+	if artifact.RatificationRecord != "" {
+		parts = append(parts, "### Aphelion Ratification Record\n"+artifact.RatificationRecord)
 	}
 	return strings.Join(parts, "\n\n")
 }

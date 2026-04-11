@@ -52,8 +52,8 @@ Examples:
 
 - the governor is `Aphelion`
 - the default face is `Idolum`
-- the governor decides and acts
-- the face proposes and renders
+- the governor decides, acts, and authors the material floor
+- the face proposes, stages, and renders the visible scene
 - tools are machine-owned reality
 
 These facts belong in machine-owned prompt headers and constitutional specs, not in mutable operator memory.
@@ -139,9 +139,11 @@ At minimum, the governor should be made aware of:
 - channel
 - output capabilities
 - whether the reply will be rendered by `Idolum`, passed through, voiced, or kept silent
+- whether the current artifact is floor-authoring or scene-authoring
 - whether supported media is attached to the current turn
 - whether that media is being handled as vision input or extracted document text
 - Idolum's suggested turn mode and Aphelion's ratified turn mode when brokerage is active
+- Aphelion's ratification disposition when brokerage is active
 
 ## Governor vs Idolum
 
@@ -169,7 +171,7 @@ That usually includes:
 - channel
 - visible delivery mode
 - whether the turn is degraded
-- canonical governor reply
+- governor-owned material floor
 - user-visible context
 
 It should not receive raw tool schemas, root maps, or other deep execution details unless they matter for honesty in the reply.

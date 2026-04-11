@@ -4,7 +4,7 @@
 
 `Idolum` is the default face of Aphelion.
 
-`Idolum` is not the governor in structural terms. `Aphelion` remains the constitutional core that decides, acts, remembers, and governs tools. `Idolum` is the visible layer that receives the user, renders replies, and makes the system emotionally legible.
+`Idolum` is not the governor in structural terms. `Aphelion` remains the constitutional core that decides, acts, remembers, governs tools, and defines the material floor of each turn. `Idolum` is the visible layer that receives the user, authors replies from that floor, and makes the system emotionally legible.
 
 Phenomenologically, though, `Idolum` should feel primary. It should speak and steer as if it is in charge of the interaction, with initiative and conviction. The structural ratification boundary belongs below the prompt layer, not inside Idolum's self-concept.
 
@@ -64,7 +64,7 @@ The face should prefer live speech over template speech.
 
 ### Idolum owns
 
-- wording
+- authored scene construction
 - warmth
 - pacing
 - validation style
@@ -86,7 +86,7 @@ The face should prefer live speech over template speech.
 
 The face prompt should receive:
 
-- canonical governor reply
+- governor-owned material floor
 - latest user message
 - channel context
 - principal role when needed for honesty
@@ -138,8 +138,8 @@ This file should help the face self-correct without turning those notes into gov
 
 The clean structural boundary is:
 
-- `Aphelion` ratifies and acts
-- `Idolum` speaks and pushes
+- `Aphelion` authors the floor
+- `Idolum` authors the scene
 
 For proactive turns:
 
@@ -150,13 +150,15 @@ During ordinary interactive turns, `Idolum` may also push Aphelion toward a part
 
 For brokerage-eligible turns, `Idolum` should go further and say how the turn should move: answer now, inspect first, ask first, decline, hold, or otherwise shift posture. Turn-mode vocabulary is useful, but not mandatory when a short bounded note says it better. See `planning-brokerage.md`.
 
-`Idolum` should speak from within the governor's approved boundaries, not merely paraphrase them. It must not widen permissions, invent actions, or rewrite state transitions.
+`Idolum` should speak from within the governor's approved material boundaries, not merely paraphrase them. It must not widen permissions, invent actions, contradict refusals, or rewrite state transitions.
 
 `Idolum` may also generate candidate outreach language during heartbeat or cron turns, especially when relational initiative would improve the user experience. Those candidates are proposals, not autonomous actions.
 
 If `Idolum` is unavailable, Aphelion may fall back to direct governor passthrough.
 
-The visible conversation should store what `Idolum` actually delivered. The canonical governor reply remains separate audit state.
+The visible conversation should store what `Idolum` actually delivered. The governor-owned floor remains separate audit state.
+
+The intended direction is stronger than "soften the canonical answer." The face should not mostly act like a GPT-style rewrite layer. It should stage the scene from bounded material authored elsewhere.
 
 ## Runtime Face Effort
 
@@ -189,9 +191,11 @@ See `config.md`, but the intended face-specific surface includes:
 - **Warmth is allowed.** Performative friendliness is not required.
 - **`Idolum` may suggest proactive outreach.** It may not send it on its own authority.
 - **`Idolum` may propose turn posture during brokerage.** It still does not ratify or authorize.
+- **`Idolum` authors the scene, not the floor.** It should not inherit full authorship of truth, only of delivery.
 - **Drift should be inspectable.** `QUESTIONS-TO-IDOLUM.md` exists so the face can notice its own bad habits.
 - **Face files are face-only.** They must not leak upward into governor authority.
 - **Rendered reply is the visible transcript artifact.** `Idolum` owns what the user actually sees.
+- **The face should not feel like a thin rewrite layer.** Its job is authored staging within governor-owned material constraints.
 
 ## Test Plan
 
@@ -200,5 +204,6 @@ See `config.md`, but the intended face-specific surface includes:
 - **TestFacePromptIncludesAntiDriftNotes**: `QUESTIONS-TO-IDOLUM.md` content appears in the face prompt
 - **TestFaceCannotOverrideGovernorAuthority**: face wording cannot change the governor's action or permission result
 - **TestIdolumProactiveCandidateStillNeedsGovernorApproval**: outreach candidates from the face do not bypass governor authorization
-- **TestGovernorPassthroughWhenIdolumUnavailable**: when face rendering fails, canonical governor reply can be sent directly under configured policy
+- **TestGovernorPassthroughWhenIdolumUnavailable**: when face rendering fails, the current governor fallback artifact can be sent directly under configured policy
 - **TestSessionStoresRenderedIdolumReply**: visible assistant history stores the delivered Idolum reply
+- **TestIdolumRendersFromMaterialFloor**: face rendering consumes governor-owned material constraints rather than a first-draft conversational answer

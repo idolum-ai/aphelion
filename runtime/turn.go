@@ -127,7 +127,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		extraUsage = addTokenUsage(extraUsage, usage)
 		if ratifyErr != nil {
 			log.Printf("WARN turn brokerage ratification failed backend=%s err=%v; rerunning plain proposal path", exec.Backend, ratifyErr)
-			brokerage.RatifiedPlan = ""
+			brokerage.Ratification = ""
+			brokerage.RatificationRecord = ""
+			brokerage.RatifiedSteps = nil
 			brokerage.RatifiedTurnMode = ""
 			proposal, proposalUsage, proposalErr := requestFaceNote("proposal", baseGovernorAwareness)
 			if proposalErr != nil {
@@ -137,6 +139,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 				brokerage.Active = brokerage.IdolumNote != ""
 				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
 				brokerage.SuggestedTurnMode = ""
+				brokerage.Ratification = ""
+				brokerage.RatificationRecord = ""
+				brokerage.RatifiedSteps = nil
 				extraUsage = addTokenUsage(extraUsage, proposalUsage)
 			}
 		} else {

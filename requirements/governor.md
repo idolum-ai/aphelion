@@ -13,7 +13,7 @@ The governor's name is **Aphelion**.
 
 `Aphelion` is the constitutional identity of the system: the layer that decides, acts, remembers, and governs tools. The face may have its own name, tone, or personas without replacing that core identity. The default face is `Idolum`.
 
-The governor owns truth, action, tools, memory writes, and authority. The face owns warmth, phrasing, channel presentation, and assertive conversational initiative.
+The governor owns truth, action, tools, memory writes, authority, and the material floor of the turn. The face owns warmth, phrasing, channel presentation, assertive conversational initiative, and the authored scene the user actually receives.
 
 For supported media turns, the governor remains the decision layer. The runtime may choose a different execution backend for that turn when the default governor backend cannot actually perceive the attached media.
 
@@ -54,16 +54,17 @@ This split exists because the system layer and the user-facing layer optimize fo
 - machine-authored runtime self-description
 - memory writes
 - review-event creation
-- canonical assistant decision for the turn
+- canonical material floor for the turn
+- facts, refusals, commitments, allowed actions, and hard scene constraints
 - authorization of proactive outreach
 - continuity of identity as `Aphelion`
 
 ### Face owns
 
-- user-facing wording
+- user-facing authorship
 - warmth and validation style
 - formatting for the target channel
-- optional summarization or softening of the governor's reply
+- scene construction from governor-owned material
 - optional outreach candidates for proactive turns
 - assertive advice about what the governor should do next
 - continuity of face identity as `Idolum`
@@ -93,7 +94,9 @@ This split exists because the system layer and the user-facing layer optimize fo
 
 ## Decision Model
 
-The governor produces the canonical result of the turn.
+The governor should not primarily author the final user-visible prose on ordinary persona turns.
+
+Instead, the governor should produce the canonical **material floor** of the turn: the bounded execution and truth artifact the face is allowed to speak from.
 
 ```go
 type Governor interface {
@@ -109,14 +112,23 @@ type GovernorTurn struct {
 }
 
 type GovernorDecision struct {
-    CanonicalReply string
+    MaterialPacket MaterialPacket
     ToolLog        []string
     Usage          TokenUsage
     Audit          map[string]string
 }
+
+type MaterialPacket struct {
+    Facts            []string
+    AllowedActions   []string
+    Commitments      []string
+    Refusals         []string
+    SceneConstraints []string
+    Notes            []string
+}
 ```
 
-The face takes the governor's canonical result and renders the user-visible output.
+The face takes the governor's material floor and authors the user-visible output.
 
 ```go
 type Face interface {
@@ -126,7 +138,7 @@ type Face interface {
 type RenderRequest struct {
     Principal      Principal
     Inbound        core.InboundMessage
-    CanonicalReply string
+    MaterialPacket MaterialPacket
 }
 
 type RenderedReply struct {
@@ -138,13 +150,22 @@ The exact types may evolve, but the ownership boundary should remain stable.
 
 The key distinction is:
 
-- canonical governor reply = decision artifact
-- rendered face reply = delivered conversation artifact
+- material floor = governor-owned decision artifact
+- rendered face reply = Idolum-authored delivered conversation artifact
 
 For proactive turns, a second distinction matters:
 
 - face may suggest outreach
 - governor authorizes delivery
+
+### Transitional compatibility
+
+During migration, the implementation may still serialize the governor artifact as a text-shaped canonical sidecar.
+
+That should be treated as a temporary encoding detail, not the intended long-term contract. The architectural goal remains:
+
+- `Aphelion` authors the floor
+- `Idolum` authors the scene
 
 ## Lifecycle
 
@@ -156,10 +177,13 @@ For each inbound DM turn:
 4. assemble governor prompt/context
 5. run governor backend
 6. apply any governor-owned side effects
-7. run face backend or passthrough rendering
-8. persist the visible assistant reply to the session ledger
-9. persist canonical governor reply as sidecar audit data
-10. send outbound channel message
+7. emit the canonical material floor for the turn
+8. run face backend or passthrough rendering from that floor
+9. persist the visible assistant reply to the session ledger
+10. persist the governor-owned floor as sidecar audit state
+11. send outbound channel message
+
+If passthrough is used, that is a degraded delivery mode rather than the ideal architecture.
 
 ## Codex-First Governor
 
@@ -182,7 +206,7 @@ The existing provider/tool loop remains valid as the native governor path:
 
 - inference provider call
 - tool loop
-- final canonical reply
+- final material floor output
 
 This path should continue to satisfy the same governor contract so the rest of Aphelion does not care which governor backend is active.
 
@@ -196,9 +220,9 @@ When that happens, the governor should be made aware of the degraded path explic
 
 The face may:
 
-- soften tone
-- add validation
-- rephrase for clarity
+- author the visible scene from the material floor
+- choose pacing, emphasis, and arrangement
+- add validation when compatible with the floor
 - adapt to the user's style
 - use `Idolum`-specific identity and anti-drift guidance
 - push the governor toward a warmer, sharper, or more proactive next move
@@ -211,9 +235,15 @@ The face must not:
 - change action decisions
 - widen authority
 - claim writes or memory changes the governor did not make
+- contradict the material floor
 - send proactive messages without governor authorization
 
-If the face backend is unavailable, Aphelion may send the governor's canonical reply directly.
+If the face backend is unavailable, Aphelion may send the governor's current fallback artifact directly.
+
+That passthrough should be understood as a fallback, not as the ideal normal path. The normal path is:
+
+- governor constrains
+- face authors
 
 For brokerage-eligible interactive turns, the ordinary one-way proposal path should become a bounded negotiation:
 
@@ -276,19 +306,22 @@ profile = "idolum"
 - **The default face is `Idolum`.** That identity belongs to the visible conversational layer.
 - **Idolum is phenomenologically primary.** It should feel like the one leading the conversation.
 - **The ratification boundary is structural, not theatrical.** Idolum should not be constantly reminded that it is subordinate.
+- **Aphelion owns the material floor.** It defines what is true, permitted, refused, and committed for the turn.
+- **Idolum authors the scene.** It decides how the bounded material is spoken to the user.
 - **Face may suggest outreach.** It may not self-authorize outreach.
-- **Canonical and rendered replies are different artifacts.** The governor decides one; the face delivers the other.
+- **Canonical floor and rendered scene are different artifacts.** The governor authors one; the face authors the other.
 - **Codex-first is intentional.** If the user already has Codex access, Aphelion should be able to use it as the governing core.
 - **Fallback matters.** Native governor support keeps the system usable without Codex.
 
 ## Test Plan
 
-- **TestGovernorDecidesBeforeFaceRender**: face receives canonical reply from governor rather than raw user input only
+- **TestGovernorDecidesBeforeFaceRender**: face receives governor-owned material rather than raw user input only
+- **TestGovernorProducesMaterialFloorBeforeFaceRender**: face receives governor-owned material constraints rather than first-draft visible prose
 - **TestFaceCannotInvokeTools**: tool execution remains governor-only
 - **TestFaceCannotSelfAuthorizeProactiveMessage**: proactive delivery still requires governor authorization
-- **TestGovernorPassthroughFallback**: with `face.backend = "governor_passthrough"`, canonical reply is sent directly
+- **TestGovernorPassthroughFallback**: with `face.backend = "governor_passthrough"`, the current governor fallback artifact is sent directly
 - **TestGovernorBackendAutoPrefersCodex**: with Codex available and `backend = "auto"`, Codex governor is selected
 - **TestGovernorBackendFallsBackNative**: without Codex, native governor is selected
-- **TestFaceFailureFallsBackCanonical**: face backend failure can degrade to canonical governor reply under configured policy
+- **TestFaceFailureFallsBackCanonical**: face backend failure can degrade to direct governor delivery under configured policy
 - **TestVisibleLedgerStoresRenderedReply**: session history replays the delivered face-rendered reply
-- **TestCanonicalReplyStoredAsAuditArtifact**: canonical governor reply is stored alongside the session without polluting the visible transcript
+- **TestMaterialFloorStoredAsAuditArtifact**: governor-owned material floor is stored alongside the session without polluting the visible transcript

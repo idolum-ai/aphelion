@@ -9,7 +9,7 @@ Prompt assembly has two distinct targets:
 - **governor prompt**
 - **face prompt(s)**
 
-The governor prompt carries authority, execution reality, and tool policy. The face prompt carries interaction style and rendering guidance.
+The governor prompt carries authority, execution reality, tool policy, and the material floor contract. The face prompt carries interaction style, scene authorship guidance, and delivery constraints.
 
 The governor prompt defines **Aphelion**. The default face prompt defines **Idolum**. Idolum may vary in tone or style over time, but it must not replace or contradict the governor's identity.
 
@@ -108,11 +108,11 @@ There are two useful face artifacts:
 
 - a **proposal prompt** that lets `Idolum` push the governor before it decides
 - a **brokerage prompt** that lets `Idolum` push how the turn should move before the governor answers with what posture it can ratify
-- a **render prompt** that lets `Idolum` speak what the user actually receives after the governor authorizes the turn
+- a **render prompt** that lets `Idolum` author what the user actually receives after the governor authorizes the turn
 
 It should receive:
 
-- canonical governor reply or other machine-approved turn boundary
+- governor-owned material floor or other machine-approved turn boundary
 - channel information
 - interaction style
 - face-specific identity and anti-drift rules
@@ -132,7 +132,7 @@ The default face prompt should be assembled in layers.
 1. machine-generated face header
 2. stable face files
 3. dynamic face files
-4. canonical governor reply
+4. material floor
 5. latest user message
 6. channel/rendering context
 
@@ -142,6 +142,7 @@ The machine-generated face header should state that:
 - `Idolum` is the apparent lead of the conversation
 - structural ratification happens below the prompt layer
 - `Idolum` should not present itself as a subordinate translator
+- `Idolum` is authoring the visible scene from governor-owned material rather than merely softening a prewritten answer
 
 ### Stable face files
 
@@ -159,12 +160,12 @@ The session ledger primarily stores the user-visible transcript.
 
 Review digests, bot notices, and face-rendered replies should enter the session history as conversation items. They should not be silently merged into the governor prompt as hidden memory.
 
-Canonical governor artifacts may later be stored alongside the session for audit, but they are not a replacement for the visible ledger.
+Governor-owned material artifacts may be stored alongside the session for audit, but they are not a replacement for the visible ledger.
 
 The replay rule is:
 
 - visible transcript replays rendered replies
-- canonical governor artifacts remain sidecar audit state
+- governor-owned material artifacts remain sidecar audit state
 
 ## Config Surface
 
@@ -186,6 +187,7 @@ See `config.md`, but prompt-related ownership should include:
 - **Idolum should feel primary from inside the conversation.** The hard boundary should live in code and machine-owned reality, not in constant self-subordination cues.
 - **`Aphelion` belongs to the governor layer.** Face personas may vary without replacing the governor's identity.
 - **`Idolum` is the default face.** It owns presentation, not authority.
+- **Render prompts should carry floor, not first-draft scene.** The face should author the final visible reply from bounded material rather than revise a GPT-like answer by default.
 - **`USER.md` is operator-facing in v0.** Per-user memory belongs elsewhere.
 - **Face files are separate from governor files.** `IDOLUM.md` and `QUESTIONS-TO-IDOLUM.md` must not leak into governor authority.
 
@@ -198,4 +200,5 @@ See `config.md`, but prompt-related ownership should include:
 - **TestFacePromptOmitsToolDefinitions**: face prompt does not include tool schemas or authority rules
 - **TestFacePromptLoadsIdolumFilesOnly**: `IDOLUM.md` and `QUESTIONS-TO-IDOLUM.md` are loaded into the face prompt and excluded from the governor prompt
 - **TestReviewDigestStoredAsHistoryNotHiddenPrompt**: delivered review digest enters conversation history instead of hidden prompt state
-- **TestVisibleReplayUsesRenderedReply**: visible session replay uses the delivered face-rendered reply rather than the canonical sidecar artifact
+- **TestVisibleReplayUsesRenderedReply**: visible session replay uses the delivered face-rendered reply rather than the governor sidecar artifact
+- **TestFaceRenderPromptReceivesMaterialFloor**: render prompt receives governor-owned material constraints rather than a first-draft conversational answer

@@ -99,6 +99,7 @@ Examples:
 - Codex unavailable in `auto` mode -> native governor
 - native Anthropic unavailable after bounded retries -> OpenRouter when configured
 - reflection failure -> skip reflection, continue heartbeat
+- malformed brokerage ratification -> plain proposal fallback
 
 ### 4. Never silently pretend success
 
