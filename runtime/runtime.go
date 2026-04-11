@@ -137,10 +137,7 @@ func New(
 		return nil, fmt.Errorf("resolve governor auth: %w", err)
 	}
 
-	faceBackend := face.Backend(strings.ToLower(strings.TrimSpace(cfg.Face.Backend)))
-	if faceBackend == "" {
-		faceBackend = face.BackendProvider
-	}
+	faceBackend := face.NormalizeBackend(cfg.Face.Backend)
 
 	if provider == nil && (governorAuth.Backend == governorauth.BackendNative || faceBackend == face.BackendProvider) {
 		return nil, fmt.Errorf("native provider is required for configured governor/face backends")
@@ -169,7 +166,7 @@ func New(
 	switch faceBackend {
 	case face.BackendProvider:
 		faceProvider = provider
-	case face.BackendGovernorPassthrough:
+	case face.BackendFloorFallback:
 		faceProvider = activeProvider
 	default:
 		return nil, fmt.Errorf("unsupported face backend: %q", cfg.Face.Backend)
@@ -289,6 +286,8 @@ func normalizeRuntimeConfig(cfg *config.Config) *config.Config {
 	}
 	copy := *cfg
 	copy.Agent = cfg.Agent
+	copy.Face = cfg.Face
+	copy.Face.Backend = string(face.NormalizeBackend(cfg.Face.Backend))
 	copy.Agent.PromptRoot = cfg.Agent.EffectivePromptRoot()
 	copy.Agent.ExecRoot = cfg.Agent.EffectiveExecRoot()
 	copy.Agent.SharedMemoryRoot = cfg.Agent.EffectiveSharedMemoryRoot()

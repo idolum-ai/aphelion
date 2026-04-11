@@ -65,7 +65,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	currentFaceModel := r.currentFaceRenderer()
 	requestFaceNote := func(mode string, awareness prompt.RuntimeAwareness) (string, core.TokenUsage, error) {
 		proposer, ok := currentFaceModel.(face.Proposer)
-		if !ok || r.faceBackend == face.BackendGovernorPassthrough {
+		if !ok || r.faceBackend == face.BackendFloorFallback {
 			return "", core.TokenUsage{}, nil
 		}
 		proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
@@ -190,8 +190,8 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 
 	sess.TurnCount++
-	materialFloor, canonicalReply, _ := governorMaterialArtifact(result.Text, useMaterialFloor)
-	replyText := canonicalReply
+	materialFloor, floorText, _ := governorMaterialArtifact(result.Text, useMaterialFloor)
+	replyText := floorText
 	outboundID := int64(0)
 	outboundType := ""
 	streamedReply := false
@@ -206,25 +206,25 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	} else if facePolicy.Render {
 		faceAwareness.DeliveryMode = "idolum_render"
 	}
-	if r.faceBackend != face.BackendGovernorPassthrough && currentFaceModel != nil {
+	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
 		renderReq := face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
 			Channel:         "telegram",
 			PrincipalRole:   string(actor.Role),
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			CanonicalReply:  canonicalReply,
+			FloorText:       floorText,
 			MaterialFloor:   materialFloor,
 			LatestUserInput: prepared.LedgerText,
 			Runtime:         faceAwareness,
 		}
-		renderHeuristicText := canonicalReply
+		renderHeuristicText := floorText
 		if useMaterialFloor {
-			renderHeuristicText = materialFloorHeuristicText(materialFloor, canonicalReply)
+			renderHeuristicText = materialFloorHeuristicText(materialFloor, floorText)
 		}
 		shouldRender := shouldRenderIdolumReply(facePolicy, prepared.LedgerText, renderHeuristicText, result.ToolLog, outHistory[len(input):])
 		if !shouldRender && !r.shouldReplyWithVoice(prepared.InboundWasVoice) {
-			faceAwareness.DeliveryMode = "governor_passthrough"
+			faceAwareness.DeliveryMode = "floor_fallback"
 			renderReq.Runtime = faceAwareness
 		}
 
@@ -245,7 +245,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 						faceRendered = true
 						replyText = strings.TrimSpace(renderedReply)
 						if replyText == "" {
-							replyText = canonicalReply
+							replyText = floorText
 						}
 						extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 						outboundID, err = editor.Finish(ctx)
@@ -269,11 +269,11 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			}
 			renderedReply, renderErr := currentFaceModel.Render(ctx, renderReq)
 			if renderErr != nil {
-				log.Printf("WARN face render failed backend=%s err=%v; using governor_passthrough", r.faceBackend, renderErr)
+				log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback", r.faceBackend, renderErr)
 			} else {
 				replyText = strings.TrimSpace(renderedReply)
 				if replyText == "" {
-					replyText = canonicalReply
+					replyText = floorText
 				}
 				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 			}
@@ -285,9 +285,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if err != nil {
 		return nil, fmt.Errorf("convert new messages: %w", err)
 	}
-	newMessages = replaceLastAssistantWithRenderedReply(newMessages, replyText)
-	newMessages = setLastAssistantCanonical(newMessages, canonicalReply)
-	sess.LastCanonicalReply = canonicalReply
+	newMessages = replaceLastAssistantWithSceneText(newMessages, replyText)
+	newMessages = setLastAssistantFloor(newMessages, floorText)
+	sess.LastFloorText = floorText
 
 	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
 		return nil, fmt.Errorf("save session: %w", err)
@@ -339,8 +339,8 @@ func addTokenUsage(dst core.TokenUsage, src core.TokenUsage) core.TokenUsage {
 	return dst
 }
 
-func replaceLastAssistantWithRenderedReply(messages []session.Message, renderedReply string) []session.Message {
-	trimmed := strings.TrimSpace(renderedReply)
+func replaceLastAssistantWithSceneText(messages []session.Message, sceneText string) []session.Message {
+	trimmed := strings.TrimSpace(sceneText)
 	if trimmed == "" {
 		return messages
 	}
@@ -378,7 +378,7 @@ func (r *Runtime) enqueueReviewEventsForTurn(
 	msg core.InboundMessage,
 	turnIndex int,
 	userText string,
-	renderedReply string,
+	sceneText string,
 	toolLog []string,
 ) error {
 	targets := uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)
@@ -387,13 +387,13 @@ func (r *Runtime) enqueueReviewEventsForTurn(
 	}
 
 	summary := session.BuildReviewSummary(session.ReviewSummaryInput{
-		SourceChatID:  msg.ChatID,
-		SourceUserID:  msg.SenderID,
-		SourceRole:    string(actor.Role),
-		TurnIndex:     turnIndex,
-		UserText:      userText,
-		RenderedReply: renderedReply,
-		ToolLog:       toolLog,
+		SourceChatID: msg.ChatID,
+		SourceUserID: msg.SenderID,
+		SourceRole:   string(actor.Role),
+		TurnIndex:    turnIndex,
+		UserText:     userText,
+		SceneText:    sceneText,
+		ToolLog:      toolLog,
 	}, session.DefaultReviewSummaryMaxChars)
 
 	for _, adminChatID := range targets {

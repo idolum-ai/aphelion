@@ -140,15 +140,15 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 		GovernorName:    "Aphelion",
 		FaceName:        "Idolum",
 		Channel:         "telegram",
-		CanonicalReply:  "I changed the file.",
+		FloorText:       "I changed the file.",
 		LatestUserInput: "please update it",
 	})
 
 	if strings.Contains(got, "## Tool Manifest") || strings.Contains(got, "exec constraints") {
 		t.Fatalf("face prompt should not include tool definitions: %q", got)
 	}
-	if !strings.Contains(got, "## Canonical Governor Reply") {
-		t.Fatalf("face prompt missing canonical reply section: %q", got)
+	if !strings.Contains(got, "## Serialized Floor Fallback") {
+		t.Fatalf("face prompt missing serialized floor fallback section: %q", got)
 	}
 	if !strings.Contains(got, "## Delivery Awareness") {
 		t.Fatalf("face prompt missing delivery awareness block: %q", got)
@@ -166,7 +166,7 @@ func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",
-		CanonicalReply:  "Canonical answer",
+		FloorText:       "Canonical answer",
 		LatestUserInput: "What changed?",
 		StableFiles: []workspace.LoadedFile{
 			{Path: "IDOLUM.md", Content: "idolum defaults"},
@@ -189,12 +189,12 @@ func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 	stableIdx := strings.Index(got, "## Stable Face Files")
 	awarenessIdx := strings.Index(got, "## Delivery Awareness")
 	dynamicIdx := strings.Index(got, "## Dynamic Face Files")
-	canonicalIdx := strings.Index(got, "## Canonical Governor Reply")
+	floorIdx := strings.Index(got, "## Serialized Floor Fallback")
 	userIdx := strings.Index(got, "## Latest User Message")
-	if awarenessIdx == -1 || stableIdx == -1 || dynamicIdx == -1 || canonicalIdx == -1 || userIdx == -1 {
+	if awarenessIdx == -1 || stableIdx == -1 || dynamicIdx == -1 || floorIdx == -1 || userIdx == -1 {
 		t.Fatalf("face prompt missing expected layered sections: %q", got)
 	}
-	if !(awarenessIdx < stableIdx && stableIdx < dynamicIdx && dynamicIdx < canonicalIdx && canonicalIdx < userIdx) {
+	if !(awarenessIdx < stableIdx && stableIdx < dynamicIdx && dynamicIdx < floorIdx && floorIdx < userIdx) {
 		t.Fatalf("face prompt sections are out of order: %q", got)
 	}
 }
@@ -207,7 +207,7 @@ func TestBuildFacePromptPrefersMaterialFloorWhenPresent(t *testing.T) {
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",
-		CanonicalReply:  "legacy canonical",
+		FloorText:       "legacy canonical",
 		MaterialFloor:   core.MaterialPacket{Facts: []string{"The repo was inspected."}, SceneConstraints: []string{"Keep the tone grounded."}},
 		LatestUserInput: "What changed?",
 	})
@@ -215,8 +215,8 @@ func TestBuildFacePromptPrefersMaterialFloorWhenPresent(t *testing.T) {
 	if !strings.Contains(got, "## Governor Material Floor") {
 		t.Fatalf("face prompt missing material floor section: %q", got)
 	}
-	if strings.Contains(got, "## Canonical Governor Reply") {
-		t.Fatalf("face prompt should prefer material floor over canonical fallback: %q", got)
+	if strings.Contains(got, "## Serialized Floor Fallback") {
+		t.Fatalf("face prompt should prefer material floor over serialized floor fallback: %q", got)
 	}
 	if !strings.Contains(got, "FACTS:") || !strings.Contains(got, "SCENE_CONSTRAINTS:") {
 		t.Fatalf("face prompt missing rendered material packet: %q", got)
@@ -235,8 +235,8 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 		Mode:            "proposal",
 	})
 
-	if strings.Contains(got, "## Canonical Governor Reply") {
-		t.Fatalf("proposal prompt should not include canonical reply section: %q", got)
+	if strings.Contains(got, "## Serialized Floor Fallback") {
+		t.Fatalf("proposal prompt should not include floor fallback section: %q", got)
 	}
 	if !strings.Contains(got, "This is not turn-mode selection") {
 		t.Fatalf("proposal prompt missing boundary from brokerage: %q", got)
@@ -258,8 +258,8 @@ func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
 		Mode:            "brokerage",
 	})
 
-	if strings.Contains(got, "## Canonical Governor Reply") {
-		t.Fatalf("brokerage prompt should not include canonical reply section: %q", got)
+	if strings.Contains(got, "## Serialized Floor Fallback") {
+		t.Fatalf("brokerage prompt should not include floor fallback section: %q", got)
 	}
 	if !strings.Contains(got, "If you name a turn mode, put it on its own line as MODE:") {
 		t.Fatalf("brokerage prompt missing turn mode guidance: %q", got)
@@ -283,7 +283,7 @@ func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		LatestUserInput: "hello",
-		CanonicalReply:  "hi",
+		FloorText:       "hi",
 		StableFiles: []workspace.LoadedFile{
 			{Path: "IDOLUM.md", Content: "stable"},
 		},
@@ -355,7 +355,7 @@ func TestBuildFacePromptKeepsAwarenessNarrow(t *testing.T) {
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",
-		CanonicalReply:  "done",
+		FloorText:       "done",
 		LatestUserInput: "hello",
 		Runtime: RuntimeAwareness{
 			SessionKind:      "interactive",

@@ -33,7 +33,7 @@ type FaceRequest struct {
 	Channel         string
 	Style           string
 	PrincipalRole   string
-	CanonicalReply  string
+	FloorText       string
 	MaterialFloor   core.MaterialPacket
 	LatestUserInput string
 	StableFiles     []workspace.LoadedFile
@@ -233,12 +233,12 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 				Text: "## Governor Material Floor\n" + material,
 			})
 		} else {
-			canonical := strings.TrimSpace(req.CanonicalReply)
-			if canonical == "" {
-				canonical = "(no canonical reply provided)"
+			floorText := strings.TrimSpace(req.FloorText)
+			if floorText == "" {
+				floorText = "(no floor text provided)"
 			}
 			parts = append(parts, agent.SystemBlock{
-				Text: "## Canonical Governor Reply\n" + canonical,
+				Text: "## Serialized Floor Fallback\n" + floorText,
 			})
 		}
 	}

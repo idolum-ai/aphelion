@@ -333,7 +333,7 @@ func newSessionSearchStore(t *testing.T) *session.SQLiteStore {
 		sess.TurnCount = tc.turn
 		if err := store.Save(sess, []session.Message{
 			{Role: "user", Content: tc.userText, TurnIndex: tc.turn},
-			{Role: "assistant", Content: tc.reply, CanonicalContent: tc.reply, TurnIndex: tc.turn},
+			{Role: "assistant", Content: tc.reply, FloorContent: tc.reply, TurnIndex: tc.turn},
 		}, core.TokenUsage{}); err != nil {
 			t.Fatalf("Save(%v) err = %v", tc.key, err)
 		}

@@ -202,7 +202,7 @@ Additional per-channel or per-principal voice overrides may come later.
 - **TestVoiceOnlyRepliesToVoiceInput**: `voice_only` sends spoken replies only for voice-originated turns
 - **TestAllModeSpeaksForTextInput**: `all` mode also produces spoken replies for text turns
 - **TestOffModeUsesTextOnly**: `off` mode never emits TTS output
-- **TestVoiceReplyUsesIdolumRenderedText**: spoken output is synthesized from Idolum-rendered reply text
+- **TestVoiceReplyUsesDeliveredSceneText**: spoken output is synthesized from the delivered Idolum scene text
 - **TestTTSFallbackToText**: TTS failure still sends the text reply
 - **TestApprovedUserVoiceArtifactsStayIsolated**: non-admin audio/transcripts remain in isolated roots
-- **TestVisibleLedgerStoresTranscriptAndRenderedReply**: session replay remains text-first even when voice media is used
+- **TestVisibleLedgerStoresTranscriptAndScene**: session replay remains text-first even when voice media is used

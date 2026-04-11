@@ -11,13 +11,13 @@ func TestBuildReviewSummaryIncludesProvenance(t *testing.T) {
 	t.Parallel()
 
 	out := BuildReviewSummary(ReviewSummaryInput{
-		SourceChatID:  77,
-		SourceUserID:  88,
-		SourceRole:    "approved_user",
-		TurnIndex:     4,
-		UserText:      "hello",
-		RenderedReply: "hi there",
-		ToolLog:       []string{"exec:ok"},
+		SourceChatID: 77,
+		SourceUserID: 88,
+		SourceRole:   "approved_user",
+		TurnIndex:    4,
+		UserText:     "hello",
+		SceneText:    "hi there",
+		ToolLog:      []string{"exec:ok"},
 	}, 300)
 
 	if !strings.Contains(out, "provenance chat=77 user=88 role=approved_user turn=4") {
@@ -39,13 +39,13 @@ func TestBuildReviewSummaryIsBounded(t *testing.T) {
 
 	long := strings.Repeat("x", 500)
 	out := BuildReviewSummary(ReviewSummaryInput{
-		SourceChatID:  1,
-		SourceUserID:  2,
-		SourceRole:    "approved_user",
-		TurnIndex:     1,
-		UserText:      long,
-		RenderedReply: long,
-		ToolLog:       []string{long},
+		SourceChatID: 1,
+		SourceUserID: 2,
+		SourceRole:   "approved_user",
+		TurnIndex:    1,
+		UserText:     long,
+		SceneText:    long,
+		ToolLog:      []string{long},
 	}, 120)
 
 	if got := len([]rune(out)); got > 120 {

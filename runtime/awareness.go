@@ -183,7 +183,7 @@ func (r *Runtime) nativeModelName() string {
 
 func (r *Runtime) faceProviderName() string {
 	switch r.faceBackend {
-	case face.BackendGovernorPassthrough:
+	case face.BackendFloorFallback:
 		if state, ok := currentProviderRuntimeState(r.provider); ok && strings.TrimSpace(state.ActiveProvider) != "" {
 			return strings.TrimSpace(state.ActiveProvider)
 		}

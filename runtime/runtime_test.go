@@ -469,8 +469,8 @@ func TestHandleInboundPersistsAndSends(t *testing.T) {
 	if sess.Messages[0].Role != "user" || sess.Messages[1].Role != "assistant" {
 		t.Fatalf("roles = %#v %#v", sess.Messages[0], sess.Messages[1])
 	}
-	if sess.Messages[1].CanonicalContent != "ok" {
-		t.Fatalf("assistant canonical = %q, want ok", sess.Messages[1].CanonicalContent)
+	if sess.Messages[1].FloorContent != "ok" {
+		t.Fatalf("assistant floor = %q, want ok", sess.Messages[1].FloorContent)
 	}
 	if sess.Messages[1].Thinking != "Reasoning summary" {
 		t.Fatalf("assistant thinking = %q, want reasoning summary", sess.Messages[1].Thinking)
@@ -622,7 +622,7 @@ func TestHandleInboundApprovedUserDoesNotLoadGlobalDynamicMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.faceBackend = face.BackendGovernorPassthrough
+	rt.faceBackend = face.BackendFloorFallback
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     71,
@@ -849,16 +849,16 @@ func TestHandleInboundRendersFromStructuredMaterialFloor(t *testing.T) {
 	if !strings.Contains(provider.seenFaceSystem[0], "## Governor Material Floor") {
 		t.Fatalf("face prompt missing material floor section: %q", provider.seenFaceSystem[0])
 	}
-	if strings.Contains(provider.seenFaceSystem[0], "## Canonical Governor Reply") {
-		t.Fatalf("face prompt should not use canonical reply section when structured material is available: %q", provider.seenFaceSystem[0])
+	if strings.Contains(provider.seenFaceSystem[0], "## Serialized Floor Fallback") {
+		t.Fatalf("face prompt should not use serialized floor fallback when structured material is available: %q", provider.seenFaceSystem[0])
 	}
 
 	sess, err := store.Load(session.SessionKey{ChatID: 7201, UserID: 0})
 	if err != nil {
 		t.Fatalf("Load() err = %v", err)
 	}
-	if !strings.Contains(sess.LastCanonicalReply, "FACTS:") {
-		t.Fatalf("LastCanonicalReply = %q, want text-shaped material floor", sess.LastCanonicalReply)
+	if !strings.Contains(sess.LastFloorText, "FACTS:") {
+		t.Fatalf("LastFloorText = %q, want text-shaped material floor", sess.LastFloorText)
 	}
 }
 
@@ -1032,8 +1032,8 @@ func TestHandleInboundFallsBackToGovernorSidecarWhenFaceRenderFailsAfterMaterial
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want 1", len(sender.sent))
 	}
-	if sender.sent[0].Text != sess.LastCanonicalReply {
-		t.Fatalf("sent text = %q, want governor sidecar fallback %q", sender.sent[0].Text, sess.LastCanonicalReply)
+	if sender.sent[0].Text != sess.LastFloorText {
+		t.Fatalf("sent text = %q, want governor floor fallback %q", sender.sent[0].Text, sess.LastFloorText)
 	}
 	if !strings.Contains(sender.sent[0].Text, "FACTS:") {
 		t.Fatalf("sent fallback = %q, want text-shaped material floor", sender.sent[0].Text)
@@ -1097,13 +1097,13 @@ func TestHandleInboundCompactsLongSessionBeforeGovernorTurn(t *testing.T) {
 	long := strings.Repeat("memory-rich content ", 20)
 	if err := store.Save(sess, []session.Message{
 		{Role: "user", Content: "turn one " + long, TurnIndex: 1},
-		{Role: "assistant", Content: "reply one " + long, CanonicalContent: "reply one " + long, TurnIndex: 1},
+		{Role: "assistant", Content: "reply one " + long, FloorContent: "reply one " + long, TurnIndex: 1},
 		{Role: "user", Content: "turn two " + long, TurnIndex: 2},
-		{Role: "assistant", Content: "reply two " + long, CanonicalContent: "reply two " + long, TurnIndex: 2},
+		{Role: "assistant", Content: "reply two " + long, FloorContent: "reply two " + long, TurnIndex: 2},
 		{Role: "user", Content: "turn three " + long, TurnIndex: 3},
-		{Role: "assistant", Content: "reply three " + long, CanonicalContent: "reply three " + long, TurnIndex: 3},
+		{Role: "assistant", Content: "reply three " + long, FloorContent: "reply three " + long, TurnIndex: 3},
 		{Role: "user", Content: "turn four " + long, TurnIndex: 4},
-		{Role: "assistant", Content: "reply four " + long, CanonicalContent: "reply four " + long, TurnIndex: 4},
+		{Role: "assistant", Content: "reply four " + long, FloorContent: "reply four " + long, TurnIndex: 4},
 	}, core.TokenUsage{}); err != nil {
 		t.Fatalf("Save(seed) err = %v", err)
 	}
@@ -1224,8 +1224,8 @@ func TestHeartbeatTargetNoneStoresMaintenanceWithoutOutbound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(heartbeat session) err = %v", err)
 	}
-	if maintenance.LastCanonicalReply != "heartbeat canonical" {
-		t.Fatalf("maintenance canonical = %q, want heartbeat canonical", maintenance.LastCanonicalReply)
+	if maintenance.LastFloorText != "heartbeat canonical" {
+		t.Fatalf("maintenance floor = %q, want heartbeat canonical", maintenance.LastFloorText)
 	}
 	if len(maintenance.Messages) == 0 || maintenance.Messages[len(maintenance.Messages)-1].Content != "heartbeat canonical" {
 		t.Fatalf("maintenance messages = %#v, want canonical heartbeat entry", maintenance.Messages)
@@ -1286,14 +1286,14 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(admin session) err = %v", err)
 	}
-	if adminSession.LastCanonicalReply != "heartbeat canonical" {
-		t.Fatalf("admin canonical = %q, want heartbeat canonical", adminSession.LastCanonicalReply)
+	if adminSession.LastFloorText != "heartbeat canonical" {
+		t.Fatalf("admin floor = %q, want heartbeat canonical", adminSession.LastFloorText)
 	}
 	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "heartbeat rendered" {
 		t.Fatalf("admin messages = %#v, want rendered heartbeat entry", adminSession.Messages)
 	}
-	if adminSession.Messages[len(adminSession.Messages)-1].CanonicalContent != "heartbeat canonical" {
-		t.Fatalf("admin canonical content = %q, want heartbeat canonical", adminSession.Messages[len(adminSession.Messages)-1].CanonicalContent)
+	if adminSession.Messages[len(adminSession.Messages)-1].FloorContent != "heartbeat canonical" {
+		t.Fatalf("admin floor content = %q, want heartbeat canonical", adminSession.Messages[len(adminSession.Messages)-1].FloorContent)
 	}
 
 	events, err := store.PendingReviewEvents(1001, 10)
@@ -1483,8 +1483,8 @@ func TestCronJobNoneStoresDedicatedSessionWithoutOutbound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(cron session) err = %v", err)
 	}
-	if cronSession.LastCanonicalReply != "cron canonical" {
-		t.Fatalf("cron canonical = %q, want cron canonical", cronSession.LastCanonicalReply)
+	if cronSession.LastFloorText != "cron canonical" {
+		t.Fatalf("cron floor = %q, want cron canonical", cronSession.LastFloorText)
 	}
 	if len(cronSession.Messages) == 0 || cronSession.Messages[len(cronSession.Messages)-1].Content != "cron canonical" {
 		t.Fatalf("cron messages = %#v, want canonical cron entry", cronSession.Messages)
@@ -1528,14 +1528,14 @@ func TestCronJobAnnounceUsesFaceAndUpdatesAdminSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(admin session) err = %v", err)
 	}
-	if adminSession.LastCanonicalReply != "cron canonical" {
-		t.Fatalf("admin canonical = %q, want cron canonical", adminSession.LastCanonicalReply)
+	if adminSession.LastFloorText != "cron canonical" {
+		t.Fatalf("admin floor = %q, want cron canonical", adminSession.LastFloorText)
 	}
 	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "cron rendered" {
 		t.Fatalf("admin messages = %#v, want rendered cron entry", adminSession.Messages)
 	}
-	if adminSession.Messages[len(adminSession.Messages)-1].CanonicalContent != "cron canonical" {
-		t.Fatalf("admin canonical content = %q, want cron canonical", adminSession.Messages[len(adminSession.Messages)-1].CanonicalContent)
+	if adminSession.Messages[len(adminSession.Messages)-1].FloorContent != "cron canonical" {
+		t.Fatalf("admin floor content = %q, want cron canonical", adminSession.Messages[len(adminSession.Messages)-1].FloorContent)
 	}
 }
 
@@ -1700,8 +1700,8 @@ func TestStartupRecoveryLogsMaintenanceAnalysis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(maintenance) err = %v", err)
 	}
-	if maintenance.LastCanonicalReply != provider.replyText {
-		t.Fatalf("maintenance canonical = %q, want %q", maintenance.LastCanonicalReply, provider.replyText)
+	if maintenance.LastFloorText != provider.replyText {
+		t.Fatalf("maintenance floor = %q, want %q", maintenance.LastFloorText, provider.replyText)
 	}
 	if len(maintenance.Messages) != 2 || maintenance.Messages[0].Role != "user" || maintenance.Messages[1].Role != "assistant" {
 		t.Fatalf("maintenance messages = %#v, want synthetic user + assistant", maintenance.Messages)
@@ -1759,8 +1759,8 @@ func TestFaceProviderSelection(t *testing.T) {
 			},
 		},
 		{
-			name:        "governor_passthrough uses governor provider",
-			faceBackend: face.BackendGovernorPassthrough,
+			name:        "floor_fallback uses governor provider",
+			faceBackend: face.BackendFloorFallback,
 			resolveAuth: func(cfg config.GovernorConfig) (governorauth.Bundle, error) {
 				return governorauth.Bundle{Backend: governorauth.BackendCodex, BaseURL: "https://codex", AccessToken: "token"}, nil
 			},
@@ -1914,14 +1914,14 @@ func TestNewRejectsNilDependencies(t *testing.T) {
 	}
 }
 
-func TestNewAllowsNilProviderForCodexGovernorPassthrough(t *testing.T) {
+func TestNewAllowsNilProviderForCodexFloorFallback(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, _, sender := buildRuntimeFixtures(t)
 	cfg.Governor.Backend = "codex"
 	cfg.Governor.Codex.AuthSource = "codex_cli"
 	cfg.Governor.Codex.CodexHome = t.TempDir()
-	cfg.Face.Backend = "governor_passthrough"
+	cfg.Face.Backend = "floor_fallback"
 
 	authPath := filepath.Join(cfg.Governor.Codex.CodexHome, "auth.json")
 	rawAuth := `{"tokens":{"access_token":"codex-access","refresh_token":"refresh-secret","account_id":"acct"}}`
@@ -2013,7 +2013,7 @@ func TestHandleInboundApprovedUserDisablesToolsWithoutIsolationFloor(t *testing.
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.faceBackend = face.BackendGovernorPassthrough
+	rt.faceBackend = face.BackendFloorFallback
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     501,
@@ -2057,7 +2057,7 @@ func TestHandleInboundApprovedUserUsesPrincipalAwareToolsWhenSupported(t *testin
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.faceBackend = face.BackendGovernorPassthrough
+	rt.faceBackend = face.BackendFloorFallback
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     502,
@@ -2100,7 +2100,7 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.faceBackend = face.BackendGovernorPassthrough
+	rt.faceBackend = face.BackendFloorFallback
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     503,
@@ -2166,7 +2166,7 @@ func TestHandleInboundAdminFallsBackToLegacyToolsWhenPrincipalAwareNotReady(t *t
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.faceBackend = face.BackendGovernorPassthrough
+	rt.faceBackend = face.BackendFloorFallback
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     503,
@@ -2236,12 +2236,12 @@ func TestHandleInboundRendersViaFaceByDefault(t *testing.T) {
 	if sess.Messages[1].Content != "idolum rendered" {
 		t.Fatalf("session assistant text = %q, want rendered reply", sess.Messages[1].Content)
 	}
-	if sess.LastCanonicalReply != "governor canonical" {
-		t.Fatalf("session canonical sidecar = %q, want canonical", sess.LastCanonicalReply)
+	if sess.LastFloorText != "governor canonical" {
+		t.Fatalf("session floor sidecar = %q, want canonical", sess.LastFloorText)
 	}
 }
 
-func TestHandleInboundFaceFailureFallsBackToGovernorPassthrough(t *testing.T) {
+func TestHandleInboundFaceFailureFallsBackToFloorFallback(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -2277,15 +2277,15 @@ func TestHandleInboundFaceFailureFallsBackToGovernorPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() err = %v", err)
 	}
-	if sess.LastCanonicalReply != "governor canonical" {
-		t.Fatalf("session canonical sidecar = %q, want canonical", sess.LastCanonicalReply)
+	if sess.LastFloorText != "governor canonical" {
+		t.Fatalf("session floor sidecar = %q, want canonical", sess.LastFloorText)
 	}
 	if len(sess.Messages) < 2 || sess.Messages[1].Content != "governor canonical" {
 		t.Fatalf("visible transcript assistant content = %q, want canonical fallback", sess.Messages[1].Content)
 	}
 }
 
-func TestHandleInboundGovernorPassthroughBackendSkipsFaceRender(t *testing.T) {
+func TestHandleInboundFloorFallbackBackendSkipsFaceRender(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -2296,7 +2296,7 @@ func TestHandleInboundGovernorPassthroughBackendSkipsFaceRender(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.faceBackend = face.BackendGovernorPassthrough
+	rt.faceBackend = face.BackendFloorFallback
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     903,
@@ -2322,8 +2322,8 @@ func TestHandleInboundGovernorPassthroughBackendSkipsFaceRender(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() err = %v", err)
 	}
-	if sess.LastCanonicalReply != "governor canonical" {
-		t.Fatalf("session canonical sidecar = %q, want canonical", sess.LastCanonicalReply)
+	if sess.LastFloorText != "governor canonical" {
+		t.Fatalf("session floor sidecar = %q, want canonical", sess.LastFloorText)
 	}
 	if len(sess.Messages) < 2 || sess.Messages[1].Content != "governor canonical" {
 		t.Fatalf("visible transcript assistant content = %q, want canonical passthrough", sess.Messages[1].Content)
@@ -2583,7 +2583,7 @@ func TestHandleInboundUsesCodexGovernorBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.faceBackend = face.BackendGovernorPassthrough
+	rt.faceBackend = face.BackendFloorFallback
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     404,
@@ -2640,7 +2640,7 @@ func TestNewAutoFallsBackToNativeWhenCodexCredentialsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.faceBackend = face.BackendGovernorPassthrough
+	rt.faceBackend = face.BackendFloorFallback
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     405,
@@ -2686,7 +2686,7 @@ func TestNewAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.faceBackend = face.BackendGovernorPassthrough
+	rt.faceBackend = face.BackendFloorFallback
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     406,
@@ -2716,7 +2716,7 @@ func TestNewAutoPrefersCodexWhenCredentialsExist(t *testing.T) {
 func TestCodexRuntimeFailureFallsBackToNativeProviderChain(t *testing.T) {
 	cfg, store, nativeProvider, sender := buildRuntimeFixtures(t)
 	cfg.Governor.Backend = "codex"
-	cfg.Face.Backend = "governor_passthrough"
+	cfg.Face.Backend = "floor_fallback"
 
 	origFactory := newCodexProvider
 	defer func() { newCodexProvider = origFactory }()
@@ -2760,7 +2760,7 @@ func TestCodexRuntimeFailureFallsBackToNativeProviderChain(t *testing.T) {
 func TestImageTurnUsesNativeProviderWhenGovernorBackendIsCodex(t *testing.T) {
 	cfg, store, nativeProvider, sender := buildRuntimeFixtures(t)
 	cfg.Governor.Backend = "codex"
-	cfg.Face.Backend = "governor_passthrough"
+	cfg.Face.Backend = "floor_fallback"
 
 	origFactory := newCodexProvider
 	defer func() { newCodexProvider = origFactory }()

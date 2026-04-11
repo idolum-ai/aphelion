@@ -105,23 +105,23 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		return fmt.Errorf("invalid recovery output: history shrank from %d to %d", len(input), len(outHistory))
 	}
 
-	canonicalReply := strings.TrimSpace(result.Text)
-	if canonicalReply == "" {
-		canonicalReply = fallbackRecoverySummary(runs)
+	floorText := strings.TrimSpace(result.Text)
+	if floorText == "" {
+		floorText = fallbackRecoverySummary(runs)
 	}
 
 	maintenanceSession.ChatType = "system"
 	maintenanceSession.UserName = "startup-recovery"
 	maintenanceSession.SystemPrompt = systemPrompt
 	maintenanceSession.TurnCount++
-	maintenanceSession.LastCanonicalReply = canonicalReply
+	maintenanceSession.LastFloorText = floorText
 
 	newMessages, err := session.NewMessagesForTurn(requestText, outHistory[len(input):], maintenanceSession.TurnCount)
 	if err != nil {
 		return fmt.Errorf("convert recovery messages: %w", err)
 	}
-	newMessages = replaceLastAssistantWithRenderedReply(newMessages, canonicalReply)
-	newMessages = setLastAssistantCanonical(newMessages, canonicalReply)
+	newMessages = replaceLastAssistantWithSceneText(newMessages, floorText)
+	newMessages = setLastAssistantFloor(newMessages, floorText)
 	if err := r.store.Save(maintenanceSession, newMessages, result.TokenUsage); err != nil {
 		return fmt.Errorf("save recovery maintenance session: %w", err)
 	}
@@ -130,10 +130,10 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	for _, run := range runs {
 		ids = append(ids, run.ID)
 	}
-	if err := r.store.MarkTurnRunsRecovered(ids, canonicalReply); err != nil {
+	if err := r.store.MarkTurnRunsRecovered(ids, floorText); err != nil {
 		return fmt.Errorf("mark turn runs recovered: %w", err)
 	}
-	if err := r.deliverStartupRecoveryCatchup(ctx, systemPrompt, runs, canonicalReply); err != nil {
+	if err := r.deliverStartupRecoveryCatchup(ctx, systemPrompt, runs, floorText); err != nil {
 		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
 	}
 	return nil
@@ -191,7 +191,7 @@ func fallbackRecoverySummary(runs []session.TurnRun) string {
 	return strings.Join(lines, "\n")
 }
 
-func (r *Runtime) deliverStartupRecoveryCatchup(ctx context.Context, systemPrompt string, runs []session.TurnRun, canonicalReply string) error {
+func (r *Runtime) deliverStartupRecoveryCatchup(ctx context.Context, systemPrompt string, runs []session.TurnRun, floorText string) error {
 	adminIDs := uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)
 	if len(adminIDs) == 0 {
 		return nil
@@ -200,7 +200,7 @@ func (r *Runtime) deliverStartupRecoveryCatchup(ctx context.Context, systemPromp
 	if targetChatID == 0 {
 		targetChatID = adminIDs[0]
 	}
-	text := renderStartupRecoveryCatchup(runs, canonicalReply)
+	text := renderStartupRecoveryCatchup(runs, floorText)
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -217,7 +217,7 @@ func (r *Runtime) deliverStartupRecoveryCatchup(ctx context.Context, systemPromp
 	}
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
-	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, text, canonicalReply), core.TokenUsage{}); err != nil {
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, text, floorText), core.TokenUsage{}); err != nil {
 		return fmt.Errorf("save startup recovery admin session: %w", err)
 	}
 	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "startup_recovery"); err != nil {
@@ -226,7 +226,7 @@ func (r *Runtime) deliverStartupRecoveryCatchup(ctx context.Context, systemPromp
 	return nil
 }
 
-func renderStartupRecoveryCatchup(runs []session.TurnRun, canonicalReply string) string {
+func renderStartupRecoveryCatchup(runs []session.TurnRun, floorText string) string {
 	parts := []string{"Restart catch-up."}
 	if len(runs) == 1 {
 		parts = append(parts, "I recovered 1 interrupted turn.")
@@ -247,7 +247,7 @@ func renderStartupRecoveryCatchup(runs []session.TurnRun, canonicalReply string)
 			parts = append(parts, "Last tool in flight: "+tool+".")
 		}
 	}
-	if summary := sanitizeStartupRecoveryCatchupSummary(canonicalReply); summary != "" {
+	if summary := sanitizeStartupRecoveryCatchupSummary(floorText); summary != "" {
 		parts = append(parts, "Recovery note: "+sentenceAwareSummary(summary, 240))
 	}
 	parts = append(parts, "Next: investigate the interruption before returning to deferred work.")

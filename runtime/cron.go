@@ -97,8 +97,8 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		return fmt.Errorf("invalid cron output: history shrank from %d to %d", len(input), len(outHistory))
 	}
 
-	canonicalReply := strings.TrimSpace(result.Text)
-	if canonicalReply == "" {
+	floorText := strings.TrimSpace(result.Text)
+	if floorText == "" {
 		return nil
 	}
 
@@ -106,12 +106,12 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	cronSession.UserName = "cron:" + job.ID
 	cronSession.SystemPrompt = systemPrompt
 	cronSession.TurnCount++
-	cronSession.LastCanonicalReply = canonicalReply
+	cronSession.LastFloorText = floorText
 	newMessages, err := session.NewMessagesForTurn(requestText, outHistory[len(input):], cronSession.TurnCount)
 	if err != nil {
 		return fmt.Errorf("convert cron messages: %w", err)
 	}
-	newMessages = setLastAssistantCanonical(newMessages, canonicalReply)
+	newMessages = setLastAssistantFloor(newMessages, floorText)
 	if err := r.store.Save(cronSession, newMessages, result.TokenUsage); err != nil {
 		return fmt.Errorf("save cron session: %w", err)
 	}
@@ -125,9 +125,9 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		targetChatID = r.cfg.Principals.Telegram.AdminUserIDs[0]
 	}
 
-	replyText := canonicalReply
+	replyText := floorText
 	currentFaceModel := r.currentFaceRenderer()
-	if r.faceBackend != face.BackendGovernorPassthrough && currentFaceModel != nil {
+	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
 		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", governorExecution{})
 		faceAwareness.DeliveryMode = "cron_delivery"
 		renderedReply, renderErr := currentFaceModel.Render(ctx, face.RenderRequest{
@@ -136,12 +136,12 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 			Channel:         "telegram",
 			PrincipalRole:   "admin",
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			CanonicalReply:  canonicalReply,
+			FloorText:       floorText,
 			LatestUserInput: "[cron:" + job.ID + "]",
 			Runtime:         faceAwareness,
 		})
 		if renderErr != nil {
-			log.Printf("WARN cron face render failed backend=%s job=%s err=%v; using governor_passthrough", r.faceBackend, job.ID, renderErr)
+			log.Printf("WARN cron face render failed backend=%s job=%s err=%v; using floor_fallback", r.faceBackend, job.ID, renderErr)
 		} else if strings.TrimSpace(renderedReply) != "" {
 			replyText = strings.TrimSpace(renderedReply)
 		}
@@ -165,7 +165,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	}
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
-	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, canonicalReply), core.TokenUsage{}); err != nil {
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText), core.TokenUsage{}); err != nil {
 		return fmt.Errorf("save cron admin session: %w", err)
 	}
 	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "cron"); err != nil {

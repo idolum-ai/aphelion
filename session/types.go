@@ -34,12 +34,12 @@ type Session struct {
 	UserID       int64 // 0 for shared group sessions
 	Messages     []Message
 	SystemPrompt string
-	// LastCanonicalReply stores the governor-canonical assistant text for audit.
-	// The visible transcript in Messages stores the rendered Idolum reply.
-	LastCanonicalReply string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	TurnCount          int
+	// LastFloorText stores the governor-owned floor text sidecar for audit.
+	// The visible transcript in Messages stores the delivered scene text.
+	LastFloorText string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	TurnCount     int
 
 	// Cache tracking
 	CacheState CacheState
@@ -124,30 +124,30 @@ type TurnRun struct {
 
 // Message is one persisted conversation message.
 type Message struct {
-	ID               int64
-	ChatID           int64
-	UserID           int64
-	Role             string
-	Content          string
-	CanonicalContent string
-	ToolCalls        string
-	ToolID           string
-	ToolName         string
-	Thinking         string
-	CreatedAt        time.Time
-	TurnIndex        int
-	ContentChars     int
-	Compacted        bool
+	ID           int64
+	ChatID       int64
+	UserID       int64
+	Role         string
+	Content      string
+	FloorContent string
+	ToolCalls    string
+	ToolID       string
+	ToolName     string
+	Thinking     string
+	CreatedAt    time.Time
+	TurnIndex    int
+	ContentChars int
+	Compacted    bool
 }
 
 type SearchHit struct {
-	ChatID           int64
-	UserID           int64
-	TurnIndex        int
-	Role             string
-	Content          string
-	CanonicalContent string
-	CreatedAt        time.Time
+	ChatID       int64
+	UserID       int64
+	TurnIndex    int
+	Role         string
+	Content      string
+	FloorContent string
+	CreatedAt    time.Time
 }
 
 type RhizomeNode struct {

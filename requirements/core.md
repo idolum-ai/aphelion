@@ -33,8 +33,8 @@ This spec is **staged**. The initial "core runnable" milestone is the minimal en
 - **Telegram**: Long-polls the Bot API. Normalizes updates into `InboundMessage`. Sends `OutboundMessage` back. Knows Telegram formatting. Doesn't know about LLMs.
 - **Router**: Maps inbound messages to sessions by chat ID. Dispatches agent turns as goroutines. Enforces one-turn-at-a-time per session via per-session mutexes. Queues overflow.
 - **Runtime**: Owns the lifecycle for one inbound event: load session, assemble prompt context, run the governor, run the face, persist new messages, and send outbound results. This keeps `main.go` thin without pushing transport/store logic into `core.Router`.
-- **Governor**: Owns the canonical decision for a turn. This layer is named `Aphelion`. It may be backed by Codex or by the native provider/tool loop.
-- **Face**: Renders the governor's canonical result into the user-visible channel reply.
+- **Governor**: Owns the floor of a turn. This layer is named `Aphelion`. It may be backed by Codex or by the native provider/tool loop.
+- **Face**: Authors the user-visible scene from the governor-owned floor.
 - **Agent**: The native governor path. Runs a single conversational turn via the provider/tool loop.
 - **Session Store**: SQLite via CGo. Persists conversation history, system prompt snapshots, metadata. Start with a single-connection SQLite access model (`SetMaxOpenConns(1)`); add a dedicated writer goroutine only if contention or correctness requires it.
 
@@ -86,10 +86,10 @@ type Media struct {
    a. If backend is native: assemble API messages (governor prompt + history + new message)
    b. HTTP call to inference provider
    c. If response has tool calls → execute tools → append results → goto 8b
-   d. If response is text → canonical decision complete
-9. Runtime calls face backend or passthrough rendering
+   d. If response is text → floor complete
+9. Runtime calls face scene-authoring or floor fallback delivery
 10. Runtime persists updated session to SQLite
-11. Runtime sends rendered reply → OutboundMessage via Telegram
+11. Runtime sends delivered scene or fallback text → OutboundMessage via Telegram
 12. Router releases per-session mutex
 ```
 

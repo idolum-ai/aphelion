@@ -32,17 +32,17 @@ func decideInteractiveFacePolicy(sess *session.Session, userText string) faceTur
 	return faceTurnPolicy{Proposal: true, Render: true}
 }
 
-func shouldRenderIdolumReply(policy faceTurnPolicy, userText string, canonicalReply string, toolLog []string, generated []agent.Message) bool {
+func shouldRenderIdolumReply(policy faceTurnPolicy, userText string, floorText string, toolLog []string, generated []agent.Message) bool {
 	if !policy.Render {
 		return false
 	}
 	if len(toolLog) > 0 || generatedHasToolMessages(generated) {
 		return false
 	}
-	if looksMechanicalReply(canonicalReply) {
+	if looksMechanicalReply(floorText) {
 		return false
 	}
-	if isSimpleFactualTurn(userText) && countWords(canonicalReply) <= 24 {
+	if isSimpleFactualTurn(userText) && countWords(floorText) <= 24 {
 		return false
 	}
 	return true

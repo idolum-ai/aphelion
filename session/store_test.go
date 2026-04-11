@@ -180,7 +180,7 @@ func TestSearchMessagesFiltersByScopeAndReturnsNewestFirst(t *testing.T) {
 		sess.TurnCount = tc.turn
 		if err := store.Save(sess, []Message{
 			{Role: "user", Content: tc.userText, TurnIndex: tc.turn},
-			{Role: "assistant", Content: tc.reply, CanonicalContent: tc.reply, TurnIndex: tc.turn},
+			{Role: "assistant", Content: tc.reply, FloorContent: tc.reply, TurnIndex: tc.turn},
 		}, core.TokenUsage{}); err != nil {
 			t.Fatalf("Save(%v) err = %v", tc.key, err)
 		}
@@ -388,7 +388,7 @@ func newTestSQLiteStore(t *testing.T) *SQLiteStore {
 	return store
 }
 
-func TestSaveAndLoadCanonicalReplySidecar(t *testing.T) {
+func TestSaveAndLoadFloorSidecar(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
@@ -401,7 +401,7 @@ func TestSaveAndLoadCanonicalReplySidecar(t *testing.T) {
 	}
 
 	sess.TurnCount = 1
-	sess.LastCanonicalReply = "governor canonical"
+	sess.LastFloorText = "governor canonical"
 	if err := store.Save(sess, []Message{
 		{
 			Role:      "user",
@@ -409,10 +409,10 @@ func TestSaveAndLoadCanonicalReplySidecar(t *testing.T) {
 			TurnIndex: 1,
 		},
 		{
-			Role:             "assistant",
-			Content:          "idolum rendered",
-			CanonicalContent: "governor canonical",
-			TurnIndex:        1,
+			Role:         "assistant",
+			Content:      "idolum rendered",
+			FloorContent: "governor canonical",
+			TurnIndex:    1,
 		},
 	}, core.TokenUsage{}); err != nil {
 		t.Fatalf("Save() err = %v", err)
@@ -422,8 +422,8 @@ func TestSaveAndLoadCanonicalReplySidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() after save err = %v", err)
 	}
-	if got.LastCanonicalReply != "governor canonical" {
-		t.Fatalf("LastCanonicalReply = %q, want governor canonical", got.LastCanonicalReply)
+	if got.LastFloorText != "governor canonical" {
+		t.Fatalf("LastFloorText = %q, want governor canonical", got.LastFloorText)
 	}
 	if len(got.Messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(got.Messages))
@@ -431,12 +431,12 @@ func TestSaveAndLoadCanonicalReplySidecar(t *testing.T) {
 	if got.Messages[1].Content != "idolum rendered" {
 		t.Fatalf("assistant visible content = %q, want idolum rendered", got.Messages[1].Content)
 	}
-	if got.Messages[1].CanonicalContent != "governor canonical" {
-		t.Fatalf("assistant canonical content = %q, want governor canonical", got.Messages[1].CanonicalContent)
+	if got.Messages[1].FloorContent != "governor canonical" {
+		t.Fatalf("assistant floor content = %q, want governor canonical", got.Messages[1].FloorContent)
 	}
 }
 
-func TestInitMigratesLegacySessionsWithCanonicalColumn(t *testing.T) {
+func TestInitMigratesLegacySessionsWithFloorColumn(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
@@ -496,25 +496,25 @@ func TestInitMigratesLegacySessionsWithCanonicalColumn(t *testing.T) {
 	err = store.db.QueryRow(`
 			SELECT COUNT(1)
 			FROM pragma_table_info('sessions')
-			WHERE name = 'last_canonical_reply'
+			WHERE name = 'last_floor_text'
 		`).Scan(&hasColumn)
 	if err != nil {
 		t.Fatalf("query pragma_table_info: %v", err)
 	}
 	if hasColumn != 1 {
-		t.Fatalf("last_canonical_reply column count = %d, want 1", hasColumn)
+		t.Fatalf("last_floor_text column count = %d, want 1", hasColumn)
 	}
 
 	err = store.db.QueryRow(`
 			SELECT COUNT(1)
 			FROM pragma_table_info('messages')
-			WHERE name = 'canonical_content'
+			WHERE name = 'floor_content'
 		`).Scan(&hasColumn)
 	if err != nil {
 		t.Fatalf("query pragma_table_info(messages): %v", err)
 	}
 	if hasColumn != 1 {
-		t.Fatalf("canonical_content column count = %d, want 1", hasColumn)
+		t.Fatalf("floor_content column count = %d, want 1", hasColumn)
 	}
 
 	err = store.db.QueryRow(`

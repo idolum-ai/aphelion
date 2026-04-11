@@ -119,16 +119,16 @@ Cron should default toward artifacts and events first, not chatty conversational
 
 If a cron run does produce a user-visible message:
 
-1. the scheduled job produces a canonical governor result
+1. the scheduled job produces a governor floor
 2. `Idolum` may propose the user-facing phrasing
 3. the governor authorizes the outward message
 4. the delivered message enters the visible ledger of the target session
-5. the canonical cron output remains sidecar audit state
+5. the cron floor remains sidecar audit state
 
 This preserves the same rule used elsewhere:
 
-- visible ledger stores rendered output
-- canonical governor output remains sidecar audit state
+- visible ledger stores the delivered scene
+- governor floor remains sidecar audit state
 
 ## Proactivity Model
 
@@ -234,7 +234,7 @@ Later config may add:
 - **TestCronMainTargetDoesNotCollapseIntoHeartbeatSemantics**: main-target cron work remains identifiable as cron-originated
 - **TestCronUsesLightContextByDefault**: isolated cron jobs do not load the full workspace prompt surface
 - **TestCronIdolumSuggestionStillNeedsGovernorAuthorization**: Idolum-generated outreach candidates do not bypass the governor
-- **TestCronVisibleLedgerStoresRenderedReply**: delivered cron messages enter the visible ledger as rendered output
-- **TestCronCanonicalOutputStoredAsSidecar**: canonical cron result is stored separately from the visible transcript
+- **TestCronVisibleLedgerStoresDeliveredScene**: delivered cron messages enter the visible ledger as delivered scene output
+- **TestCronFloorStoredAsSidecar**: cron floor is stored separately from the visible transcript
 - **TestCronRetryAndFailureStatePersist**: failures and retries are inspectable across runs
 - **TestCronDoesNotUseSleepLoopsForScheduling**: deferred follow-up is expressed through cron jobs rather than improvised timer loops

@@ -9,33 +9,34 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 4. ✅ [`sessions.md`](sessions.md) — Conversation state, context window, compaction, cache-aware truncation
 5. ✅ [`governor.md`](governor.md) — Governor backend, face pipeline, Codex-first core
 6. ✅ [`governor-auth.md`](governor-auth.md) — Codex credential sourcing, ownership, and fallback
+7. ✅ [`terminology.md`](terminology.md) — Brokerage/floor/scene/fallback language and migration rules
 
 ## LLM
-7. ✅ [`providers.md`](providers.md) — Inference adapters only. Streaming, retries, and failover staging.
-8. ✅ [`thinking.md`](thinking.md) — Reasoning effort, summaries, run-kind defaults, governor-owned budgeting
+8. ✅ [`providers.md`](providers.md) — Inference adapters only. Streaming, retries, and failover staging.
+9. ✅ [`thinking.md`](thinking.md) — Reasoning effort, summaries, run-kind defaults, governor-owned budgeting
 
 ## Channels
-9. ✅ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
+10. ✅ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
 
 ## Agent
-10. ✅ [`tools.md`](tools.md) — Tool definition, per-run manifest shaping, sandboxing, exec, file ops, web fetch
-11. ✅ [`memory.md`](memory.md) — Workspace files, shared/per-user memory, OpenAI files, vector stores
-12. ✅ [`system-prompt.md`](system-prompt.md) — Governor prompt, face prompt, cache boundary, dynamic vs stable sections
-13. 🟡 [`semantic-store.md`](semantic-store.md) — Aphelion-owned local semantic substrate, provenance-preserving import, retrieval modes
-14. ✅ [`idolum.md`](idolum.md) — Face identity, anti-drift, Idolum-specific prompt files
-15. ✅ [`subagents.md`](subagents.md) — First-class subordinate sessions, capability depth, completion, isolation
-16. ✅ [`self-awareness.md`](self-awareness.md) — Machine-authored runtime self-description, authority awareness, degraded-state awareness
-17. ✅ [`planning-brokerage.md`](planning-brokerage.md) — Bounded Idolum-to-Aphelion turn planning handshake before selected interactive turns
+11. ✅ [`tools.md`](tools.md) — Tool definition, per-run manifest shaping, sandboxing, exec, file ops, web fetch
+12. ✅ [`memory.md`](memory.md) — Workspace files, shared/per-user memory, OpenAI files, vector stores
+13. ✅ [`system-prompt.md`](system-prompt.md) — Governor prompt, face prompt, cache boundary, dynamic vs stable sections
+14. 🟡 [`semantic-store.md`](semantic-store.md) — Aphelion-owned local semantic substrate, provenance-preserving import, retrieval modes
+15. ✅ [`idolum.md`](idolum.md) — Face identity, anti-drift, Idolum-specific prompt files
+16. ✅ [`subagents.md`](subagents.md) — First-class subordinate sessions, capability depth, completion, isolation
+17. ✅ [`self-awareness.md`](self-awareness.md) — Machine-authored runtime self-description, authority awareness, degraded-state awareness
+18. ✅ [`planning-brokerage.md`](planning-brokerage.md) — Bounded Idolum-to-Aphelion turn planning handshake before selected interactive turns
 
 ## Automation
-18. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
-19. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
+19. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
+20. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
 
 ## Media
-20. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
-21. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
+21. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
+22. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
 
 ## Operations
-22. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
-23. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
-24. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
+23. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
+24. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
+25. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline

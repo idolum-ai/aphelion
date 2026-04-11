@@ -111,42 +111,42 @@ func voiceTempRoot(scope sandbox.Scope, cfg config.AgentConfig) string {
 	return filepath.Join(base, ".aphelion", "tmp")
 }
 
-func setLastAssistantCanonical(messages []session.Message, canonical string) []session.Message {
-	canonical = strings.TrimSpace(canonical)
-	if canonical == "" {
+func setLastAssistantFloor(messages []session.Message, floorText string) []session.Message {
+	floorText = strings.TrimSpace(floorText)
+	if floorText == "" {
 		return messages
 	}
 
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "assistant" {
-			messages[i].CanonicalContent = canonical
+			messages[i].FloorContent = floorText
 			return messages
 		}
 	}
 	return messages
 }
 
-func appendAssistantTurn(sess *session.Session, text string, canonical string) []session.Message {
+func appendAssistantTurn(sess *session.Session, text string, floorText string) []session.Message {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return nil
 	}
 	sess.TurnCount++
-	canonical = strings.TrimSpace(canonical)
-	if canonical == "" {
-		canonical = trimmed
+	floorText = strings.TrimSpace(floorText)
+	if floorText == "" {
+		floorText = trimmed
 	}
-	sess.LastCanonicalReply = canonical
+	sess.LastFloorText = floorText
 	return []session.Message{{
-		Role:             "assistant",
-		Content:          trimmed,
-		CanonicalContent: canonical,
-		ContentChars:     len(trimmed),
-		TurnIndex:        sess.TurnCount,
+		Role:         "assistant",
+		Content:      trimmed,
+		FloorContent: floorText,
+		ContentChars: len(trimmed),
+		TurnIndex:    sess.TurnCount,
 	}}
 }
 
-func appendSyntheticTurn(sess *session.Session, requestText string, replyText string, canonical string) []session.Message {
+func appendSyntheticTurn(sess *session.Session, requestText string, replyText string, floorText string) []session.Message {
 	requestText = strings.TrimSpace(requestText)
 	replyText = strings.TrimSpace(replyText)
 	if requestText == "" || replyText == "" {
@@ -154,11 +154,11 @@ func appendSyntheticTurn(sess *session.Session, requestText string, replyText st
 	}
 
 	sess.TurnCount++
-	canonical = strings.TrimSpace(canonical)
-	if canonical == "" {
-		canonical = replyText
+	floorText = strings.TrimSpace(floorText)
+	if floorText == "" {
+		floorText = replyText
 	}
-	sess.LastCanonicalReply = canonical
+	sess.LastFloorText = floorText
 
 	return []session.Message{
 		{
@@ -168,11 +168,11 @@ func appendSyntheticTurn(sess *session.Session, requestText string, replyText st
 			TurnIndex:    sess.TurnCount,
 		},
 		{
-			Role:             "assistant",
-			Content:          replyText,
-			CanonicalContent: canonical,
-			ContentChars:     len(replyText),
-			TurnIndex:        sess.TurnCount,
+			Role:         "assistant",
+			Content:      replyText,
+			FloorContent: floorText,
+			ContentChars: len(replyText),
+			TurnIndex:    sess.TurnCount,
 		},
 	}
 }

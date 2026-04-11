@@ -144,8 +144,8 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return fmt.Errorf("invalid heartbeat output: history shrank from %d to %d", len(input), len(outHistory))
 	}
 
-	canonicalReply := strings.TrimSpace(result.Text)
-	if canonicalReply == "" {
+	floorText := strings.TrimSpace(result.Text)
+	if floorText == "" {
 		return nil
 	}
 
@@ -153,12 +153,12 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	maintenanceSession.UserName = "heartbeat"
 	maintenanceSession.SystemPrompt = systemPrompt
 	maintenanceSession.TurnCount++
-	maintenanceSession.LastCanonicalReply = canonicalReply
+	maintenanceSession.LastFloorText = floorText
 	newMessages, err := session.NewMessagesForTurn(requestText, outHistory[len(input):], maintenanceSession.TurnCount)
 	if err != nil {
 		return fmt.Errorf("convert heartbeat messages: %w", err)
 	}
-	newMessages = setLastAssistantCanonical(newMessages, canonicalReply)
+	newMessages = setLastAssistantFloor(newMessages, floorText)
 	if err := r.store.Save(maintenanceSession, newMessages, result.TokenUsage); err != nil {
 		return fmt.Errorf("save heartbeat session: %w", err)
 	}
@@ -167,9 +167,9 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return nil
 	}
 
-	replyText := canonicalReply
+	replyText := floorText
 	currentFaceModel := r.currentFaceRenderer()
-	if r.faceBackend != face.BackendGovernorPassthrough && currentFaceModel != nil {
+	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
 		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", governorExecution{})
 		faceAwareness.DeliveryMode = "heartbeat_delivery"
 		renderedReply, renderErr := currentFaceModel.Render(ctx, face.RenderRequest{
@@ -178,12 +178,12 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 			Channel:         "telegram",
 			PrincipalRole:   "admin",
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			CanonicalReply:  canonicalReply,
+			FloorText:       floorText,
 			LatestUserInput: "[heartbeat]",
 			Runtime:         faceAwareness,
 		})
 		if renderErr != nil {
-			log.Printf("WARN heartbeat face render failed backend=%s err=%v; using governor_passthrough", r.faceBackend, renderErr)
+			log.Printf("WARN heartbeat face render failed backend=%s err=%v; using floor_fallback", r.faceBackend, renderErr)
 		} else if strings.TrimSpace(renderedReply) != "" {
 			replyText = strings.TrimSpace(renderedReply)
 		}
@@ -207,7 +207,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	}
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
-	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, canonicalReply), core.TokenUsage{}); err != nil {
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText), core.TokenUsage{}); err != nil {
 		return fmt.Errorf("save heartbeat admin session: %w", err)
 	}
 	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "heartbeat"); err != nil {

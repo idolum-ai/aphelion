@@ -147,8 +147,8 @@ For outbound DM turns, Telegram is the visible surface of the face layer:
 
 1. user message enters raw
 2. governor decides
-3. face renders the visible reply
-4. Telegram sends the rendered reply
+3. face authors the visible scene
+4. Telegram sends the delivered scene
 
 Outbound delivery must treat Telegram's message size limit as a first-class constraint rather than a rare failure case. Long replies should be split into sequential Telegram messages before delivery instead of attempting one oversized `sendMessage`.
 

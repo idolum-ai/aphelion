@@ -201,13 +201,13 @@ codex_home = ""               # Empty = CODEX_HOME or ~/.codex
 base_url = "https://chatgpt.com/backend-api"
 
 [face]
-backend = "provider"          # "provider" | "governor_passthrough"
+backend = "provider"          # "provider" | "floor_fallback"
 provider = "anthropic"
 model_override = ""
 profile = "host"
 bootstrap_files = ["IDOLUM.md"]
 dynamic_files = ["QUESTIONS-TO-IDOLUM.md"]
-persist_canonical = true      # Keep canonical governor reply as sidecar audit data
+persist_floor = true          # Keep governor floor text as sidecar audit data
 
 # ─── Agent ───
 [agent]

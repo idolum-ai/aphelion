@@ -200,5 +200,5 @@ See `config.md`, but prompt-related ownership should include:
 - **TestFacePromptOmitsToolDefinitions**: face prompt does not include tool schemas or authority rules
 - **TestFacePromptLoadsIdolumFilesOnly**: `IDOLUM.md` and `QUESTIONS-TO-IDOLUM.md` are loaded into the face prompt and excluded from the governor prompt
 - **TestReviewDigestStoredAsHistoryNotHiddenPrompt**: delivered review digest enters conversation history instead of hidden prompt state
-- **TestVisibleReplayUsesRenderedReply**: visible session replay uses the delivered face-rendered reply rather than the governor sidecar artifact
+- **TestVisibleReplayUsesDeliveredScene**: visible session replay uses the delivered face-authored scene rather than the governor floor sidecar
 - **TestFaceRenderPromptReceivesMaterialFloor**: render prompt receives governor-owned material constraints rather than a first-draft conversational answer

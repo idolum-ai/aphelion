@@ -476,6 +476,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("expand agent.user_memory_root: %w", err)
 	}
 	normalizeAgentRoots(&cfg)
+	cfg.Face.Backend = NormalizeFaceBackendValue(cfg.Face.Backend)
 
 	if err := validate(&cfg); err != nil {
 		return nil, err
@@ -662,11 +663,11 @@ func validate(cfg *Config) error {
 	if cfg.Memory.Semantic.HeartbeatMaxChars <= 0 {
 		return fmt.Errorf("memory.semantic.heartbeat_max_chars must be > 0")
 	}
-	faceBackend := strings.ToLower(strings.TrimSpace(cfg.Face.Backend))
+	faceBackend := NormalizeFaceBackendValue(cfg.Face.Backend)
 	switch faceBackend {
-	case "", "provider", "governor_passthrough":
+	case "", "provider", "floor_fallback":
 	default:
-		return fmt.Errorf("face.backend must be one of provider|governor_passthrough")
+		return fmt.Errorf("face.backend must be one of provider|floor_fallback")
 	}
 	switch providerName(strings.TrimSpace(cfg.Providers.Default)) {
 	case "", "anthropic", "openrouter":
@@ -962,4 +963,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func NormalizeFaceBackendValue(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "provider":
+		return strings.ToLower(strings.TrimSpace(raw))
+	case "floor_fallback":
+		return "floor_fallback"
+	default:
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
 }

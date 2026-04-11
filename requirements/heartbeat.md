@@ -135,16 +135,16 @@ Delivery should be bounded and selective. Heartbeat should not emit routine chat
 
 If heartbeat emits an outward message:
 
-1. the governor produces a canonical maintenance reply
+1. the governor produces a maintenance floor
 2. `Idolum` may propose user-facing outreach language for the target channel
 3. the governor authorizes the final outward message
 4. the delivered message enters the visible ledger of the target session
-5. the canonical heartbeat output remains sidecar audit state
+5. the heartbeat floor remains sidecar audit state
 
 This follows the same rule as ordinary turns:
 
-- visible ledger stores rendered output
-- canonical governor output remains auditable sidecar state
+- visible ledger stores the delivered scene
+- governor floor remains auditable sidecar state
 
 The proactive rule is:
 
@@ -272,7 +272,7 @@ This is not the same thing as a normal periodic heartbeat wake, but it belongs t
 - **`HEARTBEAT.md` is dynamic.** It belongs after the stable cache boundary.
 - **Silence is a valid result.** Heartbeat should not speak merely because it woke up.
 - **Admin DM is the normal outward surface.** Heartbeat is for maintenance and review, not arbitrary user interruption.
-- **Rendered and canonical outputs stay separate.** Delivered heartbeat messages use `Idolum`; canonical maintenance output remains sidecar audit state.
+- **Scene and floor stay separate.** Delivered heartbeat messages use `Idolum`; maintenance floor remains sidecar audit state.
 - **`Idolum` may propose heartbeat outreach.** The governor still authorizes delivery.
 - **Heartbeat must not route into subagent sessions.** Maintenance and subordinate execution are distinct concerns.
 - **Cron remains separate.** Procedural scheduled jobs must not absorb the reflective maintenance role of heartbeat.
@@ -287,6 +287,6 @@ This is not the same thing as a normal periodic heartbeat wake, but it belongs t
 - **TestHeartbeatDoesNotRouteToSubagentSession**: subordinate sessions are excluded from heartbeat delivery
 - **TestHeartbeatUsesIdolumForDeliveredMessage**: delivered heartbeat output is rendered through the face layer
 - **TestHeartbeatIdolumSuggestionStillNeedsGovernorAuthorization**: Idolum-generated outreach candidates do not bypass the governor
-- **TestHeartbeatStoresCanonicalAsSidecar**: canonical maintenance output is stored separately from visible delivered text
+- **TestHeartbeatStoresFloorAsSidecar**: maintenance floor is stored separately from visible delivered text
 - **TestHeartbeatBatchesReviewEvents**: pending review events can be surfaced as a bounded admin digest
 - **TestHeartbeatDoesNotAutoPersistObservedStateToMemory**: mere observation during heartbeat does not silently mutate durable memory

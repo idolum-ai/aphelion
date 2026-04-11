@@ -19,7 +19,7 @@ func (r *Runtime) currentFaceRenderer() face.Renderer {
 	if r == nil {
 		return nil
 	}
-	if r.faceBackend == face.BackendGovernorPassthrough {
+	if r.faceBackend == face.BackendFloorFallback {
 		return r.faceModel
 	}
 	snapshot := r.currentRecipeSnapshot()
@@ -52,7 +52,7 @@ func (r *Runtime) buildFaceRendererForRecipe(recipe string) (face.Renderer, erro
 	if r == nil {
 		return nil, fmt.Errorf("runtime is nil")
 	}
-	if r.faceBackend == face.BackendGovernorPassthrough {
+	if r.faceBackend == face.BackendFloorFallback {
 		return r.faceModel, nil
 	}
 	provider, err := buildFaceProviderChainForRecipe(r.cfg, recipe)
@@ -169,7 +169,7 @@ func faceModelForProvider(providerName, recipe string) string {
 }
 
 func (r *Runtime) faceModelName() string {
-	if r.faceBackend == face.BackendGovernorPassthrough {
+	if r.faceBackend == face.BackendFloorFallback {
 		return r.governorModelName()
 	}
 	snapshot := r.currentRecipeSnapshot()

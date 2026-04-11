@@ -291,7 +291,7 @@ cron = "low"
 recovery = "high"
 
 [face]
-backend = "governor_passthrough"
+backend = "floor_fallback"
 
 [heartbeat]
 enabled = true
@@ -401,8 +401,8 @@ elevenlabs_voice_id = "voice-123"
 	if cfg.Thinking.Defaults.Default != "high" || cfg.Thinking.Defaults.Heartbeat != "medium" || cfg.Thinking.Defaults.Cron != "low" || cfg.Thinking.Defaults.Recovery != "high" {
 		t.Fatalf("thinking.defaults = %#v", cfg.Thinking.Defaults)
 	}
-	if cfg.Face.Backend != "governor_passthrough" {
-		t.Fatalf("face.backend = %q, want governor_passthrough", cfg.Face.Backend)
+	if cfg.Face.Backend != "floor_fallback" {
+		t.Fatalf("face.backend = %q, want floor_fallback", cfg.Face.Backend)
 	}
 	if !cfg.Heartbeat.Enabled || cfg.Heartbeat.Every != "45m" || cfg.Heartbeat.Target != "123" {
 		t.Fatalf("heartbeat = %#v, want enabled 45m target 123", cfg.Heartbeat)
@@ -651,7 +651,7 @@ api_key = "sk-ant-test"
 	}
 }
 
-func TestLoadAllowsCodexGovernorPassthroughWithoutAnthropicKey(t *testing.T) {
+func TestLoadAllowsCodexFloorFallbackWithoutAnthropicKey(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -667,7 +667,7 @@ admin_user_ids = [123]
 backend = "codex"
 
 [face]
-backend = "governor_passthrough"
+backend = "floor_fallback"
 
 [agent]
 workspace = "./workspace"

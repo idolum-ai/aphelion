@@ -10,13 +10,13 @@ import (
 const DefaultReviewSummaryMaxChars = 600
 
 type ReviewSummaryInput struct {
-	SourceChatID  int64
-	SourceUserID  int64
-	SourceRole    string
-	TurnIndex     int
-	UserText      string
-	RenderedReply string
-	ToolLog       []string
+	SourceChatID int64
+	SourceUserID int64
+	SourceRole   string
+	TurnIndex    int
+	UserText     string
+	SceneText    string
+	ToolLog      []string
 }
 
 // BuildReviewSummary creates a compact, bounded, provenance-labeled digest.
@@ -41,7 +41,7 @@ func BuildReviewSummary(in ReviewSummaryInput, maxChars int) string {
 	if userText == "" {
 		userText = "(empty)"
 	}
-	replyText := clampChars(normalizeWhitespace(in.RenderedReply), maxChars/3)
+	replyText := clampChars(normalizeWhitespace(in.SceneText), maxChars/3)
 	if replyText == "" {
 		replyText = "(empty)"
 	}

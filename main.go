@@ -429,7 +429,7 @@ func nativeProviderRequired(cfg *config.Config) bool {
 		return false
 	}
 	governorBackend := strings.ToLower(strings.TrimSpace(cfg.Governor.Backend))
-	faceBackend := strings.ToLower(strings.TrimSpace(cfg.Face.Backend))
+	faceBackend := config.NormalizeFaceBackendValue(cfg.Face.Backend)
 	return governorBackend == "native" || faceBackend == "" || faceBackend == "provider"
 }
 

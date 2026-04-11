@@ -18,8 +18,8 @@ const (
 type Backend string
 
 const (
-	BackendProvider            Backend = "provider"
-	BackendGovernorPassthrough Backend = "governor_passthrough"
+	BackendProvider      Backend = "provider"
+	BackendFloorFallback Backend = "floor_fallback"
 )
 
 type RenderRequest struct {
@@ -29,7 +29,7 @@ type RenderRequest struct {
 	Style           string
 	PrincipalRole   string
 	WorkspaceRoot   string
-	CanonicalReply  string
+	FloorText       string
 	MaterialFloor   core.MaterialPacket
 	LatestUserInput string
 	Runtime         prompt.RuntimeAwareness
@@ -59,10 +59,21 @@ type Proposer interface {
 	Propose(ctx context.Context, req ProposalRequest) (string, error)
 }
 
-func CanonicalOrFallback(text string) string {
-	canonical := strings.TrimSpace(text)
-	if canonical == "" {
+func NormalizeBackend(raw string) Backend {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(BackendProvider):
+		return BackendProvider
+	case string(BackendFloorFallback):
+		return BackendFloorFallback
+	default:
+		return Backend(strings.ToLower(strings.TrimSpace(raw)))
+	}
+}
+
+func FloorTextOrFallback(text string) string {
+	floor := strings.TrimSpace(text)
+	if floor == "" {
 		return "(no response)"
 	}
-	return canonical
+	return floor
 }

@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 5
+const schemaVersion = 7
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -67,7 +67,7 @@ func (s *SQLiteStore) init() error {
 			chat_id INTEGER NOT NULL,
 			user_id INTEGER NOT NULL DEFAULT 0,
 			system_prompt TEXT,
-			last_canonical_reply TEXT,
+			last_floor_text TEXT,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			turn_count INTEGER NOT NULL DEFAULT 0,
@@ -95,7 +95,7 @@ func (s *SQLiteStore) init() error {
 				user_id INTEGER NOT NULL DEFAULT 0,
 				role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
 				content TEXT NOT NULL,
-				canonical_content TEXT,
+				floor_content TEXT,
 				tool_calls TEXT,
 				tool_id TEXT,
 				tool_name TEXT,
@@ -219,7 +219,8 @@ func (s *SQLiteStore) init() error {
 func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	row := s.db.QueryRow(`
 		SELECT
-			chat_id, user_id, system_prompt, last_canonical_reply, created_at, updated_at, turn_count,
+			chat_id, user_id, system_prompt, last_floor_text,
+			created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
 			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
@@ -234,7 +235,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		updatedAtRaw         string
 		cacheLastWriteRaw    sql.NullString
 		systemPrompt         sql.NullString
-		lastCanonicalReply   sql.NullString
+		lastFloorText        sql.NullString
 		chatType             sql.NullString
 		chatTitle            sql.NullString
 		userName             sql.NullString
@@ -245,7 +246,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	)
 
 	err := row.Scan(
-		&sess.ChatID, &sess.UserID, &systemPrompt, &lastCanonicalReply, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
+		&sess.ChatID, &sess.UserID, &systemPrompt, &lastFloorText, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
 		&chatType, &chatTitle, &userName,
 		&sess.CacheState.LastWriteBlock, &sess.CacheState.BlocksSinceWrite, &cacheLastWriteRaw, &sess.CacheState.HitRate, &consecutiveMissesRaw,
 		&sess.TotalInputTokens, &sess.TotalOutputTokens, &sess.TotalCacheRead, &sess.TotalCacheWrite,
@@ -259,7 +260,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	}
 
 	sess.SystemPrompt = nullToString(systemPrompt)
-	sess.LastCanonicalReply = nullToString(lastCanonicalReply)
+	sess.LastFloorText = nullToString(lastFloorText)
 	sess.ChatType = nullToString(chatType)
 	sess.ChatTitle = nullToString(chatTitle)
 	sess.UserName = nullToString(userName)
@@ -289,7 +290,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	}
 
 	msgRows, err := s.db.Query(`
-			SELECT id, chat_id, user_id, role, content, canonical_content, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
+			SELECT id, chat_id, user_id, role, content, floor_content, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
 			FROM messages
 			WHERE chat_id = ? AND user_id = ?
 			ORDER BY turn_index, id
@@ -303,7 +304,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		var (
 			m            Message
 			createdRaw   string
-			canonicalRaw sql.NullString
+			floorRaw     sql.NullString
 			toolCallsRaw sql.NullString
 			toolIDRaw    sql.NullString
 			toolNameRaw  sql.NullString
@@ -312,13 +313,13 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		)
 
 		if err := msgRows.Scan(
-			&m.ID, &m.ChatID, &m.UserID, &m.Role, &m.Content, &canonicalRaw, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
+			&m.ID, &m.ChatID, &m.UserID, &m.Role, &m.Content, &floorRaw, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
 			&createdRaw, &m.TurnIndex, &m.ContentChars, &compactedRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 
-		m.CanonicalContent = nullToString(canonicalRaw)
+		m.FloorContent = nullToString(floorRaw)
 		m.ToolCalls = nullToString(toolCallsRaw)
 		m.ToolID = nullToString(toolIDRaw)
 		m.ToolName = nullToString(toolNameRaw)
@@ -414,11 +415,11 @@ func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.T
 
 		_, err := tx.Exec(`
 				INSERT INTO messages(
-					chat_id, user_id, role, content, canonical_content, tool_calls, tool_id, tool_name, thinking,
+					chat_id, user_id, role, content, floor_content, tool_calls, tool_id, tool_name, thinking,
 					created_at, turn_index, content_chars, compacted
 				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`,
-			msg.ChatID, msg.UserID, msg.Role, msg.Content, nullableString(msg.CanonicalContent),
+			msg.ChatID, msg.UserID, msg.Role, msg.Content, nullableString(msg.FloorContent),
 			nullableString(msg.ToolCalls), nullableString(msg.ToolID), nullableString(msg.ToolName), nullableString(msg.Thinking),
 			msg.CreatedAt.UTC().Format(time.RFC3339Nano), msg.TurnIndex, msg.ContentChars, boolToInt(msg.Compacted),
 		)
@@ -709,12 +710,12 @@ func (s *SQLiteStore) SearchMessages(query string, limit int, scope *SessionKey)
 
 	pattern := "%" + query + "%"
 	base := `
-		SELECT chat_id, user_id, turn_index, role, content, canonical_content, created_at
+		SELECT chat_id, user_id, turn_index, role, content, floor_content, created_at
 		FROM messages
 		WHERE compacted = 0
 			AND (
 				LOWER(content) LIKE LOWER(?)
-				OR LOWER(COALESCE(canonical_content, '')) LIKE LOWER(?)
+				OR LOWER(COALESCE(floor_content, '')) LIKE LOWER(?)
 			)
 	`
 	args := []any{pattern, pattern}
@@ -734,17 +735,17 @@ func (s *SQLiteStore) SearchMessages(query string, limit int, scope *SessionKey)
 	hits := make([]SearchHit, 0, limit)
 	for rows.Next() {
 		var (
-			hit              SearchHit
-			createdAtRaw     string
-			canonicalContent sql.NullString
+			hit          SearchHit
+			createdAtRaw string
+			floorContent sql.NullString
 		)
 		if err := rows.Scan(
 			&hit.ChatID, &hit.UserID, &hit.TurnIndex, &hit.Role,
-			&hit.Content, &canonicalContent, &createdAtRaw,
+			&hit.Content, &floorContent, &createdAtRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan search hit: %w", err)
 		}
-		hit.CanonicalContent = nullToString(canonicalContent)
+		hit.FloorContent = nullToString(floorContent)
 		createdAt, err := parseSQLiteTime(createdAtRaw)
 		if err != nil {
 			return nil, fmt.Errorf("parse search hit created_at: %w", err)
@@ -1471,7 +1472,7 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 
 	if _, err := s.db.Exec(`
 		INSERT INTO sessions(
-			chat_id, user_id, system_prompt, last_canonical_reply, created_at, updated_at, turn_count, chat_type
+			chat_id, user_id, system_prompt, last_floor_text, created_at, updated_at, turn_count, chat_type
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		key.ChatID, key.UserID, "", "", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), 0, sess.ChatType,
@@ -1484,7 +1485,7 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 	_, err := tx.Exec(`
 		INSERT INTO sessions(
-			chat_id, user_id, system_prompt, last_canonical_reply, created_at, updated_at, turn_count,
+			chat_id, user_id, system_prompt, last_floor_text, created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
 			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
@@ -1492,7 +1493,7 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_id, user_id) DO UPDATE SET
 			system_prompt = excluded.system_prompt,
-			last_canonical_reply = excluded.last_canonical_reply,
+			last_floor_text = excluded.last_floor_text,
 			updated_at = excluded.updated_at,
 			turn_count = excluded.turn_count,
 			chat_type = excluded.chat_type,
@@ -1512,7 +1513,7 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 			active_tool_calls = excluded.active_tool_calls,
 			last_error = excluded.last_error
 	`,
-		session.ChatID, session.UserID, session.SystemPrompt, nullableString(session.LastCanonicalReply),
+		session.ChatID, session.UserID, session.SystemPrompt, nullableString(session.LastFloorText),
 		nonZeroTimeOrNow(session.CreatedAt, now).UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), session.TurnCount,
 		defaultChatType(session.ChatType), nullableString(session.ChatTitle), nullableString(session.UserName),
 		session.CacheState.LastWriteBlock, session.CacheState.BlocksSinceWrite, nullableTime(session.CacheState.LastWriteTime), session.CacheState.HitRate, session.CacheState.ConsecutiveMisses,
@@ -1526,11 +1527,11 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 }
 
 func applyMigrations(tx *sql.Tx) error {
-	if err := ensureSessionColumn(tx, "last_canonical_reply", "TEXT"); err != nil {
-		return fmt.Errorf("ensure sessions.last_canonical_reply: %w", err)
+	if err := ensureSessionColumn(tx, "last_floor_text", "TEXT"); err != nil {
+		return fmt.Errorf("ensure sessions.last_floor_text: %w", err)
 	}
-	if err := ensureTableColumn(tx, "messages", "canonical_content", "TEXT"); err != nil {
-		return fmt.Errorf("ensure messages.canonical_content: %w", err)
+	if err := ensureTableColumn(tx, "messages", "floor_content", "TEXT"); err != nil {
+		return fmt.Errorf("ensure messages.floor_content: %w", err)
 	}
 
 	currentVersion, err := currentSchemaVersion(tx)

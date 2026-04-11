@@ -16,8 +16,8 @@ In the governor/face architecture, the session ledger primarily stores the user-
 
 The key rule is:
 
-- rendered `Idolum` reply = visible conversation record
-- canonical governor reply = audit record
+- delivered `Idolum` scene = visible conversation record
+- governor floor sidecar = audit record
 
 Interrupted execution follows the same pattern:
 
@@ -190,9 +190,9 @@ type Session struct {
     // Snapshot of the resolved execution root for audit/debugging.
     ResolvedWorkspaceRoot string
 
-    // Sidecar audit artifact for the most recent canonical governor output.
-    // The visible ledger still stores the rendered assistant reply.
-    LastCanonicalReply string
+    // Sidecar audit artifact for the most recent governor floor text.
+    // The visible ledger still stores the delivered scene reply.
+    LastFloorText string
 
     // Cache tracking
     CacheState CacheState
@@ -649,7 +649,7 @@ type Store interface {
 }
 ```
 
-For v0, `Save(...)` should preserve the rendered assistant reply in the visible transcript. Canonical governor output should be stored alongside the session as audit data rather than appended as a second visible assistant message.
+For v0, `Save(...)` should preserve the delivered assistant scene in the visible transcript. The governor floor should be stored alongside the session as audit data rather than appended as a second visible assistant message.
 
 ### v0 principal policy
 
@@ -741,8 +741,8 @@ Provider-specific pruning knobs remain provider config, not session-ledger confi
 - **TestExpireKeepsActive**: active session survives expiry sweep
 - **TestConcurrentReads**: concurrent reads succeed under WAL mode
 - **TestWALMode**: `PRAGMA journal_mode` returns `wal`
-- **TestVisibleLedgerStoresRenderedReply**: visible assistant history stores the delivered Idolum reply
-- **TestCanonicalReplyStoredAsSidecarAudit**: canonical governor reply is stored alongside the session without polluting the visible transcript
+- **TestVisibleLedgerStoresDeliveredScene**: visible assistant history stores the delivered Idolum scene
+- **TestFloorStoredAsSidecarAudit**: governor floor text is stored alongside the session without polluting the visible transcript
 
 ### v0 context assembly
 

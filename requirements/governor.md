@@ -88,7 +88,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 ### Face backends
 
 - `provider`
-- `governor_passthrough`
+- `floor_fallback`
 
 `codex` is the preferred governor backend when available because it aligns economically and operationally with the intended coding/operator role of the core. The native governor path remains the fallback and compatibility path.
 
@@ -132,16 +132,16 @@ The face takes the governor's material floor and authors the user-visible output
 
 ```go
 type Face interface {
-    Render(ctx context.Context, req *RenderRequest) (*RenderedReply, error)
+    AuthorScene(ctx context.Context, req *SceneRequest) (*SceneArtifact, error)
 }
 
-type RenderRequest struct {
+type SceneRequest struct {
     Principal      Principal
     Inbound        core.InboundMessage
     MaterialPacket MaterialPacket
 }
 
-type RenderedReply struct {
+type SceneArtifact struct {
     Text string
 }
 ```
@@ -160,7 +160,7 @@ For proactive turns, a second distinction matters:
 
 ### Transitional compatibility
 
-During migration, the implementation may still serialize the governor artifact as a text-shaped canonical sidecar.
+During migration, the implementation may still serialize the governor artifact as a text-shaped floor sidecar.
 
 That should be treated as a temporary encoding detail, not the intended long-term contract. The architectural goal remains:
 
@@ -287,7 +287,7 @@ codex_home = ""
 base_url = "https://chatgpt.com/backend-api"
 
 [face]
-backend = "provider"          # "provider" | "governor_passthrough"
+backend = "provider"          # "provider" | "floor_fallback"
 provider = "anthropic"
 model_override = ""
 profile = "idolum"
@@ -309,7 +309,7 @@ profile = "idolum"
 - **Aphelion owns the material floor.** It defines what is true, permitted, refused, and committed for the turn.
 - **Idolum authors the scene.** It decides how the bounded material is spoken to the user.
 - **Face may suggest outreach.** It may not self-authorize outreach.
-- **Canonical floor and rendered scene are different artifacts.** The governor authors one; the face authors the other.
+- **Floor and scene are different artifacts.** The governor authors one; the face authors the other.
 - **Codex-first is intentional.** If the user already has Codex access, Aphelion should be able to use it as the governing core.
 - **Fallback matters.** Native governor support keeps the system usable without Codex.
 
@@ -319,9 +319,9 @@ profile = "idolum"
 - **TestGovernorProducesMaterialFloorBeforeFaceRender**: face receives governor-owned material constraints rather than first-draft visible prose
 - **TestFaceCannotInvokeTools**: tool execution remains governor-only
 - **TestFaceCannotSelfAuthorizeProactiveMessage**: proactive delivery still requires governor authorization
-- **TestGovernorPassthroughFallback**: with `face.backend = "governor_passthrough"`, the current governor fallback artifact is sent directly
+- **TestFloorFallbackDelivery**: with `face.backend = "floor_fallback"`, the current governor fallback artifact is sent directly
 - **TestGovernorBackendAutoPrefersCodex**: with Codex available and `backend = "auto"`, Codex governor is selected
 - **TestGovernorBackendFallsBackNative**: without Codex, native governor is selected
-- **TestFaceFailureFallsBackCanonical**: face backend failure can degrade to direct governor delivery under configured policy
-- **TestVisibleLedgerStoresRenderedReply**: session history replays the delivered face-rendered reply
+- **TestFaceFailureFallsBackToFloor**: face backend failure can degrade to direct governor floor delivery under configured policy
+- **TestVisibleLedgerStoresDeliveredScene**: session history replays the delivered face-authored scene
 - **TestMaterialFloorStoredAsAuditArtifact**: governor-owned material floor is stored alongside the session without polluting the visible transcript

@@ -11,7 +11,7 @@ import (
 )
 
 func shouldUseMaterialFloorContract(faceBackend face.Backend, policy faceTurnPolicy) bool {
-	if faceBackend == face.BackendGovernorPassthrough {
+	if faceBackend == face.BackendFloorFallback {
 		return false
 	}
 	return policy.Proposal || policy.Brokerage
@@ -20,15 +20,15 @@ func shouldUseMaterialFloorContract(faceBackend face.Backend, policy faceTurnPol
 func governorMaterialArtifact(text string, useContract bool) (core.MaterialPacket, string, bool) {
 	trimmed := strings.TrimSpace(text)
 	if !useContract {
-		return core.MaterialPacket{}, face.CanonicalOrFallback(trimmed), false
+		return core.MaterialPacket{}, face.FloorTextOrFallback(trimmed), false
 	}
 	packet, err := parseMaterialPacket(trimmed)
 	if err != nil {
-		return core.LegacyMaterialPacket(trimmed), face.CanonicalOrFallback(trimmed), false
+		return core.LegacyMaterialPacket(trimmed), face.FloorTextOrFallback(trimmed), false
 	}
 	sidecar := strings.TrimSpace(packet.Text())
 	if sidecar == "" {
-		sidecar = face.CanonicalOrFallback(trimmed)
+		sidecar = face.FloorTextOrFallback(trimmed)
 	}
 	return packet, sidecar, true
 }

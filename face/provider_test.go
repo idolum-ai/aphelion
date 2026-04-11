@@ -91,7 +91,7 @@ func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
 	}
 
 	got, err := renderer.Render(context.Background(), RenderRequest{
-		CanonicalReply:  "Canonical text",
+		FloorText:       "Canonical text",
 		LatestUserInput: "How are you?",
 		PrincipalRole:   "admin",
 	})
@@ -169,7 +169,7 @@ func TestProviderRendererUsesResolvedNamesInTransportPrompts(t *testing.T) {
 	}
 
 	if _, err := renderer.Render(context.Background(), RenderRequest{
-		CanonicalReply:  "Canonical text",
+		FloorText:       "Canonical text",
 		LatestUserInput: "Hello",
 		PrincipalRole:   "admin",
 	}); err != nil {
@@ -200,7 +200,7 @@ func TestProviderRendererReturnsErrEmptyRender(t *testing.T) {
 	}
 
 	_, err = renderer.Render(context.Background(), RenderRequest{
-		CanonicalReply: "Canonical text",
+		FloorText: "Canonical text",
 	})
 	if !errors.Is(err, ErrEmptyRender) {
 		t.Fatalf("Render() err = %v, want ErrEmptyRender", err)
@@ -221,7 +221,7 @@ func TestProviderRendererRenderPromptIncludesMaterialFloor(t *testing.T) {
 	}
 
 	if _, err := renderer.Render(context.Background(), RenderRequest{
-		CanonicalReply: "legacy canonical",
+		FloorText: "legacy canonical",
 		MaterialFloor: core.MaterialPacket{
 			Facts:            []string{"The codebase was inspected."},
 			SceneConstraints: []string{"Keep the tone direct."},
@@ -234,8 +234,8 @@ func TestProviderRendererRenderPromptIncludesMaterialFloor(t *testing.T) {
 	if !strings.Contains(provider.lastPrompt, "## Governor Material Floor") {
 		t.Fatalf("render prompt missing material floor section: %q", provider.lastPrompt)
 	}
-	if strings.Contains(provider.lastPrompt, "## Canonical Governor Reply") {
-		t.Fatalf("render prompt should prefer material floor over canonical fallback: %q", provider.lastPrompt)
+	if strings.Contains(provider.lastPrompt, "## Serialized Floor Fallback") {
+		t.Fatalf("render prompt should prefer material floor over serialized floor fallback: %q", provider.lastPrompt)
 	}
 }
 
@@ -260,7 +260,7 @@ func TestProviderRendererRenderStream(t *testing.T) {
 
 	var chunks []string
 	got, err := renderer.RenderStream(context.Background(), RenderRequest{
-		CanonicalReply:  "Canonical text",
+		FloorText:       "Canonical text",
 		LatestUserInput: "How are you?",
 		PrincipalRole:   "admin",
 	}, func(text string) error {
