@@ -104,7 +104,8 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 			log.Printf("WARN heartbeat reflection failed: %v", reflectionErr)
 		}
 	}
-	if len(events) == 0 {
+	eligibleForOutreach := deliver && hiddenInputs.ReflectiveOutreachEligible()
+	if len(events) == 0 && !eligibleForOutreach {
 		if strings.TrimSpace(reflectionSummary) == "" {
 			return nil
 		}
@@ -123,7 +124,6 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return fmt.Errorf("assemble heartbeat history: %w", err)
 	}
 
-	eligibleForOutreach := deliver && hiddenInputs.ReflectiveOutreachEligible()
 	requestText := renderHeartbeatRequest(targetChatID, events, deliver, hiddenInputs)
 	monitor := r.startTurnMonitor(maintenanceKey, session.TurnRunKindHeartbeat, requestText, nil)
 	defer monitor.Finish(ctx, err)
@@ -355,10 +355,19 @@ func renderHeartbeatRequest(targetChatID int64, events []session.ReviewEvent, de
 		fmt.Sprintf("Target admin chat: %d", targetChatID),
 		fmt.Sprintf("Delivery allowed this turn: %t", deliver),
 		fmt.Sprintf("Reflective outreach eligible this turn: %t", hiddenInputs.ReflectiveOutreachEligible()),
-		"Produce a concise maintenance floor from the pending review events.",
-		"If reflective outreach is not eligible, keep the floor internal; the runtime may stay silent.",
-		"Pending review events:",
 	}
+	if len(events) == 0 {
+		lines = append(lines,
+			"There are no pending review events this turn.",
+			"Produce a concise maintenance floor from hidden-input convergence and latent state alone.",
+		)
+	} else {
+		lines = append(lines,
+			"Produce a concise maintenance floor from the pending review events.",
+			"Pending review events:",
+		)
+	}
+	lines = append(lines, "If reflective outreach is not eligible, keep the floor internal; the runtime may stay silent.")
 	if hiddenInputs.Active() {
 		lines = append(lines, fmt.Sprintf("Hidden input categories: %s", strings.Join(hiddenInputs.Categories(), ", ")))
 		if summary := hiddenInputs.ProvenanceSummary(); summary != "" {

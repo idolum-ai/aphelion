@@ -1402,6 +1402,82 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	}
 }
 
+func TestHeartbeatDeliveryCanTriggerFromLatentStateWithoutReviewEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.Target = "last"
+	cfg.Agent.DailyNotes = true
+	provider.replyText = "latent heartbeat floor"
+	provider.proposalReplyText = "Something unresolved keeps surfacing around deployment readiness."
+	provider.faceReplyText = "latent heartbeat scene"
+
+	noteDir := filepath.Join(cfg.Agent.SharedMemoryRoot, cfg.Agent.DailyNotesDir)
+	if err := os.MkdirAll(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(memory) err = %v", err)
+	}
+	if err := os.MkdirAll(noteDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(noteDir) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "questions.md"), []byte("# questions.md\n\n- Should deployment readiness become a first-class heartbeat concern?"), 0o600); err != nil {
+		t.Fatalf("write questions.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(noteDir, "2026-04-09.md"), []byte("Deployment readiness still feels unresolved."), 0o600); err != nil {
+		t.Fatalf("write today note: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(noteDir, "2026-04-08.md"), []byte("Need to revisit deployment readiness before the week closes."), 0o600); err != nil {
+		t.Fatalf("write yesterday note: %v", err)
+	}
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].ChatID != 1001 || sender.sent[0].Text != "latent heartbeat scene" {
+		t.Fatalf("sent = %#v, want latent heartbeat scene to admin", sender.sent[0])
+	}
+	sender.mu.Unlock()
+
+	adminSession, err := store.Load(session.SessionKey{ChatID: 1001, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(admin session) err = %v", err)
+	}
+	if adminSession.LastFloorText != "latent heartbeat floor" {
+		t.Fatalf("admin floor = %q, want latent heartbeat floor", adminSession.LastFloorText)
+	}
+	if len(adminSession.Messages) == 0 || adminSession.Messages[len(adminSession.Messages)-1].Content != "latent heartbeat scene" {
+		t.Fatalf("admin messages = %#v, want latent heartbeat scene entry", adminSession.Messages)
+	}
+	if adminSession.Messages[len(adminSession.Messages)-1].FloorContent != "latent heartbeat floor" {
+		t.Fatalf("admin floor content = %q, want latent heartbeat floor", adminSession.Messages[len(adminSession.Messages)-1].FloorContent)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenProposalSystem) == 0 {
+		t.Fatal("seenProposalSystem empty, want hidden-input proposal for latent heartbeat outreach")
+	}
+	if !strings.Contains(provider.seenProposalSystem[len(provider.seenProposalSystem)-1], "- hidden_inputs_active: true") {
+		t.Fatalf("heartbeat proposal prompt missing hidden-input awareness: %q", provider.seenProposalSystem[len(provider.seenProposalSystem)-1])
+	}
+	if !strings.Contains(provider.seenProposalSystem[len(provider.seenProposalSystem)-1], "semantic_recurrence") {
+		t.Fatalf("heartbeat proposal prompt missing semantic recurrence category: %q", provider.seenProposalSystem[len(provider.seenProposalSystem)-1])
+	}
+	if !strings.Contains(provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content, "There are no pending review events this turn.") {
+		t.Fatalf("heartbeat request missing latent-state-only marker: %q", provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1].Content)
+	}
+}
+
 func TestHeartbeatStaysSilentWithoutConvergingSignals(t *testing.T) {
 	t.Parallel()
 

@@ -157,6 +157,8 @@ func (r *Runtime) assembleHeartbeatHiddenInputs(ctx context.Context, scope sandb
 	query := heartbeatEventQuery(events)
 	if summary := detectRecurringEventTheme(events); summary != "" {
 		inputs.add(hiddenInputSemanticRecurrence, summary)
+	} else if summary := r.detectLatentSemanticRecurrence(ctx, root, semanticScopeForPrincipal(scope.Principal), now); summary != "" {
+		inputs.add(hiddenInputSemanticRecurrence, summary)
 	} else if summary := r.detectSemanticRecurrence(ctx, root, semanticScopeForPrincipal(scope.Principal), query, memstore.SemanticModeHeartbeat, now); summary != "" {
 		inputs.add(hiddenInputSemanticRecurrence, summary)
 	}
@@ -166,6 +168,23 @@ func (r *Runtime) assembleHeartbeatHiddenInputs(ctx context.Context, scope sandb
 	}
 
 	return inputs
+}
+
+func (r *Runtime) detectLatentSemanticRecurrence(ctx context.Context, root string, scope string, now time.Time) string {
+	questions := loadMemoryBullets(filepath.Join(root, "memory", "questions.md"))
+	noteTexts := r.loadRecentDailyNotes(root, now)
+	texts := make([]string, 0, len(questions)+len(noteTexts))
+	texts = append(texts, questions...)
+	texts = append(texts, noteTexts...)
+
+	if summary := detectRecurringTheme(texts, "latent state keeps converging around"); summary != "" {
+		return summary
+	}
+	if len(questions) == 0 {
+		return ""
+	}
+	query := strings.Join(questions[:minInt(2, len(questions))], "\n")
+	return r.detectSemanticRecurrence(ctx, root, scope, query, memstore.SemanticModeHeartbeat, now)
 }
 
 func (r *Runtime) detectSemanticRecurrence(ctx context.Context, root string, scope string, query string, mode memstore.SemanticMode, now time.Time) string {
@@ -229,6 +248,10 @@ func detectRecurringEventTheme(events []session.ReviewEvent) string {
 			texts = append(texts, summary)
 		}
 	}
+	return detectRecurringTheme(texts, "pending review events keep converging around")
+}
+
+func detectRecurringTheme(texts []string, prefix string) string {
 	if len(texts) < 2 {
 		return ""
 	}
@@ -271,7 +294,7 @@ func detectRecurringEventTheme(events []session.ReviewEvent) string {
 	for _, entry := range rankedTerms[:limit] {
 		terms = append(terms, entry.term)
 	}
-	return fmt.Sprintf("pending review events keep converging around %s", strings.Join(terms, ", "))
+	return fmt.Sprintf("%s %s", strings.TrimSpace(prefix), strings.Join(terms, ", "))
 }
 
 func detectOpenQuestions(root string) string {
@@ -330,6 +353,31 @@ func loadMemoryBullets(path string) []string {
 	return out
 }
 
+func (r *Runtime) loadRecentDailyNotes(root string, now time.Time) []string {
+	if r == nil || r.cfg == nil || !r.cfg.Agent.DailyNotes {
+		return nil
+	}
+	notesDir := strings.TrimSpace(r.cfg.Agent.DailyNotesDir)
+	if notesDir == "" {
+		return nil
+	}
+	paths := []string{
+		filepath.Join(root, filepath.FromSlash(notesDir), now.Format("2006-01-02")+".md"),
+		filepath.Join(root, filepath.FromSlash(notesDir), now.AddDate(0, 0, -1).Format("2006-01-02")+".md"),
+	}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if text := strings.TrimSpace(string(raw)); text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
 func hiddenInputTokens(text string) []string {
 	parts := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
 		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
@@ -363,4 +411,11 @@ var hiddenInputStopwords = map[string]struct{}{
 	"they": {}, "this": {}, "what": {}, "when": {}, "where": {}, "which": {},
 	"with": {}, "would": {}, "should": {}, "could": {}, "around": {}, "into": {},
 	"because": {}, "their": {}, "turn": {}, "reply": {}, "user": {}, "message": {},
+}
+
+func minInt(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
