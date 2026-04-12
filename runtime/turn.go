@@ -198,7 +198,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	floorMetadataState := hiddenInputs.Metadata()
 	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, prepared.ArtifactRefs...)
 	floorMetadata := encodeFloorMetadata(floorMetadataState)
-	replyText := face.SerializeFloorFallback(materialFloor, floorText)
+	replyWithVoice := r.shouldReplyWithVoice(prepared.InboundWasVoice)
+	fallbackOpts := face.FallbackOptions{Channel: "telegram", Voice: replyWithVoice}
+	replyText := face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
 	outboundID := int64(0)
 	outboundType := ""
 	streamedReply := false
@@ -208,7 +210,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	faceAwareness.ArtifactMode = "scene"
 	faceAwareness.DeliveryMode = "text"
 	faceAwareness.StreamReply = false
-	if r.shouldReplyWithVoice(prepared.InboundWasVoice) {
+	if replyWithVoice {
 		faceAwareness.DeliveryMode = "voice"
 	} else if facePolicy.Render {
 		faceAwareness.DeliveryMode = "idolum_render"
@@ -230,12 +232,12 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			renderHeuristicText = materialFloorHeuristicText(materialFloor, floorText)
 		}
 		shouldRender := shouldRenderIdolumReply(facePolicy, prepared.LedgerText, renderHeuristicText, result.ToolLog, outHistory[len(input):])
-		if !shouldRender && !r.shouldReplyWithVoice(prepared.InboundWasVoice) {
+		if !shouldRender && !replyWithVoice {
 			faceAwareness.DeliveryMode = "floor_fallback"
 			renderReq.Runtime = faceAwareness
 		}
 
-		if shouldRender && !r.shouldReplyWithVoice(prepared.InboundWasVoice) {
+		if shouldRender && !replyWithVoice {
 			if streamer, ok := currentFaceModel.(face.StreamRenderer); ok {
 				editor := r.newStreamEditor(msg)
 				if editor != nil {
@@ -252,7 +254,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 						faceRendered = true
 						replyText = strings.TrimSpace(renderedReply)
 						if replyText == "" {
-							replyText = face.SerializeFloorFallback(materialFloor, floorText)
+							replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
 						}
 						extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 						outboundID, err = editor.Finish(ctx)
@@ -269,7 +271,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		}
 
 		if shouldRender && !faceRendered {
-			if !r.shouldReplyWithVoice(prepared.InboundWasVoice) {
+			if !replyWithVoice {
 				faceAwareness.DeliveryMode = "idolum_render"
 				faceAwareness.StreamReply = false
 				renderReq.Runtime = faceAwareness
@@ -280,7 +282,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			} else {
 				replyText = strings.TrimSpace(renderedReply)
 				if replyText == "" {
-					replyText = face.SerializeFloorFallback(materialFloor, floorText)
+					replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
 				}
 				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 			}

@@ -219,6 +219,10 @@ Example shape:
 
 - "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
 
+The fallback serializer should remain deterministic in `v0`.
+
+It may be channel-aware and house-shaped, but it should not become a second model-authored scene path under degradation.
+
 The runtime should not tell ordinary users to kill or restart the whole service from chat.
 
 Future admin-only operational controls such as `/restart` may exist, but they are distinct from end-user turn cancellation.

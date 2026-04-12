@@ -125,7 +125,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		targetChatID = r.cfg.Principals.Telegram.AdminUserIDs[0]
 	}
 
-	replyText := face.SerializeFloorFallback(materialFloor, floorText)
+	replyText := face.SerializeFloorFallback(materialFloor, floorText, face.FallbackOptions{Channel: "telegram"})
 	currentFaceModel := r.currentFaceRenderer()
 	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
 		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", governorExecution{})

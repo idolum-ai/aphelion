@@ -153,6 +153,17 @@ The fallback-floor overlay should emphasize:
 
 It should not try to impersonate ordinary scene authorship.
 
+In `v0`, this fallback serializer should remain deterministic.
+
+That means:
+
+- fixed section selection rules
+- fixed omission rules
+- fixed channel-specific labels and phrasing
+- fixed voice-safe sentence shaping when the fallback is spoken
+
+It should absorb house language through bounded composition rules, not through an additional generative layer.
+
 ## Core Elements
 
 ## Sentence Structure

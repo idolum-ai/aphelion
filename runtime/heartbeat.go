@@ -195,7 +195,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return nil
 	}
 
-	replyText := face.SerializeFloorFallback(materialFloor, floorText)
+	replyText := face.SerializeFloorFallback(materialFloor, floorText, face.FallbackOptions{Channel: "telegram"})
 	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
 		faceAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", governorExecution{}), hiddenInputs)
 		faceAwareness.DeliveryMode = "heartbeat_delivery"

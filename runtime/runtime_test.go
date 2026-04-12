@@ -302,13 +302,17 @@ func (f fakeTranscriber) Translate(_ context.Context, _ *media.TranscriptionRequ
 }
 
 type fakeSynth struct {
-	media core.Media
-	err   error
+	media    core.Media
+	err      error
+	lastText *string
 }
 
-func (f fakeSynth) Synthesize(_ context.Context, _ string) (core.Media, error) {
+func (f fakeSynth) Synthesize(_ context.Context, text string) (core.Media, error) {
 	if f.err != nil {
 		return core.Media{}, f.err
+	}
+	if f.lastText != nil {
+		*f.lastText = text
 	}
 	return f.media, nil
 }
@@ -1099,10 +1103,10 @@ func TestHandleInboundFaceFailureUsesSerializedFallbackAfterMaterialFloor(t *tes
 		t.Fatalf("sent len = %d, want 1", len(sender.sent))
 	}
 	want := strings.Join([]string{
-		"What is true:",
+		"What matters:",
 		"- The repo was inspected.",
 		"",
-		"What I can do:",
+		"Next:",
 		"- Propose the strongest next steps.",
 	}, "\n")
 	if sender.sent[0].Text != want {
@@ -1145,10 +1149,10 @@ func TestHandleInboundFloorFallbackBackendSerializesStructuredFloor(t *testing.T
 	}
 
 	want := strings.Join([]string{
-		"What is true:",
+		"What matters:",
 		"- The repo was inspected.",
 		"",
-		"What I'll do:",
+		"Committed:",
 		"- Keep the answer focused on the next move.",
 	}, "\n")
 
@@ -1519,10 +1523,10 @@ func TestHeartbeatDeliveryFaceFailureUsesSerializedFloorFallback(t *testing.T) {
 	}
 
 	want := strings.Join([]string{
-		"What is true:",
+		"What matters:",
 		"- Deployment readiness is still unresolved.",
 		"",
-		"What I'll do:",
+		"Committed:",
 		"- Surface the blocker directly.",
 	}, "\n")
 
@@ -1928,10 +1932,10 @@ func TestCronJobAnnounceFaceFailureUsesSerializedFloorFallback(t *testing.T) {
 	}
 
 	want := strings.Join([]string{
-		"What is true:",
+		"What matters:",
 		"- The nightly maintenance summary is ready.",
 		"",
-		"What I can do:",
+		"Next:",
 		"- Review the pending maintenance queue.",
 	}, "\n")
 
@@ -2029,6 +2033,67 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 	}
 	if len(sender.sent) != 1 || sender.sent[0].Text != "voice fallback text" {
 		t.Fatalf("text sends = %#v, want text fallback", sender.sent)
+	}
+}
+
+func TestHandleInboundVoiceFallbackSerializerUsesVoiceOverlay(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.proposalReplyText = "Keep it steady and direct."
+	provider.replyText = strings.Join([]string{
+		"FACTS:",
+		"- The repo was inspected.",
+		"COMMITMENTS:",
+		"- Keep the answer focused on the next move.",
+		"REFUSALS:",
+		"- Pretend the tests passed when they did not.",
+		"SCENE_CONSTRAINTS:",
+		"- Do not become lyrical.",
+	}, "\n")
+	provider.faceErr = errors.New("face unavailable")
+
+	var synthesized string
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "help me think this through"}, fakeSynth{
+		media:    core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+		lastText: &synthesized,
+	})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1202,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  79,
+		Artifacts:  []core.Artifact{{ID: "voice-3", Channel: "telegram", SourceType: "voice", Kind: "audio", Subtype: "voice_note", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	want := "Here's what matters: The repo was inspected. I'll keep the answer focused on the next move. I won't pretend the tests passed when they did not."
+	if synthesized != want {
+		t.Fatalf("synthesized text = %q, want %q", synthesized, want)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("text sends = %d, want 0 in voice fallback mode", len(sender.sent))
+	}
+	if len(sender.voice) != 1 {
+		t.Fatalf("voice sends = %d, want 1", len(sender.voice))
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 1202, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if len(sess.Messages) < 2 || sess.Messages[1].Content != want {
+		t.Fatalf("session assistant text = %q, want voice-shaped fallback transcript", sess.Messages[1].Content)
 	}
 }
 
