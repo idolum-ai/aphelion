@@ -161,6 +161,9 @@ enabled = false
 
 [voice]
 mode = "off"
+# off = always text replies
+# auto = reply with voice to voice/audio input and text to text input
+# all = always synthesize spoken replies
 openai_api_key = ""
 openai_base_url = ""
 openai_model = "whisper-1"

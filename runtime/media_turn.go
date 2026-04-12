@@ -9,7 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
@@ -20,48 +23,93 @@ type preparedInboundTurn struct {
 	UserText        string
 	LedgerText      string
 	AgentMedia      []core.Media
+	ArtifactRefs    []core.ArtifactReference
 	InboundWasVoice bool
 	MediaAttached   bool
 	MediaMode       string
 }
 
 func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, msg core.InboundMessage) (preparedInboundTurn, error) {
-	userText, inboundWasVoice, err := r.transcribeVoiceIfNeeded(ctx, scope, msg)
-	if err != nil {
-		return preparedInboundTurn{}, err
-	}
-
 	prepared := preparedInboundTurn{
-		UserText:        strings.TrimSpace(userText),
-		LedgerText:      strings.TrimSpace(userText),
-		InboundWasVoice: inboundWasVoice,
+		UserText:      strings.TrimSpace(msg.Text),
+		LedgerText:    strings.TrimSpace(msg.Text),
+		MediaAttached: len(msg.Artifacts) > 0,
 	}
 
-	imageMedia := supportedImageMedia(msg.Media)
-	if len(imageMedia) > 0 {
-		prepared.AgentMedia = append(prepared.AgentMedia, imageMedia...)
-		prepared.MediaAttached = true
-		prepared.MediaMode = "vision"
-	}
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if strings.TrimSpace(artifact.Scope) == "" {
+			artifact.Scope = scopeRootLabel(scope)
+		}
+		if strings.TrimSpace(artifact.PrincipalID) == "" {
+			artifact.PrincipalID = scopePrincipalID(scope)
+		}
 
-	if pdfMedia, ok := firstPDFMedia(msg.Media); ok {
-		prepared.MediaAttached = true
-		if prepared.MediaMode == "" {
-			prepared.MediaMode = "document_text"
+		ref := core.ArtifactReference{
+			ArtifactID:      artifact.ID,
+			Kind:            artifact.Kind,
+			SourceType:      artifact.SourceType,
+			Summary:         summarizeArtifactForFloor(artifact),
+			Retention:       firstNonEmpty(strings.TrimSpace(artifact.DefaultRetention), "ephemeral"),
+			ProvenanceScope: artifact.Scope,
 		}
-		extracted, err := r.extractPDFText(ctx, scope, pdfMedia)
-		if err != nil {
-			prepared.UserText = appendTextSection(prepared.UserText, fmt.Sprintf("[PDF attached: text extraction unavailable: %v]", err))
-		} else if strings.TrimSpace(extracted) != "" {
-			prepared.UserText = appendTextSection(prepared.UserText, "[PDF attached]")
-			prepared.UserText = appendTextSection(prepared.UserText, "[DOCUMENT_TEXT]\n"+strings.TrimSpace(extracted)+"\n[/DOCUMENT_TEXT]")
-		} else {
-			prepared.UserText = appendTextSection(prepared.UserText, "[PDF attached: no extractable text found]")
+
+		switch artifactHandling(artifact) {
+		case "attach_for_vision":
+			ref.Handling = "attach_for_vision"
+			media, ok := artifactVisionMedia(artifact)
+			if ok {
+				prepared.AgentMedia = append(prepared.AgentMedia, media)
+				prepared.MediaAttached = true
+				prepared.MediaMode = "vision"
+			}
+		case "transcribe":
+			prepared.InboundWasVoice = true
+			ref.Handling = "transcribe"
+			ref.DerivedOutput = "transcript"
+			setIfEmpty(&prepared.MediaMode, "transcript")
+			transcript, err := r.transcribeAudioArtifact(ctx, scope, artifact)
+			if err != nil {
+				prepared.UserText = appendTextSection(prepared.UserText, fmt.Sprintf("[%s attached: transcription unavailable: %v]", artifactHumanLabel(artifact), err))
+				prepared.LedgerText = appendTextSection(prepared.LedgerText, fmt.Sprintf("[%s attached: transcription unavailable]", artifactHumanLabel(artifact)))
+			} else if strings.TrimSpace(transcript) != "" {
+				prepared.UserText = appendTextSection(prepared.UserText, strings.TrimSpace(transcript))
+				prepared.LedgerText = appendTextSection(prepared.LedgerText, strings.TrimSpace(transcript))
+			} else {
+				prepared.UserText = appendTextSection(prepared.UserText, fmt.Sprintf("[%s attached: empty transcript]", artifactHumanLabel(artifact)))
+				prepared.LedgerText = appendTextSection(prepared.LedgerText, fmt.Sprintf("[%s attached: empty transcript]", artifactHumanLabel(artifact)))
+			}
+		case "extract_text":
+			ref.Handling = "extract_text"
+			ref.DerivedOutput = "extracted_text"
+			prepared.MediaAttached = true
+			setIfEmpty(&prepared.MediaMode, "document_text")
+			extracted, err := r.extractArtifactText(ctx, scope, artifact)
+			if err != nil {
+				prepared.UserText = appendTextSection(prepared.UserText, fmt.Sprintf("[%s attached: text extraction unavailable: %v]", artifactHumanLabel(artifact), err))
+			} else if strings.TrimSpace(extracted) != "" {
+				prepared.UserText = appendTextSection(prepared.UserText, documentTextSectionForArtifact(artifact, extracted))
+			} else {
+				prepared.UserText = appendTextSection(prepared.UserText, fmt.Sprintf("[%s attached: no extractable text found]", artifactHumanLabel(artifact)))
+			}
+		case "inspect_metadata":
+			ref.Handling = "inspect_metadata"
+			ref.DerivedOutput = "metadata_note"
+			setIfEmpty(&prepared.MediaMode, "artifact_reference")
+			prepared.UserText = appendTextSection(prepared.UserText, metadataNoteForArtifact(artifact))
+		default:
+			ref.Handling = "store_reference_only"
+			setIfEmpty(&prepared.MediaMode, "artifact_reference")
 		}
+
+		if artifact.Kind == "audio" {
+			prepared.InboundWasVoice = true
+		}
+		prepared.ArtifactRefs = append(prepared.ArtifactRefs, ref)
 	}
 
 	prepared.UserText = strings.TrimSpace(prepared.UserText)
-	prepared.LedgerText = summarizeInboundForLedger(prepared.LedgerText, msg.Media)
+	prepared.LedgerText = summarizeInboundForLedger(prepared.LedgerText, msg.Artifacts)
 	return prepared, nil
 }
 
@@ -85,23 +133,62 @@ func (r *Runtime) executionForTurn(prepared preparedInboundTurn) governorExecuti
 	return exec
 }
 
-func supportedImageMedia(items []core.Media) []core.Media {
-	out := make([]core.Media, 0, len(items))
-	for _, item := range items {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.MimeType)), "image/") && len(item.Data) > 0 {
-			out = append(out, item)
-		}
+func artifactHandling(artifact core.Artifact) string {
+	switch {
+	case artifact.HasCapability("vision") && len(artifact.Data) > 0:
+		return "attach_for_vision"
+	case artifact.HasCapability("extract_text") && len(artifact.Data) > 0:
+		return "extract_text"
+	case artifact.HasCapability("transcribe") && len(artifact.Data) > 0:
+		return "transcribe"
+	case artifact.HasCapability("inspect_metadata"):
+		return "inspect_metadata"
+	default:
+		return "store_reference_only"
 	}
-	return out
 }
 
-func firstPDFMedia(items []core.Media) (core.Media, bool) {
-	for _, item := range items {
-		if strings.EqualFold(strings.TrimSpace(item.MimeType), "application/pdf") && len(item.Data) > 0 {
-			return item, true
+func artifactVisionMedia(artifact core.Artifact) (core.Media, bool) {
+	if len(artifact.Data) == 0 {
+		return core.Media{}, false
+	}
+	switch artifact.Kind {
+	case "image":
+		return core.Media{
+			Type:     firstNonEmpty(strings.TrimSpace(artifact.SourceType), "image"),
+			Data:     artifact.Data,
+			MimeType: artifact.MimeType,
+			Filename: artifact.Filename,
+		}, true
+	case "sticker":
+		if artifact.Subtype == "static_sticker" {
+			return core.Media{
+				Type:     "sticker",
+				Data:     artifact.Data,
+				MimeType: artifact.MimeType,
+				Filename: firstNonEmpty(artifact.Filename, "sticker.webp"),
+			}, true
 		}
 	}
 	return core.Media{}, false
+}
+
+func (r *Runtime) extractArtifactText(ctx context.Context, scope sandbox.Scope, artifact core.Artifact) (string, error) {
+	if artifact.Subtype == "pdf" || strings.EqualFold(strings.TrimSpace(artifact.MimeType), "application/pdf") {
+		return r.extractPDFText(ctx, scope, core.Media{
+			Type:     firstNonEmpty(strings.TrimSpace(artifact.SourceType), "document"),
+			Data:     artifact.Data,
+			MimeType: artifact.MimeType,
+			Filename: artifact.Filename,
+		})
+	}
+	if len(artifact.Data) == 0 {
+		return "", fmt.Errorf("document bytes unavailable")
+	}
+	if !utf8.Valid(artifact.Data) {
+		return "", fmt.Errorf("document is not valid utf-8 text")
+	}
+	return strings.TrimSpace(string(artifact.Data)), nil
 }
 
 func (r *Runtime) extractPDFText(ctx context.Context, scope sandbox.Scope, media core.Media) (string, error) {
@@ -161,21 +248,153 @@ func appendTextSection(base string, addition string) string {
 	return base + "\n\n" + addition
 }
 
-func summarizeInboundForLedger(text string, media []core.Media) string {
+func summarizeInboundForLedger(text string, artifacts []core.Artifact) string {
 	text = strings.TrimSpace(text)
-	notes := make([]string, 0, len(media))
-	for _, item := range media {
-		switch {
-		case item.Type == "voice":
-			notes = append(notes, "[voice attached]")
-		case strings.EqualFold(strings.TrimSpace(item.MimeType), "application/pdf"):
-			notes = append(notes, "[pdf attached]")
-		case strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.MimeType)), "image/"):
-			notes = append(notes, "[image attached]")
+	notes := make([]string, 0, len(artifacts))
+	seen := map[string]struct{}{}
+	for _, raw := range artifacts {
+		marker := ledgerMarkerForArtifact(core.NormalizeArtifact(raw))
+		if marker == "" {
+			continue
 		}
+		if _, ok := seen[marker]; ok {
+			continue
+		}
+		seen[marker] = struct{}{}
+		notes = append(notes, marker)
 	}
 	if len(notes) == 0 {
 		return text
 	}
+	sort.Strings(notes)
 	return appendTextSection(text, strings.Join(notes, "\n"))
+}
+
+func ledgerMarkerForArtifact(artifact core.Artifact) string {
+	switch {
+	case artifact.Kind == "audio":
+		return "[voice attached]"
+	case artifact.Kind == "image":
+		return "[image attached]"
+	case artifact.Kind == "sticker":
+		return "[sticker attached]"
+	case artifact.Kind == "video":
+		return "[video attached]"
+	case artifact.Kind == "structured":
+		return "[" + firstNonEmpty(artifact.Subtype, artifact.SourceType, "structured") + " attached]"
+	case artifact.Kind == "document" && artifact.Subtype == "pdf":
+		return "[pdf attached]"
+	case artifact.Kind == "document":
+		return "[document attached]"
+	default:
+		return ""
+	}
+}
+
+func summarizeArtifactForFloor(artifact core.Artifact) string {
+	name := firstNonEmpty(strings.TrimSpace(artifact.Filename), artifact.SourceType, artifact.Subtype, artifact.Kind, "artifact")
+	switch artifact.Kind {
+	case "structured":
+		return metadataNoteForArtifact(artifact)
+	case "sticker":
+		return artifactHumanLabel(artifact) + " " + name
+	default:
+		return name
+	}
+}
+
+func documentTextSectionForArtifact(artifact core.Artifact, extracted string) string {
+	extracted = strings.TrimSpace(extracted)
+	if extracted == "" {
+		return ""
+	}
+	if artifact.Subtype == "pdf" {
+		return "[PDF attached]\n\n[DOCUMENT_TEXT]\n" + extracted + "\n[/DOCUMENT_TEXT]"
+	}
+	name := firstNonEmpty(strings.TrimSpace(artifact.Filename), "document")
+	return fmt.Sprintf("[Document attached: %s]\n\n[DOCUMENT_TEXT]\n%s\n[/DOCUMENT_TEXT]", name, extracted)
+}
+
+func metadataNoteForArtifact(artifact core.Artifact) string {
+	name := firstNonEmpty(strings.TrimSpace(artifact.Filename), artifact.SourceType, artifact.Subtype, artifact.Kind, "artifact")
+	switch artifact.Kind {
+	case "video":
+		return fmt.Sprintf("[video attached: %s]", name)
+	case "structured":
+		switch artifact.Subtype {
+		case "location":
+			return fmt.Sprintf("[location attached: latitude=%s longitude=%s]", artifact.Metadata["latitude"], artifact.Metadata["longitude"])
+		case "venue":
+			return fmt.Sprintf("[venue attached: %s, %s]", artifact.Metadata["title"], artifact.Metadata["address"])
+		case "contact":
+			return fmt.Sprintf("[contact attached: %s %s]", artifact.Metadata["first_name"], artifact.Metadata["last_name"])
+		case "poll":
+			return fmt.Sprintf("[poll attached: %s]", artifact.Metadata["question"])
+		default:
+			return fmt.Sprintf("[%s attached]", firstNonEmpty(artifact.Subtype, "structured artifact"))
+		}
+	case "document":
+		return fmt.Sprintf("[document attached: %s]", name)
+	case "sticker":
+		return fmt.Sprintf("[sticker attached: %s]", name)
+	default:
+		return fmt.Sprintf("[%s attached: %s]", artifactHumanLabel(artifact), name)
+	}
+}
+
+func artifactHumanLabel(artifact core.Artifact) string {
+	switch {
+	case artifact.Kind == "audio" && artifact.Subtype == "voice_note":
+		return "voice"
+	case artifact.Kind == "audio":
+		return "audio"
+	case artifact.Kind == "image":
+		return "image"
+	case artifact.Kind == "video":
+		return "video"
+	case artifact.Kind == "document" && artifact.Subtype == "pdf":
+		return "PDF"
+	case artifact.Kind == "document":
+		return "document"
+	case artifact.Kind == "sticker":
+		return "sticker"
+	case artifact.Kind == "structured":
+		return firstNonEmpty(artifact.Subtype, "structured artifact")
+	default:
+		return "artifact"
+	}
+}
+
+func scopeRootLabel(scope sandbox.Scope) string {
+	if strings.TrimSpace(scope.UserWorkspace) != "" {
+		return "principal"
+	}
+	return "shared"
+}
+
+func scopePrincipalID(scope sandbox.Scope) string {
+	if strings.TrimSpace(scope.UserWorkspace) == "" || scope.Principal.TelegramUserID == 0 {
+		return ""
+	}
+	return strconv.FormatInt(scope.Principal.TelegramUserID, 10)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func setIfEmpty(current *string, value string) {
+	if current == nil {
+		return
+	}
+	if strings.TrimSpace(*current) != "" || strings.TrimSpace(value) == "" {
+		return
+	}
+	*current = strings.TrimSpace(value)
 }

@@ -82,16 +82,18 @@ Voice behavior should be explicit.
 Supported modes should include:
 
 - `off`
-- `voice_only`
+- `auto`
 - `all`
 
 ### `off`
 
 Text only.
 
-### `voice_only`
+### `auto`
 
-If the inbound message was a voice message, reply with voice by default.
+If the inbound message was a voice or audio-originated message, reply with voice by default.
+
+If the inbound message was text-only, reply with text by default.
 
 This should be the default messaging-gateway voice mode.
 
@@ -104,7 +106,7 @@ Reply with voice for all messages, not just voice-originated ones.
 The intended default is:
 
 - when voice mode is enabled
-- and the user sends a voice message
+- and the user sends voice or audio
 - Aphelion replies in voice unless explicitly configured otherwise
 
 This is the right "natural" rule for messaging platforms.
@@ -172,7 +174,7 @@ See `config.md`, but the intended shape should preserve:
 
 ```toml
 [voice]
-mode = "voice_only"           # off | voice_only | all
+mode = "auto"                 # off | auto | all
 stt_provider = "openai"
 tts_provider = "elevenlabs"
 
@@ -191,15 +193,16 @@ Additional per-channel or per-principal voice overrides may come later.
 
 - **Whisper/OpenAI first for STT.** It is the cleanest first cloud transcription path.
 - **ElevenLabs first for TTS.** It is the strongest first premium spoken-output path.
-- **Voice mode is explicit.** `voice_only` is the best default for messaging.
-- **Voice replies follow voice input by default.** If the user sends voice and voice mode is enabled, reply with voice unless configured otherwise.
+- **Voice mode is explicit.** `auto` is the best default for messaging.
+- **Voice replies follow voice/audio input by default.** If the user sends voice or audio and voice mode is enabled, reply with voice unless configured otherwise.
 - **The session ledger stays text-first.** Audio remains sidecar media state.
 - **Voice is rendering, not authority.** Aphelion authorizes, Idolum speaks, voice renders the speech form.
 
 ## Test Plan
 
 - **TestVoiceMessageTriggersTranscription**: inbound voice is transcribed before the turn runs
-- **TestVoiceOnlyRepliesToVoiceInput**: `voice_only` sends spoken replies only for voice-originated turns
+- **TestAutoModeRepliesToVoiceInput**: `auto` sends spoken replies only for voice/audio-originated turns
+- **TestAutoModeFallsBackToTextForTextInput**: `auto` does not emit spoken replies for text-originated turns
 - **TestAllModeSpeaksForTextInput**: `all` mode also produces spoken replies for text turns
 - **TestOffModeUsesTextOnly**: `off` mode never emits TTS output
 - **TestVoiceReplyUsesDeliveredSceneText**: spoken output is synthesized from the delivered Idolum scene text

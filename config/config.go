@@ -771,9 +771,9 @@ func validate(cfg *Config) error {
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Voice.Mode)) {
-	case "", "off", "voice_only", "all":
+	case "", "off", "auto", "all":
 	default:
-		return fmt.Errorf("voice.mode must be one of off|voice_only|all")
+		return fmt.Errorf("voice.mode must be one of off|auto|all")
 	}
 	if strings.TrimSpace(cfg.Voice.Mode) != "" && !strings.EqualFold(strings.TrimSpace(cfg.Voice.Mode), "off") {
 		if strings.TrimSpace(cfg.Voice.OpenAIAPIKey) == "" {

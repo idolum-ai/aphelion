@@ -314,7 +314,7 @@ delivery = "announce"
 enabled = true
 
 [voice]
-mode = "voice_only"
+mode = "auto"
 openai_api_key = "sk-openai"
 openai_model = "whisper-1"
 elevenlabs_api_key = "xi-test"
@@ -413,7 +413,7 @@ elevenlabs_voice_id = "voice-123"
 	if cfg.Cron.Jobs[0].ID != "check-in" || cfg.Cron.Jobs[0].Every != "2h" || cfg.Cron.Jobs[0].Delivery != "announce" {
 		t.Fatalf("cron job = %#v, want parsed job", cfg.Cron.Jobs[0])
 	}
-	if cfg.Voice.Mode != "voice_only" || cfg.Voice.OpenAIModel != "whisper-1" || cfg.Voice.ElevenLabsVoiceID != "voice-123" {
+	if cfg.Voice.Mode != "auto" || cfg.Voice.OpenAIModel != "whisper-1" || cfg.Voice.ElevenLabsVoiceID != "voice-123" {
 		t.Fatalf("voice = %#v, want parsed voice config", cfg.Voice)
 	}
 }

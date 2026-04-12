@@ -195,7 +195,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 
 	sess.TurnCount++
 	materialFloor, floorText, _ := governorMaterialArtifact(result.Text, useMaterialFloor)
-	floorMetadata := encodeFloorMetadata(hiddenInputs.Metadata())
+	floorMetadataState := hiddenInputs.Metadata()
+	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, prepared.ArtifactRefs...)
+	floorMetadata := encodeFloorMetadata(floorMetadataState)
 	replyText := floorText
 	outboundID := int64(0)
 	outboundType := ""

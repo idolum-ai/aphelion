@@ -56,6 +56,15 @@ type Message struct {
 	Photo          []PhotoSize     `json:"photo"`
 	Document       *Document       `json:"document"`
 	Voice          *Voice          `json:"voice"`
+	Audio          *Audio          `json:"audio"`
+	Video          *Video          `json:"video"`
+	VideoNote      *VideoNote      `json:"video_note"`
+	Animation      *Animation      `json:"animation"`
+	Sticker        *Sticker        `json:"sticker"`
+	Contact        *Contact        `json:"contact"`
+	Location       *Location       `json:"location"`
+	Venue          *Venue          `json:"venue"`
+	Poll           *Poll           `json:"poll"`
 	Entities       []MessageEntity `json:"entities"`
 	ReplyToMessage *Message        `json:"reply_to_message"`
 	Raw            json.RawMessage `json:"-"`
@@ -99,4 +108,79 @@ type Document struct {
 	FileName string `json:"file_name"`
 	MimeType string `json:"mime_type"`
 	FileSize int64  `json:"file_size"`
+}
+
+type Audio struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	MimeType string `json:"mime_type"`
+	FileName string `json:"file_name"`
+	FileSize int64  `json:"file_size"`
+}
+
+type Video struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	MimeType string `json:"mime_type"`
+	FileName string `json:"file_name"`
+	FileSize int64  `json:"file_size"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+type VideoNote struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	FileSize int64  `json:"file_size"`
+	Length   int    `json:"length"`
+}
+
+type Animation struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	MimeType string `json:"mime_type"`
+	FileName string `json:"file_name"`
+	FileSize int64  `json:"file_size"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+type Sticker struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	IsAnimated   bool   `json:"is_animated"`
+	IsVideo      bool   `json:"is_video"`
+	Type         string `json:"type"`
+	Emoji        string `json:"emoji"`
+	SetName      string `json:"set_name"`
+	MimeType     string `json:"mime_type"`
+	FileSize     int64  `json:"file_size"`
+	Width        int    `json:"width"`
+	Height       int    `json:"height"`
+}
+
+type Contact struct {
+	PhoneNumber string `json:"phone_number"`
+	FirstName   string `json:"first_name"`
+	LastName    string `json:"last_name"`
+	UserID      int64  `json:"user_id"`
+	VCard       string `json:"vcard"`
+}
+
+type Location struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+}
+
+type Venue struct {
+	Location     *Location `json:"location"`
+	Title        string    `json:"title"`
+	Address      string    `json:"address"`
+	FoursquareID string    `json:"foursquare_id"`
+}
+
+type Poll struct {
+	ID       string `json:"id"`
+	Question string `json:"question"`
+	Type     string `json:"type"`
 }

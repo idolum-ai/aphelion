@@ -4,6 +4,12 @@
 
 This spec covers media handling across channels plus platform services used to process media.
 
+The channel-neutral file/media model belongs in `artifacts.md`.
+
+The bounded `Idolum`/`Aphelion` deliberation over file meaning, handling, and retention belongs in `artifact-brokerage.md`.
+
+This document stays focused on media processors and service surfaces such as transcription, translation, extraction, and isolation behavior.
+
 OpenAI belongs here for:
 
 - audio transcription
@@ -18,7 +24,7 @@ Media services are also separate from the face layer. The governor may invoke tr
 ### v0 required
 
 - Telegram media normalization
-- lazy media download when needed
+- deterministic download for artifact kinds that require bytes for same-turn handling
 
 ### v0.5
 
@@ -34,9 +40,15 @@ Media services are also separate from the face layer. The governor may invoke tr
 ## Media Pipeline
 
 1. normalize inbound Telegram media metadata
-2. defer actual download until the agent needs bytes
+2. decide whether the artifact capability envelope requires local bytes this turn
 3. store transient local copies in the session's allowed writable root
 4. hand media off to the appropriate processor
+
+In v0, that means:
+
+- images, PDFs, text-like documents, and audio may download bytes during transport normalization
+- video and structured Telegram objects may remain metadata-first
+- download policy is driven by deterministic capability needs, not by ad hoc agent requests
 
 ## Transcription
 
@@ -128,7 +140,8 @@ translation_model = "whisper-1"
 
 - **TestNormalizePhotoMessage**
 - **TestNormalizeCaptionFallback**
-- **TestLazyDownloadOnlyWhenNeeded**
+- **TestDeterministicArtifactDownloadForSupportedKinds**
+- **TestMetadataOnlyArtifactsDoNotFetchBytes**
 
 ### Deferred transcription
 

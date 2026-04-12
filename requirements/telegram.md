@@ -90,8 +90,8 @@ func normalizeUpdate(update Update) *core.InboundMessage {
         inbound.ReplyTo = &id
     }
     
-    // Media extraction
-    inbound.Media = extractMedia(msg)
+    // Artifact extraction
+    inbound.Artifacts = extractArtifacts(msg)
     
     return inbound
 }
@@ -112,36 +112,38 @@ func buildDisplayName(user *User) string {
 }
 ```
 
-### Media extraction
+### Artifact extraction
 
-Extract photos, documents, audio, voice, video from the message:
+Telegram attachments should normalize into channel-neutral `core.Artifact` values rather than a growing list of Telegram-only media branches.
 
-```go
-func extractMedia(msg *Message) []core.Media {
-    var media []core.Media
-    
-    // Photos: take the largest size (last in array)
-    if len(msg.Photo) > 0 {
-        largest := msg.Photo[len(msg.Photo)-1]
-        media = append(media, core.Media{
-            Type: "photo",
-            URL:  fileURL(largest.FileID), // resolved via getFile later
-            // FileID stored for download
-        })
-    }
-    
-    if msg.Document != nil { /* ... */ }
-    if msg.Audio != nil    { /* ... */ }
-    if msg.Voice != nil    { /* ... */ }
-    if msg.Video != nil    { /* ... */ }
-    if msg.VideoNote != nil { /* ... */ }
-    if msg.Sticker != nil  { /* ... */ }
-    
-    return media
-}
-```
+At minimum, the transport should normalize:
 
-Media files need a two-step download: `getFile` to get `file_path`, then `https://api.telegram.org/file/bot<token>/<file_path>` to download. We do this lazily — only when the agent actually needs the file content.
+- `photo`
+- `document`
+- `voice`
+- `audio`
+- `video`
+- `video_note`
+- `animation`
+- `sticker`
+- `contact`
+- `location`
+- `venue`
+- `poll`
+
+Normalization and capability rules:
+
+- major inbound attachment classes always normalize into artifacts in v0
+- deep handling is governed by the artifact capability envelope, not just by Telegram type
+- images, PDFs, text-like documents, and audio may download bytes for deterministic handling
+- videos, animated stickers, and structured Telegram objects may remain metadata-first in v0
+
+Telegram file downloads still use the Bot API two-step flow:
+
+1. `getFile` to resolve `file_path`
+2. `https://api.telegram.org/file/bot<token>/<file_path>` to download bytes
+
+Downloads should happen only when the artifact capability envelope justifies local bytes for this turn.
 
 For outbound DM turns, Telegram is the visible surface of the face layer:
 
@@ -694,21 +696,34 @@ func splitMessage(text string, maxLen int) []string {
 
 When a user sends media, it needs to be converted into something the LLM can use. Each media type has a different pipeline.
 
-For the current Aphelion runtime, the implemented Telegram media scope is intentionally narrow:
+For the current Aphelion runtime, deep interpretive handling remains intentionally narrower than Telegram's full attachment surface:
 
-- inbound `photo`
-- inbound image `document`
-- inbound PDF `document`
-- existing inbound `voice`
+- `photo`
+- image `document`
+- PDF `document`
+- `voice`
+
+For v0 of the artifact system, the transport should still normalize the broader major Telegram attachment classes into artifacts even when their handling remains metadata-first:
+
+- `audio`
+- `video`
+- `video_note`
+- `animation`
+- `sticker`
+- `contact`
+- `location`
+- `venue`
+- `poll`
 
 Deferred:
 
-- video / video note
-- generic audio files beyond the voice path
-- sticker understanding beyond bounded metadata handling
-- generic binary document analysis
+- deeper video understanding
+- sticker semantics beyond bounded metadata handling
+- generic binary content understanding beyond metadata-first handling
 
 The runtime must not silently imply unsupported media was actually processed.
+
+Longer-term broad Telegram file support should not be implemented as a growing list of Telegram-only branches. The transport should normalize Telegram attachments into the channel-neutral artifact model in `artifacts.md`, and any model-side deliberation over meaning/retention should follow `artifact-brokerage.md`.
 
 ### Photos → Vision input
 

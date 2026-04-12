@@ -12,7 +12,7 @@ type InboundMessage struct {
 	SenderID   int64
 	SenderName string
 	Text       string
-	Media      []Media
+	Artifacts  []Artifact
 	ReplyTo    *int64
 	MessageID  int64
 	Timestamp  time.Time
@@ -35,6 +35,27 @@ type Media struct {
 	URL      string
 	MimeType string
 	Filename string
+}
+
+type Artifact struct {
+	ID               string
+	Channel          string
+	SourceType       string
+	Kind             string
+	Subtype          string
+	Data             []byte
+	Path             string
+	URL              string
+	MimeType         string
+	Filename         string
+	SizeBytes        int64
+	Caption          string
+	Scope            string
+	PrincipalID      string
+	Metadata         map[string]string
+	Capabilities     []string
+	DefaultRetention string
+	RetentionCeiling string
 }
 
 // TurnResult is returned by the agent after one turn.

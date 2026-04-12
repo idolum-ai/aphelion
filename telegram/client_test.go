@@ -145,6 +145,76 @@ func TestNormalizeMessagePDFDocumentOnly(t *testing.T) {
 	}
 }
 
+func TestNormalizeMessageAudioOnly(t *testing.T) {
+	now := time.Now().Unix()
+	msg := &Message{
+		MessageID: 14,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		Audio:     &Audio{FileID: "audio1", FileName: "memo.mp3", MimeType: "audio/mpeg"},
+	}
+
+	got := NormalizeMessage(msg)
+	if got == nil {
+		t.Fatal("expected audio message to be normalized")
+	}
+	if got.Text != "" {
+		t.Fatalf("text = %q, want empty for audio-only input", got.Text)
+	}
+}
+
+func TestNormalizeMessageVideoOnly(t *testing.T) {
+	now := time.Now().Unix()
+	msg := &Message{
+		MessageID: 15,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		Video:     &Video{FileID: "video1", FileName: "clip.mp4", MimeType: "video/mp4"},
+	}
+
+	got := NormalizeMessage(msg)
+	if got == nil {
+		t.Fatal("expected video message to be normalized")
+	}
+	if got.Text != "" {
+		t.Fatalf("text = %q, want empty for video-only input", got.Text)
+	}
+}
+
+func TestNormalizeMessageStickerOnly(t *testing.T) {
+	now := time.Now().Unix()
+	msg := &Message{
+		MessageID: 16,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		Sticker:   &Sticker{FileID: "sticker1", MimeType: "image/webp"},
+	}
+
+	got := NormalizeMessage(msg)
+	if got == nil {
+		t.Fatal("expected sticker message to be normalized")
+	}
+}
+
+func TestNormalizeMessageLocationOnly(t *testing.T) {
+	now := time.Now().Unix()
+	msg := &Message{
+		MessageID: 17,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		Location:  &Location{Latitude: 40.0, Longitude: -73.0},
+	}
+
+	got := NormalizeMessage(msg)
+	if got == nil {
+		t.Fatal("expected location message to be normalized")
+	}
+}
+
 func TestSendMessagePayload(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{

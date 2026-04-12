@@ -18,54 +18,52 @@ type voiceSender interface {
 	SendVoiceMessage(ctx context.Context, chatID int64, media core.Media, replyTo *int64) (int64, error)
 }
 
-func (r *Runtime) transcribeVoiceIfNeeded(ctx context.Context, scope sandbox.Scope, msg core.InboundMessage) (string, bool, error) {
-	text := strings.TrimSpace(msg.Text)
-	if text != "" {
-		return text, false, nil
-	}
-
-	voiceMedia, ok := firstVoiceMedia(msg.Media)
-	if !ok {
-		return "[empty message]", false, nil
+func (r *Runtime) transcribeAudioArtifact(ctx context.Context, scope sandbox.Scope, artifact core.Artifact) (string, error) {
+	if len(artifact.Data) == 0 {
+		return "", fmt.Errorf("audio bytes unavailable")
 	}
 	if r.transcriber == nil {
-		return "", true, fmt.Errorf("voice transcription is not configured")
+		return "", fmt.Errorf("voice transcription is not configured")
 	}
 
 	tmpRoot := voiceTempRoot(scope, r.cfg.Agent)
 	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
-		return "", true, fmt.Errorf("create voice temp root: %w", err)
+		return "", fmt.Errorf("create voice temp root: %w", err)
 	}
-	tmp, err := os.CreateTemp(tmpRoot, "aphelion-voice-*.ogg")
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(artifact.Filename)))
+	if ext == "" {
+		ext = ".ogg"
+	}
+	tmp, err := os.CreateTemp(tmpRoot, "aphelion-audio-*"+ext)
 	if err != nil {
-		return "", true, fmt.Errorf("create temp voice file: %w", err)
+		return "", fmt.Errorf("create temp voice file: %w", err)
 	}
 	path := filepath.Clean(tmp.Name())
 	defer os.Remove(path)
-	if _, err := tmp.Write(voiceMedia.Data); err != nil {
+	if _, err := tmp.Write(artifact.Data); err != nil {
 		_ = tmp.Close()
-		return "", true, fmt.Errorf("write temp voice file: %w", err)
+		return "", fmt.Errorf("write temp voice file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return "", true, fmt.Errorf("close temp voice file: %w", err)
+		return "", fmt.Errorf("close temp voice file: %w", err)
 	}
 
 	transcription, err := r.transcriber.Transcribe(ctx, &media.TranscriptionRequest{Path: path})
 	if err != nil {
-		return "", true, fmt.Errorf("transcribe voice: %w", err)
+		return "", fmt.Errorf("transcribe %s: %w", artifactHumanLabel(artifact), err)
 	}
-	text = strings.TrimSpace(transcription.Text)
+	text := strings.TrimSpace(transcription.Text)
 	if text == "" {
-		text = "[empty voice transcript]"
+		return "[empty voice transcript]", nil
 	}
-	return text, true, nil
+	return text, nil
 }
 
 func (r *Runtime) shouldReplyWithVoice(inboundWasVoice bool) bool {
 	switch strings.ToLower(strings.TrimSpace(r.voiceMode)) {
 	case "all":
 		return true
-	case "voice_only":
+	case "auto":
 		return inboundWasVoice
 	default:
 		return false
@@ -95,15 +93,6 @@ func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text s
 		return 0, "", err
 	}
 	return msgID, "text", nil
-}
-
-func firstVoiceMedia(items []core.Media) (core.Media, bool) {
-	for _, item := range items {
-		if item.Type == "voice" && len(item.Data) > 0 {
-			return item, true
-		}
-	}
-	return core.Media{}, false
 }
 
 func replyToMessageID(id int64) *int64 {

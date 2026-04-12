@@ -312,6 +312,7 @@ jobs = []
 # ─── Voice ───
 [voice]
 provider = "elevenlabs"
+mode = "auto"                # off | auto | all
 api_key = ""
 voice_id = ""
 model = "eleven_turbo_v2_5"

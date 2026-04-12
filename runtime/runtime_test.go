@@ -1764,7 +1764,7 @@ func TestCronJobAnnounceUsesFaceAndUpdatesAdminSession(t *testing.T) {
 	}
 }
 
-func TestHandleInboundVoiceOnlyTranscribesAndRepliesWithVoice(t *testing.T) {
+func TestHandleInboundAutoModeTranscribesAndRepliesWithVoice(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -1773,7 +1773,7 @@ func TestHandleInboundVoiceOnlyTranscribesAndRepliesWithVoice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.ConfigureVoice(config.VoiceConfig{Mode: "voice_only"}, fakeTranscriber{text: "transcribed hello"}, fakeSynth{
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "transcribed hello"}, fakeSynth{
 		media: core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
 	})
 
@@ -1782,7 +1782,7 @@ func TestHandleInboundVoiceOnlyTranscribesAndRepliesWithVoice(t *testing.T) {
 		SenderID:   1001,
 		SenderName: "admin",
 		MessageID:  77,
-		Media:      []core.Media{{Type: "voice", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+		Artifacts:  []core.Artifact{{ID: "voice-1", Channel: "telegram", SourceType: "voice", Kind: "audio", Subtype: "voice_note", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
 	})
 	if err != nil {
 		t.Fatalf("HandleInbound() err = %v", err)
@@ -1791,7 +1791,7 @@ func TestHandleInboundVoiceOnlyTranscribesAndRepliesWithVoice(t *testing.T) {
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
 	if len(sender.sent) != 0 {
-		t.Fatalf("text sends = %d, want 0 in voice_only mode", len(sender.sent))
+		t.Fatalf("text sends = %d, want 0 in auto mode for voice input", len(sender.sent))
 	}
 	if len(sender.voice) != 1 {
 		t.Fatalf("voice sends = %d, want 1", len(sender.voice))
@@ -1818,7 +1818,7 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	rt.ConfigureVoice(config.VoiceConfig{Mode: "voice_only"}, fakeTranscriber{text: "transcribed hello"}, fakeSynth{
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "transcribed hello"}, fakeSynth{
 		err: errors.New("tts down"),
 	})
 
@@ -1827,7 +1827,7 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 		SenderID:   1001,
 		SenderName: "admin",
 		MessageID:  78,
-		Media:      []core.Media{{Type: "voice", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+		Artifacts:  []core.Artifact{{ID: "voice-2", Channel: "telegram", SourceType: "voice", Kind: "audio", Subtype: "voice_note", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
 	})
 	if err != nil {
 		t.Fatalf("HandleInbound() err = %v", err)
@@ -1840,6 +1840,124 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 	}
 	if len(sender.sent) != 1 || sender.sent[0].Text != "voice fallback text" {
 		t.Fatalf("text sends = %#v, want text fallback", sender.sent)
+	}
+}
+
+func TestHandleInboundAutoModeTextInputStaysText(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "plain text reply"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "unused"}, fakeSynth{
+		media: core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+	})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1202,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  79,
+		Text:       "hello there",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.voice) != 0 {
+		t.Fatalf("voice sends = %d, want 0 for text input in auto mode", len(sender.voice))
+	}
+	if len(sender.sent) != 1 || sender.sent[0].Text != "plain text reply" {
+		t.Fatalf("text sends = %#v, want plain text reply", sender.sent)
+	}
+}
+
+func TestPrepareInboundTurnProcessesArtifacts(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	_ = store
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "spoken transcript"}, fakeSynth{})
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    1300,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{
+			{ID: "img-1", Channel: "telegram", SourceType: "photo", Kind: "image", MimeType: "image/png", Filename: "screen.png", Data: []byte("image-bytes")},
+			{ID: "voice-1", Channel: "telegram", SourceType: "voice", Kind: "audio", Subtype: "voice_note", MimeType: "audio/ogg", Filename: "voice.ogg", Data: []byte("voice-bytes")},
+			{ID: "video-1", Channel: "telegram", SourceType: "video", Kind: "video", MimeType: "video/mp4", Filename: "clip.mp4", SizeBytes: 42},
+			{ID: "loc-1", Channel: "telegram", SourceType: "location", Kind: "structured", Metadata: map[string]string{"latitude": "40.0", "longitude": "-73.0"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+
+	if !prepared.MediaAttached || prepared.MediaMode != "vision" {
+		t.Fatalf("prepared media = attached:%t mode:%q, want vision artifact handling", prepared.MediaAttached, prepared.MediaMode)
+	}
+	if len(prepared.AgentMedia) != 1 {
+		t.Fatalf("agent media len = %d, want 1 image artifact for vision", len(prepared.AgentMedia))
+	}
+	if !strings.Contains(prepared.UserText, "spoken transcript") {
+		t.Fatalf("user text = %q, want audio transcript", prepared.UserText)
+	}
+	if !strings.Contains(prepared.UserText, "clip.mp4") || !strings.Contains(prepared.UserText, "location") {
+		t.Fatalf("user text = %q, want video and location summaries", prepared.UserText)
+	}
+	if !strings.Contains(prepared.LedgerText, "[image attached]") || !strings.Contains(prepared.LedgerText, "[voice attached]") || !strings.Contains(prepared.LedgerText, "[video attached]") {
+		t.Fatalf("ledger text = %q, want artifact markers", prepared.LedgerText)
+	}
+}
+
+func TestHandleInboundPersistsArtifactReferencesInFloorMetadata(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "artifact-aware reply"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1301,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  1,
+		Text:       "what do you make of this screenshot?",
+		Artifacts: []core.Artifact{
+			{ID: "img-2", Channel: "telegram", SourceType: "photo", Kind: "image", MimeType: "image/png", Filename: "screen.png", Data: []byte("image-bytes")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 1301, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, "\"artifact_id\":\"img-2\"") {
+		t.Fatalf("LastFloorMetadata = %q, want artifact reference", sess.LastFloorMetadata)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, "\"handling\":\"attach_for_vision\"") {
+		t.Fatalf("LastFloorMetadata = %q, want handling decision", sess.LastFloorMetadata)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, "\"retention\":\"session_reference\"") {
+		t.Fatalf("LastFloorMetadata = %q, want retention decision", sess.LastFloorMetadata)
 	}
 }
 
@@ -3004,11 +3122,14 @@ func TestImageTurnUsesNativeProviderWhenGovernorBackendIsCodex(t *testing.T) {
 		SenderID:   1001,
 		SenderName: "admin",
 		MessageID:  1,
-		Media: []core.Media{{
-			Type:     "photo",
-			Data:     []byte("fake-image"),
-			MimeType: "image/png",
-			Filename: "photo.png",
+		Artifacts: []core.Artifact{{
+			ID:         "img-408",
+			Channel:    "telegram",
+			SourceType: "photo",
+			Kind:       "image",
+			Data:       []byte("fake-image"),
+			MimeType:   "image/png",
+			Filename:   "photo.png",
 		}},
 	})
 	if err != nil {
@@ -3059,11 +3180,15 @@ func TestPrepareInboundTurnPDFExtractionFailureFallsBackToPlaceholder(t *testing
 		ChatID:    409,
 		SenderID:  1001,
 		MessageID: 1,
-		Media: []core.Media{{
-			Type:     "document",
-			Data:     []byte("not-a-real-pdf"),
-			MimeType: "application/pdf",
-			Filename: "broken.pdf",
+		Artifacts: []core.Artifact{{
+			ID:         "pdf-409",
+			Channel:    "telegram",
+			SourceType: "document",
+			Kind:       "document",
+			Subtype:    "pdf",
+			Data:       []byte("not-a-real-pdf"),
+			MimeType:   "application/pdf",
+			Filename:   "broken.pdf",
 		}},
 	})
 	if err != nil {
