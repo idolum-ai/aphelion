@@ -7,7 +7,7 @@ Aphelion should describe the live conversation architecture with four primary no
 - **brokerage**: the bounded pre-turn negotiation between `Idolum` and `Aphelion`
 - **floor**: the governor-owned material truth/permission/refusal/commitment artifact for a turn
 - **scene**: the user-visible reply authored by `Idolum` from that floor
-- **fallback**: the degraded direct-delivery path used when scene authorship is skipped or fails
+- **fallback**: the degraded direct-delivery path used when scene authorship is skipped or fails, normally via a dedicated floor-to-user fallback serializer
 
 These are conceptual terms. They should be preferred in architectural writing, reviews, logs, and new code.
 
@@ -18,7 +18,7 @@ These are conceptual terms. They should be preferred in architectural writing, r
 - `brokerage` for the pre-turn handshake
 - `floor` for the governor-owned turn artifact
 - `scene` for the delivered face-authored reply
-- `fallback` for degraded direct delivery
+- `fallback` for degraded direct delivery, normally mediated by the fallback serializer
 
 ### Demote These Terms
 
@@ -48,7 +48,7 @@ If a spec must mention them, it should do so only to describe migration compatib
 
 ## Migration Note
 
-During migration, the floor may still be serialized as text for storage, replay, search, or direct fallback delivery.
+The floor may still be serialized as text for storage, replay, search, or emergency last-resort direct delivery.
 
 That serialization detail is not the conceptual model. The conceptual model remains:
 

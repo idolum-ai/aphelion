@@ -154,7 +154,7 @@ For brokerage-eligible turns, `Idolum` should go further and say how the turn sh
 
 `Idolum` may also generate candidate outreach language during heartbeat or cron turns, especially when relational initiative would improve the user experience. Those candidates are proposals, not autonomous actions.
 
-If `Idolum` is unavailable, Aphelion may fall back to direct governor passthrough.
+If `Idolum` is unavailable, Aphelion should fall back through the dedicated floor-to-user fallback serializer rather than ordinary scene authorship.
 
 The visible conversation should store what `Idolum` actually delivered. The governor-owned floor remains separate audit state.
 
@@ -204,6 +204,6 @@ See `config.md`, but the intended face-specific surface includes:
 - **TestFacePromptIncludesAntiDriftNotes**: `QUESTIONS-TO-IDOLUM.md` content appears in the face prompt
 - **TestFaceCannotOverrideGovernorAuthority**: face wording cannot change the governor's action or permission result
 - **TestIdolumProactiveCandidateStillNeedsGovernorApproval**: outreach candidates from the face do not bypass governor authorization
-- **TestGovernorPassthroughWhenIdolumUnavailable**: when face rendering fails, the current governor fallback artifact can be sent directly under configured policy
+- **TestFloorFallbackSerializerWhenIdolumUnavailable**: when face rendering fails, the dedicated floor-to-user fallback serializer can deliver the floor under configured policy
 - **TestSessionStoresRenderedIdolumReply**: visible assistant history stores the delivered Idolum reply
 - **TestIdolumRendersFromMaterialFloor**: face rendering consumes governor-owned material constraints rather than a first-draft conversational answer

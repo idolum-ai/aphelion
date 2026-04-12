@@ -98,6 +98,8 @@ The governor should not primarily author the final user-visible prose on ordinar
 
 Instead, the governor should produce the canonical **material floor** of the turn: the bounded execution and truth artifact the face is allowed to speak from.
 
+If that floor must reach the user without ordinary scene authorship, it should do so through a dedicated floor-to-user fallback serializer rather than by asking the governor to prose-shape for fallback by default.
+
 ```go
 type Governor interface {
     Decide(ctx context.Context, turn *GovernorTurn) (*GovernorDecision, error)
@@ -160,9 +162,7 @@ For proactive turns, a second distinction matters:
 
 ### Transitional compatibility
 
-During migration, the implementation may still serialize the governor artifact as a text-shaped floor sidecar.
-
-That should be treated as a temporary encoding detail, not the intended long-term contract. The architectural goal remains:
+The architectural goal remains:
 
 - `Aphelion` authors the floor
 - `Idolum` authors the scene
@@ -178,7 +178,7 @@ For each inbound DM turn:
 5. run governor backend
 6. apply any governor-owned side effects
 7. emit the canonical material floor for the turn
-8. run face backend or passthrough rendering from that floor
+8. run face backend or floor-to-user fallback serializer from that floor
 9. persist the visible assistant reply to the session ledger
 10. persist the governor-owned floor as sidecar audit state
 11. send outbound channel message
@@ -238,12 +238,14 @@ The face must not:
 - contradict the material floor
 - send proactive messages without governor authorization
 
-If the face backend is unavailable, Aphelion may send the governor's current fallback artifact directly.
+If the face backend is unavailable, Aphelion should invoke a dedicated floor-to-user fallback serializer.
 
-That passthrough should be understood as a fallback, not as the ideal normal path. The normal path is:
+That fallback serializer should be understood as a degraded delivery path, not as the ideal normal path. The normal path is:
 
 - governor constrains
 - face authors
+
+Direct raw floor delivery should be treated as an emergency last resort if both face authorship and fallback serialization fail.
 
 For brokerage-eligible interactive turns, the ordinary one-way proposal path should become a bounded negotiation:
 
@@ -287,7 +289,7 @@ codex_home = ""
 base_url = "https://chatgpt.com/backend-api"
 
 [face]
-backend = "provider"          # "provider" | "floor_fallback"
+backend = "provider"          # "provider" | "floor_fallback" (dedicated floor-to-user fallback serializer)
 provider = "anthropic"
 model_override = ""
 profile = "idolum"
@@ -319,9 +321,10 @@ profile = "idolum"
 - **TestGovernorProducesMaterialFloorBeforeFaceRender**: face receives governor-owned material constraints rather than first-draft visible prose
 - **TestFaceCannotInvokeTools**: tool execution remains governor-only
 - **TestFaceCannotSelfAuthorizeProactiveMessage**: proactive delivery still requires governor authorization
-- **TestFloorFallbackDelivery**: with `face.backend = "floor_fallback"`, the current governor fallback artifact is sent directly
+- **TestFloorFallbackSerializerDelivery**: with `face.backend = "floor_fallback"`, the floor-to-user fallback serializer produces the delivered reply
 - **TestGovernorBackendAutoPrefersCodex**: with Codex available and `backend = "auto"`, Codex governor is selected
 - **TestGovernorBackendFallsBackNative**: without Codex, native governor is selected
-- **TestFaceFailureFallsBackToFloor**: face backend failure can degrade to direct governor floor delivery under configured policy
+- **TestFaceFailureFallsBackToSerializer**: face backend failure can degrade to the floor-to-user fallback serializer under configured policy
+- **TestSerializerFailureFallsBackToRawFloorAsLastResort**: if both scene authorship and serializer fail, direct floor delivery is treated as an emergency last resort
 - **TestVisibleLedgerStoresDeliveredScene**: session history replays the delivered face-authored scene
 - **TestMaterialFloorStoredAsAuditArtifact**: governor-owned material floor is stored alongside the session without polluting the visible transcript

@@ -93,7 +93,7 @@ If a component fails, the system should prefer a narrower truthful mode over tot
 
 Examples:
 
-- face failure -> governor passthrough
+- face failure -> floor-to-user fallback serializer
 - streamed reply failure -> non-streamed reply
 - voice synthesis failure -> text reply
 - Codex unavailable in `auto` mode -> native governor
@@ -385,8 +385,9 @@ Rules:
 6. if plain proposal fails, continue without proposal
 7. try Idolum render when policy says render is useful
 8. if stream render fails, fall back to non-stream render
-9. if non-stream render fails, bypass scene authorship and deliver the governor's current text-shaped floor sidecar artifact directly for this turn; treat this as degraded floor fallback during migration, not the preferred architecture
-10. if face backend is `floor_fallback`, skip face entirely
+9. if non-stream render fails, bypass scene authorship and invoke the dedicated floor-to-user fallback serializer for this turn
+10. if face backend is `floor_fallback`, skip face scene authorship and invoke the fallback serializer directly
+11. if fallback serialization fails too, direct raw floor delivery may be used as an emergency last resort and must be recorded as such
 
 The face must never block a valid governor reply from being delivered.
 

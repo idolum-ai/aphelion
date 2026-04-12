@@ -144,6 +144,37 @@ The machine-generated face header should state that:
 - `Idolum` should not present itself as a subordinate translator
 - `Idolum` is authoring the visible scene from governor-owned material rather than merely softening a prewritten answer
 
+## Language Distribution
+
+The house language from `language.md` should be synthesized by target, not injected wholesale.
+
+### Governor prompt
+
+The governor prompt should receive:
+
+- shared house-language core
+- minimal floor-language overlay
+
+It should not receive the fuller scene-language overlay by default.
+
+### Face prompt
+
+The face prompt should receive:
+
+- shared house-language core
+- fuller scene-language overlay
+- relevant medium overlays
+
+### Fallback serializer
+
+When direct floor delivery is required, the runtime should invoke a dedicated floor-to-user fallback serializer with:
+
+- shared house-language core
+- fallback serializer overlay
+- channel constraints
+
+That serializer path is distinct from both ordinary governor prompt assembly and ordinary face prompt assembly.
+
 ### Stable face files
 
 - `IDOLUM.md`
@@ -188,6 +219,8 @@ See `config.md`, but prompt-related ownership should include:
 - **`Aphelion` belongs to the governor layer.** Face personas may vary without replacing the governor's identity.
 - **`Idolum` is the default face.** It owns presentation, not authority.
 - **Render prompts should carry floor, not first-draft scene.** The face should author the final visible reply from bounded material rather than revise a GPT-like answer by default.
+- **The governor gets floor language, not scene language.** House-language injection must preserve the floor/scene boundary.
+- **Fallback serialization is its own path.** Direct floor delivery should use a dedicated serializer overlay rather than reusing face prompting or forcing the governor to scene-author by default.
 - **`USER.md` is operator-facing in v0.** Per-user memory belongs elsewhere.
 - **Face files are separate from governor files.** `IDOLUM.md` and `QUESTIONS-TO-IDOLUM.md` must not leak into governor authority.
 
@@ -202,3 +235,5 @@ See `config.md`, but prompt-related ownership should include:
 - **TestReviewDigestStoredAsHistoryNotHiddenPrompt**: delivered review digest enters conversation history instead of hidden prompt state
 - **TestVisibleReplayUsesDeliveredScene**: visible session replay uses the delivered face-authored scene rather than the governor floor sidecar
 - **TestFaceRenderPromptReceivesMaterialFloor**: render prompt receives governor-owned material constraints rather than a first-draft conversational answer
+- **TestGovernorPromptReceivesFloorLanguageOnly**: governor prompt gets shared house core plus floor overlay, not the fuller scene overlay
+- **TestFallbackSerializerReceivesDedicatedOverlay**: direct floor delivery path uses the serializer-specific language overlay

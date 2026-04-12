@@ -201,7 +201,7 @@ codex_home = ""               # Empty = CODEX_HOME or ~/.codex
 base_url = "https://chatgpt.com/backend-api"
 
 [face]
-backend = "provider"          # "provider" | "floor_fallback"
+backend = "provider"          # "provider" | "floor_fallback" (dedicated floor-to-user fallback serializer)
 provider = "anthropic"
 model_override = ""
 profile = "host"
