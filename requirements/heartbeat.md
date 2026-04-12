@@ -24,6 +24,7 @@ Heartbeat is one of Aphelion's mechanisms for **reflective proactivity**.
 - active-hours gating
 - delivery targeting
 - quiet-by-default behavior
+- proactive eligibility driven by hidden-input convergence rather than timer expiration alone
 - explicit separation from cron
 
 ### Deferred after v0
@@ -196,6 +197,8 @@ Heartbeat may also create opportunities for warm or relational check-ins that wo
 ## Relationship to Cron
 
 Heartbeat and cron are separate subsystems.
+
+Heartbeat proactivity should follow `hidden-inputs.md`: recurring signal, unresolved state, temporal pressure, and convergence. A timer alone is not sufficient cause for outreach.
 
 ### Heartbeat
 

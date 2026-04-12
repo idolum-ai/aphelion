@@ -133,6 +133,8 @@ At minimum, the governor should be made aware of:
 - whether recalled context was injected
 - whether memory is shared, operator-scoped, or principal-scoped
 - whether semantic retrieval results were injected, and from which source class
+- whether hidden inputs are active for this turn, and which categories are present
+- whether a provenance summary was assembled for a proactive or brokerage turn
 
 ### Delivery
 

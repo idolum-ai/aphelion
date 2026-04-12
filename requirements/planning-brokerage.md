@@ -75,6 +75,7 @@ It should say:
 - what the user seems to need
 - what kind of turn this should be
 - whether the system should answer, inspect, ask, decline, or hold
+- what hidden input or latent signal is shaping that read when one is materially present
 - what tone or initiative would improve the turn
 
 `Idolum` does not ratify or authorize. It proposes.
@@ -106,7 +107,7 @@ The brokerage layer should use a small fixed vocabulary.
 
 ## Idolum Brokerage Proposal
 
-The face-side brokerage output should be short and bounded. It may be structured when useful, but it should not feel like bureaucracy by default.
+The face-side brokerage output should be short and bounded. It may be structured when useful, but it should not feel like bureaucracy by default. When a hidden input is materially shaping the push, the note should name it. See `hidden-inputs.md`.
 
 Example shape:
 
@@ -155,6 +156,7 @@ The runtime should parse and carry these fields explicitly:
 
 - `MODE`
 - `RATIFICATION`
+- `SIGNAL_JUDGMENT` — optional; present when Idolum named a hidden input in its proposal. Aphelion states whether the signal is confirmed, overridden, or not material. Preserves Aphelion's side of the signal negotiation in the artifact.
 - `PLAN` steps
 
 `RATIFICATION` uses a small fixed vocabulary:

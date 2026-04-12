@@ -27,16 +27,17 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 16. ✅ [`subagents.md`](subagents.md) — First-class subordinate sessions, capability depth, completion, isolation
 17. ✅ [`self-awareness.md`](self-awareness.md) — Machine-authored runtime self-description, authority awareness, degraded-state awareness
 18. ✅ [`planning-brokerage.md`](planning-brokerage.md) — Bounded Idolum-to-Aphelion turn planning handshake before selected interactive turns
+19. ✅ [`hidden-inputs.md`](hidden-inputs.md) — Latent signal, proactive eligibility, provenance, and floor/scene reaction model
 
 ## Automation
-19. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
-20. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
+20. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
+21. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
 
 ## Media
-21. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
-22. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
+22. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
+23. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
 
 ## Operations
-23. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
-24. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
-25. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
+24. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
+25. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
+26. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
