@@ -10,10 +10,7 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 )
 
-func shouldUseMaterialFloorContract(faceBackend face.Backend, policy faceTurnPolicy) bool {
-	if faceBackend == face.BackendFloorFallback {
-		return false
-	}
+func shouldUseMaterialFloorContract(_ face.Backend, policy faceTurnPolicy) bool {
 	return policy.Proposal || policy.Brokerage
 }
 

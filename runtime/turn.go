@@ -198,7 +198,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	floorMetadataState := hiddenInputs.Metadata()
 	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, prepared.ArtifactRefs...)
 	floorMetadata := encodeFloorMetadata(floorMetadataState)
-	replyText := floorText
+	replyText := face.SerializeFloorFallback(materialFloor, floorText)
 	outboundID := int64(0)
 	outboundType := ""
 	streamedReply := false
@@ -252,7 +252,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 						faceRendered = true
 						replyText = strings.TrimSpace(renderedReply)
 						if replyText == "" {
-							replyText = floorText
+							replyText = face.SerializeFloorFallback(materialFloor, floorText)
 						}
 						extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 						outboundID, err = editor.Finish(ctx)
@@ -276,11 +276,11 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			}
 			renderedReply, renderErr := currentFaceModel.Render(ctx, renderReq)
 			if renderErr != nil {
-				log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback", r.faceBackend, renderErr)
+				log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, renderErr)
 			} else {
 				replyText = strings.TrimSpace(renderedReply)
 				if replyText == "" {
-					replyText = floorText
+					replyText = face.SerializeFloorFallback(materialFloor, floorText)
 				}
 				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 			}

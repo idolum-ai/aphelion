@@ -169,7 +169,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return fmt.Errorf("invalid heartbeat output: history shrank from %d to %d", len(input), len(outHistory))
 	}
 
-	floorText := strings.TrimSpace(result.Text)
+	materialFloor, floorText, _ := governorMaterialArtifact(result.Text, true)
 	if floorText == "" {
 		return nil
 	}
@@ -195,7 +195,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return nil
 	}
 
-	replyText := floorText
+	replyText := face.SerializeFloorFallback(materialFloor, floorText)
 	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
 		faceAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", governorExecution{}), hiddenInputs)
 		faceAwareness.DeliveryMode = "heartbeat_delivery"
@@ -206,11 +206,12 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 			PrincipalRole:   "admin",
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			FloorText:       floorText,
+			MaterialFloor:   materialFloor,
 			LatestUserInput: "[heartbeat]",
 			Runtime:         faceAwareness,
 		})
 		if renderErr != nil {
-			log.Printf("WARN heartbeat face render failed backend=%s err=%v; using floor_fallback", r.faceBackend, renderErr)
+			log.Printf("WARN heartbeat face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, renderErr)
 		} else if strings.TrimSpace(renderedReply) != "" {
 			replyText = strings.TrimSpace(renderedReply)
 		}

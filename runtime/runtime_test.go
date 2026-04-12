@@ -1057,7 +1057,7 @@ func TestHandleInboundPreservesBrokerageWhenProposalRerunAlsoFails(t *testing.T)
 	}
 }
 
-func TestHandleInboundFallsBackToGovernorSidecarWhenFaceRenderFailsAfterMaterialFloor(t *testing.T) {
+func TestHandleInboundFaceFailureUsesSerializedFallbackAfterMaterialFloor(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -1098,11 +1098,78 @@ func TestHandleInboundFallsBackToGovernorSidecarWhenFaceRenderFailsAfterMaterial
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want 1", len(sender.sent))
 	}
-	if sender.sent[0].Text != sess.LastFloorText {
-		t.Fatalf("sent text = %q, want governor floor fallback %q", sender.sent[0].Text, sess.LastFloorText)
+	want := strings.Join([]string{
+		"What is true:",
+		"- The repo was inspected.",
+		"",
+		"What I can do:",
+		"- Propose the strongest next steps.",
+	}, "\n")
+	if sender.sent[0].Text != want {
+		t.Fatalf("sent text = %q, want serialized floor fallback %q", sender.sent[0].Text, want)
 	}
-	if !strings.Contains(sender.sent[0].Text, "FACTS:") {
-		t.Fatalf("sent fallback = %q, want text-shaped material floor", sender.sent[0].Text)
+	if !strings.Contains(sess.LastFloorText, "FACTS:") {
+		t.Fatalf("session floor sidecar = %q, want structured floor sidecar", sess.LastFloorText)
+	}
+}
+
+func TestHandleInboundFloorFallbackBackendSerializesStructuredFloor(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.proposalReplyText = "Stay grounded and concrete."
+	provider.replyText = strings.Join([]string{
+		"FACTS:",
+		"- The repo was inspected.",
+		"COMMITMENTS:",
+		"- Keep the answer focused on the next move.",
+		"SCENE_CONSTRAINTS:",
+		"- Do not sound theatrical.",
+	}, "\n")
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     7203,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "help me think this through",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	want := strings.Join([]string{
+		"What is true:",
+		"- The repo was inspected.",
+		"",
+		"What I'll do:",
+		"- Keep the answer focused on the next move.",
+	}, "\n")
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != want {
+		t.Fatalf("outbound text = %q, want serialized floor fallback %q", sender.sent[0].Text, want)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 7203, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if !strings.Contains(sess.LastFloorText, "FACTS:") {
+		t.Fatalf("session floor sidecar = %q, want structured floor sidecar", sess.LastFloorText)
+	}
+	if len(sess.Messages) < 2 || sess.Messages[1].Content != want {
+		t.Fatalf("visible transcript assistant content = %q, want serialized floor fallback", sess.Messages[1].Content)
 	}
 }
 
@@ -1399,6 +1466,73 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	}
 	if !strings.Contains(provider.seenProposalSystem[len(provider.seenProposalSystem)-1], "semantic_recurrence") {
 		t.Fatalf("heartbeat proposal prompt missing hidden-input categories: %q", provider.seenProposalSystem[len(provider.seenProposalSystem)-1])
+	}
+}
+
+func TestHeartbeatDeliveryFaceFailureUsesSerializedFloorFallback(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.Target = "last"
+	provider.replyText = strings.Join([]string{
+		"FACTS:",
+		"- Deployment readiness is still unresolved.",
+		"COMMITMENTS:",
+		"- Surface the blocker directly.",
+		"SCENE_CONSTRAINTS:",
+		"- Do not sound dramatic.",
+	}, "\n")
+	provider.proposalReplyText = "Name the unresolved blocker."
+	provider.faceErr = errors.New("face unavailable")
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      335,
+		SourceUserID:      1002,
+		SourceRole:        "approved_user",
+		TargetAdminChatID: 1001,
+		TurnFrom:          4,
+		TurnTo:            4,
+		Summary:           "deployment readiness needs review",
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      336,
+		SourceUserID:      1002,
+		SourceRole:        "approved_user",
+		TargetAdminChatID: 1001,
+		TurnFrom:          5,
+		TurnTo:            5,
+		Summary:           "deployment readiness still needs review",
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce() err = %v", err)
+	}
+
+	want := strings.Join([]string{
+		"What is true:",
+		"- Deployment readiness is still unresolved.",
+		"",
+		"What I'll do:",
+		"- Surface the blocker directly.",
+	}, "\n")
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != want {
+		t.Fatalf("sent = %#v, want serialized heartbeat fallback %q", sender.sent[0], want)
 	}
 }
 
@@ -1761,6 +1895,61 @@ func TestCronJobAnnounceUsesFaceAndUpdatesAdminSession(t *testing.T) {
 	}
 	if adminSession.Messages[len(adminSession.Messages)-1].FloorContent != "cron canonical" {
 		t.Fatalf("admin floor content = %q, want cron canonical", adminSession.Messages[len(adminSession.Messages)-1].FloorContent)
+	}
+}
+
+func TestCronJobAnnounceFaceFailureUsesSerializedFloorFallback(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = strings.Join([]string{
+		"FACTS:",
+		"- The nightly maintenance summary is ready.",
+		"ALLOWED_ACTIONS:",
+		"- Review the pending maintenance queue.",
+		"SCENE_CONSTRAINTS:",
+		"- Keep the tone spare.",
+	}, "\n")
+	provider.faceErr = errors.New("face unavailable")
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := rt.runCronJobOnce(context.Background(), config.CronJobConfig{
+		ID:       "announce-fallback",
+		Every:    "1h",
+		Prompt:   "Tell the admin something useful.",
+		Delivery: "announce",
+		Enabled:  true,
+	}); err != nil {
+		t.Fatalf("runCronJobOnce() err = %v", err)
+	}
+
+	want := strings.Join([]string{
+		"What is true:",
+		"- The nightly maintenance summary is ready.",
+		"",
+		"What I can do:",
+		"- Review the pending maintenance queue.",
+	}, "\n")
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != want {
+		t.Fatalf("sent = %#v, want serialized cron fallback %q", sender.sent[0], want)
+	}
+
+	adminSession, err := store.Load(session.SessionKey{ChatID: 1001, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(admin session) err = %v", err)
+	}
+	if adminSession.Messages[len(adminSession.Messages)-1].Content != want {
+		t.Fatalf("admin visible content = %q, want serialized cron fallback", adminSession.Messages[len(adminSession.Messages)-1].Content)
 	}
 }
 

@@ -97,7 +97,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		return fmt.Errorf("invalid cron output: history shrank from %d to %d", len(input), len(outHistory))
 	}
 
-	floorText := strings.TrimSpace(result.Text)
+	materialFloor, floorText, _ := governorMaterialArtifact(result.Text, true)
 	if floorText == "" {
 		return nil
 	}
@@ -125,7 +125,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		targetChatID = r.cfg.Principals.Telegram.AdminUserIDs[0]
 	}
 
-	replyText := floorText
+	replyText := face.SerializeFloorFallback(materialFloor, floorText)
 	currentFaceModel := r.currentFaceRenderer()
 	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
 		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", governorExecution{})
@@ -137,11 +137,12 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 			PrincipalRole:   "admin",
 			WorkspaceRoot:   faceWorkspaceRoot(scope),
 			FloorText:       floorText,
+			MaterialFloor:   materialFloor,
 			LatestUserInput: "[cron:" + job.ID + "]",
 			Runtime:         faceAwareness,
 		})
 		if renderErr != nil {
-			log.Printf("WARN cron face render failed backend=%s job=%s err=%v; using floor_fallback", r.faceBackend, job.ID, renderErr)
+			log.Printf("WARN cron face render failed backend=%s job=%s err=%v; using floor_fallback serializer", r.faceBackend, job.ID, renderErr)
 		} else if strings.TrimSpace(renderedReply) != "" {
 			replyText = strings.TrimSpace(renderedReply)
 		}
