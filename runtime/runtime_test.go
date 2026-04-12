@@ -1962,12 +1962,15 @@ func TestHandleInboundAutoModeTranscribesAndRepliesWithVoice(t *testing.T) {
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "idolum text"
+	provider.faceReplyText = "idolum spoken"
+	var synthesized string
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
 	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "transcribed hello"}, fakeSynth{
-		media: core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+		media:    core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+		lastText: &synthesized,
 	})
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
@@ -1992,6 +1995,9 @@ func TestHandleInboundAutoModeTranscribesAndRepliesWithVoice(t *testing.T) {
 	if sender.voice[0].ChatID != 1200 {
 		t.Fatalf("voice chat id = %d, want 1200", sender.voice[0].ChatID)
 	}
+	if synthesized != "idolum spoken" {
+		t.Fatalf("synthesized text = %q, want idolum spoken", synthesized)
+	}
 
 	sess, err := store.Load(session.SessionKey{ChatID: 1200, UserID: 0})
 	if err != nil {
@@ -2000,6 +2006,9 @@ func TestHandleInboundAutoModeTranscribesAndRepliesWithVoice(t *testing.T) {
 	if len(sess.Messages) < 2 || sess.Messages[0].Content != "transcribed hello\n\n[voice attached]" {
 		t.Fatalf("session messages = %#v, want transcribed user text plus voice marker", sess.Messages)
 	}
+	if sess.Messages[1].Content != "idolum spoken" {
+		t.Fatalf("assistant scene = %q, want idolum spoken", sess.Messages[1].Content)
+	}
 }
 
 func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
@@ -2007,6 +2016,7 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "voice fallback text"
+	provider.faceReplyText = "voice scene text"
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -2031,7 +2041,7 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 	if len(sender.voice) != 0 {
 		t.Fatalf("voice sends = %d, want 0 on synth failure", len(sender.voice))
 	}
-	if len(sender.sent) != 1 || sender.sent[0].Text != "voice fallback text" {
+	if len(sender.sent) != 1 || sender.sent[0].Text != "voice scene text" {
 		t.Fatalf("text sends = %#v, want text fallback", sender.sent)
 	}
 }

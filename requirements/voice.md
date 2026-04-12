@@ -42,9 +42,10 @@ Voice handling should follow this flow:
 4. transcribe via the configured STT backend
 5. inject transcript as ordinary user content
 6. run governor turn
-7. run Idolum rendering
-8. synthesize spoken reply when voice mode says to do so
-9. send audio reply, with text fallback if needed
+7. attempt Idolum scene rendering for the reply
+8. if scene rendering is unavailable or skipped, derive a deterministic spoken fallback from the floor
+9. synthesize spoken reply when voice mode says to do so
+10. send audio reply, with text fallback if needed
 
 ## Speech-to-Text
 
@@ -153,6 +154,8 @@ That means:
 
 The voice subsystem does not get to rewrite governor intent; it only renders the already-spoken Idolum output into speech.
 
+When ordinary scene authorship is unavailable, the fallback serializer may provide deterministic spoken wording. That is a degraded path, not the normal voice path.
+
 ## Failure Behavior
 
 Voice failure should degrade gracefully.
@@ -206,6 +209,7 @@ Additional per-channel or per-principal voice overrides may come later.
 - **TestAllModeSpeaksForTextInput**: `all` mode also produces spoken replies for text turns
 - **TestOffModeUsesTextOnly**: `off` mode never emits TTS output
 - **TestVoiceReplyUsesDeliveredSceneText**: spoken output is synthesized from the delivered Idolum scene text
+- **TestVoiceFaceFailureUsesSpokenFallbackOverlay**: if face rendering fails, spoken output falls back to the deterministic voice overlay rather than raw floor text
 - **TestTTSFallbackToText**: TTS failure still sends the text reply
 - **TestApprovedUserVoiceArtifactsStayIsolated**: non-admin audio/transcripts remain in isolated roots
 - **TestVisibleLedgerStoresTranscriptAndScene**: session replay remains text-first even when voice media is used

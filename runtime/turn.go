@@ -231,7 +231,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		if useMaterialFloor {
 			renderHeuristicText = materialFloorHeuristicText(materialFloor, floorText)
 		}
-		shouldRender := shouldRenderIdolumReply(facePolicy, prepared.LedgerText, renderHeuristicText, result.ToolLog, outHistory[len(input):])
+		shouldRender := shouldRenderIdolumReply(facePolicy, prepared.LedgerText, renderHeuristicText, result.ToolLog, outHistory[len(input):]) || replyWithVoice
 		if !shouldRender && !replyWithVoice {
 			faceAwareness.DeliveryMode = "floor_fallback"
 			renderReq.Runtime = faceAwareness

@@ -404,9 +404,11 @@ For inbound voice:
 
 For outbound voice:
 
-1. attempt voice synthesis when mode requires it
-2. if synthesis fails, send text fallback
-3. record that the delivered artifact was degraded from voice to text
+1. when mode requires voice, attempt ordinary scene authorship first
+2. if scene authorship is unavailable or skipped, use the deterministic spoken fallback serializer
+3. attempt voice synthesis on the chosen spoken text
+4. if synthesis fails, send text fallback
+5. record whether the delivered artifact was degraded from scene to spoken fallback, or from voice to text
 
 For inbound image/document turns:
 
