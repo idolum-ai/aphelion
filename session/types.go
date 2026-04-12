@@ -36,10 +36,11 @@ type Session struct {
 	SystemPrompt string
 	// LastFloorText stores the governor-owned floor text sidecar for audit.
 	// The visible transcript in Messages stores the delivered scene text.
-	LastFloorText string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	TurnCount     int
+	LastFloorText     string
+	LastFloorMetadata string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	TurnCount         int
 
 	// Cache tracking
 	CacheState CacheState
@@ -124,20 +125,21 @@ type TurnRun struct {
 
 // Message is one persisted conversation message.
 type Message struct {
-	ID           int64
-	ChatID       int64
-	UserID       int64
-	Role         string
-	Content      string
-	FloorContent string
-	ToolCalls    string
-	ToolID       string
-	ToolName     string
-	Thinking     string
-	CreatedAt    time.Time
-	TurnIndex    int
-	ContentChars int
-	Compacted    bool
+	ID            int64
+	ChatID        int64
+	UserID        int64
+	Role          string
+	Content       string
+	FloorContent  string
+	FloorMetadata string
+	ToolCalls     string
+	ToolID        string
+	ToolName      string
+	Thinking      string
+	CreatedAt     time.Time
+	TurnIndex     int
+	ContentChars  int
+	Compacted     bool
 }
 
 type SearchHit struct {

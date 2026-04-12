@@ -75,7 +75,8 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	if err != nil {
 		return fmt.Errorf("load workspace prompt context: %w", err)
 	}
-	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", governorExecution{})
+	hiddenInputs := r.assembleHeartbeatHiddenInputs(ctx, scope, now, deliver, events)
+	governorAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", governorExecution{}), hiddenInputs)
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
@@ -111,7 +112,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		maintenanceSession.ChatType = "system"
 		maintenanceSession.UserName = "heartbeat"
 		maintenanceSession.SystemPrompt = systemPrompt
-		if err := r.store.Save(maintenanceSession, appendSyntheticTurn(maintenanceSession, "[heartbeat reflection]", reflectionSummary, reflectionSummary), core.TokenUsage{}); err != nil {
+		if err := r.store.Save(maintenanceSession, appendSyntheticTurn(maintenanceSession, "[heartbeat reflection]", reflectionSummary, reflectionSummary, ""), core.TokenUsage{}); err != nil {
 			return fmt.Errorf("save heartbeat reflection note: %w", err)
 		}
 		return nil
@@ -122,12 +123,36 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return fmt.Errorf("assemble heartbeat history: %w", err)
 	}
 
-	requestText := renderHeartbeatRequest(targetChatID, events, deliver)
+	eligibleForOutreach := deliver && hiddenInputs.ReflectiveOutreachEligible()
+	requestText := renderHeartbeatRequest(targetChatID, events, deliver, hiddenInputs)
 	monitor := r.startTurnMonitor(maintenanceKey, session.TurnRunKindHeartbeat, requestText, nil)
 	defer monitor.Finish(ctx, err)
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {
 		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
+	}
+	currentFaceModel := r.currentFaceRenderer()
+	if eligibleForOutreach && r.faceBackend != face.BackendFloorFallback {
+		if proposer, ok := currentFaceModel.(face.Proposer); ok {
+			faceAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", governorExecution{}), hiddenInputs)
+			faceAwareness.ArtifactMode = "scene"
+			faceAwareness.DeliveryMode = "heartbeat_proposal"
+			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
+				GovernorName:    prompt.DefaultGovernorName,
+				FaceName:        face.DefaultFaceName,
+				Channel:         "telegram",
+				Mode:            "proposal",
+				PrincipalRole:   "admin",
+				WorkspaceRoot:   faceWorkspaceRoot(scope),
+				LatestUserInput: requestText,
+				Runtime:         faceAwareness,
+			})
+			if proposalErr != nil {
+				log.Printf("WARN heartbeat idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
+			} else if advisory := prompt.RenderIdolumProposalForGovernor(face.DefaultFaceName, strings.TrimSpace(proposal)); advisory != "" {
+				input = append(input, agent.Message{Role: "system", Content: advisory})
+			}
+		}
 	}
 	input = append(input, history...)
 	input = append(input, agent.Message{Role: "user", Content: requestText})
@@ -148,29 +173,31 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	if floorText == "" {
 		return nil
 	}
+	floorMetadata := encodeFloorMetadata(hiddenInputs.Metadata())
 
 	maintenanceSession.ChatType = "system"
 	maintenanceSession.UserName = "heartbeat"
 	maintenanceSession.SystemPrompt = systemPrompt
 	maintenanceSession.TurnCount++
 	maintenanceSession.LastFloorText = floorText
+	maintenanceSession.LastFloorMetadata = floorMetadata
 	newMessages, err := session.NewMessagesForTurn(requestText, outHistory[len(input):], maintenanceSession.TurnCount)
 	if err != nil {
 		return fmt.Errorf("convert heartbeat messages: %w", err)
 	}
 	newMessages = setLastAssistantFloor(newMessages, floorText)
+	newMessages = setLastAssistantFloorMetadata(newMessages, floorMetadata)
 	if err := r.store.Save(maintenanceSession, newMessages, result.TokenUsage); err != nil {
 		return fmt.Errorf("save heartbeat session: %w", err)
 	}
 
-	if !deliver {
+	if !eligibleForOutreach {
 		return nil
 	}
 
 	replyText := floorText
-	currentFaceModel := r.currentFaceRenderer()
 	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
-		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", governorExecution{})
+		faceAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", governorExecution{}), hiddenInputs)
 		faceAwareness.DeliveryMode = "heartbeat_delivery"
 		renderedReply, renderErr := currentFaceModel.Render(ctx, face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
@@ -207,7 +234,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	}
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
-	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText), core.TokenUsage{}); err != nil {
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText, floorMetadata), core.TokenUsage{}); err != nil {
 		return fmt.Errorf("save heartbeat admin session: %w", err)
 	}
 	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "heartbeat"); err != nil {
@@ -322,13 +349,21 @@ func (r *Runtime) heartbeatWithinActiveHours(now time.Time) bool {
 	return !localNow.Before(startTime) && localNow.Before(endTime)
 }
 
-func renderHeartbeatRequest(targetChatID int64, events []session.ReviewEvent, deliver bool) string {
+func renderHeartbeatRequest(targetChatID int64, events []session.ReviewEvent, deliver bool, hiddenInputs hiddenInputSet) string {
 	lines := []string{
 		"Heartbeat maintenance turn.",
 		fmt.Sprintf("Target admin chat: %d", targetChatID),
 		fmt.Sprintf("Delivery allowed this turn: %t", deliver),
-		"Summarize the pending review events into a concise admin digest. If nothing is worth surfacing, return an empty response.",
+		fmt.Sprintf("Reflective outreach eligible this turn: %t", hiddenInputs.ReflectiveOutreachEligible()),
+		"Produce a concise maintenance floor from the pending review events.",
+		"If reflective outreach is not eligible, keep the floor internal; the runtime may stay silent.",
 		"Pending review events:",
+	}
+	if hiddenInputs.Active() {
+		lines = append(lines, fmt.Sprintf("Hidden input categories: %s", strings.Join(hiddenInputs.Categories(), ", ")))
+		if summary := hiddenInputs.ProvenanceSummary(); summary != "" {
+			lines = append(lines, "Hidden input provenance: "+summary)
+		}
 	}
 
 	sort.Slice(events, func(i, j int) bool {

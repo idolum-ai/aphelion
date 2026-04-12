@@ -27,6 +27,7 @@ type turnBrokerage struct {
 	IdolumNote         string
 	SuggestedTurnMode  string
 	Ratification       string
+	SignalJudgment     string
 	RatificationRecord string
 	RatifiedSteps      []string
 	RatifiedTurnMode   string
@@ -38,6 +39,7 @@ func (r *Runtime) withBrokerageAwareness(aw prompt.RuntimeAwareness, brokerage t
 	aw.SuggestedTurnMode = strings.TrimSpace(brokerage.SuggestedTurnMode)
 	aw.BrokerageRatification = strings.TrimSpace(brokerage.Ratification)
 	aw.RatifiedTurnMode = strings.TrimSpace(brokerage.RatifiedTurnMode)
+	aw.SignalJudgment = strings.TrimSpace(brokerage.SignalJudgment)
 	return aw
 }
 
@@ -68,6 +70,18 @@ func normalizeRatification(raw string) string {
 	value := strings.ToLower(strings.TrimSpace(raw))
 	switch value {
 	case "accept", "adapt", "reject":
+		return value
+	default:
+		return ""
+	}
+}
+
+func normalizeSignalJudgment(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	value = strings.ReplaceAll(value, "-", "_")
+	value = strings.ReplaceAll(value, " ", "_")
+	switch value {
+	case "", "confirmed", "overridden", "not_material":
 		return value
 	default:
 		return ""
@@ -112,6 +126,10 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 			continue
 		case strings.HasPrefix(upper, "RATIFICATION:"):
 			parsed.Ratification = normalizeRatification(strings.TrimSpace(line[len("RATIFICATION:"):]))
+			inPlan = false
+			continue
+		case strings.HasPrefix(upper, "SIGNAL_JUDGMENT:"):
+			parsed.SignalJudgment = normalizeSignalJudgment(strings.TrimSpace(line[len("SIGNAL_JUDGMENT:"):]))
 			inPlan = false
 			continue
 		case upper == "PLAN:":
@@ -168,6 +186,7 @@ func (r *Runtime) ratifyTurnBrokerage(
 			"Return exactly this structure and nothing else:",
 			"MODE: <answer_now|inspect_then_answer|ask_then_wait|decline|silent>",
 			"RATIFICATION: <accept|adapt|reject>",
+			"SIGNAL_JUDGMENT: <confirmed|overridden|not_material>  # optional; use when Idolum named a hidden input",
 			"PLAN:",
 			"- <short concrete first step>",
 			"- <optional second step>",
@@ -189,6 +208,7 @@ func (r *Runtime) ratifyTurnBrokerage(
 	}
 	brokerage.RatificationRecord = parsed.RatificationRecord
 	brokerage.Ratification = parsed.Ratification
+	brokerage.SignalJudgment = parsed.SignalJudgment
 	brokerage.RatifiedTurnMode = parsed.RatifiedTurnMode
 	brokerage.RatifiedSteps = append(brokerage.RatifiedSteps[:0], parsed.RatifiedSteps...)
 	return brokerage, resp.Usage, nil
@@ -200,6 +220,7 @@ func brokerageContextForGovernor(brokerage turnBrokerage) string {
 			IdolumProposal:     brokerage.IdolumNote,
 			RatifiedTurnMode:   brokerage.RatifiedTurnMode,
 			Ratification:       brokerage.Ratification,
+			SignalJudgment:     brokerage.SignalJudgment,
 			RatifiedSteps:      brokerage.RatifiedSteps,
 			RatificationRecord: brokerage.RatificationRecord,
 		}); block != "" {

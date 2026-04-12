@@ -165,7 +165,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	}
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
-	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText), core.TokenUsage{}); err != nil {
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText, ""), core.TokenUsage{}); err != nil {
 		return fmt.Errorf("save cron admin session: %w", err)
 	}
 	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "cron"); err != nil {

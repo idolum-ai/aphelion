@@ -26,6 +26,7 @@ type RuntimeAwareness struct {
 	SuggestedTurnMode     string
 	BrokerageRatification string
 	RatifiedTurnMode      string
+	SignalJudgment        string
 	FaceBackend           string
 	FaceProvider          string
 	FaceModel             string
@@ -34,6 +35,9 @@ type RuntimeAwareness struct {
 	StreamReply           bool
 	MediaAttached         bool
 	MediaMode             string
+	HiddenInputsActive    bool
+	HiddenInputCategories []string
+	ProvenanceSummary     string
 	PromptRoot            string
 	ExecRoot              string
 	SharedMemoryRoot      string
@@ -66,6 +70,10 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_turn_mode", aw.SuggestedTurnMode))
 	lines = append(lines, nonEmptyAwarenessLine("brokerage_ratification", aw.BrokerageRatification))
 	lines = append(lines, nonEmptyAwarenessLine("ratified_turn_mode", aw.RatifiedTurnMode))
+	lines = append(lines, nonEmptyAwarenessLine("signal_judgment", aw.SignalJudgment))
+	lines = append(lines, fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive))
+	lines = append(lines, nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)))
+	lines = append(lines, nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary))
 	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
 	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	lines = append(lines, nonEmptyAwarenessLine("prompt_root", aw.PromptRoot))
@@ -100,6 +108,10 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode st
 	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_turn_mode", aw.SuggestedTurnMode))
 	lines = append(lines, nonEmptyAwarenessLine("brokerage_ratification", aw.BrokerageRatification))
 	lines = append(lines, nonEmptyAwarenessLine("ratified_turn_mode", aw.RatifiedTurnMode))
+	lines = append(lines, nonEmptyAwarenessLine("signal_judgment", aw.SignalJudgment))
+	lines = append(lines, fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive))
+	lines = append(lines, nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)))
+	lines = append(lines, nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary))
 	lines = append(lines, nonEmptyAwarenessLine("face_backend", aw.FaceBackend))
 	lines = append(lines, nonEmptyAwarenessLine("face_provider", aw.FaceProvider))
 	lines = append(lines, nonEmptyAwarenessLine("face_model", aw.FaceModel))
@@ -141,4 +153,17 @@ func formatProviderPath(path []string) string {
 		}
 	}
 	return strings.Join(out, " -> ")
+}
+
+func formatAwarenessList(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return strings.Join(out, ", ")
 }

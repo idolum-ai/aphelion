@@ -241,6 +241,9 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	if !strings.Contains(got, "This is not turn-mode selection") {
 		t.Fatalf("proposal prompt missing boundary from brokerage: %q", got)
 	}
+	if !strings.Contains(got, "hidden input is materially shaping your note") {
+		t.Fatalf("proposal prompt missing hidden-input guidance: %q", got)
+	}
 	if !strings.Contains(got, "reaching for") {
 		t.Fatalf("proposal prompt missing subtext observation guidance: %q", got)
 	}
@@ -269,6 +272,9 @@ func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
 	}
 	if !strings.Contains(got, "Do not turn this into a form") {
 		t.Fatalf("brokerage prompt missing anti-bureaucracy guidance: %q", got)
+	}
+	if !strings.Contains(got, "hidden input is materially shaping your push") {
+		t.Fatalf("brokerage prompt missing hidden-input guidance: %q", got)
 	}
 	if !strings.Contains(got, "inspect_then_answer") {
 		t.Fatalf("brokerage prompt missing brokerage mode vocabulary: %q", got)

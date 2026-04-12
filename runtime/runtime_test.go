@@ -802,6 +802,72 @@ func TestHandleInboundUsesBrokerageForStrategicTurn(t *testing.T) {
 	}
 }
 
+func TestHandleInboundPersistsHiddenInputProvenanceForBrokerageTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Memory.Semantic.Enabled = true
+	cfg.Memory.Semantic.Sources = []string{"memory/knowledge.md"}
+	cfg.Memory.Semantic.InteractiveTopK = 5
+	cfg.Memory.Semantic.InteractiveMaxChars = 4000
+	provider.brokerageReplyText = "MODE: inspect_then_answer\nWHY: There is a recurring semantic layer decision hiding under the feature request.\nPUSH:\n- Inspect first.\n- Name the buried blocker."
+	provider.planningReplyText = "MODE: inspect_then_answer\nRATIFICATION: adapt\nSIGNAL_JUDGMENT: confirmed\nPLAN:\n- Inspect the codebase before proposing features.\n- Then answer with prioritized ideas."
+
+	if err := os.MkdirAll(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(memory) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "knowledge.md"), []byte("# knowledge.md\n\n- The semantic layer is the recurring architectural tension."), 0o600); err != nil {
+		t.Fatalf("write knowledge.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "questions.md"), []byte("# questions.md\n\n- Should the semantic layer stay lexical-first or become vector-ranked?"), 0o600); err != nil {
+		t.Fatalf("write questions.md: %v", err)
+	}
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     721,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "come up with some features for my semantic layer work",
+		MessageID:  1,
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	if len(provider.seenBrokerageSystem) == 0 {
+		t.Fatal("seenBrokerageSystem empty, want brokerage prompt call")
+	}
+	if !strings.Contains(provider.seenBrokerageSystem[len(provider.seenBrokerageSystem)-1], "- hidden_inputs_active: true") {
+		t.Fatalf("brokerage prompt missing hidden-input awareness: %q", provider.seenBrokerageSystem[len(provider.seenBrokerageSystem)-1])
+	}
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "signal_judgment: confirmed") {
+		t.Fatalf("negotiated brokerage block missing signal judgment: %q", provider.lastGovernorMsgs[1].Content)
+	}
+	provider.mu.Unlock()
+
+	sess, err := store.Load(session.SessionKey{ChatID: 721, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if strings.TrimSpace(sess.LastFloorMetadata) == "" {
+		t.Fatal("LastFloorMetadata empty, want hidden-input provenance")
+	}
+	if !strings.Contains(sess.LastFloorMetadata, "semantic_recurrence") {
+		t.Fatalf("LastFloorMetadata = %q, want semantic recurrence", sess.LastFloorMetadata)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, "unresolved_memory_state") {
+		t.Fatalf("LastFloorMetadata = %q, want unresolved memory state", sess.LastFloorMetadata)
+	}
+	if len(sess.Messages) < 2 || strings.TrimSpace(sess.Messages[len(sess.Messages)-1].FloorMetadata) == "" {
+		t.Fatalf("assistant floor metadata missing from messages: %#v", sess.Messages)
+	}
+}
+
 func TestHandleInboundRendersFromStructuredMaterialFloor(t *testing.T) {
 	t.Parallel()
 
@@ -1250,11 +1316,19 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	cfg.Heartbeat.Enabled = true
 	cfg.Heartbeat.Target = "last"
 	provider.replyText = "heartbeat canonical"
+	provider.proposalReplyText = "A recurring deployment blocker keeps surfacing. Name it."
 	provider.faceReplyText = "heartbeat rendered"
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(memory) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "questions.md"), []byte("# questions.md\n\n- Should deployment rollback become a first-class workflow?"), 0o600); err != nil {
+		t.Fatalf("write questions.md: %v", err)
 	}
 
 	if err := store.EnqueueReviewEvent(session.ReviewEvent{
@@ -1264,7 +1338,18 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 		TargetAdminChatID: 1001,
 		TurnFrom:          2,
 		TurnTo:            2,
-		Summary:           "needs review",
+		Summary:           "deployment rollback needs review",
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      334,
+		SourceUserID:      1002,
+		SourceRole:        "approved_user",
+		TargetAdminChatID: 1001,
+		TurnFrom:          3,
+		TurnTo:            3,
+		Summary:           "deployment plan needs review",
 	}); err != nil {
 		t.Fatalf("EnqueueReviewEvent() err = %v", err)
 	}
@@ -1302,6 +1387,70 @@ func TestHeartbeatDeliveryUsesFaceAndMarksReviewEventsDelivered(t *testing.T) {
 	}
 	if len(events) != 0 {
 		t.Fatalf("pending review events len = %d, want 0 after delivery", len(events))
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenProposalSystem) == 0 {
+		t.Fatal("seenProposalSystem empty, want hidden-input proposal for heartbeat outreach")
+	}
+	if !strings.Contains(provider.seenProposalSystem[len(provider.seenProposalSystem)-1], "- hidden_inputs_active: true") {
+		t.Fatalf("heartbeat proposal prompt missing hidden-input awareness: %q", provider.seenProposalSystem[len(provider.seenProposalSystem)-1])
+	}
+	if !strings.Contains(provider.seenProposalSystem[len(provider.seenProposalSystem)-1], "semantic_recurrence") {
+		t.Fatalf("heartbeat proposal prompt missing hidden-input categories: %q", provider.seenProposalSystem[len(provider.seenProposalSystem)-1])
+	}
+}
+
+func TestHeartbeatStaysSilentWithoutConvergingSignals(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.Target = "last"
+	provider.replyText = "heartbeat canonical"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      333,
+		SourceUserID:      1002,
+		SourceRole:        "approved_user",
+		TargetAdminChatID: 1001,
+		TurnFrom:          2,
+		TurnTo:            2,
+		Summary:           "single isolated review item",
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent len = %d, want 0 when signals do not converge", len(sender.sent))
+	}
+	sender.mu.Unlock()
+
+	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load(heartbeat session) err = %v", err)
+	}
+	if maintenance.LastFloorText != "heartbeat canonical" {
+		t.Fatalf("maintenance floor = %q, want heartbeat canonical", maintenance.LastFloorText)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events len = %d, want 1 when heartbeat stays silent", len(events))
 	}
 }
 

@@ -126,7 +126,22 @@ func setLastAssistantFloor(messages []session.Message, floorText string) []sessi
 	return messages
 }
 
-func appendAssistantTurn(sess *session.Session, text string, floorText string) []session.Message {
+func setLastAssistantFloorMetadata(messages []session.Message, floorMetadata string) []session.Message {
+	floorMetadata = strings.TrimSpace(floorMetadata)
+	if floorMetadata == "" {
+		return messages
+	}
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" {
+			messages[i].FloorMetadata = floorMetadata
+			return messages
+		}
+	}
+	return messages
+}
+
+func appendAssistantTurn(sess *session.Session, text string, floorText string, floorMetadata string) []session.Message {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return nil
@@ -137,16 +152,18 @@ func appendAssistantTurn(sess *session.Session, text string, floorText string) [
 		floorText = trimmed
 	}
 	sess.LastFloorText = floorText
+	sess.LastFloorMetadata = strings.TrimSpace(floorMetadata)
 	return []session.Message{{
-		Role:         "assistant",
-		Content:      trimmed,
-		FloorContent: floorText,
-		ContentChars: len(trimmed),
-		TurnIndex:    sess.TurnCount,
+		Role:          "assistant",
+		Content:       trimmed,
+		FloorContent:  floorText,
+		FloorMetadata: strings.TrimSpace(floorMetadata),
+		ContentChars:  len(trimmed),
+		TurnIndex:     sess.TurnCount,
 	}}
 }
 
-func appendSyntheticTurn(sess *session.Session, requestText string, replyText string, floorText string) []session.Message {
+func appendSyntheticTurn(sess *session.Session, requestText string, replyText string, floorText string, floorMetadata string) []session.Message {
 	requestText = strings.TrimSpace(requestText)
 	replyText = strings.TrimSpace(replyText)
 	if requestText == "" || replyText == "" {
@@ -159,6 +176,7 @@ func appendSyntheticTurn(sess *session.Session, requestText string, replyText st
 		floorText = replyText
 	}
 	sess.LastFloorText = floorText
+	sess.LastFloorMetadata = strings.TrimSpace(floorMetadata)
 
 	return []session.Message{
 		{
@@ -168,11 +186,12 @@ func appendSyntheticTurn(sess *session.Session, requestText string, replyText st
 			TurnIndex:    sess.TurnCount,
 		},
 		{
-			Role:         "assistant",
-			Content:      replyText,
-			FloorContent: floorText,
-			ContentChars: len(replyText),
-			TurnIndex:    sess.TurnCount,
+			Role:          "assistant",
+			Content:       replyText,
+			FloorContent:  floorText,
+			FloorMetadata: strings.TrimSpace(floorMetadata),
+			ContentChars:  len(replyText),
+			TurnIndex:     sess.TurnCount,
 		},
 	}
 }

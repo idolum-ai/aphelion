@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 7
+const schemaVersion = 8
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -68,6 +68,7 @@ func (s *SQLiteStore) init() error {
 			user_id INTEGER NOT NULL DEFAULT 0,
 			system_prompt TEXT,
 			last_floor_text TEXT,
+			last_floor_metadata TEXT,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			turn_count INTEGER NOT NULL DEFAULT 0,
@@ -96,6 +97,7 @@ func (s *SQLiteStore) init() error {
 				role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
 				content TEXT NOT NULL,
 				floor_content TEXT,
+				floor_metadata TEXT,
 				tool_calls TEXT,
 				tool_id TEXT,
 				tool_name TEXT,
@@ -219,7 +221,7 @@ func (s *SQLiteStore) init() error {
 func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	row := s.db.QueryRow(`
 		SELECT
-			chat_id, user_id, system_prompt, last_floor_text,
+			chat_id, user_id, system_prompt, last_floor_text, last_floor_metadata,
 			created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
@@ -236,6 +238,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		cacheLastWriteRaw    sql.NullString
 		systemPrompt         sql.NullString
 		lastFloorText        sql.NullString
+		lastFloorMetadata    sql.NullString
 		chatType             sql.NullString
 		chatTitle            sql.NullString
 		userName             sql.NullString
@@ -246,7 +249,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	)
 
 	err := row.Scan(
-		&sess.ChatID, &sess.UserID, &systemPrompt, &lastFloorText, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
+		&sess.ChatID, &sess.UserID, &systemPrompt, &lastFloorText, &lastFloorMetadata, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
 		&chatType, &chatTitle, &userName,
 		&sess.CacheState.LastWriteBlock, &sess.CacheState.BlocksSinceWrite, &cacheLastWriteRaw, &sess.CacheState.HitRate, &consecutiveMissesRaw,
 		&sess.TotalInputTokens, &sess.TotalOutputTokens, &sess.TotalCacheRead, &sess.TotalCacheWrite,
@@ -261,6 +264,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 
 	sess.SystemPrompt = nullToString(systemPrompt)
 	sess.LastFloorText = nullToString(lastFloorText)
+	sess.LastFloorMetadata = nullToString(lastFloorMetadata)
 	sess.ChatType = nullToString(chatType)
 	sess.ChatTitle = nullToString(chatTitle)
 	sess.UserName = nullToString(userName)
@@ -290,7 +294,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	}
 
 	msgRows, err := s.db.Query(`
-			SELECT id, chat_id, user_id, role, content, floor_content, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
+			SELECT id, chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
 			FROM messages
 			WHERE chat_id = ? AND user_id = ?
 			ORDER BY turn_index, id
@@ -305,6 +309,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 			m            Message
 			createdRaw   string
 			floorRaw     sql.NullString
+			floorMetaRaw sql.NullString
 			toolCallsRaw sql.NullString
 			toolIDRaw    sql.NullString
 			toolNameRaw  sql.NullString
@@ -313,13 +318,14 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		)
 
 		if err := msgRows.Scan(
-			&m.ID, &m.ChatID, &m.UserID, &m.Role, &m.Content, &floorRaw, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
+			&m.ID, &m.ChatID, &m.UserID, &m.Role, &m.Content, &floorRaw, &floorMetaRaw, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
 			&createdRaw, &m.TurnIndex, &m.ContentChars, &compactedRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 
 		m.FloorContent = nullToString(floorRaw)
+		m.FloorMetadata = nullToString(floorMetaRaw)
 		m.ToolCalls = nullToString(toolCallsRaw)
 		m.ToolID = nullToString(toolIDRaw)
 		m.ToolName = nullToString(toolNameRaw)
@@ -415,11 +421,11 @@ func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.T
 
 		_, err := tx.Exec(`
 				INSERT INTO messages(
-					chat_id, user_id, role, content, floor_content, tool_calls, tool_id, tool_name, thinking,
+					chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking,
 					created_at, turn_index, content_chars, compacted
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`,
-			msg.ChatID, msg.UserID, msg.Role, msg.Content, nullableString(msg.FloorContent),
+			msg.ChatID, msg.UserID, msg.Role, msg.Content, nullableString(msg.FloorContent), nullableString(msg.FloorMetadata),
 			nullableString(msg.ToolCalls), nullableString(msg.ToolID), nullableString(msg.ToolName), nullableString(msg.Thinking),
 			msg.CreatedAt.UTC().Format(time.RFC3339Nano), msg.TurnIndex, msg.ContentChars, boolToInt(msg.Compacted),
 		)
@@ -1485,15 +1491,16 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 	_, err := tx.Exec(`
 		INSERT INTO sessions(
-			chat_id, user_id, system_prompt, last_floor_text, created_at, updated_at, turn_count,
+			chat_id, user_id, system_prompt, last_floor_text, last_floor_metadata, created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
 			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
 			last_provider, last_model, active_tool_calls, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_id, user_id) DO UPDATE SET
 			system_prompt = excluded.system_prompt,
 			last_floor_text = excluded.last_floor_text,
+			last_floor_metadata = excluded.last_floor_metadata,
 			updated_at = excluded.updated_at,
 			turn_count = excluded.turn_count,
 			chat_type = excluded.chat_type,
@@ -1513,7 +1520,7 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 			active_tool_calls = excluded.active_tool_calls,
 			last_error = excluded.last_error
 	`,
-		session.ChatID, session.UserID, session.SystemPrompt, nullableString(session.LastFloorText),
+		session.ChatID, session.UserID, session.SystemPrompt, nullableString(session.LastFloorText), nullableString(session.LastFloorMetadata),
 		nonZeroTimeOrNow(session.CreatedAt, now).UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), session.TurnCount,
 		defaultChatType(session.ChatType), nullableString(session.ChatTitle), nullableString(session.UserName),
 		session.CacheState.LastWriteBlock, session.CacheState.BlocksSinceWrite, nullableTime(session.CacheState.LastWriteTime), session.CacheState.HitRate, session.CacheState.ConsecutiveMisses,
@@ -1530,8 +1537,14 @@ func applyMigrations(tx *sql.Tx) error {
 	if err := ensureSessionColumn(tx, "last_floor_text", "TEXT"); err != nil {
 		return fmt.Errorf("ensure sessions.last_floor_text: %w", err)
 	}
+	if err := ensureSessionColumn(tx, "last_floor_metadata", "TEXT"); err != nil {
+		return fmt.Errorf("ensure sessions.last_floor_metadata: %w", err)
+	}
 	if err := ensureTableColumn(tx, "messages", "floor_content", "TEXT"); err != nil {
 		return fmt.Errorf("ensure messages.floor_content: %w", err)
+	}
+	if err := ensureTableColumn(tx, "messages", "floor_metadata", "TEXT"); err != nil {
+		return fmt.Errorf("ensure messages.floor_metadata: %w", err)
 	}
 
 	currentVersion, err := currentSchemaVersion(tx)

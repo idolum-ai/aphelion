@@ -42,6 +42,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if err != nil {
 		return nil, fmt.Errorf("resolve principal scope: %w", err)
 	}
+	now := time.Now().UTC()
 	prepared, err := r.prepareInboundTurn(ctx, scope, msg)
 	if err != nil {
 		return nil, err
@@ -49,11 +50,12 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	facePolicy := decideInteractiveFacePolicy(sess, prepared.LedgerText)
 	useMaterialFloor := shouldUseMaterialFloorContract(r.faceBackend, facePolicy)
 	exec := r.executionForTurn(prepared)
-	promptContext, err := r.promptContextForScope(scope, time.Now())
+	promptContext, err := r.promptContextForScope(scope, now)
 	if err != nil {
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
-	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
+	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText)
+	governorAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec), hiddenInputs)
 	if useMaterialFloor {
 		governorAwareness.ArtifactMode = "floor"
 	}
@@ -136,6 +138,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		if ratifyErr != nil {
 			log.Printf("WARN turn brokerage ratification failed backend=%s err=%v; rerunning plain proposal path", exec.Backend, ratifyErr)
 			brokerage.Ratification = ""
+			brokerage.SignalJudgment = ""
 			brokerage.RatificationRecord = ""
 			brokerage.RatifiedSteps = nil
 			brokerage.RatifiedTurnMode = ""
@@ -148,6 +151,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
 				brokerage.SuggestedTurnMode = ""
 				brokerage.Ratification = ""
+				brokerage.SignalJudgment = ""
 				brokerage.RatificationRecord = ""
 				brokerage.RatifiedSteps = nil
 				extraUsage = addTokenUsage(extraUsage, proposalUsage)
@@ -191,6 +195,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 
 	sess.TurnCount++
 	materialFloor, floorText, _ := governorMaterialArtifact(result.Text, useMaterialFloor)
+	floorMetadata := encodeFloorMetadata(hiddenInputs.Metadata())
 	replyText := floorText
 	outboundID := int64(0)
 	outboundType := ""
@@ -287,7 +292,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 	newMessages = replaceLastAssistantWithSceneText(newMessages, replyText)
 	newMessages = setLastAssistantFloor(newMessages, floorText)
+	newMessages = setLastAssistantFloorMetadata(newMessages, floorMetadata)
 	sess.LastFloorText = floorText
+	sess.LastFloorMetadata = floorMetadata
 
 	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
 		return nil, fmt.Errorf("save session: %w", err)
@@ -426,7 +433,7 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		if err != nil {
 			return err
 		}
-		newMessages := appendAssistantTurn(sess, text, text)
+		newMessages := appendAssistantTurn(sess, text, text, "")
 		if err := r.store.Save(sess, newMessages, core.TokenUsage{}); err != nil {
 			return err
 		}

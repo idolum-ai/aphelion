@@ -46,6 +46,7 @@ type BrokerageArtifact struct {
 	IdolumProposal     string
 	RatifiedTurnMode   string
 	Ratification       string
+	SignalJudgment     string
 	RatifiedSteps      []string
 	RatificationRecord string
 }
@@ -182,6 +183,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"If you name a turn mode, put it on its own line as MODE: <answer_now|inspect_then_answer|ask_then_wait|decline|silent>.",
 			"You may omit a mode entirely when a short bounded note says it better.",
 			"Do not turn this into a form unless the moment genuinely calls for it. A short bounded note is enough.",
+			"When a hidden input is materially shaping your push and runtime awareness says one is active, name it plainly.",
 			"Focus on what the user is actually reaching for, how ready the situation is for action, and whether the user should be stirred, steadied, questioned, answered, declined, or left alone for now.",
 			"Be concrete and brief. Do not claim authority. Do not describe hidden mechanics. Do not draft the eventual answer.",
 		)
@@ -191,6 +193,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"Say what you think this turn should center, notice, or prioritize and why.",
 			"This is not turn-mode selection. Do not classify the turn as answer_now, inspect_then_answer, ask_then_wait, decline, or silent unless quoting the user.",
 			"Push for what matters inside the turn: warmth, sharper observation, a better question, a concrete action, or deliberate silence.",
+			"When a hidden input is materially shaping your note and runtime awareness says one is active, name it briefly.",
 			"Notice what the user is reaching for, not just what they said. If something feels off or important beneath the surface, name it.",
 			"Be brief. Write only when your push would materially change the turn. Return nothing if there is no useful guidance.",
 		)
@@ -294,6 +297,7 @@ func RenderBrokeragePlanForGovernor(artifact BrokerageArtifact) string {
 	artifact.IdolumProposal = strings.TrimSpace(artifact.IdolumProposal)
 	artifact.RatifiedTurnMode = strings.TrimSpace(artifact.RatifiedTurnMode)
 	artifact.Ratification = strings.TrimSpace(artifact.Ratification)
+	artifact.SignalJudgment = strings.TrimSpace(artifact.SignalJudgment)
 	artifact.RatificationRecord = strings.TrimSpace(artifact.RatificationRecord)
 	if artifact.IdolumProposal == "" && artifact.RatificationRecord == "" && len(artifact.RatifiedSteps) == 0 {
 		return ""
@@ -310,6 +314,9 @@ func RenderBrokeragePlanForGovernor(artifact BrokerageArtifact) string {
 	}
 	if artifact.Ratification != "" {
 		summary = append(summary, fmt.Sprintf("- ratification: %s", artifact.Ratification))
+	}
+	if artifact.SignalJudgment != "" {
+		summary = append(summary, fmt.Sprintf("- signal_judgment: %s", artifact.SignalJudgment))
 	}
 	if len(summary) > 0 {
 		parts = append(parts, strings.Join(summary, "\n"))

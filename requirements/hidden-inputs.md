@@ -150,15 +150,19 @@ This makes brokerage a real negotiation between two readings of the same latent 
 
 ## Scope
 
-### v0 required
+### v0
 
+- heuristic hidden-input assembly for brokerage and heartbeat turns
 - semantic recurrence detection in heartbeat eligibility
 - unresolved memory state as proactive eligibility signal
 - temporal pressure as proactive eligibility signal
+- hidden-input convergence gates heartbeat-originated reflective outreach
 - Idolum brokerage proposals name the hidden input when one is materially shaping the push
-- floor sidecar preserves hidden inputs when material
+- Aphelion ratification may preserve `SIGNAL_JUDGMENT` when Idolum named a hidden input
+- floor sidecar metadata preserves hidden inputs when material
+- runtime self-awareness exposes active hidden-input categories and whether a provenance summary was assembled
 
-### Deferred
+### v0.5
 
 - automated latent signal extraction across session history
 - cross-session semantic clustering for recurrence detection

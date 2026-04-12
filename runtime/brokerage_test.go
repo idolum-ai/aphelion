@@ -7,7 +7,7 @@ import "testing"
 func TestParseBrokerageRatificationParsesStructuredFields(t *testing.T) {
 	t.Parallel()
 
-	parsed, err := parseBrokerageRatification("MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n1. Inspect the repo first.\n2. Reply with prioritized ideas.")
+	parsed, err := parseBrokerageRatification("MODE: inspect_then_answer\nRATIFICATION: adapt\nSIGNAL_JUDGMENT: confirmed\nPLAN:\n1. Inspect the repo first.\n2. Reply with prioritized ideas.")
 	if err != nil {
 		t.Fatalf("parseBrokerageRatification() err = %v", err)
 	}
@@ -16,6 +16,9 @@ func TestParseBrokerageRatificationParsesStructuredFields(t *testing.T) {
 	}
 	if parsed.Ratification != "adapt" {
 		t.Fatalf("Ratification = %q, want adapt", parsed.Ratification)
+	}
+	if parsed.SignalJudgment != "confirmed" {
+		t.Fatalf("SignalJudgment = %q, want confirmed", parsed.SignalJudgment)
 	}
 	if len(parsed.RatifiedSteps) != 2 {
 		t.Fatalf("RatifiedSteps len = %d, want 2", len(parsed.RatifiedSteps))
