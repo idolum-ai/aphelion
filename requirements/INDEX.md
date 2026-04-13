@@ -24,23 +24,24 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 13. ✅ [`system-prompt.md`](system-prompt.md) — Governor prompt, face prompt, cache boundary, dynamic vs stable sections
 14. 🟡 [`semantic-store.md`](semantic-store.md) — Aphelion-owned local semantic substrate, provenance-preserving import, retrieval modes
 15. ✅ [`language.md`](language.md) — Shared house writing substrate across governor and face
-16. ✅ [`idolum.md`](idolum.md) — Face identity, anti-drift, Idolum-specific prompt files
-17. ✅ [`subagents.md`](subagents.md) — First-class subordinate sessions, capability depth, completion, isolation
-18. ✅ [`self-awareness.md`](self-awareness.md) — Machine-authored runtime self-description, authority awareness, degraded-state awareness
-19. ✅ [`planning-brokerage.md`](planning-brokerage.md) — Bounded Idolum-to-Aphelion turn planning handshake before selected interactive turns
-20. ✅ [`hidden-inputs.md`](hidden-inputs.md) — Latent signal, proactive eligibility, provenance, and floor/scene reaction model
-21. ✅ [`artifacts.md`](artifacts.md) — Channel-neutral file/media artifact model, capability envelope, retention classes
-22. ✅ [`artifact-brokerage.md`](artifact-brokerage.md) — Bounded Idolum/Aphelion deliberation over artifact meaning, handling, and retention
+16. 🟡 [`durable-agents.md`](durable-agents.md) — External sensory organs, quarantine, admin-ratified drift, and parent governance
+17. ✅ [`idolum.md`](idolum.md) — Face identity, anti-drift, Idolum-specific prompt files
+18. ✅ [`subagents.md`](subagents.md) — First-class subordinate sessions, capability depth, completion, isolation
+19. ✅ [`self-awareness.md`](self-awareness.md) — Machine-authored runtime self-description, authority awareness, degraded-state awareness
+20. ✅ [`planning-brokerage.md`](planning-brokerage.md) — Bounded Idolum-to-Aphelion turn planning handshake before selected interactive turns
+21. ✅ [`hidden-inputs.md`](hidden-inputs.md) — Latent signal, proactive eligibility, provenance, and floor/scene reaction model
+22. ✅ [`artifacts.md`](artifacts.md) — Channel-neutral file/media artifact model, capability envelope, retention classes
+23. ✅ [`artifact-brokerage.md`](artifact-brokerage.md) — Bounded Idolum/Aphelion deliberation over artifact meaning, handling, and retention
 
 ## Automation
-23. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
-24. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
+24. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
+25. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
 
 ## Media
-25. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
-26. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
+26. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
+27. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
 
 ## Operations
-27. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
-28. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
-29. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
+28. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
+29. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
+30. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
