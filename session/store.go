@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -66,6 +66,9 @@ func (s *SQLiteStore) init() error {
 		`CREATE TABLE IF NOT EXISTS sessions (
 			chat_id INTEGER NOT NULL,
 			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT,
+			scope_id TEXT,
+			durable_agent_id TEXT,
 			system_prompt TEXT,
 			last_floor_text TEXT,
 			last_floor_metadata TEXT,
@@ -126,10 +129,17 @@ func (s *SQLiteStore) init() error {
 			source_chat_id INTEGER NOT NULL,
 			source_user_id INTEGER NOT NULL DEFAULT 0,
 			source_role TEXT NOT NULL,
+			source_scope_kind TEXT,
+			source_scope_id TEXT,
+			source_durable_agent_id TEXT,
 			target_chat_id INTEGER NOT NULL,
+			target_scope_kind TEXT,
+			target_scope_id TEXT,
+			target_durable_agent_id TEXT,
 			turn_from INTEGER,
 			turn_to INTEGER,
 			summary TEXT NOT NULL,
+			metadata_json TEXT,
 			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'dismissed')),
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			delivered_at TEXT
@@ -139,6 +149,9 @@ func (s *SQLiteStore) init() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			chat_id INTEGER NOT NULL,
 			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT,
+			scope_id TEXT,
+			durable_agent_id TEXT,
 			kind TEXT NOT NULL,
 			status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'interrupted')),
 			request_text TEXT NOT NULL,
@@ -156,6 +169,36 @@ func (s *SQLiteStore) init() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(chat_id, user_id, started_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
+		`CREATE TABLE IF NOT EXISTS durable_agents (
+			agent_id TEXT PRIMARY KEY,
+			parent_agent_id TEXT,
+			parent_scope_kind TEXT,
+			parent_scope_id TEXT,
+			review_target_chat_id INTEGER NOT NULL DEFAULT 0,
+			channel_kind TEXT NOT NULL,
+			charter TEXT NOT NULL DEFAULT '',
+			capability_envelope_json TEXT NOT NULL DEFAULT '[]',
+			local_storage_roots_json TEXT NOT NULL DEFAULT '[]',
+			network_policy TEXT,
+			wakeup_mode TEXT,
+			outbound_mode TEXT,
+			drift_policy TEXT,
+			secret_scopes_json TEXT NOT NULL DEFAULT '[]',
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS durable_agent_state (
+			agent_id TEXT PRIMARY KEY,
+			cursor TEXT,
+			status TEXT,
+			state_json TEXT,
+			last_wake_at TEXT,
+			last_review_at TEXT,
+			dormant_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (agent_id) REFERENCES durable_agents(agent_id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS compaction_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			chat_id INTEGER NOT NULL,
@@ -221,7 +264,7 @@ func (s *SQLiteStore) init() error {
 func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	row := s.db.QueryRow(`
 		SELECT
-			chat_id, user_id, system_prompt, last_floor_text, last_floor_metadata,
+			chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata,
 			created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
@@ -236,6 +279,9 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		createdAtRaw         string
 		updatedAtRaw         string
 		cacheLastWriteRaw    sql.NullString
+		scopeKind            sql.NullString
+		scopeID              sql.NullString
+		durableAgentID       sql.NullString
 		systemPrompt         sql.NullString
 		lastFloorText        sql.NullString
 		lastFloorMetadata    sql.NullString
@@ -249,7 +295,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	)
 
 	err := row.Scan(
-		&sess.ChatID, &sess.UserID, &systemPrompt, &lastFloorText, &lastFloorMetadata, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
+		&sess.ChatID, &sess.UserID, &scopeKind, &scopeID, &durableAgentID, &systemPrompt, &lastFloorText, &lastFloorMetadata, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
 		&chatType, &chatTitle, &userName,
 		&sess.CacheState.LastWriteBlock, &sess.CacheState.BlocksSinceWrite, &cacheLastWriteRaw, &sess.CacheState.HitRate, &consecutiveMissesRaw,
 		&sess.TotalInputTokens, &sess.TotalOutputTokens, &sess.TotalCacheRead, &sess.TotalCacheWrite,
@@ -263,6 +309,14 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	}
 
 	sess.SystemPrompt = nullToString(systemPrompt)
+	sess.Scope = NormalizeScopeRef(ScopeRef{
+		Kind:           ScopeKind(nullToString(scopeKind)),
+		ID:             nullToString(scopeID),
+		DurableAgentID: nullToString(durableAgentID),
+	})
+	if sess.Scope.IsZero() {
+		sess.Scope = defaultScopeForKey(key)
+	}
 	sess.LastFloorText = nullToString(lastFloorText)
 	sess.LastFloorMetadata = nullToString(lastFloorMetadata)
 	sess.ChatType = nullToString(chatType)
@@ -952,11 +1006,13 @@ func (s *SQLiteStore) RecordOutbound(key SessionKey, turnIndex int, telegramMsgI
 }
 
 func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
-	if event.SourceChatID == 0 {
-		return fmt.Errorf("enqueue review event: source_chat_id is required")
-	}
 	if strings.TrimSpace(event.SourceRole) == "" {
 		return fmt.Errorf("enqueue review event: source_role is required")
+	}
+	event.SourceScope = NormalizeScopeRef(event.SourceScope)
+	event.TargetScope = NormalizeScopeRef(event.TargetScope)
+	if event.SourceChatID == 0 && event.SourceScope.IsZero() {
+		return fmt.Errorf("enqueue review event: source provenance is required")
 	}
 	if event.TargetAdminChatID == 0 {
 		return fmt.Errorf("enqueue review event: target_chat_id is required")
@@ -973,12 +1029,16 @@ func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(`
 		INSERT INTO review_events(
-			source_chat_id, source_user_id, source_role, target_chat_id,
-			turn_from, turn_to, summary, status, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
+			target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
+			turn_from, turn_to, summary, metadata_json, status, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		event.SourceChatID, event.SourceUserID, event.SourceRole, event.TargetAdminChatID,
-		event.TurnFrom, event.TurnTo, event.Summary, status, now,
+		event.SourceChatID, event.SourceUserID, event.SourceRole,
+		nullableString(string(event.SourceScope.Kind)), nullableString(event.SourceScope.ID), nullableString(event.SourceScope.DurableAgentID),
+		event.TargetAdminChatID,
+		nullableString(string(event.TargetScope.Kind)), nullableString(event.TargetScope.ID), nullableString(event.TargetScope.DurableAgentID),
+		event.TurnFrom, event.TurnTo, event.Summary, nullableString(event.MetadataJSON), status, now,
 	)
 	if err != nil {
 		return fmt.Errorf("enqueue review event: %w", err)
@@ -996,8 +1056,9 @@ func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]Revi
 
 	rows, err := s.db.Query(`
 		SELECT
-			id, source_chat_id, source_user_id, source_role, target_chat_id,
-			turn_from, turn_to, summary, status, created_at, delivered_at
+			id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
+			target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
 		FROM review_events
 		WHERE target_chat_id = ? AND status = 'pending'
 		ORDER BY created_at ASC, id ASC
@@ -1017,16 +1078,35 @@ func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]Revi
 			turnFromRaw     sql.NullInt64
 			turnToRaw       sql.NullInt64
 			targetChatIDRaw int64
+			sourceScopeKind sql.NullString
+			sourceScopeID   sql.NullString
+			sourceAgentID   sql.NullString
+			targetScopeKind sql.NullString
+			targetScopeID   sql.NullString
+			targetAgentID   sql.NullString
+			metadataJSON    sql.NullString
 		)
 
 		if err := rows.Scan(
-			&event.ID, &event.SourceChatID, &event.SourceUserID, &event.SourceRole, &targetChatIDRaw,
-			&turnFromRaw, &turnToRaw, &event.Summary, &event.Status, &createdAtRaw, &deliveredAtRaw,
+			&event.ID, &event.SourceChatID, &event.SourceUserID, &event.SourceRole, &sourceScopeKind, &sourceScopeID, &sourceAgentID,
+			&targetChatIDRaw, &targetScopeKind, &targetScopeID, &targetAgentID,
+			&turnFromRaw, &turnToRaw, &event.Summary, &metadataJSON, &event.Status, &createdAtRaw, &deliveredAtRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan pending review event: %w", err)
 		}
 
 		event.TargetAdminChatID = targetChatIDRaw
+		event.SourceScope = NormalizeScopeRef(ScopeRef{
+			Kind:           ScopeKind(nullToString(sourceScopeKind)),
+			ID:             nullToString(sourceScopeID),
+			DurableAgentID: nullToString(sourceAgentID),
+		})
+		event.TargetScope = NormalizeScopeRef(ScopeRef{
+			Kind:           ScopeKind(nullToString(targetScopeKind)),
+			ID:             nullToString(targetScopeID),
+			DurableAgentID: nullToString(targetAgentID),
+		})
+		event.MetadataJSON = nullToString(metadataJSON)
 		if turnFromRaw.Valid {
 			event.TurnFrom = int(turnFromRaw.Int64)
 		}
@@ -1099,13 +1179,15 @@ func (s *SQLiteStore) BeginTurnRun(key SessionKey, kind TurnRunKind, requestText
 	if kind == "" {
 		kind = TurnRunKindInteractive
 	}
+	scope := defaultScopeForKey(key)
 
 	res, err := s.db.Exec(`
 		INSERT INTO turn_runs(
-			chat_id, user_id, kind, status, request_text, started_at, last_activity_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, last_activity_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		key.ChatID, key.UserID, string(kind), string(TurnRunStatusRunning), requestText,
+		key.ChatID, key.UserID, nullableString(string(scope.Kind)), nullableString(scope.ID), nullableString(scope.DurableAgentID),
+		string(kind), string(TurnRunStatusRunning), requestText,
 		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -1120,6 +1202,7 @@ func (s *SQLiteStore) BeginTurnRun(key SessionKey, kind TurnRunKind, requestText
 		ID:             id,
 		ChatID:         key.ChatID,
 		UserID:         key.UserID,
+		Scope:          scope,
 		Kind:           kind,
 		Status:         TurnRunStatusRunning,
 		RequestText:    requestText,
@@ -1215,7 +1298,7 @@ func (s *SQLiteStore) InterruptRunningTurnRuns() ([]TurnRun, error) {
 
 	rows, err := tx.Query(`
 		SELECT
-			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
@@ -1281,7 +1364,7 @@ func (s *SQLiteStore) PendingRecoveryTurnRuns(limit int) ([]TurnRun, error) {
 
 	rows, err := s.db.Query(`
 		SELECT
-			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
@@ -1352,7 +1435,7 @@ func (s *SQLiteStore) MarkTurnRunsRecovered(ids []int64, summary string) error {
 func (s *SQLiteStore) LatestTurnRun(key SessionKey) (*TurnRun, error) {
 	rows, err := s.db.Query(`
 		SELECT
-			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
@@ -1377,7 +1460,7 @@ func (s *SQLiteStore) LatestTurnRun(key SessionKey) (*TurnRun, error) {
 func (s *SQLiteStore) TurnRun(id int64) (*TurnRun, error) {
 	rows, err := s.db.Query(`
 		SELECT
-			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
@@ -1466,11 +1549,183 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+func (s *SQLiteStore) UpsertDurableAgent(agent core.DurableAgent) error {
+	agent.AgentID = strings.TrimSpace(agent.AgentID)
+	if agent.AgentID == "" {
+		return fmt.Errorf("upsert durable agent: agent_id is required")
+	}
+	agent.ChannelKind = strings.TrimSpace(agent.ChannelKind)
+	if agent.ChannelKind == "" {
+		return fmt.Errorf("upsert durable agent: channel_kind is required")
+	}
+
+	capabilitiesJSON, err := marshalStringSlice(agent.CapabilityEnvelope)
+	if err != nil {
+		return fmt.Errorf("upsert durable agent capability_envelope: %w", err)
+	}
+	storageRootsJSON, err := marshalStringSlice(agent.LocalStorageRoots)
+	if err != nil {
+		return fmt.Errorf("upsert durable agent local_storage_roots: %w", err)
+	}
+	secretScopesJSON, err := marshalStringSlice(agent.SecretScopes)
+	if err != nil {
+		return fmt.Errorf("upsert durable agent secret_scopes: %w", err)
+	}
+
+	now := time.Now().UTC()
+	createdAt := nonZeroTimeOrNow(agent.CreatedAt, now).UTC().Format(time.RFC3339Nano)
+	updatedAt := now.UTC().Format(time.RFC3339Nano)
+	_, err = s.db.Exec(`
+		INSERT INTO durable_agents(
+			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
+			channel_kind, charter, capability_envelope_json, local_storage_roots_json, network_policy,
+			wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id) DO UPDATE SET
+			parent_agent_id = excluded.parent_agent_id,
+			parent_scope_kind = excluded.parent_scope_kind,
+			parent_scope_id = excluded.parent_scope_id,
+			review_target_chat_id = excluded.review_target_chat_id,
+			channel_kind = excluded.channel_kind,
+			charter = excluded.charter,
+			capability_envelope_json = excluded.capability_envelope_json,
+			local_storage_roots_json = excluded.local_storage_roots_json,
+			network_policy = excluded.network_policy,
+			wakeup_mode = excluded.wakeup_mode,
+			outbound_mode = excluded.outbound_mode,
+			drift_policy = excluded.drift_policy,
+			secret_scopes_json = excluded.secret_scopes_json,
+			status = excluded.status,
+			updated_at = excluded.updated_at
+	`,
+		agent.AgentID, nullableString(agent.ParentAgentID), nullableString(agent.ParentScopeKind), nullableString(agent.ParentScopeID), agent.ReviewTargetChatID,
+		agent.ChannelKind, strings.TrimSpace(agent.Charter), string(capabilitiesJSON), string(storageRootsJSON), nullableString(agent.NetworkPolicy),
+		nullableString(agent.WakeupMode), nullableString(agent.OutboundMode), nullableString(agent.DriftPolicy), string(secretScopesJSON), nullableString(agent.Status),
+		createdAt, updatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert durable agent: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) DurableAgent(agentID string) (*core.DurableAgent, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
+			channel_kind, charter, capability_envelope_json, local_storage_roots_json, network_policy,
+			wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status, created_at, updated_at
+		FROM durable_agents
+		WHERE agent_id = ?
+	`, strings.TrimSpace(agentID))
+	if err != nil {
+		return nil, fmt.Errorf("query durable agent: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, sql.ErrNoRows
+	}
+	agent, err := scanDurableAgent(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &agent, nil
+}
+
+func (s *SQLiteStore) ListDurableAgents() ([]core.DurableAgent, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
+			channel_kind, charter, capability_envelope_json, local_storage_roots_json, network_policy,
+			wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status, created_at, updated_at
+		FROM durable_agents
+		ORDER BY created_at ASC, agent_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list durable agents: %w", err)
+	}
+	defer rows.Close()
+
+	var agents []core.DurableAgent
+	for rows.Next() {
+		agent, err := scanDurableAgent(rows)
+		if err != nil {
+			return nil, err
+		}
+		agents = append(agents, agent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate durable agents: %w", err)
+	}
+	return agents, nil
+}
+
+func (s *SQLiteStore) SaveDurableAgentState(state core.DurableAgentState) error {
+	state.AgentID = strings.TrimSpace(state.AgentID)
+	if state.AgentID == "" {
+		return fmt.Errorf("save durable agent state: agent_id is required")
+	}
+
+	now := time.Now().UTC()
+	_, err := s.db.Exec(`
+		INSERT INTO durable_agent_state(
+			agent_id, cursor, status, state_json, last_wake_at, last_review_at, dormant_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id) DO UPDATE SET
+			cursor = excluded.cursor,
+			status = excluded.status,
+			state_json = excluded.state_json,
+			last_wake_at = excluded.last_wake_at,
+			last_review_at = excluded.last_review_at,
+			dormant_at = excluded.dormant_at,
+			updated_at = excluded.updated_at
+	`,
+		state.AgentID, nullableString(state.Cursor), nullableString(state.Status), nullableString(state.StateJSON),
+		nullableTime(state.LastWakeAt), nullableTime(state.LastReviewAt), nullableTime(state.DormantAt), now.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("save durable agent state: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) DurableAgentState(agentID string) (*core.DurableAgentState, error) {
+	rows, err := s.db.Query(`
+		SELECT agent_id, cursor, status, state_json, last_wake_at, last_review_at, dormant_at, updated_at
+		FROM durable_agent_state
+		WHERE agent_id = ?
+	`, strings.TrimSpace(agentID))
+	if err != nil {
+		return nil, fmt.Errorf("query durable agent state: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, sql.ErrNoRows
+	}
+	state, err := scanDurableAgentState(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (s *SQLiteStore) DeleteDurableAgent(agentID string) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return fmt.Errorf("delete durable agent: agent_id is required")
+	}
+	if _, err := s.db.Exec(`DELETE FROM durable_agents WHERE agent_id = ?`, agentID); err != nil {
+		return fmt.Errorf("delete durable agent: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 	now := time.Now().UTC()
 	sess := &Session{
 		ChatID:    key.ChatID,
 		UserID:    key.UserID,
+		Scope:     defaultScopeForKey(key),
 		CreatedAt: now,
 		UpdatedAt: now,
 		ChatType:  "dm",
@@ -1478,10 +1733,11 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 
 	if _, err := s.db.Exec(`
 		INSERT INTO sessions(
-			chat_id, user_id, system_prompt, last_floor_text, created_at, updated_at, turn_count, chat_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, created_at, updated_at, turn_count, chat_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		key.ChatID, key.UserID, "", "", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), 0, sess.ChatType,
+		key.ChatID, key.UserID, nullableString(string(sess.Scope.Kind)), nullableString(sess.Scope.ID), nullableString(sess.Scope.DurableAgentID),
+		"", "", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), 0, sess.ChatType,
 	); err != nil {
 		return nil, fmt.Errorf("insert empty session: %w", err)
 	}
@@ -1489,15 +1745,19 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 }
 
 func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
+	session.Scope = NormalizeScopeRef(session.Scope)
 	_, err := tx.Exec(`
 		INSERT INTO sessions(
-			chat_id, user_id, system_prompt, last_floor_text, last_floor_metadata, created_at, updated_at, turn_count,
+			chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata, created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
 			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
 			last_provider, last_model, active_tool_calls, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(chat_id, user_id) DO UPDATE SET
+			scope_kind = excluded.scope_kind,
+			scope_id = excluded.scope_id,
+			durable_agent_id = excluded.durable_agent_id,
 			system_prompt = excluded.system_prompt,
 			last_floor_text = excluded.last_floor_text,
 			last_floor_metadata = excluded.last_floor_metadata,
@@ -1520,7 +1780,8 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 			active_tool_calls = excluded.active_tool_calls,
 			last_error = excluded.last_error
 	`,
-		session.ChatID, session.UserID, session.SystemPrompt, nullableString(session.LastFloorText), nullableString(session.LastFloorMetadata),
+		session.ChatID, session.UserID, nullableString(string(session.Scope.Kind)), nullableString(session.Scope.ID), nullableString(session.Scope.DurableAgentID),
+		session.SystemPrompt, nullableString(session.LastFloorText), nullableString(session.LastFloorMetadata),
 		nonZeroTimeOrNow(session.CreatedAt, now).UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), session.TurnCount,
 		defaultChatType(session.ChatType), nullableString(session.ChatTitle), nullableString(session.UserName),
 		session.CacheState.LastWriteBlock, session.CacheState.BlocksSinceWrite, nullableTime(session.CacheState.LastWriteTime), session.CacheState.HitRate, session.CacheState.ConsecutiveMisses,
@@ -1540,11 +1801,40 @@ func applyMigrations(tx *sql.Tx) error {
 	if err := ensureSessionColumn(tx, "last_floor_metadata", "TEXT"); err != nil {
 		return fmt.Errorf("ensure sessions.last_floor_metadata: %w", err)
 	}
+	if err := ensureSessionColumn(tx, "scope_kind", "TEXT"); err != nil {
+		return fmt.Errorf("ensure sessions.scope_kind: %w", err)
+	}
+	if err := ensureSessionColumn(tx, "scope_id", "TEXT"); err != nil {
+		return fmt.Errorf("ensure sessions.scope_id: %w", err)
+	}
+	if err := ensureSessionColumn(tx, "durable_agent_id", "TEXT"); err != nil {
+		return fmt.Errorf("ensure sessions.durable_agent_id: %w", err)
+	}
 	if err := ensureTableColumn(tx, "messages", "floor_content", "TEXT"); err != nil {
 		return fmt.Errorf("ensure messages.floor_content: %w", err)
 	}
 	if err := ensureTableColumn(tx, "messages", "floor_metadata", "TEXT"); err != nil {
 		return fmt.Errorf("ensure messages.floor_metadata: %w", err)
+	}
+	for _, column := range []struct {
+		table string
+		name  string
+		typ   string
+	}{
+		{"review_events", "source_scope_kind", "TEXT"},
+		{"review_events", "source_scope_id", "TEXT"},
+		{"review_events", "source_durable_agent_id", "TEXT"},
+		{"review_events", "target_scope_kind", "TEXT"},
+		{"review_events", "target_scope_id", "TEXT"},
+		{"review_events", "target_durable_agent_id", "TEXT"},
+		{"review_events", "metadata_json", "TEXT"},
+		{"turn_runs", "scope_kind", "TEXT"},
+		{"turn_runs", "scope_id", "TEXT"},
+		{"turn_runs", "durable_agent_id", "TEXT"},
+	} {
+		if err := ensureTableColumn(tx, column.table, column.name, column.typ); err != nil {
+			return fmt.Errorf("ensure %s.%s: %w", column.table, column.name, err)
+		}
 	}
 
 	currentVersion, err := currentSchemaVersion(tx)
@@ -1633,9 +1923,132 @@ func nullableString(v string) any {
 	return v
 }
 
+func marshalStringSlice(values []string) ([]byte, error) {
+	if len(values) == 0 {
+		return []byte("[]"), nil
+	}
+	return json.Marshal(values)
+}
+
+func unmarshalStringSlice(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.DurableAgent, error) {
+	var (
+		agent            core.DurableAgent
+		parentAgentID    sql.NullString
+		parentScopeKind  sql.NullString
+		parentScopeID    sql.NullString
+		capabilitiesJSON string
+		storageRootsJSON string
+		networkPolicy    sql.NullString
+		wakeupMode       sql.NullString
+		outboundMode     sql.NullString
+		driftPolicy      sql.NullString
+		secretScopesJSON string
+		status           sql.NullString
+		createdAtRaw     string
+		updatedAtRaw     string
+	)
+	if err := scanner.Scan(
+		&agent.AgentID, &parentAgentID, &parentScopeKind, &parentScopeID, &agent.ReviewTargetChatID,
+		&agent.ChannelKind, &agent.Charter, &capabilitiesJSON, &storageRootsJSON, &networkPolicy,
+		&wakeupMode, &outboundMode, &driftPolicy, &secretScopesJSON, &status, &createdAtRaw, &updatedAtRaw,
+	); err != nil {
+		return core.DurableAgent{}, fmt.Errorf("scan durable agent: %w", err)
+	}
+	var err error
+	agent.ParentAgentID = nullToString(parentAgentID)
+	agent.ParentScopeKind = nullToString(parentScopeKind)
+	agent.ParentScopeID = nullToString(parentScopeID)
+	agent.NetworkPolicy = nullToString(networkPolicy)
+	agent.WakeupMode = nullToString(wakeupMode)
+	agent.OutboundMode = nullToString(outboundMode)
+	agent.DriftPolicy = nullToString(driftPolicy)
+	agent.Status = nullToString(status)
+	agent.CapabilityEnvelope, err = unmarshalStringSlice(capabilitiesJSON)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("decode durable agent capabilities: %w", err)
+	}
+	agent.LocalStorageRoots, err = unmarshalStringSlice(storageRootsJSON)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("decode durable agent storage roots: %w", err)
+	}
+	agent.SecretScopes, err = unmarshalStringSlice(secretScopesJSON)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("decode durable agent secret scopes: %w", err)
+	}
+	agent.CreatedAt, err = parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("parse durable agent created_at: %w", err)
+	}
+	agent.UpdatedAt, err = parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("parse durable agent updated_at: %w", err)
+	}
+	return agent, nil
+}
+
+func scanDurableAgentState(scanner interface{ Scan(dest ...any) error }) (core.DurableAgentState, error) {
+	var (
+		state           core.DurableAgentState
+		cursorRaw       sql.NullString
+		statusRaw       sql.NullString
+		stateJSONRaw    sql.NullString
+		lastWakeAtRaw   sql.NullString
+		lastReviewAtRaw sql.NullString
+		dormantAtRaw    sql.NullString
+		updatedAtRaw    string
+	)
+	if err := scanner.Scan(
+		&state.AgentID, &cursorRaw, &statusRaw, &stateJSONRaw, &lastWakeAtRaw, &lastReviewAtRaw, &dormantAtRaw, &updatedAtRaw,
+	); err != nil {
+		return core.DurableAgentState{}, fmt.Errorf("scan durable agent state: %w", err)
+	}
+	var err error
+	state.Cursor = nullToString(cursorRaw)
+	state.Status = nullToString(statusRaw)
+	state.StateJSON = nullToString(stateJSONRaw)
+	if lastWakeAtRaw.Valid && lastWakeAtRaw.String != "" {
+		state.LastWakeAt, err = parseSQLiteTime(lastWakeAtRaw.String)
+		if err != nil {
+			return core.DurableAgentState{}, fmt.Errorf("parse durable agent last_wake_at: %w", err)
+		}
+	}
+	if lastReviewAtRaw.Valid && lastReviewAtRaw.String != "" {
+		state.LastReviewAt, err = parseSQLiteTime(lastReviewAtRaw.String)
+		if err != nil {
+			return core.DurableAgentState{}, fmt.Errorf("parse durable agent last_review_at: %w", err)
+		}
+	}
+	if dormantAtRaw.Valid && dormantAtRaw.String != "" {
+		state.DormantAt, err = parseSQLiteTime(dormantAtRaw.String)
+		if err != nil {
+			return core.DurableAgentState{}, fmt.Errorf("parse durable agent dormant_at: %w", err)
+		}
+	}
+	state.UpdatedAt, err = parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return core.DurableAgentState{}, fmt.Errorf("parse durable agent updated_at: %w", err)
+	}
+	return state, nil
+}
+
 func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) {
 	var (
 		run                 TurnRun
+		scopeKindRaw        sql.NullString
+		scopeIDRaw          sql.NullString
+		durableAgentIDRaw   sql.NullString
 		kindRaw             string
 		statusRaw           string
 		startedAtRaw        string
@@ -1650,7 +2063,7 @@ func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) 
 	)
 
 	if err := scanner.Scan(
-		&run.ID, &run.ChatID, &run.UserID, &kindRaw, &statusRaw, &run.RequestText, &startedAtRaw, &completedAtRaw,
+		&run.ID, &run.ChatID, &run.UserID, &scopeKindRaw, &scopeIDRaw, &durableAgentIDRaw, &kindRaw, &statusRaw, &run.RequestText, &startedAtRaw, &completedAtRaw,
 		&lastActivityAtRaw, &lastToolNameRaw, &lastToolPreviewRaw, &run.ToolCallsStarted,
 		&progressMessageRaw, &errorTextRaw, &recoverySummaryRaw, &recoveryLoggedAtRaw,
 	); err != nil {
@@ -1658,6 +2071,11 @@ func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) 
 	}
 
 	var err error
+	run.Scope = NormalizeScopeRef(ScopeRef{
+		Kind:           ScopeKind(nullToString(scopeKindRaw)),
+		ID:             nullToString(scopeIDRaw),
+		DurableAgentID: nullToString(durableAgentIDRaw),
+	})
 	run.Kind = TurnRunKind(kindRaw)
 	run.Status = TurnRunStatus(statusRaw)
 	run.StartedAt, err = parseSQLiteTime(startedAtRaw)

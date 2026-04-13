@@ -52,7 +52,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		return fmt.Errorf("resolve recovery scope: %w", err)
 	}
 
-	maintenanceKey := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0}
+	maintenanceKey := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}
 	unlock := r.lockSession(maintenanceKey)
 	defer unlock()
 
@@ -60,6 +60,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err != nil {
 		return fmt.Errorf("load recovery maintenance session: %w", err)
 	}
+	applySessionScope(maintenanceSession, maintenanceKey)
 
 	promptContext, err := r.promptContextForScope(scope, now)
 	if err != nil {
@@ -208,13 +209,14 @@ func (r *Runtime) deliverStartupRecoveryCatchup(ctx context.Context, systemPromp
 	if err != nil {
 		return err
 	}
-	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0}
+	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0, Scope: telegramDMScopeRef(targetChatID)}
 	unlockAdmin := r.lockSession(adminKey)
 	defer unlockAdmin()
 	adminSession, err := r.store.Load(adminKey)
 	if err != nil {
 		return fmt.Errorf("load startup recovery target session: %w", err)
 	}
+	applySessionScope(adminSession, adminKey)
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
 	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, text, floorText, ""), core.TokenUsage{}); err != nil {

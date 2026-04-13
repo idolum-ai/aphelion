@@ -58,7 +58,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return fmt.Errorf("resolve heartbeat scope: %w", err)
 	}
 
-	maintenanceKey := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0}
+	maintenanceKey := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}
 	unlockMaintenance := r.lockSession(maintenanceKey)
 	defer unlockMaintenance()
 
@@ -66,6 +66,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	if err != nil {
 		return fmt.Errorf("load heartbeat session: %w", err)
 	}
+	applySessionScope(maintenanceSession, maintenanceKey)
 	lastMaintenanceAt := maintenanceSession.UpdatedAt
 	if maintenanceSession.TurnCount == 0 {
 		lastMaintenanceAt = time.Time{}
@@ -225,7 +226,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return fmt.Errorf("send heartbeat outbound: %w", err)
 	}
 
-	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0}
+	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0, Scope: telegramDMScopeRef(targetChatID)}
 	unlockAdmin := r.lockSession(adminKey)
 	defer unlockAdmin()
 
@@ -233,6 +234,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	if err != nil {
 		return fmt.Errorf("load admin target session: %w", err)
 	}
+	applySessionScope(adminSession, adminKey)
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
 	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText, floorMetadata), core.TokenUsage{}); err != nil {

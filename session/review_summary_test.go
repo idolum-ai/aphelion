@@ -34,6 +34,35 @@ func TestBuildReviewSummaryIncludesProvenance(t *testing.T) {
 	}
 }
 
+func TestBuildReviewSummaryIncludesScopeProvenanceWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	out := BuildReviewSummary(ReviewSummaryInput{
+		SourceChatID: 77,
+		SourceRole:   "durable_agent",
+		SourceScope: ScopeRef{
+			Kind:            ScopeKindDurableAgent,
+			ID:              "family-group",
+			DurableAgentID:  "family-group",
+			ParentScopeKind: ScopeKindTelegramDM,
+			ParentScopeID:   "1001",
+		},
+		TurnIndex: 2,
+		UserText:  "the group is pushing for a standing tone change",
+		SceneText: "surfacing for parent review",
+	}, 400)
+
+	if !strings.Contains(out, "scope=durable_agent:family-group") {
+		t.Fatalf("summary missing source scope: %q", out)
+	}
+	if !strings.Contains(out, "agent=family-group") {
+		t.Fatalf("summary missing durable agent id: %q", out)
+	}
+	if !strings.Contains(out, "parent=telegram_dm:1001") {
+		t.Fatalf("summary missing parent scope: %q", out)
+	}
+}
+
 func TestBuildReviewSummaryIsBounded(t *testing.T) {
 	t.Parallel()
 

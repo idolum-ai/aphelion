@@ -28,7 +28,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	stopTyping := r.startChatActionLoop(ctx, msg.ChatID, "typing")
 	defer stopTyping()
 
-	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
+	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramDMScopeRef(msg.ChatID)}
 	unlock := r.lockSession(key)
 	defer unlock()
 
@@ -37,6 +37,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if err != nil {
 		return nil, fmt.Errorf("load session: %w", err)
 	}
+	applySessionScope(sess, key)
 
 	scope, err := r.scopeForPrincipal(actor)
 	if err != nil {
@@ -401,6 +402,7 @@ func (r *Runtime) enqueueReviewEventsForTurn(
 		SourceChatID: msg.ChatID,
 		SourceUserID: msg.SenderID,
 		SourceRole:   string(actor.Role),
+		SourceScope:  telegramDMScopeRef(msg.ChatID),
 		TurnIndex:    turnIndex,
 		UserText:     userText,
 		SceneText:    sceneText,
@@ -412,7 +414,9 @@ func (r *Runtime) enqueueReviewEventsForTurn(
 			SourceChatID:      msg.ChatID,
 			SourceUserID:      msg.SenderID,
 			SourceRole:        string(actor.Role),
+			SourceScope:       telegramDMScopeRef(msg.ChatID),
 			TargetAdminChatID: adminChatID,
+			TargetScope:       telegramDMScopeRef(adminChatID),
 			TurnFrom:          turnIndex,
 			TurnTo:            turnIndex,
 			Summary:           summary,
@@ -476,13 +480,35 @@ func formatReviewEventMessage(event session.ReviewEvent) string {
 	}
 
 	return fmt.Sprintf(
-		"[Review Digest]\nsource_chat=%d source_user=%d source_role=%s turns=%s\n\n%s",
+		"[Review Digest]\nsource_chat=%d source_user=%d source_role=%s%s turns=%s\n\n%s",
 		event.SourceChatID,
 		event.SourceUserID,
 		event.SourceRole,
+		formatReviewScopeSuffix(event),
 		turnRange,
 		strings.TrimSpace(event.Summary),
 	)
+}
+
+func formatReviewScopeSuffix(event session.ReviewEvent) string {
+	scope := session.NormalizeScopeRef(event.SourceScope)
+	if scope.IsZero() {
+		return ""
+	}
+	parts := []string{" source_scope=" + scope.String()}
+	if scope.DurableAgentID != "" {
+		parts = append(parts, " source_agent="+scope.DurableAgentID)
+	}
+	if scope.ParentScopeKind != "" || scope.ParentScopeID != "" {
+		parent := session.NormalizeScopeRef(session.ScopeRef{
+			Kind: scope.ParentScopeKind,
+			ID:   scope.ParentScopeID,
+		})
+		if !parent.IsZero() {
+			parts = append(parts, " parent_scope="+parent.String())
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 func toolManifest(registry agent.ToolRegistry) string {

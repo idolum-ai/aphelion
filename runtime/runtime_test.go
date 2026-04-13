@@ -3108,11 +3108,20 @@ func TestHandleInboundGeneratesReviewEventForApprovedUser(t *testing.T) {
 	if event.SourceRole != "approved_user" {
 		t.Fatalf("source role = %q, want approved_user", event.SourceRole)
 	}
+	if event.SourceScope.Kind != session.ScopeKindTelegramDM || event.SourceScope.ID != "222" {
+		t.Fatalf("source scope = %#v, want telegram_dm 222", event.SourceScope)
+	}
+	if event.TargetScope.Kind != session.ScopeKindTelegramDM || event.TargetScope.ID != "1001" {
+		t.Fatalf("target scope = %#v, want telegram_dm 1001", event.TargetScope)
+	}
 	if event.TurnFrom != 1 || event.TurnTo != 1 {
 		t.Fatalf("turn range = %d-%d, want 1-1", event.TurnFrom, event.TurnTo)
 	}
 	if !strings.Contains(event.Summary, "provenance chat=222 user=1002 role=approved_user turn=1") {
 		t.Fatalf("summary missing provenance: %q", event.Summary)
+	}
+	if !strings.Contains(event.Summary, "scope=telegram_dm:222") {
+		t.Fatalf("summary missing source scope: %q", event.Summary)
 	}
 	if len([]rune(event.Summary)) > session.DefaultReviewSummaryMaxChars {
 		t.Fatalf("summary len = %d, want <= %d", len([]rune(event.Summary)), session.DefaultReviewSummaryMaxChars)

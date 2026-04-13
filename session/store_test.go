@@ -5,7 +5,9 @@ package session
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	_ "github.com/mattn/go-sqlite3"
@@ -154,6 +156,56 @@ func TestReviewEventsLimitAndMarkDelivered(t *testing.T) {
 	}
 	if remaining[0].Summary != "two" || remaining[1].Summary != "three" {
 		t.Fatalf("remaining summaries = [%q, %q], want [two, three]", remaining[0].Summary, remaining[1].Summary)
+	}
+}
+
+func TestReviewEventsPreserveScopeAndMetadata(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	event := ReviewEvent{
+		SourceChatID:      0,
+		SourceRole:        "durable_agent",
+		TargetAdminChatID: 9001,
+		SourceScope: ScopeRef{
+			Kind:            ScopeKindDurableAgent,
+			ID:              "family-group",
+			DurableAgentID:  "family-group",
+			ParentScopeKind: ScopeKindTelegramDM,
+			ParentScopeID:   "1001",
+		},
+		TargetScope: ScopeRef{
+			Kind: ScopeKindTelegramDM,
+			ID:   "9001",
+		},
+		Summary:      "bounded child synthesis",
+		MetadataJSON: `{"risk_flags":["tone drift"],"questions":["approve charter change?"]}`,
+	}
+	if err := store.EnqueueReviewEvent(event); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	pending, err := store.PendingReviewEvents(9001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending len = %d, want 1", len(pending))
+	}
+	got := pending[0]
+	if got.SourceScope.Kind != ScopeKindDurableAgent || got.SourceScope.ID != "family-group" {
+		t.Fatalf("source scope = %#v, want durable_agent family-group", got.SourceScope)
+	}
+	if got.SourceScope.DurableAgentID != "family-group" {
+		t.Fatalf("source durable agent id = %q, want family-group", got.SourceScope.DurableAgentID)
+	}
+	if got.TargetScope.Kind != ScopeKindTelegramDM || got.TargetScope.ID != "9001" {
+		t.Fatalf("target scope = %#v, want telegram_dm 9001", got.TargetScope)
+	}
+	if got.MetadataJSON != event.MetadataJSON {
+		t.Fatalf("MetadataJSON = %q, want %q", got.MetadataJSON, event.MetadataJSON)
 	}
 }
 
@@ -436,6 +488,125 @@ func TestSaveAndLoadFloorSidecar(t *testing.T) {
 	}
 }
 
+func TestSavePersistsSessionScopeMetadata(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{
+		ChatID: 5001,
+		Scope: ScopeRef{
+			Kind: ScopeKindHeartbeat,
+			ID:   "admin-house",
+		},
+	}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	sess.Scope = key.Scope
+	sess.TurnCount = 1
+	if err := store.Save(sess, []Message{{Role: "assistant", Content: "ok", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	got, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(reloaded) err = %v", err)
+	}
+	if got.Scope.Kind != ScopeKindHeartbeat || got.Scope.ID != "admin-house" {
+		t.Fatalf("Scope = %#v, want heartbeat admin-house", got.Scope)
+	}
+}
+
+func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentAgentID:      "house",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		Charter:            "help the family group without mutating the house",
+		CapabilityEnvelope: []string{"read_channel", "draft_reply", "synthesize_review"},
+		LocalStorageRoots:  []string{"/tmp/family-group"},
+		NetworkPolicy:      "restricted",
+		WakeupMode:         "event",
+		OutboundMode:       "draft_only",
+		DriftPolicy:        "admin_ratified",
+		SecretScopes:       []string{"telegram_bot"},
+		Status:             "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	got, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if got.AgentID != agent.AgentID || got.ChannelKind != agent.ChannelKind {
+		t.Fatalf("DurableAgent() = %#v, want agent %q kind %q", got, agent.AgentID, agent.ChannelKind)
+	}
+	if len(got.CapabilityEnvelope) != 3 || got.CapabilityEnvelope[2] != "synthesize_review" {
+		t.Fatalf("CapabilityEnvelope = %#v, want preserved capabilities", got.CapabilityEnvelope)
+	}
+	if len(got.SecretScopes) != 1 || got.SecretScopes[0] != "telegram_bot" {
+		t.Fatalf("SecretScopes = %#v, want telegram_bot", got.SecretScopes)
+	}
+	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
+		t.Fatalf("timestamps = created:%v updated:%v, want populated", got.CreatedAt, got.UpdatedAt)
+	}
+
+	listed, err := store.ListDurableAgents()
+	if err != nil {
+		t.Fatalf("ListDurableAgents() err = %v", err)
+	}
+	if len(listed) != 1 || listed[0].AgentID != agent.AgentID {
+		t.Fatalf("ListDurableAgents() = %#v, want single family-group agent", listed)
+	}
+
+	state := core.DurableAgentState{
+		AgentID:      agent.AgentID,
+		Cursor:       "msg-42",
+		Status:       "dormant",
+		StateJSON:    `{"last_sender":"alice"}`,
+		LastWakeAt:   time.Now().UTC().Add(-5 * time.Minute).Round(0),
+		LastReviewAt: time.Now().UTC().Round(0),
+	}
+	if err := store.SaveDurableAgentState(state); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	gotState, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if gotState.Cursor != state.Cursor || gotState.Status != state.Status {
+		t.Fatalf("DurableAgentState() = %#v, want cursor/status preserved", gotState)
+	}
+	if gotState.StateJSON != state.StateJSON {
+		t.Fatalf("StateJSON = %q, want %q", gotState.StateJSON, state.StateJSON)
+	}
+
+	if err := store.DeleteDurableAgent(agent.AgentID); err != nil {
+		t.Fatalf("DeleteDurableAgent() err = %v", err)
+	}
+	if _, err := store.DurableAgent(agent.AgentID); err == nil || !strings.Contains(err.Error(), "no rows") {
+		t.Fatalf("DurableAgent() after delete err = %v, want no rows", err)
+	}
+	if _, err := store.DurableAgentState(agent.AgentID); err == nil || !strings.Contains(err.Error(), "no rows") {
+		t.Fatalf("DurableAgentState() after delete err = %v, want no rows", err)
+	}
+}
+
 func TestInitMigratesLegacySessionsWithFloorColumn(t *testing.T) {
 	t.Parallel()
 
@@ -658,7 +829,7 @@ func TestCompleteTurnRun(t *testing.T) {
 
 	rows, err := store.db.Query(`
 		SELECT
-			id, chat_id, user_id, kind, status, request_text, started_at, completed_at,
+			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs

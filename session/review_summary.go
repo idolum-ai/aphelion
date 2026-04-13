@@ -13,6 +13,7 @@ type ReviewSummaryInput struct {
 	SourceChatID int64
 	SourceUserID int64
 	SourceRole   string
+	SourceScope  ScopeRef
 	TurnIndex    int
 	UserText     string
 	SceneText    string
@@ -36,6 +37,21 @@ func BuildReviewSummary(in ReviewSummaryInput, maxChars int) string {
 		role,
 		in.TurnIndex,
 	)
+	if scope := NormalizeScopeRef(in.SourceScope); !scope.IsZero() {
+		provenance += " scope=" + scope.String()
+		if scope.DurableAgentID != "" {
+			provenance += " agent=" + scope.DurableAgentID
+		}
+		if scope.ParentScopeKind != "" || scope.ParentScopeID != "" {
+			parent := NormalizeScopeRef(ScopeRef{
+				Kind: scope.ParentScopeKind,
+				ID:   scope.ParentScopeID,
+			})
+			if !parent.IsZero() {
+				provenance += " parent=" + parent.String()
+			}
+		}
+	}
 
 	userText := clampChars(normalizeWhitespace(in.UserText), maxChars/3)
 	if userText == "" {

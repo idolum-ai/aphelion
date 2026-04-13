@@ -46,7 +46,7 @@ func (r *Runtime) StartCronLoop(ctx context.Context, logger func(string, ...any)
 }
 
 func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) (err error) {
-	key := session.SessionKey{ChatID: cronSessionChatID(job.ID), UserID: 0}
+	key := session.SessionKey{ChatID: cronSessionChatID(job.ID), UserID: 0, Scope: cronScopeRef(job.ID)}
 	unlockCron := r.lockSession(key)
 	defer unlockCron()
 
@@ -54,6 +54,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	if err != nil {
 		return fmt.Errorf("load cron session: %w", err)
 	}
+	applySessionScope(cronSession, key)
 
 	scope, err := r.scopeForPrincipal(principal.Principal{Role: principal.RoleAdmin})
 	if err != nil {
@@ -156,7 +157,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		return fmt.Errorf("send cron outbound: %w", err)
 	}
 
-	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0}
+	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0, Scope: telegramDMScopeRef(targetChatID)}
 	unlockAdmin := r.lockSession(adminKey)
 	defer unlockAdmin()
 
@@ -164,6 +165,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	if err != nil {
 		return fmt.Errorf("load cron target session: %w", err)
 	}
+	applySessionScope(adminSession, adminKey)
 	adminSession.ChatType = "dm"
 	adminSession.SystemPrompt = systemPrompt
 	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText, ""), core.TokenUsage{}); err != nil {

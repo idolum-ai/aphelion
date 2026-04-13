@@ -22,16 +22,37 @@ const (
 	TurnRunStatusInterrupted TurnRunStatus = "interrupted"
 )
 
+type ScopeKind string
+
+const (
+	ScopeKindTelegramDM    ScopeKind = "telegram_dm"
+	ScopeKindTelegramGroup ScopeKind = "telegram_group"
+	ScopeKindHeartbeat     ScopeKind = "heartbeat"
+	ScopeKindCron          ScopeKind = "cron"
+	ScopeKindRecovery      ScopeKind = "recovery"
+	ScopeKindDurableAgent  ScopeKind = "durable_agent"
+)
+
+type ScopeRef struct {
+	Kind            ScopeKind
+	ID              string
+	DurableAgentID  string
+	ParentScopeKind ScopeKind
+	ParentScopeID   string
+}
+
 // SessionKey identifies a unique session.
 type SessionKey struct {
 	ChatID int64
 	UserID int64 // 0 for shared group sessions or DMs
+	Scope  ScopeRef
 }
 
 // Session stores conversation state, cache metadata, and accounting.
 type Session struct {
 	ChatID       int64
 	UserID       int64 // 0 for shared group sessions
+	Scope        ScopeRef
 	Messages     []Message
 	SystemPrompt string
 	// LastFloorText stores the governor-owned floor text sidecar for audit.
@@ -94,10 +115,13 @@ type ReviewEvent struct {
 	SourceChatID      int64
 	SourceUserID      int64
 	SourceRole        string
+	SourceScope       ScopeRef
 	TargetAdminChatID int64
+	TargetScope       ScopeRef
 	TurnFrom          int
 	TurnTo            int
 	Summary           string
+	MetadataJSON      string
 	Status            string // "pending" | "delivered" | "dismissed"
 	CreatedAt         time.Time
 	DeliveredAt       time.Time
@@ -108,6 +132,7 @@ type TurnRun struct {
 	ID                int64
 	ChatID            int64
 	UserID            int64
+	Scope             ScopeRef
 	Kind              TurnRunKind
 	Status            TurnRunStatus
 	RequestText       string

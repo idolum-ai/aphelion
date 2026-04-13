@@ -195,3 +195,37 @@ func appendSyntheticTurn(sess *session.Session, requestText string, replyText st
 		},
 	}
 }
+
+func telegramDMScopeRef(chatID int64) session.ScopeRef {
+	if chatID == 0 {
+		return session.ScopeRef{}
+	}
+	return session.ScopeRef{
+		Kind: session.ScopeKindTelegramDM,
+		ID:   strconv.FormatInt(chatID, 10),
+	}
+}
+
+func heartbeatScopeRef() session.ScopeRef {
+	return session.ScopeRef{
+		Kind: session.ScopeKindHeartbeat,
+		ID:   "admin-house",
+	}
+}
+
+func cronScopeRef(id string) session.ScopeRef {
+	id = strings.TrimSpace(id)
+	return session.ScopeRef{
+		Kind: session.ScopeKindCron,
+		ID:   id,
+	}
+}
+
+func applySessionScope(sess *session.Session, key session.SessionKey) {
+	if sess == nil {
+		return
+	}
+	if !key.Scope.IsZero() {
+		sess.Scope = session.NormalizeScopeRef(key.Scope)
+	}
+}
