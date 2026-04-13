@@ -150,6 +150,8 @@ workspace = "./workspace"
 enabled = true
 listen = "127.0.0.1:8787"
 base_path = "/control"
+cert_file = "/tmp/cert.pem"
+key_file = "/tmp/key.pem"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -167,6 +169,12 @@ base_path = "/control"
 	}
 	if cfg.DurableAgents.ControlPlane.BasePath != "/control" {
 		t.Fatalf("durable_agents.control_plane.base_path = %q, want /control", cfg.DurableAgents.ControlPlane.BasePath)
+	}
+	if cfg.DurableAgents.ControlPlane.CertFile != "/tmp/cert.pem" {
+		t.Fatalf("durable_agents.control_plane.cert_file = %q, want /tmp/cert.pem", cfg.DurableAgents.ControlPlane.CertFile)
+	}
+	if cfg.DurableAgents.ControlPlane.KeyFile != "/tmp/key.pem" {
+		t.Fatalf("durable_agents.control_plane.key_file = %q, want /tmp/key.pem", cfg.DurableAgents.ControlPlane.KeyFile)
 	}
 }
 
@@ -201,6 +209,42 @@ enabled = true
 	}
 	if !strings.Contains(err.Error(), "durable_agents.control_plane.listen is required") {
 		t.Fatalf("Load() err = %v, want durable_agents.control_plane.listen validation", err)
+	}
+}
+
+func TestLoadRejectsPartialDurableAgentControlPlaneTLSConfig(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+workspace = "./workspace"
+
+[durable_agents.control_plane]
+enabled = true
+listen = "127.0.0.1:8787"
+cert_file = "/tmp/cert.pem"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want durable agent control plane tls validation error")
+	}
+	if !strings.Contains(err.Error(), "durable_agents.control_plane.cert_file and key_file must be set together") {
+		t.Fatalf("Load() err = %v, want cert/key pair validation", err)
 	}
 }
 

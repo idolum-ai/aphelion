@@ -267,6 +267,8 @@ type DurableAgentControlPlaneConfig struct {
 	Enabled  bool   `toml:"enabled"`
 	Listen   string `toml:"listen"`
 	BasePath string `toml:"base_path"`
+	CertFile string `toml:"cert_file"`
+	KeyFile  string `toml:"key_file"`
 }
 
 func (a AgentConfig) EffectivePromptRoot() string {
@@ -839,6 +841,9 @@ func validate(cfg *Config) error {
 	}
 	if strings.TrimSpace(cfg.DurableAgents.ControlPlane.BasePath) != "" && !strings.HasPrefix(strings.TrimSpace(cfg.DurableAgents.ControlPlane.BasePath), "/") {
 		return fmt.Errorf("durable_agents.control_plane.base_path must start with / when set")
+	}
+	if (strings.TrimSpace(cfg.DurableAgents.ControlPlane.CertFile) == "") != (strings.TrimSpace(cfg.DurableAgents.ControlPlane.KeyFile) == "") {
+		return fmt.Errorf("durable_agents.control_plane.cert_file and key_file must be set together")
 	}
 
 	admin := make(map[int64]struct{}, len(cfg.Principals.Telegram.AdminUserIDs))
