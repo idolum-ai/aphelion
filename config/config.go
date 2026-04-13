@@ -14,20 +14,21 @@ import (
 )
 
 type Config struct {
-	Identity   IdentityConfig   `toml:"identity"`
-	Telegram   TelegramConfig   `toml:"telegram"`
-	Principals PrincipalsConfig `toml:"principals"`
-	Governor   GovernorConfig   `toml:"governor"`
-	Providers  ProvidersConfig  `toml:"providers"`
-	OpenAI     OpenAIConfig     `toml:"openai"`
-	Sessions   SessionsConfig   `toml:"sessions"`
-	Agent      AgentConfig      `toml:"agent"`
-	Memory     MemoryConfig     `toml:"memory"`
-	Thinking   ThinkingConfig   `toml:"thinking"`
-	Face       FaceConfig       `toml:"face"`
-	Heartbeat  HeartbeatConfig  `toml:"heartbeat"`
-	Cron       CronConfig       `toml:"cron"`
-	Voice      VoiceConfig      `toml:"voice"`
+	Identity      IdentityConfig      `toml:"identity"`
+	Telegram      TelegramConfig      `toml:"telegram"`
+	Principals    PrincipalsConfig    `toml:"principals"`
+	Governor      GovernorConfig      `toml:"governor"`
+	Providers     ProvidersConfig     `toml:"providers"`
+	OpenAI        OpenAIConfig        `toml:"openai"`
+	Sessions      SessionsConfig      `toml:"sessions"`
+	Agent         AgentConfig         `toml:"agent"`
+	Memory        MemoryConfig        `toml:"memory"`
+	Thinking      ThinkingConfig      `toml:"thinking"`
+	Face          FaceConfig          `toml:"face"`
+	Heartbeat     HeartbeatConfig     `toml:"heartbeat"`
+	Cron          CronConfig          `toml:"cron"`
+	Voice         VoiceConfig         `toml:"voice"`
+	DurableAgents DurableAgentsConfig `toml:"durable_agents"`
 }
 
 type IdentityConfig struct {
@@ -258,6 +259,15 @@ type VoiceConfig struct {
 	ElevenLabsModelID string `toml:"elevenlabs_model_id"`
 }
 
+type DurableAgentsConfig struct {
+	ControlPlane DurableAgentControlPlaneConfig `toml:"control_plane"`
+}
+
+type DurableAgentControlPlaneConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Listen  string `toml:"listen"`
+}
+
 func (a AgentConfig) EffectivePromptRoot() string {
 	return firstNonEmpty(strings.TrimSpace(a.PromptRoot), strings.TrimSpace(a.Workspace))
 }
@@ -420,6 +430,7 @@ func Default() Config {
 			OpenAIModel:       "whisper-1",
 			ElevenLabsModelID: "eleven_multilingual_v2",
 		},
+		DurableAgents: DurableAgentsConfig{},
 	}
 }
 
@@ -821,6 +832,9 @@ func validate(cfg *Config) error {
 	}
 	if len(cfg.Principals.Telegram.AdminUserIDs) == 0 {
 		return fmt.Errorf("principals.telegram.admin_user_ids must contain at least one user id; add [principals.telegram] admin_user_ids = [123456789]")
+	}
+	if cfg.DurableAgents.ControlPlane.Enabled && strings.TrimSpace(cfg.DurableAgents.ControlPlane.Listen) == "" {
+		return fmt.Errorf("durable_agents.control_plane.listen is required when durable_agents.control_plane.enabled = true")
 	}
 
 	admin := make(map[int64]struct{}, len(cfg.Principals.Telegram.AdminUserIDs))

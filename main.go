@@ -230,6 +230,9 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if err := startDurableAgentControlPlane(ctx, durableAgentControlPlaneServer(cfg, store)); err != nil {
+		return err
+	}
 	rt.StartStartupRecovery(ctx, log.Printf)
 	rt.StartIdleExpiryLoop(ctx, log.Printf)
 	rt.StartHeartbeatLoop(ctx, log.Printf)

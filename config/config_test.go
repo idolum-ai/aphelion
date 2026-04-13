@@ -123,6 +123,81 @@ workspace = "./workspace"
 	if cfg.Voice.Mode != "off" {
 		t.Fatalf("voice.mode = %q, want off", cfg.Voice.Mode)
 	}
+	if cfg.DurableAgents.ControlPlane.Enabled {
+		t.Fatalf("durable_agents.control_plane.enabled = true, want false by default")
+	}
+}
+
+func TestLoadParsesDurableAgentControlPlane(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+workspace = "./workspace"
+
+[durable_agents.control_plane]
+enabled = true
+listen = "127.0.0.1:8787"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if !cfg.DurableAgents.ControlPlane.Enabled {
+		t.Fatal("durable_agents.control_plane.enabled = false, want true")
+	}
+	if cfg.DurableAgents.ControlPlane.Listen != "127.0.0.1:8787" {
+		t.Fatalf("durable_agents.control_plane.listen = %q, want 127.0.0.1:8787", cfg.DurableAgents.ControlPlane.Listen)
+	}
+}
+
+func TestLoadRejectsEnabledDurableAgentControlPlaneWithoutListen(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+workspace = "./workspace"
+
+[durable_agents.control_plane]
+enabled = true
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want durable agent control plane listen validation error")
+	}
+	if !strings.Contains(err.Error(), "durable_agents.control_plane.listen is required") {
+		t.Fatalf("Load() err = %v, want durable_agents.control_plane.listen validation", err)
+	}
 }
 
 func TestLoadParsesMultilineArrays(t *testing.T) {
