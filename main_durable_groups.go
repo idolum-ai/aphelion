@@ -3,9 +3,12 @@
 package main
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
@@ -18,6 +21,10 @@ func syncConfiguredTelegramDurableGroups(cfg *config.Config, store *session.SQLi
 		return nil
 	}
 	for _, group := range cfg.Telegram.DurableGroups {
+		existing, err := store.DurableAgent(strings.TrimSpace(group.AgentID))
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("load durable telegram group %s: %w", group.AgentID, err)
+		}
 		reviewTarget := group.ReviewTargetChatID
 		if reviewTarget == 0 && len(cfg.Principals.Telegram.AdminUserIDs) > 0 {
 			reviewTarget = cfg.Principals.Telegram.AdminUserIDs[0]
@@ -28,19 +35,29 @@ func syncConfiguredTelegramDurableGroups(cfg *config.Config, store *session.SQLi
 				return fmt.Errorf("create durable group root %s: %w", root, err)
 			}
 		}
+		livePolicy := core.DefaultTelegramGroupLivePolicy(strings.TrimSpace(group.Charter))
+		policyVersion := int64(1)
+		policyHash := ""
+		policyIssuedAt := time.Time{}
+		if existing != nil {
+			livePolicy = existing.LivePolicy
+			policyVersion = existing.PolicyVersion
+			policyHash = existing.PolicyHash
+			policyIssuedAt = existing.PolicyIssuedAt
+		}
 		if err := store.UpsertDurableAgent(core.DurableAgent{
 			AgentID:            strings.TrimSpace(group.AgentID),
 			ParentScopeKind:    string(session.ScopeKindHeartbeat),
 			ParentScopeID:      "admin-house",
 			ReviewTargetChatID: reviewTarget,
 			ChannelKind:        "telegram_group",
-			Charter:            strings.TrimSpace(group.Charter),
-			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			LivePolicy:         livePolicy,
+			PolicyVersion:      policyVersion,
+			PolicyHash:         policyHash,
+			PolicyIssuedAt:     policyIssuedAt,
 			LocalStorageRoots:  []string{workspaceRoot, memoryRoot},
 			NetworkPolicy:      "default",
 			WakeupMode:         "telegram_update",
-			OutboundMode:       "reply_within_charter",
-			DriftPolicy:        "admin_review",
 			Status:             "active",
 		}); err != nil {
 			return fmt.Errorf("upsert durable telegram group %s: %w", group.AgentID, err)

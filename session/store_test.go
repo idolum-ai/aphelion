@@ -534,15 +534,18 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "telegram_group",
-		Charter:            "help the family group without mutating the house",
-		CapabilityEnvelope: []string{"read_channel", "draft_reply", "synthesize_review"},
-		LocalStorageRoots:  []string{"/tmp/family-group"},
-		NetworkPolicy:      "restricted",
-		WakeupMode:         "event",
-		OutboundMode:       "draft_only",
-		DriftPolicy:        "admin_ratified",
-		SecretScopes:       []string{"telegram_bot"},
-		Status:             "active",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "help the family group without mutating the house",
+			CapabilityEnvelope: []string{"read_channel", "draft_reply", "synthesize_review"},
+			OutboundMode:       "draft_only",
+			DriftPolicy:        "admin_ratified",
+			PublicSurfaceMode:  "explicit_parent_relay_only",
+		},
+		LocalStorageRoots: []string{"/tmp/family-group"},
+		NetworkPolicy:     "restricted",
+		WakeupMode:        "event",
+		SecretScopes:      []string{"telegram_bot"},
+		Status:            "active",
 	}
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
@@ -555,14 +558,45 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	if got.AgentID != agent.AgentID || got.ChannelKind != agent.ChannelKind {
 		t.Fatalf("DurableAgent() = %#v, want agent %q kind %q", got, agent.AgentID, agent.ChannelKind)
 	}
-	if len(got.CapabilityEnvelope) != 3 || got.CapabilityEnvelope[2] != "synthesize_review" {
-		t.Fatalf("CapabilityEnvelope = %#v, want preserved capabilities", got.CapabilityEnvelope)
+	if len(got.LivePolicy.CapabilityEnvelope) != 3 || got.LivePolicy.CapabilityEnvelope[2] != "synthesize_review" {
+		t.Fatalf("CapabilityEnvelope = %#v, want preserved capabilities", got.LivePolicy.CapabilityEnvelope)
 	}
 	if len(got.SecretScopes) != 1 || got.SecretScopes[0] != "telegram_bot" {
 		t.Fatalf("SecretScopes = %#v, want telegram_bot", got.SecretScopes)
 	}
+	if got.LivePolicy.OutboundMode != "draft_only" {
+		t.Fatalf("OutboundMode = %q, want draft_only", got.LivePolicy.OutboundMode)
+	}
+	if got.PolicyVersion != 1 {
+		t.Fatalf("PolicyVersion = %d, want 1", got.PolicyVersion)
+	}
+	if got.PolicyHash == "" {
+		t.Fatal("PolicyHash is empty, want derived policy hash")
+	}
 	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
 		t.Fatalf("timestamps = created:%v updated:%v, want populated", got.CreatedAt, got.UpdatedAt)
+	}
+
+	if err := store.SetDurableAgentLivePolicy(agent.AgentID, core.DurableAgentLivePolicy{
+		Charter:            "ratified updated charter",
+		CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+		OutboundMode:       "read_only",
+		DriftPolicy:        "admin_review",
+	}); err != nil {
+		t.Fatalf("SetDurableAgentLivePolicy() err = %v", err)
+	}
+	updated, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent(updated) err = %v", err)
+	}
+	if updated.LivePolicy.Charter != "ratified updated charter" {
+		t.Fatalf("updated charter = %q, want ratified updated charter", updated.LivePolicy.Charter)
+	}
+	if updated.PolicyVersion != 2 {
+		t.Fatalf("updated PolicyVersion = %d, want 2", updated.PolicyVersion)
+	}
+	if updated.PolicyHash == got.PolicyHash {
+		t.Fatal("updated PolicyHash did not change after live policy update")
 	}
 
 	listed, err := store.ListDurableAgents()
@@ -706,6 +740,93 @@ func TestInitMigratesLegacySessionsWithFloorColumn(t *testing.T) {
 	}
 	if maxVersion != schemaVersion {
 		t.Fatalf("schema version max = %d, want %d", maxVersion, schemaVersion)
+	}
+}
+
+func TestInitMigratesLegacyDurableAgentsToLivePolicy(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "legacy-durable.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	legacyDDL := []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (10)`,
+		`CREATE TABLE durable_agents (
+			agent_id TEXT PRIMARY KEY,
+			parent_agent_id TEXT,
+			parent_scope_kind TEXT,
+			parent_scope_id TEXT,
+			review_target_chat_id INTEGER NOT NULL DEFAULT 0,
+			channel_kind TEXT NOT NULL,
+			charter TEXT NOT NULL DEFAULT '',
+			capability_envelope_json TEXT NOT NULL DEFAULT '[]',
+			local_storage_roots_json TEXT NOT NULL DEFAULT '[]',
+			network_policy TEXT,
+			wakeup_mode TEXT,
+			outbound_mode TEXT,
+			drift_policy TEXT,
+			secret_scopes_json TEXT NOT NULL DEFAULT '[]',
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE durable_agent_state (
+			agent_id TEXT PRIMARY KEY,
+			cursor TEXT,
+			status TEXT,
+			state_json TEXT,
+			last_wake_at TEXT,
+			last_review_at TEXT,
+			dormant_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO durable_agents(
+			agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id, channel_kind, charter,
+			capability_envelope_json, local_storage_roots_json, wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status,
+			created_at, updated_at
+		) VALUES (
+			'family-group', 'heartbeat', 'admin-house', 1001, 'telegram_group', 'legacy charter',
+			'["group_reply","bounded_review_artifact"]', '["/tmp/family-group"]', 'telegram_update', 'reply_within_charter', 'admin_review', '["telegram_bot"]', 'active',
+			'2026-04-12T00:00:00Z', '2026-04-12T00:10:00Z'
+		)`,
+	}
+	for _, stmt := range legacyDDL {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("exec legacy durable stmt %q: %v", stmt, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	got, err := store.DurableAgent("family-group")
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if got.LivePolicy.Charter != "legacy charter" {
+		t.Fatalf("LivePolicy.Charter = %q, want legacy charter", got.LivePolicy.Charter)
+	}
+	if got.LivePolicy.OutboundMode != "reply_with_policy_authorization" {
+		t.Fatalf("LivePolicy.OutboundMode = %q, want migrated reply_with_policy_authorization", got.LivePolicy.OutboundMode)
+	}
+	if got.PolicyVersion != 1 {
+		t.Fatalf("PolicyVersion = %d, want 1", got.PolicyVersion)
+	}
+	if got.PolicyHash == "" {
+		t.Fatal("PolicyHash is empty after migration")
 	}
 }
 

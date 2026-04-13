@@ -130,6 +130,18 @@ type ReviewEvent struct {
 	DeliveredAt       time.Time
 }
 
+type DurableAgentPolicyUpdate struct {
+	ID                  int64
+	AgentID             string
+	SourceReviewEventID int64
+	PreviousVersion     int64
+	NewVersion          int64
+	PolicyHash          string
+	PolicyJSON          string
+	Reason              string
+	AppliedAt           time.Time
+}
+
 // TurnRun stores machine-authored facts about a turn lifecycle for recovery.
 type TurnRun struct {
 	ID                int64

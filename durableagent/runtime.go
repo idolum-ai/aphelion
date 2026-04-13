@@ -44,6 +44,10 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 	}
 
 	artifact.AgentID = firstNonEmpty(strings.TrimSpace(artifact.AgentID), agent.AgentID)
+	artifact, err := PrepareReviewArtifact(agent, artifact)
+	if err != nil {
+		return fmt.Errorf("prepare durable review artifact: %w", err)
+	}
 	summary := buildReviewSummary(agent, artifact, defaultReviewSummaryMaxChars)
 	metadataJSON, err := marshalArtifactMetadata(artifact)
 	if err != nil {

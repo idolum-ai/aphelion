@@ -2622,8 +2622,12 @@ func TestHandleInboundHandlesDurableTelegramGroup(t *testing.T) {
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "telegram_group",
-		Charter:            "Help locally in the family group without changing standing role or authority.",
-		Status:             "active",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Help locally in the family group without changing standing role or authority.",
+			OutboundMode: "reply_with_policy_authorization",
+			DriftPolicy:  "admin_review",
+		},
+		Status: "active",
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
@@ -2697,8 +2701,12 @@ func TestHandleInboundDurableTelegramGroupQueuesReviewOnDriftPressure(t *testing
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "telegram_group",
-		Charter:            "Help locally in the family group without changing standing role or authority.",
-		Status:             "active",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Help locally in the family group without changing standing role or authority.",
+			OutboundMode: "reply_with_policy_authorization",
+			DriftPolicy:  "admin_review",
+		},
+		Status: "active",
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
@@ -2735,8 +2743,60 @@ func TestHandleInboundDurableTelegramGroupQueuesReviewOnDriftPressure(t *testing
 	if !strings.Contains(events[0].Summary, "durable_agent=family-group") {
 		t.Fatalf("summary = %q, want durable agent provenance", events[0].Summary)
 	}
+	if strings.Contains(events[0].MetadataJSON, "password") {
+		t.Fatalf("metadata leaked secret-bearing excerpt: %q", events[0].MetadataJSON)
+	}
+	if !strings.Contains(events[0].MetadataJSON, "forensic://durable-agent/family-group/") {
+		t.Fatalf("metadata = %q, want forensic ref", events[0].MetadataJSON)
+	}
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent messages = %d, want 1 local reply", len(sender.sent))
+	}
+}
+
+func TestHandleInboundDurableTelegramGroupReadOnlyPolicySkipsLocalReply(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I drafted something locally but should stay silent."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Observe the family group and escalate only when necessary.",
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+		},
+		Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         -100200,
+		ChatType:       "group",
+		ChatTitle:      "Family",
+		SenderID:       555,
+		SenderName:     "alice",
+		Text:           "hello there",
+		MessageID:      7,
+		DurableAgentID: "family-group",
+		Timestamp:      time.Now(),
+		Raw:            json.RawMessage(`{"source":"telegram-group"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent messages = %d, want 0 for read_only policy", len(sender.sent))
 	}
 }
 

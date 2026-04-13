@@ -304,9 +304,129 @@ Full durable-agent transcripts should remain inspectable sidecar state, not ordi
 The parent may inspect them explicitly when needed.
 They should not be the default upward path.
 
+## Memory Model
+
+Durable-agent memory should not be treated as one undifferentiated store.
+
+At minimum, the system should distinguish between:
+
+- **policy memory** — charter, capability envelope, outbound mode, drift policy
+- **continuity memory** — the local and parent-reviewed state that gives the child continuity over time
+- **inference memory** — transient runtime state such as prefix caches, KV caches, or other reusable prefill artifacts
+
+These classes serve different purposes and must not collapse into one promotion path.
+
+### Policy memory
+
+Policy memory defines what the child is allowed to do.
+
+It includes:
+
+- charter
+- capability envelope
+- outbound mode
+- drift policy
+- ratified standing constraints
+
+Policy memory flows downward after admin-ratified change.
+It must not be learned durably from external interaction alone.
+
+### Continuity memory
+
+Continuity memory defines what the child carries forward as local reality across wakeups.
+
+It may include:
+
+- recent channel context
+- local summaries
+- cursors and pending work
+- source-specific observations
+- bounded local preferences that are explicitly allowed within the charter
+- references to parent review artifacts
+- distilled outcomes from parent review
+- memory candidates
+
+Continuity memory is the main surface where external contact can become durable local continuity.
+It therefore requires quarantine, bounded retention, and selective upward-promotion discipline.
+It is not the same as policy memory, and it should not be governed as if it were a downward-only policy layer.
+
+### Inference memory
+
+Inference memory is transient runtime optimization state, not durable memory.
+
+Examples include:
+
+- reusable shared prefixes
+- KV cache or other attention-state reuse
+- embedding or prefill cache reuse across compatible runs
+
+Inference memory should be treated as:
+
+- transient
+- runtime-owned
+- architecture-conditional
+- optimization-oriented rather than identity-bearing
+
+Inference memory must not be treated as durable semantic truth, policy, or ordinary memory promotion material.
+
+### Inference-state reuse across children
+
+When multiple children process the same public prefix, the runtime may eventually support inference-state reuse across compatible models for performance.
+
+This is a systems optimization, not a constitutional memory-sharing path.
+
+It should only be considered when:
+
+- the model family or architecture is compatible
+- the serving layer actually exposes such reuse control
+- the reused prefix belongs to a surface that is allowed to be shared
+
+This does **not** imply that one child's private state becomes another child's memory.
+
+### Public-prefix vs private-state rule
+
+The clean rule is:
+
+- shared public context may be eligible for shared inference-state reuse
+- child-private state is not
+
+Examples:
+
+- a public poker table transcript may be a shared runtime prefix
+- a player's hole cards are not
+- a player's private tactical report is not
+- hidden beliefs about other players are not
+
+Parent-mediated relay still defines what becomes public context.
+The optimization layer must follow that boundary, not widen it.
+
+### Remote or API limitations
+
+Inference-state reuse is not a universal assumption.
+
+It may be unavailable when:
+
+- children use unrelated model families
+- the serving provider does not expose runtime cache control
+- the child runs over a generic hosted API surface where KV or prefix reuse is opaque
+
+For example, OpenRouter-style API routing may support child model selection without exposing the low-level inference-state controls needed for cross-child cache reuse.
+
+That means inference memory should be specified as an optional runtime optimization layer, not as a required part of durable-agent semantics.
+
 ## Memory Zones
 
 The system should treat durable-agent state as three zones.
+
+The memory layers above and the zones below are orthogonal, not competing classifications.
+
+The intended mapping is:
+
+- bootstrap policy ceilings live locally on the child host
+- parent-authored live policy normally lives in admin-ratified durable memory and is then applied downward within the local ceiling
+- continuity memory normally lives in child-local working memory, with bounded references to parent review artifacts
+- parent review artifacts remain their own zone and should not be absorbed wholesale into continuity memory by default
+- inference memory remains a runtime-owned optimization layer outside the durable memory zones
 
 ### 1. Child-local working memory
 
@@ -317,19 +437,41 @@ This may include:
 - local summaries
 - pending actions
 - source-specific metadata
+- cursors and other operational continuity state
 
 This state is not automatically trusted by the parent.
+It belongs primarily to the continuity-memory layer, not to shared house memory.
 
 ### 2. Parent review artifact
 
 The synthesized upward artifact the parent sees first.
 This is the normal review surface between child and parent.
+Child-local continuity may keep references, distilled outcomes, or pending-status pointers to these artifacts, but the artifacts themselves should remain separate bounded objects for audit, retention, and deletion discipline.
 
 ### 3. Admin-ratified durable memory
 
 Only after parent review and admin ratification should information be promoted into broader parent memory, policy, or retrieval surfaces.
 
 This keeps the external world from writing directly into the center of the house.
+
+### Forgetting and retention ceilings
+
+Durable-agent memory must support forgetting as a first-class behavior.
+
+If every child keeps everything indefinitely, the architecture becomes porous, expensive, and vulnerable to accidental drift.
+
+At minimum, child-local continuity memory should support:
+
+- bounded windows
+- retention ceilings
+- decay or compaction
+- explicit local deletion policies
+
+Promotion upward should remain selective and asymmetric:
+
+- easy to keep local for a while
+- harder to promote upward durably
+- possible to forget locally without affecting parent memory
 
 ## Wakeup and Heartbeat Model
 
@@ -540,6 +682,234 @@ Minimum conceptual requirements:
 The remote child should not be treated as trusted merely because it is "ours".
 Its authority still comes from the registered charter and enforced runtime policy.
 
+## Remote Child–Parent Control Plane
+
+Remote durable agents require an explicit control-plane protocol.
+
+This protocol is not yet implemented in the current runtime.
+
+The preferred first transport shape is:
+
+- child-initiated secure connection to the parent control plane
+- TLS for all transport, plus signed application-level envelopes for identity and message integrity
+- parent-signed policy or configuration updates
+- child acknowledgements of the exact applied policy version and hash
+
+This should normally be implemented as:
+
+- a persistent child-initiated connection when the runtime supports it
+- request/response artifact upload plus policy polling when persistent connectivity is unavailable or undesirable
+
+### Why child-initiated transport
+
+Child-initiated transport is the preferred default because it:
+
+- works behind NAT and home-network constraints
+- avoids requiring inbound ports on child hosts
+- fits dormant or intermittently waking children
+- maps cleanly to remote laptops, VPS children, and serverless runtimes
+
+### Transport shape
+
+For long-lived children on ordinary hosts, the preferred transport is:
+
+- child-initiated secure bidirectional connection over an HTTPS-compatible transport
+
+For ephemeral or serverless children, the preferred degraded transport is:
+
+- signed artifact upload over HTTPS
+- signed policy polling over HTTPS
+
+The control-plane semantics should remain the same across both shapes even if the transport differs.
+
+### Envelope semantics
+
+The control-plane envelope should preserve:
+
+- protocol version
+- child agent identity
+- parent or house identity
+- message kind
+- message id
+- timestamp
+- payload
+- signature
+- mandatory replay-protection field such as sequence number, nonce, or bounded timestamp window
+
+Supported message kinds should eventually include:
+
+- enrollment or re-attestation
+- review artifact upload
+- child state update
+- policy poll
+- policy update
+- policy acknowledgement
+- key rotation or revocation notice
+
+### Replay protection and ordering
+
+Replay protection is required, not optional.
+
+The control plane should reject:
+
+- duplicate message ids
+- invalid signatures
+- envelopes outside the allowed replay window
+- stale or out-of-order policy updates
+
+### Policy version semantics
+
+Every live policy should carry at least:
+
+- `policy_version`
+- `policy_hash`
+- `issued_at`
+
+The child acknowledgement should report:
+
+- which policy version was received
+- which version was applied
+- whether application succeeded or failed
+
+The parent should be able to distinguish:
+
+- last policy offered
+- last policy acknowledged
+- last policy actually applied
+
+## Configuration Split
+
+Remote durable-agent configuration should be split into two layers.
+
+### 1. Local bootstrap configuration
+
+Bootstrap configuration lives on the child host and is installed by the operator or host owner.
+
+It should define at least:
+
+- parent control-plane URL
+- child agent id
+- enrollment credential or one-time enrollment token
+- local key material or key-registration path
+- allowed model or provider options available on that host
+- local writable roots
+- local secret availability
+- local network or infrastructure ceiling
+
+The local bootstrap configuration defines the maximum local ceiling.
+
+The parent must not silently exceed that ceiling through later policy updates.
+
+### Bootstrap ceiling law
+
+Parent-authored live policy may narrow the local bootstrap ceiling.
+It must not widen that ceiling.
+
+Widening the ceiling requires explicit local operator action on the child host.
+
+### 2. Parent-authored live policy
+
+After enrollment, the parent may supply signed live policy describing the child's behavioral charter.
+
+This may include:
+
+- role or charter
+- model or provider selection within the locally allowed ceiling
+- capability envelope
+- outbound mode
+- drift policy
+- review cadence or wakeup policy
+- task-specific behavioral constraints
+
+The child should apply only parent policy that is validly signed and remains within the local bootstrap ceiling.
+
+### Parent-declared public surface
+
+Whether a surface counts as public for shared inference-state reuse should be decided in the admin-parent conversation, then encoded into parent-authored live policy.
+
+Conversation alone is not enough.
+The runtime needs a stable machine-readable declaration to enforce.
+
+At minimum, the live policy should be able to express something like:
+
+- `public_surface_mode = none | channel_transcript | explicit_parent_relay_only`
+- `shared_inference_reuse = disabled | allowed`
+- `shared_inference_reuse_scope = public_prefix_only`
+
+That means:
+
+- the admin and parent may discuss and ratify what counts as public
+- the child should only treat that decision as effective after it appears in valid signed live policy
+- private child state remains private even if it was discussed conversationally, unless it is explicitly reclassified through policy
+
+## Enrollment, Rotation, and Revocation
+
+The remote control plane should support at least:
+
+- first enrollment
+- later re-attestation
+- key registration
+- key rotation
+- parent-side revocation or decommissioning
+
+A decommissioned or revoked child must not continue to receive privileged live policy merely because it still has older local state.
+
+## Parent and Child Model Configuration
+
+The parent and child may use different models and providers.
+
+This should be supported explicitly.
+
+Examples include:
+
+- parent on one provider or model family
+- child on OpenRouter with a specified open model
+- multiple children using different models for the same experiment
+
+For durable children created directly by the parent on infrastructure under parent or admin control, the parent may provision the child configuration automatically.
+
+For children installed on independently managed hosts, the operator should install bootstrap config locally, then let the child enroll outward to the parent.
+
+## Offline and Dormant Semantics
+
+A remote child may be:
+
+- offline
+- intermittently connected
+- dormant between source events
+
+While disconnected, the child may:
+
+- continue only within its last valid applied policy
+- queue bounded signed review artifacts locally for later upload
+
+While disconnected, the child must not:
+
+- infer broader authority from parent unreachability
+- self-widen local ceilings
+- assume missing parent contact is implicit approval
+
+When connectivity resumes, queued artifacts should upload and policy reconciliation should occur explicitly.
+
+## Parent-Mediated Multi-Agent Communication
+
+Durable children should not trust or reconfigure each other directly by default.
+
+The preferred rule is:
+
+- child-to-child communication routes through the parent control plane unless an explicitly ratified topology says otherwise
+- artifacts crossing between children remain bounded, provenance-bearing, and policy-governed
+- one child must not widen another child's authority or secret surface
+- any shared runtime prefix optimization may follow only the parent-authored live-policy declaration of public surface, not private child state
+
+If later direct child-to-child communication is allowed, it should still preserve:
+
+- explicit topology
+- signed envelopes
+- provenance
+- policy ceilings
+- parent-observable auditability
+
 ## Isolation and Runtime Model
 
 Go may orchestrate durable-agent runtimes, but Go alone is not the security boundary.
@@ -602,6 +972,8 @@ Durable agents must not acquire lasting changes silently.
 - **Child-originated secret requests are untrusted.** Upward requests for credentials or capability widening must enter review, not execution.
 - **Remote-host children follow the same law.** New machine, same parent/child governance.
 - **Routine local action and standing privilege are different.** Pre-authorized local remediation does not imply self-widening authority.
+- **Continuity memory and inference memory are different layers.** Shared runtime prefix optimization is not shared durable memory.
+- **Only public context may become shared inference state.** Private child state must not be co-mingled into sibling runtime reuse surfaces.
 - **Hostile public ingress is the reference threat model.** If the public web case is safe, the quieter cases inherit that safety.
 
 ## Test Plan
@@ -624,5 +996,14 @@ Durable agents must not acquire lasting changes silently.
 - **TestOutboundAutonomyRequiresExplicitPolicy**: child reply autonomy is not implied by repeated use
 - **TestRemoteDurableAgentReportsWithBoundedIdentityAndPolicy**: remote child reports under its registered charter and capability envelope
 - **TestRemoteRoutineActionDoesNotImplyPrivilegeWidening**: a remote child may perform pre-authorized routine remediations without gaining self-directed authority expansion
+- **TestRemoteControlPlaneUsesTLSAndSignedEnvelopes**: remote control-plane transport requires TLS plus valid application signatures
+- **TestRemoteControlPlaneRejectsReplay**: duplicate or replayed envelopes are rejected
+- **TestRemotePolicyAckCarriesAppliedVersion**: parent can observe offered vs acknowledged vs applied policy version
+- **TestParentPolicyCannotExceedBootstrapCeiling**: live parent policy may narrow but not widen local bootstrap ceilings
+- **TestRemoteChildQueuesArtifactsWhileOfflineWithoutAuthorityExpansion**: offline children may queue bounded artifacts but may not infer broader authority
+- **TestParentMediatedChildToChildCommunicationPreservesProvenance**: inter-child artifacts remain parent-mediated and bounded unless explicitly ratified otherwise
+- **TestSharedInferenceStateUsesOnlyPublicPrefix**: runtime prefix or KV reuse, when supported by the serving/runtime layer, may use declared public context but not private child state
+- **TestInferenceStateReuseDoesNotPromoteDurableMemory**: transient runtime cache reuse, when supported, does not create shared semantic memory or house-memory promotion
+- **TestIncompatibleModelFamiliesSkipSharedInferenceReuse**: children using incompatible architectures or opaque hosted APIs do not assume cross-child inference-state reuse even if the optimization exists elsewhere
 - **TestHostilePublicIngressIsContainedByQuarantine**: public website pressure cannot bypass the durable-agent quarantine and ratification boundary
 - **TestDurableDriftPreservesProvenance**: approved child changes record the motivating review artifact and admin ratification

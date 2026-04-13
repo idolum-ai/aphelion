@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 10
+const schemaVersion = 12
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -175,13 +175,13 @@ func (s *SQLiteStore) init() error {
 			parent_scope_id TEXT,
 			review_target_chat_id INTEGER NOT NULL DEFAULT 0,
 			channel_kind TEXT NOT NULL,
-			charter TEXT NOT NULL DEFAULT '',
-			capability_envelope_json TEXT NOT NULL DEFAULT '[]',
+			live_policy_json TEXT NOT NULL DEFAULT '{}',
+			policy_version INTEGER NOT NULL DEFAULT 1,
+			policy_hash TEXT NOT NULL DEFAULT '',
+			policy_issued_at TEXT,
 			local_storage_roots_json TEXT NOT NULL DEFAULT '[]',
 			network_policy TEXT,
 			wakeup_mode TEXT,
-			outbound_mode TEXT,
-			drift_policy TEXT,
 			secret_scopes_json TEXT NOT NULL DEFAULT '[]',
 			status TEXT NOT NULL DEFAULT 'active',
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -196,6 +196,18 @@ func (s *SQLiteStore) init() error {
 			last_review_at TEXT,
 			dormant_at TEXT,
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (agent_id) REFERENCES durable_agents(agent_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS durable_agent_policy_updates (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL,
+			source_review_event_id INTEGER NOT NULL DEFAULT 0,
+			previous_version INTEGER NOT NULL DEFAULT 0,
+			new_version INTEGER NOT NULL,
+			policy_hash TEXT NOT NULL,
+			policy_json TEXT NOT NULL,
+			reason TEXT,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now')),
 			FOREIGN KEY (agent_id) REFERENCES durable_agents(agent_id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS compaction_log (
@@ -1103,65 +1115,10 @@ func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]Revi
 
 	events := make([]ReviewEvent, 0, limit)
 	for rows.Next() {
-		var (
-			event           ReviewEvent
-			createdAtRaw    string
-			deliveredAtRaw  sql.NullString
-			turnFromRaw     sql.NullInt64
-			turnToRaw       sql.NullInt64
-			targetChatIDRaw int64
-			sourceSessionID sql.NullString
-			sourceScopeKind sql.NullString
-			sourceScopeID   sql.NullString
-			sourceAgentID   sql.NullString
-			targetSessionID sql.NullString
-			targetScopeKind sql.NullString
-			targetScopeID   sql.NullString
-			targetAgentID   sql.NullString
-			metadataJSON    sql.NullString
-		)
-
-		if err := rows.Scan(
-			&event.ID, &sourceSessionID, &event.SourceChatID, &event.SourceUserID, &event.SourceRole, &sourceScopeKind, &sourceScopeID, &sourceAgentID,
-			&targetSessionID, &targetChatIDRaw, &targetScopeKind, &targetScopeID, &targetAgentID,
-			&turnFromRaw, &turnToRaw, &event.Summary, &metadataJSON, &event.Status, &createdAtRaw, &deliveredAtRaw,
-		); err != nil {
-			return nil, fmt.Errorf("scan pending review event: %w", err)
-		}
-
-		event.SourceSessionID = nullToString(sourceSessionID)
-		event.TargetAdminChatID = targetChatIDRaw
-		event.TargetSessionID = nullToString(targetSessionID)
-		event.SourceScope = NormalizeScopeRef(ScopeRef{
-			Kind:           ScopeKind(nullToString(sourceScopeKind)),
-			ID:             nullToString(sourceScopeID),
-			DurableAgentID: nullToString(sourceAgentID),
-		})
-		event.TargetScope = NormalizeScopeRef(ScopeRef{
-			Kind:           ScopeKind(nullToString(targetScopeKind)),
-			ID:             nullToString(targetScopeID),
-			DurableAgentID: nullToString(targetAgentID),
-		})
-		event.MetadataJSON = nullToString(metadataJSON)
-		if turnFromRaw.Valid {
-			event.TurnFrom = int(turnFromRaw.Int64)
-		}
-		if turnToRaw.Valid {
-			event.TurnTo = int(turnToRaw.Int64)
-		}
-		createdAt, err := parseSQLiteTime(createdAtRaw)
+		event, err := scanReviewEvent(rows)
 		if err != nil {
-			return nil, fmt.Errorf("parse review event created_at: %w", err)
+			return nil, err
 		}
-		event.CreatedAt = createdAt
-		if deliveredAtRaw.Valid && deliveredAtRaw.String != "" {
-			deliveredAt, err := parseSQLiteTime(deliveredAtRaw.String)
-			if err != nil {
-				return nil, fmt.Errorf("parse review event delivered_at: %w", err)
-			}
-			event.DeliveredAt = deliveredAt
-		}
-
 		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {
@@ -1590,36 +1547,48 @@ func (s *SQLiteStore) Close() error {
 }
 
 func (s *SQLiteStore) UpsertDurableAgent(agent core.DurableAgent) error {
+	_, err := upsertDurableAgentExec(s.db, agent)
+	return err
+}
+
+func upsertDurableAgentExec(exec interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}, agent core.DurableAgent) (core.DurableAgent, error) {
 	agent.AgentID = strings.TrimSpace(agent.AgentID)
 	if agent.AgentID == "" {
-		return fmt.Errorf("upsert durable agent: agent_id is required")
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent: agent_id is required")
 	}
 	agent.ChannelKind = strings.TrimSpace(agent.ChannelKind)
 	if agent.ChannelKind == "" {
-		return fmt.Errorf("upsert durable agent: channel_kind is required")
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent: channel_kind is required")
 	}
 
-	capabilitiesJSON, err := marshalStringSlice(agent.CapabilityEnvelope)
+	livePolicyJSON, policyHash, err := marshalDurableAgentLivePolicy(agent.LivePolicy)
 	if err != nil {
-		return fmt.Errorf("upsert durable agent capability_envelope: %w", err)
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent live_policy: %w", err)
 	}
 	storageRootsJSON, err := marshalStringSlice(agent.LocalStorageRoots)
 	if err != nil {
-		return fmt.Errorf("upsert durable agent local_storage_roots: %w", err)
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent local_storage_roots: %w", err)
 	}
 	secretScopesJSON, err := marshalStringSlice(agent.SecretScopes)
 	if err != nil {
-		return fmt.Errorf("upsert durable agent secret_scopes: %w", err)
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent secret_scopes: %w", err)
 	}
 
 	now := time.Now().UTC()
 	createdAt := nonZeroTimeOrNow(agent.CreatedAt, now).UTC().Format(time.RFC3339Nano)
 	updatedAt := now.UTC().Format(time.RFC3339Nano)
-	_, err = s.db.Exec(`
+	policyVersion := agent.PolicyVersion
+	if policyVersion <= 0 {
+		policyVersion = 1
+	}
+	policyIssuedAt := nonZeroTimeOrNow(agent.PolicyIssuedAt, now)
+	_, err = exec.Exec(`
 		INSERT INTO durable_agents(
 			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
-			channel_kind, charter, capability_envelope_json, local_storage_roots_json, network_policy,
-			wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status, created_at, updated_at
+			channel_kind, live_policy_json, policy_version, policy_hash, policy_issued_at,
+			local_storage_roots_json, network_policy, wakeup_mode, secret_scopes_json, status, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(agent_id) DO UPDATE SET
 			parent_agent_id = excluded.parent_agent_id,
@@ -1627,57 +1596,193 @@ func (s *SQLiteStore) UpsertDurableAgent(agent core.DurableAgent) error {
 			parent_scope_id = excluded.parent_scope_id,
 			review_target_chat_id = excluded.review_target_chat_id,
 			channel_kind = excluded.channel_kind,
-			charter = excluded.charter,
-			capability_envelope_json = excluded.capability_envelope_json,
+			live_policy_json = excluded.live_policy_json,
+			policy_version = excluded.policy_version,
+			policy_hash = excluded.policy_hash,
+			policy_issued_at = excluded.policy_issued_at,
 			local_storage_roots_json = excluded.local_storage_roots_json,
 			network_policy = excluded.network_policy,
 			wakeup_mode = excluded.wakeup_mode,
-			outbound_mode = excluded.outbound_mode,
-			drift_policy = excluded.drift_policy,
 			secret_scopes_json = excluded.secret_scopes_json,
 			status = excluded.status,
 			updated_at = excluded.updated_at
 	`,
 		agent.AgentID, nullableString(agent.ParentAgentID), nullableString(agent.ParentScopeKind), nullableString(agent.ParentScopeID), agent.ReviewTargetChatID,
-		agent.ChannelKind, strings.TrimSpace(agent.Charter), string(capabilitiesJSON), string(storageRootsJSON), nullableString(agent.NetworkPolicy),
-		nullableString(agent.WakeupMode), nullableString(agent.OutboundMode), nullableString(agent.DriftPolicy), string(secretScopesJSON), nullableString(agent.Status),
-		createdAt, updatedAt,
+		agent.ChannelKind, livePolicyJSON, policyVersion, policyHash, nullableTime(policyIssuedAt), string(storageRootsJSON),
+		nullableString(agent.NetworkPolicy), nullableString(agent.WakeupMode), string(secretScopesJSON), nullableString(agent.Status), createdAt, updatedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("upsert durable agent: %w", err)
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent: %w", err)
 	}
-	return nil
+	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(agent.LivePolicy)
+	agent.PolicyVersion = policyVersion
+	agent.PolicyHash = policyHash
+	agent.PolicyIssuedAt = policyIssuedAt
+	agent.CreatedAt = mustParseSQLiteTime(createdAt)
+	agent.UpdatedAt = mustParseSQLiteTime(updatedAt)
+	return agent, nil
 }
 
 func (s *SQLiteStore) DurableAgent(agentID string) (*core.DurableAgent, error) {
+	return queryDurableAgent(s.db, strings.TrimSpace(agentID))
+}
+
+func (s *SQLiteStore) SetDurableAgentLivePolicy(agentID string, policy core.DurableAgentLivePolicy) error {
+	agent, err := s.DurableAgent(agentID)
+	if err != nil {
+		return err
+	}
+	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(policy)
+	agent.PolicyVersion++
+	if agent.PolicyVersion <= 0 {
+		agent.PolicyVersion = 1
+	}
+	agent.PolicyIssuedAt = time.Now().UTC()
+	return s.UpsertDurableAgent(*agent)
+}
+
+func (s *SQLiteStore) ApplyDurableAgentLivePolicy(agentID string, policy core.DurableAgentLivePolicy, sourceReviewEventID int64, reason string) (*core.DurableAgent, *DurableAgentPolicyUpdate, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin apply durable agent live policy tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	agent, err := queryDurableAgent(tx, agentID)
+	if err != nil {
+		return nil, nil, err
+	}
+	nextPolicy := core.NormalizeDurableAgentLivePolicy(policy)
+	nextPolicyHash, err := core.DurableAgentPolicyHash(nextPolicy)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hash durable agent live policy: %w", err)
+	}
+	if agent.PolicyHash == "" {
+		agent.PolicyHash, err = core.DurableAgentPolicyHash(agent.LivePolicy)
+		if err != nil {
+			return nil, nil, fmt.Errorf("hash current durable agent live policy: %w", err)
+		}
+	}
+	if agent.PolicyHash == nextPolicyHash {
+		if err := tx.Commit(); err != nil {
+			return nil, nil, fmt.Errorf("commit no-op durable agent live policy apply: %w", err)
+		}
+		return agent, nil, nil
+	}
+	previousVersion := agent.PolicyVersion
+	agent.LivePolicy = nextPolicy
+	agent.PolicyVersion++
+	if agent.PolicyVersion <= 0 {
+		agent.PolicyVersion = 1
+	}
+	agent.PolicyIssuedAt = time.Now().UTC()
+	updated, err := upsertDurableAgentExec(tx, *agent)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	policyJSON, policyHash, err := marshalDurableAgentLivePolicy(updated.LivePolicy)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal applied durable agent live policy: %w", err)
+	}
+	now := time.Now().UTC()
+	res, err := tx.Exec(`
+		INSERT INTO durable_agent_policy_updates(
+			agent_id, source_review_event_id, previous_version, new_version, policy_hash, policy_json, reason, applied_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		updated.AgentID, maxInt64(sourceReviewEventID, 0), previousVersion, updated.PolicyVersion, policyHash, policyJSON, nullableString(reason), now.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("insert durable agent policy update: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, nil, fmt.Errorf("durable agent policy update last insert id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("commit durable agent live policy apply: %w", err)
+	}
+	return &updated, &DurableAgentPolicyUpdate{
+		ID:                  id,
+		AgentID:             updated.AgentID,
+		SourceReviewEventID: maxInt64(sourceReviewEventID, 0),
+		PreviousVersion:     previousVersion,
+		NewVersion:          updated.PolicyVersion,
+		PolicyHash:          policyHash,
+		PolicyJSON:          policyJSON,
+		Reason:              strings.TrimSpace(reason),
+		AppliedAt:           now,
+	}, nil
+}
+
+func (s *SQLiteStore) DurableAgentPolicyUpdates(agentID string, limit int) ([]DurableAgentPolicyUpdate, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, fmt.Errorf("durable agent policy updates: agent_id is required")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.Query(`
+		SELECT id, agent_id, source_review_event_id, previous_version, new_version, policy_hash, policy_json, reason, applied_at
+		FROM durable_agent_policy_updates
+		WHERE agent_id = ?
+		ORDER BY applied_at DESC, id DESC
+		LIMIT ?
+	`, agentID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query durable agent policy updates: %w", err)
+	}
+	defer rows.Close()
+	var updates []DurableAgentPolicyUpdate
+	for rows.Next() {
+		update, err := scanDurableAgentPolicyUpdate(rows)
+		if err != nil {
+			return nil, err
+		}
+		updates = append(updates, update)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate durable agent policy updates: %w", err)
+	}
+	return updates, nil
+}
+
+func (s *SQLiteStore) ReviewEventByID(id int64) (*ReviewEvent, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("review event id is required")
+	}
 	rows, err := s.db.Query(`
 		SELECT
-			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
-			channel_kind, charter, capability_envelope_json, local_storage_roots_json, network_policy,
-			wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status, created_at, updated_at
-		FROM durable_agents
-		WHERE agent_id = ?
-	`, strings.TrimSpace(agentID))
+			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
+			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
+		FROM review_events
+		WHERE id = ?
+	`, id)
 	if err != nil {
-		return nil, fmt.Errorf("query durable agent: %w", err)
+		return nil, fmt.Errorf("query review event: %w", err)
 	}
 	defer rows.Close()
 	if !rows.Next() {
 		return nil, sql.ErrNoRows
 	}
-	agent, err := scanDurableAgent(rows)
+	event, err := scanReviewEvent(rows)
 	if err != nil {
 		return nil, err
 	}
-	return &agent, nil
+	return &event, nil
 }
 
 func (s *SQLiteStore) ListDurableAgents() ([]core.DurableAgent, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
-			channel_kind, charter, capability_envelope_json, local_storage_roots_json, network_policy,
-			wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status, created_at, updated_at
+			channel_kind, live_policy_json, policy_version, policy_hash, policy_issued_at, local_storage_roots_json, network_policy,
+			wakeup_mode, secret_scopes_json, status, created_at, updated_at
 		FROM durable_agents
 		ORDER BY created_at ASC, agent_id ASC
 	`)
@@ -1901,6 +2006,11 @@ func applyMigrations(tx *sql.Tx) error {
 	}
 	if currentVersion < 10 {
 		if err := migrateSessionIdentity(tx); err != nil {
+			return err
+		}
+	}
+	if currentVersion < 11 {
+		if err := migrateDurableAgentLivePolicy(tx); err != nil {
 			return err
 		}
 	}
@@ -2246,16 +2356,16 @@ func backfillSessionIdentityColumns(tx *sql.Tx) error {
 	var reviews []reviewRow
 	for reviewRows.Next() {
 		var (
-			row              reviewRow
-			sourceChatID     int64
-			sourceUserID     int64
-			sourceScopeKind  string
-			sourceScopeID    string
-			sourceAgentID    string
-			targetChatID     int64
-			targetScopeKind  string
-			targetScopeID    string
-			targetAgentID    string
+			row             reviewRow
+			sourceChatID    int64
+			sourceUserID    int64
+			sourceScopeKind string
+			sourceScopeID   string
+			sourceAgentID   string
+			targetChatID    int64
+			targetScopeKind string
+			targetScopeID   string
+			targetAgentID   string
 		)
 		if err := reviewRows.Scan(&row.id, &row.sourceSessionID, &sourceChatID, &sourceUserID, &sourceScopeKind, &sourceScopeID, &sourceAgentID, &row.targetSessionID, &targetChatID, &targetScopeKind, &targetScopeID, &targetAgentID); err != nil {
 			return fmt.Errorf("scan review event backfill row: %w", err)
@@ -2287,6 +2397,140 @@ func backfillSessionIdentityColumns(tx *sql.Tx) error {
 	return nil
 }
 
+func migrateDurableAgentLivePolicy(tx *sql.Tx) error {
+	hasLivePolicy, err := tableHasColumn(tx, "durable_agents", "live_policy_json")
+	if err != nil {
+		return err
+	}
+	hasLegacyCharter, err := tableHasColumn(tx, "durable_agents", "charter")
+	if err != nil {
+		return err
+	}
+	if hasLivePolicy && !hasLegacyCharter {
+		return nil
+	}
+	if !hasLegacyCharter {
+		return nil
+	}
+
+	type legacyDurableAgentRow struct {
+		AgentID            string
+		ParentAgentID      sql.NullString
+		ParentScopeKind    sql.NullString
+		ParentScopeID      sql.NullString
+		ReviewTargetChatID int64
+		ChannelKind        string
+		Charter            string
+		CapabilitiesJSON   string
+		LocalRootsJSON     string
+		NetworkPolicy      sql.NullString
+		WakeupMode         sql.NullString
+		OutboundMode       sql.NullString
+		DriftPolicy        sql.NullString
+		SecretScopesJSON   string
+		Status             sql.NullString
+		CreatedAt          string
+		UpdatedAt          string
+	}
+
+	rows, err := tx.Query(`
+		SELECT
+			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
+			channel_kind, charter, capability_envelope_json, local_storage_roots_json, network_policy,
+			wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status, created_at, updated_at
+		FROM durable_agents
+	`)
+	if err != nil {
+		return fmt.Errorf("query legacy durable agents: %w", err)
+	}
+	defer rows.Close()
+
+	var legacyRows []legacyDurableAgentRow
+	for rows.Next() {
+		var row legacyDurableAgentRow
+		if err := rows.Scan(
+			&row.AgentID, &row.ParentAgentID, &row.ParentScopeKind, &row.ParentScopeID, &row.ReviewTargetChatID,
+			&row.ChannelKind, &row.Charter, &row.CapabilitiesJSON, &row.LocalRootsJSON, &row.NetworkPolicy,
+			&row.WakeupMode, &row.OutboundMode, &row.DriftPolicy, &row.SecretScopesJSON, &row.Status, &row.CreatedAt, &row.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("scan legacy durable agent: %w", err)
+		}
+		legacyRows = append(legacyRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate legacy durable agents: %w", err)
+	}
+
+	if _, err := tx.Exec(`CREATE TABLE durable_agents_v11 (
+		agent_id TEXT PRIMARY KEY,
+		parent_agent_id TEXT,
+		parent_scope_kind TEXT,
+		parent_scope_id TEXT,
+		review_target_chat_id INTEGER NOT NULL DEFAULT 0,
+		channel_kind TEXT NOT NULL,
+		live_policy_json TEXT NOT NULL DEFAULT '{}',
+		policy_version INTEGER NOT NULL DEFAULT 1,
+		policy_hash TEXT NOT NULL DEFAULT '',
+		policy_issued_at TEXT,
+		local_storage_roots_json TEXT NOT NULL DEFAULT '[]',
+		network_policy TEXT,
+		wakeup_mode TEXT,
+		secret_scopes_json TEXT NOT NULL DEFAULT '[]',
+		status TEXT NOT NULL DEFAULT 'active',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		return fmt.Errorf("create durable_agents_v11: %w", err)
+	}
+
+	insertStmt, err := tx.Prepare(`
+		INSERT INTO durable_agents_v11(
+			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
+			channel_kind, live_policy_json, policy_version, policy_hash, policy_issued_at,
+			local_storage_roots_json, network_policy, wakeup_mode, secret_scopes_json, status, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare durable_agents_v11 insert: %w", err)
+	}
+	defer insertStmt.Close()
+
+	for _, row := range legacyRows {
+		capabilities, err := unmarshalStringSlice(row.CapabilitiesJSON)
+		if err != nil {
+			return fmt.Errorf("decode legacy durable agent capabilities agent_id=%s: %w", row.AgentID, err)
+		}
+		policy := core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            row.Charter,
+			CapabilityEnvelope: capabilities,
+			OutboundMode:       nullToString(row.OutboundMode),
+			DriftPolicy:        nullToString(row.DriftPolicy),
+		})
+		livePolicyJSON, policyHash, err := marshalDurableAgentLivePolicy(policy)
+		if err != nil {
+			return fmt.Errorf("marshal legacy durable agent live policy agent_id=%s: %w", row.AgentID, err)
+		}
+		if _, err := insertStmt.Exec(
+			row.AgentID, nullableString(nullToString(row.ParentAgentID)), nullableString(nullToString(row.ParentScopeKind)),
+			nullableString(nullToString(row.ParentScopeID)), row.ReviewTargetChatID, row.ChannelKind, livePolicyJSON, 1, policyHash,
+			row.UpdatedAt, defaultJSONString(row.LocalRootsJSON, "[]"), nullableString(nullToString(row.NetworkPolicy)), nullableString(nullToString(row.WakeupMode)),
+			defaultJSONString(row.SecretScopesJSON, "[]"), nullableString(nullToString(row.Status)), row.CreatedAt, row.UpdatedAt,
+		); err != nil {
+			return fmt.Errorf("insert migrated durable agent agent_id=%s: %w", row.AgentID, err)
+		}
+	}
+
+	for _, stmt := range []string{
+		`DROP TABLE durable_agents`,
+		`ALTER TABLE durable_agents_v11 RENAME TO durable_agents`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("migrate durable_agents with %q: %w", stmt, err)
+		}
+	}
+	return nil
+}
+
 func backfillChildSessionIDs(tx *sql.Tx) error {
 	for _, table := range []string{"messages", "outbound_messages", "turn_runs", "compaction_log"} {
 		if _, err := tx.Exec(fmt.Sprintf(`
@@ -2303,6 +2547,35 @@ func backfillChildSessionIDs(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+func tableHasColumn(tx *sql.Tx, table string, name string) (bool, error) {
+	rows, err := tx.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, fmt.Errorf("query table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid      int
+			column   string
+			typ      string
+			notNull  int
+			defaultV sql.NullString
+			primaryK int
+		)
+		if err := rows.Scan(&cid, &column, &typ, &notNull, &defaultV, &primaryK); err != nil {
+			return false, fmt.Errorf("scan table_info(%s): %w", table, err)
+		}
+		if strings.EqualFold(column, name) {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate table_info(%s): %w", table, err)
+	}
+	return false, nil
 }
 
 func primaryKeyColumns(tx *sql.Tx, table string) ([]string, error) {
@@ -2411,11 +2684,68 @@ func nullableString(v string) any {
 	return v
 }
 
+func defaultJSONString(raw string, fallback string) string {
+	if strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	return raw
+}
+
 func marshalStringSlice(values []string) ([]byte, error) {
 	if len(values) == 0 {
 		return []byte("[]"), nil
 	}
 	return json.Marshal(values)
+}
+
+func queryDurableAgent(q interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}, agentID string) (*core.DurableAgent, error) {
+	rows, err := q.Query(`
+		SELECT
+			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
+			channel_kind, live_policy_json, policy_version, policy_hash, policy_issued_at, local_storage_roots_json, network_policy,
+			wakeup_mode, secret_scopes_json, status, created_at, updated_at
+		FROM durable_agents
+		WHERE agent_id = ?
+	`, strings.TrimSpace(agentID))
+	if err != nil {
+		return nil, fmt.Errorf("query durable agent: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, sql.ErrNoRows
+	}
+	agent, err := scanDurableAgent(rows)
+	if err != nil {
+		return nil, err
+	}
+	return &agent, nil
+}
+
+func marshalDurableAgentLivePolicy(policy core.DurableAgentLivePolicy) (string, string, error) {
+	normalized := core.NormalizeDurableAgentLivePolicy(policy)
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return "", "", err
+	}
+	hash, err := core.DurableAgentPolicyHash(normalized)
+	if err != nil {
+		return "", "", err
+	}
+	return string(raw), hash, nil
+}
+
+func unmarshalDurableAgentLivePolicy(raw string) (core.DurableAgentLivePolicy, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{}), nil
+	}
+	var policy core.DurableAgentLivePolicy
+	if err := json.Unmarshal([]byte(raw), &policy); err != nil {
+		return core.DurableAgentLivePolicy{}, err
+	}
+	return core.NormalizeDurableAgentLivePolicy(policy), nil
 }
 
 func unmarshalStringSlice(raw string) ([]string, error) {
@@ -2436,12 +2766,13 @@ func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.Durabl
 		parentAgentID    sql.NullString
 		parentScopeKind  sql.NullString
 		parentScopeID    sql.NullString
-		capabilitiesJSON string
+		livePolicyJSON   string
+		policyVersion    int64
+		policyHash       string
+		policyIssuedAt   sql.NullString
 		storageRootsJSON string
 		networkPolicy    sql.NullString
 		wakeupMode       sql.NullString
-		outboundMode     sql.NullString
-		driftPolicy      sql.NullString
 		secretScopesJSON string
 		status           sql.NullString
 		createdAtRaw     string
@@ -2449,8 +2780,8 @@ func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.Durabl
 	)
 	if err := scanner.Scan(
 		&agent.AgentID, &parentAgentID, &parentScopeKind, &parentScopeID, &agent.ReviewTargetChatID,
-		&agent.ChannelKind, &agent.Charter, &capabilitiesJSON, &storageRootsJSON, &networkPolicy,
-		&wakeupMode, &outboundMode, &driftPolicy, &secretScopesJSON, &status, &createdAtRaw, &updatedAtRaw,
+		&agent.ChannelKind, &livePolicyJSON, &policyVersion, &policyHash, &policyIssuedAt, &storageRootsJSON, &networkPolicy,
+		&wakeupMode, &secretScopesJSON, &status, &createdAtRaw, &updatedAtRaw,
 	); err != nil {
 		return core.DurableAgent{}, fmt.Errorf("scan durable agent: %w", err)
 	}
@@ -2458,15 +2789,27 @@ func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.Durabl
 	agent.ParentAgentID = nullToString(parentAgentID)
 	agent.ParentScopeKind = nullToString(parentScopeKind)
 	agent.ParentScopeID = nullToString(parentScopeID)
+	agent.LivePolicy, err = unmarshalDurableAgentLivePolicy(livePolicyJSON)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("decode durable agent live policy: %w", err)
+	}
+	agent.PolicyVersion = policyVersion
+	agent.PolicyHash = strings.TrimSpace(policyHash)
+	if agent.PolicyHash == "" {
+		agent.PolicyHash, err = core.DurableAgentPolicyHash(agent.LivePolicy)
+		if err != nil {
+			return core.DurableAgent{}, fmt.Errorf("hash durable agent live policy: %w", err)
+		}
+	}
+	if policyIssuedAt.Valid && strings.TrimSpace(policyIssuedAt.String) != "" {
+		agent.PolicyIssuedAt, err = parseSQLiteTime(policyIssuedAt.String)
+		if err != nil {
+			return core.DurableAgent{}, fmt.Errorf("parse durable agent policy_issued_at: %w", err)
+		}
+	}
 	agent.NetworkPolicy = nullToString(networkPolicy)
 	agent.WakeupMode = nullToString(wakeupMode)
-	agent.OutboundMode = nullToString(outboundMode)
-	agent.DriftPolicy = nullToString(driftPolicy)
 	agent.Status = nullToString(status)
-	agent.CapabilityEnvelope, err = unmarshalStringSlice(capabilitiesJSON)
-	if err != nil {
-		return core.DurableAgent{}, fmt.Errorf("decode durable agent capabilities: %w", err)
-	}
 	agent.LocalStorageRoots, err = unmarshalStringSlice(storageRootsJSON)
 	if err != nil {
 		return core.DurableAgent{}, fmt.Errorf("decode durable agent storage roots: %w", err)
@@ -2484,6 +2827,86 @@ func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.Durabl
 		return core.DurableAgent{}, fmt.Errorf("parse durable agent updated_at: %w", err)
 	}
 	return agent, nil
+}
+
+func scanReviewEvent(scanner interface{ Scan(dest ...any) error }) (ReviewEvent, error) {
+	var (
+		event           ReviewEvent
+		createdAtRaw    string
+		deliveredAtRaw  sql.NullString
+		turnFromRaw     sql.NullInt64
+		turnToRaw       sql.NullInt64
+		targetChatIDRaw int64
+		sourceSessionID sql.NullString
+		sourceScopeKind sql.NullString
+		sourceScopeID   sql.NullString
+		sourceAgentID   sql.NullString
+		targetSessionID sql.NullString
+		targetScopeKind sql.NullString
+		targetScopeID   sql.NullString
+		targetAgentID   sql.NullString
+		metadataJSON    sql.NullString
+	)
+
+	if err := scanner.Scan(
+		&event.ID, &sourceSessionID, &event.SourceChatID, &event.SourceUserID, &event.SourceRole, &sourceScopeKind, &sourceScopeID, &sourceAgentID,
+		&targetSessionID, &targetChatIDRaw, &targetScopeKind, &targetScopeID, &targetAgentID,
+		&turnFromRaw, &turnToRaw, &event.Summary, &metadataJSON, &event.Status, &createdAtRaw, &deliveredAtRaw,
+	); err != nil {
+		return ReviewEvent{}, fmt.Errorf("scan review event: %w", err)
+	}
+
+	event.SourceSessionID = nullToString(sourceSessionID)
+	event.TargetAdminChatID = targetChatIDRaw
+	event.TargetSessionID = nullToString(targetSessionID)
+	event.SourceScope = NormalizeScopeRef(ScopeRef{
+		Kind:           ScopeKind(nullToString(sourceScopeKind)),
+		ID:             nullToString(sourceScopeID),
+		DurableAgentID: nullToString(sourceAgentID),
+	})
+	event.TargetScope = NormalizeScopeRef(ScopeRef{
+		Kind:           ScopeKind(nullToString(targetScopeKind)),
+		ID:             nullToString(targetScopeID),
+		DurableAgentID: nullToString(targetAgentID),
+	})
+	event.MetadataJSON = nullToString(metadataJSON)
+	if turnFromRaw.Valid {
+		event.TurnFrom = int(turnFromRaw.Int64)
+	}
+	if turnToRaw.Valid {
+		event.TurnTo = int(turnToRaw.Int64)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return ReviewEvent{}, fmt.Errorf("parse review event created_at: %w", err)
+	}
+	event.CreatedAt = createdAt
+	if deliveredAtRaw.Valid && deliveredAtRaw.String != "" {
+		deliveredAt, err := parseSQLiteTime(deliveredAtRaw.String)
+		if err != nil {
+			return ReviewEvent{}, fmt.Errorf("parse review event delivered_at: %w", err)
+		}
+		event.DeliveredAt = deliveredAt
+	}
+	return event, nil
+}
+
+func scanDurableAgentPolicyUpdate(scanner interface{ Scan(dest ...any) error }) (DurableAgentPolicyUpdate, error) {
+	var (
+		update       DurableAgentPolicyUpdate
+		reason       sql.NullString
+		appliedAtRaw string
+	)
+	if err := scanner.Scan(&update.ID, &update.AgentID, &update.SourceReviewEventID, &update.PreviousVersion, &update.NewVersion, &update.PolicyHash, &update.PolicyJSON, &reason, &appliedAtRaw); err != nil {
+		return DurableAgentPolicyUpdate{}, fmt.Errorf("scan durable agent policy update: %w", err)
+	}
+	update.Reason = nullToString(reason)
+	appliedAt, err := parseSQLiteTime(appliedAtRaw)
+	if err != nil {
+		return DurableAgentPolicyUpdate{}, fmt.Errorf("parse durable agent policy update applied_at: %w", err)
+	}
+	update.AppliedAt = appliedAt
+	return update, nil
 }
 
 func scanDurableAgentState(scanner interface{ Scan(dest ...any) error }) (core.DurableAgentState, error) {
@@ -2655,6 +3078,13 @@ func nonZeroTimeOrNow(t, now time.Time) time.Time {
 		return now
 	}
 	return t
+}
+
+func maxInt64(a int64, b int64) int64 {
+	if a >= b {
+		return a
+	}
+	return b
 }
 
 func boolToInt(v bool) int {

@@ -10,13 +10,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/durableagent"
 	memstore "github.com/idolum-ai/aphelion/memory"
+	"github.com/idolum-ai/aphelion/session"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+var captureStdoutMu sync.Mutex
 
 func TestSeedAgentPromptFilesSeedsStructuredMemoryFiles(t *testing.T) {
 	t.Parallel()
@@ -386,6 +392,214 @@ user_memory_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated"
 	}
 }
 
+func TestRunDurableAgentPolicyShowAndApply(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(cfg.Sessions.DBPath, "family-group")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
+	}
+	if err := os.MkdirAll(memoryRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
+	}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Initial charter",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "reply_with_policy_authorization",
+			DriftPolicy:        "admin_review",
+		},
+		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
+		Status:            "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceRole: "durable_agent",
+		SourceScope: session.ScopeRef{
+			Kind:           session.ScopeKindDurableAgent,
+			ID:             "family-group",
+			DurableAgentID: "family-group",
+		},
+		TargetAdminChatID: 1,
+		TargetScope: session.ScopeRef{
+			Kind: session.ScopeKindTelegramDM,
+			ID:   "1",
+		},
+		Summary: "Family group pressure suggests a narrower reply mode.",
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+	events, err := store.PendingReviewEvents(1, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	reviewID := events[0].ID
+
+	showOut, err := captureStdout(t, func() error {
+		return runDurableAgentPolicyCommand([]string{"--config", cfgPath, "--agent", "family-group", "show"})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentPolicyCommand(show) err = %v", err)
+	}
+	if !strings.Contains(showOut, "charter: Initial charter") || !strings.Contains(showOut, "outbound_mode: reply_with_policy_authorization") {
+		t.Fatalf("policy show output = %q, want initial policy", showOut)
+	}
+
+	applyOut, err := captureStdout(t, func() error {
+		return runDurableAgentPolicyCommand([]string{
+			"--config", cfgPath,
+			"--agent", "family-group",
+			"--review-event", strconv.FormatInt(reviewID, 10),
+			"--outbound-mode", "read_only",
+			"--reason", "ratified quieter family group mode",
+			"apply",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentPolicyCommand(apply) err = %v", err)
+	}
+	if !strings.Contains(applyOut, "changed: true") || !strings.Contains(applyOut, "policy_version: 2") {
+		t.Fatalf("policy apply output = %q, want changed version 2", applyOut)
+	}
+
+	updated, err := store.DurableAgent("family-group")
+	if err != nil {
+		t.Fatalf("DurableAgent(updated) err = %v", err)
+	}
+	if updated.LivePolicy.OutboundMode != "read_only" {
+		t.Fatalf("updated outbound mode = %q, want read_only", updated.LivePolicy.OutboundMode)
+	}
+	updates, err := store.DurableAgentPolicyUpdates("family-group", 10)
+	if err != nil {
+		t.Fatalf("DurableAgentPolicyUpdates() err = %v", err)
+	}
+	if len(updates) != 1 || updates[0].SourceReviewEventID != reviewID {
+		t.Fatalf("policy updates = %#v, want one update with review id %d", updates, reviewID)
+	}
+}
+
+func TestRunDurableAgentForensicShowReadsRestrictedSidecar(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(cfg.Sessions.DBPath, "family-group")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
+	}
+	if err := os.MkdirAll(memoryRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Initial charter",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "reply_with_policy_authorization",
+			DriftPolicy:        "admin_review",
+		},
+		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
+		Status:            "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	ref, err := durableagent.WriteForensicRecord(agent, durableagent.ForensicRecord{
+		AgentID:        "family-group",
+		Reason:         "secret_like_material",
+		CreatedAt:      time.Now().UTC(),
+		RedactedFields: []string{"source_excerpt"},
+		Payload: map[string]string{
+			"source_excerpt": "Use this password: super-secret-123",
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteForensicRecord() err = %v", err)
+	}
+
+	out, err := captureStdout(t, func() error {
+		return runDurableAgentForensicCommand([]string{
+			"--config", cfgPath,
+			"--agent", "family-group",
+			"--ref", ref,
+			"show",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentForensicCommand(show) err = %v", err)
+	}
+	if !strings.Contains(out, "payload.source_excerpt: Use this password: super-secret-123") {
+		t.Fatalf("forensic show output = %q, want preserved forensic payload", out)
+	}
+}
+
+func writeMaintenanceConfig(t *testing.T, root string) string {
+	t.Helper()
+
+	cfgPath := filepath.Join(root, "aphelion.toml")
+	if err := os.MkdirAll(filepath.Join(root, "state"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(state) err = %v", err)
+	}
+	configRaw := `
+[telegram]
+bot_token = "token"
+
+[principals.telegram]
+admin_user_ids = [1]
+
+[providers.anthropic]
+api_key = "anthropic-key"
+
+[sessions]
+db_path = "` + filepath.ToSlash(filepath.Join(root, "state", "sessions.db")) + `"
+
+[agent]
+prompt_root = "` + filepath.ToSlash(filepath.Join(root, "agent")) + `"
+exec_root = "` + filepath.ToSlash(filepath.Join(root, "workspace")) + `"
+shared_memory_root = "` + filepath.ToSlash(filepath.Join(root, "agent")) + `"
+user_workspace_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated", "workspaces")) + `"
+user_memory_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated", "memory")) + `"
+`
+	if err := os.WriteFile(cfgPath, []byte(configRaw), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) err = %v", err)
+	}
+	return cfgPath
+}
+
 func createOpenClawImportFixture(t *testing.T, path string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path)
@@ -441,6 +655,8 @@ func createOpenClawImportFixture(t *testing.T, path string) {
 
 func captureStdout(t *testing.T, fn func() error) (string, error) {
 	t.Helper()
+	captureStdoutMu.Lock()
+	defer captureStdoutMu.Unlock()
 
 	orig := os.Stdout
 	r, w, err := os.Pipe()
