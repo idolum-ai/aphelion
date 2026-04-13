@@ -31,27 +31,27 @@ func NewRuntime(store Store) *Runtime {
 	return &Runtime{store: store}
 }
 
-func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.DurableReviewArtifact) error {
+func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.DurableReviewArtifact) (int64, error) {
 	if r == nil || r.store == nil {
-		return fmt.Errorf("durable agent runtime store is nil")
+		return 0, fmt.Errorf("durable agent runtime store is nil")
 	}
 	agent.AgentID = strings.TrimSpace(agent.AgentID)
 	if agent.AgentID == "" {
-		return fmt.Errorf("queue durable review artifact: agent_id is required")
+		return 0, fmt.Errorf("queue durable review artifact: agent_id is required")
 	}
 	if agent.ReviewTargetChatID == 0 {
-		return fmt.Errorf("queue durable review artifact: review_target_chat_id is required")
+		return 0, fmt.Errorf("queue durable review artifact: review_target_chat_id is required")
 	}
 
 	artifact.AgentID = firstNonEmpty(strings.TrimSpace(artifact.AgentID), agent.AgentID)
 	artifact, err := PrepareReviewArtifact(agent, artifact)
 	if err != nil {
-		return fmt.Errorf("prepare durable review artifact: %w", err)
+		return 0, fmt.Errorf("prepare durable review artifact: %w", err)
 	}
 	summary := buildReviewSummary(agent, artifact, defaultReviewSummaryMaxChars)
 	metadataJSON, err := marshalArtifactMetadata(artifact)
 	if err != nil {
-		return fmt.Errorf("queue durable review artifact metadata: %w", err)
+		return 0, fmt.Errorf("queue durable review artifact metadata: %w", err)
 	}
 
 	event := session.ReviewEvent{
@@ -67,12 +67,12 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 	}
 	eventID, err := r.store.InsertReviewEvent(event)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	state, err := r.store.DurableAgentState(agent.AgentID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+		return 0, err
 	}
 	if state == nil {
 		state = &core.DurableAgentState{AgentID: agent.AgentID}
@@ -80,19 +80,19 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 	now := time.Now().UTC()
 	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
 	if err != nil {
-		return fmt.Errorf("parse durable agent continuity state: %w", err)
+		return 0, fmt.Errorf("parse durable agent continuity state: %w", err)
 	}
 	continuity = continuity.WithReviewArtifact(eventID, artifact, now)
 	stateJSON, err := continuity.Marshal()
 	if err != nil {
-		return fmt.Errorf("marshal durable agent continuity state: %w", err)
+		return 0, fmt.Errorf("marshal durable agent continuity state: %w", err)
 	}
 	state.StateJSON = stateJSON
 	state.LastReviewAt = now
 	if err := r.store.SaveDurableAgentState(*state); err != nil {
-		return err
+		return 0, err
 	}
-	return nil
+	return eventID, nil
 }
 
 func sourceScope(agent core.DurableAgent) session.ScopeRef {

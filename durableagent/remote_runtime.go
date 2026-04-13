@@ -37,6 +37,10 @@ type RemoteSyncResult struct {
 	PolicyVersion int64
 }
 
+type RemoteUploadResult struct {
+	ReviewEventID int64
+}
+
 type RemoteRuntime struct {
 	store     RemoteRuntimeStore
 	newClient RemoteClientFactory
@@ -136,6 +140,72 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 		PolicyChanged: true,
 		PolicyVersion: pollResp.Snapshot.PolicyVersion,
 	}, nil
+}
+
+func (r *RemoteRuntime) UploadReviewArtifact(ctx context.Context, bootstrapPath string, artifact core.DurableReviewArtifact) (*RemoteUploadResult, error) {
+	if r == nil || r.store == nil {
+		return nil, fmt.Errorf("durable agent remote runtime store is nil")
+	}
+	bootstrap, err := ReadRemoteBootstrap(bootstrapPath)
+	if err != nil {
+		return nil, err
+	}
+	enrollment, err := r.store.DurableAgentRemoteEnrollment(bootstrap.AgentID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if _, err := r.Sync(ctx, bootstrapPath); err != nil {
+			return nil, err
+		}
+		enrollment, err = r.store.DurableAgentRemoteEnrollment(bootstrap.AgentID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	client, err := r.newClient(bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	seedRemoteClientSequence(client, enrollment)
+
+	agent, state, err := r.localDurableAgentState(bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	artifact.AgentID = firstNonEmpty(strings.TrimSpace(artifact.AgentID), bootstrap.AgentID)
+	artifact, err = PrepareReviewArtifact(agent, artifact)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.UploadReviewArtifact(ctx, artifact)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Accepted {
+		return nil, fmt.Errorf("durable agent remote review artifact upload was not accepted")
+	}
+	if err := r.persistRemoteEnrollment(*enrollment, client); err != nil {
+		return nil, err
+	}
+	now := r.now()
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return nil, fmt.Errorf("parse durable agent continuity state: %w", err)
+	}
+	continuity = continuity.WithReviewArtifact(resp.ReviewEventID, artifact, now)
+	stateJSON, err := continuity.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("marshal durable agent continuity state: %w", err)
+	}
+	state.StateJSON = stateJSON
+	state.LastReviewAt = now
+	state.Status = "active"
+	if err := r.store.SaveDurableAgentState(*state); err != nil {
+		return nil, err
+	}
+	return &RemoteUploadResult{ReviewEventID: resp.ReviewEventID}, nil
 }
 
 func (r *RemoteRuntime) applySnapshot(ctx context.Context, client RemoteControlClient, bootstrap core.DurableAgentRemoteBootstrap, snapshot core.DurableAgentPolicySnapshot) error {

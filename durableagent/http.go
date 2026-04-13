@@ -162,11 +162,15 @@ func (h *HTTPHandler) handleArtifactUpload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	if err := h.review.QueueReviewArtifact(*agent, req.Artifact); err != nil {
+	eventID, err := h.review.QueueReviewArtifact(*agent, req.Artifact)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, core.DurableAgentReviewArtifactUploadResponse{Accepted: true})
+	writeJSON(w, http.StatusAccepted, core.DurableAgentReviewArtifactUploadResponse{
+		Accepted:      true,
+		ReviewEventID: eventID,
+	})
 }
 
 func (h *HTTPHandler) handlePolicyAck(w http.ResponseWriter, r *http.Request) {

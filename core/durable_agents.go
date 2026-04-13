@@ -232,7 +232,8 @@ type DurableAgentReviewArtifactUploadRequest struct {
 }
 
 type DurableAgentReviewArtifactUploadResponse struct {
-	Accepted bool `json:"accepted"`
+	Accepted      bool  `json:"accepted"`
+	ReviewEventID int64 `json:"review_event_id,omitempty"`
 }
 
 type DurableAgentPolicyAcknowledgementRequest struct {

@@ -419,7 +419,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	}
 
 	if artifact := durableGroupReviewArtifact(registered, core.NormalizeDurableAgentLivePolicy(registered.LivePolicy), msg, replyText); artifact != nil {
-		if err := durableagent.NewRuntime(r.store).QueueReviewArtifact(registered, *artifact); err != nil {
+		if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(registered, *artifact); err != nil {
 			return nil, fmt.Errorf("queue durable group review artifact: %w", err)
 		}
 	}

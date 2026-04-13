@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -184,6 +185,118 @@ func TestRemoteRuntimeSyncPollsAndAppliesUpdatedPolicy(t *testing.T) {
 	}
 	if state.LastAcknowledgedPolicyVersion != updated.PolicyVersion {
 		t.Fatalf("LastAcknowledgedPolicyVersion = %d, want %d", state.LastAcknowledgedPolicyVersion, updated.PolicyVersion)
+	}
+}
+
+func TestRemoteRuntimeUploadReviewArtifactQueuesParentReviewAndUpdatesLocalContinuity(t *testing.T) {
+	t.Parallel()
+
+	parentStore := newTestSQLiteStore(t)
+	defer parentStore.Close()
+	agent := testRemoteDurableAgent()
+	if err := parentStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("parent UpsertDurableAgent() err = %v", err)
+	}
+
+	childStore, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "child.db"))
+	if err != nil {
+		t.Fatalf("child NewSQLiteStore() err = %v", err)
+	}
+	defer childStore.Close()
+
+	bootstrapPath := filepath.Join(t.TempDir(), "remote-bootstrap.json")
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example",
+		EnrollmentToken:  "enroll-token-1",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+		LocalStorageRoots: []string{
+			filepath.Join(t.TempDir(), "work"),
+			filepath.Join(t.TempDir(), "memory"),
+		},
+		SecretScopes:  []string{"telegram_bot"},
+		NetworkPolicy: "restricted",
+	}
+	if err := WriteRemoteBootstrap(bootstrapPath, bootstrap); err != nil {
+		t.Fatalf("WriteRemoteBootstrap() err = %v", err)
+	}
+
+	rt := NewRemoteRuntime(childStore, func(b core.DurableAgentRemoteBootstrap) (RemoteControlClient, error) {
+		client, err := NewHTTPClient(b)
+		if err != nil {
+			return nil, err
+		}
+		client.Client = remoteRuntimeHTTPClient(NewHTTPHandler(parentStore).Handler())
+		return client, nil
+	})
+	if _, err := rt.Sync(context.Background(), bootstrapPath); err != nil {
+		t.Fatalf("Sync() err = %v", err)
+	}
+
+	artifact := core.DurableReviewArtifact{
+		Summary:       "Calendar drift is building around the family dinner plan.",
+		IntervalLabel: "messages 12-18",
+		LocalActions:  []string{"Held reply pending parent visibility."},
+		Questions:     []string{"Should this become a standing family reminder?"},
+		RiskFlags:     []string{"family_relevant_update"},
+	}
+	result, err := rt.UploadReviewArtifact(context.Background(), bootstrapPath, artifact)
+	if err != nil {
+		t.Fatalf("UploadReviewArtifact() err = %v", err)
+	}
+	if result.ReviewEventID == 0 {
+		t.Fatalf("UploadReviewArtifact().ReviewEventID = %d, want non-zero", result.ReviewEventID)
+	}
+
+	events, err := parentStore.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("parent PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("parent pending len = %d, want 1", len(events))
+	}
+	if events[0].ID != result.ReviewEventID {
+		t.Fatalf("parent review event id = %d, want %d", events[0].ID, result.ReviewEventID)
+	}
+	if !strings.Contains(events[0].Summary, "Calendar drift is building") {
+		t.Fatalf("parent Summary = %q, want uploaded review summary", events[0].Summary)
+	}
+
+	state, err := childStore.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("child DurableAgentState() err = %v", err)
+	}
+	if state.LastReviewAt.IsZero() {
+		t.Fatal("LastReviewAt is zero, want remote upload to update local review state")
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if len(continuity.ReviewRefs) != 1 {
+		t.Fatalf("ReviewRefs len = %d, want 1", len(continuity.ReviewRefs))
+	}
+	if continuity.ReviewRefs[0].ReviewEventID != result.ReviewEventID {
+		t.Fatalf("ReviewRefs[0].ReviewEventID = %d, want %d", continuity.ReviewRefs[0].ReviewEventID, result.ReviewEventID)
+	}
+	if len(continuity.PendingQuestions) != 1 {
+		t.Fatalf("PendingQuestions len = %d, want 1", len(continuity.PendingQuestions))
+	}
+	if !strings.Contains(continuity.PendingQuestions[0].Question, "standing family reminder") {
+		t.Fatalf("PendingQuestions[0].Question = %q, want uploaded question", continuity.PendingQuestions[0].Question)
+	}
+
+	enrollment, err := childStore.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("child DurableAgentRemoteEnrollment() err = %v", err)
+	}
+	if enrollment.LastSequence <= 2 {
+		t.Fatalf("LastSequence = %d, want > 2 after sync and upload", enrollment.LastSequence)
 	}
 }
 

@@ -58,7 +58,7 @@ func TestQueueReviewArtifactReusesReviewQueue(t *testing.T) {
 		RiskFlags:     []string{"durable drift pressure"},
 		ArtifactRefs:  []string{"artifact://telegram/family-group/thread-12"},
 	}
-	if err := rt.QueueReviewArtifact(agent, artifact); err != nil {
+	if _, err := rt.QueueReviewArtifact(agent, artifact); err != nil {
 		t.Fatalf("QueueReviewArtifact() err = %v", err)
 	}
 
@@ -168,7 +168,7 @@ func TestQueueReviewArtifactRedactsSecretLikeMetadataIntoForensicSidecar(t *test
 			"local_response": "I will not store that password or use it as standing authority.",
 		},
 	}
-	if err := rt.QueueReviewArtifact(agent, artifact); err != nil {
+	if _, err := rt.QueueReviewArtifact(agent, artifact); err != nil {
 		t.Fatalf("QueueReviewArtifact() err = %v", err)
 	}
 
