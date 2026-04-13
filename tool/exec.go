@@ -83,6 +83,23 @@ type openAIVectorStoreInput struct {
 	Limit   int    `json:"limit,omitempty"`
 }
 
+type durableAgentInput struct {
+	Action                    string   `json:"action"`
+	AgentID                   string   `json:"agent_id,omitempty"`
+	ReviewEventID             int64    `json:"review_event_id,omitempty"`
+	Reason                    string   `json:"reason,omitempty"`
+	Charter                   string   `json:"charter,omitempty"`
+	Capabilities              []string `json:"capabilities,omitempty"`
+	OutboundMode              string   `json:"outbound_mode,omitempty"`
+	DriftPolicy               string   `json:"drift_policy,omitempty"`
+	PublicSurfaceMode         string   `json:"public_surface_mode,omitempty"`
+	SharedInferenceReuse      string   `json:"shared_inference_reuse,omitempty"`
+	SharedInferenceReuseScope string   `json:"shared_inference_reuse_scope,omitempty"`
+	Operation                 string   `json:"operation,omitempty"`
+	Secret                    string   `json:"secret,omitempty"`
+	History                   int      `json:"history,omitempty"`
+}
+
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
 	return &Registry{
 		workspace:      workspace,
@@ -96,6 +113,11 @@ func NewRegistryWithSandbox(workspace string, timeout time.Duration, resolver *s
 	registry.sandbox = resolver
 	registry.runner = sandbox.NewRunner()
 	return registry
+}
+
+func (r *Registry) WithRunner(runner *sandbox.Runner) *Registry {
+	r.runner = runner
+	return r
 }
 
 func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
@@ -230,6 +252,32 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			}`),
 		})
 	}
+	if r.store != nil {
+		defs = append(defs, agent.ToolDef{
+			Name:        "durable_agent",
+			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. Use this to list agents, inspect live policy or enrollment state, apply ratified policy changes, or change enrollment lifecycle state.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["list", "policy_show", "policy_apply", "enrollment_show", "enrollment_update"], "description": "Durable-agent governance operation"},
+					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
+					"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
+					"reason": {"type": "string", "description": "Optional operator reason for the change"},
+					"charter": {"type": "string", "description": "Optional charter override for policy_apply"},
+					"capabilities": {"type": "array", "items": {"type": "string"}, "description": "Optional capability envelope override for policy_apply"},
+					"outbound_mode": {"type": "string", "description": "Optional outbound mode override for policy_apply"},
+					"drift_policy": {"type": "string", "description": "Optional drift policy override for policy_apply"},
+					"public_surface_mode": {"type": "string", "description": "Optional public surface mode override for policy_apply"},
+					"shared_inference_reuse": {"type": "string", "description": "Optional shared inference reuse override for policy_apply"},
+					"shared_inference_reuse_scope": {"type": "string", "description": "Optional shared inference reuse scope override for policy_apply"},
+					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},
+					"secret": {"type": "string", "description": "Replacement control-plane secret for enrollment_update when operation=rotate_secret"},
+					"history": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Recent policy update entries to show for policy_show"}
+				},
+				"required": ["action"]
+			}`),
+		})
+	}
 	return defs
 }
 
@@ -287,6 +335,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.openAIFile(ctx, input, scope, p)
 	case "openai_vector_store":
 		return r.openAIVectorStore(ctx, input, p)
+	case "durable_agent":
+		return r.durableAgent(ctx, input, p)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}

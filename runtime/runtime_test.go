@@ -24,6 +24,7 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	providerpkg "github.com/idolum-ai/aphelion/provider"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -400,6 +401,40 @@ func (p *multiToolRequestingProvider) Complete(_ context.Context, _ []agent.Mess
 	return &agent.Response{Content: "done"}, nil
 }
 
+type durableAgentToolRequestingProvider struct {
+	mu             sync.Mutex
+	callCount      int
+	lastToolOutput string
+}
+
+func (p *durableAgentToolRequestingProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.callCount++
+	if p.callCount == 1 {
+		for _, def := range tools {
+			if def.Name == "durable_agent" {
+				return &agent.Response{
+					ToolCalls: []agent.ToolCall{{
+						ID:    "tool-call-1",
+						Name:  "durable_agent",
+						Input: json.RawMessage(`{"action":"policy_apply","agent_id":"family-group","outbound_mode":"read_only","reason":"ratified from conversation"}`),
+					}},
+				}, nil
+			}
+		}
+		return &agent.Response{Content: "durable-agent tool unavailable"}, nil
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "tool" {
+			p.lastToolOutput = messages[i].Content
+			break
+		}
+	}
+	return &agent.Response{Content: "Policy updated through conversation."}, nil
+}
+
 type legacyRecordingTools struct {
 	defs         []agent.ToolDef
 	executeCalls int
@@ -439,6 +474,41 @@ func (t *principalRecordingTools) ExecuteForPrincipal(_ context.Context, p princ
 
 func (t *principalRecordingTools) SupportsPrincipal(_ principal.Principal) bool {
 	return t.supportsPrincipal
+}
+
+func setFakeBubblewrapRunnerForRegistry(t *testing.T, registry *toolpkg.Registry) {
+	t.Helper()
+
+	dir := t.TempDir()
+	fakeBwrapPath := filepath.Join(dir, "bwrap")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+workdir=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --chdir)
+      shift
+      workdir="$1"
+      ;;
+    --)
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+if [[ -n "$workdir" ]]; then
+  cd "$workdir"
+fi
+exec "$@"
+`
+	if err := os.WriteFile(fakeBwrapPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake bwrap: %v", err)
+	}
+
+	registry.WithRunner(sandbox.NewRunnerWithLookPath(func(_ string) (string, error) {
+		return fakeBwrapPath, nil
+	}))
 }
 
 func testExecToolDef() agent.ToolDef {
@@ -3250,6 +3320,93 @@ func TestHandleInboundApprovedUserUsesPrincipalAwareToolsWhenSupported(t *testin
 	}
 	if tools.lastPrincipal.TelegramUserID != 1002 {
 		t.Fatalf("last principal user id = %d, want 1002", tools.lastPrincipal.TelegramUserID)
+	}
+}
+
+func TestHandleInboundAdminCanManageDurableAgentThroughConversationTool(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &durableAgentToolRequestingProvider{}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, 2*time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues.")),
+		BootstrapLLM:       durableGroupTestBootstrapLLM(),
+		PolicyVersion:      1,
+		LocalStorageRoots:  []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:      "default",
+		WakeupMode:         "telegram_update",
+		Status:             "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     42,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "Set family-group to read only.",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	updated, err := store.DurableAgent("family-group")
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if updated.LivePolicy.OutboundMode != "read_only" {
+		t.Fatalf("updated outbound_mode = %q, want read_only", updated.LivePolicy.OutboundMode)
+	}
+	if updated.PolicyVersion != 2 {
+		t.Fatalf("updated policy_version = %d, want 2", updated.PolicyVersion)
+	}
+
+	provider.mu.Lock()
+	if !strings.Contains(provider.lastToolOutput, "action: durable-agent policy apply") {
+		t.Fatalf("tool output = %q, want durable-agent policy apply output", provider.lastToolOutput)
+	}
+	provider.mu.Unlock()
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 2 {
+		t.Fatalf("sent len = %d, want progress + final reply", len(sender.sent))
+	}
+	if !strings.Contains(sender.sent[0].Text, "Using durable_agent") {
+		t.Fatalf("progress text = %q, want durable_agent progress entry", sender.sent[0].Text)
+	}
+	if sender.sent[1].Text != "Policy updated through conversation." {
+		t.Fatalf("final reply = %q, want conversational policy update reply", sender.sent[1].Text)
 	}
 }
 
