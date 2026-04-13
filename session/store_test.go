@@ -829,7 +829,7 @@ func TestCompleteTurnRun(t *testing.T) {
 
 	rows, err := store.db.Query(`
 		SELECT
-			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs

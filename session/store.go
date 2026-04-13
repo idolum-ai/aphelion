@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 9
+const schemaVersion = 10
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -64,11 +64,12 @@ func (s *SQLiteStore) init() error {
 			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
-			chat_id INTEGER NOT NULL,
+			session_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
 			user_id INTEGER NOT NULL DEFAULT 0,
-			scope_kind TEXT,
-			scope_id TEXT,
-			durable_agent_id TEXT,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
 			system_prompt TEXT,
 			last_floor_text TEXT,
 			last_floor_metadata TEXT,
@@ -90,52 +91,52 @@ func (s *SQLiteStore) init() error {
 			last_provider TEXT,
 			last_model TEXT,
 			active_tool_calls INTEGER NOT NULL DEFAULT 0,
-			last_error TEXT,
-			PRIMARY KEY (chat_id, user_id)
+			last_error TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS messages (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				chat_id INTEGER NOT NULL,
-				user_id INTEGER NOT NULL DEFAULT 0,
-				role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
-				content TEXT NOT NULL,
-				floor_content TEXT,
-				floor_metadata TEXT,
-				tool_calls TEXT,
-				tool_id TEXT,
-				tool_name TEXT,
-				thinking TEXT,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
+			content TEXT NOT NULL,
+			floor_content TEXT,
+			floor_metadata TEXT,
+			tool_calls TEXT,
+			tool_id TEXT,
+			tool_name TEXT,
+			thinking TEXT,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			turn_index INTEGER NOT NULL,
 			content_chars INTEGER NOT NULL DEFAULT 0,
 			compacted INTEGER NOT NULL DEFAULT 0,
-			FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
+			FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(chat_id, user_id, turn_index)`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_active ON messages(chat_id, user_id, compacted, turn_index)`,
 		`CREATE TABLE IF NOT EXISTS outbound_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			chat_id INTEGER NOT NULL,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
 			user_id INTEGER NOT NULL DEFAULT 0,
 			turn_index INTEGER NOT NULL,
 			telegram_msg_id INTEGER NOT NULL,
 			msg_type TEXT NOT NULL,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
+			FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_outbound_session ON outbound_messages(chat_id, user_id, turn_index)`,
 		`CREATE TABLE IF NOT EXISTS review_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			source_chat_id INTEGER NOT NULL,
+			source_session_id TEXT,
+			source_chat_id INTEGER NOT NULL DEFAULT 0,
 			source_user_id INTEGER NOT NULL DEFAULT 0,
 			source_role TEXT NOT NULL,
-			source_scope_kind TEXT,
-			source_scope_id TEXT,
-			source_durable_agent_id TEXT,
-			target_chat_id INTEGER NOT NULL,
-			target_scope_kind TEXT,
-			target_scope_id TEXT,
-			target_durable_agent_id TEXT,
+			source_scope_kind TEXT NOT NULL DEFAULT '',
+			source_scope_id TEXT NOT NULL DEFAULT '',
+			source_durable_agent_id TEXT NOT NULL DEFAULT '',
+			target_session_id TEXT,
+			target_chat_id INTEGER NOT NULL DEFAULT 0,
+			target_scope_kind TEXT NOT NULL DEFAULT '',
+			target_scope_id TEXT NOT NULL DEFAULT '',
+			target_durable_agent_id TEXT NOT NULL DEFAULT '',
 			turn_from INTEGER,
 			turn_to INTEGER,
 			summary TEXT NOT NULL,
@@ -144,14 +145,14 @@ func (s *SQLiteStore) init() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			delivered_at TEXT
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_review_events_target ON review_events(target_chat_id, status, created_at, id)`,
 		`CREATE TABLE IF NOT EXISTS turn_runs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			chat_id INTEGER NOT NULL,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
 			user_id INTEGER NOT NULL DEFAULT 0,
-			scope_kind TEXT,
-			scope_id TEXT,
-			durable_agent_id TEXT,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
 			kind TEXT NOT NULL,
 			status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'interrupted')),
 			request_text TEXT NOT NULL,
@@ -165,10 +166,8 @@ func (s *SQLiteStore) init() error {
 			error_text TEXT,
 			recovery_summary TEXT,
 			recovery_logged_at TEXT,
-			FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
+			FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(chat_id, user_id, started_at, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
 		`CREATE TABLE IF NOT EXISTS durable_agents (
 			agent_id TEXT PRIMARY KEY,
 			parent_agent_id TEXT,
@@ -201,7 +200,8 @@ func (s *SQLiteStore) init() error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS compaction_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			chat_id INTEGER NOT NULL,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
 			user_id INTEGER NOT NULL DEFAULT 0,
 			timestamp TEXT NOT NULL DEFAULT (datetime('now')),
 			turns_before INTEGER,
@@ -210,7 +210,7 @@ func (s *SQLiteStore) init() error {
 			tokens_after INTEGER,
 			summary TEXT,
 			strategy TEXT NOT NULL DEFAULT 'summarize',
-			FOREIGN KEY (chat_id, user_id) REFERENCES sessions(chat_id, user_id) ON DELETE CASCADE
+			FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS rhizome_nodes (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -254,6 +254,9 @@ func (s *SQLiteStore) init() error {
 	if err := applyMigrations(tx); err != nil {
 		return err
 	}
+	if err := ensureSessionIdentityIndexes(tx); err != nil {
+		return err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema tx: %w", err)
@@ -262,17 +265,18 @@ func (s *SQLiteStore) init() error {
 }
 
 func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
+	sessionID := SessionIDForKey(key)
 	row := s.db.QueryRow(`
 		SELECT
-			chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata,
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata,
 			created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
 			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
 			last_provider, last_model, active_tool_calls, last_error
 		FROM sessions
-		WHERE chat_id = ? AND user_id = ?
-	`, key.ChatID, key.UserID)
+		WHERE session_id = ?
+	`, sessionID)
 
 	sess := &Session{}
 	var (
@@ -295,7 +299,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	)
 
 	err := row.Scan(
-		&sess.ChatID, &sess.UserID, &scopeKind, &scopeID, &durableAgentID, &systemPrompt, &lastFloorText, &lastFloorMetadata, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
+		&sess.SessionID, &sess.ChatID, &sess.UserID, &scopeKind, &scopeID, &durableAgentID, &systemPrompt, &lastFloorText, &lastFloorMetadata, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
 		&chatType, &chatTitle, &userName,
 		&sess.CacheState.LastWriteBlock, &sess.CacheState.BlocksSinceWrite, &cacheLastWriteRaw, &sess.CacheState.HitRate, &consecutiveMissesRaw,
 		&sess.TotalInputTokens, &sess.TotalOutputTokens, &sess.TotalCacheRead, &sess.TotalCacheWrite,
@@ -348,11 +352,11 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	}
 
 	msgRows, err := s.db.Query(`
-			SELECT id, chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
+			SELECT id, session_id, chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
 			FROM messages
-			WHERE chat_id = ? AND user_id = ?
+			WHERE session_id = ?
 			ORDER BY turn_index, id
-	`, key.ChatID, key.UserID)
+	`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
 	}
@@ -372,7 +376,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		)
 
 		if err := msgRows.Scan(
-			&m.ID, &m.ChatID, &m.UserID, &m.Role, &m.Content, &floorRaw, &floorMetaRaw, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
+			&m.ID, &m.SessionID, &m.ChatID, &m.UserID, &m.Role, &m.Content, &floorRaw, &floorMetaRaw, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
 			&createdRaw, &m.TurnIndex, &m.ContentChars, &compactedRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
@@ -398,9 +402,9 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	compRows, err := s.db.Query(`
 		SELECT timestamp, turns_before, turns_after, tokens_before, tokens_after, summary, strategy
 		FROM compaction_log
-		WHERE chat_id = ? AND user_id = ?
+		WHERE session_id = ?
 		ORDER BY timestamp ASC, id ASC
-	`, key.ChatID, key.UserID)
+	`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("query compaction log: %w", err)
 	}
@@ -436,6 +440,12 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 
 func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.TokenUsage) error {
 	now := time.Now().UTC()
+	session.Scope = defaultScopeForKey(SessionKey{
+		ChatID: session.ChatID,
+		UserID: session.UserID,
+		Scope:  session.Scope,
+	})
+	session.SessionID = SessionIDFromParts(session.ChatID, session.UserID, session.Scope)
 	session.UpdatedAt = now
 	session.TotalInputTokens += usage.InputTokens
 	session.TotalOutputTokens += usage.OutputTokens
@@ -457,6 +467,7 @@ func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.T
 
 	for i := range newMessages {
 		msg := newMessages[i]
+		msg.SessionID = session.SessionID
 		if msg.ChatID == 0 {
 			msg.ChatID = session.ChatID
 		}
@@ -475,11 +486,11 @@ func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.T
 
 		_, err := tx.Exec(`
 				INSERT INTO messages(
-					chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking,
+					session_id, chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking,
 					created_at, turn_index, content_chars, compacted
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`,
-			msg.ChatID, msg.UserID, msg.Role, msg.Content, nullableString(msg.FloorContent), nullableString(msg.FloorMetadata),
+			msg.SessionID, msg.ChatID, msg.UserID, msg.Role, msg.Content, nullableString(msg.FloorContent), nullableString(msg.FloorMetadata),
 			nullableString(msg.ToolCalls), nullableString(msg.ToolID), nullableString(msg.ToolName), nullableString(msg.Thinking),
 			msg.CreatedAt.UTC().Format(time.RFC3339Nano), msg.TurnIndex, msg.ContentChars, boolToInt(msg.Compacted),
 		)
@@ -532,6 +543,7 @@ func updateCacheStateForUsage(session *Session, usage core.TokenUsage, now time.
 }
 
 func (s *SQLiteStore) UpdateCacheState(key SessionKey, state CacheState) error {
+	sessionID := SessionIDForKey(key)
 	_, err := s.db.Exec(`
 		UPDATE sessions
 		SET
@@ -541,7 +553,7 @@ func (s *SQLiteStore) UpdateCacheState(key SessionKey, state CacheState) error {
 			cache_hit_rate = ?,
 			cache_consecutive_misses = ?,
 			updated_at = ?
-		WHERE chat_id = ? AND user_id = ?
+		WHERE session_id = ?
 	`,
 		state.LastWriteBlock,
 		state.BlocksSinceWrite,
@@ -549,7 +561,7 @@ func (s *SQLiteStore) UpdateCacheState(key SessionKey, state CacheState) error {
 		state.HitRate,
 		state.ConsecutiveMisses,
 		time.Now().UTC().Format(time.RFC3339Nano),
-		key.ChatID, key.UserID,
+		sessionID,
 	)
 	if err != nil {
 		return fmt.Errorf("update cache state: %w", err)
@@ -562,6 +574,7 @@ func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) 
 		return fmt.Errorf("keepFromTurn must be >= 0")
 	}
 	summary = strings.TrimSpace(summary)
+	sessionID := SessionIDForKey(key)
 	strategy := "truncate"
 	if summary != "" {
 		strategy = "summarize"
@@ -579,25 +592,25 @@ func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) 
 	if err := tx.QueryRow(`
 		SELECT COUNT(1), COALESCE(SUM(content_chars), 0)
 		FROM messages
-		WHERE chat_id = ? AND user_id = ? AND compacted = 0
-	`, key.ChatID, key.UserID).Scan(&turnsBefore, &charsBefore); err != nil {
+		WHERE session_id = ? AND compacted = 0
+	`, sessionID).Scan(&turnsBefore, &charsBefore); err != nil {
 		return fmt.Errorf("query pre-compaction stats: %w", err)
 	}
 
 	if _, err := tx.Exec(`
 		UPDATE messages
 		SET compacted = 1
-		WHERE chat_id = ? AND user_id = ? AND turn_index < ? AND compacted = 0
-	`, key.ChatID, key.UserID, keepFromTurn); err != nil {
+		WHERE session_id = ? AND turn_index < ? AND compacted = 0
+	`, sessionID, keepFromTurn); err != nil {
 		return fmt.Errorf("compact old messages: %w", err)
 	}
 
 	if summary != "" {
 		_, err := tx.Exec(`
 			INSERT INTO messages(
-				chat_id, user_id, role, content, created_at, turn_index, content_chars, compacted
-			) VALUES (?, ?, 'assistant', ?, ?, ?, ?, 0)
-		`, key.ChatID, key.UserID, summary, time.Now().UTC().Format(time.RFC3339Nano), keepFromTurn, len(summary))
+				session_id, chat_id, user_id, role, content, created_at, turn_index, content_chars, compacted
+			) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?, 0)
+		`, sessionID, key.ChatID, key.UserID, summary, time.Now().UTC().Format(time.RFC3339Nano), keepFromTurn, len(summary))
 		if err != nil {
 			return fmt.Errorf("insert compaction summary: %w", err)
 		}
@@ -607,17 +620,17 @@ func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) 
 	if err := tx.QueryRow(`
 		SELECT COUNT(1), COALESCE(SUM(content_chars), 0)
 		FROM messages
-		WHERE chat_id = ? AND user_id = ? AND compacted = 0
-	`, key.ChatID, key.UserID).Scan(&turnsAfter, &charsAfter); err != nil {
+		WHERE session_id = ? AND compacted = 0
+	`, sessionID).Scan(&turnsAfter, &charsAfter); err != nil {
 		return fmt.Errorf("query post-compaction stats: %w", err)
 	}
 
 	if _, err := tx.Exec(`
 		INSERT INTO compaction_log(
-			chat_id, user_id, timestamp, turns_before, turns_after, tokens_before, tokens_after, summary, strategy
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			session_id, chat_id, user_id, timestamp, turns_before, turns_after, tokens_before, tokens_after, summary, strategy
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		key.ChatID, key.UserID, time.Now().UTC().Format(time.RFC3339Nano),
+		sessionID, key.ChatID, key.UserID, time.Now().UTC().Format(time.RFC3339Nano),
 		turnsBefore, turnsAfter, charsBefore/4, charsAfter/4, summary, strategy,
 	); err != nil {
 		return fmt.Errorf("insert compaction log: %w", err)
@@ -631,8 +644,8 @@ func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) 
 			cache_hit_rate = 0,
 			cache_consecutive_misses = 0,
 			updated_at = ?
-		WHERE chat_id = ? AND user_id = ?
-	`, time.Now().UTC().Format(time.RFC3339Nano), key.ChatID, key.UserID); err != nil {
+		WHERE session_id = ?
+	`, time.Now().UTC().Format(time.RFC3339Nano), sessionID); err != nil {
 		return fmt.Errorf("update session after compaction: %w", err)
 	}
 
@@ -667,7 +680,7 @@ func (s *SQLiteStore) ListActive(since time.Duration) ([]SessionKey, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT chat_id, user_id
+		SELECT chat_id, user_id, scope_kind, scope_id, durable_agent_id
 		FROM sessions
 		WHERE updated_at >= datetime('now', ?)
 		ORDER BY updated_at DESC
@@ -679,10 +692,20 @@ func (s *SQLiteStore) ListActive(since time.Duration) ([]SessionKey, error) {
 
 	keys := make([]SessionKey, 0, 32)
 	for rows.Next() {
-		var key SessionKey
-		if err := rows.Scan(&key.ChatID, &key.UserID); err != nil {
+		var (
+			key            SessionKey
+			scopeKind      sql.NullString
+			scopeID        sql.NullString
+			durableAgentID sql.NullString
+		)
+		if err := rows.Scan(&key.ChatID, &key.UserID, &scopeKind, &scopeID, &durableAgentID); err != nil {
 			return nil, fmt.Errorf("scan active session key: %w", err)
 		}
+		key.Scope = NormalizeScopeRef(ScopeRef{
+			Kind:           ScopeKind(nullToString(scopeKind)),
+			ID:             nullToString(scopeID),
+			DurableAgentID: nullToString(durableAgentID),
+		})
 		keys = append(keys, key)
 	}
 	if err := rows.Err(); err != nil {
@@ -692,6 +715,7 @@ func (s *SQLiteStore) ListActive(since time.Duration) ([]SessionKey, error) {
 }
 
 func (s *SQLiteStore) ForkAt(key SessionKey, turnIndex int, newContent string) error {
+	sessionID := SessionIDForKey(key)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin fork tx: %w", err)
@@ -703,24 +727,24 @@ func (s *SQLiteStore) ForkAt(key SessionKey, turnIndex int, newContent string) e
 	if _, err := tx.Exec(`
 		UPDATE messages
 		SET compacted = 1
-		WHERE chat_id = ? AND user_id = ? AND turn_index > ?
-	`, key.ChatID, key.UserID, turnIndex); err != nil {
+		WHERE session_id = ? AND turn_index > ?
+	`, sessionID, turnIndex); err != nil {
 		return fmt.Errorf("compact fork tail: %w", err)
 	}
 
 	if _, err := tx.Exec(`
 		UPDATE messages
 		SET content = ?, content_chars = ?, compacted = 0
-		WHERE chat_id = ? AND user_id = ? AND turn_index = ? AND role = 'user'
-	`, newContent, len(newContent), key.ChatID, key.UserID, turnIndex); err != nil {
+		WHERE session_id = ? AND turn_index = ? AND role = 'user'
+	`, newContent, len(newContent), sessionID, turnIndex); err != nil {
 		return fmt.Errorf("update forked user message: %w", err)
 	}
 
 	if _, err := tx.Exec(`
 		UPDATE sessions
 		SET turn_count = ?, updated_at = ?
-		WHERE chat_id = ? AND user_id = ?
-	`, turnIndex, time.Now().UTC().Format(time.RFC3339Nano), key.ChatID, key.UserID); err != nil {
+		WHERE session_id = ?
+	`, turnIndex, time.Now().UTC().Format(time.RFC3339Nano), sessionID); err != nil {
 		return fmt.Errorf("update session turn_count after fork: %w", err)
 	}
 
@@ -731,12 +755,13 @@ func (s *SQLiteStore) ForkAt(key SessionKey, turnIndex int, newContent string) e
 }
 
 func (s *SQLiteStore) OutboundAfterTurn(key SessionKey, turnIndex int) ([]int64, error) {
+	sessionID := SessionIDForKey(key)
 	rows, err := s.db.Query(`
 		SELECT telegram_msg_id
 		FROM outbound_messages
-		WHERE chat_id = ? AND user_id = ? AND turn_index > ?
+		WHERE session_id = ? AND turn_index > ?
 		ORDER BY telegram_msg_id
-	`, key.ChatID, key.UserID, turnIndex)
+	`, sessionID, turnIndex)
 	if err != nil {
 		return nil, fmt.Errorf("query outbound after turn: %w", err)
 	}
@@ -770,7 +795,7 @@ func (s *SQLiteStore) SearchMessages(query string, limit int, scope *SessionKey)
 
 	pattern := "%" + query + "%"
 	base := `
-		SELECT chat_id, user_id, turn_index, role, content, floor_content, created_at
+		SELECT session_id, chat_id, user_id, turn_index, role, content, floor_content, created_at
 		FROM messages
 		WHERE compacted = 0
 			AND (
@@ -780,8 +805,8 @@ func (s *SQLiteStore) SearchMessages(query string, limit int, scope *SessionKey)
 	`
 	args := []any{pattern, pattern}
 	if scope != nil {
-		base += ` AND chat_id = ? AND user_id = ?`
-		args = append(args, scope.ChatID, scope.UserID)
+		base += ` AND session_id = ?`
+		args = append(args, SessionIDForKey(*scope))
 	}
 	base += ` ORDER BY created_at DESC, id DESC LIMIT ?`
 	args = append(args, limit)
@@ -800,7 +825,7 @@ func (s *SQLiteStore) SearchMessages(query string, limit int, scope *SessionKey)
 			floorContent sql.NullString
 		)
 		if err := rows.Scan(
-			&hit.ChatID, &hit.UserID, &hit.TurnIndex, &hit.Role,
+			&hit.SessionID, &hit.ChatID, &hit.UserID, &hit.TurnIndex, &hit.Role,
 			&hit.Content, &floorContent, &createdAtRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan search hit: %w", err)
@@ -994,11 +1019,12 @@ func (s *SQLiteStore) RecordOutbound(key SessionKey, turnIndex int, telegramMsgI
 	if strings.TrimSpace(msgType) == "" {
 		msgType = "text"
 	}
+	sessionID := SessionIDForKey(key)
 
 	_, err := s.db.Exec(`
-		INSERT INTO outbound_messages(chat_id, user_id, turn_index, telegram_msg_id, msg_type)
-		VALUES (?, ?, ?, ?, ?)
-	`, key.ChatID, key.UserID, turnIndex, telegramMsgID, msgType)
+		INSERT INTO outbound_messages(session_id, chat_id, user_id, turn_index, telegram_msg_id, msg_type)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, sessionID, key.ChatID, key.UserID, turnIndex, telegramMsgID, msgType)
 	if err != nil {
 		return fmt.Errorf("record outbound: %w", err)
 	}
@@ -1025,19 +1051,25 @@ func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
 	if status == "" {
 		status = "pending"
 	}
+	if strings.TrimSpace(event.SourceSessionID) == "" {
+		event.SourceSessionID = SessionIDFromParts(event.SourceChatID, event.SourceUserID, event.SourceScope)
+	}
+	if strings.TrimSpace(event.TargetSessionID) == "" {
+		event.TargetSessionID = SessionIDFromParts(event.TargetAdminChatID, 0, event.TargetScope)
+	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(`
 		INSERT INTO review_events(
-			source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
-			target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
+			source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
+			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
 			turn_from, turn_to, summary, metadata_json, status, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		event.SourceChatID, event.SourceUserID, event.SourceRole,
-		nullableString(string(event.SourceScope.Kind)), nullableString(event.SourceScope.ID), nullableString(event.SourceScope.DurableAgentID),
-		event.TargetAdminChatID,
-		nullableString(string(event.TargetScope.Kind)), nullableString(event.TargetScope.ID), nullableString(event.TargetScope.DurableAgentID),
+		nullableString(event.SourceSessionID), event.SourceChatID, event.SourceUserID, event.SourceRole,
+		string(event.SourceScope.Kind), event.SourceScope.ID, event.SourceScope.DurableAgentID,
+		nullableString(event.TargetSessionID), event.TargetAdminChatID,
+		string(event.TargetScope.Kind), event.TargetScope.ID, event.TargetScope.DurableAgentID,
 		event.TurnFrom, event.TurnTo, event.Summary, nullableString(event.MetadataJSON), status, now,
 	)
 	if err != nil {
@@ -1056,8 +1088,8 @@ func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]Revi
 
 	rows, err := s.db.Query(`
 		SELECT
-			id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
-			target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
+			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
+			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
 			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
 		FROM review_events
 		WHERE target_chat_id = ? AND status = 'pending'
@@ -1078,9 +1110,11 @@ func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]Revi
 			turnFromRaw     sql.NullInt64
 			turnToRaw       sql.NullInt64
 			targetChatIDRaw int64
+			sourceSessionID sql.NullString
 			sourceScopeKind sql.NullString
 			sourceScopeID   sql.NullString
 			sourceAgentID   sql.NullString
+			targetSessionID sql.NullString
 			targetScopeKind sql.NullString
 			targetScopeID   sql.NullString
 			targetAgentID   sql.NullString
@@ -1088,14 +1122,16 @@ func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]Revi
 		)
 
 		if err := rows.Scan(
-			&event.ID, &event.SourceChatID, &event.SourceUserID, &event.SourceRole, &sourceScopeKind, &sourceScopeID, &sourceAgentID,
-			&targetChatIDRaw, &targetScopeKind, &targetScopeID, &targetAgentID,
+			&event.ID, &sourceSessionID, &event.SourceChatID, &event.SourceUserID, &event.SourceRole, &sourceScopeKind, &sourceScopeID, &sourceAgentID,
+			&targetSessionID, &targetChatIDRaw, &targetScopeKind, &targetScopeID, &targetAgentID,
 			&turnFromRaw, &turnToRaw, &event.Summary, &metadataJSON, &event.Status, &createdAtRaw, &deliveredAtRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan pending review event: %w", err)
 		}
 
+		event.SourceSessionID = nullToString(sourceSessionID)
 		event.TargetAdminChatID = targetChatIDRaw
+		event.TargetSessionID = nullToString(targetSessionID)
 		event.SourceScope = NormalizeScopeRef(ScopeRef{
 			Kind:           ScopeKind(nullToString(sourceScopeKind)),
 			ID:             nullToString(sourceScopeID),
@@ -1180,13 +1216,14 @@ func (s *SQLiteStore) BeginTurnRun(key SessionKey, kind TurnRunKind, requestText
 		kind = TurnRunKindInteractive
 	}
 	scope := defaultScopeForKey(key)
+	sessionID := SessionIDFromParts(key.ChatID, key.UserID, scope)
 
 	res, err := s.db.Exec(`
 		INSERT INTO turn_runs(
-			chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, last_activity_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, last_activity_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		key.ChatID, key.UserID, nullableString(string(scope.Kind)), nullableString(scope.ID), nullableString(scope.DurableAgentID),
+		sessionID, key.ChatID, key.UserID, string(scope.Kind), scope.ID, scope.DurableAgentID,
 		string(kind), string(TurnRunStatusRunning), requestText,
 		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
 	)
@@ -1200,6 +1237,7 @@ func (s *SQLiteStore) BeginTurnRun(key SessionKey, kind TurnRunKind, requestText
 
 	return &TurnRun{
 		ID:             id,
+		SessionID:      sessionID,
 		ChatID:         key.ChatID,
 		UserID:         key.UserID,
 		Scope:          scope,
@@ -1298,7 +1336,7 @@ func (s *SQLiteStore) InterruptRunningTurnRuns() ([]TurnRun, error) {
 
 	rows, err := tx.Query(`
 		SELECT
-			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
@@ -1364,7 +1402,7 @@ func (s *SQLiteStore) PendingRecoveryTurnRuns(limit int) ([]TurnRun, error) {
 
 	rows, err := s.db.Query(`
 		SELECT
-			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
@@ -1433,16 +1471,17 @@ func (s *SQLiteStore) MarkTurnRunsRecovered(ids []int64, summary string) error {
 }
 
 func (s *SQLiteStore) LatestTurnRun(key SessionKey) (*TurnRun, error) {
+	sessionID := SessionIDForKey(key)
 	rows, err := s.db.Query(`
 		SELECT
-			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
-		WHERE chat_id = ? AND user_id = ?
+		WHERE session_id = ?
 		ORDER BY id DESC
 		LIMIT 1
-	`, key.ChatID, key.UserID)
+	`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("query latest turn run: %w", err)
 	}
@@ -1460,7 +1499,7 @@ func (s *SQLiteStore) LatestTurnRun(key SessionKey) (*TurnRun, error) {
 func (s *SQLiteStore) TurnRun(id int64) (*TurnRun, error) {
 	rows, err := s.db.Query(`
 		SELECT
-			id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
 			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
@@ -1481,6 +1520,7 @@ func (s *SQLiteStore) TurnRun(id int64) (*TurnRun, error) {
 }
 
 func (s *SQLiteStore) DeleteSession(key SessionKey) (int, error) {
+	sessionID := SessionIDForKey(key)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("begin delete session tx: %w", err)
@@ -1492,16 +1532,16 @@ func (s *SQLiteStore) DeleteSession(key SessionKey) (int, error) {
 	if _, err := tx.Exec(`
 		DELETE FROM review_events
 		WHERE
-			(source_chat_id = ? AND source_user_id = ?)
-			OR target_chat_id = ?
-	`, key.ChatID, key.UserID, key.ChatID); err != nil {
+			source_session_id = ?
+			OR target_session_id = ?
+	`, sessionID, sessionID); err != nil {
 		return 0, fmt.Errorf("delete related review events: %w", err)
 	}
 
 	res, err := tx.Exec(`
 		DELETE FROM sessions
-		WHERE chat_id = ? AND user_id = ?
-	`, key.ChatID, key.UserID)
+		WHERE session_id = ?
+	`, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("delete session: %w", err)
 	}
@@ -1722,10 +1762,12 @@ func (s *SQLiteStore) DeleteDurableAgent(agentID string) error {
 
 func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 	now := time.Now().UTC()
+	scope := defaultScopeForKey(key)
 	sess := &Session{
+		SessionID: SessionIDFromParts(key.ChatID, key.UserID, scope),
 		ChatID:    key.ChatID,
 		UserID:    key.UserID,
-		Scope:     defaultScopeForKey(key),
+		Scope:     scope,
 		CreatedAt: now,
 		UpdatedAt: now,
 		ChatType:  "dm",
@@ -1733,10 +1775,10 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 
 	if _, err := s.db.Exec(`
 		INSERT INTO sessions(
-			chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, created_at, updated_at, turn_count, chat_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, created_at, updated_at, turn_count, chat_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		key.ChatID, key.UserID, nullableString(string(sess.Scope.Kind)), nullableString(sess.Scope.ID), nullableString(sess.Scope.DurableAgentID),
+		sess.SessionID, key.ChatID, key.UserID, string(sess.Scope.Kind), sess.Scope.ID, sess.Scope.DurableAgentID,
 		"", "", now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), 0, sess.ChatType,
 	); err != nil {
 		return nil, fmt.Errorf("insert empty session: %w", err)
@@ -1745,16 +1787,23 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 }
 
 func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
-	session.Scope = NormalizeScopeRef(session.Scope)
+	session.Scope = defaultScopeForKey(SessionKey{
+		ChatID: session.ChatID,
+		UserID: session.UserID,
+		Scope:  session.Scope,
+	})
+	session.SessionID = SessionIDFromParts(session.ChatID, session.UserID, session.Scope)
 	_, err := tx.Exec(`
 		INSERT INTO sessions(
-			chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata, created_at, updated_at, turn_count,
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata, created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
 			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
 			last_provider, last_model, active_tool_calls, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(chat_id, user_id) DO UPDATE SET
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET
+			chat_id = excluded.chat_id,
+			user_id = excluded.user_id,
 			scope_kind = excluded.scope_kind,
 			scope_id = excluded.scope_id,
 			durable_agent_id = excluded.durable_agent_id,
@@ -1780,7 +1829,7 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 			active_tool_calls = excluded.active_tool_calls,
 			last_error = excluded.last_error
 	`,
-		session.ChatID, session.UserID, nullableString(string(session.Scope.Kind)), nullableString(session.Scope.ID), nullableString(session.Scope.DurableAgentID),
+		session.SessionID, session.ChatID, session.UserID, string(session.Scope.Kind), session.Scope.ID, session.Scope.DurableAgentID,
 		session.SystemPrompt, nullableString(session.LastFloorText), nullableString(session.LastFloorMetadata),
 		nonZeroTimeOrNow(session.CreatedAt, now).UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), session.TurnCount,
 		defaultChatType(session.ChatType), nullableString(session.ChatTitle), nullableString(session.UserName),
@@ -1800,6 +1849,9 @@ func applyMigrations(tx *sql.Tx) error {
 	}
 	if err := ensureSessionColumn(tx, "last_floor_metadata", "TEXT"); err != nil {
 		return fmt.Errorf("ensure sessions.last_floor_metadata: %w", err)
+	}
+	if err := ensureSessionColumn(tx, "session_id", "TEXT"); err != nil {
+		return fmt.Errorf("ensure sessions.session_id: %w", err)
 	}
 	if err := ensureSessionColumn(tx, "scope_kind", "TEXT"); err != nil {
 		return fmt.Errorf("ensure sessions.scope_kind: %w", err)
@@ -1821,16 +1873,22 @@ func applyMigrations(tx *sql.Tx) error {
 		name  string
 		typ   string
 	}{
+		{"messages", "session_id", "TEXT"},
 		{"review_events", "source_scope_kind", "TEXT"},
 		{"review_events", "source_scope_id", "TEXT"},
 		{"review_events", "source_durable_agent_id", "TEXT"},
+		{"review_events", "source_session_id", "TEXT"},
 		{"review_events", "target_scope_kind", "TEXT"},
 		{"review_events", "target_scope_id", "TEXT"},
 		{"review_events", "target_durable_agent_id", "TEXT"},
+		{"review_events", "target_session_id", "TEXT"},
 		{"review_events", "metadata_json", "TEXT"},
+		{"outbound_messages", "session_id", "TEXT"},
 		{"turn_runs", "scope_kind", "TEXT"},
 		{"turn_runs", "scope_id", "TEXT"},
 		{"turn_runs", "durable_agent_id", "TEXT"},
+		{"turn_runs", "session_id", "TEXT"},
+		{"compaction_log", "session_id", "TEXT"},
 	} {
 		if err := ensureTableColumn(tx, column.table, column.name, column.typ); err != nil {
 			return fmt.Errorf("ensure %s.%s: %w", column.table, column.name, err)
@@ -1840,6 +1898,11 @@ func applyMigrations(tx *sql.Tx) error {
 	currentVersion, err := currentSchemaVersion(tx)
 	if err != nil {
 		return err
+	}
+	if currentVersion < 10 {
+		if err := migrateSessionIdentity(tx); err != nil {
+			return err
+		}
 	}
 	if currentVersion >= schemaVersion {
 		return nil
@@ -1851,6 +1914,431 @@ func applyMigrations(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+func migrateSessionIdentity(tx *sql.Tx) error {
+	pk, err := primaryKeyColumns(tx, "sessions")
+	if err != nil {
+		return fmt.Errorf("inspect sessions primary key: %w", err)
+	}
+	if len(pk) == 1 && strings.EqualFold(pk[0], "session_id") {
+		if err := backfillSessionIdentityColumns(tx); err != nil {
+			return err
+		}
+		if err := backfillChildSessionIDs(tx); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := backfillSessionIdentityColumns(tx); err != nil {
+		return err
+	}
+
+	statements := []string{
+		`CREATE TABLE sessions_v10 (
+			session_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			system_prompt TEXT,
+			last_floor_text TEXT,
+			last_floor_metadata TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			turn_count INTEGER NOT NULL DEFAULT 0,
+			chat_type TEXT NOT NULL DEFAULT 'dm',
+			chat_title TEXT,
+			user_name TEXT,
+			cache_last_write_block INTEGER NOT NULL DEFAULT 0,
+			cache_blocks_since INTEGER NOT NULL DEFAULT 0,
+			cache_last_write_time TEXT,
+			cache_hit_rate REAL NOT NULL DEFAULT 0.0,
+			cache_consecutive_misses INTEGER NOT NULL DEFAULT 0,
+			total_input_tokens INTEGER NOT NULL DEFAULT 0,
+			total_output_tokens INTEGER NOT NULL DEFAULT 0,
+			total_cache_read INTEGER NOT NULL DEFAULT 0,
+			total_cache_write INTEGER NOT NULL DEFAULT 0,
+			last_provider TEXT,
+			last_model TEXT,
+			active_tool_calls INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT
+		)`,
+		`CREATE TABLE messages_v10 (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
+			content TEXT NOT NULL,
+			floor_content TEXT,
+			floor_metadata TEXT,
+			tool_calls TEXT,
+			tool_id TEXT,
+			tool_name TEXT,
+			thinking TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			turn_index INTEGER NOT NULL,
+			content_chars INTEGER NOT NULL DEFAULT 0,
+			compacted INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY (session_id) REFERENCES sessions_v10(session_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE outbound_messages_v10 (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			turn_index INTEGER NOT NULL,
+			telegram_msg_id INTEGER NOT NULL,
+			msg_type TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (session_id) REFERENCES sessions_v10(session_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE review_events_v10 (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_session_id TEXT,
+			source_chat_id INTEGER NOT NULL DEFAULT 0,
+			source_user_id INTEGER NOT NULL DEFAULT 0,
+			source_role TEXT NOT NULL,
+			source_scope_kind TEXT NOT NULL DEFAULT '',
+			source_scope_id TEXT NOT NULL DEFAULT '',
+			source_durable_agent_id TEXT NOT NULL DEFAULT '',
+			target_session_id TEXT,
+			target_chat_id INTEGER NOT NULL DEFAULT 0,
+			target_scope_kind TEXT NOT NULL DEFAULT '',
+			target_scope_id TEXT NOT NULL DEFAULT '',
+			target_durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_from INTEGER,
+			turn_to INTEGER,
+			summary TEXT NOT NULL,
+			metadata_json TEXT,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'dismissed')),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			delivered_at TEXT
+		)`,
+		`CREATE TABLE turn_runs_v10 (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'interrupted')),
+			request_text TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			completed_at TEXT,
+			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+			last_tool_name TEXT,
+			last_tool_preview TEXT,
+			tool_calls_started INTEGER NOT NULL DEFAULT 0,
+			progress_message_id INTEGER,
+			error_text TEXT,
+			recovery_summary TEXT,
+			recovery_logged_at TEXT,
+			FOREIGN KEY (session_id) REFERENCES sessions_v10(session_id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE compaction_log_v10 (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+			turns_before INTEGER,
+			turns_after INTEGER,
+			tokens_before INTEGER,
+			tokens_after INTEGER,
+			summary TEXT,
+			strategy TEXT NOT NULL DEFAULT 'summarize',
+			FOREIGN KEY (session_id) REFERENCES sessions_v10(session_id) ON DELETE CASCADE
+		)`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("create session identity table: %w", err)
+		}
+	}
+
+	copyStatements := []string{
+		`INSERT INTO sessions_v10(
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata,
+			created_at, updated_at, turn_count, chat_type, chat_title, user_name,
+			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
+			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
+			last_provider, last_model, active_tool_calls, last_error
+		)
+		SELECT
+			session_id, chat_id, user_id, COALESCE(scope_kind, ''), COALESCE(scope_id, ''), COALESCE(durable_agent_id, ''),
+			system_prompt, last_floor_text, last_floor_metadata,
+			created_at, updated_at, turn_count, chat_type, chat_title, user_name,
+			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
+			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
+			last_provider, last_model, active_tool_calls, last_error
+		FROM sessions`,
+		`INSERT INTO messages_v10(
+			id, session_id, chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking,
+			created_at, turn_index, content_chars, compacted
+		)
+		SELECT
+			messages.id, sessions.session_id, messages.chat_id, messages.user_id, messages.role, messages.content, messages.floor_content, messages.floor_metadata, messages.tool_calls, messages.tool_id, messages.tool_name, messages.thinking,
+			messages.created_at, messages.turn_index, messages.content_chars, messages.compacted
+		FROM messages
+		JOIN sessions ON sessions.chat_id = messages.chat_id AND sessions.user_id = messages.user_id`,
+		`INSERT INTO outbound_messages_v10(
+			id, session_id, chat_id, user_id, turn_index, telegram_msg_id, msg_type, created_at
+		)
+		SELECT
+			outbound_messages.id, sessions.session_id, outbound_messages.chat_id, outbound_messages.user_id, outbound_messages.turn_index, outbound_messages.telegram_msg_id, outbound_messages.msg_type, outbound_messages.created_at
+		FROM outbound_messages
+		JOIN sessions ON sessions.chat_id = outbound_messages.chat_id AND sessions.user_id = outbound_messages.user_id`,
+		`INSERT INTO review_events_v10(
+			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
+			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
+		)
+		SELECT
+			id, source_session_id, source_chat_id, source_user_id, source_role, COALESCE(source_scope_kind, ''), COALESCE(source_scope_id, ''), COALESCE(source_durable_agent_id, ''),
+			target_session_id, target_chat_id, COALESCE(target_scope_kind, ''), COALESCE(target_scope_id, ''), COALESCE(target_durable_agent_id, ''),
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
+		FROM review_events`,
+		`INSERT INTO turn_runs_v10(
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text,
+			started_at, completed_at, last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
+			progress_message_id, error_text, recovery_summary, recovery_logged_at
+		)
+		SELECT
+			turn_runs.id, sessions.session_id, turn_runs.chat_id, turn_runs.user_id, COALESCE(turn_runs.scope_kind, ''), COALESCE(turn_runs.scope_id, ''), COALESCE(turn_runs.durable_agent_id, ''), turn_runs.kind, turn_runs.status, turn_runs.request_text,
+			turn_runs.started_at, turn_runs.completed_at, turn_runs.last_activity_at, turn_runs.last_tool_name, turn_runs.last_tool_preview, turn_runs.tool_calls_started,
+			turn_runs.progress_message_id, turn_runs.error_text, turn_runs.recovery_summary, turn_runs.recovery_logged_at
+		FROM turn_runs
+		JOIN sessions ON sessions.chat_id = turn_runs.chat_id AND sessions.user_id = turn_runs.user_id`,
+		`INSERT INTO compaction_log_v10(
+			id, session_id, chat_id, user_id, timestamp, turns_before, turns_after, tokens_before, tokens_after, summary, strategy
+		)
+		SELECT
+			compaction_log.id, sessions.session_id, compaction_log.chat_id, compaction_log.user_id, compaction_log.timestamp, compaction_log.turns_before, compaction_log.turns_after, compaction_log.tokens_before, compaction_log.tokens_after, compaction_log.summary, compaction_log.strategy
+		FROM compaction_log
+		JOIN sessions ON sessions.chat_id = compaction_log.chat_id AND sessions.user_id = compaction_log.user_id`,
+	}
+	for _, stmt := range copyStatements {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("copy session identity data: %w", err)
+		}
+	}
+
+	for _, stmt := range []string{
+		`DROP TABLE messages`,
+		`DROP TABLE outbound_messages`,
+		`DROP TABLE turn_runs`,
+		`DROP TABLE compaction_log`,
+		`DROP TABLE review_events`,
+		`DROP TABLE sessions`,
+		`ALTER TABLE sessions_v10 RENAME TO sessions`,
+		`ALTER TABLE messages_v10 RENAME TO messages`,
+		`ALTER TABLE outbound_messages_v10 RENAME TO outbound_messages`,
+		`ALTER TABLE review_events_v10 RENAME TO review_events`,
+		`ALTER TABLE turn_runs_v10 RENAME TO turn_runs`,
+		`ALTER TABLE compaction_log_v10 RENAME TO compaction_log`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_transport_scope ON sessions(chat_id, user_id, scope_kind, scope_id, durable_agent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, turn_index)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_active ON messages(session_id, compacted, turn_index)`,
+		`CREATE INDEX IF NOT EXISTS idx_outbound_session ON outbound_messages(session_id, turn_index)`,
+		`CREATE INDEX IF NOT EXISTS idx_review_events_target ON review_events(target_chat_id, status, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_review_events_target_session ON review_events(target_session_id, status, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("finalize session identity migration: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureSessionIdentityIndexes(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_transport_scope ON sessions(chat_id, user_id, scope_kind, scope_id, durable_agent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, turn_index)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_active ON messages(session_id, compacted, turn_index)`,
+		`CREATE INDEX IF NOT EXISTS idx_outbound_session ON outbound_messages(session_id, turn_index)`,
+		`CREATE INDEX IF NOT EXISTS idx_review_events_target ON review_events(target_chat_id, status, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_review_events_target_session ON review_events(target_session_id, status, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure session identity index: %w", err)
+		}
+	}
+	return nil
+}
+
+func backfillSessionIdentityColumns(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT rowid, chat_id, user_id, COALESCE(scope_kind, ''), COALESCE(scope_id, ''), COALESCE(durable_agent_id, ''), COALESCE(session_id, '')
+		FROM sessions
+	`)
+	if err != nil {
+		return fmt.Errorf("query sessions for session identity backfill: %w", err)
+	}
+	defer rows.Close()
+
+	type sessionRow struct {
+		rowid int64
+		id    string
+	}
+	var sessionRows []sessionRow
+	for rows.Next() {
+		var (
+			rowid           int64
+			chatID          int64
+			userID          int64
+			scopeKind       string
+			scopeID         string
+			durableAgentID  string
+			existingSession string
+		)
+		if err := rows.Scan(&rowid, &chatID, &userID, &scopeKind, &scopeID, &durableAgentID, &existingSession); err != nil {
+			return fmt.Errorf("scan session backfill row: %w", err)
+		}
+		scope := NormalizeScopeRef(ScopeRef{
+			Kind:           ScopeKind(scopeKind),
+			ID:             scopeID,
+			DurableAgentID: durableAgentID,
+		})
+		if existingSession == "" {
+			existingSession = SessionIDFromParts(chatID, userID, scope)
+		}
+		sessionRows = append(sessionRows, sessionRow{rowid: rowid, id: existingSession})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate sessions for backfill: %w", err)
+	}
+	for _, row := range sessionRows {
+		if _, err := tx.Exec(`UPDATE sessions SET session_id = ? WHERE rowid = ?`, row.id, row.rowid); err != nil {
+			return fmt.Errorf("backfill sessions.session_id rowid=%d: %w", row.rowid, err)
+		}
+	}
+
+	reviewRows, err := tx.Query(`
+		SELECT
+			id,
+			COALESCE(source_session_id, ''),
+			source_chat_id, source_user_id,
+			COALESCE(source_scope_kind, ''), COALESCE(source_scope_id, ''), COALESCE(source_durable_agent_id, ''),
+			COALESCE(target_session_id, ''),
+			target_chat_id,
+			COALESCE(target_scope_kind, ''), COALESCE(target_scope_id, ''), COALESCE(target_durable_agent_id, '')
+		FROM review_events
+	`)
+	if err != nil {
+		return fmt.Errorf("query review events for backfill: %w", err)
+	}
+	defer reviewRows.Close()
+	type reviewRow struct {
+		id              int64
+		sourceSessionID string
+		targetSessionID string
+	}
+	var reviews []reviewRow
+	for reviewRows.Next() {
+		var (
+			row              reviewRow
+			sourceChatID     int64
+			sourceUserID     int64
+			sourceScopeKind  string
+			sourceScopeID    string
+			sourceAgentID    string
+			targetChatID     int64
+			targetScopeKind  string
+			targetScopeID    string
+			targetAgentID    string
+		)
+		if err := reviewRows.Scan(&row.id, &row.sourceSessionID, &sourceChatID, &sourceUserID, &sourceScopeKind, &sourceScopeID, &sourceAgentID, &row.targetSessionID, &targetChatID, &targetScopeKind, &targetScopeID, &targetAgentID); err != nil {
+			return fmt.Errorf("scan review event backfill row: %w", err)
+		}
+		if row.sourceSessionID == "" {
+			row.sourceSessionID = SessionIDFromParts(sourceChatID, sourceUserID, NormalizeScopeRef(ScopeRef{
+				Kind:           ScopeKind(sourceScopeKind),
+				ID:             sourceScopeID,
+				DurableAgentID: sourceAgentID,
+			}))
+		}
+		if row.targetSessionID == "" {
+			row.targetSessionID = SessionIDFromParts(targetChatID, 0, NormalizeScopeRef(ScopeRef{
+				Kind:           ScopeKind(targetScopeKind),
+				ID:             targetScopeID,
+				DurableAgentID: targetAgentID,
+			}))
+		}
+		reviews = append(reviews, row)
+	}
+	if err := reviewRows.Err(); err != nil {
+		return fmt.Errorf("iterate review events for backfill: %w", err)
+	}
+	for _, row := range reviews {
+		if _, err := tx.Exec(`UPDATE review_events SET source_session_id = ?, target_session_id = ? WHERE id = ?`, nullableString(row.sourceSessionID), nullableString(row.targetSessionID), row.id); err != nil {
+			return fmt.Errorf("backfill review_events session ids id=%d: %w", row.id, err)
+		}
+	}
+	return nil
+}
+
+func backfillChildSessionIDs(tx *sql.Tx) error {
+	for _, table := range []string{"messages", "outbound_messages", "turn_runs", "compaction_log"} {
+		if _, err := tx.Exec(fmt.Sprintf(`
+			UPDATE %s
+			SET session_id = (
+				SELECT sessions.session_id
+				FROM sessions
+				WHERE sessions.chat_id = %s.chat_id AND sessions.user_id = %s.user_id
+				LIMIT 1
+			)
+			WHERE COALESCE(session_id, '') = ''
+		`, table, table, table)); err != nil {
+			return fmt.Errorf("backfill %s.session_id: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func primaryKeyColumns(tx *sql.Tx, table string) ([]string, error) {
+	rows, err := tx.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return nil, fmt.Errorf("query table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+	byOrder := map[int]string{}
+	for rows.Next() {
+		var (
+			cid      int
+			column   string
+			typ      string
+			notNull  int
+			defaultV sql.NullString
+			primaryK int
+		)
+		if err := rows.Scan(&cid, &column, &typ, &notNull, &defaultV, &primaryK); err != nil {
+			return nil, fmt.Errorf("scan table_info(%s): %w", table, err)
+		}
+		if primaryK > 0 {
+			byOrder[primaryK] = column
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate table_info(%s): %w", table, err)
+	}
+	if len(byOrder) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(byOrder))
+	for i := 1; i <= len(byOrder); i++ {
+		out = append(out, byOrder[i])
+	}
+	return out, nil
 }
 
 func currentSchemaVersion(tx *sql.Tx) (int, error) {
@@ -2046,6 +2534,7 @@ func scanDurableAgentState(scanner interface{ Scan(dest ...any) error }) (core.D
 func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) {
 	var (
 		run                 TurnRun
+		sessionIDRaw        string
 		scopeKindRaw        sql.NullString
 		scopeIDRaw          sql.NullString
 		durableAgentIDRaw   sql.NullString
@@ -2063,7 +2552,7 @@ func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) 
 	)
 
 	if err := scanner.Scan(
-		&run.ID, &run.ChatID, &run.UserID, &scopeKindRaw, &scopeIDRaw, &durableAgentIDRaw, &kindRaw, &statusRaw, &run.RequestText, &startedAtRaw, &completedAtRaw,
+		&run.ID, &sessionIDRaw, &run.ChatID, &run.UserID, &scopeKindRaw, &scopeIDRaw, &durableAgentIDRaw, &kindRaw, &statusRaw, &run.RequestText, &startedAtRaw, &completedAtRaw,
 		&lastActivityAtRaw, &lastToolNameRaw, &lastToolPreviewRaw, &run.ToolCallsStarted,
 		&progressMessageRaw, &errorTextRaw, &recoverySummaryRaw, &recoveryLoggedAtRaw,
 	); err != nil {
@@ -2071,6 +2560,7 @@ func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) 
 	}
 
 	var err error
+	run.SessionID = strings.TrimSpace(sessionIDRaw)
 	run.Scope = NormalizeScopeRef(ScopeRef{
 		Kind:           ScopeKind(nullToString(scopeKindRaw)),
 		ID:             nullToString(scopeIDRaw),

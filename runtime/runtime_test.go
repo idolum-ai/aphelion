@@ -1357,7 +1357,7 @@ func TestHeartbeatTargetNoneStoresMaintenanceWithoutOutbound(t *testing.T) {
 	}
 	sender.mu.Unlock()
 
-	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0})
+	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()})
 	if err != nil {
 		t.Fatalf("Load(heartbeat session) err = %v", err)
 	}
@@ -1651,7 +1651,7 @@ func TestHeartbeatStaysSilentWithoutConvergingSignals(t *testing.T) {
 	}
 	sender.mu.Unlock()
 
-	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0})
+	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()})
 	if err != nil {
 		t.Fatalf("Load(heartbeat session) err = %v", err)
 	}
@@ -1746,7 +1746,7 @@ func TestHeartbeatReflectionWritesCuratedMemoryFromDailyNotes(t *testing.T) {
 	}
 	sender.mu.Unlock()
 
-	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0})
+	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()})
 	if err != nil {
 		t.Fatalf("Load(heartbeat session) err = %v", err)
 	}
@@ -1842,7 +1842,7 @@ func TestCronJobNoneStoresDedicatedSessionWithoutOutbound(t *testing.T) {
 	}
 	sender.mu.Unlock()
 
-	cronSession, err := store.Load(session.SessionKey{ChatID: cronSessionChatID("sample"), UserID: 0})
+	cronSession, err := store.Load(session.SessionKey{ChatID: cronSessionChatID("sample"), UserID: 0, Scope: cronScopeRef("sample")})
 	if err != nil {
 		t.Fatalf("Load(cron session) err = %v", err)
 	}
@@ -2303,7 +2303,7 @@ func TestStartupRecoveryLogsMaintenanceAnalysis(t *testing.T) {
 		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
 	}
 
-	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0})
+	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()})
 	if err != nil {
 		t.Fatalf("Load(maintenance) err = %v", err)
 	}

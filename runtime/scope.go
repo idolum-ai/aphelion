@@ -18,7 +18,10 @@ import (
 )
 
 func (r *Runtime) lockSession(key session.SessionKey) func() {
-	lockKey := strconv.FormatInt(key.ChatID, 10) + ":" + strconv.FormatInt(key.UserID, 10)
+	lockKey := session.SessionIDForKey(key)
+	if strings.TrimSpace(lockKey) == "" {
+		lockKey = strconv.FormatInt(key.ChatID, 10) + ":" + strconv.FormatInt(key.UserID, 10)
+	}
 
 	r.sessionMu.Lock()
 	lock := r.sessionLocks[lockKey]

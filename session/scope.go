@@ -45,3 +45,23 @@ func defaultScopeForKey(key SessionKey) ScopeRef {
 		ID:   strconv.FormatInt(key.ChatID, 10),
 	}
 }
+
+func SessionIDForKey(key SessionKey) string {
+	scope := defaultScopeForKey(key)
+	base := scope.String()
+	if base == "" {
+		base = fmt.Sprintf("transport:%d", key.ChatID)
+	}
+	if key.UserID != 0 {
+		base += fmt.Sprintf("/user:%d", key.UserID)
+	}
+	return base
+}
+
+func SessionIDFromParts(chatID int64, userID int64, scope ScopeRef) string {
+	return SessionIDForKey(SessionKey{
+		ChatID: chatID,
+		UserID: userID,
+		Scope:  scope,
+	})
+}

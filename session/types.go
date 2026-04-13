@@ -50,6 +50,7 @@ type SessionKey struct {
 
 // Session stores conversation state, cache metadata, and accounting.
 type Session struct {
+	SessionID    string
 	ChatID       int64
 	UserID       int64 // 0 for shared group sessions
 	Scope        ScopeRef
@@ -112,10 +113,12 @@ type CompactionEntry struct {
 // ReviewEvent is a bounded digest from a source session to the admin DM.
 type ReviewEvent struct {
 	ID                int64
+	SourceSessionID   string
 	SourceChatID      int64
 	SourceUserID      int64
 	SourceRole        string
 	SourceScope       ScopeRef
+	TargetSessionID   string
 	TargetAdminChatID int64
 	TargetScope       ScopeRef
 	TurnFrom          int
@@ -130,6 +133,7 @@ type ReviewEvent struct {
 // TurnRun stores machine-authored facts about a turn lifecycle for recovery.
 type TurnRun struct {
 	ID                int64
+	SessionID         string
 	ChatID            int64
 	UserID            int64
 	Scope             ScopeRef
@@ -151,6 +155,7 @@ type TurnRun struct {
 // Message is one persisted conversation message.
 type Message struct {
 	ID            int64
+	SessionID     string
 	ChatID        int64
 	UserID        int64
 	Role          string
@@ -168,6 +173,7 @@ type Message struct {
 }
 
 type SearchHit struct {
+	SessionID    string
 	ChatID       int64
 	UserID       int64
 	TurnIndex    int
