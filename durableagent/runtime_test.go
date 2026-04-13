@@ -93,6 +93,31 @@ func TestQueueReviewArtifactReusesReviewQueue(t *testing.T) {
 	if state.LastReviewAt.IsZero() {
 		t.Fatal("LastReviewAt is zero, want queueing review artifact to update agent state")
 	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if len(continuity.RecentInteractions) != 1 {
+		t.Fatalf("RecentInteractions len = %d, want 1", len(continuity.RecentInteractions))
+	}
+	if !strings.Contains(continuity.RecentInteractions[0].Summary, "Group pressure is recurring") {
+		t.Fatalf("RecentInteractions[0].Summary = %q, want durable review summary", continuity.RecentInteractions[0].Summary)
+	}
+	if len(continuity.PendingQuestions) != 1 {
+		t.Fatalf("PendingQuestions len = %d, want 1", len(continuity.PendingQuestions))
+	}
+	if !strings.Contains(continuity.PendingQuestions[0].Question, "Approve a broader family-group charter") {
+		t.Fatalf("PendingQuestions[0].Question = %q, want promoted review question", continuity.PendingQuestions[0].Question)
+	}
+	if len(continuity.ReviewRefs) != 1 {
+		t.Fatalf("ReviewRefs len = %d, want 1", len(continuity.ReviewRefs))
+	}
+	if continuity.ReviewRefs[0].ReviewEventID == 0 {
+		t.Fatalf("ReviewRefs[0].ReviewEventID = %d, want non-zero review event id", continuity.ReviewRefs[0].ReviewEventID)
+	}
+	if len(continuity.ReviewRefs[0].RiskFlags) != 1 || continuity.ReviewRefs[0].RiskFlags[0] != "durable drift pressure" {
+		t.Fatalf("ReviewRefs[0].RiskFlags = %#v, want preserved durable drift pressure", continuity.ReviewRefs[0].RiskFlags)
+	}
 }
 
 func TestQueueReviewArtifactRedactsSecretLikeMetadataIntoForensicSidecar(t *testing.T) {

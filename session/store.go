@@ -1045,20 +1045,20 @@ func (s *SQLiteStore) RecordOutbound(key SessionKey, turnIndex int, telegramMsgI
 	return nil
 }
 
-func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
+func (s *SQLiteStore) InsertReviewEvent(event ReviewEvent) (int64, error) {
 	if strings.TrimSpace(event.SourceRole) == "" {
-		return fmt.Errorf("enqueue review event: source_role is required")
+		return 0, fmt.Errorf("enqueue review event: source_role is required")
 	}
 	event.SourceScope = NormalizeScopeRef(event.SourceScope)
 	event.TargetScope = NormalizeScopeRef(event.TargetScope)
 	if event.SourceChatID == 0 && event.SourceScope.IsZero() {
-		return fmt.Errorf("enqueue review event: source provenance is required")
+		return 0, fmt.Errorf("enqueue review event: source provenance is required")
 	}
 	if event.TargetAdminChatID == 0 {
-		return fmt.Errorf("enqueue review event: target_chat_id is required")
+		return 0, fmt.Errorf("enqueue review event: target_chat_id is required")
 	}
 	if strings.TrimSpace(event.Summary) == "" {
-		return fmt.Errorf("enqueue review event: summary is required")
+		return 0, fmt.Errorf("enqueue review event: summary is required")
 	}
 
 	status := strings.TrimSpace(event.Status)
@@ -1073,7 +1073,7 @@ func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.Exec(`
+	res, err := s.db.Exec(`
 		INSERT INTO review_events(
 			source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
 			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
@@ -1087,9 +1087,18 @@ func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
 		event.TurnFrom, event.TurnTo, event.Summary, nullableString(event.MetadataJSON), status, now,
 	)
 	if err != nil {
-		return fmt.Errorf("enqueue review event: %w", err)
+		return 0, fmt.Errorf("enqueue review event: %w", err)
 	}
-	return nil
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("review event last insert id: %w", err)
+	}
+	return id, nil
+}
+
+func (s *SQLiteStore) EnqueueReviewEvent(event ReviewEvent) error {
+	_, err := s.InsertReviewEvent(event)
+	return err
 }
 
 func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]ReviewEvent, error) {

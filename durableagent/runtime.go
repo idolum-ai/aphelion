@@ -18,7 +18,7 @@ import (
 const defaultReviewSummaryMaxChars = 700
 
 type Store interface {
-	EnqueueReviewEvent(event session.ReviewEvent) error
+	InsertReviewEvent(event session.ReviewEvent) (int64, error)
 	SaveDurableAgentState(state core.DurableAgentState) error
 	DurableAgentState(agentID string) (*core.DurableAgentState, error)
 }
@@ -65,7 +65,8 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 		Summary:      summary,
 		MetadataJSON: metadataJSON,
 	}
-	if err := r.store.EnqueueReviewEvent(event); err != nil {
+	eventID, err := r.store.InsertReviewEvent(event)
+	if err != nil {
 		return err
 	}
 
@@ -76,7 +77,18 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 	if state == nil {
 		state = &core.DurableAgentState{AgentID: agent.AgentID}
 	}
-	state.LastReviewAt = time.Now().UTC()
+	now := time.Now().UTC()
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return fmt.Errorf("parse durable agent continuity state: %w", err)
+	}
+	continuity = continuity.WithReviewArtifact(eventID, artifact, now)
+	stateJSON, err := continuity.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal durable agent continuity state: %w", err)
+	}
+	state.StateJSON = stateJSON
+	state.LastReviewAt = now
 	if err := r.store.SaveDurableAgentState(*state); err != nil {
 		return err
 	}

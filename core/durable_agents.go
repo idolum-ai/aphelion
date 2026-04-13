@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -73,6 +74,45 @@ type DurableAgentState struct {
 	UpdatedAt    time.Time
 }
 
+type DurableAgentContinuityState struct {
+	RecentInteractions []DurableAgentRecentInteraction `json:"recent_interactions,omitempty"`
+	PendingQuestions   []DurableAgentPendingQuestion   `json:"pending_questions,omitempty"`
+	ReviewRefs         []DurableAgentReviewReference   `json:"review_refs,omitempty"`
+	RatifiedOutcomes   []DurableAgentRatifiedOutcome   `json:"ratified_outcomes,omitempty"`
+}
+
+type DurableAgentRecentInteraction struct {
+	Summary       string    `json:"summary,omitempty"`
+	Source        string    `json:"source,omitempty"`
+	TriggerKinds  []string  `json:"trigger_kinds,omitempty"`
+	ReviewEventID int64     `json:"review_event_id,omitempty"`
+	OccurredAt    time.Time `json:"occurred_at,omitempty"`
+}
+
+type DurableAgentPendingQuestion struct {
+	Question      string    `json:"question,omitempty"`
+	ReviewEventID int64     `json:"review_event_id,omitempty"`
+	Status        string    `json:"status,omitempty"`
+	CreatedAt     time.Time `json:"created_at,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at,omitempty"`
+}
+
+type DurableAgentReviewReference struct {
+	ReviewEventID int64     `json:"review_event_id,omitempty"`
+	Summary       string    `json:"summary,omitempty"`
+	RiskFlags     []string  `json:"risk_flags,omitempty"`
+	Status        string    `json:"status,omitempty"`
+	CreatedAt     time.Time `json:"created_at,omitempty"`
+}
+
+type DurableAgentRatifiedOutcome struct {
+	Summary             string    `json:"summary,omitempty"`
+	PolicyVersion       int64     `json:"policy_version,omitempty"`
+	PolicyHash          string    `json:"policy_hash,omitempty"`
+	SourceReviewEventID int64     `json:"source_review_event_id,omitempty"`
+	AppliedAt           time.Time `json:"applied_at,omitempty"`
+}
+
 type DurableReviewArtifact struct {
 	AgentID       string
 	Summary       string
@@ -83,6 +123,8 @@ type DurableReviewArtifact struct {
 	ArtifactRefs  []string
 	Metadata      map[string]string
 }
+
+const durableAgentContinuityMaxItems = 12
 
 func DefaultTelegramGroupLivePolicy(charter string) DurableAgentLivePolicy {
 	return NormalizeDurableAgentLivePolicy(DurableAgentLivePolicy{
@@ -251,6 +293,100 @@ func DurableAgentPolicyHash(policy DurableAgentLivePolicy) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+func ParseDurableAgentContinuityState(raw string) (DurableAgentContinuityState, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DurableAgentContinuityState{}, nil
+	}
+	var state DurableAgentContinuityState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return DurableAgentContinuityState{}, err
+	}
+	return NormalizeDurableAgentContinuityState(state), nil
+}
+
+func NormalizeDurableAgentContinuityState(state DurableAgentContinuityState) DurableAgentContinuityState {
+	state.RecentInteractions = normalizeDurableAgentRecentInteractions(state.RecentInteractions)
+	state.PendingQuestions = normalizeDurableAgentPendingQuestions(state.PendingQuestions)
+	state.ReviewRefs = normalizeDurableAgentReviewReferences(state.ReviewRefs)
+	state.RatifiedOutcomes = normalizeDurableAgentRatifiedOutcomes(state.RatifiedOutcomes)
+	return state
+}
+
+func (s DurableAgentContinuityState) Marshal() (string, error) {
+	s = NormalizeDurableAgentContinuityState(s)
+	if s.IsZero() {
+		return "", nil
+	}
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func (s DurableAgentContinuityState) IsZero() bool {
+	return len(s.RecentInteractions) == 0 &&
+		len(s.PendingQuestions) == 0 &&
+		len(s.ReviewRefs) == 0 &&
+		len(s.RatifiedOutcomes) == 0
+}
+
+func (s DurableAgentContinuityState) WithReviewArtifact(reviewEventID int64, artifact DurableReviewArtifact, at time.Time) DurableAgentContinuityState {
+	s = NormalizeDurableAgentContinuityState(s)
+	at = at.UTC()
+	summary := normalizeDurableAgentText(artifact.Summary)
+	source := normalizeDurableAgentText(artifact.Metadata["sender_name"])
+	triggerKinds := normalizeDurableAgentCSV(artifact.Metadata["trigger_kinds"])
+	if summary != "" {
+		s.RecentInteractions = prependDurableAgentRecentInteraction(s.RecentInteractions, DurableAgentRecentInteraction{
+			Summary:       summary,
+			Source:        source,
+			TriggerKinds:  triggerKinds,
+			ReviewEventID: reviewEventID,
+			OccurredAt:    at,
+		})
+	}
+	for _, question := range artifact.Questions {
+		question = normalizeDurableAgentText(question)
+		if question == "" {
+			continue
+		}
+		s.PendingQuestions = upsertDurableAgentPendingQuestion(s.PendingQuestions, DurableAgentPendingQuestion{
+			Question:      question,
+			ReviewEventID: reviewEventID,
+			Status:        "pending_review",
+			CreatedAt:     at,
+			UpdatedAt:     at,
+		})
+	}
+	if reviewEventID > 0 {
+		s.ReviewRefs = prependDurableAgentReviewReference(s.ReviewRefs, DurableAgentReviewReference{
+			ReviewEventID: reviewEventID,
+			Summary:       summary,
+			RiskFlags:     normalizeDurableAgentStringSet(artifact.RiskFlags),
+			Status:        "pending",
+			CreatedAt:     at,
+		})
+	}
+	return NormalizeDurableAgentContinuityState(s)
+}
+
+func (s DurableAgentContinuityState) WithRatifiedOutcome(summary string, policyVersion int64, policyHash string, sourceReviewEventID int64, appliedAt time.Time) DurableAgentContinuityState {
+	s = NormalizeDurableAgentContinuityState(s)
+	if policyVersion <= 0 || strings.TrimSpace(policyHash) == "" {
+		return s
+	}
+	s.RatifiedOutcomes = prependDurableAgentRatifiedOutcome(s.RatifiedOutcomes, DurableAgentRatifiedOutcome{
+		Summary:             normalizeDurableAgentText(summary),
+		PolicyVersion:       policyVersion,
+		PolicyHash:          strings.TrimSpace(policyHash),
+		SourceReviewEventID: sourceReviewEventID,
+		AppliedAt:           appliedAt.UTC(),
+	})
+	return NormalizeDurableAgentContinuityState(s)
+}
+
 func normalizeDurableAgentPolicyMode(mode string) string {
 	switch strings.TrimSpace(mode) {
 	case "read_only", "draft_only", "reply_with_parent_review", "reply_with_policy_authorization":
@@ -395,6 +531,176 @@ func normalizeDurableAgentStringSet(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func normalizeDurableAgentRecentInteractions(values []DurableAgentRecentInteraction) []DurableAgentRecentInteraction {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]DurableAgentRecentInteraction, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value.Summary = normalizeDurableAgentText(value.Summary)
+		value.Source = normalizeDurableAgentText(value.Source)
+		value.TriggerKinds = normalizeDurableAgentStringSet(value.TriggerKinds)
+		if value.Summary == "" {
+			continue
+		}
+		key := durableAgentInteractionKey(value.ReviewEventID, value.Summary)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+		if len(out) == durableAgentContinuityMaxItems {
+			break
+		}
+	}
+	return out
+}
+
+func normalizeDurableAgentPendingQuestions(values []DurableAgentPendingQuestion) []DurableAgentPendingQuestion {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]DurableAgentPendingQuestion, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value.Question = normalizeDurableAgentText(value.Question)
+		value.Status = normalizeDurableAgentPendingQuestionStatus(value.Status)
+		if value.Question == "" {
+			continue
+		}
+		key := durableAgentPendingQuestionKey(value.ReviewEventID, value.Question)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+		if len(out) == durableAgentContinuityMaxItems {
+			break
+		}
+	}
+	return out
+}
+
+func normalizeDurableAgentReviewReferences(values []DurableAgentReviewReference) []DurableAgentReviewReference {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]DurableAgentReviewReference, 0, len(values))
+	seen := make(map[int64]struct{}, len(values))
+	for _, value := range values {
+		value.Summary = normalizeDurableAgentText(value.Summary)
+		value.RiskFlags = normalizeDurableAgentStringSet(value.RiskFlags)
+		value.Status = normalizeDurableAgentReviewStatus(value.Status)
+		if value.ReviewEventID <= 0 {
+			continue
+		}
+		if _, ok := seen[value.ReviewEventID]; ok {
+			continue
+		}
+		seen[value.ReviewEventID] = struct{}{}
+		out = append(out, value)
+		if len(out) == durableAgentContinuityMaxItems {
+			break
+		}
+	}
+	return out
+}
+
+func normalizeDurableAgentRatifiedOutcomes(values []DurableAgentRatifiedOutcome) []DurableAgentRatifiedOutcome {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]DurableAgentRatifiedOutcome, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value.Summary = normalizeDurableAgentText(value.Summary)
+		value.PolicyHash = strings.TrimSpace(value.PolicyHash)
+		if value.PolicyVersion <= 0 || value.PolicyHash == "" {
+			continue
+		}
+		key := fmt.Sprintf("%d:%s", value.PolicyVersion, value.PolicyHash)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+		if len(out) == durableAgentContinuityMaxItems {
+			break
+		}
+	}
+	return out
+}
+
+func prependDurableAgentRecentInteraction(values []DurableAgentRecentInteraction, next DurableAgentRecentInteraction) []DurableAgentRecentInteraction {
+	return append([]DurableAgentRecentInteraction{next}, values...)
+}
+
+func prependDurableAgentReviewReference(values []DurableAgentReviewReference, next DurableAgentReviewReference) []DurableAgentReviewReference {
+	return append([]DurableAgentReviewReference{next}, values...)
+}
+
+func prependDurableAgentRatifiedOutcome(values []DurableAgentRatifiedOutcome, next DurableAgentRatifiedOutcome) []DurableAgentRatifiedOutcome {
+	return append([]DurableAgentRatifiedOutcome{next}, values...)
+}
+
+func upsertDurableAgentPendingQuestion(values []DurableAgentPendingQuestion, next DurableAgentPendingQuestion) []DurableAgentPendingQuestion {
+	key := durableAgentPendingQuestionKey(next.ReviewEventID, next.Question)
+	out := make([]DurableAgentPendingQuestion, 0, len(values)+1)
+	out = append(out, next)
+	for _, existing := range values {
+		if durableAgentPendingQuestionKey(existing.ReviewEventID, existing.Question) == key {
+			continue
+		}
+		out = append(out, existing)
+	}
+	return out
+}
+
+func normalizeDurableAgentText(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+func normalizeDurableAgentCSV(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return normalizeDurableAgentStringSet(strings.Split(value, ","))
+}
+
+func normalizeDurableAgentPendingQuestionStatus(value string) string {
+	switch strings.TrimSpace(value) {
+	case "answered", "dismissed", "ratified":
+		return strings.TrimSpace(value)
+	default:
+		return "pending_review"
+	}
+}
+
+func normalizeDurableAgentReviewStatus(value string) string {
+	switch strings.TrimSpace(value) {
+	case "delivered", "dismissed":
+		return strings.TrimSpace(value)
+	default:
+		return "pending"
+	}
+}
+
+func durableAgentInteractionKey(reviewEventID int64, summary string) string {
+	if reviewEventID > 0 {
+		return fmt.Sprintf("review:%d", reviewEventID)
+	}
+	return normalizeDurableAgentText(summary)
+}
+
+func durableAgentPendingQuestionKey(reviewEventID int64, question string) string {
+	if reviewEventID > 0 {
+		return fmt.Sprintf("%d:%s", reviewEventID, normalizeDurableAgentText(question))
+	}
+	return normalizeDurableAgentText(question)
 }
 
 func normalizeDurableAgentPolicyModes(values []string) []string {
