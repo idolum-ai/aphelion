@@ -275,7 +275,7 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 			faceAwareness.DeliveryMode = "floor_fallback"
 			renderReq.Runtime = faceAwareness
 		}
-		if shouldRender {
+		if shouldRender && allowLocalReply {
 			if streamer, ok := currentFaceModel.(face.StreamRenderer); ok {
 				editor := r.newStreamEditor(msg)
 				if editor != nil {
@@ -429,8 +429,8 @@ func durableGroupGovernorContext(agent core.DurableAgent, policy core.DurableAge
 }
 
 func durableGroupReviewArtifact(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage, replyText string) *core.DurableReviewArtifact {
-	signals := durableGroupDriftSignals(msg.Text)
-	if len(signals) == 0 {
+	assessment := durableGroupAssessInteraction(msg.Text)
+	if !durableGroupShouldEscalate(policy, assessment) {
 		return nil
 	}
 	summary := strings.TrimSpace(msg.Text)
@@ -444,30 +444,39 @@ func durableGroupReviewArtifact(agent core.DurableAgent, policy core.DurableAgen
 	if member == "" {
 		member = "group_member"
 	}
+	allowLocalReply := durableGroupAllowsLocalReply(policy)
+	localActions := durableGroupReviewLocalActions(policy, assessment, allowLocalReply)
+	questions := durableGroupReviewQuestions(policy, assessment)
+	riskFlags := uniqueStrings(append(append([]string{}, assessment.TriggerKinds...), assessment.DriftSignals...))
+	metadata := map[string]string{
+		"chat_id":           strconv.FormatInt(msg.ChatID, 10),
+		"chat_title":        strings.TrimSpace(msg.ChatTitle),
+		"sender_id":         strconv.FormatInt(msg.SenderID, 10),
+		"sender_name":       member,
+		"source_excerpt":    truncateRunes(summary, 240),
+		"channel_kind":      "telegram_group",
+		"durable_agent_id":  strings.TrimSpace(agent.AgentID),
+		"policy_outbound":   strings.TrimSpace(policy.OutboundMode),
+		"trigger_kinds":     strings.Join(assessment.TriggerKinds, ","),
+		"question_detected": boolString(assessment.DirectQuestion),
+		"family_relevant":   boolString(assessment.FamilyRelevant),
+	}
+	if allowLocalReply {
+		metadata["local_response"] = truncateRunes(strings.TrimSpace(replyText), 240)
+	} else if strings.TrimSpace(replyText) != "" {
+		metadata["draft_response"] = truncateRunes(strings.TrimSpace(replyText), 240)
+	}
+	if len(assessment.DriftSignals) > 0 {
+		metadata["drift_detected"] = "true"
+	}
 	return &core.DurableReviewArtifact{
 		AgentID:       strings.TrimSpace(agent.AgentID),
-		Summary:       fmt.Sprintf("Telegram group pressure from %s may be pushing the durable child beyond its standing charter.", member),
+		Summary:       durableGroupReviewSummary(member, assessment, policy),
 		IntervalLabel: strconv.FormatInt(msg.MessageID, 10),
-		LocalActions: []string{
-			"Replied locally within the current charter.",
-			"Did not widen standing role, authority, or secret scope.",
-		},
-		Questions: []string{
-			"Should the durable child's charter or standing role change in response to this pressure?",
-		},
-		RiskFlags: signals,
-		Metadata: map[string]string{
-			"chat_id":          strconv.FormatInt(msg.ChatID, 10),
-			"chat_title":       strings.TrimSpace(msg.ChatTitle),
-			"sender_id":        strconv.FormatInt(msg.SenderID, 10),
-			"sender_name":      member,
-			"source_excerpt":   truncateRunes(summary, 240),
-			"local_response":   truncateRunes(strings.TrimSpace(replyText), 240),
-			"channel_kind":     "telegram_group",
-			"drift_detected":   "true",
-			"durable_agent_id": strings.TrimSpace(agent.AgentID),
-			"policy_outbound":  strings.TrimSpace(policy.OutboundMode),
-		},
+		LocalActions:  localActions,
+		Questions:     questions,
+		RiskFlags:     riskFlags,
+		Metadata:      metadata,
 	}
 }
 
@@ -501,6 +510,160 @@ func durableGroupDriftSignals(text string) []string {
 		signals = append(signals, "authority_widening_pressure")
 	}
 	return uniqueStrings(signals)
+}
+
+type durableGroupInteractionAssessment struct {
+	DirectQuestion         bool
+	FamilyRelevant         bool
+	FamilyRelevantUpdate   bool
+	FamilyRelevantQuestion bool
+	DriftSignals           []string
+	TriggerKinds           []string
+}
+
+func durableGroupAssessInteraction(text string) durableGroupInteractionAssessment {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return durableGroupInteractionAssessment{}
+	}
+	lower := strings.ToLower(trimmed)
+	directQuestion := strings.Contains(trimmed, "?") || startsWithAnyWord(lower,
+		"can", "could", "should", "would", "will", "what", "when", "where", "who", "why", "how", "do", "does", "did", "is", "are", "am",
+	)
+	familyRelevant := containsAny(lower,
+		"tonight", "tomorrow", "weekend", "birthday", "dinner", "lunch", "breakfast", "pick up", "pickup", "drop off", "school", "doctor", "appointment",
+		"hospital", "med", "medicine", "pharmacy", "airport", "flight", "trip", "travel", "visit", "guest", "family", "mom", "dad", "grandma", "grandpa",
+		"kid", "kids", "child", "children", "baby", "babysit", "groceries", "errand", "house", "home", "rent", "bill", "payment", "arrive", "arriving",
+		"leave", "leaving", "landed", "confirmed", "cancelled", "rescheduled", "moved",
+	)
+	familyRelevantUpdate := !directQuestion && containsAny(lower,
+		"heads up", "fyi", "update", "confirmed", "cancelled", "rescheduled", "moved", "arriving", "leaving", "landed", "appointment", "pickup", "drop off",
+		"tomorrow", "tonight", "weekend", "birthday", "flight", "airport", "visit", "hospital", "school", "doctor",
+	)
+	familyRelevantQuestion := directQuestion && familyRelevant
+	driftSignals := durableGroupDriftSignals(trimmed)
+
+	triggerKinds := make([]string, 0, 4)
+	if len(driftSignals) > 0 {
+		triggerKinds = append(triggerKinds, "drift_pressure")
+	}
+	if familyRelevantQuestion {
+		triggerKinds = append(triggerKinds, "family_relevant_question")
+	} else if directQuestion {
+		triggerKinds = append(triggerKinds, "direct_question")
+	}
+	if familyRelevantUpdate {
+		triggerKinds = append(triggerKinds, "family_relevant_update")
+	}
+
+	return durableGroupInteractionAssessment{
+		DirectQuestion:         directQuestion,
+		FamilyRelevant:         familyRelevant,
+		FamilyRelevantUpdate:   familyRelevantUpdate,
+		FamilyRelevantQuestion: familyRelevantQuestion,
+		DriftSignals:           driftSignals,
+		TriggerKinds:           uniqueStrings(triggerKinds),
+	}
+}
+
+func durableGroupShouldEscalate(policy core.DurableAgentLivePolicy, assessment durableGroupInteractionAssessment) bool {
+	if len(assessment.DriftSignals) > 0 || assessment.FamilyRelevantUpdate || assessment.FamilyRelevantQuestion {
+		return true
+	}
+	switch strings.TrimSpace(policy.OutboundMode) {
+	case "draft_only", "reply_with_parent_review":
+		return assessment.DirectQuestion
+	default:
+		return false
+	}
+}
+
+func durableGroupReviewSummary(member string, assessment durableGroupInteractionAssessment, policy core.DurableAgentLivePolicy) string {
+	switch {
+	case len(assessment.DriftSignals) > 0:
+		return fmt.Sprintf("Telegram group pressure from %s may be pushing the durable child beyond its standing charter.", member)
+	case assessment.FamilyRelevantQuestion && strings.TrimSpace(policy.OutboundMode) == "reply_with_parent_review":
+		return fmt.Sprintf("Family-relevant question from %s is awaiting parent review before any reply.", member)
+	case assessment.FamilyRelevantQuestion && strings.TrimSpace(policy.OutboundMode) == "draft_only":
+		return fmt.Sprintf("Family-relevant question from %s produced a local draft that still needs parent review.", member)
+	case assessment.FamilyRelevantQuestion:
+		return fmt.Sprintf("Family-relevant question from %s may need parent visibility or follow-up.", member)
+	case assessment.FamilyRelevantUpdate:
+		return fmt.Sprintf("Family-relevant update from %s may matter for durable continuity.", member)
+	case assessment.DirectQuestion && strings.TrimSpace(policy.OutboundMode) == "reply_with_parent_review":
+		return fmt.Sprintf("Direct group question from %s is awaiting parent review before any reply.", member)
+	case assessment.DirectQuestion && strings.TrimSpace(policy.OutboundMode) == "draft_only":
+		return fmt.Sprintf("Direct group question from %s produced a local draft that still needs parent review.", member)
+	default:
+		return fmt.Sprintf("Group interaction from %s was surfaced for parent review.", member)
+	}
+}
+
+func durableGroupReviewLocalActions(policy core.DurableAgentLivePolicy, assessment durableGroupInteractionAssessment, allowLocalReply bool) []string {
+	actions := make([]string, 0, 3)
+	switch {
+	case allowLocalReply:
+		actions = append(actions, "Replied locally within the current charter.")
+	case strings.TrimSpace(policy.OutboundMode) == "reply_with_parent_review":
+		actions = append(actions, "Held the reply because live policy requires parent review.")
+	case strings.TrimSpace(policy.OutboundMode) == "draft_only":
+		actions = append(actions, "Prepared a local draft but did not reply because live policy is draft_only.")
+	case strings.TrimSpace(policy.OutboundMode) == "read_only":
+		actions = append(actions, "Stayed silent because live policy is read_only.")
+	default:
+		actions = append(actions, "Did not reply locally under the current live policy.")
+	}
+	if len(assessment.DriftSignals) > 0 {
+		actions = append(actions, "Did not widen standing role, authority, memory, or secret scope.")
+	}
+	if assessment.FamilyRelevantUpdate {
+		actions = append(actions, "Surfaced the update upward for bounded continuity review.")
+	}
+	if assessment.DirectQuestion && !allowLocalReply {
+		actions = append(actions, "Surfaced the question upward for parent review instead of answering in-channel.")
+	}
+	return uniqueStrings(actions)
+}
+
+func durableGroupReviewQuestions(policy core.DurableAgentLivePolicy, assessment durableGroupInteractionAssessment) []string {
+	questions := make([]string, 0, 3)
+	if len(assessment.DriftSignals) > 0 {
+		questions = append(questions, "Should the durable child's charter, standing role, or authority change in response to this pressure?")
+	}
+	if assessment.FamilyRelevantQuestion {
+		if strings.TrimSpace(policy.OutboundMode) == "reply_with_parent_review" || strings.TrimSpace(policy.OutboundMode) == "draft_only" {
+			questions = append(questions, "Approve, edit, or reject the held reply to this family-relevant question?")
+		} else {
+			questions = append(questions, "Should this family-relevant question be retained for continuity or follow-up?")
+		}
+	}
+	if assessment.FamilyRelevantUpdate {
+		questions = append(questions, "Should this family-relevant update be retained in durable continuity or promoted upward?")
+	}
+	if assessment.DirectQuestion && !assessment.FamilyRelevantQuestion && (strings.TrimSpace(policy.OutboundMode) == "reply_with_parent_review" || strings.TrimSpace(policy.OutboundMode) == "draft_only") {
+		questions = append(questions, "Approve, edit, or reject the held reply to this question?")
+	}
+	return uniqueStrings(questions)
+}
+
+func startsWithAnyWord(text string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			continue
+		}
+		if text == prefix || strings.HasPrefix(text, prefix+" ") || strings.HasPrefix(text, prefix+"?") {
+			return true
+		}
+	}
+	return false
+}
+
+func boolString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }
 
 func containsAny(text string, patterns ...string) bool {
