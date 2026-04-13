@@ -4,7 +4,9 @@ package durableagent
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,5 +117,114 @@ func TestRemoteChildRunnerRunOnceSyncsExecutesAndUploadsPendingReviewArtifacts(t
 	}
 	if len(childPending) != 0 {
 		t.Fatalf("child pending review events len = %d, want 0 after upload", len(childPending))
+	}
+}
+
+func TestRemoteChildLoopRunnerProcessesQueuedMessageFiles(t *testing.T) {
+	t.Parallel()
+
+	parentStore := newTestSQLiteStore(t)
+	defer parentStore.Close()
+	agent := testRemoteDurableAgent()
+	if err := parentStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("parent UpsertDurableAgent() err = %v", err)
+	}
+
+	childStore, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "child.db"))
+	if err != nil {
+		t.Fatalf("child NewSQLiteStore() err = %v", err)
+	}
+	defer childStore.Close()
+
+	bootstrapPath := filepath.Join(t.TempDir(), "remote-bootstrap.json")
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		ReviewTargetChatID: agent.ReviewTargetChatID,
+		AgentID:            agent.AgentID,
+		ParentAgentID:      "house",
+		ChannelKind:        agent.ChannelKind,
+		ParentControlURL:   "https://house.example",
+		EnrollmentToken:    "enroll-token-1",
+		KeyFingerprint:     "child-key-fp",
+		ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:       testDurableAgentBootstrapLLM(),
+		BootstrapCeiling:   agent.BootstrapCeiling,
+		LocalStorageRoots: []string{
+			filepath.Join(t.TempDir(), "work"),
+			filepath.Join(t.TempDir(), "memory"),
+		},
+		SecretScopes:  []string{"telegram_bot"},
+		NetworkPolicy: "restricted",
+	}
+	if err := WriteRemoteBootstrap(bootstrapPath, bootstrap); err != nil {
+		t.Fatalf("WriteRemoteBootstrap() err = %v", err)
+	}
+
+	inboxDir := filepath.Join(t.TempDir(), "inbox")
+	if err := os.MkdirAll(inboxDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(inbox) err = %v", err)
+	}
+	msg := core.InboundMessage{
+		ChatID:         -100123,
+		ChatType:       "group",
+		SenderID:       77,
+		SenderName:     "Aunt May",
+		Text:           "Can you remind everyone again?",
+		MessageID:      22,
+		DurableAgentID: agent.AgentID,
+		Timestamp:      time.Now().UTC(),
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("json.Marshal(msg) err = %v", err)
+	}
+	messagePath := filepath.Join(inboxDir, "0001.json")
+	if err := os.WriteFile(messagePath, raw, 0o600); err != nil {
+		t.Fatalf("WriteFile(message) err = %v", err)
+	}
+
+	runner := NewRemoteChildRunner(
+		childStore,
+		NewRemoteRuntime(childStore, func(b core.DurableAgentRemoteBootstrap) (RemoteControlClient, error) {
+			client, err := NewHTTPClient(b)
+			if err != nil {
+				return nil, err
+			}
+			client.Client = &http.Client{Transport: handlerRoundTripper{handler: NewHTTPHandler(parentStore).Handler()}}
+			return client, nil
+		}),
+		RemoteChildExecutorFunc(func(ctx context.Context, bootstrap core.DurableAgentRemoteBootstrap, agent core.DurableAgent, msg core.InboundMessage) error {
+			_, err := NewRuntime(childStore).QueueReviewArtifact(agent, core.DurableReviewArtifact{
+				Summary:       "Family schedule drift keeps resurfacing around the dinner plan.",
+				IntervalLabel: "messages 20-25",
+				LocalActions:  []string{"Held reply pending parent visibility."},
+				Questions:     []string{"Should this become a standing family reminder?"},
+				RiskFlags:     []string{"family_relevant_update"},
+			})
+			return err
+		}),
+	)
+	loop := NewRemoteChildLoopRunner(runner)
+	loop.Sleep = func(context.Context, time.Duration) error { return nil }
+
+	result, err := loop.Run(context.Background(), bootstrapPath, inboxDir, time.Second, 1)
+	if err != nil {
+		t.Fatalf("Run(loop) err = %v", err)
+	}
+	if result.MessagesProcessed != 1 {
+		t.Fatalf("MessagesProcessed = %d, want 1", result.MessagesProcessed)
+	}
+	if result.UploadedReviewArtifacts != 1 {
+		t.Fatalf("UploadedReviewArtifacts = %d, want 1", result.UploadedReviewArtifacts)
+	}
+	if _, err := os.Stat(messagePath); !os.IsNotExist(err) {
+		t.Fatalf("message file still exists, err=%v", err)
+	}
+
+	parentEvents, err := parentStore.PendingReviewEvents(agent.ReviewTargetChatID, 10)
+	if err != nil {
+		t.Fatalf("parent PendingReviewEvents() err = %v", err)
+	}
+	if len(parentEvents) != 1 {
+		t.Fatalf("parent pending review events len = %d, want 1", len(parentEvents))
 	}
 }

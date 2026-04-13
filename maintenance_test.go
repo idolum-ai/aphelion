@@ -692,8 +692,6 @@ func TestRunDurableAgentBootstrapWriteExportsRemoteBootstrap(t *testing.T) {
 }
 
 func TestRunDurableAgentRemoteRunOnceSyncsAndUploadsArtifacts(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	parentCfgPath := writeMaintenanceConfig(t, root)
 
@@ -829,6 +827,154 @@ func TestRunDurableAgentRemoteRunOnceSyncsAndUploadsArtifacts(t *testing.T) {
 	}
 	if len(parentEvents) != 1 {
 		t.Fatalf("parent pending review events len = %d, want 1", len(parentEvents))
+	}
+}
+
+func TestRunDurableAgentRemoteLoopProcessesQueuedMessages(t *testing.T) {
+	root := t.TempDir()
+	parentCfgPath := writeMaintenanceConfig(t, root)
+
+	parentCfg, _, err := loadConfigForCommand(parentCfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	parentStore, err := session.NewSQLiteStore(parentCfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("parent NewSQLiteStore() err = %v", err)
+	}
+	defer parentStore.Close()
+
+	workspaceRoot := filepath.Join(root, "durable-work")
+	memoryRoot := filepath.Join(root, "durable-memory")
+	if err := os.MkdirAll(workspaceRoot, 0o700); err != nil {
+		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
+	}
+	if err := os.MkdirAll(memoryRoot, 0o700); err != nil {
+		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentAgentID:      "house",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Initial charter",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		BootstrapCeiling: core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DurableAgentLivePolicy{
+			Charter:            "Initial charter",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
+		},
+		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
+		SecretScopes:      []string{"telegram_bot"},
+		NetworkPolicy:     "restricted",
+		Status:            "active",
+	}
+	if err := parentStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("parent UpsertDurableAgent() err = %v", err)
+	}
+
+	childDBPath := filepath.Join(root, "remote-child.db")
+	bootstrapPath := filepath.Join(root, "family-group-bootstrap.json")
+	if err := runDurableAgentBootstrapCommand([]string{
+		"--config", parentCfgPath,
+		"--agent", "family-group",
+		"--path", bootstrapPath,
+		"--parent-control-url", "https://house.example",
+		"--enrollment-token", "enroll-token-1",
+		"--key-fingerprint", "child-key-fp",
+		"write",
+	}); err != nil {
+		t.Fatalf("runDurableAgentBootstrapCommand(write) err = %v", err)
+	}
+
+	inboxDir := filepath.Join(root, "remote-inbox")
+	if err := os.MkdirAll(inboxDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(inbox) err = %v", err)
+	}
+	msgRaw := []byte(`{
+  "ChatID": -100123,
+  "ChatType": "group",
+  "SenderID": 77,
+  "SenderName": "Aunt May",
+  "Text": "Can you remind everyone again?",
+  "MessageID": 22,
+  "DurableAgentID": "family-group",
+  "Timestamp": "2026-04-13T00:00:00Z"
+}`)
+	if err := os.WriteFile(filepath.Join(inboxDir, "0001.json"), msgRaw, 0o600); err != nil {
+		t.Fatalf("WriteFile(message) err = %v", err)
+	}
+
+	origClientFactory := durableAgentRemoteClientFactory
+	origExecutorFactory := durableAgentRemoteExecutorFactory
+	defer func() {
+		durableAgentRemoteClientFactory = origClientFactory
+		durableAgentRemoteExecutorFactory = origExecutorFactory
+	}()
+
+	durableAgentRemoteClientFactory = func(b core.DurableAgentRemoteBootstrap) (durableagent.RemoteControlClient, error) {
+		client, err := durableagent.NewHTTPClient(b)
+		if err != nil {
+			return nil, err
+		}
+		client.Client = &http.Client{Transport: maintenanceHandlerRoundTripper{handler: durableagent.NewHTTPHandler(parentStore).Handler()}}
+		return client, nil
+	}
+	durableAgentRemoteExecutorFactory = func(store *session.SQLiteStore, dbPath string) durableagent.RemoteChildExecutor {
+		return durableagent.RemoteChildExecutorFunc(func(ctx context.Context, bootstrap core.DurableAgentRemoteBootstrap, agent core.DurableAgent, msg core.InboundMessage) error {
+			_, err := durableagent.NewRuntime(store).QueueReviewArtifact(agent, core.DurableReviewArtifact{
+				Summary:       "Family schedule drift keeps resurfacing around the dinner plan.",
+				IntervalLabel: "messages 20-25",
+				LocalActions:  []string{"Held reply pending parent visibility."},
+				Questions:     []string{"Should this become a standing family reminder?"},
+				RiskFlags:     []string{"family_relevant_update"},
+			})
+			return err
+		})
+	}
+
+	out, err := captureStdout(t, func() error {
+		return runDurableAgentRemoteCommand([]string{
+			"--bootstrap", bootstrapPath,
+			"--db", childDBPath,
+			"--inbox-dir", inboxDir,
+			"--iterations", "1",
+			"loop",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentRemoteCommand(loop) err = %v", err)
+	}
+	if !strings.Contains(out, "action: durable-agent remote loop") {
+		t.Fatalf("remote loop output = %q, want action line", out)
+	}
+	if !strings.Contains(out, "messages_processed: 1") {
+		t.Fatalf("remote loop output = %q, want processed count", out)
+	}
+
+	parentEvents, err := parentStore.PendingReviewEvents(1, 10)
+	if err != nil {
+		t.Fatalf("parent PendingReviewEvents() err = %v", err)
+	}
+	if len(parentEvents) != 1 {
+		t.Fatalf("parent pending review events len = %d, want 1", len(parentEvents))
+	}
+	if _, err := os.Stat(filepath.Join(inboxDir, "0001.json")); !os.IsNotExist(err) {
+		t.Fatalf("message file still exists, err=%v", err)
 	}
 }
 

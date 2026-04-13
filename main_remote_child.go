@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
@@ -34,6 +36,9 @@ func runDurableAgentRemoteCommand(args []string) error {
 	bootstrapPath := fs.String("bootstrap", "", "path to remote child bootstrap json")
 	dbPath := fs.String("db", "", "path to child state sqlite db")
 	messagePath := fs.String("message", "", "path to inbound message json for run-once")
+	inboxDir := fs.String("inbox-dir", "", "path to inbound message queue dir for loop")
+	pollInterval := fs.String("poll-interval", "", "remote child loop poll interval")
+	iterations := fs.Int("iterations", 0, "maximum loop iterations before exit; 0 runs until canceled")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -86,8 +91,27 @@ func runDurableAgentRemoteCommand(args []string) error {
 		fmt.Fprintf(os.Stdout, "policy_version: %d\n", result.Sync.PolicyVersion)
 		fmt.Fprintf(os.Stdout, "uploaded_review_artifacts: %d\n", result.UploadedReviewArtifacts)
 		return nil
+	case "loop":
+		if strings.TrimSpace(*inboxDir) == "" {
+			return fmt.Errorf("durable-agent remote loop requires --inbox-dir")
+		}
+		interval, err := parseRemotePollInterval(*pollInterval)
+		if err != nil {
+			return err
+		}
+		loop := durableagent.NewRemoteChildLoopRunner(durableagent.NewRemoteChildRunner(store, remote, durableAgentRemoteExecutorFactory(store, strings.TrimSpace(*dbPath))))
+		result, err := loop.Run(context.Background(), *bootstrapPath, *inboxDir, interval, *iterations)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stdout, "action: durable-agent remote loop\n")
+		fmt.Fprintf(os.Stdout, "syncs: %d\n", result.Syncs)
+		fmt.Fprintf(os.Stdout, "messages_processed: %d\n", result.MessagesProcessed)
+		fmt.Fprintf(os.Stdout, "uploaded_review_artifacts: %d\n", result.UploadedReviewArtifacts)
+		fmt.Fprintf(os.Stdout, "policy_version: %d\n", result.LastPolicyVersion)
+		return nil
 	default:
-		return fmt.Errorf("durable-agent remote action must be one of sync|run-once")
+		return fmt.Errorf("durable-agent remote action must be one of sync|run-once|loop")
 	}
 }
 
@@ -188,4 +212,22 @@ func remoteFirstPositive(values ...int) int {
 		}
 	}
 	return 0
+}
+
+func parseRemotePollInterval(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second, nil
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("parse durable-agent remote poll interval: %w", err)
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("durable-agent remote poll interval must be > 0")
+	}
+	return value, nil
 }
