@@ -154,6 +154,67 @@ For outbound DM turns, Telegram is the visible surface of the face layer:
 
 Outbound delivery must treat Telegram's message size limit as a first-class constraint rather than a rare failure case. Long replies should be split into sequential Telegram messages before delivery instead of attempting one oversized `sendMessage`.
 
+## Durable Telegram Groups
+
+Telegram groups are not ordinary house-principal sessions.
+
+An admitted durable Telegram group should run as a durable child:
+
+- child-local session scope
+- child-local charter and live policy
+- group members remain child-local subjects, not house principals
+- bounded upward synthesis through the existing review path
+
+### Admission
+
+Group ingress is inert by default.
+
+Only groups explicitly configured in `[[telegram.durable_groups]]` should activate the durable-group adapter.
+
+### Child execution
+
+When an admitted group message arrives:
+
+1. Telegram normalizes the update into `InboundMessage`
+2. runtime resolves the durable child by `agent_id`
+3. the durable child executes inside its own isolated scope
+4. the child uses only its own configured LLM bootstrap
+5. the child may emit:
+   - a bounded local reply
+   - a bounded upward review artifact
+   - both, depending on live policy
+
+The child must not inherit the parent's governor credentials or provider API keys.
+
+### Parent-owned delivery
+
+Even when the group turn executes inside the child runtime, Telegram delivery remains parent-owned.
+
+That means:
+
+- the child computes the turn result and any local reply text
+- the parent process sends the actual Telegram message
+- outbound bookkeeping remains in the parent session/store path
+
+This keeps external-channel transport ownership separate from child-local reasoning.
+
+### Child-local LLM bootstrap
+
+The current durable-group adapter supports two child bootstrap shapes:
+
+- `native`
+  - `anthropic`
+  - `openrouter`
+- `codex`
+
+If the configured bootstrap is missing or invalid, the group child should fail rather than silently falling back to the parent's LLM path.
+
+Current implementation detail:
+
+- native children may still use the ordinary face render path inside the child turn
+- codex children currently serialize the floor through the fallback path inside the child turn rather than running a child-local face-provider render
+- Telegram delivery remains parent-owned in both cases
+
 ## Bot Commands
 
 Telegram command discovery should be explicit. On startup, Aphelion should register its command list with `setMyCommands` so Telegram clients can show the available slash commands.

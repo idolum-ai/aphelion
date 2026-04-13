@@ -61,6 +61,32 @@ auto_vision_documents = true
 extract_pdf_text = true
 max_pdf_bytes = "8MB"
 
+# Admitted durable Telegram groups are child-local durable agents, not house-principal chats.
+# They require an explicit child-local LLM bootstrap and do not inherit the parent's governor credentials.
+[[telegram.durable_groups]]
+chat_id = -1001234567890
+agent_id = "family-group"
+charter = "Help locally in the family group without widening standing role or authority."
+respond_on = "mentions"         # "mentions" | "all"
+review_target_chat_id = 123456789
+
+# Child-local node LLM bootstrap.
+# Choose either a native provider bootstrap or a Codex bootstrap.
+llm_backend = "native"          # "native" | "codex"
+
+# Native child bootstrap
+llm_provider = "openrouter"     # "anthropic" | "openrouter"
+llm_api_key = ""
+llm_base_url = "https://openrouter.ai/api/v1"
+llm_model = "anthropic/claude-sonnet-4-6"
+llm_max_tokens = 64000
+
+# Codex child bootstrap
+# llm_backend = "codex"
+# llm_codex_auth_source = "codex_cli"  # "auto" | "codex_cli"
+# llm_codex_home = "/srv/family-group/.codex"
+# llm_codex_base_url = "https://chatgpt.com/backend-api"
+
 # ─── Providers ───
 [providers]
 default = "anthropic"
@@ -390,6 +416,24 @@ drop_capabilities = [
 user_namespace = true
 uid_map = "65534"            # Map to nobody
 gid_map = "65534"            # Map to nogroup
+
+## Durable Telegram Group Bootstrap
+
+Implemented behavior:
+
+- `[[telegram.durable_groups]]` admits specific Telegram groups as durable children.
+- Each admitted group must define a child-local node LLM bootstrap.
+- The runtime currently supports:
+  - `llm_backend = "native"` with `llm_provider = "anthropic" | "openrouter"`
+  - `llm_backend = "codex"` with child-local Codex auth/home settings
+- A durable child must not inherit the parent governor/provider credentials.
+- If the child bootstrap is missing or invalid, the durable child should fail rather than silently execute on the parent's LLM credentials.
+
+Current implementation detail:
+
+- same-host Telegram durable groups seed their child bootstrap from `aphelion.toml`
+- the durable-agent record persists that bootstrap separately from live policy
+- parent-authored live policy may narrow behavior within the bootstrap ceiling, but it does not carry secret-bearing LLM credentials
 
 # ─── Logging ───
 [logging]

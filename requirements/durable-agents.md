@@ -791,6 +791,7 @@ It should define at least:
 - child agent id
 - enrollment credential or one-time enrollment token
 - local key material or key-registration path
+- child-local node LLM backend
 - allowed model or provider options available on that host
 - local writable roots
 - local secret availability
@@ -799,6 +800,25 @@ It should define at least:
 The local bootstrap configuration defines the maximum local ceiling.
 
 The parent must not silently exceed that ceiling through later policy updates.
+
+For LLM-backed children, the bootstrap should also define the node's own inference/auth path.
+
+At minimum, the child bootstrap should be able to express:
+
+- `backend = native`
+  - `native_provider = anthropic | openrouter`
+  - child-local API key
+  - optional base URL, model, max tokens
+- `backend = codex`
+  - child-local Codex auth source
+  - child-local `codex_home`
+  - optional child-local Codex base URL
+
+The key rule is:
+
+- child-local LLM bootstrap is secret-bearing bootstrap state
+- it is not part of parent-authored live policy
+- it must not be inherited ambiently from the parent merely because the child runs on the same machine
 
 ### Bootstrap ceiling law
 
@@ -822,6 +842,8 @@ This may include:
 - task-specific behavioral constraints
 
 The child should apply only parent policy that is validly signed and remains within the local bootstrap ceiling.
+
+Parent live policy may choose within the locally allowed node LLM ceiling, but it must not carry new secret-bearing credentials for that child.
 
 ### Parent-declared public surface
 
@@ -864,11 +886,23 @@ Examples include:
 
 - parent on one provider or model family
 - child on OpenRouter with a specified open model
+- child on Codex using its own local Codex auth/home
 - multiple children using different models for the same experiment
 
 For durable children created directly by the parent on infrastructure under parent or admin control, the parent may provision the child configuration automatically.
 
 For children installed on independently managed hosts, the operator should install bootstrap config locally, then let the child enroll outward to the parent.
+
+### Implemented local child bootstrap
+
+The current same-host Telegram durable-child implementation already follows this law in a minimal form:
+
+- the durable-agent record persists a child-local node LLM bootstrap separate from live policy
+- the child runtime builds its config from that bootstrap
+- native children use only their own native provider credentials
+- Codex children use only their own Codex auth/home settings
+- Codex children currently use floor-fallback serialization inside the child turn rather than a child-local face-provider render path
+- the child must not silently fall back to the parent's LLM credentials if its own bootstrap is missing or unusable
 
 ## Offline and Dormant Semantics
 

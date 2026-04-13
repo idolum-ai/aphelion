@@ -167,6 +167,19 @@ The system must ensure:
 
 See `security.md`.
 
+## Durable Child Bootstrap
+
+Durable children that use `codex` should follow the same auth law, but through child-local bootstrap rather than parent governor config.
+
+That means:
+
+- a child may use `codex` as its own node backend
+- the child should resolve Codex auth from its own configured `codex_home` / auth source
+- the child must not inherit the parent's Codex credentials merely because it runs on the same host
+- parent-authored live policy may choose within the child bootstrap ceiling, but it must not inject new Codex secrets into live policy
+
+This keeps Codex auth ownership aligned with the durable-agent bootstrap law: secret-bearing bootstrap is local, policy is downward and non-secret.
+
 ## Config Surface
 
 See `config.md`, but the intended shape includes:
