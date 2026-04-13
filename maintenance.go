@@ -598,7 +598,7 @@ func runImportSemanticCommand(args []string) error {
 
 func runDurableAgentCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("durable-agent requires a subcommand: policy, forensic, bootstrap, or child-run")
+		return fmt.Errorf("durable-agent requires a subcommand: policy, forensic, bootstrap, remote, or child-run")
 	}
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case "policy":
@@ -607,10 +607,12 @@ func runDurableAgentCommand(args []string) error {
 		return runDurableAgentForensicCommand(args[1:])
 	case "bootstrap":
 		return runDurableAgentBootstrapCommand(args[1:])
+	case "remote":
+		return runDurableAgentRemoteCommand(args[1:])
 	case "child-run":
 		return runDurableAgentChildCommand(args[1:])
 	default:
-		return fmt.Errorf("durable-agent subcommand must be one of policy|forensic|bootstrap|child-run")
+		return fmt.Errorf("durable-agent subcommand must be one of policy|forensic|bootstrap|remote|child-run")
 	}
 }
 

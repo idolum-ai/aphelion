@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -680,6 +682,183 @@ func TestRunDurableAgentBootstrapWriteExportsRemoteBootstrap(t *testing.T) {
 	if bootstrap.NetworkPolicy != "restricted" {
 		t.Fatalf("bootstrap.NetworkPolicy = %q, want restricted", bootstrap.NetworkPolicy)
 	}
+}
+
+func TestRunDurableAgentRemoteRunOnceSyncsAndUploadsArtifacts(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parentCfgPath := writeMaintenanceConfig(t, root)
+
+	parentCfg, _, err := loadConfigForCommand(parentCfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	parentStore, err := session.NewSQLiteStore(parentCfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("parent NewSQLiteStore() err = %v", err)
+	}
+	defer parentStore.Close()
+
+	workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(parentCfg.Sessions.DBPath, "family-group")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
+	}
+	if err := os.MkdirAll(memoryRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentAgentID:      "house",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Initial charter",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		BootstrapCeiling: core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DurableAgentLivePolicy{
+			Charter:            "Initial charter",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
+		},
+		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
+		SecretScopes:      []string{"telegram_bot"},
+		NetworkPolicy:     "restricted",
+		Status:            "active",
+	}
+	if err := parentStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("parent UpsertDurableAgent() err = %v", err)
+	}
+
+	childDBPath := filepath.Join(root, "remote-child.db")
+	bootstrapPath := filepath.Join(root, "family-group-bootstrap.json")
+	if err := runDurableAgentBootstrapCommand([]string{
+		"--config", parentCfgPath,
+		"--agent", "family-group",
+		"--path", bootstrapPath,
+		"--parent-control-url", "https://house.example",
+		"--enrollment-token", "enroll-token-1",
+		"--key-fingerprint", "child-key-fp",
+		"write",
+	}); err != nil {
+		t.Fatalf("runDurableAgentBootstrapCommand(write) err = %v", err)
+	}
+
+	messagePath := filepath.Join(root, "message.json")
+	msgRaw := []byte(`{
+  "ChatID": -100123,
+  "ChatType": "group",
+  "SenderID": 77,
+  "SenderName": "Aunt May",
+  "Text": "Can you remind everyone again?",
+  "MessageID": 22,
+  "DurableAgentID": "family-group",
+  "Timestamp": "2026-04-13T00:00:00Z"
+}`)
+	if err := os.WriteFile(messagePath, msgRaw, 0o600); err != nil {
+		t.Fatalf("WriteFile(message) err = %v", err)
+	}
+
+	origClientFactory := durableAgentRemoteClientFactory
+	origExecutorFactory := durableAgentRemoteExecutorFactory
+	defer func() {
+		durableAgentRemoteClientFactory = origClientFactory
+		durableAgentRemoteExecutorFactory = origExecutorFactory
+	}()
+
+	durableAgentRemoteClientFactory = func(b core.DurableAgentRemoteBootstrap) (durableagent.RemoteControlClient, error) {
+		client, err := durableagent.NewHTTPClient(b)
+		if err != nil {
+			return nil, err
+		}
+		client.Client = &http.Client{Transport: maintenanceHandlerRoundTripper{handler: durableagent.NewHTTPHandler(parentStore).Handler()}}
+		return client, nil
+	}
+	durableAgentRemoteExecutorFactory = func(store *session.SQLiteStore, dbPath string) durableagent.RemoteChildExecutor {
+		return durableagent.RemoteChildExecutorFunc(func(ctx context.Context, bootstrap core.DurableAgentRemoteBootstrap, agent core.DurableAgent, msg core.InboundMessage) error {
+			_, err := durableagent.NewRuntime(store).QueueReviewArtifact(agent, core.DurableReviewArtifact{
+				Summary:       "Family schedule drift keeps resurfacing around the dinner plan.",
+				IntervalLabel: "messages 20-25",
+				LocalActions:  []string{"Held reply pending parent visibility."},
+				Questions:     []string{"Should this become a standing family reminder?"},
+				RiskFlags:     []string{"family_relevant_update"},
+			})
+			return err
+		})
+	}
+
+	out, err := captureStdout(t, func() error {
+		return runDurableAgentRemoteCommand([]string{
+			"--bootstrap", bootstrapPath,
+			"--db", childDBPath,
+			"--message", messagePath,
+			"run-once",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentRemoteCommand(run-once) err = %v", err)
+	}
+	if !strings.Contains(out, "action: durable-agent remote run-once") {
+		t.Fatalf("remote run-once output = %q, want action line", out)
+	}
+	if !strings.Contains(out, "uploaded_review_artifacts: 1") {
+		t.Fatalf("remote run-once output = %q, want uploaded review count", out)
+	}
+
+	parentEvents, err := parentStore.PendingReviewEvents(1, 10)
+	if err != nil {
+		t.Fatalf("parent PendingReviewEvents() err = %v", err)
+	}
+	if len(parentEvents) != 1 {
+		t.Fatalf("parent pending review events len = %d, want 1", len(parentEvents))
+	}
+}
+
+type maintenanceHandlerRoundTripper struct {
+	handler http.Handler
+}
+
+func (rt maintenanceHandlerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	rec := captureResponseRecorder{header: make(http.Header)}
+	rt.handler.ServeHTTP(&rec, req)
+	return &http.Response{
+		StatusCode: rec.code,
+		Header:     rec.header.Clone(),
+		Body:       io.NopCloser(bytes.NewReader(rec.body.Bytes())),
+		Request:    req,
+	}, nil
+}
+
+type captureResponseRecorder struct {
+	header http.Header
+	body   bytes.Buffer
+	code   int
+}
+
+func (r *captureResponseRecorder) Header() http.Header {
+	return r.header
+}
+
+func (r *captureResponseRecorder) Write(data []byte) (int, error) {
+	if r.code == 0 {
+		r.code = http.StatusOK
+	}
+	return r.body.Write(data)
+}
+
+func (r *captureResponseRecorder) WriteHeader(statusCode int) {
+	r.code = statusCode
 }
 
 func writeMaintenanceConfig(t *testing.T, root string) string {
