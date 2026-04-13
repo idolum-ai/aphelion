@@ -4,6 +4,9 @@
 
 Aphelion needs a first-class model for **durable external-channel agents**.
 
+This is a forward-looking architecture spec for the next major tranche after the current DM-only principal floor.
+It does not retroactively widen the existing `v0` admission or security claims.
+
 These agents are not ordinary task subagents.
 They are persistent subordinate organs attached to the house through an external ingress surface such as:
 
@@ -39,7 +42,15 @@ They are sensory organs with local processing, not new sovereign selves.
 
 ## Scope
 
-### v0 required
+This spec defines the next durable-agent tranche, not the current platform floor.
+
+The current floor remains:
+
+- DM-only Telegram principals
+- trusted-admin-first execution
+- no broad public or semi-public ingress claims by default
+
+### First durable-agent tranche
 
 - a durable-agent concept distinct from ordinary subagents
 - parent/child governance model for durable agents
@@ -50,7 +61,7 @@ They are sensory organs with local processing, not new sovereign selves.
 - dormancy model for durable agents when idle
 - isolation rules for local and remote durable-agent runtimes
 
-### Deferred after v0
+### Deferred after the first durable-agent tranche
 
 - full runtime implementation for remote durable-agent registration
 - public website durable-agent deployment flow
@@ -130,6 +141,28 @@ Examples:
 
 The charter is derivative of the parent house identity, but narrower and task-focused.
 
+## External Actors Are Not House Principals
+
+The people or systems encountered through a durable agent's channel are not house principals by default.
+
+Examples:
+
+- members of a Telegram group
+- people sending mail to a durable inbox
+- visitors to a public website chat
+- remote-host observations such as processes, files, sensors, or local machine state
+
+These channel actors and observed inputs are child-local subjects of that durable agent, not `admin` or `approved_user` principals of the parent house.
+
+That means:
+
+- they do not inherit parent authority
+- they do not get direct parent-session continuity
+- they do not become eligible for tools or writable roots through channel contact alone
+- they may influence child-local context, but only bounded child review artifacts may move upward
+
+If a future architecture introduces broader cross-transport identity, it should do so explicitly in the principal model rather than implicitly through durable-agent ingress.
+
 ## Constitutional Boundary
 
 The constitutional rule is strict:
@@ -186,6 +219,15 @@ A review artifact may include:
 - questions requiring admin decision
 - risk or anomaly flags
 - optional child-session or run reference
+
+The normal upward conduit should reuse the existing review events, artifact retention/quarantine rules, and operator-ratification discipline rather than inventing a parallel review plane.
+
+At minimum, that means:
+
+- the child-local synthesis becomes a bounded parent review artifact
+- surfaced files or corpora remain artifacts with explicit retention and quarantine semantics
+- raw child transcripts remain sidecar-inspectable state
+- promotion into broader parent memory or retrieval still requires the existing ratification/review path
 
 The parent house reviews that artifact first.
 The parent may then send an admin-facing synthesis for final ratification before broader retention or reframing.
@@ -388,6 +430,7 @@ Durable agents must not acquire lasting changes silently.
 
 ## Relationship to Existing Specs
 
+- `principals.md` still governs the current house principal model; durable-agent channel actors are not house principals by default
 - `subagents.md` governs ordinary subordinate sessions and should later reference durable agents as a distinct subtype or sibling construct
 - `heartbeat.md` governs the parent house heartbeat; durable agents default to source-triggered wakeups rather than independent heartbeats
 - `security.md` governs isolation floors and secret boundaries; durable agents add external-ingress quarantine requirements on top
@@ -409,6 +452,8 @@ Durable agents must not acquire lasting changes silently.
 - **TestDurableAgentCannotMutateParentPromptFromExternalInteraction**: child-local external events cannot directly rewrite parent prompt files
 - **TestDurableAgentCannotMutateParentMemoryWithoutRatification**: upward promotion requires review and admin ratification
 - **TestDurableAgentReportsUpwardThroughReviewArtifact**: parent sees bounded synthesis before raw transcript
+- **TestExternalChannelActorsDoNotBecomeHousePrincipals**: group members, inbox senders, website visitors, and remote observations remain child-local actors unless explicitly admitted through the principal model
+- **TestDurableAgentUpwardSynthesisUsesExistingReviewConduit**: upward child synthesis enters the parent through the existing review/artifact/quarantine path rather than a parallel review subsystem
 - **TestRawDurableTranscriptRemainsSidecarInspectable**: full child transcript is inspectable but not default prompt input
 - **TestOneHeartbeatForHouse**: durable agents do not own independent heartbeats by default
 - **TestDurableAgentWakeIsEventOrPollDriven**: channel-appropriate wakeup paths function without child heartbeat loops
