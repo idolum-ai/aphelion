@@ -28,11 +28,14 @@ type HTTPStore interface {
 }
 
 type HTTPHandler struct {
-	store   HTTPStore
-	control *ControlPlane
-	review  *Runtime
-	clock   func() time.Time
+	store    HTTPStore
+	control  *ControlPlane
+	review   *Runtime
+	clock    func() time.Time
+	Verifier EnvelopeVerifier
 }
+
+type EnvelopeVerifier func(envelope core.DurableAgentControlEnvelope) error
 
 func NewHTTPHandler(store HTTPStore) *HTTPHandler {
 	return &HTTPHandler{
@@ -64,6 +67,10 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	req.Payload = core.NormalizeDurableAgentEnrollmentPayload(req.Payload)
 	if err := core.ValidateDurableAgentControlEnvelope(req.Envelope); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := h.verifyEnvelope(req.Envelope); err != nil {
+		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
 	if err := core.ValidateDurableAgentEnrollmentPayload(req.Payload); err != nil {
@@ -124,6 +131,10 @@ func (h *HTTPHandler) handlePolicyPoll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("durable agent policy poll requires message_kind=policy_poll"))
 		return
 	}
+	if err := h.verifyEnvelope(req.Envelope); err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -151,6 +162,10 @@ func (h *HTTPHandler) handleArtifactUpload(w http.ResponseWriter, r *http.Reques
 	req.Envelope = core.NormalizeDurableAgentControlEnvelope(req.Envelope)
 	if req.Envelope.MessageKind != core.DurableAgentControlMessageReviewArtifactUpload {
 		writeError(w, http.StatusBadRequest, errors.New("durable agent review artifact upload requires message_kind=review_artifact_upload"))
+		return
+	}
+	if err := h.verifyEnvelope(req.Envelope); err != nil {
+		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
 	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
@@ -186,6 +201,10 @@ func (h *HTTPHandler) handlePolicyAck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("durable agent policy acknowledgement requires message_kind=policy_ack"))
 		return
 	}
+	if err := h.verifyEnvelope(req.Envelope); err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	if err := h.control.AcceptPolicyAcknowledgement(req.Envelope, req.Ack, h.now()); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -198,6 +217,13 @@ func (h *HTTPHandler) now() time.Time {
 		return h.clock().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (h *HTTPHandler) verifyEnvelope(envelope core.DurableAgentControlEnvelope) error {
+	if h == nil || h.Verifier == nil {
+		return nil
+	}
+	return h.Verifier(envelope)
 }
 
 func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
