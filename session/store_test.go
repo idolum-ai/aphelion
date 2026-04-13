@@ -556,11 +556,12 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 			Model:          "openrouter/group-model",
 			MaxTokens:      256,
 		},
-		LocalStorageRoots: []string{"/tmp/family-group"},
-		NetworkPolicy:     "restricted",
-		WakeupMode:        "event",
-		SecretScopes:      []string{"telegram_bot"},
-		Status:            "active",
+		ControlPlaneSecret: "group-control-secret",
+		LocalStorageRoots:  []string{"/tmp/family-group"},
+		NetworkPolicy:      "restricted",
+		WakeupMode:         "event",
+		SecretScopes:       []string{"telegram_bot"},
+		Status:             "active",
 	}
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
@@ -593,6 +594,9 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 	if got.BootstrapLLM.APIKey != "sk-or-group" {
 		t.Fatalf("BootstrapLLM.APIKey = %q, want sk-or-group", got.BootstrapLLM.APIKey)
+	}
+	if got.ControlPlaneSecret != "group-control-secret" {
+		t.Fatalf("ControlPlaneSecret = %q, want group-control-secret", got.ControlPlaneSecret)
 	}
 	if got.PolicyVersion != 1 {
 		t.Fatalf("PolicyVersion = %d, want 1", got.PolicyVersion)

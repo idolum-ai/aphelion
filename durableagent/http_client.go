@@ -35,8 +35,8 @@ func NewHTTPClient(bootstrap core.DurableAgentRemoteBootstrap) (*HTTPClient, err
 	return &HTTPClient{
 		Bootstrap: bootstrap,
 		Client:    &http.Client{Timeout: 30 * time.Second},
-		Signer: func(core.DurableAgentControlEnvelope, any) (string, error) {
-			return "signed-envelope", nil
+		Signer: func(envelope core.DurableAgentControlEnvelope, payload any) (string, error) {
+			return SignEnvelopeHMAC(bootstrap.EnrollmentToken, envelope, payload)
 		},
 		Clock: func() time.Time { return time.Now().UTC() },
 	}, nil
@@ -58,8 +58,8 @@ func (c *HTTPClient) Enroll(ctx context.Context) (core.DurableAgentEnrollmentRes
 
 func (c *HTTPClient) PollPolicy(ctx context.Context, knownVersion int64, knownHash string) (core.DurableAgentPolicyPollResponse, error) {
 	reqPayload := struct {
-		KnownVersion int64
-		KnownHash    string
+		KnownVersion int64  `json:"known_version,omitempty"`
+		KnownHash    string `json:"known_hash,omitempty"`
 	}{KnownVersion: knownVersion, KnownHash: strings.TrimSpace(knownHash)}
 	env, err := c.nextEnvelope(core.DurableAgentControlMessagePolicyPoll, reqPayload)
 	if err != nil {
@@ -157,7 +157,7 @@ func (c *HTTPClient) nextEnvelope(kind string, payload any) (core.DurableAgentCo
 		Sequence:        c.sequence,
 		Timestamp:       c.now(),
 	}
-	signature := "signed-envelope"
+	signature := ""
 	if c.Signer != nil {
 		signed, err := c.Signer(env, payload)
 		if err != nil {

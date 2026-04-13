@@ -682,6 +682,13 @@ func TestRunDurableAgentBootstrapWriteExportsRemoteBootstrap(t *testing.T) {
 	if bootstrap.NetworkPolicy != "restricted" {
 		t.Fatalf("bootstrap.NetworkPolicy = %q, want restricted", bootstrap.NetworkPolicy)
 	}
+	persisted, err := store.DurableAgent("family-group")
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if persisted.ControlPlaneSecret != "enroll-token-1" {
+		t.Fatalf("persisted ControlPlaneSecret = %q, want enroll-token-1", persisted.ControlPlaneSecret)
+	}
 }
 
 func TestRunDurableAgentRemoteRunOnceSyncsAndUploadsArtifacts(t *testing.T) {

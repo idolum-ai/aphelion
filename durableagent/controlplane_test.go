@@ -164,6 +164,7 @@ func testRemoteDurableAgent() core.DurableAgent {
 		AgentID:            "family-group",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "telegram_group",
+		ControlPlaneSecret: "enroll-token-1",
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:            "Observe and surface bounded family coordination.",
 			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},

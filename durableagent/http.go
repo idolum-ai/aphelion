@@ -5,6 +5,7 @@ package durableagent
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -35,14 +36,15 @@ type HTTPHandler struct {
 	Verifier EnvelopeVerifier
 }
 
-type EnvelopeVerifier func(envelope core.DurableAgentControlEnvelope) error
+type EnvelopeVerifier func(envelope core.DurableAgentControlEnvelope, payload any) error
 
 func NewHTTPHandler(store HTTPStore) *HTTPHandler {
 	return &HTTPHandler{
-		store:   store,
-		control: NewControlPlane(store, 10*time.Minute),
-		review:  NewRuntime(store),
-		clock:   func() time.Time { return time.Now().UTC() },
+		store:    store,
+		control:  NewControlPlane(store, 10*time.Minute),
+		review:   NewRuntime(store),
+		clock:    func() time.Time { return time.Now().UTC() },
+		Verifier: NewStoreBackedEnvelopeVerifier(store),
 	}
 }
 
@@ -69,7 +71,7 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := h.verifyEnvelope(req.Envelope); err != nil {
+	if err := h.verifyEnvelope(req.Envelope, req.Payload); err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
@@ -131,7 +133,13 @@ func (h *HTTPHandler) handlePolicyPoll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("durable agent policy poll requires message_kind=policy_poll"))
 		return
 	}
-	if err := h.verifyEnvelope(req.Envelope); err != nil {
+	if err := h.verifyEnvelope(req.Envelope, struct {
+		KnownVersion int64  `json:"known_version,omitempty"`
+		KnownHash    string `json:"known_hash,omitempty"`
+	}{
+		KnownVersion: req.KnownVersion,
+		KnownHash:    req.KnownHash,
+	}); err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
@@ -164,7 +172,7 @@ func (h *HTTPHandler) handleArtifactUpload(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, errors.New("durable agent review artifact upload requires message_kind=review_artifact_upload"))
 		return
 	}
-	if err := h.verifyEnvelope(req.Envelope); err != nil {
+	if err := h.verifyEnvelope(req.Envelope, req.Artifact); err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
@@ -201,7 +209,8 @@ func (h *HTTPHandler) handlePolicyAck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("durable agent policy acknowledgement requires message_kind=policy_ack"))
 		return
 	}
-	if err := h.verifyEnvelope(req.Envelope); err != nil {
+	req.Ack = core.NormalizeDurableAgentPolicyAcknowledgement(req.Ack)
+	if err := h.verifyEnvelope(req.Envelope, req.Ack); err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
@@ -219,11 +228,27 @@ func (h *HTTPHandler) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (h *HTTPHandler) verifyEnvelope(envelope core.DurableAgentControlEnvelope) error {
+func (h *HTTPHandler) verifyEnvelope(envelope core.DurableAgentControlEnvelope, payload any) error {
 	if h == nil || h.Verifier == nil {
 		return nil
 	}
-	return h.Verifier(envelope)
+	return h.Verifier(envelope, payload)
+}
+
+func NewStoreBackedEnvelopeVerifier(store HTTPStore) EnvelopeVerifier {
+	return func(envelope core.DurableAgentControlEnvelope, payload any) error {
+		if store == nil {
+			return fmt.Errorf("durable agent control plane store is nil")
+		}
+		agent, err := store.DurableAgent(envelope.AgentID)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(agent.ControlPlaneSecret) == "" {
+			return fmt.Errorf("invalid signature")
+		}
+		return VerifyEnvelopeHMAC(agent.ControlPlaneSecret, envelope, payload)
+	}
 }
 
 func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {

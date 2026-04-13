@@ -665,6 +665,10 @@ func runDurableAgentBootstrapCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	agent.ControlPlaneSecret = strings.TrimSpace(*enrollmentToken)
+	if err := store.UpsertDurableAgent(*agent); err != nil {
+		return err
+	}
 	bootstrap := core.DurableAgentRemoteBootstrap{
 		ReviewTargetChatID: agent.ReviewTargetChatID,
 		AgentID:            agent.AgentID,

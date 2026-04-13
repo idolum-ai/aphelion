@@ -47,10 +47,14 @@ func TestHTTPEnrollRegistersRemoteChildAndReturnsPolicy(t *testing.T) {
 			MessageID:       "enroll-1",
 			Sequence:        1,
 			Timestamp:       time.Now().UTC(),
-			Signature:       "signed-envelope",
 		},
 		Payload: bootstrap.EnrollmentPayload(),
 	}
+	signature, err := SignEnvelopeHMAC(agent.ControlPlaneSecret, reqBody.Envelope, reqBody.Payload)
+	if err != nil {
+		t.Fatalf("SignEnvelopeHMAC(enroll) err = %v", err)
+	}
+	reqBody.Envelope.Signature = signature
 	rec := performJSONRequest(t, handler, http.MethodPost, ControlPlaneEnrollPath, reqBody)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -103,11 +107,21 @@ func TestHTTPPolicyPollReturnsCurrentPolicySnapshot(t *testing.T) {
 			MessageID:       "poll-1",
 			Sequence:        1,
 			Timestamp:       time.Now().UTC(),
-			Signature:       "signed-envelope",
 		},
 		KnownVersion: 0,
 		KnownHash:    "",
 	}
+	signature, err := SignEnvelopeHMAC(agent.ControlPlaneSecret, reqBody.Envelope, struct {
+		KnownVersion int64  `json:"known_version,omitempty"`
+		KnownHash    string `json:"known_hash,omitempty"`
+	}{
+		KnownVersion: reqBody.KnownVersion,
+		KnownHash:    reqBody.KnownHash,
+	})
+	if err != nil {
+		t.Fatalf("SignEnvelopeHMAC(policy poll) err = %v", err)
+	}
+	reqBody.Envelope.Signature = signature
 	rec := performJSONRequest(t, handler, http.MethodPost, ControlPlanePolicyPollPath, reqBody)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -154,7 +168,6 @@ func TestHTTPReviewArtifactUploadQueuesReviewEvent(t *testing.T) {
 			MessageID:       "artifact-1",
 			Sequence:        1,
 			Timestamp:       time.Now().UTC(),
-			Signature:       "signed-envelope",
 		},
 		Artifact: core.DurableReviewArtifact{
 			AgentID:       agent.AgentID,
@@ -165,6 +178,11 @@ func TestHTTPReviewArtifactUploadQueuesReviewEvent(t *testing.T) {
 			RiskFlags:     []string{"family_relevant_update"},
 		},
 	}
+	signature, err := SignEnvelopeHMAC(agent.ControlPlaneSecret, reqBody.Envelope, reqBody.Artifact)
+	if err != nil {
+		t.Fatalf("SignEnvelopeHMAC(review artifact) err = %v", err)
+	}
+	reqBody.Envelope.Signature = signature
 	rec := performJSONRequest(t, handler, http.MethodPost, ControlPlaneArtifactUploadPath, reqBody)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -192,7 +210,7 @@ func TestHTTPHandlerVerifierRejectsInvalidSignature(t *testing.T) {
 	}
 
 	handler := NewHTTPHandler(store)
-	handler.Verifier = func(envelope core.DurableAgentControlEnvelope) error {
+	handler.Verifier = func(envelope core.DurableAgentControlEnvelope, payload any) error {
 		if envelope.Signature != "expected-signature" {
 			return errors.New("invalid signature")
 		}
@@ -240,7 +258,7 @@ func TestHTTPClientSignerSatisfiesHandlerVerifier(t *testing.T) {
 	}
 
 	handler := NewHTTPHandler(store)
-	handler.Verifier = func(envelope core.DurableAgentControlEnvelope) error {
+	handler.Verifier = func(envelope core.DurableAgentControlEnvelope, payload any) error {
 		if envelope.Signature != "expected-signature" {
 			return errors.New("invalid signature")
 		}
@@ -273,6 +291,43 @@ func TestHTTPClientSignerSatisfiesHandlerVerifier(t *testing.T) {
 	}
 	if resp.Policy.PolicyVersion != 1 {
 		t.Fatalf("policy version = %d, want 1", resp.Policy.PolicyVersion)
+	}
+}
+
+func TestHTTPHandlerRejectsWrongStoreBackedSignature(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	agent.ControlPlaneSecret = "expected-control-secret"
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	client, err := NewHTTPClient(core.DurableAgentRemoteBootstrap{
+		ReviewTargetChatID: agent.ReviewTargetChatID,
+		AgentID:            agent.AgentID,
+		ParentAgentID:      "house",
+		ChannelKind:        agent.ChannelKind,
+		ParentControlURL:   "https://house.example",
+		EnrollmentToken:    "wrong-control-secret",
+		KeyFingerprint:     "child-key-fp",
+		ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:       testDurableAgentBootstrapLLM(),
+		BootstrapCeiling:   agent.BootstrapCeiling,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient() err = %v", err)
+	}
+	client.Client = &http.Client{Transport: handlerRoundTripper{handler: NewHTTPHandler(store).Handler()}}
+
+	_, err = client.Enroll(context.Background())
+	if err == nil {
+		t.Fatal("Enroll() err = nil, want invalid signature failure")
+	}
+	if !strings.Contains(err.Error(), "invalid signature") {
+		t.Fatalf("Enroll() err = %v, want invalid signature", err)
 	}
 }
 

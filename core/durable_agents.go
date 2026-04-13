@@ -51,6 +51,7 @@ type DurableAgent struct {
 	LivePolicy         DurableAgentLivePolicy
 	BootstrapCeiling   DurableAgentBootstrapCeiling
 	BootstrapLLM       NodeLLMBootstrap
+	ControlPlaneSecret string
 	PolicyVersion      int64
 	PolicyHash         string
 	PolicyIssuedAt     time.Time
