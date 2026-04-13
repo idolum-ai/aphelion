@@ -798,6 +798,11 @@ func printDurableAgentPolicy(w *os.File, agent core.DurableAgent, updates []sess
 	fmt.Fprintf(w, "public_surface_mode: %s\n", agent.LivePolicy.PublicSurfaceMode)
 	fmt.Fprintf(w, "shared_inference_reuse: %s\n", agent.LivePolicy.SharedInferenceReuse)
 	fmt.Fprintf(w, "shared_inference_reuse_scope: %s\n", agent.LivePolicy.SharedInferenceReuseScope)
+	fmt.Fprintf(w, "bootstrap_capabilities: %s\n", strings.Join(agent.BootstrapCeiling.CapabilityEnvelope, ","))
+	fmt.Fprintf(w, "bootstrap_allowed_outbound_modes: %s\n", strings.Join(agent.BootstrapCeiling.AllowedOutboundModes, ","))
+	fmt.Fprintf(w, "bootstrap_allowed_public_surface_modes: %s\n", strings.Join(agent.BootstrapCeiling.AllowedPublicSurfaceModes, ","))
+	fmt.Fprintf(w, "bootstrap_allowed_shared_inference_reuse: %s\n", strings.Join(agent.BootstrapCeiling.AllowedSharedInferenceReuse, ","))
+	fmt.Fprintf(w, "bootstrap_allowed_shared_inference_scopes: %s\n", strings.Join(agent.BootstrapCeiling.AllowedSharedInferenceScopes, ","))
 	fmt.Fprintf(w, "policy_updates: %d\n", len(updates))
 	for _, update := range updates {
 		fmt.Fprintf(w, "- id=%d previous=%d new=%d", update.ID, update.PreviousVersion, update.NewVersion)

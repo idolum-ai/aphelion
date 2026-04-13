@@ -541,6 +541,13 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 			DriftPolicy:        "admin_ratified",
 			PublicSurfaceMode:  "explicit_parent_relay_only",
 		},
+		BootstrapCeiling: core.DurableAgentBootstrapCeiling{
+			CapabilityEnvelope:           []string{"read_channel", "draft_reply", "synthesize_review", "bounded_review_artifact"},
+			AllowedOutboundModes:         []string{"draft_only", "read_only"},
+			AllowedPublicSurfaceModes:    []string{"explicit_parent_relay_only", "none"},
+			AllowedSharedInferenceReuse:  []string{"disabled"},
+			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
+		},
 		LocalStorageRoots: []string{"/tmp/family-group"},
 		NetworkPolicy:     "restricted",
 		WakeupMode:        "event",
@@ -563,6 +570,9 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 	if len(got.SecretScopes) != 1 || got.SecretScopes[0] != "telegram_bot" {
 		t.Fatalf("SecretScopes = %#v, want telegram_bot", got.SecretScopes)
+	}
+	if len(got.BootstrapCeiling.AllowedOutboundModes) != 2 || got.BootstrapCeiling.AllowedOutboundModes[0] != "draft_only" {
+		t.Fatalf("BootstrapCeiling.AllowedOutboundModes = %#v, want preserved ceiling", got.BootstrapCeiling.AllowedOutboundModes)
 	}
 	if got.LivePolicy.OutboundMode != "draft_only" {
 		t.Fatalf("OutboundMode = %q, want draft_only", got.LivePolicy.OutboundMode)
@@ -597,6 +607,9 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 	if updated.PolicyHash == got.PolicyHash {
 		t.Fatal("updated PolicyHash did not change after live policy update")
+	}
+	if updated.BootstrapCeiling.AllowedSharedInferenceReuse[0] != "disabled" {
+		t.Fatalf("updated BootstrapCeiling.AllowedSharedInferenceReuse = %#v, want preserved disabled ceiling", updated.BootstrapCeiling.AllowedSharedInferenceReuse)
 	}
 
 	listed, err := store.ListDurableAgents()
@@ -638,6 +651,60 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 	if _, err := store.DurableAgentState(agent.AgentID); err == nil || !strings.Contains(err.Error(), "no rows") {
 		t.Fatalf("DurableAgentState() after delete err = %v, want no rows", err)
+	}
+}
+
+func TestApplyDurableAgentLivePolicyRejectsBootstrapCeilingWidening(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Observe and surface bounded family coordination.",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		BootstrapCeiling: core.DurableAgentBootstrapCeiling{
+			CapabilityEnvelope:           []string{"group_reply", "bounded_review_artifact"},
+			AllowedOutboundModes:         []string{"read_only", "draft_only"},
+			AllowedPublicSurfaceModes:    []string{"none"},
+			AllowedSharedInferenceReuse:  []string{"disabled"},
+			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
+		},
+		Status: "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, _, err := store.ApplyDurableAgentLivePolicy(agent.AgentID, core.DurableAgentLivePolicy{
+		Charter:            "Observe and surface bounded family coordination.",
+		CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+		OutboundMode:       "reply_with_policy_authorization",
+		DriftPolicy:        "admin_review",
+	}, 0, "attempted widening")
+	if err == nil {
+		t.Fatal("ApplyDurableAgentLivePolicy() err = nil, want bootstrap ceiling violation")
+	}
+	if !strings.Contains(err.Error(), "bootstrap ceiling") {
+		t.Fatalf("ApplyDurableAgentLivePolicy() err = %v, want bootstrap ceiling violation", err)
+	}
+
+	got, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if got.LivePolicy.OutboundMode != "read_only" {
+		t.Fatalf("LivePolicy.OutboundMode = %q, want unchanged read_only", got.LivePolicy.OutboundMode)
+	}
+	if got.PolicyVersion != 1 {
+		t.Fatalf("PolicyVersion = %d, want unchanged 1", got.PolicyVersion)
 	}
 }
 

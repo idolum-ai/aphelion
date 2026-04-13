@@ -463,6 +463,9 @@ func TestRunDurableAgentPolicyShowAndApply(t *testing.T) {
 	if !strings.Contains(showOut, "charter: Initial charter") || !strings.Contains(showOut, "outbound_mode: reply_with_policy_authorization") {
 		t.Fatalf("policy show output = %q, want initial policy", showOut)
 	}
+	if !strings.Contains(showOut, "bootstrap_allowed_outbound_modes: read_only,draft_only,reply_with_parent_review,reply_with_policy_authorization") {
+		t.Fatalf("policy show output = %q, want bootstrap ceiling lines", showOut)
+	}
 
 	applyOut, err := captureStdout(t, func() error {
 		return runDurableAgentPolicyCommand([]string{

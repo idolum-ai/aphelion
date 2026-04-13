@@ -36,11 +36,13 @@ func syncConfiguredTelegramDurableGroups(cfg *config.Config, store *session.SQLi
 			}
 		}
 		livePolicy := core.DefaultTelegramGroupLivePolicy(strings.TrimSpace(group.Charter))
+		bootstrapCeiling := core.DefaultDurableAgentBootstrapCeiling("telegram_group", livePolicy)
 		policyVersion := int64(1)
 		policyHash := ""
 		policyIssuedAt := time.Time{}
 		if existing != nil {
 			livePolicy = existing.LivePolicy
+			bootstrapCeiling = existing.BootstrapCeiling
 			policyVersion = existing.PolicyVersion
 			policyHash = existing.PolicyHash
 			policyIssuedAt = existing.PolicyIssuedAt
@@ -52,6 +54,7 @@ func syncConfiguredTelegramDurableGroups(cfg *config.Config, store *session.SQLi
 			ReviewTargetChatID: reviewTarget,
 			ChannelKind:        "telegram_group",
 			LivePolicy:         livePolicy,
+			BootstrapCeiling:   bootstrapCeiling,
 			PolicyVersion:      policyVersion,
 			PolicyHash:         policyHash,
 			PolicyIssuedAt:     policyIssuedAt,

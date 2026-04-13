@@ -35,6 +35,13 @@ func TestSyncConfiguredTelegramDurableGroupsPreservesExistingLivePolicy(t *testi
 			DriftPolicy:        "admin_review",
 			PublicSurfaceMode:  "explicit_parent_relay_only",
 		},
+		BootstrapCeiling: core.DurableAgentBootstrapCeiling{
+			CapabilityEnvelope:           []string{"group_reply", "bounded_review_artifact"},
+			AllowedOutboundModes:         []string{"read_only", "reply_with_parent_review"},
+			AllowedPublicSurfaceModes:    []string{"none", "explicit_parent_relay_only"},
+			AllowedSharedInferenceReuse:  []string{"disabled"},
+			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
+		},
 		PolicyVersion: 4,
 		LocalStorageRoots: []string{
 			filepath.Join(root, "existing", "workspace"),
@@ -77,6 +84,9 @@ func TestSyncConfiguredTelegramDurableGroupsPreservesExistingLivePolicy(t *testi
 	}
 	if got.PolicyVersion != 4 {
 		t.Fatalf("PolicyVersion = %d, want preserved 4", got.PolicyVersion)
+	}
+	if len(got.BootstrapCeiling.AllowedOutboundModes) != 2 || got.BootstrapCeiling.AllowedOutboundModes[1] != "reply_with_parent_review" {
+		t.Fatalf("BootstrapCeiling.AllowedOutboundModes = %#v, want preserved existing ceiling", got.BootstrapCeiling.AllowedOutboundModes)
 	}
 	if got.ReviewTargetChatID != 1001 {
 		t.Fatalf("ReviewTargetChatID = %d, want 1001", got.ReviewTargetChatID)
