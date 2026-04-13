@@ -175,6 +175,35 @@ type DurableAgentPolicyAcknowledgement struct {
 	AcknowledgedAt      time.Time
 }
 
+type DurableAgentRemoteBootstrap struct {
+	AgentID           string
+	ParentAgentID     string
+	ChannelKind       string
+	ParentControlURL  string
+	EnrollmentToken   string
+	KeyFingerprint    string
+	ProtocolVersion   string
+	BootstrapLLM      NodeLLMBootstrap
+	BootstrapCeiling  DurableAgentBootstrapCeiling
+	LocalStorageRoots []string
+	SecretScopes      []string
+	NetworkPolicy     string
+}
+
+type DurableAgentEnrollmentPayload struct {
+	AgentID           string                       `json:"agent_id,omitempty"`
+	ParentAgentID     string                       `json:"parent_agent_id,omitempty"`
+	ChannelKind       string                       `json:"channel_kind,omitempty"`
+	EnrollmentToken   string                       `json:"enrollment_token,omitempty"`
+	KeyFingerprint    string                       `json:"key_fingerprint,omitempty"`
+	ProtocolVersion   string                       `json:"protocol_version,omitempty"`
+	BootstrapLLM      NodeLLMBootstrap             `json:"bootstrap_llm,omitempty"`
+	BootstrapCeiling  DurableAgentBootstrapCeiling `json:"bootstrap_ceiling,omitempty"`
+	LocalStorageRoots []string                     `json:"local_storage_roots,omitempty"`
+	SecretScopes      []string                     `json:"secret_scopes,omitempty"`
+	NetworkPolicy     string                       `json:"network_policy,omitempty"`
+}
+
 type DurableReviewArtifact struct {
 	AgentID       string
 	Summary       string
@@ -399,6 +428,84 @@ func NormalizeDurableAgentPolicyAcknowledgement(ack DurableAgentPolicyAcknowledg
 	ack.Status = normalizeDurableAgentPolicyApplyStatus(ack.Status)
 	ack.Error = strings.TrimSpace(ack.Error)
 	return ack
+}
+
+func NormalizeDurableAgentRemoteBootstrap(bootstrap DurableAgentRemoteBootstrap) DurableAgentRemoteBootstrap {
+	bootstrap.AgentID = strings.TrimSpace(bootstrap.AgentID)
+	bootstrap.ParentAgentID = strings.TrimSpace(bootstrap.ParentAgentID)
+	bootstrap.ChannelKind = strings.TrimSpace(bootstrap.ChannelKind)
+	bootstrap.ParentControlURL = strings.TrimSpace(bootstrap.ParentControlURL)
+	bootstrap.EnrollmentToken = strings.TrimSpace(bootstrap.EnrollmentToken)
+	bootstrap.KeyFingerprint = strings.TrimSpace(bootstrap.KeyFingerprint)
+	bootstrap.ProtocolVersion = normalizeDurableAgentControlProtocolVersion(bootstrap.ProtocolVersion)
+	bootstrap.BootstrapLLM = NormalizeNodeLLMBootstrap(bootstrap.BootstrapLLM)
+	bootstrap.BootstrapCeiling = NormalizeDurableAgentBootstrapCeiling(bootstrap.BootstrapCeiling)
+	bootstrap.LocalStorageRoots = normalizeDurableAgentStringSet(bootstrap.LocalStorageRoots)
+	bootstrap.SecretScopes = normalizeDurableAgentStringSet(bootstrap.SecretScopes)
+	bootstrap.NetworkPolicy = strings.TrimSpace(bootstrap.NetworkPolicy)
+	return bootstrap
+}
+
+func ValidateDurableAgentRemoteBootstrap(bootstrap DurableAgentRemoteBootstrap) error {
+	bootstrap = NormalizeDurableAgentRemoteBootstrap(bootstrap)
+	switch {
+	case bootstrap.AgentID == "":
+		return fmt.Errorf("durable agent remote bootstrap agent_id is required")
+	case bootstrap.ParentControlURL == "":
+		return fmt.Errorf("durable agent remote bootstrap parent_control_url is required")
+	case bootstrap.EnrollmentToken == "":
+		return fmt.Errorf("durable agent remote bootstrap enrollment_token is required")
+	case bootstrap.KeyFingerprint == "":
+		return fmt.Errorf("durable agent remote bootstrap key_fingerprint is required")
+	default:
+		return ValidateNodeLLMBootstrap(bootstrap.BootstrapLLM)
+	}
+}
+
+func (b DurableAgentRemoteBootstrap) EnrollmentPayload() DurableAgentEnrollmentPayload {
+	b = NormalizeDurableAgentRemoteBootstrap(b)
+	return DurableAgentEnrollmentPayload{
+		AgentID:           b.AgentID,
+		ParentAgentID:     b.ParentAgentID,
+		ChannelKind:       b.ChannelKind,
+		EnrollmentToken:   b.EnrollmentToken,
+		KeyFingerprint:    b.KeyFingerprint,
+		ProtocolVersion:   b.ProtocolVersion,
+		BootstrapLLM:      b.BootstrapLLM,
+		BootstrapCeiling:  b.BootstrapCeiling,
+		LocalStorageRoots: append([]string(nil), b.LocalStorageRoots...),
+		SecretScopes:      append([]string(nil), b.SecretScopes...),
+		NetworkPolicy:     b.NetworkPolicy,
+	}
+}
+
+func NormalizeDurableAgentEnrollmentPayload(payload DurableAgentEnrollmentPayload) DurableAgentEnrollmentPayload {
+	payload.AgentID = strings.TrimSpace(payload.AgentID)
+	payload.ParentAgentID = strings.TrimSpace(payload.ParentAgentID)
+	payload.ChannelKind = strings.TrimSpace(payload.ChannelKind)
+	payload.EnrollmentToken = strings.TrimSpace(payload.EnrollmentToken)
+	payload.KeyFingerprint = strings.TrimSpace(payload.KeyFingerprint)
+	payload.ProtocolVersion = normalizeDurableAgentControlProtocolVersion(payload.ProtocolVersion)
+	payload.BootstrapLLM = NormalizeNodeLLMBootstrap(payload.BootstrapLLM)
+	payload.BootstrapCeiling = NormalizeDurableAgentBootstrapCeiling(payload.BootstrapCeiling)
+	payload.LocalStorageRoots = normalizeDurableAgentStringSet(payload.LocalStorageRoots)
+	payload.SecretScopes = normalizeDurableAgentStringSet(payload.SecretScopes)
+	payload.NetworkPolicy = strings.TrimSpace(payload.NetworkPolicy)
+	return payload
+}
+
+func ValidateDurableAgentEnrollmentPayload(payload DurableAgentEnrollmentPayload) error {
+	payload = NormalizeDurableAgentEnrollmentPayload(payload)
+	switch {
+	case payload.AgentID == "":
+		return fmt.Errorf("durable agent enrollment payload agent_id is required")
+	case payload.EnrollmentToken == "":
+		return fmt.Errorf("durable agent enrollment payload enrollment_token is required")
+	case payload.KeyFingerprint == "":
+		return fmt.Errorf("durable agent enrollment payload key_fingerprint is required")
+	default:
+		return ValidateNodeLLMBootstrap(payload.BootstrapLLM)
+	}
 }
 
 func ValidateDurableAgentControlEnvelope(envelope DurableAgentControlEnvelope) error {
