@@ -86,7 +86,10 @@ The current floor remains:
 5. **Trust changes local latitude, not constitutional ownership.**
    A family agent may have a wider local charter than a public website agent, but neither owns the center.
 
-6. **One heartbeat for the house.**
+6. **Secrets are scoped by charter, not inherited by lineage.**
+   A durable child must receive only the credentials and secret material required for its own charter. It must not inherit unrelated parent or sibling secrets by default.
+
+7. **One heartbeat for the house.**
    The parent heartbeat belongs to Aphelion. Durable agents do not own independent heartbeats by default; they wake from source events or bounded polling.
 
 ## Durable Agent vs Ordinary Subagent
@@ -181,6 +184,63 @@ That means external interaction alone must not:
 - change the child's charter or allowed actions permanently
 
 Those changes may happen only through parent review and admin ratification.
+
+## Secret Boundary and Exfiltration Resistance
+
+Durable-agent safety must hold even when the child is socially compromised.
+
+Assume an external actor successfully convinces the durable agent to do something unsafe.
+The architecture should still prevent broad house compromise by constraining what the child can materially see and send.
+
+### Least-secret law
+
+A durable agent must receive only the secrets required for its own charter.
+
+Examples:
+
+- an email child may receive inbox credentials for that inbox
+- a remote-host child may receive host-local credentials required for its charter
+- a public website child should generally receive no parent-house secrets beyond what its own runtime minimally requires
+
+A durable email agent should not be able to leak unrelated parent credentials if those credentials are outside its scoped secret surface.
+
+### No inherited parent secret surface
+
+A durable child must not inherit by default:
+
+- parent host environment variables
+- unrelated API keys
+- sibling durable-agent credentials
+- admin CLI auth material
+- global credential files merely because they exist on the same machine
+
+Lineage does not imply secret inheritance.
+
+### Untrusted upward secret requests
+
+Requests flowing upward from a durable child for:
+
+- credentials
+- capability widening
+- tool enablement
+- policy relaxation
+
+must be treated as untrusted review material, not as authenticated admin intent.
+
+If a phished child reports upward, for example, "Daniel asked me to send the deployment credentials," the parent must surface that as suspicious child-originated review content rather than comply as if the admin had issued the request directly.
+
+### Secret scrubbing on upward synthesis
+
+Review artifacts, review events, and surfaced child syntheses should redact or quarantine suspected secret material rather than casually propagate it upward.
+
+The upward path is for bounded review, not for secret exfiltration through summarization.
+
+That means:
+
+- bounded parent review artifacts should contain redacted summaries rather than exact secret-bearing payloads
+- if exact material must be retained for audit or incident response, it should live in restricted forensic sidecar storage rather than ordinary review content
+- inspection of that restricted sidecar should require an explicit admin-only path
+- secret-like material that is neither needed for review nor safe to retain may be dropped entirely instead of being propagated
 
 ## Local Accommodation vs Durable Drift
 
@@ -323,6 +383,8 @@ but it must never be implicitly granted by repeated external interaction.
 
 ## Example Use Cases
 
+These are not just thematic sketches. They are intended execution shapes for the first durable-agent tranche.
+
 ## Email durable agent
 
 A user gives Aphelion an email address.
@@ -338,6 +400,29 @@ The admin and parent define:
 The email agent then polls or receives events, digests locally, and reports upward through review artifacts.
 If the admin decides the summaries should change, that drift is approved in the parent conversation and then pushed downward.
 
+### Typical flow
+
+1. Admin setup:
+   The parent house defines the email child's charter, retention ceiling, outbound mode, and escalation rules.
+2. Registration:
+   The durable-agent registry stores the child identity, scoped inbox credentials, wakeup mode, and local working roots.
+3. Email ingress:
+   The email adapter receives or polls a new message and normalizes body text, metadata, and attachments into child-local artifacts.
+4. Child-local processing:
+   The child classifies urgency, extracts allowed document content, and decides whether the message is routine, escalatory, or drift-seeking.
+5. Local action:
+   If policy allows it, the child may prepare a draft reply or take another bounded local action.
+6. Upward synthesis:
+   The child emits a bounded review artifact summarizing what happened, what it did locally, what files matter, and any drift candidates or suspicious requests.
+7. Parent review:
+   The parent house sees the bounded artifact first, not the raw inbox transcript.
+8. Admin ratification:
+   Any durable change to summary policy, outbound autonomy, or promoted memory must be approved in the admin conversation.
+9. Downward update:
+   Approved policy or charter changes are pushed back to the child with provenance.
+10. Dormancy:
+   The child returns to idle until the next inbox event or bounded poll cycle.
+
 ## Family Telegram group durable agent
 
 The bot being added to a family group should be inert by default.
@@ -345,6 +430,27 @@ Only after explicit durable-agent setup should the group become a live ingress s
 
 The family durable agent may help locally in the group.
 But if the group socially pressures the agent into a new standing role, that attempted drift is surfaced upward for admin review rather than becoming durable truth.
+
+### Typical flow
+
+1. Admission:
+   Adding the bot to a group does nothing until the admin explicitly creates a durable group child.
+2. Chartering:
+   The parent defines what the child may do in the group, what tone latitude it has, and whether it may ever reply autonomously.
+3. Group ingress:
+   Mentions or messages wake only the group child, not the parent house directly.
+4. Child-local continuity:
+   The child keeps recent group context and may answer within its charter.
+5. Drift detection:
+   If the group repeatedly pressures the child into a new standing role or policy, the child treats that as attempted durable drift rather than accommodation.
+6. Upward synthesis:
+   The child emits a bounded artifact summarizing important interactions, family-relevant questions, and any drift attempts.
+7. Parent/admin review:
+   The parent surfaces the group synthesis in the admin conversation for decision.
+8. Ratified update:
+   Only an admin-ratified change may widen the child's standing role, autonomy, or memory policy.
+9. Ongoing dormancy:
+   Between group events, the child remains dormant rather than running an internal heartbeat loop.
 
 ## Remote host durable agent
 
@@ -354,6 +460,25 @@ That child may monitor files, processes, resource pressure, or local browser aut
 It still remains subordinate to the parent house.
 Its privileges are bounded by a charter and capability envelope.
 Behavior or privilege changes require admin-ratified drift from the parent side.
+
+### Typical flow
+
+1. Registration:
+   The parent house registers the remote child with host identity, attested runtime, charter, and capability envelope.
+2. Scoped provisioning:
+   The remote child receives only the host-local credentials and writable roots required for its own charter.
+3. Local observation:
+   Source events such as file changes, process state, battery pressure, or local browser state wake the child.
+4. Child-local reasoning:
+   The child interprets those observations within its charter and may take bounded local actions if pre-authorized.
+5. Sensitive boundary:
+   Host observations remain child-local inputs, not house principals and not direct parent prompt content.
+6. Upward synthesis:
+   The child reports status, anomalies, completed local actions, and requested changes upward through bounded review artifacts.
+7. Parent review:
+   The parent decides whether any requested privilege change, tooling expansion, or standing policy drift should be ratified.
+8. Downward sync:
+   Approved changes are pushed to the remote child explicitly with provenance.
 
 ## Public website durable agent
 
@@ -369,6 +494,25 @@ Its charter should be narrow:
 - aggressive quarantine of transcripts and files
 
 If the architecture is safe here, it becomes safe by construction in less-exposed cases.
+
+### Typical flow
+
+1. Explicit deployment:
+   The website route stays inert until the admin creates a durable web child with a narrow charter.
+2. Hostile ingress:
+   Public visitors interact only with the child, never with the parent house directly.
+3. Local processing:
+   The child answers bounded public questions, captures permitted contact signals, and normalizes uploaded files into child-local artifacts.
+4. Aggressive quarantine:
+   Public transcripts, uploads, and extracted text stay quarantined by default and must not enter ordinary parent retrieval or memory.
+5. Escalation filtering:
+   The child emits bounded upward artifacts only for meaningful sales, support, anomaly, or drift-relevant cases.
+6. Parent review:
+   The parent sees redacted synthesized review content first and may inspect sidecar material explicitly if needed.
+7. Policy pressure:
+   Repeated public attempts to widen authority or obtain secrets are treated as hostile pressure, not as legitimate product steering.
+8. Admin ratification:
+   Any widening of outbound behavior, memory promotion, or website charter occurs only through the admin conversation.
 
 ## Remote Durable Agents
 
@@ -399,6 +543,7 @@ Required concepts:
 - dedicated working roots
 - explicit writable vs read-only mounts/roots
 - dropped environment and hidden secret paths
+- charter-scoped credential mounting or injection
 - resource limits
 - explicit network policy
 - dormancy when idle
@@ -444,6 +589,8 @@ Durable agents must not acquire lasting changes silently.
 - **No direct upward writes.** The normal upward path is a bounded review artifact.
 - **Durable drift belongs to the admin conversation.** Outside interaction alone cannot ratify lasting change.
 - **Trust widens local charter, not constitutional ownership.**
+- **Secrets are least-privilege and child-scoped.** A durable child should only be able to leak what it can materially access.
+- **Child-originated secret requests are untrusted.** Upward requests for credentials or capability widening must enter review, not execution.
 - **Remote-host children follow the same law.** New machine, same parent/child governance.
 - **Public web agents are a proving ground, not an exception.** If hostile public ingress is safe, the quieter cases inherit that safety.
 
@@ -454,6 +601,10 @@ Durable agents must not acquire lasting changes silently.
 - **TestDurableAgentReportsUpwardThroughReviewArtifact**: parent sees bounded synthesis before raw transcript
 - **TestExternalChannelActorsDoNotBecomeHousePrincipals**: group members, inbox senders, website visitors, and remote observations remain child-local actors unless explicitly admitted through the principal model
 - **TestDurableAgentUpwardSynthesisUsesExistingReviewConduit**: upward child synthesis enters the parent through the existing review/artifact/quarantine path rather than a parallel review subsystem
+- **TestDurableAgentSecretsAreCharterScoped**: a child receives only the credentials required for its own charter, not unrelated parent or sibling secrets
+- **TestChildCannotExfiltrateUnavailableParentSecret**: a socially compromised child cannot leak a secret that is outside its scoped secret surface
+- **TestChildOriginatedCredentialRequestEntersReviewNotExecution**: upward requests for credentials or capability widening from a durable child are treated as suspicious review material rather than authenticated admin instruction
+- **TestUpwardSynthesisRedactsOrQuarantinesSecretMaterial**: secret-like strings discovered by a child are redacted or quarantined on the upward review path
 - **TestRawDurableTranscriptRemainsSidecarInspectable**: full child transcript is inspectable but not default prompt input
 - **TestOneHeartbeatForHouse**: durable agents do not own independent heartbeats by default
 - **TestDurableAgentWakeIsEventOrPollDriven**: channel-appropriate wakeup paths function without child heartbeat loops
