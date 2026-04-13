@@ -43,8 +43,16 @@ func NewHTTPClient(bootstrap core.DurableAgentRemoteBootstrap) (*HTTPClient, err
 }
 
 func (c *HTTPClient) Enroll(ctx context.Context) (core.DurableAgentEnrollmentResponse, error) {
+	return c.sendEnrollment(ctx, core.DurableAgentControlMessageEnrollment)
+}
+
+func (c *HTTPClient) Reattest(ctx context.Context) (core.DurableAgentEnrollmentResponse, error) {
+	return c.sendEnrollment(ctx, core.DurableAgentControlMessageReattestation)
+}
+
+func (c *HTTPClient) sendEnrollment(ctx context.Context, kind string) (core.DurableAgentEnrollmentResponse, error) {
 	payload := c.Bootstrap.EnrollmentPayload()
-	env, err := c.nextEnvelope(core.DurableAgentControlMessageEnrollment, payload)
+	env, err := c.nextEnvelope(kind, payload)
 	if err != nil {
 		return core.DurableAgentEnrollmentResponse{}, err
 	}

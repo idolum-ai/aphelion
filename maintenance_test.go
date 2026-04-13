@@ -691,6 +691,105 @@ func TestRunDurableAgentBootstrapWriteExportsRemoteBootstrap(t *testing.T) {
 	}
 }
 
+func TestRunDurableAgentEnrollmentShowRevokeAndReactivate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Observe and surface bounded family coordination.",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		BootstrapCeiling: core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DurableAgentLivePolicy{
+			Charter:            "Observe and surface bounded family coordination.",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
+		},
+		ControlPlaneSecret: "enroll-token-1",
+		Status:             "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		Status:           "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+
+	showOut, err := captureStdout(t, func() error {
+		return runDurableAgentEnrollmentCommand([]string{"--config", cfgPath, "--agent", "family-group", "show"})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentEnrollmentCommand(show) err = %v", err)
+	}
+	if !strings.Contains(showOut, "status: active") {
+		t.Fatalf("show output = %q, want active status", showOut)
+	}
+
+	revokeOut, err := captureStdout(t, func() error {
+		return runDurableAgentEnrollmentCommand([]string{"--config", cfgPath, "--agent", "family-group", "revoke"})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentEnrollmentCommand(revoke) err = %v", err)
+	}
+	if !strings.Contains(revokeOut, "status: revoked") {
+		t.Fatalf("revoke output = %q, want revoked status", revokeOut)
+	}
+	enrollment, err := store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRemoteEnrollment(revoked) err = %v", err)
+	}
+	if enrollment.Status != "revoked" || enrollment.RevokedAt.IsZero() {
+		t.Fatalf("enrollment after revoke = %#v, want revoked with timestamp", enrollment)
+	}
+
+	reactivateOut, err := captureStdout(t, func() error {
+		return runDurableAgentEnrollmentCommand([]string{"--config", cfgPath, "--agent", "family-group", "reactivate"})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentEnrollmentCommand(reactivate) err = %v", err)
+	}
+	if !strings.Contains(reactivateOut, "status: active") {
+		t.Fatalf("reactivate output = %q, want active status", reactivateOut)
+	}
+	enrollment, err = store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRemoteEnrollment(reactivated) err = %v", err)
+	}
+	if enrollment.Status != "active" || !enrollment.RevokedAt.IsZero() {
+		t.Fatalf("enrollment after reactivate = %#v, want active without revocation", enrollment)
+	}
+}
+
 func TestRunDurableAgentRemoteRunOnceSyncsAndUploadsArtifacts(t *testing.T) {
 	root := t.TempDir()
 	parentCfgPath := writeMaintenanceConfig(t, root)

@@ -598,11 +598,13 @@ func runImportSemanticCommand(args []string) error {
 
 func runDurableAgentCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("durable-agent requires a subcommand: policy, forensic, bootstrap, remote, or child-run")
+		return fmt.Errorf("durable-agent requires a subcommand: policy, enrollment, forensic, bootstrap, remote, or child-run")
 	}
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case "policy":
 		return runDurableAgentPolicyCommand(args[1:])
+	case "enrollment":
+		return runDurableAgentEnrollmentCommand(args[1:])
 	case "forensic":
 		return runDurableAgentForensicCommand(args[1:])
 	case "bootstrap":
@@ -612,7 +614,63 @@ func runDurableAgentCommand(args []string) error {
 	case "child-run":
 		return runDurableAgentChildCommand(args[1:])
 	default:
-		return fmt.Errorf("durable-agent subcommand must be one of policy|forensic|bootstrap|remote|child-run")
+		return fmt.Errorf("durable-agent subcommand must be one of policy|enrollment|forensic|bootstrap|remote|child-run")
+	}
+}
+
+func runDurableAgentEnrollmentCommand(args []string) error {
+	fs := flag.NewFlagSet("durable-agent enrollment", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	agentID := fs.String("agent", "", "durable agent id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*agentID) == "" {
+		return fmt.Errorf("durable-agent enrollment requires --agent")
+	}
+
+	action := "show"
+	if fs.NArg() > 0 {
+		action = strings.ToLower(strings.TrimSpace(fs.Arg(0)))
+	}
+
+	cfg, _, err := loadConfigForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	enrollment, err := store.DurableAgentRemoteEnrollment(*agentID)
+	if err != nil {
+		return err
+	}
+
+	switch action {
+	case "", "show":
+		printDurableAgentEnrollment(os.Stdout, *enrollment)
+		return nil
+	case "revoke":
+		enrollment.Status = "revoked"
+		enrollment.RevokedAt = time.Now().UTC()
+		if err := store.UpsertDurableAgentRemoteEnrollment(*enrollment); err != nil {
+			return err
+		}
+		printDurableAgentEnrollment(os.Stdout, *enrollment)
+		return nil
+	case "reactivate":
+		enrollment.Status = "active"
+		enrollment.RevokedAt = time.Time{}
+		if err := store.UpsertDurableAgentRemoteEnrollment(*enrollment); err != nil {
+			return err
+		}
+		printDurableAgentEnrollment(os.Stdout, *enrollment)
+		return nil
+	default:
+		return fmt.Errorf("durable-agent enrollment action must be one of show|revoke|reactivate")
 	}
 }
 
@@ -904,6 +962,25 @@ func printDurableAgentPolicy(w *os.File, agent core.DurableAgent, updates []sess
 			fmt.Fprintf(w, " reason=%s", update.Reason)
 		}
 		fmt.Fprintf(w, " applied_at=%s\n", update.AppliedAt.UTC().Format(time.RFC3339Nano))
+	}
+}
+
+func printDurableAgentEnrollment(w *os.File, enrollment core.DurableAgentRemoteEnrollment) {
+	fmt.Fprintf(w, "action: durable-agent enrollment\n")
+	fmt.Fprintf(w, "agent_id: %s\n", enrollment.AgentID)
+	fmt.Fprintf(w, "status: %s\n", enrollment.Status)
+	fmt.Fprintf(w, "parent_control_url: %s\n", enrollment.ParentControlURL)
+	fmt.Fprintf(w, "key_fingerprint: %s\n", enrollment.KeyFingerprint)
+	fmt.Fprintf(w, "protocol_version: %s\n", enrollment.ProtocolVersion)
+	fmt.Fprintf(w, "last_sequence: %d\n", enrollment.LastSequence)
+	if !enrollment.EnrolledAt.IsZero() {
+		fmt.Fprintf(w, "enrolled_at: %s\n", enrollment.EnrolledAt.UTC().Format(time.RFC3339))
+	}
+	if !enrollment.LastSeenAt.IsZero() {
+		fmt.Fprintf(w, "last_seen_at: %s\n", enrollment.LastSeenAt.UTC().Format(time.RFC3339))
+	}
+	if !enrollment.RevokedAt.IsZero() {
+		fmt.Fprintf(w, "revoked_at: %s\n", enrollment.RevokedAt.UTC().Format(time.RFC3339))
 	}
 }
 

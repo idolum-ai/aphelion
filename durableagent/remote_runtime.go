@@ -15,6 +15,7 @@ import (
 
 type RemoteControlClient interface {
 	Enroll(ctx context.Context) (core.DurableAgentEnrollmentResponse, error)
+	Reattest(ctx context.Context) (core.DurableAgentEnrollmentResponse, error)
 	PollPolicy(ctx context.Context, knownVersion int64, knownHash string) (core.DurableAgentPolicyPollResponse, error)
 	UploadReviewArtifact(ctx context.Context, artifact core.DurableReviewArtifact) (core.DurableAgentReviewArtifactUploadResponse, error)
 	AcknowledgePolicy(ctx context.Context, ack core.DurableAgentPolicyAcknowledgement) (core.DurableAgentPolicyAcknowledgementResponse, error)
@@ -99,6 +100,17 @@ func (r *RemoteRuntime) Sync(ctx context.Context, bootstrapPath string) (*Remote
 			PolicyChanged: true,
 			PolicyVersion: resp.Policy.PolicyVersion,
 		}, nil
+	}
+
+	if remoteEnrollmentNeedsReattestation(*enrollment, bootstrap) {
+		resp, err := client.Reattest(ctx)
+		if err != nil {
+			return nil, err
+		}
+		enrollment = &resp.Enrollment
+		if err := r.persistRemoteEnrollment(*enrollment, client); err != nil {
+			return nil, err
+		}
 	}
 
 	localAgent, err := r.store.DurableAgent(bootstrap.AgentID)
@@ -354,4 +366,12 @@ func nonZeroRemotePolicyTime(value time.Time, fallback time.Time) time.Time {
 		return value.UTC()
 	}
 	return fallback.UTC()
+}
+
+func remoteEnrollmentNeedsReattestation(enrollment core.DurableAgentRemoteEnrollment, bootstrap core.DurableAgentRemoteBootstrap) bool {
+	enrollment = core.NormalizeDurableAgentRemoteEnrollment(enrollment)
+	bootstrap = core.NormalizeDurableAgentRemoteBootstrap(bootstrap)
+	return strings.TrimSpace(enrollment.ParentControlURL) != strings.TrimSpace(bootstrap.ParentControlURL) ||
+		strings.TrimSpace(enrollment.KeyFingerprint) != strings.TrimSpace(bootstrap.KeyFingerprint) ||
+		strings.TrimSpace(enrollment.ProtocolVersion) != strings.TrimSpace(bootstrap.ProtocolVersion)
 }

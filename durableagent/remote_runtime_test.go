@@ -300,6 +300,140 @@ func TestRemoteRuntimeUploadReviewArtifactQueuesParentReviewAndUpdatesLocalConti
 	}
 }
 
+func TestRemoteRuntimeSyncReattestsWhenBootstrapFingerprintChanges(t *testing.T) {
+	t.Parallel()
+
+	parentStore := newTestSQLiteStore(t)
+	defer parentStore.Close()
+	agent := testRemoteDurableAgent()
+	if err := parentStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("parent UpsertDurableAgent() err = %v", err)
+	}
+
+	childStore, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "child.db"))
+	if err != nil {
+		t.Fatalf("child NewSQLiteStore() err = %v", err)
+	}
+	defer childStore.Close()
+
+	bootstrapPath := filepath.Join(t.TempDir(), "remote-bootstrap.json")
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example",
+		EnrollmentToken:  "enroll-token-1",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	}
+	if err := WriteRemoteBootstrap(bootstrapPath, bootstrap); err != nil {
+		t.Fatalf("WriteRemoteBootstrap() err = %v", err)
+	}
+
+	rt := NewRemoteRuntime(childStore, func(b core.DurableAgentRemoteBootstrap) (RemoteControlClient, error) {
+		client, err := NewHTTPClient(b)
+		if err != nil {
+			return nil, err
+		}
+		client.Client = remoteRuntimeHTTPClient(NewHTTPHandler(parentStore).Handler())
+		return client, nil
+	})
+	if _, err := rt.Sync(context.Background(), bootstrapPath); err != nil {
+		t.Fatalf("first Sync() err = %v", err)
+	}
+
+	bootstrap.KeyFingerprint = "child-key-fp-rotated"
+	if err := WriteRemoteBootstrap(bootstrapPath, bootstrap); err != nil {
+		t.Fatalf("WriteRemoteBootstrap(rotated) err = %v", err)
+	}
+
+	result, err := rt.Sync(context.Background(), bootstrapPath)
+	if err != nil {
+		t.Fatalf("second Sync() err = %v", err)
+	}
+	if result.Enrolled {
+		t.Fatal("Sync().Enrolled = true, want false on re-attestation")
+	}
+
+	parentEnrollment, err := parentStore.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("parent DurableAgentRemoteEnrollment() err = %v", err)
+	}
+	if parentEnrollment.KeyFingerprint != "child-key-fp-rotated" {
+		t.Fatalf("parent KeyFingerprint = %q, want child-key-fp-rotated", parentEnrollment.KeyFingerprint)
+	}
+	childEnrollment, err := childStore.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("child DurableAgentRemoteEnrollment() err = %v", err)
+	}
+	if childEnrollment.KeyFingerprint != "child-key-fp-rotated" {
+		t.Fatalf("child KeyFingerprint = %q, want child-key-fp-rotated", childEnrollment.KeyFingerprint)
+	}
+}
+
+func TestRemoteRuntimeSyncFailsWhenParentEnrollmentRevoked(t *testing.T) {
+	t.Parallel()
+
+	parentStore := newTestSQLiteStore(t)
+	defer parentStore.Close()
+	agent := testRemoteDurableAgent()
+	if err := parentStore.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("parent UpsertDurableAgent() err = %v", err)
+	}
+
+	childStore, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "child.db"))
+	if err != nil {
+		t.Fatalf("child NewSQLiteStore() err = %v", err)
+	}
+	defer childStore.Close()
+
+	bootstrapPath := filepath.Join(t.TempDir(), "remote-bootstrap.json")
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example",
+		EnrollmentToken:  "enroll-token-1",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	}
+	if err := WriteRemoteBootstrap(bootstrapPath, bootstrap); err != nil {
+		t.Fatalf("WriteRemoteBootstrap() err = %v", err)
+	}
+
+	rt := NewRemoteRuntime(childStore, func(b core.DurableAgentRemoteBootstrap) (RemoteControlClient, error) {
+		client, err := NewHTTPClient(b)
+		if err != nil {
+			return nil, err
+		}
+		client.Client = remoteRuntimeHTTPClient(NewHTTPHandler(parentStore).Handler())
+		return client, nil
+	})
+	if _, err := rt.Sync(context.Background(), bootstrapPath); err != nil {
+		t.Fatalf("first Sync() err = %v", err)
+	}
+
+	parentEnrollment, err := parentStore.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("parent DurableAgentRemoteEnrollment() err = %v", err)
+	}
+	parentEnrollment.Status = "revoked"
+	parentEnrollment.RevokedAt = rt.now()
+	if err := parentStore.UpsertDurableAgentRemoteEnrollment(*parentEnrollment); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment(revoked) err = %v", err)
+	}
+
+	if _, err := rt.Sync(context.Background(), bootstrapPath); err == nil {
+		t.Fatal("Sync() err = nil, want revoked enrollment failure")
+	} else if !strings.Contains(err.Error(), "not active") {
+		t.Fatalf("Sync() err = %v, want not active", err)
+	}
+}
+
 func remoteRuntimeHTTPClient(handler http.Handler) *http.Client {
 	return &http.Client{Transport: handlerRoundTripper{handler: handler}}
 }

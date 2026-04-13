@@ -3,6 +3,7 @@
 package durableagent
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,8 +86,8 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if req.Envelope.MessageKind != core.DurableAgentControlMessageEnrollment {
-		writeError(w, http.StatusBadRequest, errors.New("durable agent enrollment requires message_kind=enrollment"))
+	if req.Envelope.MessageKind != core.DurableAgentControlMessageEnrollment && req.Envelope.MessageKind != core.DurableAgentControlMessageReattestation {
+		writeError(w, http.StatusBadRequest, errors.New("durable agent enrollment requires message_kind=enrollment or reattestation"))
 		return
 	}
 	agent, err := h.store.DurableAgent(req.Payload.AgentID)
@@ -94,27 +95,55 @@ func (h *HTTPHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
-	enrollment := core.NormalizeDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
-		AgentID:          req.Payload.AgentID,
-		ParentControlURL: req.Payload.ParentControlURL,
-		KeyFingerprint:   req.Payload.KeyFingerprint,
-		ProtocolVersion:  req.Payload.ProtocolVersion,
-		Status:           "active",
-	})
-	if err := h.store.UpsertDurableAgentRemoteEnrollment(enrollment); err != nil {
+	existing, err := h.store.DurableAgentRemoteEnrollment(req.Payload.AgentID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		existing = nil
+	}
+	if req.Envelope.MessageKind == core.DurableAgentControlMessageReattestation {
+		if existing == nil {
+			writeError(w, http.StatusNotFound, errors.New("durable agent reattestation requires an existing enrollment"))
+			return
+		}
+		if existing.Status != "active" {
+			writeError(w, http.StatusForbidden, fmt.Errorf("durable agent remote enrollment %s is not active", existing.AgentID))
+			return
+		}
+	} else if existing == nil {
+		enrollment := core.NormalizeDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+			AgentID:          req.Payload.AgentID,
+			ParentControlURL: req.Payload.ParentControlURL,
+			KeyFingerprint:   req.Payload.KeyFingerprint,
+			ProtocolVersion:  req.Payload.ProtocolVersion,
+			Status:           "active",
+		})
+		if err := h.store.UpsertDurableAgentRemoteEnrollment(enrollment); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	if err := h.control.AcceptEnvelope(req.Envelope, h.now()); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	snapshot, err := h.control.PolicySnapshot(agent.AgentID)
+	registered, err := h.store.DurableAgentRemoteEnrollment(agent.AgentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	registered, err := h.store.DurableAgentRemoteEnrollment(agent.AgentID)
+	registered.ParentControlURL = req.Payload.ParentControlURL
+	registered.KeyFingerprint = req.Payload.KeyFingerprint
+	registered.ProtocolVersion = req.Payload.ProtocolVersion
+	registered.Status = "active"
+	registered.RevokedAt = time.Time{}
+	if err := h.store.UpsertDurableAgentRemoteEnrollment(*registered); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	snapshot, err := h.control.PolicySnapshot(agent.AgentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
