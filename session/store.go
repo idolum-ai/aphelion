@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 14
+const schemaVersion = 15
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -194,6 +194,17 @@ func (s *SQLiteStore) init() error {
 			cursor TEXT,
 			status TEXT,
 			state_json TEXT,
+			last_offered_policy_version INTEGER NOT NULL DEFAULT 0,
+			last_offered_policy_hash TEXT NOT NULL DEFAULT '',
+			last_offered_policy_at TEXT,
+			last_acknowledged_policy_version INTEGER NOT NULL DEFAULT 0,
+			last_acknowledged_policy_hash TEXT NOT NULL DEFAULT '',
+			last_acknowledged_policy_at TEXT,
+			last_applied_policy_version INTEGER NOT NULL DEFAULT 0,
+			last_applied_policy_hash TEXT NOT NULL DEFAULT '',
+			last_applied_policy_at TEXT,
+			last_apply_status TEXT NOT NULL DEFAULT '',
+			last_apply_error TEXT NOT NULL DEFAULT '',
 			last_wake_at TEXT,
 			last_review_at TEXT,
 			dormant_at TEXT,
@@ -1562,9 +1573,15 @@ func (s *SQLiteStore) UpsertDurableAgent(agent core.DurableAgent) error {
 	return err
 }
 
-func upsertDurableAgentExec(exec interface {
+type sqlExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
-}, agent core.DurableAgent) (core.DurableAgent, error) {
+}
+
+type sqlQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func upsertDurableAgentExec(exec sqlExecer, agent core.DurableAgent) (core.DurableAgent, error) {
 	agent.AgentID = strings.TrimSpace(agent.AgentID)
 	if agent.AgentID == "" {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent: agent_id is required")
@@ -1671,7 +1688,23 @@ func (s *SQLiteStore) SetDurableAgentLivePolicy(agentID string, policy core.Dura
 		agent.PolicyVersion = 1
 	}
 	agent.PolicyIssuedAt = time.Now().UTC()
-	return s.UpsertDurableAgent(*agent)
+	updated, err := upsertDurableAgentExec(s.db, *agent)
+	if err != nil {
+		return err
+	}
+	state, err := s.DurableAgentState(agent.AgentID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if state == nil {
+		state = &core.DurableAgentState{AgentID: agent.AgentID}
+	}
+	state.LastOfferedPolicyVersion = updated.PolicyVersion
+	state.LastOfferedPolicyHash = updated.PolicyHash
+	state.LastOfferedPolicyAt = updated.PolicyIssuedAt
+	state.LastApplyStatus = "pending"
+	state.LastApplyError = ""
+	return s.SaveDurableAgentState(*state)
 }
 
 func (s *SQLiteStore) ApplyDurableAgentLivePolicy(agentID string, policy core.DurableAgentLivePolicy, sourceReviewEventID int64, reason string) (*core.DurableAgent, *DurableAgentPolicyUpdate, error) {
@@ -1734,6 +1767,35 @@ func (s *SQLiteStore) ApplyDurableAgentLivePolicy(agentID string, policy core.Du
 	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, nil, fmt.Errorf("durable agent policy update last insert id: %w", err)
+	}
+	state, err := queryDurableAgentState(tx, updated.AgentID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, fmt.Errorf("load durable agent state for policy apply: %w", err)
+	}
+	if state == nil {
+		state = &core.DurableAgentState{AgentID: updated.AgentID}
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse durable agent continuity for policy apply: %w", err)
+	}
+	summary := strings.TrimSpace(reason)
+	if summary == "" {
+		summary = "Ratified durable-agent live policy update."
+	}
+	continuity = continuity.WithRatifiedOutcome(summary, updated.PolicyVersion, policyHash, maxInt64(sourceReviewEventID, 0), now)
+	stateJSON, err := continuity.Marshal()
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal durable agent continuity for policy apply: %w", err)
+	}
+	state.StateJSON = stateJSON
+	state.LastOfferedPolicyVersion = updated.PolicyVersion
+	state.LastOfferedPolicyHash = policyHash
+	state.LastOfferedPolicyAt = now
+	state.LastApplyStatus = "pending"
+	state.LastApplyError = ""
+	if err := saveDurableAgentStateExec(tx, *state); err != nil {
+		return nil, nil, fmt.Errorf("save durable agent state for policy apply: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, nil, fmt.Errorf("commit durable agent live policy apply: %w", err)
@@ -1839,26 +1901,50 @@ func (s *SQLiteStore) ListDurableAgents() ([]core.DurableAgent, error) {
 }
 
 func (s *SQLiteStore) SaveDurableAgentState(state core.DurableAgentState) error {
+	return saveDurableAgentStateExec(s.db, state)
+}
+
+func saveDurableAgentStateExec(exec sqlExecer, state core.DurableAgentState) error {
 	state.AgentID = strings.TrimSpace(state.AgentID)
 	if state.AgentID == "" {
 		return fmt.Errorf("save durable agent state: agent_id is required")
 	}
 
 	now := time.Now().UTC()
-	_, err := s.db.Exec(`
+	_, err := exec.Exec(`
 		INSERT INTO durable_agent_state(
-			agent_id, cursor, status, state_json, last_wake_at, last_review_at, dormant_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			agent_id, cursor, status, state_json,
+			last_offered_policy_version, last_offered_policy_hash, last_offered_policy_at,
+			last_acknowledged_policy_version, last_acknowledged_policy_hash, last_acknowledged_policy_at,
+			last_applied_policy_version, last_applied_policy_hash, last_applied_policy_at,
+			last_apply_status, last_apply_error,
+			last_wake_at, last_review_at, dormant_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(agent_id) DO UPDATE SET
 			cursor = excluded.cursor,
 			status = excluded.status,
 			state_json = excluded.state_json,
+			last_offered_policy_version = excluded.last_offered_policy_version,
+			last_offered_policy_hash = excluded.last_offered_policy_hash,
+			last_offered_policy_at = excluded.last_offered_policy_at,
+			last_acknowledged_policy_version = excluded.last_acknowledged_policy_version,
+			last_acknowledged_policy_hash = excluded.last_acknowledged_policy_hash,
+			last_acknowledged_policy_at = excluded.last_acknowledged_policy_at,
+			last_applied_policy_version = excluded.last_applied_policy_version,
+			last_applied_policy_hash = excluded.last_applied_policy_hash,
+			last_applied_policy_at = excluded.last_applied_policy_at,
+			last_apply_status = excluded.last_apply_status,
+			last_apply_error = excluded.last_apply_error,
 			last_wake_at = excluded.last_wake_at,
 			last_review_at = excluded.last_review_at,
 			dormant_at = excluded.dormant_at,
 			updated_at = excluded.updated_at
 	`,
 		state.AgentID, nullableString(state.Cursor), nullableString(state.Status), nullableString(state.StateJSON),
+		state.LastOfferedPolicyVersion, strings.TrimSpace(state.LastOfferedPolicyHash), nullableTime(state.LastOfferedPolicyAt),
+		state.LastAcknowledgedPolicyVersion, strings.TrimSpace(state.LastAcknowledgedPolicyHash), nullableTime(state.LastAcknowledgedPolicyAt),
+		state.LastAppliedPolicyVersion, strings.TrimSpace(state.LastAppliedPolicyHash), nullableTime(state.LastAppliedPolicyAt),
+		strings.TrimSpace(state.LastApplyStatus), strings.TrimSpace(state.LastApplyError),
 		nullableTime(state.LastWakeAt), nullableTime(state.LastReviewAt), nullableTime(state.DormantAt), now.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -1868,8 +1954,18 @@ func (s *SQLiteStore) SaveDurableAgentState(state core.DurableAgentState) error 
 }
 
 func (s *SQLiteStore) DurableAgentState(agentID string) (*core.DurableAgentState, error) {
-	rows, err := s.db.Query(`
-		SELECT agent_id, cursor, status, state_json, last_wake_at, last_review_at, dormant_at, updated_at
+	return queryDurableAgentState(s.db, agentID)
+}
+
+func queryDurableAgentState(queryer sqlQueryer, agentID string) (*core.DurableAgentState, error) {
+	rows, err := queryer.Query(`
+		SELECT
+			agent_id, cursor, status, state_json,
+			last_offered_policy_version, last_offered_policy_hash, last_offered_policy_at,
+			last_acknowledged_policy_version, last_acknowledged_policy_hash, last_acknowledged_policy_at,
+			last_applied_policy_version, last_applied_policy_hash, last_applied_policy_at,
+			last_apply_status, last_apply_error,
+			last_wake_at, last_review_at, dormant_at, updated_at
 		FROM durable_agent_state
 		WHERE agent_id = ?
 	`, strings.TrimSpace(agentID))
@@ -2052,6 +2148,26 @@ func applyMigrations(tx *sql.Tx) error {
 	}
 	if err := ensureTableColumn(tx, "durable_agents", "bootstrap_provider_json", "TEXT"); err != nil {
 		return fmt.Errorf("ensure durable_agents.bootstrap_provider_json: %w", err)
+	}
+	for _, column := range []struct {
+		name string
+		typ  string
+	}{
+		{"last_offered_policy_version", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_offered_policy_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"last_offered_policy_at", "TEXT"},
+		{"last_acknowledged_policy_version", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_acknowledged_policy_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"last_acknowledged_policy_at", "TEXT"},
+		{"last_applied_policy_version", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_applied_policy_hash", "TEXT NOT NULL DEFAULT ''"},
+		{"last_applied_policy_at", "TEXT"},
+		{"last_apply_status", "TEXT NOT NULL DEFAULT ''"},
+		{"last_apply_error", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureTableColumn(tx, "durable_agent_state", column.name, column.typ); err != nil {
+			return fmt.Errorf("ensure durable_agent_state.%s: %w", column.name, err)
+		}
 	}
 	if currentVersion < 13 {
 		if err := backfillDurableAgentBootstrapCeilings(tx); err != nil {
@@ -3066,17 +3182,30 @@ func scanDurableAgentPolicyUpdate(scanner interface{ Scan(dest ...any) error }) 
 
 func scanDurableAgentState(scanner interface{ Scan(dest ...any) error }) (core.DurableAgentState, error) {
 	var (
-		state           core.DurableAgentState
-		cursorRaw       sql.NullString
-		statusRaw       sql.NullString
-		stateJSONRaw    sql.NullString
-		lastWakeAtRaw   sql.NullString
-		lastReviewAtRaw sql.NullString
-		dormantAtRaw    sql.NullString
-		updatedAtRaw    string
+		state                         core.DurableAgentState
+		cursorRaw                     sql.NullString
+		statusRaw                     sql.NullString
+		stateJSONRaw                  sql.NullString
+		lastOfferedPolicyHashRaw      sql.NullString
+		lastOfferedPolicyAtRaw        sql.NullString
+		lastAcknowledgedPolicyHashRaw sql.NullString
+		lastAcknowledgedPolicyAtRaw   sql.NullString
+		lastAppliedPolicyHashRaw      sql.NullString
+		lastAppliedPolicyAtRaw        sql.NullString
+		lastApplyStatusRaw            sql.NullString
+		lastApplyErrorRaw             sql.NullString
+		lastWakeAtRaw                 sql.NullString
+		lastReviewAtRaw               sql.NullString
+		dormantAtRaw                  sql.NullString
+		updatedAtRaw                  string
 	)
 	if err := scanner.Scan(
-		&state.AgentID, &cursorRaw, &statusRaw, &stateJSONRaw, &lastWakeAtRaw, &lastReviewAtRaw, &dormantAtRaw, &updatedAtRaw,
+		&state.AgentID, &cursorRaw, &statusRaw, &stateJSONRaw,
+		&state.LastOfferedPolicyVersion, &lastOfferedPolicyHashRaw, &lastOfferedPolicyAtRaw,
+		&state.LastAcknowledgedPolicyVersion, &lastAcknowledgedPolicyHashRaw, &lastAcknowledgedPolicyAtRaw,
+		&state.LastAppliedPolicyVersion, &lastAppliedPolicyHashRaw, &lastAppliedPolicyAtRaw,
+		&lastApplyStatusRaw, &lastApplyErrorRaw,
+		&lastWakeAtRaw, &lastReviewAtRaw, &dormantAtRaw, &updatedAtRaw,
 	); err != nil {
 		return core.DurableAgentState{}, fmt.Errorf("scan durable agent state: %w", err)
 	}
@@ -3084,6 +3213,29 @@ func scanDurableAgentState(scanner interface{ Scan(dest ...any) error }) (core.D
 	state.Cursor = nullToString(cursorRaw)
 	state.Status = nullToString(statusRaw)
 	state.StateJSON = nullToString(stateJSONRaw)
+	state.LastOfferedPolicyHash = nullToString(lastOfferedPolicyHashRaw)
+	state.LastAcknowledgedPolicyHash = nullToString(lastAcknowledgedPolicyHashRaw)
+	state.LastAppliedPolicyHash = nullToString(lastAppliedPolicyHashRaw)
+	state.LastApplyStatus = nullToString(lastApplyStatusRaw)
+	state.LastApplyError = nullToString(lastApplyErrorRaw)
+	if lastOfferedPolicyAtRaw.Valid && lastOfferedPolicyAtRaw.String != "" {
+		state.LastOfferedPolicyAt, err = parseSQLiteTime(lastOfferedPolicyAtRaw.String)
+		if err != nil {
+			return core.DurableAgentState{}, fmt.Errorf("parse durable agent last_offered_policy_at: %w", err)
+		}
+	}
+	if lastAcknowledgedPolicyAtRaw.Valid && lastAcknowledgedPolicyAtRaw.String != "" {
+		state.LastAcknowledgedPolicyAt, err = parseSQLiteTime(lastAcknowledgedPolicyAtRaw.String)
+		if err != nil {
+			return core.DurableAgentState{}, fmt.Errorf("parse durable agent last_acknowledged_policy_at: %w", err)
+		}
+	}
+	if lastAppliedPolicyAtRaw.Valid && lastAppliedPolicyAtRaw.String != "" {
+		state.LastAppliedPolicyAt, err = parseSQLiteTime(lastAppliedPolicyAtRaw.String)
+		if err != nil {
+			return core.DurableAgentState{}, fmt.Errorf("parse durable agent last_applied_policy_at: %w", err)
+		}
+	}
 	if lastWakeAtRaw.Valid && lastWakeAtRaw.String != "" {
 		state.LastWakeAt, err = parseSQLiteTime(lastWakeAtRaw.String)
 		if err != nil {

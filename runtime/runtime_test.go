@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -3025,6 +3026,143 @@ func TestHandleInboundDurableTelegramGroupReplyWithParentReviewQueuesDraftWithou
 	}
 	if !strings.Contains(events[0].MetadataJSON, "\"policy_outbound\":\"reply_with_parent_review\"") {
 		t.Fatalf("metadata = %q, want policy_outbound", events[0].MetadataJSON)
+	}
+}
+
+func TestHandleInboundDurableTelegramGroupRecordsAppliedPolicyState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I can help with that."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Help locally in the family group while surfacing important continuity updates upward.",
+			OutboundMode: "read_only",
+			DriftPolicy:  "admin_review",
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	updated, _, err := store.ApplyDurableAgentLivePolicy("family-group", core.DurableAgentLivePolicy{
+		Charter:      "Help locally in the family group while surfacing important continuity updates upward.",
+		OutboundMode: "reply_with_policy_authorization",
+		DriftPolicy:  "admin_review",
+	}, 0, "allow local family-group replies")
+	if err != nil {
+		t.Fatalf("ApplyDurableAgentLivePolicy() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         -100200,
+		ChatType:       "group",
+		ChatTitle:      "Family",
+		SenderID:       555,
+		SenderName:     "alice",
+		Text:           "Can you remind everyone about dinner?",
+		MessageID:      11,
+		DurableAgentID: "family-group",
+		Timestamp:      time.Now(),
+		Raw:            json.RawMessage(`{"source":"telegram-group"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	state, err := store.DurableAgentState("family-group")
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if state.LastOfferedPolicyVersion != updated.PolicyVersion {
+		t.Fatalf("LastOfferedPolicyVersion = %d, want %d", state.LastOfferedPolicyVersion, updated.PolicyVersion)
+	}
+	if state.LastAcknowledgedPolicyVersion != updated.PolicyVersion {
+		t.Fatalf("LastAcknowledgedPolicyVersion = %d, want %d", state.LastAcknowledgedPolicyVersion, updated.PolicyVersion)
+	}
+	if state.LastAppliedPolicyVersion != updated.PolicyVersion {
+		t.Fatalf("LastAppliedPolicyVersion = %d, want %d", state.LastAppliedPolicyVersion, updated.PolicyVersion)
+	}
+	if state.LastApplyStatus != "applied" {
+		t.Fatalf("LastApplyStatus = %q, want applied", state.LastApplyStatus)
+	}
+	if state.LastApplyError != "" {
+		t.Fatalf("LastApplyError = %q, want empty", state.LastApplyError)
+	}
+}
+
+func TestHandleInboundDurableTelegramGroupRecordsPolicyApplyFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I can help with that."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{
+		run: func(context.Context, core.InboundMessage) (*DurableGroupChildResult, error) {
+			return nil, fmt.Errorf("child policy bootstrap failed")
+		},
+	}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Help locally in the family group while surfacing important continuity updates upward.",
+			OutboundMode: "reply_with_policy_authorization",
+			DriftPolicy:  "admin_review",
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         -100200,
+		ChatType:       "group",
+		ChatTitle:      "Family",
+		SenderID:       555,
+		SenderName:     "alice",
+		Text:           "Can you remind everyone about dinner?",
+		MessageID:      12,
+		DurableAgentID: "family-group",
+		Timestamp:      time.Now(),
+		Raw:            json.RawMessage(`{"source":"telegram-group"}`),
+	})
+	if err == nil {
+		t.Fatal("HandleInbound() err = nil, want durable child failure")
+	}
+
+	state, err := store.DurableAgentState("family-group")
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if state.LastOfferedPolicyVersion != 1 {
+		t.Fatalf("LastOfferedPolicyVersion = %d, want 1", state.LastOfferedPolicyVersion)
+	}
+	if state.LastAppliedPolicyVersion != 0 {
+		t.Fatalf("LastAppliedPolicyVersion = %d, want 0 after failed child run", state.LastAppliedPolicyVersion)
+	}
+	if state.LastApplyStatus != "failed" {
+		t.Fatalf("LastApplyStatus = %q, want failed", state.LastApplyStatus)
+	}
+	if !strings.Contains(state.LastApplyError, "child policy bootstrap failed") {
+		t.Fatalf("LastApplyError = %q, want child failure message", state.LastApplyError)
 	}
 }
 

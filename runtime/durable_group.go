@@ -50,6 +50,9 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 	if err := r.markDurableAgentAwake(registered.AgentID, msg.MessageID); err != nil {
 		return nil, fmt.Errorf("mark durable agent awake: %w", err)
 	}
+	if err := r.ensureDurableAgentPolicyOffered(*registered); err != nil {
+		return nil, fmt.Errorf("record durable agent offered policy: %w", err)
+	}
 	defer func() {
 		if dormantErr := r.markDurableAgentDormant(registered.AgentID); dormantErr != nil {
 			log.Printf("WARN durable agent dormant state update failed agent_id=%s err=%v", registered.AgentID, dormantErr)
@@ -70,7 +73,13 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 	}
 	childResult, childErr := child.Run(ctx, scope, *registered, msg)
 	if childErr != nil {
+		if markErr := r.markDurableAgentPolicyApplyFailure(*registered, childErr); markErr != nil {
+			log.Printf("WARN durable agent policy failure state update failed agent_id=%s err=%v", registered.AgentID, markErr)
+		}
 		return nil, fmt.Errorf("run durable child: %w", childErr)
+	}
+	if err := r.markDurableAgentPolicyApplied(*registered); err != nil {
+		return nil, fmt.Errorf("record durable agent applied policy: %w", err)
 	}
 	if childResult.AllowLocalReply {
 		outboundID, outboundType, sendErr := r.sendReply(ctx, msg, childResult.ReplyText, childResult.InboundWasVoice)
@@ -782,6 +791,77 @@ func (r *Runtime) markDurableAgentDormant(agentID string) error {
 	state.Status = "dormant"
 	state.DormantAt = now
 	return r.store.SaveDurableAgentState(*state)
+}
+
+func (r *Runtime) ensureDurableAgentPolicyOffered(agent core.DurableAgent) error {
+	state, err := r.store.DurableAgentState(agent.AgentID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if state == nil {
+		state = &core.DurableAgentState{AgentID: agent.AgentID}
+	}
+	if state.LastOfferedPolicyVersion == agent.PolicyVersion && strings.TrimSpace(state.LastOfferedPolicyHash) == strings.TrimSpace(agent.PolicyHash) {
+		return nil
+	}
+	state.LastOfferedPolicyVersion = agent.PolicyVersion
+	state.LastOfferedPolicyHash = strings.TrimSpace(agent.PolicyHash)
+	state.LastOfferedPolicyAt = nonZeroPolicyTime(agent.PolicyIssuedAt)
+	if strings.TrimSpace(state.LastApplyStatus) == "" {
+		state.LastApplyStatus = "pending"
+	}
+	state.LastApplyError = ""
+	return r.store.SaveDurableAgentState(*state)
+}
+
+func (r *Runtime) markDurableAgentPolicyApplied(agent core.DurableAgent) error {
+	state, err := r.store.DurableAgentState(agent.AgentID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if state == nil {
+		state = &core.DurableAgentState{AgentID: agent.AgentID}
+	}
+	now := time.Now().UTC()
+	state.LastOfferedPolicyVersion = agent.PolicyVersion
+	state.LastOfferedPolicyHash = strings.TrimSpace(agent.PolicyHash)
+	if state.LastOfferedPolicyAt.IsZero() {
+		state.LastOfferedPolicyAt = nonZeroPolicyTime(agent.PolicyIssuedAt)
+	}
+	state.LastAcknowledgedPolicyVersion = agent.PolicyVersion
+	state.LastAcknowledgedPolicyHash = strings.TrimSpace(agent.PolicyHash)
+	state.LastAcknowledgedPolicyAt = now
+	state.LastAppliedPolicyVersion = agent.PolicyVersion
+	state.LastAppliedPolicyHash = strings.TrimSpace(agent.PolicyHash)
+	state.LastAppliedPolicyAt = now
+	state.LastApplyStatus = "applied"
+	state.LastApplyError = ""
+	return r.store.SaveDurableAgentState(*state)
+}
+
+func (r *Runtime) markDurableAgentPolicyApplyFailure(agent core.DurableAgent, cause error) error {
+	state, err := r.store.DurableAgentState(agent.AgentID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if state == nil {
+		state = &core.DurableAgentState{AgentID: agent.AgentID}
+	}
+	state.LastOfferedPolicyVersion = agent.PolicyVersion
+	state.LastOfferedPolicyHash = strings.TrimSpace(agent.PolicyHash)
+	if state.LastOfferedPolicyAt.IsZero() {
+		state.LastOfferedPolicyAt = nonZeroPolicyTime(agent.PolicyIssuedAt)
+	}
+	state.LastApplyStatus = "failed"
+	state.LastApplyError = strings.TrimSpace(cause.Error())
+	return r.store.SaveDurableAgentState(*state)
+}
+
+func nonZeroPolicyTime(value time.Time) time.Time {
+	if value.IsZero() {
+		return time.Now().UTC()
+	}
+	return value.UTC()
 }
 
 func truncateRunes(value string, limit int) string {

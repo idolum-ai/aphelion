@@ -64,14 +64,25 @@ type DurableAgent struct {
 }
 
 type DurableAgentState struct {
-	AgentID      string
-	Cursor       string
-	Status       string
-	StateJSON    string
-	LastWakeAt   time.Time
-	LastReviewAt time.Time
-	DormantAt    time.Time
-	UpdatedAt    time.Time
+	AgentID                       string
+	Cursor                        string
+	Status                        string
+	StateJSON                     string
+	LastOfferedPolicyVersion      int64
+	LastOfferedPolicyHash         string
+	LastOfferedPolicyAt           time.Time
+	LastAcknowledgedPolicyVersion int64
+	LastAcknowledgedPolicyHash    string
+	LastAcknowledgedPolicyAt      time.Time
+	LastAppliedPolicyVersion      int64
+	LastAppliedPolicyHash         string
+	LastAppliedPolicyAt           time.Time
+	LastApplyStatus               string
+	LastApplyError                string
+	LastWakeAt                    time.Time
+	LastReviewAt                  time.Time
+	DormantAt                     time.Time
+	UpdatedAt                     time.Time
 }
 
 type DurableAgentContinuityState struct {

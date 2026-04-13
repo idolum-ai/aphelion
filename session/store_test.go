@@ -731,6 +731,90 @@ func TestApplyDurableAgentLivePolicyRejectsBootstrapCeilingWidening(t *testing.T
 	}
 }
 
+func TestApplyDurableAgentLivePolicyTracksOfferedStateAndRatifiedOutcome(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Observe and surface bounded family coordination.",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		BootstrapCeiling: core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DurableAgentLivePolicy{
+			Charter:            "Observe and surface bounded family coordination.",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
+		},
+		Status: "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	updated, update, err := store.ApplyDurableAgentLivePolicy(agent.AgentID, core.DurableAgentLivePolicy{
+		Charter:            "Observe and surface family coordination, but allow reviewed drafting.",
+		CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+		OutboundMode:       "draft_only",
+		DriftPolicy:        "admin_review",
+	}, 42, "ratified family-group narrowing")
+	if err != nil {
+		t.Fatalf("ApplyDurableAgentLivePolicy() err = %v", err)
+	}
+	if update == nil {
+		t.Fatal("ApplyDurableAgentLivePolicy() update = nil, want policy update record")
+	}
+	if updated.PolicyVersion != 2 {
+		t.Fatalf("updated.PolicyVersion = %d, want 2", updated.PolicyVersion)
+	}
+
+	state, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if state.LastOfferedPolicyVersion != updated.PolicyVersion {
+		t.Fatalf("LastOfferedPolicyVersion = %d, want %d", state.LastOfferedPolicyVersion, updated.PolicyVersion)
+	}
+	if state.LastOfferedPolicyHash != updated.PolicyHash {
+		t.Fatalf("LastOfferedPolicyHash = %q, want %q", state.LastOfferedPolicyHash, updated.PolicyHash)
+	}
+	if state.LastApplyStatus != "pending" {
+		t.Fatalf("LastApplyStatus = %q, want pending", state.LastApplyStatus)
+	}
+	if state.LastApplyError != "" {
+		t.Fatalf("LastApplyError = %q, want empty", state.LastApplyError)
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if len(continuity.RatifiedOutcomes) != 1 {
+		t.Fatalf("RatifiedOutcomes len = %d, want 1", len(continuity.RatifiedOutcomes))
+	}
+	if continuity.RatifiedOutcomes[0].PolicyVersion != updated.PolicyVersion {
+		t.Fatalf("RatifiedOutcomes[0].PolicyVersion = %d, want %d", continuity.RatifiedOutcomes[0].PolicyVersion, updated.PolicyVersion)
+	}
+	if continuity.RatifiedOutcomes[0].SourceReviewEventID != 42 {
+		t.Fatalf("RatifiedOutcomes[0].SourceReviewEventID = %d, want 42", continuity.RatifiedOutcomes[0].SourceReviewEventID)
+	}
+	if !strings.Contains(continuity.RatifiedOutcomes[0].Summary, "ratified family-group narrowing") {
+		t.Fatalf("RatifiedOutcomes[0].Summary = %q, want operator reason", continuity.RatifiedOutcomes[0].Summary)
+	}
+}
+
 func TestInitMigratesLegacySessionsWithFloorColumn(t *testing.T) {
 	t.Parallel()
 
