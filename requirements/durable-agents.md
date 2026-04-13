@@ -28,6 +28,11 @@ So the architecture must prevent outside users, group chats, inboxes, public web
 
 Durable agents exist to solve that problem without giving up rich external sensing or long-lived channel presence.
 
+The reference threat model for this architecture is **hostile public ingress**.
+
+If the architecture safely contains a low-trust public website child, it should become safer by architectural default for quieter cases such as family groups, private inboxes, and trusted remote hosts.
+Those quieter cases may widen local charter, but they should not bypass the same core quarantine and ratification laws.
+
 ## Telos
 
 Durable agents should let Aphelion:
@@ -470,14 +475,18 @@ Behavior or privilege changes require admin-ratified drift from the parent side.
 3. Local observation:
    Source events such as file changes, process state, battery pressure, or local browser state wake the child.
 4. Child-local reasoning:
-   The child interprets those observations within its charter and may take bounded local actions if pre-authorized.
-5. Sensitive boundary:
+   The child interprets those observations within its charter.
+5. Routine local action:
+   The child may take only the narrow class of routine local actions that were explicitly pre-authorized in its charter.
+6. Privileged or standing change requests:
+   Actions that widen privilege, change standing policy, or cross the child's routine charter must be surfaced upward for parent/admin review rather than executed locally.
+7. Sensitive boundary:
    Host observations remain child-local inputs, not house principals and not direct parent prompt content.
-6. Upward synthesis:
+8. Upward synthesis:
    The child reports status, anomalies, completed local actions, and requested changes upward through bounded review artifacts.
-7. Parent review:
+9. Parent review:
    The parent decides whether any requested privilege change, tooling expansion, or standing policy drift should be ratified.
-8. Downward sync:
+10. Downward sync:
    Approved changes are pushed to the remote child explicitly with provenance.
 
 ## Public website durable agent
@@ -493,7 +502,7 @@ Its charter should be narrow:
 - cheap model
 - aggressive quarantine of transcripts and files
 
-If the architecture is safe here, it becomes safe by construction in less-exposed cases.
+If the architecture is safe here, the less-exposed cases should become safer by architectural default.
 
 ### Typical flow
 
@@ -592,7 +601,8 @@ Durable agents must not acquire lasting changes silently.
 - **Secrets are least-privilege and child-scoped.** A durable child should only be able to leak what it can materially access.
 - **Child-originated secret requests are untrusted.** Upward requests for credentials or capability widening must enter review, not execution.
 - **Remote-host children follow the same law.** New machine, same parent/child governance.
-- **Public web agents are a proving ground, not an exception.** If hostile public ingress is safe, the quieter cases inherit that safety.
+- **Routine local action and standing privilege are different.** Pre-authorized local remediation does not imply self-widening authority.
+- **Hostile public ingress is the reference threat model.** If the public web case is safe, the quieter cases inherit that safety.
 
 ## Test Plan
 
@@ -613,4 +623,6 @@ Durable agents must not acquire lasting changes silently.
 - **TestAttemptedRoleDriftSurfacesForAdminReview**: social pressure from a group cannot durably redefine the child without ratification
 - **TestOutboundAutonomyRequiresExplicitPolicy**: child reply autonomy is not implied by repeated use
 - **TestRemoteDurableAgentReportsWithBoundedIdentityAndPolicy**: remote child reports under its registered charter and capability envelope
+- **TestRemoteRoutineActionDoesNotImplyPrivilegeWidening**: a remote child may perform pre-authorized routine remediations without gaining self-directed authority expansion
+- **TestHostilePublicIngressIsContainedByQuarantine**: public website pressure cannot bypass the durable-agent quarantine and ratification boundary
 - **TestDurableDriftPreservesProvenance**: approved child changes record the motivating review artifact and admin ratification
