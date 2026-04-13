@@ -54,6 +54,7 @@ func TestSyncConfiguredTelegramDurableGroupsPreservesExistingLivePolicy(t *testi
 	}
 
 	cfg := &config.Config{
+		Agent:    config.AgentConfig{PromptRoot: filepath.Join(root, "prompt")},
 		Sessions: config.SessionsConfig{DBPath: dbPath},
 		Principals: config.PrincipalsConfig{
 			Telegram: config.TelegramPrincipalsConfig{AdminUserIDs: []int64{1001}},
@@ -93,5 +94,36 @@ func TestSyncConfiguredTelegramDurableGroupsPreservesExistingLivePolicy(t *testi
 	}
 	if len(got.LocalStorageRoots) != 2 {
 		t.Fatalf("LocalStorageRoots = %#v, want synced storage roots", got.LocalStorageRoots)
+	}
+}
+
+func TestSyncConfiguredTelegramDurableGroupsRejectsMissingPromptRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "sessions.db")
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	cfg := &config.Config{
+		Sessions: config.SessionsConfig{DBPath: dbPath},
+		Principals: config.PrincipalsConfig{
+			Telegram: config.TelegramPrincipalsConfig{AdminUserIDs: []int64{1001}},
+		},
+		Telegram: config.TelegramConfig{
+			DurableGroups: []config.TelegramDurableGroupConfig{{
+				ChatID:    -100200,
+				AgentID:   "family-group",
+				Charter:   "Bootstrap charter.",
+				RespondOn: "mentions",
+			}},
+		},
+	}
+
+	if err := syncConfiguredTelegramDurableGroups(cfg, store); err == nil {
+		t.Fatal("syncConfiguredTelegramDurableGroups() err = nil, want prompt root validation")
 	}
 }

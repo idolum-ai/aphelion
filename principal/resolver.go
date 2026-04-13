@@ -7,10 +7,12 @@ type Role string
 const (
 	RoleAdmin        Role = "admin"
 	RoleApprovedUser Role = "approved_user"
+	RoleDurableAgent Role = "durable_agent"
 )
 
 type Principal struct {
 	TelegramUserID int64
+	DurableAgentID string
 	Role           Role
 }
 

@@ -100,6 +100,47 @@ func TestResolverRejectsApprovedUserWithoutID(t *testing.T) {
 	}
 }
 
+func TestDurableAgentScope(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	scope, err := DurableAgentScope(
+		"family-group",
+		filepath.Join(tmp, "global"),
+		filepath.Join(tmp, "workspaces", "family-group"),
+		filepath.Join(tmp, "memory", "family-group"),
+		"restricted",
+	)
+	if err != nil {
+		t.Fatalf("DurableAgentScope() err = %v", err)
+	}
+
+	if scope.Principal.Role != principal.RoleDurableAgent {
+		t.Fatalf("principal role = %q, want %q", scope.Principal.Role, principal.RoleDurableAgent)
+	}
+	if scope.Principal.DurableAgentID != "family-group" {
+		t.Fatalf("durable agent id = %q, want family-group", scope.Principal.DurableAgentID)
+	}
+	if scope.WorkingRoot != filepath.Join(tmp, "workspaces", "family-group") {
+		t.Fatalf("working root = %q", scope.WorkingRoot)
+	}
+	if scope.SharedMemoryRoot != filepath.Join(tmp, "memory", "family-group") {
+		t.Fatalf("shared memory root = %q", scope.SharedMemoryRoot)
+	}
+	if scope.UserWorkspace != scope.WorkingRoot {
+		t.Fatalf("user workspace = %q, want working root %q", scope.UserWorkspace, scope.WorkingRoot)
+	}
+	if scope.UserMemory != scope.SharedMemoryRoot {
+		t.Fatalf("user memory = %q, want shared memory root %q", scope.UserMemory, scope.SharedMemoryRoot)
+	}
+	if scope.Profile.Mode != ModeIsolated {
+		t.Fatalf("profile mode = %q, want %q", scope.Profile.Mode, ModeIsolated)
+	}
+	if scope.Profile.Network != NetworkDeny {
+		t.Fatalf("profile network = %q, want %q", scope.Profile.Network, NetworkDeny)
+	}
+}
+
 func TestNewResolverRejectsMissingRoots(t *testing.T) {
 	t.Parallel()
 

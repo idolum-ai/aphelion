@@ -29,6 +29,14 @@ func TestProfilesForRole(t *testing.T) {
 		t.Fatalf("approved mode = %q, want %q", approved.Mode, ModeIsolated)
 	}
 
+	durable, err := profiles.ForRole(principal.RoleDurableAgent)
+	if err != nil {
+		t.Fatalf("ForRole(durable_agent) err = %v", err)
+	}
+	if durable.Mode != ModeIsolated {
+		t.Fatalf("durable_agent mode = %q, want %q", durable.Mode, ModeIsolated)
+	}
+
 	if _, err := profiles.ForRole(principal.Role("unknown")); err == nil {
 		t.Fatal("ForRole(unknown) err = nil, want error")
 	}

@@ -34,6 +34,7 @@ type Profile struct {
 type Profiles struct {
 	Admin        Profile
 	ApprovedUser Profile
+	DurableAgent Profile
 }
 
 func DefaultProfiles() Profiles {
@@ -56,6 +57,19 @@ func DefaultProfiles() Profiles {
 			},
 			Network: NetworkDeny,
 		},
+		DurableAgent: Profile{
+			Mode:          ModeIsolated,
+			ReadonlyRoot:  true,
+			WritablePaths: []string{"{working_root}", "{shared_memory_root}", "/tmp"},
+			ReadonlyPaths: []string{"{global_root}"},
+			HiddenPaths: []string{
+				"~/.aphelion/aphelion.toml",
+				"~/.config/aphelion/config.toml",
+				"~/.ssh",
+				"~/.gnupg",
+			},
+			Network: NetworkDeny,
+		},
 	}
 }
 
@@ -65,6 +79,8 @@ func (p Profiles) ForRole(role principal.Role) (Profile, error) {
 		return p.Admin, nil
 	case principal.RoleApprovedUser:
 		return p.ApprovedUser, nil
+	case principal.RoleDurableAgent:
+		return p.DurableAgent, nil
 	default:
 		return Profile{}, fmt.Errorf("unsupported role %q", role)
 	}

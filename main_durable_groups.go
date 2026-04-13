@@ -14,6 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func syncConfiguredTelegramDurableGroups(cfg *config.Config, store *session.SQLiteStore) error {
@@ -34,6 +35,9 @@ func syncConfiguredTelegramDurableGroups(cfg *config.Config, store *session.SQLi
 			if err := os.MkdirAll(root, 0o755); err != nil {
 				return fmt.Errorf("create durable group root %s: %w", root, err)
 			}
+		}
+		if _, err := sandbox.DurableAgentScope(strings.TrimSpace(group.AgentID), cfg.Agent.PromptRoot, workspaceRoot, memoryRoot, "default"); err != nil {
+			return fmt.Errorf("validate durable group scope %s: %w", group.AgentID, err)
 		}
 		livePolicy := core.DefaultTelegramGroupLivePolicy(strings.TrimSpace(group.Charter))
 		bootstrapCeiling := core.DefaultDurableAgentBootstrapCeiling("telegram_group", livePolicy)

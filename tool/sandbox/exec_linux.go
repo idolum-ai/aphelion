@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	"github.com/idolum-ai/aphelion/principal"
 )
 
 type Stage string
@@ -66,13 +64,10 @@ func (r *Runner) Supports(scope Scope) bool {
 }
 
 func (r *Runner) Stage(scope Scope) Stage {
-	switch scope.Principal.Role {
-	case principal.RoleAdmin:
+	switch scope.Profile.Mode {
+	case ModeTrusted:
 		return StageTrustedHost
-	case principal.RoleApprovedUser:
-		if scope.Profile.Mode != ModeIsolated {
-			return StageUnavailable
-		}
+	case ModeIsolated:
 		if r.bwrapBinary() == "" {
 			return StageUnavailable
 		}
@@ -129,7 +124,7 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 	case StageIsolatedBwrap:
 		bwrapPath := r.bwrapBinary()
 		if bwrapPath == "" {
-			return ExecutionPlan{}, fmt.Errorf("bubblewrap is required for approved_user isolated execution")
+			return ExecutionPlan{}, fmt.Errorf("bubblewrap is required for isolated execution")
 		}
 		args, err := buildBwrapArgs(req.Scope, workdir, command)
 		if err != nil {
@@ -143,7 +138,7 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 			Env:    nil,
 		}, nil
 	default:
-		return ExecutionPlan{}, fmt.Errorf("no supported execution backend for role %q", req.Scope.Principal.Role)
+		return ExecutionPlan{}, fmt.Errorf("no supported execution backend for sandbox mode %q", req.Scope.Profile.Mode)
 	}
 }
 

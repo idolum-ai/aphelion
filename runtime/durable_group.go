@@ -17,7 +17,6 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
 	"github.com/idolum-ai/aphelion/face"
-	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -359,10 +358,6 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 }
 
 func (r *Runtime) scopeForDurableAgent(agent core.DurableAgent) (sandbox.Scope, error) {
-	scope, err := r.scopeForPrincipal(principalAdmin())
-	if err != nil {
-		return sandbox.Scope{}, err
-	}
 	workspaceRoot, memoryRoot := durableagent.LocalRoots(agent.AgentID, agent.LocalStorageRoots)
 	if workspaceRoot == "" || memoryRoot == "" {
 		workspaceRoot, memoryRoot = durableagent.DefaultLocalRoots(r.cfg.Sessions.DBPath, agent.AgentID)
@@ -372,9 +367,7 @@ func (r *Runtime) scopeForDurableAgent(agent core.DurableAgent) (sandbox.Scope, 
 			return sandbox.Scope{}, fmt.Errorf("create durable agent root %s: %w", root, err)
 		}
 	}
-	scope.WorkingRoot = workspaceRoot
-	scope.SharedMemoryRoot = memoryRoot
-	return scope, nil
+	return sandbox.DurableAgentScope(agent.AgentID, r.cfg.Agent.PromptRoot, workspaceRoot, memoryRoot, agent.NetworkPolicy)
 }
 
 func durableAgentScopeRef(agent core.DurableAgent) session.ScopeRef {
@@ -693,10 +686,6 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func principalAdmin() principal.Principal {
-	return principal.Principal{Role: principal.RoleAdmin}
 }
 
 func (r *Runtime) markDurableAgentAwake(agentID string, cursorMessageID int64) error {
