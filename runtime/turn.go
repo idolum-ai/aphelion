@@ -21,6 +21,9 @@ import (
 const maxReviewEventsPerTurn = 10
 
 func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (result *core.TurnResult, err error) {
+	if strings.TrimSpace(msg.DurableAgentID) != "" {
+		return r.handleDurableTelegramGroupInbound(ctx, msg)
+	}
 	actor, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
 	if !ok {
 		return nil, ErrPrincipalDenied

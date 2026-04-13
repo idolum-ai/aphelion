@@ -8,15 +8,18 @@ import (
 )
 
 type InboundMessage struct {
-	ChatID     int64
-	SenderID   int64
-	SenderName string
-	Text       string
-	Artifacts  []Artifact
-	ReplyTo    *int64
-	MessageID  int64
-	Timestamp  time.Time
-	Raw        json.RawMessage
+	ChatID         int64
+	ChatType       string
+	ChatTitle      string
+	SenderID       int64
+	SenderName     string
+	Text           string
+	Artifacts      []Artifact
+	ReplyTo        *int64
+	MessageID      int64
+	DurableAgentID string
+	Timestamp      time.Time
+	Raw            json.RawMessage
 }
 
 type OutboundMessage struct {

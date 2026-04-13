@@ -40,6 +40,9 @@ func registerTelegramCommands(ctx context.Context, client *telegram.Client) erro
 }
 
 func handleTelegramCommand(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
+	if strings.TrimSpace(msg.DurableAgentID) != "" {
+		return false, nil
+	}
 	command, ok := parseTelegramCommand(msg.Text)
 	if !ok {
 		return false, nil

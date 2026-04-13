@@ -121,6 +121,9 @@ func run() error {
 		return err
 	}
 	defer store.Close()
+	if err := syncConfiguredTelegramDurableGroups(cfg, store); err != nil {
+		return err
+	}
 
 	httpClient := &http.Client{Timeout: 90 * time.Second}
 	llm, err := buildNativeProviderChain(cfg, httpClient)
@@ -172,6 +175,15 @@ func run() error {
 		telegram.WithHTTPClient(httpClient),
 		telegram.WithPollTimeout(cfg.Telegram.PollTimeout),
 	)
+	var botUser *telegram.User
+	if durableGroupsConfigured(cfg) && durableGroupsNeedBotIdentity(cfg.Telegram.DurableGroups) {
+		getMeCtx, cancelGetMe := context.WithTimeout(context.Background(), 15*time.Second)
+		botUser, err = tgClient.GetMe(getMeCtx)
+		cancelGetMe()
+		if err != nil {
+			return err
+		}
+	}
 
 	rt, err := runtime.New(cfg, store, llm, tools, tgClient)
 	if err != nil {
@@ -242,6 +254,8 @@ func run() error {
 		telegram.WithPollerTimeout(cfg.Telegram.PollTimeout),
 		telegram.WithMediaConfig(cfg.Telegram.Media),
 		telegram.WithPrincipalResolver(principalResolver),
+		telegram.WithDurableGroups(cfg.Telegram.DurableGroups),
+		telegram.WithBotIdentity(botUser),
 	)
 
 	log.Printf(

@@ -95,6 +95,18 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSeconds in
 	return resp.Result, nil
 }
 
+func (c *Client) GetMe(ctx context.Context) (*User, error) {
+	var resp getMeResponse
+	if err := c.post(ctx, "getMe", map[string]any{}, &resp); err != nil {
+		return nil, err
+	}
+	if !resp.Ok {
+		return nil, fmt.Errorf("telegram getMe failed: %s", resp.Description)
+	}
+	user := resp.Result
+	return &user, nil
+}
+
 func (c *Client) SendMessage(ctx context.Context, msg core.OutboundMessage) (int64, error) {
 	if msg.ChatID == 0 {
 		return 0, errors.New("chat_id is required")

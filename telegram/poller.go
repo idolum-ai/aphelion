@@ -5,6 +5,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/config"
@@ -22,6 +23,8 @@ type Poller struct {
 	pollTimeoutSeconds int
 	resolver           *principal.Resolver
 	media              config.TelegramMediaConfig
+	durableGroups      map[int64]durableGroupRoute
+	botUser            *User
 }
 
 func NewPoller(client *Client, handler UpdateHandler, opts ...PollerOption) *Poller {
@@ -53,6 +56,18 @@ func WithPrincipalResolver(resolver *principal.Resolver) PollerOption {
 func WithMediaConfig(cfg config.TelegramMediaConfig) PollerOption {
 	return func(p *Poller) {
 		p.media = cfg
+	}
+}
+
+func WithDurableGroups(groups []config.TelegramDurableGroupConfig) PollerOption {
+	return func(p *Poller) {
+		p.durableGroups = durableGroupRoutes(groups)
+	}
+}
+
+func WithBotIdentity(user *User) PollerOption {
+	return func(p *Poller) {
+		p.botUser = user
 	}
 }
 
@@ -101,7 +116,7 @@ func (p *Poller) Run(ctx context.Context) error {
 }
 
 func (p *Poller) normalizeUpdate(ctx context.Context, upd Update) (*core.InboundMessage, error) {
-	inbound := NormalizeMessage(upd.Message)
+	inbound := p.normalizeMessage(upd.Message)
 	if inbound == nil {
 		return nil, nil
 	}
@@ -113,6 +128,18 @@ func (p *Poller) normalizeUpdate(ctx context.Context, upd Update) (*core.Inbound
 		inbound.Artifacts = append(inbound.Artifacts, artifacts...)
 	}
 	return inbound, nil
+}
+
+func (p *Poller) normalizeMessage(msg *Message) *core.InboundMessage {
+	if msg == nil || msg.Chat == nil {
+		return nil
+	}
+	if route, ok := p.durableGroups[msg.Chat.ID]; ok {
+		if inbound := normalizeDurableGroupMessage(msg, route, p.botUser); inbound != nil {
+			return inbound
+		}
+	}
+	return NormalizeMessage(msg)
 }
 
 func NormalizeMessage(msg *Message) *core.InboundMessage {
@@ -128,6 +155,8 @@ func NormalizeMessage(msg *Message) *core.InboundMessage {
 	}
 	return &core.InboundMessage{
 		ChatID:     msg.Chat.ID,
+		ChatType:   msg.Chat.Type,
+		ChatTitle:  strings.TrimSpace(msg.Chat.Title),
 		SenderID:   senderID(msg.From),
 		SenderName: buildSenderName(msg.From),
 		Text:       text,

@@ -418,6 +418,86 @@ elevenlabs_voice_id = "voice-123"
 	}
 }
 
+func TestLoadParsesTelegramDurableGroups(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[[telegram.durable_groups]]
+chat_id = -100123
+agent_id = "family-group"
+charter = "Help locally in the family group without taking on standing role changes."
+respond_on = "all"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+workspace = "./workspace"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if len(cfg.Telegram.DurableGroups) != 1 {
+		t.Fatalf("durable groups = %d, want 1", len(cfg.Telegram.DurableGroups))
+	}
+	group := cfg.Telegram.DurableGroups[0]
+	if group.ChatID != -100123 {
+		t.Fatalf("chat_id = %d, want -100123", group.ChatID)
+	}
+	if group.AgentID != "family-group" {
+		t.Fatalf("agent_id = %q, want family-group", group.AgentID)
+	}
+	if group.RespondOn != "all" {
+		t.Fatalf("respond_on = %q, want all", group.RespondOn)
+	}
+}
+
+func TestLoadRejectsInvalidTelegramDurableGroupAgentID(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[[telegram.durable_groups]]
+chat_id = -100123
+agent_id = "family/group"
+charter = "Help locally."
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+workspace = "./workspace"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil || !strings.Contains(err.Error(), "agent_id must contain only") {
+		t.Fatalf("Load() err = %v, want durable group agent_id validation error", err)
+	}
+}
+
 func TestLoadIgnoresUnknownKeys(t *testing.T) {
 	t.Parallel()
 

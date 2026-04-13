@@ -21,6 +21,11 @@ type sendMessageResponse struct {
 type sendVoiceResponse = sendMessageResponse
 type editMessageResponse = sendMessageResponse
 type setMyCommandsResponse = telegramOKResponse
+type getMeResponse struct {
+	Ok          bool   `json:"ok"`
+	Description string `json:"description"`
+	Result      User   `json:"result"`
+}
 
 type BotCommand struct {
 	Command     string `json:"command"`
@@ -71,8 +76,9 @@ type Message struct {
 }
 
 type Chat struct {
-	ID   int64  `json:"id"`
-	Type string `json:"type"`
+	ID    int64  `json:"id"`
+	Type  string `json:"type"`
+	Title string `json:"title"`
 }
 
 type User struct {

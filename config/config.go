@@ -35,15 +35,24 @@ type IdentityConfig struct {
 }
 
 type TelegramConfig struct {
-	BotToken            string              `toml:"bot_token"`
-	PollTimeout         int                 `toml:"poll_timeout"`
-	StreamEditInterval  string              `toml:"stream_edit_interval"`
-	StreamCursor        string              `toml:"stream_cursor"`
-	ToolProgress        string              `toml:"tool_progress"`
-	ToolProgressStyle   string              `toml:"tool_progress_style"`
-	ToolProgressWindow  int                 `toml:"tool_progress_window"`
-	ToolProgressCleanup bool                `toml:"tool_progress_cleanup"`
-	Media               TelegramMediaConfig `toml:"media"`
+	BotToken            string                       `toml:"bot_token"`
+	PollTimeout         int                          `toml:"poll_timeout"`
+	StreamEditInterval  string                       `toml:"stream_edit_interval"`
+	StreamCursor        string                       `toml:"stream_cursor"`
+	ToolProgress        string                       `toml:"tool_progress"`
+	ToolProgressStyle   string                       `toml:"tool_progress_style"`
+	ToolProgressWindow  int                          `toml:"tool_progress_window"`
+	ToolProgressCleanup bool                         `toml:"tool_progress_cleanup"`
+	Media               TelegramMediaConfig          `toml:"media"`
+	DurableGroups       []TelegramDurableGroupConfig `toml:"durable_groups"`
+}
+
+type TelegramDurableGroupConfig struct {
+	ChatID             int64  `toml:"chat_id"`
+	AgentID            string `toml:"agent_id"`
+	Charter            string `toml:"charter"`
+	RespondOn          string `toml:"respond_on"`
+	ReviewTargetChatID int64  `toml:"review_target_chat_id"`
 }
 
 type TelegramMediaConfig struct {
@@ -477,6 +486,7 @@ func Load(path string) (*Config, error) {
 	}
 	normalizeAgentRoots(&cfg)
 	cfg.Face.Backend = NormalizeFaceBackendValue(cfg.Face.Backend)
+	normalizeTelegramDurableGroups(&cfg)
 
 	if err := validate(&cfg); err != nil {
 		return nil, err
@@ -518,6 +528,9 @@ func validate(cfg *Config) error {
 	}
 	if _, err := ParseByteSize(strings.TrimSpace(cfg.Telegram.Media.MaxPDFBytes)); err != nil {
 		return fmt.Errorf("telegram.media.max_pdf_bytes must be a valid positive size: %w", err)
+	}
+	if err := validateTelegramDurableGroups(cfg); err != nil {
+		return err
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Thinking.Effort)) {
 	case "", "none", "low", "medium", "high", "xhigh":
@@ -937,6 +950,91 @@ func normalizeAgentRoots(cfg *Config) {
 	if strings.TrimSpace(cfg.Agent.Workspace) == "" {
 		cfg.Agent.Workspace = cfg.Agent.ExecRoot
 	}
+}
+
+func normalizeTelegramDurableGroups(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	for i := range cfg.Telegram.DurableGroups {
+		cfg.Telegram.DurableGroups[i].AgentID = strings.TrimSpace(cfg.Telegram.DurableGroups[i].AgentID)
+		cfg.Telegram.DurableGroups[i].Charter = strings.TrimSpace(cfg.Telegram.DurableGroups[i].Charter)
+		cfg.Telegram.DurableGroups[i].RespondOn = normalizeTelegramDurableGroupRespondOn(cfg.Telegram.DurableGroups[i].RespondOn)
+	}
+}
+
+func validateTelegramDurableGroups(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	seenChats := make(map[int64]string, len(cfg.Telegram.DurableGroups))
+	seenAgents := make(map[string]int64, len(cfg.Telegram.DurableGroups))
+	defaultReviewTarget := int64(0)
+	if len(cfg.Principals.Telegram.AdminUserIDs) > 0 {
+		defaultReviewTarget = cfg.Principals.Telegram.AdminUserIDs[0]
+	}
+	for i, group := range cfg.Telegram.DurableGroups {
+		if group.ChatID == 0 {
+			return fmt.Errorf("telegram.durable_groups[%d].chat_id is required", i)
+		}
+		if existing, ok := seenChats[group.ChatID]; ok {
+			return fmt.Errorf("telegram.durable_groups[%d].chat_id duplicates durable group %q", i, existing)
+		}
+		agentID := strings.TrimSpace(group.AgentID)
+		if agentID == "" {
+			return fmt.Errorf("telegram.durable_groups[%d].agent_id is required", i)
+		}
+		if !isSafeDurableAgentID(agentID) {
+			return fmt.Errorf("telegram.durable_groups[%d].agent_id must contain only a-z, 0-9, ., _, or -", i)
+		}
+		if existing, ok := seenAgents[agentID]; ok {
+			return fmt.Errorf("telegram.durable_groups[%d].agent_id duplicates chat_id %d", i, existing)
+		}
+		if strings.TrimSpace(group.Charter) == "" {
+			return fmt.Errorf("telegram.durable_groups[%d].charter is required", i)
+		}
+		switch normalizeTelegramDurableGroupRespondOn(group.RespondOn) {
+		case "all", "mentions":
+		default:
+			return fmt.Errorf("telegram.durable_groups[%d].respond_on must be one of all|mentions", i)
+		}
+		if group.ReviewTargetChatID == 0 && defaultReviewTarget == 0 {
+			return fmt.Errorf("telegram.durable_groups[%d].review_target_chat_id is required when no admin_user_ids are configured", i)
+		}
+		if group.ReviewTargetChatID < 0 {
+			return fmt.Errorf("telegram.durable_groups[%d].review_target_chat_id must be positive", i)
+		}
+		seenChats[group.ChatID] = agentID
+		seenAgents[agentID] = group.ChatID
+	}
+	return nil
+}
+
+func normalizeTelegramDurableGroupRespondOn(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "mentions":
+		return "mentions"
+	case "all":
+		return "all"
+	default:
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+}
+
+func isSafeDurableAgentID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func defaultHomePath(parts ...string) string {

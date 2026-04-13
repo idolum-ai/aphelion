@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 )
@@ -923,5 +924,128 @@ func TestPollerDropsUnknownPrincipalMessages(t *testing.T) {
 	}
 	if handled[0].Text != "allowed" {
 		t.Fatalf("text = %q, want allowed", handled[0].Text)
+	}
+}
+
+func TestPollerIgnoresGroupMessagesWithoutDurableAdmission(t *testing.T) {
+	now := time.Now().Unix()
+	updates := []Update{
+		{
+			UpdateID: 1,
+			Message: &Message{
+				MessageID: 10,
+				Chat:      &Chat{ID: -100, Type: "group", Title: "family"},
+				From:      &User{ID: 555, Username: "alice"},
+				Text:      "@aphelion hello",
+				Date:      now,
+				Entities: []MessageEntity{
+					{Type: "mention", Offset: 0, Length: len([]rune("@aphelion"))},
+				},
+			},
+		},
+	}
+
+	call := 0
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			resp := getUpdatesResponse{Ok: true}
+			if call == 1 {
+				resp.Result = updates
+			}
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handled := make([]core.InboundMessage, 0, 1)
+	handler := func(ctx context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	}
+	poller := NewPoller(client, handler, WithPollerTimeout(1), WithBotIdentity(&User{ID: 99, Username: "aphelion"}))
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	_ = poller.Run(ctx)
+	if len(handled) != 0 {
+		t.Fatalf("handled %d group messages without durable admission, want 0", len(handled))
+	}
+}
+
+func TestPollerRoutesAdmittedDurableGroupMentions(t *testing.T) {
+	now := time.Now().Unix()
+	mention := "@aphelion"
+	updates := []Update{
+		{
+			UpdateID: 1,
+			Message: &Message{
+				MessageID: 10,
+				Chat:      &Chat{ID: -100, Type: "supergroup", Title: "family"},
+				From:      &User{ID: 555, Username: "alice"},
+				Text:      mention + " hello there",
+				Date:      now,
+				Entities: []MessageEntity{
+					{Type: "mention", Offset: 0, Length: len([]rune(mention))},
+				},
+			},
+		},
+	}
+
+	call := 0
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			resp := getUpdatesResponse{Ok: true}
+			if call == 1 {
+				resp.Result = updates
+			}
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handled := make([]core.InboundMessage, 0, 1)
+	handler := func(ctx context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	}
+	poller := NewPoller(
+		client,
+		handler,
+		WithPollerTimeout(1),
+		WithDurableGroups([]config.TelegramDurableGroupConfig{{
+			ChatID:    -100,
+			AgentID:   "family-group",
+			Charter:   "Help in the family group.",
+			RespondOn: "mentions",
+		}}),
+		WithBotIdentity(&User{ID: 99, Username: "aphelion"}),
+	)
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("poller failed: %v", err)
+	}
+	if len(handled) != 1 {
+		t.Fatalf("handled %d admitted group messages, want 1", len(handled))
+	}
+	if handled[0].DurableAgentID != "family-group" {
+		t.Fatalf("durable agent id = %q, want family-group", handled[0].DurableAgentID)
+	}
+	if handled[0].ChatType != "supergroup" {
+		t.Fatalf("chat type = %q, want supergroup", handled[0].ChatType)
+	}
+	if handled[0].ChatTitle != "family" {
+		t.Fatalf("chat title = %q, want family", handled[0].ChatTitle)
 	}
 }
