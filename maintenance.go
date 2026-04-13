@@ -622,6 +622,7 @@ func runDurableAgentEnrollmentCommand(args []string) error {
 	fs := flag.NewFlagSet("durable-agent enrollment", flag.ContinueOnError)
 	configFlag := fs.String("config", "", "path to config.toml")
 	agentID := fs.String("agent", "", "durable agent id")
+	secret := fs.String("secret", "", "new control-plane secret for rotate-secret")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -662,6 +663,9 @@ func runDurableAgentEnrollmentCommand(args []string) error {
 		printDurableAgentEnrollment(os.Stdout, *enrollment)
 		return nil
 	case "reactivate":
+		if enrollment.Status == "decommissioned" {
+			return fmt.Errorf("durable-agent enrollment %s is decommissioned and cannot be reactivated", strings.TrimSpace(*agentID))
+		}
 		enrollment.Status = "active"
 		enrollment.RevokedAt = time.Time{}
 		if err := store.UpsertDurableAgentRemoteEnrollment(*enrollment); err != nil {
@@ -669,8 +673,31 @@ func runDurableAgentEnrollmentCommand(args []string) error {
 		}
 		printDurableAgentEnrollment(os.Stdout, *enrollment)
 		return nil
+	case "decommission":
+		enrollment.Status = "decommissioned"
+		enrollment.RevokedAt = time.Now().UTC()
+		if err := store.UpsertDurableAgentRemoteEnrollment(*enrollment); err != nil {
+			return err
+		}
+		printDurableAgentEnrollment(os.Stdout, *enrollment)
+		return nil
+	case "rotate-secret":
+		nextSecret := strings.TrimSpace(*secret)
+		if nextSecret == "" {
+			return fmt.Errorf("durable-agent enrollment rotate-secret requires --secret")
+		}
+		agent, err := store.DurableAgent(*agentID)
+		if err != nil {
+			return err
+		}
+		agent.ControlPlaneSecret = nextSecret
+		if err := store.UpsertDurableAgent(*agent); err != nil {
+			return err
+		}
+		printDurableAgentEnrollment(os.Stdout, *enrollment)
+		return nil
 	default:
-		return fmt.Errorf("durable-agent enrollment action must be one of show|revoke|reactivate")
+		return fmt.Errorf("durable-agent enrollment action must be one of show|revoke|reactivate|decommission|rotate-secret")
 	}
 }
 

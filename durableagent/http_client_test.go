@@ -236,6 +236,72 @@ func TestHTTPClientReattestsAndUpdatesParentEnrollmentFingerprint(t *testing.T) 
 	}
 }
 
+func TestHTTPClientRejectsOldControlPlaneSecretAfterRotation(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	handler := NewHTTPHandler(store).Handler()
+	oldClient, err := NewHTTPClient(core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example",
+		EnrollmentToken:  "enroll-token-1",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient(old) err = %v", err)
+	}
+	oldClient.Client = &http.Client{Transport: handlerRoundTripper{handler: handler}}
+	if _, err := oldClient.Enroll(context.Background()); err != nil {
+		t.Fatalf("Enroll() err = %v", err)
+	}
+
+	agent.ControlPlaneSecret = "enroll-token-2"
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent(rotated) err = %v", err)
+	}
+
+	if _, err := oldClient.PollPolicy(context.Background(), 0, ""); err == nil {
+		t.Fatal("PollPolicy(old token) err = nil, want invalid signature")
+	} else if err.Error() != "invalid signature" {
+		t.Fatalf("PollPolicy(old token) err = %v, want invalid signature", err)
+	}
+
+	newClient, err := NewHTTPClient(core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example",
+		EnrollmentToken:  "enroll-token-2",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient(new) err = %v", err)
+	}
+	newClient.Client = &http.Client{Transport: handlerRoundTripper{handler: handler}}
+	enrollment, err := store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRemoteEnrollment() err = %v", err)
+	}
+	seedRemoteClientSequence(newClient, enrollment)
+	if _, err := newClient.PollPolicy(context.Background(), 0, ""); err != nil {
+		t.Fatalf("PollPolicy(new token) err = %v", err)
+	}
+}
+
 type handlerRoundTripper struct {
 	handler http.Handler
 }

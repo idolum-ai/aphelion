@@ -790,6 +790,101 @@ func TestRunDurableAgentEnrollmentShowRevokeAndReactivate(t *testing.T) {
 	}
 }
 
+func TestRunDurableAgentEnrollmentRotateSecretAndDecommission(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Observe and surface bounded family coordination.",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		BootstrapCeiling: core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DurableAgentLivePolicy{
+			Charter:            "Observe and surface bounded family coordination.",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
+		},
+		ControlPlaneSecret: "enroll-token-1",
+		Status:             "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		Status:           "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+
+	rotateOut, err := captureStdout(t, func() error {
+		return runDurableAgentEnrollmentCommand([]string{"--config", cfgPath, "--agent", "family-group", "--secret", "enroll-token-2", "rotate-secret"})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentEnrollmentCommand(rotate-secret) err = %v", err)
+	}
+	if !strings.Contains(rotateOut, "status: active") {
+		t.Fatalf("rotate-secret output = %q, want active status", rotateOut)
+	}
+	updatedAgent, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent(rotated) err = %v", err)
+	}
+	if updatedAgent.ControlPlaneSecret != "enroll-token-2" {
+		t.Fatalf("ControlPlaneSecret = %q, want enroll-token-2", updatedAgent.ControlPlaneSecret)
+	}
+
+	decommissionOut, err := captureStdout(t, func() error {
+		return runDurableAgentEnrollmentCommand([]string{"--config", cfgPath, "--agent", "family-group", "decommission"})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentEnrollmentCommand(decommission) err = %v", err)
+	}
+	if !strings.Contains(decommissionOut, "status: decommissioned") {
+		t.Fatalf("decommission output = %q, want decommissioned status", decommissionOut)
+	}
+	enrollment, err := store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRemoteEnrollment(decommissioned) err = %v", err)
+	}
+	if enrollment.Status != "decommissioned" || enrollment.RevokedAt.IsZero() {
+		t.Fatalf("enrollment after decommission = %#v, want decommissioned with timestamp", enrollment)
+	}
+
+	if err := runDurableAgentEnrollmentCommand([]string{"--config", cfgPath, "--agent", "family-group", "reactivate"}); err == nil {
+		t.Fatal("runDurableAgentEnrollmentCommand(reactivate) err = nil, want decommissioned refusal")
+	} else if !strings.Contains(err.Error(), "decommissioned") {
+		t.Fatalf("runDurableAgentEnrollmentCommand(reactivate) err = %v, want decommissioned refusal", err)
+	}
+}
+
 func TestRunDurableAgentRemoteRunOnceSyncsAndUploadsArtifacts(t *testing.T) {
 	root := t.TempDir()
 	parentCfgPath := writeMaintenanceConfig(t, root)
