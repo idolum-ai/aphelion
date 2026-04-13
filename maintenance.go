@@ -598,15 +598,17 @@ func runImportSemanticCommand(args []string) error {
 
 func runDurableAgentCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("durable-agent requires a subcommand: policy or forensic")
+		return fmt.Errorf("durable-agent requires a subcommand: policy, forensic, or child-run")
 	}
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case "policy":
 		return runDurableAgentPolicyCommand(args[1:])
 	case "forensic":
 		return runDurableAgentForensicCommand(args[1:])
+	case "child-run":
+		return runDurableAgentChildCommand(args[1:])
 	default:
-		return fmt.Errorf("durable-agent subcommand must be one of policy|forensic")
+		return fmt.Errorf("durable-agent subcommand must be one of policy|forensic|child-run")
 	}
 }
 
@@ -803,6 +805,12 @@ func printDurableAgentPolicy(w *os.File, agent core.DurableAgent, updates []sess
 	fmt.Fprintf(w, "bootstrap_allowed_public_surface_modes: %s\n", strings.Join(agent.BootstrapCeiling.AllowedPublicSurfaceModes, ","))
 	fmt.Fprintf(w, "bootstrap_allowed_shared_inference_reuse: %s\n", strings.Join(agent.BootstrapCeiling.AllowedSharedInferenceReuse, ","))
 	fmt.Fprintf(w, "bootstrap_allowed_shared_inference_scopes: %s\n", strings.Join(agent.BootstrapCeiling.AllowedSharedInferenceScopes, ","))
+	fmt.Fprintf(w, "bootstrap_llm_backend: %s\n", agent.BootstrapLLM.Backend)
+	fmt.Fprintf(w, "bootstrap_native_provider: %s\n", agent.BootstrapLLM.NativeProvider)
+	fmt.Fprintf(w, "bootstrap_model: %s\n", agent.BootstrapLLM.Model)
+	if strings.TrimSpace(agent.BootstrapLLM.CodexHome) != "" {
+		fmt.Fprintf(w, "bootstrap_codex_home: %s\n", agent.BootstrapLLM.CodexHome)
+	}
 	fmt.Fprintf(w, "policy_updates: %d\n", len(updates))
 	for _, update := range updates {
 		fmt.Fprintf(w, "- id=%d previous=%d new=%d", update.ID, update.PreviousVersion, update.NewVersion)

@@ -427,6 +427,12 @@ func TestRunDurableAgentPolicyShowAndApply(t *testing.T) {
 			OutboundMode:       "reply_with_policy_authorization",
 			DriftPolicy:        "admin_review",
 		},
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
+		},
 		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
 		Status:            "active",
 	}); err != nil {
@@ -534,6 +540,12 @@ func TestRunDurableAgentForensicShowReadsRestrictedSidecar(t *testing.T) {
 			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
 			OutboundMode:       "reply_with_policy_authorization",
 			DriftPolicy:        "admin_review",
+		},
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
 		},
 		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
 		Status:            "active",

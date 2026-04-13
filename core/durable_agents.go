@@ -20,6 +20,18 @@ type DurableAgentLivePolicy struct {
 	SharedInferenceReuseScope string   `json:"shared_inference_reuse_scope,omitempty"`
 }
 
+type NodeLLMBootstrap struct {
+	Backend         string `json:"backend,omitempty"`
+	NativeProvider  string `json:"native_provider,omitempty"`
+	APIKey          string `json:"api_key,omitempty"`
+	BaseURL         string `json:"base_url,omitempty"`
+	Model           string `json:"model,omitempty"`
+	MaxTokens       int    `json:"max_tokens,omitempty"`
+	CodexAuthSource string `json:"codex_auth_source,omitempty"`
+	CodexHome       string `json:"codex_home,omitempty"`
+	CodexBaseURL    string `json:"codex_base_url,omitempty"`
+}
+
 type DurableAgentBootstrapCeiling struct {
 	CapabilityEnvelope           []string `json:"capability_envelope,omitempty"`
 	AllowedOutboundModes         []string `json:"allowed_outbound_modes,omitempty"`
@@ -37,6 +49,7 @@ type DurableAgent struct {
 	ChannelKind        string
 	LivePolicy         DurableAgentLivePolicy
 	BootstrapCeiling   DurableAgentBootstrapCeiling
+	BootstrapLLM       NodeLLMBootstrap
 	PolicyVersion      int64
 	PolicyHash         string
 	PolicyIssuedAt     time.Time
@@ -132,6 +145,95 @@ func NormalizeDurableAgentBootstrapCeiling(ceiling DurableAgentBootstrapCeiling)
 	return ceiling
 }
 
+func NormalizeNodeLLMBootstrap(bootstrap NodeLLMBootstrap) NodeLLMBootstrap {
+	bootstrap.Backend = normalizeNodeLLMBackend(bootstrap.Backend)
+	bootstrap.NativeProvider = normalizeNodeNativeProviderName(bootstrap.NativeProvider)
+	bootstrap.APIKey = strings.TrimSpace(bootstrap.APIKey)
+	bootstrap.BaseURL = strings.TrimSpace(bootstrap.BaseURL)
+	bootstrap.Model = strings.TrimSpace(bootstrap.Model)
+	bootstrap.CodexAuthSource = normalizeNodeCodexAuthSource(bootstrap.CodexAuthSource)
+	bootstrap.CodexHome = strings.TrimSpace(bootstrap.CodexHome)
+	bootstrap.CodexBaseURL = strings.TrimSpace(bootstrap.CodexBaseURL)
+	if bootstrap.MaxTokens < 0 {
+		bootstrap.MaxTokens = 0
+	}
+	if bootstrap.Backend == "" {
+		hasNativeFields := bootstrap.NativeProvider != "" ||
+			bootstrap.APIKey != "" ||
+			bootstrap.BaseURL != "" ||
+			bootstrap.Model != "" ||
+			bootstrap.MaxTokens > 0
+		hasCodexFields := bootstrap.CodexAuthSource != "" ||
+			bootstrap.CodexHome != "" ||
+			bootstrap.CodexBaseURL != ""
+		switch {
+		case hasCodexFields:
+			bootstrap.Backend = "codex"
+		case hasNativeFields:
+			bootstrap.Backend = "native"
+		}
+	}
+	switch bootstrap.Backend {
+	case "":
+		return NodeLLMBootstrap{}
+	case "native":
+		bootstrap.CodexAuthSource = ""
+		bootstrap.CodexHome = ""
+		bootstrap.CodexBaseURL = ""
+		if bootstrap.NativeProvider == "" {
+			return NodeLLMBootstrap{}
+		}
+	case "codex":
+		bootstrap.NativeProvider = ""
+		bootstrap.APIKey = ""
+		bootstrap.BaseURL = ""
+		bootstrap.Model = ""
+		bootstrap.MaxTokens = 0
+		if bootstrap.CodexAuthSource == "" {
+			bootstrap.CodexAuthSource = "codex_cli"
+		}
+	}
+	return bootstrap
+}
+
+func (b NodeLLMBootstrap) Configured() bool {
+	b = NormalizeNodeLLMBootstrap(b)
+	switch b.Backend {
+	case "native":
+		return b.NativeProvider != "" && b.APIKey != ""
+	case "codex":
+		return b.CodexHome != ""
+	default:
+		return false
+	}
+}
+
+func ValidateNodeLLMBootstrap(bootstrap NodeLLMBootstrap) error {
+	bootstrap = NormalizeNodeLLMBootstrap(bootstrap)
+	switch bootstrap.Backend {
+	case "":
+		return &NodeLLMBootstrapError{Field: "backend", Message: "backend is required"}
+	case "native":
+		if bootstrap.NativeProvider == "" {
+			return &NodeLLMBootstrapError{Field: "native_provider", Message: "native_provider is required for native backend"}
+		}
+		if strings.TrimSpace(bootstrap.APIKey) == "" {
+			return &NodeLLMBootstrapError{Field: "api_key", Message: "api_key is required for native backend"}
+		}
+		if bootstrap.MaxTokens < 0 {
+			return &NodeLLMBootstrapError{Field: "max_tokens", Message: "max_tokens must be >= 0"}
+		}
+		return nil
+	case "codex":
+		if bootstrap.CodexHome == "" {
+			return &NodeLLMBootstrapError{Field: "codex_home", Message: "codex_home is required for codex backend"}
+		}
+		return nil
+	default:
+		return &NodeLLMBootstrapError{Field: "backend", Message: "backend must be one of native|codex"}
+	}
+}
+
 func (c DurableAgentBootstrapCeiling) IsZero() bool {
 	return len(c.CapabilityEnvelope) == 0 &&
 		len(c.AllowedOutboundModes) == 0 &&
@@ -187,6 +289,53 @@ func normalizeDurableAgentSharedInferenceReuseScope(value string) string {
 	default:
 		return "public_prefix_only"
 	}
+}
+
+func normalizeNodeNativeProviderName(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "anthropic", "openrouter":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeNodeLLMBackend(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "native", "codex":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeNodeCodexAuthSource(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "auto", "codex_cli":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+type NodeLLMBootstrapError struct {
+	Field   string
+	Message string
+}
+
+func (e *NodeLLMBootstrapError) Error() string {
+	if e == nil {
+		return "invalid node llm bootstrap"
+	}
+	field := strings.TrimSpace(e.Field)
+	if field == "" {
+		return "invalid node llm bootstrap"
+	}
+	msg := strings.TrimSpace(e.Message)
+	if msg == "" {
+		return "invalid node llm bootstrap for " + field
+	}
+	return "invalid node llm bootstrap for " + field + ": " + msg
 }
 
 func ValidateDurableAgentLivePolicyWithinCeiling(policy DurableAgentLivePolicy, ceiling DurableAgentBootstrapCeiling) error {

@@ -65,14 +65,15 @@ type Runtime struct {
 	idleExpiry time.Duration
 	expireIdle func(maxIdle time.Duration) (int, error)
 
-	scopeResolver *sandbox.Resolver
-	sessionMu     sync.Mutex
-	sessionLocks  map[string]*sync.Mutex
-	faceModelsMu  sync.Mutex
-	recipeMu      sync.Mutex
-	recipeFileMu  sync.Mutex
-	recipePath    string
-	recipeState   runtimeRecipeState
+	scopeResolver     *sandbox.Resolver
+	durableGroupChild durableGroupChildExecutor
+	sessionMu         sync.Mutex
+	sessionLocks      map[string]*sync.Mutex
+	faceModelsMu      sync.Mutex
+	recipeMu          sync.Mutex
+	recipeFileMu      sync.Mutex
+	recipePath        string
+	recipeState       runtimeRecipeState
 }
 
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
@@ -276,6 +277,7 @@ func New(
 		recipePath:          recipePath,
 		recipeState:         recipeState,
 		scopeResolver:       scopeResolver,
+		durableGroupChild:   newSandboxDurableGroupChildExecutor(cfg),
 		sessionLocks:        make(map[string]*sync.Mutex),
 	}, nil
 }

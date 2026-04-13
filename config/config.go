@@ -53,6 +53,15 @@ type TelegramDurableGroupConfig struct {
 	Charter            string `toml:"charter"`
 	RespondOn          string `toml:"respond_on"`
 	ReviewTargetChatID int64  `toml:"review_target_chat_id"`
+	LLMBackend         string `toml:"llm_backend"`
+	LLMProvider        string `toml:"llm_provider"`
+	LLMAPIKey          string `toml:"llm_api_key"`
+	LLMBaseURL         string `toml:"llm_base_url"`
+	LLMModel           string `toml:"llm_model"`
+	LLMMaxTokens       int    `toml:"llm_max_tokens"`
+	LLMCodexAuthSource string `toml:"llm_codex_auth_source"`
+	LLMCodexHome       string `toml:"llm_codex_home"`
+	LLMCodexBaseURL    string `toml:"llm_codex_base_url"`
 }
 
 type TelegramMediaConfig struct {
@@ -960,6 +969,27 @@ func normalizeTelegramDurableGroups(cfg *Config) {
 		cfg.Telegram.DurableGroups[i].AgentID = strings.TrimSpace(cfg.Telegram.DurableGroups[i].AgentID)
 		cfg.Telegram.DurableGroups[i].Charter = strings.TrimSpace(cfg.Telegram.DurableGroups[i].Charter)
 		cfg.Telegram.DurableGroups[i].RespondOn = normalizeTelegramDurableGroupRespondOn(cfg.Telegram.DurableGroups[i].RespondOn)
+		cfg.Telegram.DurableGroups[i].LLMBackend = normalizeTelegramDurableGroupLLMBackend(
+			cfg.Telegram.DurableGroups[i].LLMBackend,
+			cfg.Telegram.DurableGroups[i].LLMProvider,
+			cfg.Telegram.DurableGroups[i].LLMAPIKey,
+			cfg.Telegram.DurableGroups[i].LLMBaseURL,
+			cfg.Telegram.DurableGroups[i].LLMModel,
+			cfg.Telegram.DurableGroups[i].LLMMaxTokens,
+			cfg.Telegram.DurableGroups[i].LLMCodexAuthSource,
+			cfg.Telegram.DurableGroups[i].LLMCodexHome,
+			cfg.Telegram.DurableGroups[i].LLMCodexBaseURL,
+		)
+		cfg.Telegram.DurableGroups[i].LLMProvider = strings.ToLower(strings.TrimSpace(cfg.Telegram.DurableGroups[i].LLMProvider))
+		cfg.Telegram.DurableGroups[i].LLMAPIKey = strings.TrimSpace(cfg.Telegram.DurableGroups[i].LLMAPIKey)
+		cfg.Telegram.DurableGroups[i].LLMBaseURL = strings.TrimSpace(cfg.Telegram.DurableGroups[i].LLMBaseURL)
+		cfg.Telegram.DurableGroups[i].LLMModel = strings.TrimSpace(cfg.Telegram.DurableGroups[i].LLMModel)
+		cfg.Telegram.DurableGroups[i].LLMCodexAuthSource = normalizeTelegramDurableGroupCodexAuthSource(cfg.Telegram.DurableGroups[i].LLMCodexAuthSource)
+		cfg.Telegram.DurableGroups[i].LLMCodexHome = strings.TrimSpace(cfg.Telegram.DurableGroups[i].LLMCodexHome)
+		cfg.Telegram.DurableGroups[i].LLMCodexBaseURL = strings.TrimSpace(cfg.Telegram.DurableGroups[i].LLMCodexBaseURL)
+		if cfg.Telegram.DurableGroups[i].LLMMaxTokens < 0 {
+			cfg.Telegram.DurableGroups[i].LLMMaxTokens = 0
+		}
 	}
 }
 
@@ -1004,6 +1034,29 @@ func validateTelegramDurableGroups(cfg *Config) error {
 		if group.ReviewTargetChatID < 0 {
 			return fmt.Errorf("telegram.durable_groups[%d].review_target_chat_id must be positive", i)
 		}
+		switch group.LLMBackend {
+		case "native":
+			switch group.LLMProvider {
+			case "anthropic", "openrouter":
+			default:
+				return fmt.Errorf("telegram.durable_groups[%d].llm_provider must be one of anthropic|openrouter for native backend", i)
+			}
+			if strings.TrimSpace(group.LLMAPIKey) == "" {
+				return fmt.Errorf("telegram.durable_groups[%d].llm_api_key is required for native backend", i)
+			}
+			if strings.TrimSpace(group.LLMCodexAuthSource) != "" || strings.TrimSpace(group.LLMCodexHome) != "" || strings.TrimSpace(group.LLMCodexBaseURL) != "" {
+				return fmt.Errorf("telegram.durable_groups[%d] mixes native llm settings with codex bootstrap settings", i)
+			}
+		case "codex":
+			if strings.TrimSpace(group.LLMCodexHome) == "" {
+				return fmt.Errorf("telegram.durable_groups[%d].llm_codex_home is required for codex backend", i)
+			}
+			if strings.TrimSpace(group.LLMProvider) != "" || strings.TrimSpace(group.LLMAPIKey) != "" || strings.TrimSpace(group.LLMBaseURL) != "" || strings.TrimSpace(group.LLMModel) != "" || group.LLMMaxTokens > 0 {
+				return fmt.Errorf("telegram.durable_groups[%d] mixes codex llm settings with native provider bootstrap settings", i)
+			}
+		default:
+			return fmt.Errorf("telegram.durable_groups[%d].llm_backend must be one of native|codex", i)
+		}
 		seenChats[group.ChatID] = agentID
 		seenAgents[agentID] = group.ChatID
 	}
@@ -1018,6 +1071,35 @@ func normalizeTelegramDurableGroupRespondOn(raw string) string {
 		return "all"
 	default:
 		return strings.ToLower(strings.TrimSpace(raw))
+	}
+}
+
+func normalizeTelegramDurableGroupLLMBackend(backend string, provider string, apiKey string, baseURL string, model string, maxTokens int, codexAuthSource string, codexHome string, codexBaseURL string) string {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "native", "codex":
+		return strings.ToLower(strings.TrimSpace(backend))
+	}
+	hasCodexFields := strings.TrimSpace(codexAuthSource) != "" || strings.TrimSpace(codexHome) != "" || strings.TrimSpace(codexBaseURL) != ""
+	if hasCodexFields {
+		return "codex"
+	}
+	hasNativeFields := strings.TrimSpace(provider) != "" ||
+		strings.TrimSpace(apiKey) != "" ||
+		strings.TrimSpace(baseURL) != "" ||
+		strings.TrimSpace(model) != "" ||
+		maxTokens > 0
+	if hasNativeFields {
+		return "native"
+	}
+	return ""
+}
+
+func normalizeTelegramDurableGroupCodexAuthSource(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "auto", "codex_cli":
+		return strings.ToLower(strings.TrimSpace(raw))
+	default:
+		return ""
 	}
 }
 

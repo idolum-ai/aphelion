@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 13
+const schemaVersion = 14
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -177,6 +177,7 @@ func (s *SQLiteStore) init() error {
 			channel_kind TEXT NOT NULL,
 			live_policy_json TEXT NOT NULL DEFAULT '{}',
 			bootstrap_ceiling_json TEXT NOT NULL DEFAULT '{}',
+			bootstrap_provider_json TEXT NOT NULL DEFAULT '{}',
 			policy_version INTEGER NOT NULL DEFAULT 1,
 			policy_hash TEXT NOT NULL DEFAULT '',
 			policy_issued_at TEXT,
@@ -1566,7 +1567,11 @@ func upsertDurableAgentExec(exec interface {
 	if agent.BootstrapCeiling.IsZero() {
 		agent.BootstrapCeiling = core.DefaultDurableAgentBootstrapCeiling(agent.ChannelKind, agent.LivePolicy)
 	}
+	if err := core.ValidateNodeLLMBootstrap(agent.BootstrapLLM); err != nil {
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent bootstrap_llm: %w", err)
+	}
 	agent.BootstrapCeiling = core.NormalizeDurableAgentBootstrapCeiling(agent.BootstrapCeiling)
+	agent.BootstrapLLM = core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
 	if err := core.ValidateDurableAgentLivePolicyWithinCeiling(agent.LivePolicy, agent.BootstrapCeiling); err != nil {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent live_policy: %w", err)
 	}
@@ -1578,6 +1583,10 @@ func upsertDurableAgentExec(exec interface {
 	bootstrapCeilingJSON, err := marshalDurableAgentBootstrapCeiling(agent.BootstrapCeiling)
 	if err != nil {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent bootstrap_ceiling: %w", err)
+	}
+	bootstrapProviderJSON, err := marshalDurableAgentBootstrapLLM(agent.BootstrapLLM)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent bootstrap_llm: %w", err)
 	}
 	storageRootsJSON, err := marshalStringSlice(agent.LocalStorageRoots)
 	if err != nil {
@@ -1599,9 +1608,9 @@ func upsertDurableAgentExec(exec interface {
 	_, err = exec.Exec(`
 		INSERT INTO durable_agents(
 			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
-			channel_kind, live_policy_json, bootstrap_ceiling_json, policy_version, policy_hash, policy_issued_at,
+			channel_kind, live_policy_json, bootstrap_ceiling_json, bootstrap_provider_json, policy_version, policy_hash, policy_issued_at,
 			local_storage_roots_json, network_policy, wakeup_mode, secret_scopes_json, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(agent_id) DO UPDATE SET
 			parent_agent_id = excluded.parent_agent_id,
 			parent_scope_kind = excluded.parent_scope_kind,
@@ -1610,6 +1619,7 @@ func upsertDurableAgentExec(exec interface {
 			channel_kind = excluded.channel_kind,
 			live_policy_json = excluded.live_policy_json,
 			bootstrap_ceiling_json = excluded.bootstrap_ceiling_json,
+			bootstrap_provider_json = excluded.bootstrap_provider_json,
 			policy_version = excluded.policy_version,
 			policy_hash = excluded.policy_hash,
 			policy_issued_at = excluded.policy_issued_at,
@@ -1621,7 +1631,7 @@ func upsertDurableAgentExec(exec interface {
 			updated_at = excluded.updated_at
 	`,
 		agent.AgentID, nullableString(agent.ParentAgentID), nullableString(agent.ParentScopeKind), nullableString(agent.ParentScopeID), agent.ReviewTargetChatID,
-		agent.ChannelKind, livePolicyJSON, bootstrapCeilingJSON, policyVersion, policyHash, nullableTime(policyIssuedAt), string(storageRootsJSON),
+		agent.ChannelKind, livePolicyJSON, bootstrapCeilingJSON, bootstrapProviderJSON, policyVersion, policyHash, nullableTime(policyIssuedAt), string(storageRootsJSON),
 		nullableString(agent.NetworkPolicy), nullableString(agent.WakeupMode), string(secretScopesJSON), nullableString(agent.Status), createdAt, updatedAt,
 	)
 	if err != nil {
@@ -1795,7 +1805,7 @@ func (s *SQLiteStore) ListDurableAgents() ([]core.DurableAgent, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
-			channel_kind, live_policy_json, COALESCE(bootstrap_ceiling_json, ''), policy_version, policy_hash, policy_issued_at, local_storage_roots_json, network_policy,
+			channel_kind, live_policy_json, COALESCE(bootstrap_ceiling_json, ''), COALESCE(bootstrap_provider_json, ''), policy_version, policy_hash, policy_issued_at, local_storage_roots_json, network_policy,
 			wakeup_mode, secret_scopes_json, status, created_at, updated_at
 		FROM durable_agents
 		ORDER BY created_at ASC, agent_id ASC
@@ -2030,6 +2040,9 @@ func applyMigrations(tx *sql.Tx) error {
 	}
 	if err := ensureTableColumn(tx, "durable_agents", "bootstrap_ceiling_json", "TEXT"); err != nil {
 		return fmt.Errorf("ensure durable_agents.bootstrap_ceiling_json: %w", err)
+	}
+	if err := ensureTableColumn(tx, "durable_agents", "bootstrap_provider_json", "TEXT"); err != nil {
+		return fmt.Errorf("ensure durable_agents.bootstrap_provider_json: %w", err)
 	}
 	if currentVersion < 13 {
 		if err := backfillDurableAgentBootstrapCeilings(tx); err != nil {
@@ -2492,6 +2505,7 @@ func migrateDurableAgentLivePolicy(tx *sql.Tx) error {
 		channel_kind TEXT NOT NULL,
 		live_policy_json TEXT NOT NULL DEFAULT '{}',
 		bootstrap_ceiling_json TEXT NOT NULL DEFAULT '{}',
+		bootstrap_provider_json TEXT NOT NULL DEFAULT '{}',
 		policy_version INTEGER NOT NULL DEFAULT 1,
 		policy_hash TEXT NOT NULL DEFAULT '',
 		policy_issued_at TEXT,
@@ -2509,9 +2523,9 @@ func migrateDurableAgentLivePolicy(tx *sql.Tx) error {
 	insertStmt, err := tx.Prepare(`
 		INSERT INTO durable_agents_v11(
 			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
-			channel_kind, live_policy_json, bootstrap_ceiling_json, policy_version, policy_hash, policy_issued_at,
+			channel_kind, live_policy_json, bootstrap_ceiling_json, bootstrap_provider_json, policy_version, policy_hash, policy_issued_at,
 			local_storage_roots_json, network_policy, wakeup_mode, secret_scopes_json, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare durable_agents_v11 insert: %w", err)
@@ -2539,7 +2553,7 @@ func migrateDurableAgentLivePolicy(tx *sql.Tx) error {
 		}
 		if _, err := insertStmt.Exec(
 			row.AgentID, nullableString(nullToString(row.ParentAgentID)), nullableString(nullToString(row.ParentScopeKind)),
-			nullableString(nullToString(row.ParentScopeID)), row.ReviewTargetChatID, row.ChannelKind, livePolicyJSON, bootstrapCeilingJSON, 1, policyHash,
+			nullableString(nullToString(row.ParentScopeID)), row.ReviewTargetChatID, row.ChannelKind, livePolicyJSON, bootstrapCeilingJSON, "{}", 1, policyHash,
 			row.UpdatedAt, defaultJSONString(row.LocalRootsJSON, "[]"), nullableString(nullToString(row.NetworkPolicy)), nullableString(nullToString(row.WakeupMode)),
 			defaultJSONString(row.SecretScopesJSON, "[]"), nullableString(nullToString(row.Status)), row.CreatedAt, row.UpdatedAt,
 		); err != nil {
@@ -2781,7 +2795,7 @@ func queryDurableAgent(q interface {
 	rows, err := q.Query(`
 		SELECT
 			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
-			channel_kind, live_policy_json, COALESCE(bootstrap_ceiling_json, ''), policy_version, policy_hash, policy_issued_at, local_storage_roots_json, network_policy,
+			channel_kind, live_policy_json, COALESCE(bootstrap_ceiling_json, ''), COALESCE(bootstrap_provider_json, ''), policy_version, policy_hash, policy_issued_at, local_storage_roots_json, network_policy,
 			wakeup_mode, secret_scopes_json, status, created_at, updated_at
 		FROM durable_agents
 		WHERE agent_id = ?
@@ -2822,6 +2836,15 @@ func marshalDurableAgentBootstrapCeiling(ceiling core.DurableAgentBootstrapCeili
 	return string(raw), nil
 }
 
+func marshalDurableAgentBootstrapLLM(bootstrap core.NodeLLMBootstrap) (string, error) {
+	normalized := core.NormalizeNodeLLMBootstrap(bootstrap)
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
 func unmarshalDurableAgentLivePolicy(raw string) (core.DurableAgentLivePolicy, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -2846,6 +2869,18 @@ func unmarshalDurableAgentBootstrapCeiling(raw string) (core.DurableAgentBootstr
 	return core.NormalizeDurableAgentBootstrapCeiling(ceiling), nil
 }
 
+func unmarshalDurableAgentBootstrapLLM(raw string) (core.NodeLLMBootstrap, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return core.NormalizeNodeLLMBootstrap(core.NodeLLMBootstrap{}), nil
+	}
+	var bootstrap core.NodeLLMBootstrap
+	if err := json.Unmarshal([]byte(raw), &bootstrap); err != nil {
+		return core.NodeLLMBootstrap{}, err
+	}
+	return core.NormalizeNodeLLMBootstrap(bootstrap), nil
+}
+
 func unmarshalStringSlice(raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -2860,26 +2895,27 @@ func unmarshalStringSlice(raw string) ([]string, error) {
 
 func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.DurableAgent, error) {
 	var (
-		agent                core.DurableAgent
-		parentAgentID        sql.NullString
-		parentScopeKind      sql.NullString
-		parentScopeID        sql.NullString
-		livePolicyJSON       string
-		bootstrapCeilingJSON string
-		policyVersion        int64
-		policyHash           string
-		policyIssuedAt       sql.NullString
-		storageRootsJSON     string
-		networkPolicy        sql.NullString
-		wakeupMode           sql.NullString
-		secretScopesJSON     string
-		status               sql.NullString
-		createdAtRaw         string
-		updatedAtRaw         string
+		agent                 core.DurableAgent
+		parentAgentID         sql.NullString
+		parentScopeKind       sql.NullString
+		parentScopeID         sql.NullString
+		livePolicyJSON        string
+		bootstrapCeilingJSON  string
+		bootstrapProviderJSON string
+		policyVersion         int64
+		policyHash            string
+		policyIssuedAt        sql.NullString
+		storageRootsJSON      string
+		networkPolicy         sql.NullString
+		wakeupMode            sql.NullString
+		secretScopesJSON      string
+		status                sql.NullString
+		createdAtRaw          string
+		updatedAtRaw          string
 	)
 	if err := scanner.Scan(
 		&agent.AgentID, &parentAgentID, &parentScopeKind, &parentScopeID, &agent.ReviewTargetChatID,
-		&agent.ChannelKind, &livePolicyJSON, &bootstrapCeilingJSON, &policyVersion, &policyHash, &policyIssuedAt, &storageRootsJSON, &networkPolicy,
+		&agent.ChannelKind, &livePolicyJSON, &bootstrapCeilingJSON, &bootstrapProviderJSON, &policyVersion, &policyHash, &policyIssuedAt, &storageRootsJSON, &networkPolicy,
 		&wakeupMode, &secretScopesJSON, &status, &createdAtRaw, &updatedAtRaw,
 	); err != nil {
 		return core.DurableAgent{}, fmt.Errorf("scan durable agent: %w", err)
@@ -2895,6 +2931,10 @@ func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.Durabl
 	agent.BootstrapCeiling, err = unmarshalDurableAgentBootstrapCeiling(bootstrapCeilingJSON)
 	if err != nil {
 		return core.DurableAgent{}, fmt.Errorf("decode durable agent bootstrap ceiling: %w", err)
+	}
+	agent.BootstrapLLM, err = unmarshalDurableAgentBootstrapLLM(bootstrapProviderJSON)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("decode durable agent bootstrap llm: %w", err)
 	}
 	if agent.BootstrapCeiling.IsZero() {
 		agent.BootstrapCeiling = core.DefaultDurableAgentBootstrapCeiling(agent.ChannelKind, agent.LivePolicy)

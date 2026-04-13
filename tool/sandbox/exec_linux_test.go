@@ -3,6 +3,7 @@
 package sandbox
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -212,5 +213,42 @@ func TestRunnerPlanApprovedFailsWithoutBubblewrap(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Plan() err = nil, want unavailable backend error")
+	}
+}
+
+func TestRunnerPlanIncludesExtraBindPaths(t *testing.T) {
+	t.Parallel()
+
+	scope := buildScope(t, principal.RoleDurableAgent)
+	extraRO := filepath.Join(t.TempDir(), "codex-home")
+	extraRW := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(extraRO, 0o755); err != nil {
+		t.Fatalf("MkdirAll(extraRO) err = %v", err)
+	}
+	if err := os.MkdirAll(extraRW, 0o755); err != nil {
+		t.Fatalf("MkdirAll(extraRW) err = %v", err)
+	}
+
+	runner := NewRunnerWithLookPath(func(string) (string, error) {
+		return "/usr/bin/bwrap", nil
+	})
+
+	plan, err := runner.Plan(ExecRequest{
+		Scope:              scope,
+		Command:            "pwd",
+		Workdir:            scope.WorkingRoot,
+		ExtraReadonlyPaths: []string{extraRO},
+		ExtraWritablePaths: []string{extraRW},
+	})
+	if err != nil {
+		t.Fatalf("Plan() err = %v", err)
+	}
+
+	args := strings.Join(plan.Args, " ")
+	if !strings.Contains(args, "--ro-bind "+extraRO+" "+extraRO) {
+		t.Fatalf("args missing extra readonly bind %q: %v", extraRO, plan.Args)
+	}
+	if !strings.Contains(args, "--bind "+extraRW+" "+extraRW) {
+		t.Fatalf("args missing extra writable bind %q: %v", extraRW, plan.Args)
 	}
 }

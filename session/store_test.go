@@ -548,6 +548,14 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 			AllowedSharedInferenceReuse:  []string{"disabled"},
 			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
 		},
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			BaseURL:        "https://openrouter.example.test",
+			Model:          "openrouter/group-model",
+			MaxTokens:      256,
+		},
 		LocalStorageRoots: []string{"/tmp/family-group"},
 		NetworkPolicy:     "restricted",
 		WakeupMode:        "event",
@@ -576,6 +584,15 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 	if got.LivePolicy.OutboundMode != "draft_only" {
 		t.Fatalf("OutboundMode = %q, want draft_only", got.LivePolicy.OutboundMode)
+	}
+	if got.BootstrapLLM.Backend != "native" {
+		t.Fatalf("BootstrapLLM.Backend = %q, want native", got.BootstrapLLM.Backend)
+	}
+	if got.BootstrapLLM.NativeProvider != "openrouter" {
+		t.Fatalf("BootstrapLLM.NativeProvider = %q, want openrouter", got.BootstrapLLM.NativeProvider)
+	}
+	if got.BootstrapLLM.APIKey != "sk-or-group" {
+		t.Fatalf("BootstrapLLM.APIKey = %q, want sk-or-group", got.BootstrapLLM.APIKey)
 	}
 	if got.PolicyVersion != 1 {
 		t.Fatalf("PolicyVersion = %d, want 1", got.PolicyVersion)
@@ -676,6 +693,12 @@ func TestApplyDurableAgentLivePolicyRejectsBootstrapCeilingWidening(t *testing.T
 			AllowedPublicSurfaceModes:    []string{"none"},
 			AllowedSharedInferenceReuse:  []string{"disabled"},
 			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
+		},
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
 		},
 		Status: "active",
 	}
@@ -894,6 +917,9 @@ func TestInitMigratesLegacyDurableAgentsToLivePolicy(t *testing.T) {
 	}
 	if got.PolicyHash == "" {
 		t.Fatal("PolicyHash is empty after migration")
+	}
+	if got.BootstrapLLM.Configured() {
+		t.Fatalf("BootstrapLLM = %#v, want empty bootstrap llm after legacy migration", got.BootstrapLLM)
 	}
 }
 

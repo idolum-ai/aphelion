@@ -27,18 +27,9 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 	if agentID == "" {
 		return nil, fmt.Errorf("durable group inbound missing agent id")
 	}
-	registered, err := r.store.DurableAgent(agentID)
+	registered, err := r.loadDurableTelegramGroupAgent(agentID)
 	if err != nil {
-		return nil, fmt.Errorf("load durable agent: %w", err)
-	}
-	if registered == nil {
-		return nil, fmt.Errorf("durable agent %q not found", agentID)
-	}
-	if strings.TrimSpace(registered.ChannelKind) != "telegram_group" {
-		return nil, fmt.Errorf("durable agent %q is not a telegram_group agent", agentID)
-	}
-	if status := strings.ToLower(strings.TrimSpace(registered.Status)); status != "" && status != "active" {
-		return nil, fmt.Errorf("durable agent %q is not active", agentID)
+		return nil, err
 	}
 	livePolicy := core.NormalizeDurableAgentLivePolicy(registered.LivePolicy)
 	allowLocalReply := durableGroupAllowsLocalReply(livePolicy)
@@ -65,19 +56,84 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 		}
 	}()
 
+	scope, err := r.scopeForDurableAgent(*registered)
+	if err != nil {
+		return nil, fmt.Errorf("resolve durable agent scope: %w", err)
+	}
+	bootstrapLLM := core.NormalizeNodeLLMBootstrap(registered.BootstrapLLM)
+	if !bootstrapLLM.Configured() {
+		return nil, fmt.Errorf("durable agent %q requires child-local llm bootstrap", registered.AgentID)
+	}
+	child := r.durableGroupChild
+	if child == nil || !child.Supports(scope, *registered) {
+		return nil, fmt.Errorf("durable agent %q isolated child execution is unavailable", registered.AgentID)
+	}
+	childResult, childErr := child.Run(ctx, scope, *registered, msg)
+	if childErr != nil {
+		return nil, fmt.Errorf("run durable child: %w", childErr)
+	}
+	if childResult.AllowLocalReply {
+		outboundID, outboundType, sendErr := r.sendReply(ctx, msg, childResult.ReplyText, childResult.InboundWasVoice)
+		if sendErr != nil {
+			return &childResult.TurnResult, fmt.Errorf("send durable group reply: %w", sendErr)
+		}
+		if outboundID != 0 {
+			if err := r.store.RecordOutbound(key, childResult.TurnIndex, outboundID, outboundType); err != nil {
+				return &childResult.TurnResult, fmt.Errorf("record durable group outbound reply: %w", err)
+			}
+		}
+	}
+	return &childResult.TurnResult, nil
+}
+
+type durableGroupRunOptions struct {
+	DeliverReply bool
+	AllowStream  bool
+}
+
+func (r *Runtime) RunDurableTelegramGroupChild(ctx context.Context, msg core.InboundMessage) (*DurableGroupChildResult, error) {
+	registered, err := r.loadDurableTelegramGroupAgent(strings.TrimSpace(msg.DurableAgentID))
+	if err != nil {
+		return nil, err
+	}
+	scope, err := r.scopeForDurableAgent(*registered)
+	if err != nil {
+		return nil, fmt.Errorf("resolve durable agent scope: %w", err)
+	}
+	return r.runDurableTelegramGroupTurn(ctx, msg, *registered, scope, durableGroupRunOptions{})
+}
+
+func (r *Runtime) loadDurableTelegramGroupAgent(agentID string) (*core.DurableAgent, error) {
+	registered, err := r.store.DurableAgent(strings.TrimSpace(agentID))
+	if err != nil {
+		return nil, fmt.Errorf("load durable agent: %w", err)
+	}
+	if registered == nil {
+		return nil, fmt.Errorf("durable agent %q not found", strings.TrimSpace(agentID))
+	}
+	if strings.TrimSpace(registered.ChannelKind) != "telegram_group" {
+		return nil, fmt.Errorf("durable agent %q is not a telegram_group agent", strings.TrimSpace(agentID))
+	}
+	if status := strings.ToLower(strings.TrimSpace(registered.Status)); status != "" && status != "active" {
+		return nil, fmt.Errorf("durable agent %q is not active", strings.TrimSpace(agentID))
+	}
+	return registered, nil
+}
+
+func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.InboundMessage, registered core.DurableAgent, scope sandbox.Scope, opts durableGroupRunOptions) (*DurableGroupChildResult, error) {
+	if len(registered.LocalStorageRoots) == 0 {
+		registered.LocalStorageRoots = []string{scope.WorkingRoot, scope.SharedMemoryRoot}
+	}
+	key := session.SessionKey{
+		ChatID: msg.ChatID,
+		Scope:  durableAgentScopeRef(registered),
+	}
 	sess, err := r.store.Load(key)
 	if err != nil {
 		return nil, fmt.Errorf("load session: %w", err)
 	}
 	applySessionScope(sess, key)
 
-	scope, err := r.scopeForDurableAgent(*registered)
-	if err != nil {
-		return nil, fmt.Errorf("resolve durable agent scope: %w", err)
-	}
-	if len(registered.LocalStorageRoots) == 0 {
-		registered.LocalStorageRoots = []string{scope.WorkingRoot, scope.SharedMemoryRoot}
-	}
 	now := time.Now().UTC()
 	preparedMsg := msg
 	preparedMsg.Text = durableGroupInboundText(msg)
@@ -208,6 +264,9 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 	}
 
 	progress := r.newToolProgressReporter(msg)
+	if !opts.DeliverReply {
+		progress = nil
+	}
 	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, prepared.LedgerText, progress)
 	defer monitor.Finish(ctx, err)
 
@@ -215,7 +274,7 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 	if systemPrompt != "" {
 		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
 	}
-	input = append(input, agent.Message{Role: "system", Content: durableGroupGovernorContext(*registered, livePolicy, msg)})
+	input = append(input, agent.Message{Role: "system", Content: durableGroupGovernorContext(registered, core.NormalizeDurableAgentLivePolicy(registered.LivePolicy), msg)})
 	if advisory := brokerageContextForGovernor(brokerage); advisory != "" {
 		input = append(input, agent.Message{Role: "system", Content: advisory})
 	}
@@ -244,6 +303,7 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 	outboundType := ""
 	streamedReply := false
 	faceRendered := false
+	allowLocalReply := durableGroupAllowsLocalReply(core.NormalizeDurableAgentLivePolicy(registered.LivePolicy))
 	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec)
 	faceAwareness = r.withBrokerageAwareness(faceAwareness, brokerage)
 	faceAwareness.ArtifactMode = "scene"
@@ -274,7 +334,7 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 			faceAwareness.DeliveryMode = "floor_fallback"
 			renderReq.Runtime = faceAwareness
 		}
-		if shouldRender && allowLocalReply {
+		if shouldRender && allowLocalReply && opts.AllowStream {
 			if streamer, ok := currentFaceModel.(face.StreamRenderer); ok {
 				editor := r.newStreamEditor(msg)
 				if editor != nil {
@@ -296,7 +356,7 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 						extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
 						outboundID, err = editor.Finish(ctx)
 						if err != nil {
-							return result, fmt.Errorf("finish streamed durable group reply: %w", err)
+							return nil, fmt.Errorf("finish streamed durable group reply: %w", err)
 						}
 						if outboundID != 0 {
 							outboundType = "streaming"
@@ -337,24 +397,30 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 		return nil, fmt.Errorf("save durable group session: %w", err)
 	}
 
-	if !streamedReply && allowLocalReply {
-		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, false)
+	if opts.DeliverReply && !streamedReply && allowLocalReply {
+		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, prepared.InboundWasVoice)
 		if err != nil {
-			return result, fmt.Errorf("send durable group reply: %w", err)
+			return nil, fmt.Errorf("send durable group reply: %w", err)
 		}
 	}
-	if outboundID != 0 {
+	if opts.DeliverReply && outboundID != 0 {
 		if err := r.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
-			return result, fmt.Errorf("record durable group outbound reply: %w", err)
+			return nil, fmt.Errorf("record durable group outbound reply: %w", err)
 		}
 	}
 
-	if artifact := durableGroupReviewArtifact(*registered, livePolicy, msg, replyText); artifact != nil {
-		if err := durableagent.NewRuntime(r.store).QueueReviewArtifact(*registered, *artifact); err != nil {
-			return result, fmt.Errorf("queue durable group review artifact: %w", err)
+	if artifact := durableGroupReviewArtifact(registered, core.NormalizeDurableAgentLivePolicy(registered.LivePolicy), msg, replyText); artifact != nil {
+		if err := durableagent.NewRuntime(r.store).QueueReviewArtifact(registered, *artifact); err != nil {
+			return nil, fmt.Errorf("queue durable group review artifact: %w", err)
 		}
 	}
-	return result, nil
+	return &DurableGroupChildResult{
+		TurnResult:      *result,
+		ReplyText:       replyText,
+		AllowLocalReply: allowLocalReply,
+		InboundWasVoice: prepared.InboundWasVoice,
+		TurnIndex:       sess.TurnCount,
+	}, nil
 }
 
 func (r *Runtime) scopeForDurableAgent(agent core.DurableAgent) (sandbox.Scope, error) {

@@ -1,0 +1,248 @@
+//go:build linux
+
+package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
+)
+
+type DurableAgentChildBootstrap struct {
+	Config config.Config `json:"config"`
+}
+
+type DurableGroupChildResult struct {
+	TurnResult      core.TurnResult `json:"turn_result"`
+	ReplyText       string          `json:"reply_text"`
+	AllowLocalReply bool            `json:"allow_local_reply"`
+	InboundWasVoice bool            `json:"inbound_was_voice"`
+	TurnIndex       int             `json:"turn_index"`
+}
+
+type durableGroupChildExecutor interface {
+	Supports(scope sandbox.Scope, agent core.DurableAgent) bool
+	Run(ctx context.Context, scope sandbox.Scope, agent core.DurableAgent, msg core.InboundMessage) (*DurableGroupChildResult, error)
+}
+
+type sandboxDurableGroupChildExecutor struct {
+	cfg        *config.Config
+	binaryPath string
+	runner     *sandbox.Runner
+	supported  bool
+}
+
+func newSandboxDurableGroupChildExecutor(cfg *config.Config) durableGroupChildExecutor {
+	if cfg == nil {
+		return nil
+	}
+	binaryPath, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	binaryPath = strings.TrimSpace(binaryPath)
+	if binaryPath == "" {
+		return nil
+	}
+	return &sandboxDurableGroupChildExecutor{
+		cfg:        cfg,
+		binaryPath: binaryPath,
+		runner:     sandbox.NewRunner(),
+		supported:  true,
+	}
+}
+
+func (e *sandboxDurableGroupChildExecutor) Supports(scope sandbox.Scope, agent core.DurableAgent) bool {
+	if e == nil || !e.supported || e.runner == nil {
+		return false
+	}
+	if !core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM).Configured() {
+		return false
+	}
+	return e.runner.Supports(scope)
+}
+
+func (e *sandboxDurableGroupChildExecutor) Run(ctx context.Context, scope sandbox.Scope, agent core.DurableAgent, msg core.InboundMessage) (*DurableGroupChildResult, error) {
+	if !e.Supports(scope, agent) {
+		return nil, fmt.Errorf("durable child executor is unavailable for scope %q", scope.Principal.Role)
+	}
+	payloadRoot := filepath.Join(scope.SharedMemoryRoot, ".aphelion", "child-run")
+	if err := os.MkdirAll(payloadRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("create durable child payload root: %w", err)
+	}
+
+	bootstrapPath, err := writeJSONTemp(payloadRoot, "bootstrap-*.json", DurableAgentChildBootstrap{
+		Config: *durableAgentChildConfig(e.cfg, agent, scope),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(bootstrapPath)
+
+	messagePath, err := writeJSONTemp(payloadRoot, "message-*.json", msg)
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(messagePath)
+
+	stateRoot := filepath.Dir(strings.TrimSpace(e.cfg.Sessions.DBPath))
+	extraReadonly := []string{e.binaryPath}
+	bootstrap := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
+	if bootstrap.Backend == "codex" && strings.TrimSpace(bootstrap.CodexHome) != "" {
+		extraReadonly = append(extraReadonly, strings.TrimSpace(bootstrap.CodexHome))
+	}
+	command := durableAgentChildCommand(e.binaryPath, bootstrapPath, messagePath)
+	res, err := e.runner.Run(ctx, sandbox.ExecRequest{
+		Scope:              scope,
+		Command:            command,
+		Workdir:            scope.WorkingRoot,
+		ExtraReadonlyPaths: extraReadonly,
+		ExtraWritablePaths: []string{stateRoot},
+	})
+	if err != nil {
+		if strings.TrimSpace(res.Stderr) != "" {
+			return nil, fmt.Errorf("durable child runner failed: %w: %s", err, strings.TrimSpace(res.Stderr))
+		}
+		return nil, fmt.Errorf("durable child runner failed: %w", err)
+	}
+
+	var out DurableGroupChildResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(res.Stdout)), &out); err != nil {
+		return nil, fmt.Errorf("decode durable child result: %w", err)
+	}
+	return &out, nil
+}
+
+func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, scope sandbox.Scope) *config.Config {
+	if parent == nil {
+		return &config.Config{}
+	}
+	bootstrap := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
+	copy := *parent
+	copy.Telegram.BotToken = ""
+	copy.Telegram.DurableGroups = nil
+	copy.Principals = config.PrincipalsConfig{}
+	copy.Providers = config.ProvidersConfig{}
+	copy.OpenAI.Files.Enabled = false
+	copy.OpenAI.VectorStores.Enabled = false
+	copy.Heartbeat.Enabled = false
+	copy.Cron.Enabled = false
+	copy.Voice = config.VoiceConfig{Mode: "off"}
+	copy.Governor = config.GovernorConfig{}
+	copy.Face = config.FaceConfig{Backend: string(faceBackendForChildBootstrap(bootstrap))}
+	copy.Agent.Workspace = scope.WorkingRoot
+	copy.Agent.ExecRoot = scope.WorkingRoot
+	copy.Agent.SharedMemoryRoot = scope.SharedMemoryRoot
+	copy.Agent.UserWorkspaceRoot = ""
+	copy.Agent.UserMemoryRoot = ""
+	copy.Agent.PromptRoot = firstNonEmpty(strings.TrimSpace(parent.Agent.PromptRoot), strings.TrimSpace(scope.GlobalRoot))
+	if copy.Agent.PromptRoot == "" {
+		copy.Agent.PromptRoot = scope.GlobalRoot
+	}
+	if strings.TrimSpace(copy.Agent.SharedMemoryRoot) == "" {
+		copy.Agent.SharedMemoryRoot = scope.SharedMemoryRoot
+	}
+	if strings.TrimSpace(copy.Agent.ExecRoot) == "" {
+		copy.Agent.ExecRoot = scope.WorkingRoot
+	}
+	if strings.TrimSpace(copy.Agent.Workspace) == "" {
+		copy.Agent.Workspace = scope.WorkingRoot
+	}
+	switch bootstrap.Backend {
+	case "codex":
+		copy.Governor.Backend = "codex"
+		copy.Governor.Codex = config.GovernorCodexConfig{
+			AuthSource: bootstrap.CodexAuthSource,
+			CodexHome:  bootstrap.CodexHome,
+			BaseURL:    bootstrap.CodexBaseURL,
+		}
+	case "native":
+		copy.Governor.Backend = "native"
+		copy.Governor.NativeProvider = bootstrap.NativeProvider
+		copy.Providers = config.ProvidersConfig{
+			Default:       bootstrap.NativeProvider,
+			FallbackChain: nil,
+		}
+	}
+	switch bootstrap.NativeProvider {
+	case "anthropic":
+		copy.Providers.Anthropic = config.AnthropicConfig{
+			APIKey:        bootstrap.APIKey,
+			Model:         firstNonEmpty(bootstrap.Model, config.Default().Providers.Anthropic.Model),
+			MaxTokens:     firstPositive(bootstrap.MaxTokens, config.Default().Providers.Anthropic.MaxTokens),
+			ContextWindow: config.Default().Providers.Anthropic.ContextWindow,
+		}
+	case "openrouter":
+		copy.Providers.OpenRouter = config.OpenRouterConfig{
+			APIKey:        bootstrap.APIKey,
+			BaseURL:       firstNonEmpty(bootstrap.BaseURL, config.Default().Providers.OpenRouter.BaseURL),
+			Model:         firstNonEmpty(bootstrap.Model, config.Default().Providers.OpenRouter.Model),
+			MaxTokens:     firstPositive(bootstrap.MaxTokens, config.Default().Providers.OpenRouter.MaxTokens),
+			ContextWindow: config.Default().Providers.OpenRouter.ContextWindow,
+		}
+	}
+	return &copy
+}
+
+func faceBackendForChildBootstrap(bootstrap core.NodeLLMBootstrap) string {
+	bootstrap = core.NormalizeNodeLLMBootstrap(bootstrap)
+	switch bootstrap.Backend {
+	case "native":
+		return config.NormalizeFaceBackendValue("provider")
+	default:
+		return config.NormalizeFaceBackendValue("floor_fallback")
+	}
+}
+
+func durableAgentChildCommand(binaryPath string, bootstrapPath string, messagePath string) string {
+	return strings.Join([]string{
+		shellQuote(binaryPath),
+		"durable-agent",
+		"child-run",
+		"--bootstrap",
+		shellQuote(bootstrapPath),
+		"--message",
+		shellQuote(messagePath),
+	}, " ")
+}
+
+func shellQuote(value string) string {
+	return strconv.Quote(strings.TrimSpace(value))
+}
+
+func writeJSONTemp(root string, pattern string, value any) (string, error) {
+	tmp, err := os.CreateTemp(root, pattern)
+	if err != nil {
+		return "", fmt.Errorf("create temp payload: %w", err)
+	}
+	path := filepath.Clean(tmp.Name())
+	enc := json.NewEncoder(tmp)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(value); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("encode temp payload %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("close temp payload %s: %w", path, err)
+	}
+	return path, nil
+}
+
+func firstPositive(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}

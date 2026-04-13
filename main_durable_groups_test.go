@@ -42,6 +42,12 @@ func TestSyncConfiguredTelegramDurableGroupsPreservesExistingLivePolicy(t *testi
 			AllowedSharedInferenceReuse:  []string{"disabled"},
 			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
 		},
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-existing",
+			Model:          "openrouter/existing-model",
+		},
 		PolicyVersion: 4,
 		LocalStorageRoots: []string{
 			filepath.Join(root, "existing", "workspace"),
@@ -61,10 +67,14 @@ func TestSyncConfiguredTelegramDurableGroupsPreservesExistingLivePolicy(t *testi
 		},
 		Telegram: config.TelegramConfig{
 			DurableGroups: []config.TelegramDurableGroupConfig{{
-				ChatID:    -100200,
-				AgentID:   "family-group",
-				Charter:   "New bootstrap charter should not clobber live policy.",
-				RespondOn: "mentions",
+				ChatID:       -100200,
+				AgentID:      "family-group",
+				Charter:      "New bootstrap charter should not clobber live policy.",
+				RespondOn:    "mentions",
+				LLMProvider:  "openrouter",
+				LLMAPIKey:    "sk-or-group",
+				LLMModel:     "openrouter/group-model",
+				LLMMaxTokens: 321,
 			}},
 		},
 	}
@@ -95,6 +105,21 @@ func TestSyncConfiguredTelegramDurableGroupsPreservesExistingLivePolicy(t *testi
 	if len(got.LocalStorageRoots) != 2 {
 		t.Fatalf("LocalStorageRoots = %#v, want synced storage roots", got.LocalStorageRoots)
 	}
+	if got.BootstrapLLM.Backend != "native" {
+		t.Fatalf("BootstrapLLM.Backend = %q, want native", got.BootstrapLLM.Backend)
+	}
+	if got.BootstrapLLM.NativeProvider != "openrouter" {
+		t.Fatalf("BootstrapLLM.NativeProvider = %q, want openrouter", got.BootstrapLLM.NativeProvider)
+	}
+	if got.BootstrapLLM.APIKey != "sk-or-group" {
+		t.Fatalf("BootstrapLLM.APIKey = %q, want sk-or-group", got.BootstrapLLM.APIKey)
+	}
+	if got.BootstrapLLM.Model != "openrouter/group-model" {
+		t.Fatalf("BootstrapLLM.Model = %q, want openrouter/group-model", got.BootstrapLLM.Model)
+	}
+	if got.BootstrapLLM.MaxTokens != 321 {
+		t.Fatalf("BootstrapLLM.MaxTokens = %d, want 321", got.BootstrapLLM.MaxTokens)
+	}
 }
 
 func TestSyncConfiguredTelegramDurableGroupsRejectsMissingPromptRoot(t *testing.T) {
@@ -115,10 +140,12 @@ func TestSyncConfiguredTelegramDurableGroupsRejectsMissingPromptRoot(t *testing.
 		},
 		Telegram: config.TelegramConfig{
 			DurableGroups: []config.TelegramDurableGroupConfig{{
-				ChatID:    -100200,
-				AgentID:   "family-group",
-				Charter:   "Bootstrap charter.",
-				RespondOn: "mentions",
+				ChatID:      -100200,
+				AgentID:     "family-group",
+				Charter:     "Bootstrap charter.",
+				RespondOn:   "mentions",
+				LLMProvider: "anthropic",
+				LLMAPIKey:   "sk-ant-group",
 			}},
 		},
 	}

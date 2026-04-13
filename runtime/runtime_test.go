@@ -23,6 +23,7 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	providerpkg "github.com/idolum-ai/aphelion/provider"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 type fakeProvider struct {
@@ -211,6 +212,27 @@ type fakeSender struct {
 	edits    []messageEdit
 	deletes  []messageDelete
 	actionCh chan chatAction
+}
+
+type inlineDurableGroupChildExecutor struct {
+	run func(context.Context, core.InboundMessage) (*DurableGroupChildResult, error)
+}
+
+func (e inlineDurableGroupChildExecutor) Supports(sandbox.Scope, core.DurableAgent) bool {
+	return e.run != nil
+}
+
+func (e inlineDurableGroupChildExecutor) Run(ctx context.Context, _ sandbox.Scope, _ core.DurableAgent, msg core.InboundMessage) (*DurableGroupChildResult, error) {
+	return e.run(ctx, msg)
+}
+
+func durableGroupTestBootstrapLLM() core.NodeLLMBootstrap {
+	return core.NodeLLMBootstrap{
+		Backend:        "native",
+		NativeProvider: "openrouter",
+		APIKey:         "sk-or-group",
+		Model:          "openrouter/test-model",
+	}
 }
 
 type stubRuntimeStatusError struct {
@@ -2616,6 +2638,7 @@ func TestHandleInboundHandlesDurableTelegramGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:            "family-group",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
@@ -2627,7 +2650,8 @@ func TestHandleInboundHandlesDurableTelegramGroup(t *testing.T) {
 			OutboundMode: "reply_with_policy_authorization",
 			DriftPolicy:  "admin_review",
 		},
-		Status: "active",
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
@@ -2695,6 +2719,7 @@ func TestHandleInboundDurableTelegramGroupQueuesReviewOnDriftPressure(t *testing
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:            "family-group",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
@@ -2706,7 +2731,8 @@ func TestHandleInboundDurableTelegramGroupQueuesReviewOnDriftPressure(t *testing
 			OutboundMode: "reply_with_policy_authorization",
 			DriftPolicy:  "admin_review",
 		},
-		Status: "active",
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
@@ -2763,6 +2789,7 @@ func TestHandleInboundDurableTelegramGroupReadOnlyPolicySkipsLocalReply(t *testi
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:            "family-group",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
@@ -2775,7 +2802,8 @@ func TestHandleInboundDurableTelegramGroupReadOnlyPolicySkipsLocalReply(t *testi
 			DriftPolicy:        "admin_review",
 			CapabilityEnvelope: []string{"bounded_review_artifact"},
 		},
-		Status: "active",
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
@@ -2816,6 +2844,7 @@ func TestHandleInboundDurableTelegramGroupReadOnlyPolicyQueuesReviewForFamilyQue
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:            "family-group",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
@@ -2828,7 +2857,8 @@ func TestHandleInboundDurableTelegramGroupReadOnlyPolicyQueuesReviewForFamilyQue
 			DriftPolicy:        "admin_review",
 			CapabilityEnvelope: []string{"bounded_review_artifact"},
 		},
-		Status: "active",
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
@@ -2879,6 +2909,7 @@ func TestHandleInboundDurableTelegramGroupPolicyAuthorizationSurfacesFamilyUpdat
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:            "family-group",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
@@ -2890,7 +2921,8 @@ func TestHandleInboundDurableTelegramGroupPolicyAuthorizationSurfacesFamilyUpdat
 			OutboundMode: "reply_with_policy_authorization",
 			DriftPolicy:  "admin_review",
 		},
-		Status: "active",
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
@@ -2941,6 +2973,7 @@ func TestHandleInboundDurableTelegramGroupReplyWithParentReviewQueuesDraftWithou
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:            "family-group",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
@@ -2952,7 +2985,8 @@ func TestHandleInboundDurableTelegramGroupReplyWithParentReviewQueuesDraftWithou
 			OutboundMode: "reply_with_parent_review",
 			DriftPolicy:  "admin_review",
 		},
-		Status: "active",
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
 	}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}

@@ -13,6 +13,15 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+func testDurableAgentBootstrapLLM() core.NodeLLMBootstrap {
+	return core.NodeLLMBootstrap{
+		Backend:        "native",
+		NativeProvider: "openrouter",
+		APIKey:         "sk-or-group",
+		Model:          "openrouter/test-model",
+	}
+}
+
 func TestQueueReviewArtifactReusesReviewQueue(t *testing.T) {
 	t.Parallel()
 
@@ -33,7 +42,8 @@ func TestQueueReviewArtifactReusesReviewQueue(t *testing.T) {
 			OutboundMode:       "reply_with_policy_authorization",
 			DriftPolicy:        "admin_review",
 		},
-		Status: "active",
+		BootstrapLLM: testDurableAgentBootstrapLLM(),
+		Status:       "active",
 	}
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
@@ -113,6 +123,7 @@ func TestQueueReviewArtifactRedactsSecretLikeMetadataIntoForensicSidecar(t *test
 			OutboundMode:       "reply_with_policy_authorization",
 			DriftPolicy:        "admin_review",
 		},
+		BootstrapLLM:      testDurableAgentBootstrapLLM(),
 		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
 		Status:            "active",
 	}

@@ -41,6 +41,10 @@ func syncConfiguredTelegramDurableGroups(cfg *config.Config, store *session.SQLi
 		}
 		livePolicy := core.DefaultTelegramGroupLivePolicy(strings.TrimSpace(group.Charter))
 		bootstrapCeiling := core.DefaultDurableAgentBootstrapCeiling("telegram_group", livePolicy)
+		bootstrapLLM := durableGroupLLMBootstrap(group)
+		if !bootstrapLLM.Configured() {
+			return fmt.Errorf("telegram durable group %s requires a configured llm bootstrap", strings.TrimSpace(group.AgentID))
+		}
 		policyVersion := int64(1)
 		policyHash := ""
 		policyIssuedAt := time.Time{}
@@ -59,6 +63,7 @@ func syncConfiguredTelegramDurableGroups(cfg *config.Config, store *session.SQLi
 			ChannelKind:        "telegram_group",
 			LivePolicy:         livePolicy,
 			BootstrapCeiling:   bootstrapCeiling,
+			BootstrapLLM:       bootstrapLLM,
 			PolicyVersion:      policyVersion,
 			PolicyHash:         policyHash,
 			PolicyIssuedAt:     policyIssuedAt,
@@ -71,6 +76,20 @@ func syncConfiguredTelegramDurableGroups(cfg *config.Config, store *session.SQLi
 		}
 	}
 	return nil
+}
+
+func durableGroupLLMBootstrap(group config.TelegramDurableGroupConfig) core.NodeLLMBootstrap {
+	return core.NormalizeNodeLLMBootstrap(core.NodeLLMBootstrap{
+		Backend:         group.LLMBackend,
+		NativeProvider:  group.LLMProvider,
+		APIKey:          group.LLMAPIKey,
+		BaseURL:         group.LLMBaseURL,
+		Model:           group.LLMModel,
+		MaxTokens:       group.LLMMaxTokens,
+		CodexAuthSource: group.LLMCodexAuthSource,
+		CodexHome:       group.LLMCodexHome,
+		CodexBaseURL:    group.LLMCodexBaseURL,
+	})
 }
 
 func durableGroupsNeedBotIdentity(groups []config.TelegramDurableGroupConfig) bool {

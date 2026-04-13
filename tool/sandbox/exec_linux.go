@@ -22,9 +22,11 @@ const (
 )
 
 type ExecRequest struct {
-	Scope   Scope
-	Command string
-	Workdir string
+	Scope              Scope
+	Command            string
+	Workdir            string
+	ExtraWritablePaths []string
+	ExtraReadonlyPaths []string
 }
 
 type ExecResult struct {
@@ -126,7 +128,7 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 		if bwrapPath == "" {
 			return ExecutionPlan{}, fmt.Errorf("bubblewrap is required for isolated execution")
 		}
-		args, err := buildBwrapArgs(req.Scope, workdir, command)
+		args, err := buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths)
 		if err != nil {
 			return ExecutionPlan{}, err
 		}
@@ -142,17 +144,27 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 	}
 }
 
-func buildBwrapArgs(scope Scope, workdir, command string) ([]string, error) {
+func buildBwrapArgs(scope Scope, workdir, command string, extraWritablePaths []string, extraReadonlyPaths []string) ([]string, error) {
 	runtimeRO := existingRoots("/bin", "/usr", "/lib", "/lib64", "/etc")
 
 	writablePaths, err := resolveScopedPaths(scope.Profile.WritablePaths, scope)
 	if err != nil {
 		return nil, err
 	}
+	resolvedExtraWritable, err := resolveHostPaths(extraWritablePaths)
+	if err != nil {
+		return nil, err
+	}
+	writablePaths = append(writablePaths, resolvedExtraWritable...)
 	readonlyPaths, err := resolveScopedPaths(scope.Profile.ReadonlyPaths, scope)
 	if err != nil {
 		return nil, err
 	}
+	resolvedExtraReadonly, err := resolveHostPaths(extraReadonlyPaths)
+	if err != nil {
+		return nil, err
+	}
+	readonlyPaths = append(readonlyPaths, resolvedExtraReadonly...)
 	hiddenPaths, err := resolveScopedPaths(scope.Profile.HiddenPaths, scope)
 	if err != nil {
 		return nil, err
@@ -304,6 +316,22 @@ func resolveScopedPath(value string, scope Scope) (string, error) {
 		return "", fmt.Errorf("resolve sandbox path %q: %w", value, err)
 	}
 	return abs, nil
+}
+
+func resolveHostPaths(raw []string) ([]string, error) {
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		resolved, err := resolveRootPath("sandbox_host_path", value)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, resolved)
+	}
+	return dedupePaths(out), nil
 }
 
 func existingRoots(paths ...string) []string {
