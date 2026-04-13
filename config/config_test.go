@@ -149,6 +149,7 @@ workspace = "./workspace"
 [durable_agents.control_plane]
 enabled = true
 listen = "127.0.0.1:8787"
+base_path = "/control"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -163,6 +164,9 @@ listen = "127.0.0.1:8787"
 	}
 	if cfg.DurableAgents.ControlPlane.Listen != "127.0.0.1:8787" {
 		t.Fatalf("durable_agents.control_plane.listen = %q, want 127.0.0.1:8787", cfg.DurableAgents.ControlPlane.Listen)
+	}
+	if cfg.DurableAgents.ControlPlane.BasePath != "/control" {
+		t.Fatalf("durable_agents.control_plane.base_path = %q, want /control", cfg.DurableAgents.ControlPlane.BasePath)
 	}
 }
 

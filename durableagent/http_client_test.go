@@ -152,6 +152,42 @@ func TestHTTPClientUploadsReviewArtifact(t *testing.T) {
 	}
 }
 
+func TestHTTPClientSupportsControlPlaneBasePath(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	handler := NewHTTPHandler(store).HandlerWithBasePath("/control")
+	client, err := NewHTTPClient(core.DurableAgentRemoteBootstrap{
+		AgentID:          agent.AgentID,
+		ParentAgentID:    "house",
+		ChannelKind:      agent.ChannelKind,
+		ParentControlURL: "https://house.example/control",
+		EnrollmentToken:  "enroll-token-1",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:     testDurableAgentBootstrapLLM(),
+		BootstrapCeiling: agent.BootstrapCeiling,
+	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient() err = %v", err)
+	}
+	client.Client = &http.Client{Transport: handlerRoundTripper{handler: handler}}
+
+	resp, err := client.Enroll(context.Background())
+	if err != nil {
+		t.Fatalf("Enroll() err = %v", err)
+	}
+	if resp.Enrollment.AgentID != agent.AgentID {
+		t.Fatalf("Enrollment.AgentID = %q, want %q", resp.Enrollment.AgentID, agent.AgentID)
+	}
+}
+
 type handlerRoundTripper struct {
 	handler http.Handler
 }

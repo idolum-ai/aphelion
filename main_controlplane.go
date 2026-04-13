@@ -24,9 +24,10 @@ func durableAgentControlPlaneServer(cfg *config.Config, store *session.SQLiteSto
 	if addr == "" {
 		return nil
 	}
+	handler := durableagent.NewHTTPHandler(store)
 	return &http.Server{
 		Addr:              addr,
-		Handler:           durableagent.NewHTTPHandler(store).Handler(),
+		Handler:           handler.HandlerWithBasePath(cfg.DurableAgents.ControlPlane.BasePath),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 }

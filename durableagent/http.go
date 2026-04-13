@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -49,11 +50,16 @@ func NewHTTPHandler(store HTTPStore) *HTTPHandler {
 }
 
 func (h *HTTPHandler) Handler() http.Handler {
+	return h.HandlerWithBasePath("")
+}
+
+func (h *HTTPHandler) HandlerWithBasePath(basePath string) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc(ControlPlaneEnrollPath, h.handleEnroll)
-	mux.HandleFunc(ControlPlanePolicyPollPath, h.handlePolicyPoll)
-	mux.HandleFunc(ControlPlaneArtifactUploadPath, h.handleArtifactUpload)
-	mux.HandleFunc(ControlPlanePolicyAckPath, h.handlePolicyAck)
+	basePath = normalizeControlPlaneBasePath(basePath)
+	mux.HandleFunc(path.Join(basePath, ControlPlaneEnrollPath), h.handleEnroll)
+	mux.HandleFunc(path.Join(basePath, ControlPlanePolicyPollPath), h.handlePolicyPoll)
+	mux.HandleFunc(path.Join(basePath, ControlPlaneArtifactUploadPath), h.handleArtifactUpload)
+	mux.HandleFunc(path.Join(basePath, ControlPlanePolicyAckPath), h.handlePolicyAck)
 	return mux
 }
 
@@ -249,6 +255,14 @@ func NewStoreBackedEnvelopeVerifier(store HTTPStore) EnvelopeVerifier {
 		}
 		return VerifyEnvelopeHMAC(agent.ControlPlaneSecret, envelope, payload)
 	}
+}
+
+func normalizeControlPlaneBasePath(basePath string) string {
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" || basePath == "/" {
+		return ""
+	}
+	return path.Clean("/" + strings.TrimPrefix(basePath, "/"))
 }
 
 func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {

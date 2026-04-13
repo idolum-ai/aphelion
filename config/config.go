@@ -264,8 +264,9 @@ type DurableAgentsConfig struct {
 }
 
 type DurableAgentControlPlaneConfig struct {
-	Enabled bool   `toml:"enabled"`
-	Listen  string `toml:"listen"`
+	Enabled  bool   `toml:"enabled"`
+	Listen   string `toml:"listen"`
+	BasePath string `toml:"base_path"`
 }
 
 func (a AgentConfig) EffectivePromptRoot() string {
@@ -835,6 +836,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.DurableAgents.ControlPlane.Enabled && strings.TrimSpace(cfg.DurableAgents.ControlPlane.Listen) == "" {
 		return fmt.Errorf("durable_agents.control_plane.listen is required when durable_agents.control_plane.enabled = true")
+	}
+	if strings.TrimSpace(cfg.DurableAgents.ControlPlane.BasePath) != "" && !strings.HasPrefix(strings.TrimSpace(cfg.DurableAgents.ControlPlane.BasePath), "/") {
+		return fmt.Errorf("durable_agents.control_plane.base_path must start with / when set")
 	}
 
 	admin := make(map[int64]struct{}, len(cfg.Principals.Telegram.AdminUserIDs))
