@@ -194,6 +194,7 @@ type DurableAgentEnrollmentPayload struct {
 	AgentID           string                       `json:"agent_id,omitempty"`
 	ParentAgentID     string                       `json:"parent_agent_id,omitempty"`
 	ChannelKind       string                       `json:"channel_kind,omitempty"`
+	ParentControlURL  string                       `json:"parent_control_url,omitempty"`
 	EnrollmentToken   string                       `json:"enrollment_token,omitempty"`
 	KeyFingerprint    string                       `json:"key_fingerprint,omitempty"`
 	ProtocolVersion   string                       `json:"protocol_version,omitempty"`
@@ -202,6 +203,45 @@ type DurableAgentEnrollmentPayload struct {
 	LocalStorageRoots []string                     `json:"local_storage_roots,omitempty"`
 	SecretScopes      []string                     `json:"secret_scopes,omitempty"`
 	NetworkPolicy     string                       `json:"network_policy,omitempty"`
+}
+
+type DurableAgentEnrollmentRequest struct {
+	Envelope DurableAgentControlEnvelope   `json:"envelope"`
+	Payload  DurableAgentEnrollmentPayload `json:"payload"`
+}
+
+type DurableAgentEnrollmentResponse struct {
+	Enrollment DurableAgentRemoteEnrollment `json:"enrollment"`
+	Policy     DurableAgentPolicySnapshot   `json:"policy"`
+}
+
+type DurableAgentPolicyPollRequest struct {
+	Envelope     DurableAgentControlEnvelope `json:"envelope"`
+	KnownVersion int64                       `json:"known_version,omitempty"`
+	KnownHash    string                      `json:"known_hash,omitempty"`
+}
+
+type DurableAgentPolicyPollResponse struct {
+	Snapshot DurableAgentPolicySnapshot `json:"snapshot"`
+	Changed  bool                       `json:"changed"`
+}
+
+type DurableAgentReviewArtifactUploadRequest struct {
+	Envelope DurableAgentControlEnvelope `json:"envelope"`
+	Artifact DurableReviewArtifact       `json:"artifact"`
+}
+
+type DurableAgentReviewArtifactUploadResponse struct {
+	Accepted bool `json:"accepted"`
+}
+
+type DurableAgentPolicyAcknowledgementRequest struct {
+	Envelope DurableAgentControlEnvelope       `json:"envelope"`
+	Ack      DurableAgentPolicyAcknowledgement `json:"ack"`
+}
+
+type DurableAgentPolicyAcknowledgementResponse struct {
+	Accepted bool `json:"accepted"`
 }
 
 type DurableReviewArtifact struct {
@@ -468,6 +508,7 @@ func (b DurableAgentRemoteBootstrap) EnrollmentPayload() DurableAgentEnrollmentP
 		AgentID:           b.AgentID,
 		ParentAgentID:     b.ParentAgentID,
 		ChannelKind:       b.ChannelKind,
+		ParentControlURL:  b.ParentControlURL,
 		EnrollmentToken:   b.EnrollmentToken,
 		KeyFingerprint:    b.KeyFingerprint,
 		ProtocolVersion:   b.ProtocolVersion,
@@ -483,6 +524,7 @@ func NormalizeDurableAgentEnrollmentPayload(payload DurableAgentEnrollmentPayloa
 	payload.AgentID = strings.TrimSpace(payload.AgentID)
 	payload.ParentAgentID = strings.TrimSpace(payload.ParentAgentID)
 	payload.ChannelKind = strings.TrimSpace(payload.ChannelKind)
+	payload.ParentControlURL = strings.TrimSpace(payload.ParentControlURL)
 	payload.EnrollmentToken = strings.TrimSpace(payload.EnrollmentToken)
 	payload.KeyFingerprint = strings.TrimSpace(payload.KeyFingerprint)
 	payload.ProtocolVersion = normalizeDurableAgentControlProtocolVersion(payload.ProtocolVersion)
@@ -499,6 +541,8 @@ func ValidateDurableAgentEnrollmentPayload(payload DurableAgentEnrollmentPayload
 	switch {
 	case payload.AgentID == "":
 		return fmt.Errorf("durable agent enrollment payload agent_id is required")
+	case payload.ParentControlURL == "":
+		return fmt.Errorf("durable agent enrollment payload parent_control_url is required")
 	case payload.EnrollmentToken == "":
 		return fmt.Errorf("durable agent enrollment payload enrollment_token is required")
 	case payload.KeyFingerprint == "":
