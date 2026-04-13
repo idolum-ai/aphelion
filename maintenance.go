@@ -598,18 +598,94 @@ func runImportSemanticCommand(args []string) error {
 
 func runDurableAgentCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("durable-agent requires a subcommand: policy, forensic, or child-run")
+		return fmt.Errorf("durable-agent requires a subcommand: policy, forensic, bootstrap, or child-run")
 	}
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case "policy":
 		return runDurableAgentPolicyCommand(args[1:])
 	case "forensic":
 		return runDurableAgentForensicCommand(args[1:])
+	case "bootstrap":
+		return runDurableAgentBootstrapCommand(args[1:])
 	case "child-run":
 		return runDurableAgentChildCommand(args[1:])
 	default:
-		return fmt.Errorf("durable-agent subcommand must be one of policy|forensic|child-run")
+		return fmt.Errorf("durable-agent subcommand must be one of policy|forensic|bootstrap|child-run")
 	}
+}
+
+func runDurableAgentBootstrapCommand(args []string) error {
+	fs := flag.NewFlagSet("durable-agent bootstrap", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	agentID := fs.String("agent", "", "durable agent id")
+	path := fs.String("path", "", "bootstrap json output path")
+	parentControlURL := fs.String("parent-control-url", "", "remote parent control-plane URL")
+	enrollmentToken := fs.String("enrollment-token", "", "child enrollment token")
+	keyFingerprint := fs.String("key-fingerprint", "", "child key fingerprint")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	action := "write"
+	if fs.NArg() > 0 {
+		action = strings.ToLower(strings.TrimSpace(fs.Arg(0)))
+	}
+	if action != "write" {
+		return fmt.Errorf("durable-agent bootstrap action must be write")
+	}
+	if strings.TrimSpace(*agentID) == "" {
+		return fmt.Errorf("durable-agent bootstrap write requires --agent")
+	}
+	if strings.TrimSpace(*path) == "" {
+		return fmt.Errorf("durable-agent bootstrap write requires --path")
+	}
+	if strings.TrimSpace(*parentControlURL) == "" {
+		return fmt.Errorf("durable-agent bootstrap write requires --parent-control-url")
+	}
+	if strings.TrimSpace(*enrollmentToken) == "" {
+		return fmt.Errorf("durable-agent bootstrap write requires --enrollment-token")
+	}
+	if strings.TrimSpace(*keyFingerprint) == "" {
+		return fmt.Errorf("durable-agent bootstrap write requires --key-fingerprint")
+	}
+
+	cfg, _, err := loadConfigForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	agent, err := store.DurableAgent(*agentID)
+	if err != nil {
+		return err
+	}
+	bootstrap := core.DurableAgentRemoteBootstrap{
+		AgentID:           agent.AgentID,
+		ParentAgentID:     agent.ParentAgentID,
+		ChannelKind:       agent.ChannelKind,
+		ParentControlURL:  strings.TrimSpace(*parentControlURL),
+		EnrollmentToken:   strings.TrimSpace(*enrollmentToken),
+		KeyFingerprint:    strings.TrimSpace(*keyFingerprint),
+		ProtocolVersion:   core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:      agent.BootstrapLLM,
+		BootstrapCeiling:  agent.BootstrapCeiling,
+		LocalStorageRoots: append([]string(nil), agent.LocalStorageRoots...),
+		SecretScopes:      append([]string(nil), agent.SecretScopes...),
+		NetworkPolicy:     agent.NetworkPolicy,
+	}
+	if err := durableagent.WriteRemoteBootstrap(*path, bootstrap); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "action: durable-agent bootstrap write\n")
+	fmt.Fprintf(os.Stdout, "agent_id: %s\n", bootstrap.AgentID)
+	fmt.Fprintf(os.Stdout, "path: %s\n", strings.TrimSpace(*path))
+	fmt.Fprintf(os.Stdout, "parent_control_url: %s\n", bootstrap.ParentControlURL)
+	fmt.Fprintf(os.Stdout, "protocol_version: %s\n", bootstrap.ProtocolVersion)
+	return nil
 }
 
 func runDurableAgentPolicyCommand(args []string) error {

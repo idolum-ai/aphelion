@@ -582,6 +582,106 @@ func TestRunDurableAgentForensicShowReadsRestrictedSidecar(t *testing.T) {
 	}
 }
 
+func TestRunDurableAgentBootstrapWriteExportsRemoteBootstrap(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	workspaceRoot, memoryRoot := durableagent.DefaultLocalRoots(cfg.Sessions.DBPath, "family-group")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
+	}
+	if err := os.MkdirAll(memoryRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentAgentID:      "house",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:            "Initial charter",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "reply_with_policy_authorization",
+			DriftPolicy:        "admin_review",
+		},
+		BootstrapCeiling: core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DurableAgentLivePolicy{
+			Charter:            "Initial charter",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "reply_with_policy_authorization",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
+		},
+		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
+		SecretScopes:      []string{"telegram_bot"},
+		NetworkPolicy:     "restricted",
+		Status:            "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	bootstrapPath := filepath.Join(root, "family-group-bootstrap.json")
+	out, err := captureStdout(t, func() error {
+		return runDurableAgentBootstrapCommand([]string{
+			"--config", cfgPath,
+			"--agent", "family-group",
+			"--path", bootstrapPath,
+			"--parent-control-url", "https://house.example/control",
+			"--enrollment-token", "enroll-token-1",
+			"--key-fingerprint", "child-key-fp",
+			"write",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentBootstrapCommand(write) err = %v", err)
+	}
+	if !strings.Contains(out, "action: durable-agent bootstrap write") || !strings.Contains(out, "agent_id: family-group") {
+		t.Fatalf("bootstrap write output = %q, want action and agent id", out)
+	}
+
+	bootstrap, err := durableagent.ReadRemoteBootstrap(bootstrapPath)
+	if err != nil {
+		t.Fatalf("ReadRemoteBootstrap() err = %v", err)
+	}
+	if bootstrap.AgentID != "family-group" {
+		t.Fatalf("bootstrap.AgentID = %q, want family-group", bootstrap.AgentID)
+	}
+	if bootstrap.ParentControlURL != "https://house.example/control" {
+		t.Fatalf("bootstrap.ParentControlURL = %q, want https://house.example/control", bootstrap.ParentControlURL)
+	}
+	if bootstrap.EnrollmentToken != "enroll-token-1" {
+		t.Fatalf("bootstrap.EnrollmentToken = %q, want enroll-token-1", bootstrap.EnrollmentToken)
+	}
+	if bootstrap.KeyFingerprint != "child-key-fp" {
+		t.Fatalf("bootstrap.KeyFingerprint = %q, want child-key-fp", bootstrap.KeyFingerprint)
+	}
+	if bootstrap.BootstrapLLM.NativeProvider != "openrouter" {
+		t.Fatalf("bootstrap.BootstrapLLM.NativeProvider = %q, want openrouter", bootstrap.BootstrapLLM.NativeProvider)
+	}
+	if bootstrap.NetworkPolicy != "restricted" {
+		t.Fatalf("bootstrap.NetworkPolicy = %q, want restricted", bootstrap.NetworkPolicy)
+	}
+}
+
 func writeMaintenanceConfig(t *testing.T, root string) string {
 	t.Helper()
 
