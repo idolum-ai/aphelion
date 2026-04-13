@@ -288,16 +288,17 @@ func (r *RemoteRuntime) localDurableAgentState(bootstrap core.DurableAgentRemote
 	}
 	if errors.Is(err, sql.ErrNoRows) || agent == nil {
 		agent = &core.DurableAgent{
-			AgentID:           bootstrap.AgentID,
-			ParentAgentID:     bootstrap.ParentAgentID,
-			ChannelKind:       bootstrap.ChannelKind,
-			BootstrapCeiling:  bootstrap.BootstrapCeiling,
-			BootstrapLLM:      bootstrap.BootstrapLLM,
-			LocalStorageRoots: append([]string(nil), bootstrap.LocalStorageRoots...),
-			SecretScopes:      append([]string(nil), bootstrap.SecretScopes...),
-			NetworkPolicy:     bootstrap.NetworkPolicy,
-			WakeupMode:        "remote_control_plane",
-			Status:            "active",
+			ReviewTargetChatID: bootstrap.ReviewTargetChatID,
+			AgentID:            bootstrap.AgentID,
+			ParentAgentID:      bootstrap.ParentAgentID,
+			ChannelKind:        bootstrap.ChannelKind,
+			BootstrapCeiling:   bootstrap.BootstrapCeiling,
+			BootstrapLLM:       bootstrap.BootstrapLLM,
+			LocalStorageRoots:  append([]string(nil), bootstrap.LocalStorageRoots...),
+			SecretScopes:       append([]string(nil), bootstrap.SecretScopes...),
+			NetworkPolicy:      bootstrap.NetworkPolicy,
+			WakeupMode:         "remote_control_plane",
+			Status:             "active",
 		}
 	}
 

@@ -664,18 +664,19 @@ func runDurableAgentBootstrapCommand(args []string) error {
 		return err
 	}
 	bootstrap := core.DurableAgentRemoteBootstrap{
-		AgentID:           agent.AgentID,
-		ParentAgentID:     agent.ParentAgentID,
-		ChannelKind:       agent.ChannelKind,
-		ParentControlURL:  strings.TrimSpace(*parentControlURL),
-		EnrollmentToken:   strings.TrimSpace(*enrollmentToken),
-		KeyFingerprint:    strings.TrimSpace(*keyFingerprint),
-		ProtocolVersion:   core.DefaultDurableAgentControlProtocolVersion,
-		BootstrapLLM:      agent.BootstrapLLM,
-		BootstrapCeiling:  agent.BootstrapCeiling,
-		LocalStorageRoots: append([]string(nil), agent.LocalStorageRoots...),
-		SecretScopes:      append([]string(nil), agent.SecretScopes...),
-		NetworkPolicy:     agent.NetworkPolicy,
+		ReviewTargetChatID: agent.ReviewTargetChatID,
+		AgentID:            agent.AgentID,
+		ParentAgentID:      agent.ParentAgentID,
+		ChannelKind:        agent.ChannelKind,
+		ParentControlURL:   strings.TrimSpace(*parentControlURL),
+		EnrollmentToken:    strings.TrimSpace(*enrollmentToken),
+		KeyFingerprint:     strings.TrimSpace(*keyFingerprint),
+		ProtocolVersion:    core.DefaultDurableAgentControlProtocolVersion,
+		BootstrapLLM:       agent.BootstrapLLM,
+		BootstrapCeiling:   agent.BootstrapCeiling,
+		LocalStorageRoots:  append([]string(nil), agent.LocalStorageRoots...),
+		SecretScopes:       append([]string(nil), agent.SecretScopes...),
+		NetworkPolicy:      agent.NetworkPolicy,
 	}
 	if err := durableagent.WriteRemoteBootstrap(*path, bootstrap); err != nil {
 		return err

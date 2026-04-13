@@ -176,33 +176,35 @@ type DurableAgentPolicyAcknowledgement struct {
 }
 
 type DurableAgentRemoteBootstrap struct {
-	AgentID           string
-	ParentAgentID     string
-	ChannelKind       string
-	ParentControlURL  string
-	EnrollmentToken   string
-	KeyFingerprint    string
-	ProtocolVersion   string
-	BootstrapLLM      NodeLLMBootstrap
-	BootstrapCeiling  DurableAgentBootstrapCeiling
-	LocalStorageRoots []string
-	SecretScopes      []string
-	NetworkPolicy     string
+	ReviewTargetChatID int64
+	AgentID            string
+	ParentAgentID      string
+	ChannelKind        string
+	ParentControlURL   string
+	EnrollmentToken    string
+	KeyFingerprint     string
+	ProtocolVersion    string
+	BootstrapLLM       NodeLLMBootstrap
+	BootstrapCeiling   DurableAgentBootstrapCeiling
+	LocalStorageRoots  []string
+	SecretScopes       []string
+	NetworkPolicy      string
 }
 
 type DurableAgentEnrollmentPayload struct {
-	AgentID           string                       `json:"agent_id,omitempty"`
-	ParentAgentID     string                       `json:"parent_agent_id,omitempty"`
-	ChannelKind       string                       `json:"channel_kind,omitempty"`
-	ParentControlURL  string                       `json:"parent_control_url,omitempty"`
-	EnrollmentToken   string                       `json:"enrollment_token,omitempty"`
-	KeyFingerprint    string                       `json:"key_fingerprint,omitempty"`
-	ProtocolVersion   string                       `json:"protocol_version,omitempty"`
-	BootstrapLLM      NodeLLMBootstrap             `json:"bootstrap_llm,omitempty"`
-	BootstrapCeiling  DurableAgentBootstrapCeiling `json:"bootstrap_ceiling,omitempty"`
-	LocalStorageRoots []string                     `json:"local_storage_roots,omitempty"`
-	SecretScopes      []string                     `json:"secret_scopes,omitempty"`
-	NetworkPolicy     string                       `json:"network_policy,omitempty"`
+	ReviewTargetChatID int64                        `json:"review_target_chat_id,omitempty"`
+	AgentID            string                       `json:"agent_id,omitempty"`
+	ParentAgentID      string                       `json:"parent_agent_id,omitempty"`
+	ChannelKind        string                       `json:"channel_kind,omitempty"`
+	ParentControlURL   string                       `json:"parent_control_url,omitempty"`
+	EnrollmentToken    string                       `json:"enrollment_token,omitempty"`
+	KeyFingerprint     string                       `json:"key_fingerprint,omitempty"`
+	ProtocolVersion    string                       `json:"protocol_version,omitempty"`
+	BootstrapLLM       NodeLLMBootstrap             `json:"bootstrap_llm,omitempty"`
+	BootstrapCeiling   DurableAgentBootstrapCeiling `json:"bootstrap_ceiling,omitempty"`
+	LocalStorageRoots  []string                     `json:"local_storage_roots,omitempty"`
+	SecretScopes       []string                     `json:"secret_scopes,omitempty"`
+	NetworkPolicy      string                       `json:"network_policy,omitempty"`
 }
 
 type DurableAgentEnrollmentRequest struct {
@@ -506,18 +508,19 @@ func ValidateDurableAgentRemoteBootstrap(bootstrap DurableAgentRemoteBootstrap) 
 func (b DurableAgentRemoteBootstrap) EnrollmentPayload() DurableAgentEnrollmentPayload {
 	b = NormalizeDurableAgentRemoteBootstrap(b)
 	return DurableAgentEnrollmentPayload{
-		AgentID:           b.AgentID,
-		ParentAgentID:     b.ParentAgentID,
-		ChannelKind:       b.ChannelKind,
-		ParentControlURL:  b.ParentControlURL,
-		EnrollmentToken:   b.EnrollmentToken,
-		KeyFingerprint:    b.KeyFingerprint,
-		ProtocolVersion:   b.ProtocolVersion,
-		BootstrapLLM:      b.BootstrapLLM,
-		BootstrapCeiling:  b.BootstrapCeiling,
-		LocalStorageRoots: append([]string(nil), b.LocalStorageRoots...),
-		SecretScopes:      append([]string(nil), b.SecretScopes...),
-		NetworkPolicy:     b.NetworkPolicy,
+		ReviewTargetChatID: b.ReviewTargetChatID,
+		AgentID:            b.AgentID,
+		ParentAgentID:      b.ParentAgentID,
+		ChannelKind:        b.ChannelKind,
+		ParentControlURL:   b.ParentControlURL,
+		EnrollmentToken:    b.EnrollmentToken,
+		KeyFingerprint:     b.KeyFingerprint,
+		ProtocolVersion:    b.ProtocolVersion,
+		BootstrapLLM:       b.BootstrapLLM,
+		BootstrapCeiling:   b.BootstrapCeiling,
+		LocalStorageRoots:  append([]string(nil), b.LocalStorageRoots...),
+		SecretScopes:       append([]string(nil), b.SecretScopes...),
+		NetworkPolicy:      b.NetworkPolicy,
 	}
 }
 

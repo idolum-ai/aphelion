@@ -144,6 +144,7 @@ func buildReviewSummary(agent core.DurableAgent, artifact core.DurableReviewArti
 func marshalArtifactMetadata(artifact core.DurableReviewArtifact) (string, error) {
 	payload := struct {
 		AgentID       string            `json:"agent_id,omitempty"`
+		Summary       string            `json:"summary,omitempty"`
 		IntervalLabel string            `json:"interval_label,omitempty"`
 		LocalActions  []string          `json:"local_actions,omitempty"`
 		Questions     []string          `json:"questions,omitempty"`
@@ -152,6 +153,7 @@ func marshalArtifactMetadata(artifact core.DurableReviewArtifact) (string, error
 		Metadata      map[string]string `json:"metadata,omitempty"`
 	}{
 		AgentID:       strings.TrimSpace(artifact.AgentID),
+		Summary:       normalizeWhitespace(artifact.Summary),
 		IntervalLabel: strings.TrimSpace(artifact.IntervalLabel),
 		LocalActions:  cloneStrings(artifact.LocalActions),
 		Questions:     cloneStrings(artifact.Questions),
