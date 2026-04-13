@@ -1,0 +1,126 @@
+//go:build linux
+
+package durableagent
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/idolum-ai/aphelion/core"
+)
+
+type ControlPlaneStore interface {
+	DurableAgent(agentID string) (*core.DurableAgent, error)
+	DurableAgentState(agentID string) (*core.DurableAgentState, error)
+	SaveDurableAgentState(state core.DurableAgentState) error
+	AcceptDurableAgentControlEnvelope(envelope core.DurableAgentControlEnvelope, receivedAt time.Time) error
+}
+
+type ControlPlane struct {
+	store        ControlPlaneStore
+	replayWindow time.Duration
+}
+
+func NewControlPlane(store ControlPlaneStore, replayWindow time.Duration) *ControlPlane {
+	if replayWindow <= 0 {
+		replayWindow = 10 * time.Minute
+	}
+	return &ControlPlane{store: store, replayWindow: replayWindow}
+}
+
+func (cp *ControlPlane) AcceptEnvelope(envelope core.DurableAgentControlEnvelope, now time.Time) error {
+	if cp == nil || cp.store == nil {
+		return fmt.Errorf("durable agent control plane store is nil")
+	}
+	envelope = core.NormalizeDurableAgentControlEnvelope(envelope)
+	if err := core.ValidateDurableAgentControlEnvelope(envelope); err != nil {
+		return err
+	}
+	now = normalizeControlPlaneTime(now)
+	if outsideReplayWindow(envelope.Timestamp, now, cp.replayWindow) {
+		return fmt.Errorf("durable agent control envelope is outside the allowed replay window")
+	}
+	return cp.store.AcceptDurableAgentControlEnvelope(envelope, now)
+}
+
+func (cp *ControlPlane) PolicySnapshot(agentID string) (core.DurableAgentPolicySnapshot, error) {
+	if cp == nil || cp.store == nil {
+		return core.DurableAgentPolicySnapshot{}, fmt.Errorf("durable agent control plane store is nil")
+	}
+	agent, err := cp.store.DurableAgent(strings.TrimSpace(agentID))
+	if err != nil {
+		return core.DurableAgentPolicySnapshot{}, err
+	}
+	return core.DurableAgentPolicySnapshot{
+		AgentID:       agent.AgentID,
+		PolicyVersion: agent.PolicyVersion,
+		PolicyHash:    agent.PolicyHash,
+		IssuedAt:      agent.PolicyIssuedAt,
+		LivePolicy:    agent.LivePolicy,
+	}, nil
+}
+
+func (cp *ControlPlane) AcceptPolicyAcknowledgement(envelope core.DurableAgentControlEnvelope, ack core.DurableAgentPolicyAcknowledgement, now time.Time) error {
+	if err := cp.AcceptEnvelope(envelope, now); err != nil {
+		return err
+	}
+	ack = core.NormalizeDurableAgentPolicyAcknowledgement(ack)
+	if ack.AgentID == "" {
+		ack.AgentID = strings.TrimSpace(envelope.AgentID)
+	}
+	if ack.AgentID != strings.TrimSpace(envelope.AgentID) {
+		return fmt.Errorf("durable agent policy acknowledgement agent_id does not match envelope")
+	}
+	if ack.AcknowledgedVersion <= 0 || ack.AcknowledgedHash == "" {
+		return fmt.Errorf("durable agent policy acknowledgement must include acknowledged version and hash")
+	}
+	now = normalizeControlPlaneTime(now)
+	if ack.AcknowledgedAt.IsZero() {
+		ack.AcknowledgedAt = now
+	}
+	state, err := cp.store.DurableAgentState(ack.AgentID)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if state == nil {
+		state = &core.DurableAgentState{AgentID: ack.AgentID}
+	}
+	if state.LastOfferedPolicyVersion < ack.AcknowledgedVersion || strings.TrimSpace(state.LastOfferedPolicyHash) == "" {
+		state.LastOfferedPolicyVersion = ack.AcknowledgedVersion
+		state.LastOfferedPolicyHash = ack.AcknowledgedHash
+		if state.LastOfferedPolicyAt.IsZero() {
+			state.LastOfferedPolicyAt = ack.AcknowledgedAt
+		}
+	}
+	state.LastAcknowledgedPolicyVersion = ack.AcknowledgedVersion
+	state.LastAcknowledgedPolicyHash = ack.AcknowledgedHash
+	state.LastAcknowledgedPolicyAt = ack.AcknowledgedAt.UTC()
+	state.LastApplyStatus = ack.Status
+	state.LastApplyError = ack.Error
+	if ack.AppliedVersion > 0 && ack.AppliedHash != "" {
+		state.LastAppliedPolicyVersion = ack.AppliedVersion
+		state.LastAppliedPolicyHash = ack.AppliedHash
+		state.LastAppliedPolicyAt = ack.AcknowledgedAt.UTC()
+	}
+	return cp.store.SaveDurableAgentState(*state)
+}
+
+func normalizeControlPlaneTime(now time.Time) time.Time {
+	if now.IsZero() {
+		return time.Now().UTC()
+	}
+	return now.UTC()
+}
+
+func outsideReplayWindow(timestamp time.Time, now time.Time, window time.Duration) bool {
+	if timestamp.IsZero() {
+		return true
+	}
+	delta := now.Sub(timestamp.UTC())
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta > window
+}

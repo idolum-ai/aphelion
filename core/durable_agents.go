@@ -124,6 +124,57 @@ type DurableAgentRatifiedOutcome struct {
 	AppliedAt           time.Time `json:"applied_at,omitempty"`
 }
 
+type DurableAgentRemoteEnrollment struct {
+	AgentID          string
+	ParentControlURL string
+	KeyFingerprint   string
+	ProtocolVersion  string
+	Status           string
+	LastSequence     int64
+	EnrolledAt       time.Time
+	LastSeenAt       time.Time
+	RevokedAt        time.Time
+}
+
+type DurableAgentControlEnvelope struct {
+	ProtocolVersion string          `json:"protocol_version,omitempty"`
+	AgentID         string          `json:"agent_id,omitempty"`
+	ParentAgentID   string          `json:"parent_agent_id,omitempty"`
+	MessageKind     string          `json:"message_kind,omitempty"`
+	MessageID       string          `json:"message_id,omitempty"`
+	Sequence        int64           `json:"sequence,omitempty"`
+	Timestamp       time.Time       `json:"timestamp,omitempty"`
+	Payload         json.RawMessage `json:"payload,omitempty"`
+	Signature       string          `json:"signature,omitempty"`
+}
+
+type DurableAgentControlReceipt struct {
+	AgentID     string
+	MessageID   string
+	MessageKind string
+	Sequence    int64
+	ReceivedAt  time.Time
+}
+
+type DurableAgentPolicySnapshot struct {
+	AgentID       string
+	PolicyVersion int64
+	PolicyHash    string
+	IssuedAt      time.Time
+	LivePolicy    DurableAgentLivePolicy
+}
+
+type DurableAgentPolicyAcknowledgement struct {
+	AgentID             string
+	AcknowledgedVersion int64
+	AcknowledgedHash    string
+	AppliedVersion      int64
+	AppliedHash         string
+	Status              string
+	Error               string
+	AcknowledgedAt      time.Time
+}
+
 type DurableReviewArtifact struct {
 	AgentID       string
 	Summary       string
@@ -136,6 +187,18 @@ type DurableReviewArtifact struct {
 }
 
 const durableAgentContinuityMaxItems = 12
+
+const DefaultDurableAgentControlProtocolVersion = "v1"
+
+const (
+	DurableAgentControlMessageEnrollment           = "enrollment"
+	DurableAgentControlMessageReattestation        = "re_attestation"
+	DurableAgentControlMessageReviewArtifactUpload = "review_artifact_upload"
+	DurableAgentControlMessageChildStateUpdate     = "child_state_update"
+	DurableAgentControlMessagePolicyPoll           = "policy_poll"
+	DurableAgentControlMessagePolicyUpdate         = "policy_update"
+	DurableAgentControlMessagePolicyAck            = "policy_ack"
+)
 
 func DefaultTelegramGroupLivePolicy(charter string) DurableAgentLivePolicy {
 	return NormalizeDurableAgentLivePolicy(DurableAgentLivePolicy{
@@ -304,6 +367,62 @@ func DurableAgentPolicyHash(policy DurableAgentLivePolicy) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+func NormalizeDurableAgentRemoteEnrollment(enrollment DurableAgentRemoteEnrollment) DurableAgentRemoteEnrollment {
+	enrollment.AgentID = strings.TrimSpace(enrollment.AgentID)
+	enrollment.ParentControlURL = strings.TrimSpace(enrollment.ParentControlURL)
+	enrollment.KeyFingerprint = strings.TrimSpace(enrollment.KeyFingerprint)
+	enrollment.ProtocolVersion = normalizeDurableAgentControlProtocolVersion(enrollment.ProtocolVersion)
+	enrollment.Status = normalizeDurableAgentRemoteEnrollmentStatus(enrollment.Status)
+	if enrollment.LastSequence < 0 {
+		enrollment.LastSequence = 0
+	}
+	return enrollment
+}
+
+func NormalizeDurableAgentControlEnvelope(envelope DurableAgentControlEnvelope) DurableAgentControlEnvelope {
+	envelope.ProtocolVersion = normalizeDurableAgentControlProtocolVersion(envelope.ProtocolVersion)
+	envelope.AgentID = strings.TrimSpace(envelope.AgentID)
+	envelope.ParentAgentID = strings.TrimSpace(envelope.ParentAgentID)
+	envelope.MessageKind = normalizeDurableAgentControlMessageKind(envelope.MessageKind)
+	envelope.MessageID = strings.TrimSpace(envelope.MessageID)
+	envelope.Signature = strings.TrimSpace(envelope.Signature)
+	if envelope.Sequence < 0 {
+		envelope.Sequence = 0
+	}
+	return envelope
+}
+
+func NormalizeDurableAgentPolicyAcknowledgement(ack DurableAgentPolicyAcknowledgement) DurableAgentPolicyAcknowledgement {
+	ack.AgentID = strings.TrimSpace(ack.AgentID)
+	ack.AcknowledgedHash = strings.TrimSpace(ack.AcknowledgedHash)
+	ack.AppliedHash = strings.TrimSpace(ack.AppliedHash)
+	ack.Status = normalizeDurableAgentPolicyApplyStatus(ack.Status)
+	ack.Error = strings.TrimSpace(ack.Error)
+	return ack
+}
+
+func ValidateDurableAgentControlEnvelope(envelope DurableAgentControlEnvelope) error {
+	envelope = NormalizeDurableAgentControlEnvelope(envelope)
+	switch {
+	case envelope.ProtocolVersion == "":
+		return fmt.Errorf("durable agent control envelope protocol_version is required")
+	case envelope.AgentID == "":
+		return fmt.Errorf("durable agent control envelope agent_id is required")
+	case envelope.MessageKind == "":
+		return fmt.Errorf("durable agent control envelope message_kind is required")
+	case envelope.MessageID == "":
+		return fmt.Errorf("durable agent control envelope message_id is required")
+	case envelope.Sequence <= 0:
+		return fmt.Errorf("durable agent control envelope sequence must be > 0")
+	case envelope.Timestamp.IsZero():
+		return fmt.Errorf("durable agent control envelope timestamp is required")
+	case envelope.Signature == "":
+		return fmt.Errorf("durable agent control envelope signature is required")
+	default:
+		return nil
+	}
+}
+
 func ParseDurableAgentContinuityState(raw string) (DurableAgentContinuityState, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -459,6 +578,48 @@ func normalizeNodeLLMBackend(value string) string {
 func normalizeNodeCodexAuthSource(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "auto", "codex_cli":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeDurableAgentControlProtocolVersion(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", DefaultDurableAgentControlProtocolVersion:
+		return DefaultDurableAgentControlProtocolVersion
+	default:
+		return ""
+	}
+}
+
+func normalizeDurableAgentControlMessageKind(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case DurableAgentControlMessageEnrollment,
+		DurableAgentControlMessageReattestation,
+		DurableAgentControlMessageReviewArtifactUpload,
+		DurableAgentControlMessageChildStateUpdate,
+		DurableAgentControlMessagePolicyPoll,
+		DurableAgentControlMessagePolicyUpdate,
+		DurableAgentControlMessagePolicyAck:
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeDurableAgentRemoteEnrollmentStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "revoked", "decommissioned":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "active"
+	}
+}
+
+func normalizeDurableAgentPolicyApplyStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "pending", "applied", "failed":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""
