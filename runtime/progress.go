@@ -101,6 +101,16 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 }
 
 func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.RawMessage, output string, err error) {
+	resultPreview := truncatePreview(strings.TrimSpace(output), 220)
+	errorText := ""
+	if err != nil {
+		errorText = trimError(err.Error())
+	}
+	if m.runID != 0 {
+		if storeErr := m.runtime.store.NoteTurnRunToolFinish(m.runID, resultPreview, errorText); storeErr != nil {
+			log.Printf("WARN note turn run tool finish id=%d tool=%s err=%v", m.runID, name, storeErr)
+		}
+	}
 	if m.progress != nil {
 		m.progress.ToolFinished(ctx, name, err)
 	}

@@ -1239,6 +1239,9 @@ func TestTurnRunLifecycleAndRecovery(t *testing.T) {
 	if err := store.NoteTurnRunToolStart(run.ID, "exec", `{"command":"rg foo"}`); err != nil {
 		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
 	}
+	if err := store.NoteTurnRunToolFinish(run.ID, "stdout:\nmatch", ""); err != nil {
+		t.Fatalf("NoteTurnRunToolFinish() err = %v", err)
+	}
 	if err := store.UpdateTurnRunProgressMessage(run.ID, 12345); err != nil {
 		t.Fatalf("UpdateTurnRunProgressMessage() err = %v", err)
 	}
@@ -1255,6 +1258,12 @@ func TestTurnRunLifecycleAndRecovery(t *testing.T) {
 	}
 	if interrupted[0].ToolCallsStarted != 1 {
 		t.Fatalf("tool_calls_started = %d, want 1", interrupted[0].ToolCallsStarted)
+	}
+	if interrupted[0].ToolCallsFinished != 1 {
+		t.Fatalf("tool_calls_finished = %d, want 1", interrupted[0].ToolCallsFinished)
+	}
+	if interrupted[0].LastToolResultPreview != "stdout:\nmatch" {
+		t.Fatalf("last_tool_result_preview = %q, want stdout match", interrupted[0].LastToolResultPreview)
 	}
 	if interrupted[0].ProgressMessageID != 12345 {
 		t.Fatalf("progress_message_id = %d, want 12345", interrupted[0].ProgressMessageID)
@@ -1306,7 +1315,7 @@ func TestCompleteTurnRun(t *testing.T) {
 	rows, err := store.db.Query(`
 		SELECT
 			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
-			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
 			progress_message_id, error_text, recovery_summary, recovery_logged_at
 		FROM turn_runs
 		WHERE id = ?

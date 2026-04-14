@@ -3470,6 +3470,12 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if run.ToolCallsStarted != 2 {
 		t.Fatalf("tool_calls_started = %d, want 2", run.ToolCallsStarted)
 	}
+	if run.ToolCallsFinished != 2 {
+		t.Fatalf("tool_calls_finished = %d, want 2", run.ToolCallsFinished)
+	}
+	if run.LastToolResultPreview == "" {
+		t.Fatal("last_tool_result_preview is empty, want persisted tool finish preview")
+	}
 	if run.ProgressMessageID != 1 {
 		t.Fatalf("progress_message_id = %d, want 1", run.ProgressMessageID)
 	}

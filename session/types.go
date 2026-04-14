@@ -199,6 +199,9 @@ type TurnRun struct {
 	LastToolName      string
 	LastToolPreview   string
 	ToolCallsStarted  int
+	ToolCallsFinished int
+	LastToolResultPreview string
+	LastToolError     string
 	ProgressMessageID int64
 	ErrorText         string
 	RecoverySummary   string

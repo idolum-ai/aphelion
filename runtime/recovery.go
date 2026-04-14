@@ -158,11 +158,20 @@ func renderStartupRecoveryRequest(runs []session.TurnRun) string {
 		if run.ToolCallsStarted > 0 {
 			lines = append(lines, fmt.Sprintf("  tool_calls_started=%d", run.ToolCallsStarted))
 		}
+		if run.ToolCallsFinished > 0 {
+			lines = append(lines, fmt.Sprintf("  tool_calls_finished=%d", run.ToolCallsFinished))
+		}
 		if strings.TrimSpace(run.LastToolName) != "" {
 			lines = append(lines, "  last_tool="+run.LastToolName)
 		}
 		if strings.TrimSpace(run.LastToolPreview) != "" {
 			lines = append(lines, "  last_tool_preview="+truncatePreview(run.LastToolPreview, 220))
+		}
+		if strings.TrimSpace(run.LastToolResultPreview) != "" {
+			lines = append(lines, "  last_tool_result_preview="+truncatePreview(run.LastToolResultPreview, 220))
+		}
+		if strings.TrimSpace(run.LastToolError) != "" {
+			lines = append(lines, "  last_tool_error="+strconv.Quote(truncatePreview(run.LastToolError, 220)))
 		}
 		if run.ProgressMessageID != 0 {
 			lines = append(lines, fmt.Sprintf("  progress_message_id=%d", run.ProgressMessageID))
