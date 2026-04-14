@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 18
+const schemaVersion = 19
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -145,6 +145,14 @@ func (s *SQLiteStore) init() error {
 			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'dismissed')),
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			delivered_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS plan_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			event_kind TEXT NOT NULL,
+			plan_state_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS turn_runs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -375,6 +383,13 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	sess.LastFloorText = nullToString(lastFloorText)
 	sess.LastFloorMetadata = nullToString(lastFloorMetadata)
 	sess.PlanState = decodePlanState(planStateJSON.String)
+	if len(sess.PlanState.Steps) == 0 && sess.PlanState.Explanation == "" {
+		if rehydrated, ok, rehydrateErr := s.rehydratePlanState(sessionID); rehydrateErr != nil {
+			return nil, rehydrateErr
+		} else if ok {
+			sess.PlanState = rehydrated
+		}
+	}
 	sess.ChatType = nullToString(chatType)
 	sess.ChatTitle = nullToString(chatTitle)
 	sess.UserName = nullToString(userName)
@@ -623,21 +638,32 @@ func (s *SQLiteStore) UpdateCacheState(key SessionKey, state CacheState) error {
 }
 
 func (s *SQLiteStore) UpdatePlanState(key SessionKey, state PlanState) error {
+	return s.updatePlanState(key, state, "")
+}
+
+func (s *SQLiteStore) UpdatePlanStateWithEvent(key SessionKey, state PlanState, kind PlanEventKind) error {
+	return s.updatePlanState(key, state, kind)
+}
+
+func (s *SQLiteStore) updatePlanState(key SessionKey, state PlanState, kind PlanEventKind) error {
+	if _, err := s.Load(key); err != nil {
+		return err
+	}
 	sessionID := SessionIDForKey(key)
 	state = NormalizePlanState(state)
-	_, err := s.db.Exec(`
-		UPDATE sessions
-		SET
-			plan_state_json = ?,
-			updated_at = ?
-		WHERE session_id = ?
-	`,
-		encodePlanState(state),
-		time.Now().UTC().Format(time.RFC3339Nano),
-		sessionID,
-	)
+	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("update plan state: %w", err)
+		return fmt.Errorf("begin update plan state tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := updatePlanStateTx(tx, sessionID, state, kind); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update plan state tx: %w", err)
 	}
 	return nil
 }
@@ -660,7 +686,170 @@ func (s *SQLiteStore) PlanState(key SessionKey) (PlanState, error) {
 	if err != nil {
 		return PlanState{}, fmt.Errorf("load plan state: %w", err)
 	}
-	return decodePlanState(raw.String), nil
+	state := decodePlanState(raw.String)
+	if len(state.Steps) > 0 || state.Explanation != "" {
+		return state, nil
+	}
+	rehydrated, ok, err := s.rehydratePlanState(sessionID)
+	if err != nil {
+		return PlanState{}, err
+	}
+	if ok {
+		return rehydrated, nil
+	}
+	return state, nil
+}
+
+func (s *SQLiteStore) PlanEvents(key SessionKey, limit int) ([]PlanEvent, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	sessionID := SessionIDForKey(key)
+	rows, err := s.db.Query(`
+		SELECT id, event_kind, plan_state_json, created_at
+		FROM plan_events
+		WHERE session_id = ?
+		ORDER BY created_at DESC, id DESC
+		LIMIT ?
+	`, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query plan events: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PlanEvent
+	for rows.Next() {
+		var (
+			event   PlanEvent
+			rawPlan sql.NullString
+			rawTime string
+		)
+		if err := rows.Scan(&event.ID, &event.Kind, &rawPlan, &rawTime); err != nil {
+			return nil, fmt.Errorf("scan plan event: %w", err)
+		}
+		event.SessionID = sessionID
+		event.PlanState = decodePlanState(rawPlan.String)
+		event.CreatedAt = mustParseSQLiteTime(rawTime)
+		out = append(out, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate plan events: %w", err)
+	}
+	return out, nil
+}
+
+func updatePlanStateTx(tx *sql.Tx, sessionID string, state PlanState, kind PlanEventKind) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := tx.Exec(`
+		UPDATE sessions
+		SET
+			plan_state_json = ?,
+			updated_at = ?
+		WHERE session_id = ?
+	`,
+		encodePlanState(state),
+		now,
+		sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("update plan state: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("plan state rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("update plan state: session %q not found", sessionID)
+	}
+	if strings.TrimSpace(string(kind)) == "" {
+		return nil
+	}
+	if err := recordPlanEventTx(tx, sessionID, kind, state); err != nil {
+		return err
+	}
+	return nil
+}
+
+func recordPlanEventTx(tx *sql.Tx, sessionID string, kind PlanEventKind, state PlanState) error {
+	if _, err := tx.Exec(`
+		INSERT INTO plan_events(session_id, event_kind, plan_state_json, created_at)
+		VALUES (?, ?, ?, ?)
+	`, sessionID, string(kind), encodePlanState(state), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("insert plan event: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) rehydratePlanState(sessionID string) (PlanState, bool, error) {
+	state, ok, err := s.latestPlanEventState(sessionID)
+	if err != nil {
+		return PlanState{}, false, err
+	}
+	if !ok {
+		state, ok, err = s.latestTranscriptPlanState(sessionID)
+		if err != nil {
+			return PlanState{}, false, err
+		}
+	}
+	if !ok {
+		return PlanState{}, false, nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return PlanState{}, false, fmt.Errorf("begin rehydrate plan tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if err := updatePlanStateTx(tx, sessionID, state, PlanEventKindRehydrated); err != nil {
+		return PlanState{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PlanState{}, false, fmt.Errorf("commit rehydrate plan tx: %w", err)
+	}
+	return state, true, nil
+}
+
+func (s *SQLiteStore) latestPlanEventState(sessionID string) (PlanState, bool, error) {
+	var raw sql.NullString
+	err := s.db.QueryRow(`
+		SELECT plan_state_json
+		FROM plan_events
+		WHERE session_id = ?
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, sessionID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlanState{}, false, nil
+	}
+	if err != nil {
+		return PlanState{}, false, fmt.Errorf("load latest plan event: %w", err)
+	}
+	state := decodePlanState(raw.String)
+	if len(state.Steps) == 0 && state.Explanation == "" {
+		return PlanState{}, false, nil
+	}
+	return state, true, nil
+}
+
+func (s *SQLiteStore) latestTranscriptPlanState(sessionID string) (PlanState, bool, error) {
+	var content sql.NullString
+	err := s.db.QueryRow(`
+		SELECT content
+		FROM messages
+		WHERE session_id = ? AND role = 'tool' AND tool_name = 'update_plan'
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, sessionID).Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlanState{}, false, nil
+	}
+	if err != nil {
+		return PlanState{}, false, fmt.Errorf("load transcript plan state: %w", err)
+	}
+	state, ok := parseRenderedPlanState(content.String)
+	return state, ok, nil
 }
 
 func (s *SQLiteStore) Compact(key SessionKey, summary string, keepFromTurn int) error {
@@ -2607,6 +2796,7 @@ func migrateSessionIdentity(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_outbound_session ON outbound_messages(session_id, turn_index)`,
 		`CREATE INDEX IF NOT EXISTS idx_review_events_target ON review_events(target_chat_id, status, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_review_events_target_session ON review_events(target_session_id, status, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_events_session ON plan_events(session_id, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
 	} {
@@ -2625,6 +2815,7 @@ func ensureSessionIdentityIndexes(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_outbound_session ON outbound_messages(session_id, turn_index)`,
 		`CREATE INDEX IF NOT EXISTS idx_review_events_target ON review_events(target_chat_id, status, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_review_events_target_session ON review_events(target_session_id, status, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_plan_events_session ON plan_events(session_id, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
 	} {
@@ -3673,6 +3864,46 @@ func decodePlanState(raw string) PlanState {
 		return PlanState{}
 	}
 	return NormalizePlanState(state)
+}
+
+func parseRenderedPlanState(raw string) (PlanState, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return PlanState{}, false
+	}
+
+	var (
+		state  PlanState
+		header bool
+	)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "[PLAN"):
+			header = true
+		case strings.HasPrefix(strings.ToLower(line), "explanation:"):
+			state.Explanation = strings.TrimSpace(strings.TrimPrefix(line, "explanation:"))
+		case strings.HasPrefix(line, "- ["):
+			end := strings.Index(line, "]")
+			if end <= 3 {
+				continue
+			}
+			status := NormalizePlanStatus(PlanStatus(line[3:end]))
+			step := strings.TrimSpace(line[end+1:])
+			if status == "" || step == "" {
+				continue
+			}
+			state.Steps = append(state.Steps, PlanStep{Step: step, Status: status})
+		}
+	}
+	state = NormalizePlanState(state)
+	if !header || (len(state.Steps) == 0 && state.Explanation == "") {
+		return PlanState{}, false
+	}
+	return state, true
 }
 
 func mustParseSQLiteTime(raw string) time.Time {

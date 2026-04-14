@@ -63,6 +63,22 @@ type PlanState struct {
 	UpdatedAt   time.Time  `json:"updated_at,omitempty"`
 }
 
+type PlanEventKind string
+
+const (
+	PlanEventKindToolUpdated   PlanEventKind = "tool_updated"
+	PlanEventKindBrokerageSeed PlanEventKind = "brokerage_seed"
+	PlanEventKindRehydrated    PlanEventKind = "rehydrated"
+)
+
+type PlanEvent struct {
+	ID        int64
+	SessionID string
+	Kind      PlanEventKind
+	PlanState PlanState
+	CreatedAt time.Time
+}
+
 // SessionKey identifies a unique session.
 type SessionKey struct {
 	ChatID int64

@@ -324,6 +324,120 @@ func TestPlanStateRoundTripAndUpdate(t *testing.T) {
 	}
 }
 
+func TestPlanEventsRoundTripAndRehydrateFromLatestEvent(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 78, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "78"}}
+	state := PlanState{
+		Explanation: "Track long-running work durably.",
+		Steps: []PlanStep{
+			{Step: "Inspect the current runtime.", Status: PlanStatusInProgress},
+			{Step: "Patch the missing event log.", Status: PlanStatusPending},
+		},
+	}
+
+	if err := store.UpdatePlanStateWithEvent(key, state, PlanEventKindToolUpdated); err != nil {
+		t.Fatalf("UpdatePlanStateWithEvent() err = %v", err)
+	}
+
+	events, err := store.PlanEvents(key, 10)
+	if err != nil {
+		t.Fatalf("PlanEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("plan events len = %d, want 1", len(events))
+	}
+	if events[0].Kind != PlanEventKindToolUpdated {
+		t.Fatalf("plan event kind = %q, want %q", events[0].Kind, PlanEventKindToolUpdated)
+	}
+	if events[0].PlanState.Explanation != state.Explanation {
+		t.Fatalf("event explanation = %q, want %q", events[0].PlanState.Explanation, state.Explanation)
+	}
+
+	if _, err := store.db.Exec(`UPDATE sessions SET plan_state_json = '{}' WHERE session_id = ?`, SessionIDForKey(key)); err != nil {
+		t.Fatalf("clear plan_state_json err = %v", err)
+	}
+
+	rehydrated, err := store.PlanState(key)
+	if err != nil {
+		t.Fatalf("PlanState(rehydrated) err = %v", err)
+	}
+	if rehydrated.Explanation != state.Explanation {
+		t.Fatalf("rehydrated explanation = %q, want %q", rehydrated.Explanation, state.Explanation)
+	}
+	if len(rehydrated.Steps) != 2 || rehydrated.Steps[0].Status != PlanStatusInProgress {
+		t.Fatalf("rehydrated steps = %#v, want original state", rehydrated.Steps)
+	}
+
+	events, err = store.PlanEvents(key, 10)
+	if err != nil {
+		t.Fatalf("PlanEvents(after rehydrate) err = %v", err)
+	}
+	if len(events) < 2 {
+		t.Fatalf("plan events len after rehydrate = %d, want >= 2", len(events))
+	}
+	if events[0].Kind != PlanEventKindRehydrated {
+		t.Fatalf("latest plan event kind = %q, want %q", events[0].Kind, PlanEventKindRehydrated)
+	}
+}
+
+func TestPlanStateRehydratesFromTranscriptWhenEventLogMissing(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 79, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "79"}}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.TurnCount = 1
+	if err := store.Save(sess, []Message{
+		{Role: "user", Content: "work through this", TurnIndex: 1},
+		{
+			Role:     "tool",
+			ToolName: "update_plan",
+			Content: strings.Join([]string{
+				"[PLAN_UPDATED]",
+				"active: true",
+				"explanation: Recover from transcript state.",
+				"- [in_progress] Inspect the relevant files.",
+				"- [pending] Patch the bug.",
+			}, "\n"),
+			TurnIndex: 1,
+		},
+	}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	if _, err := store.db.Exec(`UPDATE sessions SET plan_state_json = '{}' WHERE session_id = ?`, SessionIDForKey(key)); err != nil {
+		t.Fatalf("clear plan_state_json err = %v", err)
+	}
+
+	rehydrated, err := store.PlanState(key)
+	if err != nil {
+		t.Fatalf("PlanState(rehydrated) err = %v", err)
+	}
+	if rehydrated.Explanation != "Recover from transcript state." {
+		t.Fatalf("rehydrated explanation = %q, want transcript-derived explanation", rehydrated.Explanation)
+	}
+	if len(rehydrated.Steps) != 2 || rehydrated.Steps[1].Status != PlanStatusPending {
+		t.Fatalf("rehydrated steps = %#v, want transcript-derived plan", rehydrated.Steps)
+	}
+
+	events, err := store.PlanEvents(key, 10)
+	if err != nil {
+		t.Fatalf("PlanEvents() err = %v", err)
+	}
+	if len(events) == 0 || events[0].Kind != PlanEventKindRehydrated {
+		t.Fatalf("plan events = %#v, want transcript rehydration event", events)
+	}
+}
+
 func TestSaveUpdatesCacheTotalsAndState(t *testing.T) {
 	t.Parallel()
 
