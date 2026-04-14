@@ -74,3 +74,51 @@ func TestNewMessagesForTurn(t *testing.T) {
 		t.Fatalf("tool row = %#v", rows[2])
 	}
 }
+
+func TestToAgentHistoryBackfillsPendingToolIdentity(t *testing.T) {
+	t.Parallel()
+
+	history, err := ToAgentHistory([]Message{
+		{ID: 1, Role: "assistant", Content: "running", ToolCalls: `[{"id":"t1","name":"exec","input":{"command":"pwd"}}]`},
+		{ID: 2, Role: "tool", Content: "stdout:\n/home/test"},
+	})
+	if err != nil {
+		t.Fatalf("ToAgentHistory() err = %v", err)
+	}
+
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want 2", len(history))
+	}
+	if history[1].Role != "tool" {
+		t.Fatalf("history[1] = %#v, want tool message", history[1])
+	}
+	if history[1].ToolCallID != "t1" || history[1].ToolName != "exec" {
+		t.Fatalf("history[1] = %#v, want repaired tool identity", history[1])
+	}
+}
+
+func TestToAgentHistorySynthesizesMissingToolResultsAndDropsOrphans(t *testing.T) {
+	t.Parallel()
+
+	history, err := ToAgentHistory([]Message{
+		{ID: 1, Role: "assistant", Content: "running", ToolCalls: `[{"id":"t1","name":"exec","input":{"command":"pwd"}}]`},
+		{ID: 2, Role: "assistant", Content: "done"},
+		{ID: 3, Role: "tool", Content: "orphan output", ToolID: "orphan", ToolName: "exec"},
+	})
+	if err != nil {
+		t.Fatalf("ToAgentHistory() err = %v", err)
+	}
+
+	if len(history) != 3 {
+		t.Fatalf("history len = %d, want 3", len(history))
+	}
+	if history[1].Role != "tool" || history[1].ToolCallID != "t1" || history[1].ToolName != "exec" {
+		t.Fatalf("history[1] = %#v, want synthesized tool result", history[1])
+	}
+	if history[1].Content != "tool_error: missing tool result in persisted transcript" {
+		t.Fatalf("history[1].Content = %q, want synthesized tool error", history[1].Content)
+	}
+	if history[2].Role != "assistant" || history[2].Content != "done" {
+		t.Fatalf("history[2] = %#v, want trailing assistant", history[2])
+	}
+}

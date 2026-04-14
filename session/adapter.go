@@ -31,7 +31,7 @@ func ToAgentHistory(messages []Message) ([]agent.Message, error) {
 		}
 		out = append(out, entry)
 	}
-	return out, nil
+	return repairAgentHistory(out), nil
 }
 
 // NewMessagesForTurn converts user input + generated assistant/tool messages into persisted rows.
@@ -89,4 +89,136 @@ func toolNameFromContent(content string) string {
 		return ""
 	}
 	return "exec"
+}
+
+func repairAgentHistory(history []agent.Message) []agent.Message {
+	repaired := make([]agent.Message, 0, len(history))
+	pending := newPendingToolCalls()
+	for _, msg := range history {
+		switch msg.Role {
+		case "assistant":
+			if pending.hasPending() {
+				repaired = append(repaired, pending.flushMissing()...)
+			}
+			msg.ToolCalls = sanitizeToolCalls(msg.ToolCalls)
+			repaired = append(repaired, msg)
+			pending.add(msg.ToolCalls)
+		case "tool":
+			toolMsg, ok := pending.match(msg)
+			if !ok {
+				continue
+			}
+			repaired = append(repaired, toolMsg)
+		default:
+			if pending.hasPending() {
+				repaired = append(repaired, pending.flushMissing()...)
+			}
+			repaired = append(repaired, msg)
+		}
+	}
+	if pending.hasPending() {
+		repaired = append(repaired, pending.flushMissing()...)
+	}
+	return repaired
+}
+
+func sanitizeToolCalls(calls []agent.ToolCall) []agent.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]agent.ToolCall, 0, len(calls))
+	for _, call := range calls {
+		if strings.TrimSpace(call.ID) == "" || strings.TrimSpace(call.Name) == "" {
+			continue
+		}
+		out = append(out, call)
+	}
+	return out
+}
+
+type pendingToolCalls struct {
+	order []agent.ToolCall
+	byID  map[string]agent.ToolCall
+}
+
+func newPendingToolCalls() *pendingToolCalls {
+	return &pendingToolCalls{byID: make(map[string]agent.ToolCall)}
+}
+
+func (p *pendingToolCalls) hasPending() bool {
+	return len(p.order) > 0
+}
+
+func (p *pendingToolCalls) add(calls []agent.ToolCall) {
+	for _, call := range calls {
+		id := strings.TrimSpace(call.ID)
+		if id == "" {
+			continue
+		}
+		p.order = append(p.order, call)
+		p.byID[id] = call
+	}
+}
+
+func (p *pendingToolCalls) match(msg agent.Message) (agent.Message, bool) {
+	if len(p.order) == 0 {
+		return agent.Message{}, false
+	}
+
+	repaired := msg
+	repaired.ToolCallID = strings.TrimSpace(repaired.ToolCallID)
+	repaired.ToolName = strings.TrimSpace(repaired.ToolName)
+
+	if repaired.ToolCallID == "" {
+		switch len(p.order) {
+		case 1:
+			repaired.ToolCallID = p.order[0].ID
+		default:
+			if repaired.ToolName != "" {
+				for _, call := range p.order {
+					if strings.TrimSpace(call.Name) == repaired.ToolName {
+						repaired.ToolCallID = call.ID
+						break
+					}
+				}
+			}
+		}
+	}
+
+	call, ok := p.byID[repaired.ToolCallID]
+	if !ok {
+		return agent.Message{}, false
+	}
+	repaired.ToolName = call.Name
+	p.remove(call.ID)
+	return repaired, true
+}
+
+func (p *pendingToolCalls) flushMissing() []agent.Message {
+	if len(p.order) == 0 {
+		return nil
+	}
+	out := make([]agent.Message, 0, len(p.order))
+	for _, call := range p.order {
+		out = append(out, agent.Message{
+			Role:       "tool",
+			Content:    "tool_error: missing tool result in persisted transcript",
+			ToolCallID: call.ID,
+			ToolName:   call.Name,
+		})
+	}
+	p.order = nil
+	p.byID = make(map[string]agent.ToolCall)
+	return out
+}
+
+func (p *pendingToolCalls) remove(id string) {
+	delete(p.byID, id)
+	for idx, call := range p.order {
+		if call.ID != id {
+			continue
+		}
+		p.order = append(p.order[:idx], p.order[idx+1:]...)
+		return
+	}
 }
