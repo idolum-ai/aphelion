@@ -205,6 +205,16 @@ Instead:
 
 This keeps proposal semantics durable and session-native while keeping the interaction transport-neutral.
 
+The same pattern should be reused for child setup work.
+
+Creating a durable email child is an operation:
+
+- objective: set up a bounded inbox child
+- stage: proposal, configuration, connection, activation
+- proposal: adapter choice, capability acquisition, credential binding, or activation threshold
+
+That lets the setup behave like guided operational work instead of a one-shot static form.
+
 ## Persona Rule
 
 The public-facing persona remains `Idolum`.

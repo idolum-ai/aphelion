@@ -498,6 +498,72 @@ Dormancy means:
 The parent heartbeat may notice stale durable-agent state, pending review artifacts, or missed wakeups.
 But the parent heartbeat should not collapse into running every child's internal lifecycle.
 
+## Conversational Creation and Child Charter
+
+Durable agents should not be registry-only objects created out-of-band forever.
+
+The admin conversation with `Idolum` should be able to create a new bounded child through ordinary dialogue.
+
+The shape is:
+
+1. the parent proposes creating a durable child
+2. the admin approves the proposal
+3. the conversation becomes a bounded setup flow
+4. the resulting child charter is persisted as machine-readable policy
+5. activation happens only after the required channel connection is configured
+
+This should feel more like setting up a specialist worker than filling out a hidden config file.
+
+The conversation may ask one missing question at a time, for example:
+
+- should the child be read-only at first
+- should it ever draft or send replies
+- what counts as important enough to surface upward
+- whether PDFs or other attachments should be summarized automatically
+- how often the child should synthesize findings upward
+- whether it wakes on polling, push, or both
+- what local actions are allowed
+- what should never be retained
+
+The answers belong to the charter formed by the admin and parent together.
+They do not come from external senders or from the child improvising its own standing role.
+
+## Registry Shape
+
+The durable-agent registry should keep using the existing durable-agent record as the durable identity and policy object.
+
+The first structured extension should be:
+
+- `channel_config`: machine-readable channel-specific configuration for the child
+
+This should not replace the existing live policy.
+The split is:
+
+- `live_policy`: behavioral authority and constitutional posture
+- `channel_config`: source-specific wiring and bounded child charter details
+
+For an email child, the top-level durable-agent fields should continue to hold:
+
+- `channel_kind=email`
+- `wakeup_mode`
+- `secret_scopes`
+- `local_storage_roots`
+- `network_policy`
+- `live_policy.outbound_mode`
+- `live_policy.capability_envelope`
+
+The email-specific `channel_config` should hold the rest of the operational shape, such as:
+
+- owned address or inbox identity
+- adapter kind such as `gog_cli`
+- poll interval
+- importance / escalation criteria
+- attachment handling rules
+- synthesis cadence
+- retention ceilings or explicit `never_retain` classes
+
+This keeps the child charter structured without flattening all durable-agent behavior into one giant generic policy object.
+
 ## Channel Admission and Ingress Safety
 
 Default rule:
@@ -547,6 +613,25 @@ The admin and parent define:
 The email agent then polls or receives events, digests locally, and reports upward through review artifacts.
 If the admin decides the summaries should change, that drift is approved in the parent conversation and then pushed downward.
 
+### Conversational setup
+
+The preferred creation path is a guided parent-admin conversation, not a startup-only config entry.
+
+Typical flow:
+
+1. Proposal:
+   `Idolum` proposes creating an email durable child and asks for approval before capability or connection work begins.
+2. Setup questions:
+   The parent asks only the missing questions needed to form a bounded charter.
+3. Draft persistence:
+   The registry persists the child in a `draft` or other non-active state while the charter is still being formed.
+4. Connection test:
+   The chosen ingress adapter and scoped credentials are tested.
+5. Activation:
+   The child becomes `active` only once the charter and channel connection are both ready.
+
+The public surface should remain one coherent `Idolum` conversation, even when the underlying runtime is drafting structured child policy behind the scenes.
+
 ### Typical flow
 
 1. Admin setup:
@@ -569,6 +654,23 @@ If the admin decides the summaries should change, that drift is approved in the 
    Approved policy or charter changes are pushed back to the child with provenance.
 10. Dormancy:
    The child returns to idle until the next inbox event or bounded poll cycle.
+
+### First live slice
+
+The first concrete slice should be intentionally narrow:
+
+- read-only email child
+- poll-driven wakeups
+- no outbound mail
+- scoped inbox credentials for the child only
+- bounded upward digests through review artifacts
+
+This slice is already enough to make the architecture real:
+
+- the inbox has continuity
+- the child owns the local work
+- the parent remains protected
+- widening autonomy later still goes through admin-ratified drift
 
 ## Family Telegram group durable agent
 

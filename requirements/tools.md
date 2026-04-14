@@ -149,6 +149,32 @@ The broker is transport machinery, not the semantic source of the proposal.
 
 The proposal itself should live in durable session state and be renderable independent of Telegram or CLI transport.
 
+The same proposal discipline should apply to durable-child creation.
+
+Examples:
+
+- proposing the use of a channel adapter such as `gog`
+- proposing child-scoped credential binding
+- proposing activation of a newly chartered durable child
+
+Those are not ordinary shell-command approvals.
+They are bounded operational proposals inside the admin conversation.
+
+## Durable-Agent Governance Tooling
+
+The `durable_agent` governance surface should not be limited to editing already-existing children forever.
+
+It should support, at minimum:
+
+- listing registered children
+- showing current policy
+- creating a new draft child
+- updating or ratifying a draft child's charter
+- testing a channel connection
+- activating a child once its charter and connection are ready
+
+Creation and activation remain admin-only, but they should be reachable from ordinary conversation rather than only from startup config.
+
 ## `TOOLS.md`
 
 `TOOLS.md` is a valid Aphelion concept.
