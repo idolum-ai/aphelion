@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/idolum-ai/aphelion/core"
 )
@@ -144,10 +146,14 @@ func RunTurn(
 		toolDefs      []ToolDef
 		toolLog       []string
 		pendingBudget string
+		toolIDs       = newToolIDGenerator(history)
+		toolRepair    = newToolRepairState(toolDefs)
+		toolLoopGuard toolLoopGuardState
 	)
 
 	if tools != nil {
 		toolDefs = tools.Definitions()
+		toolRepair = newToolRepairState(toolDefs)
 	}
 
 	for {
@@ -197,13 +203,19 @@ func RunTurn(
 			resp = retried
 		}
 
+		repairedCalls := make([]ToolCall, 0, len(resp.ToolCalls))
+		for _, call := range resp.ToolCalls {
+			repairedCalls = append(repairedCalls, toolRepair.repair(call, toolIDs.next))
+		}
+		resp.ToolCalls = repairedCalls
+
 		history = append(history, Message{
 			Role:          "assistant",
 			Content:       resp.Content,
 			Thinking:      resp.Thinking,
 			ThinkingMeta:  append([]ThinkingBlock(nil), resp.ThinkingMeta...),
 			ProviderState: append(json.RawMessage(nil), resp.ProviderState...),
-			ToolCalls:     append([]ToolCall(nil), resp.ToolCalls...),
+			ToolCalls:     append([]ToolCall(nil), repairedCalls...),
 		})
 
 		if len(resp.ToolCalls) == 0 {
@@ -220,6 +232,33 @@ func RunTurn(
 		}
 
 		for _, call := range resp.ToolCalls {
+			repairedInput, inputErr := repairToolInput(call.Input)
+			if inputErr != nil {
+				content := withBudgetWarning(fmt.Sprintf("tool_error: Invalid tool arguments for %s: %v", call.Name, inputErr), &pendingBudget)
+				toolLog = append(toolLog, fmt.Sprintf("%s:error", call.Name))
+				history = append(history, Message{
+					Role:       "tool",
+					Content:    content,
+					ToolCallID: call.ID,
+					ToolName:   call.Name,
+				})
+				continue
+			}
+			call.Input = repairedInput
+
+			requestSig, loopBlocked := toolLoopGuard.shouldBlock(call)
+			if loopBlocked {
+				content := withBudgetWarning(fmt.Sprintf("tool_error: no-progress tool loop blocked for %s", call.Name), &pendingBudget)
+				toolLog = append(toolLog, fmt.Sprintf("%s:error", call.Name))
+				history = append(history, Message{
+					Role:       "tool",
+					Content:    content,
+					ToolCallID: call.ID,
+					ToolName:   call.Name,
+				})
+				continue
+			}
+
 			out, toolErr := tools.Execute(ctx, call.Name, call.Input)
 			if toolErr != nil {
 				log.Printf("WARN tool execution failed tool=%s id=%s err=%v", call.Name, call.ID, toolErr)
@@ -239,14 +278,8 @@ func RunTurn(
 				toolLog = append(toolLog, fmt.Sprintf("%s:ok", call.Name))
 			}
 
-			if pendingBudget != "" {
-				if content == "" {
-					content = pendingBudget
-				} else {
-					content += "\n\n" + pendingBudget
-				}
-				pendingBudget = ""
-			}
+			toolLoopGuard.recordOutcome(requestSig, content, toolErr != nil)
+			content = withBudgetWarning(content, &pendingBudget)
 
 			history = append(history, Message{
 				Role:       "tool",
@@ -448,4 +481,159 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+type toolIDGenerator struct {
+	nextID int
+}
+
+func newToolIDGenerator(history []Message) *toolIDGenerator {
+	maxID := 0
+	for _, msg := range history {
+		for _, call := range msg.ToolCalls {
+			if id := parseSyntheticToolID(call.ID); id > maxID {
+				maxID = id
+			}
+		}
+		if id := parseSyntheticToolID(msg.ToolCallID); id > maxID {
+			maxID = id
+		}
+	}
+	return &toolIDGenerator{nextID: maxID + 1}
+}
+
+func (g *toolIDGenerator) next() string {
+	id := fmt.Sprintf("toolcall-%d", g.nextID)
+	g.nextID++
+	return id
+}
+
+func parseSyntheticToolID(id string) int {
+	const prefix = "toolcall-"
+	if !strings.HasPrefix(id, prefix) {
+		return 0
+	}
+	var value int
+	if _, err := fmt.Sscanf(id, prefix+"%d", &value); err != nil {
+		return 0
+	}
+	return value
+}
+
+type toolRepairState struct {
+	byCanonical map[string]string
+}
+
+func newToolRepairState(defs []ToolDef) toolRepairState {
+	byCanonical := make(map[string]string, len(defs))
+	for _, def := range defs {
+		name := strings.TrimSpace(def.Name)
+		if name == "" {
+			continue
+		}
+		byCanonical[canonicalToolName(name)] = name
+	}
+	return toolRepairState{byCanonical: byCanonical}
+}
+
+func (s toolRepairState) repair(call ToolCall, nextID func() string) ToolCall {
+	repaired := call
+	if strings.TrimSpace(repaired.ID) == "" {
+		repaired.ID = nextID()
+	}
+	if actual, ok := s.byCanonical[canonicalToolName(repaired.Name)]; ok {
+		repaired.Name = actual
+	}
+	return repaired
+}
+
+func canonicalToolName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func repairToolInput(input json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(input)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return json.RawMessage(`{}`), nil
+	}
+	if json.Valid(trimmed) {
+		var wrapped string
+		if err := json.Unmarshal(trimmed, &wrapped); err == nil {
+			unwrapped := strings.TrimSpace(wrapped)
+			if unwrapped != "" && json.Valid([]byte(unwrapped)) {
+				return compactJSON(json.RawMessage(unwrapped))
+			}
+		}
+		return compactJSON(json.RawMessage(trimmed))
+	}
+	return nil, fmt.Errorf("input is not valid JSON")
+}
+
+func compactJSON(input json.RawMessage) (json.RawMessage, error) {
+	var decoded any
+	if err := json.Unmarshal(input, &decoded); err != nil {
+		return nil, err
+	}
+	compact, err := json.Marshal(decoded)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(compact), nil
+}
+
+type toolLoopGuardState struct {
+	lastRequest string
+	lastOutcome string
+	streak      int
+}
+
+func (s *toolLoopGuardState) shouldBlock(call ToolCall) (string, bool) {
+	requestSig := toolRequestSignature(call)
+	switch call.Name {
+	case "update_plan":
+		return requestSig, false
+	case "exec":
+		return requestSig, s.lastRequest == requestSig && s.streak >= 2
+	default:
+		return requestSig, false
+	}
+}
+
+func (s *toolLoopGuardState) recordOutcome(requestSig, content string, failed bool) {
+	outcomeSig := content
+	if failed {
+		outcomeSig = "error:" + outcomeSig
+	} else {
+		outcomeSig = "ok:" + outcomeSig
+	}
+	if s.lastRequest == requestSig && s.lastOutcome == outcomeSig {
+		s.streak++
+	} else {
+		s.lastRequest = requestSig
+		s.lastOutcome = outcomeSig
+		s.streak = 1
+	}
+}
+
+func toolRequestSignature(call ToolCall) string {
+	return strings.TrimSpace(call.Name) + "\n" + strings.TrimSpace(string(call.Input))
+}
+
+func withBudgetWarning(content string, pending *string) string {
+	if pending == nil || *pending == "" {
+		return content
+	}
+	if content == "" {
+		content = *pending
+	} else {
+		content += "\n\n" + *pending
+	}
+	*pending = ""
+	return content
 }
