@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
@@ -238,12 +239,7 @@ func (r *Runtime) deliverStartupRecoveryCatchup(ctx context.Context, systemPromp
 }
 
 func renderStartupRecoveryCatchup(runs []session.TurnRun, floorText string) string {
-	parts := []string{"Restart catch-up."}
-	if len(runs) == 1 {
-		parts = append(parts, "I recovered 1 interrupted turn.")
-	} else {
-		parts = append(parts, fmt.Sprintf("I recovered %d interrupted turns.", len(runs)))
-	}
+	notice := face.StartupRecoveryNotice{InterruptedCount: len(runs)}
 	if len(runs) > 0 {
 		last := runs[0]
 		for _, run := range runs[1:] {
@@ -252,17 +248,16 @@ func renderStartupRecoveryCatchup(runs []session.TurnRun, floorText string) stri
 			}
 		}
 		if request := strings.TrimSpace(last.RequestText); request != "" {
-			parts = append(parts, "Most recent interrupted request: "+strconv.Quote(truncatePreview(request, 160))+".")
+			notice.MostRecentRequest = truncatePreview(request, 160)
 		}
 		if tool := strings.TrimSpace(last.LastToolName); tool != "" {
-			parts = append(parts, "Last tool in flight: "+tool+".")
+			notice.LastTool = tool
 		}
 	}
 	if summary := sanitizeStartupRecoveryCatchupSummary(floorText); summary != "" {
-		parts = append(parts, "Recovery note: "+sentenceAwareSummary(summary, 240))
+		notice.RecoverySummary = sentenceAwareSummary(summary, 240)
 	}
-	parts = append(parts, "Next: investigate the interruption before returning to deferred work.")
-	return strings.Join(parts, " ")
+	return face.RenderStartupRecovery(notice)
 }
 
 func sanitizeStartupRecoveryCatchupSummary(raw string) string {

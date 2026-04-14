@@ -487,37 +487,41 @@ func formatReviewEventMessage(event session.ReviewEvent) string {
 	} else if event.TurnFrom > 0 {
 		turnRange = fmt.Sprintf("%d", event.TurnFrom)
 	}
-
-	return fmt.Sprintf(
-		"[Review Digest]\nsource_chat=%d source_user=%d source_role=%s%s turns=%s\n\n%s",
-		event.SourceChatID,
-		event.SourceUserID,
-		event.SourceRole,
-		formatReviewScopeSuffix(event),
-		turnRange,
-		strings.TrimSpace(event.Summary),
-	)
+	return face.RenderReviewDigest(face.ReviewDigestNotice{
+		SourceChatID: event.SourceChatID,
+		SourceUserID: event.SourceUserID,
+		SourceRole:   event.SourceRole,
+		SourceScope:  formattedReviewEventScope(event),
+		SourceAgent:  formattedReviewEventAgent(event),
+		ParentScope:  formattedReviewEventParentScope(event),
+		TurnRange:    turnRange,
+		Summary:      strings.TrimSpace(event.Summary),
+	})
 }
 
-func formatReviewScopeSuffix(event session.ReviewEvent) string {
+func formattedReviewEventScope(event session.ReviewEvent) string {
 	scope := session.NormalizeScopeRef(event.SourceScope)
 	if scope.IsZero() {
 		return ""
 	}
-	parts := []string{" source_scope=" + scope.String()}
-	if scope.DurableAgentID != "" {
-		parts = append(parts, " source_agent="+scope.DurableAgentID)
+	return scope.String()
+}
+
+func formattedReviewEventAgent(event session.ReviewEvent) string {
+	scope := session.NormalizeScopeRef(event.SourceScope)
+	return strings.TrimSpace(scope.DurableAgentID)
+}
+
+func formattedReviewEventParentScope(event session.ReviewEvent) string {
+	scope := session.NormalizeScopeRef(event.SourceScope)
+	if scope.ParentScopeKind == "" && scope.ParentScopeID == "" {
+		return ""
 	}
-	if scope.ParentScopeKind != "" || scope.ParentScopeID != "" {
-		parent := session.NormalizeScopeRef(session.ScopeRef{
-			Kind: scope.ParentScopeKind,
-			ID:   scope.ParentScopeID,
-		})
-		if !parent.IsZero() {
-			parts = append(parts, " parent_scope="+parent.String())
-		}
+	parent := session.NormalizeScopeRef(session.ScopeRef{Kind: scope.ParentScopeKind, ID: scope.ParentScopeID})
+	if parent.IsZero() {
+		return ""
 	}
-	return strings.Join(parts, "")
+	return parent.String()
 }
 
 func toolManifest(registry agent.ToolRegistry) string {

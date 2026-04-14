@@ -120,7 +120,7 @@ Cron should default toward artifacts and events first, not chatty conversational
 If a cron run does produce a user-visible message:
 
 1. the scheduled job produces a governor floor
-2. `Idolum` may propose the user-facing phrasing
+2. `Idolum` authors the user-facing scheduled message from that floor when available
 3. the governor authorizes the outward message
 4. the delivered message enters the visible ledger of the target session
 5. the cron floor remains sidecar audit state
@@ -144,7 +144,7 @@ Internally, cron-originated outreach should be auditable as:
 - job-linked
 - distinct from heartbeat-originated outreach
 
-The face layer may supply a warmer or more relational wording for scheduled outreach, but it must not self-authorize the delivery.
+The face layer owns the relationship-bearing scheduled wording when available, but it must not self-authorize the delivery.
 
 The rule remains:
 

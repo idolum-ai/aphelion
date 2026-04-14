@@ -9,7 +9,7 @@ Heartbeat is not cron.
 - **heartbeat** is reflective, stateful, and selective
 - **cron** is scheduled task execution
 
-Heartbeat belongs to **Aphelion** the governor. If a heartbeat turn produces a user-visible message, `Idolum` may render it for delivery. If nothing is worth surfacing, heartbeat should stay quiet.
+Heartbeat belongs to **Aphelion** the governor. If a heartbeat turn produces a user-visible message, `Idolum` should own the delivered relationship surface when available. If nothing is worth surfacing, heartbeat should stay quiet.
 
 Heartbeat is one of Aphelion's mechanisms for **reflective proactivity**.
 
@@ -137,7 +137,7 @@ Delivery should be bounded and selective. Heartbeat should not emit routine chat
 If heartbeat emits an outward message:
 
 1. the governor produces a maintenance floor
-2. `Idolum` may propose user-facing outreach language for the target channel
+2. `Idolum` authors the user-facing outreach language for the target channel when available
 3. the governor authorizes the final outward message
 4. the delivered message enters the visible ledger of the target session
 5. the heartbeat floor remains sidecar audit state

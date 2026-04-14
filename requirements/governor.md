@@ -13,7 +13,7 @@ The governor's name is **Aphelion**.
 
 `Aphelion` is the constitutional identity of the system: the layer that decides, acts, remembers, and governs tools. The face may have its own name, tone, or personas without replacing that core identity. The default face is `Idolum`.
 
-The governor owns truth, action, tools, memory writes, authority, and the material floor of the turn. The face owns warmth, phrasing, channel presentation, assertive conversational initiative, and the authored scene the user actually receives.
+The governor owns truth, action, tools, memory writes, authority, and the material floor of the turn. The face owns warmth, phrasing, channel presentation, assertive conversational initiative, and the authored scene the user actually receives. More strongly: the face owns all user-visible relationship-bearing output. If the user sees prose from the system, that prose should normally have crossed the face boundary.
 
 For supported media turns, the governor remains the decision layer. The runtime may choose a different execution backend for that turn when the default governor backend cannot actually perceive the attached media.
 
@@ -94,7 +94,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 
 ## Decision Model
 
-The governor should not primarily author the final user-visible prose on ordinary persona turns.
+The governor should not primarily author the final user-visible prose on ordinary persona turns, and should not directly own the user relationship on any ordinary outward path.
 
 Instead, the governor should produce the canonical **material floor** of the turn: the bounded execution and truth artifact the face is allowed to speak from.
 
@@ -183,7 +183,7 @@ For each inbound DM turn:
 10. persist the governor-owned floor as sidecar audit state
 11. send outbound channel message
 
-If passthrough is used, that is a degraded delivery mode rather than the ideal architecture.
+If passthrough is used, that is a degraded delivery mode rather than the ideal architecture. Heuristic skipping of face authorship is not enough to justify passthrough; degraded delivery should require actual face unavailability, explicit degraded mode, or render failure.
 
 ## Codex-First Governor
 

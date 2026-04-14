@@ -1270,12 +1270,12 @@ func TestHandleInboundFloorFallbackBackendSerializesStructuredFloor(t *testing.T
 	}
 }
 
-func TestHandleInboundSkipsIdolumForSimpleFactualTurn(t *testing.T) {
+func TestHandleInboundRendersIdolumForSimpleFactualTurn(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "The current time is 12:00 UTC."
-	provider.faceReplyText = "Idolum should not be called."
+	provider.faceReplyText = "It's 12:00 UTC."
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -1297,14 +1297,21 @@ func TestHandleInboundSkipsIdolumForSimpleFactualTurn(t *testing.T) {
 	if len(provider.seenProposalSystem) != 0 {
 		t.Fatalf("seenProposalSystem len = %d, want 0", len(provider.seenProposalSystem))
 	}
-	if len(provider.seenFaceSystem) != 0 {
-		t.Fatalf("seenFaceSystem len = %d, want 0", len(provider.seenFaceSystem))
+	if len(provider.seenFaceSystem) == 0 {
+		t.Fatal("seenFaceSystem empty, want face render for simple factual turn")
 	}
 
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
-	if len(sender.sent) != 1 || sender.sent[0].Text != "The current time is 12:00 UTC." {
-		t.Fatalf("sent = %#v, want canonical passthrough reply", sender.sent)
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	finalText := sender.sent[0].Text
+	if len(sender.edits) > 0 {
+		finalText = sender.edits[len(sender.edits)-1].Text
+	}
+	if finalText != "It's 12:00 UTC." {
+		t.Fatalf("final text = %q, want face-rendered reply", finalText)
 	}
 }
 
@@ -1382,7 +1389,7 @@ func TestHandleInboundCompactsLongSessionBeforeGovernorTurn(t *testing.T) {
 	}
 }
 
-func TestHandleInboundSkipsIdolumRenderForCodeHeavyReply(t *testing.T) {
+func TestHandleInboundRendersIdolumForCodeHeavyReply(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -1410,8 +1417,8 @@ func TestHandleInboundSkipsIdolumRenderForCodeHeavyReply(t *testing.T) {
 	if len(provider.seenProposalSystem) == 0 {
 		t.Fatal("seenProposalSystem empty, want proposal call for open-ended request")
 	}
-	if len(provider.seenFaceSystem) != 0 {
-		t.Fatalf("seenFaceSystem len = %d, want 0 for code-heavy passthrough", len(provider.seenFaceSystem))
+	if len(provider.seenFaceSystem) == 0 {
+		t.Fatal("seenFaceSystem empty, want face render for code-heavy reply")
 	}
 }
 
@@ -2229,8 +2236,15 @@ func TestHandleInboundAutoModeTextInputStaysText(t *testing.T) {
 	if len(sender.voice) != 0 {
 		t.Fatalf("voice sends = %d, want 0 for text input in auto mode", len(sender.voice))
 	}
-	if len(sender.sent) != 1 || sender.sent[0].Text != "plain text reply" {
-		t.Fatalf("text sends = %#v, want plain text reply", sender.sent)
+	if len(sender.sent) != 1 {
+		t.Fatalf("text sends = %d, want 1", len(sender.sent))
+	}
+	finalText := sender.sent[0].Text
+	if len(sender.edits) > 0 {
+		finalText = sender.edits[len(sender.edits)-1].Text
+	}
+	if finalText != "plain text reply" {
+		t.Fatalf("final text = %q, want plain text reply", finalText)
 	}
 }
 
@@ -3709,7 +3723,7 @@ func TestHandleInboundDeliversPendingReviewEventsForAdmin(t *testing.T) {
 	if finalText != "ok" {
 		t.Fatalf("first message = %q, want model reply", finalText)
 	}
-	if !strings.Contains(sender.sent[1].Text, "[Review Digest]") {
+	if !strings.Contains(sender.sent[1].Text, "Review digest.") {
 		t.Fatalf("second message missing digest label: %q", sender.sent[1].Text)
 	}
 	if !strings.Contains(sender.sent[1].Text, "source_chat=7001") {
@@ -3731,7 +3745,7 @@ func TestHandleInboundDeliversPendingReviewEventsForAdmin(t *testing.T) {
 	if len(adminSession.Messages) != 3 {
 		t.Fatalf("admin session messages len = %d, want 3", len(adminSession.Messages))
 	}
-	if !strings.Contains(adminSession.Messages[2].Content, "[Review Digest]") {
+	if !strings.Contains(adminSession.Messages[2].Content, "Review digest.") {
 		t.Fatalf("admin digest content = %q, want persisted review digest", adminSession.Messages[2].Content)
 	}
 }

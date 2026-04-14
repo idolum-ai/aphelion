@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -252,23 +253,21 @@ func (p *toolProgressReporter) Finish(ctx context.Context) {
 }
 
 func (p *toolProgressReporter) render() string {
-	lines := []string{"Working on it..."}
+	notice := face.ToolProgressNotice{}
 	if len(p.entries) > p.window {
-		lines = append(lines, fmt.Sprintf("%d earlier steps omitted.", len(p.entries)-p.window))
+		notice.Omitted = len(p.entries) - p.window
 	}
 	start := 0
 	if len(p.entries) > p.window {
 		start = len(p.entries) - p.window
 	}
-	for i, entry := range p.entries[start:] {
-		_ = i
-		line := "- " + entry.Text
-		if entry.Count > 1 {
-			line = fmt.Sprintf("- %s (%dx)", entry.Text, entry.Count)
-		}
-		lines = append(lines, line)
+	for _, entry := range p.entries[start:] {
+		notice.Entries = append(notice.Entries, face.ToolProgressEntry{
+			Text:  entry.Text,
+			Count: entry.Count,
+		})
 	}
-	return strings.Join(lines, "\n")
+	return face.RenderToolProgress(notice)
 }
 
 func (p *toolProgressReporter) addEntry(entry toolProgressEntry) bool {

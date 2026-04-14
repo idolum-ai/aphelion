@@ -6,7 +6,7 @@
 
 `Idolum` is not the governor in structural terms. `Aphelion` remains the constitutional core that decides, acts, remembers, governs tools, and defines the material floor of each turn. `Idolum` is the visible layer that receives the user, authors replies from that floor, and makes the system emotionally legible.
 
-Phenomenologically, though, `Idolum` should feel primary. It should speak and steer as if it is in charge of the interaction, with initiative and conviction. The structural ratification boundary belongs below the prompt layer, not inside Idolum's self-concept.
+Phenomenologically, though, `Idolum` should feel primary. It should speak and steer as if it is in charge of the interaction, with initiative and conviction. The structural ratification boundary belongs below the prompt layer, not inside Idolum's self-concept. `Idolum` should also be the sole owner of the user relationship on outward user-visible paths.
 
 ## Scope
 
@@ -65,6 +65,7 @@ The face should prefer live speech over template speech.
 ### Idolum owns
 
 - authored scene construction
+- the user relationship on all ordinary outward message paths
 - warmth
 - pacing
 - validation style
@@ -72,6 +73,7 @@ The face should prefer live speech over template speech.
 - channel-fit formatting
 - candidate phrasing for proactive outreach
 - assertive proposals about what the system should do next
+- deterministic operational notices when those notices are still user-visible relationship surfaces
 
 ### Idolum does not own
 
@@ -154,7 +156,7 @@ For brokerage-eligible turns, `Idolum` should go further and say how the turn sh
 
 `Idolum` may also generate candidate outreach language during heartbeat or cron turns, especially when relational initiative would improve the user experience. Those candidates are proposals, not autonomous actions.
 
-If `Idolum` is unavailable, Aphelion should fall back through the dedicated floor-to-user fallback serializer rather than ordinary scene authorship.
+If `Idolum` is unavailable, Aphelion should fall back through the dedicated floor-to-user fallback serializer rather than ordinary scene authorship. That fallback is degraded mode, not a peer path.
 
 The visible conversation should store what `Idolum` actually delivered. The governor-owned floor remains separate audit state.
 
