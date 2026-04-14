@@ -15,6 +15,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool"
@@ -82,6 +83,7 @@ func (s *deployVerificationSender) Last() (core.OutboundMessage, bool) {
 type builtDeployVerificationRuntime struct {
 	Runner  deployTurnRunner
 	Sender  *deployVerificationSender
+	Probe   func(context.Context, session.SessionKey, principal.Principal) (string, error)
 	Cleanup func()
 }
 
@@ -145,6 +147,10 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 	key := session.SessionKey{ChatID: chatID, UserID: 0}
 	report.ProbeChatID = chatID
 	report.ProbeSessionID = session.SessionIDForKey(key)
+	adminPrincipal := principal.Principal{
+		TelegramUserID: senderID,
+		Role:           principal.RoleAdmin,
+	}
 
 	var (
 		store     *session.SQLiteStore
@@ -209,6 +215,15 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 			return "", fmt.Errorf("verification runtime builder returned nil sender")
 		}
 		return fmt.Sprintf("runtime initialized for session %s", report.ProbeSessionID), nil
+	}); err != nil {
+		return report, err
+	}
+
+	if err := runProbe("tool_path", func() (string, error) {
+		if built.Probe == nil {
+			return "", fmt.Errorf("verification runtime builder returned nil tool probe")
+		}
+		return built.Probe(ctx, key, adminPrincipal)
 	}); err != nil {
 		return report, err
 	}
@@ -351,6 +366,33 @@ func defaultDeployVerificationRuntimeBuilder(cfg *config.Config, store *session.
 	return builtDeployVerificationRuntime{
 		Runner: rt,
 		Sender: sender,
+		Probe: func(ctx context.Context, key session.SessionKey, p principal.Principal) (string, error) {
+			raw := json.RawMessage(`{
+				"explanation": "Deployment verification plan probe",
+				"plan": [
+					{"step": "Verify the deploy tool path", "status": "in_progress"},
+					{"step": "Confirm persisted verification state", "status": "pending"}
+				]
+			}`)
+			out, err := registry.ExecuteForSessionPrincipal(ctx, p, key, "update_plan", raw)
+			if err != nil {
+				return "", err
+			}
+			state, err := store.PlanState(key)
+			if err != nil {
+				return "", err
+			}
+			if len(state.Steps) != 2 {
+				return "", fmt.Errorf("tool probe persisted %d plan steps, want 2", len(state.Steps))
+			}
+			if state.Steps[0].Status != session.PlanStatusInProgress {
+				return "", fmt.Errorf("tool probe first step status = %q, want in_progress", state.Steps[0].Status)
+			}
+			if !strings.Contains(out, "[PLAN_UPDATED]") {
+				return "", fmt.Errorf("tool probe output missing [PLAN_UPDATED] header: %q", out)
+			}
+			return "update_plan executed and persisted session state", nil
+		},
 		Cleanup: func() {
 			if semanticEngine != nil {
 				semanticEngine.Close()

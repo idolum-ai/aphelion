@@ -21,6 +21,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
 	memstore "github.com/idolum-ai/aphelion/memory"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -1241,6 +1242,18 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 		return builtDeployVerificationRuntime{
 			Runner: runner,
 			Sender: sender,
+			Probe: func(ctx context.Context, key session.SessionKey, p principal.Principal) (string, error) {
+				state := session.PlanState{
+					Explanation: "tool probe",
+					Steps: []session.PlanStep{
+						{Step: "tool path", Status: session.PlanStatusInProgress},
+					},
+				}
+				if err := store.UpdatePlanStateWithEvent(key, state, session.PlanEventKindToolUpdated); err != nil {
+					return "", err
+				}
+				return "tool probe persisted plan state", nil
+			},
 		}, nil
 	}
 
@@ -1256,8 +1269,8 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 	if !report.Blessed {
 		t.Fatal("report.Blessed = false, want true")
 	}
-	if len(report.Probes) != 3 {
-		t.Fatalf("probe len = %d, want 3", len(report.Probes))
+	if len(report.Probes) != 4 {
+		t.Fatalf("probe len = %d, want 4", len(report.Probes))
 	}
 
 	db, err := sql.Open("sqlite3", cfg.Sessions.DBPath)
