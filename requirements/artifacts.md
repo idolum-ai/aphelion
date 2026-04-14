@@ -279,6 +279,52 @@ The floor sidecar should preserve:
 
 The raw bytes themselves should not be replayed into the visible transcript.
 
+## Outbound Reply Artifacts
+
+Outbound reply media should remain governed rather than ad hoc.
+
+Current implemented rules:
+
+- normal assistant replies may stage local files for native Telegram delivery
+- runtime may parse material outbound directives from governor text
+- those directives are removed from the visible reply before face rendering
+- the visible reply text becomes the media caption when appropriate
+
+Illustrative directive surface:
+
+- `MEDIA: reports/chart.png`
+- `MEDIA: shared/output/report.pdf`
+- `[[audio_as_voice]]`
+
+The directive surface is a transitional delivery contract, not the final artifact constitution.
+
+### Path safety
+
+Outbound local paths must remain inside the active execution scope.
+
+The first implementation only allows local files inside:
+
+- working root
+- shared-memory root
+- user-memory root
+
+This keeps ordinary replies from exfiltrating arbitrary host files through Telegram delivery.
+
+Remote artifact URLs are deliberately out of scope for this tranche.
+
+### Native Telegram mapping
+
+Current outbound media kinds map to Telegram as:
+
+- `image` -> `sendPhoto`
+- `document` -> `sendDocument`
+- `video` -> `sendVideo`
+- `audio` -> `sendAudio`
+- `voice` -> `sendVoice`
+- `animation` -> `sendAnimation`
+
+If outbound media is present, it outranks synthesized voice reply mode for that turn.
+
 ## Relationship to Other Specs
 
 - `telegram.md` defines Telegram transport behavior

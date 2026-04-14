@@ -154,6 +154,65 @@ For outbound DM turns, Telegram is the visible surface of the face layer:
 
 Outbound delivery must treat Telegram's message size limit as a first-class constraint rather than a rare failure case. Long replies should be split into sequential Telegram messages before delivery instead of attempting one oversized `sendMessage`.
 
+## Outbound Media Replies
+
+Ordinary assistant replies may include native Telegram media delivery.
+
+The current v0.5 path is:
+
+1. governor produces ordinary reply text
+2. runtime strips material outbound directives from that text
+3. face authors the visible caption or reply text
+4. Telegram chooses the native send method per media item
+
+Current directive contract:
+
+- `MEDIA: <path>`
+- `[[audio_as_voice]]`
+
+These directives are runtime material, not user-visible prose.
+
+That means:
+
+- the directives are removed before visible delivery
+- the visible caption is still authored through the normal face path when text remains
+- media-only replies may send an empty caption rather than a fake placeholder
+
+### Supported Telegram outbound methods
+
+The Telegram client should choose native upload methods per media kind:
+
+- `sendPhoto`
+- `sendDocument`
+- `sendVideo`
+- `sendAudio`
+- `sendVoice`
+- `sendAnimation`
+
+If a reply contains multiple media items, Telegram delivery may send them sequentially rather than as one album. The first media item may carry the caption; overflow text should be delivered as follow-up text messages.
+
+### Safe outbound media roots
+
+For ordinary replies, local file paths must stay inside the active scope roots.
+
+Current allowed local roots are:
+
+- scope working root
+- scope shared-memory root
+- scope user-memory root
+
+Remote URLs are not part of this first implementation tranche.
+
+### Voice precedence
+
+Explicit outbound media takes precedence over synthesized voice mode.
+
+That means:
+
+- if a reply includes explicit media, Telegram sends that media
+- runtime should not synthesize a separate voice reply for the same turn
+- `[[audio_as_voice]]` marks an outbound audio file for native Telegram `sendVoice`
+
 ## Durable Telegram Groups
 
 Telegram groups are not ordinary house-principal sessions.
