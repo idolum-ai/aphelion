@@ -305,6 +305,8 @@ func semanticToolProgressEntry(name string, input json.RawMessage) toolProgressE
 		return semanticExecProgressEntry(input)
 	case "memory":
 		return toolProgressEntry{Key: "memory:update", Text: "Updating memory"}
+	case "update_plan":
+		return toolProgressEntry{Key: "plan:update", Text: "Updating the plan"}
 	case "session_search":
 		return toolProgressEntry{Key: "session:search", Text: "Searching past sessions"}
 	case "semantic_search":

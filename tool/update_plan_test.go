@@ -77,6 +77,14 @@ func TestUpdatePlanToolPersistsAndShowsPlanState(t *testing.T) {
 		t.Fatalf("Steps = %#v, want persisted in_progress plan", planState.Steps)
 	}
 
+	events, err := store.PlanEvents(key, 10)
+	if err != nil {
+		t.Fatalf("PlanEvents() err = %v", err)
+	}
+	if len(events) == 0 || events[0].Kind != session.PlanEventKindToolUpdated {
+		t.Fatalf("PlanEvents = %#v, want tool_updated event", events)
+	}
+
 	showOut, err := registry.ExecuteForSessionPrincipal(
 		context.Background(),
 		principal.Principal{Role: principal.RoleAdmin},
@@ -89,6 +97,68 @@ func TestUpdatePlanToolPersistsAndShowsPlanState(t *testing.T) {
 	}
 	if !strings.Contains(showOut, "[PLAN]") || !strings.Contains(showOut, "Patch the issue.") {
 		t.Fatalf("show output = %q, want current plan state", showOut)
+	}
+}
+
+func TestUpdatePlanToolMergePreservesExistingStepsAndAppendsNewWork(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if err := store.UpdatePlanState(key, session.PlanState{
+		Explanation: "Existing plan.",
+		Steps: []session.PlanStep{
+			{Step: "Inspect the current files.", Status: session.PlanStatusInProgress},
+			{Step: "Patch the issue.", Status: session.PlanStatusPending},
+		},
+	}); err != nil {
+		t.Fatalf("UpdatePlanState(seed) err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_plan",
+		json.RawMessage(`{
+			"merge": true,
+			"explanation": "Execution is underway.",
+			"plan":[
+				{"step":"Inspect the current files.","status":"completed"},
+				{"step":"Patch the issue.","status":"in_progress"},
+				{"step":"Run focused tests.","status":"pending"}
+			]
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_plan merge) err = %v", err)
+	}
+	if !strings.Contains(out, "Run focused tests.") {
+		t.Fatalf("merge output = %q, want appended step", out)
+	}
+
+	planState, err := store.PlanState(key)
+	if err != nil {
+		t.Fatalf("PlanState() err = %v", err)
+	}
+	if planState.Explanation != "Execution is underway." {
+		t.Fatalf("Explanation = %q, want merged explanation", planState.Explanation)
+	}
+	if len(planState.Steps) != 3 {
+		t.Fatalf("steps len = %d, want 3", len(planState.Steps))
+	}
+	if planState.Steps[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("first step status = %q, want completed", planState.Steps[0].Status)
+	}
+	if planState.Steps[1].Status != session.PlanStatusInProgress {
+		t.Fatalf("second step status = %q, want in_progress", planState.Steps[1].Status)
+	}
+	if planState.Steps[2].Step != "Run focused tests." {
+		t.Fatalf("third step = %#v, want appended new step", planState.Steps[2])
 	}
 }
 

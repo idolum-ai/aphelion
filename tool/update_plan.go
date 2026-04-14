@@ -27,26 +27,32 @@ func (r *Registry) updatePlan(_ context.Context, input json.RawMessage, key sess
 		}
 	}
 
-	if in.Plan == nil && strings.TrimSpace(in.Explanation) == "" {
-		state, err := r.store.PlanState(key)
-		if err != nil {
-			return "", err
-		}
-		return renderPlanState("[PLAN]", state), nil
+	current, err := r.store.PlanState(key)
+	if err != nil {
+		return "", err
 	}
 
-	state, err := validatePlanInput(in)
+	if in.Plan == nil && strings.TrimSpace(in.Explanation) == "" {
+		return renderPlanState("[PLAN]", current), nil
+	}
+
+	state, err := applyPlanInput(current, in)
 	if err != nil {
 		return "", err
 	}
 	state.UpdatedAt = time.Now().UTC()
-	if err := r.store.UpdatePlanState(key, state); err != nil {
+	if err := r.store.UpdatePlanStateWithEvent(key, state, session.PlanEventKindToolUpdated); err != nil {
 		return "", err
 	}
 	return renderPlanState("[PLAN_UPDATED]", state), nil
 }
 
-func validatePlanInput(in updatePlanInput) (session.PlanState, error) {
+func applyPlanInput(current session.PlanState, in updatePlanInput) (session.PlanState, error) {
+	current = session.NormalizePlanState(current)
+	if in.Merge {
+		return mergePlanInput(current, in)
+	}
+
 	state := session.PlanState{
 		Explanation: strings.TrimSpace(in.Explanation),
 		Steps:       make([]session.PlanStep, 0, len(in.Plan)),
@@ -73,6 +79,51 @@ func validatePlanInput(in updatePlanInput) (session.PlanState, error) {
 		return session.PlanState{}, fmt.Errorf("update_plan must have at most one in_progress step")
 	}
 	return session.NormalizePlanState(state), nil
+}
+
+func mergePlanInput(current session.PlanState, in updatePlanInput) (session.PlanState, error) {
+	state := session.PlanState{
+		Explanation: current.Explanation,
+		Steps:       append([]session.PlanStep(nil), current.Steps...),
+	}
+	if explanation := strings.TrimSpace(in.Explanation); explanation != "" {
+		state.Explanation = explanation
+	}
+
+	indexByStep := make(map[string]int, len(state.Steps))
+	for i, step := range state.Steps {
+		indexByStep[step.Step] = i
+	}
+
+	for _, item := range in.Plan {
+		step := strings.TrimSpace(item.Step)
+		if step == "" {
+			return session.PlanState{}, fmt.Errorf("update_plan step is required")
+		}
+		status := session.NormalizePlanStatus(session.PlanStatus(item.Status))
+		if status == "" {
+			return session.PlanState{}, fmt.Errorf("update_plan status must be pending, in_progress, or completed")
+		}
+
+		if idx, ok := indexByStep[step]; ok {
+			state.Steps[idx].Status = status
+			continue
+		}
+		state.Steps = append(state.Steps, session.PlanStep{Step: step, Status: status})
+		indexByStep[step] = len(state.Steps) - 1
+	}
+
+	state = session.NormalizePlanState(state)
+	inProgress := 0
+	for _, step := range state.Steps {
+		if step.Status == session.PlanStatusInProgress {
+			inProgress++
+		}
+	}
+	if inProgress > 1 {
+		return session.PlanState{}, fmt.Errorf("update_plan must have at most one in_progress step")
+	}
+	return state, nil
 }
 
 func renderPlanState(header string, state session.PlanState) string {

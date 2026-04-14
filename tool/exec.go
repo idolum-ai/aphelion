@@ -74,6 +74,7 @@ type updatePlanStepInput struct {
 
 type updatePlanInput struct {
 	Explanation string                `json:"explanation,omitempty"`
+	Merge       bool                  `json:"merge,omitempty"`
 	Plan        []updatePlanStepInput `json:"plan,omitempty"`
 }
 
@@ -270,9 +271,10 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				"type": "object",
 				"properties": {
 					"explanation": {"type": "string", "description": "Optional short explanation for the current plan"},
+					"merge": {"type": "boolean", "description": "When true, merge the provided steps into the existing plan instead of replacing it wholesale"},
 					"plan": {
 						"type": "array",
-						"description": "Optional full replacement plan. Omit to inspect the current plan state.",
+						"description": "Optional plan update. Omit with no explanation to inspect the current plan state.",
 						"items": {
 							"type": "object",
 							"properties": {
