@@ -221,6 +221,9 @@ func run() error {
 
 	router := core.NewRouter(rt.AgentFunc())
 	commandControl := telegramCommandControl{router: router, rt: rt}
+	decisionBroker := newTelegramDecisionBroker(tgClient)
+	decisionHandler := newTelegramDecisionHandler(tgClient, router, decisionBroker)
+	tools.WithExecApprover(newTelegramExecApprover(tgClient, decisionBroker))
 
 	registerCtx, cancelRegister := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := registerTelegramCommands(registerCtx, tgClient); err != nil {
@@ -246,6 +249,11 @@ func run() error {
 		if handled {
 			return nil
 		}
+		if busyHandled, busyErr := decisionHandler.HandleBusyMessage(parent, msg); busyErr != nil {
+			return busyErr
+		} else if busyHandled {
+			return nil
+		}
 
 		turnCtx, cancel := context.WithTimeout(parent, turnTimeout)
 		go func() {
@@ -259,6 +267,7 @@ func run() error {
 		telegram.WithPrincipalResolver(principalResolver),
 		telegram.WithDurableGroups(cfg.Telegram.DurableGroups),
 		telegram.WithBotIdentity(botUser),
+		telegram.WithCallbackHandler(decisionHandler.HandleCallbackQuery),
 	)
 
 	log.Printf(

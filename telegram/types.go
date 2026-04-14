@@ -27,9 +27,18 @@ type getMeResponse struct {
 	Result      User   `json:"result"`
 }
 
+type inlineKeyboardMarkup struct {
+	InlineKeyboard [][]InlineButton `json:"inline_keyboard"`
+}
+
 type BotCommand struct {
 	Command     string `json:"command"`
 	Description string `json:"description"`
+}
+
+type InlineButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
 }
 
 type telegramOKResponse struct {
@@ -47,8 +56,16 @@ type getFileResponse struct {
 }
 
 type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query"`
+}
+
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	From    *User    `json:"from"`
+	Message *Message `json:"message"`
+	Data    string   `json:"data"`
 }
 
 type Message struct {

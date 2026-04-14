@@ -76,6 +76,21 @@ func TestBuildGovernorPromptAddsPlanningDisciplineWhenUpdatePlanIsAvailable(t *t
 	}
 }
 
+func TestBuildGovernorPromptAddsConfirmationDisciplineWhenExecIsAvailable(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolManifest: "tools:\n- exec: shell execution",
+	})
+
+	if !strings.Contains(got, "## Confirmation Discipline") {
+		t.Fatalf("prompt missing confirmation discipline block: %q", got)
+	}
+	if !strings.Contains(got, "Ask for confirmation when authority genuinely depends on it") {
+		t.Fatalf("prompt missing confirmation guidance: %q", got)
+	}
+}
+
 func TestBuildGovernorPromptPlacesDynamicFilesAfterStableSections(t *testing.T) {
 	t.Parallel()
 

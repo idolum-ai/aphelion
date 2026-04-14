@@ -12,8 +12,21 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
+
+type stubExecApprover struct {
+	called   int
+	approved bool
+	request  ExecApprovalRequest
+}
+
+func (s *stubExecApprover) ConfirmExec(_ context.Context, req ExecApprovalRequest) (ExecApprovalDecision, error) {
+	s.called++
+	s.request = req
+	return ExecApprovalDecision{Approved: s.approved}, nil
+}
 
 func setFakeBubblewrapRunner(t *testing.T, registry *Registry) {
 	t.Helper()
@@ -59,6 +72,67 @@ func TestExecSuccess(t *testing.T) {
 	out, err := registry.Execute(context.Background(), "exec", json.RawMessage(`{"command":"printf 'ok'"}`))
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("output = %q, want command output", out)
+	}
+}
+
+func TestExecDangerousCommandRequiresApproval(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), 2*time.Second)
+	_, err := registry.Execute(context.Background(), "exec", json.RawMessage(`{"command":"rm -rf build"}`))
+	if err == nil {
+		t.Fatal("Execute() err = nil, want approval error")
+	}
+	if !strings.Contains(err.Error(), "requires explicit confirmation") {
+		t.Fatalf("err = %v, want explicit confirmation error", err)
+	}
+}
+
+func TestExecDangerousCommandUsesApprover(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: false}
+	registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"rm -rf build"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 7},
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want denied approval")
+	}
+	if approver.called != 1 {
+		t.Fatalf("approver called = %d, want 1", approver.called)
+	}
+	if approver.request.Command != "rm -rf build" {
+		t.Fatalf("approver command = %q, want rm -rf build", approver.request.Command)
+	}
+	if approver.request.SessionKey.ChatID != 7 {
+		t.Fatalf("approver session = %+v, want chat id 7", approver.request.SessionKey)
+	}
+}
+
+func TestExecSafeCommandSkipsApprover(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: true}
+	registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+	out, err := registry.Execute(context.Background(), "exec", json.RawMessage(`{"command":"printf 'ok'"}`))
+	if err != nil {
+		t.Fatalf("Execute() err = %v", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want 0", approver.called)
 	}
 	if !strings.Contains(out, "ok") {
 		t.Fatalf("output = %q, want command output", out)

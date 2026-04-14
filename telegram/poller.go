@@ -14,6 +14,7 @@ import (
 )
 
 type UpdateHandler func(context.Context, core.InboundMessage) error
+type CallbackHandler func(context.Context, CallbackQuery) error
 
 type PollerOption func(*Poller)
 
@@ -25,6 +26,7 @@ type Poller struct {
 	media              config.TelegramMediaConfig
 	durableGroups      map[int64]durableGroupRoute
 	botUser            *User
+	callbackHandler    CallbackHandler
 }
 
 func NewPoller(client *Client, handler UpdateHandler, opts ...PollerOption) *Poller {
@@ -71,6 +73,12 @@ func WithBotIdentity(user *User) PollerOption {
 	}
 }
 
+func WithCallbackHandler(handler CallbackHandler) PollerOption {
+	return func(p *Poller) {
+		p.callbackHandler = handler
+	}
+}
+
 func (p *Poller) Run(ctx context.Context) error {
 	if p.client == nil || p.handler == nil {
 		return errors.New("poller client and handler are required")
@@ -90,6 +98,26 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 
 		for _, upd := range updates {
+			if upd.CallbackQuery != nil {
+				if p.resolver != nil && shouldResolveCallbackPrincipal(upd.CallbackQuery) {
+					if _, ok := p.resolver.ResolveTelegramUser(senderID(upd.CallbackQuery.From)); !ok {
+						if next := upd.UpdateID + 1; next > offset {
+							offset = next
+						}
+						continue
+					}
+				}
+				if err := p.dispatchCallback(ctx, *upd.CallbackQuery); err != nil {
+					if errors.Is(err, context.Canceled) {
+						return nil
+					}
+					return err
+				}
+				if next := upd.UpdateID + 1; next > offset {
+					offset = next
+				}
+				continue
+			}
 			if p.resolver != nil && shouldResolvePrincipal(upd.Message) {
 				if _, ok := p.resolver.ResolveTelegramUser(senderID(upd.Message.From)); !ok {
 					if next := upd.UpdateID + 1; next > offset {
@@ -113,6 +141,13 @@ func (p *Poller) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (p *Poller) dispatchCallback(ctx context.Context, cb CallbackQuery) error {
+	if p == nil || p.callbackHandler == nil {
+		return nil
+	}
+	return p.callbackHandler(ctx, cb)
 }
 
 func (p *Poller) normalizeUpdate(ctx context.Context, upd Update) (*core.InboundMessage, error) {
@@ -175,4 +210,8 @@ func senderID(user *User) int64 {
 
 func shouldResolvePrincipal(msg *Message) bool {
 	return msg != nil && msg.Chat != nil && msg.Chat.Type == "private"
+}
+
+func shouldResolveCallbackPrincipal(cb *CallbackQuery) bool {
+	return cb != nil && cb.Message != nil && cb.Message.Chat != nil && cb.Message.Chat.Type == "private"
 }

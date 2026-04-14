@@ -87,7 +87,7 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSeconds in
 	payload := map[string]interface{}{
 		"offset":          offset,
 		"timeout":         timeoutSeconds,
-		"allowed_updates": []string{"message"},
+		"allowed_updates": []string{"message", "callback_query"},
 	}
 	var resp getUpdatesResponse
 	if err := c.post(ctx, "getUpdates", payload, &resp); err != nil {
@@ -261,6 +261,58 @@ func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int6
 	}
 	if !resp.Ok {
 		return fmt.Errorf("telegram deleteMessage failed: %s", resp.Description)
+	}
+	return nil
+}
+
+func (c *Client) SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]InlineButton, replyTo *int64) (int64, error) {
+	if chatID == 0 {
+		return 0, errors.New("chat_id is required")
+	}
+	if len(rows) == 0 {
+		return 0, errors.New("inline keyboard rows are required")
+	}
+
+	body := map[string]interface{}{
+		"chat_id": chatID,
+		"text":    strings.TrimSpace(text),
+		"reply_markup": inlineKeyboardMarkup{
+			InlineKeyboard: rows,
+		},
+	}
+	if replyTo != nil {
+		body["reply_to_message_id"] = *replyTo
+	}
+
+	resp, err := c.sendMessageRequest(ctx, body)
+	if err != nil {
+		return 0, err
+	}
+	if !resp.Ok {
+		return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
+	}
+	return resp.Result.MessageID, nil
+}
+
+func (c *Client) AnswerCallbackQuery(ctx context.Context, callbackQueryID string, text string) error {
+	callbackQueryID = strings.TrimSpace(callbackQueryID)
+	if callbackQueryID == "" {
+		return errors.New("callback_query_id is required")
+	}
+
+	body := map[string]interface{}{
+		"callback_query_id": callbackQueryID,
+	}
+	if strings.TrimSpace(text) != "" {
+		body["text"] = strings.TrimSpace(text)
+	}
+
+	var resp telegramOKResponse
+	if err := c.post(ctx, "answerCallbackQuery", body, &resp); err != nil {
+		return err
+	}
+	if !resp.Ok {
+		return fmt.Errorf("telegram answerCallbackQuery failed: %s", resp.Description)
 	}
 	return nil
 }

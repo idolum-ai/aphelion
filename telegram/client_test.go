@@ -270,6 +270,140 @@ func TestSendMessagePayload(t *testing.T) {
 	}
 }
 
+func TestSendInlineKeyboardPayload(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/sendMessage" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = 222
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	replyTo := int64(99)
+	got, err := client.SendInlineKeyboard(context.Background(), 5, "Choose", [][]InlineButton{
+		{
+			{Text: "Approve", CallbackData: "decision:1:approve"},
+			{Text: "Deny", CallbackData: "decision:1:deny"},
+		},
+	}, &replyTo)
+	if err != nil {
+		t.Fatalf("SendInlineKeyboard() err = %v", err)
+	}
+	if got != 222 {
+		t.Fatalf("message id = %d, want 222", got)
+	}
+	if requestBody["text"] != "Choose" {
+		t.Fatalf("text = %v, want Choose", requestBody["text"])
+	}
+	if requestBody["reply_to_message_id"] != float64(99) {
+		t.Fatalf("reply_to_message_id = %v, want 99", requestBody["reply_to_message_id"])
+	}
+	replyMarkup, ok := requestBody["reply_markup"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("reply_markup = %#v, want object", requestBody["reply_markup"])
+	}
+	rows, ok := replyMarkup["inline_keyboard"].([]interface{})
+	if !ok || len(rows) != 1 {
+		t.Fatalf("inline_keyboard = %#v, want 1 row", replyMarkup["inline_keyboard"])
+	}
+}
+
+func TestAnswerCallbackQueryPayload(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/answerCallbackQuery" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, telegramOKResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	if err := client.AnswerCallbackQuery(context.Background(), "cb-1", "ok"); err != nil {
+		t.Fatalf("AnswerCallbackQuery() err = %v", err)
+	}
+	if requestBody["callback_query_id"] != "cb-1" {
+		t.Fatalf("callback_query_id = %v, want cb-1", requestBody["callback_query_id"])
+	}
+	if requestBody["text"] != "ok" {
+		t.Fatalf("text = %v, want ok", requestBody["text"])
+	}
+}
+
+func TestGetUpdatesRequestsCallbackQueries(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/getUpdates" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, getUpdatesResponse{Ok: true, Result: []Update{}}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	if _, err := client.GetUpdates(context.Background(), 10, 15); err != nil {
+		t.Fatalf("GetUpdates() err = %v", err)
+	}
+
+	allowed, ok := requestBody["allowed_updates"].([]interface{})
+	if !ok {
+		t.Fatalf("allowed_updates = %#v, want array", requestBody["allowed_updates"])
+	}
+	foundMessage := false
+	foundCallback := false
+	for _, raw := range allowed {
+		if raw == "message" {
+			foundMessage = true
+		}
+		if raw == "callback_query" {
+			foundCallback = true
+		}
+	}
+	if !foundMessage || !foundCallback {
+		t.Fatalf("allowed_updates = %#v, want message and callback_query", allowed)
+	}
+}
+
 func TestSendMessageChunksLongReplies(t *testing.T) {
 	var bodies []map[string]interface{}
 	transport := testTransport{

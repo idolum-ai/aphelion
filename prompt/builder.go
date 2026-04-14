@@ -116,6 +116,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		if planning := renderPlanningDisciplineBlock(manifest); planning != "" {
 			parts = append(parts, agent.SystemBlock{Text: planning})
 		}
+		if confirmation := renderConfirmationDisciplineBlock(manifest); confirmation != "" {
+			parts = append(parts, agent.SystemBlock{Text: confirmation})
+		}
 	}
 
 	if len(toolPolicyFiles) > 0 {
@@ -489,6 +492,18 @@ func renderPlanningDisciplineBlock(manifest string) string {
 		"Use update_plan for genuinely multi-step work where progress should survive long turns, compaction, or retries.",
 		"Keep the plan concise, keep statuses current, and keep at most one step in_progress.",
 		"Do not use update_plan for trivial one-step replies or to narrate work you are not about to execute.",
+	}, "\n")
+}
+
+func renderConfirmationDisciplineBlock(manifest string) string {
+	if !strings.Contains(manifest, "exec") {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Confirmation Discipline",
+		"Ask for confirmation when authority genuinely depends on it, when intent is materially ambiguous, or when a destructive or irreversible action is next.",
+		"Do not ask for confirmation as a politeness reflex when the next move is already obvious.",
+		"When runtime approval blocks a risky command, treat that as a real execution boundary rather than a stylistic suggestion.",
 	}, "\n")
 }
 

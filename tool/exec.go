@@ -29,6 +29,7 @@ type Registry struct {
 	workspace      string
 	timeout        time.Duration
 	maxOutputBytes int
+	execApprover   ExecApprover
 	sandbox        *sandbox.Resolver
 	runner         *sandbox.Runner
 	store          *session.SQLiteStore
@@ -136,6 +137,11 @@ func (r *Registry) WithRunner(runner *sandbox.Runner) *Registry {
 
 func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
 	r.store = store
+	return r
+}
+
+func (r *Registry) WithExecApprover(approver ExecApprover) *Registry {
+	r.execApprover = approver
 	return r
 }
 
@@ -364,7 +370,7 @@ func (r *Registry) executeWithScope(ctx context.Context, name string, input json
 func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
 	switch name {
 	case "exec":
-		return r.exec(ctx, input, scope)
+		return r.exec(ctx, input, scope, p, key)
 	case "memory":
 		return r.memory(ctx, input, scope)
 	case "session_search":
@@ -384,7 +390,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	}
 }
 
-func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbox.Scope) (string, error) {
+func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
 	var in execInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", fmt.Errorf("decode exec input: %w", err)
@@ -396,6 +402,25 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 	workdir, err := resolveWorkdir(scope.WorkingRoot, in.Workdir)
 	if err != nil {
 		return "", err
+	}
+	if reason := approvalReasonForCommand(in.Command); reason != "" {
+		if r.execApprover == nil {
+			return "", fmt.Errorf("command requires explicit confirmation: %s", reason)
+		}
+		decision, err := r.execApprover.ConfirmExec(ctx, ExecApprovalRequest{
+			Principal:  p,
+			SessionKey: key,
+			Scope:      scope,
+			Command:    in.Command,
+			Workdir:    workdir,
+			Reason:     reason,
+		})
+		if err != nil {
+			return "", err
+		}
+		if !decision.Approved {
+			return "", fmt.Errorf("command approval denied: %s", reason)
+		}
 	}
 
 	timeout := r.timeout
