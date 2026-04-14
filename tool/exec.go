@@ -67,6 +67,16 @@ type semanticSearchInput struct {
 	Scope string `json:"scope,omitempty"`
 }
 
+type updatePlanStepInput struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+}
+
+type updatePlanInput struct {
+	Explanation string                `json:"explanation,omitempty"`
+	Plan        []updatePlanStepInput `json:"plan,omitempty"`
+}
+
 type openAIFileInput struct {
 	Action  string `json:"action"`
 	Path    string `json:"path,omitempty"`
@@ -254,6 +264,28 @@ func (r *Registry) Definitions() []agent.ToolDef {
 	}
 	if r.store != nil {
 		defs = append(defs, agent.ToolDef{
+			Name:        "update_plan",
+			Description: "Persist or inspect the current execution plan for this session. Use this for genuinely multi-step work, keep statuses current, and keep at most one step in progress.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"explanation": {"type": "string", "description": "Optional short explanation for the current plan"},
+					"plan": {
+						"type": "array",
+						"description": "Optional full replacement plan. Omit to inspect the current plan state.",
+						"items": {
+							"type": "object",
+							"properties": {
+								"step": {"type": "string", "description": "Concrete plan step"},
+								"status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Current step status"}
+							},
+							"required": ["step", "status"]
+						}
+					}
+				}
+			}`),
+		})
+		defs = append(defs, agent.ToolDef{
 			Name:        "durable_agent",
 			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. Use this to list agents, inspect live policy or enrollment state, apply ratified policy changes, or change enrollment lifecycle state.",
 			Parameters: json.RawMessage(`{
@@ -329,6 +361,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.memory(ctx, input, scope)
 	case "session_search":
 		return r.sessionSearch(ctx, input, p, key)
+	case "update_plan":
+		return r.updatePlan(ctx, input, key)
 	case "semantic_search":
 		return r.semanticSearch(ctx, input, scope)
 	case "openai_file":

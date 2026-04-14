@@ -91,6 +91,10 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		}, "\n\n"),
 	})
 
+	if currentPlan := renderCurrentPlanStateBlock(req.Runtime); currentPlan != "" {
+		parts = append(parts, agent.SystemBlock{Text: currentPlan})
+	}
+
 	if contract := renderMaterialFloorContractBlock(req.Runtime); contract != "" {
 		parts = append(parts, agent.SystemBlock{Text: contract})
 	}
@@ -105,6 +109,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		parts = append(parts, agent.SystemBlock{
 			Text: "## Tool Manifest\n" + manifest,
 		})
+		if planning := renderPlanningDisciplineBlock(manifest); planning != "" {
+			parts = append(parts, agent.SystemBlock{Text: planning})
+		}
 	}
 
 	if len(toolPolicyFiles) > 0 {
@@ -399,6 +406,39 @@ func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
 		"NOTES:",
 		"- <optional bounded notes that matter for delivery>",
 		"Do not write the final user-facing reply text here.",
+	}, "\n")
+}
+
+func renderCurrentPlanStateBlock(aw RuntimeAwareness) string {
+	if !aw.PlanActive && strings.TrimSpace(aw.PlanSummary) == "" && len(aw.PlanSteps) == 0 {
+		return ""
+	}
+	lines := []string{
+		"## Current Plan State",
+		"This plan is durable session state. Prefer updating it with update_plan when the work is genuinely multi-step, and keep statuses honest as execution advances.",
+	}
+	if summary := strings.TrimSpace(aw.PlanSummary); summary != "" {
+		lines = append(lines, summary)
+	}
+	for _, step := range aw.PlanSteps {
+		step = strings.TrimSpace(step)
+		if step == "" {
+			continue
+		}
+		lines = append(lines, "- "+step)
+	}
+	return strings.Join(lines, "\n\n")
+}
+
+func renderPlanningDisciplineBlock(manifest string) string {
+	if !strings.Contains(manifest, "update_plan") {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Planning Discipline",
+		"Use update_plan for genuinely multi-step work where progress should survive long turns, compaction, or retries.",
+		"Keep the plan concise, keep statuses current, and keep at most one step in_progress.",
+		"Do not use update_plan for trivial one-step replies or to narrate work you are not about to execute.",
 	}, "\n")
 }
 

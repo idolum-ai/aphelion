@@ -243,3 +243,29 @@ func brokerageModeName(active bool, mode string) string {
 	}
 	return trimmed
 }
+
+func maybeSeedPlanFromBrokerage(current session.PlanState, brokerage turnBrokerage) session.PlanState {
+	current = session.NormalizePlanState(current)
+	if len(current.Steps) > 0 || len(brokerage.RatifiedSteps) == 0 {
+		return current
+	}
+	steps := make([]session.PlanStep, 0, len(brokerage.RatifiedSteps))
+	for i, step := range brokerage.RatifiedSteps {
+		status := session.PlanStatusPending
+		if i == 0 {
+			status = session.PlanStatusInProgress
+		}
+		steps = append(steps, session.PlanStep{
+			Step:   strings.TrimSpace(step),
+			Status: status,
+		})
+	}
+	explanation := "Ratified execution plan."
+	if mode := strings.TrimSpace(brokerage.RatifiedTurnMode); mode != "" {
+		explanation = fmt.Sprintf("Ratified %s plan.", mode)
+	}
+	return session.NormalizePlanState(session.PlanState{
+		Explanation: explanation,
+		Steps:       steps,
+	})
+}

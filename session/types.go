@@ -2,7 +2,10 @@
 
 package session
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type TurnRunKind string
 
@@ -41,6 +44,25 @@ type ScopeRef struct {
 	ParentScopeID   string
 }
 
+type PlanStatus string
+
+const (
+	PlanStatusPending    PlanStatus = "pending"
+	PlanStatusInProgress PlanStatus = "in_progress"
+	PlanStatusCompleted  PlanStatus = "completed"
+)
+
+type PlanStep struct {
+	Step   string     `json:"step"`
+	Status PlanStatus `json:"status"`
+}
+
+type PlanState struct {
+	Explanation string     `json:"explanation,omitempty"`
+	Steps       []PlanStep `json:"steps,omitempty"`
+	UpdatedAt   time.Time  `json:"updated_at,omitempty"`
+}
+
 // SessionKey identifies a unique session.
 type SessionKey struct {
 	ChatID int64
@@ -69,6 +91,9 @@ type Session struct {
 
 	// Compaction
 	CompactionLog []CompactionEntry
+
+	// Planning
+	PlanState PlanState
 
 	// Token accounting (cumulative across all turns)
 	TotalInputTokens  int64
@@ -201,6 +226,55 @@ type RhizomeNode struct {
 	Name       string
 	EventCount int
 	LastSeenAt time.Time
+}
+
+func NormalizePlanState(state PlanState) PlanState {
+	state.Explanation = strings.TrimSpace(state.Explanation)
+	steps := make([]PlanStep, 0, len(state.Steps))
+	for _, step := range state.Steps {
+		text := strings.TrimSpace(step.Step)
+		if text == "" {
+			continue
+		}
+		status := NormalizePlanStatus(step.Status)
+		if status == "" {
+			status = PlanStatusPending
+		}
+		steps = append(steps, PlanStep{
+			Step:   text,
+			Status: status,
+		})
+	}
+	state.Steps = steps
+	if state.UpdatedAt.IsZero() && (len(state.Steps) > 0 || state.Explanation != "") {
+		state.UpdatedAt = time.Now().UTC()
+	}
+	return state
+}
+
+func (s PlanState) Active() bool {
+	return len(NormalizePlanState(s).Steps) > 0
+}
+
+func (s PlanState) FormattedSteps() []string {
+	normalized := NormalizePlanState(s)
+	out := make([]string, 0, len(normalized.Steps))
+	for _, step := range normalized.Steps {
+		out = append(out, "["+string(step.Status)+"] "+step.Step)
+	}
+	return out
+}
+
+func NormalizePlanStatus(status PlanStatus) PlanStatus {
+	value := strings.ToLower(strings.TrimSpace(string(status)))
+	value = strings.ReplaceAll(value, "-", "_")
+	value = strings.ReplaceAll(value, " ", "_")
+	switch PlanStatus(value) {
+	case PlanStatusPending, PlanStatusInProgress, PlanStatusCompleted:
+		return PlanStatus(value)
+	default:
+		return ""
+	}
 }
 
 type RhizomeEvent struct {

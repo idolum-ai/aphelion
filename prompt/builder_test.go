@@ -61,6 +61,21 @@ func TestBuildGovernorPromptPlacesManifestBeforeToolsPolicy(t *testing.T) {
 	}
 }
 
+func TestBuildGovernorPromptAddsPlanningDisciplineWhenUpdatePlanIsAvailable(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolManifest: "exec, update_plan",
+	})
+
+	if !strings.Contains(got, "## Planning Discipline") {
+		t.Fatalf("prompt missing planning discipline block: %q", got)
+	}
+	if !strings.Contains(got, "Do not use update_plan for trivial one-step replies") {
+		t.Fatalf("prompt missing update_plan usage guidance: %q", got)
+	}
+}
+
 func TestBuildGovernorPromptPlacesDynamicFilesAfterStableSections(t *testing.T) {
 	t.Parallel()
 
@@ -350,6 +365,31 @@ func TestBuildGovernorPromptIncludesResolvedRuntimeFacts(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q: %q", want, got)
 		}
+	}
+}
+
+func TestBuildGovernorPromptIncludesCurrentPlanState(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		GovernorName:    "Aphelion",
+		GovernorBackend: "native",
+		PrincipalRole:   "admin",
+		Runtime: RuntimeAwareness{
+			PlanActive:  true,
+			PlanSummary: "Inspect before editing.",
+			PlanSteps: []string{
+				"[in_progress] Inspect the relevant files.",
+				"[pending] Patch the issue.",
+			},
+		},
+	})
+
+	if !strings.Contains(got, "## Current Plan State") {
+		t.Fatalf("prompt missing current plan state block: %q", got)
+	}
+	if !strings.Contains(got, "Inspect before editing.") || !strings.Contains(got, "[pending] Patch the issue.") {
+		t.Fatalf("prompt missing plan details: %q", got)
 	}
 }
 

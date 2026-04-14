@@ -38,6 +38,9 @@ type RuntimeAwareness struct {
 	HiddenInputsActive    bool
 	HiddenInputCategories []string
 	ProvenanceSummary     string
+	PlanActive            bool
+	PlanSummary           string
+	PlanSteps             []string
 	PromptRoot            string
 	ExecRoot              string
 	SharedMemoryRoot      string
@@ -74,6 +77,8 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive))
 	lines = append(lines, nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)))
 	lines = append(lines, nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary))
+	lines = append(lines, fmt.Sprintf("- plan_active: %t", aw.PlanActive))
+	lines = append(lines, nonEmptyAwarenessLine("plan_summary", aw.PlanSummary))
 	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
 	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	lines = append(lines, nonEmptyAwarenessLine("prompt_root", aw.PromptRoot))

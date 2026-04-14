@@ -59,7 +59,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
 	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText)
-	governorAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec), hiddenInputs)
+	governorAwareness := r.withPlanAwareness(r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec), hiddenInputs), sess.PlanState)
 	if useMaterialFloor {
 		governorAwareness.ArtifactMode = "floor"
 	}
@@ -162,8 +162,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			}
 		} else {
 			brokerage = updated
+			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}
-		governorAwareness = r.withBrokerageAwareness(governorAwareness, brokerage)
+		governorAwareness = r.withPlanAwareness(r.withBrokerageAwareness(governorAwareness, brokerage), sess.PlanState)
 		governorPrompt.Runtime = governorAwareness
 		systemBlocks = prompt.BuildGovernorPromptBlocks(governorPrompt)
 		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
@@ -303,6 +304,11 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	newMessages = setLastAssistantFloorMetadata(newMessages, floorMetadata)
 	sess.LastFloorText = floorText
 	sess.LastFloorMetadata = floorMetadata
+	if planState, planErr := r.store.PlanState(key); planErr == nil {
+		sess.PlanState = mergeSessionPlanState(sess.PlanState, planState)
+	} else {
+		return nil, fmt.Errorf("load plan state before save: %w", planErr)
+	}
 
 	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
 		return nil, fmt.Errorf("save session: %w", err)

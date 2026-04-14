@@ -159,7 +159,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		return nil, fmt.Errorf("load durable agent prompt context: %w", err)
 	}
 	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText)
-	governorAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec), hiddenInputs)
+	governorAwareness := r.withPlanAwareness(r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec), hiddenInputs), sess.PlanState)
 	if useMaterialFloor {
 		governorAwareness.ArtifactMode = "floor"
 	}
@@ -264,8 +264,9 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 			}
 		} else {
 			brokerage = updated
+			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}
-		governorAwareness = r.withBrokerageAwareness(governorAwareness, brokerage)
+		governorAwareness = r.withPlanAwareness(r.withBrokerageAwareness(governorAwareness, brokerage), sess.PlanState)
 		governorPrompt.Runtime = governorAwareness
 		systemBlocks = prompt.BuildGovernorPromptBlocks(governorPrompt)
 		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
@@ -402,6 +403,11 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	newMessages = setLastAssistantFloorMetadata(newMessages, floorMetadata)
 	sess.LastFloorText = floorText
 	sess.LastFloorMetadata = floorMetadata
+	if planState, planErr := r.store.PlanState(key); planErr == nil {
+		sess.PlanState = mergeSessionPlanState(sess.PlanState, planState)
+	} else {
+		return nil, fmt.Errorf("load durable group plan state before save: %w", planErr)
+	}
 	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
 		return nil, fmt.Errorf("save durable group session: %w", err)
 	}

@@ -84,6 +84,14 @@ func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.Tur
 	return aw
 }
 
+func (r *Runtime) withPlanAwareness(aw prompt.RuntimeAwareness, state session.PlanState) prompt.RuntimeAwareness {
+	state = session.NormalizePlanState(state)
+	aw.PlanActive = len(state.Steps) > 0
+	aw.PlanSummary = strings.TrimSpace(state.Explanation)
+	aw.PlanSteps = append([]string(nil), state.FormattedSteps()...)
+	return aw
+}
+
 func sessionKindForRun(kind session.TurnRunKind) string {
 	switch kind {
 	case session.TurnRunKindHeartbeat, session.TurnRunKindCron, session.TurnRunKindRecovery:

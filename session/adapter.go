@@ -41,6 +41,7 @@ func NewMessagesForTurn(userText string, generated []agent.Message, turnIndex in
 		ContentChars: len(userText),
 		TurnIndex:    turnIndex,
 	}}
+	toolNames := make(map[string]string)
 
 	for _, msg := range generated {
 		entry := Message{
@@ -58,10 +59,19 @@ func NewMessagesForTurn(userText string, generated []agent.Message, turnIndex in
 				return nil, fmt.Errorf("encode tool calls: %w", err)
 			}
 			entry.ToolCalls = string(raw)
+			for _, call := range msg.ToolCalls {
+				if strings.TrimSpace(call.ID) == "" || strings.TrimSpace(call.Name) == "" {
+					continue
+				}
+				toolNames[strings.TrimSpace(call.ID)] = strings.TrimSpace(call.Name)
+			}
 		}
 
 		if msg.Role == "tool" {
-			entry.ToolName = toolNameFromContent(msg.Content)
+			entry.ToolName = toolNames[strings.TrimSpace(msg.ToolCallID)]
+			if entry.ToolName == "" {
+				entry.ToolName = toolNameFromContent(msg.Content)
+			}
 		}
 
 		out = append(out, entry)

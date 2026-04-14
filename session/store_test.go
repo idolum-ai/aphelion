@@ -264,6 +264,66 @@ func TestSearchMessagesFiltersByScopeAndReturnsNewestFirst(t *testing.T) {
 	}
 }
 
+func TestPlanStateRoundTripAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 77, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "77"}}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.PlanState = PlanState{
+		Explanation: "Inspect before editing.",
+		Steps: []PlanStep{
+			{Step: "Inspect the relevant files.", Status: PlanStatusInProgress},
+			{Step: "Patch the bug.", Status: PlanStatusPending},
+		},
+	}
+	sess.TurnCount = 1
+	if err := store.Save(sess, []Message{{Role: "assistant", Content: "planned", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	reloaded, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(reloaded) err = %v", err)
+	}
+	if reloaded.PlanState.Explanation != "Inspect before editing." {
+		t.Fatalf("Explanation = %q, want persisted explanation", reloaded.PlanState.Explanation)
+	}
+	if len(reloaded.PlanState.Steps) != 2 {
+		t.Fatalf("steps len = %d, want 2", len(reloaded.PlanState.Steps))
+	}
+	if reloaded.PlanState.Steps[0].Status != PlanStatusInProgress {
+		t.Fatalf("first step status = %q, want in_progress", reloaded.PlanState.Steps[0].Status)
+	}
+
+	updated := PlanState{
+		Explanation: "Execution complete.",
+		Steps: []PlanStep{
+			{Step: "Inspect the relevant files.", Status: PlanStatusCompleted},
+			{Step: "Patch the bug.", Status: PlanStatusCompleted},
+		},
+	}
+	if err := store.UpdatePlanState(key, updated); err != nil {
+		t.Fatalf("UpdatePlanState() err = %v", err)
+	}
+
+	planState, err := store.PlanState(key)
+	if err != nil {
+		t.Fatalf("PlanState() err = %v", err)
+	}
+	if planState.Explanation != "Execution complete." {
+		t.Fatalf("updated explanation = %q, want updated value", planState.Explanation)
+	}
+	if len(planState.Steps) != 2 || planState.Steps[1].Status != PlanStatusCompleted {
+		t.Fatalf("updated steps = %#v, want completed steps", planState.Steps)
+	}
+}
+
 func TestSaveUpdatesCacheTotalsAndState(t *testing.T) {
 	t.Parallel()
 
