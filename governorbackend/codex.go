@@ -26,6 +26,7 @@ const (
 	codexRefreshClientID  = "app_EMoamEEZ73f0CkXaXp7hrann"
 	defaultCodexModel     = "gpt-5.4"
 	defaultCodexPrompt    = "You are Codex, a coding agent. Help the user directly and use tools when needed."
+	maxCodexContinuations = 3
 )
 
 var (
@@ -119,7 +120,39 @@ func (c *Codex) Stream(ctx context.Context, messages []agent.Message, tools []ag
 }
 
 func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*agent.Response, error) {
-	reqBody := buildCodexRequest(messages, tools, opts, true)
+	aggregate := newCodexResponseAccumulator()
+	plan := planCodexRequest(messages)
+	continuations := 0
+	usedPreviousResponseFallback := false
+
+	for {
+		result, err := c.completeRequest(ctx, plan, tools, opts, cb, allowRetry)
+		if err != nil {
+			if plan.mode == codexTurnModeIncrementalToolResults && !usedPreviousResponseFallback && isPreviousResponseRejected(err) {
+				plan = planFullCodexRequest(messages)
+				usedPreviousResponseFallback = true
+				continue
+			}
+			return nil, err
+		}
+
+		aggregate.merge(result.Response, result.ResponseID)
+		if result.Complete {
+			return aggregate.response(), nil
+		}
+		if strings.TrimSpace(result.ResponseID) == "" {
+			return nil, fmt.Errorf("codex: incomplete response missing response id")
+		}
+		continuations++
+		if continuations > maxCodexContinuations {
+			return nil, fmt.Errorf("codex: response remained incomplete after %d continuation attempts", maxCodexContinuations)
+		}
+		plan = planCodexContinuation(messages, result.ResponseID)
+	}
+}
+
+func (c *Codex) completeRequest(ctx context.Context, plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*codexCompletionResult, error) {
+	reqBody := buildCodexRequest(plan, tools, opts, true)
 
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(reqBody); err != nil {
@@ -133,7 +166,7 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 		if allowRetry && errors.As(err, &apiErr) && apiErr.statusCode == http.StatusUnauthorized {
 			reauthorized, reauthErr := c.reauthorize(ctx, accessToken)
 			if reauthorized {
-				return c.complete(ctx, messages, tools, opts, cb, false)
+				return c.completeRequest(ctx, plan, tools, opts, cb, false)
 			}
 			if reauthErr != nil {
 				return nil, fmt.Errorf("%w: reauthorization failed: %v", err, reauthErr)
@@ -298,45 +331,16 @@ func (c *Codex) refreshTokens(ctx context.Context, refreshToken string) (governo
 	}, nil
 }
 
-func buildCodexRequest(messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, stream bool) map[string]any {
-	instructions := collectCodexInstructions(messages)
-	input := make([]map[string]any, 0, len(messages))
-	for _, msg := range messages {
-		role := strings.ToLower(strings.TrimSpace(msg.Role))
-		if role == "" || role == "system" {
-			continue
-		}
-
-		switch role {
-		case "user", "assistant":
-			if item, ok := codexMessageInputItem(role, msg); ok {
-				input = append(input, item)
-			}
-			if role == "assistant" {
-				for _, call := range msg.ToolCalls {
-					input = append(input, map[string]any{
-						"type":      "function_call",
-						"name":      call.Name,
-						"arguments": normalizeArguments(call.Input),
-						"call_id":   firstNonEmpty(strings.TrimSpace(call.ID), strings.TrimSpace(msg.ToolCallID)),
-					})
-				}
-			}
-		case "tool":
-			input = append(input, map[string]any{
-				"type":    "function_call_output",
-				"call_id": strings.TrimSpace(msg.ToolCallID),
-				"output":  strings.TrimSpace(msg.Content),
-			})
-		}
-	}
-
+func buildCodexRequest(plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, stream bool) map[string]any {
 	reqBody := map[string]any{
 		"model":        defaultCodexModel,
-		"instructions": instructions,
-		"input":        input,
-		"store":        false,
+		"instructions": plan.instructions,
+		"input":        plan.input,
+		"store":        true,
 		"stream":       stream,
+	}
+	if plan.previousResponseID != "" {
+		reqBody["previous_response_id"] = plan.previousResponseID
 	}
 	if defs := toCodexTools(tools); len(defs) > 0 {
 		reqBody["tools"] = defs
@@ -348,7 +352,7 @@ func buildCodexRequest(messages []agent.Message, tools []agent.ToolDef, opts age
 	return reqBody
 }
 
-func consumeCodexStream(body io.Reader, cb agent.StreamCallback) (*agent.Response, error) {
+func consumeCodexStream(body io.Reader, cb agent.StreamCallback) (*codexCompletionResult, error) {
 	parser := &codexStreamParser{}
 	for event := range internal.ParseSSE(body) {
 		if strings.EqualFold(strings.TrimSpace(event.Data), "[DONE]") {
@@ -536,8 +540,17 @@ type codexStreamEnvelope struct {
 }
 
 type codexCompletedResponse struct {
-	ID    string      `json:"id"`
-	Usage *codexUsage `json:"usage"`
+	ID                string      `json:"id"`
+	Status            string      `json:"status"`
+	Usage             *codexUsage `json:"usage"`
+	IncompleteDetails *struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+}
+
+type codexProviderState struct {
+	Backend    string `json:"backend"`
+	ResponseID string `json:"response_id"`
 }
 
 type codexFailedResponse struct {
@@ -552,7 +565,22 @@ type codexStreamParser struct {
 	thinkingMeta []agent.ThinkingBlock
 	toolCalls    []agent.ToolCall
 	usage        core.TokenUsage
-	completed    bool
+	responseID   string
+	status       codexResponseStatus
+}
+
+type codexResponseStatus string
+
+const (
+	codexResponseStatusPending    codexResponseStatus = ""
+	codexResponseStatusCompleted  codexResponseStatus = "completed"
+	codexResponseStatusIncomplete codexResponseStatus = "incomplete"
+)
+
+type codexCompletionResult struct {
+	Response   *agent.Response
+	ResponseID string
+	Complete   bool
 }
 
 func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallback) error {
@@ -567,6 +595,7 @@ func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallbac
 	}
 	switch kind {
 	case "response.created":
+		p.captureResponseEnvelope(env.Response)
 		return nil
 	case "response.output_text.delta":
 		p.text.WriteString(env.Delta)
@@ -614,23 +643,15 @@ func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallbac
 		}
 		return nil
 	case "response.completed":
-		p.completed = true
-		var completed codexCompletedResponse
-		if len(env.Response) > 0 && json.Unmarshal(env.Response, &completed) == nil && completed.Usage != nil {
-			p.usage = core.TokenUsage{
-				InputTokens:      completed.Usage.InputTokens,
-				OutputTokens:     completed.Usage.OutputTokens,
-				TotalTokens:      completed.Usage.TotalTokens,
-				CacheReadTokens:  completed.Usage.InputTokensDetails.CachedTokens,
-				CacheWriteTokens: completed.Usage.InputTokensDetails.CacheWriteTokens,
-			}
-			if p.usage.TotalTokens == 0 {
-				p.usage.TotalTokens = p.usage.InputTokens + p.usage.OutputTokens
-			}
-			if cb != nil {
-				usage := p.usage
-				return cb(agent.StreamChunk{Type: "usage", Usage: &usage})
-			}
+		p.status = codexResponseStatusCompleted
+		if err := p.captureUsage(env.Response, cb); err != nil {
+			return err
+		}
+		return nil
+	case "response.incomplete":
+		p.status = codexResponseStatusIncomplete
+		if err := p.captureUsage(env.Response, cb); err != nil {
+			return err
 		}
 		return nil
 	case "response.failed":
@@ -646,17 +667,75 @@ func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallbac
 	}
 }
 
-func (p *codexStreamParser) response() (*agent.Response, error) {
-	if !p.completed {
-		return nil, fmt.Errorf("codex: stream closed before response.completed")
-	}
-	return &agent.Response{
-		Content:      strings.TrimSpace(p.text.String()),
-		Thinking:     strings.TrimSpace(p.thinking.String()),
+func (p *codexStreamParser) response() (*codexCompletionResult, error) {
+	resp := &agent.Response{
+		Content:      p.text.String(),
+		Thinking:     p.thinking.String(),
 		ThinkingMeta: append([]agent.ThinkingBlock(nil), p.thinkingMeta...),
 		ToolCalls:    append([]agent.ToolCall(nil), p.toolCalls...),
 		Usage:        p.usage,
-	}, nil
+	}
+	if strings.TrimSpace(p.responseID) != "" {
+		resp.ProviderState = marshalCodexProviderState(p.responseID)
+	}
+
+	switch p.status {
+	case codexResponseStatusCompleted:
+		return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: true}, nil
+	case codexResponseStatusIncomplete:
+		return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: false}, nil
+	}
+	if strings.TrimSpace(p.responseID) != "" {
+		return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: false}, nil
+	}
+	if resp.Content == "" && resp.Thinking == "" && len(resp.ToolCalls) == 0 {
+		return nil, fmt.Errorf("codex: stream closed before response.completed")
+	}
+	return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: false}, nil
+}
+
+func (p *codexStreamParser) captureResponseEnvelope(raw json.RawMessage) {
+	if len(raw) == 0 {
+		return
+	}
+	var envelope codexCompletedResponse
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return
+	}
+	if strings.TrimSpace(envelope.ID) != "" {
+		p.responseID = strings.TrimSpace(envelope.ID)
+	}
+}
+
+func (p *codexStreamParser) captureUsage(raw json.RawMessage, cb agent.StreamCallback) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var envelope codexCompletedResponse
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(envelope.ID) != "" {
+		p.responseID = strings.TrimSpace(envelope.ID)
+	}
+	if envelope.Usage == nil {
+		return nil
+	}
+	p.usage = core.TokenUsage{
+		InputTokens:      envelope.Usage.InputTokens,
+		OutputTokens:     envelope.Usage.OutputTokens,
+		TotalTokens:      envelope.Usage.TotalTokens,
+		CacheReadTokens:  envelope.Usage.InputTokensDetails.CachedTokens,
+		CacheWriteTokens: envelope.Usage.InputTokensDetails.CacheWriteTokens,
+	}
+	if p.usage.TotalTokens == 0 {
+		p.usage.TotalTokens = p.usage.InputTokens + p.usage.OutputTokens
+	}
+	if cb != nil {
+		usage := p.usage
+		return cb(agent.StreamChunk{Type: "usage", Usage: &usage})
+	}
+	return nil
 }
 
 func parseCodexResponse(raw []byte) (*agent.Response, error) {
@@ -822,6 +901,209 @@ func redactBodyExcerpt(raw []byte, secrets ...string) string {
 	return text
 }
 
+type codexTurnMode string
+
+const (
+	codexTurnModeFullContext            codexTurnMode = "full_context"
+	codexTurnModeIncrementalToolResults codexTurnMode = "incremental_tool_results"
+	codexTurnModeContinuationOnly       codexTurnMode = "continuation_only"
+)
+
+type codexRequestPlan struct {
+	mode               codexTurnMode
+	instructions       string
+	input              []map[string]any
+	previousResponseID string
+}
+
+func planCodexRequest(messages []agent.Message) codexRequestPlan {
+	if previousResponseID, input, ok := planCodexIncrementalToolResults(messages); ok {
+		return codexRequestPlan{
+			mode:               codexTurnModeIncrementalToolResults,
+			instructions:       collectCodexInstructions(messages),
+			input:              input,
+			previousResponseID: previousResponseID,
+		}
+	}
+	return planFullCodexRequest(messages)
+}
+
+func planFullCodexRequest(messages []agent.Message) codexRequestPlan {
+	return codexRequestPlan{
+		mode:         codexTurnModeFullContext,
+		instructions: collectCodexInstructions(messages),
+		input:        codexInputItems(messages),
+	}
+}
+
+func planCodexContinuation(messages []agent.Message, previousResponseID string) codexRequestPlan {
+	return codexRequestPlan{
+		mode:               codexTurnModeContinuationOnly,
+		instructions:       collectCodexInstructions(messages),
+		input:              []map[string]any{},
+		previousResponseID: strings.TrimSpace(previousResponseID),
+	}
+}
+
+func codexInputItems(messages []agent.Message) []map[string]any {
+	input := make([]map[string]any, 0, len(messages))
+	for _, msg := range messages {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		if role == "" || role == "system" {
+			continue
+		}
+
+		switch role {
+		case "user", "assistant":
+			if item, ok := codexMessageInputItem(role, msg); ok {
+				input = append(input, item)
+			}
+			if role == "assistant" {
+				for _, call := range msg.ToolCalls {
+					input = append(input, map[string]any{
+						"type":      "function_call",
+						"name":      call.Name,
+						"arguments": normalizeArguments(call.Input),
+						"call_id":   firstNonEmpty(strings.TrimSpace(call.ID), strings.TrimSpace(msg.ToolCallID)),
+					})
+				}
+			}
+		case "tool":
+			input = append(input, map[string]any{
+				"type":    "function_call_output",
+				"call_id": strings.TrimSpace(msg.ToolCallID),
+				"output":  strings.TrimSpace(msg.Content),
+			})
+		}
+	}
+	return input
+}
+
+func planCodexIncrementalToolResults(messages []agent.Message) (string, []map[string]any, bool) {
+	assistantIdx := -1
+	var previousResponseID string
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
+			continue
+		}
+		state, ok := decodeCodexProviderState(msg.ProviderState)
+		if !ok {
+			return "", nil, false
+		}
+		assistantIdx = i
+		previousResponseID = state.ResponseID
+		break
+	}
+	if assistantIdx < 0 || strings.TrimSpace(previousResponseID) == "" || assistantIdx == len(messages)-1 {
+		return "", nil, false
+	}
+	input := make([]map[string]any, 0, len(messages)-assistantIdx-1)
+	for _, msg := range messages[assistantIdx+1:] {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "tool") {
+			return "", nil, false
+		}
+		input = append(input, map[string]any{
+			"type":    "function_call_output",
+			"call_id": strings.TrimSpace(msg.ToolCallID),
+			"output":  strings.TrimSpace(msg.Content),
+		})
+	}
+	if len(input) == 0 {
+		return "", nil, false
+	}
+	return previousResponseID, input, true
+}
+
+func marshalCodexProviderState(responseID string) json.RawMessage {
+	if strings.TrimSpace(responseID) == "" {
+		return nil
+	}
+	raw, err := json.Marshal(codexProviderState{
+		Backend:    "codex",
+		ResponseID: strings.TrimSpace(responseID),
+	})
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func decodeCodexProviderState(raw json.RawMessage) (codexProviderState, bool) {
+	var state codexProviderState
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return codexProviderState{}, false
+	}
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return codexProviderState{}, false
+	}
+	if strings.TrimSpace(state.Backend) != "codex" || strings.TrimSpace(state.ResponseID) == "" {
+		return codexProviderState{}, false
+	}
+	state.ResponseID = strings.TrimSpace(state.ResponseID)
+	return state, true
+}
+
+type codexResponseAccumulator struct {
+	content      strings.Builder
+	thinking     strings.Builder
+	thinkingMeta []agent.ThinkingBlock
+	toolCalls    []agent.ToolCall
+	toolCallSet  map[string]struct{}
+	usage        core.TokenUsage
+	responseID   string
+}
+
+func newCodexResponseAccumulator() *codexResponseAccumulator {
+	return &codexResponseAccumulator{
+		toolCallSet: map[string]struct{}{},
+	}
+}
+
+func (a *codexResponseAccumulator) merge(resp *agent.Response, responseID string) {
+	if a == nil || resp == nil {
+		return
+	}
+	if resp.Content != "" {
+		a.content.WriteString(resp.Content)
+	}
+	if resp.Thinking != "" {
+		a.thinking.WriteString(resp.Thinking)
+	}
+	a.thinkingMeta = append(a.thinkingMeta, resp.ThinkingMeta...)
+	for _, call := range resp.ToolCalls {
+		key := strings.Join([]string{strings.TrimSpace(call.ID), strings.TrimSpace(call.Name), string(bytes.TrimSpace(call.Input))}, "\x00")
+		if _, ok := a.toolCallSet[key]; ok {
+			continue
+		}
+		a.toolCallSet[key] = struct{}{}
+		a.toolCalls = append(a.toolCalls, call)
+	}
+	if resp.Usage.TotalTokens != 0 || resp.Usage.InputTokens != 0 || resp.Usage.OutputTokens != 0 {
+		a.usage = resp.Usage
+	}
+	if strings.TrimSpace(responseID) != "" {
+		a.responseID = strings.TrimSpace(responseID)
+	}
+}
+
+func (a *codexResponseAccumulator) response() *agent.Response {
+	if a == nil {
+		return &agent.Response{}
+	}
+	resp := &agent.Response{
+		Content:      strings.TrimSpace(a.content.String()),
+		Thinking:     strings.TrimSpace(a.thinking.String()),
+		ThinkingMeta: append([]agent.ThinkingBlock(nil), a.thinkingMeta...),
+		ToolCalls:    append([]agent.ToolCall(nil), a.toolCalls...),
+		Usage:        a.usage,
+	}
+	if a.responseID != "" {
+		resp.ProviderState = marshalCodexProviderState(a.responseID)
+	}
+	return resp
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -847,4 +1129,15 @@ func (e codexAPIError) StatusCode() int {
 
 func (e codexAPIError) Unwrap() error {
 	return e.cause
+}
+
+func isPreviousResponseRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, "previous_response_id") || strings.Contains(msg, "previous response")
 }

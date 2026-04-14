@@ -446,6 +446,286 @@ func TestCodexCompleteRedactsSecretInTransportError(t *testing.T) {
 	}
 }
 
+func TestCodexCompleteContinuesIncompleteResponses(t *testing.T) {
+	t.Parallel()
+
+	var seen []map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seen = append(seen, payload)
+		if len(seen) == 1 {
+			writeSSE(t, w,
+				sseEvent("response.output_text.delta", map[string]any{
+					"type":  "response.output_text.delta",
+					"delta": "hello ",
+				}),
+				sseEvent("response.incomplete", map[string]any{
+					"type": "response.incomplete",
+					"response": map[string]any{
+						"id":     "resp-incomplete",
+						"status": "incomplete",
+					},
+				}),
+			)
+			return
+		}
+		if got := payload["previous_response_id"]; got != "resp-incomplete" {
+			t.Fatalf("previous_response_id = %#v, want resp-incomplete", got)
+		}
+		input, _ := payload["input"].([]any)
+		if len(input) != 0 {
+			t.Fatalf("continuation input len = %d, want 0", len(input))
+		}
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "world",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp-final",
+				},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "hello world" {
+		t.Fatalf("content = %q, want hello world", resp.Content)
+	}
+	if got := len(seen); got != 2 {
+		t.Fatalf("request count = %d, want 2", got)
+	}
+	for i, payload := range seen {
+		if store, ok := payload["store"].(bool); !ok || !store {
+			t.Fatalf("payload[%d].store = %#v, want true", i, payload["store"])
+		}
+	}
+}
+
+func TestCodexCompleteContinuesWhenStreamClosesAfterResponseCreated(t *testing.T) {
+	t.Parallel()
+
+	var seen []map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seen = append(seen, payload)
+		if len(seen) == 1 {
+			writeSSE(t, w,
+				sseEvent("response.created", map[string]any{
+					"type": "response.created",
+					"response": map[string]any{
+						"id": "resp-created",
+					},
+				}),
+				sseEvent("response.output_text.delta", map[string]any{
+					"type":  "response.output_text.delta",
+					"delta": "partial ",
+				}),
+			)
+			return
+		}
+		if got := payload["previous_response_id"]; got != "resp-created" {
+			t.Fatalf("previous_response_id = %#v, want resp-created", got)
+		}
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "recovered",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp-finished",
+				},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "partial recovered" {
+		t.Fatalf("content = %q, want partial recovered", resp.Content)
+	}
+	if got := len(seen); got != 2 {
+		t.Fatalf("request count = %d, want 2", got)
+	}
+}
+
+func TestCodexCompleteUsesPreviousResponseIDForToolFollowUps(t *testing.T) {
+	t.Parallel()
+
+	var seen []map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seen = append(seen, payload)
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "ok",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp-followup",
+				},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{
+		{Role: "user", Content: "Run ls"},
+		{
+			Role:          "assistant",
+			ToolCalls:     []agent.ToolCall{{ID: "call-1", Name: "exec", Input: json.RawMessage(`{"cmd":"ls"}`)}},
+			ProviderState: json.RawMessage(`{"backend":"codex","response_id":"resp-turn-1"}`),
+		},
+		{Role: "tool", ToolCallID: "call-1", Content: "file.txt"},
+	}, []agent.ToolDef{{
+		Name:       "exec",
+		Parameters: json.RawMessage(`{"type":"object"}`),
+	}})
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+
+	if got := len(seen); got != 1 {
+		t.Fatalf("request count = %d, want 1", got)
+	}
+	payload := seen[0]
+	if got := payload["previous_response_id"]; got != "resp-turn-1" {
+		t.Fatalf("previous_response_id = %#v, want resp-turn-1", got)
+	}
+	input, ok := payload["input"].([]any)
+	if !ok || len(input) != 1 {
+		t.Fatalf("input = %#v, want one tool output item", payload["input"])
+	}
+	item, ok := input[0].(map[string]any)
+	if !ok {
+		t.Fatalf("input item = %#v, want object", input[0])
+	}
+	if item["type"] != "function_call_output" {
+		t.Fatalf("item type = %#v, want function_call_output", item["type"])
+	}
+	if item["call_id"] != "call-1" || item["output"] != "file.txt" {
+		t.Fatalf("tool output item = %#v, want call-1/file.txt", item)
+	}
+}
+
+func TestCodexCompleteFallsBackToFullContextWhenPreviousResponseRejected(t *testing.T) {
+	t.Parallel()
+
+	var seen []map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seen = append(seen, payload)
+		if len(seen) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Previous response with id 'resp-stale' not found.","param":"previous_response_id"}}`))
+			return
+		}
+		if _, ok := payload["previous_response_id"]; ok {
+			t.Fatalf("fallback payload unexpectedly kept previous_response_id: %#v", payload["previous_response_id"])
+		}
+		input, ok := payload["input"].([]any)
+		if !ok || len(input) < 3 {
+			t.Fatalf("fallback input = %#v, want full context replay", payload["input"])
+		}
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "replayed",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp-replayed",
+				},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{
+		{Role: "user", Content: "Run ls"},
+		{
+			Role:          "assistant",
+			ToolCalls:     []agent.ToolCall{{ID: "call-1", Name: "exec", Input: json.RawMessage(`{"cmd":"ls"}`)}},
+			ProviderState: json.RawMessage(`{"backend":"codex","response_id":"resp-stale"}`),
+		},
+		{Role: "tool", ToolCallID: "call-1", Content: "file.txt"},
+	}, []agent.ToolDef{{
+		Name:       "exec",
+		Parameters: json.RawMessage(`{"type":"object"}`),
+	}})
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "replayed" {
+		t.Fatalf("content = %q, want replayed", resp.Content)
+	}
+	if got := len(seen); got != 2 {
+		t.Fatalf("request count = %d, want 2", got)
+	}
+}
+
 type testTransport struct {
 	handler http.Handler
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -87,6 +88,22 @@ func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.Trans
 
 var ErrPrincipalDenied = errors.New("principal is not admitted")
 
+func newCodexHTTPClient() *http.Client {
+	transport, _ := http.DefaultTransport.(*http.Transport)
+	if transport == nil {
+		return &http.Client{}
+	}
+	clone := transport.Clone()
+	clone.ResponseHeaderTimeout = 30 * time.Second
+	clone.TLSHandshakeTimeout = 10 * time.Second
+	clone.ExpectContinueTimeout = time.Second
+	clone.DialContext = (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	return &http.Client{Transport: clone}
+}
+
 var newCodexProvider = func(bundle governorauth.Bundle, cfg *config.Config) (agent.Provider, error) {
 	var loadTokens func() (governorauth.CodexTokens, error)
 	var saveTokens func(governorauth.CodexTokens, time.Time) error
@@ -105,7 +122,7 @@ var newCodexProvider = func(bundle governorauth.Bundle, cfg *config.Config) (age
 		RefreshToken: bundle.RefreshToken,
 		AccountID:    bundle.AccountID,
 		RefreshURL:   bundle.RefreshURL,
-		HTTPClient:   &http.Client{Timeout: 90 * time.Second},
+		HTTPClient:   newCodexHTTPClient(),
 		UserAgent:    cfg.Identity.UserAgent,
 		LoadTokens:   loadTokens,
 		SaveTokens:   saveTokens,

@@ -36,14 +36,15 @@ type ToolRegistry interface {
 }
 
 type Message struct {
-	Role         string
-	Content      string
-	Media        []core.Media
-	SystemBlocks []SystemBlock
-	Thinking     string
-	ThinkingMeta []ThinkingBlock
-	ToolCalls    []ToolCall
-	ToolCallID   string
+	Role          string
+	Content       string
+	Media         []core.Media
+	SystemBlocks  []SystemBlock
+	Thinking      string
+	ThinkingMeta  []ThinkingBlock
+	ProviderState json.RawMessage
+	ToolCalls     []ToolCall
+	ToolCallID    string
 }
 
 type SystemBlock struct {
@@ -71,11 +72,12 @@ type ThinkingBlock struct {
 }
 
 type Response struct {
-	Content      string
-	Thinking     string
-	ThinkingMeta []ThinkingBlock
-	ToolCalls    []ToolCall
-	Usage        core.TokenUsage
+	Content       string
+	Thinking      string
+	ThinkingMeta  []ThinkingBlock
+	ProviderState json.RawMessage
+	ToolCalls     []ToolCall
+	Usage         core.TokenUsage
 }
 
 type StreamChunk struct {
@@ -188,11 +190,12 @@ func RunTurn(
 		}
 
 		history = append(history, Message{
-			Role:         "assistant",
-			Content:      resp.Content,
-			Thinking:     resp.Thinking,
-			ThinkingMeta: append([]ThinkingBlock(nil), resp.ThinkingMeta...),
-			ToolCalls:    append([]ToolCall(nil), resp.ToolCalls...),
+			Role:          "assistant",
+			Content:       resp.Content,
+			Thinking:      resp.Thinking,
+			ThinkingMeta:  append([]ThinkingBlock(nil), resp.ThinkingMeta...),
+			ProviderState: append(json.RawMessage(nil), resp.ProviderState...),
+			ToolCalls:     append([]ToolCall(nil), resp.ToolCalls...),
 		})
 
 		if len(resp.ToolCalls) == 0 {
