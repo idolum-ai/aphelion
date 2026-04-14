@@ -198,14 +198,23 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return nil, fmt.Errorf("invalid turn output: history shrank from %d to %d", len(input), len(outHistory))
 	}
 
+	result.Text, result.Media = extractOutboundReplyMedia(scope, result.Text, result.Media)
 	sess.TurnCount++
-	materialFloor, floorText, _ := governorMaterialArtifact(result.Text, useMaterialFloor)
+	mediaOnlyReply := len(result.Media) > 0 && strings.TrimSpace(result.Text) == ""
+	materialFloor := core.MaterialPacket{}
+	floorText := ""
+	if !mediaOnlyReply {
+		materialFloor, floorText, _ = governorMaterialArtifact(result.Text, useMaterialFloor)
+	}
 	floorMetadataState := hiddenInputs.Metadata()
 	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, prepared.ArtifactRefs...)
 	floorMetadata := encodeFloorMetadata(floorMetadataState)
-	replyWithVoice := r.shouldReplyWithVoice(prepared.InboundWasVoice)
+	replyWithVoice := r.shouldReplyWithVoice(prepared.InboundWasVoice) && len(result.Media) == 0
 	fallbackOpts := face.FallbackOptions{Channel: "telegram", Voice: replyWithVoice}
-	replyText := face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
+	replyText := ""
+	if !mediaOnlyReply {
+		replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
+	}
 	outboundID := int64(0)
 	outboundType := ""
 	streamedReply := false
@@ -220,7 +229,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	} else if facePolicy.Render {
 		faceAwareness.DeliveryMode = "idolum_render"
 	}
-	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
+	if !mediaOnlyReply && r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
 		renderReq := face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
@@ -242,7 +251,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			renderReq.Runtime = faceAwareness
 		}
 
-		if shouldRender && !replyWithVoice {
+		if shouldRender && !replyWithVoice && len(result.Media) == 0 {
 			if streamer, ok := currentFaceModel.(face.StreamRenderer); ok {
 				editor := r.newStreamEditor(msg)
 				if editor != nil {
@@ -315,7 +324,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 
 	if !streamedReply {
-		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, prepared.InboundWasVoice)
+		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, result.Media, prepared.InboundWasVoice)
 		if err != nil {
 			return result, fmt.Errorf("send outbound reply: %w", err)
 		}
@@ -362,16 +371,15 @@ func addTokenUsage(dst core.TokenUsage, src core.TokenUsage) core.TokenUsage {
 
 func replaceLastAssistantWithSceneText(messages []session.Message, sceneText string) []session.Message {
 	trimmed := strings.TrimSpace(sceneText)
-	if trimmed == "" {
-		return messages
-	}
-
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "assistant" {
 			messages[i].Content = trimmed
 			messages[i].ContentChars = len(trimmed)
 			return messages
 		}
+	}
+	if trimmed == "" {
+		return messages
 	}
 
 	turnIndex := 0

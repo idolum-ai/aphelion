@@ -70,7 +70,20 @@ func (r *Runtime) shouldReplyWithVoice(inboundWasVoice bool) bool {
 	}
 }
 
-func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text string, inboundWasVoice bool) (int64, string, error) {
+func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text string, media []core.Media, inboundWasVoice bool) (int64, string, error) {
+	if len(media) > 0 {
+		msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
+			ChatID:  msg.ChatID,
+			Text:    text,
+			Media:   media,
+			ReplyTo: replyToMessageID(msg.MessageID),
+		})
+		if err != nil {
+			return 0, "", err
+		}
+		return msgID, "media", nil
+	}
+
 	if r.shouldReplyWithVoice(inboundWasVoice) && r.synth != nil {
 		if sender, ok := r.outbound.(voiceSender); ok {
 			audio, err := r.synth.Synthesize(ctx, text)

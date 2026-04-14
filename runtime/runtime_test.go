@@ -2146,6 +2146,166 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 	}
 }
 
+func TestHandleInboundSendsTelegramMediaReply(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	chartPath := filepath.Join(cfg.Agent.Workspace, "chart.png")
+	if err := os.WriteFile(chartPath, []byte("png-bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q) err = %v", chartPath, err)
+	}
+	provider.replyText = "Here you go.\nMEDIA: chart.png"
+	provider.faceReplyText = "Here you go."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1202,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "send the chart",
+		MessageID:  79,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != "Here you go." {
+		t.Fatalf("caption = %q, want %q", sender.sent[0].Text, "Here you go.")
+	}
+	if len(sender.sent[0].Media) != 1 {
+		t.Fatalf("media len = %d, want 1", len(sender.sent[0].Media))
+	}
+	if sender.sent[0].Media[0].Type != "image" {
+		t.Fatalf("media type = %q, want image", sender.sent[0].Media[0].Type)
+	}
+	if sender.sent[0].Media[0].Path != chartPath {
+		t.Fatalf("media path = %q, want %q", sender.sent[0].Media[0].Path, chartPath)
+	}
+	if len(sender.voice) != 0 {
+		t.Fatalf("voice sends = %d, want 0", len(sender.voice))
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 1202, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if got := sess.Messages[len(sess.Messages)-1].FloorContent; got != "Here you go." {
+		t.Fatalf("assistant floor = %q, want %q", got, "Here you go.")
+	}
+}
+
+func TestHandleInboundMediaOnlyReplyOmitsNoResponseCaption(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	chartPath := filepath.Join(cfg.Agent.Workspace, "chart.png")
+	if err := os.WriteFile(chartPath, []byte("png-bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q) err = %v", chartPath, err)
+	}
+	provider.replyText = "MEDIA: chart.png"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1203,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "send only the file",
+		MessageID:  80,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != "" {
+		t.Fatalf("caption = %q, want empty", sender.sent[0].Text)
+	}
+	if len(sender.sent[0].Media) != 1 {
+		t.Fatalf("media len = %d, want 1", len(sender.sent[0].Media))
+	}
+	if sender.sent[0].Media[0].Path != chartPath {
+		t.Fatalf("media path = %q, want %q", sender.sent[0].Media[0].Path, chartPath)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 1203, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if got := sess.Messages[len(sess.Messages)-1].Content; got != "" {
+		t.Fatalf("assistant content = %q, want empty", got)
+	}
+	if got := sess.Messages[len(sess.Messages)-1].FloorContent; got != "" {
+		t.Fatalf("assistant floor = %q, want empty", got)
+	}
+}
+
+func TestHandleInboundExplicitMediaBeatsVoiceSynthesis(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	chartPath := filepath.Join(cfg.Agent.Workspace, "chart.png")
+	if err := os.WriteFile(chartPath, []byte("png-bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q) err = %v", chartPath, err)
+	}
+	provider.replyText = "MEDIA: chart.png"
+	var synthesized string
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "transcribed hello"}, fakeSynth{
+		media:    core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+		lastText: &synthesized,
+	})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1204,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  81,
+		Artifacts:  []core.Artifact{{ID: "voice-3", Channel: "telegram", SourceType: "voice", Kind: "audio", Subtype: "voice_note", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.voice) != 0 {
+		t.Fatalf("voice sends = %d, want 0", len(sender.voice))
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("text/media sends = %d, want 1", len(sender.sent))
+	}
+	if len(sender.sent[0].Media) != 1 {
+		t.Fatalf("media len = %d, want 1", len(sender.sent[0].Media))
+	}
+	if sender.sent[0].Media[0].Path != chartPath {
+		t.Fatalf("media path = %q, want %q", sender.sent[0].Media[0].Path, chartPath)
+	}
+	if synthesized != "" {
+		t.Fatalf("synthesized text = %q, want empty", synthesized)
+	}
+}
+
 func TestHandleInboundVoiceFallbackSerializerUsesVoiceOverlay(t *testing.T) {
 	t.Parallel()
 
@@ -2792,6 +2952,77 @@ func TestHandleInboundHandlesDurableTelegramGroup(t *testing.T) {
 	}
 	if state.Cursor != "5" {
 		t.Fatalf("durable agent cursor = %q, want 5", state.Cursor)
+	}
+}
+
+func TestHandleInboundDurableTelegramGroupDeliversChildMedia(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-group-media",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Help locally in the family group.",
+			OutboundMode: "reply_with_policy_authorization",
+			DriftPolicy:  "admin_review",
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	registered, err := store.DurableAgent("family-group-media")
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	scope, err := rt.scopeForDurableAgent(*registered)
+	if err != nil {
+		t.Fatalf("scopeForDurableAgent() err = %v", err)
+	}
+	documentPath := filepath.Join(scope.WorkingRoot, "family-note.txt")
+	if err := os.WriteFile(documentPath, []byte("note"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q) err = %v", documentPath, err)
+	}
+	provider.replyText = "Attached.\nMEDIA: family-note.txt"
+	provider.faceReplyText = "Attached."
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         -100201,
+		ChatType:       "group",
+		ChatTitle:      "Family",
+		SenderID:       555,
+		SenderName:     "alice",
+		Text:           "send the note",
+		MessageID:      6,
+		DurableAgentID: "family-group-media",
+		Timestamp:      time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != "Attached." {
+		t.Fatalf("caption = %q, want %q", sender.sent[0].Text, "Attached.")
+	}
+	if len(sender.sent[0].Media) != 1 {
+		t.Fatalf("media len = %d, want 1", len(sender.sent[0].Media))
+	}
+	if sender.sent[0].Media[0].Path != documentPath {
+		t.Fatalf("media path = %q, want %q", sender.sent[0].Media[0].Path, documentPath)
 	}
 }
 

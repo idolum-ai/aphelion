@@ -82,7 +82,7 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 		return nil, fmt.Errorf("record durable agent applied policy: %w", err)
 	}
 	if childResult.AllowLocalReply {
-		outboundID, outboundType, sendErr := r.sendReply(ctx, msg, childResult.ReplyText, childResult.InboundWasVoice)
+		outboundID, outboundType, sendErr := r.sendReply(ctx, msg, childResult.ReplyText, childResult.TurnResult.Media, childResult.InboundWasVoice)
 		if sendErr != nil {
 			return &childResult.TurnResult, fmt.Errorf("send durable group reply: %w", sendErr)
 		}
@@ -303,12 +303,21 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		return nil, fmt.Errorf("invalid durable group turn output: history shrank from %d to %d", len(input), len(outHistory))
 	}
 
-	materialFloor, floorText, _ := governorMaterialArtifact(result.Text, useMaterialFloor)
+	result.Text, result.Media = extractOutboundReplyMedia(scope, result.Text, result.Media)
+	mediaOnlyReply := len(result.Media) > 0 && strings.TrimSpace(result.Text) == ""
+	materialFloor := core.MaterialPacket{}
+	floorText := ""
+	if !mediaOnlyReply {
+		materialFloor, floorText, _ = governorMaterialArtifact(result.Text, useMaterialFloor)
+	}
 	floorMetadataState := hiddenInputs.Metadata()
 	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, prepared.ArtifactRefs...)
 	floorMetadata := encodeFloorMetadata(floorMetadataState)
 	fallbackOpts := face.FallbackOptions{Channel: "telegram"}
-	replyText := face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
+	replyText := ""
+	if !mediaOnlyReply {
+		replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
+	}
 	outboundID := int64(0)
 	outboundType := ""
 	streamedReply := false
@@ -323,7 +332,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		faceAwareness.DeliveryMode = "idolum_render"
 	}
 
-	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
+	if !mediaOnlyReply && r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
 		renderReq := face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
 			FaceName:        face.DefaultFaceName,
@@ -344,7 +353,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 			faceAwareness.DeliveryMode = "floor_fallback"
 			renderReq.Runtime = faceAwareness
 		}
-		if shouldRender && allowLocalReply && opts.AllowStream {
+		if shouldRender && allowLocalReply && opts.AllowStream && len(result.Media) == 0 {
 			if streamer, ok := currentFaceModel.(face.StreamRenderer); ok {
 				editor := r.newStreamEditor(msg)
 				if editor != nil {
@@ -413,7 +422,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	}
 
 	if opts.DeliverReply && !streamedReply && allowLocalReply {
-		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, prepared.InboundWasVoice)
+		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, result.Media, prepared.InboundWasVoice)
 		if err != nil {
 			return nil, fmt.Errorf("send durable group reply: %w", err)
 		}
