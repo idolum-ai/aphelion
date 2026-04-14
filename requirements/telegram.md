@@ -58,6 +58,14 @@ func (p *Poller) Run(ctx context.Context) error {
 - `timeout`: from config (`telegram.poll_timeout`, default 30s)
 - `allowed_updates`: `["message", "edited_message", "callback_query"]`
 
+`callback_query` matters because Telegram is also the first decision surface for:
+
+- busy-turn interruption choices
+- stop-word confirmation while busy
+- risky tool approvals
+
+Those should all flow through one runtime decision broker rather than separate ad hoc handlers.
+
 ## Update Normalization
 
 We only handle `message` updates for v1. Each incoming message is normalized into `core.InboundMessage`.
@@ -1235,6 +1243,21 @@ func (h *InterruptHandler) OnMessageWhileBusy(ctx context.Context, msg core.Inbo
 }
 ```
 
+This decision path should be brokered by a shared pending-decision layer rather than duplicating queue/wait logic in the Telegram transport and the tool runtime.
+
+The transport owns:
+
+- rendering inline buttons
+- acknowledging callback queries
+- editing or deleting the prompt message
+
+The broker owns:
+
+- decision ids
+- pending state
+- timeout resolution
+- delivering the resolved choice back to the waiting caller
+
 ### Callback query handling
 
 Telegram sends `callback_query` updates when users tap inline buttons. We need to handle these:
@@ -1252,6 +1275,15 @@ func (p *Poller) handleUpdate(update Update) {
 ```
 
 Update `allowed_updates` to include `"callback_query"`.
+
+The callback path should not be treated as a second message stream. It is a response to an existing pending decision.
+
+The normal flow should be:
+
+1. pending decision created by runtime
+2. Telegram renders inline keyboard with callback data containing the decision id
+3. callback handler resolves that decision id
+4. waiting runtime path resumes with the chosen result
 
 ### Router integration
 
@@ -1363,6 +1395,8 @@ func isOnlyStopWord(text string) bool {
 - A button takes 0.5s to tap and removes all ambiguity
 - The non-destructive default (keep going on timeout) means accidental stop words don't kill work
 - This is consistent with the interrupt button pattern above
+
+This is a transport/runtime confirmation, not a model-only etiquette rule. The governor may still ask for confirmation in language, but stop-word handling while busy should remain machine-enforced.
 
 ### Config
 

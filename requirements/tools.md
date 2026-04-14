@@ -81,6 +81,69 @@ Only the first two layers are authoritative.
 
 The key difference from a simpler Hermes-style registry is that Aphelion's authoritative surface is resolved **per run**, not just per process.
 
+## Confirmation and Approval
+
+Aphelion should split "asking before acting" into three different mechanisms rather than flattening them into one generic approval queue.
+
+### 1. Conversational confirmation
+
+This is prompt-level behavior.
+
+The governor should ask the user for a plain yes/no style confirmation when:
+
+- authority genuinely depends on it
+- intent is materially ambiguous
+- a destructive or irreversible action is next
+
+This is not a security boundary. It is a turn-shaping rule.
+
+### 2. Runtime approval
+
+This is code-level enforcement.
+
+When the governor reaches a tool action that is already authorized in principle but risky in execution, the runtime may stop and require an explicit approval before the tool continues.
+
+Examples:
+
+- destructive shell commands
+- irreversible mutations
+- interruption decisions while another turn is still active
+
+This must not live only in prompt prose. The runtime needs a real pending-decision object and an explicit user response path.
+
+### 3. Escalation
+
+This is an authority boundary.
+
+If a requested action exceeds the current principal's authority, the system should not ask that same principal to "approve" it into existence. It should deny or escalate into the appropriate review path instead.
+
+That distinction matters:
+
+- confirmation = clarify or confirm intent
+- approval = confirm a risky but already-authorized action
+- escalation = request ratification from a higher-authority path
+
+Aphelion should keep those concepts separate in both code and language.
+
+## Decision Broker
+
+The runtime should own a small decision broker for pending approvals and transport-level confirmations.
+
+The broker's job is:
+
+- create a durable request id for a pending decision
+- expose bounded user choices
+- wait for an explicit resolution or timeout
+- report the final choice back to the caller
+
+The broker should be transport-neutral. Telegram, CLI, or other surfaces may render the decision differently, but the pending state should not be embedded directly in `exec` or in ad hoc Telegram code.
+
+The first concrete decision kinds should be:
+
+- interrupt while busy
+- stop-word confirmation while busy
+- risky `exec` confirmation
+
 ## `TOOLS.md`
 
 `TOOLS.md` is a valid Aphelion concept.
@@ -230,6 +293,24 @@ Behavior:
 For v0, `exec` may target the configured admin workspace and remain simpler than the target sandbox architecture, but the interface and audit shape should leave room for role-aware sandboxing.
 
 For clarity: v0 `exec` is not sufficient for non-admin use. Restricting `workdir` is useful, but it does not stop a process from referencing other host paths or using host networking.
+
+### `exec` confirmation policy
+
+`exec` should distinguish ordinary shell work from actions that deserve an explicit confirmation barrier.
+
+The first implementation should stay simple:
+
+- ordinary inspection and bounded development commands run directly
+- clearly destructive or irreversible commands require explicit approval
+- if no interactive approval surface exists, risky commands fail closed instead of silently running
+
+This should be implemented as a guard in the `exec` enforcement path, not as a prompt-only suggestion.
+
+Hermes-style global command approval patterns are a useful reference, but Aphelion should stay more scope-aware:
+
+- the same command may mean different things under admin and isolated-user roots
+- approval is about risky execution inside current authority
+- out-of-authority actions belong to denial or escalation, not same-user approval
 
 ## v0.5 Role-Aware Execution
 
