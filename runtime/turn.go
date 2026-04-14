@@ -93,23 +93,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		}
 		return strings.TrimSpace(proposal), consumeFaceUsage(currentFaceModel), nil
 	}
-	if facePolicy.Brokerage {
-		faceProposalAwareness := baseGovernorAwareness
-		faceProposalAwareness.ArtifactMode = "scene"
-		proposal, usage, proposalErr := requestFaceNote("brokerage", r.withBrokerageAwareness(faceProposalAwareness, turnBrokerage{Active: true, Mode: "brokerage"}), "", "")
-		if proposalErr != nil {
-			log.Printf("WARN idolum brokerage proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
-			facePolicy.Brokerage = false
-			facePolicy.Proposal = true
-		} else {
-			brokerage.IdolumNote = proposal
-			brokerage.Active = brokerage.IdolumNote != ""
-			brokerage.Mode = brokerageModeName(brokerage.Active, "brokerage")
-			brokerage.SuggestedTurnMode = parseBrokerageMode(proposal)
-			extraUsage = addTokenUsage(extraUsage, usage)
-		}
-	}
-	if !brokerage.Active && facePolicy.Proposal {
+	if facePolicy.Proposal {
 		faceProposalAwareness := baseGovernorAwareness
 		faceProposalAwareness.ArtifactMode = "scene"
 		proposal, usage, proposalErr := requestFaceNote("proposal", faceProposalAwareness, "", "")
@@ -118,7 +102,12 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		} else {
 			brokerage.IdolumNote = proposal
 			brokerage.Active = brokerage.IdolumNote != ""
-			brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+			if suggestedMode := parseBrokerageMode(proposal); suggestedMode != "" {
+				brokerage.Mode = brokerageModeName(brokerage.Active, "brokerage")
+				brokerage.SuggestedTurnMode = suggestedMode
+			} else {
+				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+			}
 			extraUsage = addTokenUsage(extraUsage, usage)
 		}
 	}
@@ -153,7 +142,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
 		sess.SystemPrompt = systemPrompt
 	}
-	progress := r.newToolProgressReporter(msg, audit)
+	progress := r.newToolProgressReporter(msg, sess.PlanState, audit)
 	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, prepared.LedgerText, progress, audit)
 	defer monitor.Finish(ctx, err)
 	tools = monitor.observeTools(tools)

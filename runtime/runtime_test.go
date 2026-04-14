@@ -48,6 +48,8 @@ type fakeProvider struct {
 	streamFaceText      string
 	faceErr             error
 	proposalErr         error
+	proposalErrAfter    int
+	proposalCallCount   int
 	seenGovernorSystem  []string
 	seenFaceSystem      []string
 	seenProposalSystem  []string
@@ -104,7 +106,8 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 		}
 		if strings.Contains(messages[0].Content, "- mode: proposal") {
 			f.seenProposalSystem = append(f.seenProposalSystem, messages[0].Content)
-			if f.proposalErr != nil {
+			f.proposalCallCount++
+			if f.proposalErr != nil && (f.proposalErrAfter == 0 || f.proposalCallCount >= f.proposalErrAfter) {
 				return nil, f.proposalErr
 			}
 			reply := strings.TrimSpace(nextFakeReply(&f.proposalReplies, f.proposalReplyText))
@@ -859,10 +862,8 @@ func TestHandleInboundUsesBrokerageForStrategicTurn(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.brokerageReplies = []string{
-		"MODE: inspect_then_answer\nWHY: Ground the feature ideas in the repo.\nPUSH:\n- Inspect first.\n- Keep the answer concrete.",
-		"MODE: answer_now\nWHY: The repo context already supports a direct answer.\nPUSH:\n- Answer directly.\n- Keep it concrete.",
-	}
+	provider.proposalReplyText = "MODE: inspect_then_answer\nWHY: Ground the feature ideas in the repo.\nPUSH:\n- Inspect first.\n- Keep the answer concrete."
+	provider.brokerageReplyText = "MODE: answer_now\nWHY: The repo context already supports a direct answer.\nPUSH:\n- Answer directly.\n- Keep it concrete."
 	provider.planningReplies = []string{
 		"MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect the codebase before proposing features.\n- Then reply with prioritized ideas.",
 		"MODE: answer_now\nRATIFICATION: accept\nPLAN:\n- Reply with prioritized ideas grounded in the current repo context.",
@@ -886,11 +887,14 @@ func TestHandleInboundUsesBrokerageForStrategicTurn(t *testing.T) {
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if len(provider.seenBrokerageSystem) == 0 {
-		t.Fatal("seenBrokerageSystem empty, want brokerage prompt call")
+	if len(provider.seenProposalSystem) == 0 {
+		t.Fatal("seenProposalSystem empty, want proposal prompt call")
 	}
-	if !strings.Contains(provider.seenBrokerageSystem[0], "mode: brokerage") {
-		t.Fatalf("brokerage prompt missing brokerage mode: %q", provider.seenBrokerageSystem[0])
+	if !strings.Contains(provider.seenProposalSystem[0], "mode: proposal") {
+		t.Fatalf("proposal prompt missing proposal mode: %q", provider.seenProposalSystem[0])
+	}
+	if len(provider.seenBrokerageSystem) == 0 {
+		t.Fatal("seenBrokerageSystem empty, want revised brokerage prompt after adaptation")
 	}
 	if len(provider.seenPlanningSystem) == 0 {
 		t.Fatal("seenPlanningSystem empty, want planning ratification call")
@@ -932,10 +936,8 @@ func TestHandleInboundPersistsHiddenInputProvenanceForBrokerageTurn(t *testing.T
 	cfg.Memory.Semantic.Sources = []string{"memory/knowledge.md"}
 	cfg.Memory.Semantic.InteractiveTopK = 5
 	cfg.Memory.Semantic.InteractiveMaxChars = 4000
-	provider.brokerageReplies = []string{
-		"MODE: inspect_then_answer\nWHY: There is a recurring semantic layer decision hiding under the feature request.\nPUSH:\n- Inspect first.\n- Name the buried blocker.",
-		"MODE: answer_now\nWHY: The recurring blocker is already visible enough to name directly.\nPUSH:\n- Name the buried blocker plainly.\n- Then answer.",
-	}
+	provider.proposalReplyText = "MODE: inspect_then_answer\nWHY: There is a recurring semantic layer decision hiding under the feature request.\nPUSH:\n- Inspect first.\n- Name the buried blocker."
+	provider.brokerageReplyText = "MODE: answer_now\nWHY: The recurring blocker is already visible enough to name directly.\nPUSH:\n- Name the buried blocker plainly.\n- Then answer."
 	provider.planningReplies = []string{
 		"MODE: inspect_then_answer\nRATIFICATION: adapt\nSIGNAL_JUDGMENT: confirmed\nPLAN:\n- Inspect the codebase before proposing features.\n- Then answer with prioritized ideas.",
 		"MODE: answer_now\nRATIFICATION: accept\nSIGNAL_JUDGMENT: confirmed\nPLAN:\n- Name the buried blocker.\n- Then answer with prioritized ideas.",
@@ -967,11 +969,11 @@ func TestHandleInboundPersistsHiddenInputProvenanceForBrokerageTurn(t *testing.T
 	}
 
 	provider.mu.Lock()
-	if len(provider.seenBrokerageSystem) == 0 {
-		t.Fatal("seenBrokerageSystem empty, want brokerage prompt call")
+	if len(provider.seenProposalSystem) == 0 {
+		t.Fatal("seenProposalSystem empty, want proposal prompt call")
 	}
-	if !strings.Contains(provider.seenBrokerageSystem[len(provider.seenBrokerageSystem)-1], "- hidden_inputs_active: true") {
-		t.Fatalf("brokerage prompt missing hidden-input awareness: %q", provider.seenBrokerageSystem[len(provider.seenBrokerageSystem)-1])
+	if !strings.Contains(provider.seenProposalSystem[0], "- hidden_inputs_active: true") {
+		t.Fatalf("proposal prompt missing hidden-input awareness: %q", provider.seenProposalSystem[0])
 	}
 	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "signal_judgment: confirmed") {
 		t.Fatalf("negotiated brokerage block missing signal judgment: %q", provider.lastGovernorMsgs[1].Content)
@@ -1060,8 +1062,10 @@ func TestHandleInboundFallsBackToPlainProposalWhenBrokerageRatificationFails(t *
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.brokerageReplyText = "MODE: inspect_then_answer\nWHY: Ground the answer.\nPUSH:\n- Inspect first."
-	provider.proposalReplyText = "Push for a concrete answer grounded in what is already known."
+	provider.proposalReplies = []string{
+		"MODE: inspect_then_answer\nWHY: Ground the answer.\nPUSH:\n- Inspect first.",
+		"Push for a concrete answer grounded in what is already known.",
+	}
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -1082,11 +1086,8 @@ func TestHandleInboundFallsBackToPlainProposalWhenBrokerageRatificationFails(t *
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if len(provider.seenBrokerageSystem) == 0 {
-		t.Fatal("seenBrokerageSystem empty, want brokerage prompt call")
-	}
 	if len(provider.seenProposalSystem) == 0 {
-		t.Fatal("seenProposalSystem empty, want explicit proposal rerun after planning failure")
+		t.Fatal("seenProposalSystem empty, want initial proposal plus proposal rerun after planning failure")
 	}
 	if len(provider.lastGovernorMsgs) < 2 {
 		t.Fatalf("lastGovernorMsgs len = %d, want at least 2", len(provider.lastGovernorMsgs))
@@ -1109,9 +1110,11 @@ func TestHandleInboundFallsBackToPlainProposalWhenBrokerageRatificationIsInvalid
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.brokerageReplyText = "MODE: inspect_then_answer\nPUSH:\n- Inspect first."
+	provider.proposalReplies = []string{
+		"MODE: inspect_then_answer\nPUSH:\n- Inspect first.",
+		"Push for a concrete answer grounded in what is already known.",
+	}
 	provider.planningReplyText = "MODE: inspect_then_answer\nPLAN:\n- Inspect first."
-	provider.proposalReplyText = "Push for a concrete answer grounded in what is already known."
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -1149,7 +1152,7 @@ func TestHandleInboundPreservesBrokerageWhenProposalRerunAlsoFails(t *testing.T)
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.brokerageReplyText = "PUSH:\n- Inspect first.\n- Keep the user moving."
+	provider.proposalReplyText = "MODE: inspect_then_answer\nPUSH:\n- Inspect first.\n- Keep the user moving."
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -1157,6 +1160,7 @@ func TestHandleInboundPreservesBrokerageWhenProposalRerunAlsoFails(t *testing.T)
 	}
 	rt.provider = planningErrorProvider{Provider: rt.provider, err: errors.New("planning failed")}
 	provider.proposalErr = errors.New("proposal rerun failed")
+	provider.proposalErrAfter = 2
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID:     722,
@@ -1325,8 +1329,8 @@ func TestHandleInboundRendersIdolumForSimpleFactualTurn(t *testing.T) {
 
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if len(provider.seenProposalSystem) != 0 {
-		t.Fatalf("seenProposalSystem len = %d, want 0", len(provider.seenProposalSystem))
+	if len(provider.seenProposalSystem) != 1 {
+		t.Fatalf("seenProposalSystem len = %d, want 1", len(provider.seenProposalSystem))
 	}
 	if len(provider.seenFaceSystem) == 0 {
 		t.Fatal("seenFaceSystem empty, want face render for simple factual turn")
@@ -3678,8 +3682,8 @@ func TestHandleInboundAdminCanManageDurableAgentThroughConversationTool(t *testi
 	if len(sender.sent) != 2 {
 		t.Fatalf("sent len = %d, want progress + final reply", len(sender.sent))
 	}
-	if !strings.Contains(sender.sent[0].Text, "Using durable_agent") {
-		t.Fatalf("progress text = %q, want durable_agent progress entry", sender.sent[0].Text)
+	if !strings.Contains(sender.sent[0].Text, "Working on Set family-group to read only") {
+		t.Fatalf("progress text = %q, want conversation-derived durable_agent progress entry", sender.sent[0].Text)
 	}
 	if sender.sent[1].Text != "Policy updated through conversation." {
 		t.Fatalf("final reply = %q, want conversational policy update reply", sender.sent[1].Text)
@@ -3719,11 +3723,11 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if !strings.Contains(sender.sent[0].Text, "Working on it") {
 		t.Fatalf("progress text = %q, want tool progress message", sender.sent[0].Text)
 	}
-	if !strings.Contains(sender.sent[0].Text, "Inspecting files") {
-		t.Fatalf("progress text = %q, want semantic inspection label", sender.sent[0].Text)
+	if !strings.Contains(sender.sent[0].Text, "Working on inspect") {
+		t.Fatalf("progress text = %q, want task-derived progress label", sender.sent[0].Text)
 	}
 	if strings.Contains(sender.sent[0].Text, "rg first") {
-		t.Fatalf("progress text = %q, want semantic progress instead of raw command", sender.sent[0].Text)
+		t.Fatalf("progress text = %q, want task-derived progress instead of raw command", sender.sent[0].Text)
 	}
 	if sender.sent[0].ReplyTo == nil || *sender.sent[0].ReplyTo != 99 {
 		t.Fatalf("progress reply_to = %#v, want 99", sender.sent[0].ReplyTo)
@@ -3731,8 +3735,8 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if len(sender.edits) != 1 {
 		t.Fatalf("edit count = %d, want 1", len(sender.edits))
 	}
-	if !strings.Contains(sender.edits[0].Text, "Inspecting files (2x)") {
-		t.Fatalf("edit text = %q, want aggregated semantic tool progress", sender.edits[0].Text)
+	if !strings.Contains(sender.edits[0].Text, "Working on inspect (2x)") {
+		t.Fatalf("edit text = %q, want aggregated task-derived tool progress", sender.edits[0].Text)
 	}
 	sender.mu.Unlock()
 

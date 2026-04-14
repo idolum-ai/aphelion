@@ -175,6 +175,162 @@ func TestDurableAgentToolPolicyApplyUsesReviewEventProvenance(t *testing.T) {
 	}
 }
 
+func TestDurableAgentToolPolicyApplyAcceptsConversationDerivedPolicyFields(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "child-key",
+			Model:          "openrouter/group-model",
+		},
+		PolicyVersion:     1,
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "telegram_update",
+		Status:            "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"policy_apply","agent_id":"family-group","autonomy":"review_before_reply","visibility":"parent_relay_only","shared_context":"isolated","reason":"ratified conversational policy"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(policy_apply conversation fields) err = %v", err)
+	}
+	if !strings.Contains(out, "autonomy: review_before_reply") {
+		t.Fatalf("policy apply output = %q, want conversational autonomy summary", out)
+	}
+	if !strings.Contains(out, "visibility: parent_relay_only") {
+		t.Fatalf("policy apply output = %q, want conversational visibility summary", out)
+	}
+	if !strings.Contains(out, "shared_context: isolated") {
+		t.Fatalf("policy apply output = %q, want conversational shared-context summary", out)
+	}
+
+	updated, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if updated.LivePolicy.OutboundMode != "reply_with_parent_review" {
+		t.Fatalf("updated outbound_mode = %q, want reply_with_parent_review", updated.LivePolicy.OutboundMode)
+	}
+	if updated.LivePolicy.PublicSurfaceMode != "explicit_parent_relay_only" {
+		t.Fatalf("updated public_surface_mode = %q, want explicit_parent_relay_only", updated.LivePolicy.PublicSurfaceMode)
+	}
+	if updated.LivePolicy.SharedInferenceReuse != "disabled" {
+		t.Fatalf("updated shared_inference_reuse = %q, want disabled", updated.LivePolicy.SharedInferenceReuse)
+	}
+}
+
+func TestDurableAgentToolPolicyApplyResolvesConversationStyleAgentReference(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "child-key",
+			Model:          "openrouter/group-model",
+		},
+		PolicyVersion:     1,
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "telegram_update",
+		Status:            "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"policy_apply","agent_id":"Family Group durable agent","autonomy":"review_before_reply"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(policy_apply conversational reference) err = %v", err)
+	}
+	if !strings.Contains(out, "agent_id: family-group") {
+		t.Fatalf("policy apply output = %q, want resolved canonical agent id", out)
+	}
+
+	updated, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if updated.LivePolicy.OutboundMode != "reply_with_parent_review" {
+		t.Fatalf("updated outbound_mode = %q, want reply_with_parent_review", updated.LivePolicy.OutboundMode)
+	}
+}
+
+func TestDurableAgentToolPolicyApplyUnknownAgentListsAvailableAgents(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "child-key",
+			Model:          "openrouter/group-model",
+		},
+		PolicyVersion:     1,
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "telegram_update",
+		Status:            "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"policy_apply","agent_id":"missing-agent","autonomy":"observe_only"}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(policy_apply missing agent) err = nil, want helpful not-found error")
+	}
+	if !strings.Contains(err.Error(), "available agent_ids: family-group") {
+		t.Fatalf("err = %v, want available agent list", err)
+	}
+}
+
 func TestDurableAgentToolEnrollmentShowAndUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -255,6 +411,48 @@ func TestDurableAgentToolEnrollmentShowAndUpdate(t *testing.T) {
 	}
 	if updated.ControlPlaneSecret != "secret-v2" {
 		t.Fatalf("updated control plane secret = %q, want secret-v2", updated.ControlPlaneSecret)
+	}
+}
+
+func TestDurableAgentToolEnrollmentShowMissingIsExplicit(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "child-key",
+			Model:          "openrouter/group-model",
+		},
+		PolicyVersion:     1,
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "telegram_update",
+		Status:            "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"enrollment_show","agent_id":"family-group"}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(enrollment_show missing enrollment) err = nil, want explicit missing-enrollment error")
+	}
+	if !strings.Contains(err.Error(), "has no remote enrollment") {
+		t.Fatalf("err = %v, want explicit no-remote-enrollment guidance", err)
 	}
 }
 

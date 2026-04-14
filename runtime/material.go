@@ -11,7 +11,7 @@ import (
 )
 
 func shouldUseMaterialFloorContract(_ face.Backend, policy faceTurnPolicy) bool {
-	return policy.Proposal || policy.Brokerage
+	return policy.Proposal
 }
 
 func governorMaterialArtifact(text string, useContract bool) (core.MaterialPacket, string, bool) {

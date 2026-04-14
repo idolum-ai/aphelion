@@ -110,10 +110,8 @@ func TestHandleInboundBrokerageConvergesAfterAdaptation(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.brokerageReplies = []string{
-		"MODE: inspect_then_answer\nPUSH:\n- Inspect first.\n- Keep it concrete.",
-		"MODE: answer_now\nPUSH:\n- The repo is already sufficient.\n- Answer directly.",
-	}
+	provider.proposalReplyText = "MODE: inspect_then_answer\nPUSH:\n- Inspect first.\n- Keep it concrete."
+	provider.brokerageReplyText = "MODE: answer_now\nPUSH:\n- The repo is already sufficient.\n- Answer directly."
 	provider.planningReplies = []string{
 		"MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect the codebase before answering.",
 		"MODE: answer_now\nRATIFICATION: accept\nPLAN:\n- Answer directly from the current code context.",
@@ -138,8 +136,11 @@ func TestHandleInboundBrokerageConvergesAfterAdaptation(t *testing.T) {
 		t.Fatalf("HandleInbound() err = %v", err)
 	}
 
-	if len(provider.seenBrokerageSystem) < 2 {
-		t.Fatalf("brokerage prompt calls = %d, want at least 2", len(provider.seenBrokerageSystem))
+	if len(provider.seenProposalSystem) == 0 {
+		t.Fatal("expected initial proposal prompt")
+	}
+	if len(provider.seenBrokerageSystem) == 0 {
+		t.Fatal("expected revised brokerage prompt after adaptation")
 	}
 	if len(audit.BrokerageRounds) != 2 {
 		t.Fatalf("brokerage rounds = %d, want 2", len(audit.BrokerageRounds))
@@ -164,9 +165,12 @@ func TestHandleInboundBrokerageFallsBackToProposalAfterMaxRounds(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.proposalReplies = []string{
+		"MODE: inspect_then_answer\nPUSH:\n- Inspect first.",
+		"Push for a grounded answer from what is already known.",
+	}
 	provider.brokerageReplyText = "MODE: inspect_then_answer\nPUSH:\n- Inspect first."
 	provider.planningReplyText = "MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect first."
-	provider.proposalReplyText = "Push for a grounded answer from what is already known."
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {

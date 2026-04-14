@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"strings"
 
@@ -160,6 +159,8 @@ type toolProgressReporter struct {
 	recordMessageID func(messageID int64)
 	validateText    func(string) (string, []ConstitutionViolation)
 	audit           *turnAuditRecorder
+	taskSummary     string
+	currentPlanStep string
 }
 
 type toolProgressEntry struct {
@@ -168,7 +169,7 @@ type toolProgressEntry struct {
 	Count int
 }
 
-func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, audit *turnAuditRecorder) *toolProgressReporter {
+func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, planState session.PlanState, audit *turnAuditRecorder) *toolProgressReporter {
 	mode := strings.ToLower(strings.TrimSpace(r.toolProgressMode))
 	if mode == "" {
 		mode = "all"
@@ -178,15 +179,17 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, audit *turnAu
 	}
 
 	reporter := &toolProgressReporter{
-		sender:   r.outbound,
-		chatID:   msg.ChatID,
-		replyTo:  replyToMessageID(msg.MessageID),
-		mode:     mode,
-		style:    strings.ToLower(strings.TrimSpace(r.toolProgressStyle)),
-		window:   r.toolProgressWindow,
-		cleanup:  r.toolProgressCleanup,
-		seenKeys: make(map[string]struct{}),
-		audit:    audit,
+		sender:          r.outbound,
+		chatID:          msg.ChatID,
+		replyTo:         replyToMessageID(msg.MessageID),
+		mode:            mode,
+		style:           strings.ToLower(strings.TrimSpace(r.toolProgressStyle)),
+		window:          r.toolProgressWindow,
+		cleanup:         r.toolProgressCleanup,
+		seenKeys:        make(map[string]struct{}),
+		audit:           audit,
+		taskSummary:     summarizeProgressTask(msg.Text),
+		currentPlanStep: currentProgressPlanStep(planState),
 	}
 	if reporter.style == "" {
 		reporter.style = "semantic"
@@ -330,7 +333,7 @@ func (p *toolProgressReporter) makeEntry(name string, input json.RawMessage) too
 	if p.style == "raw" {
 		return rawToolProgressEntry(name, input)
 	}
-	return semanticToolProgressEntry(name, input)
+	return semanticToolProgressEntry(name, input, p.currentPlanStep, p.taskSummary)
 }
 
 func rawToolProgressEntry(name string, input json.RawMessage) toolProgressEntry {
@@ -344,25 +347,59 @@ func rawToolProgressEntry(name string, input json.RawMessage) toolProgressEntry 
 	}
 }
 
-func semanticToolProgressEntry(name string, input json.RawMessage) toolProgressEntry {
-	switch strings.TrimSpace(name) {
-	case "exec":
-		return semanticExecProgressEntry(input)
-	case "memory":
-		return toolProgressEntry{Key: "memory:update", Text: "Updating memory"}
-	case "update_plan":
-		return toolProgressEntry{Key: "plan:update", Text: "Updating the plan"}
-	case "session_search":
-		return toolProgressEntry{Key: "session:search", Text: "Searching past sessions"}
-	case "semantic_search":
-		return toolProgressEntry{Key: "memory:semantic", Text: "Searching semantic memory"}
-	case "openai_file":
-		return semanticOpenAIFileProgressEntry(input)
-	case "openai_vector_store":
-		return semanticOpenAIVectorStoreProgressEntry(input)
-	default:
-		return toolProgressEntry{Key: name, Text: fmt.Sprintf("Using %s", name)}
+func semanticToolProgressEntry(name string, input json.RawMessage, currentStep string, taskSummary string) toolProgressEntry {
+	contextLabel := strings.TrimSpace(currentStep)
+	if contextLabel == "" {
+		contextLabel = strings.TrimSpace(taskSummary)
 	}
+	switch strings.TrimSpace(name) {
+	case "update_plan":
+		if contextLabel != "" {
+			return toolProgressEntry{Key: "plan:update", Text: "Refining the plan for " + contextLabel}
+		}
+		return toolProgressEntry{Key: "plan:update", Text: "Refining the plan"}
+	default:
+		if contextLabel != "" {
+			return toolProgressEntry{Key: "task:" + name, Text: "Working on " + contextLabel}
+		}
+		return toolProgressEntry{Key: "task:" + name, Text: "Working through the request"}
+	}
+}
+
+func currentProgressPlanStep(planState session.PlanState) string {
+	normalized := session.NormalizePlanState(planState)
+	for _, step := range normalized.Steps {
+		if step.Status == session.PlanStatusInProgress {
+			return strings.TrimSpace(step.Step)
+		}
+	}
+	for _, step := range normalized.Steps {
+		if step.Status == session.PlanStatusPending {
+			return strings.TrimSpace(step.Step)
+		}
+	}
+	return ""
+}
+
+func summarizeProgressTask(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.ReplaceAll(trimmed, "\r\n", " ")
+	trimmed = strings.ReplaceAll(trimmed, "\n", " ")
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return ""
+	}
+	if len(fields) > 10 {
+		fields = fields[:10]
+	}
+	summary := strings.Join(fields, " ")
+	if len(summary) > 80 {
+		summary = strings.TrimSpace(summary[:80])
+	}
+	return strings.TrimRight(summary, ".,:;!?")
 }
 
 type execToolInput struct {

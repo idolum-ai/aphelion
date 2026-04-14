@@ -4,8 +4,11 @@ package tool
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,11 +38,10 @@ func (r *Registry) durableAgent(_ context.Context, input json.RawMessage, p prin
 		}
 		return renderDurableAgentList(agents), nil
 	case "policy_show":
-		agentID := strings.TrimSpace(in.AgentID)
-		if agentID == "" {
+		if strings.TrimSpace(in.AgentID) == "" {
 			return "", fmt.Errorf("durable_agent agent_id is required for policy_show")
 		}
-		agent, err := r.store.DurableAgent(agentID)
+		agent, err := r.resolveDurableAgent(in.AgentID)
 		if err != nil {
 			return "", err
 		}
@@ -47,7 +49,7 @@ func (r *Registry) durableAgent(_ context.Context, input json.RawMessage, p prin
 		if history <= 0 {
 			history = 5
 		}
-		updates, err := r.store.DurableAgentPolicyUpdates(agentID, history)
+		updates, err := r.store.DurableAgentPolicyUpdates(agent.AgentID, history)
 		if err != nil {
 			return "", err
 		}
@@ -59,8 +61,15 @@ func (r *Registry) durableAgent(_ context.Context, input json.RawMessage, p prin
 		if agentID == "" {
 			return "", fmt.Errorf("durable_agent agent_id is required for enrollment_show")
 		}
-		enrollment, err := r.store.DurableAgentRemoteEnrollment(agentID)
+		agent, err := r.resolveDurableAgent(agentID)
 		if err != nil {
+			return "", err
+		}
+		enrollment, err := r.store.DurableAgentRemoteEnrollment(agent.AgentID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", fmt.Errorf("durable agent %q has no remote enrollment; use policy_apply for ordinary autonomy/privacy/shared-context changes", agent.AgentID)
+			}
 			return "", err
 		}
 		return renderDurableAgentEnrollment(*enrollment), nil
@@ -76,7 +85,7 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 	if agentID == "" {
 		return "", fmt.Errorf("durable_agent agent_id is required for policy_apply")
 	}
-	agent, err := r.store.DurableAgent(agentID)
+	agent, err := r.resolveDurableAgent(agentID)
 	if err != nil {
 		return "", err
 	}
@@ -85,14 +94,36 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 		if err != nil {
 			return "", err
 		}
-		if event.SourceScope.Kind != session.ScopeKindDurableAgent || !durableAgentReviewTargetsAgent(agentID, event.SourceScope) {
-			return "", fmt.Errorf("review event %d does not belong to durable agent %s", in.ReviewEventID, agentID)
+		if event.SourceScope.Kind != session.ScopeKindDurableAgent || !durableAgentReviewTargetsAgent(agent.AgentID, event.SourceScope) {
+			return "", fmt.Errorf("review event %d does not belong to durable agent %s", in.ReviewEventID, agent.AgentID)
 		}
 	}
 
 	policy := agent.LivePolicy
 	if strings.TrimSpace(in.Charter) != "" {
 		policy.Charter = strings.TrimSpace(in.Charter)
+	}
+	if strings.TrimSpace(in.Autonomy) != "" {
+		mode, err := durableAgentAutonomyToOutboundMode(in.Autonomy)
+		if err != nil {
+			return "", err
+		}
+		policy.OutboundMode = mode
+	}
+	if strings.TrimSpace(in.Visibility) != "" {
+		mode, err := durableAgentVisibilityToPublicSurfaceMode(in.Visibility)
+		if err != nil {
+			return "", err
+		}
+		policy.PublicSurfaceMode = mode
+	}
+	if strings.TrimSpace(in.SharedContext) != "" {
+		reuse, scope, err := durableAgentSharedContextToReuse(in.SharedContext)
+		if err != nil {
+			return "", err
+		}
+		policy.SharedInferenceReuse = reuse
+		policy.SharedInferenceReuseScope = scope
 	}
 	if len(in.Capabilities) > 0 {
 		policy.CapabilityEnvelope = append([]string(nil), in.Capabilities...)
@@ -117,7 +148,7 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 	if reason == "" && in.ReviewEventID > 0 {
 		reason = fmt.Sprintf("ratified from review_event=%d", in.ReviewEventID)
 	}
-	updated, update, err := r.store.ApplyDurableAgentLivePolicy(agentID, policy, in.ReviewEventID, reason)
+	updated, update, err := r.store.ApplyDurableAgentLivePolicy(agent.AgentID, policy, in.ReviewEventID, reason)
 	if err != nil {
 		return "", err
 	}
@@ -129,8 +160,15 @@ func (r *Registry) updateDurableAgentEnrollment(in durableAgentInput) (string, e
 	if agentID == "" {
 		return "", fmt.Errorf("durable_agent agent_id is required for enrollment_update")
 	}
-	enrollment, err := r.store.DurableAgentRemoteEnrollment(agentID)
+	agent, err := r.resolveDurableAgent(agentID)
 	if err != nil {
+		return "", err
+	}
+	enrollment, err := r.store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("durable agent %q has no remote enrollment; use policy_apply for ordinary autonomy/privacy/shared-context changes", agent.AgentID)
+		}
 		return "", err
 	}
 	switch strings.ToLower(strings.TrimSpace(in.Operation)) {
@@ -150,10 +188,6 @@ func (r *Registry) updateDurableAgentEnrollment(in durableAgentInput) (string, e
 		secret := strings.TrimSpace(in.Secret)
 		if secret == "" {
 			return "", fmt.Errorf("durable_agent enrollment_update secret is required when operation=rotate_secret")
-		}
-		agent, err := r.store.DurableAgent(agentID)
-		if err != nil {
-			return "", err
 		}
 		agent.ControlPlaneSecret = secret
 		if err := r.store.UpsertDurableAgent(*agent); err != nil {
@@ -200,6 +234,9 @@ func renderDurableAgentPolicy(agent core.DurableAgent, updates []session.Durable
 	if !agent.PolicyIssuedAt.IsZero() {
 		fmt.Fprintf(&b, "policy_issued_at: %s\n", agent.PolicyIssuedAt.UTC().Format(time.RFC3339Nano))
 	}
+	fmt.Fprintf(&b, "autonomy: %s\n", durableAgentAutonomyFromPolicy(agent.LivePolicy))
+	fmt.Fprintf(&b, "visibility: %s\n", durableAgentVisibilityFromPolicy(agent.LivePolicy))
+	fmt.Fprintf(&b, "shared_context: %s\n", durableAgentSharedContextFromPolicy(agent.LivePolicy))
 	fmt.Fprintf(&b, "charter: %s\n", agent.LivePolicy.Charter)
 	fmt.Fprintf(&b, "capabilities: %s\n", strings.Join(agent.LivePolicy.CapabilityEnvelope, ","))
 	fmt.Fprintf(&b, "outbound_mode: %s\n", agent.LivePolicy.OutboundMode)
@@ -245,6 +282,9 @@ func renderDurableAgentPolicyApply(agent core.DurableAgent, update *session.Dura
 	b.WriteString("changed: true\n")
 	fmt.Fprintf(&b, "policy_version: %d\n", agent.PolicyVersion)
 	fmt.Fprintf(&b, "policy_hash: %s\n", agent.PolicyHash)
+	fmt.Fprintf(&b, "autonomy: %s\n", durableAgentAutonomyFromPolicy(agent.LivePolicy))
+	fmt.Fprintf(&b, "visibility: %s\n", durableAgentVisibilityFromPolicy(agent.LivePolicy))
+	fmt.Fprintf(&b, "shared_context: %s\n", durableAgentSharedContextFromPolicy(agent.LivePolicy))
 	if update.SourceReviewEventID > 0 {
 		fmt.Fprintf(&b, "source_review_event_id: %d\n", update.SourceReviewEventID)
 	}
@@ -278,4 +318,171 @@ func renderDurableAgentEnrollment(enrollment core.DurableAgentRemoteEnrollment) 
 func durableAgentReviewTargetsAgent(agentID string, scope session.ScopeRef) bool {
 	agentID = strings.TrimSpace(agentID)
 	return strings.TrimSpace(scope.DurableAgentID) == agentID || strings.TrimSpace(scope.ID) == agentID
+}
+
+func (r *Registry) resolveDurableAgent(raw string) (*core.DurableAgent, error) {
+	agentID := strings.TrimSpace(raw)
+	if agentID == "" {
+		return nil, fmt.Errorf("durable_agent agent_id is required")
+	}
+	agent, err := r.store.DurableAgent(agentID)
+	if err == nil {
+		return agent, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
+	agents, listErr := r.store.ListDurableAgents()
+	if listErr != nil {
+		return nil, err
+	}
+	if matched := findDurableAgentCandidate(agents, agentID); matched != nil {
+		return matched, nil
+	}
+	if len(agents) == 0 {
+		return nil, fmt.Errorf("durable agent %q not found and no durable agents are registered", agentID)
+	}
+	return nil, fmt.Errorf("durable agent %q not found; available agent_ids: %s", agentID, strings.Join(durableAgentIDOptions(agents), ", "))
+}
+
+func findDurableAgentCandidate(agents []core.DurableAgent, raw string) *core.DurableAgent {
+	normalized := normalizeDurableAgentReference(raw)
+	if normalized == "" {
+		return nil
+	}
+	var exact *core.DurableAgent
+	exactCount := 0
+	for i := range agents {
+		if normalizeDurableAgentReference(agents[i].AgentID) == normalized {
+			exact = &agents[i]
+			exactCount++
+		}
+	}
+	if exactCount == 1 {
+		return exact
+	}
+
+	var fuzzy *core.DurableAgent
+	fuzzyCount := 0
+	for i := range agents {
+		candidate := normalizeDurableAgentReference(agents[i].AgentID)
+		if candidate == "" {
+			continue
+		}
+		if strings.Contains(candidate, normalized) || strings.Contains(normalized, candidate) {
+			fuzzy = &agents[i]
+			fuzzyCount++
+		}
+	}
+	if fuzzyCount == 1 {
+		return fuzzy
+	}
+	return nil
+}
+
+func durableAgentIDOptions(agents []core.DurableAgent) []string {
+	if len(agents) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		id := strings.TrimSpace(agent.AgentID)
+		if id == "" {
+			continue
+		}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func normalizeDurableAgentReference(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	raw = strings.ReplaceAll(raw, "durable", " ")
+	raw = strings.ReplaceAll(raw, "agent", " ")
+	var b strings.Builder
+	for _, r := range raw {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func durableAgentAutonomyToOutboundMode(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "observe_only":
+		return "read_only", nil
+	case "local_drafts":
+		return "draft_only", nil
+	case "review_before_reply":
+		return "reply_with_parent_review", nil
+	case "reply_within_charter":
+		return "reply_with_policy_authorization", nil
+	default:
+		return "", fmt.Errorf("durable_agent autonomy must be one of observe_only|local_drafts|review_before_reply|reply_within_charter")
+	}
+}
+
+func durableAgentVisibilityToPublicSurfaceMode(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "private":
+		return "none", nil
+	case "parent_relay_only":
+		return "explicit_parent_relay_only", nil
+	case "public_channel":
+		return "channel_transcript", nil
+	default:
+		return "", fmt.Errorf("durable_agent visibility must be one of private|parent_relay_only|public_channel")
+	}
+}
+
+func durableAgentSharedContextToReuse(value string) (string, string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "isolated":
+		return "disabled", "public_prefix_only", nil
+	case "public_only":
+		return "allowed", "public_prefix_only", nil
+	default:
+		return "", "", fmt.Errorf("durable_agent shared_context must be one of isolated|public_only")
+	}
+}
+
+func durableAgentAutonomyFromPolicy(policy core.DurableAgentLivePolicy) string {
+	switch strings.TrimSpace(policy.OutboundMode) {
+	case "read_only":
+		return "observe_only"
+	case "draft_only":
+		return "local_drafts"
+	case "reply_with_parent_review":
+		return "review_before_reply"
+	case "reply_with_policy_authorization":
+		return "reply_within_charter"
+	default:
+		return ""
+	}
+}
+
+func durableAgentVisibilityFromPolicy(policy core.DurableAgentLivePolicy) string {
+	switch strings.TrimSpace(policy.PublicSurfaceMode) {
+	case "none":
+		return "private"
+	case "explicit_parent_relay_only":
+		return "parent_relay_only"
+	case "channel_transcript":
+		return "public_channel"
+	default:
+		return ""
+	}
+}
+
+func durableAgentSharedContextFromPolicy(policy core.DurableAgentLivePolicy) string {
+	if strings.TrimSpace(policy.SharedInferenceReuse) == "allowed" {
+		return "public_only"
+	}
+	return "isolated"
 }

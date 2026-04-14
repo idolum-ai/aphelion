@@ -198,23 +198,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		return strings.TrimSpace(proposal), consumeFaceUsage(currentFaceModel), nil
 	}
 
-	if facePolicy.Brokerage {
-		faceProposalAwareness := baseGovernorAwareness
-		faceProposalAwareness.ArtifactMode = "scene"
-		proposal, usage, proposalErr := requestFaceNote("brokerage", r.withBrokerageAwareness(faceProposalAwareness, turnBrokerage{Active: true, Mode: "brokerage"}), "", "")
-		if proposalErr != nil {
-			log.Printf("WARN durable agent brokerage proposal failed backend=%s agent_id=%s err=%v", r.faceBackend, registered.AgentID, proposalErr)
-			facePolicy.Brokerage = false
-			facePolicy.Proposal = true
-		} else {
-			brokerage.IdolumNote = proposal
-			brokerage.Active = brokerage.IdolumNote != ""
-			brokerage.Mode = brokerageModeName(brokerage.Active, "brokerage")
-			brokerage.SuggestedTurnMode = parseBrokerageMode(proposal)
-			extraUsage = addTokenUsage(extraUsage, usage)
-		}
-	}
-	if !brokerage.Active && facePolicy.Proposal {
+	if facePolicy.Proposal {
 		faceProposalAwareness := baseGovernorAwareness
 		faceProposalAwareness.ArtifactMode = "scene"
 		proposal, usage, proposalErr := requestFaceNote("proposal", faceProposalAwareness, "", "")
@@ -223,7 +207,12 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		} else {
 			brokerage.IdolumNote = proposal
 			brokerage.Active = brokerage.IdolumNote != ""
-			brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+			if suggestedMode := parseBrokerageMode(proposal); suggestedMode != "" {
+				brokerage.Mode = brokerageModeName(brokerage.Active, "brokerage")
+				brokerage.SuggestedTurnMode = suggestedMode
+			} else {
+				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+			}
 			extraUsage = addTokenUsage(extraUsage, usage)
 		}
 	}
@@ -260,7 +249,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		sess.SystemPrompt = systemPrompt
 	}
 
-	progress := r.newToolProgressReporter(msg, audit)
+	progress := r.newToolProgressReporter(msg, sess.PlanState, audit)
 	if !opts.DeliverReply {
 		progress = nil
 	}

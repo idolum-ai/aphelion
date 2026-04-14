@@ -9,33 +9,6 @@ import (
 	"testing"
 )
 
-func TestClassifyExecCommandSemanticLabels(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		command string
-		want    string
-	}{
-		{name: "memory write", command: "cat > /tmp/memory/knowledge.md <<'EOF'", want: "Writing memory files"},
-		{name: "config read", command: "cat /home/user/.aphelion/aphelion.toml", want: "Inspecting config"},
-		{name: "service restart", command: "systemctl --user restart aphelion", want: "Restarting service"},
-		{name: "tests", command: "go test ./...", want: "Running tests"},
-		{name: "git inspect", command: "git status --short", want: "Inspecting git state"},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := classifyExecCommand(tc.command)
-			if got.Text != tc.want {
-				t.Fatalf("classifyExecCommand(%q) = %q, want %q", tc.command, got.Text, tc.want)
-			}
-		})
-	}
-}
-
 func TestToolProgressReporterRawStyleKeepsPreview(t *testing.T) {
 	t.Parallel()
 
@@ -66,13 +39,14 @@ func TestToolProgressReporterSemanticWindowOmitsEarlierSteps(t *testing.T) {
 
 	sender := &fakeSender{}
 	reporter := &toolProgressReporter{
-		sender:   sender,
-		editor:   sender,
-		chatID:   42,
-		mode:     "all",
-		style:    "semantic",
-		window:   2,
-		seenKeys: make(map[string]struct{}),
+		sender:      sender,
+		editor:      sender,
+		chatID:      42,
+		mode:        "all",
+		style:       "semantic",
+		window:      2,
+		seenKeys:    make(map[string]struct{}),
+		taskSummary: "review the deployment changes",
 	}
 
 	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"cat /tmp/config.toml"}`))
@@ -85,19 +59,16 @@ func TestToolProgressReporterSemanticWindowOmitsEarlierSteps(t *testing.T) {
 		t.Fatal("expected edited progress message")
 	}
 	got := sender.edits[len(sender.edits)-1].Text
-	if !strings.Contains(got, "1 earlier steps omitted.") {
-		t.Fatalf("progress = %q, want omission line", got)
-	}
-	if !strings.Contains(got, "Running tests") || !strings.Contains(got, "Restarting service") {
-		t.Fatalf("progress = %q, want last two semantic steps", got)
+	if !strings.Contains(got, "Working on review the deployment changes (3x)") {
+		t.Fatalf("progress = %q, want aggregated task-derived semantic steps", got)
 	}
 }
 
 func TestSemanticToolProgressLabel(t *testing.T) {
 	t.Parallel()
 
-	got := semanticToolProgressEntry("semantic_search", json.RawMessage(`{"query":"operator preference"}`))
-	if got.Text != "Searching semantic memory" {
-		t.Fatalf("semanticToolProgressEntry() = %q, want semantic search label", got.Text)
+	got := semanticToolProgressEntry("semantic_search", json.RawMessage(`{"query":"operator preference"}`), "review the runtime", "")
+	if got.Text != "Working on review the runtime" {
+		t.Fatalf("semanticToolProgressEntry() = %q, want task-derived label", got.Text)
 	}
 }

@@ -253,8 +253,8 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	if strings.Contains(got, "## Serialized Floor Fallback") {
 		t.Fatalf("proposal prompt should not include floor fallback section: %q", got)
 	}
-	if !strings.Contains(got, "This is not turn-mode selection") {
-		t.Fatalf("proposal prompt missing boundary from brokerage: %q", got)
+	if !strings.Contains(got, "When the turn clearly needs explicit posture negotiation") {
+		t.Fatalf("proposal prompt missing proposal-to-brokerage escalation guidance: %q", got)
 	}
 	if !strings.Contains(got, "hidden input is materially shaping your note") {
 		t.Fatalf("proposal prompt missing hidden-input guidance: %q", got)

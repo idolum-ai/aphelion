@@ -100,6 +100,9 @@ type durableAgentInput struct {
 	ReviewEventID             int64    `json:"review_event_id,omitempty"`
 	Reason                    string   `json:"reason,omitempty"`
 	Charter                   string   `json:"charter,omitempty"`
+	Autonomy                  string   `json:"autonomy,omitempty"`
+	Visibility                string   `json:"visibility,omitempty"`
+	SharedContext             string   `json:"shared_context,omitempty"`
 	Capabilities              []string `json:"capabilities,omitempty"`
 	OutboundMode              string   `json:"outbound_mode,omitempty"`
 	DriftPolicy               string   `json:"drift_policy,omitempty"`
@@ -232,7 +235,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 	if r.fileStore != nil {
 		defs = append(defs, agent.ToolDef{
 			Name:        "openai_file",
-			Description: "Use OpenAI file storage for durable external file objects. Admin only.",
+			Description: "Use OpenAI file storage for durable external file objects. Admin only. Do not use this for Telegram/user-visible attachments; for those, generate a local file and attach it in the reply with the normal MEDIA path contract.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -289,7 +292,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		})
 		defs = append(defs, agent.ToolDef{
 			Name:        "durable_agent",
-			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. Use this to list agents, inspect live policy or enrollment state, apply ratified policy changes, or change enrollment lifecycle state.",
+			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. Prefer the broader autonomy, visibility, and shared_context fields when the change was described conversationally, and only drop to lower-level policy fields when necessary. For ordinary behavior/privacy/shared-context changes, use policy_apply directly; enrollment actions are only for remote control-plane lifecycle.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -298,6 +301,9 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
 					"reason": {"type": "string", "description": "Optional operator reason for the change"},
 					"charter": {"type": "string", "description": "Optional charter override for policy_apply"},
+					"autonomy": {"type": "string", "description": "Optional high-level autonomy posture for policy_apply: observe_only, local_drafts, review_before_reply, or reply_within_charter"},
+					"visibility": {"type": "string", "description": "Optional visibility posture for policy_apply: private, parent_relay_only, or public_channel"},
+					"shared_context": {"type": "string", "description": "Optional high-level inference-sharing posture for policy_apply: isolated or public_only"},
 					"capabilities": {"type": "array", "items": {"type": "string"}, "description": "Optional capability envelope override for policy_apply"},
 					"outbound_mode": {"type": "string", "description": "Optional outbound mode override for policy_apply"},
 					"drift_policy": {"type": "string", "description": "Optional drift policy override for policy_apply"},

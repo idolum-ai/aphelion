@@ -10,24 +10,15 @@ import (
 )
 
 type faceTurnPolicy struct {
-	Brokerage bool
-	Proposal  bool
-	Render    bool
+	Proposal bool
+	Render   bool
 }
 
 func decideInteractiveFacePolicy(sess *session.Session, userText string) faceTurnPolicy {
+	_ = sess
 	trimmed := strings.TrimSpace(userText)
 	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
 		return faceTurnPolicy{}
-	}
-	if looksBrokerageTurn(trimmed) {
-		return faceTurnPolicy{Brokerage: true, Render: true}
-	}
-	if looksToolHeavyRequest(trimmed) || lastTurnHadToolMessages(sess.Messages) {
-		return faceTurnPolicy{Render: true}
-	}
-	if isSimpleFactualTurn(trimmed) {
-		return faceTurnPolicy{Render: true}
 	}
 	return faceTurnPolicy{Proposal: true, Render: true}
 }
