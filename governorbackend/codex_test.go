@@ -337,6 +337,61 @@ func TestCodexCompleteReloadsAuthFileAfterUnauthorized(t *testing.T) {
 	}
 }
 
+func TestCodexCompleteSyncsRotatedTokensBeforeRequest(t *testing.T) {
+	t.Parallel()
+
+	var (
+		loadCalls int
+		seenAuth  []string
+	)
+	client, err := NewCodex(CodexOptions{
+		BaseURL:      "https://chatgpt.com/backend-api",
+		AccessToken:  "stale-token",
+		RefreshToken: "stale-refresh",
+		AccountID:    "acct-123",
+		LoadTokens: func() (governorauth.CodexTokens, error) {
+			loadCalls++
+			return governorauth.CodexTokens{
+				AccessToken:  "fresh-token",
+				RefreshToken: "fresh-refresh",
+				AccountID:    "acct-456",
+			}, nil
+		},
+		HTTPClient: &http.Client{Transport: &testTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seenAuth = append(seenAuth, r.Header.Get("Authorization")+"|"+r.Header.Get("ChatGPT-Account-ID"))
+			writeSSE(t, w,
+				sseEvent("response.output_text.delta", map[string]any{
+					"type":  "response.output_text.delta",
+					"delta": "synced",
+				}),
+				sseEvent("response.completed", map[string]any{
+					"type": "response.completed",
+					"response": map[string]any{
+						"id": "resp1",
+					},
+				}),
+			)
+		})}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "synced" {
+		t.Fatalf("content = %q, want synced", resp.Content)
+	}
+	if loadCalls == 0 {
+		t.Fatal("LoadTokens() was not called before request")
+	}
+	if got, want := strings.Join(seenAuth, ","), "Bearer fresh-token|acct-456"; got != want {
+		t.Fatalf("auth sequence = %q, want %q", got, want)
+	}
+}
+
 func TestCodexCompleteRefreshesAndPersistsTokensAfterUnauthorized(t *testing.T) {
 	t.Parallel()
 

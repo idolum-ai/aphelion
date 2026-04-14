@@ -159,6 +159,7 @@ func (c *Codex) completeRequest(ctx context.Context, plan codexRequestPlan, tool
 		return nil, fmt.Errorf("codex: encode request: %w", err)
 	}
 
+	c.syncCredentialsFromStore()
 	accessToken, accountID := c.currentCredentials()
 	resp, err := c.doRequest(ctx, &body, accessToken, accountID)
 	if err != nil {
@@ -176,6 +177,42 @@ func (c *Codex) completeRequest(ctx context.Context, plan codexRequestPlan, tool
 	}
 	defer resp.Body.Close()
 	return consumeCodexStream(resp.Body, cb)
+}
+
+func (c *Codex) syncCredentialsFromStore() {
+	if c == nil || c.loadTokens == nil {
+		return
+	}
+	tokens, err := c.loadTokens()
+	if err != nil {
+		return
+	}
+
+	access := strings.TrimSpace(tokens.AccessToken)
+	refresh := strings.TrimSpace(tokens.RefreshToken)
+	accountID := strings.TrimSpace(tokens.AccountID)
+	if access == "" && refresh == "" && accountID == "" {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if refresh != "" && refresh != c.refreshToken {
+		c.refreshToken = refresh
+		if access != "" {
+			c.accessToken = access
+		}
+		if accountID != "" {
+			c.accountID = accountID
+		}
+		return
+	}
+	if c.accessToken == "" && access != "" {
+		c.accessToken = access
+	}
+	if c.accountID == "" && accountID != "" {
+		c.accountID = accountID
+	}
 }
 
 func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken string, accountID string) (*http.Response, error) {
