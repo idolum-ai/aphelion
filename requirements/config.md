@@ -223,8 +223,12 @@ native_provider = "anthropic" # Used when backend resolves to native
 
 [governor.codex]
 auth_source = "auto"          # "auto" | "codex_cli" | "aphelion"
+auth_path = ""                # Empty = ~/.aphelion/state/codex-auth.json
 codex_home = ""               # Empty = CODEX_HOME or ~/.codex
 base_url = "https://chatgpt.com/backend-api"
+model = "gpt-5.4"
+max_continuations = 3
+transport_retries = 1
 
 [face]
 backend = "provider"          # "provider" | "floor_fallback" (dedicated floor-to-user fallback serializer)

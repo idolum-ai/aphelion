@@ -89,11 +89,14 @@ type GovernorConfig struct {
 }
 
 type GovernorCodexConfig struct {
-	AuthSource    string `toml:"auth_source"`
-	AuthPath      string `toml:"auth_path"`
-	CodexHome     string `toml:"codex_home"`
-	BaseURL       string `toml:"base_url"`
-	ContextWindow int    `toml:"context_window"`
+	AuthSource       string `toml:"auth_source"`
+	AuthPath         string `toml:"auth_path"`
+	CodexHome        string `toml:"codex_home"`
+	BaseURL          string `toml:"base_url"`
+	Model            string `toml:"model"`
+	ContextWindow    int    `toml:"context_window"`
+	MaxContinuations int    `toml:"max_continuations"`
+	TransportRetries int    `toml:"transport_retries"`
 }
 
 type ProvidersConfig struct {
@@ -314,9 +317,12 @@ func Default() Config {
 			Backend:        "auto",
 			NativeProvider: "anthropic",
 			Codex: GovernorCodexConfig{
-				AuthSource:    "auto",
-				BaseURL:       "https://chatgpt.com/backend-api",
-				ContextWindow: 200000,
+				AuthSource:       "auto",
+				BaseURL:          "https://chatgpt.com/backend-api",
+				Model:            "gpt-5.4",
+				ContextWindow:    200000,
+				MaxContinuations: 3,
+				TransportRetries: 1,
 			},
 		},
 		Providers: ProvidersConfig{
@@ -592,8 +598,17 @@ func validate(cfg *Config) error {
 	if strings.TrimSpace(cfg.Governor.Codex.BaseURL) == "" {
 		return fmt.Errorf("governor.codex.base_url is required")
 	}
+	if strings.TrimSpace(cfg.Governor.Codex.Model) == "" {
+		return fmt.Errorf("governor.codex.model is required")
+	}
 	if cfg.Governor.Codex.ContextWindow <= 0 {
 		return fmt.Errorf("governor.codex.context_window must be > 0")
+	}
+	if cfg.Governor.Codex.MaxContinuations <= 0 {
+		return fmt.Errorf("governor.codex.max_continuations must be > 0")
+	}
+	if cfg.Governor.Codex.TransportRetries < 0 {
+		return fmt.Errorf("governor.codex.transport_retries must be >= 0")
 	}
 	if cfg.Agent.MaxIterations <= 0 {
 		return fmt.Errorf("agent.max_iterations must be > 0")

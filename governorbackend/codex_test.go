@@ -102,6 +102,49 @@ func TestCodexCompleteTextUsesResponsesProtocol(t *testing.T) {
 	}
 }
 
+func TestCodexCompleteUsesConfiguredModel(t *testing.T) {
+	t.Parallel()
+
+	var seenModel any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seenModel = payload["model"]
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "ok",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp1",
+				},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		Model:       "gpt-5.4-mini",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	if _, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if seenModel != "gpt-5.4-mini" {
+		t.Fatalf("model = %#v, want gpt-5.4-mini", seenModel)
+	}
+}
+
 func TestCodexCompleteToolCallViaResponsesOutput(t *testing.T) {
 	t.Parallel()
 
@@ -588,6 +631,54 @@ func TestCodexCompleteRedactsSecretInTransportError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "[REDACTED]") {
 		t.Fatalf("error = %v, want redacted marker", err)
+	}
+}
+
+func TestCodexCompleteRetriesTransientTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	var attempts int
+	client, err := NewCodex(CodexOptions{
+		BaseURL:          "https://chatgpt.com/backend-api",
+		AccessToken:      "secret-token",
+		AccountID:        "acct-123",
+		TransportRetries: 1,
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				attempts++
+				if attempts == 1 {
+					return nil, io.EOF
+				}
+				rec := httptest.NewRecorder()
+				writeSSE(t, rec,
+					sseEvent("response.output_text.delta", map[string]any{
+						"type":  "response.output_text.delta",
+						"delta": "recovered",
+					}),
+					sseEvent("response.completed", map[string]any{
+						"type": "response.completed",
+						"response": map[string]any{
+							"id": "resp1",
+						},
+					}),
+				)
+				return rec.Result(), nil
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "recovered" {
+		t.Fatalf("content = %q, want recovered", resp.Content)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
 	}
 }
 

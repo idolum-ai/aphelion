@@ -23,8 +23,8 @@ const (
 	AuthSourceCodexCLI = "codex_cli"
 	AuthSourceAphelion = "aphelion"
 
-	DefaultCodexBaseURL    = "https://chatgpt.com/backend-api"
-	DefaultCodexRefreshURL = "https://auth.openai.com/oauth/token"
+	DefaultCodexBaseURL                  = "https://chatgpt.com/backend-api"
+	DefaultCodexRefreshURL               = "https://auth.openai.com/oauth/token"
 	defaultAphelionCodexAuthRelativePath = ".aphelion/state/codex-auth.json"
 )
 

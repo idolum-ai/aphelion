@@ -43,39 +43,31 @@ The minimum usable payload is:
 
 If those are missing or malformed, the source is ignored.
 
-### Future Aphelion-owned source
+### Aphelion-owned source
 
-Later, Aphelion may maintain its own governor auth store separate from Codex CLI.
+Aphelion now supports its own Codex auth store separate from Codex CLI.
 
-That is the long-term ownership path, but it is not required for v0.
+This gives the runtime a stable, refreshable credential home even when the operator wants Codex compatibility without treating `~/.codex/auth.json` as the only long-term source of truth.
 
-## v0 Credential Strategy
+## Credential Strategy
 
-For v0, Aphelion should be interoperable first.
+Aphelion should support both:
+
+- Codex CLI interoperability
+- Aphelion-owned Codex credential persistence
 
 That means:
 
 - detect existing Codex CLI credentials
 - use them for governor selection when valid
-- avoid taking ownership of those credentials yet
-- fall back cleanly to native governor when unavailable
+- support an Aphelion-owned auth file as an explicit source of truth
+- refresh and persist tokens to the active owner store
+- fall back cleanly to native governor when Codex credentials are unavailable
 
-This is intentionally closer to OpenClaw’s interoperability posture than to Hermes’ immediate import-into-own-store posture.
-
-## Desired Long-Term Strategy
-
-Longer term, Aphelion should become capable of:
-
-- importing Codex CLI credentials into an Aphelion-owned store
-- refreshing them independently
-- operating without depending on Codex CLI as the sole source of truth
-
-That is conceptually closer to Hermes.
-
-The intended end state is:
+The intended posture is:
 
 - OpenClaw-style interoperability
-- Hermes-style ownership
+- Hermes-style ownership and refresh resilience
 
 ## Backend Resolution
 
@@ -118,7 +110,7 @@ type GovernorAuth struct {
 For Codex, the source may be:
 
 - `codex-cli-auth-json`
-- later `aphelion-auth-store`
+- `aphelion-auth-json`
 
 The exact type may evolve, but the rest of the governor path should depend on a normalized bundle rather than directly reading `auth.json`.
 
@@ -132,26 +124,19 @@ If `account_id` is missing, Codex auth should be treated as incomplete and shoul
 
 ## Expiry and Refresh
 
-### v0
+The runtime should:
 
-v0 may stay conservative:
-
-- use only credentials that appear valid
+- use credentials that appear valid
 - if they are missing, malformed, or expired, fall back to native in `auto`
 - fail explicitly in `codex`
+- refresh access tokens when needed
+- persist refreshed tokens to the active owner store
+- resync from the active auth file before requests so externally rotated tokens do not strand the process
 
-### Later
+Ownership rules still matter:
 
-Later versions may:
-
-- detect imminent expiry
-- refresh access tokens
-- persist refreshed tokens to the appropriate owner store
-
-Ownership rules matter here:
-
-- if Aphelion is only borrowing Codex CLI credentials, it should be careful about mutating that store
-- once Aphelion has its own auth store, it may refresh there without depending on Codex CLI
+- if Aphelion is borrowing Codex CLI credentials, it should treat that file as the active owner store for refresh persistence
+- if Aphelion is using its own auth store, it should refresh there without depending on Codex CLI as the sole source of truth
 
 ## Security Rules
 
@@ -191,8 +176,12 @@ native_provider = "anthropic"
 
 [governor.codex]
 auth_source = "auto"            # "auto" | "codex_cli" | "aphelion"
+auth_path = ""                  # Empty = ~/.aphelion/state/codex-auth.json
 codex_home = ""                 # empty = CODEX_HOME or ~/.codex
 base_url = "https://chatgpt.com/backend-api"
+model = "gpt-5.4"
+max_continuations = 3
+transport_retries = 1
 ```
 
 `auth_source = "auto"` means:
@@ -200,13 +189,15 @@ base_url = "https://chatgpt.com/backend-api"
 - prefer Aphelion-owned credentials when that store exists
 - otherwise use external Codex CLI credentials when available
 
-For v0, only the external path is required.
+- `auth_source = "aphelion"` means use Aphelion-owned credential persistence explicitly
+- `auth_source = "codex_cli"` means use the external Codex CLI store explicitly
 
 ## Decisions
 
 - **Codex auth is not the same as OpenAI API-key auth.**
 - **External Codex CLI credentials are a valid v0 source.**
 - **Aphelion should be Codex-compatible before it is Codex-self-hosting.**
+- **Aphelion may now own Codex auth while remaining CLI-compatible.**
 - **`auto` prefers Codex when valid credentials exist.**
 - **Fallback to native is required for practicality.**
 - **Governor credentials must never leak into prompts or non-admin tool surfaces.**
@@ -216,6 +207,8 @@ For v0, only the external path is required.
 - **TestDetectCodexCLIAuthFile**: valid `CODEX_HOME/auth.json` is detected
 - **TestIgnoreMalformedCodexCLIAuthFile**: malformed or incomplete auth file is ignored
 - **TestGovernorBackendAutoPrefersCodexWhenCredentialsExist**: `auto` selects Codex when valid external credentials exist
+- **TestGovernorBackendAutoPrefersAphelionAuthStoreBeforeCLI**: `auto` prefers the Aphelion-owned auth store when both sources exist
 - **TestGovernorBackendAutoFallsBackNativeWhenCredentialsMissing**: `auto` selects native when Codex credentials are absent
 - **TestGovernorBackendCodexFailsWithoutCredentials**: explicit Codex mode fails clearly when auth is unavailable
+- **TestGovernorBackendCodexLoadsAphelionAuthStore**: explicit Aphelion auth source resolves a stored credential bundle
 - **TestGovernorAuthNeverInjectedIntoPrompt**: access tokens do not appear in governor or face prompt text

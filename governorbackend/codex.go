@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,11 +23,12 @@ import (
 )
 
 const (
-	maxCodexResponseBytes = 1 << 20 // 1 MiB
-	codexRefreshClientID  = "app_EMoamEEZ73f0CkXaXp7hrann"
-	defaultCodexModel     = "gpt-5.4"
-	defaultCodexPrompt    = "You are Codex, a coding agent. Help the user directly and use tools when needed."
-	maxCodexContinuations = 3
+	maxCodexResponseBytes        = 1 << 20 // 1 MiB
+	codexRefreshClientID         = "app_EMoamEEZ73f0CkXaXp7hrann"
+	defaultCodexModel            = "gpt-5.4"
+	defaultCodexPrompt           = "You are Codex, a coding agent. Help the user directly and use tools when needed."
+	maxCodexContinuations        = 3
+	defaultCodexTransportRetries = 1
 )
 
 var (
@@ -37,26 +39,32 @@ var (
 )
 
 type CodexOptions struct {
-	BaseURL      string
-	AccessToken  string
-	RefreshToken string
-	AccountID    string
-	RefreshURL   string
-	HTTPClient   *http.Client
-	UserAgent    string
-	LoadTokens   func() (governorauth.CodexTokens, error)
-	SaveTokens   func(governorauth.CodexTokens, time.Time) error
-	Now          func() time.Time
+	BaseURL          string
+	AccessToken      string
+	RefreshToken     string
+	AccountID        string
+	RefreshURL       string
+	Model            string
+	MaxContinuations int
+	TransportRetries int
+	HTTPClient       *http.Client
+	UserAgent        string
+	LoadTokens       func() (governorauth.CodexTokens, error)
+	SaveTokens       func(governorauth.CodexTokens, time.Time) error
+	Now              func() time.Time
 }
 
 type Codex struct {
-	endpoint   string
-	refreshURL string
-	client     *http.Client
-	userAgent  string
-	loadTokens func() (governorauth.CodexTokens, error)
-	saveTokens func(governorauth.CodexTokens, time.Time) error
-	now        func() time.Time
+	endpoint         string
+	refreshURL       string
+	client           *http.Client
+	userAgent        string
+	model            string
+	maxContinuations int
+	transportRetries int
+	loadTokens       func() (governorauth.CodexTokens, error)
+	saveTokens       func(governorauth.CodexTokens, time.Time) error
+	now              func() time.Time
 
 	mu           sync.Mutex
 	accessToken  string
@@ -92,18 +100,33 @@ func NewCodex(opts CodexOptions) (*Codex, error) {
 	if now == nil {
 		now = time.Now
 	}
+	model := strings.TrimSpace(opts.Model)
+	if model == "" {
+		model = defaultCodexModel
+	}
+	maxContinuations := opts.MaxContinuations
+	if maxContinuations <= 0 {
+		maxContinuations = maxCodexContinuations
+	}
+	transportRetries := opts.TransportRetries
+	if transportRetries < 0 {
+		transportRetries = defaultCodexTransportRetries
+	}
 
 	return &Codex{
-		endpoint:     codexResponsesEndpoint(opts.BaseURL),
-		refreshURL:   refreshURL,
-		accessToken:  strings.TrimSpace(opts.AccessToken),
-		refreshToken: strings.TrimSpace(opts.RefreshToken),
-		accountID:    strings.TrimSpace(opts.AccountID),
-		client:       client,
-		userAgent:    opts.UserAgent,
-		loadTokens:   opts.LoadTokens,
-		saveTokens:   opts.SaveTokens,
-		now:          now,
+		endpoint:         codexResponsesEndpoint(opts.BaseURL),
+		refreshURL:       refreshURL,
+		accessToken:      strings.TrimSpace(opts.AccessToken),
+		refreshToken:     strings.TrimSpace(opts.RefreshToken),
+		accountID:        strings.TrimSpace(opts.AccountID),
+		client:           client,
+		userAgent:        opts.UserAgent,
+		model:            model,
+		maxContinuations: maxContinuations,
+		transportRetries: transportRetries,
+		loadTokens:       opts.LoadTokens,
+		saveTokens:       opts.SaveTokens,
+		now:              now,
 	}, nil
 }
 
@@ -144,39 +167,55 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 			return nil, fmt.Errorf("codex: incomplete response missing response id")
 		}
 		continuations++
-		if continuations > maxCodexContinuations {
-			return nil, fmt.Errorf("codex: response remained incomplete after %d continuation attempts", maxCodexContinuations)
+		if continuations > c.maxContinuations {
+			return nil, fmt.Errorf("codex: response remained incomplete after %d continuation attempts", c.maxContinuations)
 		}
 		plan = planCodexContinuation(messages, result.ResponseID)
 	}
 }
 
 func (c *Codex) completeRequest(ctx context.Context, plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*codexCompletionResult, error) {
-	reqBody := buildCodexRequest(plan, tools, opts, true)
+	for attempt := 0; attempt <= c.transportRetries; attempt++ {
+		reqBody := buildCodexRequest(plan, tools, opts, true, c.model)
 
-	var body bytes.Buffer
-	if err := json.NewEncoder(&body).Encode(reqBody); err != nil {
-		return nil, fmt.Errorf("codex: encode request: %w", err)
-	}
-
-	c.syncCredentialsFromStore()
-	accessToken, accountID := c.currentCredentials()
-	resp, err := c.doRequest(ctx, &body, accessToken, accountID)
-	if err != nil {
-		var apiErr codexAPIError
-		if allowRetry && errors.As(err, &apiErr) && apiErr.statusCode == http.StatusUnauthorized {
-			reauthorized, reauthErr := c.reauthorize(ctx, accessToken)
-			if reauthorized {
-				return c.completeRequest(ctx, plan, tools, opts, cb, false)
-			}
-			if reauthErr != nil {
-				return nil, fmt.Errorf("%w: reauthorization failed: %v", err, reauthErr)
-			}
+		var body bytes.Buffer
+		if err := json.NewEncoder(&body).Encode(reqBody); err != nil {
+			return nil, fmt.Errorf("codex: encode request: %w", err)
 		}
-		return nil, err
+
+		c.syncCredentialsFromStore()
+		accessToken, accountID := c.currentCredentials()
+		resp, err := c.doRequest(ctx, &body, accessToken, accountID)
+		if err != nil {
+			var apiErr codexAPIError
+			if allowRetry && errors.As(err, &apiErr) && apiErr.statusCode == http.StatusUnauthorized {
+				reauthorized, reauthErr := c.reauthorize(ctx, accessToken)
+				if reauthorized {
+					return c.completeRequest(ctx, plan, tools, opts, cb, false)
+				}
+				if reauthErr != nil {
+					return nil, fmt.Errorf("%w: reauthorization failed: %v", err, reauthErr)
+				}
+			}
+			if attempt < c.transportRetries && isRetryableCodexTransportError(err) {
+				continue
+			}
+			return nil, err
+		}
+
+		result, consumeErr := func() (*codexCompletionResult, error) {
+			defer resp.Body.Close()
+			return consumeCodexStream(resp.Body, cb)
+		}()
+		if consumeErr != nil {
+			if attempt < c.transportRetries && isRetryableCodexTransportError(consumeErr) {
+				continue
+			}
+			return nil, consumeErr
+		}
+		return result, nil
 	}
-	defer resp.Body.Close()
-	return consumeCodexStream(resp.Body, cb)
+	return nil, fmt.Errorf("codex: transport retries exhausted")
 }
 
 func (c *Codex) syncCredentialsFromStore() {
@@ -246,6 +285,33 @@ func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken s
 		}
 	}
 	return resp, nil
+}
+
+func isRetryableCodexTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr codexAPIError
+	if errors.As(err, &apiErr) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout() || netErr.Temporary()
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, " eof") ||
+		strings.HasSuffix(msg, "eof") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "stream closed")
 }
 
 func (c *Codex) currentCredentials() (string, string) {
@@ -368,9 +434,13 @@ func (c *Codex) refreshTokens(ctx context.Context, refreshToken string) (governo
 	}, nil
 }
 
-func buildCodexRequest(plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, stream bool) map[string]any {
+func buildCodexRequest(plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, stream bool, model string) map[string]any {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = defaultCodexModel
+	}
 	reqBody := map[string]any{
-		"model":        defaultCodexModel,
+		"model":        model,
 		"instructions": plan.instructions,
 		"input":        plan.input,
 		"store":        true,
@@ -995,16 +1065,16 @@ func codexInputItems(messages []agent.Message) []map[string]any {
 			continue
 		}
 
-	switch role {
-	case "user", "assistant":
-		if role == "assistant" {
-			for _, item := range codexReasoningInputItems(msg.ProviderState) {
+		switch role {
+		case "user", "assistant":
+			if role == "assistant" {
+				for _, item := range codexReasoningInputItems(msg.ProviderState) {
+					input = append(input, item)
+				}
+			}
+			if item, ok := codexMessageInputItem(role, msg); ok {
 				input = append(input, item)
 			}
-		}
-		if item, ok := codexMessageInputItem(role, msg); ok {
-			input = append(input, item)
-		}
 			if role == "assistant" {
 				for _, call := range msg.ToolCalls {
 					input = append(input, map[string]any{
@@ -1145,7 +1215,7 @@ type codexResponseAccumulator struct {
 
 func newCodexResponseAccumulator() *codexResponseAccumulator {
 	return &codexResponseAccumulator{
-		toolCallSet: map[string]struct{}{},
+		toolCallSet:  map[string]struct{}{},
 		reasoningSet: map[string]struct{}{},
 	}
 }

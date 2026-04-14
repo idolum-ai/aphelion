@@ -337,7 +337,10 @@ native_provider = "anthropic"
 	auth_path = "/var/lib/aphelion/codex-auth.json"
 	codex_home = "~/codex-home"
 	base_url = "https://chatgpt.com/backend-api"
+	model = "gpt-5.4-mini"
 	context_window = 180000
+	max_continuations = 5
+	transport_retries = 2
 
 [providers.anthropic]
 api_key = "sk-ant-test"
@@ -492,8 +495,17 @@ elevenlabs_voice_id = "voice-123"
 	if cfg.Governor.Codex.AuthPath != "/var/lib/aphelion/codex-auth.json" {
 		t.Fatalf("governor.codex.auth_path = %q, want /var/lib/aphelion/codex-auth.json", cfg.Governor.Codex.AuthPath)
 	}
+	if cfg.Governor.Codex.Model != "gpt-5.4-mini" {
+		t.Fatalf("governor.codex.model = %q, want gpt-5.4-mini", cfg.Governor.Codex.Model)
+	}
 	if cfg.Governor.Codex.ContextWindow != 180000 {
 		t.Fatalf("governor.codex.context_window = %d, want 180000", cfg.Governor.Codex.ContextWindow)
+	}
+	if cfg.Governor.Codex.MaxContinuations != 5 {
+		t.Fatalf("governor.codex.max_continuations = %d, want 5", cfg.Governor.Codex.MaxContinuations)
+	}
+	if cfg.Governor.Codex.TransportRetries != 2 {
+		t.Fatalf("governor.codex.transport_retries = %d, want 2", cfg.Governor.Codex.TransportRetries)
 	}
 	if cfg.Sessions.IdleExpiry != "36h" {
 		t.Fatalf("idle_expiry = %q, want 36h", cfg.Sessions.IdleExpiry)

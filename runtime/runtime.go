@@ -123,15 +123,18 @@ var newCodexProvider = func(bundle governorauth.Bundle, cfg *config.Config) (age
 		}
 	}
 	return governorbackend.NewCodex(governorbackend.CodexOptions{
-		BaseURL:      bundle.BaseURL,
-		AccessToken:  bundle.AccessToken,
-		RefreshToken: bundle.RefreshToken,
-		AccountID:    bundle.AccountID,
-		RefreshURL:   bundle.RefreshURL,
-		HTTPClient:   newCodexHTTPClient(),
-		UserAgent:    cfg.Identity.UserAgent,
-		LoadTokens:   loadTokens,
-		SaveTokens:   saveTokens,
+		BaseURL:          bundle.BaseURL,
+		AccessToken:      bundle.AccessToken,
+		RefreshToken:     bundle.RefreshToken,
+		AccountID:        bundle.AccountID,
+		RefreshURL:       bundle.RefreshURL,
+		Model:            cfg.Governor.Codex.Model,
+		MaxContinuations: cfg.Governor.Codex.MaxContinuations,
+		TransportRetries: cfg.Governor.Codex.TransportRetries,
+		HTTPClient:       newCodexHTTPClient(),
+		UserAgent:        cfg.Identity.UserAgent,
+		LoadTokens:       loadTokens,
+		SaveTokens:       saveTokens,
 	})
 }
 
