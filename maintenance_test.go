@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -1169,6 +1170,146 @@ func TestRunDurableAgentRemoteLoopProcessesQueuedMessages(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(inboxDir, "0001.json")); !os.IsNotExist(err) {
 		t.Fatalf("message file still exists, err=%v", err)
+	}
+}
+
+type deployTurnRunnerFunc func(context.Context, core.InboundMessage) (*core.TurnResult, error)
+
+func (f deployTurnRunnerFunc) HandleInbound(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
+	return f(ctx, msg)
+}
+
+func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T) {
+	root := t.TempDir()
+	cfg := &config.Config{
+		Principals: config.PrincipalsConfig{
+			Telegram: config.TelegramPrincipalsConfig{
+				AdminUserIDs: []int64{42},
+			},
+		},
+		Sessions: config.SessionsConfig{
+			DBPath: filepath.Join(root, "state", "sessions.db"),
+		},
+		Agent: config.AgentConfig{
+			PromptRoot:        filepath.Join(root, "agent"),
+			ExecRoot:          filepath.Join(root, "workspace"),
+			SharedMemoryRoot:  filepath.Join(root, "agent"),
+			UserWorkspaceRoot: filepath.Join(root, "state", "isolated", "workspaces"),
+			UserMemoryRoot:    filepath.Join(root, "state", "isolated", "memory"),
+			ToolTimeout:       30,
+		},
+	}
+
+	origBuilder := deployVerificationRuntimeBuilder
+	defer func() { deployVerificationRuntimeBuilder = origBuilder }()
+
+	deployVerificationRuntimeBuilder = func(cfg *config.Config, store *session.SQLiteStore) (builtDeployVerificationRuntime, error) {
+		sender := &deployVerificationSender{}
+		reply := "DEPLOYMENT VERIFIED: governor and Idolum are healthy."
+		runner := deployTurnRunnerFunc(func(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
+			key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
+			sess, err := store.Load(key)
+			if err != nil {
+				return nil, err
+			}
+			sess.ChatType = "dm"
+			sess.UserName = msg.SenderName
+			sess.TurnCount++
+			sess.LastFloorText = "Verification floor."
+			newMessages := []session.Message{
+				{
+					Role:         "user",
+					Content:      msg.Text,
+					ContentChars: len(msg.Text),
+					TurnIndex:    sess.TurnCount,
+				},
+				{
+					Role:         "assistant",
+					Content:      reply,
+					ContentChars: len(reply),
+					TurnIndex:    sess.TurnCount,
+				},
+			}
+			if err := store.Save(sess, newMessages, core.TokenUsage{}); err != nil {
+				return nil, err
+			}
+			if _, err := sender.SendMessage(ctx, core.OutboundMessage{ChatID: msg.ChatID, Text: reply}); err != nil {
+				return nil, err
+			}
+			return &core.TurnResult{Text: "Verification floor."}, nil
+		})
+		return builtDeployVerificationRuntime{
+			Runner: runner,
+			Sender: sender,
+		}, nil
+	}
+
+	report, err := verifyDeployment(context.Background(), cfg, deployVerificationOptions{
+		ConfigPath: "/tmp/aphelion.toml",
+	})
+	if err != nil {
+		t.Fatalf("verifyDeployment() err = %v", err)
+	}
+	if report.Status != "passed" {
+		t.Fatalf("report.Status = %q, want passed", report.Status)
+	}
+	if !report.Blessed {
+		t.Fatal("report.Blessed = false, want true")
+	}
+	if len(report.Probes) != 3 {
+		t.Fatalf("probe len = %d, want 3", len(report.Probes))
+	}
+
+	db, err := sql.Open("sqlite3", cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("sql.Open() err = %v", err)
+	}
+	defer db.Close()
+
+	var remaining int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM sessions WHERE session_id = ?`, report.ProbeSessionID).Scan(&remaining); err != nil {
+		t.Fatalf("query probe session cleanup: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("probe session rows = %d, want 0 after successful cleanup", remaining)
+	}
+}
+
+func TestRunVerifyDeployCommandPrintsFailureReport(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+
+	origRunner := deployVerificationRunner
+	defer func() { deployVerificationRunner = origRunner }()
+
+	deployVerificationRunner = func(_ context.Context, _ *config.Config, _ deployVerificationOptions) (deployVerificationReport, error) {
+		return deployVerificationReport{
+			Status:         "failed",
+			Blessed:        false,
+			ProbeChatID:    -9100000001,
+			ProbeSessionID: "telegram_dm:-9100000001",
+			Diagnosis:      "deployment verification failed on the live governor/Idolum golden path: no outbound reply",
+			Probes: []deployProbeResult{
+				{Name: "boot", Status: deployProbeStatusPass, DurationMS: 12, Detail: "runtime initialized"},
+				{Name: "golden_path", Status: deployProbeStatusFail, DurationMS: 18, Detail: "no outbound reply"},
+			},
+		}, fmt.Errorf("no outbound reply")
+	}
+
+	out, err := captureStdout(t, func() error {
+		return runVerifyDeployCommand([]string{"--config", cfgPath})
+	})
+	if err == nil {
+		t.Fatal("runVerifyDeployCommand() err = nil, want failure")
+	}
+	if !strings.Contains(out, "action: verify-deploy") {
+		t.Fatalf("verify-deploy output = %q, want action header", out)
+	}
+	if !strings.Contains(out, "status: failed") {
+		t.Fatalf("verify-deploy output = %q, want failed status", out)
+	}
+	if !strings.Contains(out, "golden_path: fail") {
+		t.Fatalf("verify-deploy output = %q, want golden_path failure", out)
 	}
 }
 

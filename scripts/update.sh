@@ -19,5 +19,13 @@ go build -o bin/aphelion .
 "${repo_root}/bin/aphelion" --config "${config_path}" --check-config
 "${repo_root}/bin/aphelion" init --config "${config_path}"
 systemctl --user restart aphelion
+for _ in {1..10}; do
+  if systemctl --user is-active --quiet aphelion; then
+    break
+  fi
+  sleep 1
+done
+systemctl --user is-active --quiet aphelion
+"${repo_root}/bin/aphelion" verify-deploy --config "${config_path}"
 
-echo "Updated and restarted aphelion using ${config_path}"
+echo "Updated, restarted, and verified aphelion using ${config_path}"
