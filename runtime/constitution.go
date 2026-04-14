@@ -30,15 +30,15 @@ type TurnToolAudit struct {
 }
 
 type BrokerageRoundAudit struct {
-	Round             int      `json:"round"`
-	Mode              string   `json:"mode,omitempty"`
-	IdolumNote        string   `json:"idolum_note,omitempty"`
-	SuggestedTurnMode string   `json:"suggested_turn_mode,omitempty"`
-	Ratification      string   `json:"ratification,omitempty"`
-	RatifiedTurnMode  string   `json:"ratified_turn_mode,omitempty"`
-	SignalJudgment    string   `json:"signal_judgment,omitempty"`
-	RatifiedSteps     []string `json:"ratified_steps,omitempty"`
-	Error             string   `json:"error,omitempty"`
+	Round                      int      `json:"round"`
+	Phase                      string   `json:"phase,omitempty"`
+	IdolumNote                 string   `json:"idolum_note,omitempty"`
+	SuggestedExecutionContract string   `json:"suggested_execution_contract,omitempty"`
+	Ratification               string   `json:"ratification,omitempty"`
+	RatifiedExecutionContract  string   `json:"ratified_execution_contract,omitempty"`
+	SignalJudgment             string   `json:"signal_judgment,omitempty"`
+	RatifiedSteps              []string `json:"ratified_steps,omitempty"`
+	Error                      string   `json:"error,omitempty"`
 }
 
 type TurnAudit struct {

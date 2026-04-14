@@ -231,10 +231,10 @@ func TestProviderRendererRenderPromptIncludesMaterialFloor(t *testing.T) {
 		t.Fatalf("Render() err = %v", err)
 	}
 
-	if !strings.Contains(provider.lastPrompt, "## Governor Material Floor") {
+	if !strings.Contains(provider.lastPrompt, "## Execution Facts") {
 		t.Fatalf("render prompt missing material floor section: %q", provider.lastPrompt)
 	}
-	if strings.Contains(provider.lastPrompt, "## Serialized Floor Fallback") {
+	if strings.Contains(provider.lastPrompt, "## Execution Facts Fallback") {
 		t.Fatalf("render prompt should prefer material floor over serialized floor fallback: %q", provider.lastPrompt)
 	}
 }

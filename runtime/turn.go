@@ -102,11 +102,11 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		} else {
 			brokerage.IdolumNote = proposal
 			brokerage.Active = brokerage.IdolumNote != ""
-			if suggestedMode := parseBrokerageMode(proposal); suggestedMode != "" {
-				brokerage.Mode = brokerageModeName(brokerage.Active, "brokerage")
-				brokerage.SuggestedTurnMode = suggestedMode
+			if suggestedContract := parseProposalExecutionContract(proposal); suggestedContract != nil {
+				brokerage.Phase = brokeragePhaseName(brokerage.Active, "brokerage")
+				brokerage.SuggestedExecutionContract = suggestedContract
 			} else {
-				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+				brokerage.Phase = brokeragePhaseName(brokerage.Active, "proposal")
 			}
 			extraUsage = addTokenUsage(extraUsage, usage)
 		}
@@ -129,11 +129,11 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if err != nil {
 		return nil, fmt.Errorf("maybe compact session: %w", err)
 	}
-	if brokerage.Active && brokerage.Mode == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" {
+	if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" {
 		updated, usage := r.convergeTurnBrokerage(ctx, exec, baseGovernorAwareness, systemBlocks, history, prepared.UserText, brokerage, requestFaceNote, audit)
 		extraUsage = addTokenUsage(extraUsage, usage)
 		brokerage = updated
-		if brokerage.Mode == "brokerage" && brokerage.Ratification == "accept" {
+		if brokerage.Phase == "brokerage" && brokerage.Ratification == "accept" {
 			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}
 		governorAwareness = r.withPlanAwareness(r.withBrokerageAwareness(governorAwareness, brokerage), sess.PlanState)

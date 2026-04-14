@@ -12,19 +12,19 @@ import (
 // BrokerageProposal is Idolum's bounded pre-turn push about how a turn should
 // move.
 type BrokerageProposal struct {
-	RawText       string
-	SuggestedMode TurnMode
-	Usage         core.TokenUsage
+	RawText           string
+	SuggestedContract ExecutionContract
+	Usage             core.TokenUsage
 }
 
 // BrokerageRatification is Aphelion's bounded answer to a brokerage proposal.
 type BrokerageRatification struct {
-	RawText        string
-	RatifiedMode   TurnMode
-	Disposition    RatificationDisposition
-	SignalJudgment SignalJudgment
-	RatifiedSteps  []string
-	Usage          core.TokenUsage
+	RawText          string
+	RatifiedContract ExecutionContract
+	Disposition      RatificationDisposition
+	SignalJudgment   SignalJudgment
+	RatifiedSteps    []string
+	Usage            core.TokenUsage
 }
 
 // BrokerageArtifact preserves both sides of the negotiated brokerage surface.

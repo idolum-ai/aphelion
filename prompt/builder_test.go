@@ -162,7 +162,7 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	if strings.Contains(got, "## Tool Manifest") || strings.Contains(got, "exec constraints") {
 		t.Fatalf("face prompt should not include tool definitions: %q", got)
 	}
-	if !strings.Contains(got, "## Serialized Floor Fallback") {
+	if !strings.Contains(got, "## Execution Facts Fallback") {
 		t.Fatalf("face prompt missing serialized floor fallback section: %q", got)
 	}
 	if !strings.Contains(got, "## Delivery Awareness") {
@@ -204,7 +204,7 @@ func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 	stableIdx := strings.Index(got, "## Stable Face Files")
 	awarenessIdx := strings.Index(got, "## Delivery Awareness")
 	dynamicIdx := strings.Index(got, "## Dynamic Face Files")
-	floorIdx := strings.Index(got, "## Serialized Floor Fallback")
+	floorIdx := strings.Index(got, "## Execution Facts Fallback")
 	userIdx := strings.Index(got, "## Latest User Message")
 	if awarenessIdx == -1 || stableIdx == -1 || dynamicIdx == -1 || floorIdx == -1 || userIdx == -1 {
 		t.Fatalf("face prompt missing expected layered sections: %q", got)
@@ -227,10 +227,10 @@ func TestBuildFacePromptPrefersMaterialFloorWhenPresent(t *testing.T) {
 		LatestUserInput: "What changed?",
 	})
 
-	if !strings.Contains(got, "## Governor Material Floor") {
+	if !strings.Contains(got, "## Execution Facts") {
 		t.Fatalf("face prompt missing material floor section: %q", got)
 	}
-	if strings.Contains(got, "## Serialized Floor Fallback") {
+	if strings.Contains(got, "## Execution Facts Fallback") {
 		t.Fatalf("face prompt should prefer material floor over serialized floor fallback: %q", got)
 	}
 	if !strings.Contains(got, "FACTS:") || !strings.Contains(got, "SCENE_CONSTRAINTS:") {
@@ -250,10 +250,10 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 		Mode:            "proposal",
 	})
 
-	if strings.Contains(got, "## Serialized Floor Fallback") {
+	if strings.Contains(got, "## Execution Facts Fallback") {
 		t.Fatalf("proposal prompt should not include floor fallback section: %q", got)
 	}
-	if !strings.Contains(got, "When the turn clearly needs explicit posture negotiation") {
+	if !strings.Contains(got, "When the turn clearly needs explicit execution shaping") {
 		t.Fatalf("proposal prompt missing proposal-to-brokerage escalation guidance: %q", got)
 	}
 	if !strings.Contains(got, "hidden input is materially shaping your note") {
@@ -276,14 +276,14 @@ func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
 		Mode:            "brokerage",
 	})
 
-	if strings.Contains(got, "## Serialized Floor Fallback") {
+	if strings.Contains(got, "## Execution Facts Fallback") {
 		t.Fatalf("brokerage prompt should not include floor fallback section: %q", got)
 	}
-	if !strings.Contains(got, "If you name a turn mode, put it on its own line as MODE:") {
-		t.Fatalf("brokerage prompt missing turn mode guidance: %q", got)
+	if !strings.Contains(got, "INSPECT: <yes|no>, QUESTION: <yes|no>, ANSWER: <yes|no>") {
+		t.Fatalf("brokerage prompt missing execution contract guidance: %q", got)
 	}
-	if !strings.Contains(got, "You may omit a mode entirely") {
-		t.Fatalf("brokerage prompt missing optional-mode guidance: %q", got)
+	if !strings.Contains(got, "You may omit that contract entirely") {
+		t.Fatalf("brokerage prompt missing optional-contract guidance: %q", got)
 	}
 	if !strings.Contains(got, "Do not turn this into a form") {
 		t.Fatalf("brokerage prompt missing anti-bureaucracy guidance: %q", got)
@@ -291,8 +291,8 @@ func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
 	if !strings.Contains(got, "hidden input is materially shaping your push") {
 		t.Fatalf("brokerage prompt missing hidden-input guidance: %q", got)
 	}
-	if !strings.Contains(got, "inspect_then_answer") {
-		t.Fatalf("brokerage prompt missing brokerage mode vocabulary: %q", got)
+	if !strings.Contains(got, "whether the turn needs inspection, a question before action, or an answer now") {
+		t.Fatalf("brokerage prompt missing execution-shape guidance: %q", got)
 	}
 }
 
@@ -441,7 +441,7 @@ func TestRenderIdolumProposalForGovernorWrapsAdvisory(t *testing.T) {
 	t.Parallel()
 
 	got := RenderIdolumProposalForGovernor("Idolum", "Push for more initiative.")
-	if !strings.Contains(got, "## Idolum Proposal") {
+	if !strings.Contains(got, "## Conversational Pressure") {
 		t.Fatalf("wrapped proposal missing heading: %q", got)
 	}
 	if !strings.Contains(got, "Push for more initiative.") {
@@ -453,25 +453,25 @@ func TestRenderBrokeragePlanForGovernorWrapsNegotiation(t *testing.T) {
 	t.Parallel()
 
 	got := RenderBrokeragePlanForGovernor(BrokerageArtifact{
-		IdolumProposal:     "MODE: inspect_then_answer\nPUSH:\n- Inspect first.",
-		RatifiedTurnMode:   "inspect_then_answer",
-		Ratification:       "adapt",
-		RatifiedSteps:      []string{"Inspect prompt, runtime, and memory surfaces first."},
-		RatificationRecord: "MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect prompt, runtime, and memory surfaces first.",
+		IdolumProposal:            "INSPECT: yes\nQUESTION: no\nANSWER: yes\nPUSH:\n- Inspect first.",
+		RatifiedExecutionContract: "inspect=yes, question=no, answer=yes",
+		Ratification:              "adapt",
+		RatifiedSteps:             []string{"Inspect prompt, runtime, and memory surfaces first."},
+		RatificationRecord:        "INSPECT: yes\nQUESTION: no\nANSWER: yes\nRATIFICATION: adapt\nPLAN:\n- Inspect prompt, runtime, and memory surfaces first.",
 	})
-	if !strings.Contains(got, "## Negotiated Turn Brokerage") {
+	if !strings.Contains(got, "## Execution Contract") {
 		t.Fatalf("wrapped plan missing heading: %q", got)
 	}
 	if !strings.Contains(got, "- ratification: adapt") {
 		t.Fatalf("wrapped plan missing ratification summary: %q", got)
 	}
-	if !strings.Contains(got, "### Idolum Position") {
+	if !strings.Contains(got, "### Conversational Pressure") {
 		t.Fatalf("wrapped plan missing idolum position: %q", got)
 	}
-	if !strings.Contains(got, "### Aphelion Execution Contract") {
+	if !strings.Contains(got, "### Approved Steps") {
 		t.Fatalf("wrapped plan missing execution contract: %q", got)
 	}
-	if !strings.Contains(got, "### Aphelion Ratification Record") {
+	if !strings.Contains(got, "### Ratification Record") {
 		t.Fatalf("wrapped plan missing ratification record: %q", got)
 	}
 }

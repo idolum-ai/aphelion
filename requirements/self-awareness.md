@@ -144,7 +144,7 @@ At minimum, the governor should be made aware of:
 - whether the current artifact is floor-authoring or scene-authoring
 - whether supported media is attached to the current turn
 - whether that media is being handled as vision input or extracted document text
-- Idolum's suggested turn mode and Aphelion's ratified turn mode when brokerage is active
+- Idolum's suggested execution contract and Aphelion's ratified execution contract when brokerage is active
 - Aphelion's ratification disposition when brokerage is active
 
 ## Governor vs Idolum

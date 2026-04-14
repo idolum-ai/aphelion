@@ -24,16 +24,13 @@ type FallbackArtifact struct {
 	Text string
 }
 
-// TurnMode names the bounded posture vocabulary used in brokerage.
-type TurnMode string
-
-const (
-	TurnModeAnswerNow        TurnMode = "answer_now"
-	TurnModeInspectThenReply TurnMode = "inspect_then_answer"
-	TurnModeAskThenWait      TurnMode = "ask_then_wait"
-	TurnModeDecline          TurnMode = "decline"
-	TurnModeSilent           TurnMode = "silent"
-)
+// ExecutionContract names the bounded execution shape negotiated during
+// brokerage without forcing the turn through a fixed mode taxonomy.
+type ExecutionContract struct {
+	NeedsInspection bool
+	NeedsQuestion   bool
+	MayAnswerNow    bool
+}
 
 // RatificationDisposition records how Aphelion answered Idolum's brokerage
 // push.

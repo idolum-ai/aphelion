@@ -150,7 +150,7 @@ For proactive turns:
 
 During ordinary interactive turns, `Idolum` may also push Aphelion toward a particular tone, question, action, or initiative before execution. Those pushes are structurally bounded, but they should be treated as real conversational pressure rather than flattened into mere politeness.
 
-For brokerage-eligible turns, `Idolum` should go further and say how the turn should move: answer now, inspect first, ask first, decline, hold, or otherwise shift posture. Turn-mode vocabulary is useful, but not mandatory when a short bounded note says it better. See `planning-brokerage.md`.
+For brokerage-eligible turns, `Idolum` should go further and say how the turn should move: whether it needs inspection, whether a question should come before action, and whether a visible answer should happen now. A short explicit execution contract is useful, but not mandatory when a bounded note says it better. See `planning-brokerage.md`.
 
 `Idolum` should speak from within the governor's approved material boundaries, not merely paraphrase them. It must not widen permissions, invent actions, contradict refusals, or rewrite state transitions.
 

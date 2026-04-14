@@ -110,11 +110,11 @@ func TestHandleInboundBrokerageConvergesAfterAdaptation(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.proposalReplyText = "MODE: inspect_then_answer\nPUSH:\n- Inspect first.\n- Keep it concrete."
-	provider.brokerageReplyText = "MODE: answer_now\nPUSH:\n- The repo is already sufficient.\n- Answer directly."
+	provider.proposalReplyText = "INSPECT: yes\nQUESTION: no\nANSWER: yes\nPUSH:\n- Inspect first.\n- Keep it concrete."
+	provider.brokerageReplyText = "INSPECT: no\nQUESTION: no\nANSWER: yes\nPUSH:\n- The repo is already sufficient.\n- Answer directly."
 	provider.planningReplies = []string{
-		"MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect the codebase before answering.",
-		"MODE: answer_now\nRATIFICATION: accept\nPLAN:\n- Answer directly from the current code context.",
+		"INSPECT: yes\nQUESTION: no\nANSWER: yes\nRATIFICATION: adapt\nPLAN:\n- Inspect the codebase before answering.",
+		"INSPECT: no\nQUESTION: no\nANSWER: yes\nRATIFICATION: accept\nPLAN:\n- Answer directly from the current code context.",
 	}
 
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -166,11 +166,11 @@ func TestHandleInboundBrokerageFallsBackToProposalAfterMaxRounds(t *testing.T) {
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.proposalReplies = []string{
-		"MODE: inspect_then_answer\nPUSH:\n- Inspect first.",
+		"INSPECT: yes\nQUESTION: no\nANSWER: yes\nPUSH:\n- Inspect first.",
 		"Push for a grounded answer from what is already known.",
 	}
-	provider.brokerageReplyText = "MODE: inspect_then_answer\nPUSH:\n- Inspect first."
-	provider.planningReplyText = "MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect first."
+	provider.brokerageReplyText = "INSPECT: yes\nQUESTION: no\nANSWER: yes\nPUSH:\n- Inspect first."
+	provider.planningReplyText = "INSPECT: yes\nQUESTION: no\nANSWER: yes\nRATIFICATION: adapt\nPLAN:\n- Inspect first."
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -202,10 +202,10 @@ func TestHandleInboundBrokerageFallsBackToProposalAfterMaxRounds(t *testing.T) {
 	if len(provider.lastGovernorMsgs) < 2 {
 		t.Fatalf("lastGovernorMsgs len = %d, want at least 2", len(provider.lastGovernorMsgs))
 	}
-	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "## Idolum Proposal") {
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "## Conversational Pressure") {
 		t.Fatalf("governor input should fall back to Idolum proposal block: %q", provider.lastGovernorMsgs[1].Content)
 	}
-	if strings.Contains(provider.lastGovernorMsgs[1].Content, "## Negotiated Turn Brokerage") {
+	if strings.Contains(provider.lastGovernorMsgs[1].Content, "## Execution Contract") {
 		t.Fatalf("governor input should not contain negotiated brokerage after max-round fallback: %q", provider.lastGovernorMsgs[1].Content)
 	}
 }

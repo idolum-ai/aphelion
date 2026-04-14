@@ -6,10 +6,21 @@ import "testing"
 
 func TestBrokerageArtifactPreservesBothSides(t *testing.T) {
 	artifact := BrokerageArtifact{
-		Proposal: BrokerageProposal{RawText: "MODE: inspect_then_answer", SuggestedMode: TurnModeInspectThenReply},
+		Proposal: BrokerageProposal{
+			RawText: "INSPECT: yes\nQUESTION: no\nANSWER: yes",
+			SuggestedContract: ExecutionContract{
+				NeedsInspection: true,
+				NeedsQuestion:   false,
+				MayAnswerNow:    true,
+			},
+		},
 		Ratification: BrokerageRatification{
-			RawText:       "MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- inspect first",
-			RatifiedMode:  TurnModeInspectThenReply,
+			RawText: "INSPECT: yes\nQUESTION: no\nANSWER: yes\nRATIFICATION: adapt\nPLAN:\n- inspect first",
+			RatifiedContract: ExecutionContract{
+				NeedsInspection: true,
+				NeedsQuestion:   false,
+				MayAnswerNow:    true,
+			},
 			Disposition:   RatificationAdapt,
 			RatifiedSteps: []string{"inspect first"},
 		},

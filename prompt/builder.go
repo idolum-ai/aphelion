@@ -47,12 +47,12 @@ type FaceRequest struct {
 }
 
 type BrokerageArtifact struct {
-	IdolumProposal     string
-	RatifiedTurnMode   string
-	Ratification       string
-	SignalJudgment     string
-	RatifiedSteps      []string
-	RatificationRecord string
+	IdolumProposal            string
+	RatifiedExecutionContract string
+	Ratification              string
+	SignalJudgment            string
+	RatifiedSteps             []string
+	RatificationRecord        string
 }
 
 func BuildGovernorPrompt(req GovernorRequest) string {
@@ -191,19 +191,19 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
 			"Before execution begins, state how you think this turn should move and what pressure should be applied.",
 			"Return a short brokerage note, not a reply to the user.",
-			"If you name a turn mode, put it on its own line as MODE: <answer_now|inspect_then_answer|ask_then_wait|decline|silent>.",
-			"You may omit a mode entirely when a short bounded note says it better.",
+			"If explicit execution shaping matters, you may put these on their own lines: INSPECT: <yes|no>, QUESTION: <yes|no>, ANSWER: <yes|no>.",
+			"You may omit that contract entirely when a short bounded note says it better.",
 			"Do not turn this into a form unless the moment genuinely calls for it. A short bounded note is enough.",
 			"When a hidden input is materially shaping your push and runtime awareness says one is active, name it plainly.",
-			"Focus on what the user is actually reaching for, how ready the situation is for action, and whether the user should be stirred, steadied, questioned, answered, declined, or left alone for now.",
-			"When prior brokerage feedback is present, revise toward a negotiated posture instead of merely repeating the previous note.",
+			"Focus on what the user is actually reaching for, how ready the situation is for action, and whether the turn needs inspection, a question before action, or an answer now.",
+			"When prior execution feedback is present, revise toward a negotiated contract instead of merely repeating the previous note.",
 			"Be concrete and brief. Do not claim authority. Do not describe hidden mechanics. Do not draft the eventual answer.",
 		)
 	case "proposal":
 		intro = append(intro,
 			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
 			"Say what you think this turn should center, notice, or prioritize and why.",
-			"When the turn clearly needs explicit posture negotiation, you may put MODE: <answer_now|inspect_then_answer|ask_then_wait|decline|silent> on its own line.",
+			"When the turn clearly needs explicit execution shaping, you may put INSPECT: <yes|no>, QUESTION: <yes|no>, and ANSWER: <yes|no> on their own lines.",
 			"Only do that when the turn really needs negotiation. Otherwise stay with a short note or return nothing.",
 			"Push for what matters inside the turn: warmth, sharper observation, a better question, a concrete action, or deliberate silence.",
 			"When a hidden input is materially shaping your note and runtime awareness says one is active, name it briefly.",
@@ -278,12 +278,12 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	if mode == "brokerage" {
 		if prior := strings.TrimSpace(req.PriorProposal); prior != "" {
 			parts = append(parts, agent.SystemBlock{
-				Text: "## Prior Brokerage Proposal\n" + prior,
+				Text: "## Prior Conversational Pressure\n" + prior,
 			})
 		}
 		if feedback := strings.TrimSpace(req.BrokerageFeedback); feedback != "" {
 			parts = append(parts, agent.SystemBlock{
-				Text: "## Aphelion Ratification Feedback\n" + feedback,
+				Text: "## Execution Contract Feedback\n" + feedback,
 			})
 		}
 	}
@@ -291,7 +291,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	if mode != "proposal" && mode != "brokerage" {
 		if material := strings.TrimSpace(req.MaterialFloor.Text()); material != "" {
 			parts = append(parts, agent.SystemBlock{
-				Text: "## Governor Material Floor\n" + material,
+				Text: "## Execution Facts\n" + material,
 			})
 		} else {
 			floorText := strings.TrimSpace(req.FloorText)
@@ -299,7 +299,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 				floorText = "(no floor text provided)"
 			}
 			parts = append(parts, agent.SystemBlock{
-				Text: "## Serialized Floor Fallback\n" + floorText,
+				Text: "## Execution Facts Fallback\n" + floorText,
 			})
 		}
 	}
@@ -329,8 +329,8 @@ func RenderIdolumProposalForGovernor(faceName string, proposal string) string {
 		return ""
 	}
 	return strings.Join([]string{
-		fmt.Sprintf("## %s Proposal", faceName),
-		fmt.Sprintf("This is guidance from %s, the public-facing persona. It represents the conversational pressure %s wants to exert on the turn. The governor still owns authority, but this pressure is real and should not be flattened into politeness.", faceName, faceName),
+		"## Conversational Pressure",
+		fmt.Sprintf("This is guidance from %s about how the conversation should move. Treat it as real pressure on the turn, but not as the approved execution contract.", faceName),
 		proposal,
 	}, "\n\n")
 }
@@ -345,15 +345,15 @@ func RenderIdolumBrokerageForGovernor(faceName string, proposal string) string {
 		return ""
 	}
 	return strings.Join([]string{
-		fmt.Sprintf("## %s Brokerage Proposal", faceName),
-		fmt.Sprintf("This is the planning push from %s, the public-facing persona. It says how the conversation should move, what pressure should be applied, and whether the user should be stirred, steadied, questioned, or met directly. It is not authoritative on system action, but it is a coequal negotiating position in turn posture.", faceName),
+		"## Conversational Pressure",
+		fmt.Sprintf("This is %s's current push on how the conversation should move. It may include a proposed execution shape, but it is still pressure to be ratified rather than the approved execution contract.", faceName),
 		proposal,
 	}, "\n\n")
 }
 
 func RenderBrokeragePlanForGovernor(artifact BrokerageArtifact) string {
 	artifact.IdolumProposal = strings.TrimSpace(artifact.IdolumProposal)
-	artifact.RatifiedTurnMode = strings.TrimSpace(artifact.RatifiedTurnMode)
+	artifact.RatifiedExecutionContract = strings.TrimSpace(artifact.RatifiedExecutionContract)
 	artifact.Ratification = strings.TrimSpace(artifact.Ratification)
 	artifact.SignalJudgment = strings.TrimSpace(artifact.SignalJudgment)
 	artifact.RatificationRecord = strings.TrimSpace(artifact.RatificationRecord)
@@ -361,14 +361,13 @@ func RenderBrokeragePlanForGovernor(artifact BrokerageArtifact) string {
 		return ""
 	}
 	parts := []string{
-		"## Negotiated Turn Brokerage",
-		"This block preserves the brokerage itself instead of collapsing it into a single machine summary.",
-		"Keep both sides visible: Idolum's position says what conversational pressure should be applied, and Aphelion's ratification says what execution posture is actually approved.",
-		"Use the negotiated shape below to steer execution without forgetting where the tension came from.",
+		"## Execution Contract",
+		"This block preserves both the conversational pressure and the approved execution shape instead of collapsing them into a single summary.",
+		"Use the approved contract below to steer execution without forgetting where the pressure came from.",
 	}
 	summary := make([]string, 0, 2)
-	if artifact.RatifiedTurnMode != "" {
-		summary = append(summary, fmt.Sprintf("- ratified_turn_mode: %s", artifact.RatifiedTurnMode))
+	if artifact.RatifiedExecutionContract != "" {
+		summary = append(summary, fmt.Sprintf("- ratified_execution_contract: %s", artifact.RatifiedExecutionContract))
 	}
 	if artifact.Ratification != "" {
 		summary = append(summary, fmt.Sprintf("- ratification: %s", artifact.Ratification))
@@ -380,10 +379,10 @@ func RenderBrokeragePlanForGovernor(artifact BrokerageArtifact) string {
 		parts = append(parts, strings.Join(summary, "\n"))
 	}
 	if artifact.IdolumProposal != "" {
-		parts = append(parts, "### Idolum Position\n"+artifact.IdolumProposal)
+		parts = append(parts, "### Conversational Pressure\n"+artifact.IdolumProposal)
 	}
 	if len(artifact.RatifiedSteps) > 0 {
-		lines := []string{"### Aphelion Execution Contract"}
+		lines := []string{"### Approved Steps"}
 		for _, step := range artifact.RatifiedSteps {
 			step = strings.TrimSpace(step)
 			if step == "" {
@@ -396,7 +395,7 @@ func RenderBrokeragePlanForGovernor(artifact BrokerageArtifact) string {
 		}
 	}
 	if artifact.RatificationRecord != "" {
-		parts = append(parts, "### Aphelion Ratification Record\n"+artifact.RatificationRecord)
+		parts = append(parts, "### Ratification Record\n"+artifact.RatificationRecord)
 	}
 	return strings.Join(parts, "\n\n")
 }

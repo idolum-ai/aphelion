@@ -7,12 +7,15 @@ import "testing"
 func TestParseBrokerageRatificationParsesStructuredFields(t *testing.T) {
 	t.Parallel()
 
-	parsed, err := parseBrokerageRatification("MODE: inspect_then_answer\nRATIFICATION: adapt\nSIGNAL_JUDGMENT: confirmed\nPLAN:\n1. Inspect the repo first.\n2. Reply with prioritized ideas.")
+	parsed, err := parseBrokerageRatification("INSPECT: yes\nQUESTION: no\nANSWER: yes\nRATIFICATION: adapt\nSIGNAL_JUDGMENT: confirmed\nPLAN:\n1. Inspect the repo first.\n2. Reply with prioritized ideas.")
 	if err != nil {
 		t.Fatalf("parseBrokerageRatification() err = %v", err)
 	}
-	if parsed.RatifiedTurnMode != turnModeInspectThenReply {
-		t.Fatalf("RatifiedTurnMode = %q, want %q", parsed.RatifiedTurnMode, turnModeInspectThenReply)
+	if parsed.RatifiedExecutionContract == nil {
+		t.Fatal("RatifiedExecutionContract = nil, want parsed execution contract")
+	}
+	if !parsed.RatifiedExecutionContract.NeedsInspection || parsed.RatifiedExecutionContract.NeedsQuestion || !parsed.RatifiedExecutionContract.MayAnswerNow {
+		t.Fatalf("RatifiedExecutionContract = %#v, want inspect=yes question=no answer=yes", parsed.RatifiedExecutionContract)
 	}
 	if parsed.Ratification != "adapt" {
 		t.Fatalf("Ratification = %q, want adapt", parsed.Ratification)
@@ -31,13 +34,13 @@ func TestParseBrokerageRatificationParsesStructuredFields(t *testing.T) {
 func TestParseBrokerageRatificationRejectsMissingFields(t *testing.T) {
 	t.Parallel()
 
-	if _, err := parseBrokerageRatification("MODE: inspect_then_answer\nPLAN:\n- Inspect the repo first."); err == nil {
+	if _, err := parseBrokerageRatification("INSPECT: yes\nQUESTION: no\nANSWER: yes\nPLAN:\n- Inspect the repo first."); err == nil {
 		t.Fatal("parseBrokerageRatification() err = nil, want missing disposition error")
 	}
 	if _, err := parseBrokerageRatification("RATIFICATION: adapt\nPLAN:\n- Inspect the repo first."); err == nil {
-		t.Fatal("parseBrokerageRatification() err = nil, want missing mode error")
+		t.Fatal("parseBrokerageRatification() err = nil, want missing execution contract error")
 	}
-	if _, err := parseBrokerageRatification("MODE: inspect_then_answer\nRATIFICATION: adapt"); err == nil {
+	if _, err := parseBrokerageRatification("INSPECT: yes\nQUESTION: no\nANSWER: yes\nRATIFICATION: adapt"); err == nil {
 		t.Fatal("parseBrokerageRatification() err = nil, want missing plan steps error")
 	}
 }

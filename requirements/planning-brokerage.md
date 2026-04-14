@@ -73,8 +73,8 @@ Brokerage should usually be skipped for:
 It should say:
 
 - what the user seems to need
-- what kind of turn this should be
-- whether the system should answer, inspect, ask, decline, or hold
+- what execution shape this turn seems to need
+- whether the system should inspect, ask before acting, or answer now
 - what hidden input or latent signal is shaping that read when one is materially present
 - what tone or initiative would improve the turn
 
@@ -86,7 +86,7 @@ It should say:
 
 It should decide:
 
-- which turn mode is actually warranted
+- which execution contract is actually warranted
 - which parts of Idolum's push are accepted, adapted, or rejected
 - whether tools are needed
 - whether clarification is required first
@@ -95,15 +95,13 @@ The authoritative execution boundary still belongs to Aphelion, but the main tur
 
 Aphelion's post-brokerage task is not just "answer." Its task is to decide the material floor the face is later allowed to stage.
 
-## Turn Modes
+## Execution Contract
 
-The brokerage layer should use a small fixed vocabulary.
+The brokerage layer should prefer a small execution contract over a named turn-mode taxonomy.
 
-- `answer_now`
-- `inspect_then_answer`
-- `ask_then_wait`
-- `decline`
-- `silent`
+- `INSPECT: yes|no`
+- `QUESTION: yes|no`
+- `ANSWER: yes|no`
 
 ## Idolum Brokerage Proposal
 
@@ -112,7 +110,9 @@ The face-side brokerage output should be short and bounded. It may be structured
 Example shape:
 
 ```text
-MODE: inspect_then_answer
+INSPECT: yes
+QUESTION: no
+ANSWER: yes
 WHY: The user wants grounded feature ideas, not generic brainstorming.
 PUSH:
 - Inspect the repo before proposing features.
@@ -138,7 +138,9 @@ On Aphelion's side, this ratification must be parseable enough for runtime execu
 Example shape:
 
 ```text
-MODE: inspect_then_answer
+INSPECT: yes
+QUESTION: no
+ANSWER: yes
 RATIFICATION: adapt
 PLAN:
 - Inspect prompt, runtime, and memory integration surfaces first.
@@ -154,7 +156,9 @@ These constraints apply to Aphelion's ratification artifact so runtime can execu
 
 The runtime should parse and carry these fields explicitly:
 
-- `MODE`
+- `INSPECT`
+- `QUESTION`
+- `ANSWER`
 - `RATIFICATION`
 - `SIGNAL_JUDGMENT` — optional; present when Idolum named a hidden input in its proposal. Aphelion states whether the signal is confirmed, overridden, or not material. Preserves Aphelion's side of the signal negotiation in the artifact.
 - `PLAN` steps
@@ -199,7 +203,7 @@ That negotiated block exists to constrain both later phases:
 
 The governor should be able to see, explicitly:
 
-- the ratified turn mode
+- the ratified execution contract
 - the ratification disposition
 - the concrete execution steps
 - the original ratification record
@@ -229,8 +233,8 @@ The machine-authored runtime awareness surface should expose:
 
 - whether brokerage is active
 - whether the current turn used plain proposal or brokerage
-- Idolum's suggested turn mode when available
-- Aphelion's ratified turn mode when available
+- Idolum's suggested execution contract when available
+- Aphelion's ratified execution contract when available
 - Aphelion's ratification disposition when available
 
 `Idolum` should receive only the subset relevant to speaking honestly about the turn posture.
@@ -259,11 +263,11 @@ The system must not drop or stall a turn merely because brokerage failed.
 
 ## Decisions
 
-- **Brokerage is bounded.** One face proposal, one governor ratification, then execution.
+- **Brokerage is bounded.** The system may iterate through a small number of bounded revision rounds, then either converge or fail closed to the plain proposal path.
 - **Idolum proposes posture.** It does not authorize tools or system actions.
 - **Aphelion ratifies execution.** It remains the action and authority layer.
 - **Brokerage preserves both pressures.** The surviving artifact should keep Idolum's push and Aphelion's ratification together.
-- **Ratification must be parseable.** `MODE`, `RATIFICATION`, and `PLAN` are runtime contract fields, not just suggestive formatting.
+- **Ratification must be parseable.** `INSPECT`, `QUESTION`, `ANSWER`, `RATIFICATION`, and `PLAN` are runtime contract fields, not just suggestive formatting.
 - **Brokerage is selective.** It should not run on every turn.
 - **The negotiated brokerage block is machine-scoped context.** It is not user-visible by default.
 - **Fallback is required and honest.** Brokerage failure must degrade to the existing turn path without relabeling brokerage text as some other artifact type.
@@ -283,8 +287,8 @@ Still deferred after this tranche:
 - **TestBrokerageActivatesForStrategicInteractiveTurn**: feature/codebase-style requests trigger brokerage
 - **TestBrokerageSkipsSimpleFactualTurn**: simple factual questions skip brokerage
 - **TestBrokerageNegotiatedBlockFeedsMainGovernorTurn**: the negotiated brokerage block enters the main governor turn
-- **TestBrokerageRatificationParsesDispositionAndSteps**: a valid ratification yields explicit mode, disposition, and bounded steps
+- **TestBrokerageRatificationParsesDispositionAndSteps**: a valid ratification yields an explicit execution contract, disposition, and bounded steps
 - **TestBrokerageInvalidRatificationFallsBackToProposal**: malformed ratification output triggers the same fallback ladder as a ratification error
 - **TestBrokerageRerunsPlainProposalAfterRatificationFailure**: failed ratification triggers a real proposal rerun
 - **TestBrokeragePreservesFramingWhenProposalRerunFails**: failed proposal rerun preserves brokerage framing instead of relabeling it
-- **TestBrokerageAwarenessVisibleToGovernorAndFace**: runtime awareness reflects brokerage mode and ratified turn mode
+- **TestBrokerageAwarenessVisibleToGovernorAndFace**: runtime awareness reflects brokerage phase and the ratified execution contract

@@ -8,47 +8,47 @@ import (
 )
 
 type RuntimeAwareness struct {
-	SessionKind           string
-	RunKind               string
-	Channel               string
-	GovernorBackend       string
-	GovernorProvider      string
-	GovernorModel         string
-	GovernorProviderPath  []string
-	ActiveProvider        string
-	FallbackActive        bool
-	ReasoningEffort       string
-	ReasoningSummary      string
-	GovernorEffortRecipe  string
-	ArtifactMode          string
-	BrokerageActive       bool
-	BrokerageMode         string
-	SuggestedTurnMode     string
-	BrokerageRatification string
-	RatifiedTurnMode      string
-	SignalJudgment        string
-	FaceBackend           string
-	FaceProvider          string
-	FaceModel             string
-	PersonaEffortRecipe   string
-	DeliveryMode          string
-	StreamReply           bool
-	MediaAttached         bool
-	MediaMode             string
-	HiddenInputsActive    bool
-	HiddenInputCategories []string
-	ProvenanceSummary     string
-	PlanActive            bool
-	PlanSummary           string
-	PlanSteps             []string
-	PromptRoot            string
-	ExecRoot              string
-	SharedMemoryRoot      string
-	UserWorkspaceRoot     string
-	UserMemoryRoot        string
-	WorkingRoot           string
-	SandboxMode           string
-	NetworkPolicy         string
+	SessionKind                string
+	RunKind                    string
+	Channel                    string
+	GovernorBackend            string
+	GovernorProvider           string
+	GovernorModel              string
+	GovernorProviderPath       []string
+	ActiveProvider             string
+	FallbackActive             bool
+	ReasoningEffort            string
+	ReasoningSummary           string
+	GovernorEffortRecipe       string
+	ArtifactMode               string
+	BrokerageActive            bool
+	BrokeragePhase             string
+	SuggestedExecutionContract string
+	BrokerageRatification      string
+	RatifiedExecutionContract  string
+	SignalJudgment             string
+	FaceBackend                string
+	FaceProvider               string
+	FaceModel                  string
+	PersonaEffortRecipe        string
+	DeliveryMode               string
+	StreamReply                bool
+	MediaAttached              bool
+	MediaMode                  string
+	HiddenInputsActive         bool
+	HiddenInputCategories      []string
+	ProvenanceSummary          string
+	PlanActive                 bool
+	PlanSummary                string
+	PlanSteps                  []string
+	PromptRoot                 string
+	ExecRoot                   string
+	SharedMemoryRoot           string
+	UserWorkspaceRoot          string
+	UserMemoryRoot             string
+	WorkingRoot                string
+	SandboxMode                string
+	NetworkPolicy              string
 }
 
 func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
@@ -69,10 +69,10 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe))
 	lines = append(lines, nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode))
 	lines = append(lines, fmt.Sprintf("- brokerage_active: %t", aw.BrokerageActive))
-	lines = append(lines, nonEmptyAwarenessLine("brokerage_mode", aw.BrokerageMode))
-	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_turn_mode", aw.SuggestedTurnMode))
+	lines = append(lines, nonEmptyAwarenessLine("brokerage_phase", aw.BrokeragePhase))
+	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_execution_contract", aw.SuggestedExecutionContract))
 	lines = append(lines, nonEmptyAwarenessLine("brokerage_ratification", aw.BrokerageRatification))
-	lines = append(lines, nonEmptyAwarenessLine("ratified_turn_mode", aw.RatifiedTurnMode))
+	lines = append(lines, nonEmptyAwarenessLine("ratified_execution_contract", aw.RatifiedExecutionContract))
 	lines = append(lines, nonEmptyAwarenessLine("signal_judgment", aw.SignalJudgment))
 	lines = append(lines, fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive))
 	lines = append(lines, nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)))
@@ -109,10 +109,10 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode st
 	lines = append(lines, nonEmptyAwarenessLine("governor_effort_recipe", aw.GovernorEffortRecipe))
 	lines = append(lines, nonEmptyAwarenessLine("artifact_mode", aw.ArtifactMode))
 	lines = append(lines, fmt.Sprintf("- brokerage_active: %t", aw.BrokerageActive))
-	lines = append(lines, nonEmptyAwarenessLine("brokerage_mode", aw.BrokerageMode))
-	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_turn_mode", aw.SuggestedTurnMode))
+	lines = append(lines, nonEmptyAwarenessLine("brokerage_phase", aw.BrokeragePhase))
+	lines = append(lines, nonEmptyAwarenessLine("idolum_suggested_execution_contract", aw.SuggestedExecutionContract))
 	lines = append(lines, nonEmptyAwarenessLine("brokerage_ratification", aw.BrokerageRatification))
-	lines = append(lines, nonEmptyAwarenessLine("ratified_turn_mode", aw.RatifiedTurnMode))
+	lines = append(lines, nonEmptyAwarenessLine("ratified_execution_contract", aw.RatifiedExecutionContract))
 	lines = append(lines, nonEmptyAwarenessLine("signal_judgment", aw.SignalJudgment))
 	lines = append(lines, fmt.Sprintf("- hidden_inputs_active: %t", aw.HiddenInputsActive))
 	lines = append(lines, nonEmptyAwarenessLine("hidden_input_categories", formatAwarenessList(aw.HiddenInputCategories)))

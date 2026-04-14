@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	// Legacy mode names remain as a compatibility parser for older proposals and
+	// ratification records.
 	turnModeAnswerNow        = "answer_now"
 	turnModeInspectThenReply = "inspect_then_answer"
 	turnModeAskThenWait      = "ask_then_wait"
@@ -22,26 +24,50 @@ const (
 	maxBrokerageRounds       = 3
 )
 
+type executionContract struct {
+	NeedsInspection bool
+	NeedsQuestion   bool
+	MayAnswerNow    bool
+}
+
+func (c executionContract) Summary() string {
+	return fmt.Sprintf("inspect=%s, question=%s, answer=%s", yesNo(c.NeedsInspection), yesNo(c.NeedsQuestion), yesNo(c.MayAnswerNow))
+}
+
 type turnBrokerage struct {
-	Active             bool
-	Mode               string
-	IdolumNote         string
-	SuggestedTurnMode  string
-	Ratification       string
-	SignalJudgment     string
-	RatificationRecord string
-	RatifiedSteps      []string
-	RatifiedTurnMode   string
+	Active                     bool
+	Phase                      string
+	IdolumNote                 string
+	SuggestedExecutionContract *executionContract
+	Ratification               string
+	SignalJudgment             string
+	RatificationRecord         string
+	RatifiedSteps              []string
+	RatifiedExecutionContract  *executionContract
 }
 
 func (r *Runtime) withBrokerageAwareness(aw prompt.RuntimeAwareness, brokerage turnBrokerage) prompt.RuntimeAwareness {
 	aw.BrokerageActive = brokerage.Active
-	aw.BrokerageMode = strings.TrimSpace(brokerage.Mode)
-	aw.SuggestedTurnMode = strings.TrimSpace(brokerage.SuggestedTurnMode)
+	aw.BrokeragePhase = strings.TrimSpace(brokerage.Phase)
+	aw.SuggestedExecutionContract = summarizeExecutionContract(brokerage.SuggestedExecutionContract)
 	aw.BrokerageRatification = strings.TrimSpace(brokerage.Ratification)
-	aw.RatifiedTurnMode = strings.TrimSpace(brokerage.RatifiedTurnMode)
+	aw.RatifiedExecutionContract = summarizeExecutionContract(brokerage.RatifiedExecutionContract)
 	aw.SignalJudgment = strings.TrimSpace(brokerage.SignalJudgment)
 	return aw
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
+func summarizeExecutionContract(contract *executionContract) string {
+	if contract == nil {
+		return ""
+	}
+	return contract.Summary()
 }
 
 func normalizeTurnMode(raw string) string {
@@ -56,15 +82,66 @@ func normalizeTurnMode(raw string) string {
 	}
 }
 
-func parseBrokerageMode(text string) string {
+func executionContractFromTurnMode(raw string) (*executionContract, bool) {
+	switch normalizeTurnMode(raw) {
+	case turnModeAnswerNow, turnModeDecline:
+		return &executionContract{MayAnswerNow: true}, true
+	case turnModeInspectThenReply:
+		return &executionContract{NeedsInspection: true, MayAnswerNow: true}, true
+	case turnModeAskThenWait:
+		return &executionContract{NeedsQuestion: true}, true
+	case turnModeSilent:
+		return &executionContract{}, true
+	default:
+		return nil, false
+	}
+}
+
+func normalizeDirectiveBool(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "yes", "true", "required", "needed", "y":
+		return true, true
+	case "no", "false", "not_required", "not needed", "n":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func parseProposalExecutionContract(text string) *executionContract {
+	contract := executionContract{}
+	inspectSet := false
+	questionSet := false
+	answerSet := false
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(strings.ToUpper(line), "MODE:") {
-			continue
+		upper := strings.ToUpper(line)
+		switch {
+		case strings.HasPrefix(upper, "INSPECT:"):
+			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("INSPECT:"):])); ok {
+				contract.NeedsInspection = value
+				inspectSet = true
+			}
+		case strings.HasPrefix(upper, "QUESTION:"):
+			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("QUESTION:"):])); ok {
+				contract.NeedsQuestion = value
+				questionSet = true
+			}
+		case strings.HasPrefix(upper, "ANSWER:"):
+			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("ANSWER:"):])); ok {
+				contract.MayAnswerNow = value
+				answerSet = true
+			}
+		case strings.HasPrefix(upper, "MODE:"):
+			if legacy, ok := executionContractFromTurnMode(strings.TrimSpace(line[len("MODE:"):])); ok {
+				return legacy
+			}
 		}
-		return normalizeTurnMode(strings.TrimSpace(line[len("MODE:"):]))
 	}
-	return ""
+	if inspectSet && questionSet && answerSet {
+		return &contract
+	}
+	return nil
 }
 
 func normalizeRatification(raw string) string {
@@ -113,6 +190,10 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 		return parsed, fmt.Errorf("empty brokerage ratification")
 	}
 
+	contract := executionContract{}
+	inspectSet := false
+	questionSet := false
+	answerSet := false
 	inPlan := false
 	for _, rawLine := range strings.Split(parsed.RatificationRecord, "\n") {
 		line := strings.TrimSpace(rawLine)
@@ -121,8 +202,34 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 		}
 		upper := strings.ToUpper(line)
 		switch {
+		case strings.HasPrefix(upper, "INSPECT:"):
+			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("INSPECT:"):])); ok {
+				contract.NeedsInspection = value
+				inspectSet = true
+			}
+			inPlan = false
+			continue
+		case strings.HasPrefix(upper, "QUESTION:"):
+			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("QUESTION:"):])); ok {
+				contract.NeedsQuestion = value
+				questionSet = true
+			}
+			inPlan = false
+			continue
+		case strings.HasPrefix(upper, "ANSWER:"):
+			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("ANSWER:"):])); ok {
+				contract.MayAnswerNow = value
+				answerSet = true
+			}
+			inPlan = false
+			continue
 		case strings.HasPrefix(upper, "MODE:"):
-			parsed.RatifiedTurnMode = normalizeTurnMode(strings.TrimSpace(line[len("MODE:"):]))
+			if legacy, ok := executionContractFromTurnMode(strings.TrimSpace(line[len("MODE:"):])); ok {
+				contract = *legacy
+				inspectSet = true
+				questionSet = true
+				answerSet = true
+			}
 			inPlan = false
 			continue
 		case strings.HasPrefix(upper, "RATIFICATION:"):
@@ -144,10 +251,13 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 			parsed.RatifiedSteps = append(parsed.RatifiedSteps, step)
 		}
 	}
+	if inspectSet && questionSet && answerSet {
+		parsed.RatifiedExecutionContract = &contract
+	}
 
 	switch {
-	case parsed.RatifiedTurnMode == "":
-		return parsed, fmt.Errorf("missing ratified turn mode")
+	case parsed.RatifiedExecutionContract == nil:
+		return parsed, fmt.Errorf("missing ratified execution contract")
 	case parsed.Ratification == "":
 		return parsed, fmt.Errorf("missing ratification disposition")
 	case len(parsed.RatifiedSteps) == 0:
@@ -185,7 +295,9 @@ func (r *Runtime) ratifyTurnBrokerage(
 			"The latest user message is below.",
 			"Before the main turn executes, ratify how this turn should proceed.",
 			"Return exactly this structure and nothing else:",
-			"MODE: <answer_now|inspect_then_answer|ask_then_wait|decline|silent>",
+			"INSPECT: <yes|no>",
+			"QUESTION: <yes|no>",
+			"ANSWER: <yes|no>",
 			"RATIFICATION: <accept|adapt|reject>",
 			"SIGNAL_JUDGMENT: <confirmed|overridden|not_material>  # optional; use when Idolum named a hidden input",
 			"PLAN:",
@@ -210,35 +322,35 @@ func (r *Runtime) ratifyTurnBrokerage(
 	brokerage.RatificationRecord = parsed.RatificationRecord
 	brokerage.Ratification = parsed.Ratification
 	brokerage.SignalJudgment = parsed.SignalJudgment
-	brokerage.RatifiedTurnMode = parsed.RatifiedTurnMode
+	brokerage.RatifiedExecutionContract = parsed.RatifiedExecutionContract
 	brokerage.RatifiedSteps = append(brokerage.RatifiedSteps[:0], parsed.RatifiedSteps...)
 	return brokerage, resp.Usage, nil
 }
 
 func brokerageContextForGovernor(brokerage turnBrokerage) string {
-	if brokerage.Active && brokerage.Mode == "brokerage" && strings.TrimSpace(brokerage.RatificationRecord) != "" {
+	if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.RatificationRecord) != "" {
 		if block := prompt.RenderBrokeragePlanForGovernor(prompt.BrokerageArtifact{
-			IdolumProposal:     brokerage.IdolumNote,
-			RatifiedTurnMode:   brokerage.RatifiedTurnMode,
-			Ratification:       brokerage.Ratification,
-			SignalJudgment:     brokerage.SignalJudgment,
-			RatifiedSteps:      brokerage.RatifiedSteps,
-			RatificationRecord: brokerage.RatificationRecord,
+			IdolumProposal:            brokerage.IdolumNote,
+			RatifiedExecutionContract: summarizeExecutionContract(brokerage.RatifiedExecutionContract),
+			Ratification:              brokerage.Ratification,
+			SignalJudgment:            brokerage.SignalJudgment,
+			RatifiedSteps:             brokerage.RatifiedSteps,
+			RatificationRecord:        brokerage.RatificationRecord,
 		}); block != "" {
 			return block
 		}
 	}
-	if brokerage.Active && brokerage.Mode == "brokerage" {
+	if brokerage.Active && brokerage.Phase == "brokerage" {
 		return prompt.RenderIdolumBrokerageForGovernor("Idolum", brokerage.IdolumNote)
 	}
 	return prompt.RenderIdolumProposalForGovernor("Idolum", brokerage.IdolumNote)
 }
 
-func brokerageModeName(active bool, mode string) string {
+func brokeragePhaseName(active bool, phase string) string {
 	if !active {
 		return ""
 	}
-	trimmed := strings.TrimSpace(mode)
+	trimmed := strings.TrimSpace(phase)
 	if trimmed == "" {
 		return "proposal"
 	}
@@ -261,12 +373,8 @@ func maybeSeedPlanFromBrokerage(current session.PlanState, brokerage turnBrokera
 			Status: status,
 		})
 	}
-	explanation := "Ratified execution plan."
-	if mode := strings.TrimSpace(brokerage.RatifiedTurnMode); mode != "" {
-		explanation = fmt.Sprintf("Ratified %s plan.", mode)
-	}
 	return session.NormalizePlanState(session.PlanState{
-		Explanation: explanation,
+		Explanation: "Ratified execution plan.",
 		Steps:       steps,
 	})
 }
@@ -284,7 +392,7 @@ func (r *Runtime) convergeTurnBrokerage(
 	requestFaceNote brokerageFaceRequester,
 	audit *turnAuditRecorder,
 ) (turnBrokerage, core.TokenUsage) {
-	if strings.TrimSpace(brokerage.IdolumNote) == "" || brokerage.Mode != "brokerage" {
+	if strings.TrimSpace(brokerage.IdolumNote) == "" || brokerage.Phase != "brokerage" {
 		return brokerage, core.TokenUsage{}
 	}
 
@@ -293,10 +401,10 @@ func (r *Runtime) convergeTurnBrokerage(
 		updated, usage, ratifyErr := r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, userText, brokerage)
 		totalUsage = addTokenUsage(totalUsage, usage)
 		roundAudit := BrokerageRoundAudit{
-			Round:             round,
-			Mode:              brokerage.Mode,
-			IdolumNote:        strings.TrimSpace(brokerage.IdolumNote),
-			SuggestedTurnMode: strings.TrimSpace(brokerage.SuggestedTurnMode),
+			Round:                      round,
+			Phase:                      brokerage.Phase,
+			IdolumNote:                 strings.TrimSpace(brokerage.IdolumNote),
+			SuggestedExecutionContract: summarizeExecutionContract(brokerage.SuggestedExecutionContract),
 		}
 		if ratifyErr != nil {
 			roundAudit.Error = ratifyErr.Error()
@@ -309,7 +417,7 @@ func (r *Runtime) convergeTurnBrokerage(
 
 		brokerage = updated
 		roundAudit.Ratification = strings.TrimSpace(brokerage.Ratification)
-		roundAudit.RatifiedTurnMode = strings.TrimSpace(brokerage.RatifiedTurnMode)
+		roundAudit.RatifiedExecutionContract = summarizeExecutionContract(brokerage.RatifiedExecutionContract)
 		roundAudit.SignalJudgment = strings.TrimSpace(brokerage.SignalJudgment)
 		roundAudit.RatifiedSteps = append([]string(nil), brokerage.RatifiedSteps...)
 		if audit != nil {
@@ -339,12 +447,12 @@ func (r *Runtime) convergeTurnBrokerage(
 			return r.fallbackToPlainProposal(ctx, baseAwareness, brokerage, requestFaceNote, totalUsage)
 		}
 		brokerage.IdolumNote = strings.TrimSpace(revised)
-		brokerage.SuggestedTurnMode = parseBrokerageMode(revised)
+		brokerage.SuggestedExecutionContract = parseProposalExecutionContract(revised)
 		brokerage.Ratification = ""
 		brokerage.SignalJudgment = ""
 		brokerage.RatificationRecord = ""
 		brokerage.RatifiedSteps = nil
-		brokerage.RatifiedTurnMode = ""
+		brokerage.RatifiedExecutionContract = nil
 	}
 	if audit != nil {
 		audit.MarkBrokerageConverged(false)
@@ -363,8 +471,8 @@ func (r *Runtime) fallbackToPlainProposal(
 	brokerage.SignalJudgment = ""
 	brokerage.RatificationRecord = ""
 	brokerage.RatifiedSteps = nil
-	brokerage.RatifiedTurnMode = ""
-	brokerage.SuggestedTurnMode = ""
+	brokerage.RatifiedExecutionContract = nil
+	brokerage.SuggestedExecutionContract = nil
 
 	proposal, proposalUsage, proposalErr := requestFaceNote("proposal", baseAwareness, "", "")
 	currentUsage = addTokenUsage(currentUsage, proposalUsage)
@@ -372,6 +480,6 @@ func (r *Runtime) fallbackToPlainProposal(
 		brokerage.IdolumNote = strings.TrimSpace(proposal)
 	}
 	brokerage.Active = strings.TrimSpace(brokerage.IdolumNote) != ""
-	brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+	brokerage.Phase = brokeragePhaseName(brokerage.Active, "proposal")
 	return brokerage, currentUsage
 }

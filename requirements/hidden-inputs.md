@@ -190,7 +190,7 @@ Aphelion answers directly from the visible request and available code context. N
 
 A user asks: "Come up with some features for my codebase."
 
-Idolum notices a recurring architectural tension and pushes for `inspect_then_answer` rather than generic brainstorming. If that push is materially shaped by a hidden input, the brokerage note names it. Aphelion ratifies the mode, records whether the signal is confirmed or not material, and executes the main turn under that negotiated artifact. The user receives one coherent answer, but the system preserves both the signal-shaped push and the structural ratification.
+Idolum notices a recurring architectural tension and pushes for inspection before answering rather than generic brainstorming. If that push is materially shaped by a hidden input, the brokerage note names it. Aphelion ratifies the resulting execution contract, records whether the signal is confirmed or not material, and executes the main turn under that negotiated artifact. The user receives one coherent answer, but the system preserves both the signal-shaped push and the structural ratification.
 
 ### Reflective Heartbeat Outreach
 
