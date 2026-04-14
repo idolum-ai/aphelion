@@ -147,7 +147,7 @@ func (c *Codex) Stream(ctx context.Context, messages []agent.Message, tools []ag
 
 func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*agent.Response, error) {
 	aggregate := newCodexResponseAccumulator()
-	plan := planFullCodexRequest(messages)
+	plan := planFullCodexRequest(messages, c.storeResponses)
 	if c.storeResponses {
 		plan = planCodexRequest(messages)
 	}
@@ -158,7 +158,7 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 		result, err := c.completeRequest(ctx, plan, tools, opts, cb, allowRetry)
 		if err != nil {
 			if c.storeResponses && plan.mode == codexTurnModeIncrementalToolResults && !usedPreviousResponseFallback && isPreviousResponseRejected(err) {
-				plan = planFullCodexRequest(messages)
+				plan = planFullCodexRequest(messages, c.storeResponses)
 				usedPreviousResponseFallback = true
 				continue
 			}
@@ -1046,14 +1046,14 @@ func planCodexRequest(messages []agent.Message) codexRequestPlan {
 			previousResponseID: previousResponseID,
 		}
 	}
-	return planFullCodexRequest(messages)
+	return planFullCodexRequest(messages, true)
 }
 
-func planFullCodexRequest(messages []agent.Message) codexRequestPlan {
+func planFullCodexRequest(messages []agent.Message, includeReasoningItems bool) codexRequestPlan {
 	return codexRequestPlan{
 		mode:         codexTurnModeFullContext,
 		instructions: collectCodexInstructions(messages),
-		input:        codexInputItems(messages),
+		input:        codexInputItems(messages, includeReasoningItems),
 	}
 }
 
@@ -1066,7 +1066,7 @@ func planCodexContinuation(messages []agent.Message, previousResponseID string) 
 	}
 }
 
-func codexInputItems(messages []agent.Message) []map[string]any {
+func codexInputItems(messages []agent.Message, includeReasoningItems bool) []map[string]any {
 	input := make([]map[string]any, 0, len(messages))
 	for _, msg := range messages {
 		role := strings.ToLower(strings.TrimSpace(msg.Role))
@@ -1076,7 +1076,7 @@ func codexInputItems(messages []agent.Message) []map[string]any {
 
 		switch role {
 		case "user", "assistant":
-			if role == "assistant" {
+			if includeReasoningItems && role == "assistant" {
 				for _, item := range codexReasoningInputItems(msg.ProviderState) {
 					input = append(input, item)
 				}

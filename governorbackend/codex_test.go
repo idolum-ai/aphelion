@@ -307,10 +307,11 @@ func TestCodexCompletePreservesReasoningItemsForFullContextReplay(t *testing.T) 
 	})
 
 	client, err := NewCodex(CodexOptions{
-		BaseURL:     "https://chatgpt.com/backend-api",
-		AccessToken: "secret-token",
-		AccountID:   "acct-123",
-		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+		BaseURL:        "https://chatgpt.com/backend-api",
+		AccessToken:    "secret-token",
+		AccountID:      "acct-123",
+		StoreResponses: true,
+		HTTPClient:     &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
 		t.Fatalf("NewCodex() err = %v", err)
@@ -862,7 +863,7 @@ func TestCodexCompleteUsesPreviousResponseIDForToolFollowUps(t *testing.T) {
 		{
 			Role:          "assistant",
 			ToolCalls:     []agent.ToolCall{{ID: "call-1", Name: "exec", Input: json.RawMessage(`{"cmd":"ls"}`)}},
-			ProviderState: json.RawMessage(`{"backend":"codex","response_id":"resp-turn-1"}`),
+			ProviderState: json.RawMessage(`{"backend":"codex","response_id":"resp-turn-1","reasoning_items":[{"type":"reasoning","id":"rs_123","summary":[{"text":"keep private"}]}]}`),
 		},
 		{Role: "tool", ToolCallID: "call-1", Content: "file.txt"},
 	}, []agent.ToolDef{{
@@ -1027,6 +1028,15 @@ func TestCodexCompleteDefaultsToStatelessRequests(t *testing.T) {
 	input, ok := seen["input"].([]any)
 	if !ok || len(input) < 3 {
 		t.Fatalf("input = %#v, want full context replay", seen["input"])
+	}
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["type"] == "reasoning" {
+			t.Fatalf("input unexpectedly included reasoning item in stateless mode: %#v", item)
+		}
 	}
 }
 
