@@ -479,3 +479,96 @@ func TestRunTurnRetriesPlanningOnlyReplyBeforePersistingIt(t *testing.T) {
 		}
 	}
 }
+
+func TestRunTurnRetriesPlanningOnlyReplyAfterPlanUpdateWithinSameTurn(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, messages []Message, tools []ToolDef) (*Response, error) {
+			switch call {
+			case 1:
+				return &Response{
+					ToolCalls: []ToolCall{{
+						ID:    "plan-1",
+						Name:  "update_plan",
+						Input: json.RawMessage(`{"plan":[{"step":"Inspect the repository.","status":"in_progress"},{"step":"Patch the issue.","status":"pending"}]}`),
+					}},
+				}, nil
+			case 2:
+				last := messages[len(messages)-1]
+				if last.Role != "tool" || last.ToolName != "update_plan" {
+					t.Fatalf("last tool message = %#v, want update_plan output", last)
+				}
+				return &Response{Content: "Next I'll inspect the relevant files and then continue."}, nil
+			case 3:
+				last := messages[len(messages)-1]
+				if last.Role != "user" || !strings.Contains(last.Content, "only described a plan") {
+					t.Fatalf("retry steer = %#v, want planning-only correction", last)
+				}
+				return &Response{
+					ToolCalls: []ToolCall{{
+						ID:    "exec-1",
+						Name:  "exec",
+						Input: json.RawMessage(`{"command":"pwd"}`),
+					}},
+				}, nil
+			case 4:
+				last := messages[len(messages)-1]
+				if last.Role != "tool" || last.ToolName != "exec" || last.Content != "tool output" {
+					t.Fatalf("last tool message = %#v, want exec output", last)
+				}
+				return &Response{Content: "done"}, nil
+			default:
+				t.Fatalf("unexpected call %d", call)
+				return nil, nil
+			}
+		},
+	}
+
+	tools := &mockTools{
+		defs: []ToolDef{
+			{Name: "exec"},
+			{Name: "update_plan"},
+		},
+		exec: func(_ context.Context, name string, _ json.RawMessage) (string, error) {
+			switch name {
+			case "update_plan":
+				return "[PLAN_UPDATED]\nactive: true\n- [in_progress] Inspect the repository.\n- [pending] Patch the issue.", nil
+			case "exec":
+				return "tool output", nil
+			default:
+				t.Fatalf("unexpected tool name %q", name)
+				return "", nil
+			}
+		},
+	}
+
+	result, history, err := RunTurn(
+		context.Background(),
+		provider,
+		tools,
+		defaultBudget(),
+		nil,
+		[]Message{{Role: "user", Content: "please handle this carefully"}},
+	)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("result.Text = %q, want done", result.Text)
+	}
+	if provider.calls != 4 {
+		t.Fatalf("provider calls = %d, want 4", provider.calls)
+	}
+	if len(tools.execCalls) != 2 {
+		t.Fatalf("tool calls = %d, want 2", len(tools.execCalls))
+	}
+	for _, msg := range history {
+		if msg.Role == "assistant" && strings.Contains(msg.Content, "Next I'll inspect the relevant files") {
+			t.Fatalf("history unexpectedly persisted mid-turn planning-only assistant reply: %#v", history)
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, "only described a plan") {
+			t.Fatalf("history unexpectedly persisted planning-only steer: %#v", history)
+		}
+	}
+}

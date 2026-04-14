@@ -45,6 +45,7 @@ type Message struct {
 	ProviderState json.RawMessage
 	ToolCalls     []ToolCall
 	ToolCallID    string
+	ToolName      string
 }
 
 type SystemBlock struct {
@@ -189,13 +190,11 @@ func RunTurn(
 				TokenUsage: core.TokenUsage{},
 			}, history, nil
 		}
-		if len(toolLog) == 0 {
-			retried, retryErr := maybeRetryPlanningOnly(ctx, provider, history, toolDefs, opts, resp)
-			if retryErr != nil {
-				log.Printf("WARN planning-only correction failed err=%v", retryErr)
-			} else if retried != nil {
-				resp = retried
-			}
+		retried, retryErr := maybeRetryPlanningOnly(ctx, provider, history, toolDefs, opts, resp)
+		if retryErr != nil {
+			log.Printf("WARN planning-only correction failed err=%v", retryErr)
+		} else if retried != nil {
+			resp = retried
 		}
 
 		history = append(history, Message{
@@ -253,6 +252,7 @@ func RunTurn(
 				Role:       "tool",
 				Content:    content,
 				ToolCallID: call.ID,
+				ToolName:   call.Name,
 			})
 		}
 	}
@@ -270,6 +270,9 @@ func maybeRetryPlanningOnly(
 		return nil, nil
 	}
 	if !hasActionableTools(tools) || !looksLikePlanningOnlyReply(resp.Content) {
+		return nil, nil
+	}
+	if hasToolResults(history) && !historyHasIncompletePlan(history) {
 		return nil, nil
 	}
 
@@ -325,6 +328,39 @@ func looksLikePlanningOnlyReply(content string) bool {
 		}
 	}
 	return false
+}
+
+func hasToolResults(history []Message) bool {
+	for _, msg := range history {
+		if msg.Role == "tool" {
+			return true
+		}
+	}
+	return false
+}
+
+func historyHasIncompletePlan(history []Message) bool {
+	for _, msg := range history {
+		if msg.Role == "tool" && strings.TrimSpace(msg.ToolName) == "update_plan" {
+			if containsIncompletePlanStatus(msg.Content) {
+				return true
+			}
+		}
+		for _, block := range msg.SystemBlocks {
+			if !strings.Contains(block.Text, "## Current Plan State") {
+				continue
+			}
+			if containsIncompletePlanStatus(block.Text) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsIncompletePlanStatus(text string) bool {
+	text = strings.ToLower(text)
+	return strings.Contains(text, "[pending]") || strings.Contains(text, "[in_progress]")
 }
 
 func completeWithRetry(

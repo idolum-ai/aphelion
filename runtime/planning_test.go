@@ -97,6 +97,13 @@ func TestHandleInboundPersistsPlanUpdatesFromToolAndReinjectsPlan(t *testing.T) 
 	if len(sess.PlanState.Steps) != 2 || sess.PlanState.Steps[0].Status != "in_progress" {
 		t.Fatalf("PlanState = %#v, want persisted in_progress steps", sess.PlanState)
 	}
+	events, err := store.PlanEvents(key, 10)
+	if err != nil {
+		t.Fatalf("PlanEvents() err = %v", err)
+	}
+	if len(events) == 0 || events[0].Kind != session.PlanEventKindToolUpdated {
+		t.Fatalf("PlanEvents = %#v, want tool_updated event", events)
+	}
 
 	probe := &fakeProvider{replyText: "second"}
 	rt, err = New(cfg, store, probe, tools, sender)

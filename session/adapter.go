@@ -22,6 +22,7 @@ func ToAgentHistory(messages []Message) ([]agent.Message, error) {
 			Role:       msg.Role,
 			Content:    msg.Content,
 			ToolCallID: msg.ToolID,
+			ToolName:   msg.ToolName,
 		}
 		if strings.TrimSpace(msg.ToolCalls) != "" {
 			if err := json.Unmarshal([]byte(msg.ToolCalls), &entry.ToolCalls); err != nil {
@@ -51,6 +52,7 @@ func NewMessagesForTurn(userText string, generated []agent.Message, turnIndex in
 			ContentChars: len(msg.Content),
 			TurnIndex:    turnIndex,
 			ToolID:       msg.ToolCallID,
+			ToolName:     strings.TrimSpace(msg.ToolName),
 		}
 
 		if len(msg.ToolCalls) > 0 {
@@ -68,7 +70,9 @@ func NewMessagesForTurn(userText string, generated []agent.Message, turnIndex in
 		}
 
 		if msg.Role == "tool" {
-			entry.ToolName = toolNames[strings.TrimSpace(msg.ToolCallID)]
+			if entry.ToolName == "" {
+				entry.ToolName = toolNames[strings.TrimSpace(msg.ToolCallID)]
+			}
 			if entry.ToolName == "" {
 				entry.ToolName = toolNameFromContent(msg.Content)
 			}
