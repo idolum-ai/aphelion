@@ -586,8 +586,9 @@ type codexCompletedResponse struct {
 }
 
 type codexProviderState struct {
-	Backend    string `json:"backend"`
-	ResponseID string `json:"response_id"`
+	Backend        string            `json:"backend"`
+	ResponseID     string            `json:"response_id"`
+	ReasoningItems []json.RawMessage `json:"reasoning_items,omitempty"`
 }
 
 type codexFailedResponse struct {
@@ -601,6 +602,7 @@ type codexStreamParser struct {
 	thinking     strings.Builder
 	thinkingMeta []agent.ThinkingBlock
 	toolCalls    []agent.ToolCall
+	reasoningRaw []json.RawMessage
 	usage        core.TokenUsage
 	responseID   string
 	status       codexResponseStatus
@@ -663,6 +665,9 @@ func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallbac
 				return cb(agent.StreamChunk{Type: "tool_call", ToolCall: &call})
 			}
 		case "reasoning":
+			if raw := bytes.TrimSpace(env.Item); len(raw) > 0 {
+				p.reasoningRaw = append(p.reasoningRaw, append(json.RawMessage(nil), raw...))
+			}
 			for _, summary := range item.Summary {
 				if text := strings.TrimSpace(summary.Text); text != "" {
 					if p.thinking.Len() > 0 {
@@ -713,7 +718,7 @@ func (p *codexStreamParser) response() (*codexCompletionResult, error) {
 		Usage:        p.usage,
 	}
 	if strings.TrimSpace(p.responseID) != "" {
-		resp.ProviderState = marshalCodexProviderState(p.responseID)
+		resp.ProviderState = marshalCodexProviderState(p.responseID, p.reasoningRaw)
 	}
 
 	switch p.status {
@@ -990,11 +995,16 @@ func codexInputItems(messages []agent.Message) []map[string]any {
 			continue
 		}
 
-		switch role {
-		case "user", "assistant":
-			if item, ok := codexMessageInputItem(role, msg); ok {
+	switch role {
+	case "user", "assistant":
+		if role == "assistant" {
+			for _, item := range codexReasoningInputItems(msg.ProviderState) {
 				input = append(input, item)
 			}
+		}
+		if item, ok := codexMessageInputItem(role, msg); ok {
+			input = append(input, item)
+		}
 			if role == "assistant" {
 				for _, call := range msg.ToolCalls {
 					input = append(input, map[string]any{
@@ -1052,13 +1062,50 @@ func planCodexIncrementalToolResults(messages []agent.Message) (string, []map[st
 	return previousResponseID, input, true
 }
 
-func marshalCodexProviderState(responseID string) json.RawMessage {
+func codexReasoningInputItems(raw json.RawMessage) []map[string]any {
+	state, ok := decodeCodexProviderState(raw)
+	if !ok || len(state.ReasoningItems) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(state.ReasoningItems))
+	for _, itemRaw := range state.ReasoningItems {
+		var item map[string]any
+		if len(bytes.TrimSpace(itemRaw)) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(itemRaw, &item); err != nil {
+			continue
+		}
+		if strings.TrimSpace(fmt.Sprint(item["type"])) != "reasoning" {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func marshalCodexProviderState(responseID string, reasoningItems []json.RawMessage) json.RawMessage {
 	if strings.TrimSpace(responseID) == "" {
 		return nil
 	}
+	items := make([]json.RawMessage, 0, len(reasoningItems))
+	seen := map[string]struct{}{}
+	for _, item := range reasoningItems {
+		trimmed := bytes.TrimSpace(item)
+		if len(trimmed) == 0 {
+			continue
+		}
+		key := string(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		items = append(items, append(json.RawMessage(nil), trimmed...))
+	}
 	raw, err := json.Marshal(codexProviderState{
-		Backend:    "codex",
-		ResponseID: strings.TrimSpace(responseID),
+		Backend:        "codex",
+		ResponseID:     strings.TrimSpace(responseID),
+		ReasoningItems: items,
 	})
 	if err != nil {
 		return nil
@@ -1078,6 +1125,9 @@ func decodeCodexProviderState(raw json.RawMessage) (codexProviderState, bool) {
 		return codexProviderState{}, false
 	}
 	state.ResponseID = strings.TrimSpace(state.ResponseID)
+	for i := range state.ReasoningItems {
+		state.ReasoningItems[i] = append(json.RawMessage(nil), bytes.TrimSpace(state.ReasoningItems[i])...)
+	}
 	return state, true
 }
 
@@ -1087,6 +1137,8 @@ type codexResponseAccumulator struct {
 	thinkingMeta []agent.ThinkingBlock
 	toolCalls    []agent.ToolCall
 	toolCallSet  map[string]struct{}
+	reasoningRaw []json.RawMessage
+	reasoningSet map[string]struct{}
 	usage        core.TokenUsage
 	responseID   string
 }
@@ -1094,6 +1146,7 @@ type codexResponseAccumulator struct {
 func newCodexResponseAccumulator() *codexResponseAccumulator {
 	return &codexResponseAccumulator{
 		toolCallSet: map[string]struct{}{},
+		reasoningSet: map[string]struct{}{},
 	}
 }
 
@@ -1116,6 +1169,20 @@ func (a *codexResponseAccumulator) merge(resp *agent.Response, responseID string
 		a.toolCallSet[key] = struct{}{}
 		a.toolCalls = append(a.toolCalls, call)
 	}
+	if state, ok := decodeCodexProviderState(resp.ProviderState); ok {
+		for _, raw := range state.ReasoningItems {
+			trimmed := bytes.TrimSpace(raw)
+			if len(trimmed) == 0 {
+				continue
+			}
+			key := string(trimmed)
+			if _, ok := a.reasoningSet[key]; ok {
+				continue
+			}
+			a.reasoningSet[key] = struct{}{}
+			a.reasoningRaw = append(a.reasoningRaw, append(json.RawMessage(nil), trimmed...))
+		}
+	}
 	if resp.Usage.TotalTokens != 0 || resp.Usage.InputTokens != 0 || resp.Usage.OutputTokens != 0 {
 		a.usage = resp.Usage
 	}
@@ -1136,7 +1203,7 @@ func (a *codexResponseAccumulator) response() *agent.Response {
 		Usage:        a.usage,
 	}
 	if a.responseID != "" {
-		resp.ProviderState = marshalCodexProviderState(a.responseID)
+		resp.ProviderState = marshalCodexProviderState(a.responseID, a.reasoningRaw)
 	}
 	return resp
 }

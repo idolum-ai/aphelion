@@ -221,6 +221,96 @@ func TestCodexCompleteMapsAssistantHistoryAsOutputText(t *testing.T) {
 	}
 }
 
+func TestCodexCompletePreservesReasoningItemsForFullContextReplay(t *testing.T) {
+	t.Parallel()
+
+	var (
+		requestCount int
+		secondInput  []any
+	)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if requestCount == 2 {
+			items, ok := payload["input"].([]any)
+			if !ok {
+				t.Fatalf("input = %#v, want []any", payload["input"])
+			}
+			secondInput = append([]any(nil), items...)
+		}
+		writeSSE(t, w,
+			sseEvent("response.output_item.done", map[string]any{
+				"type": "response.output_item.done",
+				"item": map[string]any{
+					"type":    "reasoning",
+					"id":      "rs_123",
+					"summary": []map[string]any{{"text": "private reasoning summary"}},
+				},
+			}),
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "hello",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp1",
+				},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	first, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "first"}}, nil)
+	if err != nil {
+		t.Fatalf("first Complete() err = %v", err)
+	}
+	state, ok := decodeCodexProviderState(first.ProviderState)
+	if !ok {
+		t.Fatalf("provider state = %s, want codex provider state", string(first.ProviderState))
+	}
+	if len(state.ReasoningItems) != 1 {
+		t.Fatalf("reasoning items len = %d, want 1", len(state.ReasoningItems))
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: first.Content, Thinking: first.Thinking, ThinkingMeta: first.ThinkingMeta, ProviderState: first.ProviderState},
+		{Role: "user", Content: "second"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("second Complete() err = %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("request count = %d, want 2", requestCount)
+	}
+	if len(secondInput) < 3 {
+		t.Fatalf("second input len = %d, want at least reasoning + assistant + user", len(secondInput))
+	}
+	reasoningItem, ok := secondInput[1].(map[string]any)
+	if !ok {
+		t.Fatalf("replayed reasoning item = %#v, want object", secondInput[1])
+	}
+	if reasoningItem["type"] != "reasoning" {
+		t.Fatalf("replayed reasoning type = %#v, want reasoning", reasoningItem["type"])
+	}
+	if reasoningItem["id"] != "rs_123" {
+		t.Fatalf("replayed reasoning id = %#v, want rs_123", reasoningItem["id"])
+	}
+}
+
 func TestCodexCompleteStatusError(t *testing.T) {
 	t.Parallel()
 
