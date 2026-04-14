@@ -141,17 +141,26 @@ Install and update flows should also run an initialization step that:
 - seeds bundled starter prompt files if they are absent
 - never overwrites operator-edited prompt files
 
+Install and update flows should also run a deterministic post-restart verification
+step against the live service, not just assume success from a clean restart.
+
 Typical source update flow:
 
 1. update repo
 2. rebuild binary
-3. restart service
+3. validate config
+4. run init
+5. restart service
+6. run post-restart verification
 
 Typical release update flow:
 
 1. fetch new binary
 2. replace installed binary atomically
-3. restart service
+3. validate config
+4. run init
+5. restart service
+6. run post-restart verification
 
 ## Rollback
 
@@ -198,6 +207,7 @@ The deployment story should document:
 - live logs
 - restart commands
 - binary version checks
+- post-restart verification command
 
 ## Failure and Recovery
 
@@ -236,6 +246,7 @@ This section may remain mostly documentary at first; the important thing is pres
 - **GitHub Releases are the preferred binary channel.** Source builds remain supported.
 - **Linux + `systemd` is the primary deployment target.** User services come first.
 - **Updates should be one short path.** The operator should not need bespoke manual steps.
+- **A restart is not a deploy verdict.** Local deploys should pass a deterministic post-restart verifier.
 - **State and binary stay separate.** Updating Aphelion must not rewrite config or workspace files.
 - **Rollback should be practical.** Keeping the previous binary is enough for the first real recovery story.
 
@@ -245,5 +256,6 @@ This section may remain mostly documentary at first; the important thing is pres
 - **TestUserServiceUnitUsesConfiguredBinaryAndConfig**: service file points at the expected paths
 - **TestRestartOnFailurePolicyPresent**: service definition restarts failed processes
 - **TestUpdateScriptRebuildsAndRestarts**: source update path rebuilds and restarts service
+- **TestUpdateScriptsRunVerifyDeploy**: install/update scripts gate success on post-restart verification
 - **TestReleaseInstallPreservesConfigAndWorkspace**: replacing the binary does not overwrite state/config surfaces
 - **TestRollbackToPreviousBinary**: operator can restart the service against a previous binary

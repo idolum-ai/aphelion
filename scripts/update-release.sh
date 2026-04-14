@@ -17,5 +17,13 @@ fi
 "${exec_path}" --config "${config_path}" --check-config
 "${exec_path}" init --config "${config_path}"
 systemctl --user restart aphelion
+for _ in {1..10}; do
+  if systemctl --user is-active --quiet aphelion; then
+    break
+  fi
+  sleep 1
+done
+systemctl --user is-active --quiet aphelion
+"${exec_path}" verify-deploy --config "${config_path}"
 
-echo "Updated release binary at ${exec_path} and restarted aphelion using ${config_path}"
+echo "Updated, restarted, and verified release binary at ${exec_path} using ${config_path}"

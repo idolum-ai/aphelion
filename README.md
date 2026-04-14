@@ -189,6 +189,43 @@ Update a release-installed binary and restart the user service:
 make update-release
 ```
 
+## Local Deploy
+
+The local deploy path is the same one the service uses in production on this
+machine:
+
+1. build or replace the binary
+2. run `--check-config`
+3. run `init`
+4. restart the user service
+5. run `verify-deploy`
+
+Source install / local redeploy:
+
+```bash
+make update
+```
+
+Release install / local redeploy:
+
+```bash
+make update-release
+```
+
+Manual equivalent for a source build:
+
+```bash
+go build -o bin/aphelion .
+./bin/aphelion --config ~/.aphelion/aphelion.toml --check-config
+./bin/aphelion init --config ~/.aphelion/aphelion.toml
+systemctl --user restart aphelion
+./bin/aphelion verify-deploy --config ~/.aphelion/aphelion.toml
+```
+
+`verify-deploy` is the post-restart gate. It runs a small synthetic turn through
+the live governor/Idolum path, checks one tool path, and confirms persistence.
+If it fails, the deploy should be treated as failed.
+
 ## Background Service
 
 Install as a user service:
@@ -214,7 +251,7 @@ Inside Telegram:
 
 Config failures now exit once with a dedicated config error and the service will not
 crash-loop. `make install-user-service`, `make update`, and `make update-release`
-also run a config preflight before restarting the service.
+also run a config preflight, `init`, and `verify-deploy` around the service start.
 
 Update after pulling new changes:
 
