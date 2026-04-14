@@ -940,6 +940,71 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDurableAgentEmailChannelConfigRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review the inbox and surface important threads without sending mail.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact", "summarize_pdf"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		ChannelConfig: core.DurableAgentChannelConfig{
+			Email: &core.DurableAgentEmailChannelConfig{
+				Address:          "idolum@example.com",
+				Account:          "idolum@example.com",
+				Adapter:          "gog_cli",
+				Query:            "label:inbox newer_than:7d",
+				PollInterval:     "5m",
+				SurfaceRules:     []string{"job opportunity", "external inquiry"},
+				SummarizePDFs:    true,
+				SynthesisCadence: "4h",
+				NeverRetain:      []string{"oauth_token", "password"},
+			},
+		},
+		WakeupMode: "poll",
+		Status:     "draft",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	got, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if got.ChannelConfig.Email == nil {
+		t.Fatal("ChannelConfig.Email = nil, want persisted email channel config")
+	}
+	if got.ChannelConfig.Email.Address != "idolum@example.com" {
+		t.Fatalf("ChannelConfig.Email.Address = %q, want idolum@example.com", got.ChannelConfig.Email.Address)
+	}
+	if got.ChannelConfig.Email.Adapter != "gog_cli" {
+		t.Fatalf("ChannelConfig.Email.Adapter = %q, want gog_cli", got.ChannelConfig.Email.Adapter)
+	}
+	if got.ChannelConfig.Email.PollInterval != "5m" {
+		t.Fatalf("ChannelConfig.Email.PollInterval = %q, want 5m", got.ChannelConfig.Email.PollInterval)
+	}
+	if !got.ChannelConfig.Email.SummarizePDFs {
+		t.Fatal("ChannelConfig.Email.SummarizePDFs = false, want true")
+	}
+	if len(got.ChannelConfig.Email.SurfaceRules) != 2 || got.ChannelConfig.Email.SurfaceRules[0] != "job opportunity" {
+		t.Fatalf("ChannelConfig.Email.SurfaceRules = %#v, want persisted surface rules", got.ChannelConfig.Email.SurfaceRules)
+	}
+	if len(got.ChannelConfig.Email.NeverRetain) != 2 || got.ChannelConfig.Email.NeverRetain[1] != "password" {
+		t.Fatalf("ChannelConfig.Email.NeverRetain = %#v, want persisted never-retain classes", got.ChannelConfig.Email.NeverRetain)
+	}
+}
+
 func TestApplyDurableAgentLivePolicyRejectsBootstrapCeilingWidening(t *testing.T) {
 	t.Parallel()
 

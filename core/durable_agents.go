@@ -21,6 +21,22 @@ type DurableAgentLivePolicy struct {
 	SharedInferenceReuseScope string   `json:"shared_inference_reuse_scope,omitempty"`
 }
 
+type DurableAgentChannelConfig struct {
+	Email *DurableAgentEmailChannelConfig `json:"email,omitempty"`
+}
+
+type DurableAgentEmailChannelConfig struct {
+	Address          string   `json:"address,omitempty"`
+	Account          string   `json:"account,omitempty"`
+	Adapter          string   `json:"adapter,omitempty"`
+	Query            string   `json:"query,omitempty"`
+	PollInterval     string   `json:"poll_interval,omitempty"`
+	SurfaceRules     []string `json:"surface_rules,omitempty"`
+	SummarizePDFs    bool     `json:"summarize_pdfs,omitempty"`
+	SynthesisCadence string   `json:"synthesis_cadence,omitempty"`
+	NeverRetain      []string `json:"never_retain,omitempty"`
+}
+
 type NodeLLMBootstrap struct {
 	Backend         string `json:"backend,omitempty"`
 	NativeProvider  string `json:"native_provider,omitempty"`
@@ -49,6 +65,7 @@ type DurableAgent struct {
 	ReviewTargetChatID int64
 	ChannelKind        string
 	LivePolicy         DurableAgentLivePolicy
+	ChannelConfig      DurableAgentChannelConfig
 	BootstrapCeiling   DurableAgentBootstrapCeiling
 	BootstrapLLM       NodeLLMBootstrap
 	ControlPlaneSecret string
@@ -323,6 +340,31 @@ func NormalizeDurableAgentLivePolicy(policy DurableAgentLivePolicy) DurableAgent
 	policy.SharedInferenceReuseScope = normalizeDurableAgentSharedInferenceReuseScope(policy.SharedInferenceReuseScope)
 	policy.CapabilityEnvelope = normalizeDurableAgentStringSet(policy.CapabilityEnvelope)
 	return policy
+}
+
+func NormalizeDurableAgentChannelConfig(cfg DurableAgentChannelConfig) DurableAgentChannelConfig {
+	if cfg.Email != nil {
+		normalized := NormalizeDurableAgentEmailChannelConfig(*cfg.Email)
+		cfg.Email = &normalized
+	}
+	return cfg
+}
+
+func NormalizeDurableAgentEmailChannelConfig(cfg DurableAgentEmailChannelConfig) DurableAgentEmailChannelConfig {
+	cfg.Address = strings.TrimSpace(cfg.Address)
+	cfg.Account = strings.TrimSpace(cfg.Account)
+	cfg.Adapter = normalizeDurableAgentEmailAdapter(cfg.Adapter)
+	cfg.Query = strings.TrimSpace(cfg.Query)
+	cfg.PollInterval = strings.TrimSpace(cfg.PollInterval)
+	cfg.SurfaceRules = normalizeDurableAgentStringSet(cfg.SurfaceRules)
+	cfg.SynthesisCadence = strings.TrimSpace(cfg.SynthesisCadence)
+	cfg.NeverRetain = normalizeDurableAgentStringSet(cfg.NeverRetain)
+	return cfg
+}
+
+func (cfg DurableAgentChannelConfig) IsZero() bool {
+	cfg = NormalizeDurableAgentChannelConfig(cfg)
+	return cfg.Email == nil
 }
 
 func NormalizeDurableAgentBootstrapCeiling(ceiling DurableAgentBootstrapCeiling) DurableAgentBootstrapCeiling {
@@ -710,6 +752,15 @@ func normalizeDurableAgentSharedInferenceReuseScope(value string) string {
 		return value
 	default:
 		return "public_prefix_only"
+	}
+}
+
+func normalizeDurableAgentEmailAdapter(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "gog", "gog_cli":
+		return "gog_cli"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
 	}
 }
 

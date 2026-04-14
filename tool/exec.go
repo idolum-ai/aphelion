@@ -128,23 +128,29 @@ type openAIVectorStoreInput struct {
 }
 
 type durableAgentInput struct {
-	Action                    string   `json:"action"`
-	AgentID                   string   `json:"agent_id,omitempty"`
-	ReviewEventID             int64    `json:"review_event_id,omitempty"`
-	Reason                    string   `json:"reason,omitempty"`
-	Charter                   string   `json:"charter,omitempty"`
-	Autonomy                  string   `json:"autonomy,omitempty"`
-	Visibility                string   `json:"visibility,omitempty"`
-	SharedContext             string   `json:"shared_context,omitempty"`
-	Capabilities              []string `json:"capabilities,omitempty"`
-	OutboundMode              string   `json:"outbound_mode,omitempty"`
-	DriftPolicy               string   `json:"drift_policy,omitempty"`
-	PublicSurfaceMode         string   `json:"public_surface_mode,omitempty"`
-	SharedInferenceReuse      string   `json:"shared_inference_reuse,omitempty"`
-	SharedInferenceReuseScope string   `json:"shared_inference_reuse_scope,omitempty"`
-	Operation                 string   `json:"operation,omitempty"`
-	Secret                    string   `json:"secret,omitempty"`
-	History                   int      `json:"history,omitempty"`
+	Action                    string          `json:"action"`
+	AgentID                   string          `json:"agent_id,omitempty"`
+	ChannelKind               string          `json:"channel_kind,omitempty"`
+	ReviewEventID             int64           `json:"review_event_id,omitempty"`
+	ReviewTargetChatID        int64           `json:"review_target_chat_id,omitempty"`
+	Reason                    string          `json:"reason,omitempty"`
+	Charter                   string          `json:"charter,omitempty"`
+	Autonomy                  string          `json:"autonomy,omitempty"`
+	Visibility                string          `json:"visibility,omitempty"`
+	SharedContext             string          `json:"shared_context,omitempty"`
+	Capabilities              []string        `json:"capabilities,omitempty"`
+	OutboundMode              string          `json:"outbound_mode,omitempty"`
+	DriftPolicy               string          `json:"drift_policy,omitempty"`
+	PublicSurfaceMode         string          `json:"public_surface_mode,omitempty"`
+	SharedInferenceReuse      string          `json:"shared_inference_reuse,omitempty"`
+	SharedInferenceReuseScope string          `json:"shared_inference_reuse_scope,omitempty"`
+	WakeupMode                string          `json:"wakeup_mode,omitempty"`
+	NetworkPolicy             string          `json:"network_policy,omitempty"`
+	SecretScopes              []string        `json:"secret_scopes,omitempty"`
+	ChannelConfig             json.RawMessage `json:"channel_config,omitempty"`
+	Operation                 string          `json:"operation,omitempty"`
+	Secret                    string          `json:"secret,omitempty"`
+	History                   int             `json:"history,omitempty"`
 }
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
@@ -386,9 +392,11 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["list", "policy_show", "policy_apply", "enrollment_show", "enrollment_update"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
+					"channel_kind": {"type": "string", "description": "Required for create. Example: email"},
 					"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
+					"review_target_chat_id": {"type": "integer", "description": "Optional admin review target chat id override for create"},
 					"reason": {"type": "string", "description": "Optional operator reason for the change"},
 					"charter": {"type": "string", "description": "Optional charter override for policy_apply"},
 					"autonomy": {"type": "string", "description": "Optional high-level autonomy posture for policy_apply: observe_only, local_drafts, review_before_reply, or reply_within_charter"},
@@ -400,6 +408,10 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"public_surface_mode": {"type": "string", "description": "Optional public surface mode override for policy_apply"},
 					"shared_inference_reuse": {"type": "string", "description": "Optional shared inference reuse override for policy_apply"},
 					"shared_inference_reuse_scope": {"type": "string", "description": "Optional shared inference reuse scope override for policy_apply"},
+					"wakeup_mode": {"type": "string", "description": "Optional wakeup mode for create. Example: poll"},
+					"network_policy": {"type": "string", "description": "Optional network policy for create"},
+					"secret_scopes": {"type": "array", "items": {"type": "string"}, "description": "Optional secret scopes for create"},
+					"channel_config": {"type": "object", "description": "Optional structured channel configuration for create"},
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},
 					"secret": {"type": "string", "description": "Replacement control-plane secret for enrollment_update when operation=rotate_secret"},
 					"history": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Recent policy update entries to show for policy_show"}
@@ -470,7 +482,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	case "openai_vector_store":
 		return r.openAIVectorStore(ctx, input, p)
 	case "durable_agent":
-		return r.durableAgent(ctx, input, p)
+		return r.durableAgent(ctx, input, p, key)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}

@@ -239,6 +239,7 @@ func run() error {
 	rt.StartStartupRecovery(ctx, log.Printf)
 	rt.StartIdleExpiryLoop(ctx, log.Printf)
 	rt.StartHeartbeatLoop(ctx, log.Printf)
+	rt.StartDurableEmailLoop(ctx, log.Printf)
 	rt.StartCronLoop(ctx, log.Printf)
 
 	poller := telegram.NewPoller(tgClient, func(parent context.Context, msg core.InboundMessage) error {

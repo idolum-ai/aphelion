@@ -456,6 +456,93 @@ func TestDurableAgentToolEnrollmentShowMissingIsExplicit(t *testing.T) {
 	}
 }
 
+func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+
+	createOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"create",
+			"agent_id":"idolum-email",
+			"channel_kind":"email",
+			"charter":"Review the inbox, surface important threads, summarize PDFs, and never send mail.",
+			"autonomy":"observe_only",
+			"capabilities":["read_channel","bounded_review_artifact","summarize_pdf"],
+			"wakeup_mode":"poll",
+			"secret_scopes":["gogcli"],
+			"channel_config":{
+				"email":{
+					"address":"idolum@example.com",
+					"account":"idolum@example.com",
+					"adapter":"gog_cli",
+					"query":"label:inbox newer_than:7d",
+					"poll_interval":"5m",
+					"summarize_pdfs":true,
+					"synthesis_cadence":"4h",
+					"surface_rules":["job opportunity","external inquiry"],
+					"never_retain":["oauth_token","password"]
+				}
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(create email draft) err = %v", err)
+	}
+	if !strings.Contains(createOut, "action: durable-agent create") || !strings.Contains(createOut, "status: draft") {
+		t.Fatalf("create output = %q, want durable-agent create draft summary", createOut)
+	}
+	if !strings.Contains(createOut, "email_address: idolum@example.com") {
+		t.Fatalf("create output = %q, want email address summary", createOut)
+	}
+
+	draft, err := store.DurableAgent("idolum-email")
+	if err != nil {
+		t.Fatalf("DurableAgent(draft) err = %v", err)
+	}
+	if draft.Status != "draft" {
+		t.Fatalf("draft status = %q, want draft", draft.Status)
+	}
+	if draft.ReviewTargetChatID != 1001 {
+		t.Fatalf("ReviewTargetChatID = %d, want 1001", draft.ReviewTargetChatID)
+	}
+	if draft.ParentScopeKind != string(session.ScopeKindTelegramDM) || draft.ParentScopeID != "1001" {
+		t.Fatalf("parent scope = kind:%q id:%q, want telegram_dm/1001", draft.ParentScopeKind, draft.ParentScopeID)
+	}
+	if draft.ChannelConfig.Email == nil || draft.ChannelConfig.Email.Adapter != "gog_cli" {
+		t.Fatalf("ChannelConfig.Email = %#v, want gog_cli email config", draft.ChannelConfig.Email)
+	}
+	if draft.LivePolicy.OutboundMode != "read_only" {
+		t.Fatalf("LivePolicy.OutboundMode = %q, want read_only", draft.LivePolicy.OutboundMode)
+	}
+
+	activateOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"activate","agent_id":"idolum-email"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(activate email draft) err = %v", err)
+	}
+	if !strings.Contains(activateOut, "action: durable-agent activate") || !strings.Contains(activateOut, "status: active") {
+		t.Fatalf("activate output = %q, want activation summary", activateOut)
+	}
+
+	activated, err := store.DurableAgent("idolum-email")
+	if err != nil {
+		t.Fatalf("DurableAgent(activated) err = %v", err)
+	}
+	if activated.Status != "active" {
+		t.Fatalf("activated status = %q, want active", activated.Status)
+	}
+}
+
 func TestDurableAgentToolApprovedUserIsDenied(t *testing.T) {
 	t.Parallel()
 

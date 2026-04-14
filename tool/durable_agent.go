@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -17,7 +18,7 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func (r *Registry) durableAgent(_ context.Context, input json.RawMessage, p principal.Principal) (string, error) {
+func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p principal.Principal, key session.SessionKey) (string, error) {
 	if r.store == nil {
 		return "", fmt.Errorf("durable agent governance requires transcript store")
 	}
@@ -37,6 +38,12 @@ func (r *Registry) durableAgent(_ context.Context, input json.RawMessage, p prin
 			return "", err
 		}
 		return renderDurableAgentList(agents), nil
+	case "create":
+		return r.createDurableAgent(in, key)
+	case "activate":
+		return r.activateDurableAgent(in)
+	case "connection_test":
+		return r.testDurableAgentConnection(ctx, in)
 	case "policy_show":
 		if strings.TrimSpace(in.AgentID) == "" {
 			return "", fmt.Errorf("durable_agent agent_id is required for policy_show")
@@ -76,7 +83,7 @@ func (r *Registry) durableAgent(_ context.Context, input json.RawMessage, p prin
 	case "enrollment_update":
 		return r.updateDurableAgentEnrollment(in)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|policy_show|policy_apply|enrollment_show|enrollment_update")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update")
 	}
 }
 
@@ -155,6 +162,160 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 	return renderDurableAgentPolicyApply(*updated, update), nil
 }
 
+func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionKey) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for create")
+	}
+	channelKind := strings.TrimSpace(in.ChannelKind)
+	if channelKind == "" {
+		return "", fmt.Errorf("durable_agent channel_kind is required for create")
+	}
+
+	existing, err := r.store.DurableAgent(agentID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+
+	var agent core.DurableAgent
+	if existing != nil {
+		if strings.TrimSpace(existing.Status) != "" && strings.TrimSpace(existing.Status) != "draft" {
+			return "", fmt.Errorf("durable agent %q already exists with status %q; use policy_apply or activate instead of create", existing.AgentID, existing.Status)
+		}
+		agent = *existing
+	}
+	agent.AgentID = agentID
+	agent.ChannelKind = firstNonEmpty(channelKind, agent.ChannelKind)
+	agent.ParentScopeKind = firstNonEmpty(agent.ParentScopeKind, string(key.Scope.Kind))
+	agent.ParentScopeID = firstNonEmpty(agent.ParentScopeID, key.Scope.ID)
+	if in.ReviewTargetChatID > 0 {
+		agent.ReviewTargetChatID = in.ReviewTargetChatID
+	} else if agent.ReviewTargetChatID == 0 && key.ChatID != 0 {
+		agent.ReviewTargetChatID = key.ChatID
+	}
+	if strings.TrimSpace(in.WakeupMode) != "" {
+		agent.WakeupMode = strings.TrimSpace(in.WakeupMode)
+	} else if strings.TrimSpace(agent.WakeupMode) == "" && agent.ChannelKind == "email" {
+		agent.WakeupMode = "poll"
+	}
+	if strings.TrimSpace(in.NetworkPolicy) != "" {
+		agent.NetworkPolicy = strings.TrimSpace(in.NetworkPolicy)
+	}
+	if len(in.SecretScopes) > 0 {
+		agent.SecretScopes = append([]string(nil), in.SecretScopes...)
+	}
+	policy := agent.LivePolicy
+	if strings.TrimSpace(policy.Charter) == "" &&
+		len(policy.CapabilityEnvelope) == 0 &&
+		strings.TrimSpace(policy.OutboundMode) == "" &&
+		strings.TrimSpace(policy.DriftPolicy) == "" &&
+		strings.TrimSpace(policy.PublicSurfaceMode) == "" &&
+		strings.TrimSpace(policy.SharedInferenceReuse) == "" &&
+		strings.TrimSpace(policy.SharedInferenceReuseScope) == "" {
+		policy = defaultDurableAgentLivePolicy(agent.ChannelKind, strings.TrimSpace(in.Charter))
+	}
+	if strings.TrimSpace(in.Charter) != "" {
+		policy.Charter = strings.TrimSpace(in.Charter)
+	}
+	if strings.TrimSpace(in.Autonomy) != "" {
+		mode, err := durableAgentAutonomyToOutboundMode(in.Autonomy)
+		if err != nil {
+			return "", err
+		}
+		policy.OutboundMode = mode
+	}
+	if len(in.Capabilities) > 0 {
+		policy.CapabilityEnvelope = append([]string(nil), in.Capabilities...)
+	}
+	if strings.TrimSpace(in.OutboundMode) != "" {
+		policy.OutboundMode = strings.TrimSpace(in.OutboundMode)
+	}
+	if strings.TrimSpace(in.DriftPolicy) != "" {
+		policy.DriftPolicy = strings.TrimSpace(in.DriftPolicy)
+	}
+	if strings.TrimSpace(in.Visibility) != "" {
+		mode, err := durableAgentVisibilityToPublicSurfaceMode(in.Visibility)
+		if err != nil {
+			return "", err
+		}
+		policy.PublicSurfaceMode = mode
+	}
+	if strings.TrimSpace(in.SharedContext) != "" {
+		reuse, scope, err := durableAgentSharedContextToReuse(in.SharedContext)
+		if err != nil {
+			return "", err
+		}
+		policy.SharedInferenceReuse = reuse
+		policy.SharedInferenceReuseScope = scope
+	}
+	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(policy)
+
+	channelConfig, err := mergeDurableAgentChannelConfig(agent.ChannelConfig, in.ChannelConfig)
+	if err != nil {
+		return "", err
+	}
+	agent.ChannelConfig = channelConfig
+	agent.Status = "draft"
+
+	if err := r.store.UpsertDurableAgent(agent); err != nil {
+		return "", err
+	}
+	updated, err := r.store.DurableAgent(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	return renderDurableAgentLifecycle("create", *updated), nil
+}
+
+func (r *Registry) activateDurableAgent(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for activate")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	if err := validateDurableAgentActivation(*agent); err != nil {
+		return "", err
+	}
+	agent.Status = "active"
+	if err := r.store.UpsertDurableAgent(*agent); err != nil {
+		return "", err
+	}
+	return renderDurableAgentLifecycle("activate", *agent), nil
+}
+
+func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for connection_test")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	switch strings.TrimSpace(agent.ChannelKind) {
+	case "email":
+		if agent.ChannelConfig.Email == nil {
+			return "", fmt.Errorf("durable agent %q has no email channel_config", agent.AgentID)
+		}
+		args := []string{"gog"}
+		if strings.TrimSpace(agent.ChannelConfig.Email.Account) != "" {
+			args = append(args, "--account", strings.TrimSpace(agent.ChannelConfig.Email.Account))
+		}
+		args = append(args, "gmail", "search", firstNonEmpty(strings.TrimSpace(agent.ChannelConfig.Email.Query), "label:inbox"), "--json", "--results-only", "--max", "1", "--no-input")
+		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("durable agent connection_test failed: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		return fmt.Sprintf("action: durable-agent connection test\nagent_id: %s\nchannel_kind: %s\nstatus: ok\n", agent.AgentID, agent.ChannelKind), nil
+	default:
+		return "", fmt.Errorf("durable agent %q channel %q does not support connection_test yet", agent.AgentID, agent.ChannelKind)
+	}
+}
+
 func (r *Registry) updateDurableAgentEnrollment(in durableAgentInput) (string, error) {
 	agentID := strings.TrimSpace(in.AgentID)
 	if agentID == "" {
@@ -229,6 +390,8 @@ func renderDurableAgentPolicy(agent core.DurableAgent, updates []session.Durable
 	b.WriteString("action: durable-agent policy show\n")
 	fmt.Fprintf(&b, "agent_id: %s\n", agent.AgentID)
 	fmt.Fprintf(&b, "channel_kind: %s\n", agent.ChannelKind)
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "active"))
+	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
 	fmt.Fprintf(&b, "policy_version: %d\n", agent.PolicyVersion)
 	fmt.Fprintf(&b, "policy_hash: %s\n", agent.PolicyHash)
 	if !agent.PolicyIssuedAt.IsZero() {
@@ -255,6 +418,7 @@ func renderDurableAgentPolicy(agent core.DurableAgent, updates []session.Durable
 	if strings.TrimSpace(agent.BootstrapLLM.CodexHome) != "" {
 		fmt.Fprintf(&b, "bootstrap_codex_home: %s\n", agent.BootstrapLLM.CodexHome)
 	}
+	renderDurableAgentChannelConfig(&b, agent)
 	fmt.Fprintf(&b, "policy_updates: %d\n", len(updates))
 	for _, update := range updates {
 		fmt.Fprintf(&b, "- id=%d previous=%d new=%d", update.ID, update.PreviousVersion, update.NewVersion)
@@ -313,6 +477,35 @@ func renderDurableAgentEnrollment(enrollment core.DurableAgentRemoteEnrollment) 
 		fmt.Fprintf(&b, "revoked_at: %s\n", enrollment.RevokedAt.UTC().Format(time.RFC3339))
 	}
 	return b.String()
+}
+
+func renderDurableAgentLifecycle(action string, agent core.DurableAgent) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "action: durable-agent %s\n", strings.TrimSpace(action))
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	fmt.Fprintf(&b, "channel_kind: %s\n", strings.TrimSpace(agent.ChannelKind))
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "active"))
+	fmt.Fprintf(&b, "review_target_chat_id: %d\n", agent.ReviewTargetChatID)
+	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
+	fmt.Fprintf(&b, "outbound_mode: %s\n", strings.TrimSpace(agent.LivePolicy.OutboundMode))
+	renderDurableAgentChannelConfig(&b, agent)
+	return b.String()
+}
+
+func renderDurableAgentChannelConfig(b *strings.Builder, agent core.DurableAgent) {
+	if b == nil || agent.ChannelConfig.Email == nil {
+		return
+	}
+	email := agent.ChannelConfig.Email
+	fmt.Fprintf(b, "email_address: %s\n", strings.TrimSpace(email.Address))
+	fmt.Fprintf(b, "email_account: %s\n", strings.TrimSpace(email.Account))
+	fmt.Fprintf(b, "email_adapter: %s\n", strings.TrimSpace(email.Adapter))
+	fmt.Fprintf(b, "email_query: %s\n", strings.TrimSpace(email.Query))
+	fmt.Fprintf(b, "email_poll_interval: %s\n", strings.TrimSpace(email.PollInterval))
+	fmt.Fprintf(b, "email_summarize_pdfs: %t\n", email.SummarizePDFs)
+	fmt.Fprintf(b, "email_synthesis_cadence: %s\n", strings.TrimSpace(email.SynthesisCadence))
+	fmt.Fprintf(b, "email_surface_rules: %s\n", strings.Join(email.SurfaceRules, ","))
+	fmt.Fprintf(b, "email_never_retain: %s\n", strings.Join(email.NeverRetain, ","))
 }
 
 func durableAgentReviewTargetsAgent(agentID string, scope session.ScopeRef) bool {
@@ -450,6 +643,97 @@ func durableAgentSharedContextToReuse(value string) (string, string, error) {
 	default:
 		return "", "", fmt.Errorf("durable_agent shared_context must be one of isolated|public_only")
 	}
+}
+
+func defaultDurableAgentLivePolicy(channelKind string, charter string) core.DurableAgentLivePolicy {
+	switch strings.TrimSpace(channelKind) {
+	case "email":
+		return core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:                   strings.TrimSpace(charter),
+			CapabilityEnvelope:        []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:              "read_only",
+			DriftPolicy:               "admin_review",
+			PublicSurfaceMode:         "explicit_parent_relay_only",
+			SharedInferenceReuse:      "disabled",
+			SharedInferenceReuseScope: "public_prefix_only",
+		})
+	default:
+		return core.DefaultTelegramGroupLivePolicy(charter)
+	}
+}
+
+func mergeDurableAgentChannelConfig(existing core.DurableAgentChannelConfig, raw json.RawMessage) (core.DurableAgentChannelConfig, error) {
+	existing = core.NormalizeDurableAgentChannelConfig(existing)
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "" {
+		return existing, nil
+	}
+	var update core.DurableAgentChannelConfig
+	if err := json.Unmarshal(raw, &update); err != nil {
+		return core.DurableAgentChannelConfig{}, fmt.Errorf("decode durable_agent channel_config: %w", err)
+	}
+	update = core.NormalizeDurableAgentChannelConfig(update)
+	if update.Email != nil {
+		if existing.Email == nil {
+			cfg := *update.Email
+			existing.Email = &cfg
+		} else {
+			mergeDurableAgentEmailChannelConfig(existing.Email, *update.Email)
+		}
+	}
+	return core.NormalizeDurableAgentChannelConfig(existing), nil
+}
+
+func mergeDurableAgentEmailChannelConfig(dst *core.DurableAgentEmailChannelConfig, src core.DurableAgentEmailChannelConfig) {
+	if dst == nil {
+		return
+	}
+	if strings.TrimSpace(src.Address) != "" {
+		dst.Address = strings.TrimSpace(src.Address)
+	}
+	if strings.TrimSpace(src.Account) != "" {
+		dst.Account = strings.TrimSpace(src.Account)
+	}
+	if strings.TrimSpace(src.Adapter) != "" {
+		dst.Adapter = strings.TrimSpace(src.Adapter)
+	}
+	if strings.TrimSpace(src.Query) != "" {
+		dst.Query = strings.TrimSpace(src.Query)
+	}
+	if strings.TrimSpace(src.PollInterval) != "" {
+		dst.PollInterval = strings.TrimSpace(src.PollInterval)
+	}
+	if len(src.SurfaceRules) > 0 {
+		dst.SurfaceRules = append([]string(nil), src.SurfaceRules...)
+	}
+	if src.SummarizePDFs {
+		dst.SummarizePDFs = true
+	}
+	if strings.TrimSpace(src.SynthesisCadence) != "" {
+		dst.SynthesisCadence = strings.TrimSpace(src.SynthesisCadence)
+	}
+	if len(src.NeverRetain) > 0 {
+		dst.NeverRetain = append([]string(nil), src.NeverRetain...)
+	}
+}
+
+func validateDurableAgentActivation(agent core.DurableAgent) error {
+	switch strings.TrimSpace(agent.ChannelKind) {
+	case "email":
+		email := agent.ChannelConfig.Email
+		if email == nil {
+			return fmt.Errorf("durable agent %q cannot activate without email channel_config", agent.AgentID)
+		}
+		if strings.TrimSpace(email.Address) == "" {
+			return fmt.Errorf("durable agent %q cannot activate without an email address", agent.AgentID)
+		}
+		if strings.TrimSpace(email.Adapter) == "" {
+			return fmt.Errorf("durable agent %q cannot activate without an email adapter", agent.AgentID)
+		}
+		if strings.TrimSpace(agent.WakeupMode) == "" {
+			return fmt.Errorf("durable agent %q cannot activate without a wakeup_mode", agent.AgentID)
+		}
+	}
+	return nil
 }
 
 func durableAgentAutonomyFromPolicy(policy core.DurableAgentLivePolicy) string {
