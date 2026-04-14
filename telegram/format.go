@@ -188,3 +188,16 @@ func isTelegramMessageNotModified(description string) bool {
 	value := strings.ToLower(strings.TrimSpace(description))
 	return strings.Contains(value, "message is not modified") || strings.Contains(value, "not modified")
 }
+
+func IsStaleCallbackQueryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	value := strings.ToLower(strings.TrimSpace(err.Error()))
+	if !strings.Contains(value, "answercallbackquery") {
+		return false
+	}
+	return strings.Contains(value, "query is too old") ||
+		strings.Contains(value, "response timeout expired") ||
+		strings.Contains(value, "query id is invalid")
+}

@@ -201,7 +201,9 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 		return nil
 	}
 	if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, ""); err != nil {
-		return err
+		if !telegram.IsStaleCallbackQueryError(err) {
+			return err
+		}
 	}
 	id, choice, ok := decision.DecodeCallbackData(cb.Data)
 	if !ok {

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ type decisionTestSender struct {
 	edits   []decisionEditCall
 	deletes []decisionDeleteCall
 	answers []decisionAnswerCall
+	answerErr error
 }
 
 type decisionInlineCall struct {
@@ -63,7 +65,7 @@ func (s *decisionTestSender) DeleteMessage(_ context.Context, chatID int64, mess
 
 func (s *decisionTestSender) AnswerCallbackQuery(_ context.Context, id string, text string) error {
 	s.answers = append(s.answers, decisionAnswerCall{id: id, text: text})
-	return nil
+	return s.answerErr
 }
 
 type decisionTestRouter struct {
@@ -263,5 +265,81 @@ func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	}
 	if !strings.Contains(sender.inline[0].text, "Acquire browser automation") {
 		t.Fatalf("inline text = %q, want capability proposal summary", sender.inline[0].text)
+	}
+}
+
+func TestHandleCallbackQueryIgnoresExpiredAckAndResolvesDecision(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{
+		answerErr: errors.New("telegram answerCallbackQuery failed: Bad Request: query is too old and response timeout expired or query ID is invalid"),
+	}
+	pendingSeen := make(chan decision.PendingDecision, 1)
+	var broker *decision.Broker
+	resolved := make(chan string, 1)
+	broker = decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		pendingSeen <- pending
+		return decision.Delivery{MessageID: 91}, nil
+	})
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker)
+
+	go func() {
+		result, err := broker.Request(context.Background(), decision.Request{
+			Kind:          decision.KindInterrupt,
+			ChatID:        7,
+			SenderID:      42,
+			Prompt:        "Still working",
+			Choices:       []decision.Choice{{ID: "stop", Label: "Stop"}, {ID: "queue", Label: "Queue"}},
+			DefaultChoice: "queue",
+			Timeout:       time.Second,
+		})
+		if err == nil {
+			resolved <- result.Choice
+		}
+	}()
+
+	var pending decision.PendingDecision
+	select {
+	case pending = <-pendingSeen:
+	case <-time.After(time.Second):
+		t.Fatal("broker did not publish a pending decision")
+	}
+	cb := telegram.CallbackQuery{
+		ID:   "cb-1",
+		Data: decision.EncodeCallbackData(pending.ID, pending.Choices[0].ID),
+	}
+	if err := handler.HandleCallbackQuery(context.Background(), cb); err != nil {
+		t.Fatalf("HandleCallbackQuery() err = %v, want nil for stale callback ack", err)
+	}
+
+	select {
+	case choice := <-resolved:
+		if choice != "stop" {
+			t.Fatalf("choice = %q, want stop", choice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("decision was not resolved after stale callback ack")
+	}
+}
+
+func TestHandleCallbackQueryReturnsNonStaleAckError(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{
+		answerErr: errors.New("telegram answerCallbackQuery failed: Bad Request: chat not found"),
+	}
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		return decision.Delivery{MessageID: 1}, nil
+	}))
+
+	err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-1",
+		Data: decision.EncodeCallbackData("1", "approve"),
+	})
+	if err == nil {
+		t.Fatal("HandleCallbackQuery() err = nil, want non-stale ack error")
+	}
+	if !strings.Contains(err.Error(), "chat not found") {
+		t.Fatalf("HandleCallbackQuery() err = %v, want original ack error", err)
 	}
 }
