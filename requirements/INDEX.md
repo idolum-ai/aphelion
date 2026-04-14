@@ -32,16 +32,17 @@ Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 21. ✅ [`hidden-inputs.md`](hidden-inputs.md) — Latent signal, proactive eligibility, provenance, and floor/scene reaction model
 22. ✅ [`artifacts.md`](artifacts.md) — Channel-neutral file/media artifact model, capability envelope, retention classes
 23. ✅ [`artifact-brokerage.md`](artifact-brokerage.md) — Bounded Idolum/Aphelion deliberation over artifact meaning, handling, and retention
+24. ✅ [`operations.md`](operations.md) — Session-native operational work, proposals, material gates, findings, and artifacts
 
 ## Automation
-24. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
-25. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
+25. ✅ [`heartbeat.md`](heartbeat.md) — Periodic governor maintenance turns, HEARTBEAT.md, delivery targets, active hours
+26. ✅ [`cron.md`](cron.md) — Scheduled proactivity, job sessions, delivery policy
 
 ## Media
-26. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
-27. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
+27. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
+28. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
 
 ## Operations
-28. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
-29. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
-30. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
+29. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
+30. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
+31. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline

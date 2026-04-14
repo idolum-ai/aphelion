@@ -14,6 +14,11 @@ This separation matters because authority is not the same thing as conversation 
 
 In the governor/face architecture, the session ledger primarily stores the user-visible conversation. Governor-internal decisions may later be recorded as sidecar audit metadata, but they should not silently replace the visible transcript.
 
+Operational work follows the same split:
+
+- visible transcript = what the user actually saw
+- operation/proposal state = machine-authored durable sidecar for ongoing work
+
 The key rule is:
 
 - delivered `Idolum` scene = visible conversation record
@@ -200,6 +205,10 @@ type Session struct {
     // Compaction
     CompactionLog []CompactionEntry
 
+    // Planning / operations
+    PlanState      PlanState
+    OperationState OperationState
+
     // Token accounting
     TotalInputTokens  int64
     TotalOutputTokens int64
@@ -220,6 +229,26 @@ type Session struct {
     UserName  string
 }
 ```
+
+### OperationState
+
+Operational work should be session-native durable state rather than an ad hoc tool-local object.
+
+```go
+type OperationState struct {
+    ID        string
+    Objective string
+    Status    string
+    Stage     string
+    Summary   string
+    Proposal  OperationProposal
+    Findings  []OperationFinding
+    Artifacts []OperationArtifact
+    UpdatedAt time.Time
+}
+```
+
+The operation state is sidecar machine state. It should inform prompts, approvals, and recovery without replacing the visible conversation history.
 
 ### ReviewEvent
 

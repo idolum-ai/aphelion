@@ -96,6 +96,7 @@ Examples:
 - degradation or fallback state
 - recovery/interruption notices
 - ratified brokerage plan for the current turn
+- current operation and proposal state
 - streamed vs non-streamed delivery state
 
 This mirrors the useful part of Codex's approach: keep a stable base, add explicit updates for changing machine state.

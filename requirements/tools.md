@@ -81,7 +81,7 @@ Only the first two layers are authoritative.
 
 The key difference from a simpler Hermes-style registry is that Aphelion's authoritative surface is resolved **per run**, not just per process.
 
-## Confirmation and Approval
+## Confirmation, Proposals, and Escalation
 
 Aphelion should split "asking before acting" into three different mechanisms rather than flattening them into one generic approval queue.
 
@@ -97,19 +97,20 @@ The governor should ask the user for a plain yes/no style confirmation when:
 
 This is not a security boundary. It is a turn-shaping rule.
 
-### 2. Runtime approval
+### 2. Runtime proposal gate
 
 This is code-level enforcement.
 
-When the governor reaches a tool action that is already authorized in principle but risky in execution, the runtime may stop and require an explicit approval before the tool continues.
+When the governor reaches a material threshold in the operation, the runtime may stop and require an explicit proposal approval before execution continues.
 
 Examples:
 
-- destructive shell commands
-- irreversible mutations
+- capability acquisition such as dependency installation
+- networked or external operations
+- destructive or irreversible mutations
 - interruption decisions while another turn is still active
 
-This must not live only in prompt prose. The runtime needs a real pending-decision object and an explicit user response path.
+This must not live only in prompt prose. The runtime needs a real pending-decision object, an explicit user response path, and durable session-native proposal state.
 
 ### 3. Escalation
 
@@ -120,14 +121,14 @@ If a requested action exceeds the current principal's authority, the system shou
 That distinction matters:
 
 - confirmation = clarify or confirm intent
-- approval = confirm a risky but already-authorized action
+- proposal = approve a bounded package of materially consequential work
 - escalation = request ratification from a higher-authority path
 
 Aphelion should keep those concepts separate in both code and language.
 
 ## Decision Broker
 
-The runtime should own a small decision broker for pending approvals and transport-level confirmations.
+The runtime should own a small decision broker for pending proposal approvals and transport-level confirmations.
 
 The broker's job is:
 
@@ -142,7 +143,11 @@ The first concrete decision kinds should be:
 
 - interrupt while busy
 - stop-word confirmation while busy
-- risky `exec` confirmation
+- operational proposal approval
+
+The broker is transport machinery, not the semantic source of the proposal.
+
+The proposal itself should live in durable session state and be renderable independent of Telegram or CLI transport.
 
 ## `TOOLS.md`
 
