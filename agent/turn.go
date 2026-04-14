@@ -121,6 +121,7 @@ const (
 	initialRetryBackoff  = 100 * time.Millisecond
 	providerFailureReply = "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
 	budgetExhaustedReply = "Iteration budget exhausted before final response."
+	planningOnlySteer    = "Your previous reply only described a plan. Do not restate the plan. Start executing now using available tools. Use update_plan only if the work is genuinely multi-step."
 )
 
 var sleepWithContextFn = sleepWithContext
@@ -188,6 +189,14 @@ func RunTurn(
 				TokenUsage: core.TokenUsage{},
 			}, history, nil
 		}
+		if len(toolLog) == 0 {
+			retried, retryErr := maybeRetryPlanningOnly(ctx, provider, history, toolDefs, opts, resp)
+			if retryErr != nil {
+				log.Printf("WARN planning-only correction failed err=%v", retryErr)
+			} else if retried != nil {
+				resp = retried
+			}
+		}
 
 		history = append(history, Message{
 			Role:          "assistant",
@@ -247,6 +256,75 @@ func RunTurn(
 			})
 		}
 	}
+}
+
+func maybeRetryPlanningOnly(
+	ctx context.Context,
+	provider Provider,
+	history []Message,
+	tools []ToolDef,
+	opts *CompleteOptions,
+	resp *Response,
+) (*Response, error) {
+	if resp == nil || len(resp.ToolCalls) > 0 {
+		return nil, nil
+	}
+	if !hasActionableTools(tools) || !looksLikePlanningOnlyReply(resp.Content) {
+		return nil, nil
+	}
+
+	retryHistory := append([]Message(nil), history...)
+	retryHistory = append(retryHistory, Message{
+		Role:          "assistant",
+		Content:       resp.Content,
+		Thinking:      resp.Thinking,
+		ThinkingMeta:  append([]ThinkingBlock(nil), resp.ThinkingMeta...),
+		ProviderState: append(json.RawMessage(nil), resp.ProviderState...),
+	})
+	retryHistory = append(retryHistory, Message{Role: "user", Content: planningOnlySteer})
+	return completeWithRetry(ctx, provider, retryHistory, tools, opts)
+}
+
+func hasActionableTools(tools []ToolDef) bool {
+	for _, def := range tools {
+		name := strings.TrimSpace(def.Name)
+		if name == "" || name == "update_plan" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func looksLikePlanningOnlyReply(content string) bool {
+	text := strings.ToLower(strings.TrimSpace(content))
+	if text == "" {
+		return false
+	}
+	actionPhrases := []string{
+		"i'll inspect",
+		"i will inspect",
+		"i'll check",
+		"i will check",
+		"i'll review",
+		"i will review",
+		"i'll look",
+		"i will look",
+		"let me inspect",
+		"let me check",
+		"let me review",
+		"let me look",
+		"i'm going to inspect",
+		"i am going to inspect",
+		"first, i'll",
+		"first i will",
+	}
+	for _, phrase := range actionPhrases {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func completeWithRetry(

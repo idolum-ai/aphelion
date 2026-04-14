@@ -396,3 +396,86 @@ func TestContextCancellation(t *testing.T) {
 		t.Fatal("RunTurn did not return after context cancellation")
 	}
 }
+
+func TestRunTurnRetriesPlanningOnlyReplyBeforePersistingIt(t *testing.T) {
+	t.Parallel()
+
+	provider := &mockProvider{
+		complete: func(_ context.Context, call int, messages []Message, tools []ToolDef) (*Response, error) {
+			switch call {
+			case 1:
+				if len(tools) == 0 {
+					t.Fatal("tools unexpectedly empty on first call")
+				}
+				return &Response{Content: "I'll inspect the repository first and then report back."}, nil
+			case 2:
+				last := messages[len(messages)-1]
+				if last.Role != "user" || !strings.Contains(last.Content, "only described a plan") {
+					t.Fatalf("retry steer = %#v, want planning-only correction", last)
+				}
+				prev := messages[len(messages)-2]
+				if prev.Role != "assistant" || !strings.Contains(prev.Content, "inspect the repository first") {
+					t.Fatalf("retry context missing prior planning-only reply: %#v", prev)
+				}
+				return &Response{
+					ToolCalls: []ToolCall{{
+						ID:    "call-1",
+						Name:  "exec",
+						Input: json.RawMessage(`{"command":"pwd"}`),
+					}},
+				}, nil
+			case 3:
+				last := messages[len(messages)-1]
+				if last.Role != "tool" || last.ToolCallID != "call-1" || last.Content != "tool output" {
+					t.Fatalf("last tool message = %#v", last)
+				}
+				return &Response{Content: "done"}, nil
+			default:
+				t.Fatalf("unexpected call %d", call)
+				return nil, nil
+			}
+		},
+	}
+
+	tools := &mockTools{
+		defs: []ToolDef{
+			{Name: "exec"},
+			{Name: "update_plan"},
+		},
+		exec: func(_ context.Context, name string, _ json.RawMessage) (string, error) {
+			if name != "exec" {
+				t.Fatalf("tool name = %q, want exec", name)
+			}
+			return "tool output", nil
+		},
+	}
+
+	result, history, err := RunTurn(
+		context.Background(),
+		provider,
+		tools,
+		defaultBudget(),
+		nil,
+		[]Message{{Role: "user", Content: "please fix it"}},
+	)
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("result.Text = %q, want done", result.Text)
+	}
+	if provider.calls != 3 {
+		t.Fatalf("provider calls = %d, want 3", provider.calls)
+	}
+	if len(tools.execCalls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(tools.execCalls))
+	}
+	for _, msg := range history {
+		if msg.Role == "assistant" && strings.Contains(msg.Content, "inspect the repository first") {
+			t.Fatalf("history unexpectedly persisted planning-only assistant reply: %#v", history)
+		}
+		if msg.Role == "user" && strings.Contains(msg.Content, "only described a plan") {
+			t.Fatalf("history unexpectedly persisted planning-only steer: %#v", history)
+		}
+	}
+}
