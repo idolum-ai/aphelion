@@ -110,9 +110,15 @@ var newCodexProvider = func(bundle governorauth.Bundle, cfg *config.Config) (age
 	if strings.TrimSpace(bundle.AuthPath) != "" {
 		authPath := bundle.AuthPath
 		loadTokens = func() (governorauth.CodexTokens, error) {
+			if bundle.Source == "aphelion-auth-json" {
+				return governorauth.LoadAphelionCodexAuth(authPath)
+			}
 			return governorauth.LoadCodexCLIAuth(authPath)
 		}
 		saveTokens = func(tokens governorauth.CodexTokens, refreshedAt time.Time) error {
+			if bundle.Source == "aphelion-auth-json" {
+				return governorauth.SaveAphelionCodexAuth(authPath, tokens, refreshedAt)
+			}
 			return governorauth.SaveCodexCLIAuth(authPath, tokens, refreshedAt)
 		}
 	}

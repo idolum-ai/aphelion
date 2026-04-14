@@ -25,6 +25,7 @@ const (
 
 	DefaultCodexBaseURL    = "https://chatgpt.com/backend-api"
 	DefaultCodexRefreshURL = "https://auth.openai.com/oauth/token"
+	defaultAphelionCodexAuthRelativePath = ".aphelion/state/codex-auth.json"
 )
 
 var (
@@ -34,7 +35,6 @@ var (
 	ErrCodexAuthMalformed    = errors.New("codex auth file is malformed")
 	ErrCodexAuthIncomplete   = errors.New("codex auth payload is incomplete")
 	ErrUnsupportedAuthSource = errors.New("unsupported governor auth source")
-	ErrAphelionAuthStoreTODO = errors.New("aphelion governor auth store is not implemented")
 )
 
 type codexUnavailableError struct {
@@ -121,7 +121,47 @@ func resolveCodexBundle(cfg config.GovernorConfig, l lookups) (Bundle, bool, err
 	}
 
 	switch authSource {
-	case AuthSourceAuto, AuthSourceCodexCLI:
+	case AuthSourceAuto:
+		baseURL := strings.TrimSpace(cfg.Codex.BaseURL)
+		if baseURL == "" {
+			baseURL = DefaultCodexBaseURL
+		}
+		aphelionPath, ok := resolveAphelionCodexAuthPath(cfg.Codex.AuthPath, l)
+		if ok {
+			tokens, err := LoadAphelionCodexAuth(aphelionPath)
+			if err == nil {
+				return Bundle{
+					Backend:      BackendCodex,
+					BaseURL:      baseURL,
+					AccessToken:  tokens.AccessToken,
+					RefreshToken: tokens.RefreshToken,
+					AccountID:    tokens.AccountID,
+					AuthPath:     aphelionPath,
+					RefreshURL:   DefaultCodexRefreshURL,
+					Source:       "aphelion-auth-json",
+				}, true, nil, nil
+			}
+		}
+		creds, err := detectCodexCLICredentials(cfg.Codex.CodexHome, l)
+		if err != nil {
+			if ok {
+				if _, aphelionErr := LoadAphelionCodexAuth(aphelionPath); aphelionErr != nil {
+					return Bundle{}, false, aphelionErr, nil
+				}
+			}
+			return Bundle{}, false, err, nil
+		}
+		return Bundle{
+			Backend:      BackendCodex,
+			BaseURL:      baseURL,
+			AccessToken:  creds.AccessToken,
+			RefreshToken: creds.RefreshToken,
+			AccountID:    creds.AccountID,
+			AuthPath:     creds.AuthPath,
+			RefreshURL:   DefaultCodexRefreshURL,
+			Source:       "codex-cli-auth-json",
+		}, true, nil, nil
+	case AuthSourceCodexCLI:
 		creds, err := detectCodexCLICredentials(cfg.Codex.CodexHome, l)
 		if err != nil {
 			return Bundle{}, false, err, nil
@@ -141,7 +181,28 @@ func resolveCodexBundle(cfg config.GovernorConfig, l lookups) (Bundle, bool, err
 			Source:       "codex-cli-auth-json",
 		}, true, nil, nil
 	case AuthSourceAphelion:
-		return Bundle{}, false, nil, ErrAphelionAuthStoreTODO
+		authPath, ok := resolveAphelionCodexAuthPath(cfg.Codex.AuthPath, l)
+		if !ok {
+			return Bundle{}, false, ErrCodexAuthNotFound, nil
+		}
+		tokens, err := LoadAphelionCodexAuth(authPath)
+		if err != nil {
+			return Bundle{}, false, err, nil
+		}
+		baseURL := strings.TrimSpace(cfg.Codex.BaseURL)
+		if baseURL == "" {
+			baseURL = DefaultCodexBaseURL
+		}
+		return Bundle{
+			Backend:      BackendCodex,
+			BaseURL:      baseURL,
+			AccessToken:  tokens.AccessToken,
+			RefreshToken: tokens.RefreshToken,
+			AccountID:    tokens.AccountID,
+			AuthPath:     authPath,
+			RefreshURL:   DefaultCodexRefreshURL,
+			Source:       "aphelion-auth-json",
+		}, true, nil, nil
 	default:
 		return Bundle{}, false, fmt.Errorf("%w: %s", ErrUnsupportedAuthSource, authSource), nil
 	}
@@ -221,6 +282,18 @@ func resolveCodexAuthPath(codexHomeOverride string, l lookups) (string, bool) {
 	return filepath.Join(codexHome, "auth.json"), true
 }
 
+func resolveAphelionCodexAuthPath(authPathOverride string, l lookups) (string, bool) {
+	authPath := strings.TrimSpace(authPathOverride)
+	if authPath != "" {
+		return authPath, true
+	}
+	home, err := l.userHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return "", false
+	}
+	return filepath.Join(home, defaultAphelionCodexAuthRelativePath), true
+}
+
 type CodexTokens struct {
 	AccessToken  string
 	RefreshToken string
@@ -228,6 +301,14 @@ type CodexTokens struct {
 }
 
 func LoadCodexCLIAuth(path string) (CodexTokens, error) {
+	return loadCodexAuthFile(path)
+}
+
+func LoadAphelionCodexAuth(path string) (CodexTokens, error) {
+	return loadCodexAuthFile(path)
+}
+
+func loadCodexAuthFile(path string) (CodexTokens, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -255,6 +336,14 @@ func LoadCodexCLIAuth(path string) (CodexTokens, error) {
 }
 
 func SaveCodexCLIAuth(path string, tokens CodexTokens, refreshedAt time.Time) error {
+	return saveCodexAuthFile(path, tokens, refreshedAt)
+}
+
+func SaveAphelionCodexAuth(path string, tokens CodexTokens, refreshedAt time.Time) error {
+	return saveCodexAuthFile(path, tokens, refreshedAt)
+}
+
+func saveCodexAuthFile(path string, tokens CodexTokens, refreshedAt time.Time) error {
 	access := strings.TrimSpace(tokens.AccessToken)
 	refresh := strings.TrimSpace(tokens.RefreshToken)
 	accountID := strings.TrimSpace(tokens.AccountID)

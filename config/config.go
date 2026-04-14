@@ -90,6 +90,7 @@ type GovernorConfig struct {
 
 type GovernorCodexConfig struct {
 	AuthSource    string `toml:"auth_source"`
+	AuthPath      string `toml:"auth_path"`
 	CodexHome     string `toml:"codex_home"`
 	BaseURL       string `toml:"base_url"`
 	ContextWindow int    `toml:"context_window"`

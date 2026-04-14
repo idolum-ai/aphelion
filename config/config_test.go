@@ -332,11 +332,12 @@ approved_user_ids = [456]
 backend = "native"
 native_provider = "anthropic"
 
-[governor.codex]
-auth_source = "codex_cli"
-codex_home = "~/codex-home"
-base_url = "https://chatgpt.com/backend-api"
-context_window = 180000
+	[governor.codex]
+	auth_source = "codex_cli"
+	auth_path = "/var/lib/aphelion/codex-auth.json"
+	codex_home = "~/codex-home"
+	base_url = "https://chatgpt.com/backend-api"
+	context_window = 180000
 
 [providers.anthropic]
 api_key = "sk-ant-test"
@@ -487,6 +488,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Governor.Codex.AuthSource != "codex_cli" {
 		t.Fatalf("governor.codex.auth_source = %q, want codex_cli", cfg.Governor.Codex.AuthSource)
+	}
+	if cfg.Governor.Codex.AuthPath != "/var/lib/aphelion/codex-auth.json" {
+		t.Fatalf("governor.codex.auth_path = %q, want /var/lib/aphelion/codex-auth.json", cfg.Governor.Codex.AuthPath)
 	}
 	if cfg.Governor.Codex.ContextWindow != 180000 {
 		t.Fatalf("governor.codex.context_window = %d, want 180000", cfg.Governor.Codex.ContextWindow)
