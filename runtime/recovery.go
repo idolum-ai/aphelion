@@ -85,7 +85,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	}
 
 	requestText := renderStartupRecoveryRequest(runs)
-	monitor := r.startTurnMonitor(maintenanceKey, session.TurnRunKindRecovery, requestText, nil)
+	monitor := r.startTurnMonitor(maintenanceKey, session.TurnRunKindRecovery, requestText, nil, nil)
 	defer monitor.Finish(ctx, err)
 
 	input := make([]agent.Message, 0, len(history)+2)

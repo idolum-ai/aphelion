@@ -28,18 +28,22 @@ type GovernorRequest struct {
 }
 
 type FaceRequest struct {
-	GovernorName    string
-	FaceName        string
-	Channel         string
-	Style           string
-	PrincipalRole   string
-	FloorText       string
-	MaterialFloor   core.MaterialPacket
-	LatestUserInput string
-	StableFiles     []workspace.LoadedFile
-	DynamicFiles    []workspace.LoadedFile
-	Mode            string
-	Runtime         RuntimeAwareness
+	GovernorName      string
+	FaceName          string
+	Channel           string
+	Mode              string
+	Style             string
+	PrincipalRole     string
+	FloorText         string
+	MaterialFloor     core.MaterialPacket
+	LatestUserInput   string
+	CandidateReply    string
+	RepairNotes       []string
+	PriorProposal     string
+	BrokerageFeedback string
+	StableFiles       []workspace.LoadedFile
+	DynamicFiles      []workspace.LoadedFile
+	Runtime           RuntimeAwareness
 }
 
 type BrokerageArtifact struct {
@@ -192,6 +196,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"Do not turn this into a form unless the moment genuinely calls for it. A short bounded note is enough.",
 			"When a hidden input is materially shaping your push and runtime awareness says one is active, name it plainly.",
 			"Focus on what the user is actually reaching for, how ready the situation is for action, and whether the user should be stirred, steadied, questioned, answered, declined, or left alone for now.",
+			"When prior brokerage feedback is present, revise toward a negotiated posture instead of merely repeating the previous note.",
 			"Be concrete and brief. Do not claim authority. Do not describe hidden mechanics. Do not draft the eventual answer.",
 		)
 	case "proposal":
@@ -203,6 +208,15 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"When a hidden input is materially shaping your note and runtime awareness says one is active, name it briefly.",
 			"Notice what the user is reaching for, not just what they said. If something feels off or important beneath the surface, name it.",
 			"Be brief. Write only when your push would materially change the turn. Return nothing if there is no useful guidance.",
+		)
+	case "repair":
+		intro = append(intro,
+			fmt.Sprintf("Act as the one the user is actually talking to. Speak in a %s way, with ownership and initiative.", style),
+			"You are repairing a candidate reply that exposed internal mechanics, contradicted delivery, or otherwise broke the visible relationship surface.",
+			"Return one direct user-facing reply only.",
+			"Do not mention Aphelion, the governor, deferral, or handoff between layers.",
+			"If media is being delivered, give it a concise face-owned narration or caption instead of leaving the delivery blind.",
+			"Keep the repaired reply inside the governor-authored boundary. Do not invent unapproved actions or commitments.",
 		)
 	default:
 		intro = append(intro,
@@ -235,6 +249,42 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		})
 	} else {
 		markLastStableCacheBreakpoint(parts)
+	}
+
+	if mode == "repair" {
+		if candidate := strings.TrimSpace(req.CandidateReply); candidate != "" {
+			parts = append(parts, agent.SystemBlock{
+				Text: "## Candidate Reply To Repair\n" + candidate,
+			})
+		}
+		if len(req.RepairNotes) > 0 {
+			lines := []string{"## Repair Constraints"}
+			for _, note := range req.RepairNotes {
+				note = strings.TrimSpace(note)
+				if note == "" {
+					continue
+				}
+				lines = append(lines, "- "+note)
+			}
+			if len(lines) > 1 {
+				parts = append(parts, agent.SystemBlock{
+					Text: strings.Join(lines, "\n"),
+				})
+			}
+		}
+	}
+
+	if mode == "brokerage" {
+		if prior := strings.TrimSpace(req.PriorProposal); prior != "" {
+			parts = append(parts, agent.SystemBlock{
+				Text: "## Prior Brokerage Proposal\n" + prior,
+			})
+		}
+		if feedback := strings.TrimSpace(req.BrokerageFeedback); feedback != "" {
+			parts = append(parts, agent.SystemBlock{
+				Text: "## Aphelion Ratification Feedback\n" + feedback,
+			})
+		}
 	}
 
 	if mode != "proposal" && mode != "brokerage" {

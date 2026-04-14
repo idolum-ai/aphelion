@@ -37,9 +37,14 @@ type fakeProvider struct {
 	reflectionReplyText string
 	compactionReplyText string
 	proposalReplyText   string
+	proposalReplies     []string
 	brokerageReplyText  string
+	brokerageReplies    []string
 	planningReplyText   string
+	planningReplies     []string
 	faceReplyText       string
+	repairReplyText     string
+	repairReplies       []string
 	streamFaceText      string
 	faceErr             error
 	proposalErr         error
@@ -87,9 +92,14 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 
 	isFaceCall := len(messages) > 0 && messages[0].Role == "system" && strings.Contains(messages[0].Content, "the face of")
 	if isFaceCall {
+		if strings.Contains(messages[0].Content, "- mode: repair") {
+			f.seenFaceSystem = append(f.seenFaceSystem, messages[0].Content)
+			reply := strings.TrimSpace(nextFakeReply(&f.repairReplies, f.repairReplyText))
+			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
+		}
 		if strings.Contains(messages[0].Content, "- mode: brokerage") {
 			f.seenBrokerageSystem = append(f.seenBrokerageSystem, messages[0].Content)
-			reply := strings.TrimSpace(f.brokerageReplyText)
+			reply := strings.TrimSpace(nextFakeReply(&f.brokerageReplies, f.brokerageReplyText))
 			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 		}
 		if strings.Contains(messages[0].Content, "- mode: proposal") {
@@ -97,7 +107,7 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 			if f.proposalErr != nil {
 				return nil, f.proposalErr
 			}
-			reply := strings.TrimSpace(f.proposalReplyText)
+			reply := strings.TrimSpace(nextFakeReply(&f.proposalReplies, f.proposalReplyText))
 			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 		}
 		f.seenFaceSystem = append(f.seenFaceSystem, messages[0].Content)
@@ -139,7 +149,7 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 		}
 		if strings.Contains(userText, "Before the main turn executes, ratify how this turn should proceed.") {
 			f.seenPlanningSystem = append(f.seenPlanningSystem, strings.Join(systemParts, "\n\n"))
-			reply := strings.TrimSpace(f.planningReplyText)
+			reply := strings.TrimSpace(nextFakeReply(&f.planningReplies, f.planningReplyText))
 			if reply == "" {
 				reply = "MODE: answer_now\nRATIFICATION: accept\nPLAN:\n- Answer directly."
 			}
@@ -204,6 +214,15 @@ func (f *fakeProvider) Stream(_ context.Context, messages []agent.Message, _ []a
 		}
 	}
 	return &agent.Response{Content: reply, Thinking: f.thinkingText, Usage: f.responseUsage}, nil
+}
+
+func nextFakeReply(queue *[]string, fallback string) string {
+	if queue == nil || len(*queue) == 0 {
+		return fallback
+	}
+	reply := (*queue)[0]
+	*queue = append((*queue)[:0], (*queue)[1:]...)
+	return reply
 }
 
 type fakeSender struct {
@@ -840,8 +859,14 @@ func TestHandleInboundUsesBrokerageForStrategicTurn(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.brokerageReplyText = "MODE: inspect_then_answer\nWHY: Ground the feature ideas in the repo.\nPUSH:\n- Inspect first.\n- Keep the answer concrete."
-	provider.planningReplyText = "MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect the codebase before proposing features.\n- Then reply with prioritized ideas."
+	provider.brokerageReplies = []string{
+		"MODE: inspect_then_answer\nWHY: Ground the feature ideas in the repo.\nPUSH:\n- Inspect first.\n- Keep the answer concrete.",
+		"MODE: answer_now\nWHY: The repo context already supports a direct answer.\nPUSH:\n- Answer directly.\n- Keep it concrete.",
+	}
+	provider.planningReplies = []string{
+		"MODE: inspect_then_answer\nRATIFICATION: adapt\nPLAN:\n- Inspect the codebase before proposing features.\n- Then reply with prioritized ideas.",
+		"MODE: answer_now\nRATIFICATION: accept\nPLAN:\n- Reply with prioritized ideas grounded in the current repo context.",
+	}
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -888,13 +913,13 @@ func TestHandleInboundUsesBrokerageForStrategicTurn(t *testing.T) {
 	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "### Aphelion Ratification Record") {
 		t.Fatalf("negotiated brokerage block missing aphelion ratification record: %q", provider.lastGovernorMsgs[1].Content)
 	}
-	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "inspect_then_answer") {
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "answer_now") {
 		t.Fatalf("negotiated brokerage block missing turn mode: %q", provider.lastGovernorMsgs[1].Content)
 	}
-	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "- ratification: adapt") {
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "- ratification: accept") {
 		t.Fatalf("negotiated brokerage block missing ratification disposition: %q", provider.lastGovernorMsgs[1].Content)
 	}
-	if !strings.Contains(provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1], "- brokerage_ratification: adapt") {
+	if !strings.Contains(provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1], "- brokerage_ratification: accept") {
 		t.Fatalf("governor awareness missing brokerage ratification: %q", provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1])
 	}
 }
@@ -907,8 +932,14 @@ func TestHandleInboundPersistsHiddenInputProvenanceForBrokerageTurn(t *testing.T
 	cfg.Memory.Semantic.Sources = []string{"memory/knowledge.md"}
 	cfg.Memory.Semantic.InteractiveTopK = 5
 	cfg.Memory.Semantic.InteractiveMaxChars = 4000
-	provider.brokerageReplyText = "MODE: inspect_then_answer\nWHY: There is a recurring semantic layer decision hiding under the feature request.\nPUSH:\n- Inspect first.\n- Name the buried blocker."
-	provider.planningReplyText = "MODE: inspect_then_answer\nRATIFICATION: adapt\nSIGNAL_JUDGMENT: confirmed\nPLAN:\n- Inspect the codebase before proposing features.\n- Then answer with prioritized ideas."
+	provider.brokerageReplies = []string{
+		"MODE: inspect_then_answer\nWHY: There is a recurring semantic layer decision hiding under the feature request.\nPUSH:\n- Inspect first.\n- Name the buried blocker.",
+		"MODE: answer_now\nWHY: The recurring blocker is already visible enough to name directly.\nPUSH:\n- Name the buried blocker plainly.\n- Then answer.",
+	}
+	provider.planningReplies = []string{
+		"MODE: inspect_then_answer\nRATIFICATION: adapt\nSIGNAL_JUDGMENT: confirmed\nPLAN:\n- Inspect the codebase before proposing features.\n- Then answer with prioritized ideas.",
+		"MODE: answer_now\nRATIFICATION: accept\nSIGNAL_JUDGMENT: confirmed\nPLAN:\n- Name the buried blocker.\n- Then answer with prioritized ideas.",
+	}
 
 	if err := os.MkdirAll(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(memory) err = %v", err)
@@ -1143,14 +1174,14 @@ func TestHandleInboundPreservesBrokerageWhenProposalRerunAlsoFails(t *testing.T)
 	if len(provider.lastGovernorMsgs) < 2 {
 		t.Fatalf("lastGovernorMsgs len = %d, want at least 2", len(provider.lastGovernorMsgs))
 	}
-	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "## Idolum Brokerage Proposal") {
-		t.Fatalf("governor input should preserve brokerage framing when proposal rerun fails: %q", provider.lastGovernorMsgs[1].Content)
+	if !strings.Contains(provider.lastGovernorMsgs[1].Content, "## Idolum Proposal") {
+		t.Fatalf("governor input should fail closed to proposal framing when rerun fails: %q", provider.lastGovernorMsgs[1].Content)
 	}
-	if strings.Contains(provider.lastGovernorMsgs[1].Content, "## Idolum Proposal") {
-		t.Fatalf("governor input should not relabel brokerage as proposal when rerun fails: %q", provider.lastGovernorMsgs[1].Content)
+	if strings.Contains(provider.lastGovernorMsgs[1].Content, "## Negotiated Turn Brokerage") {
+		t.Fatalf("governor input should not retain negotiated brokerage after failed convergence: %q", provider.lastGovernorMsgs[1].Content)
 	}
-	if !strings.Contains(provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1], "- brokerage_mode: brokerage") {
-		t.Fatalf("governor awareness should preserve brokerage mode when proposal rerun fails: %q", provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1])
+	if !strings.Contains(provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1], "- brokerage_mode: proposal") {
+		t.Fatalf("governor awareness should fall back to proposal mode when rerun fails: %q", provider.seenGovernorSystem[len(provider.seenGovernorSystem)-1])
 	}
 }
 

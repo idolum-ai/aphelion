@@ -26,12 +26,15 @@ type RenderRequest struct {
 	GovernorName    string
 	FaceName        string
 	Channel         string
+	Mode            string
 	Style           string
 	PrincipalRole   string
 	WorkspaceRoot   string
 	FloorText       string
 	MaterialFloor   core.MaterialPacket
 	LatestUserInput string
+	CandidateReply  string
+	RepairNotes     []string
 	Runtime         prompt.RuntimeAwareness
 }
 
@@ -44,15 +47,17 @@ type StreamRenderer interface {
 }
 
 type ProposalRequest struct {
-	GovernorName    string
-	FaceName        string
-	Channel         string
-	Style           string
-	Mode            string
-	PrincipalRole   string
-	WorkspaceRoot   string
-	LatestUserInput string
-	Runtime         prompt.RuntimeAwareness
+	GovernorName      string
+	FaceName          string
+	Channel           string
+	Style             string
+	Mode              string
+	PrincipalRole     string
+	WorkspaceRoot     string
+	LatestUserInput   string
+	PriorProposal     string
+	BrokerageFeedback string
+	Runtime           prompt.RuntimeAwareness
 }
 
 type Proposer interface {

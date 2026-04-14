@@ -68,6 +68,8 @@ type Runtime struct {
 
 	scopeResolver     *sandbox.Resolver
 	durableGroupChild durableGroupChildExecutor
+	constitutionGate  TurnConstitutionGate
+	turnAuditSink     func(TurnAudit)
 	sessionMu         sync.Mutex
 	sessionLocks      map[string]*sync.Mutex
 	faceModelsMu      sync.Mutex
@@ -304,8 +306,27 @@ func New(
 		recipeState:         recipeState,
 		scopeResolver:       scopeResolver,
 		durableGroupChild:   newSandboxDurableGroupChildExecutor(cfg),
+		constitutionGate:    DefaultTurnConstitutionGate(),
 		sessionLocks:        make(map[string]*sync.Mutex),
 	}, nil
+}
+
+func (r *Runtime) SetTurnAuditSink(sink func(TurnAudit)) {
+	if r == nil {
+		return
+	}
+	r.turnAuditSink = sink
+}
+
+func (r *Runtime) SetConstitutionGate(gate TurnConstitutionGate) {
+	if r == nil {
+		return
+	}
+	if gate == nil {
+		r.constitutionGate = DefaultTurnConstitutionGate()
+		return
+	}
+	r.constitutionGate = gate
 }
 
 func normalizeRuntimeConfig(cfg *config.Config) *config.Config {

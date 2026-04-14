@@ -51,6 +51,8 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if err != nil {
 		return nil, err
 	}
+	audit := newTurnAuditRecorder(key, "telegram", string(actor.Role), prepared.LedgerText)
+	defer r.emitTurnAudit(audit)
 	facePolicy := decideInteractiveFacePolicy(sess, prepared.LedgerText)
 	useMaterialFloor := shouldUseMaterialFloorContract(r.faceBackend, facePolicy)
 	exec := r.executionForTurn(prepared)
@@ -69,20 +71,22 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	brokerage := turnBrokerage{}
 	extraUsage := core.TokenUsage{}
 	currentFaceModel := r.currentFaceRenderer()
-	requestFaceNote := func(mode string, awareness prompt.RuntimeAwareness) (string, core.TokenUsage, error) {
+	requestFaceNote := func(mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error) {
 		proposer, ok := currentFaceModel.(face.Proposer)
 		if !ok || r.faceBackend == face.BackendFloorFallback {
 			return "", core.TokenUsage{}, nil
 		}
 		proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
-			GovernorName:    prompt.DefaultGovernorName,
-			FaceName:        face.DefaultFaceName,
-			Channel:         "telegram",
-			Mode:            mode,
-			PrincipalRole:   string(actor.Role),
-			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			LatestUserInput: prepared.LedgerText,
-			Runtime:         awareness,
+			GovernorName:      prompt.DefaultGovernorName,
+			FaceName:          face.DefaultFaceName,
+			Channel:           "telegram",
+			Mode:              mode,
+			PrincipalRole:     string(actor.Role),
+			WorkspaceRoot:     faceWorkspaceRoot(scope),
+			LatestUserInput:   prepared.LedgerText,
+			PriorProposal:     priorProposal,
+			BrokerageFeedback: feedback,
+			Runtime:           awareness,
 		})
 		if proposalErr != nil {
 			return "", core.TokenUsage{}, proposalErr
@@ -92,7 +96,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if facePolicy.Brokerage {
 		faceProposalAwareness := baseGovernorAwareness
 		faceProposalAwareness.ArtifactMode = "scene"
-		proposal, usage, proposalErr := requestFaceNote("brokerage", r.withBrokerageAwareness(faceProposalAwareness, turnBrokerage{Active: true, Mode: "brokerage"}))
+		proposal, usage, proposalErr := requestFaceNote("brokerage", r.withBrokerageAwareness(faceProposalAwareness, turnBrokerage{Active: true, Mode: "brokerage"}), "", "")
 		if proposalErr != nil {
 			log.Printf("WARN idolum brokerage proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
 			facePolicy.Brokerage = false
@@ -108,7 +112,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if !brokerage.Active && facePolicy.Proposal {
 		faceProposalAwareness := baseGovernorAwareness
 		faceProposalAwareness.ArtifactMode = "scene"
-		proposal, usage, proposalErr := requestFaceNote("proposal", faceProposalAwareness)
+		proposal, usage, proposalErr := requestFaceNote("proposal", faceProposalAwareness, "", "")
 		if proposalErr != nil {
 			log.Printf("WARN idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
 		} else {
@@ -137,31 +141,10 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return nil, fmt.Errorf("maybe compact session: %w", err)
 	}
 	if brokerage.Active && brokerage.Mode == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" {
-		updated, usage, ratifyErr := r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, prepared.UserText, brokerage)
+		updated, usage := r.convergeTurnBrokerage(ctx, exec, baseGovernorAwareness, systemBlocks, history, prepared.UserText, brokerage, requestFaceNote, audit)
 		extraUsage = addTokenUsage(extraUsage, usage)
-		if ratifyErr != nil {
-			log.Printf("WARN turn brokerage ratification failed backend=%s err=%v; rerunning plain proposal path", exec.Backend, ratifyErr)
-			brokerage.Ratification = ""
-			brokerage.SignalJudgment = ""
-			brokerage.RatificationRecord = ""
-			brokerage.RatifiedSteps = nil
-			brokerage.RatifiedTurnMode = ""
-			proposal, proposalUsage, proposalErr := requestFaceNote("proposal", baseGovernorAwareness)
-			if proposalErr != nil {
-				log.Printf("WARN idolum proposal rerun failed backend=%s err=%v; preserving brokerage framing", r.faceBackend, proposalErr)
-			} else {
-				brokerage.IdolumNote = proposal
-				brokerage.Active = brokerage.IdolumNote != ""
-				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
-				brokerage.SuggestedTurnMode = ""
-				brokerage.Ratification = ""
-				brokerage.SignalJudgment = ""
-				brokerage.RatificationRecord = ""
-				brokerage.RatifiedSteps = nil
-				extraUsage = addTokenUsage(extraUsage, proposalUsage)
-			}
-		} else {
-			brokerage = updated
+		brokerage = updated
+		if brokerage.Mode == "brokerage" && brokerage.Ratification == "accept" {
 			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}
 		governorAwareness = r.withPlanAwareness(r.withBrokerageAwareness(governorAwareness, brokerage), sess.PlanState)
@@ -170,8 +153,8 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
 		sess.SystemPrompt = systemPrompt
 	}
-	progress := r.newToolProgressReporter(msg)
-	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, prepared.LedgerText, progress)
+	progress := r.newToolProgressReporter(msg, audit)
+	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, prepared.LedgerText, progress, audit)
 	defer monitor.Finish(ctx, err)
 	tools = monitor.observeTools(tools)
 
@@ -199,6 +182,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 
 	result.Text, result.Media = extractOutboundReplyMedia(scope, result.Text, result.Media)
+	audit.RecordGovernorReply(result.Text, result.Media)
 	sess.TurnCount++
 	mediaOnlyReply := len(result.Media) > 0 && strings.TrimSpace(result.Text) == ""
 	materialFloor := core.MaterialPacket{}
@@ -302,6 +286,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			}
 		}
 	}
+	replyText = r.applyTurnConstitution(ctx, scope, "telegram", string(actor.Role), prepared.LedgerText, currentFaceModel, faceAwareness, materialFloor, floorText, replyText, result.Media, audit)
 	result.TokenUsage = addTokenUsage(result.TokenUsage, extraUsage)
 
 	newMessages, err := session.NewMessagesForTurn(prepared.LedgerText, outHistory[len(input):], sess.TurnCount)
@@ -329,6 +314,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			return result, fmt.Errorf("send outbound reply: %w", err)
 		}
 	}
+	audit.RecordFinalReply(replyText, result.Media, outboundType)
 	if err := r.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
 		return result, fmt.Errorf("record outbound reply: %w", err)
 	}

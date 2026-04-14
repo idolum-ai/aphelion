@@ -126,7 +126,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	}
 
 	requestText := renderHeartbeatRequest(targetChatID, events, deliver, hiddenInputs)
-	monitor := r.startTurnMonitor(maintenanceKey, session.TurnRunKindHeartbeat, requestText, nil)
+	monitor := r.startTurnMonitor(maintenanceKey, session.TurnRunKindHeartbeat, requestText, nil, nil)
 	defer monitor.Finish(ctx, err)
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {

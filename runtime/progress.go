@@ -57,13 +57,15 @@ type turnMonitor struct {
 	key      session.SessionKey
 	runID    int64
 	progress *toolProgressReporter
+	audit    *turnAuditRecorder
 }
 
-func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunKind, requestText string, progress *toolProgressReporter) *turnMonitor {
+func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunKind, requestText string, progress *toolProgressReporter, audit *turnAuditRecorder) *turnMonitor {
 	monitor := &turnMonitor{
 		runtime:  r,
 		key:      key,
 		progress: progress,
+		audit:    audit,
 	}
 
 	run, err := r.store.BeginTurnRun(key, kind, requestText)
@@ -91,6 +93,9 @@ func (m *turnMonitor) observeTools(base agent.ToolRegistry) agent.ToolRegistry {
 
 func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.RawMessage) {
 	preview := toolInputPreview(input)
+	if m.audit != nil {
+		m.audit.ToolStarted(name, preview)
+	}
 	if m.runID != 0 {
 		if err := m.runtime.store.NoteTurnRunToolStart(m.runID, name, preview); err != nil {
 			log.Printf("WARN note turn run tool start id=%d tool=%s err=%v", m.runID, name, err)
@@ -106,6 +111,9 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	errorText := ""
 	if err != nil {
 		errorText = trimError(err.Error())
+	}
+	if m.audit != nil {
+		m.audit.ToolFinished(name, resultPreview, errorText)
 	}
 	if m.runID != 0 {
 		if storeErr := m.runtime.store.NoteTurnRunToolFinish(m.runID, resultPreview, errorText); storeErr != nil {
@@ -150,6 +158,8 @@ type toolProgressReporter struct {
 	entries         []toolProgressEntry
 	seenKeys        map[string]struct{}
 	recordMessageID func(messageID int64)
+	validateText    func(string) (string, []ConstitutionViolation)
+	audit           *turnAuditRecorder
 }
 
 type toolProgressEntry struct {
@@ -158,7 +168,7 @@ type toolProgressEntry struct {
 	Count int
 }
 
-func (r *Runtime) newToolProgressReporter(msg core.InboundMessage) *toolProgressReporter {
+func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, audit *turnAuditRecorder) *toolProgressReporter {
 	mode := strings.ToLower(strings.TrimSpace(r.toolProgressMode))
 	if mode == "" {
 		mode = "all"
@@ -176,6 +186,7 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage) *toolProgress
 		window:   r.toolProgressWindow,
 		cleanup:  r.toolProgressCleanup,
 		seenKeys: make(map[string]struct{}),
+		audit:    audit,
 	}
 	if reporter.style == "" {
 		reporter.style = "semantic"
@@ -189,6 +200,7 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage) *toolProgress
 	if deleter, ok := r.outbound.(messageDeleter); ok {
 		reporter.deleter = deleter
 	}
+	reporter.validateText = r.filterProgressText
 	return reporter
 }
 
@@ -215,6 +227,16 @@ func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, inp
 	}
 
 	text := p.render()
+	if p.validateText != nil {
+		filtered, violations := p.validateText(text)
+		if p.audit != nil {
+			p.audit.RecordViolations(violations)
+		}
+		text = filtered
+	}
+	if p.audit != nil {
+		p.audit.RecordProgress(text)
+	}
 	if p.messageID == 0 {
 		msgID, err := p.sender.SendMessage(ctx, core.OutboundMessage{
 			ChatID:  p.chatID,
@@ -250,6 +272,20 @@ func (p *toolProgressReporter) Finish(ctx context.Context) {
 	if err := p.deleter.DeleteMessage(ctx, p.chatID, p.messageID); err != nil {
 		log.Printf("WARN delete tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 	}
+}
+
+func (r *Runtime) filterProgressText(text string) (string, []ConstitutionViolation) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || r == nil || r.constitutionGate == nil {
+		return trimmed, nil
+	}
+	violations := r.constitutionGate.ValidateProgressText(trimmed)
+	if len(violations) == 0 {
+		return trimmed, nil
+	}
+	return face.RenderToolProgress(face.ToolProgressNotice{
+		Entries: []face.ToolProgressEntry{{Text: "Working"}},
+	}), violations
 }
 
 func (p *toolProgressReporter) render() string {

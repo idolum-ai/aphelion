@@ -150,6 +150,8 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	if err != nil {
 		return nil, err
 	}
+	audit := newTurnAuditRecorder(key, "telegram_group", "durable_agent", prepared.LedgerText)
+	defer r.emitTurnAudit(audit)
 
 	facePolicy := decideInteractiveFacePolicy(sess, prepared.LedgerText)
 	useMaterialFloor := shouldUseMaterialFloorContract(r.faceBackend, facePolicy)
@@ -173,20 +175,22 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	brokerage := turnBrokerage{}
 	extraUsage := core.TokenUsage{}
 	currentFaceModel := r.currentFaceRenderer()
-	requestFaceNote := func(mode string, awareness prompt.RuntimeAwareness) (string, core.TokenUsage, error) {
+	requestFaceNote := func(mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error) {
 		proposer, ok := currentFaceModel.(face.Proposer)
 		if !ok || r.faceBackend == face.BackendFloorFallback {
 			return "", core.TokenUsage{}, nil
 		}
 		proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
-			GovernorName:    prompt.DefaultGovernorName,
-			FaceName:        face.DefaultFaceName,
-			Channel:         "telegram_group",
-			Mode:            mode,
-			PrincipalRole:   "durable_agent",
-			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			LatestUserInput: prepared.LedgerText,
-			Runtime:         awareness,
+			GovernorName:      prompt.DefaultGovernorName,
+			FaceName:          face.DefaultFaceName,
+			Channel:           "telegram_group",
+			Mode:              mode,
+			PrincipalRole:     "durable_agent",
+			WorkspaceRoot:     faceWorkspaceRoot(scope),
+			LatestUserInput:   prepared.LedgerText,
+			PriorProposal:     priorProposal,
+			BrokerageFeedback: feedback,
+			Runtime:           awareness,
 		})
 		if proposalErr != nil {
 			return "", core.TokenUsage{}, proposalErr
@@ -197,7 +201,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	if facePolicy.Brokerage {
 		faceProposalAwareness := baseGovernorAwareness
 		faceProposalAwareness.ArtifactMode = "scene"
-		proposal, usage, proposalErr := requestFaceNote("brokerage", r.withBrokerageAwareness(faceProposalAwareness, turnBrokerage{Active: true, Mode: "brokerage"}))
+		proposal, usage, proposalErr := requestFaceNote("brokerage", r.withBrokerageAwareness(faceProposalAwareness, turnBrokerage{Active: true, Mode: "brokerage"}), "", "")
 		if proposalErr != nil {
 			log.Printf("WARN durable agent brokerage proposal failed backend=%s agent_id=%s err=%v", r.faceBackend, registered.AgentID, proposalErr)
 			facePolicy.Brokerage = false
@@ -213,7 +217,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	if !brokerage.Active && facePolicy.Proposal {
 		faceProposalAwareness := baseGovernorAwareness
 		faceProposalAwareness.ArtifactMode = "scene"
-		proposal, usage, proposalErr := requestFaceNote("proposal", faceProposalAwareness)
+		proposal, usage, proposalErr := requestFaceNote("proposal", faceProposalAwareness, "", "")
 		if proposalErr != nil {
 			log.Printf("WARN durable agent proposal failed backend=%s agent_id=%s err=%v", r.faceBackend, registered.AgentID, proposalErr)
 		} else {
@@ -243,27 +247,10 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		return nil, fmt.Errorf("maybe compact session: %w", err)
 	}
 	if brokerage.Active && brokerage.Mode == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" {
-		updated, usage, ratifyErr := r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, prepared.UserText, brokerage)
+		updated, usage := r.convergeTurnBrokerage(ctx, exec, baseGovernorAwareness, systemBlocks, history, prepared.UserText, brokerage, requestFaceNote, audit)
 		extraUsage = addTokenUsage(extraUsage, usage)
-		if ratifyErr != nil {
-			log.Printf("WARN durable agent brokerage ratification failed backend=%s agent_id=%s err=%v; rerunning plain proposal path", exec.Backend, registered.AgentID, ratifyErr)
-			brokerage.Ratification = ""
-			brokerage.SignalJudgment = ""
-			brokerage.RatificationRecord = ""
-			brokerage.RatifiedSteps = nil
-			brokerage.RatifiedTurnMode = ""
-			proposal, proposalUsage, proposalErr := requestFaceNote("proposal", baseGovernorAwareness)
-			if proposalErr != nil {
-				log.Printf("WARN durable agent proposal rerun failed backend=%s agent_id=%s err=%v; preserving brokerage framing", r.faceBackend, registered.AgentID, proposalErr)
-			} else {
-				brokerage.IdolumNote = proposal
-				brokerage.Active = brokerage.IdolumNote != ""
-				brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
-				brokerage.SuggestedTurnMode = ""
-				extraUsage = addTokenUsage(extraUsage, proposalUsage)
-			}
-		} else {
-			brokerage = updated
+		brokerage = updated
+		if brokerage.Mode == "brokerage" && brokerage.Ratification == "accept" {
 			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}
 		governorAwareness = r.withPlanAwareness(r.withBrokerageAwareness(governorAwareness, brokerage), sess.PlanState)
@@ -273,11 +260,11 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		sess.SystemPrompt = systemPrompt
 	}
 
-	progress := r.newToolProgressReporter(msg)
+	progress := r.newToolProgressReporter(msg, audit)
 	if !opts.DeliverReply {
 		progress = nil
 	}
-	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, prepared.LedgerText, progress)
+	monitor := r.startTurnMonitor(key, session.TurnRunKindInteractive, prepared.LedgerText, progress, audit)
 	defer monitor.Finish(ctx, err)
 
 	input := make([]agent.Message, 0, len(history)+3)
@@ -304,6 +291,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	}
 
 	result.Text, result.Media = extractOutboundReplyMedia(scope, result.Text, result.Media)
+	audit.RecordGovernorReply(result.Text, result.Media)
 	mediaOnlyReply := len(result.Media) > 0 && strings.TrimSpace(result.Text) == ""
 	materialFloor := core.MaterialPacket{}
 	floorText := ""
@@ -401,6 +389,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 			}
 		}
 	}
+	replyText = r.applyTurnConstitution(ctx, scope, "telegram_group", "durable_agent", prepared.LedgerText, currentFaceModel, faceAwareness, materialFloor, floorText, replyText, result.Media, audit)
 	result.TokenUsage = addTokenUsage(result.TokenUsage, extraUsage)
 
 	newMessages, err := session.NewMessagesForTurn(prepared.LedgerText, outHistory[len(input):], sess.TurnCount)
@@ -427,6 +416,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 			return nil, fmt.Errorf("send durable group reply: %w", err)
 		}
 	}
+	audit.RecordFinalReply(replyText, result.Media, outboundType)
 	if opts.DeliverReply && outboundID != 0 {
 		if err := r.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
 			return nil, fmt.Errorf("record durable group outbound reply: %w", err)

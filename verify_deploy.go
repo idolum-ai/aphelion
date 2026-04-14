@@ -25,7 +25,7 @@ import (
 const (
 	verifyDeployDefaultTimeout = 2 * time.Minute
 	verifyDeployBlessingPrefix = "DEPLOYMENT VERIFIED:"
-	verifyDeployProbePrompt    = "This is a deployment verification probe. If Aphelion and Idolum are both functioning, reply in one short sentence that starts exactly with \"DEPLOYMENT VERIFIED:\" and mentions both governor and Idolum. Do not explain internal details unless something is broken."
+	verifyDeployProbePrompt    = "This is a deployment verification probe. If the system is functioning, reply in one short sentence that starts exactly with \"DEPLOYMENT VERIFIED:\" and confirms you are ready. Do not mention internal layers or hidden mechanics unless something is broken."
 )
 
 type deployProbeStatus string

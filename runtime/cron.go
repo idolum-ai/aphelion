@@ -77,7 +77,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	}
 
 	requestText := renderCronRequest(job)
-	monitor := r.startTurnMonitor(key, session.TurnRunKindCron, requestText, nil)
+	monitor := r.startTurnMonitor(key, session.TurnRunKindCron, requestText, nil, nil)
 	defer monitor.Finish(ctx, err)
 	input := make([]agent.Message, 0, len(history)+2)
 	if systemPrompt != "" {

@@ -19,6 +19,7 @@ const (
 	turnModeAskThenWait      = "ask_then_wait"
 	turnModeDecline          = "decline"
 	turnModeSilent           = "silent"
+	maxBrokerageRounds       = 3
 )
 
 type turnBrokerage struct {
@@ -268,4 +269,109 @@ func maybeSeedPlanFromBrokerage(current session.PlanState, brokerage turnBrokera
 		Explanation: explanation,
 		Steps:       steps,
 	})
+}
+
+type brokerageFaceRequester func(mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error)
+
+func (r *Runtime) convergeTurnBrokerage(
+	ctx context.Context,
+	exec governorExecution,
+	baseAwareness prompt.RuntimeAwareness,
+	systemBlocks []agent.SystemBlock,
+	history []agent.Message,
+	userText string,
+	brokerage turnBrokerage,
+	requestFaceNote brokerageFaceRequester,
+	audit *turnAuditRecorder,
+) (turnBrokerage, core.TokenUsage) {
+	if strings.TrimSpace(brokerage.IdolumNote) == "" || brokerage.Mode != "brokerage" {
+		return brokerage, core.TokenUsage{}
+	}
+
+	totalUsage := core.TokenUsage{}
+	for round := 1; round <= maxBrokerageRounds; round++ {
+		updated, usage, ratifyErr := r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, userText, brokerage)
+		totalUsage = addTokenUsage(totalUsage, usage)
+		roundAudit := BrokerageRoundAudit{
+			Round:             round,
+			Mode:              brokerage.Mode,
+			IdolumNote:        strings.TrimSpace(brokerage.IdolumNote),
+			SuggestedTurnMode: strings.TrimSpace(brokerage.SuggestedTurnMode),
+		}
+		if ratifyErr != nil {
+			roundAudit.Error = ratifyErr.Error()
+			if audit != nil {
+				audit.RecordBrokerageRound(roundAudit)
+				audit.MarkBrokerageConverged(false)
+			}
+			return r.fallbackToPlainProposal(ctx, baseAwareness, brokerage, requestFaceNote, totalUsage)
+		}
+
+		brokerage = updated
+		roundAudit.Ratification = strings.TrimSpace(brokerage.Ratification)
+		roundAudit.RatifiedTurnMode = strings.TrimSpace(brokerage.RatifiedTurnMode)
+		roundAudit.SignalJudgment = strings.TrimSpace(brokerage.SignalJudgment)
+		roundAudit.RatifiedSteps = append([]string(nil), brokerage.RatifiedSteps...)
+		if audit != nil {
+			audit.RecordBrokerageRound(roundAudit)
+		}
+		if brokerage.Ratification == "accept" {
+			if audit != nil {
+				audit.MarkBrokerageConverged(true)
+			}
+			return brokerage, totalUsage
+		}
+		if round == maxBrokerageRounds {
+			if audit != nil {
+				audit.MarkBrokerageConverged(false)
+			}
+			return r.fallbackToPlainProposal(ctx, baseAwareness, brokerage, requestFaceNote, totalUsage)
+		}
+
+		reviseAwareness := r.withBrokerageAwareness(baseAwareness, brokerage)
+		reviseAwareness.ArtifactMode = "scene"
+		revised, proposalUsage, proposalErr := requestFaceNote("brokerage", reviseAwareness, brokerage.IdolumNote, brokerage.RatificationRecord)
+		totalUsage = addTokenUsage(totalUsage, proposalUsage)
+		if proposalErr != nil || strings.TrimSpace(revised) == "" {
+			if audit != nil {
+				audit.MarkBrokerageConverged(false)
+			}
+			return r.fallbackToPlainProposal(ctx, baseAwareness, brokerage, requestFaceNote, totalUsage)
+		}
+		brokerage.IdolumNote = strings.TrimSpace(revised)
+		brokerage.SuggestedTurnMode = parseBrokerageMode(revised)
+		brokerage.Ratification = ""
+		brokerage.SignalJudgment = ""
+		brokerage.RatificationRecord = ""
+		brokerage.RatifiedSteps = nil
+		brokerage.RatifiedTurnMode = ""
+	}
+	if audit != nil {
+		audit.MarkBrokerageConverged(false)
+	}
+	return brokerage, totalUsage
+}
+
+func (r *Runtime) fallbackToPlainProposal(
+	ctx context.Context,
+	baseAwareness prompt.RuntimeAwareness,
+	brokerage turnBrokerage,
+	requestFaceNote brokerageFaceRequester,
+	currentUsage core.TokenUsage,
+) (turnBrokerage, core.TokenUsage) {
+	brokerage.Ratification = ""
+	brokerage.SignalJudgment = ""
+	brokerage.RatificationRecord = ""
+	brokerage.RatifiedSteps = nil
+	brokerage.RatifiedTurnMode = ""
+	brokerage.SuggestedTurnMode = ""
+
+	proposal, proposalUsage, proposalErr := requestFaceNote("proposal", baseAwareness, "", "")
+	currentUsage = addTokenUsage(currentUsage, proposalUsage)
+	if proposalErr == nil {
+		brokerage.IdolumNote = strings.TrimSpace(proposal)
+	}
+	brokerage.Active = strings.TrimSpace(brokerage.IdolumNote) != ""
+	brokerage.Mode = brokerageModeName(brokerage.Active, "proposal")
+	return brokerage, currentUsage
 }
