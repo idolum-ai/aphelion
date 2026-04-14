@@ -41,7 +41,7 @@ func TestCodexCompleteTextUsesResponsesProtocol(t *testing.T) {
 			t.Fatalf("model = %#v, want %q", payload["model"], defaultCodexModel)
 		}
 
-		assertStreamRequest(t, payload)
+		assertStreamRequest(t, payload, false)
 		writeSSE(t, w,
 			sseEvent("response.output_text.delta", map[string]any{
 				"type":  "response.output_text.delta",
@@ -153,7 +153,7 @@ func TestCodexCompleteToolCallViaResponsesOutput(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		assertStreamRequest(t, payload)
+		assertStreamRequest(t, payload, false)
 		writeSSE(t, w,
 			sseEvent("response.output_item.done", map[string]any{
 				"type": "response.output_item.done",
@@ -209,7 +209,7 @@ func TestCodexCompleteMapsAssistantHistoryAsOutputText(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		assertStreamRequest(t, payload)
+		assertStreamRequest(t, payload, false)
 		input, ok := payload["input"].([]any)
 		if !ok || len(input) < 2 {
 			t.Fatalf("input = %#v, want at least user and assistant items", payload["input"])
@@ -730,10 +730,11 @@ func TestCodexCompleteContinuesIncompleteResponses(t *testing.T) {
 	})
 
 	client, err := NewCodex(CodexOptions{
-		BaseURL:     "https://chatgpt.com/backend-api",
-		AccessToken: "secret-token",
-		AccountID:   "acct-123",
-		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+		BaseURL:        "https://chatgpt.com/backend-api",
+		AccessToken:    "secret-token",
+		AccountID:      "acct-123",
+		StoreResponses: true,
+		HTTPClient:     &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
 		t.Fatalf("NewCodex() err = %v", err)
@@ -799,10 +800,11 @@ func TestCodexCompleteContinuesWhenStreamClosesAfterResponseCreated(t *testing.T
 	})
 
 	client, err := NewCodex(CodexOptions{
-		BaseURL:     "https://chatgpt.com/backend-api",
-		AccessToken: "secret-token",
-		AccountID:   "acct-123",
-		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+		BaseURL:        "https://chatgpt.com/backend-api",
+		AccessToken:    "secret-token",
+		AccountID:      "acct-123",
+		StoreResponses: true,
+		HTTPClient:     &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
 		t.Fatalf("NewCodex() err = %v", err)
@@ -845,10 +847,11 @@ func TestCodexCompleteUsesPreviousResponseIDForToolFollowUps(t *testing.T) {
 	})
 
 	client, err := NewCodex(CodexOptions{
-		BaseURL:     "https://chatgpt.com/backend-api",
-		AccessToken: "secret-token",
-		AccountID:   "acct-123",
-		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+		BaseURL:        "https://chatgpt.com/backend-api",
+		AccessToken:    "secret-token",
+		AccountID:      "acct-123",
+		StoreResponses: true,
+		HTTPClient:     &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
 		t.Fatalf("NewCodex() err = %v", err)
@@ -930,10 +933,11 @@ func TestCodexCompleteFallsBackToFullContextWhenPreviousResponseRejected(t *test
 	})
 
 	client, err := NewCodex(CodexOptions{
-		BaseURL:     "https://chatgpt.com/backend-api",
-		AccessToken: "secret-token",
-		AccountID:   "acct-123",
-		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+		BaseURL:        "https://chatgpt.com/backend-api",
+		AccessToken:    "secret-token",
+		AccountID:      "acct-123",
+		StoreResponses: true,
+		HTTPClient:     &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
 		t.Fatalf("NewCodex() err = %v", err)
@@ -962,6 +966,112 @@ func TestCodexCompleteFallsBackToFullContextWhenPreviousResponseRejected(t *test
 	}
 }
 
+func TestCodexCompleteDefaultsToStatelessRequests(t *testing.T) {
+	t.Parallel()
+
+	var seen map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seen = payload
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "stateless",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp-stateless",
+				},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{
+		{Role: "user", Content: "Run ls"},
+		{
+			Role:          "assistant",
+			ToolCalls:     []agent.ToolCall{{ID: "call-1", Name: "exec", Input: json.RawMessage(`{"cmd":"ls"}`)}},
+			ProviderState: json.RawMessage(`{"backend":"codex","response_id":"resp-turn-1"}`),
+		},
+		{Role: "tool", ToolCallID: "call-1", Content: "file.txt"},
+	}, []agent.ToolDef{{
+		Name:       "exec",
+		Parameters: json.RawMessage(`{"type":"object"}`),
+	}})
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "stateless" {
+		t.Fatalf("content = %q, want stateless", resp.Content)
+	}
+	if store, ok := seen["store"].(bool); !ok || store {
+		t.Fatalf("store = %#v, want false", seen["store"])
+	}
+	if _, ok := seen["previous_response_id"]; ok {
+		t.Fatalf("previous_response_id = %#v, want omitted", seen["previous_response_id"])
+	}
+	input, ok := seen["input"].([]any)
+	if !ok || len(input) < 3 {
+		t.Fatalf("input = %#v, want full context replay", seen["input"])
+	}
+}
+
+func TestCodexCompleteErrorsOnIncompleteWithoutStoredResponses(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if store, ok := payload["store"].(bool); !ok || store {
+			t.Fatalf("store = %#v, want false", payload["store"])
+		}
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "partial",
+			}),
+			sseEvent("response.incomplete", map[string]any{
+				"type": "response.incomplete",
+				"response": map[string]any{
+					"id":     "resp-incomplete",
+					"status": "incomplete",
+				},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "incomplete response without stored-response continuation") {
+		t.Fatalf("Complete() err = %v, want incomplete-without-continuation error", err)
+	}
+}
+
 type testTransport struct {
 	handler http.Handler
 }
@@ -986,10 +1096,13 @@ func (t errTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, t.err
 }
 
-func assertStreamRequest(t *testing.T, payload map[string]any) {
+func assertStreamRequest(t *testing.T, payload map[string]any, store bool) {
 	t.Helper()
 	if stream, ok := payload["stream"].(bool); !ok || !stream {
 		t.Fatalf("stream = %#v, want true", payload["stream"])
+	}
+	if got, ok := payload["store"].(bool); !ok || got != store {
+		t.Fatalf("store = %#v, want %v", payload["store"], store)
 	}
 }
 

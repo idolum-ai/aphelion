@@ -45,6 +45,7 @@ type CodexOptions struct {
 	AccountID        string
 	RefreshURL       string
 	Model            string
+	StoreResponses   bool
 	MaxContinuations int
 	TransportRetries int
 	HTTPClient       *http.Client
@@ -60,6 +61,7 @@ type Codex struct {
 	client           *http.Client
 	userAgent        string
 	model            string
+	storeResponses   bool
 	maxContinuations int
 	transportRetries int
 	loadTokens       func() (governorauth.CodexTokens, error)
@@ -122,6 +124,7 @@ func NewCodex(opts CodexOptions) (*Codex, error) {
 		client:           client,
 		userAgent:        opts.UserAgent,
 		model:            model,
+		storeResponses:   opts.StoreResponses,
 		maxContinuations: maxContinuations,
 		transportRetries: transportRetries,
 		loadTokens:       opts.LoadTokens,
@@ -144,14 +147,17 @@ func (c *Codex) Stream(ctx context.Context, messages []agent.Message, tools []ag
 
 func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*agent.Response, error) {
 	aggregate := newCodexResponseAccumulator()
-	plan := planCodexRequest(messages)
+	plan := planFullCodexRequest(messages)
+	if c.storeResponses {
+		plan = planCodexRequest(messages)
+	}
 	continuations := 0
 	usedPreviousResponseFallback := false
 
 	for {
 		result, err := c.completeRequest(ctx, plan, tools, opts, cb, allowRetry)
 		if err != nil {
-			if plan.mode == codexTurnModeIncrementalToolResults && !usedPreviousResponseFallback && isPreviousResponseRejected(err) {
+			if c.storeResponses && plan.mode == codexTurnModeIncrementalToolResults && !usedPreviousResponseFallback && isPreviousResponseRejected(err) {
 				plan = planFullCodexRequest(messages)
 				usedPreviousResponseFallback = true
 				continue
@@ -162,6 +168,9 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 		aggregate.merge(result.Response, result.ResponseID)
 		if result.Complete {
 			return aggregate.response(), nil
+		}
+		if !c.storeResponses {
+			return nil, fmt.Errorf("codex: incomplete response without stored-response continuation")
 		}
 		if strings.TrimSpace(result.ResponseID) == "" {
 			return nil, fmt.Errorf("codex: incomplete response missing response id")
@@ -176,7 +185,7 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 
 func (c *Codex) completeRequest(ctx context.Context, plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*codexCompletionResult, error) {
 	for attempt := 0; attempt <= c.transportRetries; attempt++ {
-		reqBody := buildCodexRequest(plan, tools, opts, true, c.model)
+		reqBody := buildCodexRequest(plan, tools, opts, true, c.model, c.storeResponses)
 
 		var body bytes.Buffer
 		if err := json.NewEncoder(&body).Encode(reqBody); err != nil {
@@ -434,7 +443,7 @@ func (c *Codex) refreshTokens(ctx context.Context, refreshToken string) (governo
 	}, nil
 }
 
-func buildCodexRequest(plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, stream bool, model string) map[string]any {
+func buildCodexRequest(plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, stream bool, model string, store bool) map[string]any {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		model = defaultCodexModel
@@ -443,10 +452,10 @@ func buildCodexRequest(plan codexRequestPlan, tools []agent.ToolDef, opts agent.
 		"model":        model,
 		"instructions": plan.instructions,
 		"input":        plan.input,
-		"store":        true,
+		"store":        store,
 		"stream":       stream,
 	}
-	if plan.previousResponseID != "" {
+	if store && plan.previousResponseID != "" {
 		reqBody["previous_response_id"] = plan.previousResponseID
 	}
 	if defs := toCodexTools(tools); len(defs) > 0 {
