@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 19
+const schemaVersion = 20
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -74,6 +74,7 @@ func (s *SQLiteStore) init() error {
 			last_floor_text TEXT,
 			last_floor_metadata TEXT,
 			plan_state_json TEXT NOT NULL DEFAULT '{}',
+			operation_state_json TEXT NOT NULL DEFAULT '{}',
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			turn_count INTEGER NOT NULL DEFAULT 0,
@@ -329,7 +330,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	sessionID := SessionIDForKey(key)
 	row := s.db.QueryRow(`
 		SELECT
-			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata, plan_state_json,
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata, plan_state_json, operation_state_json,
 			created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
@@ -351,6 +352,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		lastFloorText        sql.NullString
 		lastFloorMetadata    sql.NullString
 		planStateJSON        sql.NullString
+		operationStateJSON   sql.NullString
 		chatType             sql.NullString
 		chatTitle            sql.NullString
 		userName             sql.NullString
@@ -361,7 +363,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	)
 
 	err := row.Scan(
-		&sess.SessionID, &sess.ChatID, &sess.UserID, &scopeKind, &scopeID, &durableAgentID, &systemPrompt, &lastFloorText, &lastFloorMetadata, &planStateJSON, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
+		&sess.SessionID, &sess.ChatID, &sess.UserID, &scopeKind, &scopeID, &durableAgentID, &systemPrompt, &lastFloorText, &lastFloorMetadata, &planStateJSON, &operationStateJSON, &createdAtRaw, &updatedAtRaw, &sess.TurnCount,
 		&chatType, &chatTitle, &userName,
 		&sess.CacheState.LastWriteBlock, &sess.CacheState.BlocksSinceWrite, &cacheLastWriteRaw, &sess.CacheState.HitRate, &consecutiveMissesRaw,
 		&sess.TotalInputTokens, &sess.TotalOutputTokens, &sess.TotalCacheRead, &sess.TotalCacheWrite,
@@ -386,6 +388,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	sess.LastFloorText = nullToString(lastFloorText)
 	sess.LastFloorMetadata = nullToString(lastFloorMetadata)
 	sess.PlanState = decodePlanState(planStateJSON.String)
+	sess.OperationState = decodeOperationState(operationStateJSON.String)
 	if len(sess.PlanState.Steps) == 0 && sess.PlanState.Explanation == "" {
 		if rehydrated, ok, rehydrateErr := s.rehydratePlanState(sessionID); rehydrateErr != nil {
 			return nil, rehydrateErr
@@ -517,6 +520,7 @@ func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.T
 	})
 	session.SessionID = SessionIDFromParts(session.ChatID, session.UserID, session.Scope)
 	session.PlanState = NormalizePlanState(session.PlanState)
+	session.OperationState = NormalizeOperationState(session.OperationState)
 	session.UpdatedAt = now
 	session.TotalInputTokens += usage.InputTokens
 	session.TotalOutputTokens += usage.OutputTokens
@@ -644,6 +648,29 @@ func (s *SQLiteStore) UpdatePlanState(key SessionKey, state PlanState) error {
 	return s.updatePlanState(key, state, "")
 }
 
+func (s *SQLiteStore) UpdateOperationState(key SessionKey, state OperationState) error {
+	if _, err := s.Load(key); err != nil {
+		return err
+	}
+	sessionID := SessionIDForKey(key)
+	state = NormalizeOperationState(state)
+	_, err := s.db.Exec(`
+		UPDATE sessions
+		SET
+			operation_state_json = ?,
+			updated_at = ?
+		WHERE session_id = ?
+	`,
+		encodeOperationState(state),
+		time.Now().UTC().Format(time.RFC3339Nano),
+		sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("update operation state: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) UpdatePlanStateWithEvent(key SessionKey, state PlanState, kind PlanEventKind) error {
 	return s.updatePlanState(key, state, kind)
 }
@@ -701,6 +728,27 @@ func (s *SQLiteStore) PlanState(key SessionKey) (PlanState, error) {
 		return rehydrated, nil
 	}
 	return state, nil
+}
+
+func (s *SQLiteStore) OperationState(key SessionKey) (OperationState, error) {
+	sessionID := SessionIDForKey(key)
+	var raw sql.NullString
+	err := s.db.QueryRow(`
+		SELECT operation_state_json
+		FROM sessions
+		WHERE session_id = ?
+	`, sessionID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		sess, createErr := s.createEmptySession(key)
+		if createErr != nil {
+			return OperationState{}, createErr
+		}
+		return sess.OperationState, nil
+	}
+	if err != nil {
+		return OperationState{}, fmt.Errorf("load operation state: %w", err)
+	}
+	return decodeOperationState(raw.String), nil
 }
 
 func (s *SQLiteStore) PlanEvents(key SessionKey, limit int) ([]PlanEvent, error) {
@@ -2401,11 +2449,11 @@ func (s *SQLiteStore) createEmptySession(key SessionKey) (*Session, error) {
 
 	if _, err := s.db.Exec(`
 		INSERT INTO sessions(
-			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, plan_state_json, created_at, updated_at, turn_count, chat_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, plan_state_json, operation_state_json, created_at, updated_at, turn_count, chat_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		sess.SessionID, key.ChatID, key.UserID, string(sess.Scope.Kind), sess.Scope.ID, sess.Scope.DurableAgentID,
-		"", "", encodePlanState(sess.PlanState), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), 0, sess.ChatType,
+		"", "", encodePlanState(sess.PlanState), encodeOperationState(sess.OperationState), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), 0, sess.ChatType,
 	); err != nil {
 		return nil, fmt.Errorf("insert empty session: %w", err)
 	}
@@ -2421,12 +2469,12 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 	session.SessionID = SessionIDFromParts(session.ChatID, session.UserID, session.Scope)
 	_, err := tx.Exec(`
 		INSERT INTO sessions(
-			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata, plan_state_json, created_at, updated_at, turn_count,
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata, plan_state_json, operation_state_json, created_at, updated_at, turn_count,
 			chat_type, chat_title, user_name,
 			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
 			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
 			last_provider, last_model, active_tool_calls, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET
 			chat_id = excluded.chat_id,
 			user_id = excluded.user_id,
@@ -2437,6 +2485,7 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 			last_floor_text = excluded.last_floor_text,
 			last_floor_metadata = excluded.last_floor_metadata,
 			plan_state_json = excluded.plan_state_json,
+			operation_state_json = excluded.operation_state_json,
 			updated_at = excluded.updated_at,
 			turn_count = excluded.turn_count,
 			chat_type = excluded.chat_type,
@@ -2457,7 +2506,7 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 			last_error = excluded.last_error
 	`,
 		session.SessionID, session.ChatID, session.UserID, string(session.Scope.Kind), session.Scope.ID, session.Scope.DurableAgentID,
-		session.SystemPrompt, nullableString(session.LastFloorText), nullableString(session.LastFloorMetadata), encodePlanState(session.PlanState),
+		session.SystemPrompt, nullableString(session.LastFloorText), nullableString(session.LastFloorMetadata), encodePlanState(session.PlanState), encodeOperationState(session.OperationState),
 		nonZeroTimeOrNow(session.CreatedAt, now).UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), session.TurnCount,
 		defaultChatType(session.ChatType), nullableString(session.ChatTitle), nullableString(session.UserName),
 		session.CacheState.LastWriteBlock, session.CacheState.BlocksSinceWrite, nullableTime(session.CacheState.LastWriteTime), session.CacheState.HitRate, session.CacheState.ConsecutiveMisses,
@@ -2476,6 +2525,9 @@ func applyMigrations(tx *sql.Tx) error {
 	}
 	if err := ensureSessionColumn(tx, "last_floor_metadata", "TEXT"); err != nil {
 		return fmt.Errorf("ensure sessions.last_floor_metadata: %w", err)
+	}
+	if err := ensureSessionColumn(tx, "operation_state_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return fmt.Errorf("ensure sessions.operation_state_json: %w", err)
 	}
 	if err := ensureSessionColumn(tx, "session_id", "TEXT"); err != nil {
 		return fmt.Errorf("ensure sessions.session_id: %w", err)
@@ -3979,6 +4031,15 @@ func encodePlanState(state PlanState) string {
 	return string(raw)
 }
 
+func encodeOperationState(state OperationState) string {
+	normalized := NormalizeOperationState(state)
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
 func decodePlanState(raw string) PlanState {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -3989,6 +4050,18 @@ func decodePlanState(raw string) PlanState {
 		return PlanState{}
 	}
 	return NormalizePlanState(state)
+}
+
+func decodeOperationState(raw string) OperationState {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return OperationState{}
+	}
+	var state OperationState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return OperationState{}
+	}
+	return NormalizeOperationState(state)
 }
 
 func parseRenderedPlanState(raw string) (PlanState, bool) {

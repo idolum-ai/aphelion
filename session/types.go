@@ -79,6 +79,67 @@ type PlanEvent struct {
 	CreatedAt time.Time
 }
 
+type OperationStatus string
+
+const (
+	OperationStatusIdle      OperationStatus = "idle"
+	OperationStatusActive    OperationStatus = "active"
+	OperationStatusBlocked   OperationStatus = "blocked"
+	OperationStatusCompleted OperationStatus = "completed"
+	OperationStatusFailed    OperationStatus = "failed"
+)
+
+type ProposalStatus string
+
+const (
+	ProposalStatusPending    ProposalStatus = "pending"
+	ProposalStatusApproved   ProposalStatus = "approved"
+	ProposalStatusDenied     ProposalStatus = "denied"
+	ProposalStatusExpired    ProposalStatus = "expired"
+	ProposalStatusSuperseded ProposalStatus = "superseded"
+)
+
+type FindingConfidence string
+
+const (
+	FindingConfidenceLow    FindingConfidence = "low"
+	FindingConfidenceMedium FindingConfidence = "medium"
+	FindingConfidenceHigh   FindingConfidence = "high"
+)
+
+type OperationProposal struct {
+	ID            string         `json:"id,omitempty"`
+	Kind          string         `json:"kind,omitempty"`
+	Summary       string         `json:"summary,omitempty"`
+	WhyNow        string         `json:"why_now,omitempty"`
+	BoundedEffect string         `json:"bounded_effect,omitempty"`
+	Status        ProposalStatus `json:"status,omitempty"`
+	UpdatedAt     time.Time      `json:"updated_at,omitempty"`
+}
+
+type OperationFinding struct {
+	Claim      string            `json:"claim"`
+	Confidence FindingConfidence `json:"confidence,omitempty"`
+	Basis      string            `json:"basis,omitempty"`
+}
+
+type OperationArtifact struct {
+	Label string `json:"label,omitempty"`
+	Ref   string `json:"ref"`
+}
+
+type OperationState struct {
+	ID        string              `json:"id,omitempty"`
+	Objective string              `json:"objective,omitempty"`
+	Status    OperationStatus     `json:"status,omitempty"`
+	Stage     string              `json:"stage,omitempty"`
+	Summary   string              `json:"summary,omitempty"`
+	Proposal  OperationProposal   `json:"proposal,omitempty"`
+	Findings  []OperationFinding  `json:"findings,omitempty"`
+	Artifacts []OperationArtifact `json:"artifacts,omitempty"`
+	UpdatedAt time.Time           `json:"updated_at,omitempty"`
+}
+
 // SessionKey identifies a unique session.
 type SessionKey struct {
 	ChatID int64
@@ -110,6 +171,9 @@ type Session struct {
 
 	// Planning
 	PlanState PlanState
+
+	// Operations
+	OperationState OperationState
 
 	// Token accounting (cumulative across all turns)
 	TotalInputTokens  int64
@@ -185,27 +249,27 @@ type DurableAgentPolicyUpdate struct {
 
 // TurnRun stores machine-authored facts about a turn lifecycle for recovery.
 type TurnRun struct {
-	ID                int64
-	SessionID         string
-	ChatID            int64
-	UserID            int64
-	Scope             ScopeRef
-	Kind              TurnRunKind
-	Status            TurnRunStatus
-	RequestText       string
-	StartedAt         time.Time
-	CompletedAt       time.Time
-	LastActivityAt    time.Time
-	LastToolName      string
-	LastToolPreview   string
-	ToolCallsStarted  int
-	ToolCallsFinished int
+	ID                    int64
+	SessionID             string
+	ChatID                int64
+	UserID                int64
+	Scope                 ScopeRef
+	Kind                  TurnRunKind
+	Status                TurnRunStatus
+	RequestText           string
+	StartedAt             time.Time
+	CompletedAt           time.Time
+	LastActivityAt        time.Time
+	LastToolName          string
+	LastToolPreview       string
+	ToolCallsStarted      int
+	ToolCallsFinished     int
 	LastToolResultPreview string
-	LastToolError     string
-	ProgressMessageID int64
-	ErrorText         string
-	RecoverySummary   string
-	RecoveryLoggedAt  time.Time
+	LastToolError         string
+	ProgressMessageID     int64
+	ErrorText             string
+	RecoverySummary       string
+	RecoveryLoggedAt      time.Time
 }
 
 // Message is one persisted conversation message.
@@ -294,6 +358,129 @@ func NormalizePlanStatus(status PlanStatus) PlanStatus {
 	default:
 		return ""
 	}
+}
+
+func NormalizeOperationState(state OperationState) OperationState {
+	state.ID = strings.TrimSpace(state.ID)
+	state.Objective = strings.TrimSpace(state.Objective)
+	state.Status = NormalizeOperationStatus(state.Status)
+	state.Stage = normalizeOperationStage(state.Stage)
+	state.Summary = strings.TrimSpace(state.Summary)
+	state.Proposal = normalizeOperationProposal(state.Proposal)
+
+	findings := make([]OperationFinding, 0, len(state.Findings))
+	for _, finding := range state.Findings {
+		claim := strings.TrimSpace(finding.Claim)
+		if claim == "" {
+			continue
+		}
+		confidence := NormalizeFindingConfidence(finding.Confidence)
+		if confidence == "" {
+			confidence = FindingConfidenceMedium
+		}
+		findings = append(findings, OperationFinding{
+			Claim:      claim,
+			Confidence: confidence,
+			Basis:      strings.TrimSpace(finding.Basis),
+		})
+	}
+	state.Findings = findings
+
+	artifacts := make([]OperationArtifact, 0, len(state.Artifacts))
+	for _, artifact := range state.Artifacts {
+		ref := strings.TrimSpace(artifact.Ref)
+		if ref == "" {
+			continue
+		}
+		artifacts = append(artifacts, OperationArtifact{
+			Label: strings.TrimSpace(artifact.Label),
+			Ref:   ref,
+		})
+	}
+	state.Artifacts = artifacts
+
+	if state.UpdatedAt.IsZero() && state.Active() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+	return state
+}
+
+func (s OperationState) Active() bool {
+	normalized := s
+	return strings.TrimSpace(normalized.ID) != "" ||
+		strings.TrimSpace(normalized.Objective) != "" ||
+		strings.TrimSpace(string(normalized.Status)) != "" ||
+		strings.TrimSpace(normalized.Stage) != "" ||
+		strings.TrimSpace(normalized.Summary) != "" ||
+		normalized.Proposal.Active() ||
+		len(normalized.Findings) > 0 ||
+		len(normalized.Artifacts) > 0
+}
+
+func (p OperationProposal) Active() bool {
+	return strings.TrimSpace(p.ID) != "" ||
+		strings.TrimSpace(p.Kind) != "" ||
+		strings.TrimSpace(p.Summary) != "" ||
+		strings.TrimSpace(p.WhyNow) != "" ||
+		strings.TrimSpace(p.BoundedEffect) != "" ||
+		strings.TrimSpace(string(p.Status)) != ""
+}
+
+func NormalizeOperationStatus(status OperationStatus) OperationStatus {
+	value := normalizeEnumValue(string(status))
+	switch OperationStatus(value) {
+	case OperationStatusIdle, OperationStatusActive, OperationStatusBlocked, OperationStatusCompleted, OperationStatusFailed:
+		return OperationStatus(value)
+	default:
+		return ""
+	}
+}
+
+func NormalizeProposalStatus(status ProposalStatus) ProposalStatus {
+	value := normalizeEnumValue(string(status))
+	switch ProposalStatus(value) {
+	case ProposalStatusPending, ProposalStatusApproved, ProposalStatusDenied, ProposalStatusExpired, ProposalStatusSuperseded:
+		return ProposalStatus(value)
+	default:
+		return ""
+	}
+}
+
+func NormalizeFindingConfidence(confidence FindingConfidence) FindingConfidence {
+	value := normalizeEnumValue(string(confidence))
+	switch FindingConfidence(value) {
+	case FindingConfidenceLow, FindingConfidenceMedium, FindingConfidenceHigh:
+		return FindingConfidence(value)
+	default:
+		return ""
+	}
+}
+
+func normalizeOperationProposal(proposal OperationProposal) OperationProposal {
+	proposal.ID = strings.TrimSpace(proposal.ID)
+	proposal.Kind = normalizeOperationStage(proposal.Kind)
+	proposal.Summary = strings.TrimSpace(proposal.Summary)
+	proposal.WhyNow = strings.TrimSpace(proposal.WhyNow)
+	proposal.BoundedEffect = strings.TrimSpace(proposal.BoundedEffect)
+	proposal.Status = NormalizeProposalStatus(proposal.Status)
+	if proposal.Status == "" && proposal.Active() {
+		proposal.Status = ProposalStatusPending
+	}
+	if proposal.UpdatedAt.IsZero() && proposal.Active() {
+		proposal.UpdatedAt = time.Now().UTC()
+	}
+	return proposal
+}
+
+func normalizeOperationStage(stage string) string {
+	return normalizeEnumValue(stage)
+}
+
+func normalizeEnumValue(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	value = strings.ReplaceAll(value, " ", "_")
+	return value
 }
 
 type RhizomeEvent struct {

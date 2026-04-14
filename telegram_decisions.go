@@ -91,11 +91,11 @@ func (a *telegramExecApprover) ConfirmExec(ctx context.Context, req toolpkg.Exec
 	}
 
 	result, err := a.broker.Request(ctx, decision.Request{
-		Kind:          decision.KindExecApproval,
+		Kind:          decision.KindProposalApproval,
 		ChatID:        req.SessionKey.ChatID,
 		SenderID:      req.Principal.TelegramUserID,
-		Prompt:        "Confirm before running this command?",
-		Details:       fmt.Sprintf("Risk: %s\n\nCommand:\n%s", strings.TrimSpace(req.Reason), strings.TrimSpace(req.Command)),
+		Prompt:        "Approve this proposal?",
+		Details:       formatExecProposalDetails(req),
 		Choices:       []decision.Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
 		DefaultChoice: "deny",
 		Timeout:       a.timeout,
@@ -112,13 +112,36 @@ func (a *telegramExecApprover) ConfirmExec(ctx context.Context, req toolpkg.Exec
 	}
 
 	if result.Delivery.MessageID != 0 {
-		text := "Command blocked."
+		text := "Proposal denied."
 		if result.TimedOut {
-			text = "Command blocked — approval timed out."
+			text = "Proposal denied — approval timed out."
 		}
 		_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, text, "")
 	}
 	return toolpkg.ExecApprovalDecision{Approved: false}, nil
+}
+
+func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
+	lines := make([]string, 0, 8)
+	if summary := strings.TrimSpace(req.Proposal.Summary); summary != "" {
+		lines = append(lines, summary)
+	}
+	if kind := strings.TrimSpace(req.Proposal.Kind); kind != "" {
+		lines = append(lines, fmt.Sprintf("Kind: %s", kind))
+	}
+	if whyNow := strings.TrimSpace(req.Proposal.WhyNow); whyNow != "" {
+		lines = append(lines, "", "Why now:", whyNow)
+	}
+	if bounded := strings.TrimSpace(req.Proposal.BoundedEffect); bounded != "" {
+		lines = append(lines, "", "If approved:", bounded)
+	}
+	if reason := strings.TrimSpace(req.Reason); reason != "" {
+		lines = append(lines, "", "Trigger:", reason)
+	}
+	if command := strings.TrimSpace(req.Command); command != "" {
+		lines = append(lines, "", "Command:", command)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func (h *telegramDecisionHandler) HandleBusyMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {

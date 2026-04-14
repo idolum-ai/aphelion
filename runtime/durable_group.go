@@ -161,7 +161,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		return nil, fmt.Errorf("load durable agent prompt context: %w", err)
 	}
 	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText)
-	governorAwareness := r.withPlanAwareness(r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec), hiddenInputs), sess.PlanState)
+	governorAwareness := r.withOperationAwareness(r.withPlanAwareness(r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec), hiddenInputs), sess.PlanState), sess.OperationState)
 	if useMaterialFloor {
 		governorAwareness.ArtifactMode = "floor"
 	}
@@ -242,7 +242,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		if brokerage.Phase == "brokerage" && brokerage.Ratification == "accept" {
 			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}
-		governorAwareness = r.withPlanAwareness(r.withBrokerageAwareness(governorAwareness, brokerage), sess.PlanState)
+		governorAwareness = r.withOperationAwareness(r.withPlanAwareness(r.withBrokerageAwareness(governorAwareness, brokerage), sess.PlanState), sess.OperationState)
 		governorPrompt.Runtime = governorAwareness
 		systemBlocks = prompt.BuildGovernorPromptBlocks(governorPrompt)
 		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
@@ -300,8 +300,11 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	streamedReply := false
 	faceRendered := false
 	allowLocalReply := durableGroupAllowsLocalReply(core.NormalizeDurableAgentLivePolicy(registered.LivePolicy))
+	if operationState, operationErr := r.store.OperationState(key); operationErr == nil {
+		sess.OperationState = mergeSessionOperationState(sess.OperationState, operationState)
+	}
 	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec)
-	faceAwareness = r.withBrokerageAwareness(faceAwareness, brokerage)
+	faceAwareness = r.withOperationAwareness(r.withBrokerageAwareness(faceAwareness, brokerage), sess.OperationState)
 	faceAwareness.ArtifactMode = "scene"
 	faceAwareness.DeliveryMode = "text"
 	faceAwareness.StreamReply = false
@@ -394,6 +397,11 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		sess.PlanState = mergeSessionPlanState(sess.PlanState, planState)
 	} else {
 		return nil, fmt.Errorf("load durable group plan state before save: %w", planErr)
+	}
+	if operationState, operationErr := r.store.OperationState(key); operationErr == nil {
+		sess.OperationState = mergeSessionOperationState(sess.OperationState, operationState)
+	} else {
+		return nil, fmt.Errorf("load durable group operation state before save: %w", operationErr)
 	}
 	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
 		return nil, fmt.Errorf("save durable group session: %w", err)

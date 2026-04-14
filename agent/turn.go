@@ -324,7 +324,7 @@ func maybeRetryPlanningOnly(
 func hasActionableTools(tools []ToolDef) bool {
 	for _, def := range tools {
 		name := strings.TrimSpace(def.Name)
-		if name == "" || name == "update_plan" {
+		if name == "" || name == "update_plan" || name == "update_operation" {
 			continue
 		}
 		return true
@@ -596,7 +596,7 @@ type toolLoopGuardState struct {
 func (s *toolLoopGuardState) shouldBlock(call ToolCall) (string, bool) {
 	requestSig := toolRequestSignature(call)
 	switch call.Name {
-	case "update_plan":
+	case "update_plan", "update_operation":
 		return requestSig, false
 	case "exec":
 		return requestSig, s.lastRequest == requestSig && s.streak >= 2

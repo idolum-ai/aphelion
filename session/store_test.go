@@ -324,6 +324,97 @@ func TestPlanStateRoundTripAndUpdate(t *testing.T) {
 	}
 }
 
+func TestOperationStateRoundTripAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 80, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "80"}}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.OperationState = OperationState{
+		ID:        "op-1",
+		Objective: "Investigate the current internet footprint.",
+		Status:    OperationStatusActive,
+		Stage:     "assessment",
+		Summary:   "Collecting public traces before requesting external access.",
+		Proposal: OperationProposal{
+			ID:            "proposal-1",
+			Kind:          "capability_acquisition",
+			Summary:       "Acquire browser automation",
+			WhyNow:        "A screenshot requires browser automation in this operation.",
+			BoundedEffect: "Install Playwright locally and capture one screenshot.",
+			Status:        ProposalStatusPending,
+		},
+		Findings: []OperationFinding{
+			{Claim: "A browser is not currently available.", Confidence: FindingConfidenceHigh, Basis: "No browser tool is exposed in the active manifest."},
+		},
+		Artifacts: []OperationArtifact{
+			{Label: "working-note", Ref: "tmp/notes.md"},
+		},
+	}
+	sess.TurnCount = 1
+	if err := store.Save(sess, []Message{{Role: "assistant", Content: "operating", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	reloaded, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(reloaded) err = %v", err)
+	}
+	if reloaded.OperationState.Objective != "Investigate the current internet footprint." {
+		t.Fatalf("Objective = %q, want persisted objective", reloaded.OperationState.Objective)
+	}
+	if reloaded.OperationState.Proposal.Status != ProposalStatusPending {
+		t.Fatalf("Proposal status = %q, want pending", reloaded.OperationState.Proposal.Status)
+	}
+	if len(reloaded.OperationState.Findings) != 1 {
+		t.Fatalf("findings len = %d, want 1", len(reloaded.OperationState.Findings))
+	}
+
+	updated := OperationState{
+		ID:        "op-1",
+		Objective: "Investigate the current internet footprint.",
+		Status:    OperationStatusActive,
+		Stage:     "execution",
+		Summary:   "Proposal approved and screenshot capture is underway.",
+		Proposal: OperationProposal{
+			ID:            "proposal-1",
+			Kind:          "capability_acquisition",
+			Summary:       "Acquire browser automation",
+			WhyNow:        "A screenshot requires browser automation in this operation.",
+			BoundedEffect: "Install Playwright locally and capture one screenshot.",
+			Status:        ProposalStatusApproved,
+		},
+		Findings: []OperationFinding{
+			{Claim: "Browser automation can be acquired locally.", Confidence: FindingConfidenceHigh, Basis: "Admin execution can install local dependencies."},
+		},
+		Artifacts: []OperationArtifact{
+			{Label: "screenshot", Ref: "tmp/reddit.png"},
+		},
+	}
+	if err := store.UpdateOperationState(key, updated); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	operationState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if operationState.Stage != "execution" {
+		t.Fatalf("updated stage = %q, want execution", operationState.Stage)
+	}
+	if operationState.Proposal.Status != ProposalStatusApproved {
+		t.Fatalf("updated proposal status = %q, want approved", operationState.Proposal.Status)
+	}
+	if len(operationState.Artifacts) != 1 || operationState.Artifacts[0].Ref != "tmp/reddit.png" {
+		t.Fatalf("artifacts = %#v, want updated screenshot artifact", operationState.Artifacts)
+	}
+}
+
 func TestPlanEventsRoundTripAndRehydrateFromLatestEvent(t *testing.T) {
 	t.Parallel()
 

@@ -98,6 +98,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 	if currentPlan := renderCurrentPlanStateBlock(req.Runtime); currentPlan != "" {
 		parts = append(parts, agent.SystemBlock{Text: currentPlan})
 	}
+	if currentOperation := renderCurrentOperationStateBlock(req.Runtime); currentOperation != "" {
+		parts = append(parts, agent.SystemBlock{Text: currentOperation})
+	}
 
 	if contract := renderMaterialFloorContractBlock(req.Runtime); contract != "" {
 		parts = append(parts, agent.SystemBlock{Text: contract})
@@ -115,6 +118,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		})
 		if planning := renderPlanningDisciplineBlock(manifest); planning != "" {
 			parts = append(parts, agent.SystemBlock{Text: planning})
+		}
+		if operations := renderOperationalDisciplineBlock(manifest); operations != "" {
+			parts = append(parts, agent.SystemBlock{Text: operations})
 		}
 		if confirmation := renderConfirmationDisciplineBlock(manifest); confirmation != "" {
 			parts = append(parts, agent.SystemBlock{Text: confirmation})
@@ -483,6 +489,72 @@ func renderCurrentPlanStateBlock(aw RuntimeAwareness) string {
 	return strings.Join(lines, "\n\n")
 }
 
+func renderCurrentOperationStateBlock(aw RuntimeAwareness) string {
+	if !aw.OperationActive &&
+		strings.TrimSpace(aw.OperationObjective) == "" &&
+		strings.TrimSpace(aw.OperationSummary) == "" &&
+		!aw.ProposalActive &&
+		len(aw.OperationFindings) == 0 &&
+		len(aw.OperationArtifacts) == 0 {
+		return ""
+	}
+	lines := []string{
+		"## Current Operation State",
+		"This operation is durable session state. Use update_operation to keep the objective, stage, proposal, findings, and artifacts honest as work evolves across turns.",
+	}
+	if objective := strings.TrimSpace(aw.OperationObjective); objective != "" {
+		lines = append(lines, "- objective: "+objective)
+	}
+	if status := strings.TrimSpace(aw.OperationStatus); status != "" {
+		lines = append(lines, "- status: "+status)
+	}
+	if stage := strings.TrimSpace(aw.OperationStage); stage != "" {
+		lines = append(lines, "- stage: "+stage)
+	}
+	if summary := strings.TrimSpace(aw.OperationSummary); summary != "" {
+		lines = append(lines, "- summary: "+summary)
+	}
+	if aw.ProposalActive || strings.TrimSpace(aw.ProposalSummary) != "" {
+		lines = append(lines, "### Current Proposal")
+		if kind := strings.TrimSpace(aw.ProposalKind); kind != "" {
+			lines = append(lines, "- kind: "+kind)
+		}
+		if status := strings.TrimSpace(aw.ProposalStatus); status != "" {
+			lines = append(lines, "- status: "+status)
+		}
+		if summary := strings.TrimSpace(aw.ProposalSummary); summary != "" {
+			lines = append(lines, "- summary: "+summary)
+		}
+		if whyNow := strings.TrimSpace(aw.ProposalWhyNow); whyNow != "" {
+			lines = append(lines, "- why_now: "+whyNow)
+		}
+		if bounded := strings.TrimSpace(aw.ProposalBoundedEffect); bounded != "" {
+			lines = append(lines, "- bounded_effect: "+bounded)
+		}
+	}
+	if len(aw.OperationFindings) > 0 {
+		lines = append(lines, "### Findings")
+		for _, finding := range aw.OperationFindings {
+			finding = strings.TrimSpace(finding)
+			if finding == "" {
+				continue
+			}
+			lines = append(lines, "- "+finding)
+		}
+	}
+	if len(aw.OperationArtifacts) > 0 {
+		lines = append(lines, "### Artifacts")
+		for _, artifact := range aw.OperationArtifacts {
+			artifact = strings.TrimSpace(artifact)
+			if artifact == "" {
+				continue
+			}
+			lines = append(lines, "- "+artifact)
+		}
+	}
+	return strings.Join(lines, "\n\n")
+}
+
 func renderPlanningDisciplineBlock(manifest string) string {
 	if !strings.Contains(manifest, "update_plan") {
 		return ""
@@ -495,6 +567,18 @@ func renderPlanningDisciplineBlock(manifest string) string {
 	}, "\n")
 }
 
+func renderOperationalDisciplineBlock(manifest string) string {
+	if !strings.Contains(manifest, "update_operation") {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Operational Discipline",
+		"Treat open-ended work as an operation with durable state rather than a one-turn improvisation.",
+		"Use update_operation to keep the objective, current stage, proposal state, findings, and artifacts current when those details materially shape execution or delivery.",
+		"Operate autonomously between gates. When the next move materially expands capability, external effect, privacy scope, or irreversible risk, surface a bounded proposal instead of silently pushing through.",
+	}, "\n")
+}
+
 func renderConfirmationDisciplineBlock(manifest string) string {
 	if !strings.Contains(manifest, "exec") {
 		return ""
@@ -503,7 +587,7 @@ func renderConfirmationDisciplineBlock(manifest string) string {
 		"## Confirmation Discipline",
 		"Ask for confirmation when authority genuinely depends on it, when intent is materially ambiguous, or when a destructive or irreversible action is next.",
 		"Do not ask for confirmation as a politeness reflex when the next move is already obvious.",
-		"When runtime approval blocks a risky command, treat that as a real execution boundary rather than a stylistic suggestion.",
+		"When runtime proposal gating blocks execution, treat that as a real operational boundary rather than a stylistic suggestion.",
 	}, "\n")
 }
 

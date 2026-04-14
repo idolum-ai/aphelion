@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,11 +184,18 @@ func TestTelegramExecApproverDeletesPromptOnApprove(t *testing.T) {
 	t.Parallel()
 
 	sender := &decisionTestSender{}
-	var broker *decision.Broker
-	broker = decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
-		go broker.Resolve(pending.ID, "approve")
-		return decision.Delivery{MessageID: 44}, nil
-	})
+	broker := newTelegramDecisionBroker(sender)
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		if len(sender.inline) == 0 || len(sender.inline[0].rows) == 0 || len(sender.inline[0].rows[0]) == 0 {
+			return
+		}
+		data := sender.inline[0].rows[0][0].CallbackData
+		id, choice, ok := decision.DecodeCallbackData(data)
+		if ok {
+			broker.Resolve(id, choice)
+		}
+	}()
 	approver := newTelegramExecApprover(sender, broker)
 
 	decisionResult, err := approver.ConfirmExec(context.Background(), toolpkg.ExecApprovalRequest{
@@ -195,6 +203,13 @@ func TestTelegramExecApproverDeletesPromptOnApprove(t *testing.T) {
 		SessionKey: session.SessionKey{ChatID: 7},
 		Command:    "rm -rf build",
 		Reason:     "recursive delete",
+		Proposal: session.OperationProposal{
+			Kind:          "destructive_mutation",
+			Summary:       "Perform a destructive change",
+			WhyNow:        "The requested command deletes existing local state.",
+			BoundedEffect: "Remove the targeted files and continue the operation.",
+			Status:        session.ProposalStatusPending,
+		},
 	})
 	if err != nil {
 		t.Fatalf("ConfirmExec() err = %v", err)
@@ -205,23 +220,34 @@ func TestTelegramExecApproverDeletesPromptOnApprove(t *testing.T) {
 	if len(sender.deletes) != 1 {
 		t.Fatalf("deletes = %#v, want one prompt delete", sender.deletes)
 	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one proposal prompt", sender.inline)
+	}
+	if !strings.Contains(sender.inline[0].text, "Perform a destructive change") {
+		t.Fatalf("inline text = %q, want proposal summary", sender.inline[0].text)
+	}
 }
 
 func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	t.Parallel()
 
 	sender := &decisionTestSender{}
-	broker := decision.NewBroker(func(_ context.Context, _ decision.PendingDecision) (decision.Delivery, error) {
-		return decision.Delivery{MessageID: 45}, nil
-	})
+	broker := newTelegramDecisionBroker(sender)
 	approver := newTelegramExecApprover(sender, broker)
 	approver.timeout = 10 * time.Millisecond
 
 	decisionResult, err := approver.ConfirmExec(context.Background(), toolpkg.ExecApprovalRequest{
 		Principal:  principal.Principal{Role: principal.RoleAdmin},
 		SessionKey: session.SessionKey{ChatID: 7},
-		Command:    "rm -rf build",
-		Reason:     "recursive delete",
+		Command:    "pip install playwright",
+		Reason:     "dependency installation",
+		Proposal: session.OperationProposal{
+			Kind:          "capability_acquisition",
+			Summary:       "Acquire browser automation",
+			WhyNow:        "A screenshot requires browser automation in this operation.",
+			BoundedEffect: "Install Playwright locally and capture one screenshot.",
+			Status:        session.ProposalStatusPending,
+		},
 	})
 	if err != nil {
 		t.Fatalf("ConfirmExec() err = %v", err)
@@ -231,5 +257,11 @@ func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	}
 	if len(sender.edits) != 1 {
 		t.Fatalf("edits = %#v, want one blocked edit", sender.edits)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one proposal prompt", sender.inline)
+	}
+	if !strings.Contains(sender.inline[0].text, "Acquire browser automation") {
+		t.Fatalf("inline text = %q, want capability proposal summary", sender.inline[0].text)
 	}
 }

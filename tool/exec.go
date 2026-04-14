@@ -79,6 +79,38 @@ type updatePlanInput struct {
 	Plan        []updatePlanStepInput `json:"plan,omitempty"`
 }
 
+type updateOperationProposalInput struct {
+	ID            string `json:"id,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	Summary       string `json:"summary,omitempty"`
+	WhyNow        string `json:"why_now,omitempty"`
+	BoundedEffect string `json:"bounded_effect,omitempty"`
+	Status        string `json:"status,omitempty"`
+}
+
+type updateOperationFindingInput struct {
+	Claim      string `json:"claim"`
+	Confidence string `json:"confidence,omitempty"`
+	Basis      string `json:"basis,omitempty"`
+}
+
+type updateOperationArtifactInput struct {
+	Label string `json:"label,omitempty"`
+	Ref   string `json:"ref"`
+}
+
+type updateOperationInput struct {
+	ID        string                         `json:"id,omitempty"`
+	Objective string                         `json:"objective,omitempty"`
+	Status    string                         `json:"status,omitempty"`
+	Stage     string                         `json:"stage,omitempty"`
+	Summary   string                         `json:"summary,omitempty"`
+	Merge     bool                           `json:"merge,omitempty"`
+	Proposal  *updateOperationProposalInput  `json:"proposal,omitempty"`
+	Findings  []updateOperationFindingInput  `json:"findings,omitempty"`
+	Artifacts []updateOperationArtifactInput `json:"artifacts,omitempty"`
+}
+
 type openAIFileInput struct {
 	Action  string `json:"action"`
 	Path    string `json:"path,omitempty"`
@@ -274,6 +306,58 @@ func (r *Registry) Definitions() []agent.ToolDef {
 	}
 	if r.store != nil {
 		defs = append(defs, agent.ToolDef{
+			Name:        "update_operation",
+			Description: "Persist or inspect the current operational state for this session. Use this to track the objective, stage, proposal, findings, and artifacts as work evolves across turns.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "Optional stable operation id"},
+					"objective": {"type": "string", "description": "Current operation objective"},
+					"status": {"type": "string", "enum": ["idle", "active", "blocked", "completed", "failed"], "description": "Current operation status"},
+					"stage": {"type": "string", "description": "Current operational stage such as intake, assessment, proposal, execution, synthesis, or delivery"},
+					"summary": {"type": "string", "description": "Short current-state summary"},
+					"merge": {"type": "boolean", "description": "When true, merge the provided fields into the existing operation state instead of replacing it wholesale"},
+					"proposal": {
+						"type": "object",
+						"description": "Optional current or most recent proposal gate",
+						"properties": {
+							"id": {"type": "string", "description": "Optional stable proposal id"},
+							"kind": {"type": "string", "description": "Proposal kind such as capability_acquisition or destructive_mutation"},
+							"summary": {"type": "string", "description": "Short proposal summary"},
+							"why_now": {"type": "string", "description": "Why this proposal is needed now"},
+							"bounded_effect": {"type": "string", "description": "What will happen if approved"},
+							"status": {"type": "string", "enum": ["pending", "approved", "denied", "expired", "superseded"], "description": "Current proposal status"}
+						}
+					},
+					"findings": {
+						"type": "array",
+						"description": "Optional bounded findings to replace or append, depending on merge",
+						"items": {
+							"type": "object",
+							"properties": {
+								"claim": {"type": "string", "description": "Bounded claim"},
+								"confidence": {"type": "string", "enum": ["low", "medium", "high"], "description": "Confidence level"},
+								"basis": {"type": "string", "description": "Short provenance or basis statement"}
+							},
+							"required": ["claim"]
+						}
+					},
+					"artifacts": {
+						"type": "array",
+						"description": "Optional artifact references to replace or append, depending on merge",
+						"items": {
+							"type": "object",
+							"properties": {
+								"label": {"type": "string", "description": "Human-readable label"},
+								"ref": {"type": "string", "description": "Path, id, or other stable reference"}
+							},
+							"required": ["ref"]
+						}
+					}
+				}
+			}`),
+		})
+		defs = append(defs, agent.ToolDef{
 			Name:        "update_plan",
 			Description: "Persist or inspect the current execution plan for this session. Use this for genuinely multi-step work, keep statuses current, and keep at most one step in progress.",
 			Parameters: json.RawMessage(`{
@@ -375,6 +459,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.memory(ctx, input, scope)
 	case "session_search":
 		return r.sessionSearch(ctx, input, p, key)
+	case "update_operation":
+		return r.updateOperation(ctx, input, key)
 	case "update_plan":
 		return r.updatePlan(ctx, input, key)
 	case "semantic_search":
@@ -403,9 +489,12 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 	if err != nil {
 		return "", err
 	}
-	if reason := approvalReasonForCommand(in.Command); reason != "" {
+	if proposal, reason := proposalForCommand(in.Command); reason != "" {
 		if r.execApprover == nil {
-			return "", fmt.Errorf("command requires explicit confirmation: %s", reason)
+			return "", fmt.Errorf("command requires an approved proposal: %s", reason)
+		}
+		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusPending); err != nil {
+			return "", err
 		}
 		decision, err := r.execApprover.ConfirmExec(ctx, ExecApprovalRequest{
 			Principal:  p,
@@ -414,12 +503,22 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 			Command:    in.Command,
 			Workdir:    workdir,
 			Reason:     reason,
+			Proposal:   proposal,
 		})
 		if err != nil {
+			if persistErr := r.persistExecProposalState(key, proposal, session.ProposalStatusExpired); persistErr != nil {
+				return "", persistErr
+			}
 			return "", err
 		}
 		if !decision.Approved {
-			return "", fmt.Errorf("command approval denied: %s", reason)
+			if err := r.persistExecProposalState(key, proposal, session.ProposalStatusDenied); err != nil {
+				return "", err
+			}
+			return "", fmt.Errorf("proposal denied: %s", reason)
+		}
+		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusApproved); err != nil {
+			return "", err
 		}
 	}
 

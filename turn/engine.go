@@ -50,6 +50,7 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 	result.FloorMetadata = strings.TrimSpace(gov.FloorMetadata)
 	result.MaterialFloor = gov.MaterialFloor
 	result.PlanState = gov.PlanState
+	result.OperationState = gov.OperationState
 
 	rendered, err := m.renderScene(ctx, prepared, policy, gov)
 	if err != nil {

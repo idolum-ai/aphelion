@@ -19,3 +19,19 @@ func mergeSessionPlanState(inMemory session.PlanState, persisted session.PlanSta
 		return inMemory
 	}
 }
+
+func mergeSessionOperationState(inMemory session.OperationState, persisted session.OperationState) session.OperationState {
+	inMemory = session.NormalizeOperationState(inMemory)
+	persisted = session.NormalizeOperationState(persisted)
+
+	switch {
+	case persisted.UpdatedAt.After(inMemory.UpdatedAt):
+		return persisted
+	case inMemory.UpdatedAt.After(persisted.UpdatedAt):
+		return inMemory
+	case persisted.Active():
+		return persisted
+	default:
+		return inMemory
+	}
+}

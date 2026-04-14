@@ -358,6 +358,11 @@ func semanticToolProgressEntry(name string, input json.RawMessage, currentStep s
 			return toolProgressEntry{Key: "plan:update", Text: "Refining the plan for " + contextLabel}
 		}
 		return toolProgressEntry{Key: "plan:update", Text: "Refining the plan"}
+	case "update_operation":
+		if contextLabel != "" {
+			return toolProgressEntry{Key: "operation:update", Text: "Updating the operation for " + contextLabel}
+		}
+		return toolProgressEntry{Key: "operation:update", Text: "Updating the operation"}
 	default:
 		if contextLabel != "" {
 			return toolProgressEntry{Key: "task:" + name, Text: "Working on " + contextLabel}

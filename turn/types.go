@@ -42,16 +42,17 @@ type Request struct {
 // The embedded policy, commit, and delivery fields make the orchestration
 // choices inspectable in tests before the package is wired into production.
 type Result struct {
-	Turn          *core.TurnResult
-	VisibleReply  string
-	FloorText     string
-	FloorMetadata string
-	MaterialFloor core.MaterialPacket
-	PlanState     session.PlanState
-	Policy        Policy
-	ProposalNote  string
-	Commit        CommitResult
-	Delivery      DeliveryResult
+	Turn           *core.TurnResult
+	VisibleReply   string
+	FloorText      string
+	FloorMetadata  string
+	MaterialFloor  core.MaterialPacket
+	PlanState      session.PlanState
+	OperationState session.OperationState
+	Policy         Policy
+	ProposalNote   string
+	Commit         CommitResult
+	Delivery       DeliveryResult
 }
 
 // Options are stable house-level defaults for a future engine instance.

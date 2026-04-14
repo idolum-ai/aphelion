@@ -408,6 +408,45 @@ func TestBuildGovernorPromptIncludesCurrentPlanState(t *testing.T) {
 	}
 }
 
+func TestBuildGovernorPromptIncludesCurrentOperationState(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		GovernorName:    "Aphelion",
+		GovernorBackend: "native",
+		PrincipalRole:   "admin",
+		Runtime: RuntimeAwareness{
+			OperationActive:       true,
+			OperationObjective:    "Investigate my internet footprint.",
+			OperationStatus:       "blocked",
+			OperationStage:        "proposal",
+			OperationSummary:      "Waiting on a proposal before external execution.",
+			ProposalActive:        true,
+			ProposalKind:          "capability_acquisition",
+			ProposalStatus:        "pending",
+			ProposalSummary:       "Acquire browser automation",
+			ProposalWhyNow:        "A screenshot requires browser automation in this operation.",
+			ProposalBoundedEffect: "Install Playwright locally and capture one screenshot.",
+			OperationFindings:     []string{"[high] Browser automation is not currently available. (basis: No browser tool is exposed.)"},
+			OperationArtifacts:    []string{"working-note: tmp/notes.md"},
+		},
+	})
+
+	if !strings.Contains(got, "## Current Operation State") {
+		t.Fatalf("prompt missing current operation state block: %q", got)
+	}
+	for _, want := range []string{
+		"Investigate my internet footprint.",
+		"Acquire browser automation",
+		"Install Playwright locally and capture one screenshot.",
+		"working-note: tmp/notes.md",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestBuildFacePromptKeepsAwarenessNarrow(t *testing.T) {
 	t.Parallel()
 

@@ -41,6 +41,19 @@ type RuntimeAwareness struct {
 	PlanActive                 bool
 	PlanSummary                string
 	PlanSteps                  []string
+	OperationActive            bool
+	OperationObjective         string
+	OperationStatus            string
+	OperationStage             string
+	OperationSummary           string
+	ProposalActive             bool
+	ProposalKind               string
+	ProposalStatus             string
+	ProposalSummary            string
+	ProposalWhyNow             string
+	ProposalBoundedEffect      string
+	OperationFindings          []string
+	OperationArtifacts         []string
 	PromptRoot                 string
 	ExecRoot                   string
 	SharedMemoryRoot           string
@@ -79,6 +92,15 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, nonEmptyAwarenessLine("provenance_summary", aw.ProvenanceSummary))
 	lines = append(lines, fmt.Sprintf("- plan_active: %t", aw.PlanActive))
 	lines = append(lines, nonEmptyAwarenessLine("plan_summary", aw.PlanSummary))
+	lines = append(lines, fmt.Sprintf("- operation_active: %t", aw.OperationActive))
+	lines = append(lines, nonEmptyAwarenessLine("operation_objective", aw.OperationObjective))
+	lines = append(lines, nonEmptyAwarenessLine("operation_status", aw.OperationStatus))
+	lines = append(lines, nonEmptyAwarenessLine("operation_stage", aw.OperationStage))
+	lines = append(lines, nonEmptyAwarenessLine("operation_summary", aw.OperationSummary))
+	lines = append(lines, fmt.Sprintf("- proposal_active: %t", aw.ProposalActive))
+	lines = append(lines, nonEmptyAwarenessLine("proposal_kind", aw.ProposalKind))
+	lines = append(lines, nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus))
+	lines = append(lines, nonEmptyAwarenessLine("proposal_summary", aw.ProposalSummary))
 	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
 	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	lines = append(lines, nonEmptyAwarenessLine("prompt_root", aw.PromptRoot))
@@ -123,6 +145,8 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode st
 	lines = append(lines, nonEmptyAwarenessLine("persona_effort_recipe", aw.PersonaEffortRecipe))
 	lines = append(lines, nonEmptyAwarenessLine("delivery_mode", aw.DeliveryMode))
 	lines = append(lines, fmt.Sprintf("- stream_reply: %t", aw.StreamReply))
+	lines = append(lines, fmt.Sprintf("- proposal_active: %t", aw.ProposalActive))
+	lines = append(lines, nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus))
 	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
 	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	return strings.Join(compactLines(lines), "\n")

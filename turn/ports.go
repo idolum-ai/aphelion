@@ -34,12 +34,13 @@ type GovernorRequest struct {
 // It surfaces the raw turn result alongside the floor sidecar that later face
 // rendering and persistence depend on.
 type GovernorResult struct {
-	Turn          *core.TurnResult
-	FloorText     string
-	FloorMetadata string
-	MaterialFloor core.MaterialPacket
-	PlanState     session.PlanState
-	Usage         core.TokenUsage
+	Turn           *core.TurnResult
+	FloorText      string
+	FloorMetadata  string
+	MaterialFloor  core.MaterialPacket
+	PlanState      session.PlanState
+	OperationState session.OperationState
+	Usage          core.TokenUsage
 }
 
 // FacePort is the relationship surface the turn engine expects from the

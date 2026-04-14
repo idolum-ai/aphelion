@@ -86,8 +86,8 @@ func TestExecDangerousCommandRequiresApproval(t *testing.T) {
 	if err == nil {
 		t.Fatal("Execute() err = nil, want approval error")
 	}
-	if !strings.Contains(err.Error(), "requires explicit confirmation") {
-		t.Fatalf("err = %v, want explicit confirmation error", err)
+	if !strings.Contains(err.Error(), "requires an approved proposal") {
+		t.Fatalf("err = %v, want explicit proposal error", err)
 	}
 }
 
@@ -115,8 +115,40 @@ func TestExecDangerousCommandUsesApprover(t *testing.T) {
 	if approver.request.Command != "rm -rf build" {
 		t.Fatalf("approver command = %q, want rm -rf build", approver.request.Command)
 	}
+	if approver.request.Proposal.Kind != "destructive_mutation" {
+		t.Fatalf("proposal kind = %q, want destructive_mutation", approver.request.Proposal.Kind)
+	}
 	if approver.request.SessionKey.ChatID != 7 {
 		t.Fatalf("approver session = %+v, want chat id 7", approver.request.SessionKey)
+	}
+}
+
+func TestExecCapabilityAcquisitionUsesApprover(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: false}
+	registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"pip install playwright"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 9},
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want denied proposal")
+	}
+	if approver.called != 1 {
+		t.Fatalf("approver called = %d, want 1", approver.called)
+	}
+	if approver.request.Proposal.Kind != "capability_acquisition" {
+		t.Fatalf("proposal kind = %q, want capability_acquisition", approver.request.Proposal.Kind)
+	}
+	if !strings.Contains(approver.request.Proposal.BoundedEffect, "install or update") {
+		t.Fatalf("proposal bounded effect = %q, want install/update summary", approver.request.Proposal.BoundedEffect)
 	}
 }
 
