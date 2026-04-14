@@ -1206,7 +1206,7 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 
 	deployVerificationRuntimeBuilder = func(cfg *config.Config, store *session.SQLiteStore) (builtDeployVerificationRuntime, error) {
 		sender := &deployVerificationSender{}
-		reply := "DEPLOYMENT VERIFIED: governor and Idolum are healthy."
+		reply := "DEPLOYMENT VERIFIED: Idolum is here and ready."
 		runner := deployTurnRunnerFunc(func(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
 			key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
 			sess, err := store.Load(key)
@@ -1285,6 +1285,88 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 	}
 	if remaining != 0 {
 		t.Fatalf("probe session rows = %d, want 0 after successful cleanup", remaining)
+	}
+}
+
+func TestVerifyDeploymentRejectsInternalLayerLeakInBlessingReply(t *testing.T) {
+	root := t.TempDir()
+	cfg := &config.Config{
+		Principals: config.PrincipalsConfig{
+			Telegram: config.TelegramPrincipalsConfig{
+				AdminUserIDs: []int64{42},
+			},
+		},
+		Sessions: config.SessionsConfig{
+			DBPath: filepath.Join(root, "state", "sessions.db"),
+		},
+		Agent: config.AgentConfig{
+			PromptRoot:        filepath.Join(root, "agent"),
+			ExecRoot:          filepath.Join(root, "workspace"),
+			SharedMemoryRoot:  filepath.Join(root, "agent"),
+			UserWorkspaceRoot: filepath.Join(root, "state", "isolated", "workspaces"),
+			UserMemoryRoot:    filepath.Join(root, "state", "isolated", "memory"),
+			ToolTimeout:       30,
+		},
+	}
+
+	origBuilder := deployVerificationRuntimeBuilder
+	defer func() { deployVerificationRuntimeBuilder = origBuilder }()
+
+	deployVerificationRuntimeBuilder = func(cfg *config.Config, store *session.SQLiteStore) (builtDeployVerificationRuntime, error) {
+		sender := &deployVerificationSender{}
+		reply := "DEPLOYMENT VERIFIED: governor and Idolum are ready."
+		runner := deployTurnRunnerFunc(func(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
+			key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
+			sess, err := store.Load(key)
+			if err != nil {
+				return nil, err
+			}
+			sess.ChatType = "dm"
+			sess.UserName = msg.SenderName
+			sess.TurnCount++
+			sess.LastFloorText = "Verification floor."
+			newMessages := []session.Message{
+				{
+					Role:         "user",
+					Content:      msg.Text,
+					ContentChars: len(msg.Text),
+					TurnIndex:    sess.TurnCount,
+				},
+				{
+					Role:         "assistant",
+					Content:      reply,
+					ContentChars: len(reply),
+					TurnIndex:    sess.TurnCount,
+				},
+			}
+			if err := store.Save(sess, newMessages, core.TokenUsage{}); err != nil {
+				return nil, err
+			}
+			if _, err := sender.SendMessage(ctx, core.OutboundMessage{ChatID: msg.ChatID, Text: reply}); err != nil {
+				return nil, err
+			}
+			return &core.TurnResult{Text: "Verification floor."}, nil
+		})
+		return builtDeployVerificationRuntime{
+			Runner: runner,
+			Sender: sender,
+			Probe: func(ctx context.Context, key session.SessionKey, p principal.Principal) (string, error) {
+				return "tool probe persisted plan state", nil
+			},
+		}, nil
+	}
+
+	report, err := verifyDeployment(context.Background(), cfg, deployVerificationOptions{
+		ConfigPath: "/tmp/aphelion.toml",
+	})
+	if err == nil {
+		t.Fatal("verifyDeployment() err = nil, want leaked internal layer failure")
+	}
+	if !strings.Contains(err.Error(), "leaked internal layer markers") {
+		t.Fatalf("verifyDeployment() err = %v, want leaked internal layer markers", err)
+	}
+	if report.Status != "failed" {
+		t.Fatalf("report.Status = %q, want failed", report.Status)
 	}
 }
 

@@ -262,8 +262,11 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 		if !strings.HasPrefix(reply, verifyDeployBlessingPrefix) {
 			return "", fmt.Errorf("verification reply missing blessing prefix %q: %q", verifyDeployBlessingPrefix, reply)
 		}
-		if !strings.Contains(lower, "governor") || !strings.Contains(lower, "idolum") {
-			return "", fmt.Errorf("verification reply missing governor/idolum markers: %q", reply)
+		if !strings.Contains(lower, "ready") {
+			return "", fmt.Errorf("verification reply missing readiness confirmation: %q", reply)
+		}
+		if strings.Contains(lower, "governor") || strings.Contains(lower, "aphelion") {
+			return "", fmt.Errorf("verification reply leaked internal layer markers: %q", reply)
 		}
 		report.Blessed = true
 		return reply, nil
