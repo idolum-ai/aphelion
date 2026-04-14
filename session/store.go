@@ -2606,6 +2606,14 @@ func migrateSessionIdentity(tx *sql.Tx) error {
 		return nil
 	}
 
+	legacyPlanEvents, err := extractLegacyPlanEvents(tx)
+	if err != nil {
+		return err
+	}
+	if err := dropLegacyPlanEvents(tx); err != nil {
+		return err
+	}
+
 	if err := backfillSessionIdentityColumns(tx); err != nil {
 		return err
 	}
@@ -2821,6 +2829,14 @@ func migrateSessionIdentity(tx *sql.Tx) error {
 		`ALTER TABLE review_events_v10 RENAME TO review_events`,
 		`ALTER TABLE turn_runs_v10 RENAME TO turn_runs`,
 		`ALTER TABLE compaction_log_v10 RENAME TO compaction_log`,
+		`CREATE TABLE plan_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			event_kind TEXT NOT NULL,
+			plan_state_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_transport_scope ON sessions(chat_id, user_id, scope_kind, scope_id, durable_agent_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, turn_index)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_active ON messages(session_id, compacted, turn_index)`,
@@ -2834,6 +2850,68 @@ func migrateSessionIdentity(tx *sql.Tx) error {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("finalize session identity migration: %w", err)
 		}
+	}
+	for _, event := range legacyPlanEvents {
+		if _, err := tx.Exec(`
+			INSERT INTO plan_events(id, session_id, event_kind, plan_state_json, created_at)
+			VALUES (?, ?, ?, ?, ?)
+		`, event.ID, event.SessionID, event.Kind, event.PlanStateJSON, event.CreatedAt); err != nil {
+			return fmt.Errorf("restore legacy plan event id=%d: %w", event.ID, err)
+		}
+	}
+	return nil
+}
+
+type legacyPlanEventRow struct {
+	ID            int64
+	SessionID     string
+	Kind          string
+	PlanStateJSON string
+	CreatedAt     string
+}
+
+func extractLegacyPlanEvents(tx *sql.Tx) ([]legacyPlanEventRow, error) {
+	exists, err := tableExists(tx, "plan_events")
+	if err != nil {
+		return nil, fmt.Errorf("inspect legacy plan_events table: %w", err)
+	}
+	if !exists {
+		return nil, nil
+	}
+	rows, err := tx.Query(`
+		SELECT id, COALESCE(session_id, ''), event_kind, COALESCE(plan_state_json, '{}'), created_at
+		FROM plan_events
+		ORDER BY created_at ASC, id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query legacy plan_events: %w", err)
+	}
+	defer rows.Close()
+
+	var out []legacyPlanEventRow
+	for rows.Next() {
+		var row legacyPlanEventRow
+		if err := rows.Scan(&row.ID, &row.SessionID, &row.Kind, &row.PlanStateJSON, &row.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan legacy plan event: %w", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate legacy plan events: %w", err)
+	}
+	return out, nil
+}
+
+func dropLegacyPlanEvents(tx *sql.Tx) error {
+	exists, err := tableExists(tx, "plan_events")
+	if err != nil {
+		return fmt.Errorf("inspect plan_events table: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	if _, err := tx.Exec(`DROP TABLE plan_events`); err != nil {
+		return fmt.Errorf("drop legacy plan_events: %w", err)
 	}
 	return nil
 }
@@ -3240,6 +3318,18 @@ func primaryKeyColumns(tx *sql.Tx, table string) ([]string, error) {
 		out = append(out, byOrder[i])
 	}
 	return out, nil
+}
+
+func tableExists(tx *sql.Tx, table string) (bool, error) {
+	var count int
+	if err := tx.QueryRow(`
+		SELECT COUNT(1)
+		FROM sqlite_master
+		WHERE type = 'table' AND name = ?
+	`, table).Scan(&count); err != nil {
+		return false, fmt.Errorf("query sqlite_master(%s): %w", table, err)
+	}
+	return count == 1, nil
 }
 
 func currentSchemaVersion(tx *sql.Tx) (int, error) {

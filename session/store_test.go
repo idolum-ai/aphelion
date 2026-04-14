@@ -1095,6 +1095,209 @@ func TestInitMigratesLegacySessionsWithFloorColumn(t *testing.T) {
 	}
 }
 
+func TestInitMigratesLegacySessionIdentityWithPlanEventsFKMismatch(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "legacy-plan-events.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	chatID := int64(321)
+	sessionID := SessionIDFromParts(chatID, 0, ScopeRef{})
+
+	legacyDDL := []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (9)`,
+		`CREATE TABLE sessions (
+			chat_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			session_id TEXT,
+			system_prompt TEXT,
+			last_floor_text TEXT,
+			last_floor_metadata TEXT,
+			plan_state_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			turn_count INTEGER NOT NULL DEFAULT 0,
+			chat_type TEXT NOT NULL DEFAULT 'dm',
+			chat_title TEXT,
+			user_name TEXT,
+			cache_last_write_block INTEGER NOT NULL DEFAULT 0,
+			cache_blocks_since INTEGER NOT NULL DEFAULT 0,
+			cache_last_write_time TEXT,
+			cache_hit_rate REAL NOT NULL DEFAULT 0.0,
+			cache_consecutive_misses INTEGER NOT NULL DEFAULT 0,
+			total_input_tokens INTEGER NOT NULL DEFAULT 0,
+			total_output_tokens INTEGER NOT NULL DEFAULT 0,
+			total_cache_read INTEGER NOT NULL DEFAULT 0,
+			total_cache_write INTEGER NOT NULL DEFAULT 0,
+			last_provider TEXT,
+			last_model TEXT,
+			active_tool_calls INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT,
+			PRIMARY KEY (chat_id, user_id)
+		)`,
+		`CREATE TABLE messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			floor_content TEXT,
+			floor_metadata TEXT,
+			tool_calls TEXT,
+			tool_id TEXT,
+			tool_name TEXT,
+			thinking TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			turn_index INTEGER NOT NULL,
+			content_chars INTEGER NOT NULL DEFAULT 0,
+			compacted INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE outbound_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			turn_index INTEGER NOT NULL,
+			telegram_msg_id INTEGER NOT NULL,
+			msg_type TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE review_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_session_id TEXT,
+			source_chat_id INTEGER NOT NULL DEFAULT 0,
+			source_user_id INTEGER NOT NULL DEFAULT 0,
+			source_role TEXT NOT NULL,
+			source_scope_kind TEXT NOT NULL DEFAULT '',
+			source_scope_id TEXT NOT NULL DEFAULT '',
+			source_durable_agent_id TEXT NOT NULL DEFAULT '',
+			target_session_id TEXT,
+			target_chat_id INTEGER NOT NULL DEFAULT 0,
+			target_scope_kind TEXT NOT NULL DEFAULT '',
+			target_scope_id TEXT NOT NULL DEFAULT '',
+			target_durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_from INTEGER,
+			turn_to INTEGER,
+			summary TEXT NOT NULL,
+			metadata_json TEXT,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			delivered_at TEXT
+		)`,
+		`CREATE TABLE turn_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			session_id TEXT,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL,
+			status TEXT NOT NULL,
+			request_text TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			completed_at TEXT,
+			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+			last_tool_name TEXT,
+			last_tool_preview TEXT,
+			tool_calls_started INTEGER NOT NULL DEFAULT 0,
+			tool_calls_finished INTEGER NOT NULL DEFAULT 0,
+			last_tool_result_preview TEXT,
+			last_tool_error TEXT,
+			progress_message_id INTEGER,
+			error_text TEXT,
+			recovery_summary TEXT,
+			recovery_logged_at TEXT
+		)`,
+		`CREATE TABLE compaction_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			session_id TEXT,
+			timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+			turns_before INTEGER,
+			turns_after INTEGER,
+			tokens_before INTEGER,
+			tokens_after INTEGER,
+			summary TEXT,
+			strategy TEXT NOT NULL DEFAULT 'summarize'
+		)`,
+		`CREATE TABLE plan_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			event_kind TEXT NOT NULL,
+			plan_state_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+		)`,
+	}
+	for _, ddl := range legacyDDL {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatalf("apply legacy ddl: %v", err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO sessions(session_id, chat_id, user_id, system_prompt)
+		VALUES (?, ?, 0, 'legacy prompt')
+	`, sessionID, chatID); err != nil {
+		t.Fatalf("insert legacy session: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO plan_events(session_id, event_kind, plan_state_json)
+		VALUES (?, 'update_plan', '{"steps":[{"step":"repair startup","status":"pending"}]}')
+	`, sessionID); err != nil {
+		t.Fatalf("insert legacy plan event: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() migration err = %v", err)
+	}
+	defer store.Close()
+
+	var eventCount int
+	if err := store.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM plan_events
+		WHERE session_id = ? AND event_kind = 'update_plan'
+	`, sessionID).Scan(&eventCount); err != nil {
+		t.Fatalf("query migrated plan_events: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("migrated plan event count = %d, want 1", eventCount)
+	}
+
+	rows, err := store.db.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatalf("PRAGMA foreign_key_check: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var (
+			table  string
+			rowid  int64
+			parent string
+			fkid   int64
+		)
+		if err := rows.Scan(&table, &rowid, &parent, &fkid); err != nil {
+			t.Fatalf("scan foreign_key_check row: %v", err)
+		}
+		t.Fatalf("foreign_key_check reported violation table=%s rowid=%d parent=%s fkid=%d", table, rowid, parent, fkid)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate foreign_key_check rows: %v", err)
+	}
+}
+
 func TestInitMigratesLegacyDurableAgentsToLivePolicy(t *testing.T) {
 	t.Parallel()
 
