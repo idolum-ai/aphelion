@@ -229,14 +229,18 @@ func nextFakeReply(queue *[]string, fallback string) string {
 }
 
 type fakeSender struct {
-	mu       sync.Mutex
-	sent     []core.OutboundMessage
-	sendErr  error
-	voice    []voiceSend
-	actions  []chatAction
-	edits    []messageEdit
-	deletes  []messageDelete
-	actionCh chan chatAction
+	mu           sync.Mutex
+	sent         []core.OutboundMessage
+	sendCount    int
+	sendErr      error
+	sendErrAfter int
+	voice        []voiceSend
+	actions      []chatAction
+	edits        []messageEdit
+	editCount    int
+	deletes      []messageDelete
+	editErr      error
+	actionCh     chan chatAction
 }
 
 type inlineDurableGroupChildExecutor struct {
@@ -271,8 +275,11 @@ func (e stubRuntimeStatusError) StatusCode() int { return e.code }
 func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.sendCount++
 	if f.sendErr != nil {
-		return 0, f.sendErr
+		if f.sendErrAfter == 0 || f.sendCount > f.sendErrAfter {
+			return 0, f.sendErr
+		}
 	}
 	f.sent = append(f.sent, msg)
 	return int64(len(f.sent)), nil
@@ -311,6 +318,10 @@ func (f *fakeSender) SendChatAction(_ context.Context, chatID int64, action stri
 func (f *fakeSender) EditMessageText(_ context.Context, chatID int64, messageID int64, text string, parseMode string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.editCount++
+	if f.editErr != nil {
+		return f.editErr
+	}
 	f.edits = append(f.edits, messageEdit{ChatID: chatID, MessageID: messageID, Text: text})
 	return nil
 }
@@ -650,6 +661,81 @@ func TestHandleInboundPersistsWhenSendFails(t *testing.T) {
 	}
 	if len(outboundIDs) != 0 {
 		t.Fatalf("outbound ids = %#v, want empty on send failure", outboundIDs)
+	}
+}
+
+func TestHandleInboundStreamingFinalizeFailureDoesNotPersistTurn(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	sender.editErr = errors.New("stream finalize failed")
+	sender.sendErr = errors.New("stream finalize fallback failed")
+	sender.sendErrAfter = 1
+	provider.streamFaceText = "streamed idolum reply"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     45,
+		SenderID:   1001,
+		SenderName: "daniel",
+		Text:       "hello",
+		MessageID:  88,
+	})
+	if err == nil {
+		sender.mu.Lock()
+		nSent := len(sender.sent)
+		nEditAttempts := sender.editCount
+		sentTexts := make([]string, len(sender.sent))
+		for i, msg := range sender.sent {
+			sentTexts[i] = msg.Text
+		}
+		sender.mu.Unlock()
+		t.Fatalf("HandleInbound() err = nil, want stream finalize failure (sent=%d editAttempts=%d texts=%v)", nSent, nEditAttempts, sentTexts)
+	}
+	if !strings.Contains(err.Error(), "finish streamed reply") {
+		t.Fatalf("HandleInbound() err = %v, want finish streamed reply error", err)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 45, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if sess.TurnCount != 0 {
+		t.Fatalf("turn count = %d, want 0", sess.TurnCount)
+	}
+	if len(sess.Messages) != 0 {
+		t.Fatalf("session messages = %d, want 0", len(sess.Messages))
+	}
+	outboundIDs, err := store.OutboundAfterTurn(session.SessionKey{ChatID: 45, UserID: 0}, 0)
+	if err != nil {
+		t.Fatalf("OutboundAfterTurn() err = %v", err)
+	}
+	if len(outboundIDs) != 0 {
+		t.Fatalf("outbound ids = %#v, want empty", outboundIDs)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if sender.editCount == 0 {
+		t.Fatal("expected attempted streamed edit before finalize failure")
+	}
+	if sender.sendErr == nil {
+		t.Fatal("expected sender send error to be configured for finalize fallback path")
+	}
+	if sender.sendCount < 2 {
+		t.Fatalf("sendCount = %d, want at least 2", sender.sendCount)
+	}
+	if len(sender.sent) == 0 {
+		t.Fatal("expected streamed send before finalize failure")
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent count = %d, want 1", len(sender.sent))
+	}
+	if len(sender.edits) > 0 && sender.edits[0].ChatID != 45 {
+		t.Fatalf("edit chat id = %d, want 45", sender.edits[0].ChatID)
 	}
 }
 
