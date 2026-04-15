@@ -8,7 +8,6 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -192,7 +191,7 @@ func ShouldRenderIdolumReply(policy FacePolicy, userText string, floorText strin
 }
 
 // ShouldUseMaterialFloorContract keeps material-floor contract usage explicit.
-func ShouldUseMaterialFloorContract(_ face.Backend, policy FacePolicy) bool {
+func ShouldUseMaterialFloorContract(_ string, policy FacePolicy) bool {
 	return policy.Proposal
 }
 

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/face"
 )
 
 // BuildFloorFromGovernor parses governor output into a material floor artifact
@@ -15,17 +14,25 @@ import (
 func BuildFloorFromGovernor(text string, useContract bool) (core.MaterialPacket, string, bool) {
 	trimmed := strings.TrimSpace(text)
 	if !useContract {
-		return core.MaterialPacket{}, face.FloorTextOrFallback(trimmed), false
+		return core.MaterialPacket{}, floorTextOrFallback(trimmed), false
 	}
 	packet, err := ParseMaterialPacket(trimmed)
 	if err != nil {
-		return core.LegacyMaterialPacket(trimmed), face.FloorTextOrFallback(trimmed), false
+		return core.LegacyMaterialPacket(trimmed), floorTextOrFallback(trimmed), false
 	}
 	sidecar := strings.TrimSpace(packet.Text())
 	if sidecar == "" {
-		sidecar = face.FloorTextOrFallback(trimmed)
+		sidecar = floorTextOrFallback(trimmed)
 	}
 	return packet, sidecar, true
+}
+
+func floorTextOrFallback(text string) string {
+	floor := strings.TrimSpace(text)
+	if floor == "" {
+		return "(no response)"
+	}
+	return floor
 }
 
 // ParseMaterialPacket parses structured `FACTS`/`ALLOWED_ACTIONS`-style floor

@@ -9,7 +9,7 @@ import (
 )
 
 func shouldUseMaterialFloorContract(backend face.Backend, policy faceTurnPolicy) bool {
-	return pipeline.ShouldUseMaterialFloorContract(backend, pipeline.FacePolicy(policy))
+	return pipeline.ShouldUseMaterialFloorContract(string(backend), pipeline.FacePolicy(policy))
 }
 
 func governorMaterialArtifact(text string, useContract bool) (core.MaterialPacket, string, bool) {

@@ -49,3 +49,23 @@ func TestBuildFloorFromGovernorFallsBackToLegacyText(t *testing.T) {
 		t.Fatalf("packet = %#v, want legacy notes packet", packet)
 	}
 }
+
+func TestBuildFloorFromGovernorUsesNoResponseFallback(t *testing.T) {
+	t.Parallel()
+
+	_, sidecarContract, structured := BuildFloorFromGovernor("", true)
+	if structured {
+		t.Fatal("structured = true, want legacy fallback on empty input")
+	}
+	if sidecarContract != "(no response)" {
+		t.Fatalf("sidecar = %q, want %q", sidecarContract, "(no response)")
+	}
+
+	_, sidecarLegacy, structured := BuildFloorFromGovernor("", false)
+	if structured {
+		t.Fatal("structured = true, want legacy floor when contract disabled")
+	}
+	if sidecarLegacy != "(no response)" {
+		t.Fatalf("sidecar = %q, want %q", sidecarLegacy, "(no response)")
+	}
+}
