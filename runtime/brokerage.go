@@ -47,10 +47,6 @@ func summarizeExecutionContract(contract *pipeline.ExecutionContract) string {
 	return contract.Summary()
 }
 
-func parseProposalExecutionContract(text string) *pipeline.ExecutionContract {
-	return pipeline.ParseExecutionContract(text)
-}
-
 func parseBrokerageRatification(text string) (turnBrokerage, error) {
 	parsed, err := pipeline.ParseBrokerageRatification(text)
 	if err != nil {
@@ -246,7 +242,7 @@ func (r *Runtime) convergeTurnBrokerage(
 			return r.fallbackToPlainProposal(ctx, baseAwareness, brokerage, requestFaceNote, totalUsage)
 		}
 		brokerage.IdolumNote = strings.TrimSpace(revised)
-		brokerage.SuggestedExecutionContract = parseProposalExecutionContract(revised)
+		brokerage.SuggestedExecutionContract = pipeline.ParseExecutionContract(revised)
 		brokerage.Ratification = ""
 		brokerage.SignalJudgment = ""
 		brokerage.RatificationRecord = ""

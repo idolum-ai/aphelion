@@ -13,6 +13,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
@@ -53,7 +54,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 	audit := newTurnAuditRecorder(key, "telegram", string(actor.Role), prepared.LedgerText)
 	defer r.emitTurnAudit(audit)
-	facePolicy := decideInteractiveFacePolicy(sess, prepared.LedgerText)
+	facePolicy := pipeline.DecideInteractiveFacePolicy(sess, prepared.LedgerText)
 	useMaterialFloor := shouldUseMaterialFloorContract(r.faceBackend, facePolicy)
 	exec := r.executionForTurn(prepared)
 	promptContext, err := r.promptContextForScope(scope, now)
@@ -102,7 +103,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		} else {
 			brokerage.IdolumNote = proposal
 			brokerage.Active = brokerage.IdolumNote != ""
-			if suggestedContract := parseProposalExecutionContract(proposal); suggestedContract != nil {
+			if suggestedContract := pipeline.ParseExecutionContract(proposal); suggestedContract != nil {
 				brokerage.Phase = brokeragePhaseName(brokerage.Active, "brokerage")
 				brokerage.SuggestedExecutionContract = suggestedContract
 			} else {
@@ -221,7 +222,12 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		if useMaterialFloor {
 			renderHeuristicText = materialFloorHeuristicText(materialFloor, floorText)
 		}
-		shouldRender := shouldRenderIdolumReply(facePolicy, prepared.LedgerText, renderHeuristicText, result.ToolLog, outHistory[len(input):]) || replyWithVoice
+		shouldRender := pipeline.ShouldRenderInteractiveIdolumReply(facePolicy, pipeline.RenderDecisionInput{
+			UserText:          prepared.LedgerText,
+			FloorText:         renderHeuristicText,
+			ToolLog:           result.ToolLog,
+			GeneratedMessages: outHistory[len(input):],
+		}) || replyWithVoice
 		if !shouldRender && !replyWithVoice {
 			faceAwareness.DeliveryMode = "floor_fallback"
 			renderReq.Runtime = faceAwareness
