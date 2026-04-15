@@ -16,18 +16,11 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-type preparedInboundTurn struct {
-	UserText        string
-	LedgerText      string
-	AgentMedia      []core.Media
-	ArtifactRefs    []core.ArtifactReference
-	InboundWasVoice bool
-	MediaAttached   bool
-	MediaMode       string
-}
+type preparedInboundTurn = pipeline.PreparedTurn
 
 func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, msg core.InboundMessage) (preparedInboundTurn, error) {
 	prepared := preparedInboundTurn{

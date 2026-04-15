@@ -79,6 +79,15 @@ That makes several things harder than they should be:
     Persist, deliver, record-delivered, stream finalization, review-event enqueue,
     and failure handling are core behavioral guarantees, not incidental plumbing.
 
+11. Treat architecture gates as explicit, testable constraints.
+   - Turn species are classification labels for policy, delivery, and authority
+     differences; they are not a promise of one universal turn engine.
+   - `pipeline` should remain narrow to governor/face transformations and not grow
+     into runtime-like transport or provider ownership.
+   - Awareness fields should be assembled only where ownership is clear.
+   - Commit and persistence semantics are first-class contracts and should be
+     extracted only after they have explicit tests.
+
 ## Status Language
 
 This plan uses three status labels for architecture claims:

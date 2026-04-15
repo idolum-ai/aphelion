@@ -3,9 +3,8 @@
 package runtime
 
 import (
-	"strings"
-
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -15,20 +14,12 @@ type faceTurnPolicy struct {
 }
 
 func decideInteractiveFacePolicy(sess *session.Session, userText string) faceTurnPolicy {
-	_ = sess
-	trimmed := strings.TrimSpace(userText)
-	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
-		return faceTurnPolicy{}
-	}
-	return faceTurnPolicy{Proposal: true, Render: true}
+	policy := pipeline.DecideInteractiveFacePolicy(sess, userText)
+	return faceTurnPolicy(policy)
 }
 
 func shouldRenderIdolumReply(policy faceTurnPolicy, userText string, floorText string, toolLog []string, generated []agent.Message) bool {
-	_ = userText
-	_ = floorText
-	_ = toolLog
-	_ = generated
-	return policy.Render
+	return pipeline.ShouldRenderIdolumReply(pipeline.FacePolicy(policy), userText, floorText, toolLog, generated)
 }
 
 func lastTurnHadToolMessages(messages []session.Message) bool {

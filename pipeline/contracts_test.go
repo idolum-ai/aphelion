@@ -43,3 +43,42 @@ func TestFloorArtifactAllowsStructuredOrLegacySurface(t *testing.T) {
 		t.Fatal("legacy floor incorrectly marked structured")
 	}
 }
+
+func TestDecideInteractiveFacePolicy(t *testing.T) {
+	t.Parallel()
+
+	p := DecideInteractiveFacePolicy(nil, "hello there")
+	if !p.Proposal || !p.Render {
+		t.Fatalf("policy = %#v, want proposal and render", p)
+	}
+
+	p = DecideInteractiveFacePolicy(nil, "/command")
+	if p.Proposal || p.Render {
+		t.Fatalf("policy = %#v, want empty for command input", p)
+	}
+}
+
+func TestShouldRenderIdolumReplyUsesRenderPolicy(t *testing.T) {
+	t.Parallel()
+
+	policy := FacePolicy{Render: true}
+	if !ShouldRenderIdolumReply(policy, "", "", nil, nil) {
+		t.Fatal("ShouldRenderIdolumReply() = false, want true")
+	}
+
+	policy.Render = false
+	if ShouldRenderIdolumReply(policy, "", "", nil, nil) {
+		t.Fatal("ShouldRenderIdolumReply() = true, want false")
+	}
+}
+
+func TestShouldUseMaterialFloorContract(t *testing.T) {
+	t.Parallel()
+
+	if !ShouldUseMaterialFloorContract("", FacePolicy{Proposal: true}) {
+		t.Fatal("ShouldUseMaterialFloorContract() = false, want true")
+	}
+	if ShouldUseMaterialFloorContract("", FacePolicy{}) {
+		t.Fatal("ShouldUseMaterialFloorContract() = true, want false")
+	}
+}

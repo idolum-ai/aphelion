@@ -4,10 +4,100 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/prompt"
+	"github.com/idolum-ai/aphelion/session"
 )
+
+// FacePolicy names the minimal turn policy that governs proposal and rendering.
+// It is intentionally small so the governance and rendering mechanics can be
+// reasoned about independently from runtime transport concerns.
+type FacePolicy struct {
+	Proposal bool
+	Render   bool
+}
+
+// TurnPrepareContract is the output boundary from the prepare phase.
+type TurnPrepareContract struct {
+	UserText        string
+	LedgerText      string
+	AgentMedia      []core.Media
+	ArtifactRefs    []core.ArtifactReference
+	InboundWasVoice bool
+	MediaAttached   bool
+	MediaMode       string
+}
+
+// PreparedTurn is the currently exported shape for inbound-turn preparation.
+// It is an alias to keep terminology stable while we move ownership toward
+// pipeline.
+type PreparedTurn = TurnPrepareContract
+
+// TurnExecutionContract is the governor-facing execution snapshot used when
+// building governor prompts and runtime awareness.
+type TurnExecutionContract struct {
+	Provider      agent.Provider
+	Backend       string
+	ProviderName  string
+	ModelName     string
+	ProviderPath  []string
+	MediaAttached bool
+	MediaMode     string
+}
+
+// GovernorExecution is the exported execution contract used by Runtime after the
+// extraction.
+// It aliases the existing concrete execution container from runtime.
+type GovernorExecution = TurnExecutionContract
+
+// FloorMaterial represents the floor output after governor execution.
+type FloorMaterial struct {
+	Packet     core.MaterialPacket
+	Text       string
+	Structured bool
+}
+
+// RenderContract captures render-mode intent after floor extraction.
+type RenderContract struct {
+	Channel         string
+	Mode            string
+	GovernorName    string
+	FaceName        string
+	PrincipalRole   string
+	WorkspaceRoot   string
+	LatestUserInput string
+	Floor           FloorArtifact
+	Material        FloorMaterial
+	Runtime         prompt.RuntimeAwareness
+	FallbackMode    string
+}
+
+// RepairContract captures the repair phase intent when draft output violates
+// constitution gates.
+type RepairContract struct {
+	Channel       string
+	PrincipalRole string
+	UserText      string
+	Candidate     string
+	FloorText     string
+	Material      FloorMaterial
+	Runtime       prompt.RuntimeAwareness
+	Violations    []string
+	MediaCount    int
+}
+
+// DeliveryContract captures delivery intent prior to side-effectful send.
+type DeliveryContract struct {
+	Mode          string
+	ReplyText     string
+	MediaOnly     bool
+	ShouldStream  bool
+	ReplyWithData bool
+}
 
 // BrokerageProposal is Idolum's bounded pre-turn push about how a turn should
 // move.
@@ -17,7 +107,7 @@ type BrokerageProposal struct {
 	Usage             core.TokenUsage
 }
 
-// BrokerageRatification is Aphelion's bounded answer to a brokerage proposal.
+// BrokerageRatification is Aphelion's bounded answer to a proposal.
 type BrokerageRatification struct {
 	RawText          string
 	RatifiedContract ExecutionContract
@@ -52,7 +142,6 @@ type RenderRequest struct {
 	GovernorName    string
 	FaceName        string
 	Channel         string
-	Style           string
 	PrincipalRole   string
 	WorkspaceRoot   string
 	LatestUserInput string
@@ -81,4 +170,47 @@ type ScenePort interface {
 // FallbackPort is the degraded floor-to-user delivery surface.
 type FallbackPort interface {
 	RenderFallback(ctx context.Context, req FallbackRequest) (*FallbackArtifact, error)
+}
+
+// DecideInteractiveFacePolicy chooses the bicameral face policy for a turn.
+func DecideInteractiveFacePolicy(_ *session.Session, userText string) FacePolicy {
+	trimmed := strings.TrimSpace(userText)
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
+		return FacePolicy{}
+	}
+	return FacePolicy{Proposal: true, Render: true}
+}
+
+// ShouldRenderIdolumReply determines whether Idolum rendering is requested for
+// a specific turn.
+func ShouldRenderIdolumReply(policy FacePolicy, userText string, floorText string, toolLog []string, generated []agent.Message) bool {
+	_ = userText
+	_ = floorText
+	_ = toolLog
+	_ = generated
+	return policy.Render
+}
+
+// ShouldUseMaterialFloorContract keeps material-floor contract usage explicit.
+func ShouldUseMaterialFloorContract(_ face.Backend, policy FacePolicy) bool {
+	return policy.Proposal
+}
+
+// FormatFloorTextForRender is currently an explicit helper for render heuristics.
+func FormatFloorTextForRender(packet core.MaterialPacket, fallback string) string {
+	if packet.Empty() {
+		return fallback
+	}
+	parts := make([]string, 0, len(packet.Facts)+len(packet.AllowedActions)+len(packet.Commitments)+len(packet.Refusals)+len(packet.SceneConstraints)+len(packet.Notes))
+	parts = append(parts, packet.Facts...)
+	parts = append(parts, packet.AllowedActions...)
+	parts = append(parts, packet.Commitments...)
+	parts = append(parts, packet.Refusals...)
+	parts = append(parts, packet.SceneConstraints...)
+	parts = append(parts, packet.Notes...)
+	joined := strings.TrimSpace(strings.Join(parts, " "))
+	if joined == "" {
+		return fallback
+	}
+	return joined
 }

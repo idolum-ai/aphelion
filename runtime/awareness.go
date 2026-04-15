@@ -7,6 +7,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
 	providerpkg "github.com/idolum-ai/aphelion/provider"
 	"github.com/idolum-ai/aphelion/session"
@@ -17,15 +18,7 @@ type providerStateReporter interface {
 	RuntimeState() providerpkg.RuntimeState
 }
 
-type governorExecution struct {
-	Provider      agent.Provider
-	Backend       string
-	ProviderName  string
-	ModelName     string
-	ProviderPath  []string
-	MediaAttached bool
-	MediaMode     string
-}
+type governorExecution = pipeline.GovernorExecution
 
 func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.TurnRunKind, channel string, exec governorExecution) prompt.RuntimeAwareness {
 	if strings.TrimSpace(exec.Backend) == "" {
