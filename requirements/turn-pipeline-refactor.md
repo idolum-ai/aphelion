@@ -110,6 +110,7 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `runtime`: removed passive face-policy helper implementations that duplicated pipeline logic.
 - `pipeline`: added brokerage parsing ownership (`ParseExecutionContract`, `ParseBrokerageRatification`) with tests for execution contract extraction and ratification contract validation. `runtime` now consumes these as parsing inputs while keeping turn orchestration ownership.
 - `runtime`: removed mirrored `executionContract` surface; `runtime` now aliases `pipeline.ExecutionContract` directly to prevent silent drift between parser and brokerage orchestration layers.
+- `runtime`: removed mirrored `faceTurnPolicy` surface by aliasing `pipeline.FacePolicy` directly and keeping rendering/policy delegation behavior in `pipeline`.
 
 ## Target Package Ownership
 

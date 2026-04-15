@@ -8,18 +8,14 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-type faceTurnPolicy struct {
-	Proposal bool
-	Render   bool
-}
+type faceTurnPolicy = pipeline.FacePolicy
 
 func decideInteractiveFacePolicy(sess *session.Session, userText string) faceTurnPolicy {
-	policy := pipeline.DecideInteractiveFacePolicy(sess, userText)
-	return faceTurnPolicy(policy)
+	return pipeline.DecideInteractiveFacePolicy(sess, userText)
 }
 
 func shouldRenderIdolumReply(policy faceTurnPolicy, userText string, floorText string, toolLog []string, generated []agent.Message) bool {
-	return pipeline.ShouldRenderInteractiveIdolumReply(pipeline.FacePolicy(policy), pipeline.RenderDecisionInput{
+	return pipeline.ShouldRenderInteractiveIdolumReply(policy, pipeline.RenderDecisionInput{
 		UserText:          userText,
 		FloorText:         floorText,
 		ToolLog:           toolLog,
