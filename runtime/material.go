@@ -8,8 +8,8 @@ import (
 	"github.com/idolum-ai/aphelion/pipeline"
 )
 
-func shouldUseMaterialFloorContract(backend face.Backend, policy faceTurnPolicy) bool {
-	return pipeline.ShouldUseMaterialFloorContract(string(backend), pipeline.FacePolicy(policy))
+func shouldUseMaterialFloorContract(backend face.Backend, policy pipeline.FacePolicy) bool {
+	return pipeline.ShouldUseMaterialFloorContract(string(backend), policy)
 }
 
 func governorMaterialArtifact(text string, useContract bool) (core.MaterialPacket, string, bool) {

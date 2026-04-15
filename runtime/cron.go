@@ -14,6 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
@@ -60,7 +61,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	if err != nil {
 		return fmt.Errorf("resolve cron scope: %w", err)
 	}
-	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "system", governorExecution{})
+	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "system", pipeline.GovernorExecution{})
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
@@ -129,7 +130,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	replyText := face.SerializeFloorFallback(materialFloor, floorText, face.FallbackOptions{Channel: "telegram"})
 	currentFaceModel := r.currentFaceRenderer()
 	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
-		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", governorExecution{})
+		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", pipeline.GovernorExecution{})
 		faceAwareness.DeliveryMode = "cron_delivery"
 		renderedReply, renderErr := currentFaceModel.Render(ctx, face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,

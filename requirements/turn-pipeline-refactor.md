@@ -112,6 +112,7 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `runtime`: removed mirrored `executionContract` surface; `runtime` now aliases `pipeline.ExecutionContract` directly to prevent silent drift between parser and brokerage orchestration layers.
 - `runtime`: removed mirrored `faceTurnPolicy` surface by aliasing `pipeline.FacePolicy` directly and keeping rendering/policy delegation behavior in `pipeline`.
 - `runtime`: added commit-semantics test (`TestHandleInboundPersistsWhenSendFails`) to pin down persisted transcript state when outbound delivery fails.
+- `runtime`: removed the remaining mirrored contract aliases for execution/awareness/policy/prep phases (`governorExecution`, `executionContract`, `preparedInboundTurn`, `faceTurnPolicy`) and now uses `pipeline` contracts directly at call sites.
 
 ## Target Package Ownership
 

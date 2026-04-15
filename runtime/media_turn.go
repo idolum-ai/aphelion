@@ -20,10 +20,8 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-type preparedInboundTurn = pipeline.PreparedTurn
-
-func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, msg core.InboundMessage) (preparedInboundTurn, error) {
-	prepared := preparedInboundTurn{
+func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, msg core.InboundMessage) (pipeline.PreparedTurn, error) {
+	prepared := pipeline.PreparedTurn{
 		UserText:      strings.TrimSpace(msg.Text),
 		LedgerText:    strings.TrimSpace(msg.Text),
 		MediaAttached: len(msg.Artifacts) > 0,
@@ -106,8 +104,8 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 	return prepared, nil
 }
 
-func (r *Runtime) executionForTurn(prepared preparedInboundTurn) governorExecution {
-	exec := governorExecution{
+func (r *Runtime) executionForTurn(prepared pipeline.PreparedTurn) pipeline.GovernorExecution {
+	exec := pipeline.GovernorExecution{
 		Provider:      r.provider,
 		Backend:       strings.TrimSpace(r.governorBackend),
 		ProviderName:  r.governorProviderName(),

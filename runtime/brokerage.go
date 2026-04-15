@@ -18,18 +18,16 @@ const (
 	maxBrokerageRounds = 3
 )
 
-type executionContract = pipeline.ExecutionContract
-
 type turnBrokerage struct {
 	Active                     bool
 	Phase                      string
 	IdolumNote                 string
-	SuggestedExecutionContract *executionContract
+	SuggestedExecutionContract *pipeline.ExecutionContract
 	Ratification               string
 	SignalJudgment             string
 	RatificationRecord         string
 	RatifiedSteps              []string
-	RatifiedExecutionContract  *executionContract
+	RatifiedExecutionContract  *pipeline.ExecutionContract
 }
 
 func (r *Runtime) withBrokerageAwareness(aw prompt.RuntimeAwareness, brokerage turnBrokerage) prompt.RuntimeAwareness {
@@ -42,14 +40,14 @@ func (r *Runtime) withBrokerageAwareness(aw prompt.RuntimeAwareness, brokerage t
 	return aw
 }
 
-func summarizeExecutionContract(contract *executionContract) string {
+func summarizeExecutionContract(contract *pipeline.ExecutionContract) string {
 	if contract == nil {
 		return ""
 	}
 	return contract.Summary()
 }
 
-func parseProposalExecutionContract(text string) *executionContract {
+func parseProposalExecutionContract(text string) *pipeline.ExecutionContract {
 	return pipeline.ParseExecutionContract(text)
 }
 
@@ -58,7 +56,7 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 	if err != nil {
 		return turnBrokerage{}, err
 	}
-	contract := executionContract(parsed.RatifiedContract)
+	contract := pipeline.ExecutionContract(parsed.RatifiedContract)
 	return turnBrokerage{
 		RatificationRecord:        parsed.RawText,
 		Ratification:              string(parsed.Disposition),
@@ -70,7 +68,7 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 
 func (r *Runtime) ratifyTurnBrokerage(
 	ctx context.Context,
-	exec governorExecution,
+	exec pipeline.GovernorExecution,
 	systemBlocks []agent.SystemBlock,
 	history []agent.Message,
 	userText string,
@@ -184,7 +182,7 @@ type brokerageFaceRequester func(mode string, awareness prompt.RuntimeAwareness,
 
 func (r *Runtime) convergeTurnBrokerage(
 	ctx context.Context,
-	exec governorExecution,
+	exec pipeline.GovernorExecution,
 	baseAwareness prompt.RuntimeAwareness,
 	systemBlocks []agent.SystemBlock,
 	history []agent.Message,
