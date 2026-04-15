@@ -96,6 +96,16 @@ This plan uses three status labels for architecture claims:
 - `migration seam`: partially real, but still split or duplicated across layers
 - `northbound target`: intended final owner, not yet the live production owner
 
+## Progress Snapshot
+
+As of this commit series, the refactor has advanced on one bounded slice:
+
+- `pipeline`: added contract-boundary extraction for turn policy, turn execution shape, and floor-material parsing/formatting.
+- `pipeline`: added pure helpers and tests for material floor parsing (`ParseMaterialPacket`, `BuildFloorFromGovernor`).
+- `runtime`: began ownership handoff by delegating prepare/material/face-policy/awareness execution shaping to `pipeline` contracts.
+- `requirements`: encoded additional cautionary rules (species as explicit policy vocabulary, pipeline scope boundaries, and test-first commitment extraction).
+- `tests`: `go test ./...` remains green after this slice.
+
 ## Target Package Ownership
 
 ### `runtime`
