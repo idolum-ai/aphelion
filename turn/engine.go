@@ -79,7 +79,7 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 	if m.Persistence != nil {
 		commit, err := m.Persistence.Persist(ctx, CommitRequest{Request: req, Result: result, Plan: plan})
 		if err != nil {
-			return nil, err
+			return result, err
 		}
 		if commit != nil {
 			result.Commit = *commit
@@ -87,9 +87,13 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	if m.Delivery != nil {
-		delivered, err := m.Delivery.Deliver(ctx, DeliveryRequest{Message: buildOutboundMessage(req, result)})
+		delivered, err := m.Delivery.Deliver(ctx, DeliveryRequest{
+			Message:         buildOutboundMessage(req, result),
+			InboundWasVoice: req.InboundWasVoice,
+			Result:          result,
+		})
 		if err != nil {
-			return nil, err
+			return result, err
 		}
 		if delivered != nil {
 			result.Delivery = *delivered
