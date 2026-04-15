@@ -180,13 +180,21 @@ func DecideInteractiveFacePolicy(_ *session.Session, userText string) FacePolicy
 	return FacePolicy{Proposal: true, Render: true}
 }
 
-// ShouldRenderIdolumReply determines whether Idolum rendering is requested for
-// a specific turn.
-func ShouldRenderIdolumReply(policy FacePolicy, userText string, floorText string, toolLog []string, generated []agent.Message) bool {
+// RenderDecisionInput carries the minimally necessary context for a render decision.
+type RenderDecisionInput struct {
+	UserText          string
+	FloorText         string
+	ToolLog           []string
+	GeneratedMessages []agent.Message
+}
+
+// ShouldRenderInteractiveIdolumReply determines whether Idolum scene rendering is
+// requested for an interactive turn.
+func ShouldRenderInteractiveIdolumReply(policy FacePolicy, input RenderDecisionInput) bool {
 	if !policy.Render {
 		return false
 	}
-	trimmedUserText := strings.TrimSpace(userText)
+	trimmedUserText := strings.TrimSpace(input.UserText)
 	if trimmedUserText == "" {
 		return false
 	}
@@ -194,13 +202,24 @@ func ShouldRenderIdolumReply(policy FacePolicy, userText string, floorText strin
 		return false
 	}
 
-	floorTrimmed := strings.TrimSpace(floorText)
+	floorTrimmed := strings.TrimSpace(input.FloorText)
 	isNoResponse := floorTrimmed == "" || strings.EqualFold(floorTrimmed, "(no response)")
-	hasToolContext := len(toolLog) > 0 || generatedHasToolMessages(generated)
+	hasToolContext := len(input.ToolLog) > 0 || generatedHasToolMessages(input.GeneratedMessages)
 	if isNoResponse && !hasToolContext {
 		return false
 	}
 	return true
+}
+
+// ShouldRenderIdolumReply is a backward-compatible interactive wrapper kept for
+// existing callsites.
+func ShouldRenderIdolumReply(policy FacePolicy, userText string, floorText string, toolLog []string, generated []agent.Message) bool {
+	return ShouldRenderInteractiveIdolumReply(policy, RenderDecisionInput{
+		UserText:          userText,
+		FloorText:         floorText,
+		ToolLog:           toolLog,
+		GeneratedMessages: generated,
+	})
 }
 
 // ShouldUseMaterialFloorContract keeps material-floor contract usage explicit.

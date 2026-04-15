@@ -19,5 +19,10 @@ func decideInteractiveFacePolicy(sess *session.Session, userText string) faceTur
 }
 
 func shouldRenderIdolumReply(policy faceTurnPolicy, userText string, floorText string, toolLog []string, generated []agent.Message) bool {
-	return pipeline.ShouldRenderIdolumReply(pipeline.FacePolicy(policy), userText, floorText, toolLog, generated)
+	return pipeline.ShouldRenderInteractiveIdolumReply(pipeline.FacePolicy(policy), pipeline.RenderDecisionInput{
+		UserText:          userText,
+		FloorText:         floorText,
+		ToolLog:           toolLog,
+		GeneratedMessages: generated,
+	})
 }
