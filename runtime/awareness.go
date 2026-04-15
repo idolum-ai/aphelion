@@ -18,7 +18,7 @@ type providerStateReporter interface {
 	RuntimeState() providerpkg.RuntimeState
 }
 
-func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.TurnRunKind, channel string, exec pipeline.GovernorExecution) prompt.RuntimeAwareness {
+func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.TurnRunKind, channel string, exec pipeline.TurnExecutionContract) prompt.RuntimeAwareness {
 	if strings.TrimSpace(exec.Backend) == "" {
 		exec.Backend = strings.TrimSpace(r.governorBackend)
 	}

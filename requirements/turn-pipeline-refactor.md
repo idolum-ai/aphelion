@@ -109,10 +109,10 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `pipeline`: introduced `RenderDecisionInput` and `ShouldRenderInteractiveIdolumReply` to keep render-decision inputs explicit and avoid argument drift; retained `ShouldRenderIdolumReply` as compatibility delegation.
 - `runtime`: removed passive face-policy helper implementations that duplicated pipeline logic.
 - `pipeline`: added brokerage parsing ownership (`ParseExecutionContract`, `ParseBrokerageRatification`) with tests for execution contract extraction and ratification contract validation. `runtime` now consumes these as parsing inputs while keeping turn orchestration ownership.
-- `runtime`: removed mirrored `executionContract` surface; `runtime` now aliases `pipeline.ExecutionContract` directly to prevent silent drift between parser and brokerage orchestration layers.
-- `runtime`: removed mirrored `faceTurnPolicy` surface by aliasing `pipeline.FacePolicy` directly and keeping rendering/policy delegation behavior in `pipeline`.
+- `runtime`: removed runtime mirrors of pipeline contracts and now consumes canonical pipeline contracts (`ExecutionContract`, `FacePolicy`, `TurnPrepareContract`, `TurnExecutionContract`) directly.
+- `pipeline`: removed in-package `PreparedTurn` / `GovernorExecution` aliases to keep one canonical contract name per concept and prevent mirrored type drift from the source.
 - `runtime`: added commit-semantics test (`TestHandleInboundPersistsWhenSendFails`) to pin down persisted transcript state when outbound delivery fails.
-- `runtime`: removed the remaining mirrored contract aliases for execution/awareness/policy/prep phases (`governorExecution`, `executionContract`, `preparedInboundTurn`, `faceTurnPolicy`) and now uses `pipeline` contracts directly at call sites.
+- `runtime`: removed the remaining mirrored contract aliases for execution/awareness/policy/prep phases and now uses `pipeline` contracts directly at call sites.
 
 ## Target Package Ownership
 

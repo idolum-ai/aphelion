@@ -68,7 +68,7 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 
 func (r *Runtime) ratifyTurnBrokerage(
 	ctx context.Context,
-	exec pipeline.GovernorExecution,
+	exec pipeline.TurnExecutionContract,
 	systemBlocks []agent.SystemBlock,
 	history []agent.Message,
 	userText string,
@@ -182,7 +182,7 @@ type brokerageFaceRequester func(mode string, awareness prompt.RuntimeAwareness,
 
 func (r *Runtime) convergeTurnBrokerage(
 	ctx context.Context,
-	exec pipeline.GovernorExecution,
+	exec pipeline.TurnExecutionContract,
 	baseAwareness prompt.RuntimeAwareness,
 	systemBlocks []agent.SystemBlock,
 	history []agent.Message,

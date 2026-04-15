@@ -31,11 +31,6 @@ type TurnPrepareContract struct {
 	MediaMode       string
 }
 
-// PreparedTurn is the currently exported shape for inbound-turn preparation.
-// It is an alias to keep terminology stable while we move ownership toward
-// pipeline.
-type PreparedTurn = TurnPrepareContract
-
 // TurnExecutionContract is the governor-facing execution snapshot used when
 // building governor prompts and runtime awareness.
 type TurnExecutionContract struct {
@@ -47,11 +42,6 @@ type TurnExecutionContract struct {
 	MediaAttached bool
 	MediaMode     string
 }
-
-// GovernorExecution is the exported execution contract used by Runtime after the
-// extraction.
-// It aliases the existing concrete execution container from runtime.
-type GovernorExecution = TurnExecutionContract
 
 // FloorMaterial represents the floor output after governor execution.
 type FloorMaterial struct {

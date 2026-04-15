@@ -78,7 +78,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return fmt.Errorf("load workspace prompt context: %w", err)
 	}
 	hiddenInputs := r.assembleHeartbeatHiddenInputs(ctx, scope, now, deliver, events)
-	governorAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", pipeline.GovernorExecution{}), hiddenInputs)
+	governorAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", pipeline.TurnExecutionContract{}), hiddenInputs)
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		GovernorBackend: r.governorBackend,
@@ -136,7 +136,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	currentFaceModel := r.currentFaceRenderer()
 	if eligibleForOutreach && r.faceBackend != face.BackendFloorFallback {
 		if proposer, ok := currentFaceModel.(face.Proposer); ok {
-			faceAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", pipeline.GovernorExecution{}), hiddenInputs)
+			faceAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", pipeline.TurnExecutionContract{}), hiddenInputs)
 			faceAwareness.ArtifactMode = "scene"
 			faceAwareness.DeliveryMode = "heartbeat_proposal"
 			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
@@ -199,7 +199,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 
 	replyText := face.SerializeFloorFallback(materialFloor, floorText, face.FallbackOptions{Channel: "telegram"})
 	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
-		faceAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", pipeline.GovernorExecution{}), hiddenInputs)
+		faceAwareness := r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", pipeline.TurnExecutionContract{}), hiddenInputs)
 		faceAwareness.DeliveryMode = "heartbeat_delivery"
 		renderedReply, renderErr := currentFaceModel.Render(ctx, face.RenderRequest{
 			GovernorName:    prompt.DefaultGovernorName,
