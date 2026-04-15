@@ -108,6 +108,7 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `pipeline`: moved face render decision from a passive wrapper into explicit behavior for `ShouldRenderIdolumReply` (command guard, empty-input guard, and no-response/tool-context handling), with tests.
 - `pipeline`: introduced `RenderDecisionInput` and `ShouldRenderInteractiveIdolumReply` to keep render-decision inputs explicit and avoid argument drift; retained `ShouldRenderIdolumReply` as compatibility delegation.
 - `runtime`: removed passive face-policy helper implementations that duplicated pipeline logic.
+- `pipeline`: added brokerage parsing ownership (`ParseExecutionContract`, `ParseBrokerageRatification`) with tests for execution contract extraction and ratification contract validation. `runtime` now consumes these as parsing inputs while keeping turn orchestration ownership.
 
 ## Target Package Ownership
 

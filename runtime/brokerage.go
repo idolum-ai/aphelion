@@ -9,19 +9,13 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 )
 
 const (
-	// Legacy mode names remain as a compatibility parser for older proposals and
-	// ratification records.
-	turnModeAnswerNow        = "answer_now"
-	turnModeInspectThenReply = "inspect_then_answer"
-	turnModeAskThenWait      = "ask_then_wait"
-	turnModeDecline          = "decline"
-	turnModeSilent           = "silent"
-	maxBrokerageRounds       = 3
+	maxBrokerageRounds = 3
 )
 
 type executionContract struct {
@@ -32,6 +26,13 @@ type executionContract struct {
 
 func (c executionContract) Summary() string {
 	return fmt.Sprintf("inspect=%s, question=%s, answer=%s", yesNo(c.NeedsInspection), yesNo(c.NeedsQuestion), yesNo(c.MayAnswerNow))
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
 }
 
 type turnBrokerage struct {
@@ -56,13 +57,6 @@ func (r *Runtime) withBrokerageAwareness(aw prompt.RuntimeAwareness, brokerage t
 	return aw
 }
 
-func yesNo(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
-}
-
 func summarizeExecutionContract(contract *executionContract) string {
 	if contract == nil {
 		return ""
@@ -70,201 +64,35 @@ func summarizeExecutionContract(contract *executionContract) string {
 	return contract.Summary()
 }
 
-func normalizeTurnMode(raw string) string {
-	value := strings.ToLower(strings.TrimSpace(raw))
-	value = strings.ReplaceAll(value, "-", "_")
-	value = strings.ReplaceAll(value, " ", "_")
-	switch value {
-	case turnModeAnswerNow, turnModeInspectThenReply, turnModeAskThenWait, turnModeDecline, turnModeSilent:
-		return value
-	default:
-		return ""
-	}
-}
-
-func executionContractFromTurnMode(raw string) (*executionContract, bool) {
-	switch normalizeTurnMode(raw) {
-	case turnModeAnswerNow, turnModeDecline:
-		return &executionContract{MayAnswerNow: true}, true
-	case turnModeInspectThenReply:
-		return &executionContract{NeedsInspection: true, MayAnswerNow: true}, true
-	case turnModeAskThenWait:
-		return &executionContract{NeedsQuestion: true}, true
-	case turnModeSilent:
-		return &executionContract{}, true
-	default:
-		return nil, false
-	}
-}
-
-func normalizeDirectiveBool(raw string) (bool, bool) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "yes", "true", "required", "needed", "y":
-		return true, true
-	case "no", "false", "not_required", "not needed", "n":
-		return false, true
-	default:
-		return false, false
-	}
-}
-
 func parseProposalExecutionContract(text string) *executionContract {
-	contract := executionContract{}
-	inspectSet := false
-	questionSet := false
-	answerSet := false
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		upper := strings.ToUpper(line)
-		switch {
-		case strings.HasPrefix(upper, "INSPECT:"):
-			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("INSPECT:"):])); ok {
-				contract.NeedsInspection = value
-				inspectSet = true
-			}
-		case strings.HasPrefix(upper, "QUESTION:"):
-			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("QUESTION:"):])); ok {
-				contract.NeedsQuestion = value
-				questionSet = true
-			}
-		case strings.HasPrefix(upper, "ANSWER:"):
-			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("ANSWER:"):])); ok {
-				contract.MayAnswerNow = value
-				answerSet = true
-			}
-		case strings.HasPrefix(upper, "MODE:"):
-			if legacy, ok := executionContractFromTurnMode(strings.TrimSpace(line[len("MODE:"):])); ok {
-				return legacy
-			}
-		}
+	parsed := pipeline.ParseExecutionContract(text)
+	if parsed == nil {
+		return nil
 	}
-	if inspectSet && questionSet && answerSet {
-		return &contract
+	return &executionContract{
+		NeedsInspection: parsed.NeedsInspection,
+		NeedsQuestion:   parsed.NeedsQuestion,
+		MayAnswerNow:    parsed.MayAnswerNow,
 	}
-	return nil
-}
-
-func normalizeRatification(raw string) string {
-	value := strings.ToLower(strings.TrimSpace(raw))
-	switch value {
-	case "accept", "adapt", "reject":
-		return value
-	default:
-		return ""
-	}
-}
-
-func normalizeSignalJudgment(raw string) string {
-	value := strings.ToLower(strings.TrimSpace(raw))
-	value = strings.ReplaceAll(value, "-", "_")
-	value = strings.ReplaceAll(value, " ", "_")
-	switch value {
-	case "", "confirmed", "overridden", "not_material":
-		return value
-	default:
-		return ""
-	}
-}
-
-func parsePlanStepLine(line string) string {
-	line = strings.TrimSpace(line)
-	switch {
-	case strings.HasPrefix(line, "- "), strings.HasPrefix(line, "* "):
-		return strings.TrimSpace(line[2:])
-	}
-	dot := strings.Index(line, ". ")
-	if dot <= 0 {
-		return ""
-	}
-	for _, ch := range line[:dot] {
-		if ch < '0' || ch > '9' {
-			return ""
-		}
-	}
-	return strings.TrimSpace(line[dot+2:])
 }
 
 func parseBrokerageRatification(text string) (turnBrokerage, error) {
-	parsed := turnBrokerage{RatificationRecord: strings.TrimSpace(text)}
-	if parsed.RatificationRecord == "" {
-		return parsed, fmt.Errorf("empty brokerage ratification")
+	parsed, err := pipeline.ParseBrokerageRatification(text)
+	if err != nil {
+		return turnBrokerage{}, err
 	}
-
-	contract := executionContract{}
-	inspectSet := false
-	questionSet := false
-	answerSet := false
-	inPlan := false
-	for _, rawLine := range strings.Split(parsed.RatificationRecord, "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" {
-			continue
-		}
-		upper := strings.ToUpper(line)
-		switch {
-		case strings.HasPrefix(upper, "INSPECT:"):
-			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("INSPECT:"):])); ok {
-				contract.NeedsInspection = value
-				inspectSet = true
-			}
-			inPlan = false
-			continue
-		case strings.HasPrefix(upper, "QUESTION:"):
-			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("QUESTION:"):])); ok {
-				contract.NeedsQuestion = value
-				questionSet = true
-			}
-			inPlan = false
-			continue
-		case strings.HasPrefix(upper, "ANSWER:"):
-			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("ANSWER:"):])); ok {
-				contract.MayAnswerNow = value
-				answerSet = true
-			}
-			inPlan = false
-			continue
-		case strings.HasPrefix(upper, "MODE:"):
-			if legacy, ok := executionContractFromTurnMode(strings.TrimSpace(line[len("MODE:"):])); ok {
-				contract = *legacy
-				inspectSet = true
-				questionSet = true
-				answerSet = true
-			}
-			inPlan = false
-			continue
-		case strings.HasPrefix(upper, "RATIFICATION:"):
-			parsed.Ratification = normalizeRatification(strings.TrimSpace(line[len("RATIFICATION:"):]))
-			inPlan = false
-			continue
-		case strings.HasPrefix(upper, "SIGNAL_JUDGMENT:"):
-			parsed.SignalJudgment = normalizeSignalJudgment(strings.TrimSpace(line[len("SIGNAL_JUDGMENT:"):]))
-			inPlan = false
-			continue
-		case upper == "PLAN:":
-			inPlan = true
-			continue
-		}
-		if !inPlan {
-			continue
-		}
-		if step := parsePlanStepLine(line); step != "" {
-			parsed.RatifiedSteps = append(parsed.RatifiedSteps, step)
-		}
+	copy := executionContract{
+		NeedsInspection: parsed.RatifiedContract.NeedsInspection,
+		NeedsQuestion:   parsed.RatifiedContract.NeedsQuestion,
+		MayAnswerNow:    parsed.RatifiedContract.MayAnswerNow,
 	}
-	if inspectSet && questionSet && answerSet {
-		parsed.RatifiedExecutionContract = &contract
-	}
-
-	switch {
-	case parsed.RatifiedExecutionContract == nil:
-		return parsed, fmt.Errorf("missing ratified execution contract")
-	case parsed.Ratification == "":
-		return parsed, fmt.Errorf("missing ratification disposition")
-	case len(parsed.RatifiedSteps) == 0:
-		return parsed, fmt.Errorf("missing ratified execution steps")
-	default:
-		return parsed, nil
-	}
+	return turnBrokerage{
+		RatificationRecord:        parsed.RawText,
+		Ratification:              string(parsed.Disposition),
+		SignalJudgment:            string(parsed.SignalJudgment),
+		RatifiedExecutionContract: &copy,
+		RatifiedSteps:             append([]string(nil), parsed.RatifiedSteps...),
+	}, nil
 }
 
 func (r *Runtime) ratifyTurnBrokerage(
