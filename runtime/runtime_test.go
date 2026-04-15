@@ -231,6 +231,7 @@ func nextFakeReply(queue *[]string, fallback string) string {
 type fakeSender struct {
 	mu       sync.Mutex
 	sent     []core.OutboundMessage
+	sendErr  error
 	voice    []voiceSend
 	actions  []chatAction
 	edits    []messageEdit
@@ -270,6 +271,9 @@ func (e stubRuntimeStatusError) StatusCode() int { return e.code }
 func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.sendErr != nil {
+		return 0, f.sendErr
+	}
 	f.sent = append(f.sent, msg)
 	return int64(len(f.sent)), nil
 }
@@ -600,6 +604,52 @@ func TestHandleInboundPersistsAndSends(t *testing.T) {
 	}
 	if len(outboundIDs) != 1 || outboundIDs[0] != 1 {
 		t.Fatalf("outbound ids = %#v, want [1]", outboundIDs)
+	}
+}
+
+func TestHandleInboundPersistsWhenSendFails(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	sender.sendErr = errors.New("send failed")
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     44,
+		SenderID:   1001,
+		SenderName: "daniel",
+		Text:       "hello",
+		MessageID:  77,
+	})
+	if err == nil {
+		t.Fatal("HandleInbound() err = nil, want send failure")
+	}
+	if !strings.Contains(err.Error(), "send outbound reply") {
+		t.Fatalf("HandleInbound() err = %v, want send outbound reply error", err)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 44, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if sess.TurnCount != 1 {
+		t.Fatalf("turn count = %d, want 1", sess.TurnCount)
+	}
+	if len(sess.Messages) != 2 {
+		t.Fatalf("session messages = %d, want 2", len(sess.Messages))
+	}
+	if sess.Messages[1].Role != "assistant" || strings.TrimSpace(sess.Messages[1].Content) == "" {
+		t.Fatalf("assistant message = %#v, want non-empty assistant message", sess.Messages[1])
+	}
+	outboundIDs, err := store.OutboundAfterTurn(session.SessionKey{ChatID: 44, UserID: 0}, 0)
+	if err != nil {
+		t.Fatalf("OutboundAfterTurn() err = %v", err)
+	}
+	if len(outboundIDs) != 0 {
+		t.Fatalf("outbound ids = %#v, want empty on send failure", outboundIDs)
 	}
 }
 
