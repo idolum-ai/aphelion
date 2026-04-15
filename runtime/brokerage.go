@@ -18,22 +18,7 @@ const (
 	maxBrokerageRounds = 3
 )
 
-type executionContract struct {
-	NeedsInspection bool
-	NeedsQuestion   bool
-	MayAnswerNow    bool
-}
-
-func (c executionContract) Summary() string {
-	return fmt.Sprintf("inspect=%s, question=%s, answer=%s", yesNo(c.NeedsInspection), yesNo(c.NeedsQuestion), yesNo(c.MayAnswerNow))
-}
-
-func yesNo(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
-}
+type executionContract = pipeline.ExecutionContract
 
 type turnBrokerage struct {
 	Active                     bool
@@ -65,15 +50,7 @@ func summarizeExecutionContract(contract *executionContract) string {
 }
 
 func parseProposalExecutionContract(text string) *executionContract {
-	parsed := pipeline.ParseExecutionContract(text)
-	if parsed == nil {
-		return nil
-	}
-	return &executionContract{
-		NeedsInspection: parsed.NeedsInspection,
-		NeedsQuestion:   parsed.NeedsQuestion,
-		MayAnswerNow:    parsed.MayAnswerNow,
-	}
+	return pipeline.ParseExecutionContract(text)
 }
 
 func parseBrokerageRatification(text string) (turnBrokerage, error) {
@@ -81,16 +58,12 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 	if err != nil {
 		return turnBrokerage{}, err
 	}
-	copy := executionContract{
-		NeedsInspection: parsed.RatifiedContract.NeedsInspection,
-		NeedsQuestion:   parsed.RatifiedContract.NeedsQuestion,
-		MayAnswerNow:    parsed.RatifiedContract.MayAnswerNow,
-	}
+	contract := executionContract(parsed.RatifiedContract)
 	return turnBrokerage{
 		RatificationRecord:        parsed.RawText,
 		Ratification:              string(parsed.Disposition),
 		SignalJudgment:            string(parsed.SignalJudgment),
-		RatifiedExecutionContract: &copy,
+		RatifiedExecutionContract: &contract,
 		RatifiedSteps:             append([]string(nil), parsed.RatifiedSteps...),
 	}, nil
 }
