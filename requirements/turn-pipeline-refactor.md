@@ -122,6 +122,7 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `runtime`: introduced a maintenance persistence port that reuses shared commit machinery (`persistTurn`) while preserving maintenance-ledger floor-first transcript semantics.
 - `runtime`: extracted shared coordinator execution orchestration (`executeCoordinatorTurnCommon`) so interactive DM and durable-group coordinators now share one governor/brokerage/floor/operation-state execution path while keeping species-specific hooks explicit at call sites.
 - `runtime`: extracted shared face-side coordinator helpers (`proposeCoordinatorFaceCommon`, `renderCoordinatorFaceCommon`) so interactive and durable-group coordinators now share proposal/request-note/render plumbing while preserving species-specific policy toggles and logging context.
+- `turn`: added cross-species policy/orchestration tests so maintenance run kinds (`heartbeat`, `cron`, `recovery`) now have explicit `turn`-package coverage for default policy shape and machine stage order without face stages.
 - `turn`: expanded engine tests for commit ordering and error propagation (`persist-before-delivery`, `delivery failure`, `persistence failure`) and now require `Result` material in delivery requests for phase-aware delivery decisions.
 - `runtime`/`turn`: moved hidden-input, plan, operation, and brokerage assembly into `turn` helpers (`turn.ApplyHiddenInputAwareness`, `turn.ApplyPlanAwareness`, `turn.ApplyOperationAwareness`, `turn.ApplyBrokerageAwareness`) and kept runtime focused on producing source facts only.
 

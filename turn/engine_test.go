@@ -250,6 +250,58 @@ func TestMachineHandlePassesFaceProposalIntoGovernor(t *testing.T) {
 	}
 }
 
+func TestMachineHandleMaintenanceSpeciesSkipsFaceStagesByDefaultPolicy(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		runKind session.TurnRunKind
+		reason  string
+	}{
+		{name: "heartbeat", runKind: session.TurnRunKindHeartbeat, reason: "heartbeat_default"},
+		{name: "cron", runKind: session.TurnRunKindCron, reason: "cron_default"},
+		{name: "recovery", runKind: session.TurnRunKindRecovery, reason: "recovery_default"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			var order []string
+			m := &Machine{
+				Governor:    &fakeGovernor{order: &order, resp: &GovernorResult{Turn: &core.TurnResult{Text: "governor raw"}, FloorText: "structured floor"}},
+				Face:        &fakeFace{order: &order, proposalResp: &FaceProposalResult{Note: "unexpected proposal"}, renderResp: &FaceRenderResult{Text: "unexpected scene"}},
+				Persistence: &fakePersistence{order: &order},
+				Delivery:    &fakeDelivery{order: &order},
+			}
+
+			result, err := m.Handle(context.Background(), Request{
+				RunKind:    tc.runKind,
+				SessionKey: session.SessionKey{ChatID: 77},
+				Inbound: core.InboundMessage{
+					ChatID: 77,
+					Text:   "maintenance input",
+				},
+				Session: &session.Session{ChatID: 77},
+			})
+			if err != nil {
+				t.Fatalf("Handle() err = %v", err)
+			}
+			if got, want := order, []string{"governor.execute", "persist", "deliver"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("order = %#v, want %#v", got, want)
+			}
+			if result.Policy.Reason != tc.reason {
+				t.Fatalf("result.Policy.Reason = %q, want %q", result.Policy.Reason, tc.reason)
+			}
+			if result.ProposalNote != "" {
+				t.Fatalf("result.ProposalNote = %q, want empty", result.ProposalNote)
+			}
+			if !result.Commit.Persisted {
+				t.Fatal("result.Commit.Persisted = false, want true")
+			}
+		})
+	}
+}
+
 func TestMachineHandleRejectsMismatchedChatIdentity(t *testing.T) {
 	m := &Machine{Governor: &fakeGovernor{}}
 	_, err := m.Handle(context.Background(), Request{

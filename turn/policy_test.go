@@ -38,3 +38,33 @@ func TestDefaultPolicySlashCommandSkipsFacePath(t *testing.T) {
 		t.Fatalf("policy = %#v, want no face stages", policy)
 	}
 }
+
+func TestDefaultPolicyMaintenanceKindsSkipFacePath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		runKind session.TurnRunKind
+		reason  string
+	}{
+		{name: "heartbeat", runKind: session.TurnRunKindHeartbeat, reason: "heartbeat_default"},
+		{name: "cron", runKind: session.TurnRunKindCron, reason: "cron_default"},
+		{name: "recovery", runKind: session.TurnRunKindRecovery, reason: "recovery_default"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			policy := DefaultPolicy(Request{
+				RunKind: tc.runKind,
+				Inbound: core.InboundMessage{Text: "maintenance turn input"},
+			})
+			if policy.Brokerage || policy.Proposal || policy.Render {
+				t.Fatalf("policy = %#v, want no face stages for %s", policy, tc.runKind)
+			}
+			if policy.Reason != tc.reason {
+				t.Fatalf("policy.Reason = %q, want %q", policy.Reason, tc.reason)
+			}
+		})
+	}
+}
