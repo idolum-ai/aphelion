@@ -4,6 +4,9 @@
 
 If `turn` is the spine of one turn, `pipeline` is the set of conversational transformations that spine invokes.
 
+The staged plan for making that ownership real lives in
+[`requirements/turn-pipeline-refactor.md`](../requirements/turn-pipeline-refactor.md).
+
 It exists to answer questions like:
 
 - how does Idolum propose posture before execution?
@@ -97,6 +100,10 @@ Aphelion's version is not identical, but it rhymes:
 What is unusual here is that these transformations are also constitutional and relational, not just stylistic.
 
 ## Likely paths forward
+
+See [`requirements/turn-pipeline-refactor.md`](../requirements/turn-pipeline-refactor.md)
+for the current staged extraction plan across the live runtime and the target
+`turn` / `pipeline` split.
 
 ### 1. Keep `pipeline` as a contract package for now
 

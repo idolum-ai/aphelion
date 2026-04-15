@@ -13,6 +13,9 @@ This package exists because the current runtime loop does more than transport me
 
 The long-term purpose of `turn` is to own that state machine.
 
+The staged plan for making that ownership real lives in
+[`requirements/turn-pipeline-refactor.md`](../requirements/turn-pipeline-refactor.md).
+
 ## What `turn` is for
 
 `turn` is not meant to be:
@@ -140,6 +143,10 @@ A turn here is load-bearing because it has to preserve:
 That makes `turn` more than a helper package. If it matures fully, it becomes one of the core packages in the repo.
 
 ## Likely paths forward
+
+See [`requirements/turn-pipeline-refactor.md`](../requirements/turn-pipeline-refactor.md)
+for the current staged extraction plan across `runtime`, `turn`, `pipeline`,
+`session`, and `durableagent`.
 
 There are a few plausible northbound paths for this package.
 
