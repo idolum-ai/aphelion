@@ -189,151 +189,93 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if !mediaOnlyReply {
 		replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
 	}
-	outboundID := int64(0)
-	outboundType := ""
 	streamedReply := false
-	faceRendered := false
-	if operationState, operationErr := r.store.OperationState(key); operationErr == nil {
-		sess.OperationState = mergeSessionOperationState(sess.OperationState, operationState)
-	}
-	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
-	faceAwareness = r.withOperationAwareness(r.withBrokerageAwareness(faceAwareness, brokerage), sess.OperationState)
-	faceAwareness.ArtifactMode = "scene"
-	faceAwareness.DeliveryMode = "text"
-	faceAwareness.StreamReply = false
-	if replyWithVoice {
-		faceAwareness.DeliveryMode = "voice"
-	} else if facePolicy.Render {
-		faceAwareness.DeliveryMode = "idolum_render"
-	}
-	if !mediaOnlyReply && r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
-		renderReq := face.RenderRequest{
-			GovernorName:    prompt.DefaultGovernorName,
-			FaceName:        face.DefaultFaceName,
-			Channel:         "telegram",
-			PrincipalRole:   string(actor.Role),
-			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			FloorText:       floorText,
-			MaterialFloor:   materialFloor,
-			LatestUserInput: prepared.LedgerText,
-			Runtime:         faceAwareness,
-		}
-		renderHeuristicText := floorText
-		if useMaterialFloor {
-			renderHeuristicText = pipeline.FormatFloorTextForRender(materialFloor, floorText)
-		}
-		shouldRender := pipeline.ShouldRenderInteractiveIdolumReply(facePolicy, pipeline.RenderDecisionInput{
-			UserText:          prepared.LedgerText,
-			FloorText:         renderHeuristicText,
-			ToolLog:           result.ToolLog,
-			GeneratedMessages: outHistory[len(input):],
-		}) || replyWithVoice
-		if !shouldRender && !replyWithVoice {
-			faceAwareness.DeliveryMode = "floor_fallback"
-			renderReq.Runtime = faceAwareness
-		}
-
-		if shouldRender && !replyWithVoice && len(result.Media) == 0 {
-			if streamer, ok := currentFaceModel.(face.StreamRenderer); ok {
-				editor := r.newStreamEditor(msg)
-				if editor != nil {
-					faceAwareness.DeliveryMode = "stream"
-					faceAwareness.StreamReply = true
-					renderReq.Runtime = faceAwareness
-					renderedReply, streamErr := streamer.RenderStream(ctx, renderReq, func(chunk string) error {
-						return editor.OnChunk(ctx, chunk)
-					})
-					if streamErr != nil {
-						editor.Abort(ctx)
-						log.Printf("WARN face stream render failed backend=%s err=%v; falling back to non-stream render", r.faceBackend, streamErr)
-					} else {
-						faceRendered = true
-						replyText = strings.TrimSpace(renderedReply)
-						if replyText == "" {
-							replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
-						}
-						extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
-						outboundID, err = editor.Finish(ctx)
-						if err != nil {
-							return result, fmt.Errorf("finish streamed reply: %w", err)
-						}
-						if outboundID != 0 {
-							outboundType = "streaming"
-							streamedReply = true
-						}
-					}
-				}
-			}
-		}
-
-		if shouldRender && !faceRendered {
-			if !replyWithVoice {
-				faceAwareness.DeliveryMode = "idolum_render"
-				faceAwareness.StreamReply = false
-				renderReq.Runtime = faceAwareness
-			}
-			renderedReply, renderErr := currentFaceModel.Render(ctx, renderReq)
-			if renderErr != nil {
-				log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, renderErr)
-			} else {
-				replyText = strings.TrimSpace(renderedReply)
-				if replyText == "" {
-					replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
-				}
-				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
-			}
-		}
-	}
-	replyText = r.applyTurnConstitution(ctx, scope, "telegram", string(actor.Role), prepared.LedgerText, currentFaceModel, faceAwareness, materialFloor, floorText, replyText, result.Media, audit)
-	result.TokenUsage = addTokenUsage(result.TokenUsage, extraUsage)
-
-	newMessages, err := session.NewMessagesForTurn(prepared.LedgerText, outHistory[len(input):], sess.TurnCount)
-	if err != nil {
-		return nil, fmt.Errorf("convert new messages: %w", err)
-	}
-	newMessages = replaceLastAssistantWithSceneText(newMessages, replyText)
-	newMessages = setLastAssistantFloor(newMessages, floorText)
-	newMessages = setLastAssistantFloorMetadata(newMessages, floorMetadata)
-	sess.LastFloorText = floorText
-	sess.LastFloorMetadata = floorMetadata
-	if planState, planErr := r.store.PlanState(key); planErr == nil {
-		sess.PlanState = mergeSessionPlanState(sess.PlanState, planState)
-	} else {
-		return nil, fmt.Errorf("load plan state before save: %w", planErr)
-	}
 	if operationState, operationErr := r.store.OperationState(key); operationErr == nil {
 		sess.OperationState = mergeSessionOperationState(sess.OperationState, operationState)
 	} else {
 		return nil, fmt.Errorf("load operation state before save: %w", operationErr)
 	}
-
-	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
-		return nil, fmt.Errorf("save session: %w", err)
+	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec)
+	faceAwareness = r.withOperationAwareness(r.withBrokerageAwareness(faceAwareness, brokerage), sess.OperationState)
+	renderResult, renderErr := r.renderTurnReply(turnRenderInput{
+		Ctx:              ctx,
+		Scope:            scope,
+		Msg:              msg,
+		Channel:          "telegram",
+		PrincipalRole:    string(actor.Role),
+		OutHistory:       outHistory,
+		HistoryInputLen:  len(input),
+		Result:           result,
+		FacePolicy:       facePolicy,
+		UseMaterialFloor: useMaterialFloor,
+		MediaOnlyReply:   mediaOnlyReply,
+		ReplyText:        replyText,
+		FloorText:        floorText,
+		MaterialFloor:    materialFloor,
+		FallbackOpts:     fallbackOpts,
+		FaceAwareness:    faceAwareness,
+		CurrentFaceModel: currentFaceModel,
+		ReplyWithVoice:   replyWithVoice,
+		AllowStream:      true,
+		PromptInput:      prepared.LedgerText,
+		Audit:            audit,
+	})
+	if renderErr != nil {
+		return result, renderErr
 	}
+	replyText = renderResult.ReplyText
+	streamedReply = renderResult.StreamedReply
+	extraUsage = addTokenUsage(extraUsage, renderResult.Usage)
+	result.TokenUsage = addTokenUsage(result.TokenUsage, extraUsage)
 
-	if !streamedReply {
-		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, result.Media, prepared.InboundWasVoice)
-		if err != nil {
-			return result, fmt.Errorf("send outbound reply: %w", err)
+	commit, err := r.commitTurn(ctx, turnCommitInput{
+		Key:             key,
+		Sess:            sess,
+		Prepared:        prepared,
+		OutHistory:      outHistory,
+		HistoryInputLen: len(input),
+		Result:          result,
+		FloorText:       floorText,
+		FloorMetadata:   floorMetadata,
+		ReplyText:       replyText,
+		StreamedReply:   streamedReply,
+		OutboundID:      renderResult.OutboundID,
+		OutboundType:    renderResult.OutboundType,
+		RecordOutbound:  true,
+		SendReply: func(_ context.Context) (int64, string, error) {
+			outID, outType, sendErr := r.sendReply(ctx, msg, replyText, result.Media, prepared.InboundWasVoice)
+			if sendErr != nil {
+				return 0, "", fmt.Errorf("send outbound reply: %w", sendErr)
+			}
+			return outID, outType, nil
+		},
+		Audit: audit,
+		PostCommitHooks: []func() error{
+			func() error {
+				if !shouldGenerateReviewEvent(actor, key) {
+					return nil
+				}
+				return r.enqueueReviewEventsForTurn(actor, msg, sess.TurnCount, prepared.LedgerText, replyText, result.ToolLog)
+			},
+			func() error {
+				if actor.Role != principal.RoleAdmin {
+					return nil
+				}
+				return r.deliverReviewEvents(ctx, key, sess)
+			},
+		},
+		ErrorConvertMessages: "convert new messages",
+		ErrorLoadPlanState:   "load plan state before save",
+		ErrorLoadOperation:   "load operation state before save",
+		ErrorSaveSession:     "save session",
+		ErrorRecordOutbound:  "record outbound reply",
+	})
+	if err != nil {
+		if commit.Committed {
+			return result, err
 		}
+		return nil, err
 	}
-	audit.RecordFinalReply(replyText, result.Media, outboundType)
-	if err := r.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
-		return result, fmt.Errorf("record outbound reply: %w", err)
-	}
-
-	if shouldGenerateReviewEvent(actor, key) {
-		if err := r.enqueueReviewEventsForTurn(actor, msg, sess.TurnCount, prepared.LedgerText, replyText, result.ToolLog); err != nil {
-			return result, fmt.Errorf("enqueue review events: %w", err)
-		}
-	}
-
-	if actor.Role == principal.RoleAdmin {
-		if err := r.deliverReviewEvents(ctx, key, sess); err != nil {
-			return result, fmt.Errorf("deliver review events: %w", err)
-		}
-	}
-
 	return result, nil
 }
 

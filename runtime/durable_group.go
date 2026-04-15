@@ -296,140 +296,94 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	if !mediaOnlyReply {
 		replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
 	}
-	outboundID := int64(0)
-	outboundType := ""
 	streamedReply := false
-	faceRendered := false
 	allowLocalReply := durableGroupAllowsLocalReply(core.NormalizeDurableAgentLivePolicy(registered.LivePolicy))
 	if operationState, operationErr := r.store.OperationState(key); operationErr == nil {
 		sess.OperationState = mergeSessionOperationState(sess.OperationState, operationState)
+	} else {
+		return nil, fmt.Errorf("load operation state before save: %w", operationErr)
 	}
 	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec)
 	faceAwareness = r.withOperationAwareness(r.withBrokerageAwareness(faceAwareness, brokerage), sess.OperationState)
-	faceAwareness.ArtifactMode = "scene"
-	faceAwareness.DeliveryMode = "text"
-	faceAwareness.StreamReply = false
-	if facePolicy.Render {
-		faceAwareness.DeliveryMode = "idolum_render"
+	renderResult, renderErr := r.renderTurnReply(turnRenderInput{
+		Ctx:              ctx,
+		Scope:            scope,
+		Msg:              msg,
+		Channel:          "telegram_group",
+		PrincipalRole:    "durable_agent",
+		OutHistory:       outHistory,
+		HistoryInputLen:  len(input),
+		Result:           result,
+		FacePolicy:       facePolicy,
+		UseMaterialFloor: useMaterialFloor,
+		MediaOnlyReply:   mediaOnlyReply,
+		ReplyText:        replyText,
+		FloorText:        floorText,
+		MaterialFloor:    materialFloor,
+		FallbackOpts:     fallbackOpts,
+		FaceAwareness:    faceAwareness,
+		CurrentFaceModel: currentFaceModel,
+		ReplyWithVoice:   false,
+		AllowStream:      opts.AllowStream,
+		PromptInput:      prepared.LedgerText,
+		Audit:            audit,
+	})
+	if renderErr != nil {
+		return nil, renderErr
 	}
-
-	if !mediaOnlyReply && r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
-		renderReq := face.RenderRequest{
-			GovernorName:    prompt.DefaultGovernorName,
-			FaceName:        face.DefaultFaceName,
-			Channel:         "telegram_group",
-			PrincipalRole:   "durable_agent",
-			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			FloorText:       floorText,
-			MaterialFloor:   materialFloor,
-			LatestUserInput: prepared.LedgerText,
-			Runtime:         faceAwareness,
-		}
-		renderHeuristicText := floorText
-		if useMaterialFloor {
-			renderHeuristicText = pipeline.FormatFloorTextForRender(materialFloor, floorText)
-		}
-		shouldRender := pipeline.ShouldRenderInteractiveIdolumReply(facePolicy, pipeline.RenderDecisionInput{
-			UserText:          prepared.LedgerText,
-			FloorText:         renderHeuristicText,
-			ToolLog:           result.ToolLog,
-			GeneratedMessages: outHistory[len(input):],
-		})
-		if !shouldRender {
-			faceAwareness.DeliveryMode = "floor_fallback"
-			renderReq.Runtime = faceAwareness
-		}
-		if shouldRender && allowLocalReply && opts.AllowStream && len(result.Media) == 0 {
-			if streamer, ok := currentFaceModel.(face.StreamRenderer); ok {
-				editor := r.newStreamEditor(msg)
-				if editor != nil {
-					faceAwareness.DeliveryMode = "stream"
-					faceAwareness.StreamReply = true
-					renderReq.Runtime = faceAwareness
-					renderedReply, streamErr := streamer.RenderStream(ctx, renderReq, func(chunk string) error {
-						return editor.OnChunk(ctx, chunk)
-					})
-					if streamErr != nil {
-						editor.Abort(ctx)
-						log.Printf("WARN durable group face stream render failed backend=%s agent_id=%s err=%v; falling back to non-stream render", r.faceBackend, registered.AgentID, streamErr)
-					} else {
-						faceRendered = true
-						replyText = strings.TrimSpace(renderedReply)
-						if replyText == "" {
-							replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
-						}
-						extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
-						outboundID, err = editor.Finish(ctx)
-						if err != nil {
-							return nil, fmt.Errorf("finish streamed durable group reply: %w", err)
-						}
-						if outboundID != 0 {
-							outboundType = "streaming"
-							streamedReply = true
-						}
-					}
-				}
-			}
-		}
-		if shouldRender && !faceRendered {
-			faceAwareness.DeliveryMode = "idolum_render"
-			faceAwareness.StreamReply = false
-			renderReq.Runtime = faceAwareness
-			renderedReply, renderErr := currentFaceModel.Render(ctx, renderReq)
-			if renderErr != nil {
-				log.Printf("WARN durable group face render failed backend=%s agent_id=%s err=%v; using floor_fallback serializer", r.faceBackend, registered.AgentID, renderErr)
-			} else {
-				replyText = strings.TrimSpace(renderedReply)
-				if replyText == "" {
-					replyText = face.SerializeFloorFallback(materialFloor, floorText, fallbackOpts)
-				}
-				extraUsage = addTokenUsage(extraUsage, consumeFaceUsage(currentFaceModel))
-			}
-		}
-	}
-	replyText = r.applyTurnConstitution(ctx, scope, "telegram_group", "durable_agent", prepared.LedgerText, currentFaceModel, faceAwareness, materialFloor, floorText, replyText, result.Media, audit)
+	replyText = renderResult.ReplyText
+	streamedReply = renderResult.StreamedReply
+	extraUsage = addTokenUsage(extraUsage, renderResult.Usage)
 	result.TokenUsage = addTokenUsage(result.TokenUsage, extraUsage)
 
-	newMessages, err := session.NewMessagesForTurn(prepared.LedgerText, outHistory[len(input):], sess.TurnCount)
+	commit, err := r.commitTurn(ctx, turnCommitInput{
+		Key:             key,
+		Sess:            sess,
+		Prepared:        prepared,
+		OutHistory:      outHistory,
+		HistoryInputLen: len(input),
+		Result:          result,
+		FloorText:       floorText,
+		FloorMetadata:   floorMetadata,
+		ReplyText:       replyText,
+		StreamedReply:   streamedReply,
+		OutboundID:      renderResult.OutboundID,
+		OutboundType:    renderResult.OutboundType,
+		RecordOutbound:  opts.DeliverReply && allowLocalReply,
+		SendReply: func(_ context.Context) (int64, string, error) {
+			if !opts.DeliverReply || !allowLocalReply {
+				return 0, "", nil
+			}
+			outboundID, outboundType, sendErr := r.sendReply(ctx, msg, replyText, result.Media, prepared.InboundWasVoice)
+			if sendErr != nil {
+				return 0, "", fmt.Errorf("send durable group reply: %w", sendErr)
+			}
+			return outboundID, outboundType, nil
+		},
+		Audit: audit,
+		PostCommitHooks: []func() error{
+			func() error {
+				artifact := durableGroupReviewArtifact(registered, core.NormalizeDurableAgentLivePolicy(registered.LivePolicy), msg, replyText)
+				if artifact == nil {
+					return nil
+				}
+				if _, hookErr := durableagent.NewRuntime(r.store).QueueReviewArtifact(registered, *artifact); hookErr != nil {
+					return fmt.Errorf("queue durable group review artifact: %w", hookErr)
+				}
+				return nil
+			},
+		},
+		ErrorConvertMessages: "convert durable group messages",
+		ErrorLoadPlanState:   "load durable group plan state before save",
+		ErrorLoadOperation:   "load durable group operation state before save",
+		ErrorSaveSession:     "save durable group session",
+		ErrorRecordOutbound:  "record durable group outbound reply",
+	})
 	if err != nil {
-		return nil, fmt.Errorf("convert durable group messages: %w", err)
-	}
-	newMessages = replaceLastAssistantWithSceneText(newMessages, replyText)
-	newMessages = setLastAssistantFloor(newMessages, floorText)
-	newMessages = setLastAssistantFloorMetadata(newMessages, floorMetadata)
-	sess.LastFloorText = floorText
-	sess.LastFloorMetadata = floorMetadata
-	if planState, planErr := r.store.PlanState(key); planErr == nil {
-		sess.PlanState = mergeSessionPlanState(sess.PlanState, planState)
-	} else {
-		return nil, fmt.Errorf("load durable group plan state before save: %w", planErr)
-	}
-	if operationState, operationErr := r.store.OperationState(key); operationErr == nil {
-		sess.OperationState = mergeSessionOperationState(sess.OperationState, operationState)
-	} else {
-		return nil, fmt.Errorf("load durable group operation state before save: %w", operationErr)
-	}
-	if err := r.store.Save(sess, newMessages, result.TokenUsage); err != nil {
-		return nil, fmt.Errorf("save durable group session: %w", err)
-	}
-
-	if opts.DeliverReply && !streamedReply && allowLocalReply {
-		outboundID, outboundType, err = r.sendReply(ctx, msg, replyText, result.Media, prepared.InboundWasVoice)
-		if err != nil {
-			return nil, fmt.Errorf("send durable group reply: %w", err)
+		if commit.Committed {
+			return nil, err
 		}
-	}
-	audit.RecordFinalReply(replyText, result.Media, outboundType)
-	if opts.DeliverReply && outboundID != 0 {
-		if err := r.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
-			return nil, fmt.Errorf("record durable group outbound reply: %w", err)
-		}
-	}
-
-	if artifact := durableGroupReviewArtifact(registered, core.NormalizeDurableAgentLivePolicy(registered.LivePolicy), msg, replyText); artifact != nil {
-		if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(registered, *artifact); err != nil {
-			return nil, fmt.Errorf("queue durable group review artifact: %w", err)
-		}
+		return nil, err
 	}
 	return &DurableGroupChildResult{
 		TurnResult:      *result,
