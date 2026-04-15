@@ -119,6 +119,7 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `runtime`: refactored turn finalization into explicit `turn.Persistence`/`turn.Delivery` ports, removing callback-style commit flow and preserving `persist-before-delivery` behavior.
 - `runtime`: updated `durable_group.go` and `turn.go` to consume `turn` machine results directly (`commit` + `delivery` phases) and removed duplicate commit sequencing.
 - `turn`: expanded engine tests for commit ordering and error propagation (`persist-before-delivery`, `delivery failure`, `persistence failure`) and now require `Result` material in delivery requests for phase-aware delivery decisions.
+- `runtime`/`turn`: moved hidden-input, plan, operation, and brokerage assembly into `turn` helpers (`turn.ApplyHiddenInputAwareness`, `turn.ApplyPlanAwareness`, `turn.ApplyOperationAwareness`, `turn.ApplyBrokerageAwareness`) and kept runtime focused on producing source facts only.
 
 ## Target Package Ownership
 

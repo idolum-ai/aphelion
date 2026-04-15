@@ -15,9 +15,9 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
-	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
+	"github.com/idolum-ai/aphelion/turn"
 )
 
 const (
@@ -122,11 +122,12 @@ func encodeFloorMetadata(metadata core.FloorMetadata) string {
 	return string(raw)
 }
 
-func (r *Runtime) withHiddenInputAwareness(aw prompt.RuntimeAwareness, inputs hiddenInputSet) prompt.RuntimeAwareness {
-	aw.HiddenInputsActive = inputs.Active()
-	aw.HiddenInputCategories = inputs.Categories()
-	aw.ProvenanceSummary = inputs.ProvenanceSummary()
-	return aw
+func (s hiddenInputSet) toTurnAwareness() turn.HiddenInputAwareness {
+	return turn.HiddenInputAwareness{
+		Active:            s.Active(),
+		Categories:        append([]string(nil), s.Categories()...),
+		ProvenanceSummary: strings.TrimSpace(s.ProvenanceSummary()),
+	}
 }
 
 func (r *Runtime) assembleInteractiveHiddenInputs(ctx context.Context, scope sandbox.Scope, now time.Time, userText string) hiddenInputSet {

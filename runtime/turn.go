@@ -62,7 +62,13 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
 	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText)
-	baseGovernorAwareness := r.withOperationAwareness(r.withPlanAwareness(r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec), hiddenInputs), sess.PlanState), sess.OperationState)
+	baseGovernorAwareness := turn.ApplyOperationAwareness(
+		turn.ApplyPlanAwareness(
+			turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec), hiddenInputs.toTurnAwareness()),
+			sess.PlanState,
+		),
+		sess.OperationState,
+	)
 	if useMaterialFloor {
 		baseGovernorAwareness.ArtifactMode = "floor"
 	}
@@ -125,16 +131,16 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 		audit: audit,
 	}
 	machine.Delivery = &turnDeliveryPort{
-		runtime:        r,
-		key:            key,
-		sess:           sess,
-		msg:            msg,
+		runtime:         r,
+		key:             key,
+		sess:            sess,
+		msg:             msg,
 		inboundWasVoice: prepared.InboundWasVoice,
-		deliver:        true,
-		recordOutbound: true,
-		audit:          audit,
-		sendErrCtx:     "send outbound reply",
-		recordErrCtx:   "record outbound reply",
+		deliver:         true,
+		recordOutbound:  true,
+		audit:           audit,
+		sendErrCtx:      "send outbound reply",
+		recordErrCtx:    "record outbound reply",
 		hooks: turnCommitHooks{
 			QueueReviewEvents: func() error {
 				if !shouldGenerateReviewEvent(actor, key) {
@@ -159,12 +165,12 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 
 	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:    session.TurnRunKindInteractive,
-		SessionKey: key,
-		Inbound:    msg,
-		Session:    sess,
+		RunKind:         session.TurnRunKindInteractive,
+		SessionKey:      key,
+		Inbound:         msg,
+		Session:         sess,
 		InboundWasVoice: prepared.InboundWasVoice,
-		Now:        now,
+		Now:             now,
 	})
 	if err != nil && (turnResult == nil || !turnResult.Commit.Persisted) {
 		return nil, err

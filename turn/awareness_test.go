@@ -1,0 +1,172 @@
+//go:build linux
+
+package turn
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/idolum-ai/aphelion/pipeline"
+	"github.com/idolum-ai/aphelion/prompt"
+	"github.com/idolum-ai/aphelion/session"
+)
+
+func TestApplyHiddenInputAwareness(t *testing.T) {
+	categories := []string{"x", "y"}
+	base := prompt.RuntimeAwareness{
+		HiddenInputCategories: []string{"old"},
+		OperationFindings:     []string{"old"},
+	}
+	aw := ApplyHiddenInputAwareness(base, HiddenInputAwareness{
+		Active:            true,
+		Categories:        categories,
+		ProvenanceSummary: "  provenance summary  ",
+	})
+
+	if !aw.HiddenInputsActive {
+		t.Fatal("HiddenInputsActive = false, want true")
+	}
+	if got, want := aw.HiddenInputCategories, categories; !reflect.DeepEqual(got, want) {
+		t.Fatalf("HiddenInputCategories = %#v, want %#v", got, want)
+	}
+	if got, want := aw.ProvenanceSummary, "provenance summary"; got != want {
+		t.Fatalf("ProvenanceSummary = %q, want %q", got, want)
+	}
+
+	categories[0] = "mutated"
+	if got, want := aw.HiddenInputCategories[0], "x"; got != want {
+		t.Fatalf("HiddenInputCategories[0] = %q, want %q", got, want)
+	}
+}
+
+func TestApplyPlanAwarenessCopiesPlanState(t *testing.T) {
+	base := prompt.RuntimeAwareness{
+		PlanSteps:   []string{"old"},
+		PlanSummary: "old",
+	}
+	state := session.PlanState{
+		Explanation: "  investigate this backlog  ",
+		Steps: []session.PlanStep{
+			{Step: " ", Status: "invalid"},
+			{Step: "  draft design  ", Status: session.PlanStatusCompleted},
+		},
+	}
+	aw := ApplyPlanAwareness(base, state)
+
+	if !aw.PlanActive {
+		t.Fatal("PlanActive = false, want true")
+	}
+	if got, want := aw.PlanSummary, "investigate this backlog"; got != want {
+		t.Fatalf("PlanSummary = %q, want %q", got, want)
+	}
+	if got, want := aw.PlanSteps, []string{"[completed] draft design"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("PlanSteps = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplyOperationAwarenessBuildsRuntimeFindingsAndArtifacts(t *testing.T) {
+	base := prompt.RuntimeAwareness{
+		OperationFindings:  []string{"stale"},
+		OperationArtifacts: []string{"stale"},
+	}
+	state := session.OperationState{
+		Objective: "  evaluate options  ",
+		Status:    session.OperationStatusActive,
+		Stage:     "reviewing",
+		Summary:   "  open investigation  ",
+		Proposal: session.OperationProposal{
+			ID:            "op-1",
+			Kind:          "investigation",
+			Status:        session.ProposalStatusDenied,
+			WhyNow:        "  urgency  ",
+			Summary:       "  review needed  ",
+			BoundedEffect: "  concise action  ",
+		},
+		Findings: []session.OperationFinding{
+			{Claim: "  signal detected  ", Confidence: session.FindingConfidenceHigh, Basis: "  first pass  "},
+		},
+		Artifacts: []session.OperationArtifact{
+			{Label: "spec", Ref: "  /tmp/spec.md  "},
+			{Ref: " /tmp/raw.txt "},
+			{Label: "blank", Ref: "   "},
+		},
+	}
+	aw := ApplyOperationAwareness(base, state)
+
+	if !aw.OperationActive {
+		t.Fatal("OperationActive = false, want true")
+	}
+	if got, want := aw.OperationObjective, "evaluate options"; got != want {
+		t.Fatalf("OperationObjective = %q, want %q", got, want)
+	}
+	if got, want := aw.OperationStatus, "active"; got != want {
+		t.Fatalf("OperationStatus = %q, want %q", got, want)
+	}
+	if got, want := aw.OperationStage, "reviewing"; got != want {
+		t.Fatalf("OperationStage = %q, want %q", got, want)
+	}
+	if got, want := aw.OperationSummary, "open investigation"; got != want {
+		t.Fatalf("OperationSummary = %q, want %q", got, want)
+	}
+	if got, want := aw.ProposalStatus, "denied"; got != want {
+		t.Fatalf("ProposalStatus = %q, want %q", got, want)
+	}
+	if got, want := aw.ProposalWhyNow, "urgency"; got != want {
+		t.Fatalf("ProposalWhyNow = %q, want %q", got, want)
+	}
+	if got, want := aw.ProposalBoundedEffect, "concise action"; got != want {
+		t.Fatalf("ProposalBoundedEffect = %q, want %q", got, want)
+	}
+	if got, want := aw.OperationFindings, []string{"[high] signal detected (basis: first pass)"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OperationFindings = %#v, want %#v", got, want)
+	}
+	if got, want := aw.OperationArtifacts, []string{"spec: /tmp/spec.md", "/tmp/raw.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OperationArtifacts = %#v, want %#v", got, want)
+	}
+}
+
+func TestApplyBrokerageAwarenessSummarizesContracts(t *testing.T) {
+	base := prompt.RuntimeAwareness{
+		SuggestedExecutionContract: "old",
+	}
+	aw := ApplyBrokerageAwareness(base, BrokerageAwareness{
+		Active:                     true,
+		Phase:                      "brokerage",
+		Ratification:               "accept",
+		SignalJudgment:             "confirmed",
+		SuggestedExecutionContract: &pipeline.ExecutionContract{NeedsInspection: true, NeedsQuestion: false, MayAnswerNow: true},
+		RatifiedExecutionContract:  &pipeline.ExecutionContract{NeedsInspection: false, NeedsQuestion: true, MayAnswerNow: false},
+	})
+
+	if !aw.BrokerageActive {
+		t.Fatal("BrokerageActive = false, want true")
+	}
+	if got, want := aw.BrokeragePhase, "brokerage"; got != want {
+		t.Fatalf("BrokeragePhase = %q, want %q", got, want)
+	}
+	if got, want := aw.BrokerageRatification, "accept"; got != want {
+		t.Fatalf("BrokerageRatification = %q, want %q", got, want)
+	}
+	if got, want := aw.SignalJudgment, "confirmed"; got != want {
+		t.Fatalf("SignalJudgment = %q, want %q", got, want)
+	}
+	if got, want := aw.SuggestedExecutionContract, "inspect=yes, question=no, answer=yes"; got != want {
+		t.Fatalf("SuggestedExecutionContract = %q, want %q", got, want)
+	}
+	if got, want := aw.RatifiedExecutionContract, "inspect=no, question=yes, answer=no"; got != want {
+		t.Fatalf("RatifiedExecutionContract = %q, want %q", got, want)
+	}
+
+	aw = ApplyBrokerageAwareness(base, BrokerageAwareness{
+		Active:         true,
+		Phase:          "proposal",
+		Ratification:   "adapt",
+		SignalJudgment: "not_material",
+	})
+	if got := aw.SuggestedExecutionContract; got != "" {
+		t.Fatalf("SuggestedExecutionContract = %q, want empty", got)
+	}
+	if got := aw.RatifiedExecutionContract; got != "" {
+		t.Fatalf("RatifiedExecutionContract = %q, want empty", got)
+	}
+}

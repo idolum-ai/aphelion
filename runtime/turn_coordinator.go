@@ -47,7 +47,7 @@ type interactiveTurnCoordinator struct {
 	replyWithVoice bool
 	// lastRenderedReply caches the visible reply text from the last render call.
 	lastRenderedReply string
-	lastToolLog      []string
+	lastToolLog       []string
 }
 
 func (c *interactiveTurnCoordinator) Propose(ctx context.Context, req turn.FaceProposalRequest) (*turn.FaceProposalResult, error) {
@@ -202,14 +202,14 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 			brokerage.Phase = brokeragePhaseName(brokerage.Active, "proposal")
 		}
 	}
- 
+
 	if c.useMaterialFloor {
 		governorAwareness.ArtifactMode = "floor"
 	}
 	c.sess.ChatType = "dm"
 	c.sess.UserName = c.msg.SenderName
 
-	governorAwareness = c.runtime.withBrokerageAwareness(governorAwareness, brokerage)
+	governorAwareness = turn.ApplyBrokerageAwareness(governorAwareness, brokerage.toTurnAwareness())
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    governorName,
 		GovernorBackend: c.exec.Backend,
@@ -236,7 +236,13 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 		if brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.Ratification) == "accept" {
 			c.sess.PlanState = maybeSeedPlanFromBrokerage(c.sess.PlanState, brokerage)
 		}
-		governorAwareness = c.runtime.withOperationAwareness(c.runtime.withPlanAwareness(c.runtime.withBrokerageAwareness(baseGovernorAwareness, brokerage), c.sess.PlanState), c.sess.OperationState)
+		governorAwareness = turn.ApplyOperationAwareness(
+			turn.ApplyPlanAwareness(
+				turn.ApplyBrokerageAwareness(baseGovernorAwareness, brokerage.toTurnAwareness()),
+				c.sess.PlanState,
+			),
+			c.sess.OperationState,
+		)
 		governorPrompt.Runtime = governorAwareness
 		systemBlocks = prompt.BuildGovernorPromptBlocks(governorPrompt)
 		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
@@ -296,10 +302,13 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 		return nil, monitorErr
 	}
 
-	c.lastFaceAwareness = c.runtime.withOperationAwareness(c.runtime.withBrokerageAwareness(
-		c.runtime.governorRuntimeAwareness(c.scope, runKind, channel, c.exec),
-		brokerage,
-	), c.sess.OperationState)
+	c.lastFaceAwareness = turn.ApplyOperationAwareness(
+		turn.ApplyBrokerageAwareness(
+			c.runtime.governorRuntimeAwareness(c.scope, runKind, channel, c.exec),
+			brokerage.toTurnAwareness(),
+		),
+		c.sess.OperationState,
+	)
 	c.replyWithVoice = c.runtime.shouldReplyWithVoice(c.prepared.InboundWasVoice) && len(turnResult.Media) == 0
 
 	governorResult := &turn.GovernorResult{
@@ -542,7 +551,7 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 	c.sess.ChatTitle = strings.TrimSpace(c.msg.ChatTitle)
 	c.sess.UserName = c.msg.SenderName
 
-	governorAwareness = c.runtime.withBrokerageAwareness(governorAwareness, brokerage)
+	governorAwareness = turn.ApplyBrokerageAwareness(governorAwareness, brokerage.toTurnAwareness())
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    governorName,
 		GovernorBackend: c.exec.Backend,
@@ -569,7 +578,13 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.Ratification) == "accept" {
 			c.sess.PlanState = maybeSeedPlanFromBrokerage(c.sess.PlanState, brokerage)
 		}
-		governorAwareness = c.runtime.withOperationAwareness(c.runtime.withPlanAwareness(c.runtime.withBrokerageAwareness(baseGovernorAwareness, brokerage), c.sess.PlanState), c.sess.OperationState)
+		governorAwareness = turn.ApplyOperationAwareness(
+			turn.ApplyPlanAwareness(
+				turn.ApplyBrokerageAwareness(baseGovernorAwareness, brokerage.toTurnAwareness()),
+				c.sess.PlanState,
+			),
+			c.sess.OperationState,
+		)
 		governorPrompt.Runtime = governorAwareness
 		systemBlocks = prompt.BuildGovernorPromptBlocks(governorPrompt)
 		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
@@ -630,10 +645,13 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		return nil, monitorErr
 	}
 
-	c.lastFaceAwareness = c.runtime.withOperationAwareness(c.runtime.withBrokerageAwareness(
-		c.runtime.governorRuntimeAwareness(c.scope, runKind, channel, c.exec),
-		brokerage,
-	), c.sess.OperationState)
+	c.lastFaceAwareness = turn.ApplyOperationAwareness(
+		turn.ApplyBrokerageAwareness(
+			c.runtime.governorRuntimeAwareness(c.scope, runKind, channel, c.exec),
+			brokerage.toTurnAwareness(),
+		),
+		c.sess.OperationState,
+	)
 
 	governorResult := &turn.GovernorResult{
 		Turn:            turnResult,

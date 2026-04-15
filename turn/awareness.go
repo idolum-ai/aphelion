@@ -1,0 +1,103 @@
+//go:build linux
+
+package turn
+
+import (
+	"strings"
+
+	"github.com/idolum-ai/aphelion/pipeline"
+	"github.com/idolum-ai/aphelion/prompt"
+	"github.com/idolum-ai/aphelion/session"
+)
+
+// HiddenInputAwareness is the assembled hidden-input view that informs turn
+// orchestration.
+type HiddenInputAwareness struct {
+	Active            bool
+	Categories        []string
+	ProvenanceSummary string
+}
+
+// BrokerageAwareness is the composed brokerage signal for a single turn.
+type BrokerageAwareness struct {
+	Active                     bool
+	Phase                      string
+	SuggestedExecutionContract *pipeline.ExecutionContract
+	Ratification               string
+	RatifiedExecutionContract  *pipeline.ExecutionContract
+	SignalJudgment             string
+}
+
+// ApplyHiddenInputAwareness composes hidden-input metadata into runtime awareness.
+func ApplyHiddenInputAwareness(aw prompt.RuntimeAwareness, input HiddenInputAwareness) prompt.RuntimeAwareness {
+	aw.HiddenInputsActive = input.Active
+	aw.HiddenInputCategories = append([]string(nil), input.Categories...)
+	aw.ProvenanceSummary = strings.TrimSpace(input.ProvenanceSummary)
+	return aw
+}
+
+// ApplyPlanAwareness composes plan-state fields into runtime awareness.
+func ApplyPlanAwareness(aw prompt.RuntimeAwareness, state session.PlanState) prompt.RuntimeAwareness {
+	state = session.NormalizePlanState(state)
+	aw.PlanActive = len(state.Steps) > 0
+	aw.PlanSummary = strings.TrimSpace(state.Explanation)
+	aw.PlanSteps = append([]string(nil), state.FormattedSteps()...)
+	return aw
+}
+
+// ApplyOperationAwareness composes operation-state fields into runtime awareness.
+func ApplyOperationAwareness(aw prompt.RuntimeAwareness, state session.OperationState) prompt.RuntimeAwareness {
+	state = session.NormalizeOperationState(state)
+	aw.OperationActive = state.Active()
+	aw.OperationObjective = strings.TrimSpace(state.Objective)
+	aw.OperationStatus = strings.TrimSpace(string(state.Status))
+	aw.OperationStage = strings.TrimSpace(state.Stage)
+	aw.OperationSummary = strings.TrimSpace(state.Summary)
+	aw.ProposalActive = state.Proposal.Active()
+	aw.ProposalKind = strings.TrimSpace(state.Proposal.Kind)
+	aw.ProposalStatus = strings.TrimSpace(string(state.Proposal.Status))
+	aw.ProposalSummary = strings.TrimSpace(state.Proposal.Summary)
+	aw.ProposalWhyNow = strings.TrimSpace(state.Proposal.WhyNow)
+	aw.ProposalBoundedEffect = strings.TrimSpace(state.Proposal.BoundedEffect)
+	aw.OperationFindings = aw.OperationFindings[:0]
+	for _, finding := range state.Findings {
+		if strings.TrimSpace(finding.Claim) == "" {
+			continue
+		}
+		line := "[" + string(finding.Confidence) + "] " + finding.Claim
+		if finding.Basis != "" {
+			line += " (basis: " + finding.Basis + ")"
+		}
+		aw.OperationFindings = append(aw.OperationFindings, line)
+	}
+	aw.OperationArtifacts = aw.OperationArtifacts[:0]
+	for _, artifact := range state.Artifacts {
+		if strings.TrimSpace(artifact.Ref) == "" {
+			continue
+		}
+		if strings.TrimSpace(artifact.Label) != "" {
+			aw.OperationArtifacts = append(aw.OperationArtifacts, artifact.Label+": "+artifact.Ref)
+			continue
+		}
+		aw.OperationArtifacts = append(aw.OperationArtifacts, artifact.Ref)
+	}
+	return aw
+}
+
+// ApplyBrokerageAwareness composes brokerage context into runtime awareness.
+func ApplyBrokerageAwareness(aw prompt.RuntimeAwareness, b BrokerageAwareness) prompt.RuntimeAwareness {
+	aw.BrokerageActive = b.Active
+	aw.BrokeragePhase = strings.TrimSpace(b.Phase)
+	aw.SuggestedExecutionContract = summarizeExecutionContract(b.SuggestedExecutionContract)
+	aw.BrokerageRatification = strings.TrimSpace(b.Ratification)
+	aw.RatifiedExecutionContract = summarizeExecutionContract(b.RatifiedExecutionContract)
+	aw.SignalJudgment = strings.TrimSpace(b.SignalJudgment)
+	return aw
+}
+
+func summarizeExecutionContract(contract *pipeline.ExecutionContract) string {
+	if contract == nil {
+		return ""
+	}
+	return contract.Summary()
+}

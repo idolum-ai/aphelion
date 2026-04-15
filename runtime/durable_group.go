@@ -165,7 +165,13 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		return nil, fmt.Errorf("load durable agent prompt context: %w", err)
 	}
 	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText)
-	governorAwareness := r.withOperationAwareness(r.withPlanAwareness(r.withHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec), hiddenInputs), sess.PlanState), sess.OperationState)
+	governorAwareness := turn.ApplyOperationAwareness(
+		turn.ApplyPlanAwareness(
+			turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec), hiddenInputs.toTurnAwareness()),
+			sess.PlanState,
+		),
+		sess.OperationState,
+	)
 	if useMaterialFloor {
 		governorAwareness.ArtifactMode = "floor"
 	}
@@ -234,16 +240,16 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		audit: audit,
 	}
 	machine.Delivery = &turnDeliveryPort{
-		runtime:        r,
-		key:            key,
-		sess:           sess,
-		msg:            msg,
+		runtime:         r,
+		key:             key,
+		sess:            sess,
+		msg:             msg,
 		inboundWasVoice: prepared.InboundWasVoice,
-		deliver:        opts.DeliverReply && allowLocalReply,
-		recordOutbound: opts.DeliverReply && allowLocalReply,
-		audit:          audit,
-		sendErrCtx:     "send durable group reply",
-		recordErrCtx:   "record durable group outbound reply",
+		deliver:         opts.DeliverReply && allowLocalReply,
+		recordOutbound:  opts.DeliverReply && allowLocalReply,
+		audit:           audit,
+		sendErrCtx:      "send durable group reply",
+		recordErrCtx:    "record durable group outbound reply",
 		hooks: turnCommitHooks{
 			QueueDurableArtifact: func() error {
 				artifact := durableGroupReviewArtifact(registered, livePolicy, msg, coordinator.lastRenderedReply)
@@ -258,12 +264,12 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		},
 	}
 	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:    session.TurnRunKindInteractive,
-		SessionKey: key,
-		Inbound:    msg,
+		RunKind:         session.TurnRunKindInteractive,
+		SessionKey:      key,
+		Inbound:         msg,
 		InboundWasVoice: prepared.InboundWasVoice,
-		Session:    sess,
-		Now:        now,
+		Session:         sess,
+		Now:             now,
 	})
 	if err != nil {
 		if turnResult == nil || !turnResult.Commit.Persisted {

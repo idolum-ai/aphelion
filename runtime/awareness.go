@@ -75,52 +75,6 @@ func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.Tur
 	return aw
 }
 
-func (r *Runtime) withPlanAwareness(aw prompt.RuntimeAwareness, state session.PlanState) prompt.RuntimeAwareness {
-	state = session.NormalizePlanState(state)
-	aw.PlanActive = len(state.Steps) > 0
-	aw.PlanSummary = strings.TrimSpace(state.Explanation)
-	aw.PlanSteps = append([]string(nil), state.FormattedSteps()...)
-	return aw
-}
-
-func (r *Runtime) withOperationAwareness(aw prompt.RuntimeAwareness, state session.OperationState) prompt.RuntimeAwareness {
-	state = session.NormalizeOperationState(state)
-	aw.OperationActive = state.Active()
-	aw.OperationObjective = strings.TrimSpace(state.Objective)
-	aw.OperationStatus = strings.TrimSpace(string(state.Status))
-	aw.OperationStage = strings.TrimSpace(state.Stage)
-	aw.OperationSummary = strings.TrimSpace(state.Summary)
-	aw.ProposalActive = state.Proposal.Active()
-	aw.ProposalKind = strings.TrimSpace(state.Proposal.Kind)
-	aw.ProposalStatus = strings.TrimSpace(string(state.Proposal.Status))
-	aw.ProposalSummary = strings.TrimSpace(state.Proposal.Summary)
-	aw.ProposalWhyNow = strings.TrimSpace(state.Proposal.WhyNow)
-	aw.ProposalBoundedEffect = strings.TrimSpace(state.Proposal.BoundedEffect)
-	aw.OperationFindings = aw.OperationFindings[:0]
-	for _, finding := range state.Findings {
-		if finding.Claim == "" {
-			continue
-		}
-		line := "[" + string(finding.Confidence) + "] " + finding.Claim
-		if finding.Basis != "" {
-			line += " (basis: " + finding.Basis + ")"
-		}
-		aw.OperationFindings = append(aw.OperationFindings, line)
-	}
-	aw.OperationArtifacts = aw.OperationArtifacts[:0]
-	for _, artifact := range state.Artifacts {
-		if artifact.Ref == "" {
-			continue
-		}
-		if artifact.Label != "" {
-			aw.OperationArtifacts = append(aw.OperationArtifacts, artifact.Label+": "+artifact.Ref)
-			continue
-		}
-		aw.OperationArtifacts = append(aw.OperationArtifacts, artifact.Ref)
-	}
-	return aw
-}
-
 func sessionKindForRun(kind session.TurnRunKind) string {
 	switch kind {
 	case session.TurnRunKindHeartbeat, session.TurnRunKindCron, session.TurnRunKindRecovery:
