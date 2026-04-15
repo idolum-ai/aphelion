@@ -50,7 +50,6 @@ At the moment, `pipeline` is still a **design-lab package**.
 The live implementations of these ideas mostly still sit in:
 
 - `runtime/brokerage.go`
-- `runtime/material.go`
 - `face/provider.go`
 - `face/fallback.go`
 - parts of `prompt/`
