@@ -184,148 +184,39 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 	if runKind == "" {
 		runKind = session.TurnRunKindInteractive
 	}
-	channel := c.requestChannel()
-	principalRole := c.principalRoleOrActor()
-	governorName := c.coordinatorGovernorName()
-
-	baseGovernorAwareness := c.baseGovernorAwareness
-	governorAwareness := baseGovernorAwareness
-	brokerage := turnBrokerage{}
-	extraUsage := core.TokenUsage{}
-	if note := strings.TrimSpace(req.FaceNote); note != "" {
-		brokerage.IdolumNote = note
-		brokerage.Active = strings.TrimSpace(note) != ""
-		if suggestedContract := pipeline.ParseExecutionContract(note); suggestedContract != nil {
-			brokerage.Phase = brokeragePhaseName(brokerage.Active, "brokerage")
-			brokerage.SuggestedExecutionContract = suggestedContract
-		} else {
-			brokerage.Phase = brokeragePhaseName(brokerage.Active, "proposal")
-		}
-	}
-
-	if c.useMaterialFloor {
-		governorAwareness.ArtifactMode = "floor"
-	}
 	c.sess.ChatType = "dm"
 	c.sess.UserName = c.msg.SenderName
 
-	governorAwareness = turn.ApplyBrokerageAwareness(governorAwareness, brokerage.toTurnAwareness())
-	governorPrompt := prompt.GovernorRequest{
-		GovernorName:    governorName,
-		GovernorBackend: c.exec.Backend,
-		PrincipalRole:   principalRole,
-		WorkspaceRoot:   c.scope.WorkingRoot,
-		ToolManifest:    toolManifest(c.tools),
-		Workspace:       c.promptContext,
-		Runtime:         governorAwareness,
+	output, err := c.runtime.executeCoordinatorTurnCommon(ctx, coordinatorExecuteCommonInput{
+		Scope:                 c.scope,
+		Msg:                   c.msg,
+		Key:                   c.key,
+		Sess:                  c.sess,
+		Prepared:              c.prepared,
+		Exec:                  c.exec,
+		UseMaterialFloor:      c.useMaterialFloor,
+		HiddenInputs:          c.hiddenInputs,
+		PromptContext:         c.promptContext,
+		Tools:                 c.tools,
+		BaseGovernorAwareness: c.baseGovernorAwareness,
+		Audit:                 c.audit,
+		RunKind:               runKind,
+		FaceNote:              req.FaceNote,
+		Channel:               c.requestChannel(),
+		PrincipalRole:         c.principalRoleOrActor(),
+		GovernorName:          c.coordinatorGovernorName(),
+		RequestFaceNote:       c.requestFaceNote,
+		RunErrPrefix:          "run turn",
+		InvalidOutputPrefix:   "invalid turn output",
+	})
+	if err != nil {
+		return nil, err
 	}
-	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
-	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
-	c.sess.SystemPrompt = systemPrompt
-
-	sess, history, maybeErr := c.runtime.maybeCompactSession(ctx, c.key, c.sess, systemBlocks, c.prepared.UserText, brokerage.IdolumNote)
-	if maybeErr != nil {
-		return nil, fmt.Errorf("maybe compact session: %w", maybeErr)
-	}
-	c.sess = sess
-
-	if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" {
-		updated, usage := c.runtime.convergeTurnBrokerage(ctx, c.exec, baseGovernorAwareness, systemBlocks, history, c.prepared.UserText, brokerage, c.requestFaceNote, c.audit)
-		extraUsage = addTokenUsage(extraUsage, usage)
-		brokerage = updated
-		if brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.Ratification) == "accept" {
-			c.sess.PlanState = maybeSeedPlanFromBrokerage(c.sess.PlanState, brokerage)
-		}
-		governorAwareness = turn.ApplyOperationAwareness(
-			turn.ApplyPlanAwareness(
-				turn.ApplyBrokerageAwareness(baseGovernorAwareness, brokerage.toTurnAwareness()),
-				c.sess.PlanState,
-			),
-			c.sess.OperationState,
-		)
-		governorPrompt.Runtime = governorAwareness
-		systemBlocks = prompt.BuildGovernorPromptBlocks(governorPrompt)
-		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
-		c.sess.SystemPrompt = systemPrompt
-	}
-
-	progress := c.runtime.newToolProgressReporter(c.msg, c.sess.PlanState, c.audit)
-	monitor := c.runtime.startTurnMonitor(c.key, runKind, c.prepared.LedgerText, progress, c.audit)
-	var monitorErr error
-	defer monitor.Finish(ctx, monitorErr)
-	tools := monitor.observeTools(c.tools)
-
-	input := make([]agent.Message, 0, len(history)+2)
-	if systemPrompt != "" {
-		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
-	}
-	if advisory := brokerageContextForGovernor(brokerage); advisory != "" {
-		input = append(input, agent.Message{Role: "system", Content: advisory})
-	}
-	input = append(input, history...)
-	input = append(input, agent.Message{Role: "user", Content: c.prepared.UserText, Media: c.prepared.AgentMedia})
-
-	turnResult, outHistory, runErr := agent.RunTurn(ctx, c.exec.Provider, tools, &agent.Budget{
-		Max:     c.runtime.cfg.Agent.MaxIterations,
-		Caution: 0.7,
-		Warning: 0.9,
-	}, c.runtime.reasoningOptionsForRun(runKind), input)
-	if runErr != nil {
-		monitorErr = fmt.Errorf("run turn: %w", runErr)
-		return nil, monitorErr
-	}
-	if len(outHistory) < len(input) {
-		monitorErr = fmt.Errorf("invalid turn output: history shrank from %d to %d", len(input), len(outHistory))
-		return nil, monitorErr
-	}
-
-	turnResult.Text, turnResult.Media = extractOutboundReplyMedia(c.scope, turnResult.Text, turnResult.Media)
-	if c.audit != nil {
-		c.audit.RecordGovernorReply(turnResult.Text, turnResult.Media)
-	}
-	c.sess.TurnCount++
-
-	mediaOnlyReply := len(turnResult.Media) > 0 && strings.TrimSpace(turnResult.Text) == ""
-	materialFloor := core.MaterialPacket{}
-	floorText := ""
-	if !mediaOnlyReply {
-		materialFloor, floorText, _ = pipeline.BuildFloorFromGovernor(turnResult.Text, c.useMaterialFloor)
-	}
-	floorMetadataState := c.hiddenInputs.Metadata()
-	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, c.prepared.ArtifactRefs...)
-	floorMetadata := encodeFloorMetadata(floorMetadataState)
-
-	if operationState, operationErr := c.runtime.store.OperationState(c.key); operationErr == nil {
-		c.sess.OperationState = mergeSessionOperationState(c.sess.OperationState, operationState)
-	} else {
-		monitorErr = fmt.Errorf("load operation state before save: %w", operationErr)
-		return nil, monitorErr
-	}
-
-	c.lastFaceAwareness = turn.ApplyOperationAwareness(
-		turn.ApplyBrokerageAwareness(
-			c.runtime.governorRuntimeAwareness(c.scope, runKind, channel, c.exec),
-			brokerage.toTurnAwareness(),
-		),
-		c.sess.OperationState,
-	)
-	c.replyWithVoice = c.runtime.shouldReplyWithVoice(c.prepared.InboundWasVoice) && len(turnResult.Media) == 0
-
-	governorResult := &turn.GovernorResult{
-		Turn:            turnResult,
-		OutHistory:      outHistory,
-		HistoryInputLen: len(input),
-		FloorText:       floorText,
-		FloorMetadata:   floorMetadata,
-		MaterialFloor:   materialFloor,
-		PlanState:       c.sess.PlanState,
-		OperationState:  c.sess.OperationState,
-		Prepared:        c.prepared,
-		Usage:           extraUsage,
-	}
-	c.lastGovernor = governorResult
-	turnResult.TokenUsage = addTokenUsage(turnResult.TokenUsage, extraUsage)
-	return governorResult, nil
+	c.sess = output.Sess
+	c.lastFaceAwareness = output.LastFaceAwareness
+	c.lastGovernor = output.GovernorResult
+	c.replyWithVoice = c.runtime.shouldReplyWithVoice(c.prepared.InboundWasVoice) && len(output.GovernorResult.Turn.Media) == 0
+	return output.GovernorResult, nil
 }
 
 func (c *interactiveTurnCoordinator) getTurnToolLog() []string {
@@ -526,15 +417,87 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 	if runKind == "" {
 		runKind = session.TurnRunKindInteractive
 	}
-	channel := c.requestChannel()
-	principalRole := c.principalRoleOrLiveRole()
-	governorName := c.coordinatorGovernorName()
+	c.sess.ChatType = firstNonEmpty(strings.TrimSpace(c.msg.ChatType), "group")
+	c.sess.ChatTitle = strings.TrimSpace(c.msg.ChatTitle)
+	c.sess.UserName = c.msg.SenderName
 
-	baseGovernorAwareness := c.baseGovernorAwareness
+	output, err := c.runtime.executeCoordinatorTurnCommon(ctx, coordinatorExecuteCommonInput{
+		Scope:                 c.scope,
+		Msg:                   c.msg,
+		Key:                   c.key,
+		Sess:                  c.sess,
+		Prepared:              c.prepared,
+		Exec:                  c.exec,
+		UseMaterialFloor:      c.useMaterialFloor,
+		HiddenInputs:          c.hiddenInputs,
+		PromptContext:         c.promptContext,
+		Tools:                 c.tools,
+		BaseGovernorAwareness: c.baseGovernorAwareness,
+		Audit:                 c.audit,
+		RunKind:               runKind,
+		FaceNote:              req.FaceNote,
+		Channel:               c.requestChannel(),
+		PrincipalRole:         c.principalRoleOrLiveRole(),
+		GovernorName:          c.coordinatorGovernorName(),
+		RequestFaceNote:       c.requestFaceNote,
+		ExtraSystemMessages: []agent.Message{
+			{Role: "system", Content: durableGroupGovernorContext(c.registered, c.livePolicy, c.msg)},
+		},
+		RunErrPrefix:        "run durable group turn",
+		InvalidOutputPrefix: "invalid durable group turn output",
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.sess = output.Sess
+	c.lastFaceAwareness = output.LastFaceAwareness
+	c.lastGovernor = output.GovernorResult
+	return output.GovernorResult, nil
+}
+
+type coordinatorExecuteCommonInput struct {
+	Scope                 sandbox.Scope
+	Msg                   core.InboundMessage
+	Key                   session.SessionKey
+	Sess                  *session.Session
+	Prepared              pipeline.TurnPrepareContract
+	Exec                  pipeline.TurnExecutionContract
+	UseMaterialFloor      bool
+	HiddenInputs          hiddenInputSet
+	PromptContext         *workspace.PromptContext
+	Tools                 agent.ToolRegistry
+	BaseGovernorAwareness prompt.RuntimeAwareness
+	Audit                 *turnAuditRecorder
+	RunKind               session.TurnRunKind
+	FaceNote              string
+	Channel               string
+	PrincipalRole         string
+	GovernorName          string
+	RequestFaceNote       func(mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error)
+	ExtraSystemMessages   []agent.Message
+	RunErrPrefix          string
+	InvalidOutputPrefix   string
+}
+
+type coordinatorExecuteCommonOutput struct {
+	Sess              *session.Session
+	GovernorResult    *turn.GovernorResult
+	LastFaceAwareness prompt.RuntimeAwareness
+}
+
+func (r *Runtime) executeCoordinatorTurnCommon(ctx context.Context, input coordinatorExecuteCommonInput) (coordinatorExecuteCommonOutput, error) {
+	out := coordinatorExecuteCommonOutput{Sess: input.Sess}
+
+	runKind := input.RunKind
+	if runKind == "" {
+		runKind = session.TurnRunKindInteractive
+	}
+
+	baseGovernorAwareness := input.BaseGovernorAwareness
 	governorAwareness := baseGovernorAwareness
 	brokerage := turnBrokerage{}
 	extraUsage := core.TokenUsage{}
-	if note := strings.TrimSpace(req.FaceNote); note != "" {
+	if note := strings.TrimSpace(input.FaceNote); note != "" {
 		brokerage.IdolumNote = note
 		brokerage.Active = strings.TrimSpace(note) != ""
 		if suggestedContract := pipeline.ParseExecutionContract(note); suggestedContract != nil {
@@ -544,130 +507,134 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 			brokerage.Phase = brokeragePhaseName(brokerage.Active, "proposal")
 		}
 	}
-	if c.useMaterialFloor {
+
+	if input.UseMaterialFloor {
 		governorAwareness.ArtifactMode = "floor"
 	}
-	c.sess.ChatType = firstNonEmpty(strings.TrimSpace(c.msg.ChatType), "group")
-	c.sess.ChatTitle = strings.TrimSpace(c.msg.ChatTitle)
-	c.sess.UserName = c.msg.SenderName
 
 	governorAwareness = turn.ApplyBrokerageAwareness(governorAwareness, brokerage.toTurnAwareness())
 	governorPrompt := prompt.GovernorRequest{
-		GovernorName:    governorName,
-		GovernorBackend: c.exec.Backend,
-		PrincipalRole:   principalRole,
-		WorkspaceRoot:   c.scope.WorkingRoot,
-		ToolManifest:    toolManifest(c.tools),
-		Workspace:       c.promptContext,
+		GovernorName:    input.GovernorName,
+		GovernorBackend: input.Exec.Backend,
+		PrincipalRole:   input.PrincipalRole,
+		WorkspaceRoot:   input.Scope.WorkingRoot,
+		ToolManifest:    toolManifest(input.Tools),
+		Workspace:       input.PromptContext,
 		Runtime:         governorAwareness,
 	}
 	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
-	c.sess.SystemPrompt = systemPrompt
+	input.Sess.SystemPrompt = systemPrompt
 
-	sess, history, maybeErr := c.runtime.maybeCompactSession(ctx, c.key, c.sess, systemBlocks, c.prepared.UserText, brokerage.IdolumNote)
+	sess, history, maybeErr := r.maybeCompactSession(ctx, input.Key, input.Sess, systemBlocks, input.Prepared.UserText, brokerage.IdolumNote)
 	if maybeErr != nil {
-		return nil, fmt.Errorf("maybe compact session: %w", maybeErr)
+		return out, fmt.Errorf("maybe compact session: %w", maybeErr)
 	}
-	c.sess = sess
+	out.Sess = sess
 
-	if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" {
-		updated, usage := c.runtime.convergeTurnBrokerage(ctx, c.exec, baseGovernorAwareness, systemBlocks, history, c.prepared.UserText, brokerage, c.requestFaceNote, c.audit)
+	if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" && input.RequestFaceNote != nil {
+		updated, usage := r.convergeTurnBrokerage(ctx, input.Exec, baseGovernorAwareness, systemBlocks, history, input.Prepared.UserText, brokerage, input.RequestFaceNote, input.Audit)
 		extraUsage = addTokenUsage(extraUsage, usage)
 		brokerage = updated
-		if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.Ratification) == "accept" {
-			c.sess.PlanState = maybeSeedPlanFromBrokerage(c.sess.PlanState, brokerage)
+		if brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.Ratification) == "accept" {
+			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}
 		governorAwareness = turn.ApplyOperationAwareness(
 			turn.ApplyPlanAwareness(
 				turn.ApplyBrokerageAwareness(baseGovernorAwareness, brokerage.toTurnAwareness()),
-				c.sess.PlanState,
+				sess.PlanState,
 			),
-			c.sess.OperationState,
+			sess.OperationState,
 		)
 		governorPrompt.Runtime = governorAwareness
 		systemBlocks = prompt.BuildGovernorPromptBlocks(governorPrompt)
 		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
-		c.sess.SystemPrompt = systemPrompt
+		sess.SystemPrompt = systemPrompt
 	}
 
-	progress := c.runtime.newToolProgressReporter(c.msg, c.sess.PlanState, c.audit)
-	monitor := c.runtime.startTurnMonitor(c.key, runKind, c.prepared.LedgerText, progress, c.audit)
+	progress := r.newToolProgressReporter(input.Msg, sess.PlanState, input.Audit)
+	monitor := r.startTurnMonitor(input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit)
 	var monitorErr error
 	defer monitor.Finish(ctx, monitorErr)
-	tools := monitor.observeTools(c.tools)
+	tools := monitor.observeTools(input.Tools)
 
-	input := make([]agent.Message, 0, len(history)+3)
+	systemCount := 1
+	if strings.TrimSpace(systemPrompt) == "" {
+		systemCount = 0
+	}
+	turnInput := make([]agent.Message, 0, len(history)+2+len(input.ExtraSystemMessages)+systemCount)
 	if systemPrompt != "" {
-		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
+		turnInput = append(turnInput, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
 	}
-	input = append(input, agent.Message{Role: "system", Content: durableGroupGovernorContext(c.registered, c.livePolicy, c.msg)})
+	turnInput = append(turnInput, input.ExtraSystemMessages...)
 	if advisory := brokerageContextForGovernor(brokerage); advisory != "" {
-		input = append(input, agent.Message{Role: "system", Content: advisory})
+		turnInput = append(turnInput, agent.Message{Role: "system", Content: advisory})
 	}
-	input = append(input, history...)
-	input = append(input, agent.Message{Role: "user", Content: c.prepared.UserText, Media: c.prepared.AgentMedia})
+	turnInput = append(turnInput, history...)
+	turnInput = append(turnInput, agent.Message{Role: "user", Content: input.Prepared.UserText, Media: input.Prepared.AgentMedia})
 
-	turnResult, outHistory, runErr := agent.RunTurn(ctx, c.exec.Provider, tools, &agent.Budget{
-		Max:     c.runtime.cfg.Agent.MaxIterations,
+	turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, &agent.Budget{
+		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
 		Warning: 0.9,
-	}, c.runtime.reasoningOptionsForRun(runKind), input)
+	}, r.reasoningOptionsForRun(runKind), turnInput)
 	if runErr != nil {
-		monitorErr = fmt.Errorf("run durable group turn: %w", runErr)
-		return nil, monitorErr
+		monitorErr = fmt.Errorf("%s: %w", firstNonEmpty(strings.TrimSpace(input.RunErrPrefix), "run turn"), runErr)
+		return out, monitorErr
 	}
-	if len(outHistory) < len(input) {
-		monitorErr = fmt.Errorf("invalid durable group turn output: history shrank from %d to %d", len(input), len(outHistory))
-		return nil, monitorErr
+	if len(outHistory) < len(turnInput) {
+		monitorErr = fmt.Errorf("%s: history shrank from %d to %d", firstNonEmpty(strings.TrimSpace(input.InvalidOutputPrefix), "invalid turn output"), len(turnInput), len(outHistory))
+		return out, monitorErr
 	}
 
-	turnResult.Text, turnResult.Media = extractOutboundReplyMedia(c.scope, turnResult.Text, turnResult.Media)
-	if c.audit != nil {
-		c.audit.RecordGovernorReply(turnResult.Text, turnResult.Media)
+	turnResult.Text, turnResult.Media = extractOutboundReplyMedia(input.Scope, turnResult.Text, turnResult.Media)
+	if input.Audit != nil {
+		input.Audit.RecordGovernorReply(turnResult.Text, turnResult.Media)
 	}
-	c.sess.TurnCount++
+	sess.TurnCount++
 
 	mediaOnlyReply := len(turnResult.Media) > 0 && strings.TrimSpace(turnResult.Text) == ""
 	materialFloor := core.MaterialPacket{}
 	floorText := ""
 	if !mediaOnlyReply {
-		materialFloor, floorText, _ = pipeline.BuildFloorFromGovernor(turnResult.Text, c.useMaterialFloor)
+		materialFloor, floorText, _ = pipeline.BuildFloorFromGovernor(turnResult.Text, input.UseMaterialFloor)
 	}
-	floorMetadataState := c.hiddenInputs.Metadata()
-	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, c.prepared.ArtifactRefs...)
+	floorMetadataState := input.HiddenInputs.Metadata()
+	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, input.Prepared.ArtifactRefs...)
 	floorMetadata := encodeFloorMetadata(floorMetadataState)
 
-	if operationState, operationErr := c.runtime.store.OperationState(c.key); operationErr == nil {
-		c.sess.OperationState = mergeSessionOperationState(c.sess.OperationState, operationState)
+	if operationState, operationErr := r.store.OperationState(input.Key); operationErr == nil {
+		sess.OperationState = mergeSessionOperationState(sess.OperationState, operationState)
 	} else {
 		monitorErr = fmt.Errorf("load operation state before save: %w", operationErr)
-		return nil, monitorErr
+		return out, monitorErr
 	}
 
-	c.lastFaceAwareness = turn.ApplyOperationAwareness(
+	out.LastFaceAwareness = turn.ApplyOperationAwareness(
 		turn.ApplyBrokerageAwareness(
-			c.runtime.governorRuntimeAwareness(c.scope, runKind, channel, c.exec),
+			r.governorRuntimeAwareness(input.Scope, runKind, input.Channel, input.Exec),
 			brokerage.toTurnAwareness(),
 		),
-		c.sess.OperationState,
+		sess.OperationState,
 	)
 
 	governorResult := &turn.GovernorResult{
 		Turn:            turnResult,
 		OutHistory:      outHistory,
-		HistoryInputLen: len(input),
+		HistoryInputLen: len(turnInput),
 		FloorText:       floorText,
 		FloorMetadata:   floorMetadata,
 		MaterialFloor:   materialFloor,
-		PlanState:       c.sess.PlanState,
-		OperationState:  c.sess.OperationState,
-		Prepared:        c.prepared,
+		PlanState:       sess.PlanState,
+		OperationState:  sess.OperationState,
+		Prepared:        input.Prepared,
 		Usage:           extraUsage,
 	}
-	c.lastGovernor = governorResult
 	turnResult.TokenUsage = addTokenUsage(turnResult.TokenUsage, extraUsage)
-	return governorResult, nil
+
+	out.Sess = sess
+	out.GovernorResult = governorResult
+	return out, nil
 }
 
 func (c *durableGroupTurnCoordinator) requestChannel() string {

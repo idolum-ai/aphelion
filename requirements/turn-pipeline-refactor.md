@@ -120,6 +120,7 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `runtime`: updated `durable_group.go` and `turn.go` to consume `turn` machine results directly (`commit` + `delivery` phases) and removed duplicate commit sequencing.
 - `runtime`: moved heartbeat, cron, and startup recovery execution paths onto `turn.Machine` via a shared `maintenanceTurnCoordinator`, preserving species-specific authority and delivery semantics while reusing governor/proposal/render orchestration.
 - `runtime`: introduced a maintenance persistence port that reuses shared commit machinery (`persistTurn`) while preserving maintenance-ledger floor-first transcript semantics.
+- `runtime`: extracted shared coordinator execution orchestration (`executeCoordinatorTurnCommon`) so interactive DM and durable-group coordinators now share one governor/brokerage/floor/operation-state execution path while keeping species-specific hooks explicit at call sites.
 - `turn`: expanded engine tests for commit ordering and error propagation (`persist-before-delivery`, `delivery failure`, `persistence failure`) and now require `Result` material in delivery requests for phase-aware delivery decisions.
 - `runtime`/`turn`: moved hidden-input, plan, operation, and brokerage assembly into `turn` helpers (`turn.ApplyHiddenInputAwareness`, `turn.ApplyPlanAwareness`, `turn.ApplyOperationAwareness`, `turn.ApplyBrokerageAwareness`) and kept runtime focused on producing source facts only.
 
