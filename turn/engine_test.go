@@ -4,7 +4,9 @@ package turn
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -58,7 +60,10 @@ func (f *fakeFace) Render(_ context.Context, req FaceRenderRequest) (*FaceRender
 	return &FaceRenderResult{Text: "visible scene"}, nil
 }
 
-type fakePersistence struct{ order *[]string }
+type fakePersistence struct {
+	order      *[]string
+	persistErr error
+}
 
 func (f *fakePersistence) Persist(_ context.Context, req CommitRequest) (*CommitResult, error) {
 	if f.order != nil {
@@ -67,14 +72,29 @@ func (f *fakePersistence) Persist(_ context.Context, req CommitRequest) (*Commit
 	if req.Plan.Mode == "" {
 		panic("expected commit plan")
 	}
+	if f.persistErr != nil {
+		return nil, f.persistErr
+	}
 	return &CommitResult{Persisted: true}, nil
 }
 
-type fakeDelivery struct{ order *[]string }
+type fakeDelivery struct {
+	order      *[]string
+	deliverErr error
+}
 
 func (f *fakeDelivery) Deliver(_ context.Context, req DeliveryRequest) (*DeliveryResult, error) {
 	if f.order != nil {
 		*f.order = append(*f.order, "deliver")
+	}
+	if req.Result == nil {
+		return nil, nil
+	}
+	if req.Result.RenderedStream {
+		return nil, nil
+	}
+	if f.deliverErr != nil {
+		return nil, f.deliverErr
 	}
 	return &DeliveryResult{MessageID: 99, Kind: "text"}, nil
 }
@@ -128,6 +148,89 @@ func TestMachineHandleFallsBackToFloorWhenFaceAbsent(t *testing.T) {
 	}
 	if result.VisibleReply != "floor fallback text" {
 		t.Fatalf("VisibleReply = %q, want floor fallback text", result.VisibleReply)
+	}
+}
+
+func TestMachineHandleSkipsDeliveryForStreamedReply(t *testing.T) {
+	var order []string
+	m := &Machine{
+		Governor: &fakeGovernor{order: &order, resp: &GovernorResult{Turn: &core.TurnResult{Text: "governor raw"}, FloorText: "floor text"}},
+		Face: &fakeFace{
+			order: &order,
+			renderResp: &FaceRenderResult{
+				Text:         "streamed idolum reply",
+				Streamed:     true,
+				RenderedID:   21,
+				RenderedType: "streaming",
+			},
+		},
+		Persistence: &fakePersistence{order: &order},
+		Delivery:    &fakeDelivery{order: &order},
+	}
+	result, err := m.Handle(context.Background(), seedRequest())
+	if err != nil {
+		t.Fatalf("Handle() err = %v", err)
+	}
+	if got, want := order, []string{"face.propose", "governor.execute", "face.render", "persist", "deliver"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %#v, want %#v", got, want)
+	}
+	if !result.Commit.Persisted {
+		t.Fatal("result.Commit.Persisted = false, want true")
+	}
+	if result.Delivery.MessageID != 0 {
+		t.Fatalf("Delivery.MessageID = %d, want 0 for streamed reply", result.Delivery.MessageID)
+	}
+}
+
+func TestMachineHandlePersistsBeforeDeliveryWhenDeliveryFails(t *testing.T) {
+	var order []string
+	m := &Machine{
+		Governor:    &fakeGovernor{order: &order, resp: &GovernorResult{Turn: &core.TurnResult{Text: "governor raw"}, FloorText: "structured floor"}},
+		Face:        &fakeFace{order: &order, renderResp: &FaceRenderResult{Text: "final visible reply"}},
+		Persistence: &fakePersistence{order: &order},
+		Delivery:    &fakeDelivery{order: &order, deliverErr: errors.New("delivery failed")},
+	}
+	result, err := m.Handle(context.Background(), seedRequest())
+	if err == nil {
+		t.Fatalf("Handle() err = %v", err)
+	}
+	if result == nil {
+		t.Fatal("result == nil, want persisted turn result")
+	}
+	if !result.Commit.Persisted {
+		t.Fatalf("result.Commit.Persisted = %v, want true", result.Commit.Persisted)
+	}
+	if got, want := order, []string{"face.propose", "governor.execute", "face.render", "persist", "deliver"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %#v, want %#v", got, want)
+	}
+	if !strings.Contains(err.Error(), "delivery failed") {
+		t.Fatalf("Handle() err = %v, want delivery failed", err)
+	}
+}
+
+func TestMachineHandleSkipsDeliveryWhenPersistenceFails(t *testing.T) {
+	var order []string
+	m := &Machine{
+		Governor:    &fakeGovernor{order: &order, resp: &GovernorResult{Turn: &core.TurnResult{Text: "governor raw"}, FloorText: "structured floor"}},
+		Face:        &fakeFace{order: &order, renderResp: &FaceRenderResult{Text: "final visible reply"}},
+		Persistence: &fakePersistence{order: &order, persistErr: errors.New("persist failed")},
+		Delivery:    &fakeDelivery{order: &order, deliverErr: errors.New("should not be called")},
+	}
+	result, err := m.Handle(context.Background(), seedRequest())
+	if err == nil {
+		t.Fatalf("Handle() err = %v", err)
+	}
+	if result == nil {
+		t.Fatal("result == nil, want partially returned result")
+	}
+	if result.Commit.Persisted {
+		t.Fatalf("result.Commit.Persisted = %v, want false", result.Commit.Persisted)
+	}
+	if got, want := order, []string{"face.propose", "governor.execute", "face.render", "persist"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("order = %#v, want %#v", got, want)
+	}
+	if !strings.Contains(err.Error(), "persist failed") {
+		t.Fatalf("Handle() err = %v, want persist failed", err)
 	}
 }
 

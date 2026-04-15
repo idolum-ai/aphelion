@@ -116,6 +116,9 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `runtime`: added commit-semantics test (`TestHandleInboundPersistsWhenSendFails`) to pin down persisted transcript state when outbound delivery fails.
 - `runtime`: removed the remaining mirrored contract aliases for execution/awareness/policy/prep phases and now uses `pipeline` contracts directly at call sites.
 - `runtime`: moved durable Telegram child turns onto `turn.Machine` via `durableGroupTurnCoordinator` so interactive and durable paths now share execution/floor/render/persist lifecycle while keeping durable-specific policy and bookkeeping at runtime.
+- `runtime`: refactored turn finalization into explicit `turn.Persistence`/`turn.Delivery` ports, removing callback-style commit flow and preserving `persist-before-delivery` behavior.
+- `runtime`: updated `durable_group.go` and `turn.go` to consume `turn` machine results directly (`commit` + `delivery` phases) and removed duplicate commit sequencing.
+- `turn`: expanded engine tests for commit ordering and error propagation (`persist-before-delivery`, `delivery failure`, `persistence failure`) and now require `Result` material in delivery requests for phase-aware delivery decisions.
 
 ## Target Package Ownership
 

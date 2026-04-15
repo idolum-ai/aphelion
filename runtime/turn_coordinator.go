@@ -45,6 +45,9 @@ type interactiveTurnCoordinator struct {
 	lastFaceAwareness     prompt.RuntimeAwareness
 	// replyWithVoice captures the active channel-aware voice preference for render.
 	replyWithVoice bool
+	// lastRenderedReply caches the visible reply text from the last render call.
+	lastRenderedReply string
+	lastToolLog      []string
 }
 
 func (c *interactiveTurnCoordinator) Propose(ctx context.Context, req turn.FaceProposalRequest) (*turn.FaceProposalResult, error) {
@@ -159,6 +162,11 @@ func (c *interactiveTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 	if err != nil {
 		return nil, err
 	}
+	c.lastRenderedReply = strings.TrimSpace(rendered.ReplyText)
+	c.lastToolLog = nil
+	if c.lastGovernor != nil && c.lastGovernor.Turn != nil {
+		c.lastToolLog = c.lastGovernor.Turn.ToolLog
+	}
 	return &turn.FaceRenderResult{
 		Text:         strings.TrimSpace(rendered.ReplyText),
 		Usage:        rendered.Usage,
@@ -194,6 +202,7 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 			brokerage.Phase = brokeragePhaseName(brokerage.Active, "proposal")
 		}
 	}
+ 
 	if c.useMaterialFloor {
 		governorAwareness.ArtifactMode = "floor"
 	}
@@ -310,6 +319,13 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 	return governorResult, nil
 }
 
+func (c *interactiveTurnCoordinator) getTurnToolLog() []string {
+	if c == nil || c.lastGovernor == nil || c.lastGovernor.Turn == nil {
+		return nil
+	}
+	return c.lastGovernor.Turn.ToolLog
+}
+
 func (c *interactiveTurnCoordinator) requestChannel() string {
 	if c == nil {
 		return "telegram"
@@ -375,6 +391,7 @@ type durableGroupTurnCoordinator struct {
 	allowStream           bool
 	lastGovernor          *turn.GovernorResult
 	lastFaceAwareness     prompt.RuntimeAwareness
+	lastRenderedReply     string
 }
 
 func (c *durableGroupTurnCoordinator) Propose(ctx context.Context, req turn.FaceProposalRequest) (*turn.FaceProposalResult, error) {
@@ -482,6 +499,7 @@ func (c *durableGroupTurnCoordinator) Render(ctx context.Context, req turn.FaceR
 	if err != nil {
 		return nil, err
 	}
+	c.lastRenderedReply = strings.TrimSpace(rendered.ReplyText)
 	return &turn.FaceRenderResult{
 		Text:         strings.TrimSpace(rendered.ReplyText),
 		Usage:        rendered.Usage,

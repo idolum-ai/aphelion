@@ -3,8 +3,9 @@
 // Package turn defines the intended boundary for turn orchestration.
 //
 // This package is a design-lab surface for the conversational state machine
-// that currently lives mostly inside runtime.HandleInbound and related helpers.
-// It is intentionally not wired into production yet.
+// that now hosts live orchestration for interactive and durable Telegram turns,
+// with runtime-specific branches still owning transport, shell policy, and loop
+// concerns.
 //
 // The architectural split we are testing is:
 //

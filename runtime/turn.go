@@ -111,54 +111,43 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 	machine.Governor = coordinator
 	machine.Face = coordinator
-
-	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:    session.TurnRunKindInteractive,
-		SessionKey: key,
-		Inbound:    msg,
-		Session:    sess,
-		Now:        now,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if turnResult == nil || turnResult.Turn == nil {
-		return nil, fmt.Errorf("interactive turn did not return a result")
-	}
-
-	replyText := strings.TrimSpace(turnResult.VisibleReply)
-
-	commit, err := r.commitTurn(ctx, turnCommitInput{
-		Key:             key,
-		Sess:            sess,
-		Prepared:        turnResult.Prepared,
-		OutHistory:      turnResult.OutHistory,
-		HistoryInputLen: turnResult.HistoryInputLen,
-		Result:          turnResult.Turn,
-		FloorText:       strings.TrimSpace(turnResult.FloorText),
-		FloorMetadata:   strings.TrimSpace(turnResult.FloorMetadata),
-		ReplyText:       replyText,
-		StreamedReply:   turnResult.RenderedStream,
-		OutboundID:      turnResult.RenderedID,
-		OutboundType:    turnResult.RenderedType,
-		RecordOutbound:  true,
-		SendReply: func(_ context.Context) (int64, string, error) {
-			if turnResult.RenderedStream {
-				return 0, "", nil
-			}
-			outID, outType, sendErr := r.sendReply(ctx, msg, replyText, turnResult.Turn.Media, prepared.InboundWasVoice)
-			if sendErr != nil {
-				return 0, "", fmt.Errorf("send outbound reply: %w", sendErr)
-			}
-			return outID, outType, nil
+	machine.Persistence = &turnPersistencePort{
+		runtime: r,
+		key:     key,
+		sess:    sess,
+		errCtx: turnCommitErrorContext{
+			ConvertMessages: "convert new messages",
+			LoadPlanState:   "load plan state before save",
+			LoadOperation:   "load operation state before save",
+			SaveSession:     "save session",
+			RecordOutbound:  "record outbound reply",
 		},
-		Audit: audit,
-		Hooks: turnCommitHooks{
+		audit: audit,
+	}
+	machine.Delivery = &turnDeliveryPort{
+		runtime:        r,
+		key:            key,
+		sess:           sess,
+		msg:            msg,
+		inboundWasVoice: prepared.InboundWasVoice,
+		deliver:        true,
+		recordOutbound: true,
+		audit:          audit,
+		sendErrCtx:     "send outbound reply",
+		recordErrCtx:   "record outbound reply",
+		hooks: turnCommitHooks{
 			QueueReviewEvents: func() error {
 				if !shouldGenerateReviewEvent(actor, key) {
 					return nil
 				}
-				return r.enqueueReviewEventsForTurn(actor, msg, sess.TurnCount, turnResult.Prepared.LedgerText, replyText, turnResult.Turn.ToolLog)
+				return r.enqueueReviewEventsForTurn(
+					actor,
+					msg,
+					sess.TurnCount,
+					prepared.LedgerText,
+					strings.TrimSpace(coordinator.lastRenderedReply),
+					coordinator.getTurnToolLog(),
+				)
 			},
 			DeliverReviewEvents: func() error {
 				if actor.Role != principal.RoleAdmin {
@@ -167,16 +156,21 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 				return r.deliverReviewEvents(ctx, key, sess)
 			},
 		},
-		ErrCtx: turnCommitErrorContext{
-			ConvertMessages: "convert new messages",
-			LoadPlanState:   "load plan state before save",
-			LoadOperation:   "load operation state before save",
-			SaveSession:     "save session",
-			RecordOutbound:  "record outbound reply",
-		},
+	}
+
+	turnResult, err := machine.Handle(ctx, turn.Request{
+		RunKind:    session.TurnRunKindInteractive,
+		SessionKey: key,
+		Inbound:    msg,
+		Session:    sess,
+		InboundWasVoice: prepared.InboundWasVoice,
+		Now:        now,
 	})
-	if err != nil && !commit.Committed {
+	if err != nil && (turnResult == nil || !turnResult.Commit.Persisted) {
 		return nil, err
+	}
+	if turnResult == nil || turnResult.Turn == nil {
+		return nil, fmt.Errorf("interactive turn did not return a result")
 	}
 	if err != nil {
 		return turnResult.Turn, err

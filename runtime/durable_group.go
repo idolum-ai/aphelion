@@ -220,49 +220,33 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	}
 	machine.Governor = coordinator
 	machine.Face = coordinator
-
-	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:    session.TurnRunKindInteractive,
-		SessionKey: key,
-		Inbound:    msg,
-		Session:    sess,
-		Now:        now,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if turnResult == nil || turnResult.Turn == nil {
-		return nil, fmt.Errorf("durable group turn did not return a result")
-	}
-
-	commit, err := r.commitTurn(ctx, turnCommitInput{
-		Key:             key,
-		Sess:            sess,
-		Prepared:        turnResult.Prepared,
-		OutHistory:      turnResult.OutHistory,
-		HistoryInputLen: turnResult.HistoryInputLen,
-		Result:          turnResult.Turn,
-		FloorText:       strings.TrimSpace(turnResult.FloorText),
-		FloorMetadata:   strings.TrimSpace(turnResult.FloorMetadata),
-		ReplyText:       strings.TrimSpace(turnResult.VisibleReply),
-		StreamedReply:   turnResult.RenderedStream,
-		OutboundID:      turnResult.RenderedID,
-		OutboundType:    turnResult.RenderedType,
-		RecordOutbound:  opts.DeliverReply && allowLocalReply,
-		SendReply: func(_ context.Context) (int64, string, error) {
-			if !opts.DeliverReply || !allowLocalReply {
-				return 0, "", nil
-			}
-			outboundID, outboundType, sendErr := r.sendReply(ctx, msg, strings.TrimSpace(turnResult.VisibleReply), turnResult.Turn.Media, prepared.InboundWasVoice)
-			if sendErr != nil {
-				return 0, "", fmt.Errorf("send durable group reply: %w", sendErr)
-			}
-			return outboundID, outboundType, nil
+	machine.Persistence = &turnPersistencePort{
+		runtime: r,
+		key:     key,
+		sess:    sess,
+		errCtx: turnCommitErrorContext{
+			ConvertMessages: "convert durable group messages",
+			LoadPlanState:   "load durable group plan state before save",
+			LoadOperation:   "load durable group operation state before save",
+			SaveSession:     "save durable group session",
+			RecordOutbound:  "record durable group outbound reply",
 		},
-		Audit: audit,
-		Hooks: turnCommitHooks{
+		audit: audit,
+	}
+	machine.Delivery = &turnDeliveryPort{
+		runtime:        r,
+		key:            key,
+		sess:           sess,
+		msg:            msg,
+		inboundWasVoice: prepared.InboundWasVoice,
+		deliver:        opts.DeliverReply && allowLocalReply,
+		recordOutbound: opts.DeliverReply && allowLocalReply,
+		audit:          audit,
+		sendErrCtx:     "send durable group reply",
+		recordErrCtx:   "record durable group outbound reply",
+		hooks: turnCommitHooks{
 			QueueDurableArtifact: func() error {
-				artifact := durableGroupReviewArtifact(registered, livePolicy, msg, strings.TrimSpace(turnResult.VisibleReply))
+				artifact := durableGroupReviewArtifact(registered, livePolicy, msg, coordinator.lastRenderedReply)
 				if artifact == nil {
 					return nil
 				}
@@ -272,19 +256,24 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 				return nil
 			},
 		},
-		ErrCtx: turnCommitErrorContext{
-			ConvertMessages: "convert durable group messages",
-			LoadPlanState:   "load durable group plan state before save",
-			LoadOperation:   "load durable group operation state before save",
-			SaveSession:     "save durable group session",
-			RecordOutbound:  "record durable group outbound reply",
-		},
+	}
+	turnResult, err := machine.Handle(ctx, turn.Request{
+		RunKind:    session.TurnRunKindInteractive,
+		SessionKey: key,
+		Inbound:    msg,
+		InboundWasVoice: prepared.InboundWasVoice,
+		Session:    sess,
+		Now:        now,
 	})
-
 	if err != nil {
-		if commit.Committed {
+		if turnResult == nil || !turnResult.Commit.Persisted {
 			return nil, err
 		}
+	}
+	if turnResult == nil || turnResult.Turn == nil {
+		return nil, fmt.Errorf("durable group turn did not return a result")
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &DurableGroupChildResult{

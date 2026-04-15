@@ -32,6 +32,9 @@ type Request struct {
 	Inbound    core.InboundMessage
 	Session    *session.Session
 	Now        time.Time
+	// InboundWasVoice preserves whether the inbound turn started from a voice
+	// artifact so delivery can preserve configured voice continuation policy.
+	InboundWasVoice bool
 }
 
 // Result is the house-level outcome of one turn.

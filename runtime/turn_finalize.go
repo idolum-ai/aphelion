@@ -15,6 +15,7 @@ import (
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
+	"github.com/idolum-ai/aphelion/turn"
 )
 
 type turnRenderInput struct {
@@ -203,7 +204,6 @@ type turnCommitInput struct {
 	StreamedReply   bool
 	OutboundID      int64
 	OutboundType    string
-	SendReply       func(context.Context) (int64, string, error)
 	RecordOutbound  bool
 	Audit           *turnAuditRecorder
 	Hooks           turnCommitHooks
@@ -224,13 +224,149 @@ type turnCommitErrorContext struct {
 	RecordOutbound  string
 }
 
+type turnPersistencePort struct {
+	runtime *Runtime
+	key     session.SessionKey
+	sess    *session.Session
+	errCtx  turnCommitErrorContext
+	audit   *turnAuditRecorder
+}
+
+func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitRequest) (*turn.CommitResult, error) {
+	if p == nil || p.runtime == nil {
+		return nil, fmt.Errorf("turn persistence port is unavailable")
+	}
+	if req.Result == nil {
+		return nil, fmt.Errorf("turn persistence request missing result")
+	}
+	result, err := p.runtime.persistTurn(ctx, turnCommitInput{
+		Key:             p.key,
+		Sess:            p.sess,
+		Prepared:        req.Result.Prepared,
+		OutHistory:      req.Result.OutHistory,
+		HistoryInputLen: req.Result.HistoryInputLen,
+		Result:          req.Result.Turn,
+		FloorText:       req.Result.FloorText,
+		FloorMetadata:   req.Result.FloorMetadata,
+		ReplyText:       req.Result.VisibleReply,
+		StreamedReply:   req.Result.RenderedStream,
+		OutboundID:      req.Result.RenderedID,
+		OutboundType:    req.Result.RenderedType,
+		RecordOutbound:  false,
+		Audit:           p.audit,
+		ErrCtx:          p.errCtx,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &turn.CommitResult{Persisted: result.Committed}, nil
+}
+
+type turnDeliveryPort struct {
+	runtime         *Runtime
+	key             session.SessionKey
+	sess            *session.Session
+	msg             core.InboundMessage
+	inboundWasVoice bool
+	deliver         bool
+	recordOutbound  bool
+	hooks           turnCommitHooks
+	audit           *turnAuditRecorder
+	sendErrCtx      string
+	recordErrCtx    string
+}
+
+func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest) (*turn.DeliveryResult, error) {
+	if p == nil || p.runtime == nil {
+		return nil, fmt.Errorf("turn delivery port is unavailable")
+	}
+	if req.Result == nil {
+		return nil, nil
+	}
+	outboundID := req.Result.RenderedID
+	outboundType := req.Result.RenderedType
+
+	if !p.deliver || req.Result.RenderedStream {
+		if p.audit != nil {
+			p.audit.RecordFinalReply(req.Message.Text, req.Message.Media, outboundType)
+		}
+		if p.recordOutbound && outboundID != 0 {
+			if err := p.recordOutboundWithContext(ctx, p.sess, p.key, outboundID, outboundType); err != nil {
+				return nil, err
+			}
+		}
+		if err := p.runPostCommitHooks(); err != nil {
+			return nil, err
+		}
+		return &turn.DeliveryResult{
+			MessageID: outboundID,
+			Kind:      outboundType,
+		}, nil
+	}
+
+	outboundID, outboundType, err := p.runtime.sendReply(ctx, p.msg, req.Message.Text, req.Message.Media, req.InboundWasVoice)
+	if err != nil {
+		if p.sendErrCtx == "" {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%s: %w", p.sendErrCtx, err)
+	}
+	if p.audit != nil {
+		p.audit.RecordFinalReply(req.Message.Text, req.Message.Media, outboundType)
+	}
+	if p.recordOutbound {
+		if err := p.recordOutboundWithContext(ctx, p.sess, p.key, outboundID, outboundType); err != nil {
+			return nil, err
+		}
+	}
+	if err := p.runPostCommitHooks(); err != nil {
+		return nil, err
+	}
+	return &turn.DeliveryResult{MessageID: outboundID, Kind: outboundType}, nil
+}
+
+func (p *turnDeliveryPort) runPostCommitHooks() error {
+	if p == nil {
+		return nil
+	}
+	if p.hooks.QueueReviewEvents != nil {
+		if err := p.hooks.QueueReviewEvents(); err != nil {
+			return err
+		}
+	}
+	if p.hooks.DeliverReviewEvents != nil {
+		if err := p.hooks.DeliverReviewEvents(); err != nil {
+			return err
+		}
+	}
+	if p.hooks.QueueDurableArtifact != nil {
+		if err := p.hooks.QueueDurableArtifact(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *turnDeliveryPort) recordOutboundWithContext(_ context.Context, sess *session.Session, key session.SessionKey, outboundID int64, outboundType string) error {
+	if sess == nil {
+		return fmt.Errorf("turn delivery post-processing missing session")
+	}
+	if p.recordErrCtx == "" {
+		p.recordErrCtx = "record outbound reply"
+	}
+	if err := p.runtime.store.RecordOutbound(key, sess.TurnCount, outboundID, outboundType); err != nil {
+		return fmt.Errorf("%s: %w", p.recordErrCtx, err)
+	}
+	return nil
+}
+
 type turnCommitResult struct {
 	OutboundID   int64
 	OutboundType string
 	Committed    bool
 }
 
-func (r *Runtime) commitTurn(ctx context.Context, input turnCommitInput) (turnCommitResult, error) {
+func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnCommitResult, error) {
 	out := turnCommitResult{}
 	convertErrPrefix := input.ErrCtx.ConvertMessages
 	if convertErrPrefix == "" {
@@ -247,10 +383,6 @@ func (r *Runtime) commitTurn(ctx context.Context, input turnCommitInput) (turnCo
 	saveErrPrefix := input.ErrCtx.SaveSession
 	if saveErrPrefix == "" {
 		saveErrPrefix = "save session"
-	}
-	recordOutboundErrPrefix := input.ErrCtx.RecordOutbound
-	if recordOutboundErrPrefix == "" {
-		recordOutboundErrPrefix = "record outbound reply"
 	}
 
 	if len(input.OutHistory) < input.HistoryInputLen {
@@ -282,42 +414,11 @@ func (r *Runtime) commitTurn(ctx context.Context, input turnCommitInput) (turnCo
 		return out, fmt.Errorf("%s: %w", saveErrPrefix, err)
 	}
 	out.Committed = true
-
-	if !input.StreamedReply && input.SendReply != nil {
-		outboundID, outboundType, sendErr := input.SendReply(ctx)
-		if sendErr != nil {
-			return out, sendErr
-		}
-		out.OutboundID = outboundID
-		out.OutboundType = outboundType
-	} else {
-		out.OutboundID = input.OutboundID
-		out.OutboundType = input.OutboundType
-	}
+	out.OutboundID = input.OutboundID
+	out.OutboundType = input.OutboundType
 
 	if input.Audit != nil {
 		input.Audit.RecordFinalReply(input.ReplyText, input.Result.Media, out.OutboundType)
-	}
-
-	if input.RecordOutbound && out.OutboundID != 0 {
-		if err := r.store.RecordOutbound(input.Key, input.Sess.TurnCount, out.OutboundID, out.OutboundType); err != nil {
-			return out, fmt.Errorf("%s: %w", recordOutboundErrPrefix, err)
-		}
-	}
-	if input.Hooks.QueueReviewEvents != nil {
-		if err := input.Hooks.QueueReviewEvents(); err != nil {
-			return out, err
-		}
-	}
-	if input.Hooks.DeliverReviewEvents != nil {
-		if err := input.Hooks.DeliverReviewEvents(); err != nil {
-			return out, err
-		}
-	}
-	if input.Hooks.QueueDurableArtifact != nil {
-		if err := input.Hooks.QueueDurableArtifact(); err != nil {
-			return out, err
-		}
 	}
 	return out, nil
 }
