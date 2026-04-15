@@ -50,40 +50,135 @@ type interactiveTurnCoordinator struct {
 	lastToolLog       []string
 }
 
-func (c *interactiveTurnCoordinator) Propose(ctx context.Context, req turn.FaceProposalRequest) (*turn.FaceProposalResult, error) {
-	if c == nil || c.runtime == nil {
-		return nil, fmt.Errorf("interactive coordinator unavailable")
-	}
-	proposer, ok := c.currentFaceModel.(face.Proposer)
-	if c.currentFaceModel == nil || !ok || c.runtime.faceBackend == face.BackendFloorFallback {
-		return &turn.FaceProposalResult{}, nil
-	}
+type coordinatorProposalCommonInput struct {
+	Scope            sandbox.Scope
+	CurrentFaceModel face.Renderer
+	GovernorName     string
+	FaceName         string
+	Channel          string
+	Mode             string
+	PrincipalRole    string
+	LatestUserInput  string
+	RuntimeAwareness prompt.RuntimeAwareness
+	PriorProposal    string
+	Feedback         string
+}
 
-	awareness := req.Runtime
-	awareness.ArtifactMode = "scene"
-	mode := strings.TrimSpace(req.Mode)
+func (r *Runtime) proposeCoordinatorFaceCommon(ctx context.Context, input coordinatorProposalCommonInput) (string, core.TokenUsage, error) {
+	if r == nil {
+		return "", core.TokenUsage{}, fmt.Errorf("runtime unavailable")
+	}
+	proposer, ok := input.CurrentFaceModel.(face.Proposer)
+	if input.CurrentFaceModel == nil || !ok || r.faceBackend == face.BackendFloorFallback {
+		return "", core.TokenUsage{}, nil
+	}
+	mode := strings.TrimSpace(input.Mode)
 	if mode == "" {
 		mode = "proposal"
 	}
 	proposal, err := proposer.Propose(ctx, face.ProposalRequest{
-		GovernorName:      req.GovernorName,
-		FaceName:          req.FaceName,
-		Channel:           req.Channel,
+		GovernorName:      input.GovernorName,
+		FaceName:          input.FaceName,
+		Channel:           input.Channel,
 		Mode:              mode,
-		PrincipalRole:     req.PrincipalRole,
-		WorkspaceRoot:     faceWorkspaceRoot(c.scope),
-		LatestUserInput:   req.LatestUserInput,
-		PriorProposal:     "",
-		BrokerageFeedback: "",
-		Runtime:           awareness,
+		PrincipalRole:     input.PrincipalRole,
+		WorkspaceRoot:     faceWorkspaceRoot(input.Scope),
+		LatestUserInput:   input.LatestUserInput,
+		PriorProposal:     input.PriorProposal,
+		BrokerageFeedback: input.Feedback,
+		Runtime:           input.RuntimeAwareness,
+	})
+	if err != nil {
+		return "", core.TokenUsage{}, err
+	}
+	return strings.TrimSpace(proposal), consumeFaceUsage(input.CurrentFaceModel), nil
+}
+
+type coordinatorRenderCommonInput struct {
+	Scope                 sandbox.Scope
+	Msg                   core.InboundMessage
+	Channel               string
+	PrincipalRole         string
+	LastGovernor          *turn.GovernorResult
+	LastFaceAwareness     prompt.RuntimeAwareness
+	BaseGovernorAwareness prompt.RuntimeAwareness
+	FacePolicy            pipeline.FacePolicy
+	UseMaterialFloor      bool
+	CurrentFaceModel      face.Renderer
+	ReplyWithVoice        bool
+	AllowStream           bool
+	PromptInput           string
+	Audit                 *turnAuditRecorder
+	FallbackOptions       face.FallbackOptions
+}
+
+func (r *Runtime) renderCoordinatorFaceCommon(ctx context.Context, input coordinatorRenderCommonInput) (turnRenderResult, error) {
+	if input.LastGovernor == nil || input.LastGovernor.Turn == nil {
+		return turnRenderResult{}, nil
+	}
+	gov := input.LastGovernor
+	mediaOnlyReply := len(gov.Turn.Media) > 0 && strings.TrimSpace(gov.Turn.Text) == ""
+	replyText := ""
+	if !mediaOnlyReply {
+		replyText = face.SerializeFloorFallback(gov.MaterialFloor, gov.FloorText, input.FallbackOptions)
+	}
+	faceAwareness := input.LastFaceAwareness
+	if strings.TrimSpace(faceAwareness.DeliveryMode) == "" {
+		faceAwareness = input.BaseGovernorAwareness
+	}
+	return r.renderTurnReply(turnRenderInput{
+		Ctx:              ctx,
+		Scope:            input.Scope,
+		Msg:              input.Msg,
+		Channel:          input.Channel,
+		PrincipalRole:    input.PrincipalRole,
+		OutHistory:       gov.OutHistory,
+		HistoryInputLen:  gov.HistoryInputLen,
+		Result:           gov.Turn,
+		FacePolicy:       input.FacePolicy,
+		UseMaterialFloor: input.UseMaterialFloor,
+		MediaOnlyReply:   mediaOnlyReply,
+		ReplyText:        replyText,
+		FloorText:        gov.FloorText,
+		MaterialFloor:    gov.MaterialFloor,
+		FallbackOpts:     input.FallbackOptions,
+		FaceAwareness:    faceAwareness,
+		CurrentFaceModel: input.CurrentFaceModel,
+		ReplyWithVoice:   input.ReplyWithVoice,
+		AllowStream:      input.AllowStream,
+		PromptInput:      input.PromptInput,
+		Audit:            input.Audit,
+	})
+}
+
+func (c *interactiveTurnCoordinator) Propose(ctx context.Context, req turn.FaceProposalRequest) (*turn.FaceProposalResult, error) {
+	if c == nil || c.runtime == nil {
+		return nil, fmt.Errorf("interactive coordinator unavailable")
+	}
+
+	awareness := req.Runtime
+	awareness.ArtifactMode = "scene"
+	proposal, usage, err := c.runtime.proposeCoordinatorFaceCommon(ctx, coordinatorProposalCommonInput{
+		Scope:            c.scope,
+		CurrentFaceModel: c.currentFaceModel,
+		GovernorName:     req.GovernorName,
+		FaceName:         req.FaceName,
+		Channel:          req.Channel,
+		Mode:             req.Mode,
+		PrincipalRole:    req.PrincipalRole,
+		LatestUserInput:  req.LatestUserInput,
+		RuntimeAwareness: awareness,
 	})
 	if err != nil {
 		log.Printf("WARN idolum proposal failed backend=%s principal=%s err=%v", c.runtime.faceBackend, c.actor.Role, err)
 		return &turn.FaceProposalResult{}, nil
 	}
+	if strings.TrimSpace(proposal) == "" {
+		return &turn.FaceProposalResult{}, nil
+	}
 	return &turn.FaceProposalResult{
 		Note:  strings.TrimSpace(proposal),
-		Usage: consumeFaceUsage(c.currentFaceModel),
+		Usage: usage,
 	}, nil
 }
 
@@ -91,76 +186,56 @@ func (c *interactiveTurnCoordinator) requestFaceNote(mode string, awareness prom
 	if c == nil || c.runtime == nil {
 		return "", core.TokenUsage{}, fmt.Errorf("interactive coordinator unavailable")
 	}
-	proposer, ok := c.currentFaceModel.(face.Proposer)
-	if c.currentFaceModel == nil || !ok || c.runtime.faceBackend == face.BackendFloorFallback {
-		return "", core.TokenUsage{}, nil
-	}
-
-	proposal, err := proposer.Propose(context.Background(), face.ProposalRequest{
-		GovernorName:      c.coordinatorGovernorName(),
-		FaceName:          c.coordinatorFaceName(),
-		Channel:           c.requestChannel(),
-		Mode:              strings.TrimSpace(mode),
-		PrincipalRole:     c.principalRoleOrActor(),
-		WorkspaceRoot:     faceWorkspaceRoot(c.scope),
-		LatestUserInput:   c.prepared.LedgerText,
-		PriorProposal:     priorProposal,
-		BrokerageFeedback: feedback,
-		Runtime:           awareness,
+	proposal, usage, err := c.runtime.proposeCoordinatorFaceCommon(context.Background(), coordinatorProposalCommonInput{
+		Scope:            c.scope,
+		CurrentFaceModel: c.currentFaceModel,
+		GovernorName:     c.coordinatorGovernorName(),
+		FaceName:         c.coordinatorFaceName(),
+		Channel:          c.requestChannel(),
+		Mode:             mode,
+		PrincipalRole:    c.principalRoleOrActor(),
+		LatestUserInput:  c.prepared.LedgerText,
+		RuntimeAwareness: awareness,
+		PriorProposal:    priorProposal,
+		Feedback:         feedback,
 	})
 	if err != nil {
 		log.Printf("WARN idolum proposal failed backend=%s principal=%s err=%v", c.runtime.faceBackend, c.actor.Role, err)
 		return "", core.TokenUsage{}, err
 	}
-	return strings.TrimSpace(proposal), consumeFaceUsage(c.currentFaceModel), nil
+	return strings.TrimSpace(proposal), usage, nil
 }
 
 func (c *interactiveTurnCoordinator) Render(ctx context.Context, req turn.FaceRenderRequest) (*turn.FaceRenderResult, error) {
 	if c == nil || c.runtime == nil {
 		return nil, fmt.Errorf("interactive coordinator unavailable")
 	}
-	if c.lastGovernor == nil || c.lastGovernor.Turn == nil {
-		return &turn.FaceRenderResult{}, nil
-	}
-	gov := c.lastGovernor
-	mediaOnlyReply := len(gov.Turn.Media) > 0 && strings.TrimSpace(gov.Turn.Text) == ""
-	replyText := ""
 	fallbackOpts := face.FallbackOptions{
 		Channel: c.requestChannel(),
 		Voice:   c.replyWithVoice,
 	}
-	if !mediaOnlyReply {
-		replyText = face.SerializeFloorFallback(gov.MaterialFloor, gov.FloorText, fallbackOpts)
-	}
-	faceAwareness := c.lastFaceAwareness
-	if strings.TrimSpace(faceAwareness.DeliveryMode) == "" {
-		faceAwareness = c.baseGovernorAwareness
-	}
-	rendered, err := c.runtime.renderTurnReply(turnRenderInput{
-		Ctx:              ctx,
-		Scope:            c.scope,
-		Msg:              c.msg,
-		Channel:          c.requestChannel(),
-		PrincipalRole:    c.principalRoleOrActor(),
-		OutHistory:       gov.OutHistory,
-		HistoryInputLen:  gov.HistoryInputLen,
-		Result:           gov.Turn,
-		FacePolicy:       c.facePolicy,
-		UseMaterialFloor: c.useMaterialFloor,
-		MediaOnlyReply:   mediaOnlyReply,
-		ReplyText:        replyText,
-		FloorText:        gov.FloorText,
-		MaterialFloor:    gov.MaterialFloor,
-		FallbackOpts:     fallbackOpts,
-		FaceAwareness:    faceAwareness,
-		CurrentFaceModel: c.currentFaceModel,
-		ReplyWithVoice:   c.replyWithVoice,
-		AllowStream:      true,
-		PromptInput:      c.prepared.LedgerText,
-		Audit:            c.audit,
+	rendered, err := c.runtime.renderCoordinatorFaceCommon(ctx, coordinatorRenderCommonInput{
+		Scope:                 c.scope,
+		Msg:                   c.msg,
+		Channel:               c.requestChannel(),
+		PrincipalRole:         c.principalRoleOrActor(),
+		LastGovernor:          c.lastGovernor,
+		LastFaceAwareness:     c.lastFaceAwareness,
+		BaseGovernorAwareness: c.baseGovernorAwareness,
+		FacePolicy:            c.facePolicy,
+		UseMaterialFloor:      c.useMaterialFloor,
+		CurrentFaceModel:      c.currentFaceModel,
+		ReplyWithVoice:        c.replyWithVoice,
+		AllowStream:           true,
+		PromptInput:           c.prepared.LedgerText,
+		Audit:                 c.audit,
+		FallbackOptions:       fallbackOpts,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if c.lastGovernor == nil || c.lastGovernor.Turn == nil {
+		return &turn.FaceRenderResult{}, nil
 	}
 	c.lastRenderedReply = strings.TrimSpace(rendered.ReplyText)
 	c.lastToolLog = nil
@@ -298,32 +373,30 @@ func (c *durableGroupTurnCoordinator) Propose(ctx context.Context, req turn.Face
 	if c == nil || c.runtime == nil {
 		return nil, fmt.Errorf("durable group coordinator unavailable")
 	}
-	proposer, ok := c.currentFaceModel.(face.Proposer)
-	if c.currentFaceModel == nil || !ok || c.runtime.faceBackend == face.BackendFloorFallback {
-		return &turn.FaceProposalResult{}, nil
-	}
 
 	awareness := req.Runtime
 	awareness.ArtifactMode = "scene"
-	proposal, err := proposer.Propose(ctx, face.ProposalRequest{
-		GovernorName:      req.GovernorName,
-		FaceName:          req.FaceName,
-		Channel:           req.Channel,
-		Mode:              req.Mode,
-		PrincipalRole:     req.PrincipalRole,
-		WorkspaceRoot:     faceWorkspaceRoot(c.scope),
-		LatestUserInput:   req.LatestUserInput,
-		PriorProposal:     "",
-		BrokerageFeedback: "",
-		Runtime:           awareness,
+	proposal, usage, err := c.runtime.proposeCoordinatorFaceCommon(ctx, coordinatorProposalCommonInput{
+		Scope:            c.scope,
+		CurrentFaceModel: c.currentFaceModel,
+		GovernorName:     req.GovernorName,
+		FaceName:         req.FaceName,
+		Channel:          req.Channel,
+		Mode:             req.Mode,
+		PrincipalRole:    req.PrincipalRole,
+		LatestUserInput:  req.LatestUserInput,
+		RuntimeAwareness: awareness,
 	})
 	if err != nil {
 		log.Printf("WARN idolum proposal failed backend=%s durable_group=%s err=%v", c.runtime.faceBackend, c.registered.AgentID, err)
 		return &turn.FaceProposalResult{}, nil
 	}
+	if strings.TrimSpace(proposal) == "" {
+		return &turn.FaceProposalResult{}, nil
+	}
 	return &turn.FaceProposalResult{
 		Note:  strings.TrimSpace(proposal),
-		Usage: consumeFaceUsage(c.currentFaceModel),
+		Usage: usage,
 	}, nil
 }
 
@@ -331,73 +404,53 @@ func (c *durableGroupTurnCoordinator) requestFaceNote(mode string, awareness pro
 	if c == nil || c.runtime == nil {
 		return "", core.TokenUsage{}, fmt.Errorf("durable group coordinator unavailable")
 	}
-	proposer, ok := c.currentFaceModel.(face.Proposer)
-	if c.currentFaceModel == nil || !ok || c.runtime.faceBackend == face.BackendFloorFallback {
-		return "", core.TokenUsage{}, nil
-	}
-
-	proposal, err := proposer.Propose(context.Background(), face.ProposalRequest{
-		GovernorName:      c.coordinatorGovernorName(),
-		FaceName:          c.coordinatorFaceName(),
-		Channel:           c.requestChannel(),
-		Mode:              strings.TrimSpace(mode),
-		PrincipalRole:     c.principalRoleOrLiveRole(),
-		WorkspaceRoot:     faceWorkspaceRoot(c.scope),
-		LatestUserInput:   c.prepared.LedgerText,
-		PriorProposal:     priorProposal,
-		BrokerageFeedback: feedback,
-		Runtime:           awareness,
+	proposal, usage, err := c.runtime.proposeCoordinatorFaceCommon(context.Background(), coordinatorProposalCommonInput{
+		Scope:            c.scope,
+		CurrentFaceModel: c.currentFaceModel,
+		GovernorName:     c.coordinatorGovernorName(),
+		FaceName:         c.coordinatorFaceName(),
+		Channel:          c.requestChannel(),
+		Mode:             mode,
+		PrincipalRole:    c.principalRoleOrLiveRole(),
+		LatestUserInput:  c.prepared.LedgerText,
+		RuntimeAwareness: awareness,
+		PriorProposal:    priorProposal,
+		Feedback:         feedback,
 	})
 	if err != nil {
 		log.Printf("WARN idolum proposal failed backend=%s durable_group=%s err=%v", c.runtime.faceBackend, c.registered.AgentID, err)
 		return "", core.TokenUsage{}, err
 	}
-	return strings.TrimSpace(proposal), consumeFaceUsage(c.currentFaceModel), nil
+	return strings.TrimSpace(proposal), usage, nil
 }
 
 func (c *durableGroupTurnCoordinator) Render(ctx context.Context, req turn.FaceRenderRequest) (*turn.FaceRenderResult, error) {
 	if c == nil || c.runtime == nil {
 		return nil, fmt.Errorf("durable group coordinator unavailable")
 	}
-	if c.lastGovernor == nil || c.lastGovernor.Turn == nil {
-		return &turn.FaceRenderResult{}, nil
-	}
-	gov := c.lastGovernor
-	mediaOnlyReply := len(gov.Turn.Media) > 0 && strings.TrimSpace(gov.Turn.Text) == ""
-	replyText := ""
 	fallbackOpts := face.FallbackOptions{Channel: c.requestChannel()}
-	if !mediaOnlyReply {
-		replyText = face.SerializeFloorFallback(gov.MaterialFloor, gov.FloorText, fallbackOpts)
-	}
-	faceAwareness := c.lastFaceAwareness
-	if strings.TrimSpace(faceAwareness.DeliveryMode) == "" {
-		faceAwareness = c.baseGovernorAwareness
-	}
-	rendered, err := c.runtime.renderTurnReply(turnRenderInput{
-		Ctx:              ctx,
-		Scope:            c.scope,
-		Msg:              c.msg,
-		Channel:          c.requestChannel(),
-		PrincipalRole:    c.principalRoleOrLiveRole(),
-		OutHistory:       gov.OutHistory,
-		HistoryInputLen:  gov.HistoryInputLen,
-		Result:           gov.Turn,
-		FacePolicy:       c.facePolicy,
-		UseMaterialFloor: c.useMaterialFloor,
-		MediaOnlyReply:   mediaOnlyReply,
-		ReplyText:        replyText,
-		FloorText:        gov.FloorText,
-		MaterialFloor:    gov.MaterialFloor,
-		FallbackOpts:     fallbackOpts,
-		FaceAwareness:    faceAwareness,
-		CurrentFaceModel: c.currentFaceModel,
-		ReplyWithVoice:   false,
-		AllowStream:      c.allowStream,
-		PromptInput:      c.prepared.LedgerText,
-		Audit:            c.audit,
+	rendered, err := c.runtime.renderCoordinatorFaceCommon(ctx, coordinatorRenderCommonInput{
+		Scope:                 c.scope,
+		Msg:                   c.msg,
+		Channel:               c.requestChannel(),
+		PrincipalRole:         c.principalRoleOrLiveRole(),
+		LastGovernor:          c.lastGovernor,
+		LastFaceAwareness:     c.lastFaceAwareness,
+		BaseGovernorAwareness: c.baseGovernorAwareness,
+		FacePolicy:            c.facePolicy,
+		UseMaterialFloor:      c.useMaterialFloor,
+		CurrentFaceModel:      c.currentFaceModel,
+		ReplyWithVoice:        false,
+		AllowStream:           c.allowStream,
+		PromptInput:           c.prepared.LedgerText,
+		Audit:                 c.audit,
+		FallbackOptions:       fallbackOpts,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if c.lastGovernor == nil || c.lastGovernor.Turn == nil {
+		return &turn.FaceRenderResult{}, nil
 	}
 	c.lastRenderedReply = strings.TrimSpace(rendered.ReplyText)
 	return &turn.FaceRenderResult{
