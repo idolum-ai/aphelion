@@ -155,7 +155,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	defer r.emitTurnAudit(audit)
 
 	facePolicy := pipeline.DecideInteractiveFacePolicy(sess, prepared.LedgerText)
-	useMaterialFloor := shouldUseMaterialFloorContract(r.faceBackend, facePolicy)
+	useMaterialFloor := pipeline.ShouldUseMaterialFloorContract(string(r.faceBackend), facePolicy)
 	exec := r.executionForTurn(prepared)
 	promptContext, err := r.promptContextForScope(scope, now)
 	if err != nil {
@@ -286,7 +286,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	materialFloor := core.MaterialPacket{}
 	floorText := ""
 	if !mediaOnlyReply {
-		materialFloor, floorText, _ = governorMaterialArtifact(result.Text, useMaterialFloor)
+		materialFloor, floorText, _ = pipeline.BuildFloorFromGovernor(result.Text, useMaterialFloor)
 	}
 	floorMetadataState := hiddenInputs.Metadata()
 	floorMetadataState.Artifacts = append(floorMetadataState.Artifacts, prepared.ArtifactRefs...)
@@ -327,7 +327,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		}
 		renderHeuristicText := floorText
 		if useMaterialFloor {
-			renderHeuristicText = materialFloorHeuristicText(materialFloor, floorText)
+			renderHeuristicText = pipeline.FormatFloorTextForRender(materialFloor, floorText)
 		}
 		shouldRender := pipeline.ShouldRenderInteractiveIdolumReply(facePolicy, pipeline.RenderDecisionInput{
 			UserText:          prepared.LedgerText,

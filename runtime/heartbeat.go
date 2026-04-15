@@ -171,7 +171,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return fmt.Errorf("invalid heartbeat output: history shrank from %d to %d", len(input), len(outHistory))
 	}
 
-	materialFloor, floorText, _ := governorMaterialArtifact(result.Text, true)
+	materialFloor, floorText, _ := pipeline.BuildFloorFromGovernor(result.Text, true)
 	if floorText == "" {
 		return nil
 	}
