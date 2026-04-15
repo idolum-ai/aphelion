@@ -105,6 +105,8 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `runtime`: began ownership handoff by delegating prepare/material/face-policy/awareness execution shaping to `pipeline` contracts.
 - `requirements`: encoded additional cautionary rules (species as explicit policy vocabulary, pipeline scope boundaries, and test-first commitment extraction).
 - `tests`: `go test ./...` remains green after this slice.
+- `pipeline`: moved face render decision from a passive wrapper into explicit behavior for `ShouldRenderIdolumReply` (command guard, empty-input guard, and no-response/tool-context handling), with tests.
+- `runtime`: removed passive face-policy helper implementations that duplicated pipeline logic.
 
 ## Target Package Ownership
 

@@ -2,7 +2,11 @@
 
 package pipeline
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/idolum-ai/aphelion/agent"
+)
 
 func TestBrokerageArtifactPreservesBothSides(t *testing.T) {
 	artifact := BrokerageArtifact{
@@ -62,12 +66,38 @@ func TestShouldRenderIdolumReplyUsesRenderPolicy(t *testing.T) {
 	t.Parallel()
 
 	policy := FacePolicy{Render: true}
-	if !ShouldRenderIdolumReply(policy, "", "", nil, nil) {
-		t.Fatal("ShouldRenderIdolumReply() = false, want true")
-	}
+	t.Run("no response should not render without tool context", func(t *testing.T) {
+		t.Parallel()
+		if ShouldRenderIdolumReply(policy, "say hi", "(no response)", nil, nil) {
+			t.Fatal("ShouldRenderIdolumReply() = true, want false for empty fallback without tool context")
+		}
+	})
+	t.Run("tool log should render even when fallback empty", func(t *testing.T) {
+		t.Parallel()
+		if !ShouldRenderIdolumReply(policy, "say hi", "(no response)", []string{"bash ls"}, nil) {
+			t.Fatal("ShouldRenderIdolumReply() = false, want true when tool log present")
+		}
+	})
+	t.Run("ordinary response text should render", func(t *testing.T) {
+		t.Parallel()
+		if !ShouldRenderIdolumReply(policy, "say hi", "floor text", nil, nil) {
+			t.Fatal("ShouldRenderIdolumReply() = false, want true for ordinary policy+text")
+		}
+	})
+	t.Run("slash command should not render", func(t *testing.T) {
+		t.Parallel()
+		if ShouldRenderIdolumReply(policy, "/help", "floor text", nil, nil) {
+			t.Fatal("ShouldRenderIdolumReply() = true, want false for slash commands")
+		}
+	})
+	t.Run("generated tool messages should trigger render", func(t *testing.T) {
+		t.Parallel()
+		if !ShouldRenderIdolumReply(policy, "say hi", "(no response)", nil, []agent.Message{{Role: "tool", Content: "done"}}) {
+			t.Fatal("ShouldRenderIdolumReply() = false, want true when generated tool messages are present")
+		}
+	})
 
-	policy.Render = false
-	if ShouldRenderIdolumReply(policy, "", "", nil, nil) {
+	if ShouldRenderIdolumReply(FacePolicy{Render: false}, "say hi", "floor text", nil, nil) {
 		t.Fatal("ShouldRenderIdolumReply() = true, want false")
 	}
 }

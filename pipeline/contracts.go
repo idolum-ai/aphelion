@@ -183,11 +183,24 @@ func DecideInteractiveFacePolicy(_ *session.Session, userText string) FacePolicy
 // ShouldRenderIdolumReply determines whether Idolum rendering is requested for
 // a specific turn.
 func ShouldRenderIdolumReply(policy FacePolicy, userText string, floorText string, toolLog []string, generated []agent.Message) bool {
-	_ = userText
-	_ = floorText
-	_ = toolLog
-	_ = generated
-	return policy.Render
+	if !policy.Render {
+		return false
+	}
+	trimmedUserText := strings.TrimSpace(userText)
+	if trimmedUserText == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmedUserText, "/") {
+		return false
+	}
+
+	floorTrimmed := strings.TrimSpace(floorText)
+	isNoResponse := floorTrimmed == "" || strings.EqualFold(floorTrimmed, "(no response)")
+	hasToolContext := len(toolLog) > 0 || generatedHasToolMessages(generated)
+	if isNoResponse && !hasToolContext {
+		return false
+	}
+	return true
 }
 
 // ShouldUseMaterialFloorContract keeps material-floor contract usage explicit.
@@ -212,4 +225,13 @@ func FormatFloorTextForRender(packet core.MaterialPacket, fallback string) strin
 		return fallback
 	}
 	return joined
+}
+
+func generatedHasToolMessages(messages []agent.Message) bool {
+	for _, msg := range messages {
+		if msg.Role == "tool" {
+			return true
+		}
+	}
+	return false
 }
