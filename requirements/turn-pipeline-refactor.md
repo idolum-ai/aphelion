@@ -118,6 +118,8 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `runtime`: moved durable Telegram child turns onto `turn.Machine` via `durableGroupTurnCoordinator` so interactive and durable paths now share execution/floor/render/persist lifecycle while keeping durable-specific policy and bookkeeping at runtime.
 - `runtime`: refactored turn finalization into explicit `turn.Persistence`/`turn.Delivery` ports, removing callback-style commit flow and preserving `persist-before-delivery` behavior.
 - `runtime`: updated `durable_group.go` and `turn.go` to consume `turn` machine results directly (`commit` + `delivery` phases) and removed duplicate commit sequencing.
+- `runtime`: moved heartbeat, cron, and startup recovery execution paths onto `turn.Machine` via a shared `maintenanceTurnCoordinator`, preserving species-specific authority and delivery semantics while reusing governor/proposal/render orchestration.
+- `runtime`: introduced a maintenance persistence port that reuses shared commit machinery (`persistTurn`) while preserving maintenance-ledger floor-first transcript semantics.
 - `turn`: expanded engine tests for commit ordering and error propagation (`persist-before-delivery`, `delivery failure`, `persistence failure`) and now require `Result` material in delivery requests for phase-aware delivery decisions.
 - `runtime`/`turn`: moved hidden-input, plan, operation, and brokerage assembly into `turn` helpers (`turn.ApplyHiddenInputAwareness`, `turn.ApplyPlanAwareness`, `turn.ApplyOperationAwareness`, `turn.ApplyBrokerageAwareness`) and kept runtime focused on producing source facts only.
 

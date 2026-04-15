@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/pipeline"
@@ -123,102 +122,102 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		return nil
 	}
 
-	history, err := session.ToAgentHistory(maintenanceSession.Messages)
-	if err != nil {
-		return fmt.Errorf("assemble heartbeat history: %w", err)
-	}
-
 	requestText := renderHeartbeatRequest(targetChatID, events, deliver, hiddenInputs)
-	monitor := r.startTurnMonitor(maintenanceKey, session.TurnRunKindHeartbeat, requestText, nil, nil)
-	defer monitor.Finish(ctx, err)
-	input := make([]agent.Message, 0, len(history)+2)
-	if systemPrompt != "" {
-		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
+	prepared := pipeline.TurnPrepareContract{
+		UserText:   requestText,
+		LedgerText: requestText,
 	}
-	currentFaceModel := r.currentFaceRenderer()
-	if eligibleForOutreach && r.faceBackend != face.BackendFloorFallback {
-		if proposer, ok := currentFaceModel.(face.Proposer); ok {
-			faceAwareness := turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", pipeline.TurnExecutionContract{}), hiddenInputAwareness)
-			faceAwareness.ArtifactMode = "scene"
-			faceAwareness.DeliveryMode = "heartbeat_proposal"
-			proposal, proposalErr := proposer.Propose(ctx, face.ProposalRequest{
-				GovernorName:    prompt.DefaultGovernorName,
-				FaceName:        face.DefaultFaceName,
-				Channel:         "telegram",
-				Mode:            "proposal",
-				PrincipalRole:   "admin",
-				WorkspaceRoot:   faceWorkspaceRoot(scope),
-				LatestUserInput: requestText,
-				Runtime:         faceAwareness,
-			})
-			if proposalErr != nil {
-				log.Printf("WARN heartbeat idolum proposal failed backend=%s err=%v", r.faceBackend, proposalErr)
-			} else if advisory := prompt.RenderIdolumProposalForGovernor(face.DefaultFaceName, strings.TrimSpace(proposal)); advisory != "" {
-				input = append(input, agent.Message{Role: "system", Content: advisory})
+	exec := r.executionForTurn(prepared)
+	governorAwareness = turn.ApplyHiddenInputAwareness(
+		r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", exec),
+		hiddenInputAwareness,
+	)
+	faceAwareness := turn.ApplyHiddenInputAwareness(
+		r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", exec),
+		hiddenInputAwareness,
+	)
+
+	coordinator := &maintenanceTurnCoordinator{
+		runtime:               r,
+		species:               maintenanceTurnHeartbeat,
+		key:                   maintenanceKey,
+		sess:                  maintenanceSession,
+		scope:                 scope,
+		prepared:              prepared,
+		exec:                  exec,
+		promptContext:         promptContext,
+		hiddenInputs:          hiddenInputs,
+		useMaterialFloor:      true,
+		governorName:          prompt.DefaultGovernorName,
+		faceName:              face.DefaultFaceName,
+		channelName:           "telegram",
+		principalRole:         "admin",
+		sessionUserName:       "heartbeat",
+		renderLatestUserInput: "[heartbeat]",
+		proposalDeliveryMode:  "heartbeat_proposal",
+		renderDeliveryMode:    "heartbeat_delivery",
+		currentFaceModel:      r.currentFaceRenderer(),
+		baseGovernorAwareness: governorAwareness,
+	}
+
+	machine := &turn.Machine{
+		Governor: coordinator,
+		Face:     coordinator,
+		Persistence: &maintenanceTurnPersistencePort{
+			runtime: r,
+			key:     maintenanceKey,
+			sess:    maintenanceSession,
+			errCtx: turnCommitErrorContext{
+				ConvertMessages: "convert heartbeat messages",
+				LoadPlanState:   "load heartbeat plan state before save",
+				LoadOperation:   "load heartbeat operation state before save",
+				SaveSession:     "save heartbeat session",
+			},
+		},
+		Options: turn.Options{
+			GovernorName: prompt.DefaultGovernorName,
+			FaceName:     face.DefaultFaceName,
+			Channel:      "telegram",
+			Style:        "observant, high-agency, warm, and emotionally lucid",
+		},
+		RuntimeAwareness: faceAwareness,
+		PolicyFunc: func(turn.Request) turn.Policy {
+			return turn.Policy{
+				Proposal: eligibleForOutreach,
+				Render:   eligibleForOutreach,
+				Reason:   "heartbeat_outreach_policy",
 			}
-		}
+		},
 	}
-	input = append(input, history...)
-	input = append(input, agent.Message{Role: "user", Content: requestText})
-
-	result, outHistory, err := agent.RunTurn(ctx, r.provider, nil, &agent.Budget{
-		Max:     r.cfg.Agent.MaxIterations,
-		Caution: 0.7,
-		Warning: 0.9,
-	}, r.reasoningOptionsForRun(session.TurnRunKindHeartbeat), input)
+	turnResult, err := machine.Handle(ctx, turn.Request{
+		RunKind:    session.TurnRunKindHeartbeat,
+		SessionKey: maintenanceKey,
+		Inbound: core.InboundMessage{
+			ChatID: maintenanceKey.ChatID,
+			Text:   requestText,
+		},
+		Session: maintenanceSession,
+		Now:     now,
+	})
 	if err != nil {
-		return fmt.Errorf("run heartbeat turn: %w", err)
+		return err
 	}
-	if len(outHistory) < len(input) {
-		return fmt.Errorf("invalid heartbeat output: history shrank from %d to %d", len(input), len(outHistory))
+	if turnResult == nil || turnResult.Turn == nil {
+		return fmt.Errorf("heartbeat turn did not return a result")
 	}
-
-	materialFloor, floorText, _ := pipeline.BuildFloorFromGovernor(result.Text, true)
-	if floorText == "" {
+	if !turnResult.Commit.Persisted {
 		return nil
 	}
-	floorMetadata := encodeFloorMetadata(hiddenInputs.Metadata())
-
-	maintenanceSession.ChatType = "system"
-	maintenanceSession.UserName = "heartbeat"
-	maintenanceSession.SystemPrompt = systemPrompt
-	maintenanceSession.TurnCount++
-	maintenanceSession.LastFloorText = floorText
-	maintenanceSession.LastFloorMetadata = floorMetadata
-	newMessages, err := session.NewMessagesForTurn(requestText, outHistory[len(input):], maintenanceSession.TurnCount)
-	if err != nil {
-		return fmt.Errorf("convert heartbeat messages: %w", err)
-	}
-	newMessages = setLastAssistantFloor(newMessages, floorText)
-	newMessages = setLastAssistantFloorMetadata(newMessages, floorMetadata)
-	if err := r.store.Save(maintenanceSession, newMessages, result.TokenUsage); err != nil {
-		return fmt.Errorf("save heartbeat session: %w", err)
-	}
+	floorText := strings.TrimSpace(turnResult.FloorText)
+	floorMetadata := strings.TrimSpace(turnResult.FloorMetadata)
 
 	if !eligibleForOutreach {
 		return nil
 	}
 
-	replyText := face.SerializeFloorFallback(materialFloor, floorText, face.FallbackOptions{Channel: "telegram"})
-	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
-		faceAwareness := turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "telegram", pipeline.TurnExecutionContract{}), hiddenInputAwareness)
-		faceAwareness.DeliveryMode = "heartbeat_delivery"
-		renderedReply, renderErr := currentFaceModel.Render(ctx, face.RenderRequest{
-			GovernorName:    prompt.DefaultGovernorName,
-			FaceName:        face.DefaultFaceName,
-			Channel:         "telegram",
-			PrincipalRole:   "admin",
-			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			FloorText:       floorText,
-			MaterialFloor:   materialFloor,
-			LatestUserInput: "[heartbeat]",
-			Runtime:         faceAwareness,
-		})
-		if renderErr != nil {
-			log.Printf("WARN heartbeat face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, renderErr)
-		} else if strings.TrimSpace(renderedReply) != "" {
-			replyText = strings.TrimSpace(renderedReply)
-		}
+	replyText := strings.TrimSpace(turnResult.VisibleReply)
+	if replyText == "" {
+		replyText = floorText
 	}
 
 	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
@@ -239,7 +238,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	}
 	applySessionScope(adminSession, adminKey)
 	adminSession.ChatType = "dm"
-	adminSession.SystemPrompt = systemPrompt
+	adminSession.SystemPrompt = maintenanceSession.SystemPrompt
 	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText, floorMetadata), core.TokenUsage{}); err != nil {
 		return fmt.Errorf("save heartbeat admin session: %w", err)
 	}

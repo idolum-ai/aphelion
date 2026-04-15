@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/turn"
 )
 
 const maxStartupRecoveryRuns = 20
@@ -68,66 +68,78 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err != nil {
 		return fmt.Errorf("load recovery prompt context: %w", err)
 	}
-	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindRecovery, "system", pipeline.TurnExecutionContract{})
-	governorPrompt := prompt.GovernorRequest{
-		GovernorName:    prompt.DefaultGovernorName,
-		GovernorBackend: r.governorBackend,
-		PrincipalRole:   "admin",
-		WorkspaceRoot:   scope.WorkingRoot,
-		Workspace:       promptContext,
-		Runtime:         governorAwareness,
-	}
-	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
-	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
-
-	history, err := session.ToAgentHistory(maintenanceSession.Messages)
-	if err != nil {
-		return fmt.Errorf("assemble recovery history: %w", err)
-	}
-
 	requestText := renderStartupRecoveryRequest(runs)
-	monitor := r.startTurnMonitor(maintenanceKey, session.TurnRunKindRecovery, requestText, nil, nil)
-	defer monitor.Finish(ctx, err)
-
-	input := make([]agent.Message, 0, len(history)+2)
-	if systemPrompt != "" {
-		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
+	prepared := pipeline.TurnPrepareContract{
+		UserText:   requestText,
+		LedgerText: requestText,
 	}
-	input = append(input, history...)
-	input = append(input, agent.Message{Role: "user", Content: requestText})
+	exec := r.executionForTurn(prepared)
+	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindRecovery, "system", exec)
 
-	result, outHistory, err := agent.RunTurn(ctx, r.provider, nil, &agent.Budget{
-		Max:     r.cfg.Agent.MaxIterations,
-		Caution: 0.7,
-		Warning: 0.9,
-	}, r.reasoningOptionsForRun(session.TurnRunKindRecovery), input)
+	coordinator := &maintenanceTurnCoordinator{
+		runtime:               r,
+		species:               maintenanceTurnRecovery,
+		key:                   maintenanceKey,
+		sess:                  maintenanceSession,
+		scope:                 scope,
+		prepared:              prepared,
+		exec:                  exec,
+		promptContext:         promptContext,
+		recoveryRuns:          runs,
+		useMaterialFloor:      false,
+		governorName:          prompt.DefaultGovernorName,
+		faceName:              face.DefaultFaceName,
+		channelName:           "system",
+		principalRole:         "admin",
+		sessionUserName:       "startup-recovery",
+		currentFaceModel:      nil,
+		baseGovernorAwareness: governorAwareness,
+	}
+
+	machine := &turn.Machine{
+		Governor: coordinator,
+		Persistence: &maintenanceTurnPersistencePort{
+			runtime: r,
+			key:     maintenanceKey,
+			sess:    maintenanceSession,
+			errCtx: turnCommitErrorContext{
+				ConvertMessages: "convert recovery messages",
+				LoadPlanState:   "load recovery plan state before save",
+				LoadOperation:   "load recovery operation state before save",
+				SaveSession:     "save recovery maintenance session",
+			},
+		},
+		Options: turn.Options{
+			GovernorName: prompt.DefaultGovernorName,
+			FaceName:     face.DefaultFaceName,
+			Channel:      "system",
+			Style:        "observant, high-agency, warm, and emotionally lucid",
+		},
+		RuntimeAwareness: governorAwareness,
+		PolicyFunc: func(turn.Request) turn.Policy {
+			return turn.Policy{Reason: "startup_recovery_maintenance"}
+		},
+	}
+	turnResult, err := machine.Handle(ctx, turn.Request{
+		RunKind:    session.TurnRunKindRecovery,
+		SessionKey: maintenanceKey,
+		Inbound: core.InboundMessage{
+			ChatID: maintenanceKey.ChatID,
+			Text:   requestText,
+		},
+		Session: maintenanceSession,
+		Now:     now,
+	})
 	if err != nil {
-		return fmt.Errorf("run startup recovery turn: %w", err)
+		return err
 	}
-	if len(outHistory) < len(input) {
-		return fmt.Errorf("invalid recovery output: history shrank from %d to %d", len(input), len(outHistory))
+	if turnResult == nil || turnResult.Turn == nil {
+		return fmt.Errorf("startup recovery turn did not return a result")
 	}
-
-	floorText := strings.TrimSpace(result.Text)
-	if floorText == "" {
-		floorText = fallbackRecoverySummary(runs)
+	if !turnResult.Commit.Persisted {
+		return nil
 	}
-
-	maintenanceSession.ChatType = "system"
-	maintenanceSession.UserName = "startup-recovery"
-	maintenanceSession.SystemPrompt = systemPrompt
-	maintenanceSession.TurnCount++
-	maintenanceSession.LastFloorText = floorText
-
-	newMessages, err := session.NewMessagesForTurn(requestText, outHistory[len(input):], maintenanceSession.TurnCount)
-	if err != nil {
-		return fmt.Errorf("convert recovery messages: %w", err)
-	}
-	newMessages = replaceLastAssistantWithSceneText(newMessages, floorText)
-	newMessages = setLastAssistantFloor(newMessages, floorText)
-	if err := r.store.Save(maintenanceSession, newMessages, result.TokenUsage); err != nil {
-		return fmt.Errorf("save recovery maintenance session: %w", err)
-	}
+	floorText := strings.TrimSpace(turnResult.FloorText)
 
 	ids := make([]int64, 0, len(runs))
 	for _, run := range runs {
@@ -136,7 +148,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err := r.store.MarkTurnRunsRecovered(ids, floorText); err != nil {
 		return fmt.Errorf("mark turn runs recovered: %w", err)
 	}
-	if err := r.deliverStartupRecoveryCatchup(ctx, systemPrompt, runs, floorText); err != nil {
+	if err := r.deliverStartupRecoveryCatchup(ctx, maintenanceSession.SystemPrompt, runs, floorText); err != nil {
 		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
 	}
 	return nil

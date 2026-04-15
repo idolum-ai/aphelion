@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
@@ -18,6 +17,7 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/turn"
 )
 
 func (r *Runtime) StartCronLoop(ctx context.Context, logger func(string, ...any)) {
@@ -61,93 +61,98 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	if err != nil {
 		return fmt.Errorf("resolve cron scope: %w", err)
 	}
-	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "system", pipeline.TurnExecutionContract{})
-	governorPrompt := prompt.GovernorRequest{
-		GovernorName:    prompt.DefaultGovernorName,
-		GovernorBackend: r.governorBackend,
-		PrincipalRole:   "admin",
-		WorkspaceRoot:   scope.WorkingRoot,
-		Runtime:         governorAwareness,
-	}
-	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
-	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
-
-	history, err := session.ToAgentHistory(cronSession.Messages)
-	if err != nil {
-		return fmt.Errorf("assemble cron history: %w", err)
-	}
-
 	requestText := renderCronRequest(job)
-	monitor := r.startTurnMonitor(key, session.TurnRunKindCron, requestText, nil, nil)
-	defer monitor.Finish(ctx, err)
-	input := make([]agent.Message, 0, len(history)+2)
-	if systemPrompt != "" {
-		input = append(input, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
+	prepared := pipeline.TurnPrepareContract{
+		UserText:   requestText,
+		LedgerText: requestText,
 	}
-	input = append(input, history...)
-	input = append(input, agent.Message{Role: "user", Content: requestText})
+	exec := r.executionForTurn(prepared)
+	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "system", exec)
+	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", exec)
+	announce := strings.EqualFold(strings.TrimSpace(job.Delivery), "announce")
 
-	result, outHistory, err := agent.RunTurn(ctx, r.provider, nil, &agent.Budget{
-		Max:     r.cfg.Agent.MaxIterations,
-		Caution: 0.7,
-		Warning: 0.9,
-	}, r.reasoningOptionsForRun(session.TurnRunKindCron), input)
+	coordinator := &maintenanceTurnCoordinator{
+		runtime:               r,
+		species:               maintenanceTurnCron,
+		key:                   key,
+		sess:                  cronSession,
+		scope:                 scope,
+		prepared:              prepared,
+		exec:                  exec,
+		promptContext:         nil,
+		useMaterialFloor:      true,
+		governorName:          prompt.DefaultGovernorName,
+		faceName:              face.DefaultFaceName,
+		channelName:           "telegram",
+		principalRole:         "admin",
+		sessionUserName:       "cron:" + job.ID,
+		renderLatestUserInput: "[cron:" + job.ID + "]",
+		renderDeliveryMode:    "cron_delivery",
+		cronJobID:             job.ID,
+		currentFaceModel:      r.currentFaceRenderer(),
+		baseGovernorAwareness: governorAwareness,
+	}
+	machine := &turn.Machine{
+		Governor: coordinator,
+		Face:     coordinator,
+		Persistence: &maintenanceTurnPersistencePort{
+			runtime: r,
+			key:     key,
+			sess:    cronSession,
+			errCtx: turnCommitErrorContext{
+				ConvertMessages: "convert cron messages",
+				LoadPlanState:   "load cron plan state before save",
+				LoadOperation:   "load cron operation state before save",
+				SaveSession:     "save cron session",
+			},
+		},
+		Options: turn.Options{
+			GovernorName: prompt.DefaultGovernorName,
+			FaceName:     face.DefaultFaceName,
+			Channel:      "telegram",
+			Style:        "observant, high-agency, warm, and emotionally lucid",
+		},
+		RuntimeAwareness: faceAwareness,
+		PolicyFunc: func(turn.Request) turn.Policy {
+			return turn.Policy{
+				Render: announce,
+				Reason: "cron_delivery_policy",
+			}
+		},
+	}
+	turnResult, err := machine.Handle(ctx, turn.Request{
+		RunKind:    session.TurnRunKindCron,
+		SessionKey: key,
+		Inbound: core.InboundMessage{
+			ChatID: key.ChatID,
+			Text:   requestText,
+		},
+		Session: cronSession,
+		Now:     time.Now().UTC(),
+	})
 	if err != nil {
-		return fmt.Errorf("run cron turn: %w", err)
+		return err
 	}
-	if len(outHistory) < len(input) {
-		return fmt.Errorf("invalid cron output: history shrank from %d to %d", len(input), len(outHistory))
+	if turnResult == nil || turnResult.Turn == nil {
+		return fmt.Errorf("cron turn did not return a result")
 	}
-
-	materialFloor, floorText, _ := pipeline.BuildFloorFromGovernor(result.Text, true)
-	if floorText == "" {
+	if !turnResult.Commit.Persisted {
 		return nil
 	}
-
-	cronSession.ChatType = "system"
-	cronSession.UserName = "cron:" + job.ID
-	cronSession.SystemPrompt = systemPrompt
-	cronSession.TurnCount++
-	cronSession.LastFloorText = floorText
-	newMessages, err := session.NewMessagesForTurn(requestText, outHistory[len(input):], cronSession.TurnCount)
-	if err != nil {
-		return fmt.Errorf("convert cron messages: %w", err)
-	}
-	newMessages = setLastAssistantFloor(newMessages, floorText)
-	if err := r.store.Save(cronSession, newMessages, result.TokenUsage); err != nil {
-		return fmt.Errorf("save cron session: %w", err)
-	}
-
-	if strings.ToLower(strings.TrimSpace(job.Delivery)) != "announce" {
-		return nil
-	}
+	floorText := strings.TrimSpace(turnResult.FloorText)
 
 	targetChatID := r.lastActiveAdminChat(uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs))
 	if targetChatID == 0 {
 		targetChatID = r.cfg.Principals.Telegram.AdminUserIDs[0]
 	}
 
-	replyText := face.SerializeFloorFallback(materialFloor, floorText, face.FallbackOptions{Channel: "telegram"})
-	currentFaceModel := r.currentFaceRenderer()
-	if r.faceBackend != face.BackendFloorFallback && currentFaceModel != nil {
-		faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", pipeline.TurnExecutionContract{})
-		faceAwareness.DeliveryMode = "cron_delivery"
-		renderedReply, renderErr := currentFaceModel.Render(ctx, face.RenderRequest{
-			GovernorName:    prompt.DefaultGovernorName,
-			FaceName:        face.DefaultFaceName,
-			Channel:         "telegram",
-			PrincipalRole:   "admin",
-			WorkspaceRoot:   faceWorkspaceRoot(scope),
-			FloorText:       floorText,
-			MaterialFloor:   materialFloor,
-			LatestUserInput: "[cron:" + job.ID + "]",
-			Runtime:         faceAwareness,
-		})
-		if renderErr != nil {
-			log.Printf("WARN cron face render failed backend=%s job=%s err=%v; using floor_fallback serializer", r.faceBackend, job.ID, renderErr)
-		} else if strings.TrimSpace(renderedReply) != "" {
-			replyText = strings.TrimSpace(renderedReply)
-		}
+	if !announce {
+		return nil
+	}
+
+	replyText := strings.TrimSpace(turnResult.VisibleReply)
+	if replyText == "" {
+		replyText = floorText
 	}
 
 	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
@@ -168,7 +173,7 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	}
 	applySessionScope(adminSession, adminKey)
 	adminSession.ChatType = "dm"
-	adminSession.SystemPrompt = systemPrompt
+	adminSession.SystemPrompt = cronSession.SystemPrompt
 	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, replyText, floorText, ""), core.TokenUsage{}); err != nil {
 		return fmt.Errorf("save cron admin session: %w", err)
 	}
