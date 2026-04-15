@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/prompt"
 )
 
@@ -46,11 +47,17 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 	result.Turn = gov.Turn
+	result.Prepared = gov.Prepared
+	result.OutHistory = append([]agent.Message(nil), gov.OutHistory...)
+	result.HistoryInputLen = gov.HistoryInputLen
 	result.FloorText = strings.TrimSpace(gov.FloorText)
 	result.FloorMetadata = strings.TrimSpace(gov.FloorMetadata)
 	result.MaterialFloor = gov.MaterialFloor
 	result.PlanState = gov.PlanState
 	result.OperationState = gov.OperationState
+	if result.Turn != nil {
+		result.Turn.TokenUsage = addTokenUsage(result.Turn.TokenUsage, gov.Usage)
+	}
 
 	rendered, err := m.renderScene(ctx, prepared, policy, gov)
 	if err != nil {
@@ -58,8 +65,14 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 	}
 	if rendered != nil && strings.TrimSpace(rendered.Text) != "" {
 		result.VisibleReply = strings.TrimSpace(rendered.Text)
+		result.RenderedStream = rendered.Streamed
+		result.RenderedID = rendered.RenderedID
+		result.RenderedType = rendered.RenderedType
 	} else {
 		result.VisibleReply = fallbackVisibleReply(gov)
+	}
+	if rendered != nil {
+		result.Turn.TokenUsage = addTokenUsage(result.Turn.TokenUsage, rendered.Usage)
 	}
 
 	plan := DefaultCommitPlan(policy)

@@ -6,7 +6,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -42,17 +44,23 @@ type Request struct {
 // The embedded policy, commit, and delivery fields make the orchestration
 // choices inspectable in tests before the package is wired into production.
 type Result struct {
-	Turn           *core.TurnResult
-	VisibleReply   string
-	FloorText      string
-	FloorMetadata  string
-	MaterialFloor  core.MaterialPacket
-	PlanState      session.PlanState
-	OperationState session.OperationState
-	Policy         Policy
-	ProposalNote   string
-	Commit         CommitResult
-	Delivery       DeliveryResult
+	Turn            *core.TurnResult
+	Prepared        pipeline.TurnPrepareContract
+	OutHistory      []agent.Message
+	HistoryInputLen int
+	VisibleReply    string
+	FloorText       string
+	FloorMetadata   string
+	MaterialFloor   core.MaterialPacket
+	PlanState       session.PlanState
+	OperationState  session.OperationState
+	RenderedStream  bool
+	RenderedID      int64
+	RenderedType    string
+	Policy          Policy
+	ProposalNote    string
+	Commit          CommitResult
+	Delivery        DeliveryResult
 }
 
 // Options are stable house-level defaults for a future engine instance.

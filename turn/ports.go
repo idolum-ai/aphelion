@@ -5,7 +5,9 @@ package turn
 import (
 	"context"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -34,13 +36,16 @@ type GovernorRequest struct {
 // It surfaces the raw turn result alongside the floor sidecar that later face
 // rendering and persistence depend on.
 type GovernorResult struct {
-	Turn           *core.TurnResult
-	FloorText      string
-	FloorMetadata  string
-	MaterialFloor  core.MaterialPacket
-	PlanState      session.PlanState
-	OperationState session.OperationState
-	Usage          core.TokenUsage
+	Turn            *core.TurnResult
+	Prepared        pipeline.TurnPrepareContract
+	OutHistory      []agent.Message
+	HistoryInputLen int
+	FloorText       string
+	FloorMetadata   string
+	MaterialFloor   core.MaterialPacket
+	PlanState       session.PlanState
+	OperationState  session.OperationState
+	Usage           core.TokenUsage
 }
 
 // FacePort is the relationship surface the turn engine expects from the
@@ -98,8 +103,11 @@ type FaceRenderRequest struct {
 
 // FaceRenderResult is the visible outcome of face scene authorship.
 type FaceRenderResult struct {
-	Text  string
-	Usage core.TokenUsage
+	Text         string
+	Usage        core.TokenUsage
+	Streamed     bool
+	RenderedID   int64
+	RenderedType string
 }
 
 // PersistencePort captures the durable write boundary the turn engine should

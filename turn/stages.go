@@ -142,6 +142,15 @@ func fallbackVisibleReply(gov *GovernorResult) string {
 	return ""
 }
 
+func addTokenUsage(dst core.TokenUsage, src core.TokenUsage) core.TokenUsage {
+	dst.InputTokens += src.InputTokens
+	dst.OutputTokens += src.OutputTokens
+	dst.TotalTokens += src.TotalTokens
+	dst.CacheReadTokens += src.CacheReadTokens
+	dst.CacheWriteTokens += src.CacheWriteTokens
+	return dst
+}
+
 func buildOutboundMessage(req Request, result *Result) core.OutboundMessage {
 	msg := core.OutboundMessage{
 		ChatID:  req.Inbound.ChatID,

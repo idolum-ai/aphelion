@@ -115,6 +115,7 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `pipeline`: removed in-package `PreparedTurn` / `GovernorExecution` aliases to keep one canonical contract name per concept and prevent mirrored type drift from the source.
 - `runtime`: added commit-semantics test (`TestHandleInboundPersistsWhenSendFails`) to pin down persisted transcript state when outbound delivery fails.
 - `runtime`: removed the remaining mirrored contract aliases for execution/awareness/policy/prep phases and now uses `pipeline` contracts directly at call sites.
+- `runtime`: moved durable Telegram child turns onto `turn.Machine` via `durableGroupTurnCoordinator` so interactive and durable paths now share execution/floor/render/persist lifecycle while keeping durable-specific policy and bookkeeping at runtime.
 
 ## Target Package Ownership
 
