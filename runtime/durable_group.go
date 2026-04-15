@@ -361,8 +361,8 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 			return outboundID, outboundType, nil
 		},
 		Audit: audit,
-		PostCommitHooks: []func() error{
-			func() error {
+		Hooks: turnCommitHooks{
+			QueueDurableArtifact: func() error {
 				artifact := durableGroupReviewArtifact(registered, core.NormalizeDurableAgentLivePolicy(registered.LivePolicy), msg, replyText)
 				if artifact == nil {
 					return nil
@@ -373,11 +373,13 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 				return nil
 			},
 		},
-		ErrorConvertMessages: "convert durable group messages",
-		ErrorLoadPlanState:   "load durable group plan state before save",
-		ErrorLoadOperation:   "load durable group operation state before save",
-		ErrorSaveSession:     "save durable group session",
-		ErrorRecordOutbound:  "record durable group outbound reply",
+		ErrCtx: turnCommitErrorContext{
+			ConvertMessages: "convert durable group messages",
+			LoadPlanState:   "load durable group plan state before save",
+			LoadOperation:   "load durable group operation state before save",
+			SaveSession:     "save durable group session",
+			RecordOutbound:  "record durable group outbound reply",
+		},
 	})
 	if err != nil {
 		if commit.Committed {

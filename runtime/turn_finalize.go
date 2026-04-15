@@ -191,27 +191,37 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 }
 
 type turnCommitInput struct {
-	Key                  session.SessionKey
-	Sess                 *session.Session
-	Prepared             pipeline.TurnPrepareContract
-	OutHistory           []agent.Message
-	HistoryInputLen      int
-	Result               *core.TurnResult
-	FloorText            string
-	FloorMetadata        string
-	ReplyText            string
-	StreamedReply        bool
-	OutboundID           int64
-	OutboundType         string
-	SendReply            func(context.Context) (int64, string, error)
-	RecordOutbound       bool
-	Audit                *turnAuditRecorder
-	PostCommitHooks      []func() error
-	ErrorConvertMessages string
-	ErrorLoadPlanState   string
-	ErrorLoadOperation   string
-	ErrorSaveSession     string
-	ErrorRecordOutbound  string
+	Key             session.SessionKey
+	Sess            *session.Session
+	Prepared        pipeline.TurnPrepareContract
+	OutHistory      []agent.Message
+	HistoryInputLen int
+	Result          *core.TurnResult
+	FloorText       string
+	FloorMetadata   string
+	ReplyText       string
+	StreamedReply   bool
+	OutboundID      int64
+	OutboundType    string
+	SendReply       func(context.Context) (int64, string, error)
+	RecordOutbound  bool
+	Audit           *turnAuditRecorder
+	Hooks           turnCommitHooks
+	ErrCtx          turnCommitErrorContext
+}
+
+type turnCommitHooks struct {
+	QueueReviewEvents    func() error
+	DeliverReviewEvents  func() error
+	QueueDurableArtifact func() error
+}
+
+type turnCommitErrorContext struct {
+	ConvertMessages string
+	LoadPlanState   string
+	LoadOperation   string
+	SaveSession     string
+	RecordOutbound  string
 }
 
 type turnCommitResult struct {
@@ -222,23 +232,23 @@ type turnCommitResult struct {
 
 func (r *Runtime) commitTurn(ctx context.Context, input turnCommitInput) (turnCommitResult, error) {
 	out := turnCommitResult{}
-	convertErrPrefix := input.ErrorConvertMessages
+	convertErrPrefix := input.ErrCtx.ConvertMessages
 	if convertErrPrefix == "" {
 		convertErrPrefix = "convert new messages"
 	}
-	planStateErrPrefix := input.ErrorLoadPlanState
+	planStateErrPrefix := input.ErrCtx.LoadPlanState
 	if planStateErrPrefix == "" {
 		planStateErrPrefix = "load plan state before save"
 	}
-	operationStateErrPrefix := input.ErrorLoadOperation
+	operationStateErrPrefix := input.ErrCtx.LoadOperation
 	if operationStateErrPrefix == "" {
 		operationStateErrPrefix = "load operation state before save"
 	}
-	saveErrPrefix := input.ErrorSaveSession
+	saveErrPrefix := input.ErrCtx.SaveSession
 	if saveErrPrefix == "" {
 		saveErrPrefix = "save session"
 	}
-	recordOutboundErrPrefix := input.ErrorRecordOutbound
+	recordOutboundErrPrefix := input.ErrCtx.RecordOutbound
 	if recordOutboundErrPrefix == "" {
 		recordOutboundErrPrefix = "record outbound reply"
 	}
@@ -294,8 +304,18 @@ func (r *Runtime) commitTurn(ctx context.Context, input turnCommitInput) (turnCo
 			return out, fmt.Errorf("%s: %w", recordOutboundErrPrefix, err)
 		}
 	}
-	for _, hook := range input.PostCommitHooks {
-		if err := hook(); err != nil {
+	if input.Hooks.QueueReviewEvents != nil {
+		if err := input.Hooks.QueueReviewEvents(); err != nil {
+			return out, err
+		}
+	}
+	if input.Hooks.DeliverReviewEvents != nil {
+		if err := input.Hooks.DeliverReviewEvents(); err != nil {
+			return out, err
+		}
+	}
+	if input.Hooks.QueueDurableArtifact != nil {
+		if err := input.Hooks.QueueDurableArtifact(); err != nil {
 			return out, err
 		}
 	}

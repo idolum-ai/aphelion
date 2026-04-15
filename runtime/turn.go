@@ -250,25 +250,27 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 			return outID, outType, nil
 		},
 		Audit: audit,
-		PostCommitHooks: []func() error{
-			func() error {
+		Hooks: turnCommitHooks{
+			QueueReviewEvents: func() error {
 				if !shouldGenerateReviewEvent(actor, key) {
 					return nil
 				}
 				return r.enqueueReviewEventsForTurn(actor, msg, sess.TurnCount, prepared.LedgerText, replyText, result.ToolLog)
 			},
-			func() error {
+			DeliverReviewEvents: func() error {
 				if actor.Role != principal.RoleAdmin {
 					return nil
 				}
 				return r.deliverReviewEvents(ctx, key, sess)
 			},
 		},
-		ErrorConvertMessages: "convert new messages",
-		ErrorLoadPlanState:   "load plan state before save",
-		ErrorLoadOperation:   "load operation state before save",
-		ErrorSaveSession:     "save session",
-		ErrorRecordOutbound:  "record outbound reply",
+		ErrCtx: turnCommitErrorContext{
+			ConvertMessages: "convert new messages",
+			LoadPlanState:   "load plan state before save",
+			LoadOperation:   "load operation state before save",
+			SaveSession:     "save session",
+			RecordOutbound:  "record outbound reply",
+		},
 	})
 	if err != nil {
 		if commit.Committed {
