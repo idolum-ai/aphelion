@@ -52,8 +52,8 @@ func TestRuntimeRecipeStateMigratesLegacyPersonaEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
 	}
-	if got.PersonaModel != personaModelOpus46 {
-		t.Fatalf("PersonaModel = %q, want %q", got.PersonaModel, personaModelOpus46)
+	if got.PersonaModel != personaModelOpus {
+		t.Fatalf("PersonaModel = %q, want %q", got.PersonaModel, personaModelOpus)
 	}
 	if got.PersonaEffort != personaEffortOpus {
 		t.Fatalf("PersonaEffort = %q, want %q", got.PersonaEffort, personaEffortOpus)

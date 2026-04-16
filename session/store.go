@@ -2764,6 +2764,11 @@ func applyMigrations(tx *sql.Tx) error {
 			return err
 		}
 	}
+	if currentVersion < 21 {
+		if err := backfillArtifactIndexFromSessions(tx); err != nil {
+			return err
+		}
+	}
 	if currentVersion >= schemaVersion {
 		return nil
 	}
@@ -3417,6 +3422,45 @@ func backfillDurableAgentBootstrapCeilings(tx *sql.Tx) error {
 		if _, err := tx.Exec(`UPDATE durable_agents SET bootstrap_ceiling_json = ? WHERE agent_id = ?`, bootstrapJSON, item.agentID); err != nil {
 			return fmt.Errorf("backfill durable agent bootstrap ceiling agent_id=%s: %w", item.agentID, err)
 		}
+	}
+	return nil
+}
+
+func backfillArtifactIndexFromSessions(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT session_id, chat_id, user_id, turn_count, last_floor_metadata
+		FROM sessions
+		WHERE TRIM(COALESCE(last_floor_metadata, '')) <> ''
+	`)
+	if err != nil {
+		return fmt.Errorf("query sessions for artifact index backfill: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			sessionID         string
+			chatID            int64
+			userID            int64
+			turnCount         int
+			lastFloorMetadata sql.NullString
+		)
+		if err := rows.Scan(&sessionID, &chatID, &userID, &turnCount, &lastFloorMetadata); err != nil {
+			return fmt.Errorf("scan session artifact backfill row: %w", err)
+		}
+		sess := &Session{
+			SessionID:         strings.TrimSpace(sessionID),
+			ChatID:            chatID,
+			UserID:            userID,
+			TurnCount:         turnCount,
+			LastFloorMetadata: nullToString(lastFloorMetadata),
+		}
+		if err := upsertArtifactIndexRecords(tx, sess); err != nil {
+			return fmt.Errorf("backfill artifact index session_id=%s: %w", strings.TrimSpace(sessionID), err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate sessions for artifact index backfill: %w", err)
 	}
 	return nil
 }

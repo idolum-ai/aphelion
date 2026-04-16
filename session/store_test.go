@@ -1741,6 +1741,70 @@ func TestArtifactIndexRoundTripAndSearch(t *testing.T) {
 	}
 }
 
+func TestInitBackfillsArtifactIndexFromExistingSessionFloorMetadata(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "legacy-artifact-index.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	legacyDDL := []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (20)`,
+		`CREATE TABLE sessions (
+			session_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			last_floor_metadata TEXT,
+			turn_count INTEGER NOT NULL DEFAULT 0
+		)`,
+		`INSERT INTO sessions(session_id, chat_id, user_id, last_floor_metadata, turn_count) VALUES (
+			'telegram_dm:777', 777, 0,
+			'{"artifacts":[{"artifact_id":"legacy-doc-1","kind":"document","source_type":"document","summary":"legacy-roadmap.pdf","handling":"extract_text","retention":"child_local","fetch_state":"fetched_local","materialized_path":"/tmp/legacy-roadmap.pdf"}]}'
+			, 12
+		)`,
+	}
+	for _, stmt := range legacyDDL {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("exec legacy artifact stmt %q: %v", stmt, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() migration err = %v", err)
+	}
+	defer store.Close()
+
+	hits, err := store.SearchArtifacts("legacy-roadmap", 10, nil)
+	if err != nil {
+		t.Fatalf("SearchArtifacts() err = %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("artifact hits len = %d, want 1", len(hits))
+	}
+	if hits[0].ArtifactID != "legacy-doc-1" {
+		t.Fatalf("ArtifactID = %q, want legacy-doc-1", hits[0].ArtifactID)
+	}
+	if hits[0].SessionID != "telegram_dm:777" {
+		t.Fatalf("SessionID = %q, want telegram_dm:777", hits[0].SessionID)
+	}
+	if hits[0].TurnIndex != 12 {
+		t.Fatalf("TurnIndex = %d, want 12", hits[0].TurnIndex)
+	}
+	if hits[0].MaterializedPath != "/tmp/legacy-roadmap.pdf" {
+		t.Fatalf("MaterializedPath = %q, want /tmp/legacy-roadmap.pdf", hits[0].MaterializedPath)
+	}
+}
+
 func TestArtifactIndexIgnoresEphemeralArtifacts(t *testing.T) {
 	t.Parallel()
 
