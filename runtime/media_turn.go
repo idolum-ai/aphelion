@@ -44,12 +44,14 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 		}
 
 		ref := core.ArtifactReference{
-			ArtifactID:      artifact.ID,
-			Kind:            artifact.Kind,
-			SourceType:      artifact.SourceType,
-			Summary:         summarizeArtifactForFloor(artifact),
-			Retention:       firstNonEmpty(strings.TrimSpace(artifact.DefaultRetention), "ephemeral"),
-			ProvenanceScope: artifact.Scope,
+			ArtifactID:       artifact.ID,
+			Kind:             artifact.Kind,
+			SourceType:       artifact.SourceType,
+			Summary:          summarizeArtifactForFloor(artifact),
+			Retention:        firstNonEmpty(strings.TrimSpace(artifact.DefaultRetention), "ephemeral"),
+			ProvenanceScope:  artifact.Scope,
+			FetchState:       inboundArtifactFetchState(artifact),
+			MaterializedPath: strings.TrimSpace(artifact.Path),
 		}
 
 		switch artifactHandling(artifact) {
@@ -100,6 +102,10 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 			setIfEmpty(&prepared.MediaMode, "artifact_reference")
 		}
 
+		ref.DecisionSummary = summarizeArtifactDecision(ref, artifact)
+		if decisionInput := artifactDecisionHiddenInput(ref, artifact); decisionInput != nil {
+			prepared.ArtifactDecisionInputs = append(prepared.ArtifactDecisionInputs, *decisionInput)
+		}
 		if artifact.Kind == "audio" {
 			prepared.InboundWasVoice = true
 		}
@@ -224,6 +230,49 @@ func defaultInboundArtifactName(artifact core.Artifact) string {
 		return "sticker.webp"
 	default:
 		return "artifact"
+	}
+}
+
+func inboundArtifactFetchState(artifact core.Artifact) string {
+	if len(artifact.Data) > 0 && strings.TrimSpace(artifact.Path) != "" {
+		return "fetched_local"
+	}
+	if len(artifact.Data) > 0 {
+		return "fetched_memory"
+	}
+	if strings.TrimSpace(artifact.RemoteID) != "" {
+		return "remote_metadata_only"
+	}
+	return "metadata_only"
+}
+
+func summarizeArtifactDecision(ref core.ArtifactReference, artifact core.Artifact) string {
+	parts := []string{firstNonEmpty(strings.TrimSpace(ref.Handling), "store_reference_only")}
+	if fetch := strings.TrimSpace(ref.FetchState); fetch != "" {
+		parts = append(parts, fetch)
+	}
+	if retention := strings.TrimSpace(ref.Retention); retention != "" {
+		parts = append(parts, retention)
+	}
+	if strings.TrimSpace(artifact.Path) != "" {
+		parts = append(parts, "materialized_locally")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func artifactDecisionHiddenInput(ref core.ArtifactReference, artifact core.Artifact) *core.HiddenInput {
+	fetchState := strings.TrimSpace(ref.FetchState)
+	if fetchState == "" || (fetchState != "fetched_local" && fetchState != "remote_metadata_only") {
+		return nil
+	}
+	summary := firstNonEmpty(strings.TrimSpace(artifact.Filename), strings.TrimSpace(ref.Summary), strings.TrimSpace(ref.ArtifactID), "artifact")
+	decision := strings.TrimSpace(ref.DecisionSummary)
+	if decision == "" {
+		decision = summarizeArtifactDecision(ref, artifact)
+	}
+	return &core.HiddenInput{
+		Category: "artifact_retention_decision",
+		Summary:  fmt.Sprintf("inbound artifact %s handled as %s", summary, decision),
 	}
 }
 

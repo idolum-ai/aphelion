@@ -165,6 +165,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		return nil, fmt.Errorf("load durable agent prompt context: %w", err)
 	}
 	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText)
+	hiddenInputs.addCoreAll(prepared.ArtifactDecisionInputs)
 	governorAwareness := turn.ApplyOperationAwareness(
 		turn.ApplyPlanAwareness(
 			turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec), hiddenInputs.toTurnAwareness()),

@@ -449,6 +449,12 @@ func TestHandleInboundPersistsArtifactReferencesInFloorMetadata(t *testing.T) {
 	if !strings.Contains(sess.LastFloorMetadata, "\"retention\":\"session_reference\"") {
 		t.Fatalf("LastFloorMetadata = %q, want retention decision", sess.LastFloorMetadata)
 	}
+	if !strings.Contains(sess.LastFloorMetadata, "\"fetch_state\":\"fetched_memory\"") {
+		t.Fatalf("LastFloorMetadata = %q, want fetch state", sess.LastFloorMetadata)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, "decision_summary") {
+		t.Fatalf("LastFloorMetadata = %q, want decision summary", sess.LastFloorMetadata)
+	}
 }
 
 func TestPrepareInboundTurnPDFExtractionFailureFallsBackToPlaceholder(t *testing.T) {
@@ -657,5 +663,52 @@ func TestPrepareInboundTurnDoesNotPersistUnfetchedArtifact(t *testing.T) {
 	root := filepath.Join(cfg.Agent.ExecRoot, ".aphelion", "inbound")
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatalf("inbound root stat err = %v, want not-exist", err)
+	}
+}
+
+func TestHandleInboundPersistsArtifactDecisionHiddenInput(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "artifact decision reply"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	fetcher := &fakeInboundFetcher{data: map[string][]byte{
+		"doc-file-hidden": []byte("hello world"),
+	}}
+	rt.inbound = fetcher
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1302,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  1,
+		Text:       "hold onto this text file",
+		Artifacts: []core.Artifact{{
+			ID:         "doc-hidden",
+			Channel:    "telegram",
+			RemoteID:   "doc-file-hidden",
+			SourceType: "document",
+			Kind:       "document",
+			Subtype:    "text",
+			Filename:   "notes.txt",
+			MimeType:   "text/plain",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 1302, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, "artifact_retention_decision") {
+		t.Fatalf("LastFloorMetadata = %q, want artifact retention decision hidden input", sess.LastFloorMetadata)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, "fetched_local") {
+		t.Fatalf("LastFloorMetadata = %q, want fetched_local decision trail", sess.LastFloorMetadata)
 	}
 }

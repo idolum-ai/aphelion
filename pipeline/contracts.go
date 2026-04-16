@@ -21,13 +21,14 @@ type FacePolicy struct {
 
 // TurnPrepareContract is the output boundary from the prepare phase.
 type TurnPrepareContract struct {
-	UserText        string
-	LedgerText      string
-	AgentMedia      []core.Media
-	ArtifactRefs    []core.ArtifactReference
-	InboundWasVoice bool
-	MediaAttached   bool
-	MediaMode       string
+	UserText               string
+	LedgerText             string
+	AgentMedia             []core.Media
+	ArtifactRefs           []core.ArtifactReference
+	InboundWasVoice        bool
+	MediaAttached          bool
+	MediaMode              string
+	ArtifactDecisionInputs []core.HiddenInput
 }
 
 // TurnExecutionContract is the governor-facing execution snapshot used when

@@ -49,6 +49,16 @@ func (s *hiddenInputSet) add(category string, summary string) {
 	s.Inputs = append(s.Inputs, hiddenInput{Category: category, Summary: summary})
 }
 
+func (s *hiddenInputSet) addCore(input core.HiddenInput) {
+	s.add(input.Category, input.Summary)
+}
+
+func (s *hiddenInputSet) addCoreAll(inputs []core.HiddenInput) {
+	for _, input := range inputs {
+		s.addCore(input)
+	}
+}
+
 func (s hiddenInputSet) Active() bool {
 	return len(s.Inputs) > 0
 }
