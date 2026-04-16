@@ -160,11 +160,11 @@ func faceModelForProvider(providerName, personaModel string) string {
 	if model == "" {
 		model = personaModelSonnet
 	}
-	if model == personaModelOpus {
+	if model == personaModelOpus46 || model == personaModelOpus47 {
 		if strings.EqualFold(strings.TrimSpace(providerName), "openrouter") {
-			return "anthropic/" + personaModelOpus
+			return "anthropic/" + model
 		}
-		return personaModelOpus
+		return model
 	}
 	if strings.EqualFold(strings.TrimSpace(providerName), "openrouter") {
 		return "anthropic/" + personaModelSonnet

@@ -233,6 +233,8 @@ func decodeRecipeCallbackData(data string) (kind string, value string, ok bool) 
 func personaModelButtonLabel(model string) string {
 	trimmed := strings.TrimSpace(model)
 	switch strings.ToLower(trimmed) {
+	case "claude-opus-4-7":
+		return "Opus 4.7"
 	case "claude-opus-4-6":
 		return "Opus 4.6"
 	case "claude-sonnet-4-6":

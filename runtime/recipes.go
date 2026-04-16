@@ -15,7 +15,8 @@ import (
 
 const (
 	personaModelSonnet   = "claude-sonnet-4-6"
-	personaModelOpus     = "claude-opus-4-6"
+	personaModelOpus46   = "claude-opus-4-6"
+	personaModelOpus47   = "claude-opus-4-7"
 	personaEffortSonnet  = "sonnet"
 	personaEffortOpus    = "opus"
 	governorEffortLow    = "low"
@@ -58,7 +59,7 @@ func defaultRuntimeRecipeState(cfg *config.Config) runtimeRecipeState {
 	}
 	if strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.Anthropic.Model)), "opus") ||
 		strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.OpenRouter.Model)), "opus") {
-		state.PersonaModel = personaModelOpus
+		state.PersonaModel = personaModelOpus46
 	}
 
 	defaultEffort := normalizeGovernorEffort(cfg.Thinking.Defaults.Default)
@@ -173,8 +174,8 @@ func (r *Runtime) TogglePersonaEffort() (string, error) {
 	if currentModel == "" {
 		currentModel = personaModelForEffort(r.recipeState.PersonaEffort)
 	}
-	nextModel := personaModelOpus
-	if currentModel == personaModelOpus {
+	nextModel := personaModelOpus46
+	if currentModel == personaModelOpus46 || currentModel == personaModelOpus47 {
 		nextModel = personaModelSonnet
 	}
 	r.recipeState.PersonaModel = nextModel
@@ -222,7 +223,7 @@ func (r *Runtime) CurrentPersonaModel() string {
 }
 
 func (r *Runtime) PersonaModelOptions() []string {
-	return []string{personaModelSonnet, personaModelOpus}
+	return []string{personaModelSonnet, personaModelOpus46, personaModelOpus47}
 }
 
 func (r *Runtime) SetPersonaModel(model string) (string, error) {
@@ -283,7 +284,7 @@ func normalizePersonaModel(model string) string {
 	value := strings.ToLower(strings.TrimSpace(model))
 	value = strings.TrimPrefix(value, "anthropic/")
 	switch value {
-	case personaModelSonnet, personaModelOpus:
+	case personaModelSonnet, personaModelOpus46, personaModelOpus47:
 		return value
 	default:
 		return ""
@@ -293,7 +294,7 @@ func normalizePersonaModel(model string) string {
 func personaModelForEffort(effort string) string {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
 	case personaEffortOpus:
-		return personaModelOpus
+		return personaModelOpus46
 	case personaEffortSonnet:
 		return personaModelSonnet
 	default:
@@ -302,7 +303,7 @@ func personaModelForEffort(effort string) string {
 }
 
 func personaEffortForModel(model string) string {
-	if normalizePersonaModel(model) == personaModelOpus {
+	if normalized := normalizePersonaModel(model); normalized == personaModelOpus46 || normalized == personaModelOpus47 {
 		return personaEffortOpus
 	}
 	return personaEffortSonnet

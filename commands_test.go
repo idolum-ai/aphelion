@@ -114,7 +114,7 @@ func (s stubCommandRouter) CurrentPersonaModel() string {
 
 func (s stubCommandRouter) PersonaModelOptions() []string {
 	if len(s.personaModelOptions) == 0 {
-		return []string{"claude-sonnet-4-6", "claude-opus-4-6"}
+		return []string{"claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"}
 	}
 	return append([]string(nil), s.personaModelOptions...)
 }
@@ -280,7 +280,7 @@ func TestHandleTelegramCommandSetPersonaModel(t *testing.T) {
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
 		personaModel:        "claude-sonnet-4-6",
-		personaModelOptions: []string{"claude-sonnet-4-6", "claude-opus-4-6"},
+		personaModelOptions: []string{"claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7"},
 	}
 	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
 		ChatID:    7,
@@ -394,5 +394,12 @@ func TestHandleTelegramCommandCallbackGovernorEffort(t *testing.T) {
 	}
 	if len(sender.edits) != 1 {
 		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	}
+}
+
+func TestPersonaModelButtonLabelIncludesOpus47(t *testing.T) {
+	t.Parallel()
+	if got := personaModelButtonLabel("claude-opus-4-7"); got != "Opus 4.7" {
+		t.Fatalf("personaModelButtonLabel() = %q, want Opus 4.7", got)
 	}
 }

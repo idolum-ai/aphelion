@@ -19,7 +19,7 @@ func TestRuntimeRecipeStateRoundTrip(t *testing.T) {
 	cfg.Sessions.DBPath = filepath.Join(t.TempDir(), "state", "sessions.db")
 	path := recipeStatePath(&cfg)
 	want := runtimeRecipeState{
-		PersonaModel:   personaModelOpus,
+		PersonaModel:   personaModelOpus46,
 		PersonaEffort:  personaEffortOpus,
 		GovernorEffort: governorEffortHigh,
 	}
@@ -52,8 +52,8 @@ func TestRuntimeRecipeStateMigratesLegacyPersonaEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
 	}
-	if got.PersonaModel != personaModelOpus {
-		t.Fatalf("PersonaModel = %q, want %q", got.PersonaModel, personaModelOpus)
+	if got.PersonaModel != personaModelOpus46 {
+		t.Fatalf("PersonaModel = %q, want %q", got.PersonaModel, personaModelOpus46)
 	}
 	if got.PersonaEffort != personaEffortOpus {
 		t.Fatalf("PersonaEffort = %q, want %q", got.PersonaEffort, personaEffortOpus)
@@ -74,19 +74,19 @@ func TestSetPersonaModelPersistsSelection(t *testing.T) {
 			GovernorEffort: governorEffortMedium,
 		},
 	}
-	got, err := rt.SetPersonaModel(personaModelOpus)
+	got, err := rt.SetPersonaModel(personaModelOpus47)
 	if err != nil {
 		t.Fatalf("SetPersonaModel() err = %v", err)
 	}
-	if got != personaModelOpus {
-		t.Fatalf("SetPersonaModel() = %q, want %q", got, personaModelOpus)
+	if got != personaModelOpus47 {
+		t.Fatalf("SetPersonaModel() = %q, want %q", got, personaModelOpus47)
 	}
 	reloaded, err := loadRuntimeRecipeState(path, &cfg)
 	if err != nil {
 		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
 	}
-	if reloaded.PersonaModel != personaModelOpus {
-		t.Fatalf("PersonaModel = %q, want %q", reloaded.PersonaModel, personaModelOpus)
+	if reloaded.PersonaModel != personaModelOpus47 {
+		t.Fatalf("PersonaModel = %q, want %q", reloaded.PersonaModel, personaModelOpus47)
 	}
 	if reloaded.PersonaEffort != personaEffortOpus {
 		t.Fatalf("PersonaEffort = %q, want %q", reloaded.PersonaEffort, personaEffortOpus)
@@ -160,5 +160,20 @@ func TestRuntimeReasoningOverrideAppliesOnlyInteractiveAndRecovery(t *testing.T)
 	}
 	if got := rt.reasoningOptionsForRun(session.TurnRunKindCron); got.Reasoning.Effort != agent.ReasoningEffortLow {
 		t.Fatalf("cron effort = %q, want low", got.Reasoning.Effort)
+	}
+}
+
+func TestPersonaModelOptionsIncludeOpus47(t *testing.T) {
+	t.Parallel()
+	rt := &Runtime{}
+	got := rt.PersonaModelOptions()
+	want := []string{personaModelSonnet, personaModelOpus46, personaModelOpus47}
+	if len(got) != len(want) {
+		t.Fatalf("PersonaModelOptions len = %d, want %d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("PersonaModelOptions[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }
