@@ -30,7 +30,7 @@ type CommitResult struct {
 	Persisted bool
 }
 
-// DefaultCommitPlan returns the current design-lab default.
+// DefaultCommitPlan returns the default commit ordering policy.
 func DefaultCommitPlan(policy Policy) CommitPlan {
 	_ = policy
 	return CommitPlan{

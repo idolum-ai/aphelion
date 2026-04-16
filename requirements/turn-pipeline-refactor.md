@@ -98,7 +98,8 @@ This plan uses three status labels for architecture claims:
 
 ## Progress Snapshot
 
-As of this commit series, the refactor has advanced on one bounded slice:
+As of this commit series, the refactor has progressed through the planned
+phases with the following live changes:
 
 - `pipeline`: added contract-boundary extraction for turn policy, turn execution shape, and floor-material parsing/formatting.
 - `pipeline`: added pure helpers and tests for material floor parsing (`ParseMaterialPacket`, `BuildFloorFromGovernor`).
@@ -133,12 +134,15 @@ As of this commit series, the refactor has advanced on one bounded slice:
 - `runtime`: finished Phase 9 test-ownership rebalance by moving the last interactive tests into dedicated domain files (`runtime/interactive_commit_delivery_runtime_test.go`, `runtime/chat_prompt_runtime_test.go`, `runtime/interactive_render_policy_runtime_test.go`) and converting the old monolith into a shared test harness file (`runtime/runtime_test_helpers.go`).
 - `turn`: expanded engine tests for commit ordering and error propagation (`persist-before-delivery`, `delivery failure`, `persistence failure`) and now require `Result` material in delivery requests for phase-aware delivery decisions.
 - `runtime`/`turn`: moved hidden-input, plan, operation, and brokerage assembly into `turn` helpers (`turn.ApplyHiddenInputAwareness`, `turn.ApplyPlanAwareness`, `turn.ApplyOperationAwareness`, `turn.ApplyBrokerageAwareness`) and kept runtime focused on producing source facts only.
+- `docs`: rewrote package docs/readmes for `runtime`, `turn`, and `pipeline` so they describe current live ownership rather than design-lab intent.
+- `requirements`: updated core architecture and module-structure docs to reflect runtime shell ownership, `turn` stage orchestration, and `pipeline` conversational-transform boundaries.
+- `turn`: removed stale design-lab ownership comments from production engine/policy/commit/type contracts so code-level docs match live behavior.
 
 ## Target Package Ownership
 
 ### `runtime`
 
-Status: `live truth` moving toward a narrower shell.
+Status: `live truth`.
 
 `runtime` should own:
 
@@ -155,7 +159,7 @@ Status: `live truth` moving toward a narrower shell.
 
 ### `turn`
 
-Status: `migration seam` today, `northbound target` for production turn orchestration.
+Status: `live truth` with narrow runtime-adapter seams.
 
 `turn` should own:
 
@@ -172,7 +176,7 @@ same, not a single universal engine at any cost.
 
 ### `pipeline`
 
-Status: `northbound target`.
+Status: `migration seam`.
 
 `pipeline` should own:
 

@@ -12,11 +12,11 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-// Engine is the intended boundary for single-turn orchestration.
+// Engine is the boundary for single-turn orchestration.
 //
-// A future implementation should be able to run interactive, heartbeat, cron,
-// recovery, and durable-child turns through the same house-level contract while
-// varying only the inputs and ports around it.
+// Production implementations support interactive, heartbeat, cron, recovery,
+// and durable-child turns through one contract while varying inputs and ports
+// by turn species.
 type Engine interface {
 	Handle(ctx context.Context, req Request) (*Result, error)
 }
@@ -44,8 +44,8 @@ type Request struct {
 //   - the governor-owned floor sidecar
 //   - the visible scene text the user actually receives
 //
-// The embedded policy, commit, and delivery fields make the orchestration
-// choices inspectable in tests before the package is wired into production.
+// The embedded policy, commit, and delivery fields keep orchestration choices
+// inspectable in tests and runtime adapters.
 type Result struct {
 	Turn            *core.TurnResult
 	Prepared        pipeline.TurnPrepareContract

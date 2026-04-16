@@ -16,9 +16,8 @@ type Policy struct {
 	Reason    string
 }
 
-// DefaultPolicy is the current design-lab policy for deciding whether a turn
-// should seek face pressure before execution and whether it should stage a
-// visible scene afterward.
+// DefaultPolicy decides whether a turn seeks face pressure before execution and
+// whether it stages a visible scene afterward.
 func DefaultPolicy(req Request) Policy {
 	text := strings.TrimSpace(req.Inbound.Text)
 	switch req.RunKind {

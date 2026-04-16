@@ -1,26 +1,18 @@
 //go:build linux
 
-// Package pipeline defines the intended boundary for Aphelion's conversational
-// mechanics: the governor/face pipeline that a turn orchestrates but should not
-// fully internalize.
+// Package pipeline owns governor/face conversational mechanics used by turn
+// orchestration.
 //
-// This package is a design-lab surface. It is not yet wired into the live
-// runtime loop.
+// The package provides production contracts and helpers for:
 //
-// In the intended architecture:
+//   - brokerage parsing and ratification shaping
+//   - floor material extraction and formatting
+//   - render/fallback contracts and render-decision policy
+//   - execution and awareness contracts shared with turn/runtime boundaries
 //
-//   - runtime owns the long-lived process shell and channel wiring
-//   - turn owns the state machine for one turn
-//   - pipeline owns the governor/face mechanics that turn invokes
+// In the live architecture:
 //
-// The key architectural nouns here are:
-//
-//   - brokerage: bounded pre-turn negotiation over posture
-//   - floor: governor-owned material truth/permission/refusal artifact
-//   - scene: face-authored visible reply from that floor
-//   - fallback: degraded delivery path when ordinary scene authorship is absent
-//
-// The purpose of this package is to make those mechanics explicit, testable,
-// and eventually extractable from runtime without collapsing them back into a
-// monolithic turn handler.
+//   - runtime owns process shell + transport wiring
+//   - turn owns one-turn stage ordering
+//   - pipeline owns conversational transformations across governor/face
 package pipeline

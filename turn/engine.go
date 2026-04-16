@@ -10,10 +10,10 @@ import (
 	"github.com/idolum-ai/aphelion/prompt"
 )
 
-// Machine is a design-lab implementation of Engine.
+// Machine is the production Engine implementation.
 //
-// It is intentionally small and explicit: a place to make the turn lifecycle
-// readable before any production extraction happens.
+// It keeps turn lifecycle stages explicit while delegating concrete behavior to
+// governor/face/persistence/delivery ports.
 type Machine struct {
 	Governor         GovernorPort
 	Face             FacePort

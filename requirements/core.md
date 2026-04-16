@@ -18,21 +18,24 @@ This spec is **staged**. The initial "core runnable" milestone is the minimal en
 
 ```
 ┌───────────┐     ┌──────────┐     ┌──────────────┐     ┌──────────────┐
-│ Telegram  │────▶│  Router  │────▶│   Runtime    │────▶│  Governor    │
-│           │◀────│          │◀────│ (orchestr.)  │◀────│ (decisions)  │
+│ Telegram  │────▶│  Router  │────▶│   Runtime    │────▶│    turn      │
+│           │◀────│          │◀────│ (house shell)│◀────│   Machine    │
 └───────────┘     └──────────┘     └──────┬───────┘     └──────┬───────┘
                                           │                    │
-                                     ┌────┴────┐         ┌─────┴─────┐
-                                     │ Session │         │   Face    │
-                                     │  Store  │         │ (render)  │
-                                     └─────────┘         └───────────┘
+                                     ┌────┴────┐        ┌──────┴────────┐
+                                     │ Session │        │   pipeline    │
+                                     │  Store  │        │ brokerage +   │
+                                     └─────────┘        │ floor/render  │
+                                                        └───────────────┘
 ```
 
 ### Components
 
 - **Telegram**: Long-polls the Bot API. Normalizes updates into `InboundMessage`. Sends `OutboundMessage` back. Knows Telegram formatting. Doesn't know about LLMs.
 - **Router**: Maps inbound messages to sessions by chat ID. Dispatches agent turns as goroutines. Enforces one-turn-at-a-time per session via per-session mutexes. Queues overflow.
-- **Runtime**: Owns the lifecycle for one inbound event: load session, assemble prompt context, run the governor, run the face, persist new messages, and send outbound results. This keeps `main.go` thin without pushing transport/store logic into `core.Router`.
+- **Runtime**: House shell. Owns transport wiring, principal/scope resolution, session locking, background loops, and assembly of concrete ports for turn execution.
+- **turn**: Owns one-turn stage order and policy for interactive, durable-child, and maintenance species.
+- **pipeline**: Owns governor/face conversational transformations (brokerage parsing, floor shaping, render/fallback contracts) consumed by turn/runtime.
 - **Governor**: Owns the floor of a turn. This layer is named `Aphelion`. It may be backed by Codex or by the native provider/tool loop.
 - **Face**: Authors the user-visible scene from the governor-owned floor.
 - **Agent**: The native governor path. Runs a single conversational turn via the provider/tool loop.
@@ -79,17 +82,17 @@ type Media struct {
 2. Normalizes → InboundMessage
 3. Router resolves session (by ChatID)
 4. Router acquires per-session mutex
-5. Runtime loads session state from SQLite
-6. Runtime assembles governor context and input messages
-7. Runtime calls the selected governor backend
+5. Runtime loads session state from SQLite and prepares turn inputs
+6. Runtime delegates to `turn.Machine`
+7. Turn machine runs governor stage with pipeline contracts
 8. Governor turn:
    a. If backend is native: assemble API messages (governor prompt + history + new message)
    b. HTTP call to inference provider
    c. If response has tool calls → execute tools → append results → goto 8b
    d. If response is text → floor complete
-9. Runtime calls face scene-authoring or floor fallback delivery
-10. Runtime persists updated session to SQLite
-11. Runtime sends delivered scene or fallback text → OutboundMessage via Telegram
+9. Turn machine runs face render/fallback stage via pipeline/runtime ports
+10. Turn machine commits through persistence/delivery ports
+11. Runtime adapter sends delivered scene or fallback text → OutboundMessage via Telegram
 12. Router releases per-session mutex
 ```
 
@@ -104,7 +107,9 @@ type Media struct {
 
 - **`main.go` is boot only.** Parse flags, load config, construct dependencies, install signal handling, start transport/runtime.
 - **`core.Router` is transport/provider agnostic.** It should not know about SQLite schema, Telegram formatting, or provider request shapes.
-- **Runtime owns orchestration.** Session load/save, governor selection, prompt assembly, face rendering, and outbound reply translation belong in `runtime/`, not in `main.go` or `core/`.
+- **Runtime owns shell wiring.** Session lock/load orchestration entrypoints, transport adapters, and long-lived loops belong in `runtime/`, not in `main.go` or `core/`.
+- **turn owns stage order.** Turn policy, stage sequencing, and commit contracts belong in `turn/`.
+- **pipeline owns conversational transforms.** Brokerage/floor/render/fallback contract mechanics belong in `pipeline/`.
 - **Adapters live at the edges.** Transport normalization, provider wire formats, Codex/native governor adapters, face adapters, and persistence-to-agent transcript conversion live in dedicated packages.
 
 ## Linux-Native Primitives
@@ -244,8 +249,18 @@ aphelion/
 │   ├── router.go        # message routing, session dispatch, per-session mutex
 │   └── types.go         # InboundMessage, OutboundMessage, Media, TurnResult
 ├── runtime/
-│   ├── runtime.go       # inbound message lifecycle orchestration
-│   └── turn.go          # load session, assemble prompt, run governor/face, persist, send
+│   ├── runtime.go       # process shell wiring and background loops
+│   ├── turn*.go         # runtime-to-turn adapters and species coordinators
+│   └── *_runtime_test.go # runtime-domain integration suites by concern
+├── turn/
+│   ├── engine.go        # one-turn stage ordering machine
+│   ├── stages.go        # governor/face/persist/deliver stage implementations
+│   ├── policy.go        # turn-species policy defaults
+│   └── ports.go         # governor/face/persistence/delivery interfaces
+├── pipeline/
+│   ├── brokerage.go     # brokerage parsing and ratification contracts
+│   ├── material.go      # governor-output -> floor-material extraction
+│   └── contracts.go     # execution/render contracts + policy helpers
 ├── governor/
 │   ├── governor.go      # governor interface
 │   ├── codex.go         # Codex-backed governor adapter
@@ -278,9 +293,6 @@ aphelion/
 │   └── prompt.go        # workspace bootstrap/dynamic file loading
 ├── memory/
 │   └── vectors.go       # embedding search (optional)
-├── automation/
-│   ├── heartbeat.go     # periodic agent turns
-│   └── cron.go          # scheduled jobs
 ├── voice/
 │   └── elevenlabs.go    # TTS
 └── internal/

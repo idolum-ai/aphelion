@@ -21,7 +21,26 @@ A minimal, focused agent runtime for personal AI assistants.
 
 ## Architecture
 
-See `requirements/` for component specs. Each spec is designed, reviewed, then implemented via sub-agents.
+Live package ownership:
+
+- `runtime`: house shell (transport wiring, scopes/locks, background loops)
+- `turn`: one-turn state machine (policy + stage order + commit contracts)
+- `pipeline`: governor/face conversational transforms (brokerage/floor/render contracts)
+
+```text
+Telegram transport
+   -> runtime (shell + adapters)
+      -> turn.Machine (stage ordering)
+         -> pipeline helpers/contracts (brokerage/floor/render)
+      -> session persistence + outbound delivery ports
+```
+
+Details:
+
+- [runtime/README.md](runtime/README.md)
+- [turn/README.md](turn/README.md)
+- [pipeline/README.md](pipeline/README.md)
+- `requirements/` specs for component-level behavior
 
 ## Status
 
