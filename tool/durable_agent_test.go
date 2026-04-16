@@ -40,6 +40,28 @@ func TestDefinitionsIncludeDurableAgentToolWhenStoreConfigured(t *testing.T) {
 	}
 }
 
+func TestDurableAgentToolDefinitionIncludesPolicyPatchSurface(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(newToolTestStore(t))
+	var durableDefJSON string
+	for _, def := range registry.Definitions() {
+		if def.Name == "durable_agent" {
+			durableDefJSON = string(def.Parameters)
+			break
+		}
+	}
+	if durableDefJSON == "" {
+		t.Fatal("durable_agent definition missing")
+	}
+	if !strings.Contains(durableDefJSON, `"policy_patch"`) {
+		t.Fatalf("durable_agent definition missing policy_patch field: %s", durableDefJSON)
+	}
+	if !strings.Contains(durableDefJSON, `"policy_overrides"`) {
+		t.Fatalf("durable_agent definition missing policy_overrides field: %s", durableDefJSON)
+	}
+}
+
 func TestDurableAgentToolListAndPolicyShow(t *testing.T) {
 	t.Parallel()
 
@@ -235,6 +257,92 @@ func TestDurableAgentToolPolicyApplyAcceptsConversationDerivedPolicyFields(t *te
 	}
 	if updated.LivePolicy.SharedInferenceReuse != "disabled" {
 		t.Fatalf("updated shared_inference_reuse = %q, want disabled", updated.LivePolicy.SharedInferenceReuse)
+	}
+}
+
+func TestDurableAgentToolPolicyApplyAcceptsStructuredPolicyPatch(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "child-key",
+			Model:          "openrouter/group-model",
+		},
+		PolicyVersion:     1,
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "telegram_update",
+		Status:            "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"policy_apply",
+			"agent_id":"family-group",
+			"policy_patch":{
+				"charter":"Observe the channel and escalate important items.",
+				"autonomy":"observe_only",
+				"visibility":"private",
+				"shared_context":"public_only",
+				"capabilities":["group_reply"],
+				"drift_policy":"admin_review"
+			},
+			"policy_overrides":{
+				"outbound_mode":"read_only"
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(policy_apply structured patch) err = %v", err)
+	}
+	if !strings.Contains(out, "autonomy: observe_only") {
+		t.Fatalf("policy apply output = %q, want structured autonomy summary", out)
+	}
+	if !strings.Contains(out, "visibility: private") {
+		t.Fatalf("policy apply output = %q, want structured visibility summary", out)
+	}
+	if !strings.Contains(out, "shared_context: public_only") {
+		t.Fatalf("policy apply output = %q, want structured shared-context summary", out)
+	}
+
+	updated, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if updated.LivePolicy.Charter != "Observe the channel and escalate important items." {
+		t.Fatalf("updated charter = %q, want structured patch charter", updated.LivePolicy.Charter)
+	}
+	if len(updated.LivePolicy.CapabilityEnvelope) != 1 || updated.LivePolicy.CapabilityEnvelope[0] != "group_reply" {
+		t.Fatalf("updated capabilities = %#v, want [group_reply]", updated.LivePolicy.CapabilityEnvelope)
+	}
+	if updated.LivePolicy.OutboundMode != "read_only" {
+		t.Fatalf("updated outbound_mode = %q, want read_only", updated.LivePolicy.OutboundMode)
+	}
+	if updated.LivePolicy.PublicSurfaceMode != "none" {
+		t.Fatalf("updated public_surface_mode = %q, want none", updated.LivePolicy.PublicSurfaceMode)
+	}
+	if updated.LivePolicy.SharedInferenceReuse != "allowed" {
+		t.Fatalf("updated shared_inference_reuse = %q, want allowed", updated.LivePolicy.SharedInferenceReuse)
+	}
+	if updated.LivePolicy.SharedInferenceReuseScope != "public_prefix_only" {
+		t.Fatalf("updated shared_inference_reuse_scope = %q, want public_prefix_only", updated.LivePolicy.SharedInferenceReuseScope)
 	}
 }
 

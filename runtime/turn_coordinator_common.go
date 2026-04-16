@@ -162,13 +162,14 @@ func (r *Runtime) buildTurnCoordinatorGovernorPrompt(input turnCoordinatorExecut
 	}
 	governorAwareness = turn.ApplyBrokerageAwareness(governorAwareness, brokerage.toTurnAwareness())
 	governorPrompt := prompt.GovernorRequest{
-		GovernorName:    input.GovernorName,
-		GovernorBackend: input.Exec.Backend,
-		PrincipalRole:   input.PrincipalRole,
-		WorkspaceRoot:   input.Scope.WorkingRoot,
-		ToolManifest:    toolManifest(input.Tools),
-		Workspace:       input.PromptContext,
-		Runtime:         governorAwareness,
+		GovernorName:     input.GovernorName,
+		GovernorBackend:  input.Exec.Backend,
+		PrincipalRole:    input.PrincipalRole,
+		WorkspaceRoot:    input.Scope.WorkingRoot,
+		ToolManifest:     toolManifest(input.Tools),
+		ToolCapabilities: toolCapabilities(input.Tools),
+		Workspace:        input.PromptContext,
+		Runtime:          governorAwareness,
 	}
 	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)

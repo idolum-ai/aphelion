@@ -175,6 +175,13 @@ It should support, at minimum:
 
 Creation and activation remain admin-only, but they should be reachable from ordinary conversation rather than only from startup config.
 
+For `policy_apply`, the governance surface should prefer a conversational patch shape:
+
+- `policy_patch` for charter/autonomy/visibility/shared-context/capabilities/drift
+- `policy_overrides` only when low-level policy axes must be set explicitly
+
+Legacy top-level fields may remain accepted for compatibility, but they should be treated as compatibility inputs mapped into the same canonical patch application path.
+
 ## `TOOLS.md`
 
 `TOOLS.md` is a valid Aphelion concept.
@@ -213,6 +220,8 @@ Per turn, tool guidance is assembled in this order:
 3. optional workspace `TOOLS.md`
 
 The model should never be shown stale tool definitions copied by hand into prompt text when the real registry differs.
+
+Runtime discipline blocks (planning/operations/confirmation) should be keyed from typed registry capabilities (for example `exec`, `update_plan`, `update_operation`) rather than substring matches against free-form manifest text.
 
 Tool guidance belongs to the **governor prompt**, not the face prompt.
 

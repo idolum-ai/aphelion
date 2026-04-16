@@ -91,6 +91,46 @@ func TestBuildGovernorPromptAddsConfirmationDisciplineWhenExecIsAvailable(t *tes
 	}
 }
 
+func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolCapabilities: ToolCapabilities{
+			Exec:            true,
+			UpdatePlan:      true,
+			UpdateOperation: true,
+		},
+	})
+
+	if !strings.Contains(got, "## Planning Discipline") {
+		t.Fatalf("prompt missing planning discipline from capability flags: %q", got)
+	}
+	if !strings.Contains(got, "## Operational Discipline") {
+		t.Fatalf("prompt missing operational discipline from capability flags: %q", got)
+	}
+	if !strings.Contains(got, "## Confirmation Discipline") {
+		t.Fatalf("prompt missing confirmation discipline from capability flags: %q", got)
+	}
+}
+
+func TestBuildGovernorPromptDoesNotInferDisciplineFromManifestDescriptions(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolManifest: "tools:\n- memory: keep notes about update_plan and update_operation usage, not command execution",
+	})
+
+	if strings.Contains(got, "## Planning Discipline") {
+		t.Fatalf("prompt unexpectedly inferred planning discipline from description text: %q", got)
+	}
+	if strings.Contains(got, "## Operational Discipline") {
+		t.Fatalf("prompt unexpectedly inferred operational discipline from description text: %q", got)
+	}
+	if strings.Contains(got, "## Confirmation Discipline") {
+		t.Fatalf("prompt unexpectedly inferred confirmation discipline from description text: %q", got)
+	}
+}
+
 func TestBuildGovernorPromptPlacesDynamicFilesAfterStableSections(t *testing.T) {
 	t.Parallel()
 

@@ -106,49 +106,10 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 		}
 	}
 
+	patch := effectiveDurableAgentPolicyPatchFromInput(in)
 	policy := agent.LivePolicy
-	if strings.TrimSpace(in.Charter) != "" {
-		policy.Charter = strings.TrimSpace(in.Charter)
-	}
-	if strings.TrimSpace(in.Autonomy) != "" {
-		mode, err := durableAgentAutonomyToOutboundMode(in.Autonomy)
-		if err != nil {
-			return "", err
-		}
-		policy.OutboundMode = mode
-	}
-	if strings.TrimSpace(in.Visibility) != "" {
-		mode, err := durableAgentVisibilityToPublicSurfaceMode(in.Visibility)
-		if err != nil {
-			return "", err
-		}
-		policy.PublicSurfaceMode = mode
-	}
-	if strings.TrimSpace(in.SharedContext) != "" {
-		reuse, scope, err := durableAgentSharedContextToReuse(in.SharedContext)
-		if err != nil {
-			return "", err
-		}
-		policy.SharedInferenceReuse = reuse
-		policy.SharedInferenceReuseScope = scope
-	}
-	if len(in.Capabilities) > 0 {
-		policy.CapabilityEnvelope = append([]string(nil), in.Capabilities...)
-	}
-	if strings.TrimSpace(in.OutboundMode) != "" {
-		policy.OutboundMode = strings.TrimSpace(in.OutboundMode)
-	}
-	if strings.TrimSpace(in.DriftPolicy) != "" {
-		policy.DriftPolicy = strings.TrimSpace(in.DriftPolicy)
-	}
-	if strings.TrimSpace(in.PublicSurfaceMode) != "" {
-		policy.PublicSurfaceMode = strings.TrimSpace(in.PublicSurfaceMode)
-	}
-	if strings.TrimSpace(in.SharedInferenceReuse) != "" {
-		policy.SharedInferenceReuse = strings.TrimSpace(in.SharedInferenceReuse)
-	}
-	if strings.TrimSpace(in.SharedInferenceReuseScope) != "" {
-		policy.SharedInferenceReuseScope = strings.TrimSpace(in.SharedInferenceReuseScope)
+	if err := applyDurableAgentPolicyPatch(&policy, patch); err != nil {
+		return "", err
 	}
 
 	reason := strings.TrimSpace(in.Reason)
@@ -204,6 +165,7 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 	if len(in.SecretScopes) > 0 {
 		agent.SecretScopes = append([]string(nil), in.SecretScopes...)
 	}
+	patch := effectiveDurableAgentPolicyPatchFromInput(in)
 	policy := agent.LivePolicy
 	if strings.TrimSpace(policy.Charter) == "" &&
 		len(policy.CapabilityEnvelope) == 0 &&
@@ -212,41 +174,10 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 		strings.TrimSpace(policy.PublicSurfaceMode) == "" &&
 		strings.TrimSpace(policy.SharedInferenceReuse) == "" &&
 		strings.TrimSpace(policy.SharedInferenceReuseScope) == "" {
-		policy = defaultDurableAgentLivePolicy(agent.ChannelKind, strings.TrimSpace(in.Charter))
+		policy = defaultDurableAgentLivePolicy(agent.ChannelKind, patch.Charter)
 	}
-	if strings.TrimSpace(in.Charter) != "" {
-		policy.Charter = strings.TrimSpace(in.Charter)
-	}
-	if strings.TrimSpace(in.Autonomy) != "" {
-		mode, err := durableAgentAutonomyToOutboundMode(in.Autonomy)
-		if err != nil {
-			return "", err
-		}
-		policy.OutboundMode = mode
-	}
-	if len(in.Capabilities) > 0 {
-		policy.CapabilityEnvelope = append([]string(nil), in.Capabilities...)
-	}
-	if strings.TrimSpace(in.OutboundMode) != "" {
-		policy.OutboundMode = strings.TrimSpace(in.OutboundMode)
-	}
-	if strings.TrimSpace(in.DriftPolicy) != "" {
-		policy.DriftPolicy = strings.TrimSpace(in.DriftPolicy)
-	}
-	if strings.TrimSpace(in.Visibility) != "" {
-		mode, err := durableAgentVisibilityToPublicSurfaceMode(in.Visibility)
-		if err != nil {
-			return "", err
-		}
-		policy.PublicSurfaceMode = mode
-	}
-	if strings.TrimSpace(in.SharedContext) != "" {
-		reuse, scope, err := durableAgentSharedContextToReuse(in.SharedContext)
-		if err != nil {
-			return "", err
-		}
-		policy.SharedInferenceReuse = reuse
-		policy.SharedInferenceReuseScope = scope
+	if err := applyDurableAgentPolicyPatch(&policy, patch); err != nil {
+		return "", err
 	}
 	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(policy)
 
@@ -587,6 +518,140 @@ func durableAgentIDOptions(agents []core.DurableAgent) []string {
 		out = append(out, id)
 	}
 	sort.Strings(out)
+	return out
+}
+
+type effectiveDurableAgentPolicyPatch struct {
+	Charter                   string
+	Autonomy                  string
+	Visibility                string
+	SharedContext             string
+	Capabilities              []string
+	CapabilitiesSet           bool
+	DriftPolicy               string
+	OutboundMode              string
+	PublicSurfaceMode         string
+	SharedInferenceReuse      string
+	SharedInferenceReuseScope string
+}
+
+func effectiveDurableAgentPolicyPatchFromInput(in durableAgentInput) effectiveDurableAgentPolicyPatch {
+	patch := effectiveDurableAgentPolicyPatch{}
+
+	if in.PolicyPatch != nil {
+		patch.Charter = strings.TrimSpace(in.PolicyPatch.Charter)
+		patch.Autonomy = strings.TrimSpace(in.PolicyPatch.Autonomy)
+		patch.Visibility = strings.TrimSpace(in.PolicyPatch.Visibility)
+		patch.SharedContext = strings.TrimSpace(in.PolicyPatch.SharedContext)
+		patch.DriftPolicy = strings.TrimSpace(in.PolicyPatch.DriftPolicy)
+		if in.PolicyPatch.Capabilities != nil {
+			patch.Capabilities = normalizePolicyCapabilities(in.PolicyPatch.Capabilities)
+			patch.CapabilitiesSet = true
+		}
+	}
+	if patch.Charter == "" {
+		patch.Charter = strings.TrimSpace(in.Charter)
+	}
+	if patch.Autonomy == "" {
+		patch.Autonomy = strings.TrimSpace(in.Autonomy)
+	}
+	if patch.Visibility == "" {
+		patch.Visibility = strings.TrimSpace(in.Visibility)
+	}
+	if patch.SharedContext == "" {
+		patch.SharedContext = strings.TrimSpace(in.SharedContext)
+	}
+	if !patch.CapabilitiesSet && in.Capabilities != nil {
+		patch.Capabilities = normalizePolicyCapabilities(in.Capabilities)
+		patch.CapabilitiesSet = true
+	}
+	if patch.DriftPolicy == "" {
+		patch.DriftPolicy = strings.TrimSpace(in.DriftPolicy)
+	}
+
+	if in.PolicyOverrides != nil {
+		patch.OutboundMode = strings.TrimSpace(in.PolicyOverrides.OutboundMode)
+		patch.PublicSurfaceMode = strings.TrimSpace(in.PolicyOverrides.PublicSurfaceMode)
+		patch.SharedInferenceReuse = strings.TrimSpace(in.PolicyOverrides.SharedInferenceReuse)
+		patch.SharedInferenceReuseScope = strings.TrimSpace(in.PolicyOverrides.SharedInferenceReuseScope)
+	}
+	if patch.OutboundMode == "" {
+		patch.OutboundMode = strings.TrimSpace(in.OutboundMode)
+	}
+	if patch.PublicSurfaceMode == "" {
+		patch.PublicSurfaceMode = strings.TrimSpace(in.PublicSurfaceMode)
+	}
+	if patch.SharedInferenceReuse == "" {
+		patch.SharedInferenceReuse = strings.TrimSpace(in.SharedInferenceReuse)
+	}
+	if patch.SharedInferenceReuseScope == "" {
+		patch.SharedInferenceReuseScope = strings.TrimSpace(in.SharedInferenceReuseScope)
+	}
+	return patch
+}
+
+func applyDurableAgentPolicyPatch(policy *core.DurableAgentLivePolicy, patch effectiveDurableAgentPolicyPatch) error {
+	if policy == nil {
+		return nil
+	}
+	if patch.Charter != "" {
+		policy.Charter = patch.Charter
+	}
+	if patch.Autonomy != "" {
+		mode, err := durableAgentAutonomyToOutboundMode(patch.Autonomy)
+		if err != nil {
+			return err
+		}
+		policy.OutboundMode = mode
+	}
+	if patch.Visibility != "" {
+		mode, err := durableAgentVisibilityToPublicSurfaceMode(patch.Visibility)
+		if err != nil {
+			return err
+		}
+		policy.PublicSurfaceMode = mode
+	}
+	if patch.SharedContext != "" {
+		reuse, scope, err := durableAgentSharedContextToReuse(patch.SharedContext)
+		if err != nil {
+			return err
+		}
+		policy.SharedInferenceReuse = reuse
+		policy.SharedInferenceReuseScope = scope
+	}
+	if patch.CapabilitiesSet {
+		policy.CapabilityEnvelope = append([]string(nil), patch.Capabilities...)
+	}
+	if patch.DriftPolicy != "" {
+		policy.DriftPolicy = patch.DriftPolicy
+	}
+	if patch.OutboundMode != "" {
+		policy.OutboundMode = patch.OutboundMode
+	}
+	if patch.PublicSurfaceMode != "" {
+		policy.PublicSurfaceMode = patch.PublicSurfaceMode
+	}
+	if patch.SharedInferenceReuse != "" {
+		policy.SharedInferenceReuse = patch.SharedInferenceReuse
+	}
+	if patch.SharedInferenceReuseScope != "" {
+		policy.SharedInferenceReuseScope = patch.SharedInferenceReuseScope
+	}
+	return nil
+}
+
+func normalizePolicyCapabilities(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
 	return out
 }
 

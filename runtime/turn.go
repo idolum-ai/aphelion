@@ -381,6 +381,13 @@ func toolManifest(registry agent.ToolRegistry) string {
 	return renderToolManifest(registry.Definitions())
 }
 
+func toolCapabilities(registry agent.ToolRegistry) prompt.ToolCapabilities {
+	if registry == nil {
+		return prompt.ToolCapabilities{}
+	}
+	return prompt.ToolCapabilitiesFromDefs(registry.Definitions())
+}
+
 func renderToolManifest(defs []agent.ToolDef) string {
 	if len(defs) == 0 {
 		return ""

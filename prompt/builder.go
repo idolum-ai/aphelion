@@ -18,13 +18,24 @@ const (
 )
 
 type GovernorRequest struct {
-	GovernorName    string
-	GovernorBackend string
-	PrincipalRole   string
-	WorkspaceRoot   string
-	ToolManifest    string
-	Workspace       *workspace.PromptContext
-	Runtime         RuntimeAwareness
+	GovernorName     string
+	GovernorBackend  string
+	PrincipalRole    string
+	WorkspaceRoot    string
+	ToolManifest     string
+	ToolCapabilities ToolCapabilities
+	Workspace        *workspace.PromptContext
+	Runtime          RuntimeAwareness
+}
+
+type ToolCapabilities struct {
+	Exec            bool
+	UpdatePlan      bool
+	UpdateOperation bool
+}
+
+func (c ToolCapabilities) Empty() bool {
+	return !c.Exec && !c.UpdatePlan && !c.UpdateOperation
 }
 
 type FaceRequest struct {
@@ -112,17 +123,32 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		})
 	}
 
-	if manifest := strings.TrimSpace(req.ToolManifest); manifest != "" {
+	toolCaps := req.ToolCapabilities
+	manifest := strings.TrimSpace(req.ToolManifest)
+	if toolCaps.Empty() {
+		toolCaps = toolCapabilitiesFromManifest(manifest)
+	}
+	if manifest != "" {
 		parts = append(parts, agent.SystemBlock{
 			Text: "## Tool Manifest\n" + manifest,
 		})
-		if planning := renderPlanningDisciplineBlock(manifest); planning != "" {
+		if planning := renderPlanningDisciplineBlock(toolCaps); planning != "" {
 			parts = append(parts, agent.SystemBlock{Text: planning})
 		}
-		if operations := renderOperationalDisciplineBlock(manifest); operations != "" {
+		if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
 			parts = append(parts, agent.SystemBlock{Text: operations})
 		}
-		if confirmation := renderConfirmationDisciplineBlock(manifest); confirmation != "" {
+		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
+			parts = append(parts, agent.SystemBlock{Text: confirmation})
+		}
+	} else {
+		if planning := renderPlanningDisciplineBlock(toolCaps); planning != "" {
+			parts = append(parts, agent.SystemBlock{Text: planning})
+		}
+		if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
+			parts = append(parts, agent.SystemBlock{Text: operations})
+		}
+		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
 			parts = append(parts, agent.SystemBlock{Text: confirmation})
 		}
 	}
@@ -555,8 +581,8 @@ func renderCurrentOperationStateBlock(aw RuntimeAwareness) string {
 	return strings.Join(lines, "\n\n")
 }
 
-func renderPlanningDisciplineBlock(manifest string) string {
-	if !strings.Contains(manifest, "update_plan") {
+func renderPlanningDisciplineBlock(capabilities ToolCapabilities) string {
+	if !capabilities.UpdatePlan {
 		return ""
 	}
 	return strings.Join([]string{
@@ -567,8 +593,8 @@ func renderPlanningDisciplineBlock(manifest string) string {
 	}, "\n")
 }
 
-func renderOperationalDisciplineBlock(manifest string) string {
-	if !strings.Contains(manifest, "update_operation") {
+func renderOperationalDisciplineBlock(capabilities ToolCapabilities) string {
+	if !capabilities.UpdateOperation {
 		return ""
 	}
 	return strings.Join([]string{
@@ -579,8 +605,8 @@ func renderOperationalDisciplineBlock(manifest string) string {
 	}, "\n")
 }
 
-func renderConfirmationDisciplineBlock(manifest string) string {
-	if !strings.Contains(manifest, "exec") {
+func renderConfirmationDisciplineBlock(capabilities ToolCapabilities) string {
+	if !capabilities.Exec {
 		return ""
 	}
 	return strings.Join([]string{
@@ -589,6 +615,104 @@ func renderConfirmationDisciplineBlock(manifest string) string {
 		"Do not ask for confirmation as a politeness reflex when the next move is already obvious.",
 		"When runtime proposal gating blocks execution, treat that as a real operational boundary rather than a stylistic suggestion.",
 	}, "\n")
+}
+
+func ToolCapabilitiesFromDefs(defs []agent.ToolDef) ToolCapabilities {
+	out := ToolCapabilities{}
+	for _, def := range defs {
+		switch normalizeToolName(def.Name) {
+		case "exec":
+			out.Exec = true
+		case "update_plan":
+			out.UpdatePlan = true
+		case "update_operation":
+			out.UpdateOperation = true
+		}
+	}
+	return out
+}
+
+func toolCapabilitiesFromManifest(manifest string) ToolCapabilities {
+	names := parseManifestToolNames(manifest)
+	return ToolCapabilities{
+		Exec:            manifestHasTool(names, "exec"),
+		UpdatePlan:      manifestHasTool(names, "update_plan"),
+		UpdateOperation: manifestHasTool(names, "update_operation"),
+	}
+}
+
+func manifestHasTool(names map[string]struct{}, name string) bool {
+	_, ok := names[name]
+	return ok
+}
+
+func parseManifestToolNames(manifest string) map[string]struct{} {
+	out := map[string]struct{}{}
+	manifest = strings.TrimSpace(manifest)
+	if manifest == "" {
+		return out
+	}
+	for _, line := range strings.Split(manifest, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		switch {
+		case strings.HasPrefix(lower, "tools:"):
+			inline := strings.TrimSpace(strings.TrimPrefix(line, "tools:"))
+			if inline != "" {
+				for _, token := range strings.Split(inline, ",") {
+					addManifestToolName(out, token)
+				}
+			}
+		case strings.HasPrefix(lower, "exec constraints:"):
+			continue
+		case strings.HasPrefix(line, "- "):
+			name := strings.TrimSpace(strings.TrimPrefix(line, "- "))
+			if idx := strings.Index(name, ":"); idx >= 0 {
+				name = name[:idx]
+			}
+			addManifestToolName(out, name)
+		case strings.Contains(line, ","):
+			for _, token := range strings.Split(line, ",") {
+				addManifestToolName(out, token)
+			}
+		}
+	}
+	return out
+}
+
+func addManifestToolName(out map[string]struct{}, raw string) {
+	name := normalizeToolName(raw)
+	if name == "" {
+		return
+	}
+	out[name] = struct{}{}
+}
+
+func normalizeToolName(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	if idx := strings.Index(raw, "("); idx >= 0 {
+		raw = raw[:idx]
+	}
+	if idx := strings.Index(raw, ":"); idx >= 0 {
+		raw = raw[:idx]
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	for _, r := range raw {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return ""
+	}
+	return raw
 }
 
 func markLastStableCacheBreakpoint(blocks []agent.SystemBlock) {
