@@ -42,8 +42,8 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "set_persona_model", Description: "Choose Idolum persona model"},
 	{Command: "set_governor_effort", Description: "Choose governor reasoning effort"},
-	{Command: "toggle_persona_effort", Description: "Switch Idolum between Sonnet and Opus"},
-	{Command: "toggle_governor_effort", Description: "Switch governor effort between medium and high"},
+	{Command: "toggle_persona_effort", Description: "Quick-toggle Idolum between Sonnet and Opus"},
+	{Command: "toggle_governor_effort", Description: "Quick-toggle governor effort between medium and high"},
 }
 
 const recipeCallbackPrefix = "recipe:"

@@ -343,7 +343,7 @@ Current selector options:
 
 Selection should persist as runtime recipe state and override the interactive/recovery governor effort without changing heartbeat/cron defaults.
 
-### `/toggle_persona_effort` (compatibility alias)
+### `/toggle_persona_effort` (quick-toggle compatibility alias)
 
 Toggle Idolum's face recipe between:
 
@@ -354,7 +354,7 @@ For now this is a narrow runtime-owned operator control rather than a user-confi
 
 This command should affect future face proposal/render calls only. It should not rewrite constitutional files, governor authority, or tool policy.
 
-### `/toggle_governor_effort` (compatibility alias)
+### `/toggle_governor_effort` (quick-toggle compatibility alias)
 
 Toggle the governor reasoning recipe for interactive work between:
 

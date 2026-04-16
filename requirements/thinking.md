@@ -173,7 +173,7 @@ For the current system shape, that layer is intentionally small:
 - interactive/recovery governor effort is operator-selectable via Telegram (`/set_governor_effort`) across `low|medium|high|xhigh`
 - heartbeat and cron should continue to use their own lower defaults
 
-`/toggle_governor_effort` remains as a compatibility alias for quick `medium<->high` switching.
+`/toggle_governor_effort` remains as a quick-toggle compatibility alias for `medium<->high` switching.
 
 This remains a hardcoded application recipe surface, not yet a configurable recipe framework.
 
