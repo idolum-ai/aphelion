@@ -8,6 +8,8 @@ This package currently owns:
 
 - brokerage parsing and ratification shaping
 - floor material parsing and floor formatting helpers
+- floor fallback serialization helpers
+- visible-reply constitution validation and repair-note shaping
 - execution/render contract structs shared by runtime and turn
 - interactive render-decision policy helpers
 
@@ -32,6 +34,8 @@ Those remain in `runtime`.
 
 - `contracts.go`, `types.go`: boundary contracts and policy helpers
 - `material.go`: floor extraction and formatting
+- `fallback.go`: material-floor fallback serialization
+- `constitution.go`: visible-reply constitution checks and repair-note shaping
 - `brokerage.go`: brokerage parsing and ratification parsing
 
 ## Contract Goal

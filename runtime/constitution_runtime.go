@@ -8,6 +8,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
@@ -91,37 +92,35 @@ func (r *Runtime) repairTurnReply(
 	if audit != nil {
 		audit.MarkFaceRepairAttempted()
 	}
-	repairNotes := make([]string, 0, len(violations))
-	for _, violation := range violations {
-		detail := strings.TrimSpace(violation.Detail)
-		if detail == "" {
-			detail = strings.TrimSpace(violation.Rule)
-		}
-		if detail == "" {
-			continue
-		}
-		repairNotes = append(repairNotes, detail)
-	}
-	repairAwareness := faceAwareness
-	repairAwareness.DeliveryMode = "constitution_repair"
-	repairAwareness.StreamReply = false
-	repairAwareness.MediaAttached = len(media) > 0
-	if len(media) > 0 {
-		repairAwareness.MediaMode = "attachments"
+	contract, ok := pipeline.BuildRepairContract(pipeline.RepairContract{
+		Channel:       channel,
+		PrincipalRole: principalRole,
+		UserText:      userText,
+		Candidate:     replyText,
+		FloorText:     floorText,
+		Material: pipeline.FloorMaterial{
+			Packet: materialFloor,
+			Text:   floorText,
+		},
+		Runtime:    faceAwareness,
+		MediaCount: len(media),
+	}, violations)
+	if !ok {
+		return "", false
 	}
 	repaired, err := currentFaceModel.Render(ctx, face.RenderRequest{
 		GovernorName:    prompt.DefaultGovernorName,
 		FaceName:        face.DefaultFaceName,
-		Channel:         channel,
+		Channel:         contract.Channel,
 		Mode:            "repair",
-		PrincipalRole:   principalRole,
+		PrincipalRole:   contract.PrincipalRole,
 		WorkspaceRoot:   faceWorkspaceRoot(scope),
-		FloorText:       floorText,
-		MaterialFloor:   materialFloor,
-		LatestUserInput: userText,
-		CandidateReply:  strings.TrimSpace(replyText),
-		RepairNotes:     repairNotes,
-		Runtime:         repairAwareness,
+		FloorText:       contract.FloorText,
+		MaterialFloor:   contract.Material.Packet,
+		LatestUserInput: contract.UserText,
+		CandidateReply:  contract.Candidate,
+		RepairNotes:     contract.Violations,
+		Runtime:         contract.Runtime,
 	})
 	if err != nil {
 		return "", false

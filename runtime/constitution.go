@@ -6,21 +6,18 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
 )
 
 const (
-	constitutionRuleProgressGovernorLeakage = "progress_governor_leakage"
-	constitutionRuleFinalGovernorLeakage    = "final_governor_leakage"
-	constitutionRuleMediaReplyContradiction = "media_reply_contradiction"
-	constitutionRuleMediaNeedsNarration     = "media_needs_narration"
+	constitutionRuleProgressGovernorLeakage = pipeline.RuleProgressGovernorLeakage
+	constitutionRuleFinalGovernorLeakage    = pipeline.RuleFinalGovernorLeakage
+	constitutionRuleMediaReplyContradiction = pipeline.RuleMediaReplyContradiction
+	constitutionRuleMediaNeedsNarration     = pipeline.RuleMediaNeedsNarration
 )
 
-type ConstitutionViolation struct {
-	Rule    string `json:"rule"`
-	Surface string `json:"surface"`
-	Detail  string `json:"detail"`
-}
+type ConstitutionViolation = pipeline.ConstitutionViolation
 
 type TurnToolAudit struct {
 	Name          string `json:"name"`
@@ -73,40 +70,11 @@ func DefaultTurnConstitutionGate() TurnConstitutionGate {
 }
 
 func (defaultTurnConstitutionGate) ValidateProgressText(text string) []ConstitutionViolation {
-	if detail := detectGovernorRelationshipLeakage(text); detail != "" {
-		return []ConstitutionViolation{{
-			Rule:    constitutionRuleProgressGovernorLeakage,
-			Surface: "progress",
-			Detail:  detail,
-		}}
-	}
-	return nil
+	return pipeline.ValidateProgressText(text)
 }
 
 func (defaultTurnConstitutionGate) ValidateFinal(audit TurnAudit) []ConstitutionViolation {
-	violations := make([]ConstitutionViolation, 0, 3)
-	if detail := detectGovernorRelationshipLeakage(audit.FinalReplyText); detail != "" {
-		violations = append(violations, ConstitutionViolation{
-			Rule:    constitutionRuleFinalGovernorLeakage,
-			Surface: "final_reply",
-			Detail:  detail,
-		})
-	}
-	if len(audit.FinalReplyMedia) > 0 && looksVisibleRefusal(audit.FinalReplyText) {
-		violations = append(violations, ConstitutionViolation{
-			Rule:    constitutionRuleMediaReplyContradiction,
-			Surface: "final_reply",
-			Detail:  "reply refuses or claims inability while media is being delivered",
-		})
-	}
-	if len(audit.FinalReplyMedia) > 0 && strings.TrimSpace(audit.FinalReplyText) == "" {
-		violations = append(violations, ConstitutionViolation{
-			Rule:    constitutionRuleMediaNeedsNarration,
-			Surface: "final_reply",
-			Detail:  "media delivery requires a visible face-owned narration or caption",
-		})
-	}
-	return violations
+	return pipeline.ValidateFinalReply(audit.FinalReplyText, audit.FinalReplyMedia)
 }
 
 type turnAuditRecorder struct {
@@ -247,54 +215,4 @@ func cloneAuditMedia(items []core.Media) []core.Media {
 		out = append(out, item)
 	}
 	return out
-}
-
-func detectGovernorRelationshipLeakage(text string) string {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return ""
-	}
-	lower := strings.ToLower(trimmed)
-	for _, marker := range []string{
-		"the governor",
-		"as the governor",
-		"deferred to aphelion",
-		"handed this to aphelion",
-		"asked aphelion",
-		"aphelion handled",
-		"aphelion will handle",
-		"idolum and aphelion",
-		"i deferred this",
-		"i deferred it",
-		"i passed this to",
-	} {
-		if strings.Contains(lower, marker) {
-			return "user-visible text exposes the idolum/aphelion relationship boundary"
-		}
-	}
-	return ""
-}
-
-func looksVisibleRefusal(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(text))
-	if lower == "" {
-		return false
-	}
-	for _, marker := range []string{
-		"i can't",
-		"i cannot",
-		"i can not",
-		"i'm unable",
-		"i am unable",
-		"i won't be able",
-		"i could not",
-		"i couldn't",
-		"i did not make",
-		"i wasn't able",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
 }

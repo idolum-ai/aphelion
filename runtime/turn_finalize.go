@@ -33,7 +33,7 @@ type turnRenderInput struct {
 	ReplyText        string
 	FloorText        string
 	MaterialFloor    core.MaterialPacket
-	FallbackOpts     face.FallbackOptions
+	FallbackOpts     pipeline.FallbackOptions
 	FaceAwareness    prompt.RuntimeAwareness
 	CurrentFaceModel face.Renderer
 	ReplyWithVoice   bool
@@ -56,122 +56,115 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 		return output, nil
 	}
 
-	output.ReplyText = input.ReplyText
+	output.ReplyText = strings.TrimSpace(input.ReplyText)
 	if len(input.OutHistory) < input.HistoryInputLen {
 		return output, nil
 	}
 	generatedMessages := input.OutHistory[input.HistoryInputLen:]
-
-	if input.FaceAwareness.DeliveryMode == "" {
-		input.FaceAwareness.DeliveryMode = "text"
-	}
-	input.FaceAwareness.StreamReply = false
-	input.FaceAwareness.ArtifactMode = "scene"
-
-	if input.ReplyWithVoice {
-		input.FaceAwareness.DeliveryMode = "voice"
-	} else if input.FacePolicy.Render {
-		input.FaceAwareness.DeliveryMode = "idolum_render"
-	}
-
-	if input.MediaOnlyReply || r.faceBackend == face.BackendFloorFallback || input.CurrentFaceModel == nil {
-		output.ReplyText = strings.TrimSpace(output.ReplyText)
-		output.ReplyText = r.applyTurnConstitution(
-			input.Ctx,
-			input.Scope,
-			input.Channel,
-			input.PrincipalRole,
-			input.PromptInput,
-			input.CurrentFaceModel,
-			input.FaceAwareness,
-			input.MaterialFloor,
-			input.FloorText,
-			output.ReplyText,
-			input.Result.Media,
-			input.Audit,
-		)
-		return output, nil
-	}
-
-	renderReq := face.RenderRequest{
-		GovernorName:    prompt.DefaultGovernorName,
-		FaceName:        face.DefaultFaceName,
-		Channel:         input.Channel,
-		PrincipalRole:   input.PrincipalRole,
-		WorkspaceRoot:   faceWorkspaceRoot(input.Scope),
-		FloorText:       input.FloorText,
-		MaterialFloor:   input.MaterialFloor,
-		LatestUserInput: input.PromptInput,
-		Runtime:         input.FaceAwareness,
-	}
-
-	renderHeuristicText := input.FloorText
-	if input.UseMaterialFloor {
-		renderHeuristicText = pipeline.FormatFloorTextForRender(input.MaterialFloor, input.FloorText)
-	}
-	shouldRender := pipeline.ShouldRenderInteractiveIdolumReply(input.FacePolicy, pipeline.RenderDecisionInput{
-		UserText:          input.PromptInput,
-		FloorText:         renderHeuristicText,
+	workspaceRoot := faceWorkspaceRoot(input.Scope)
+	stageResult, err := turn.RunRenderStage(input.Ctx, turn.RenderStageRequest{
+		Render: turn.FaceRenderRequest{
+			GovernorName:    prompt.DefaultGovernorName,
+			FaceName:        face.DefaultFaceName,
+			Channel:         input.Channel,
+			PrincipalRole:   input.PrincipalRole,
+			WorkspaceRoot:   workspaceRoot,
+			FloorText:       input.FloorText,
+			MaterialFloor:   input.MaterialFloor,
+			LatestUserInput: input.PromptInput,
+			Runtime:         input.FaceAwareness,
+		},
+		FacePolicy:        input.FacePolicy,
+		UseMaterialFloor:  input.UseMaterialFloor,
+		ReplyWithVoice:    input.ReplyWithVoice,
+		AllowStream:       input.AllowStream,
+		Media:             input.Result.Media,
 		ToolLog:           input.Result.ToolLog,
 		GeneratedMessages: generatedMessages,
-	})
-	if !shouldRender && !input.ReplyWithVoice {
-		input.FaceAwareness.DeliveryMode = "floor_fallback"
-		renderReq.Runtime = input.FaceAwareness
-	}
-
-	faceRendered := false
-	if shouldRender && !input.ReplyWithVoice && input.AllowStream && len(input.Result.Media) == 0 {
-		if streamer, ok := input.CurrentFaceModel.(face.StreamRenderer); ok {
+		InitialReply:      output.ReplyText,
+		FallbackOptions:   input.FallbackOpts,
+		SkipRender:        input.MediaOnlyReply || r.faceBackend == face.BackendFloorFallback || input.CurrentFaceModel == nil,
+	}, turn.RenderStageCallbacks{
+		Stream: func(ctx context.Context, req turn.FaceRenderRequest) (turn.FaceRenderResult, bool, error) {
+			streamer, ok := input.CurrentFaceModel.(face.StreamRenderer)
+			if !ok {
+				return turn.FaceRenderResult{}, false, nil
+			}
 			editor := r.newStreamEditor(input.Msg)
-			if editor != nil {
-				input.FaceAwareness.DeliveryMode = "stream"
-				input.FaceAwareness.StreamReply = true
-				renderReq.Runtime = input.FaceAwareness
-				renderedReply, streamErr := streamer.RenderStream(input.Ctx, renderReq, func(chunk string) error {
-					return editor.OnChunk(input.Ctx, chunk)
-				})
-				if streamErr != nil {
-					editor.Abort(input.Ctx)
-					log.Printf("WARN face stream render failed backend=%s err=%v; falling back to non-stream render", r.faceBackend, streamErr)
-				} else {
-					faceRendered = true
-					output.ReplyText = strings.TrimSpace(renderedReply)
-					if output.ReplyText == "" {
-						output.ReplyText = face.SerializeFloorFallback(input.MaterialFloor, input.FloorText, input.FallbackOpts)
-					}
-					output.Usage = addTokenUsage(output.Usage, consumeFaceUsage(input.CurrentFaceModel))
-					output.StreamedReply = true
-					outboundID, err := editor.Finish(input.Ctx)
-					if err != nil {
-						return output, fmt.Errorf("finish streamed reply: %w", err)
-					}
-					output.OutboundID = outboundID
-					if outboundID != 0 {
-						output.OutboundType = "streaming"
-					}
-				}
+			if editor == nil {
+				return turn.FaceRenderResult{}, false, nil
 			}
-		}
-	}
-
-	if shouldRender && !faceRendered {
-		if !input.ReplyWithVoice {
-			input.FaceAwareness.DeliveryMode = "idolum_render"
-			input.FaceAwareness.StreamReply = false
-			renderReq.Runtime = input.FaceAwareness
-		}
-		renderedReply, renderErr := input.CurrentFaceModel.Render(input.Ctx, renderReq)
-		if renderErr != nil {
-			log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, renderErr)
-		} else {
-			output.ReplyText = strings.TrimSpace(renderedReply)
-			if output.ReplyText == "" {
-				output.ReplyText = face.SerializeFloorFallback(input.MaterialFloor, input.FloorText, input.FallbackOpts)
+			faceReq := face.RenderRequest{
+				GovernorName:    req.GovernorName,
+				FaceName:        req.FaceName,
+				Channel:         req.Channel,
+				Style:           req.Style,
+				PrincipalRole:   req.PrincipalRole,
+				WorkspaceRoot:   req.WorkspaceRoot,
+				FloorText:       req.FloorText,
+				MaterialFloor:   req.MaterialFloor,
+				LatestUserInput: req.LatestUserInput,
+				Runtime:         req.Runtime,
 			}
-			output.Usage = addTokenUsage(output.Usage, consumeFaceUsage(input.CurrentFaceModel))
-		}
+			renderedReply, streamErr := streamer.RenderStream(ctx, faceReq, func(chunk string) error {
+				return editor.OnChunk(ctx, chunk)
+			})
+			if streamErr != nil {
+				editor.Abort(ctx)
+				log.Printf("WARN face stream render failed backend=%s err=%v; falling back to non-stream render", r.faceBackend, streamErr)
+				return turn.FaceRenderResult{}, false, nil
+			}
+			outboundID, finishErr := editor.Finish(ctx)
+			if finishErr != nil {
+				return turn.FaceRenderResult{}, false, fmt.Errorf("finish streamed reply: %w", finishErr)
+			}
+			renderedType := ""
+			if outboundID != 0 {
+				renderedType = "streaming"
+			}
+			return turn.FaceRenderResult{
+				Text:         strings.TrimSpace(renderedReply),
+				Usage:        consumeFaceUsage(input.CurrentFaceModel),
+				Streamed:     true,
+				RenderedID:   outboundID,
+				RenderedType: renderedType,
+			}, true, nil
+		},
+		Render: func(ctx context.Context, req turn.FaceRenderRequest) (*turn.FaceRenderResult, error) {
+			faceReq := face.RenderRequest{
+				GovernorName:    req.GovernorName,
+				FaceName:        req.FaceName,
+				Channel:         req.Channel,
+				Style:           req.Style,
+				PrincipalRole:   req.PrincipalRole,
+				WorkspaceRoot:   req.WorkspaceRoot,
+				FloorText:       req.FloorText,
+				MaterialFloor:   req.MaterialFloor,
+				LatestUserInput: req.LatestUserInput,
+				Runtime:         req.Runtime,
+			}
+			renderedReply, renderErr := input.CurrentFaceModel.Render(ctx, faceReq)
+			if renderErr != nil {
+				return nil, renderErr
+			}
+			return &turn.FaceRenderResult{
+				Text:  strings.TrimSpace(renderedReply),
+				Usage: consumeFaceUsage(input.CurrentFaceModel),
+			}, nil
+		},
+		Fallback: pipeline.SerializeFloorFallback,
+	})
+	if err != nil {
+		return output, err
 	}
+	if stageResult.RenderError != nil {
+		log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, stageResult.RenderError)
+	}
+	output.ReplyText = strings.TrimSpace(stageResult.ReplyText)
+	output.Usage = addTokenUsage(output.Usage, stageResult.Usage)
+	output.StreamedReply = stageResult.Streamed
+	output.OutboundID = stageResult.RenderedID
+	output.OutboundType = stageResult.RenderedType
 
 	output.ReplyText = r.applyTurnConstitution(
 		input.Ctx,
@@ -180,7 +173,7 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 		input.PrincipalRole,
 		input.PromptInput,
 		input.CurrentFaceModel,
-		input.FaceAwareness,
+		stageResult.Runtime,
 		input.MaterialFloor,
 		input.FloorText,
 		output.ReplyText,
@@ -280,49 +273,33 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 	if p == nil || p.runtime == nil {
 		return nil, fmt.Errorf("turn delivery port is unavailable")
 	}
-	if req.Result == nil {
-		return nil, nil
-	}
-	outboundID := req.Result.RenderedID
-	outboundType := req.Result.RenderedType
-
-	if !p.deliver || req.Result.RenderedStream {
-		if p.audit != nil {
-			p.audit.RecordFinalReply(req.Message.Text, req.Message.Media, outboundType)
-		}
-		if p.recordOutbound && outboundID != 0 {
-			if err := p.recordOutboundWithContext(ctx, p.sess, p.key, outboundID, outboundType); err != nil {
-				return nil, err
+	return turn.RunDeliveryStage(ctx, turn.DeliveryStageInput{
+		Request:        req,
+		Deliver:        p.deliver,
+		RecordOutbound: p.recordOutbound,
+	}, turn.DeliveryStageCallbacks{
+		Send: func(ctx context.Context, msg core.OutboundMessage, inboundWasVoice bool) (int64, string, error) {
+			outboundID, outboundType, err := p.runtime.sendReply(ctx, p.msg, msg.Text, msg.Media, inboundWasVoice)
+			if err != nil {
+				if p.sendErrCtx == "" {
+					return 0, "", err
+				}
+				return 0, "", fmt.Errorf("%s: %w", p.sendErrCtx, err)
 			}
-		}
-		if err := p.runPostCommitHooks(); err != nil {
-			return nil, err
-		}
-		return &turn.DeliveryResult{
-			MessageID: outboundID,
-			Kind:      outboundType,
-		}, nil
-	}
-
-	outboundID, outboundType, err := p.runtime.sendReply(ctx, p.msg, req.Message.Text, req.Message.Media, req.InboundWasVoice)
-	if err != nil {
-		if p.sendErrCtx == "" {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%s: %w", p.sendErrCtx, err)
-	}
-	if p.audit != nil {
-		p.audit.RecordFinalReply(req.Message.Text, req.Message.Media, outboundType)
-	}
-	if p.recordOutbound {
-		if err := p.recordOutboundWithContext(ctx, p.sess, p.key, outboundID, outboundType); err != nil {
-			return nil, err
-		}
-	}
-	if err := p.runPostCommitHooks(); err != nil {
-		return nil, err
-	}
-	return &turn.DeliveryResult{MessageID: outboundID, Kind: outboundType}, nil
+			return outboundID, outboundType, nil
+		},
+		RecordFinal: func(text string, media []core.Media, kind string) {
+			if p.audit != nil {
+				p.audit.RecordFinalReply(text, media, kind)
+			}
+		},
+		RecordOutbound: func(ctx context.Context, messageID int64, kind string) error {
+			return p.recordOutboundWithContext(ctx, p.sess, p.key, messageID, kind)
+		},
+		PostCommit: func(context.Context) error {
+			return p.runPostCommitHooks()
+		},
+	})
 }
 
 func (p *turnDeliveryPort) runPostCommitHooks() error {
@@ -367,57 +344,54 @@ type turnCommitResult struct {
 }
 
 func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnCommitResult, error) {
-	out := turnCommitResult{}
-	convertErrPrefix := input.ErrCtx.ConvertMessages
-	if convertErrPrefix == "" {
-		convertErrPrefix = "convert new messages"
+	out := turnCommitResult{
+		OutboundID:   input.OutboundID,
+		OutboundType: input.OutboundType,
 	}
-	planStateErrPrefix := input.ErrCtx.LoadPlanState
-	if planStateErrPrefix == "" {
-		planStateErrPrefix = "load plan state before save"
-	}
-	operationStateErrPrefix := input.ErrCtx.LoadOperation
-	if operationStateErrPrefix == "" {
-		operationStateErrPrefix = "load operation state before save"
-	}
-	saveErrPrefix := input.ErrCtx.SaveSession
-	if saveErrPrefix == "" {
-		saveErrPrefix = "save session"
+	usage := core.TokenUsage{}
+	if input.Result != nil {
+		usage = input.Result.TokenUsage
 	}
 
-	if len(input.OutHistory) < input.HistoryInputLen {
-		return out, fmt.Errorf("%s: %w", convertErrPrefix, fmt.Errorf("invalid governor output history window"))
-	}
-
-	newMessages, err := session.NewMessagesForTurn(input.Prepared.LedgerText, input.OutHistory[input.HistoryInputLen:], input.Sess.TurnCount)
+	stageResult, err := turn.RunPersistStage(ctx, turn.PersistStageInput{
+		LedgerText:      input.Prepared.LedgerText,
+		OutHistory:      input.OutHistory,
+		HistoryInputLen: input.HistoryInputLen,
+		Session:         input.Sess,
+		ReplyText:       input.ReplyText,
+		FloorText:       input.FloorText,
+		FloorMetadata:   input.FloorMetadata,
+		Usage:           usage,
+		ErrorContext: turn.PersistStageErrorContext{
+			ConvertMessages: input.ErrCtx.ConvertMessages,
+			LoadPlanState:   input.ErrCtx.LoadPlanState,
+			LoadOperation:   input.ErrCtx.LoadOperation,
+			SaveSession:     input.ErrCtx.SaveSession,
+		},
+	}, turn.PersistStageCallbacks{
+		BuildMessages: session.NewMessagesForTurn,
+		ApplyScene:    replaceLastAssistantWithSceneText,
+		ApplyFloor: func(messages []session.Message, floorText string, floorMetadata string) []session.Message {
+			messages = setLastAssistantFloor(messages, floorText)
+			return setLastAssistantFloorMetadata(messages, floorMetadata)
+		},
+		LoadPlanState: func(context.Context) (session.PlanState, error) {
+			return r.store.PlanState(input.Key)
+		},
+		MergePlanState: mergeSessionPlanState,
+		LoadOperationState: func(context.Context) (session.OperationState, error) {
+			return r.store.OperationState(input.Key)
+		},
+		MergeOperationState: mergeSessionOperationState,
+		Save: func(_ context.Context, sess *session.Session, newMessages []session.Message, usage core.TokenUsage) error {
+			return r.store.Save(sess, newMessages, usage)
+		},
+	})
 	if err != nil {
-		return out, fmt.Errorf("%s: %w", convertErrPrefix, err)
+		return out, err
 	}
-	newMessages = replaceLastAssistantWithSceneText(newMessages, input.ReplyText)
-	newMessages = setLastAssistantFloor(newMessages, input.FloorText)
-	newMessages = setLastAssistantFloorMetadata(newMessages, input.FloorMetadata)
-	input.Sess.LastFloorText = input.FloorText
-	input.Sess.LastFloorMetadata = input.FloorMetadata
-
-	if planState, planErr := r.store.PlanState(input.Key); planErr == nil {
-		input.Sess.PlanState = mergeSessionPlanState(input.Sess.PlanState, planState)
-	} else {
-		return out, fmt.Errorf("%s: %w", planStateErrPrefix, planErr)
-	}
-	if operationState, operationErr := r.store.OperationState(input.Key); operationErr == nil {
-		input.Sess.OperationState = mergeSessionOperationState(input.Sess.OperationState, operationState)
-	} else {
-		return out, fmt.Errorf("%s: %w", operationStateErrPrefix, operationErr)
-	}
-
-	if err := r.store.Save(input.Sess, newMessages, input.Result.TokenUsage); err != nil {
-		return out, fmt.Errorf("%s: %w", saveErrPrefix, err)
-	}
-	out.Committed = true
-	out.OutboundID = input.OutboundID
-	out.OutboundType = input.OutboundType
-
-	if input.Audit != nil {
+	out.Committed = stageResult.Committed
+	if out.Committed && input.Audit != nil && input.Result != nil {
 		input.Audit.RecordFinalReply(input.ReplyText, input.Result.Media, out.OutboundType)
 	}
 	return out, nil

@@ -7,7 +7,8 @@
 //
 //   - brokerage parsing and ratification shaping
 //   - floor material extraction and formatting
-//   - render/fallback contracts and render-decision policy
+//   - fallback serialization and render-decision policy
+//   - visible-reply constitution validation and repair-note shaping
 //   - execution and awareness contracts shared with turn/runtime boundaries
 //
 // In the live architecture:

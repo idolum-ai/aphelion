@@ -14,20 +14,21 @@ import (
 func BuildFloorFromGovernor(text string, useContract bool) (core.MaterialPacket, string, bool) {
 	trimmed := strings.TrimSpace(text)
 	if !useContract {
-		return core.MaterialPacket{}, floorTextOrFallback(trimmed), false
+		return core.MaterialPacket{}, FloorTextOrFallback(trimmed), false
 	}
 	packet, err := ParseMaterialPacket(trimmed)
 	if err != nil {
-		return core.LegacyMaterialPacket(trimmed), floorTextOrFallback(trimmed), false
+		return core.LegacyMaterialPacket(trimmed), FloorTextOrFallback(trimmed), false
 	}
 	sidecar := strings.TrimSpace(packet.Text())
 	if sidecar == "" {
-		sidecar = floorTextOrFallback(trimmed)
+		sidecar = FloorTextOrFallback(trimmed)
 	}
 	return packet, sidecar, true
 }
 
-func floorTextOrFallback(text string) string {
+// FloorTextOrFallback returns canonical floor fallback text for empty floors.
+func FloorTextOrFallback(text string) string {
 	floor := strings.TrimSpace(text)
 	if floor == "" {
 		return "(no response)"

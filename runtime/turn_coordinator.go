@@ -109,7 +109,7 @@ type coordinatorRenderCommonInput struct {
 	AllowStream           bool
 	PromptInput           string
 	Audit                 *turnAuditRecorder
-	FallbackOptions       face.FallbackOptions
+	FallbackOptions       pipeline.FallbackOptions
 }
 
 func (r *Runtime) renderCoordinatorFaceCommon(ctx context.Context, input coordinatorRenderCommonInput) (turnRenderResult, error) {
@@ -120,7 +120,7 @@ func (r *Runtime) renderCoordinatorFaceCommon(ctx context.Context, input coordin
 	mediaOnlyReply := len(gov.Turn.Media) > 0 && strings.TrimSpace(gov.Turn.Text) == ""
 	replyText := ""
 	if !mediaOnlyReply {
-		replyText = face.SerializeFloorFallback(gov.MaterialFloor, gov.FloorText, input.FallbackOptions)
+		replyText = pipeline.SerializeFloorFallback(gov.MaterialFloor, gov.FloorText, input.FallbackOptions)
 	}
 	faceAwareness := input.LastFaceAwareness
 	if strings.TrimSpace(faceAwareness.DeliveryMode) == "" {
@@ -210,7 +210,7 @@ func (c *interactiveTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 	if c == nil || c.runtime == nil {
 		return nil, fmt.Errorf("interactive coordinator unavailable")
 	}
-	fallbackOpts := face.FallbackOptions{
+	fallbackOpts := pipeline.FallbackOptions{
 		Channel: c.requestChannel(),
 		Voice:   c.replyWithVoice,
 	}
@@ -428,7 +428,7 @@ func (c *durableGroupTurnCoordinator) Render(ctx context.Context, req turn.FaceR
 	if c == nil || c.runtime == nil {
 		return nil, fmt.Errorf("durable group coordinator unavailable")
 	}
-	fallbackOpts := face.FallbackOptions{Channel: c.requestChannel()}
+	fallbackOpts := pipeline.FallbackOptions{Channel: c.requestChannel()}
 	rendered, err := c.runtime.renderCoordinatorFaceCommon(ctx, coordinatorRenderCommonInput{
 		Scope:                 c.scope,
 		Msg:                   c.msg,

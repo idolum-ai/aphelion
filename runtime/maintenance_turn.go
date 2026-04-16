@@ -198,7 +198,7 @@ func (c *maintenanceTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 		return &turn.FaceRenderResult{}, nil
 	}
 
-	replyText := face.SerializeFloorFallback(c.lastGovernor.MaterialFloor, c.lastGovernor.FloorText, face.FallbackOptions{
+	replyText := pipeline.SerializeFloorFallback(c.lastGovernor.MaterialFloor, c.lastGovernor.FloorText, pipeline.FallbackOptions{
 		Channel: c.requestChannel(),
 	})
 	if c.currentFaceModel == nil || c.runtime.faceBackend == face.BackendFloorFallback {

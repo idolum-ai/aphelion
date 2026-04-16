@@ -137,6 +137,10 @@ phases with the following live changes:
 - `docs`: rewrote package docs/readmes for `runtime`, `turn`, and `pipeline` so they describe current live ownership rather than design-lab intent.
 - `requirements`: updated core architecture and module-structure docs to reflect runtime shell ownership, `turn` stage orchestration, and `pipeline` conversational-transform boundaries.
 - `turn`: removed stale design-lab ownership comments from production engine/policy/commit/type contracts so code-level docs match live behavior.
+- `pipeline`: added ownership for floor-fallback serialization and visible-reply constitution helpers (`SerializeFloorFallback`, `ValidateProgressText`, `ValidateFinalReply`, `BuildRepairNotes`, `BuildRepairContract`) with dedicated tests; runtime now delegates gate checks and repair-contract shaping to pipeline.
+- `turn`: extracted render-stage selection into a dedicated helper (`RunRenderStage`) with turn-level tests for stream/non-stream/fallback decisions; runtime now adapts concrete face model/editor behavior through callbacks instead of owning selection flow inline.
+- `turn`: extracted delivery-stage ordering into a dedicated helper (`RunDeliveryStage`) with turn-level tests for send/record/post-commit sequencing and failure propagation; runtime delivery ports now provide adapter callbacks instead of owning branching semantics inline.
+- `turn`: extracted persist-stage ordering into a dedicated helper (`RunPersistStage`) with turn-level tests for convert/sidecar/state-load/save sequencing and prefixed error propagation; runtime persistence now supplies storage/session callbacks instead of owning ordering inline.
 
 ## Target Package Ownership
 
