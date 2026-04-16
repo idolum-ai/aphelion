@@ -11,6 +11,7 @@ import (
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
+	"github.com/idolum-ai/aphelion/turn"
 )
 
 func (r *Runtime) applyTurnConstitution(
@@ -30,45 +31,59 @@ func (r *Runtime) applyTurnConstitution(
 	if audit != nil {
 		audit.RecordFinalReply(replyText, media, "")
 	}
+	trimmedReply := strings.TrimSpace(replyText)
 	if r == nil || r.constitutionGate == nil {
-		return strings.TrimSpace(replyText)
+		return trimmedReply
 	}
 
-	snapshot := TurnAudit{
+	baseSnapshot := TurnAudit{
 		Channel:         strings.TrimSpace(channel),
 		PrincipalRole:   strings.TrimSpace(principalRole),
 		UserText:        strings.TrimSpace(userText),
-		FinalReplyText:  strings.TrimSpace(replyText),
+		FinalReplyText:  trimmedReply,
 		FinalReplyMedia: cloneAuditMedia(media),
 	}
 	if audit != nil {
-		base := audit.Snapshot()
-		snapshot = base
-		snapshot.FinalReplyText = strings.TrimSpace(replyText)
-		snapshot.FinalReplyMedia = cloneAuditMedia(media)
+		baseSnapshot = audit.Snapshot()
+		baseSnapshot.FinalReplyText = trimmedReply
+		baseSnapshot.FinalReplyMedia = cloneAuditMedia(media)
 	}
 
-	violations := r.constitutionGate.ValidateFinal(snapshot)
-	if len(violations) == 0 {
-		return strings.TrimSpace(replyText)
-	}
-	if audit != nil {
-		audit.RecordViolations(violations)
+	validateCandidate := func(candidateText string, candidateMedia []core.Media) []ConstitutionViolation {
+		candidate := baseSnapshot
+		candidate.FinalReplyText = strings.TrimSpace(candidateText)
+		candidate.FinalReplyMedia = cloneAuditMedia(candidateMedia)
+		return r.constitutionGate.ValidateFinal(candidate)
 	}
 
-	repaired, repairedOK := r.repairTurnReply(ctx, scope, channel, principalRole, userText, currentFaceModel, faceAwareness, materialFloor, floorText, replyText, media, violations, audit)
-	if repairedOK {
-		candidate := snapshot
-		candidate.FinalReplyText = repaired
-		postViolations := r.constitutionGate.ValidateFinal(candidate)
-		if audit != nil {
-			audit.RecordViolations(postViolations)
-		}
-		if len(postViolations) == 0 {
-			return repaired
-		}
-	}
-	return strings.TrimSpace(replyText)
+	return turn.RunConstitutionStage(ctx, turn.ConstitutionStageInput{
+		ReplyText: trimmedReply,
+		Media:     media,
+	}, turn.ConstitutionStageCallbacks{
+		Validate: validateCandidate,
+		Repair: func(ctx context.Context, candidateText string, candidateMedia []core.Media, violations []ConstitutionViolation) (string, bool) {
+			return r.repairTurnReply(
+				ctx,
+				scope,
+				channel,
+				principalRole,
+				userText,
+				currentFaceModel,
+				faceAwareness,
+				materialFloor,
+				floorText,
+				candidateText,
+				candidateMedia,
+				violations,
+				audit,
+			)
+		},
+		RecordViolations: func(violations []ConstitutionViolation) {
+			if audit != nil {
+				audit.RecordViolations(violations)
+			}
+		},
+	})
 }
 
 func (r *Runtime) repairTurnReply(

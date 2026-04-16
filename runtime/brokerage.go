@@ -31,6 +31,24 @@ type turnBrokerage struct {
 	RatifiedExecutionContract  *pipeline.ExecutionContract
 }
 
+func seedTurnBrokerageFromFaceNote(note string) turnBrokerage {
+	trimmed := strings.TrimSpace(note)
+	if trimmed == "" {
+		return turnBrokerage{}
+	}
+	brokerage := turnBrokerage{
+		Active:     true,
+		IdolumNote: trimmed,
+	}
+	if suggestedContract := pipeline.ParseExecutionContract(trimmed); suggestedContract != nil {
+		brokerage.Phase = brokeragePhaseName(brokerage.Active, "brokerage")
+		brokerage.SuggestedExecutionContract = suggestedContract
+	} else {
+		brokerage.Phase = brokeragePhaseName(brokerage.Active, "proposal")
+	}
+	return brokerage
+}
+
 func (b turnBrokerage) toTurnAwareness() turn.BrokerageAwareness {
 	return turn.BrokerageAwareness{
 		Active:                     b.Active,

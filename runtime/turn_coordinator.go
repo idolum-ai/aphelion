@@ -538,33 +538,17 @@ type coordinatorExecuteCommonOutput struct {
 	LastFaceAwareness prompt.RuntimeAwareness
 }
 
-func (r *Runtime) executeCoordinatorTurnCommon(ctx context.Context, input coordinatorExecuteCommonInput) (coordinatorExecuteCommonOutput, error) {
-	out := coordinatorExecuteCommonOutput{Sess: input.Sess}
+type coordinatorPromptState struct {
+	GovernorAwareness prompt.RuntimeAwareness
+	SystemBlocks      []agent.SystemBlock
+	SystemPrompt      string
+}
 
-	runKind := input.RunKind
-	if runKind == "" {
-		runKind = session.TurnRunKindInteractive
-	}
-
-	baseGovernorAwareness := input.BaseGovernorAwareness
-	governorAwareness := baseGovernorAwareness
-	brokerage := turnBrokerage{}
-	extraUsage := core.TokenUsage{}
-	if note := strings.TrimSpace(input.FaceNote); note != "" {
-		brokerage.IdolumNote = note
-		brokerage.Active = strings.TrimSpace(note) != ""
-		if suggestedContract := pipeline.ParseExecutionContract(note); suggestedContract != nil {
-			brokerage.Phase = brokeragePhaseName(brokerage.Active, "brokerage")
-			brokerage.SuggestedExecutionContract = suggestedContract
-		} else {
-			brokerage.Phase = brokeragePhaseName(brokerage.Active, "proposal")
-		}
-	}
-
+func (r *Runtime) buildCoordinatorGovernorPrompt(input coordinatorExecuteCommonInput, baseAwareness prompt.RuntimeAwareness, brokerage turnBrokerage) coordinatorPromptState {
+	governorAwareness := baseAwareness
 	if input.UseMaterialFloor {
 		governorAwareness.ArtifactMode = "floor"
 	}
-
 	governorAwareness = turn.ApplyBrokerageAwareness(governorAwareness, brokerage.toTurnAwareness())
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    input.GovernorName,
@@ -577,6 +561,27 @@ func (r *Runtime) executeCoordinatorTurnCommon(ctx context.Context, input coordi
 	}
 	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
+	return coordinatorPromptState{
+		GovernorAwareness: governorAwareness,
+		SystemBlocks:      systemBlocks,
+		SystemPrompt:      systemPrompt,
+	}
+}
+
+func (r *Runtime) executeCoordinatorTurnCommon(ctx context.Context, input coordinatorExecuteCommonInput) (coordinatorExecuteCommonOutput, error) {
+	out := coordinatorExecuteCommonOutput{Sess: input.Sess}
+
+	runKind := input.RunKind
+	if runKind == "" {
+		runKind = session.TurnRunKindInteractive
+	}
+
+	baseGovernorAwareness := input.BaseGovernorAwareness
+	brokerage := seedTurnBrokerageFromFaceNote(input.FaceNote)
+	extraUsage := core.TokenUsage{}
+	promptState := r.buildCoordinatorGovernorPrompt(input, baseGovernorAwareness, brokerage)
+	systemBlocks := promptState.SystemBlocks
+	systemPrompt := promptState.SystemPrompt
 	input.Sess.SystemPrompt = systemPrompt
 
 	sess, history, maybeErr := r.maybeCompactSession(ctx, input.Key, input.Sess, systemBlocks, input.Prepared.UserText, brokerage.IdolumNote)
@@ -592,16 +597,13 @@ func (r *Runtime) executeCoordinatorTurnCommon(ctx context.Context, input coordi
 		if brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.Ratification) == "accept" {
 			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}
-		governorAwareness = turn.ApplyOperationAwareness(
-			turn.ApplyPlanAwareness(
-				turn.ApplyBrokerageAwareness(baseGovernorAwareness, brokerage.toTurnAwareness()),
-				sess.PlanState,
-			),
+		governorAwareness := turn.ApplyOperationAwareness(
+			turn.ApplyPlanAwareness(baseGovernorAwareness, sess.PlanState),
 			sess.OperationState,
 		)
-		governorPrompt.Runtime = governorAwareness
-		systemBlocks = prompt.BuildGovernorPromptBlocks(governorPrompt)
-		systemPrompt = prompt.RenderSystemBlocks(systemBlocks)
+		promptState = r.buildCoordinatorGovernorPrompt(input, governorAwareness, brokerage)
+		systemBlocks = promptState.SystemBlocks
+		systemPrompt = promptState.SystemPrompt
 		sess.SystemPrompt = systemPrompt
 	}
 
