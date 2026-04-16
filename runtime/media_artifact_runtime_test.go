@@ -567,3 +567,95 @@ func TestPrepareInboundTurnLeavesMetadataOnlyArtifactsUnfetched(t *testing.T) {
 		t.Fatalf("user text = %q, want metadata note", prepared.UserText)
 	}
 }
+
+func TestPrepareInboundTurnPersistsFetchedArtifactToLocalPath(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	fetcher := &fakeInboundFetcher{data: map[string][]byte{
+		"doc-file": []byte("hello world"),
+	}}
+	rt.inbound = fetcher
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    1402,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{{
+			ID:         "doc-remote",
+			Channel:    "telegram",
+			RemoteID:   "doc-file",
+			SourceType: "document",
+			Kind:       "document",
+			Subtype:    "text",
+			Filename:   "notes.txt",
+			MimeType:   "text/plain",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	if len(prepared.ArtifactRefs) != 1 {
+		t.Fatalf("artifact refs len = %d, want 1", len(prepared.ArtifactRefs))
+	}
+	root := filepath.Join(cfg.Agent.ExecRoot, ".aphelion", "inbound")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) err = %v", root, err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("inbound materialized files = %d, want 1", len(entries))
+	}
+	path := filepath.Join(root, entries[0].Name())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) err = %v", path, err)
+	}
+	if string(data) != "hello world" {
+		t.Fatalf("materialized file = %q, want hello world", string(data))
+	}
+}
+
+func TestPrepareInboundTurnDoesNotPersistUnfetchedArtifact(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	fetcher := &fakeInboundFetcher{data: map[string][]byte{
+		"video-file": []byte("video-bytes"),
+	}}
+	rt.inbound = fetcher
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	_, err = rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    1403,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{{
+			ID:         "video-remote-2",
+			Channel:    "telegram",
+			RemoteID:   "video-file",
+			SourceType: "video",
+			Kind:       "video",
+			Filename:   "clip.mp4",
+			MimeType:   "video/mp4",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	root := filepath.Join(cfg.Agent.ExecRoot, ".aphelion", "inbound")
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("inbound root stat err = %v, want not-exist", err)
+	}
+}

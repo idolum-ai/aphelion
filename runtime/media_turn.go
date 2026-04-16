@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/pipeline"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -29,7 +31,7 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 
 	for _, raw := range msg.Artifacts {
 		artifact := core.NormalizeArtifact(raw)
-		if hydrated, err := r.materializeInboundArtifact(ctx, artifact); err != nil {
+		if hydrated, err := r.materializeInboundArtifact(ctx, scope, artifact); err != nil {
 			return prepared, err
 		} else {
 			artifact = hydrated
@@ -109,7 +111,7 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 	return prepared, nil
 }
 
-func (r *Runtime) materializeInboundArtifact(ctx context.Context, artifact core.Artifact) (core.Artifact, error) {
+func (r *Runtime) materializeInboundArtifact(ctx context.Context, scope sandbox.Scope, artifact core.Artifact) (core.Artifact, error) {
 	artifact = core.NormalizeArtifact(artifact)
 	if len(artifact.Data) > 0 || strings.TrimSpace(artifact.Channel) != "telegram" || strings.TrimSpace(artifact.RemoteID) == "" {
 		return artifact, nil
@@ -132,6 +134,11 @@ func (r *Runtime) materializeInboundArtifact(ctx context.Context, artifact core.
 	if artifact.SizeBytes == 0 {
 		artifact.SizeBytes = int64(len(data))
 	}
+	if path, err := r.persistInboundArtifactBytes(scope, artifact); err != nil {
+		return artifact, err
+	} else if strings.TrimSpace(path) != "" {
+		artifact.Path = path
+	}
 	return core.NormalizeArtifact(artifact), nil
 }
 
@@ -152,6 +159,71 @@ func (r *Runtime) shouldFetchInboundArtifactNow(artifact core.Artifact) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+var inboundArtifactFilenameSanitizer = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+func (r *Runtime) persistInboundArtifactBytes(scope sandbox.Scope, artifact core.Artifact) (string, error) {
+	if len(artifact.Data) == 0 {
+		return "", nil
+	}
+	root := inboundArtifactRoot(scope, r.cfg.Agent)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", fmt.Errorf("create inbound artifact root: %w", err)
+	}
+	filename := safeInboundArtifactFilename(artifact)
+	path := filepath.Join(root, filename)
+	if err := os.WriteFile(path, artifact.Data, 0o600); err != nil {
+		return "", fmt.Errorf("write inbound artifact: %w", err)
+	}
+	return path, nil
+}
+
+func inboundArtifactRoot(scope sandbox.Scope, cfg config.AgentConfig) string {
+	base := strings.TrimSpace(scope.WorkingRoot)
+	if scope.Principal.Role == principal.RoleApprovedUser && strings.TrimSpace(scope.UserMemory) != "" {
+		base = scope.UserMemory
+	}
+	if base == "" {
+		base = strings.TrimSpace(cfg.ExecRoot)
+	}
+	return filepath.Join(base, ".aphelion", "inbound")
+}
+
+func safeInboundArtifactFilename(artifact core.Artifact) string {
+	base := firstNonEmpty(strings.TrimSpace(artifact.RemoteID), strings.TrimSpace(artifact.ID), "artifact")
+	base = strings.ReplaceAll(base, "/", "-")
+	base = strings.ReplaceAll(base, ":", "-")
+	base = inboundArtifactFilenameSanitizer.ReplaceAllString(base, "-")
+	base = strings.Trim(base, "-.")
+	if base == "" {
+		base = "artifact"
+	}
+	name := inboundArtifactFilenameSanitizer.ReplaceAllString(strings.TrimSpace(artifact.Filename), "-")
+	name = strings.Trim(name, "-.")
+	if name == "" {
+		name = defaultInboundArtifactName(artifact)
+	}
+	return base + "--" + name
+}
+
+func defaultInboundArtifactName(artifact core.Artifact) string {
+	switch {
+	case strings.TrimSpace(artifact.Filename) != "":
+		return strings.TrimSpace(artifact.Filename)
+	case artifact.Kind == "audio" && artifact.Subtype == "voice_note":
+		return "voice.ogg"
+	case artifact.Kind == "image":
+		return "image"
+	case artifact.Kind == "document" && artifact.Subtype == "pdf":
+		return "document.pdf"
+	case artifact.Kind == "document":
+		return "document"
+	case artifact.Kind == "sticker":
+		return "sticker.webp"
+	default:
+		return "artifact"
 	}
 }
 
