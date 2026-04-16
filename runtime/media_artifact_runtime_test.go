@@ -712,3 +712,110 @@ func TestHandleInboundPersistsArtifactDecisionHiddenInput(t *testing.T) {
 		t.Fatalf("LastFloorMetadata = %q, want fetched_local decision trail", sess.LastFloorMetadata)
 	}
 }
+
+func TestPrepareInboundTurnExplicitTurnRetentionSkipsLocalPersistence(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	fetcher := &fakeInboundFetcher{data: map[string][]byte{
+		"doc-turn": []byte("hello turn"),
+	}}
+	rt.inbound = fetcher
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    1501,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{{
+			ID:         "doc-turn",
+			Channel:    "telegram",
+			RemoteID:   "doc-turn",
+			SourceType: "document",
+			Kind:       "document",
+			Subtype:    "text",
+			Filename:   "notes.txt",
+			MimeType:   "text/plain",
+			Metadata: map[string]string{
+				"aphelion_retention_choice": "turn",
+				"aphelion_materialize":      "memory_only",
+			},
+			DefaultRetention: "ephemeral",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	if len(prepared.ArtifactRefs) != 1 {
+		t.Fatalf("artifact refs len = %d, want 1", len(prepared.ArtifactRefs))
+	}
+	if got := prepared.ArtifactRefs[0].FetchState; got != "fetched_memory" {
+		t.Fatalf("FetchState = %q, want fetched_memory", got)
+	}
+	root := filepath.Join(cfg.Agent.ExecRoot, ".aphelion", "inbound")
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("inbound root stat err = %v, want not-exist", err)
+	}
+}
+
+func TestPrepareInboundTurnExplicitLocalRetentionForcesFetchAndPersistence(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	fetcher := &fakeInboundFetcher{data: map[string][]byte{
+		"video-local": []byte("video-bytes"),
+	}}
+	rt.inbound = fetcher
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    1502,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{{
+			ID:         "video-local",
+			Channel:    "telegram",
+			RemoteID:   "video-local",
+			SourceType: "video",
+			Kind:       "video",
+			Filename:   "clip.mp4",
+			MimeType:   "video/mp4",
+			Metadata: map[string]string{
+				"aphelion_retention_choice": "local",
+				"aphelion_materialize":      "local",
+			},
+			DefaultRetention: "child_local",
+			RetentionCeiling: "child_local",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	if len(prepared.ArtifactRefs) != 1 {
+		t.Fatalf("artifact refs len = %d, want 1", len(prepared.ArtifactRefs))
+	}
+	if got := prepared.ArtifactRefs[0].FetchState; got != "fetched_local" {
+		t.Fatalf("FetchState = %q, want fetched_local", got)
+	}
+	if got := prepared.ArtifactRefs[0].Retention; got != "child_local" {
+		t.Fatalf("Retention = %q, want child_local", got)
+	}
+	root := filepath.Join(cfg.Agent.ExecRoot, ".aphelion", "inbound")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) err = %v", root, err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("inbound materialized files = %d, want 1", len(entries))
+	}
+}

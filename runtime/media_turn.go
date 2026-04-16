@@ -140,16 +140,21 @@ func (r *Runtime) materializeInboundArtifact(ctx context.Context, scope sandbox.
 	if artifact.SizeBytes == 0 {
 		artifact.SizeBytes = int64(len(data))
 	}
-	if path, err := r.persistInboundArtifactBytes(scope, artifact); err != nil {
-		return artifact, err
-	} else if strings.TrimSpace(path) != "" {
-		artifact.Path = path
+	if shouldPersistInboundArtifactLocally(artifact) {
+		if path, err := r.persistInboundArtifactBytes(scope, artifact); err != nil {
+			return artifact, err
+		} else if strings.TrimSpace(path) != "" {
+			artifact.Path = path
+		}
 	}
 	return core.NormalizeArtifact(artifact), nil
 }
 
 func (r *Runtime) shouldFetchInboundArtifactNow(artifact core.Artifact) bool {
 	artifact = core.NormalizeArtifact(artifact)
+	if hasExplicitArtifactRetentionChoice(artifact) && shouldPersistInboundArtifactLocally(artifact) {
+		return true
+	}
 	switch {
 	case artifact.Kind == "audio":
 		return true
@@ -233,6 +238,24 @@ func defaultInboundArtifactName(artifact core.Artifact) string {
 	}
 }
 
+func inboundArtifactMaterializeMode(artifact core.Artifact) string {
+	if artifact.Metadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(artifact.Metadata["aphelion_materialize"])
+}
+
+func shouldPersistInboundArtifactLocally(artifact core.Artifact) bool {
+	return !strings.EqualFold(inboundArtifactMaterializeMode(artifact), "memory_only")
+}
+
+func hasExplicitArtifactRetentionChoice(artifact core.Artifact) bool {
+	if artifact.Metadata == nil {
+		return false
+	}
+	return strings.TrimSpace(artifact.Metadata["aphelion_retention_choice"]) != ""
+}
+
 func inboundArtifactFetchState(artifact core.Artifact) string {
 	if len(artifact.Data) > 0 && strings.TrimSpace(artifact.Path) != "" {
 		return "fetched_local"
@@ -248,6 +271,9 @@ func inboundArtifactFetchState(artifact core.Artifact) string {
 
 func summarizeArtifactDecision(ref core.ArtifactReference, artifact core.Artifact) string {
 	parts := []string{firstNonEmpty(strings.TrimSpace(ref.Handling), "store_reference_only")}
+	if choice := strings.TrimSpace(artifact.Metadata["aphelion_retention_choice"]); choice != "" {
+		parts = append(parts, "operator_"+choice)
+	}
 	if fetch := strings.TrimSpace(ref.FetchState); fetch != "" {
 		parts = append(parts, fetch)
 	}

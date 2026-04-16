@@ -275,6 +275,11 @@ func run() error {
 		} else if busyHandled {
 			return nil
 		}
+		if retentionHandled, retentionErr := decisionHandler.HandleArtifactRetentionMessage(parent, msg); retentionErr != nil {
+			return retentionErr
+		} else if retentionHandled {
+			return nil
+		}
 
 		turnCtx, cancel := context.WithTimeout(parent, turnTimeout)
 		go func() {

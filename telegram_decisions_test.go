@@ -18,10 +18,10 @@ import (
 )
 
 type decisionTestSender struct {
-	inline  []decisionInlineCall
-	edits   []decisionEditCall
-	deletes []decisionDeleteCall
-	answers []decisionAnswerCall
+	inline    []decisionInlineCall
+	edits     []decisionEditCall
+	deletes   []decisionDeleteCall
+	answers   []decisionAnswerCall
 	answerErr error
 }
 
@@ -341,5 +341,120 @@ func TestHandleCallbackQueryReturnsNonStaleAckError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "chat not found") {
 		t.Fatalf("HandleCallbackQuery() err = %v, want original ack error", err)
+	}
+}
+
+func TestHandleArtifactRetentionMessagePromptsAndRoutesChosenPolicy(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	go func() {
+		for i := 0; i < 100; i++ {
+			if len(sender.inline) > 0 && len(sender.inline[0].rows) > 0 && len(sender.inline[0].rows[0]) > 0 {
+				data := sender.inline[0].rows[0][2].CallbackData
+				id, choice, ok := decision.DecodeCallbackData(data)
+				if ok {
+					broker.Resolve(id, choice)
+				}
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	router := &decisionTestRouter{}
+	handler := newTelegramDecisionHandler(sender, router, broker)
+
+	msg := core.InboundMessage{
+		ChatID:    7,
+		SenderID:  42,
+		MessageID: 99,
+		Artifacts: []core.Artifact{{
+			ID:         "doc-1",
+			Channel:    "telegram",
+			RemoteID:   "file-1",
+			Kind:       "document",
+			SourceType: "document",
+			Filename:   "notes.txt",
+			MimeType:   "text/plain",
+		}},
+	}
+
+	handled, err := handler.HandleArtifactRetentionMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleArtifactRetentionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one selector prompt", sender.inline)
+	}
+	if !strings.Contains(sender.inline[0].text, "How should I retain this inbound file?") {
+		t.Fatalf("inline text = %q, want retention prompt", sender.inline[0].text)
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want one routed message", router.routed)
+	}
+	artifact := router.routed[0].Artifacts[0]
+	if got := artifact.Metadata["aphelion_retention_choice"]; got != "local" {
+		t.Fatalf("retention choice = %q, want local", got)
+	}
+	if got := artifact.Metadata["aphelion_materialize"]; got != "local" {
+		t.Fatalf("materialize = %q, want local", got)
+	}
+	if got := artifact.DefaultRetention; got != "child_local" {
+		t.Fatalf("DefaultRetention = %q, want child_local", got)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "save the file locally") {
+		t.Fatalf("edits = %#v, want local-save confirmation", sender.edits)
+	}
+}
+
+func TestHandleArtifactRetentionMessageTimeoutDefaultsToSession(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		return decision.Delivery{MessageID: 52}, nil
+	})
+	router := &decisionTestRouter{}
+	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler.artifactRetentionTimeout = 10 * time.Millisecond
+
+	msg := core.InboundMessage{
+		ChatID:    8,
+		SenderID:  42,
+		MessageID: 100,
+		Artifacts: []core.Artifact{{
+			ID:         "doc-2",
+			Channel:    "telegram",
+			RemoteID:   "file-2",
+			Kind:       "document",
+			SourceType: "document",
+			Filename:   "notes.txt",
+			MimeType:   "text/plain",
+		}},
+	}
+
+	handled, err := handler.HandleArtifactRetentionMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleArtifactRetentionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want one routed message", router.routed)
+	}
+	artifact := router.routed[0].Artifacts[0]
+	if got := artifact.Metadata["aphelion_retention_choice"]; got != "session" {
+		t.Fatalf("retention choice = %q, want session", got)
+	}
+	if got := artifact.DefaultRetention; got != "session_reference" {
+		t.Fatalf("DefaultRetention = %q, want session_reference", got)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "session by default") {
+		t.Fatalf("edits = %#v, want session-timeout confirmation", sender.edits)
 	}
 }

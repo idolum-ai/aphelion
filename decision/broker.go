@@ -14,9 +14,10 @@ import (
 type Kind string
 
 const (
-	KindInterrupt        Kind = "interrupt"
-	KindStopWord         Kind = "stop_word"
-	KindProposalApproval Kind = "proposal_approval"
+	KindInterrupt         Kind = "interrupt"
+	KindStopWord          Kind = "stop_word"
+	KindProposalApproval  Kind = "proposal_approval"
+	KindArtifactRetention Kind = "artifact_retention"
 )
 
 type Choice struct {

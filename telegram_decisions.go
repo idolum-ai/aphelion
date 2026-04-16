@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	defaultInterruptTimeout    = 30 * time.Second
-	defaultStopWordTimeout     = 15 * time.Second
-	defaultExecApprovalTimeout = 30 * time.Second
+	defaultInterruptTimeout         = 30 * time.Second
+	defaultStopWordTimeout          = 15 * time.Second
+	defaultExecApprovalTimeout      = 30 * time.Second
+	defaultArtifactRetentionTimeout = 45 * time.Second
 )
 
 type telegramDecisionSender interface {
@@ -34,11 +35,12 @@ type telegramDecisionRouter interface {
 }
 
 type telegramDecisionHandler struct {
-	sender           telegramDecisionSender
-	router           telegramDecisionRouter
-	broker           *decision.Broker
-	interruptTimeout time.Duration
-	stopWordTimeout  time.Duration
+	sender                   telegramDecisionSender
+	router                   telegramDecisionRouter
+	broker                   *decision.Broker
+	interruptTimeout         time.Duration
+	stopWordTimeout          time.Duration
+	artifactRetentionTimeout time.Duration
 }
 
 type telegramExecApprover struct {
@@ -49,11 +51,12 @@ type telegramExecApprover struct {
 
 func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker) *telegramDecisionHandler {
 	return &telegramDecisionHandler{
-		sender:           sender,
-		router:           router,
-		broker:           broker,
-		interruptTimeout: defaultInterruptTimeout,
-		stopWordTimeout:  defaultStopWordTimeout,
+		sender:                   sender,
+		router:                   router,
+		broker:                   broker,
+		interruptTimeout:         defaultInterruptTimeout,
+		stopWordTimeout:          defaultStopWordTimeout,
+		artifactRetentionTimeout: defaultArtifactRetentionTimeout,
 	}
 }
 
@@ -142,6 +145,133 @@ func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
 		lines = append(lines, "", "Command:", command)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func (h *telegramDecisionHandler) HandleArtifactRetentionMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
+	if h == nil || h.sender == nil || h.router == nil || h.broker == nil {
+		return false, nil
+	}
+	if !hasArtifactRetentionCandidates(msg) {
+		return false, nil
+	}
+
+	result, err := h.broker.Request(ctx, decision.Request{
+		Kind:          decision.KindArtifactRetention,
+		ChatID:        msg.ChatID,
+		SenderID:      msg.SenderID,
+		MessageID:     msg.MessageID,
+		Prompt:        "How should I retain this inbound file?",
+		Details:       formatArtifactRetentionDetails(msg),
+		Choices:       []decision.Choice{{ID: "turn", Label: "This turn only"}, {ID: "session", Label: "Keep for session"}, {ID: "local", Label: "Save locally"}},
+		DefaultChoice: "session",
+		Timeout:       h.artifactRetentionTimeout,
+	})
+	if err != nil {
+		return true, err
+	}
+
+	updated := applyArtifactRetentionChoice(msg, result.Choice)
+	if result.Delivery.MessageID != 0 {
+		_ = h.sender.EditMessageText(ctx, msg.ChatID, result.Delivery.MessageID, artifactRetentionResolutionText(result), "")
+	}
+	h.router.Route(ctx, updated)
+	return true, nil
+}
+
+func hasArtifactRetentionCandidates(msg core.InboundMessage) bool {
+	if strings.TrimSpace(msg.DurableAgentID) != "" {
+		return false
+	}
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if strings.TrimSpace(artifact.Channel) != "telegram" {
+			continue
+		}
+		if strings.TrimSpace(artifact.RemoteID) == "" && len(artifact.Data) == 0 {
+			continue
+		}
+		if artifact.Kind == "structured" {
+			continue
+		}
+		if strings.TrimSpace(artifact.Metadata["aphelion_retention_choice"]) != "" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func formatArtifactRetentionDetails(msg core.InboundMessage) string {
+	items := make([]string, 0, len(msg.Artifacts))
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if strings.TrimSpace(artifact.Channel) != "telegram" || artifact.Kind == "structured" {
+			continue
+		}
+		label := strings.TrimSpace(artifact.Filename)
+		if label == "" {
+			label = strings.TrimSpace(artifact.Kind)
+			if label == "" {
+				label = strings.TrimSpace(artifact.SourceType)
+			}
+			if label == "" {
+				label = "artifact"
+			}
+		}
+		items = append(items, "- "+label)
+	}
+	if len(items) == 0 {
+		return "Choose how long I should keep the inbound artifact after processing."
+	}
+	return strings.Join([]string{
+		"Choose how long I should keep this inbound artifact after processing.",
+		"",
+		"Artifacts:",
+		strings.Join(items, "\n"),
+	}, "\n")
+}
+
+func applyArtifactRetentionChoice(msg core.InboundMessage, choice string) core.InboundMessage {
+	choice = strings.TrimSpace(choice)
+	out := msg
+	out.Artifacts = make([]core.Artifact, 0, len(msg.Artifacts))
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if strings.TrimSpace(artifact.Channel) == "telegram" && artifact.Kind != "structured" && (strings.TrimSpace(artifact.RemoteID) != "" || len(artifact.Data) > 0) {
+			if artifact.Metadata == nil {
+				artifact.Metadata = map[string]string{}
+			}
+			artifact.Metadata["aphelion_retention_choice"] = choice
+			switch choice {
+			case "turn":
+				artifact.DefaultRetention = "ephemeral"
+				artifact.Metadata["aphelion_materialize"] = "memory_only"
+			case "local":
+				artifact.DefaultRetention = "child_local"
+				artifact.RetentionCeiling = "child_local"
+				artifact.Metadata["aphelion_materialize"] = "local"
+			default:
+				artifact.DefaultRetention = "session_reference"
+				artifact.Metadata["aphelion_materialize"] = "local"
+			}
+		}
+		out.Artifacts = append(out.Artifacts, core.NormalizeArtifact(artifact))
+	}
+	return out
+}
+
+func artifactRetentionResolutionText(result decision.Result) string {
+	if result.TimedOut {
+		return "Keeping the file for this session by default."
+	}
+	switch strings.TrimSpace(result.Choice) {
+	case "turn":
+		return "Got it — I’ll use the file for this turn only."
+	case "local":
+		return "Got it — I’ll save the file locally for longer work."
+	default:
+		return "Got it — I’ll keep the file for this session."
+	}
 }
 
 func (h *telegramDecisionHandler) HandleBusyMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
