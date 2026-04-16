@@ -157,8 +157,8 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	audit := newTurnAuditRecorder(key, "telegram_group", "durable_agent", prepared.LedgerText)
 	defer r.emitTurnAudit(audit)
 
-	facePolicy := pipeline.DecideInteractiveFacePolicy(sess, prepared.LedgerText)
-	useMaterialFloor := pipeline.ShouldUseMaterialFloorContract(string(r.faceBackend), facePolicy)
+	facePolicy := pipeline.DecideInteractiveFacePolicy(prepared.LedgerText)
+	useMaterialFloor := pipeline.ShouldUseMaterialFloorContract(facePolicy)
 	exec := r.executionForTurn(prepared)
 	promptContext, err := r.promptContextForScope(scope, now)
 	if err != nil {

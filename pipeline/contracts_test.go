@@ -51,12 +51,12 @@ func TestFloorArtifactAllowsStructuredOrLegacySurface(t *testing.T) {
 func TestDecideInteractiveFacePolicy(t *testing.T) {
 	t.Parallel()
 
-	p := DecideInteractiveFacePolicy(nil, "hello there")
+	p := DecideInteractiveFacePolicy("hello there")
 	if !p.Proposal || !p.Render {
 		t.Fatalf("policy = %#v, want proposal and render", p)
 	}
 
-	p = DecideInteractiveFacePolicy(nil, "/command")
+	p = DecideInteractiveFacePolicy("/command")
 	if p.Proposal || p.Render {
 		t.Fatalf("policy = %#v, want empty for command input", p)
 	}
@@ -125,10 +125,10 @@ func TestShouldRenderInteractiveIdolumReplyUsesRenderPolicy(t *testing.T) {
 func TestShouldUseMaterialFloorContract(t *testing.T) {
 	t.Parallel()
 
-	if !ShouldUseMaterialFloorContract("", FacePolicy{Proposal: true}) {
+	if !ShouldUseMaterialFloorContract(FacePolicy{Proposal: true}) {
 		t.Fatal("ShouldUseMaterialFloorContract() = false, want true")
 	}
-	if ShouldUseMaterialFloorContract("", FacePolicy{}) {
+	if ShouldUseMaterialFloorContract(FacePolicy{}) {
 		t.Fatal("ShouldUseMaterialFloorContract() = true, want false")
 	}
 }

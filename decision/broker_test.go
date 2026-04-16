@@ -50,7 +50,7 @@ func TestBrokerRequestFallsBackToDefaultChoiceOnTimeout(t *testing.T) {
 	})
 
 	result, err := broker.Request(context.Background(), Request{
-		Kind:          KindExecApproval,
+		Kind:          KindProposalApproval,
 		ChatID:        7,
 		Prompt:        "Confirm command?",
 		Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
@@ -77,7 +77,7 @@ func TestBrokerRequestReturnsNotifierError(t *testing.T) {
 	})
 
 	_, err := broker.Request(context.Background(), Request{
-		Kind:          KindExecApproval,
+		Kind:          KindProposalApproval,
 		ChatID:        7,
 		Prompt:        "Confirm command?",
 		Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},

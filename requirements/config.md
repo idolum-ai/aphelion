@@ -212,7 +212,6 @@ The turn-time and maintenance retrieval modes should not be forced through one i
 [openai.transcription]
 enabled = false
 model = "whisper-1"
-translation_model = "whisper-1"
 
 # ─── Governor / Face ───
 [governor]

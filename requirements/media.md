@@ -1,4 +1,4 @@
-# Media — Uploads, Downloads, Transcription & Translation
+# Media — Uploads, Downloads, and Transcription
 
 ## Overview
 
@@ -8,12 +8,11 @@ The channel-neutral file/media model belongs in `artifacts.md`.
 
 The bounded `Idolum`/`Aphelion` deliberation over file meaning, handling, and retention belongs in `artifact-brokerage.md`.
 
-This document stays focused on media processors and service surfaces such as transcription, translation, extraction, and isolation behavior.
+This document stays focused on media processors and service surfaces such as transcription, extraction, and isolation behavior.
 
 OpenAI belongs here for:
 
 - audio transcription
-- audio translation
 - media-file preprocessing inputs
 
 This is separate from inference-provider concerns.
@@ -33,7 +32,7 @@ Media services are also separate from the face layer. The governor may invoke tr
 
 ### Deferred after v0.5
 
-- OpenAI transcription/translation
+- OpenAI translation path
 - diarization-aware transcription
 - richer media indexing and attachment flows
 
@@ -59,22 +58,18 @@ Transcription is a distinct service surface.
 ```go
 type TranscriptionProvider interface {
     Transcribe(ctx context.Context, req *TranscriptionRequest) (*Transcription, error)
-    Translate(ctx context.Context, req *TranscriptionRequest) (*Transcription, error)
 }
 
 type TranscriptionRequest struct {
-    Path            string
-    Language        string
-    Prompt          string
-    Diarize         bool
-    SpeakerClips    []string
+    Path        string
+    Language    string
+    Prompt      string
 }
 
 type Transcription struct {
     Text        string
     Language    string
     Segments    []TranscriptSegment
-    Speakers    []TranscriptSpeaker
 }
 
 type TranscriptSegment struct {
@@ -84,20 +79,15 @@ type TranscriptSegment struct {
     Speaker  string
 }
 
-type TranscriptSpeaker struct {
-    ID   string
-    Name string
-}
 ```
 
 ## OpenAI Audio Services
 
-OpenAI should be supported here for speech-to-text and translation.
+OpenAI should be supported here for speech-to-text.
 
 Planned uses:
 
 - `audio/transcriptions`
-- `audio/translations`
 - support for classic Whisper-compatible flows
 - support for higher-quality transcribe models later
 
@@ -131,7 +121,6 @@ lazy_download = true
 enabled = false
 provider = "openai"
 model = "whisper-1"
-translation_model = "whisper-1"
 ```
 
 ## Tests
@@ -146,7 +135,6 @@ translation_model = "whisper-1"
 ### Deferred transcription
 
 - **TestOpenAITranscribe**
-- **TestOpenAITranslate**
 - **TestTranscriptInjectedIntoSession**
 - **TestNonAdminTranscriptStaysIsolated**
 - **TestAdminTranscriptMayAffectSharedState**

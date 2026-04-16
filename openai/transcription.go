@@ -19,15 +19,13 @@ var _ media.TranscriptionProvider = (*TranscriptionClient)(nil)
 
 // TranscriptionOptions configures OpenAI transcription endpoints.
 type TranscriptionOptions struct {
-	Model            string
-	TranslationModel string
+	Model string
 }
 
 // TranscriptionClient implements media.TranscriptionProvider.
 type TranscriptionClient struct {
-	client           *Client
-	model            string
-	translationModel string
+	client *Client
+	model  string
 }
 
 // NewTranscriptionClient creates a new transcription client.
@@ -38,33 +36,20 @@ func NewTranscriptionClient(client *Client, opts TranscriptionOptions) (*Transcr
 	if strings.TrimSpace(opts.Model) == "" {
 		return nil, fmt.Errorf("openai transcription: model is required")
 	}
-	translationModel := opts.TranslationModel
-	if strings.TrimSpace(translationModel) == "" {
-		translationModel = opts.Model
-	}
 	return &TranscriptionClient{
-		client:           client,
-		model:            opts.Model,
-		translationModel: translationModel,
+		client: client,
+		model:  opts.Model,
 	}, nil
 }
 
 // Transcribe submits audio to OpenAI's transcription endpoint.
 func (c *TranscriptionClient) Transcribe(ctx context.Context, req *media.TranscriptionRequest) (*media.Transcription, error) {
-	return c.submit(ctx, "/audio/transcriptions", c.model, req, true)
+	return c.submit(ctx, req)
 }
 
-// Translate submits audio to OpenAI's translation endpoint.
-func (c *TranscriptionClient) Translate(ctx context.Context, req *media.TranscriptionRequest) (*media.Transcription, error) {
-	return c.submit(ctx, "/audio/translations", c.translationModel, req, false)
-}
-
-func (c *TranscriptionClient) submit(ctx context.Context, path string, model string, req *media.TranscriptionRequest, includeLanguage bool) (*media.Transcription, error) {
+func (c *TranscriptionClient) submit(ctx context.Context, req *media.TranscriptionRequest) (*media.Transcription, error) {
 	if req == nil {
 		return nil, fmt.Errorf("openai transcription: request is required")
-	}
-	if req.Diarize || len(req.SpeakerClips) > 0 {
-		return nil, fmt.Errorf("openai transcription: diarization scaffolding is not wired yet")
 	}
 	if strings.TrimSpace(req.Path) == "" {
 		return nil, fmt.Errorf("openai transcription: path is required")
@@ -75,12 +60,12 @@ func (c *TranscriptionClient) submit(ctx context.Context, path string, model str
 	}
 	defer file.Close()
 
-	bodyReader, contentType, err := buildTranscriptionRequest(filepath.Base(req.Path), model, req, includeLanguage, file)
+	bodyReader, contentType, err := buildTranscriptionRequest(filepath.Base(req.Path), c.model, req, file)
 	if err != nil {
 		return nil, err
 	}
 
-	httpReq, err := c.client.newRequest(ctx, http.MethodPost, path, bodyReader)
+	httpReq, err := c.client.newRequest(ctx, http.MethodPost, "/audio/transcriptions", bodyReader)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +78,7 @@ func (c *TranscriptionClient) submit(ctx context.Context, path string, model str
 	return mapTranscription(response), nil
 }
 
-func buildTranscriptionRequest(filename string, model string, req *media.TranscriptionRequest, includeLanguage bool, src io.Reader) (io.Reader, string, error) {
+func buildTranscriptionRequest(filename string, model string, req *media.TranscriptionRequest, src io.Reader) (io.Reader, string, error) {
 	reader, writer := io.Pipe()
 	mpw := multipart.NewWriter(writer)
 
@@ -118,7 +103,7 @@ func buildTranscriptionRequest(filename string, model string, req *media.Transcr
 		if !writeField("response_format", "verbose_json") {
 			return
 		}
-		if includeLanguage && !writeField("language", req.Language) {
+		if !writeField("language", req.Language) {
 			return
 		}
 		if !writeField("prompt", req.Prompt) {

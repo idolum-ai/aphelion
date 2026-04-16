@@ -9,7 +9,6 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/prompt"
-	"github.com/idolum-ai/aphelion/session"
 )
 
 // FacePolicy names the minimal turn policy that governs proposal and rendering.
@@ -162,7 +161,7 @@ type FallbackPort interface {
 }
 
 // DecideInteractiveFacePolicy chooses the bicameral face policy for a turn.
-func DecideInteractiveFacePolicy(_ *session.Session, userText string) FacePolicy {
+func DecideInteractiveFacePolicy(userText string) FacePolicy {
 	trimmed := strings.TrimSpace(userText)
 	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
 		return FacePolicy{}
@@ -202,7 +201,7 @@ func ShouldRenderInteractiveIdolumReply(policy FacePolicy, input RenderDecisionI
 }
 
 // ShouldUseMaterialFloorContract keeps material-floor contract usage explicit.
-func ShouldUseMaterialFloorContract(_ string, policy FacePolicy) bool {
+func ShouldUseMaterialFloorContract(policy FacePolicy) bool {
 	return policy.Proposal
 }
 

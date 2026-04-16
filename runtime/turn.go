@@ -54,8 +54,8 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 	audit := newTurnAuditRecorder(key, "telegram", string(actor.Role), prepared.LedgerText)
 	defer r.emitTurnAudit(audit)
-	facePolicy := pipeline.DecideInteractiveFacePolicy(sess, prepared.LedgerText)
-	useMaterialFloor := pipeline.ShouldUseMaterialFloorContract(string(r.faceBackend), facePolicy)
+	facePolicy := pipeline.DecideInteractiveFacePolicy(prepared.LedgerText)
+	useMaterialFloor := pipeline.ShouldUseMaterialFloorContract(facePolicy)
 	exec := r.executionForTurn(prepared)
 	promptContext, err := r.promptContextForScope(scope, now)
 	if err != nil {

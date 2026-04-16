@@ -89,8 +89,7 @@ func TestTranscriptionClientTranscribeBuildsMultipartRequestAndMapsResponse(t *t
 		}), nil
 	})
 	transcriber, err := NewTranscriptionClient(client, TranscriptionOptions{
-		Model:            "whisper-1",
-		TranslationModel: "gpt-4o-mini-transcribe",
+		Model: "whisper-1",
 	})
 	if err != nil {
 		t.Fatalf("new transcription client: %v", err)
@@ -115,92 +114,22 @@ func TestTranscriptionClientTranscribeBuildsMultipartRequestAndMapsResponse(t *t
 	}
 }
 
-func TestTranscriptionClientTranslateUsesTranslationEndpoint(t *testing.T) {
+func TestTranscriptionClientRejectsMissingPath(t *testing.T) {
 	t.Parallel()
-
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "audio.wav")
-	if err := os.WriteFile(path, []byte("hola"), 0o644); err != nil {
-		t.Fatalf("write temp file: %v", err)
-	}
 
 	client := newTestClient(t, func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/audio/translations" {
-			t.Fatalf("path = %s, want /audio/translations", r.URL.Path)
-		}
-		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil {
-			t.Fatalf("parse media type: %v", err)
-		}
-		if mediaType != "multipart/form-data" {
-			t.Fatalf("media type = %s, want multipart/form-data", mediaType)
-		}
-		mr := multipart.NewReader(r.Body, params["boundary"])
-		fields := map[string]string{}
-		for {
-			part, err := mr.NextPart()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				t.Fatalf("next part: %v", err)
-			}
-			data, err := io.ReadAll(part)
-			if err != nil {
-				t.Fatalf("read part: %v", err)
-			}
-			if part.FormName() == "file" {
-				continue
-			}
-			fields[part.FormName()] = string(data)
-		}
-		if fields["model"] != "gpt-4o-mini-transcribe" {
-			t.Fatalf("model = %q, want gpt-4o-mini-transcribe", fields["model"])
-		}
-		if _, ok := fields["language"]; ok {
-			t.Fatalf("language should not be sent for translation requests")
-		}
-		return jsonResponse(t, http.StatusOK, map[string]any{
-			"text":     "hello",
-			"language": "en",
-		}), nil
+		t.Fatal("unexpected HTTP call for missing path")
+		return nil, nil
 	})
 	transcriber, err := NewTranscriptionClient(client, TranscriptionOptions{
-		Model:            "whisper-1",
-		TranslationModel: "gpt-4o-mini-transcribe",
+		Model: "whisper-1",
 	})
 	if err != nil {
 		t.Fatalf("new transcription client: %v", err)
 	}
 
-	got, err := transcriber.Translate(context.Background(), &media.TranscriptionRequest{
-		Path:     path,
-		Language: "es",
-	})
-	if err != nil {
-		t.Fatalf("translate: %v", err)
-	}
-	if got.Text != "hello" {
-		t.Fatalf("text = %q, want hello", got.Text)
-	}
-}
-
-func TestTranscriptionClientRejectsUnwiredDiarization(t *testing.T) {
-	t.Parallel()
-
-	client, err := NewClient(ClientOptions{APIKey: "test-key", BaseURL: "https://example.invalid"})
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-	transcriber, err := NewTranscriptionClient(client, TranscriptionOptions{Model: "whisper-1"})
-	if err != nil {
-		t.Fatalf("new transcription client: %v", err)
-	}
-	_, err = transcriber.Transcribe(context.Background(), &media.TranscriptionRequest{
-		Path:    "/tmp/audio.wav",
-		Diarize: true,
-	})
+	_, err = transcriber.Transcribe(context.Background(), &media.TranscriptionRequest{})
 	if err == nil {
-		t.Fatal("expected error for unwired diarization")
+		t.Fatal("expected missing path error")
 	}
 }

@@ -8,14 +8,6 @@ import (
 	"strings"
 )
 
-const (
-	turnModeAnswerNow        = "answer_now"
-	turnModeInspectThenReply = "inspect_then_answer"
-	turnModeAskThenWait      = "ask_then_wait"
-	turnModeDecline          = "decline"
-	turnModeSilent           = "silent"
-)
-
 func (c ExecutionContract) Summary() string {
 	return fmt.Sprintf("inspect=%s, question=%s, answer=%s", yesNo(c.NeedsInspection), yesNo(c.NeedsQuestion), yesNo(c.MayAnswerNow))
 }
@@ -53,10 +45,6 @@ func ParseExecutionContract(text string) *ExecutionContract {
 			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("ANSWER:"):])); ok {
 				contract.MayAnswerNow = value
 				answerSet = true
-			}
-		case strings.HasPrefix(upper, "MODE:"):
-			if legacy, ok := executionContractFromTurnMode(strings.TrimSpace(line[len("MODE:"):])); ok {
-				return legacy
 			}
 		}
 	}
@@ -108,16 +96,6 @@ func ParseBrokerageRatification(text string) (BrokerageRatification, error) {
 			if value, ok := normalizeDirectiveBool(strings.TrimSpace(line[len("ANSWER:"):])); ok {
 				contract.MayAnswerNow = value
 				answerSet = true
-			}
-			inPlan = false
-			continue
-		case strings.HasPrefix(upper, "MODE:"):
-			if legacy, ok := executionContractFromTurnMode(strings.TrimSpace(line[len("MODE:"):])); ok {
-				contract = *legacy
-				inspectSet = true
-				questionSet = true
-				answerSet = true
-				contractKnown = true
 			}
 			inPlan = false
 			continue
@@ -185,12 +163,6 @@ func parseExecutionContractObject(object map[string]any) (ExecutionContract, boo
 		}
 		if contract, ok := parseExecutionContractObject(nestedObject); ok {
 			return contract, true
-		}
-	}
-
-	if mode, ok := readStringFromMap(object, "mode", "turn_mode"); ok {
-		if legacy, ok := executionContractFromTurnMode(mode); ok {
-			return *legacy, true
 		}
 	}
 
@@ -351,33 +323,6 @@ func normalizeBoolValue(value any) (bool, bool) {
 		}
 	}
 	return false, false
-}
-
-func normalizeTurnMode(raw string) string {
-	value := strings.ToLower(strings.TrimSpace(raw))
-	value = strings.ReplaceAll(value, "-", "_")
-	value = strings.ReplaceAll(value, " ", "_")
-	switch value {
-	case turnModeAnswerNow, turnModeInspectThenReply, turnModeAskThenWait, turnModeDecline, turnModeSilent:
-		return value
-	default:
-		return ""
-	}
-}
-
-func executionContractFromTurnMode(raw string) (*ExecutionContract, bool) {
-	switch normalizeTurnMode(raw) {
-	case turnModeAnswerNow, turnModeDecline:
-		return &ExecutionContract{MayAnswerNow: true}, true
-	case turnModeInspectThenReply:
-		return &ExecutionContract{NeedsInspection: true, MayAnswerNow: true}, true
-	case turnModeAskThenWait:
-		return &ExecutionContract{NeedsQuestion: true}, true
-	case turnModeSilent:
-		return &ExecutionContract{}, true
-	default:
-		return nil, false
-	}
 }
 
 func normalizeDirectiveBool(raw string) (bool, bool) {

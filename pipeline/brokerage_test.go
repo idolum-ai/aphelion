@@ -23,11 +23,11 @@ func TestParseExecutionContractExtractsFlags(t *testing.T) {
 	}
 }
 
-func TestParseExecutionContractParsesLegacyMode(t *testing.T) {
+func TestParseExecutionContractRejectsLegacyModeDirectives(t *testing.T) {
 	t.Parallel()
 
-	if got := ParseExecutionContract("MODE: ask_then_wait"); got == nil || !got.NeedsQuestion || got.NeedsInspection || got.MayAnswerNow {
-		t.Fatalf("contract = %#v, want ask_then_wait mode", got)
+	if got := ParseExecutionContract("MODE: ask_then_wait"); got != nil {
+		t.Fatalf("contract = %#v, want nil for legacy mode directive", got)
 	}
 }
 

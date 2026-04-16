@@ -16,7 +16,6 @@ type Kind string
 const (
 	KindInterrupt        Kind = "interrupt"
 	KindStopWord         Kind = "stop_word"
-	KindExecApproval     Kind = "exec_approval"
 	KindProposalApproval Kind = "proposal_approval"
 )
 

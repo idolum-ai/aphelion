@@ -5,7 +5,6 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -350,10 +349,6 @@ func (f fakeTranscriber) Transcribe(_ context.Context, _ *media.TranscriptionReq
 		return nil, f.err
 	}
 	return &media.Transcription{Text: f.text}, nil
-}
-
-func (f fakeTranscriber) Translate(_ context.Context, _ *media.TranscriptionRequest) (*media.Transcription, error) {
-	return nil, errors.New("not implemented")
 }
 
 type fakeSynth struct {
