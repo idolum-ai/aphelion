@@ -31,7 +31,8 @@ It should also prevent a silent collapse back into the older shape where the gov
 
 ### v0 required
 
-- bounded pre-turn brokerage for selected interactive turns
+- bounded pre-turn brokerage for interactive turns when the turn carries an explicit execution contract signal
+- conversational-default pre-turn proposal for ordinary interactive turns (non-empty, non-command) so brokerage activation can be decided from the proposal itself rather than keyword routing
 - `Idolum` brokerage proposal
 - `Aphelion` ratification pass
 - negotiated brokerage block injected into the main governor turn
@@ -43,13 +44,13 @@ It should also prevent a silent collapse back into the older shape where the gov
 - multi-round negotiation
 - brokerage for heartbeat/cron
 - persistence of full brokerage artifacts beyond prompt/audit surfaces
-- operator-configurable brokerage heuristics
+- richer operator policy controls for brokerage activation and bounds
 
 ## Activation
 
-Brokerage should only run when heuristics suggest that "how to proceed" is itself part of the work.
+Brokerage should activate when the conversational proposal surfaces an explicit execution contract (`INSPECT`/`QUESTION`/`ANSWER`) that needs ratification.
 
-Good brokerage candidates:
+Typical brokerage candidates:
 
 - strategic ideation
 - feature brainstorming
@@ -57,12 +58,10 @@ Good brokerage candidates:
 - ambiguous requests with multiple plausible actions
 - reflective or emotionally loaded turns where tone and direction both matter
 
-Brokerage should usually be skipped for:
+Brokerage should usually remain inactive for:
 
 - slash commands
-- simple factual questions
-- straightforward mechanical/tool-output turns
-- short status queries
+- turns where the proposal carries no explicit execution contract
 
 ## Brokerage Roles
 

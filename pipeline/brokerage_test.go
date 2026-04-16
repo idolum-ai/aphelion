@@ -31,6 +31,18 @@ func TestParseExecutionContractParsesLegacyMode(t *testing.T) {
 	}
 }
 
+func TestParseExecutionContractParsesJSON(t *testing.T) {
+	t.Parallel()
+
+	got := ParseExecutionContract(`{"inspect": true, "question": false, "answer": true}`)
+	if got == nil {
+		t.Fatal("contract = nil, want parsed execution contract")
+	}
+	if !got.NeedsInspection || got.NeedsQuestion || !got.MayAnswerNow {
+		t.Fatalf("contract = %#v, want inspect=yes question=no answer=yes", got)
+	}
+}
+
 func TestParseExecutionContractReturnsNilForIncompleteContract(t *testing.T) {
 	t.Parallel()
 
@@ -83,5 +95,31 @@ func TestParseBrokerageRatificationRejectsMissingFields(t *testing.T) {
 	}
 	if _, err := ParseBrokerageRatification("INSPECT: yes\nQUESTION: no\nANSWER: yes\nRATIFICATION: adapt"); err == nil {
 		t.Fatal("ParseBrokerageRatification() err = nil, want missing plan steps error")
+	}
+}
+
+func TestParseBrokerageRatificationParsesJSONPayload(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := ParseBrokerageRatification(`{
+		"contract": {"inspect": true, "question": false, "answer": true},
+		"ratification": "accept",
+		"signal_judgment": "confirmed",
+		"plan": ["Inspect the repo first.", "Reply with prioritized ideas."]
+	}`)
+	if err != nil {
+		t.Fatalf("ParseBrokerageRatification() err = %v", err)
+	}
+	if !parsed.RatifiedContract.NeedsInspection || parsed.RatifiedContract.NeedsQuestion || !parsed.RatifiedContract.MayAnswerNow {
+		t.Fatalf("RatifiedContract = %#v, want inspect=yes question=no answer=yes", parsed.RatifiedContract)
+	}
+	if parsed.Disposition != RatificationAccept {
+		t.Fatalf("Disposition = %q, want %q", parsed.Disposition, RatificationAccept)
+	}
+	if parsed.SignalJudgment != SignalJudgmentConfirmed {
+		t.Fatalf("SignalJudgment = %q, want %q", parsed.SignalJudgment, SignalJudgmentConfirmed)
+	}
+	if len(parsed.RatifiedSteps) != 2 {
+		t.Fatalf("len(RatifiedSteps) = %d, want 2", len(parsed.RatifiedSteps))
 	}
 }

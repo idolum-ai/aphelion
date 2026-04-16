@@ -3,6 +3,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -22,11 +23,19 @@ func (c ExecutionContract) Summary() string {
 // ParseExecutionContract parses a proposal-like block into a bounded execution
 // contract.
 func ParseExecutionContract(text string) *ExecutionContract {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	if contract, ok := parseExecutionContractJSON(trimmed); ok {
+		return &contract
+	}
+
 	contract := ExecutionContract{}
 	inspectSet := false
 	questionSet := false
 	answerSet := false
-	for _, line := range strings.Split(text, "\n") {
+	for _, line := range strings.Split(trimmed, "\n") {
 		line = strings.TrimSpace(line)
 		upper := strings.ToUpper(line)
 		switch {
@@ -62,6 +71,9 @@ func ParseBrokerageRatification(text string) (BrokerageRatification, error) {
 	parsed := BrokerageRatification{RawText: strings.TrimSpace(text)}
 	if parsed.RawText == "" {
 		return parsed, fmt.Errorf("empty brokerage ratification")
+	}
+	if jsonParsed, ok, err := parseBrokerageRatificationJSON(parsed.RawText); ok {
+		return jsonParsed, err
 	}
 
 	contract := ExecutionContract{}
@@ -120,11 +132,14 @@ func ParseBrokerageRatification(text string) (BrokerageRatification, error) {
 		case upper == "PLAN:":
 			inPlan = true
 			continue
-		}
-		if !inPlan {
+		case upper == "STEPS:":
+			inPlan = true
 			continue
 		}
 		if step := parseBrokeragePlanStep(line); step != "" {
+			if !inPlan && parsed.Disposition == "" {
+				continue
+			}
 			parsed.RatifiedSteps = append(parsed.RatifiedSteps, step)
 		}
 	}
@@ -143,6 +158,199 @@ func ParseBrokerageRatification(text string) (BrokerageRatification, error) {
 	default:
 		return parsed, nil
 	}
+}
+
+func parseExecutionContractJSON(raw string) (ExecutionContract, bool) {
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ExecutionContract{}, false
+	}
+	object, ok := payload.(map[string]any)
+	if !ok {
+		return ExecutionContract{}, false
+	}
+	contract, ok := parseExecutionContractObject(object)
+	return contract, ok
+}
+
+func parseExecutionContractObject(object map[string]any) (ExecutionContract, bool) {
+	for _, key := range []string{"contract", "execution_contract", "ratified_contract", "suggested_contract"} {
+		nested, ok := object[key]
+		if !ok {
+			continue
+		}
+		nestedObject, ok := nested.(map[string]any)
+		if !ok {
+			continue
+		}
+		if contract, ok := parseExecutionContractObject(nestedObject); ok {
+			return contract, true
+		}
+	}
+
+	if mode, ok := readStringFromMap(object, "mode", "turn_mode"); ok {
+		if legacy, ok := executionContractFromTurnMode(mode); ok {
+			return *legacy, true
+		}
+	}
+
+	inspect, inspectOK := readBoolFromMap(object, "inspect", "needs_inspection")
+	question, questionOK := readBoolFromMap(object, "question", "needs_question")
+	answer, answerOK := readBoolFromMap(object, "answer", "answer_now", "may_answer_now")
+	if !inspectOK || !questionOK || !answerOK {
+		return ExecutionContract{}, false
+	}
+	return ExecutionContract{
+		NeedsInspection: inspect,
+		NeedsQuestion:   question,
+		MayAnswerNow:    answer,
+	}, true
+}
+
+func parseBrokerageRatificationJSON(raw string) (BrokerageRatification, bool, error) {
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return BrokerageRatification{}, false, nil
+	}
+	object, ok := payload.(map[string]any)
+	if !ok {
+		return BrokerageRatification{}, false, nil
+	}
+
+	parsed := BrokerageRatification{RawText: strings.TrimSpace(raw)}
+	if contract, ok := parseExecutionContractObject(object); ok {
+		parsed.RatifiedContract = contract
+	}
+	if ratification, ok := readStringFromMap(object, "ratification", "disposition"); ok {
+		parsed.Disposition = normalizeRatification(ratification)
+	}
+	if signal, ok := readStringFromMap(object, "signal_judgment", "signalJudgment", "signal"); ok {
+		parsed.SignalJudgment = normalizeSignalJudgment(signal)
+	}
+	parsed.RatifiedSteps = parsePlanStepsFromMap(object)
+
+	switch {
+	case parsed.RatifiedContract == (ExecutionContract{}):
+		return parsed, true, fmt.Errorf("missing ratified execution contract")
+	case parsed.Disposition == "":
+		return parsed, true, fmt.Errorf("missing ratification disposition")
+	case len(parsed.RatifiedSteps) == 0:
+		return parsed, true, fmt.Errorf("missing ratified execution steps")
+	default:
+		return parsed, true, nil
+	}
+}
+
+func parsePlanStepsFromMap(object map[string]any) []string {
+	for _, key := range []string{"plan", "steps", "ratified_steps"} {
+		value, ok := object[key]
+		if !ok {
+			continue
+		}
+		steps := parsePlanSteps(value)
+		if len(steps) > 0 {
+			return steps
+		}
+	}
+	return nil
+}
+
+func parsePlanSteps(value any) []string {
+	out := []string{}
+	appendStep := func(step string) {
+		step = strings.TrimSpace(step)
+		if step == "" {
+			return
+		}
+		out = append(out, step)
+	}
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			switch concrete := item.(type) {
+			case string:
+				appendStep(concrete)
+			default:
+				appendStep(fmt.Sprint(concrete))
+			}
+		}
+	case []string:
+		for _, step := range typed {
+			appendStep(step)
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		for _, line := range strings.Split(trimmed, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if step := parseBrokeragePlanStep(line); step != "" {
+				appendStep(step)
+				continue
+			}
+			appendStep(line)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func readBoolFromMap(object map[string]any, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		value, ok := object[key]
+		if !ok {
+			continue
+		}
+		if parsed, ok := normalizeBoolValue(value); ok {
+			return parsed, true
+		}
+	}
+	return false, false
+}
+
+func readStringFromMap(object map[string]any, keys ...string) (string, bool) {
+	for _, key := range keys {
+		value, ok := object[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			trimmed := strings.TrimSpace(typed)
+			if trimmed != "" {
+				return trimmed, true
+			}
+		default:
+			trimmed := strings.TrimSpace(fmt.Sprint(typed))
+			if trimmed != "" && trimmed != "<nil>" {
+				return trimmed, true
+			}
+		}
+	}
+	return "", false
+}
+
+func normalizeBoolValue(value any) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		return normalizeDirectiveBool(typed)
+	case float64:
+		switch typed {
+		case 0:
+			return false, true
+		case 1:
+			return true, true
+		}
+	}
+	return false, false
 }
 
 func normalizeTurnMode(raw string) string {

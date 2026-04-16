@@ -5,6 +5,7 @@ package turn
 import (
 	"strings"
 
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -25,13 +26,10 @@ func DefaultPolicy(req Request) Policy {
 		if text == "" || strings.HasPrefix(text, "/") {
 			return Policy{Reason: "empty_or_command"}
 		}
-		if looksBrokerageTurn(text) {
-			return Policy{Brokerage: true, Proposal: true, Render: true, Reason: "strategic_or_ambiguous"}
+		if pipeline.ParseExecutionContract(text) != nil {
+			return Policy{Brokerage: true, Proposal: true, Render: true, Reason: "user_execution_contract"}
 		}
-		if looksSimpleFactualTurn(text) {
-			return Policy{Render: true, Reason: "simple_interactive"}
-		}
-		return Policy{Proposal: true, Render: true, Reason: "interactive_default"}
+		return Policy{Proposal: true, Render: true, Reason: "interactive_conversational_default"}
 	case session.TurnRunKindHeartbeat:
 		return Policy{Reason: "heartbeat_default"}
 	case session.TurnRunKindCron:
@@ -41,47 +39,4 @@ func DefaultPolicy(req Request) Policy {
 	default:
 		return Policy{Reason: "noninteractive_default"}
 	}
-}
-
-func looksBrokerageTurn(text string) bool {
-	trimmed := strings.ToLower(strings.TrimSpace(text))
-	if trimmed == "" {
-		return false
-	}
-	for _, marker := range []string{
-		"brainstorm",
-		"feature",
-		"features",
-		"roadmap",
-		"direction",
-		"what should we build",
-		"what should i build",
-		"how should we proceed",
-		"help me think",
-		"thinking this through",
-		"inspect the repo",
-		"inspect the repository",
-		"look at the codebase",
-		"review the project",
-		"repository",
-		"codebase",
-	} {
-		if strings.Contains(trimmed, marker) {
-			return true
-		}
-	}
-	return strings.Contains(trimmed, "not sure") || strings.Contains(trimmed, "unclear") || strings.Contains(trimmed, "torn between")
-}
-
-func looksSimpleFactualTurn(text string) bool {
-	trimmed := strings.ToLower(strings.TrimSpace(text))
-	if trimmed == "" {
-		return true
-	}
-	for _, greeting := range []string{"hello", "hi", "hey", "good morning", "good evening"} {
-		if trimmed == greeting {
-			return false
-		}
-	}
-	return len(strings.Fields(trimmed)) <= 8 && len(trimmed) <= 64
 }
