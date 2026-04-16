@@ -62,7 +62,7 @@ func TestDecideInteractiveFacePolicy(t *testing.T) {
 	}
 }
 
-func TestShouldRenderIdolumReplyUsesRenderPolicy(t *testing.T) {
+func TestShouldRenderInteractiveIdolumReplyUsesRenderPolicy(t *testing.T) {
 	t.Parallel()
 
 	policy := FacePolicy{Render: true}
@@ -72,7 +72,7 @@ func TestShouldRenderIdolumReplyUsesRenderPolicy(t *testing.T) {
 			UserText:  "say hi",
 			FloorText: "(no response)",
 		}) {
-			t.Fatal("ShouldRenderIdolumReply() = true, want false for empty fallback without tool context")
+			t.Fatal("ShouldRenderInteractiveIdolumReply() = true, want false for empty fallback without tool context")
 		}
 	})
 	t.Run("tool log should render even when fallback empty", func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestShouldRenderIdolumReplyUsesRenderPolicy(t *testing.T) {
 			FloorText: "(no response)",
 			ToolLog:   []string{"bash ls"},
 		}) {
-			t.Fatal("ShouldRenderIdolumReply() = false, want true when tool log present")
+			t.Fatal("ShouldRenderInteractiveIdolumReply() = false, want true when tool log present")
 		}
 	})
 	t.Run("ordinary response text should render", func(t *testing.T) {
@@ -91,7 +91,7 @@ func TestShouldRenderIdolumReplyUsesRenderPolicy(t *testing.T) {
 			UserText:  "say hi",
 			FloorText: "floor text",
 		}) {
-			t.Fatal("ShouldRenderIdolumReply() = false, want true for ordinary policy+text")
+			t.Fatal("ShouldRenderInteractiveIdolumReply() = false, want true for ordinary policy+text")
 		}
 	})
 	t.Run("slash command should not render", func(t *testing.T) {
@@ -100,7 +100,7 @@ func TestShouldRenderIdolumReplyUsesRenderPolicy(t *testing.T) {
 			UserText:  "/help",
 			FloorText: "floor text",
 		}) {
-			t.Fatal("ShouldRenderIdolumReply() = true, want false for slash commands")
+			t.Fatal("ShouldRenderInteractiveIdolumReply() = true, want false for slash commands")
 		}
 	})
 	t.Run("generated tool messages should trigger render", func(t *testing.T) {
@@ -110,7 +110,7 @@ func TestShouldRenderIdolumReplyUsesRenderPolicy(t *testing.T) {
 			FloorText:         "(no response)",
 			GeneratedMessages: []agent.Message{{Role: "tool", Content: "done"}},
 		}) {
-			t.Fatal("ShouldRenderIdolumReply() = false, want true when generated tool messages are present")
+			t.Fatal("ShouldRenderInteractiveIdolumReply() = false, want true when generated tool messages are present")
 		}
 	})
 
@@ -118,15 +118,7 @@ func TestShouldRenderIdolumReplyUsesRenderPolicy(t *testing.T) {
 		UserText:  "say hi",
 		FloorText: "floor text",
 	}) {
-		t.Fatal("ShouldRenderIdolumReply() = true, want false")
-	}
-}
-
-func TestShouldRenderIdolumReplyCompatibilityWrapper(t *testing.T) {
-	t.Parallel()
-
-	if !ShouldRenderIdolumReply(FacePolicy{Render: true}, "hi", "floor text", nil, []agent.Message{}) {
-		t.Fatal("compatibility wrapper should forward to interactive policy")
+		t.Fatal("ShouldRenderInteractiveIdolumReply() = true, want false")
 	}
 }
 

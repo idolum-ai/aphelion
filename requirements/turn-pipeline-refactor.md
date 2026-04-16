@@ -106,8 +106,8 @@ phases with the following live changes:
 - `runtime`: began ownership handoff by delegating prepare/material/face-policy/awareness execution shaping to `pipeline` contracts.
 - `requirements`: encoded additional cautionary rules (species as explicit policy vocabulary, pipeline scope boundaries, and test-first commitment extraction).
 - `tests`: `go test ./...` remains green after this slice.
-- `pipeline`: moved face render decision from a passive wrapper into explicit behavior for `ShouldRenderIdolumReply` (command guard, empty-input guard, and no-response/tool-context handling), with tests.
-- `pipeline`: introduced `RenderDecisionInput` and `ShouldRenderInteractiveIdolumReply` to keep render-decision inputs explicit and avoid argument drift; retained `ShouldRenderIdolumReply` as compatibility delegation.
+- `pipeline`: moved face render decision from a passive wrapper into explicit behavior for interactive render policy (command guard, empty-input guard, and no-response/tool-context handling), with tests.
+- `pipeline`: introduced `RenderDecisionInput` and `ShouldRenderInteractiveIdolumReply` to keep render-decision inputs explicit and avoid argument drift.
 - `runtime`: removed passive face-policy helper implementations that duplicated pipeline logic.
 - `runtime`: removed the runtime `face_policy` facade entirely and inlined canonical pipeline calls (`DecideInteractiveFacePolicy`, `ShouldRenderInteractiveIdolumReply`, `ParseExecutionContract`) at call sites.
 - `runtime`: removed material shim layer (`runtime/material.go`) and moved equivalent coverage into `pipeline` tests (`pipeline/material_test.go`), leaving runtime with direct pipeline calls for floor/material conversion.
@@ -145,6 +145,9 @@ phases with the following live changes:
 - `turn`: extracted visible-reply constitution enforcement into a dedicated helper (`RunConstitutionStage`) with turn-level tests for validate/repair/revalidate semantics; runtime now supplies validator/repair adapters and audit recording callbacks instead of owning constitution loop branching inline.
 - `runtime`: tightened shared coordinator orchestration by extracting brokerage seeding (`seedTurnBrokerageFromFaceNote`) and governor prompt assembly (`buildCoordinatorGovernorPrompt`), reducing duplicated orchestration branches across interactive and durable coordinators while keeping runtime as adapter wiring.
 - `docs`: promoted architecture diagrams and as-built package/lifecycle docs into `docs/architecture/`, including canonical diagram set + archive, and retired `tmp-diagrams` as the active documentation location.
+- `runtime`: split coordinator adapters into focused files (`turn_coordinator_common.go`, `turn_coordinator_interactive.go`, `turn_coordinator_durable.go`) and renamed shared coordinator internals (`executeTurnCoordinator`, `buildTurnCoordinatorGovernorPrompt`, `turnCoordinator*`) for clearer adapter ownership boundaries.
+- `pipeline`/`face`: removed transitional fallback and render-policy compatibility wrappers (`face/fallback.go`, `ShouldRenderIdolumReply`) so canonical ownership remains explicit in `pipeline`.
+- `docs`: added coordinator boundary audit in `docs/architecture/coordinator-boundary-audit.md` and marked resolved wrapper decisions in `ARCHITECTURE_WAIVERS.md`.
 
 ## Target Package Ownership
 

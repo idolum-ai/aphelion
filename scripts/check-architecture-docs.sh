@@ -11,6 +11,7 @@ required_docs=(
   "docs/architecture/constitution-and-delivery.md"
   "docs/architecture/durable-children.md"
   "docs/architecture/state-surfaces.md"
+  "docs/architecture/coordinator-boundary-audit.md"
   "docs/architecture/migration-appendix.md"
   "docs/architecture/diagrams/README.md"
   "docs/architecture/diagrams/src/README.md"

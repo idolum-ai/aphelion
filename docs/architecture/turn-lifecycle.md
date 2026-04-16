@@ -15,7 +15,8 @@ Current interactive turn order:
 Code anchors:
 
 - [`runtime/turn.go`](../../runtime/turn.go)
-- [`runtime/turn_coordinator.go`](../../runtime/turn_coordinator.go)
+- [`runtime/turn_coordinator_common.go`](../../runtime/turn_coordinator_common.go)
+- [`runtime/turn_coordinator_interactive.go`](../../runtime/turn_coordinator_interactive.go)
 - [`turn/engine.go`](../../turn/engine.go)
 - [`turn/render_stage.go`](../../turn/render_stage.go)
 - [`turn/persist_stage.go`](../../turn/persist_stage.go)
@@ -39,7 +40,8 @@ child adapter context and policy hooks.
 Code anchors:
 
 - [`runtime/durable_group.go`](../../runtime/durable_group.go)
-- [`runtime/turn_coordinator.go`](../../runtime/turn_coordinator.go)
+- [`runtime/turn_coordinator_common.go`](../../runtime/turn_coordinator_common.go)
+- [`runtime/turn_coordinator_durable.go`](../../runtime/turn_coordinator_durable.go)
 
 Related requirements:
 
@@ -47,4 +49,3 @@ Related requirements:
 - [`requirements/heartbeat.md`](../../requirements/heartbeat.md)
 - [`requirements/cron.md`](../../requirements/cron.md)
 - [`requirements/durable-agents.md`](../../requirements/durable-agents.md)
-

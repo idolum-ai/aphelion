@@ -22,5 +22,6 @@ through `turn.Machine`, while conversational mechanics are delegated to
 
 - `runtime.go`: runtime construction, loops, and process wiring
 - `turn*.go`, `maintenance_turn.go`: adapters from runtime facts into `turn`
+- `turn_coordinator_common.go`, `turn_coordinator_interactive.go`, `turn_coordinator_durable.go`: shared and species-specific coordinator adapters
 - `durable_*.go`: durable-agent channel runtimes
 - `*_runtime_test.go`: runtime-domain integration suites (by concern)

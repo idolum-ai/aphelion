@@ -14,6 +14,7 @@ If these diverge, fix one of them in the same change.
 - [constitution-and-delivery.md](constitution-and-delivery.md): floor/scene and commit/delivery invariants.
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.
+- [coordinator-boundary-audit.md](coordinator-boundary-audit.md): adapter-boundary readout and wrapper decisions.
 - [migration-appendix.md](migration-appendix.md): refactor closeout and present-vs-intended reference.
 - [diagrams/README.md](diagrams/README.md): canonical and archived diagram assets.
 
@@ -34,4 +35,3 @@ or `durableagent`, update these docs in the same PR unless no architecture
 behavior changed.
 
 Use `make docs-architecture` to run architecture docs checks.
-

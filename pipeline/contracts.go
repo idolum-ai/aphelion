@@ -201,17 +201,6 @@ func ShouldRenderInteractiveIdolumReply(policy FacePolicy, input RenderDecisionI
 	return true
 }
 
-// ShouldRenderIdolumReply is a backward-compatible interactive wrapper kept for
-// existing callsites.
-func ShouldRenderIdolumReply(policy FacePolicy, userText string, floorText string, toolLog []string, generated []agent.Message) bool {
-	return ShouldRenderInteractiveIdolumReply(policy, RenderDecisionInput{
-		UserText:          userText,
-		FloorText:         floorText,
-		ToolLog:           toolLog,
-		GeneratedMessages: generated,
-	})
-}
-
 // ShouldUseMaterialFloorContract keeps material-floor contract usage explicit.
 func ShouldUseMaterialFloorContract(_ string, policy FacePolicy) bool {
 	return policy.Proposal
