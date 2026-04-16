@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+  </marker>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#000000" flood-opacity="0.13"/>
+  </filter>
+</defs>
+<rect width="1800" height="1100" fill="#f8fafc"/>
+<text x="900.0" y="58" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="36" font-weight="700" fill="#0f172a">Constitutional Flow</text>
+<text x="900.0" y="94" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="500" fill="#475569">Bounded initiative, explicit gates, and user approval at material thresholds.</text>
+<g filter="url(#shadow)"><rect x="770" y="150" width="260" height="70" rx="16" fill="#e0f2fe" stroke="#0284c7" stroke-width="3"/></g>
+<text x="900.0" y="185.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">Inbound turn</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="770" y="280" width="260" height="70" rx="16" fill="#fce7f3" stroke="#db2777" stroke-width="3"/></g>
+<text x="900.0" y="301.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">Idolum proposal /</tspan>
+<tspan x="900.0" dy="28">brokerage</tspan>
+</text>
+<g filter="url(#shadow)"><polygon points="900.0,430 1065,490.0 900.0,550 735,490.0" fill="#ede9fe" stroke="#7c3aed" stroke-width="3"/></g>
+<text x="900.0" y="476.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">Aphelion</tspan>
+<tspan x="900.0" dy="28">ratification</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="330" y="620" width="260" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="460.0" y="660.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="460.0" dy="0">operation state</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="640" y="620" width="260" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="770.0" y="660.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="770.0" dy="0">pending proposal</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="950" y="620" width="260" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1080.0" y="660.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1080.0" dy="0">decision broker</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="1260" y="620" width="260" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1390.0" y="646.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1390.0" dy="0">user approval /</tspan>
+<tspan x="1390.0" dy="28">denial</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="770" y="820" width="260" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="900.0" y="860.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">governor execution</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="770" y="960" width="260" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="900.0" y="1000.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">floor artifact</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="770" y="1060" width="260" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="900.0" y="1100.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">scene delivery</tspan>
+</text><line x1="900" y1="220" x2="900" y2="280" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="900" y1="350" x2="900" y2="430" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="735" y1="490" x2="460" y2="620" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="557.5" y="545.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="557.5" dy="0">material threshold</tspan>
+</text>
+<line x1="1065" y1="490" x2="900" y2="820" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="1047.5" y="645.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="1047.5" dy="0">between gates</tspan>
+</text>
+<line x1="590" y1="660" x2="640" y2="660" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="900" y1="660" x2="950" y2="660" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="1210" y1="660" x2="1260" y2="660" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="1390" y1="700" x2="900" y2="820" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="1110.0" y="750.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="1110.0" dy="0">approve</tspan>
+</text>
+<line x1="1390" y1="660" x2="900" y2="960" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" stroke-dasharray="10 8" />
+<text x="1175.0" y="800.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="1175.0" dy="0">deny</tspan>
+</text>
+<line x1="900" y1="900" x2="900" y2="960" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="900" y1="1040" x2="900" y2="1060" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" /><text x="900" y="101" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="500" fill="#64748b">
+<tspan x="900" dy="0">The system does not ask before every tool call; it asks when work crosses a materially consequential threshold.</tspan>
+</text>
+</svg>

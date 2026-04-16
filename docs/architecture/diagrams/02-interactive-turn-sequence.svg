@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+  </marker>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#000000" flood-opacity="0.13"/>
+  </filter>
+</defs>
+<rect width="1800" height="1100" fill="#f8fafc"/>
+<text x="900.0" y="58" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="36" font-weight="700" fill="#0f172a">Interactive Turn Sequence</text>
+<text x="900.0" y="94" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="500" fill="#475569">What a single visible reply actually passes through.</text>
+<g filter="url(#shadow)"><rect x="60" y="120" width="180" height="60" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="150.0" y="150.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="150.0" dy="0">User</tspan>
+</text>
+<line x1="150" y1="190" x2="150" y2="950" stroke="#cbd5e1" stroke-width="3" stroke-dasharray="8 8" />
+<g filter="url(#shadow)"><rect x="330" y="120" width="180" height="60" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="420.0" y="150.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="420.0" dy="0">Telegram</tspan>
+</text>
+<line x1="420" y1="190" x2="420" y2="950" stroke="#cbd5e1" stroke-width="3" stroke-dasharray="8 8" />
+<g filter="url(#shadow)"><rect x="600" y="120" width="180" height="60" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="690.0" y="150.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="690.0" dy="0">Runtime</tspan>
+</text>
+<line x1="690" y1="190" x2="690" y2="950" stroke="#cbd5e1" stroke-width="3" stroke-dasharray="8 8" />
+<g filter="url(#shadow)"><rect x="890" y="120" width="180" height="60" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="980.0" y="150.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="980.0" dy="0">Session</tspan>
+</text>
+<line x1="980" y1="190" x2="980" y2="950" stroke="#cbd5e1" stroke-width="3" stroke-dasharray="8 8" />
+<g filter="url(#shadow)"><rect x="1180" y="120" width="180" height="60" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1270.0" y="150.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1270.0" dy="0">Face</tspan>
+</text>
+<line x1="1270" y1="190" x2="1270" y2="950" stroke="#cbd5e1" stroke-width="3" stroke-dasharray="8 8" />
+<g filter="url(#shadow)"><rect x="1470" y="120" width="180" height="60" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1560.0" y="150.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1560.0" dy="0">Governor / Tools</tspan>
+</text>
+<line x1="1560" y1="190" x2="1560" y2="950" stroke="#cbd5e1" stroke-width="3" stroke-dasharray="8 8" />
+<line x1="150" y1="230" x2="420" y2="230" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="285.0" y="218.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="285.0" dy="0">DM / media / voice</tspan>
+</text>
+<line x1="420" y1="280" x2="690" y2="280" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="555.0" y="268.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="555.0" dy="0">InboundMessage</tspan>
+</text>
+<line x1="690" y1="330" x2="980" y2="330" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="835.0" y="318.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="835.0" dy="0">load + lock + scope</tspan>
+</text>
+<line x1="690" y1="380" x2="1270" y2="380" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="980.0" y="368.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="980.0" dy="0">proposal / brokerage note</tspan>
+</text>
+<line x1="1270" y1="430" x2="690" y2="430" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="980.0" y="418.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="980.0" dy="0">conversational pressure</tspan>
+</text>
+<line x1="690" y1="480" x2="1560" y2="480" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="1125.0" y="468.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="1125.0" dy="0">system prompt + history + advisory</tspan>
+</text>
+<line x1="1560" y1="560" x2="1560" y2="560" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" stroke-dasharray="10 8" />
+<text x="1560.0" y="548.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="1560.0" dy="0">tool calls as needed</tspan>
+</text>
+<line x1="1560" y1="640" x2="690" y2="640" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="1125.0" y="628.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="1125.0" dy="0">turn result</tspan>
+</text>
+<line x1="690" y1="720" x2="690" y2="720" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" stroke-dasharray="10 8" />
+<text x="690.0" y="708.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="690.0" dy="0">extract media + parse floor</tspan>
+</text>
+<line x1="690" y1="800" x2="1270" y2="800" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="980.0" y="788.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="980.0" dy="0">render visible scene</tspan>
+</text>
+<line x1="1270" y1="880" x2="690" y2="880" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="980.0" y="868.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="980.0" dy="0">scene text</tspan>
+</text>
+<line x1="690" y1="960" x2="980" y2="960" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="835.0" y="948.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="835.0" dy="0">persist scene + floor + sidecars</tspan>
+</text>
+<line x1="690" y1="1040" x2="420" y2="1040" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="555.0" y="1028.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="555.0" dy="0">deliver text / media / voice</tspan>
+</text>
+<line x1="420" y1="1080" x2="150" y2="1080" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<text x="285.0" y="1068.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#64748b">
+<tspan x="285.0" dy="0">visible reply</tspan>
+</text>
+<text x="900" y="1010" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="500" fill="#64748b">
+<tspan x="900" dy="0">One visible reply is downstream of scope, proposal, governor execution, floor parsing, and scene staging.</tspan>
+</text>
+</svg>

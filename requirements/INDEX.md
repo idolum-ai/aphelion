@@ -2,6 +2,8 @@
 
 Status: ⬜ = not started, 🟡 = in progress, ✅ = done
 
+As-built architecture docs: [`../docs/architecture/`](../docs/architecture/README.md)
+
 ## Foundation
 1. ✅ [`core.md`](core.md) — Event loop, message lifecycle, error handling, shutdown
 2. ✅ [`config.md`](config.md) — Config system, string anonymization, environment variables

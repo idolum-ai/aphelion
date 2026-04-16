@@ -3,7 +3,7 @@ BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP)
 CONFIG ?= $(HOME)/.aphelion/aphelion.toml
 
-.PHONY: build run test check-config init install-user-service restart-user-service logs-user-service update install-release update-release paths gc
+.PHONY: build run test check-config init install-user-service restart-user-service logs-user-service update install-release update-release paths gc docs-architecture
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -26,6 +26,9 @@ paths: build
 
 gc: build
 	./$(BIN) gc --config $(CONFIG)
+
+docs-architecture:
+	./scripts/check-architecture-docs.sh
 
 install-user-service: build
 	./scripts/install-user-service.sh

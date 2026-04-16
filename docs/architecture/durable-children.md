@@ -1,0 +1,32 @@
+# Durable Children
+
+![Durable topology](diagrams/04-durable-topology.svg)
+
+Durable children are bounded channel-specific organs, not alternate public
+personas.
+
+## Live Shape
+
+- Parent runtime owns durable-agent registry and wake loops.
+- Child execution stays scoped by charter and channel policy.
+- Upward communication is through bounded review artifacts and summaries.
+
+Code anchors:
+
+- [`durableagent/runtime.go`](../../durableagent/runtime.go)
+- [`runtime/durable_group.go`](../../runtime/durable_group.go)
+- [`runtime/durable_email.go`](../../runtime/durable_email.go)
+- [`runtime/durable_child.go`](../../runtime/durable_child.go)
+
+## Boundaries
+
+- Child credentials and local storage roots are child-scoped.
+- Child work does not directly mutate parent prompt/memory surfaces.
+- Durable child runtime reuses `turn` orchestration where lifecycle aligns.
+
+Related requirements:
+
+- [`requirements/durable-agents.md`](../../requirements/durable-agents.md)
+- [`requirements/security.md`](../../requirements/security.md)
+- [`requirements/operations.md`](../../requirements/operations.md)
+

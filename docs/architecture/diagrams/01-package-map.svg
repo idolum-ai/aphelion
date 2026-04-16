@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+  </marker>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#000000" flood-opacity="0.13"/>
+  </filter>
+</defs>
+<rect width="1800" height="1100" fill="#f8fafc"/>
+<text x="900.0" y="58" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="36" font-weight="700" fill="#0f172a">Aphelion Package Responsibility Map</text>
+<text x="900.0" y="94" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="500" fill="#475569">Who owns what, and where the northbound split is intended versus fully lived.</text>
+<g filter="url(#shadow)"><rect x="790" y="90" width="220" height="70" rx="16" fill="#e0f2fe" stroke="#0284c7" stroke-width="3"/></g>
+<text x="900.0" y="125.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">User / Operator</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="790" y="190" width="220" height="70" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="900.0" y="225.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">telegram</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="540" y="350" width="260" height="80" rx="16" fill="#1f2937" stroke="#111827" stroke-width="3"/></g>
+<text x="670.0" y="376.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#ffffff">
+<tspan x="670.0" dy="0">runtime</tspan>
+<tspan x="670.0" dy="28">process shell</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="860" y="350" width="260" height="80" rx="16" fill="#334155" stroke="#0f172a" stroke-width="3"/></g>
+<text x="990.0" y="376.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#ffffff">
+<tspan x="990.0" dy="0">turn</tspan>
+<tspan x="990.0" dy="28">turn state machine</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="1180" y="350" width="290" height="80" rx="16" fill="#334155" stroke="#0f172a" stroke-width="3"/></g>
+<text x="1325.0" y="376.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#ffffff">
+<tspan x="1325.0" dy="0">pipeline</tspan>
+<tspan x="1325.0" dy="28">governor/face mechanics</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="180" y="550" width="240" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="300.0" y="576.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="300.0" dy="0">session</tspan>
+<tspan x="300.0" dy="28">durable ledger</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="470" y="550" width="240" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="590.0" y="576.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="590.0" dy="0">decision</tspan>
+<tspan x="590.0" dy="28">pending approvals</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="760" y="550" width="240" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="880.0" y="576.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="880.0" dy="0">durableagent</tspan>
+<tspan x="880.0" dy="28">child organs</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="1050" y="550" width="240" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1170.0" y="590.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1170.0" dy="0">tool/*</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="1340" y="550" width="240" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1460.0" y="590.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1460.0" dy="0">prompt/*</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="1480" y="350" width="220" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1590.0" y="376.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1590.0" dy="0">face</tspan>
+<tspan x="1590.0" dy="28">impls</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="1180" y="730" width="260" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1310.0" y="756.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1310.0" dy="0">agent / governor</tspan>
+<tspan x="1310.0" dy="28">execution</tspan>
+</text><line x1="900" y1="160" x2="900" y2="190" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="900" y1="260" x2="670" y2="350" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="900" y1="260" x2="990" y2="350" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="800" y1="390" x2="860" y2="390" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="1120" y1="390" x2="1180" y2="390" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="660" y1="430" x2="300" y2="550" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="880" y1="430" x2="590" y2="550" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="930" y1="430" x2="880" y2="550" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="990" y1="430" x2="1170" y2="550" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="1325" y1="430" x2="1450" y2="430" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="1325" y1="430" x2="1380" y2="550" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="1325" y1="430" x2="1310" y2="730" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" /><text x="900" y="1000" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="500" fill="#64748b">
+<tspan x="900" dy="0">Live production weight still sits mostly in runtime; turn and pipeline are northbound extraction surfaces.</tspan>
+</text>
+</svg>

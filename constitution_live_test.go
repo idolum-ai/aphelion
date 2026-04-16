@@ -105,7 +105,7 @@ func TestLiveConstitution_MermaidCodebaseRequestProducesUnifiedPersonaDelivery(t
 		Text: strings.Join([]string{
 			"Please review this codebase and generate a couple of Mermaid-based architecture diagrams.",
 			"Render and attach the diagrams you make, narrate them as Idolum in one unified voice, and do not mention internal layers or handoff.",
-			"Write the generated PNG files under the repo-local tmp-diagrams/ directory, then attach them with MEDIA: absolute/path.png lines in the reply floor; do not use /tmp or OpenAI file uploads for the user-visible attachment step.",
+			"Write the generated PNG files under the repo-local docs/architecture/diagrams/generated/ directory, then attach them with MEDIA: absolute/path.png lines in the reply floor; do not use /tmp or OpenAI file uploads for the user-visible attachment step.",
 		}, " "),
 	}); err != nil {
 		t.Fatalf("HandleInbound() err = %v", err)

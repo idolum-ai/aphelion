@@ -144,6 +144,7 @@ phases with the following live changes:
 - `turn`: extracted brokerage convergence orchestration into a dedicated helper (`ConvergeBrokerage`) with turn-level tests for accept/adapt/fallback semantics; runtime brokerage now supplies ratify/revise/fallback callbacks and audit mapping instead of owning loop branching inline.
 - `turn`: extracted visible-reply constitution enforcement into a dedicated helper (`RunConstitutionStage`) with turn-level tests for validate/repair/revalidate semantics; runtime now supplies validator/repair adapters and audit recording callbacks instead of owning constitution loop branching inline.
 - `runtime`: tightened shared coordinator orchestration by extracting brokerage seeding (`seedTurnBrokerageFromFaceNote`) and governor prompt assembly (`buildCoordinatorGovernorPrompt`), reducing duplicated orchestration branches across interactive and durable coordinators while keeping runtime as adapter wiring.
+- `docs`: promoted architecture diagrams and as-built package/lifecycle docs into `docs/architecture/`, including canonical diagram set + archive, and retired `tmp-diagrams` as the active documentation location.
 
 ## Target Package Ownership
 

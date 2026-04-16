@@ -37,6 +37,7 @@ Telegram transport
 
 Details:
 
+- [docs/architecture/README.md](docs/architecture/README.md)
 - [runtime/README.md](runtime/README.md)
 - [turn/README.md](turn/README.md)
 - [pipeline/README.md](pipeline/README.md)

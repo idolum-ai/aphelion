@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+  </marker>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#000000" flood-opacity="0.13"/>
+  </filter>
+</defs>
+<rect width="1800" height="1100" fill="#f8fafc"/>
+<text x="900.0" y="58" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="36" font-weight="700" fill="#0f172a">Delivery Polymorphism</text>
+<text x="900.0" y="94" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="500" fill="#475569">Shared upstream logic, multiple outward surfaces.</text>
+<g filter="url(#shadow)"><rect x="760" y="120" width="280" height="80" rx="16" fill="#ede9fe" stroke="#7c3aed" stroke-width="3"/></g>
+<text x="900.0" y="160.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">Governor result</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="760" y="270" width="280" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="900.0" y="296.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">Outbound media</tspan>
+<tspan x="900.0" dy="28">extraction</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="760" y="420" width="280" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="900.0" y="460.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="900.0" dy="0">Floor parsing</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="460" y="610" width="280" height="80" rx="16" fill="#fce7f3" stroke="#db2777" stroke-width="3"/></g>
+<text x="600.0" y="650.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="600.0" dy="0">Idolum render</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="1060" y="610" width="280" height="80" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1200.0" y="650.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1200.0" dy="0">Floor fallback</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="760" y="800" width="280" height="80" rx="16" fill="#1f2937" stroke="#111827" stroke-width="3"/></g>
+<text x="900.0" y="840.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#ffffff">
+<tspan x="900.0" dy="0">Outbound sender</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="200" y="980" width="220" height="70" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="310.0" y="1015.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="310.0" dy="0">Telegram text</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="500" y="980" width="260" height="70" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="630.0" y="1001.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="630.0" dy="0">Telegram photo /</tspan>
+<tspan x="630.0" dy="28">document</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="860" y="980" width="220" height="70" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="970.0" y="1015.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="970.0" dy="0">Voice reply</tspan>
+</text>
+<g filter="url(#shadow)"><rect x="1180" y="980" width="260" height="70" rx="16" fill="#ffffff" stroke="#334155" stroke-width="3"/></g>
+<text x="1310.0" y="1015.0" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="22" font-weight="600" fill="#0f172a">
+<tspan x="1310.0" dy="0">Streaming edits</tspan>
+</text><line x1="900" y1="200" x2="900" y2="270" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="900" y1="350" x2="900" y2="420" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="820" y1="500" x2="600" y2="610" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="980" y1="500" x2="1200" y2="610" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="600" y1="690" x2="900" y2="800" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="1200" y1="690" x2="900" y2="800" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="820" y1="880" x2="310" y2="980" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="860" y1="880" x2="630" y2="980" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="940" y1="880" x2="970" y2="980" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" />
+<line x1="980" y1="880" x2="1310" y2="980" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)" /><text x="900" y="1040" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="500" fill="#64748b">
+<tspan x="900" dy="0">One constitutional spine fans outward into several delivery modes without changing the upstream turn logic.</tspan>
+</text>
+</svg>
