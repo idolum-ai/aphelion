@@ -1697,3 +1697,72 @@ func TestCompleteTurnRun(t *testing.T) {
 		t.Fatal("completed_at is zero, want populated timestamp")
 	}
 }
+
+func TestArtifactIndexRoundTripAndSearch(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 55, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.TurnCount = 1
+	sess.LastFloorMetadata = `{"artifacts":[{"artifact_id":"doc-1","kind":"document","source_type":"document","summary":"roadmap.txt","handling":"extract_text","retention":"child_local","fetch_state":"fetched_local","materialized_path":"/tmp/roadmap.txt"}]}`
+	if err := store.Save(sess, []Message{{Role: "assistant", Content: "ok", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	hits, err := store.SearchArtifacts("roadmap", 10, nil)
+	if err != nil {
+		t.Fatalf("SearchArtifacts() err = %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("artifact hits len = %d, want 1", len(hits))
+	}
+	if hits[0].ArtifactID != "doc-1" {
+		t.Fatalf("ArtifactID = %q, want doc-1", hits[0].ArtifactID)
+	}
+	if hits[0].Retention != "child_local" {
+		t.Fatalf("Retention = %q, want child_local", hits[0].Retention)
+	}
+	if hits[0].MaterializedPath != "/tmp/roadmap.txt" {
+		t.Fatalf("MaterializedPath = %q, want /tmp/roadmap.txt", hits[0].MaterializedPath)
+	}
+
+	scoped, err := store.SearchArtifacts("roadmap", 10, &key)
+	if err != nil {
+		t.Fatalf("SearchArtifacts(scoped) err = %v", err)
+	}
+	if len(scoped) != 1 || scoped[0].SessionID != SessionIDForKey(key) {
+		t.Fatalf("scoped hits = %#v, want one hit in session", scoped)
+	}
+}
+
+func TestArtifactIndexIgnoresEphemeralArtifacts(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 56, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.TurnCount = 1
+	sess.LastFloorMetadata = `{"artifacts":[{"artifact_id":"img-ephemeral","kind":"image","summary":"throwaway","retention":"ephemeral"}]}`
+	if err := store.Save(sess, []Message{{Role: "assistant", Content: "ok", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	hits, err := store.SearchArtifacts("throwaway", 10, nil)
+	if err != nil {
+		t.Fatalf("SearchArtifacts() err = %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("artifact hits len = %d, want 0", len(hits))
+	}
+}

@@ -303,6 +303,23 @@ type SearchHit struct {
 	CreatedAt    time.Time
 }
 
+type ArtifactRecord struct {
+	ArtifactID       string
+	SessionID        string
+	ChatID           int64
+	UserID           int64
+	TurnIndex        int
+	SourceType       string
+	Kind             string
+	Summary          string
+	Handling         string
+	Retention        string
+	FetchState       string
+	MaterializedPath string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 type RhizomeNode struct {
 	ID         int64
 	Scope      string

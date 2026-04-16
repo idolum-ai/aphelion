@@ -819,3 +819,60 @@ func TestPrepareInboundTurnExplicitLocalRetentionForcesFetchAndPersistence(t *te
 		t.Fatalf("inbound materialized files = %d, want 1", len(entries))
 	}
 }
+
+func TestHandleInboundIndexesRetainedArtifacts(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Indexed."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.inbound = &fakeInboundFetcher{data: map[string][]byte{
+		"telegram-file-keep": []byte("keep these notes"),
+	}}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1303,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  21,
+		Text:       "keep this locally",
+		Artifacts: []core.Artifact{{
+			ID:               "doc-keep",
+			Channel:          "telegram",
+			RemoteID:         "telegram-file-keep",
+			SourceType:       "document",
+			Kind:             "document",
+			Subtype:          "text",
+			MimeType:         "text/plain",
+			Filename:         "notes.txt",
+			DefaultRetention: "child_local",
+			Metadata: map[string]string{
+				"aphelion_retention_choice": "local",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	hits, err := store.SearchArtifacts("notes.txt", 10, nil)
+	if err != nil {
+		t.Fatalf("SearchArtifacts() err = %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("artifact hits len = %d, want 1", len(hits))
+	}
+	if hits[0].ArtifactID != "doc-keep" {
+		t.Fatalf("ArtifactID = %q, want doc-keep", hits[0].ArtifactID)
+	}
+	if hits[0].Retention != "child_local" {
+		t.Fatalf("Retention = %q, want child_local", hits[0].Retention)
+	}
+	if hits[0].FetchState != "fetched_local" {
+		t.Fatalf("FetchState = %q, want fetched_local", hits[0].FetchState)
+	}
+	if !strings.Contains(hits[0].MaterializedPath, "notes.txt") {
+		t.Fatalf("MaterializedPath = %q, want notes.txt suffix", hits[0].MaterializedPath)
+	}
+}
