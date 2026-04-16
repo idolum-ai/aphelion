@@ -43,6 +43,7 @@ type Media struct {
 type Artifact struct {
 	ID               string
 	Channel          string
+	RemoteID         string
 	SourceType       string
 	Kind             string
 	Subtype          string

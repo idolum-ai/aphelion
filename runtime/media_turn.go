@@ -29,6 +29,11 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 
 	for _, raw := range msg.Artifacts {
 		artifact := core.NormalizeArtifact(raw)
+		if hydrated, err := r.materializeInboundArtifact(ctx, artifact); err != nil {
+			return prepared, err
+		} else {
+			artifact = hydrated
+		}
 		if strings.TrimSpace(artifact.Scope) == "" {
 			artifact.Scope = scopeRootLabel(scope)
 		}
@@ -102,6 +107,52 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 	prepared.UserText = strings.TrimSpace(prepared.UserText)
 	prepared.LedgerText = summarizeInboundForLedger(prepared.LedgerText, msg.Artifacts)
 	return prepared, nil
+}
+
+func (r *Runtime) materializeInboundArtifact(ctx context.Context, artifact core.Artifact) (core.Artifact, error) {
+	artifact = core.NormalizeArtifact(artifact)
+	if len(artifact.Data) > 0 || strings.TrimSpace(artifact.Channel) != "telegram" || strings.TrimSpace(artifact.RemoteID) == "" {
+		return artifact, nil
+	}
+	if !r.shouldFetchInboundArtifactNow(artifact) {
+		return artifact, nil
+	}
+	if r == nil || r.inbound == nil {
+		return artifact, nil
+	}
+	maxBytes, err := config.ParseByteSize(r.cfg.Telegram.Media.DownloadMaxSize)
+	if err != nil {
+		return artifact, err
+	}
+	data, err := r.inbound.DownloadFileChecked(ctx, artifact.RemoteID, maxBytes)
+	if err != nil {
+		return artifact, fmt.Errorf("download telegram artifact %s: %w", artifact.RemoteID, err)
+	}
+	artifact.Data = data
+	if artifact.SizeBytes == 0 {
+		artifact.SizeBytes = int64(len(data))
+	}
+	return core.NormalizeArtifact(artifact), nil
+}
+
+func (r *Runtime) shouldFetchInboundArtifactNow(artifact core.Artifact) bool {
+	artifact = core.NormalizeArtifact(artifact)
+	switch {
+	case artifact.Kind == "audio":
+		return true
+	case artifact.Kind == "image" && artifact.SourceType == "photo":
+		return r != nil && r.cfg.Telegram.Media.AutoVisionPhotos
+	case artifact.Kind == "image" && artifact.SourceType == "document":
+		return r != nil && r.cfg.Telegram.Media.AutoVisionDocs
+	case artifact.Kind == "sticker" && artifact.Subtype == "static_sticker":
+		return true
+	case artifact.Kind == "document" && artifact.Subtype == "pdf":
+		return r != nil && r.cfg.Telegram.Media.ExtractPDFText
+	case artifact.Kind == "document" && artifact.Subtype == "text":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Runtime) executionForTurn(prepared pipeline.TurnPrepareContract) pipeline.TurnExecutionContract {

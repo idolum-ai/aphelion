@@ -487,3 +487,83 @@ func TestPrepareInboundTurnPDFExtractionFailureFallsBackToPlaceholder(t *testing
 		t.Fatalf("ledger text = %q, want pdf attached marker", prepared.LedgerText)
 	}
 }
+
+func TestPrepareInboundTurnHydratesTelegramArtifactsAtRuntime(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "spoken transcript"}, fakeSynth{})
+	fetcher := &fakeInboundFetcher{data: map[string][]byte{
+		"photo-file": []byte("image-bytes"),
+		"voice-file": []byte("voice-bytes"),
+	}}
+	rt.inbound = fetcher
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    1400,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{
+			{ID: "img-remote", Channel: "telegram", RemoteID: "photo-file", SourceType: "photo", Kind: "image", MimeType: "image/png", Filename: "screen.png"},
+			{ID: "voice-remote", Channel: "telegram", RemoteID: "voice-file", SourceType: "voice", Kind: "audio", Subtype: "voice_note", MimeType: "audio/ogg", Filename: "voice.ogg"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	if len(fetcher.requests) != 2 {
+		t.Fatalf("fetch requests = %#v, want two runtime downloads", fetcher.requests)
+	}
+	if len(prepared.AgentMedia) != 1 || string(prepared.AgentMedia[0].Data) != "image-bytes" {
+		t.Fatalf("agent media = %#v, want hydrated image bytes", prepared.AgentMedia)
+	}
+	if !strings.Contains(prepared.UserText, "spoken transcript") {
+		t.Fatalf("user text = %q, want hydrated voice transcript", prepared.UserText)
+	}
+}
+
+func TestPrepareInboundTurnLeavesMetadataOnlyArtifactsUnfetched(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	fetcher := &fakeInboundFetcher{data: map[string][]byte{
+		"video-file": []byte("video-bytes"),
+	}}
+	rt.inbound = fetcher
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    1401,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{{
+			ID:         "video-remote",
+			Channel:    "telegram",
+			RemoteID:   "video-file",
+			SourceType: "video",
+			Kind:       "video",
+			MimeType:   "video/mp4",
+			Filename:   "clip.mp4",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	if len(fetcher.requests) != 0 {
+		t.Fatalf("fetch requests = %#v, want none for metadata-only artifact", fetcher.requests)
+	}
+	if !strings.Contains(prepared.UserText, "clip.mp4") {
+		t.Fatalf("user text = %q, want metadata note", prepared.UserText)
+	}
+}

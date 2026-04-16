@@ -4,11 +4,9 @@ package telegram
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 
-	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 )
 
@@ -27,98 +25,65 @@ func hasNormalizableArtifacts(msg *Message) bool {
 		msg.Poll != nil)
 }
 
-func (p *Poller) normalizeArtifacts(ctx context.Context, msg *Message) ([]core.Artifact, error) {
+func (p *Poller) normalizeArtifacts(_ context.Context, msg *Message) ([]core.Artifact, error) {
 	if msg == nil {
 		return nil, nil
 	}
-	maxBytes, _ := config.ParseByteSize(p.media.DownloadMaxSize)
 	artifacts := make([]core.Artifact, 0, 8)
 
 	if voice := msg.Voice; voice != nil {
-		data, size, err := p.downloadArtifactData(ctx, voice.FileID, maxBytes)
-		if err != nil {
-			return nil, fmt.Errorf("download telegram voice %s: %w", voice.FileID, err)
-		}
-		artifact := core.Artifact{
+		artifacts = append(artifacts, core.NormalizeArtifact(core.Artifact{
 			ID:         "telegram:voice:" + voice.FileID,
 			Channel:    "telegram",
+			RemoteID:   strings.TrimSpace(voice.FileID),
 			SourceType: "voice",
 			Kind:       "audio",
 			Subtype:    "voice_note",
-			Data:       data,
 			MimeType:   strings.TrimSpace(voice.MimeType),
 			Filename:   "voice.ogg",
-			SizeBytes:  firstPositive(size, voice.FileSize),
+			SizeBytes:  voice.FileSize,
 			Caption:    strings.TrimSpace(msg.Caption),
-		}
-		if len(data) == 0 {
-			artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
-		}
-		artifacts = append(artifacts, core.NormalizeArtifact(artifact))
+		}))
 	}
 
 	if audio := msg.Audio; audio != nil {
-		data, size, err := p.downloadArtifactData(ctx, audio.FileID, maxBytes)
-		if err != nil {
-			return nil, fmt.Errorf("download telegram audio %s: %w", audio.FileID, err)
-		}
-		artifact := core.Artifact{
+		artifacts = append(artifacts, core.NormalizeArtifact(core.Artifact{
 			ID:         "telegram:audio:" + audio.FileID,
 			Channel:    "telegram",
+			RemoteID:   strings.TrimSpace(audio.FileID),
 			SourceType: "audio",
 			Kind:       "audio",
-			Data:       data,
 			MimeType:   strings.TrimSpace(audio.MimeType),
 			Filename:   strings.TrimSpace(audio.FileName),
-			SizeBytes:  firstPositive(size, audio.FileSize),
+			SizeBytes:  audio.FileSize,
 			Caption:    strings.TrimSpace(msg.Caption),
-		}
-		if len(data) == 0 {
-			artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
-		}
-		artifacts = append(artifacts, core.NormalizeArtifact(artifact))
+		}))
 	}
 
 	if len(msg.Photo) > 0 {
 		largest := msg.Photo[len(msg.Photo)-1]
-		artifact := core.Artifact{
+		artifacts = append(artifacts, core.NormalizeArtifact(core.Artifact{
 			ID:         "telegram:photo:" + largest.FileID,
 			Channel:    "telegram",
+			RemoteID:   strings.TrimSpace(largest.FileID),
 			SourceType: "photo",
 			Kind:       "image",
 			MimeType:   "image/jpeg",
 			Filename:   "photo.jpg",
 			SizeBytes:  largest.FileSize,
 			Caption:    strings.TrimSpace(msg.Caption),
-		}
-		if p.media.AutoVisionPhotos {
-			data, size, err := p.downloadArtifactData(ctx, largest.FileID, maxBytes)
-			if err != nil {
-				return nil, fmt.Errorf("download telegram photo %s: %w", largest.FileID, err)
-			}
-			artifact.Data = data
-			artifact.SizeBytes = firstPositive(size, largest.FileSize)
-			if len(data) == 0 {
-				artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
-			}
-		} else {
-			artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
-		}
-		artifacts = append(artifacts, core.NormalizeArtifact(artifact))
+		}))
 	}
 
 	if doc := msg.Document; doc != nil {
-		artifact, err := p.normalizeDocumentArtifact(ctx, msg, doc, maxBytes)
-		if err != nil {
-			return nil, err
-		}
-		artifacts = append(artifacts, artifact)
+		artifacts = append(artifacts, p.normalizeDocumentArtifact(msg, doc))
 	}
 
 	if video := msg.Video; video != nil {
 		artifacts = append(artifacts, core.NormalizeArtifact(core.Artifact{
 			ID:         "telegram:video:" + video.FileID,
 			Channel:    "telegram",
+			RemoteID:   strings.TrimSpace(video.FileID),
 			SourceType: "video",
 			Kind:       "video",
 			MimeType:   strings.TrimSpace(video.MimeType),
@@ -138,6 +103,7 @@ func (p *Poller) normalizeArtifacts(ctx context.Context, msg *Message) ([]core.A
 		artifacts = append(artifacts, core.NormalizeArtifact(core.Artifact{
 			ID:         "telegram:video_note:" + note.FileID,
 			Channel:    "telegram",
+			RemoteID:   strings.TrimSpace(note.FileID),
 			SourceType: "video_note",
 			Kind:       "video",
 			Subtype:    "video_note",
@@ -154,6 +120,7 @@ func (p *Poller) normalizeArtifacts(ctx context.Context, msg *Message) ([]core.A
 		artifacts = append(artifacts, core.NormalizeArtifact(core.Artifact{
 			ID:         "telegram:animation:" + animation.FileID,
 			Channel:    "telegram",
+			RemoteID:   strings.TrimSpace(animation.FileID),
 			SourceType: "animation",
 			Kind:       "video",
 			Subtype:    "animation",
@@ -174,6 +141,7 @@ func (p *Poller) normalizeArtifacts(ctx context.Context, msg *Message) ([]core.A
 		artifact := core.Artifact{
 			ID:         "telegram:sticker:" + sticker.FileID,
 			Channel:    "telegram",
+			RemoteID:   strings.TrimSpace(sticker.FileID),
 			SourceType: "sticker",
 			Kind:       "sticker",
 			MimeType:   strings.TrimSpace(sticker.MimeType),
@@ -188,17 +156,7 @@ func (p *Poller) normalizeArtifacts(ctx context.Context, msg *Message) ([]core.A
 				"height":                strconv.Itoa(sticker.Height),
 			},
 		}
-		if !sticker.IsAnimated && !sticker.IsVideo {
-			data, size, err := p.downloadArtifactData(ctx, sticker.FileID, maxBytes)
-			if err != nil {
-				return nil, fmt.Errorf("download telegram sticker %s: %w", sticker.FileID, err)
-			}
-			artifact.Data = data
-			artifact.SizeBytes = firstPositive(size, sticker.FileSize)
-			if len(data) == 0 {
-				artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
-			}
-		} else {
+		if sticker.IsAnimated || sticker.IsVideo {
 			artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
 		}
 		artifacts = append(artifacts, core.NormalizeArtifact(artifact))
@@ -276,72 +234,19 @@ func (p *Poller) normalizeArtifacts(ctx context.Context, msg *Message) ([]core.A
 	return artifacts, nil
 }
 
-func (p *Poller) normalizeDocumentArtifact(ctx context.Context, msg *Message, doc *Document, maxBytes int64) (core.Artifact, error) {
+func (p *Poller) normalizeDocumentArtifact(msg *Message, doc *Document) core.Artifact {
 	filename := strings.TrimSpace(doc.FileName)
 	artifact := core.Artifact{
 		ID:         "telegram:document:" + doc.FileID,
 		Channel:    "telegram",
+		RemoteID:   strings.TrimSpace(doc.FileID),
 		SourceType: "document",
 		MimeType:   strings.TrimSpace(doc.MimeType),
 		Filename:   filename,
 		SizeBytes:  doc.FileSize,
 		Caption:    strings.TrimSpace(msg.Caption),
 	}
-	artifact = core.NormalizeArtifact(artifact)
-
-	shouldDownload := false
-	switch {
-	case artifact.Kind == "image":
-		shouldDownload = p.media.AutoVisionDocs
-		if !shouldDownload {
-			artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
-		}
-	case artifact.Kind == "document" && artifact.Subtype == "pdf":
-		shouldDownload = p.media.ExtractPDFText
-		if !shouldDownload {
-			artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
-		}
-	case artifact.Kind == "document" && artifact.Subtype == "text":
-		shouldDownload = true
-	default:
-		artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
-	}
-
-	if shouldDownload {
-		data, size, err := p.downloadArtifactData(ctx, doc.FileID, maxBytes)
-		if err != nil {
-			return core.Artifact{}, fmt.Errorf("download telegram document %s: %w", doc.FileID, err)
-		}
-		artifact.Data = data
-		artifact.SizeBytes = firstPositive(size, doc.FileSize)
-		if len(data) == 0 {
-			artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
-		}
-	}
-
-	return core.NormalizeArtifact(artifact), nil
-}
-
-func (p *Poller) downloadArtifactData(ctx context.Context, fileID string, maxBytes int64) ([]byte, int64, error) {
-	if p == nil || p.client == nil || strings.TrimSpace(fileID) == "" {
-		return nil, 0, nil
-	}
-	info, err := p.client.GetFileInfo(ctx, fileID)
-	if err != nil {
-		return nil, 0, err
-	}
-	if maxBytes > 0 && info.Size > 0 && info.Size > maxBytes {
-		return nil, info.Size, nil
-	}
-	data, err := p.client.DownloadFileChecked(ctx, fileID, maxBytes)
-	if err != nil {
-		return nil, info.Size, err
-	}
-	size := info.Size
-	if size == 0 {
-		size = int64(len(data))
-	}
-	return data, size, nil
+	return core.NormalizeArtifact(artifact)
 }
 
 func firstPositive(values ...int64) int64 {

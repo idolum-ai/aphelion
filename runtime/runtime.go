@@ -38,6 +38,10 @@ type chatActionSender interface {
 	SendChatAction(ctx context.Context, chatID int64, action string) error
 }
 
+type inboundArtifactFetcher interface {
+	DownloadFileChecked(ctx context.Context, fileID string, maxBytes int64) ([]byte, error)
+}
+
 type Runtime struct {
 	cfg      *config.Config
 	store    *session.SQLiteStore
@@ -46,6 +50,7 @@ type Runtime struct {
 	tools    agent.ToolRegistry
 	outbound OutboundSender
 	resolver *principal.Resolver
+	inbound  inboundArtifactFetcher
 
 	faceBackend face.Backend
 	faceModel   face.Renderer
@@ -266,6 +271,11 @@ func New(
 		faceModels[recipeState.PersonaModel] = faceModel
 	}
 
+	var inbound inboundArtifactFetcher
+	if fetcher, ok := outbound.(inboundArtifactFetcher); ok {
+		inbound = fetcher
+	}
+
 	return &Runtime{
 		cfg:      cfg,
 		store:    store,
@@ -273,6 +283,7 @@ func New(
 		native:   provider,
 		tools:    tools,
 		outbound: outbound,
+		inbound:  inbound,
 		resolver: principal.NewResolver(
 			cfg.Principals.Telegram.AdminUserIDs,
 			cfg.Principals.Telegram.ApprovedUserIDs,

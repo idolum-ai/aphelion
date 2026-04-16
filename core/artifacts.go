@@ -22,6 +22,7 @@ func (a Artifact) HasCapability(name string) bool {
 
 func NormalizeArtifact(a Artifact) Artifact {
 	a.Channel = strings.TrimSpace(strings.ToLower(a.Channel))
+	a.RemoteID = strings.TrimSpace(a.RemoteID)
 	a.SourceType = strings.TrimSpace(strings.ToLower(a.SourceType))
 	a.Kind = strings.TrimSpace(strings.ToLower(a.Kind))
 	a.Subtype = strings.TrimSpace(strings.ToLower(a.Subtype))

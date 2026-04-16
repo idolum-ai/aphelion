@@ -1360,3 +1360,30 @@ func TestPollerRoutesAdmittedDurableGroupMentions(t *testing.T) {
 		t.Fatalf("chat title = %q, want family", handled[0].ChatTitle)
 	}
 }
+
+func TestNormalizeArtifactsEmitsMetadataOnlyRemoteDescriptors(t *testing.T) {
+	p := &Poller{}
+	artifacts, err := p.normalizeArtifacts(context.Background(), &Message{
+		Caption:  "look at this",
+		Photo:    []PhotoSize{{FileID: "p1", FileSize: 123}, {FileID: "p2", FileSize: 456}},
+		Voice:    &Voice{FileID: "voice-file", MimeType: "audio/ogg", FileSize: 11},
+		Document: &Document{FileID: "doc1", FileName: "notes.pdf", MimeType: "application/pdf", FileSize: 99},
+	})
+	if err != nil {
+		t.Fatalf("normalizeArtifacts() err = %v", err)
+	}
+	if len(artifacts) != 3 {
+		t.Fatalf("artifacts len = %d, want 3", len(artifacts))
+	}
+	for _, artifact := range artifacts {
+		if len(artifact.Data) != 0 {
+			t.Fatalf("artifact %s has eager data bytes, want metadata-only descriptor", artifact.ID)
+		}
+		if artifact.RemoteID == "" && artifact.Kind != "structured" {
+			t.Fatalf("artifact %#v missing remote id", artifact)
+		}
+	}
+	if artifacts[0].RemoteID != "voice-file" {
+		t.Fatalf("voice remote id = %q, want voice-file", artifacts[0].RemoteID)
+	}
+}

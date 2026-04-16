@@ -236,6 +236,31 @@ type fakeSender struct {
 	actionCh     chan chatAction
 }
 
+type fakeInboundFetcher struct {
+	mu        sync.Mutex
+	data      map[string][]byte
+	err       error
+	requests  []string
+	maxByFile map[string]int64
+}
+
+func (f *fakeInboundFetcher) DownloadFileChecked(_ context.Context, fileID string, maxBytes int64) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, fileID)
+	if f.maxByFile == nil {
+		f.maxByFile = map[string]int64{}
+	}
+	f.maxByFile[fileID] = maxBytes
+	if f.err != nil {
+		return nil, f.err
+	}
+	if data, ok := f.data[fileID]; ok {
+		return append([]byte(nil), data...), nil
+	}
+	return nil, nil
+}
+
 type inlineDurableGroupChildExecutor struct {
 	run func(context.Context, core.InboundMessage) (*DurableGroupChildResult, error)
 }
@@ -552,6 +577,15 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 	dbPath := filepath.Join(root, "sessions.db")
 
 	cfg := &config.Config{
+		Telegram: config.TelegramConfig{
+			Media: config.TelegramMediaConfig{
+				DownloadMaxSize:  "20MB",
+				AutoVisionPhotos: true,
+				AutoVisionDocs:   true,
+				ExtractPDFText:   true,
+				MaxPDFBytes:      "8MB",
+			},
+		},
 		Principals: config.PrincipalsConfig{
 			Telegram: config.TelegramPrincipalsConfig{
 				AdminUserIDs:    []int64{1001},
