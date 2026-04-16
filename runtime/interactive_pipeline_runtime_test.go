@@ -590,3 +590,49 @@ func TestHandleInboundFloorFallbackBackendSerializesStructuredFloor(t *testing.T
 		t.Fatalf("visible transcript assistant content = %q, want serialized floor fallback", sess.Messages[1].Content)
 	}
 }
+
+func TestHandleInboundSurfacesPriorRetainedArtifactsAsHiddenInput(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = strings.TrimSpace(`FACTS:
+- I can still see the retained artifact context.
+SCENE_CONSTRAINTS:
+- Keep the reply simple.`)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	artifactMeta := `{"artifacts":[{"artifact_id":"doc-1","summary":"notes.txt","retention":"child_local","materialized_path":"/tmp/notes.txt"}]}`
+	seed := &session.Session{
+		ChatID:            1001,
+		UserID:            0,
+		LastFloorMetadata: artifactMeta,
+		Messages:          []session.Message{{Role: "assistant", Content: "prior reply", FloorMetadata: artifactMeta, TurnIndex: 1}},
+		TurnCount:         1,
+	}
+	if err := store.Save(seed, nil, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(seed) err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1001,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  2,
+		Text:       "what do we still have from before?",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	reloaded, err := store.Load(session.SessionKey{ChatID: 1001, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if !strings.Contains(reloaded.LastFloorMetadata, "retained_artifact_context") {
+		t.Fatalf("LastFloorMetadata = %q, want retained artifact hidden input", reloaded.LastFloorMetadata)
+	}
+	if !strings.Contains(reloaded.LastFloorMetadata, "notes.txt") {
+		t.Fatalf("LastFloorMetadata = %q, want retained artifact summary", reloaded.LastFloorMetadata)
+	}
+}

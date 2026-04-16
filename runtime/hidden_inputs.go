@@ -24,6 +24,7 @@ const (
 	hiddenInputSemanticRecurrence = "semantic_recurrence"
 	hiddenInputUnresolvedMemory   = "unresolved_memory_state"
 	hiddenInputTemporalPressure   = "temporal_pressure"
+	hiddenInputRetainedArtifacts  = "retained_artifact_context"
 )
 
 type hiddenInput struct {
@@ -140,21 +141,58 @@ func (s hiddenInputSet) toTurnAwareness() turn.HiddenInputAwareness {
 	}
 }
 
-func (r *Runtime) assembleInteractiveHiddenInputs(ctx context.Context, scope sandbox.Scope, now time.Time, userText string) hiddenInputSet {
+func (r *Runtime) assembleInteractiveHiddenInputs(ctx context.Context, scope sandbox.Scope, now time.Time, userText string, priorFloorMetadata string) hiddenInputSet {
 	root := dynamicPromptRoot(scope)
 	query := strings.TrimSpace(userText)
-	if query == "" {
-		return hiddenInputSet{}
-	}
-
 	inputs := hiddenInputSet{}
-	if summary := r.detectSemanticRecurrence(ctx, root, semanticScopeForPrincipal(scope.Principal), query, memstore.SemanticModeInteractive, now); summary != "" {
-		inputs.add(hiddenInputSemanticRecurrence, summary)
+	if query != "" {
+		if summary := r.detectSemanticRecurrence(ctx, root, semanticScopeForPrincipal(scope.Principal), query, memstore.SemanticModeInteractive, now); summary != "" {
+			inputs.add(hiddenInputSemanticRecurrence, summary)
+		}
+		if summary := detectOverlappingQuestions(root, query); summary != "" {
+			inputs.add(hiddenInputUnresolvedMemory, summary)
+		}
 	}
-	if summary := detectOverlappingQuestions(root, query); summary != "" {
-		inputs.add(hiddenInputUnresolvedMemory, summary)
+	if summary := detectRetainedArtifactContext(priorFloorMetadata); summary != "" {
+		inputs.add(hiddenInputRetainedArtifacts, summary)
 	}
 	return inputs
+}
+
+func detectRetainedArtifactContext(priorFloorMetadata string) string {
+	metadata := strings.TrimSpace(priorFloorMetadata)
+	if metadata == "" {
+		return ""
+	}
+	var floor core.FloorMetadata
+	if err := json.Unmarshal([]byte(metadata), &floor); err != nil {
+		return ""
+	}
+	items := make([]string, 0, 3)
+	for _, ref := range floor.Artifacts {
+		retention := strings.TrimSpace(ref.Retention)
+		if retention != "session_reference" && retention != "child_local" {
+			continue
+		}
+		label := strings.TrimSpace(ref.Summary)
+		if label == "" {
+			label = strings.TrimSpace(ref.ArtifactID)
+		}
+		if label == "" {
+			continue
+		}
+		if strings.TrimSpace(ref.MaterializedPath) != "" {
+			label += " at " + strings.TrimSpace(ref.MaterializedPath)
+		}
+		items = append(items, label)
+		if len(items) == 3 {
+			break
+		}
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	return "retained artifacts from the prior turn remain available: " + strings.Join(items, "; ")
 }
 
 func (r *Runtime) assembleHeartbeatHiddenInputs(ctx context.Context, scope sandbox.Scope, now time.Time, activeWindow bool, events []session.ReviewEvent) hiddenInputSet {

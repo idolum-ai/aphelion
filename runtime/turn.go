@@ -61,7 +61,7 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	if err != nil {
 		return nil, fmt.Errorf("load workspace prompt context: %w", err)
 	}
-	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText)
+	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText, sess.LastFloorMetadata)
 	hiddenInputs.addCoreAll(prepared.ArtifactDecisionInputs)
 	baseGovernorAwareness := turn.ApplyOperationAwareness(
 		turn.ApplyPlanAwareness(
