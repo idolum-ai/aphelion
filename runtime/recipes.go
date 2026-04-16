@@ -17,6 +17,7 @@ const (
 	personaModelSonnet   = "claude-sonnet-4-6"
 	personaModelOpus46   = "claude-opus-4-6"
 	personaModelOpus47   = "claude-opus-4-7"
+	personaModelOpus     = personaModelOpus47
 	personaEffortSonnet  = "sonnet"
 	personaEffortOpus    = "opus"
 	governorEffortLow    = "low"
@@ -59,7 +60,7 @@ func defaultRuntimeRecipeState(cfg *config.Config) runtimeRecipeState {
 	}
 	if strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.Anthropic.Model)), "opus") ||
 		strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.OpenRouter.Model)), "opus") {
-		state.PersonaModel = personaModelOpus46
+		state.PersonaModel = personaModelOpus
 	}
 
 	defaultEffort := normalizeGovernorEffort(cfg.Thinking.Defaults.Default)
@@ -174,7 +175,7 @@ func (r *Runtime) TogglePersonaEffort() (string, error) {
 	if currentModel == "" {
 		currentModel = personaModelForEffort(r.recipeState.PersonaEffort)
 	}
-	nextModel := personaModelOpus46
+	nextModel := personaModelOpus
 	if currentModel == personaModelOpus46 || currentModel == personaModelOpus47 {
 		nextModel = personaModelSonnet
 	}
@@ -294,7 +295,7 @@ func normalizePersonaModel(model string) string {
 func personaModelForEffort(effort string) string {
 	switch strings.ToLower(strings.TrimSpace(effort)) {
 	case personaEffortOpus:
-		return personaModelOpus46
+		return personaModelOpus
 	case personaEffortSonnet:
 		return personaModelSonnet
 	default:
