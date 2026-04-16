@@ -183,74 +183,73 @@ func (r *Runtime) convergeTurnBrokerage(
 	requestFaceNote brokerageFaceRequester,
 	audit *turnAuditRecorder,
 ) (turnBrokerage, core.TokenUsage) {
-	if strings.TrimSpace(brokerage.IdolumNote) == "" || brokerage.Phase != "brokerage" {
-		return brokerage, core.TokenUsage{}
-	}
-
-	totalUsage := core.TokenUsage{}
-	for round := 1; round <= maxBrokerageRounds; round++ {
-		updated, usage, ratifyErr := r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, userText, brokerage)
-		totalUsage = addTokenUsage(totalUsage, usage)
-		roundAudit := BrokerageRoundAudit{
-			Round:      round,
-			Phase:      brokerage.Phase,
-			IdolumNote: strings.TrimSpace(brokerage.IdolumNote),
-			SuggestedExecutionContract: turn.ApplyBrokerageAwareness(prompt.RuntimeAwareness{}, brokerage.toTurnAwareness()).
-				SuggestedExecutionContract,
-		}
-		if ratifyErr != nil {
-			roundAudit.Error = ratifyErr.Error()
-			if audit != nil {
+	return turn.ConvergeBrokerage(ctx, turn.BrokerageConvergeInput[turnBrokerage]{
+		Initial:   brokerage,
+		MaxRounds: maxBrokerageRounds,
+		Note: func(state turnBrokerage) string {
+			return strings.TrimSpace(state.IdolumNote)
+		},
+		Phase: func(state turnBrokerage) string {
+			return strings.TrimSpace(state.Phase)
+		},
+		Ratification: func(state turnBrokerage) string {
+			return strings.TrimSpace(state.Ratification)
+		},
+		Ratify: func(ctx context.Context, _ int, state turnBrokerage) (turnBrokerage, core.TokenUsage, error) {
+			return r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, userText, state)
+		},
+		Revise: func(_ context.Context, _ int, state turnBrokerage) (turnBrokerage, core.TokenUsage, error) {
+			reviseAwareness := turn.ApplyBrokerageAwareness(baseAwareness, state.toTurnAwareness())
+			reviseAwareness.ArtifactMode = "scene"
+			revised, proposalUsage, proposalErr := requestFaceNote("brokerage", reviseAwareness, state.IdolumNote, state.RatificationRecord)
+			if proposalErr != nil {
+				return state, proposalUsage, proposalErr
+			}
+			if strings.TrimSpace(revised) == "" {
+				return state, proposalUsage, fmt.Errorf("empty brokerage revision")
+			}
+			state.IdolumNote = strings.TrimSpace(revised)
+			state.SuggestedExecutionContract = pipeline.ParseExecutionContract(revised)
+			state.Ratification = ""
+			state.SignalJudgment = ""
+			state.RatificationRecord = ""
+			state.RatifiedSteps = nil
+			state.RatifiedExecutionContract = nil
+			return state, proposalUsage, nil
+		},
+		Fallback: func(ctx context.Context, state turnBrokerage) (turnBrokerage, core.TokenUsage) {
+			fallback, fallbackUsage := r.fallbackToPlainProposal(ctx, baseAwareness, state, requestFaceNote, core.TokenUsage{})
+			return fallback, fallbackUsage
+		},
+		OnRound: func(round int, before turnBrokerage, after turnBrokerage, err error) {
+			if audit == nil {
+				return
+			}
+			roundAudit := BrokerageRoundAudit{
+				Round:      round,
+				Phase:      before.Phase,
+				IdolumNote: strings.TrimSpace(before.IdolumNote),
+				SuggestedExecutionContract: turn.ApplyBrokerageAwareness(prompt.RuntimeAwareness{}, before.toTurnAwareness()).
+					SuggestedExecutionContract,
+			}
+			if err != nil {
+				roundAudit.Error = err.Error()
 				audit.RecordBrokerageRound(roundAudit)
-				audit.MarkBrokerageConverged(false)
+				return
 			}
-			return r.fallbackToPlainProposal(ctx, baseAwareness, brokerage, requestFaceNote, totalUsage)
-		}
-
-		brokerage = updated
-		roundAudit.Ratification = strings.TrimSpace(brokerage.Ratification)
-		roundAudit.RatifiedExecutionContract = turn.ApplyBrokerageAwareness(prompt.RuntimeAwareness{}, brokerage.toTurnAwareness()).
-			RatifiedExecutionContract
-		roundAudit.SignalJudgment = strings.TrimSpace(brokerage.SignalJudgment)
-		roundAudit.RatifiedSteps = append([]string(nil), brokerage.RatifiedSteps...)
-		if audit != nil {
+			roundAudit.Ratification = strings.TrimSpace(after.Ratification)
+			roundAudit.RatifiedExecutionContract = turn.ApplyBrokerageAwareness(prompt.RuntimeAwareness{}, after.toTurnAwareness()).
+				RatifiedExecutionContract
+			roundAudit.SignalJudgment = strings.TrimSpace(after.SignalJudgment)
+			roundAudit.RatifiedSteps = append([]string(nil), after.RatifiedSteps...)
 			audit.RecordBrokerageRound(roundAudit)
-		}
-		if brokerage.Ratification == "accept" {
+		},
+		OnConverged: func(converged bool) {
 			if audit != nil {
-				audit.MarkBrokerageConverged(true)
+				audit.MarkBrokerageConverged(converged)
 			}
-			return brokerage, totalUsage
-		}
-		if round == maxBrokerageRounds {
-			if audit != nil {
-				audit.MarkBrokerageConverged(false)
-			}
-			return r.fallbackToPlainProposal(ctx, baseAwareness, brokerage, requestFaceNote, totalUsage)
-		}
-
-		reviseAwareness := turn.ApplyBrokerageAwareness(baseAwareness, brokerage.toTurnAwareness())
-		reviseAwareness.ArtifactMode = "scene"
-		revised, proposalUsage, proposalErr := requestFaceNote("brokerage", reviseAwareness, brokerage.IdolumNote, brokerage.RatificationRecord)
-		totalUsage = addTokenUsage(totalUsage, proposalUsage)
-		if proposalErr != nil || strings.TrimSpace(revised) == "" {
-			if audit != nil {
-				audit.MarkBrokerageConverged(false)
-			}
-			return r.fallbackToPlainProposal(ctx, baseAwareness, brokerage, requestFaceNote, totalUsage)
-		}
-		brokerage.IdolumNote = strings.TrimSpace(revised)
-		brokerage.SuggestedExecutionContract = pipeline.ParseExecutionContract(revised)
-		brokerage.Ratification = ""
-		brokerage.SignalJudgment = ""
-		brokerage.RatificationRecord = ""
-		brokerage.RatifiedSteps = nil
-		brokerage.RatifiedExecutionContract = nil
-	}
-	if audit != nil {
-		audit.MarkBrokerageConverged(false)
-	}
-	return brokerage, totalUsage
+		},
+	})
 }
 
 func (r *Runtime) fallbackToPlainProposal(

@@ -37,6 +37,7 @@ remain in `pipeline`.
 ## Package Map
 
 - `engine.go`, `stages.go`: state machine orchestration
+- `brokerage_stage.go`: bounded brokerage convergence orchestration helper
 - `render_stage.go`: render-stage stream/non-stream/fallback selection helper
 - `delivery_stage.go`: delivery/record/post-commit ordering helper
 - `persist_stage.go`: persist ordering helper (convert/apply sidecars/load state/save)

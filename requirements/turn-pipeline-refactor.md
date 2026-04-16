@@ -141,6 +141,7 @@ phases with the following live changes:
 - `turn`: extracted render-stage selection into a dedicated helper (`RunRenderStage`) with turn-level tests for stream/non-stream/fallback decisions; runtime now adapts concrete face model/editor behavior through callbacks instead of owning selection flow inline.
 - `turn`: extracted delivery-stage ordering into a dedicated helper (`RunDeliveryStage`) with turn-level tests for send/record/post-commit sequencing and failure propagation; runtime delivery ports now provide adapter callbacks instead of owning branching semantics inline.
 - `turn`: extracted persist-stage ordering into a dedicated helper (`RunPersistStage`) with turn-level tests for convert/sidecar/state-load/save sequencing and prefixed error propagation; runtime persistence now supplies storage/session callbacks instead of owning ordering inline.
+- `turn`: extracted brokerage convergence orchestration into a dedicated helper (`ConvergeBrokerage`) with turn-level tests for accept/adapt/fallback semantics; runtime brokerage now supplies ratify/revise/fallback callbacks and audit mapping instead of owning loop branching inline.
 
 ## Target Package Ownership
 
