@@ -67,6 +67,26 @@ func (c telegramCommandControl) CurrentEfforts() (string, string) {
 	return c.rt.CurrentEfforts()
 }
 
+func (c telegramCommandControl) CurrentPersonaModel() string {
+	return c.rt.CurrentPersonaModel()
+}
+
+func (c telegramCommandControl) PersonaModelOptions() []string {
+	return c.rt.PersonaModelOptions()
+}
+
+func (c telegramCommandControl) SetPersonaModel(model string) (string, error) {
+	return c.rt.SetPersonaModel(model)
+}
+
+func (c telegramCommandControl) GovernorEffortOptions() []string {
+	return c.rt.GovernorEffortOptions()
+}
+
+func (c telegramCommandControl) SetGovernorEffort(effort string) (string, error) {
+	return c.rt.SetGovernorEffort(effort)
+}
+
 func (e *configStartupError) Error() string {
 	return fmt.Sprintf("config %s: %v (run 'aphelion --config %s --check-config' to validate)", e.Path, e.Err, e.Path)
 }
@@ -268,7 +288,14 @@ func run() error {
 		telegram.WithPrincipalResolver(principalResolver),
 		telegram.WithDurableGroups(cfg.Telegram.DurableGroups),
 		telegram.WithBotIdentity(botUser),
-		telegram.WithCallbackHandler(decisionHandler.HandleCallbackQuery),
+		telegram.WithCallbackHandler(func(parent context.Context, cb telegram.CallbackQuery) error {
+			if handled, err := handleTelegramCommandCallback(parent, tgClient, commandControl, cb); err != nil {
+				return err
+			} else if handled {
+				return nil
+			}
+			return decisionHandler.HandleCallbackQuery(parent, cb)
+		}),
 	)
 
 	log.Printf(

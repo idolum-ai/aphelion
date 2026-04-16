@@ -45,8 +45,10 @@ func RenderTelegramStart(personaEffort, governorEffort string) string {
 		"/help - show command help",
 		"/status - show whether I am currently working",
 		"/stop - stop current work in this chat",
-		"/toggle_persona_effort - switch Idolum between Sonnet and Opus",
-		"/toggle_governor_effort - switch governor effort between medium and high",
+		"/set_persona_model - choose Idolum model",
+		"/set_governor_effort - choose governor reasoning effort",
+		"/toggle_persona_effort - quick toggle Sonnet/Opus",
+		"/toggle_governor_effort - quick toggle medium/high",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
 		fmt.Sprintf("Current governor effort: %s", strings.TrimSpace(governorEffort)),
@@ -61,8 +63,10 @@ func RenderTelegramHelp(personaEffort, governorEffort string) string {
 		"/help - show this help",
 		"/status - show current work state",
 		"/stop - stop current work in this chat",
-		"/toggle_persona_effort - switch Idolum between Sonnet and Opus",
-		"/toggle_governor_effort - switch governor effort between medium and high",
+		"/set_persona_model - choose Idolum model",
+		"/set_governor_effort - choose governor reasoning effort",
+		"/toggle_persona_effort - quick toggle Sonnet/Opus",
+		"/toggle_governor_effort - quick toggle medium/high",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
 		fmt.Sprintf("Current governor effort: %s", strings.TrimSpace(governorEffort)),
@@ -106,6 +110,52 @@ func RenderTelegramTogglePersona(mode string) string {
 func RenderTelegramToggleGovernor(mode string) string {
 	mode = strings.TrimSpace(mode)
 	return fmt.Sprintf("Governor effort is now %s. Future interactive turns will use %s reasoning.", mode, mode)
+}
+
+func RenderTelegramPersonaModelSelector(current string, options []string) string {
+	lines := []string{
+		"Select Idolum's persona model.",
+		fmt.Sprintf("Current: %s", strings.TrimSpace(current)),
+	}
+	if len(options) > 0 {
+		lines = append(lines, "", "Available:")
+		for _, option := range options {
+			option = strings.TrimSpace(option)
+			if option == "" {
+				continue
+			}
+			lines = append(lines, "- "+option)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func RenderTelegramGovernorEffortSelector(current string, options []string) string {
+	lines := []string{
+		"Select governor reasoning effort for interactive/recovery turns.",
+		fmt.Sprintf("Current: %s", strings.TrimSpace(current)),
+	}
+	if len(options) > 0 {
+		lines = append(lines, "", "Available:")
+		for _, option := range options {
+			option = strings.TrimSpace(option)
+			if option == "" {
+				continue
+			}
+			lines = append(lines, "- "+option)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func RenderTelegramSetPersonaModel(model string) string {
+	model = strings.TrimSpace(model)
+	return fmt.Sprintf("Idolum persona model is now %s.", model)
+}
+
+func RenderTelegramSetGovernorEffort(effort string) string {
+	effort = strings.TrimSpace(effort)
+	return fmt.Sprintf("Governor effort is now %s.", effort)
 }
 
 func RenderReviewDigest(notice ReviewDigestNotice) string {

@@ -262,8 +262,8 @@ func New(
 	}
 
 	faceModels := map[string]face.Renderer{}
-	if recipeState.PersonaEffort == defaultRuntimeRecipeState(cfg).PersonaEffort {
-		faceModels[recipeState.PersonaEffort] = faceModel
+	if recipeState.PersonaModel == defaultRuntimeRecipeState(cfg).PersonaModel {
+		faceModels[recipeState.PersonaModel] = faceModel
 	}
 
 	return &Runtime{

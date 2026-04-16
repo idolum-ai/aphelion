@@ -50,10 +50,8 @@ func (r *Runtime) reasoningOptionsForRun(kind session.TurnRunKind) *agent.Comple
 	}
 	snapshot := r.currentRecipeSnapshot()
 	if kind == session.TurnRunKindInteractive || kind == session.TurnRunKindRecovery {
-		if snapshot.GovernorEffort == governorEffortHigh {
-			opts.Reasoning.Effort = agent.ReasoningEffortHigh
-		} else if snapshot.GovernorEffort == governorEffortMedium {
-			opts.Reasoning.Effort = agent.ReasoningEffortMedium
+		if effort := normalizeGovernorEffort(snapshot.GovernorEffort); effort != "" {
+			opts.Reasoning.Effort = agent.ReasoningEffort(effort)
 		}
 	}
 	return opts

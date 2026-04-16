@@ -14,18 +14,24 @@ import (
 )
 
 const (
+	personaModelSonnet   = "claude-sonnet-4-6"
+	personaModelOpus     = "claude-opus-4-6"
 	personaEffortSonnet  = "sonnet"
 	personaEffortOpus    = "opus"
+	governorEffortLow    = "low"
 	governorEffortMedium = "medium"
 	governorEffortHigh   = "high"
+	governorEffortXHigh  = "xhigh"
 )
 
 type runtimeRecipeState struct {
-	PersonaEffort  string `json:"persona_effort"`
+	PersonaModel   string `json:"persona_model"`
+	PersonaEffort  string `json:"persona_effort,omitempty"` // legacy compatibility field
 	GovernorEffort string `json:"governor_effort"`
 }
 
 type recipeSnapshot struct {
+	PersonaModel   string
 	PersonaEffort  string
 	GovernorEffort string
 }
@@ -43,62 +49,64 @@ func recipeStatePath(cfg *config.Config) string {
 
 func defaultRuntimeRecipeState(cfg *config.Config) runtimeRecipeState {
 	state := runtimeRecipeState{
-		PersonaEffort:  personaEffortSonnet,
+		PersonaModel:   personaModelSonnet,
 		GovernorEffort: governorEffortMedium,
 	}
 	if cfg == nil {
+		state.PersonaEffort = personaEffortForModel(state.PersonaModel)
 		return state
 	}
 	if strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.Anthropic.Model)), "opus") ||
 		strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.OpenRouter.Model)), "opus") {
-		state.PersonaEffort = personaEffortOpus
+		state.PersonaModel = personaModelOpus
 	}
 
-	defaultEffort := strings.ToLower(strings.TrimSpace(cfg.Thinking.Defaults.Default))
+	defaultEffort := normalizeGovernorEffort(cfg.Thinking.Defaults.Default)
 	if defaultEffort == "" {
-		defaultEffort = strings.ToLower(strings.TrimSpace(cfg.Thinking.Effort))
+		defaultEffort = normalizeGovernorEffort(cfg.Thinking.Effort)
 	}
-	switch defaultEffort {
-	case string(governorEffortHigh), "xhigh":
-		state.GovernorEffort = governorEffortHigh
-	default:
-		state.GovernorEffort = governorEffortMedium
+	if defaultEffort != "" {
+		state.GovernorEffort = defaultEffort
 	}
+	state.PersonaEffort = personaEffortForModel(state.PersonaModel)
 	return state
 }
 
 func normalizeRuntimeRecipeState(state runtimeRecipeState, cfg *config.Config) runtimeRecipeState {
 	defaults := defaultRuntimeRecipeState(cfg)
-	switch strings.ToLower(strings.TrimSpace(state.PersonaEffort)) {
-	case personaEffortSonnet, personaEffortOpus:
-		state.PersonaEffort = strings.ToLower(strings.TrimSpace(state.PersonaEffort))
-	default:
-		state.PersonaEffort = defaults.PersonaEffort
+	model := normalizePersonaModel(state.PersonaModel)
+	if model == "" {
+		model = personaModelForEffort(state.PersonaEffort)
 	}
-	switch strings.ToLower(strings.TrimSpace(state.GovernorEffort)) {
-	case governorEffortMedium, governorEffortHigh:
-		state.GovernorEffort = strings.ToLower(strings.TrimSpace(state.GovernorEffort))
-	default:
-		state.GovernorEffort = defaults.GovernorEffort
+	if model == "" {
+		model = defaults.PersonaModel
 	}
+	state.PersonaModel = model
+	state.PersonaEffort = personaEffortForModel(model)
+	effort := normalizeGovernorEffort(state.GovernorEffort)
+	if effort == "" {
+		effort = defaults.GovernorEffort
+	}
+	state.GovernorEffort = effort
 	return state
 }
 
 func loadRuntimeRecipeState(path string, cfg *config.Config) (runtimeRecipeState, error) {
-	state := defaultRuntimeRecipeState(cfg)
+	defaults := defaultRuntimeRecipeState(cfg)
 	if strings.TrimSpace(path) == "" {
-		return state, nil
+		return defaults, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return state, nil
+			return defaults, nil
 		}
-		return state, fmt.Errorf("read runtime recipe state: %w", err)
+		return defaults, fmt.Errorf("read runtime recipe state: %w", err)
 	}
 	if len(data) == 0 {
-		return state, nil
+		return defaults, nil
 	}
+	var state runtimeRecipeState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return defaultRuntimeRecipeState(cfg), fmt.Errorf("decode runtime recipe state: %w", err)
 	}
@@ -134,14 +142,23 @@ func saveRuntimeRecipeState(path string, state runtimeRecipeState, mu *sync.Mute
 func (r *Runtime) currentRecipeSnapshot() recipeSnapshot {
 	if r == nil {
 		return recipeSnapshot{
+			PersonaModel:   personaModelSonnet,
 			PersonaEffort:  personaEffortSonnet,
 			GovernorEffort: governorEffortMedium,
 		}
 	}
 	r.recipeMu.Lock()
 	defer r.recipeMu.Unlock()
+	model := normalizePersonaModel(r.recipeState.PersonaModel)
+	if model == "" {
+		model = personaModelForEffort(r.recipeState.PersonaEffort)
+	}
+	if model == "" {
+		model = personaModelSonnet
+	}
 	return recipeSnapshot{
-		PersonaEffort:  r.recipeState.PersonaEffort,
+		PersonaModel:   model,
+		PersonaEffort:  personaEffortForModel(model),
 		GovernorEffort: r.recipeState.GovernorEffort,
 	}
 }
@@ -152,11 +169,16 @@ func (r *Runtime) TogglePersonaEffort() (string, error) {
 	}
 	r.recipeMu.Lock()
 	prev := r.recipeState
-	next := personaEffortOpus
-	if r.recipeState.PersonaEffort == personaEffortOpus {
-		next = personaEffortSonnet
+	currentModel := normalizePersonaModel(r.recipeState.PersonaModel)
+	if currentModel == "" {
+		currentModel = personaModelForEffort(r.recipeState.PersonaEffort)
 	}
-	r.recipeState.PersonaEffort = next
+	nextModel := personaModelOpus
+	if currentModel == personaModelOpus {
+		nextModel = personaModelSonnet
+	}
+	r.recipeState.PersonaModel = nextModel
+	r.recipeState.PersonaEffort = personaEffortForModel(nextModel)
 	state := r.recipeState
 	r.recipeMu.Unlock()
 	if err := saveRuntimeRecipeState(r.recipePath, state, &r.recipeFileMu); err != nil {
@@ -165,7 +187,7 @@ func (r *Runtime) TogglePersonaEffort() (string, error) {
 		r.recipeMu.Unlock()
 		return "", err
 	}
-	return next, nil
+	return personaEffortForModel(nextModel), nil
 }
 
 func (r *Runtime) ToggleGovernorEffort() (string, error) {
@@ -193,4 +215,104 @@ func (r *Runtime) ToggleGovernorEffort() (string, error) {
 func (r *Runtime) CurrentEfforts() (persona string, governor string) {
 	snapshot := r.currentRecipeSnapshot()
 	return snapshot.PersonaEffort, snapshot.GovernorEffort
+}
+
+func (r *Runtime) CurrentPersonaModel() string {
+	return r.currentRecipeSnapshot().PersonaModel
+}
+
+func (r *Runtime) PersonaModelOptions() []string {
+	return []string{personaModelSonnet, personaModelOpus}
+}
+
+func (r *Runtime) SetPersonaModel(model string) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("runtime is nil")
+	}
+	model = normalizePersonaModel(model)
+	if model == "" {
+		return "", fmt.Errorf("persona model must be one of %s", strings.Join(r.PersonaModelOptions(), ", "))
+	}
+	r.recipeMu.Lock()
+	prev := r.recipeState
+	r.recipeState.PersonaModel = model
+	r.recipeState.PersonaEffort = personaEffortForModel(model)
+	state := r.recipeState
+	r.recipeMu.Unlock()
+	if err := saveRuntimeRecipeState(r.recipePath, state, &r.recipeFileMu); err != nil {
+		r.recipeMu.Lock()
+		r.recipeState = prev
+		r.recipeMu.Unlock()
+		return "", err
+	}
+	return model, nil
+}
+
+func (r *Runtime) GovernorEffortOptions() []string {
+	return []string{
+		governorEffortLow,
+		governorEffortMedium,
+		governorEffortHigh,
+		governorEffortXHigh,
+	}
+}
+
+func (r *Runtime) SetGovernorEffort(effort string) (string, error) {
+	if r == nil {
+		return "", fmt.Errorf("runtime is nil")
+	}
+	effort = normalizeGovernorEffort(effort)
+	if effort == "" {
+		return "", fmt.Errorf("governor effort must be one of %s", strings.Join(r.GovernorEffortOptions(), ", "))
+	}
+	r.recipeMu.Lock()
+	prev := r.recipeState
+	r.recipeState.GovernorEffort = effort
+	state := r.recipeState
+	r.recipeMu.Unlock()
+	if err := saveRuntimeRecipeState(r.recipePath, state, &r.recipeFileMu); err != nil {
+		r.recipeMu.Lock()
+		r.recipeState = prev
+		r.recipeMu.Unlock()
+		return "", err
+	}
+	return effort, nil
+}
+
+func normalizePersonaModel(model string) string {
+	value := strings.ToLower(strings.TrimSpace(model))
+	value = strings.TrimPrefix(value, "anthropic/")
+	switch value {
+	case personaModelSonnet, personaModelOpus:
+		return value
+	default:
+		return ""
+	}
+}
+
+func personaModelForEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case personaEffortOpus:
+		return personaModelOpus
+	case personaEffortSonnet:
+		return personaModelSonnet
+	default:
+		return ""
+	}
+}
+
+func personaEffortForModel(model string) string {
+	if normalizePersonaModel(model) == personaModelOpus {
+		return personaEffortOpus
+	}
+	return personaEffortSonnet
+}
+
+func normalizeGovernorEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case governorEffortLow, governorEffortMedium, governorEffortHigh, governorEffortXHigh:
+		return strings.ToLower(strings.TrimSpace(effort))
+	default:
+		return ""
+	}
 }

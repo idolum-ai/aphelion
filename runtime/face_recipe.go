@@ -23,9 +23,9 @@ func (r *Runtime) currentFaceRenderer() face.Renderer {
 		return r.faceModel
 	}
 	snapshot := r.currentRecipeSnapshot()
-	key := snapshot.PersonaEffort
+	key := snapshot.PersonaModel
 	if key == "" {
-		key = personaEffortSonnet
+		key = personaModelSonnet
 	}
 
 	r.faceModelsMu.Lock()
@@ -67,7 +67,7 @@ func (r *Runtime) buildFaceRendererForRecipe(recipe string) (face.Renderer, erro
 	})
 }
 
-func buildFaceProviderChainForRecipe(cfg *config.Config, recipe string) (agent.Provider, error) {
+func buildFaceProviderChainForRecipe(cfg *config.Config, personaModel string) (agent.Provider, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -75,7 +75,7 @@ func buildFaceProviderChainForRecipe(cfg *config.Config, recipe string) (agent.P
 	names := orderedFaceProviderNames(cfg)
 	entries := make([]providerpkg.NamedProvider, 0, len(names))
 	for _, name := range names {
-		p, err := buildNamedFaceProvider(name, cfg, recipe, httpClient)
+		p, err := buildNamedFaceProvider(name, cfg, personaModel, httpClient)
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +123,7 @@ func resolveFaceProviderName(cfg *config.Config) string {
 	return "anthropic"
 }
 
-func buildNamedFaceProvider(name string, cfg *config.Config, recipe string, httpClient *http.Client) (agent.Provider, error) {
+func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string, httpClient *http.Client) (agent.Provider, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "anthropic":
 		if strings.TrimSpace(cfg.Providers.Anthropic.APIKey) == "" {
@@ -131,7 +131,7 @@ func buildNamedFaceProvider(name string, cfg *config.Config, recipe string, http
 		}
 		return providerpkg.NewAnthropic(providerpkg.AnthropicOptions{
 			APIKey:     cfg.Providers.Anthropic.APIKey,
-			Model:      faceModelForProvider("anthropic", recipe),
+			Model:      faceModelForProvider("anthropic", personaModel),
 			MaxTokens:  cfg.Providers.Anthropic.MaxTokens,
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,
@@ -143,7 +143,7 @@ func buildNamedFaceProvider(name string, cfg *config.Config, recipe string, http
 		return providerpkg.NewOpenRouter(providerpkg.OpenRouterOptions{
 			APIKey:     cfg.Providers.OpenRouter.APIKey,
 			BaseURL:    cfg.Providers.OpenRouter.BaseURL,
-			Model:      faceModelForProvider("openrouter", recipe),
+			Model:      faceModelForProvider("openrouter", personaModel),
 			MaxTokens:  cfg.Providers.OpenRouter.MaxTokens,
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,
@@ -155,17 +155,21 @@ func buildNamedFaceProvider(name string, cfg *config.Config, recipe string, http
 	}
 }
 
-func faceModelForProvider(providerName, recipe string) string {
-	if strings.EqualFold(strings.TrimSpace(recipe), personaEffortOpus) {
+func faceModelForProvider(providerName, personaModel string) string {
+	model := normalizePersonaModel(personaModel)
+	if model == "" {
+		model = personaModelSonnet
+	}
+	if model == personaModelOpus {
 		if strings.EqualFold(strings.TrimSpace(providerName), "openrouter") {
-			return "anthropic/claude-opus-4-6"
+			return "anthropic/" + personaModelOpus
 		}
-		return "claude-opus-4-6"
+		return personaModelOpus
 	}
 	if strings.EqualFold(strings.TrimSpace(providerName), "openrouter") {
-		return "anthropic/claude-sonnet-4-6"
+		return "anthropic/" + personaModelSonnet
 	}
-	return "claude-sonnet-4-6"
+	return personaModelSonnet
 }
 
 func (r *Runtime) faceModelName() string {
@@ -173,5 +177,5 @@ func (r *Runtime) faceModelName() string {
 		return r.governorModelName()
 	}
 	snapshot := r.currentRecipeSnapshot()
-	return faceModelForProvider(r.faceProviderName(), snapshot.PersonaEffort)
+	return faceModelForProvider(r.faceProviderName(), snapshot.PersonaModel)
 }

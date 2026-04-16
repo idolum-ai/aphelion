@@ -292,6 +292,8 @@ At minimum for v0:
 - `/help`
 - `/status`
 - `/stop`
+- `/set_persona_model`
+- `/set_governor_effort`
 - `/toggle_persona_effort`
 - `/toggle_governor_effort`
 
@@ -317,7 +319,31 @@ Cancel the in-flight turn for the current DM session and drop any queued latest-
 
 This command must be real, not decorative. If Telegram advertises `/stop`, the user should not have to wait for the current turn to finish before the stop takes effect.
 
-### `/toggle_persona_effort`
+### `/set_persona_model`
+
+Show an inline selector for Idolum's persona model.
+
+Current selector options:
+
+- `claude-sonnet-4-6`
+- `claude-opus-4-6`
+
+Selection should persist as runtime recipe state and affect future face proposal/render calls.
+
+### `/set_governor_effort`
+
+Show an inline selector for governor reasoning effort used by interactive and recovery turns.
+
+Current selector options:
+
+- `low`
+- `medium`
+- `high`
+- `xhigh`
+
+Selection should persist as runtime recipe state and override the interactive/recovery governor effort without changing heartbeat/cron defaults.
+
+### `/toggle_persona_effort` (compatibility alias)
 
 Toggle Idolum's face recipe between:
 
@@ -328,7 +354,7 @@ For now this is a narrow runtime-owned operator control rather than a user-confi
 
 This command should affect future face proposal/render calls only. It should not rewrite constitutional files, governor authority, or tool policy.
 
-### `/toggle_governor_effort`
+### `/toggle_governor_effort` (compatibility alias)
 
 Toggle the governor reasoning recipe for interactive work between:
 

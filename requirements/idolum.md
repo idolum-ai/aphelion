@@ -171,7 +171,9 @@ For the current system shape, that toggle switches between:
 - a Sonnet-class default recipe
 - an Opus-class higher-effort recipe
 
-This is not yet a general face-profile system. It is a hardcoded application recipe.
+The primary Telegram control is `/set_persona_model` (inline selector). `/toggle_persona_effort` remains as a compatibility alias.
+
+This is not yet a general face-profile system. It is still a hardcoded application recipe.
 
 The toggle should affect future face proposal/render calls only. It should not mutate constitutional files or the base config on disk.
 

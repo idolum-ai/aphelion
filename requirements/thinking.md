@@ -170,10 +170,12 @@ Aphelion may also expose a narrow runtime-owned override layer for operator cont
 
 For the current system shape, that layer is intentionally small:
 
-- interactive/recovery governor effort may toggle between `medium` and `high`
+- interactive/recovery governor effort is operator-selectable via Telegram (`/set_governor_effort`) across `low|medium|high|xhigh`
 - heartbeat and cron should continue to use their own lower defaults
 
-This is a hardcoded application recipe, not yet a configurable recipe framework.
+`/toggle_governor_effort` remains as a compatibility alias for quick `medium<->high` switching.
+
+This remains a hardcoded application recipe surface, not yet a configurable recipe framework.
 
 ## Decisions
 
