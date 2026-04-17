@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 21
+const schemaVersion = 22
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -302,11 +302,11 @@ func (s *SQLiteStore) init() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_rhizome_edges_scope ON rhizome_edges(scope, strength DESC, recurrence_count DESC)`,
 		`CREATE TABLE IF NOT EXISTS artifact_index (
-			artifact_id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL,
+			turn_index INTEGER NOT NULL DEFAULT 0,
+			artifact_id TEXT NOT NULL,
 			chat_id INTEGER NOT NULL DEFAULT 0,
 			user_id INTEGER NOT NULL DEFAULT 0,
-			turn_index INTEGER NOT NULL DEFAULT 0,
 			source_type TEXT NOT NULL DEFAULT '',
 			kind TEXT NOT NULL DEFAULT '',
 			summary TEXT NOT NULL DEFAULT '',
@@ -315,7 +315,8 @@ func (s *SQLiteStore) init() error {
 			fetch_state TEXT NOT NULL DEFAULT '',
 			materialized_path TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY (session_id, turn_index, artifact_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_artifact_index_session_turn ON artifact_index(session_id, turn_index DESC, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_artifact_index_summary ON artifact_index(summary, kind, updated_at DESC)`,
@@ -1225,7 +1226,7 @@ func (s *SQLiteStore) SearchArtifacts(query string, limit int, scope *SessionKey
 		base += ` AND session_id = ?`
 		args = append(args, SessionIDForKey(*scope))
 	}
-	base += ` ORDER BY updated_at DESC, artifact_id DESC LIMIT ?`
+	base += ` ORDER BY updated_at DESC, turn_index DESC, artifact_id DESC, session_id DESC LIMIT ?`
 	args = append(args, limit)
 
 	rows, err := s.db.Query(base, args...)
@@ -2652,11 +2653,11 @@ func applyMigrations(tx *sql.Tx) error {
 		return fmt.Errorf("ensure messages.floor_content: %w", err)
 	}
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS artifact_index (
-		artifact_id TEXT PRIMARY KEY,
 		session_id TEXT NOT NULL,
+		turn_index INTEGER NOT NULL DEFAULT 0,
+		artifact_id TEXT NOT NULL,
 		chat_id INTEGER NOT NULL DEFAULT 0,
 		user_id INTEGER NOT NULL DEFAULT 0,
-		turn_index INTEGER NOT NULL DEFAULT 0,
 		source_type TEXT NOT NULL DEFAULT '',
 		kind TEXT NOT NULL DEFAULT '',
 		summary TEXT NOT NULL DEFAULT '',
@@ -2665,7 +2666,8 @@ func applyMigrations(tx *sql.Tx) error {
 		fetch_state TEXT NOT NULL DEFAULT '',
 		materialized_path TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
-		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (session_id, turn_index, artifact_id)
 	)`); err != nil {
 		return fmt.Errorf("ensure artifact_index table: %w", err)
 	}
@@ -2764,8 +2766,8 @@ func applyMigrations(tx *sql.Tx) error {
 			return err
 		}
 	}
-	if currentVersion < 21 {
-		if err := backfillArtifactIndexFromSessions(tx); err != nil {
+	if currentVersion < 22 {
+		if err := migrateArtifactIndexOccurrenceIdentity(tx); err != nil {
 			return err
 		}
 	}
@@ -3426,6 +3428,84 @@ func backfillDurableAgentBootstrapCeilings(tx *sql.Tx) error {
 	return nil
 }
 
+func migrateArtifactIndexOccurrenceIdentity(tx *sql.Tx) error {
+	if _, err := tx.Exec(`DROP TABLE IF EXISTS artifact_index_v22_old`); err != nil {
+		return fmt.Errorf("drop prior artifact index backup: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE artifact_index RENAME TO artifact_index_v22_old`); err != nil {
+		return fmt.Errorf("rename artifact_index for rebuild: %w", err)
+	}
+	if _, err := tx.Exec(`CREATE TABLE artifact_index (
+		session_id TEXT NOT NULL,
+		turn_index INTEGER NOT NULL DEFAULT 0,
+		artifact_id TEXT NOT NULL,
+		chat_id INTEGER NOT NULL DEFAULT 0,
+		user_id INTEGER NOT NULL DEFAULT 0,
+		source_type TEXT NOT NULL DEFAULT '',
+		kind TEXT NOT NULL DEFAULT '',
+		summary TEXT NOT NULL DEFAULT '',
+		handling TEXT NOT NULL DEFAULT '',
+		retention TEXT NOT NULL DEFAULT '',
+		fetch_state TEXT NOT NULL DEFAULT '',
+		materialized_path TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+		PRIMARY KEY (session_id, turn_index, artifact_id)
+	)`); err != nil {
+		return fmt.Errorf("create rebuilt artifact_index: %w", err)
+	}
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_artifact_index_session_turn ON artifact_index(session_id, turn_index DESC, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifact_index_summary ON artifact_index(summary, kind, updated_at DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("create rebuilt artifact_index support: %w", err)
+		}
+	}
+	if err := rebuildArtifactIndexFromMessages(tx); err != nil {
+		return err
+	}
+	if err := backfillArtifactIndexFromSessions(tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE artifact_index_v22_old`); err != nil {
+		return fmt.Errorf("drop rebuilt artifact index backup: %w", err)
+	}
+	return nil
+}
+
+func rebuildArtifactIndexFromMessages(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT session_id, chat_id, user_id, turn_index, floor_metadata
+		FROM messages
+		WHERE TRIM(COALESCE(floor_metadata, '')) <> ''
+	`)
+	if err != nil {
+		return fmt.Errorf("query messages for artifact index rebuild: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			sessionID     string
+			chatID        int64
+			userID        int64
+			turnIndex     int
+			floorMetadata sql.NullString
+		)
+		if err := rows.Scan(&sessionID, &chatID, &userID, &turnIndex, &floorMetadata); err != nil {
+			return fmt.Errorf("scan message artifact rebuild row: %w", err)
+		}
+		if err := upsertArtifactIndexFloorMetadata(tx, strings.TrimSpace(sessionID), chatID, userID, turnIndex, nullToString(floorMetadata)); err != nil {
+			return fmt.Errorf("rebuild artifact index from message session_id=%s turn_index=%d: %w", strings.TrimSpace(sessionID), turnIndex, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate messages for artifact index rebuild: %w", err)
+	}
+	return nil
+}
+
 func backfillArtifactIndexFromSessions(tx *sql.Tx) error {
 	rows, err := tx.Query(`
 		SELECT session_id, chat_id, user_id, turn_count, last_floor_metadata
@@ -3448,14 +3528,7 @@ func backfillArtifactIndexFromSessions(tx *sql.Tx) error {
 		if err := rows.Scan(&sessionID, &chatID, &userID, &turnCount, &lastFloorMetadata); err != nil {
 			return fmt.Errorf("scan session artifact backfill row: %w", err)
 		}
-		sess := &Session{
-			SessionID:         strings.TrimSpace(sessionID),
-			ChatID:            chatID,
-			UserID:            userID,
-			TurnCount:         turnCount,
-			LastFloorMetadata: nullToString(lastFloorMetadata),
-		}
-		if err := upsertArtifactIndexRecords(tx, sess); err != nil {
+		if err := upsertArtifactIndexFloorMetadata(tx, strings.TrimSpace(sessionID), chatID, userID, turnCount, nullToString(lastFloorMetadata)); err != nil {
 			return fmt.Errorf("backfill artifact index session_id=%s: %w", strings.TrimSpace(sessionID), err)
 		}
 	}
@@ -3613,8 +3686,16 @@ func upsertArtifactIndexRecords(tx *sql.Tx, session *Session) error {
 	if tx == nil || session == nil {
 		return nil
 	}
-	metadata := strings.TrimSpace(session.LastFloorMetadata)
-	if metadata == "" {
+	return upsertArtifactIndexFloorMetadata(tx, strings.TrimSpace(session.SessionID), session.ChatID, session.UserID, session.TurnCount, session.LastFloorMetadata)
+}
+
+func upsertArtifactIndexFloorMetadata(tx *sql.Tx, sessionID string, chatID int64, userID int64, turnIndex int, metadata string) error {
+	if tx == nil {
+		return nil
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	metadata = strings.TrimSpace(metadata)
+	if sessionID == "" || metadata == "" {
 		return nil
 	}
 	var floor core.FloorMetadata
@@ -3633,14 +3714,12 @@ func upsertArtifactIndexRecords(tx *sql.Tx, session *Session) error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		if _, err := tx.Exec(`
 			INSERT INTO artifact_index(
-				artifact_id, session_id, chat_id, user_id, turn_index, source_type, kind, summary,
+				session_id, turn_index, artifact_id, chat_id, user_id, source_type, kind, summary,
 				handling, retention, fetch_state, materialized_path, created_at, updated_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(artifact_id) DO UPDATE SET
-				session_id = excluded.session_id,
+			ON CONFLICT(session_id, turn_index, artifact_id) DO UPDATE SET
 				chat_id = excluded.chat_id,
 				user_id = excluded.user_id,
-				turn_index = excluded.turn_index,
 				source_type = excluded.source_type,
 				kind = excluded.kind,
 				summary = excluded.summary,
@@ -3649,10 +3728,10 @@ func upsertArtifactIndexRecords(tx *sql.Tx, session *Session) error {
 				fetch_state = excluded.fetch_state,
 				materialized_path = excluded.materialized_path,
 				updated_at = excluded.updated_at
-		`, artifactID, session.SessionID, session.ChatID, session.UserID, session.TurnCount,
+		`, sessionID, turnIndex, artifactID, chatID, userID,
 			strings.TrimSpace(ref.SourceType), strings.TrimSpace(ref.Kind), strings.TrimSpace(ref.Summary),
 			strings.TrimSpace(ref.Handling), retention, strings.TrimSpace(ref.FetchState), strings.TrimSpace(ref.MaterializedPath), now, now); err != nil {
-			return fmt.Errorf("upsert artifact index record %s: %w", artifactID, err)
+			return fmt.Errorf("upsert artifact index record %s/%d/%s: %w", sessionID, turnIndex, artifactID, err)
 		}
 	}
 	return nil
