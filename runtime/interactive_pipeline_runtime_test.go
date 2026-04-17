@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/pipeline"
@@ -144,6 +145,52 @@ func TestHandleInboundIncludesIdolumProposalInGovernorInput(t *testing.T) {
 	if !strings.Contains(provider.seenGovernorSystem[0], "Push for a warmer reply") {
 		t.Fatalf("governor input missing concrete Idolum push: %q", provider.seenGovernorSystem[0])
 	}
+}
+
+func TestHandleInboundFaceStagesUsePreparedLedgerText(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.proposalReplyText = "Keep it steady and concrete."
+	provider.replyText = "The current time is 12:00 UTC."
+	provider.faceReplyText = "It's 12:00 UTC."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "transcribed voice text"}, fakeSynth{})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     7301,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  88,
+		Artifacts:  []core.Artifact{{ID: "voice-issue3", Channel: "telegram", SourceType: "voice", Kind: "audio", Subtype: "voice_note", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenProposalSystem) == 0 {
+		t.Fatal("seenProposalSystem empty, want proposal prompt call")
+	}
+	if len(provider.seenFaceSystem) == 0 {
+		t.Fatal("seenFaceSystem empty, want face render prompt")
+	}
+	if !strings.Contains(provider.seenProposalSystem[0], "transcribed voice text") {
+		t.Fatalf("proposal prompt = %q, want prepared ledger text", provider.seenProposalSystem[0])
+	}
+	if !strings.Contains(provider.seenProposalSystem[0], "[voice attached]") {
+		t.Fatalf("proposal prompt = %q, want prepared ledger marker alongside transcript", provider.seenProposalSystem[0])
+	}
+	if !strings.Contains(provider.seenFaceSystem[0], "transcribed voice text") {
+		t.Fatalf("face prompt = %q, want prepared ledger text", provider.seenFaceSystem[0])
+	}
+	_ = store
+	_ = sender
 }
 
 func TestHandleInboundUsesBrokerageForStrategicTurn(t *testing.T) {

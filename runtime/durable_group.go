@@ -265,12 +265,13 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		},
 	}
 	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:         session.TurnRunKindInteractive,
-		SessionKey:      key,
-		Inbound:         msg,
-		InboundWasVoice: prepared.InboundWasVoice,
-		Session:         sess,
-		Now:             now,
+		RunKind:          session.TurnRunKindInteractive,
+		SessionKey:       key,
+		Inbound:          msg,
+		InboundWasVoice:  prepared.InboundWasVoice,
+		Session:          sess,
+		Now:              now,
+		PreparedUserText: prepared.LedgerText,
 	})
 	if err != nil {
 		if turnResult == nil || !turnResult.Commit.Persisted {
