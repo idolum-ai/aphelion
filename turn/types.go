@@ -32,6 +32,9 @@ type Request struct {
 	Inbound    core.InboundMessage
 	Session    *session.Session
 	Now        time.Time
+	// PreparedUserText lets runtime adapters pass the prepared ledger/user text
+	// that face stages should see when raw inbound text has already been shaped.
+	PreparedUserText string
 	// InboundWasVoice preserves whether the inbound turn started from a voice
 	// artifact so delivery can preserve configured voice continuation policy.
 	InboundWasVoice bool

@@ -166,12 +166,13 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 	}
 
 	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:         session.TurnRunKindInteractive,
-		SessionKey:      key,
-		Inbound:         msg,
-		Session:         sess,
-		InboundWasVoice: prepared.InboundWasVoice,
-		Now:             now,
+		RunKind:          session.TurnRunKindInteractive,
+		SessionKey:       key,
+		Inbound:          msg,
+		Session:          sess,
+		InboundWasVoice:  prepared.InboundWasVoice,
+		Now:              now,
+		PreparedUserText: prepared.LedgerText,
 	})
 	if err != nil && (turnResult == nil || !turnResult.Commit.Persisted) {
 		return nil, err

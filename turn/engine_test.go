@@ -250,6 +250,32 @@ func TestMachineHandlePassesFaceProposalIntoGovernor(t *testing.T) {
 	}
 }
 
+func TestMachineHandleUsesPreparedUserTextForFaceStages(t *testing.T) {
+	face := &fakeFace{proposalResp: &FaceProposalResult{Note: "look closer first"}, renderResp: &FaceRenderResult{Text: "visible scene"}}
+	gov := &fakeGovernor{resp: &GovernorResult{Turn: &core.TurnResult{Text: "governor raw"}, FloorText: "floor text"}}
+	m := &Machine{Governor: gov, Face: face}
+
+	_, err := m.Handle(context.Background(), Request{
+		RunKind:    session.TurnRunKindInteractive,
+		SessionKey: session.SessionKey{ChatID: 42},
+		Inbound: core.InboundMessage{
+			ChatID: 42,
+			Text:   "raw inbound text",
+		},
+		PreparedUserText: "prepared ledger text",
+		Session:          &session.Session{ChatID: 42},
+	})
+	if err != nil {
+		t.Fatalf("Handle() err = %v", err)
+	}
+	if face.lastProposal.LatestUserInput != "prepared ledger text" {
+		t.Fatalf("proposal LatestUserInput = %q, want prepared ledger text", face.lastProposal.LatestUserInput)
+	}
+	if face.lastRender.LatestUserInput != "prepared ledger text" {
+		t.Fatalf("render LatestUserInput = %q, want prepared ledger text", face.lastRender.LatestUserInput)
+	}
+}
+
 func TestMachineHandleMaintenanceSpeciesSkipsFaceStagesByDefaultPolicy(t *testing.T) {
 	t.Parallel()
 

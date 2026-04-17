@@ -85,7 +85,7 @@ func (m *Machine) maybePropose(ctx context.Context, prepared preparedContext, po
 		Channel:         prepared.channel,
 		Style:           prepared.style,
 		Mode:            mode,
-		LatestUserInput: prepared.request.Inbound.Text,
+		LatestUserInput: preparedLatestUserInput(prepared.request),
 		Runtime:         m.RuntimeAwareness,
 	})
 }
@@ -119,7 +119,7 @@ func (m *Machine) renderScene(ctx context.Context, prepared preparedContext, pol
 		Style:           prepared.style,
 		FloorText:       strings.TrimSpace(gov.FloorText),
 		MaterialFloor:   gov.MaterialFloor,
-		LatestUserInput: prepared.request.Inbound.Text,
+		LatestUserInput: preparedLatestUserInput(prepared.request),
 		Runtime:         m.RuntimeAwareness,
 	})
 }
@@ -161,4 +161,11 @@ func buildOutboundMessage(req Request, result *Result) core.OutboundMessage {
 		msg.Media = append(msg.Media, result.Turn.Media...)
 	}
 	return msg
+}
+
+func preparedLatestUserInput(req Request) string {
+	if prepared := strings.TrimSpace(req.PreparedUserText); prepared != "" {
+		return prepared
+	}
+	return strings.TrimSpace(req.Inbound.Text)
 }
