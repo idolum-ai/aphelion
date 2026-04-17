@@ -78,11 +78,11 @@ func (c *durableGroupTurnCoordinator) Propose(ctx context.Context, req turn.Face
 	}, nil
 }
 
-func (c *durableGroupTurnCoordinator) requestFaceNote(mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error) {
+func (c *durableGroupTurnCoordinator) requestFaceNote(ctx context.Context, mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error) {
 	if c == nil || c.runtime == nil {
 		return "", core.TokenUsage{}, fmt.Errorf("durable group coordinator unavailable")
 	}
-	proposal, usage, err := c.runtime.proposeTurnCoordinatorFace(context.Background(), turnCoordinatorProposalInput{
+	proposal, usage, err := c.runtime.proposeTurnCoordinatorFace(ctx, turnCoordinatorProposalInput{
 		Scope:            c.scope,
 		CurrentFaceModel: c.currentFaceModel,
 		GovernorName:     c.coordinatorGovernorName(),

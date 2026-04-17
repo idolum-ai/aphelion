@@ -81,11 +81,11 @@ func (c *interactiveTurnCoordinator) Propose(ctx context.Context, req turn.FaceP
 	}, nil
 }
 
-func (c *interactiveTurnCoordinator) requestFaceNote(mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error) {
+func (c *interactiveTurnCoordinator) requestFaceNote(ctx context.Context, mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error) {
 	if c == nil || c.runtime == nil {
 		return "", core.TokenUsage{}, fmt.Errorf("interactive coordinator unavailable")
 	}
-	proposal, usage, err := c.runtime.proposeTurnCoordinatorFace(context.Background(), turnCoordinatorProposalInput{
+	proposal, usage, err := c.runtime.proposeTurnCoordinatorFace(ctx, turnCoordinatorProposalInput{
 		Scope:            c.scope,
 		CurrentFaceModel: c.currentFaceModel,
 		GovernorName:     c.coordinatorGovernorName(),
