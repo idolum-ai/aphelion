@@ -1805,6 +1805,150 @@ func TestInitBackfillsArtifactIndexFromExistingSessionFloorMetadata(t *testing.T
 	}
 }
 
+func TestArtifactIndexPreservesRepeatedArtifactIDsAcrossTurnsAndSessions(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	keyA := SessionKey{ChatID: 57, UserID: 0}
+	sessA, err := store.Load(keyA)
+	if err != nil {
+		t.Fatalf("Load(keyA) err = %v", err)
+	}
+	sessA.TurnCount = 1
+	sessA.LastFloorMetadata = `{"artifacts":[{"artifact_id":"telegram:location","kind":"structured","source_type":"location","summary":"first location","handling":"inspect_metadata","retention":"session_reference"}]}`
+	if err := store.Save(sessA, []Message{{Role: "assistant", Content: "first", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(sessA first) err = %v", err)
+	}
+	sessA.TurnCount = 2
+	sessA.LastFloorMetadata = `{"artifacts":[{"artifact_id":"telegram:location","kind":"structured","source_type":"location","summary":"second location","handling":"inspect_metadata","retention":"session_reference"}]}`
+	if err := store.Save(sessA, []Message{{Role: "assistant", Content: "second", TurnIndex: 2}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(sessA second) err = %v", err)
+	}
+
+	keyB := SessionKey{ChatID: 58, UserID: 0}
+	sessB, err := store.Load(keyB)
+	if err != nil {
+		t.Fatalf("Load(keyB) err = %v", err)
+	}
+	sessB.TurnCount = 1
+	sessB.LastFloorMetadata = `{"artifacts":[{"artifact_id":"telegram:location","kind":"structured","source_type":"location","summary":"third location","handling":"inspect_metadata","retention":"session_reference"}]}`
+	if err := store.Save(sessB, []Message{{Role: "assistant", Content: "third", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(sessB) err = %v", err)
+	}
+
+	hits, err := store.SearchArtifacts("location", 10, nil)
+	if err != nil {
+		t.Fatalf("SearchArtifacts() err = %v", err)
+	}
+	if len(hits) != 3 {
+		t.Fatalf("artifact hits len = %d, want 3", len(hits))
+	}
+
+	seen := map[string]bool{}
+	for _, hit := range hits {
+		seen[hit.SessionID+"#"+hit.Summary] = true
+	}
+	if !seen[SessionIDForKey(keyA)+"#first location"] {
+		t.Fatalf("missing first occurrence in hits: %#v", hits)
+	}
+	if !seen[SessionIDForKey(keyA)+"#second location"] {
+		t.Fatalf("missing second occurrence in hits: %#v", hits)
+	}
+	if !seen[SessionIDForKey(keyB)+"#third location"] {
+		t.Fatalf("missing third occurrence in hits: %#v", hits)
+	}
+}
+
+func TestInitRebuildsArtifactIndexFromMessageFloorMetadata(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "legacy-artifact-index-occurrence.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	legacyDDL := []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (21)`,
+		`CREATE TABLE sessions (
+			session_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			last_floor_metadata TEXT,
+			turn_count INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			floor_content TEXT,
+			floor_metadata TEXT,
+			tool_calls TEXT,
+			tool_id TEXT,
+			tool_name TEXT,
+			thinking TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			turn_index INTEGER NOT NULL,
+			content_chars INTEGER NOT NULL DEFAULT 0,
+			compacted INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE artifact_index (
+			artifact_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			turn_index INTEGER NOT NULL DEFAULT 0,
+			source_type TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			handling TEXT NOT NULL DEFAULT '',
+			retention TEXT NOT NULL DEFAULT '',
+			fetch_state TEXT NOT NULL DEFAULT '',
+			materialized_path TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO sessions(session_id, chat_id, user_id, last_floor_metadata, turn_count) VALUES ('telegram_dm:777', 777, 0, '', 2)`,
+		`INSERT INTO messages(session_id, chat_id, user_id, role, content, floor_metadata, turn_index, content_chars, compacted) VALUES
+			('telegram_dm:777', 777, 0, 'assistant', 'one', '{"artifacts":[{"artifact_id":"telegram:location","kind":"structured","source_type":"location","summary":"legacy one","handling":"inspect_metadata","retention":"session_reference"}]}', 1, 3, 0),
+			('telegram_dm:777', 777, 0, 'assistant', 'two', '{"artifacts":[{"artifact_id":"telegram:location","kind":"structured","source_type":"location","summary":"legacy two","handling":"inspect_metadata","retention":"session_reference"}]}', 2, 3, 0)`,
+	}
+	for _, stmt := range legacyDDL {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("exec legacy artifact stmt %q: %v", stmt, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() migration err = %v", err)
+	}
+	defer store.Close()
+
+	hits, err := store.SearchArtifacts("legacy", 10, nil)
+	if err != nil {
+		t.Fatalf("SearchArtifacts() err = %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("artifact hits len = %d, want 2", len(hits))
+	}
+	if hits[0].TurnIndex == hits[1].TurnIndex {
+		t.Fatalf("turn indexes = %d and %d, want distinct occurrences", hits[0].TurnIndex, hits[1].TurnIndex)
+	}
+}
+
 func TestArtifactIndexIgnoresEphemeralArtifacts(t *testing.T) {
 	t.Parallel()
 
