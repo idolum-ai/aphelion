@@ -204,9 +204,10 @@ type turnCommitInput struct {
 }
 
 type turnCommitHooks struct {
-	QueueReviewEvents    func() error
-	DeliverReviewEvents  func() error
-	QueueDurableArtifact func() error
+	QueueReviewEvents       func() error
+	DeliverReviewEvents     func() error
+	QueueDurableArtifact    func() error
+	PostReplyContinuationUI func(ctx context.Context) error
 }
 
 type turnCommitErrorContext struct {
@@ -318,6 +319,11 @@ func (p *turnDeliveryPort) runPostCommitHooks() error {
 	}
 	if p.hooks.QueueDurableArtifact != nil {
 		if err := p.hooks.QueueDurableArtifact(); err != nil {
+			return err
+		}
+	}
+	if p.hooks.PostReplyContinuationUI != nil {
+		if err := p.hooks.PostReplyContinuationUI(context.Background()); err != nil {
 			return err
 		}
 	}

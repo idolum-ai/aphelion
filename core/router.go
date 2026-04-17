@@ -43,8 +43,9 @@ type SessionStatus struct {
 }
 
 type StopResult struct {
-	ActiveCanceled bool
-	QueuedDropped  bool
+	ActiveCanceled      bool
+	QueuedDropped       bool
+	ContinuationRevoked bool
 }
 
 // NewRouter constructs a Router using fn for each routed turn.

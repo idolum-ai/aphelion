@@ -17,6 +17,7 @@ import (
 	"github.com/idolum-ai/aphelion/media"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/telegram"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
@@ -224,6 +225,7 @@ func nextFakeReply(queue *[]string, fallback string) string {
 type fakeSender struct {
 	mu           sync.Mutex
 	sent         []core.OutboundMessage
+	inline       []inlineCall
 	sendCount    int
 	sendErr      error
 	sendErrAfter int
@@ -303,9 +305,23 @@ func (f *fakeSender) SendMessage(_ context.Context, msg core.OutboundMessage) (i
 	return int64(len(f.sent)), nil
 }
 
+func (f *fakeSender) SendInlineKeyboard(_ context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inline = append(f.inline, inlineCall{chatID: chatID, text: text, rows: rows, replyTo: replyTo})
+	return int64(len(f.inline)), nil
+}
+
 type chatAction struct {
 	ChatID int64
 	Action string
+}
+
+type inlineCall struct {
+	chatID  int64
+	text    string
+	rows    [][]telegram.InlineButton
+	replyTo *int64
 }
 
 type messageEdit struct {

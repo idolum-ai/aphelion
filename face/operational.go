@@ -91,6 +91,14 @@ func RenderTelegramStatus(status core.SessionStatus, personaEffort, governorEffo
 
 func RenderTelegramStop(stopped core.StopResult) string {
 	switch {
+	case stopped.ActiveCanceled && stopped.QueuedDropped && stopped.ContinuationRevoked:
+		return "Stopped the current turn, cleared queued work, and revoked continuation approval for this chat."
+	case stopped.ActiveCanceled && stopped.ContinuationRevoked:
+		return "Stopped the current turn and revoked continuation approval for this chat."
+	case stopped.QueuedDropped && stopped.ContinuationRevoked:
+		return "Cleared queued work and revoked continuation approval for this chat."
+	case stopped.ContinuationRevoked:
+		return "Revoked continuation approval for this chat."
 	case stopped.ActiveCanceled && stopped.QueuedDropped:
 		return "Stopped the current turn and cleared queued work for this chat."
 	case stopped.ActiveCanceled:

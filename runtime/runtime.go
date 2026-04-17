@@ -84,6 +84,71 @@ type Runtime struct {
 	recipeState       runtimeRecipeState
 }
 
+func (r *Runtime) ContinuationState(chatID int64) (session.ContinuationState, error) {
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	return r.store.ContinuationState(key)
+}
+
+func (r *Runtime) ApproveContinuation(chatID int64) (session.ContinuationState, error) {
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	state, err := r.store.ContinuationState(key)
+	if err != nil {
+		return session.ContinuationState{}, err
+	}
+	state = session.NormalizeContinuationState(state)
+	state.Status = session.ContinuationStatusApproved
+	state.UpdatedAt = time.Now().UTC()
+	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return session.ContinuationState{}, err
+	}
+	return state, nil
+}
+
+func (r *Runtime) RevokeContinuation(chatID int64) (session.ContinuationState, error) {
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	state, err := r.store.ContinuationState(key)
+	if err != nil {
+		return session.ContinuationState{}, err
+	}
+	state = session.NormalizeContinuationState(state)
+	state.Status = session.ContinuationStatusRevoked
+	state.RemainingTurns = 0
+	state.UpdatedAt = time.Now().UTC()
+	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return session.ContinuationState{}, err
+	}
+	return state, nil
+}
+
+func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
+	if r == nil {
+		return nil
+	}
+	state, err := r.ContinuationState(chatID)
+	if err != nil {
+		return err
+	}
+	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
+		return nil
+	}
+	state.RemainingTurns--
+	if state.RemainingTurns <= 0 {
+		state.Status = session.ContinuationStatusIdle
+	}
+	state.UpdatedAt = time.Now().UTC()
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return err
+	}
+	_, err = r.HandleInbound(ctx, core.InboundMessage{
+		ChatID:     chatID,
+		SenderID:   positiveFirst(r.cfg.Principals.Telegram.AdminUserIDs),
+		SenderName: "continuation",
+		Text:       "Continue the previously approved next step.",
+	})
+	return err
+}
+
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
 	if r == nil {
 		return
@@ -466,4 +531,13 @@ func (r *Runtime) startChatActionLoop(ctx context.Context, chatID int64, action 
 	}()
 
 	return cancel
+}
+
+func positiveFirst(ids []int64) int64 {
+	for _, id := range ids {
+		if id > 0 {
+			return id
+		}
+	}
+	return 0
 }

@@ -140,6 +140,23 @@ type OperationState struct {
 	UpdatedAt time.Time           `json:"updated_at,omitempty"`
 }
 
+type ContinuationStatus string
+
+const (
+	ContinuationStatusIdle     ContinuationStatus = "idle"
+	ContinuationStatusPending  ContinuationStatus = "pending"
+	ContinuationStatusApproved ContinuationStatus = "approved"
+	ContinuationStatusRevoked  ContinuationStatus = "revoked"
+)
+
+type ContinuationState struct {
+	Status         ContinuationStatus `json:"status,omitempty"`
+	Objective      string             `json:"objective,omitempty"`
+	StageSummary   string             `json:"stage_summary,omitempty"`
+	RemainingTurns int                `json:"remaining_turns,omitempty"`
+	UpdatedAt      time.Time          `json:"updated_at,omitempty"`
+}
+
 // SessionKey identifies a unique session.
 type SessionKey struct {
 	ChatID int64
@@ -174,6 +191,9 @@ type Session struct {
 
 	// Operations
 	OperationState OperationState
+
+	// Continuation approval state
+	ContinuationState ContinuationState
 
 	// Token accounting (cumulative across all turns)
 	TotalInputTokens  int64
@@ -432,6 +452,24 @@ func (s OperationState) Active() bool {
 		normalized.Proposal.Active() ||
 		len(normalized.Findings) > 0 ||
 		len(normalized.Artifacts) > 0
+}
+
+func NormalizeContinuationState(state ContinuationState) ContinuationState {
+	state.Status = ContinuationStatus(strings.TrimSpace(string(state.Status)))
+	state.Objective = strings.TrimSpace(state.Objective)
+	state.StageSummary = strings.TrimSpace(state.StageSummary)
+	if state.RemainingTurns < 0 {
+		state.RemainingTurns = 0
+	}
+	if state.UpdatedAt.IsZero() && (state.Status != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0) {
+		state.UpdatedAt = time.Now().UTC()
+	}
+	return state
+}
+
+func (s ContinuationState) Active() bool {
+	state := NormalizeContinuationState(s)
+	return state.Status == ContinuationStatusPending || state.Status == ContinuationStatusApproved
 }
 
 func (p OperationProposal) Active() bool {

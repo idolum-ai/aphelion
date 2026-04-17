@@ -324,6 +324,39 @@ func TestPlanStateRoundTripAndUpdate(t *testing.T) {
 	}
 }
 
+func TestContinuationStateRoundTripAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	key := SessionKey{ChatID: 901, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.ContinuationState = ContinuationState{Status: ContinuationStatusPending, Objective: "implement continuation controls", StageSummary: "Attach approval UI", RemainingTurns: 1}
+	if err := store.Save(sess, []Message{{Role: "assistant", Content: "ok", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+	reloaded, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(reloaded) err = %v", err)
+	}
+	if reloaded.ContinuationState.Status != ContinuationStatusPending {
+		t.Fatalf("status = %q, want pending", reloaded.ContinuationState.Status)
+	}
+	updated := ContinuationState{Status: ContinuationStatusApproved, Objective: "implement continuation controls", RemainingTurns: 1}
+	if err := store.UpdateContinuationState(key, updated); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != ContinuationStatusApproved {
+		t.Fatalf("status = %q, want approved", got.Status)
+	}
+}
+
 func TestOperationStateRoundTripAndUpdate(t *testing.T) {
 	t.Parallel()
 

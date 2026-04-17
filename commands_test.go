@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -71,21 +72,25 @@ func (s *stubCommandSender) AnswerCallbackQuery(_ context.Context, id string, te
 }
 
 type stubCommandRouter struct {
-	status                  core.SessionStatus
-	stop                    core.StopResult
-	personaEffort           string
-	governorEffort          string
-	toggledPersona          string
-	toggledGovernor         string
-	personaModel            string
-	personaModelOptions     []string
-	governorEffortOptions   []string
-	setPersonaModelInput    string
-	setGovernorEffortInput  string
-	setPersonaModelReturn   string
-	setGovernorEffortReturn string
-	setPersonaModelErr      error
-	setGovernorEffortErr    error
+	status                   core.SessionStatus
+	stop                     core.StopResult
+	personaEffort            string
+	governorEffort           string
+	toggledPersona           string
+	toggledGovernor          string
+	personaModel             string
+	personaModelOptions      []string
+	governorEffortOptions    []string
+	setPersonaModelInput     string
+	setGovernorEffortInput   string
+	setPersonaModelReturn    string
+	setGovernorEffortReturn  string
+	setPersonaModelErr       error
+	setGovernorEffortErr     error
+	continuationState        session.ContinuationState
+	approveContinuationInput int64
+	revokeContinuationInput  int64
+	triggerContinuationInput int64
 }
 
 func (s stubCommandRouter) Stop(chatID int64) core.StopResult {
@@ -106,6 +111,26 @@ func (s stubCommandRouter) ToggleGovernorEffort() (string, error) {
 
 func (s stubCommandRouter) CurrentEfforts() (string, string) {
 	return s.personaEffort, s.governorEffort
+}
+
+func (s *stubCommandRouter) ApproveContinuation(chatID int64) (session.ContinuationState, error) {
+	s.approveContinuationInput = chatID
+	if s.continuationState.Status == "" {
+		s.continuationState = session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, StageSummary: "Resume the next bounded step."}
+	}
+	return s.continuationState, nil
+}
+
+func (s *stubCommandRouter) RevokeContinuation(chatID int64) (session.ContinuationState, error) {
+	s.revokeContinuationInput = chatID
+	s.continuationState = session.ContinuationState{Status: session.ContinuationStatusRevoked}
+	return s.continuationState, nil
+}
+
+func (s *stubCommandRouter) TriggerContinuation(ctx context.Context, chatID int64) error {
+	s.triggerContinuationInput = chatID
+	_ = ctx
+	return nil
 }
 
 func (s stubCommandRouter) CurrentPersonaModel() string {
@@ -180,7 +205,7 @@ func TestHandleTelegramCommandStop(t *testing.T) {
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
-		stop: core.StopResult{ActiveCanceled: true, QueuedDropped: true},
+		stop: core.StopResult{ActiveCanceled: true, QueuedDropped: true, ContinuationRevoked: true},
 	}
 	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
 		ChatID:    7,
@@ -391,6 +416,33 @@ func TestHandleTelegramCommandCallbackGovernorEffort(t *testing.T) {
 	}
 	if len(sender.answers) != 1 {
 		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{continuationState: session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, StageSummary: "Resume the next bounded step."}}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-continue",
+		Data:    encodeContinuationCallbackData("approve"),
+		Message: &telegram.Message{MessageID: 93, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 7 {
+		t.Fatalf("approveContinuationInput = %d, want 7", router.approveContinuationInput)
+	}
+	if router.triggerContinuationInput != 7 {
+		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
 	if len(sender.edits) != 1 {
 		t.Fatalf("edits count = %d, want 1", len(sender.edits))

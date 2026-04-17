@@ -48,11 +48,34 @@ type telegramCommandControl struct {
 }
 
 func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
-	return c.router.Stop(chatID)
+	result := c.router.Stop(chatID)
+	if _, err := c.rt.RevokeContinuation(chatID); err == nil {
+		result.ContinuationRevoked = true
+	}
+	return result
 }
 
 func (c telegramCommandControl) Status(chatID int64) core.SessionStatus {
 	return c.router.Status(chatID)
+}
+
+func (c telegramCommandControl) ApproveContinuation(chatID int64) (session.ContinuationState, error) {
+	return c.rt.ApproveContinuation(chatID)
+}
+
+func (c telegramCommandControl) RevokeContinuation(chatID int64) (session.ContinuationState, error) {
+	state, err := c.rt.RevokeContinuation(chatID)
+	if err != nil {
+		return state, err
+	}
+	stop := c.router.Stop(chatID)
+	stop.ContinuationRevoked = state.Status == session.ContinuationStatusRevoked
+	_ = stop
+	return state, nil
+}
+
+func (c telegramCommandControl) TriggerContinuation(ctx context.Context, chatID int64) error {
+	return c.rt.TriggerContinuation(ctx, chatID)
 }
 
 func (c telegramCommandControl) TogglePersonaEffort() (string, error) {

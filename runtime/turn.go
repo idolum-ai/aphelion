@@ -162,6 +162,9 @@ func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (r
 				}
 				return r.deliverReviewEvents(ctx, key, sess)
 			},
+			PostReplyContinuationUI: func(postCtx context.Context) error {
+				return r.offerContinuationApproval(postCtx, key, msg, prepared.LedgerText)
+			},
 		},
 	}
 
