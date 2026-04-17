@@ -12,6 +12,8 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/pipeline"
+	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -341,6 +343,69 @@ func TestHandleInboundRendersFromStructuredMaterialFloor(t *testing.T) {
 	}
 	if !strings.Contains(sess.LastFloorText, "FACTS:") {
 		t.Fatalf("LastFloorText = %q, want text-shaped material floor", sess.LastFloorText)
+	}
+}
+
+func TestConvergeTurnBrokeragePropagatesLiveContextToFaceNote(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, provider, _ := buildRuntimeFixtures(t)
+	rt := &Runtime{cfg: cfg}
+	exec := pipeline.TurnExecutionContract{Provider: provider}
+
+	provider.planningReplyText = "INSPECT: yes\nQUESTION: no\nANSWER: yes\nRATIFICATION: adapt\nPLAN:\n- revise it"
+
+	ctxKey := struct{}{}
+	ctx := context.WithValue(context.Background(), ctxKey, "live-turn")
+
+	called := false
+	gotMode := ""
+	gotValue := any(nil)
+
+	updated, _ := rt.convergeTurnBrokerage(
+		ctx,
+		exec,
+		prompt.RuntimeAwareness{},
+		nil,
+		nil,
+		"user text",
+		turnBrokerage{
+			Active:             true,
+			Phase:              "brokerage",
+			IdolumNote:         "INSPECT: yes\nQUESTION: no\nANSWER: yes",
+			Ratification:       "adapt",
+			RatificationRecord: "needs revision",
+		},
+		func(reqCtx context.Context, mode string, awareness prompt.RuntimeAwareness, _ string, _ string) (string, core.TokenUsage, error) {
+			called = true
+			gotMode = mode
+			gotValue = reqCtx.Value(ctxKey)
+			_ = awareness
+			return "Push the revised plan.", core.TokenUsage{}, nil
+		},
+		nil,
+	)
+
+	if !called {
+		t.Fatal("requestFaceNote was not called")
+	}
+	if gotValue != "live-turn" {
+		t.Fatalf("context value = %#v, want live-turn", gotValue)
+	}
+	if gotMode != "brokerage" && gotMode != "proposal" {
+		t.Fatalf("mode = %q, want brokerage or proposal callback path", gotMode)
+	}
+	if updated.IdolumNote != "Push the revised plan." {
+		t.Fatalf("updated.IdolumNote = %q, want revised proposal", updated.IdolumNote)
+	}
+	if updated.Phase != "proposal" {
+		t.Fatalf("updated.Phase = %q, want proposal", updated.Phase)
+	}
+	if updated.Ratification != "" {
+		t.Fatalf("updated.Ratification = %q, want cleared ratification", updated.Ratification)
+	}
+	if updated.RatificationRecord != "" {
+		t.Fatalf("updated.RatificationRecord = %q, want cleared record", updated.RatificationRecord)
 	}
 }
 

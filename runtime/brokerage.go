@@ -188,7 +188,7 @@ func maybeSeedPlanFromBrokerage(current session.PlanState, brokerage turnBrokera
 	})
 }
 
-type brokerageFaceRequester func(mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error)
+type brokerageFaceRequester func(ctx context.Context, mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error)
 
 func (r *Runtime) convergeTurnBrokerage(
 	ctx context.Context,
@@ -216,10 +216,10 @@ func (r *Runtime) convergeTurnBrokerage(
 		Ratify: func(ctx context.Context, _ int, state turnBrokerage) (turnBrokerage, core.TokenUsage, error) {
 			return r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, userText, state)
 		},
-		Revise: func(_ context.Context, _ int, state turnBrokerage) (turnBrokerage, core.TokenUsage, error) {
+		Revise: func(ctx context.Context, _ int, state turnBrokerage) (turnBrokerage, core.TokenUsage, error) {
 			reviseAwareness := turn.ApplyBrokerageAwareness(baseAwareness, state.toTurnAwareness())
 			reviseAwareness.ArtifactMode = "scene"
-			revised, proposalUsage, proposalErr := requestFaceNote("brokerage", reviseAwareness, state.IdolumNote, state.RatificationRecord)
+			revised, proposalUsage, proposalErr := requestFaceNote(ctx, "brokerage", reviseAwareness, state.IdolumNote, state.RatificationRecord)
 			if proposalErr != nil {
 				return state, proposalUsage, proposalErr
 			}
@@ -284,7 +284,7 @@ func (r *Runtime) fallbackToPlainProposal(
 	brokerage.RatifiedExecutionContract = nil
 	brokerage.SuggestedExecutionContract = nil
 
-	proposal, proposalUsage, proposalErr := requestFaceNote("proposal", baseAwareness, "", "")
+	proposal, proposalUsage, proposalErr := requestFaceNote(ctx, "proposal", baseAwareness, "", "")
 	currentUsage = addTokenUsage(currentUsage, proposalUsage)
 	if proposalErr == nil {
 		brokerage.IdolumNote = strings.TrimSpace(proposal)

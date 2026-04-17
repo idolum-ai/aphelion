@@ -137,7 +137,7 @@ type turnCoordinatorExecuteInput struct {
 	Channel               string
 	PrincipalRole         string
 	GovernorName          string
-	RequestFaceNote       func(mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error)
+	RequestFaceNote       func(ctx context.Context, mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error)
 	ExtraSystemMessages   []agent.Message
 	RunErrPrefix          string
 	InvalidOutputPrefix   string
