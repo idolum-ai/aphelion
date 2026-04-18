@@ -20,7 +20,6 @@ func TestRuntimeRecipeStateRoundTrip(t *testing.T) {
 	path := recipeStatePath(&cfg)
 	want := runtimeRecipeState{
 		PersonaModel:   personaModelOpus46,
-		PersonaEffort:  personaEffortOpus,
 		GovernorEffort: governorEffortHigh,
 	}
 	if err := saveRuntimeRecipeState(path, want, nil); err != nil {
@@ -35,7 +34,7 @@ func TestRuntimeRecipeStateRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRuntimeRecipeStateMigratesLegacyPersonaEffort(t *testing.T) {
+func TestRuntimeRecipeStateIgnoresLegacyPersonaEffortField(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
@@ -52,11 +51,8 @@ func TestRuntimeRecipeStateMigratesLegacyPersonaEffort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
 	}
-	if got.PersonaModel != personaModelOpus {
-		t.Fatalf("PersonaModel = %q, want %q", got.PersonaModel, personaModelOpus)
-	}
-	if got.PersonaEffort != personaEffortOpus {
-		t.Fatalf("PersonaEffort = %q, want %q", got.PersonaEffort, personaEffortOpus)
+	if got.PersonaModel != personaModelSonnet {
+		t.Fatalf("PersonaModel = %q, want default %q when persona_model is absent", got.PersonaModel, personaModelSonnet)
 	}
 }
 
@@ -70,7 +66,6 @@ func TestSetPersonaModelPersistsSelection(t *testing.T) {
 		recipePath: path,
 		recipeState: runtimeRecipeState{
 			PersonaModel:   personaModelSonnet,
-			PersonaEffort:  personaEffortSonnet,
 			GovernorEffort: governorEffortMedium,
 		},
 	}
@@ -88,9 +83,6 @@ func TestSetPersonaModelPersistsSelection(t *testing.T) {
 	if reloaded.PersonaModel != personaModelOpus47 {
 		t.Fatalf("PersonaModel = %q, want %q", reloaded.PersonaModel, personaModelOpus47)
 	}
-	if reloaded.PersonaEffort != personaEffortOpus {
-		t.Fatalf("PersonaEffort = %q, want %q", reloaded.PersonaEffort, personaEffortOpus)
-	}
 }
 
 func TestSetGovernorEffortValidatesAndPersists(t *testing.T) {
@@ -103,7 +95,6 @@ func TestSetGovernorEffortValidatesAndPersists(t *testing.T) {
 		recipePath: path,
 		recipeState: runtimeRecipeState{
 			PersonaModel:   personaModelSonnet,
-			PersonaEffort:  personaEffortSonnet,
 			GovernorEffort: governorEffortMedium,
 		},
 	}
@@ -144,7 +135,6 @@ func TestRuntimeReasoningOverrideAppliesOnlyInteractiveAndRecovery(t *testing.T)
 	rt := &Runtime{
 		cfg: cfg,
 		recipeState: runtimeRecipeState{
-			PersonaEffort:  personaEffortSonnet,
 			GovernorEffort: governorEffortHigh,
 		},
 	}

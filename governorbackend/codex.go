@@ -559,6 +559,13 @@ func normalizeArguments(raw json.RawMessage) string {
 		return "{}"
 	}
 	if json.Valid(trimmed) {
+		var encoded string
+		if err := json.Unmarshal(trimmed, &encoded); err == nil {
+			nested := bytes.TrimSpace([]byte(encoded))
+			if len(nested) > 0 && json.Valid(nested) {
+				return string(nested)
+			}
+		}
 		return string(trimmed)
 	}
 	quoted, err := json.Marshal(string(trimmed))
@@ -611,31 +618,6 @@ func mapCodexReasoning(cfg agent.ReasoningConfig) map[string]any {
 	return out
 }
 
-type codexResponse struct {
-	OutputText string            `json:"output_text"`
-	Output     []codexOutputItem `json:"output"`
-	Usage      codexUsage        `json:"usage"`
-}
-
-type codexOutputItem struct {
-	Type      string               `json:"type"`
-	Role      string               `json:"role"`
-	Name      string               `json:"name"`
-	CallID    string               `json:"call_id"`
-	Arguments string               `json:"arguments"`
-	Content   []codexContentItem   `json:"content"`
-	Summary   []codexReasoningText `json:"summary"`
-}
-
-type codexContentItem struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type codexReasoningText struct {
-	Text string `json:"text"`
-}
-
 type codexUsage struct {
 	InputTokens        int64 `json:"input_tokens"`
 	OutputTokens       int64 `json:"output_tokens"`
@@ -662,6 +644,16 @@ type codexCompletedResponse struct {
 	IncompleteDetails *struct {
 		Reason string `json:"reason"`
 	} `json:"incomplete_details"`
+}
+
+type codexOutputItem struct {
+	Type      string          `json:"type"`
+	CallID    string          `json:"call_id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+	Summary   []struct {
+		Text string `json:"text"`
+	} `json:"summary"`
 }
 
 type codexProviderState struct {
@@ -857,78 +849,6 @@ func (p *codexStreamParser) captureUsage(raw json.RawMessage, cb agent.StreamCal
 		return cb(agent.StreamChunk{Type: "usage", Usage: &usage})
 	}
 	return nil
-}
-
-func parseCodexResponse(raw []byte) (*agent.Response, error) {
-	var parsed codexResponse
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, err
-	}
-
-	var (
-		contentParts   []string
-		thinkingParts  []string
-		thinkingBlocks []agent.ThinkingBlock
-		toolCalls      []agent.ToolCall
-	)
-
-	haveRootOutputText := false
-	if text := strings.TrimSpace(parsed.OutputText); text != "" {
-		contentParts = append(contentParts, text)
-		haveRootOutputText = true
-	}
-
-	for _, item := range parsed.Output {
-		switch item.Type {
-		case "message":
-			if haveRootOutputText {
-				continue
-			}
-			for _, block := range item.Content {
-				if strings.EqualFold(block.Type, "output_text") || strings.EqualFold(block.Type, "text") {
-					if text := strings.TrimSpace(block.Text); text != "" {
-						contentParts = append(contentParts, text)
-					}
-				}
-			}
-		case "function_call":
-			toolCalls = append(toolCalls, agent.ToolCall{
-				ID:    strings.TrimSpace(item.CallID),
-				Name:  strings.TrimSpace(item.Name),
-				Input: json.RawMessage(normalizeArguments(json.RawMessage(item.Arguments))),
-			})
-		case "reasoning":
-			for _, summary := range item.Summary {
-				if text := strings.TrimSpace(summary.Text); text != "" {
-					thinkingParts = append(thinkingParts, text)
-					thinkingBlocks = append(thinkingBlocks, agent.ThinkingBlock{
-						Type:    "summary_text",
-						Content: text,
-					})
-				}
-			}
-		}
-	}
-
-	content := strings.TrimSpace(strings.Join(contentParts, "\n\n"))
-	usage := core.TokenUsage{
-		InputTokens:      parsed.Usage.InputTokens,
-		OutputTokens:     parsed.Usage.OutputTokens,
-		TotalTokens:      parsed.Usage.TotalTokens,
-		CacheReadTokens:  parsed.Usage.InputTokensDetails.CachedTokens,
-		CacheWriteTokens: parsed.Usage.InputTokensDetails.CacheWriteTokens,
-	}
-	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
-	}
-
-	return &agent.Response{
-		Content:      content,
-		Thinking:     strings.TrimSpace(strings.Join(thinkingParts, "\n\n")),
-		ThinkingMeta: thinkingBlocks,
-		ToolCalls:    toolCalls,
-		Usage:        usage,
-	}, nil
 }
 
 func codexResponsesEndpoint(baseURL string) string {

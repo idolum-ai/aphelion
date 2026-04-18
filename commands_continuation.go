@@ -7,18 +7,10 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/session"
-	"github.com/idolum-ai/aphelion/telegram"
 )
 
 const continuationCallbackPrefix = "continuation:"
 const staleContinuationCallbackText = "This continuation prompt is no longer active. Use the newest prompt."
-
-func continuationApprovalRows() [][]telegram.InlineButton {
-	return [][]telegram.InlineButton{{
-		{Text: "Stop", CallbackData: encodeContinuationCallbackData("decision", "stop")},
-		{Text: "Continue", CallbackData: encodeContinuationCallbackData("decision", "approve")},
-	}}
-}
 
 func encodeContinuationCallbackData(decisionID string, action string) string {
 	decisionID = strings.TrimSpace(decisionID)

@@ -1110,29 +1110,22 @@ api_key = "sk-ant-test"
 	}
 }
 
-func TestResolveConfigPathPrefersPrimaryThenLegacyAndEnv(t *testing.T) {
+func TestResolveConfigPathPrefersPrimaryThenEnv(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("APHELION_CONFIG", "")
 
 	primary := filepath.Join(home, ".aphelion", "aphelion.toml")
-	legacy := filepath.Join(home, ".config", "aphelion", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(primary), 0o755); err != nil {
 		t.Fatalf("mkdir primary dir: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
-		t.Fatalf("mkdir legacy dir: %v", err)
-	}
-	if err := os.WriteFile(legacy, []byte("legacy"), 0o600); err != nil {
-		t.Fatalf("write legacy config: %v", err)
 	}
 
 	got, err := ResolveConfigPath("")
 	if err != nil {
 		t.Fatalf("ResolveConfigPath() err = %v", err)
 	}
-	if got != legacy {
-		t.Fatalf("config path = %q, want legacy %q when primary is absent", got, legacy)
+	if got != primary {
+		t.Fatalf("config path = %q, want primary default %q when unset", got, primary)
 	}
 
 	if err := os.WriteFile(primary, []byte("primary"), 0o600); err != nil {

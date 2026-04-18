@@ -370,35 +370,6 @@ func resolveWorkspacePath(workspaceRoot string, rel string) (string, string, err
 	return target, filepath.ToSlash(checkRel), nil
 }
 
-func truncateContent(raw string, perFileLimit int, remaining *int) (string, bool) {
-	content := strings.TrimSpace(raw)
-	if content == "" {
-		return "", false
-	}
-
-	limit := len(content)
-	if perFileLimit > 0 && limit > perFileLimit {
-		limit = perFileLimit
-	}
-	if remaining != nil && *remaining < limit {
-		limit = *remaining
-	}
-	if limit <= 0 {
-		return "", len(content) > 0
-	}
-
-	content, truncated := truncateString(content, limit)
-
-	if remaining != nil {
-		*remaining -= len(content)
-		if *remaining < 0 {
-			*remaining = 0
-		}
-	}
-
-	return content, truncated
-}
-
 func min(a int, b int) int {
 	if a < b {
 		return a

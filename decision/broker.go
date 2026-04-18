@@ -488,10 +488,6 @@ func (b *Broker) clearWithContext(ctx context.Context, id string) error {
 	return store.DeletePending(ctx, id)
 }
 
-func (b *Broker) clear(id string) {
-	_ = b.clearWithContext(context.Background(), id)
-}
-
 func (b *Broker) activateOwner(ctx context.Context, id string) bool {
 	var staleID string
 	var stalePending *pendingDecision

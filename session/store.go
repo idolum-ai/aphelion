@@ -14,7 +14,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 23
+const (
+	schemaVersion                       = 23
+	minimumSupportedLegacySchemaVersion = 11
+)
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -3085,6 +3088,14 @@ func upsertSessionRow(tx *sql.Tx, session *Session, now time.Time) error {
 }
 
 func applyMigrations(tx *sql.Tx) error {
+	currentVersion, err := currentSchemaVersion(tx)
+	if err != nil {
+		return err
+	}
+	if err := rejectUnsupportedLegacySchema(tx, currentVersion); err != nil {
+		return err
+	}
+
 	if err := ensureSessionColumn(tx, "last_floor_text", "TEXT"); err != nil {
 		return fmt.Errorf("ensure sessions.last_floor_text: %w", err)
 	}
@@ -3188,20 +3199,6 @@ func applyMigrations(tx *sql.Tx) error {
 		}
 	}
 
-	currentVersion, err := currentSchemaVersion(tx)
-	if err != nil {
-		return err
-	}
-	if currentVersion < 10 {
-		if err := migrateSessionIdentity(tx); err != nil {
-			return err
-		}
-	}
-	if currentVersion < 11 {
-		if err := migrateDurableAgentLivePolicy(tx); err != nil {
-			return err
-		}
-	}
 	if err := ensureSessionColumn(tx, "plan_state_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
 		return fmt.Errorf("ensure sessions.plan_state_json: %w", err)
 	}
@@ -3259,330 +3256,6 @@ func applyMigrations(tx *sql.Tx) error {
 	return nil
 }
 
-func migrateSessionIdentity(tx *sql.Tx) error {
-	pk, err := primaryKeyColumns(tx, "sessions")
-	if err != nil {
-		return fmt.Errorf("inspect sessions primary key: %w", err)
-	}
-	if len(pk) == 1 && strings.EqualFold(pk[0], "session_id") {
-		if err := backfillSessionIdentityColumns(tx); err != nil {
-			return err
-		}
-		if err := backfillChildSessionIDs(tx); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	legacyPlanEvents, err := extractLegacyPlanEvents(tx)
-	if err != nil {
-		return err
-	}
-	if err := dropLegacyPlanEvents(tx); err != nil {
-		return err
-	}
-
-	if err := backfillSessionIdentityColumns(tx); err != nil {
-		return err
-	}
-
-	statements := []string{
-		`CREATE TABLE sessions_v10 (
-			session_id TEXT PRIMARY KEY,
-			chat_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			scope_kind TEXT NOT NULL DEFAULT '',
-			scope_id TEXT NOT NULL DEFAULT '',
-			durable_agent_id TEXT NOT NULL DEFAULT '',
-			system_prompt TEXT,
-			last_floor_text TEXT,
-			last_floor_metadata TEXT,
-			plan_state_json TEXT NOT NULL DEFAULT '{}',
-			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-			turn_count INTEGER NOT NULL DEFAULT 0,
-			chat_type TEXT NOT NULL DEFAULT 'dm',
-			chat_title TEXT,
-			user_name TEXT,
-			cache_last_write_block INTEGER NOT NULL DEFAULT 0,
-			cache_blocks_since INTEGER NOT NULL DEFAULT 0,
-			cache_last_write_time TEXT,
-			cache_hit_rate REAL NOT NULL DEFAULT 0.0,
-			cache_consecutive_misses INTEGER NOT NULL DEFAULT 0,
-			total_input_tokens INTEGER NOT NULL DEFAULT 0,
-			total_output_tokens INTEGER NOT NULL DEFAULT 0,
-			total_cache_read INTEGER NOT NULL DEFAULT 0,
-			total_cache_write INTEGER NOT NULL DEFAULT 0,
-			last_provider TEXT,
-			last_model TEXT,
-			active_tool_calls INTEGER NOT NULL DEFAULT 0,
-			last_error TEXT
-		)`,
-		`CREATE TABLE messages_v10 (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id TEXT NOT NULL,
-			chat_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
-			content TEXT NOT NULL,
-			floor_content TEXT,
-			floor_metadata TEXT,
-			tool_calls TEXT,
-			tool_id TEXT,
-			tool_name TEXT,
-			thinking TEXT,
-			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			turn_index INTEGER NOT NULL,
-			content_chars INTEGER NOT NULL DEFAULT 0,
-			compacted INTEGER NOT NULL DEFAULT 0,
-			FOREIGN KEY (session_id) REFERENCES sessions_v10(session_id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE outbound_messages_v10 (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id TEXT NOT NULL,
-			chat_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			turn_index INTEGER NOT NULL,
-			telegram_msg_id INTEGER NOT NULL,
-			msg_type TEXT NOT NULL,
-			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			FOREIGN KEY (session_id) REFERENCES sessions_v10(session_id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE review_events_v10 (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			source_session_id TEXT,
-			source_chat_id INTEGER NOT NULL DEFAULT 0,
-			source_user_id INTEGER NOT NULL DEFAULT 0,
-			source_role TEXT NOT NULL,
-			source_scope_kind TEXT NOT NULL DEFAULT '',
-			source_scope_id TEXT NOT NULL DEFAULT '',
-			source_durable_agent_id TEXT NOT NULL DEFAULT '',
-			target_session_id TEXT,
-			target_chat_id INTEGER NOT NULL DEFAULT 0,
-			target_scope_kind TEXT NOT NULL DEFAULT '',
-			target_scope_id TEXT NOT NULL DEFAULT '',
-			target_durable_agent_id TEXT NOT NULL DEFAULT '',
-			turn_from INTEGER,
-			turn_to INTEGER,
-			summary TEXT NOT NULL,
-			metadata_json TEXT,
-			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'dismissed')),
-			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			delivered_at TEXT
-		)`,
-		`CREATE TABLE turn_runs_v10 (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id TEXT NOT NULL,
-			chat_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			scope_kind TEXT NOT NULL DEFAULT '',
-			scope_id TEXT NOT NULL DEFAULT '',
-			durable_agent_id TEXT NOT NULL DEFAULT '',
-			kind TEXT NOT NULL,
-			status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'interrupted')),
-			request_text TEXT NOT NULL,
-			started_at TEXT NOT NULL DEFAULT (datetime('now')),
-			completed_at TEXT,
-			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
-			last_tool_name TEXT,
-			last_tool_preview TEXT,
-			tool_calls_started INTEGER NOT NULL DEFAULT 0,
-			tool_calls_finished INTEGER NOT NULL DEFAULT 0,
-			last_tool_result_preview TEXT,
-			last_tool_error TEXT,
-			progress_message_id INTEGER,
-			error_text TEXT,
-			recovery_summary TEXT,
-			recovery_logged_at TEXT,
-			FOREIGN KEY (session_id) REFERENCES sessions_v10(session_id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE compaction_log_v10 (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id TEXT NOT NULL,
-			chat_id INTEGER NOT NULL DEFAULT 0,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-			turns_before INTEGER,
-			turns_after INTEGER,
-			tokens_before INTEGER,
-			tokens_after INTEGER,
-			summary TEXT,
-			strategy TEXT NOT NULL DEFAULT 'summarize',
-			FOREIGN KEY (session_id) REFERENCES sessions_v10(session_id) ON DELETE CASCADE
-		)`,
-	}
-	for _, stmt := range statements {
-		if _, err := tx.Exec(stmt); err != nil {
-			return fmt.Errorf("create session identity table: %w", err)
-		}
-	}
-
-	copyStatements := []string{
-		`INSERT INTO sessions_v10(
-			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, system_prompt, last_floor_text, last_floor_metadata, plan_state_json,
-			created_at, updated_at, turn_count, chat_type, chat_title, user_name,
-			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
-			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
-			last_provider, last_model, active_tool_calls, last_error
-		)
-		SELECT
-			session_id, chat_id, user_id, COALESCE(scope_kind, ''), COALESCE(scope_id, ''), COALESCE(durable_agent_id, ''),
-			system_prompt, last_floor_text, last_floor_metadata, COALESCE(plan_state_json, '{}'),
-			created_at, updated_at, turn_count, chat_type, chat_title, user_name,
-			cache_last_write_block, cache_blocks_since, cache_last_write_time, cache_hit_rate, cache_consecutive_misses,
-			total_input_tokens, total_output_tokens, total_cache_read, total_cache_write,
-			last_provider, last_model, active_tool_calls, last_error
-		FROM sessions`,
-		`INSERT INTO messages_v10(
-			id, session_id, chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking,
-			created_at, turn_index, content_chars, compacted
-		)
-		SELECT
-			messages.id, sessions.session_id, messages.chat_id, messages.user_id, messages.role, messages.content, messages.floor_content, messages.floor_metadata, messages.tool_calls, messages.tool_id, messages.tool_name, messages.thinking,
-			messages.created_at, messages.turn_index, messages.content_chars, messages.compacted
-		FROM messages
-		JOIN sessions ON sessions.chat_id = messages.chat_id AND sessions.user_id = messages.user_id`,
-		`INSERT INTO outbound_messages_v10(
-			id, session_id, chat_id, user_id, turn_index, telegram_msg_id, msg_type, created_at
-		)
-		SELECT
-			outbound_messages.id, sessions.session_id, outbound_messages.chat_id, outbound_messages.user_id, outbound_messages.turn_index, outbound_messages.telegram_msg_id, outbound_messages.msg_type, outbound_messages.created_at
-		FROM outbound_messages
-		JOIN sessions ON sessions.chat_id = outbound_messages.chat_id AND sessions.user_id = outbound_messages.user_id`,
-		`INSERT INTO review_events_v10(
-			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
-			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
-		)
-		SELECT
-			id, source_session_id, source_chat_id, source_user_id, source_role, COALESCE(source_scope_kind, ''), COALESCE(source_scope_id, ''), COALESCE(source_durable_agent_id, ''),
-			target_session_id, target_chat_id, COALESCE(target_scope_kind, ''), COALESCE(target_scope_id, ''), COALESCE(target_durable_agent_id, ''),
-			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
-		FROM review_events`,
-		`INSERT INTO turn_runs_v10(
-			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text,
-			started_at, completed_at, last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
-			progress_message_id, error_text, recovery_summary, recovery_logged_at
-		)
-		SELECT
-			turn_runs.id, sessions.session_id, turn_runs.chat_id, turn_runs.user_id, COALESCE(turn_runs.scope_kind, ''), COALESCE(turn_runs.scope_id, ''), COALESCE(turn_runs.durable_agent_id, ''), turn_runs.kind, turn_runs.status, turn_runs.request_text,
-			turn_runs.started_at, turn_runs.completed_at, turn_runs.last_activity_at, turn_runs.last_tool_name, turn_runs.last_tool_preview, turn_runs.tool_calls_started, COALESCE(turn_runs.tool_calls_finished, 0), turn_runs.last_tool_result_preview, turn_runs.last_tool_error,
-			turn_runs.progress_message_id, turn_runs.error_text, turn_runs.recovery_summary, turn_runs.recovery_logged_at
-		FROM turn_runs
-		JOIN sessions ON sessions.chat_id = turn_runs.chat_id AND sessions.user_id = turn_runs.user_id`,
-		`INSERT INTO compaction_log_v10(
-			id, session_id, chat_id, user_id, timestamp, turns_before, turns_after, tokens_before, tokens_after, summary, strategy
-		)
-		SELECT
-			compaction_log.id, sessions.session_id, compaction_log.chat_id, compaction_log.user_id, compaction_log.timestamp, compaction_log.turns_before, compaction_log.turns_after, compaction_log.tokens_before, compaction_log.tokens_after, compaction_log.summary, compaction_log.strategy
-		FROM compaction_log
-		JOIN sessions ON sessions.chat_id = compaction_log.chat_id AND sessions.user_id = compaction_log.user_id`,
-	}
-	for _, stmt := range copyStatements {
-		if _, err := tx.Exec(stmt); err != nil {
-			return fmt.Errorf("copy session identity data: %w", err)
-		}
-	}
-
-	for _, stmt := range []string{
-		`DROP TABLE messages`,
-		`DROP TABLE outbound_messages`,
-		`DROP TABLE turn_runs`,
-		`DROP TABLE compaction_log`,
-		`DROP TABLE review_events`,
-		`DROP TABLE sessions`,
-		`ALTER TABLE sessions_v10 RENAME TO sessions`,
-		`ALTER TABLE messages_v10 RENAME TO messages`,
-		`ALTER TABLE outbound_messages_v10 RENAME TO outbound_messages`,
-		`ALTER TABLE review_events_v10 RENAME TO review_events`,
-		`ALTER TABLE turn_runs_v10 RENAME TO turn_runs`,
-		`ALTER TABLE compaction_log_v10 RENAME TO compaction_log`,
-		`CREATE TABLE plan_events (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id TEXT NOT NULL,
-			event_kind TEXT NOT NULL,
-			plan_state_json TEXT NOT NULL DEFAULT '{}',
-			created_at TEXT NOT NULL DEFAULT (datetime('now'))
-		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_transport_scope ON sessions(chat_id, user_id, scope_kind, scope_id, durable_agent_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, turn_index)`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_active ON messages(session_id, compacted, turn_index)`,
-		`CREATE INDEX IF NOT EXISTS idx_outbound_session ON outbound_messages(session_id, turn_index)`,
-		`CREATE INDEX IF NOT EXISTS idx_review_events_target ON review_events(target_chat_id, status, created_at, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_review_events_target_session ON review_events(target_session_id, status, created_at, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_plan_events_session ON plan_events(session_id, created_at, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
-		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
-	} {
-		if _, err := tx.Exec(stmt); err != nil {
-			return fmt.Errorf("finalize session identity migration: %w", err)
-		}
-	}
-	for _, event := range legacyPlanEvents {
-		if _, err := tx.Exec(`
-			INSERT INTO plan_events(id, session_id, event_kind, plan_state_json, created_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, event.ID, event.SessionID, event.Kind, event.PlanStateJSON, event.CreatedAt); err != nil {
-			return fmt.Errorf("restore legacy plan event id=%d: %w", event.ID, err)
-		}
-	}
-	return nil
-}
-
-type legacyPlanEventRow struct {
-	ID            int64
-	SessionID     string
-	Kind          string
-	PlanStateJSON string
-	CreatedAt     string
-}
-
-func extractLegacyPlanEvents(tx *sql.Tx) ([]legacyPlanEventRow, error) {
-	exists, err := tableExists(tx, "plan_events")
-	if err != nil {
-		return nil, fmt.Errorf("inspect legacy plan_events table: %w", err)
-	}
-	if !exists {
-		return nil, nil
-	}
-	rows, err := tx.Query(`
-		SELECT id, COALESCE(session_id, ''), event_kind, COALESCE(plan_state_json, '{}'), created_at
-		FROM plan_events
-		ORDER BY created_at ASC, id ASC
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("query legacy plan_events: %w", err)
-	}
-	defer rows.Close()
-
-	var out []legacyPlanEventRow
-	for rows.Next() {
-		var row legacyPlanEventRow
-		if err := rows.Scan(&row.ID, &row.SessionID, &row.Kind, &row.PlanStateJSON, &row.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan legacy plan event: %w", err)
-		}
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate legacy plan events: %w", err)
-	}
-	return out, nil
-}
-
-func dropLegacyPlanEvents(tx *sql.Tx) error {
-	exists, err := tableExists(tx, "plan_events")
-	if err != nil {
-		return fmt.Errorf("inspect plan_events table: %w", err)
-	}
-	if !exists {
-		return nil
-	}
-	if _, err := tx.Exec(`DROP TABLE plan_events`); err != nil {
-		return fmt.Errorf("drop legacy plan_events: %w", err)
-	}
-	return nil
-}
-
 func ensureSessionIdentityIndexes(tx *sql.Tx) error {
 	for _, stmt := range []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_transport_scope ON sessions(chat_id, user_id, scope_kind, scope_id, durable_agent_id)`,
@@ -3597,258 +3270,6 @@ func ensureSessionIdentityIndexes(tx *sql.Tx) error {
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure session identity index: %w", err)
-		}
-	}
-	return nil
-}
-
-func backfillSessionIdentityColumns(tx *sql.Tx) error {
-	rows, err := tx.Query(`
-		SELECT rowid, chat_id, user_id, COALESCE(scope_kind, ''), COALESCE(scope_id, ''), COALESCE(durable_agent_id, ''), COALESCE(session_id, '')
-		FROM sessions
-	`)
-	if err != nil {
-		return fmt.Errorf("query sessions for session identity backfill: %w", err)
-	}
-	defer rows.Close()
-
-	type sessionRow struct {
-		rowid int64
-		id    string
-	}
-	var sessionRows []sessionRow
-	for rows.Next() {
-		var (
-			rowid           int64
-			chatID          int64
-			userID          int64
-			scopeKind       string
-			scopeID         string
-			durableAgentID  string
-			existingSession string
-		)
-		if err := rows.Scan(&rowid, &chatID, &userID, &scopeKind, &scopeID, &durableAgentID, &existingSession); err != nil {
-			return fmt.Errorf("scan session backfill row: %w", err)
-		}
-		scope := NormalizeScopeRef(ScopeRef{
-			Kind:           ScopeKind(scopeKind),
-			ID:             scopeID,
-			DurableAgentID: durableAgentID,
-		})
-		if existingSession == "" {
-			existingSession = SessionIDFromParts(chatID, userID, scope)
-		}
-		sessionRows = append(sessionRows, sessionRow{rowid: rowid, id: existingSession})
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate sessions for backfill: %w", err)
-	}
-	for _, row := range sessionRows {
-		if _, err := tx.Exec(`UPDATE sessions SET session_id = ? WHERE rowid = ?`, row.id, row.rowid); err != nil {
-			return fmt.Errorf("backfill sessions.session_id rowid=%d: %w", row.rowid, err)
-		}
-	}
-
-	reviewRows, err := tx.Query(`
-		SELECT
-			id,
-			COALESCE(source_session_id, ''),
-			source_chat_id, source_user_id,
-			COALESCE(source_scope_kind, ''), COALESCE(source_scope_id, ''), COALESCE(source_durable_agent_id, ''),
-			COALESCE(target_session_id, ''),
-			target_chat_id,
-			COALESCE(target_scope_kind, ''), COALESCE(target_scope_id, ''), COALESCE(target_durable_agent_id, '')
-		FROM review_events
-	`)
-	if err != nil {
-		return fmt.Errorf("query review events for backfill: %w", err)
-	}
-	defer reviewRows.Close()
-	type reviewRow struct {
-		id              int64
-		sourceSessionID string
-		targetSessionID string
-	}
-	var reviews []reviewRow
-	for reviewRows.Next() {
-		var (
-			row             reviewRow
-			sourceChatID    int64
-			sourceUserID    int64
-			sourceScopeKind string
-			sourceScopeID   string
-			sourceAgentID   string
-			targetChatID    int64
-			targetScopeKind string
-			targetScopeID   string
-			targetAgentID   string
-		)
-		if err := reviewRows.Scan(&row.id, &row.sourceSessionID, &sourceChatID, &sourceUserID, &sourceScopeKind, &sourceScopeID, &sourceAgentID, &row.targetSessionID, &targetChatID, &targetScopeKind, &targetScopeID, &targetAgentID); err != nil {
-			return fmt.Errorf("scan review event backfill row: %w", err)
-		}
-		if row.sourceSessionID == "" {
-			row.sourceSessionID = SessionIDFromParts(sourceChatID, sourceUserID, NormalizeScopeRef(ScopeRef{
-				Kind:           ScopeKind(sourceScopeKind),
-				ID:             sourceScopeID,
-				DurableAgentID: sourceAgentID,
-			}))
-		}
-		if row.targetSessionID == "" {
-			row.targetSessionID = SessionIDFromParts(targetChatID, 0, NormalizeScopeRef(ScopeRef{
-				Kind:           ScopeKind(targetScopeKind),
-				ID:             targetScopeID,
-				DurableAgentID: targetAgentID,
-			}))
-		}
-		reviews = append(reviews, row)
-	}
-	if err := reviewRows.Err(); err != nil {
-		return fmt.Errorf("iterate review events for backfill: %w", err)
-	}
-	for _, row := range reviews {
-		if _, err := tx.Exec(`UPDATE review_events SET source_session_id = ?, target_session_id = ? WHERE id = ?`, nullableString(row.sourceSessionID), nullableString(row.targetSessionID), row.id); err != nil {
-			return fmt.Errorf("backfill review_events session ids id=%d: %w", row.id, err)
-		}
-	}
-	return nil
-}
-
-func migrateDurableAgentLivePolicy(tx *sql.Tx) error {
-	hasLivePolicy, err := tableHasColumn(tx, "durable_agents", "live_policy_json")
-	if err != nil {
-		return err
-	}
-	hasLegacyCharter, err := tableHasColumn(tx, "durable_agents", "charter")
-	if err != nil {
-		return err
-	}
-	if hasLivePolicy && !hasLegacyCharter {
-		return nil
-	}
-	if !hasLegacyCharter {
-		return nil
-	}
-
-	type legacyDurableAgentRow struct {
-		AgentID            string
-		ParentAgentID      sql.NullString
-		ParentScopeKind    sql.NullString
-		ParentScopeID      sql.NullString
-		ReviewTargetChatID int64
-		ChannelKind        string
-		Charter            string
-		CapabilitiesJSON   string
-		LocalRootsJSON     string
-		NetworkPolicy      sql.NullString
-		WakeupMode         sql.NullString
-		OutboundMode       sql.NullString
-		DriftPolicy        sql.NullString
-		SecretScopesJSON   string
-		Status             sql.NullString
-		CreatedAt          string
-		UpdatedAt          string
-	}
-
-	rows, err := tx.Query(`
-		SELECT
-			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
-			channel_kind, charter, capability_envelope_json, local_storage_roots_json, network_policy,
-			wakeup_mode, outbound_mode, drift_policy, secret_scopes_json, status, created_at, updated_at
-		FROM durable_agents
-	`)
-	if err != nil {
-		return fmt.Errorf("query legacy durable agents: %w", err)
-	}
-	defer rows.Close()
-
-	var legacyRows []legacyDurableAgentRow
-	for rows.Next() {
-		var row legacyDurableAgentRow
-		if err := rows.Scan(
-			&row.AgentID, &row.ParentAgentID, &row.ParentScopeKind, &row.ParentScopeID, &row.ReviewTargetChatID,
-			&row.ChannelKind, &row.Charter, &row.CapabilitiesJSON, &row.LocalRootsJSON, &row.NetworkPolicy,
-			&row.WakeupMode, &row.OutboundMode, &row.DriftPolicy, &row.SecretScopesJSON, &row.Status, &row.CreatedAt, &row.UpdatedAt,
-		); err != nil {
-			return fmt.Errorf("scan legacy durable agent: %w", err)
-		}
-		legacyRows = append(legacyRows, row)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate legacy durable agents: %w", err)
-	}
-
-	if _, err := tx.Exec(`CREATE TABLE durable_agents_v11 (
-		agent_id TEXT PRIMARY KEY,
-		parent_agent_id TEXT,
-		parent_scope_kind TEXT,
-		parent_scope_id TEXT,
-		review_target_chat_id INTEGER NOT NULL DEFAULT 0,
-		channel_kind TEXT NOT NULL,
-		live_policy_json TEXT NOT NULL DEFAULT '{}',
-		bootstrap_ceiling_json TEXT NOT NULL DEFAULT '{}',
-		bootstrap_provider_json TEXT NOT NULL DEFAULT '{}',
-		control_plane_secret TEXT NOT NULL DEFAULT '',
-		policy_version INTEGER NOT NULL DEFAULT 1,
-		policy_hash TEXT NOT NULL DEFAULT '',
-		policy_issued_at TEXT,
-		local_storage_roots_json TEXT NOT NULL DEFAULT '[]',
-		network_policy TEXT,
-		wakeup_mode TEXT,
-		secret_scopes_json TEXT NOT NULL DEFAULT '[]',
-		status TEXT NOT NULL DEFAULT 'active',
-		created_at TEXT NOT NULL DEFAULT (datetime('now')),
-		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-	)`); err != nil {
-		return fmt.Errorf("create durable_agents_v11: %w", err)
-	}
-
-	insertStmt, err := tx.Prepare(`
-		INSERT INTO durable_agents_v11(
-			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
-			channel_kind, live_policy_json, bootstrap_ceiling_json, bootstrap_provider_json, control_plane_secret, policy_version, policy_hash, policy_issued_at,
-			local_storage_roots_json, network_policy, wakeup_mode, secret_scopes_json, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
-	if err != nil {
-		return fmt.Errorf("prepare durable_agents_v11 insert: %w", err)
-	}
-	defer insertStmt.Close()
-
-	for _, row := range legacyRows {
-		capabilities, err := unmarshalStringSlice(row.CapabilitiesJSON)
-		if err != nil {
-			return fmt.Errorf("decode legacy durable agent capabilities agent_id=%s: %w", row.AgentID, err)
-		}
-		policy := core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            row.Charter,
-			CapabilityEnvelope: capabilities,
-			OutboundMode:       nullToString(row.OutboundMode),
-			DriftPolicy:        nullToString(row.DriftPolicy),
-		})
-		livePolicyJSON, policyHash, err := marshalDurableAgentLivePolicy(policy)
-		if err != nil {
-			return fmt.Errorf("marshal legacy durable agent live policy agent_id=%s: %w", row.AgentID, err)
-		}
-		bootstrapCeilingJSON, err := marshalDurableAgentBootstrapCeiling(core.DefaultDurableAgentBootstrapCeiling(row.ChannelKind, policy))
-		if err != nil {
-			return fmt.Errorf("marshal legacy durable agent bootstrap ceiling agent_id=%s: %w", row.AgentID, err)
-		}
-		if _, err := insertStmt.Exec(
-			row.AgentID, nullableString(nullToString(row.ParentAgentID)), nullableString(nullToString(row.ParentScopeKind)),
-			nullableString(nullToString(row.ParentScopeID)), row.ReviewTargetChatID, row.ChannelKind, livePolicyJSON, bootstrapCeilingJSON, "{}", "", 1, policyHash,
-			row.UpdatedAt, defaultJSONString(row.LocalRootsJSON, "[]"), nullableString(nullToString(row.NetworkPolicy)), nullableString(nullToString(row.WakeupMode)),
-			defaultJSONString(row.SecretScopesJSON, "[]"), nullableString(nullToString(row.Status)), row.CreatedAt, row.UpdatedAt,
-		); err != nil {
-			return fmt.Errorf("insert migrated durable agent agent_id=%s: %w", row.AgentID, err)
-		}
-	}
-
-	for _, stmt := range []string{
-		`DROP TABLE durable_agents`,
-		`ALTER TABLE durable_agents_v11 RENAME TO durable_agents`,
-	} {
-		if _, err := tx.Exec(stmt); err != nil {
-			return fmt.Errorf("migrate durable_agents with %q: %w", stmt, err)
 		}
 	}
 	return nil
@@ -4014,24 +3435,6 @@ func backfillArtifactIndexFromSessions(tx *sql.Tx) error {
 	return nil
 }
 
-func backfillChildSessionIDs(tx *sql.Tx) error {
-	for _, table := range []string{"messages", "outbound_messages", "turn_runs", "compaction_log"} {
-		if _, err := tx.Exec(fmt.Sprintf(`
-			UPDATE %s
-			SET session_id = (
-				SELECT sessions.session_id
-				FROM sessions
-				WHERE sessions.chat_id = %s.chat_id AND sessions.user_id = %s.user_id
-				LIMIT 1
-			)
-			WHERE COALESCE(session_id, '') = ''
-		`, table, table, table)); err != nil {
-			return fmt.Errorf("backfill %s.session_id: %w", table, err)
-		}
-	}
-	return nil
-}
-
 func tableHasColumn(tx *sql.Tx, table string, name string) (bool, error) {
 	rows, err := tx.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
 	if err != nil {
@@ -4061,52 +3464,41 @@ func tableHasColumn(tx *sql.Tx, table string, name string) (bool, error) {
 	return false, nil
 }
 
-func primaryKeyColumns(tx *sql.Tx, table string) ([]string, error) {
-	rows, err := tx.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
-	if err != nil {
-		return nil, fmt.Errorf("query table_info(%s): %w", table, err)
-	}
-	defer rows.Close()
-	byOrder := map[int]string{}
-	for rows.Next() {
-		var (
-			cid      int
-			column   string
-			typ      string
-			notNull  int
-			defaultV sql.NullString
-			primaryK int
+func rejectUnsupportedLegacySchema(tx *sql.Tx, currentVersion int) error {
+	if currentVersion > 0 && currentVersion < minimumSupportedLegacySchemaVersion {
+		return fmt.Errorf(
+			"unsupported legacy database schema version %d (minimum supported existing schema version is %d); reinstall from a clean state",
+			currentVersion,
+			minimumSupportedLegacySchemaVersion,
 		)
-		if err := rows.Scan(&cid, &column, &typ, &notNull, &defaultV, &primaryK); err != nil {
-			return nil, fmt.Errorf("scan table_info(%s): %w", table, err)
-		}
-		if primaryK > 0 {
-			byOrder[primaryK] = column
-		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate table_info(%s): %w", table, err)
+	if currentVersion != 0 {
+		return nil
 	}
-	if len(byOrder) == 0 {
-		return nil, nil
-	}
-	out := make([]string, 0, len(byOrder))
-	for i := 1; i <= len(byOrder); i++ {
-		out = append(out, byOrder[i])
-	}
-	return out, nil
-}
 
-func tableExists(tx *sql.Tx, table string) (bool, error) {
-	var count int
-	if err := tx.QueryRow(`
-		SELECT COUNT(1)
-		FROM sqlite_master
-		WHERE type = 'table' AND name = ?
-	`, table).Scan(&count); err != nil {
-		return false, fmt.Errorf("query sqlite_master(%s): %w", table, err)
+	// Version 0 is valid for freshly initialized databases in this release.
+	// Distinguish that from unversioned legacy layouts by checking modern markers.
+	for _, marker := range []struct {
+		table  string
+		column string
+	}{
+		{table: "sessions", column: "scope_kind"},
+		{table: "sessions", column: "session_id"},
+		{table: "durable_agents", column: "live_policy_json"},
+	} {
+		has, err := tableHasColumn(tx, marker.table, marker.column)
+		if err != nil {
+			return err
+		}
+		if !has {
+			return fmt.Errorf(
+				"unsupported legacy database schema (missing %s.%s); reinstall from a clean state",
+				marker.table,
+				marker.column,
+			)
+		}
 	}
-	return count == 1, nil
+	return nil
 }
 
 func currentSchemaVersion(tx *sql.Tx) (int, error) {

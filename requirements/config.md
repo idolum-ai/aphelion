@@ -16,8 +16,6 @@ This spec therefore distinguishes between:
 
 Default location: `~/.aphelion/aphelion.toml`
 
-Legacy fallback: `~/.config/aphelion/config.toml`
-
 Override via `APHELION_CONFIG` env var or `--config` flag.
 
 Operators should also have an explicit initialization path, e.g. `aphelion init`,
@@ -321,7 +319,6 @@ writable_paths = ["{user_workspace}", "{user_memory}", "/tmp"]
 readonly_paths = ["{global_root}", "{shared_memory_root}"]
 hidden_paths = [
     "~/.aphelion/aphelion.toml",
-    "~/.config/aphelion/config.toml",
     "~/.ssh",
     "~/.gnupg",
 ]
@@ -365,7 +362,6 @@ hidden_paths = [             # Paths invisible to exec processes
     "/home/*/.ssh",
     "/home/*/.gnupg",
     "/home/*/.aphelion/aphelion.toml",       # Don't let exec see our config
-    "/home/*/.config/aphelion/config.toml",  # Legacy config fallback
 ]
 
 # Network isolation
@@ -660,7 +656,7 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 - **TestNetworkFirewall**: With `isolation = "firewall"`, exec can reach `api.anthropic.com:443` but not `evil.com:443`.
 - **TestNetworkFull**: With `isolation = "full"`, exec cannot reach any network address.
 - **TestNetworkNone**: With `isolation = "none"`, exec has full network access.
-- **TestHiddenPaths**: With `hidden_paths` set, exec cannot read `~/.aphelion/aphelion.toml` or the legacy fallback config.
+- **TestHiddenPaths**: With `hidden_paths` set, exec cannot read `~/.aphelion/aphelion.toml`.
 - **TestSeccompModerate**: With `seccomp = "moderate"`, exec cannot call `ptrace()` or `mount()`.
 - **TestUserNamespace**: With `user_namespace = true`, exec runs as uid 65534 (nobody).
 - **TestDropCapabilities**: Exec process does not have CAP_SYS_ADMIN or CAP_NET_ADMIN.

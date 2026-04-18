@@ -1336,7 +1336,7 @@ func TestApplyDurableAgentLivePolicyTracksOfferedStateAndRatifiedOutcome(t *test
 	}
 }
 
-func TestInitMigratesLegacySessionsWithFloorColumn(t *testing.T) {
+func TestInitRejectsUnsupportedLegacySessionSchema(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
@@ -1386,59 +1386,16 @@ func TestInitMigratesLegacySessionsWithFloorColumn(t *testing.T) {
 		t.Fatalf("close legacy db: %v", err)
 	}
 
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore() migration err = %v", err)
+	_, err = NewSQLiteStore(dbPath)
+	if err == nil {
+		t.Fatal("NewSQLiteStore() err = nil, want unsupported legacy schema error")
 	}
-	defer store.Close()
-
-	var hasColumn int
-	err = store.db.QueryRow(`
-			SELECT COUNT(1)
-			FROM pragma_table_info('sessions')
-			WHERE name = 'last_floor_text'
-		`).Scan(&hasColumn)
-	if err != nil {
-		t.Fatalf("query pragma_table_info: %v", err)
-	}
-	if hasColumn != 1 {
-		t.Fatalf("last_floor_text column count = %d, want 1", hasColumn)
-	}
-
-	err = store.db.QueryRow(`
-			SELECT COUNT(1)
-			FROM pragma_table_info('messages')
-			WHERE name = 'floor_content'
-		`).Scan(&hasColumn)
-	if err != nil {
-		t.Fatalf("query pragma_table_info(messages): %v", err)
-	}
-	if hasColumn != 1 {
-		t.Fatalf("floor_content column count = %d, want 1", hasColumn)
-	}
-
-	err = store.db.QueryRow(`
-			SELECT COUNT(1)
-			FROM sqlite_master
-			WHERE type = 'table' AND name = 'turn_runs'
-		`).Scan(&hasColumn)
-	if err != nil {
-		t.Fatalf("query sqlite_master(turn_runs): %v", err)
-	}
-	if hasColumn != 1 {
-		t.Fatalf("turn_runs table count = %d, want 1", hasColumn)
-	}
-
-	var maxVersion int
-	if err := store.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&maxVersion); err != nil {
-		t.Fatalf("query schema_version: %v", err)
-	}
-	if maxVersion != schemaVersion {
-		t.Fatalf("schema version max = %d, want %d", maxVersion, schemaVersion)
+	if !strings.Contains(err.Error(), "unsupported legacy database schema version 1") {
+		t.Fatalf("NewSQLiteStore() err = %v, want unsupported legacy schema version message", err)
 	}
 }
 
-func TestInitMigratesLegacySessionIdentityWithPlanEventsFKMismatch(t *testing.T) {
+func TestInitRejectsUnsupportedLegacySessionIdentitySchema(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "legacy-plan-events.db")
@@ -1601,47 +1558,16 @@ func TestInitMigratesLegacySessionIdentityWithPlanEventsFKMismatch(t *testing.T)
 		t.Fatalf("close legacy db: %v", err)
 	}
 
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore() migration err = %v", err)
+	_, err = NewSQLiteStore(dbPath)
+	if err == nil {
+		t.Fatal("NewSQLiteStore() err = nil, want unsupported legacy schema error")
 	}
-	defer store.Close()
-
-	var eventCount int
-	if err := store.db.QueryRow(`
-		SELECT COUNT(1)
-		FROM plan_events
-		WHERE session_id = ? AND event_kind = 'update_plan'
-	`, sessionID).Scan(&eventCount); err != nil {
-		t.Fatalf("query migrated plan_events: %v", err)
-	}
-	if eventCount != 1 {
-		t.Fatalf("migrated plan event count = %d, want 1", eventCount)
-	}
-
-	rows, err := store.db.Query(`PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatalf("PRAGMA foreign_key_check: %v", err)
-	}
-	defer rows.Close()
-	if rows.Next() {
-		var (
-			table  string
-			rowid  int64
-			parent string
-			fkid   int64
-		)
-		if err := rows.Scan(&table, &rowid, &parent, &fkid); err != nil {
-			t.Fatalf("scan foreign_key_check row: %v", err)
-		}
-		t.Fatalf("foreign_key_check reported violation table=%s rowid=%d parent=%s fkid=%d", table, rowid, parent, fkid)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate foreign_key_check rows: %v", err)
+	if !strings.Contains(err.Error(), "unsupported legacy database schema version 9") {
+		t.Fatalf("NewSQLiteStore() err = %v, want unsupported legacy schema version message", err)
 	}
 }
 
-func TestInitMigratesLegacyDurableAgentsToLivePolicy(t *testing.T) {
+func TestInitRejectsUnsupportedLegacyDurableAgentSchema(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "legacy-durable.db")
@@ -1704,30 +1630,12 @@ func TestInitMigratesLegacyDurableAgentsToLivePolicy(t *testing.T) {
 		t.Fatalf("close legacy db: %v", err)
 	}
 
-	store, err := NewSQLiteStore(dbPath)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore() err = %v", err)
+	_, err = NewSQLiteStore(dbPath)
+	if err == nil {
+		t.Fatal("NewSQLiteStore() err = nil, want unsupported legacy schema error")
 	}
-	defer store.Close()
-
-	got, err := store.DurableAgent("family-group")
-	if err != nil {
-		t.Fatalf("DurableAgent() err = %v", err)
-	}
-	if got.LivePolicy.Charter != "legacy charter" {
-		t.Fatalf("LivePolicy.Charter = %q, want legacy charter", got.LivePolicy.Charter)
-	}
-	if got.LivePolicy.OutboundMode != "reply_with_policy_authorization" {
-		t.Fatalf("LivePolicy.OutboundMode = %q, want migrated reply_with_policy_authorization", got.LivePolicy.OutboundMode)
-	}
-	if got.PolicyVersion != 1 {
-		t.Fatalf("PolicyVersion = %d, want 1", got.PolicyVersion)
-	}
-	if got.PolicyHash == "" {
-		t.Fatal("PolicyHash is empty after migration")
-	}
-	if got.BootstrapLLM.Configured() {
-		t.Fatalf("BootstrapLLM = %#v, want empty bootstrap llm after legacy migration", got.BootstrapLLM)
+	if !strings.Contains(err.Error(), "unsupported legacy database schema version 10") {
+		t.Fatalf("NewSQLiteStore() err = %v, want unsupported legacy schema version message", err)
 	}
 }
 

@@ -601,12 +601,3 @@ func (r *Runtime) startChatActionLoop(ctx context.Context, chatID int64, action 
 
 	return cancel
 }
-
-func positiveFirst(ids []int64) int64 {
-	for _, id := range ids {
-		if id > 0 {
-			return id
-		}
-	}
-	return 0
-}

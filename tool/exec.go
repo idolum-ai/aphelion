@@ -499,10 +499,6 @@ func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.
 	}, principal.Principal{}, session.SessionKey{})
 }
 
-func (r *Registry) executeWithScope(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope) (string, error) {
-	return r.executeWithScopeAndPrincipal(ctx, name, input, scope, scope.Principal, session.SessionKey{})
-}
-
 func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
 	switch name {
 	case "exec":
@@ -757,40 +753,6 @@ func resolveMemoryRoot(scope sandbox.Scope, requested string) (string, string, e
 		return root, requested, nil
 	default:
 		return "", "", fmt.Errorf("memory scope must be shared or principal")
-	}
-}
-
-func resolveSemanticRoot(scope sandbox.Scope, requested string) (string, string, error) {
-	requested = strings.ToLower(strings.TrimSpace(requested))
-	if requested == "" {
-		if scope.Principal.Role == principal.RoleApprovedUser && strings.TrimSpace(scope.UserMemory) != "" {
-			requested = "principal"
-		} else {
-			requested = "shared"
-		}
-	}
-
-	switch requested {
-	case "shared":
-		if scope.Principal.Role == principal.RoleApprovedUser {
-			return "", "", fmt.Errorf("approved users may not read shared semantic memory")
-		}
-		root := strings.TrimSpace(scope.SharedMemoryRoot)
-		if root == "" {
-			root = strings.TrimSpace(scope.WorkingRoot)
-		}
-		if root == "" {
-			return "", "", fmt.Errorf("shared memory root is not configured")
-		}
-		return root, requested, nil
-	case "principal":
-		root := strings.TrimSpace(scope.UserMemory)
-		if root == "" {
-			return "", "", fmt.Errorf("principal memory root is not available for this principal")
-		}
-		return root, requested, nil
-	default:
-		return "", "", fmt.Errorf("semantic_search scope must be shared or principal")
 	}
 }
 
