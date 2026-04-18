@@ -16,9 +16,6 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
-	"github.com/idolum-ai/aphelion/face"
-	"github.com/idolum-ai/aphelion/pipeline"
-	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/turn"
@@ -139,68 +136,42 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		ChatID: msg.ChatID,
 		Scope:  durableAgentScopeRef(registered),
 	}
-	sess, err := r.store.Load(key)
-	if err != nil {
-		return nil, fmt.Errorf("load session: %w", err)
-	}
-	applySessionScope(sess, key)
-
-	now := time.Now().UTC()
 	preparedMsg := msg
 	preparedMsg.Text = durableGroupInboundText(msg)
-	prepared, err := r.prepareInboundTurn(ctx, scope, preparedMsg)
+	livePolicy := core.NormalizeDurableAgentLivePolicy(registered.LivePolicy)
+	allowLocalReply := durableGroupAllowsLocalReply(livePolicy)
+	assembled, err := r.assembleInteractiveLikeTurn(ctx, interactiveLikeAssemblyInput{
+		Scope:                scope,
+		Key:                  key,
+		Msg:                  msg,
+		PrepareInbound:       &preparedMsg,
+		RunKind:              session.TurnRunKindInteractive,
+		Channel:              "telegram_group",
+		PrincipalRole:        "durable_agent",
+		AuditChannel:         "telegram_group",
+		PromptContextErrHint: "load durable agent prompt context",
+		PolicyReason:         "mapped from interactive face policy for durable groups",
+	})
 	if err != nil {
 		return nil, err
 	}
-	livePolicy := core.NormalizeDurableAgentLivePolicy(registered.LivePolicy)
-	allowLocalReply := durableGroupAllowsLocalReply(livePolicy)
-	audit := newTurnAuditRecorder(key, "telegram_group", "durable_agent", prepared.LedgerText)
-	defer r.emitTurnAudit(audit)
 
-	facePolicy := pipeline.DecideInteractiveFacePolicy(prepared.LedgerText)
-	useMaterialFloor := pipeline.ShouldUseMaterialFloorContract(facePolicy)
-	exec := r.executionForTurn(prepared)
-	promptContext, err := r.promptContextForScope(scope, now)
-	if err != nil {
-		return nil, fmt.Errorf("load durable agent prompt context: %w", err)
-	}
-	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText, sess.LastFloorMetadata)
-	hiddenInputs.addCoreAll(prepared.ArtifactDecisionInputs)
-	governorAwareness := turn.ApplyOperationAwareness(
-		turn.ApplyPlanAwareness(
-			turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram_group", exec), hiddenInputs.toTurnAwareness()),
-			sess.PlanState,
-		),
-		sess.OperationState,
-	)
-	if useMaterialFloor {
-		governorAwareness.ArtifactMode = "floor"
-	}
-	baseGovernorAwareness := governorAwareness
+	now := assembled.Now
+	sess := assembled.Sess
+	prepared := assembled.Prepared
+	facePolicy := assembled.FacePolicy
+	useMaterialFloor := assembled.UseMaterialFloor
+	exec := assembled.Exec
+	promptContext := assembled.PromptContext
+	hiddenInputs := assembled.HiddenInputs
+	baseGovernorAwareness := assembled.BaseGovernorAwareness
+	audit := assembled.Audit
+	machine := assembled.Machine
+	defer r.emitTurnAudit(audit)
 
 	sess.ChatType = firstNonEmpty(strings.TrimSpace(msg.ChatType), "group")
 	sess.ChatTitle = strings.TrimSpace(msg.ChatTitle)
 	sess.UserName = strings.TrimSpace(msg.SenderName)
-
-	machine := &turn.Machine{
-		Governor: nil,
-		Face:     nil,
-		Options: turn.Options{
-			GovernorName: prompt.DefaultGovernorName,
-			FaceName:     face.DefaultFaceName,
-			Channel:      "telegram_group",
-			Style:        "observant, high-agency, warm, and emotionally lucid",
-		},
-		RuntimeAwareness: baseGovernorAwareness,
-		PolicyFunc: func(turn.Request) turn.Policy {
-			return turn.Policy{
-				Brokerage: false,
-				Proposal:  facePolicy.Proposal,
-				Render:    facePolicy.Render,
-				Reason:    "mapped from interactive face policy for durable groups",
-			}
-		},
-	}
 	coordinator := &durableGroupTurnCoordinator{
 		runtime:               r,
 		registered:            registered,
@@ -213,9 +184,9 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		exec:                  exec,
 		facePolicy:            facePolicy,
 		useMaterialFloor:      useMaterialFloor,
-		governorName:          prompt.DefaultGovernorName,
-		faceName:              face.DefaultFaceName,
-		channelName:           "telegram_group",
+		governorName:          machine.Options.GovernorName,
+		faceName:              machine.Options.FaceName,
+		channelName:           machine.Options.Channel,
 		principalRole:         "durable_agent",
 		hiddenInputs:          hiddenInputs,
 		promptContext:         promptContext,

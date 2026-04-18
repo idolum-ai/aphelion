@@ -33,7 +33,7 @@ This spec is **staged**. The initial "core runnable" milestone is the minimal en
 
 - **Telegram**: Long-polls the Bot API. Normalizes updates into `InboundMessage`. Sends `OutboundMessage` back. Knows Telegram formatting. Doesn't know about LLMs.
 - **Router**: Maps inbound messages to sessions by chat ID. Dispatches agent turns as goroutines. Enforces one-turn-at-a-time per session via per-session mutexes. Queues follow-up messages while busy, then compacts the queued slice into one follow-up turn.
-- **Runtime**: House shell. Owns transport wiring, principal/scope resolution, session locking, background loops, and assembly of concrete ports for turn execution.
+- **Runtime**: House shell. Owns transport wiring, principal/scope resolution, session locking, background loops, and assembly of concrete ports for turn execution. Interactive DM and durable-group turns should share one explicit interactive-like assembly spine with bounded species specialization hooks.
 - **turn**: Owns one-turn stage order and policy for interactive, durable-child, and maintenance species.
 - **pipeline**: Owns governor/face conversational transformations (brokerage parsing, floor shaping, render/fallback contracts) consumed by turn/runtime.
 - **Governor**: Owns the floor of a turn. This layer is named `Aphelion`. It may be backed by Codex or by the native provider/tool loop.
