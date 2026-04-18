@@ -76,12 +76,7 @@ func (c telegramCommandControl) StopContinuation(chatID int64) (core.StopResult,
 	if err != nil {
 		return core.StopResult{}, err
 	}
-	result := core.StopResult{ContinuationRevoked: revoke.Revoked}
-	if revoke.Revoked {
-		result = c.router.Stop(chatID)
-		result.ContinuationRevoked = true
-	}
-	return result, nil
+	return core.StopResult{ContinuationRevoked: revoke.Revoked}, nil
 }
 
 func (c telegramCommandControl) TriggerContinuation(ctx context.Context, chatID int64) error {

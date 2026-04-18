@@ -106,7 +106,7 @@ func RenderTelegramStop(stopped core.StopResult) string {
 	case stopped.QueuedDropped:
 		return "Cleared queued work for this chat."
 	default:
-		return "There is no active work to stop."
+		return "Continuation approval was already inactive for this chat."
 	}
 }
 

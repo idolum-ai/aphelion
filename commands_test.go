@@ -468,7 +468,7 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersCombinedStopResult(
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := stubCommandRouter{stopContinuationResult: core.StopResult{ActiveCanceled: true, QueuedDropped: true, ContinuationRevoked: true}}
+	router := stubCommandRouter{stopContinuationResult: core.StopResult{ContinuationRevoked: true}}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-stop",
 		Data:    encodeContinuationCallbackData("stop"),
@@ -486,8 +486,8 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersCombinedStopResult(
 	if len(sender.edits) != 1 {
 		t.Fatalf("edits count = %d, want 1", len(sender.edits))
 	}
-	if sender.edits[0].text != "Stopped the current turn, cleared queued work, and revoked continuation approval for this chat." {
-		t.Fatalf("edit text = %q, want combined stop result text", sender.edits[0].text)
+	if sender.edits[0].text != "Revoked continuation approval for this chat." {
+		t.Fatalf("edit text = %q, want continuation revoke text", sender.edits[0].text)
 	}
 }
 
@@ -510,7 +510,7 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersNoOpStopResult(t *t
 	if len(sender.edits) != 1 {
 		t.Fatalf("edits count = %d, want 1", len(sender.edits))
 	}
-	if sender.edits[0].text != "There is no active work to stop." {
-		t.Fatalf("edit text = %q, want no-op stop text", sender.edits[0].text)
+	if sender.edits[0].text != "Continuation approval was already inactive for this chat." {
+		t.Fatalf("edit text = %q, want inactive continuation text", sender.edits[0].text)
 	}
 }
