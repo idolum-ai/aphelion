@@ -56,6 +56,11 @@ type ChatStatusSnapshot struct {
 	ChatID            int64
 	ActiveTurnIDs     []uint64
 	QueueDepth        int
+	OperationStatus   string
+	OperationStage    string
+	OperationSummary  string
+	PlanStepStatus    string
+	PlanStep          string
 	PendingItems      []PendingItem
 	Continuation      *ContinuationStatusSnapshot
 	LatestTurnRun     *TurnRunStatusSnapshot
