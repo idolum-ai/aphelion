@@ -36,11 +36,20 @@ func ToAgentHistory(messages []Message) ([]agent.Message, error) {
 
 // NewMessagesForTurn converts user input + generated assistant/tool messages into persisted rows.
 func NewMessagesForTurn(userText string, generated []agent.Message, turnIndex int) ([]Message, error) {
+	return NewMessagesForTurnWithContext(userText, generated, turnIndex, TurnMessageContext{})
+}
+
+// NewMessagesForTurnWithContext converts user input + generated assistant/tool messages into persisted rows with explicit turn provenance.
+func NewMessagesForTurnWithContext(userText string, generated []agent.Message, turnIndex int, ctx TurnMessageContext) ([]Message, error) {
 	out := []Message{{
-		Role:         "user",
-		Content:      userText,
-		ContentChars: len(userText),
-		TurnIndex:    turnIndex,
+		Role:              "user",
+		Content:           userText,
+		ContentChars:      len(userText),
+		TurnIndex:         turnIndex,
+		ActorUserID:       ctx.ActorUserID,
+		ActorRole:         strings.TrimSpace(ctx.ActorRole),
+		EventOrigin:       strings.TrimSpace(ctx.EventOrigin),
+		EventOriginDetail: strings.TrimSpace(ctx.EventOriginDetail),
 	}}
 	toolNames := make(map[string]string)
 

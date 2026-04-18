@@ -122,3 +122,26 @@ func TestToAgentHistorySynthesizesMissingToolResultsAndDropsOrphans(t *testing.T
 		t.Fatalf("history[2] = %#v, want trailing assistant", history[2])
 	}
 }
+
+func TestNewMessagesForTurnWithContextCarriesTurnProvenance(t *testing.T) {
+	t.Parallel()
+
+	rows, err := NewMessagesForTurnWithContext("[approved continuation event]", nil, 4, TurnMessageContext{
+		ActorUserID:       1002,
+		ActorRole:         "approved_user",
+		EventOrigin:       "turn_authorization",
+		EventOriginDetail: "continuation",
+	})
+	if err != nil {
+		t.Fatalf("NewMessagesForTurnWithContext() err = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("row count = %d, want 1", len(rows))
+	}
+	if rows[0].ActorUserID != 1002 || rows[0].ActorRole != "approved_user" {
+		t.Fatalf("actor provenance = %#v, want approved user", rows[0])
+	}
+	if rows[0].EventOrigin != "turn_authorization" || rows[0].EventOriginDetail != "continuation" {
+		t.Fatalf("event provenance = (%q, %q), want turn_authorization/continuation", rows[0].EventOrigin, rows[0].EventOriginDetail)
+	}
+}

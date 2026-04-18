@@ -12,6 +12,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/pipeline"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -187,6 +188,8 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 type turnCommitInput struct {
 	Key             session.SessionKey
 	Sess            *session.Session
+	Msg             core.InboundMessage
+	Actor           principal.Principal
 	Prepared        pipeline.TurnPrepareContract
 	OutHistory      []agent.Message
 	HistoryInputLen int
@@ -222,6 +225,8 @@ type turnPersistencePort struct {
 	runtime *Runtime
 	key     session.SessionKey
 	sess    *session.Session
+	msg     core.InboundMessage
+	actor   principal.Principal
 	errCtx  turnCommitErrorContext
 	audit   *turnAuditRecorder
 }
@@ -236,6 +241,8 @@ func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitReques
 	result, err := p.runtime.persistTurn(ctx, turnCommitInput{
 		Key:             p.key,
 		Sess:            p.sess,
+		Msg:             p.msg,
+		Actor:           p.actor,
 		Prepared:        req.Result.Prepared,
 		OutHistory:      req.Result.OutHistory,
 		HistoryInputLen: req.Result.HistoryInputLen,
@@ -375,8 +382,16 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 			SaveSession:     input.ErrCtx.SaveSession,
 		},
 	}, turn.PersistStageCallbacks{
-		BuildMessages: session.NewMessagesForTurn,
-		ApplyScene:    replaceLastAssistantWithSceneText,
+		BuildMessages: func(ledgerText string, generated []agent.Message, turnIndex int) ([]session.Message, error) {
+			msgCtx := session.TurnMessageContext{
+				ActorUserID:       input.Actor.TelegramUserID,
+				ActorRole:         string(input.Actor.Role),
+				EventOrigin:       inboundOriginLabel(input.Msg),
+				EventOriginDetail: inboundOriginDetailLabel(input.Msg),
+			}
+			return session.NewMessagesForTurnWithContext(ledgerText, generated, turnIndex, msgCtx)
+		},
+		ApplyScene: replaceLastAssistantWithSceneText,
 		ApplyFloor: func(messages []session.Message, floorText string, floorMetadata string) []session.Message {
 			messages = setLastAssistantFloor(messages, floorText)
 			return setLastAssistantFloorMetadata(messages, floorMetadata)

@@ -168,10 +168,12 @@ func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.P
 		return err
 	}
 	_, err := r.handleInternalContinuation(ctx, actor, core.InboundMessage{
-		ChatID:     chatID,
-		SenderID:   actor.TelegramUserID,
-		SenderName: actorLabel(actor),
-		Text:       "[approved continuation event]",
+		ChatID:       chatID,
+		SenderID:     actor.TelegramUserID,
+		SenderName:   actorLabel(actor),
+		Text:         "[approved continuation event]",
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	return err
 }

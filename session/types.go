@@ -140,23 +140,41 @@ type OperationState struct {
 	UpdatedAt time.Time           `json:"updated_at,omitempty"`
 }
 
-type ContinuationStatus string
+type TurnAuthorizationKind string
 
 const (
-	ContinuationStatusIdle     ContinuationStatus = "idle"
-	ContinuationStatusPending  ContinuationStatus = "pending"
-	ContinuationStatusApproved ContinuationStatus = "approved"
-	ContinuationStatusRevoked  ContinuationStatus = "revoked"
+	TurnAuthorizationKindContinuation TurnAuthorizationKind = "continuation"
 )
 
-type ContinuationState struct {
-	Status         ContinuationStatus `json:"status,omitempty"`
-	Objective      string             `json:"objective,omitempty"`
-	StageSummary   string             `json:"stage_summary,omitempty"`
-	RemainingTurns int                `json:"remaining_turns,omitempty"`
-	ApprovedBy     int64              `json:"approved_by,omitempty"`
-	UpdatedAt      time.Time          `json:"updated_at,omitempty"`
+type TurnAuthorizationStatus string
+
+const (
+	TurnAuthorizationStatusIdle     TurnAuthorizationStatus = "idle"
+	TurnAuthorizationStatusPending  TurnAuthorizationStatus = "pending"
+	TurnAuthorizationStatusApproved TurnAuthorizationStatus = "approved"
+	TurnAuthorizationStatusRevoked  TurnAuthorizationStatus = "revoked"
+)
+
+type TurnAuthorizationState struct {
+	Kind           TurnAuthorizationKind   `json:"kind,omitempty"`
+	Status         TurnAuthorizationStatus `json:"status,omitempty"`
+	Objective      string                  `json:"objective,omitempty"`
+	StageSummary   string                  `json:"stage_summary,omitempty"`
+	RemainingTurns int                     `json:"remaining_turns,omitempty"`
+	ApprovedBy     int64                   `json:"approved_by,omitempty"`
+	UpdatedAt      time.Time               `json:"updated_at,omitempty"`
 }
+
+type ContinuationStatus = TurnAuthorizationStatus
+
+const (
+	ContinuationStatusIdle     = TurnAuthorizationStatusIdle
+	ContinuationStatusPending  = TurnAuthorizationStatusPending
+	ContinuationStatusApproved = TurnAuthorizationStatusApproved
+	ContinuationStatusRevoked  = TurnAuthorizationStatusRevoked
+)
+
+type ContinuationState = TurnAuthorizationState
 
 // SessionKey identifies a unique session.
 type SessionKey struct {
@@ -295,22 +313,33 @@ type TurnRun struct {
 
 // Message is one persisted conversation message.
 type Message struct {
-	ID            int64
-	SessionID     string
-	ChatID        int64
-	UserID        int64
-	Role          string
-	Content       string
-	FloorContent  string
-	FloorMetadata string
-	ToolCalls     string
-	ToolID        string
-	ToolName      string
-	Thinking      string
-	CreatedAt     time.Time
-	TurnIndex     int
-	ContentChars  int
-	Compacted     bool
+	ID                int64
+	SessionID         string
+	ChatID            int64
+	UserID            int64
+	ActorUserID       int64
+	ActorRole         string
+	EventOrigin       string
+	EventOriginDetail string
+	Role              string
+	Content           string
+	FloorContent      string
+	FloorMetadata     string
+	ToolCalls         string
+	ToolID            string
+	ToolName          string
+	Thinking          string
+	CreatedAt         time.Time
+	TurnIndex         int
+	ContentChars      int
+	Compacted         bool
+}
+
+type TurnMessageContext struct {
+	ActorUserID       int64
+	ActorRole         string
+	EventOrigin       string
+	EventOriginDetail string
 }
 
 type SearchHit struct {
@@ -455,25 +484,36 @@ func (s OperationState) Active() bool {
 		len(normalized.Artifacts) > 0
 }
 
-func NormalizeContinuationState(state ContinuationState) ContinuationState {
-	state.Status = ContinuationStatus(strings.TrimSpace(string(state.Status)))
+func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthorizationState {
+	state.Kind = TurnAuthorizationKind(strings.TrimSpace(string(state.Kind)))
+	state.Status = TurnAuthorizationStatus(strings.TrimSpace(string(state.Status)))
 	state.Objective = strings.TrimSpace(state.Objective)
 	state.StageSummary = strings.TrimSpace(state.StageSummary)
+	if state.Kind == "" && (state.Status != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
+		state.Kind = TurnAuthorizationKindContinuation
+	}
 	if state.RemainingTurns < 0 {
 		state.RemainingTurns = 0
 	}
-	if state.Status == ContinuationStatusIdle || state.Status == ContinuationStatusRevoked {
+	if state.Status == TurnAuthorizationStatusIdle || state.Status == TurnAuthorizationStatusRevoked {
 		state.ApprovedBy = 0
 	}
-	if state.UpdatedAt.IsZero() && (state.Status != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
+	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state
 }
 
-func (s ContinuationState) Active() bool {
-	state := NormalizeContinuationState(s)
-	return state.Status == ContinuationStatusPending || state.Status == ContinuationStatusApproved
+func NormalizeContinuationState(state ContinuationState) ContinuationState {
+	if strings.TrimSpace(string(state.Kind)) == "" {
+		state.Kind = TurnAuthorizationKindContinuation
+	}
+	return NormalizeTurnAuthorizationState(state)
+}
+
+func (s TurnAuthorizationState) Active() bool {
+	state := NormalizeTurnAuthorizationState(s)
+	return state.Status == TurnAuthorizationStatusPending || state.Status == TurnAuthorizationStatusApproved
 }
 
 func (p OperationProposal) Active() bool {

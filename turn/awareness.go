@@ -18,6 +18,19 @@ type HiddenInputAwareness struct {
 	ProvenanceSummary string
 }
 
+// EventAwareness captures the explicit origin of the inbound event.
+type EventAwareness struct {
+	Origin                string
+	TurnAuthorizationKind string
+}
+
+// ApplyEventAwareness composes inbound-event provenance into runtime awareness.
+func ApplyEventAwareness(aw prompt.RuntimeAwareness, event EventAwareness) prompt.RuntimeAwareness {
+	aw.EventOrigin = strings.TrimSpace(event.Origin)
+	aw.TurnAuthorizationKind = strings.TrimSpace(event.TurnAuthorizationKind)
+	return aw
+}
+
 // BrokerageAwareness is the composed brokerage signal for a single turn.
 type BrokerageAwareness struct {
 	Active                     bool

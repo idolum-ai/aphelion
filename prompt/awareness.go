@@ -11,6 +11,8 @@ type RuntimeAwareness struct {
 	SessionKind                string
 	RunKind                    string
 	Channel                    string
+	EventOrigin                string
+	TurnAuthorizationKind      string
 	GovernorBackend            string
 	GovernorProvider           string
 	GovernorModel              string
@@ -69,6 +71,8 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, nonEmptyAwarenessLine("session_kind", aw.SessionKind))
 	lines = append(lines, nonEmptyAwarenessLine("run_kind", aw.RunKind))
 	lines = append(lines, nonEmptyAwarenessLine("channel", aw.Channel))
+	lines = append(lines, nonEmptyAwarenessLine("event_origin", aw.EventOrigin))
+	lines = append(lines, nonEmptyAwarenessLine("turn_authorization_kind", aw.TurnAuthorizationKind))
 	lines = append(lines, nonEmptyAwarenessLine("governor_backend", aw.GovernorBackend))
 	lines = append(lines, nonEmptyAwarenessLine("governor_provider", aw.GovernorProvider))
 	lines = append(lines, nonEmptyAwarenessLine("governor_model", aw.GovernorModel))

@@ -80,9 +80,16 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 	}
 	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText, sess.LastFloorMetadata)
 	hiddenInputs.addCoreAll(prepared.ArtifactDecisionInputs)
+	eventAwareness := turn.EventAwareness{Origin: inboundOriginLabel(msg)}
+	if msg.Origin == core.InboundOriginTurnAuthorization {
+		eventAwareness.TurnAuthorizationKind = inboundOriginDetailLabel(msg)
+	}
 	baseGovernorAwareness := turn.ApplyOperationAwareness(
 		turn.ApplyPlanAwareness(
-			turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec), hiddenInputs.toTurnAwareness()),
+			turn.ApplyEventAwareness(
+				turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec), hiddenInputs.toTurnAwareness()),
+				eventAwareness,
+			),
 			sess.PlanState,
 		),
 		sess.OperationState,
@@ -139,6 +146,8 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 		runtime: r,
 		key:     key,
 		sess:    sess,
+		msg:     msg,
+		actor:   actor,
 		errCtx: turnCommitErrorContext{
 			ConvertMessages: "convert new messages",
 			LoadPlanState:   "load plan state before save",
@@ -428,4 +437,16 @@ func renderToolManifest(defs []agent.ToolDef) string {
 	}
 	sort.Strings(names)
 	return strings.Join(names, ", ")
+}
+
+func inboundOriginLabel(msg core.InboundMessage) string {
+	origin := strings.TrimSpace(string(msg.Origin))
+	if origin == "" {
+		return string(core.InboundOriginUser)
+	}
+	return origin
+}
+
+func inboundOriginDetailLabel(msg core.InboundMessage) string {
+	return strings.TrimSpace(msg.OriginDetail)
 }

@@ -2010,3 +2010,39 @@ func TestArtifactIndexIgnoresEphemeralArtifacts(t *testing.T) {
 		t.Fatalf("artifact hits len = %d, want 0", len(hits))
 	}
 }
+
+func TestMessageTurnProvenanceRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 991, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if err := store.Save(sess, []Message{{
+		Role:              "user",
+		Content:           "[approved continuation event]",
+		ActorUserID:       1002,
+		ActorRole:         "approved_user",
+		EventOrigin:       "turn_authorization",
+		EventOriginDetail: "continuation",
+		TurnIndex:         1,
+	}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+	got, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() reload err = %v", err)
+	}
+	if len(got.Messages) != 1 {
+		t.Fatalf("message count = %d, want 1", len(got.Messages))
+	}
+	if got.Messages[0].ActorUserID != 1002 || got.Messages[0].ActorRole != "approved_user" {
+		t.Fatalf("actor provenance = %#v, want approved user", got.Messages[0])
+	}
+	if got.Messages[0].EventOrigin != "turn_authorization" || got.Messages[0].EventOriginDetail != "continuation" {
+		t.Fatalf("event provenance = (%q, %q), want turn_authorization/continuation", got.Messages[0].EventOrigin, got.Messages[0].EventOriginDetail)
+	}
+}

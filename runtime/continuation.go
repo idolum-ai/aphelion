@@ -27,6 +27,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	operationState, _ := r.store.OperationState(key)
 	objective, nextStep := summarizeContinuationPlan(planState, operationState, promptInput)
 	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
 		Status:         session.ContinuationStatusPending,
 		Objective:      objective,
 		StageSummary:   nextStep,

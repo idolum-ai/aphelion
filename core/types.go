@@ -7,6 +7,13 @@ import (
 	"time"
 )
 
+type InboundOrigin string
+
+const (
+	InboundOriginUser              InboundOrigin = "user"
+	InboundOriginTurnAuthorization InboundOrigin = "turn_authorization"
+)
+
 type InboundMessage struct {
 	ChatID         int64
 	ChatType       string
@@ -18,6 +25,8 @@ type InboundMessage struct {
 	ReplyTo        *int64
 	MessageID      int64
 	DurableAgentID string
+	Origin         InboundOrigin
+	OriginDetail   string
 	Timestamp      time.Time
 	Raw            json.RawMessage
 }

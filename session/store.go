@@ -14,7 +14,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 22
+const schemaVersion = 23
 
 type SQLiteStore struct {
 	db *sql.DB
@@ -101,6 +101,10 @@ func (s *SQLiteStore) init() error {
 			session_id TEXT NOT NULL,
 			chat_id INTEGER NOT NULL DEFAULT 0,
 			user_id INTEGER NOT NULL DEFAULT 0,
+			actor_user_id INTEGER NOT NULL DEFAULT 0,
+			actor_role TEXT NOT NULL DEFAULT '',
+			event_origin TEXT NOT NULL DEFAULT '',
+			event_origin_detail TEXT NOT NULL DEFAULT '',
 			role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'tool')),
 			content TEXT NOT NULL,
 			floor_content TEXT,
@@ -443,7 +447,7 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 	}
 
 	msgRows, err := s.db.Query(`
-			SELECT id, session_id, chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
+			SELECT id, session_id, chat_id, user_id, actor_user_id, actor_role, event_origin, event_origin_detail, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking, created_at, turn_index, content_chars, compacted
 			FROM messages
 			WHERE session_id = ?
 			ORDER BY turn_index, id
@@ -457,6 +461,9 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		var (
 			m            Message
 			createdRaw   string
+			actorRoleRaw sql.NullString
+			originRaw    sql.NullString
+			originDetRaw sql.NullString
 			floorRaw     sql.NullString
 			floorMetaRaw sql.NullString
 			toolCallsRaw sql.NullString
@@ -467,12 +474,15 @@ func (s *SQLiteStore) Load(key SessionKey) (*Session, error) {
 		)
 
 		if err := msgRows.Scan(
-			&m.ID, &m.SessionID, &m.ChatID, &m.UserID, &m.Role, &m.Content, &floorRaw, &floorMetaRaw, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
+			&m.ID, &m.SessionID, &m.ChatID, &m.UserID, &m.ActorUserID, &actorRoleRaw, &originRaw, &originDetRaw, &m.Role, &m.Content, &floorRaw, &floorMetaRaw, &toolCallsRaw, &toolIDRaw, &toolNameRaw, &thinkingRaw,
 			&createdRaw, &m.TurnIndex, &m.ContentChars, &compactedRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 
+		m.ActorRole = nullToString(actorRoleRaw)
+		m.EventOrigin = nullToString(originRaw)
+		m.EventOriginDetail = nullToString(originDetRaw)
 		m.FloorContent = nullToString(floorRaw)
 		m.FloorMetadata = nullToString(floorMetaRaw)
 		m.ToolCalls = nullToString(toolCallsRaw)
@@ -578,13 +588,16 @@ func (s *SQLiteStore) Save(session *Session, newMessages []Message, usage core.T
 			msg.TurnIndex = session.TurnCount
 		}
 
+		actorRole := strings.TrimSpace(msg.ActorRole)
+		eventOrigin := strings.TrimSpace(msg.EventOrigin)
+		eventOriginDetail := strings.TrimSpace(msg.EventOriginDetail)
 		_, err := tx.Exec(`
 				INSERT INTO messages(
-					session_id, chat_id, user_id, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking,
+					session_id, chat_id, user_id, actor_user_id, actor_role, event_origin, event_origin_detail, role, content, floor_content, floor_metadata, tool_calls, tool_id, tool_name, thinking,
 					created_at, turn_index, content_chars, compacted
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`,
-			msg.SessionID, msg.ChatID, msg.UserID, msg.Role, msg.Content, nullableString(msg.FloorContent), nullableString(msg.FloorMetadata),
+			msg.SessionID, msg.ChatID, msg.UserID, msg.ActorUserID, actorRole, eventOrigin, eventOriginDetail, msg.Role, msg.Content, nullableString(msg.FloorContent), nullableString(msg.FloorMetadata),
 			nullableString(msg.ToolCalls), nullableString(msg.ToolID), nullableString(msg.ToolName), nullableString(msg.Thinking),
 			msg.CreatedAt.UTC().Format(time.RFC3339Nano), msg.TurnIndex, msg.ContentChars, boolToInt(msg.Compacted),
 		)
@@ -2733,6 +2746,19 @@ func applyMigrations(tx *sql.Tx) error {
 	}
 	if err := ensureTableColumn(tx, "messages", "floor_metadata", "TEXT"); err != nil {
 		return fmt.Errorf("ensure messages.floor_metadata: %w", err)
+	}
+	for _, column := range []struct {
+		name string
+		typ  string
+	}{
+		{"actor_user_id", "INTEGER NOT NULL DEFAULT 0"},
+		{"actor_role", "TEXT NOT NULL DEFAULT ''"},
+		{"event_origin", "TEXT NOT NULL DEFAULT ''"},
+		{"event_origin_detail", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureTableColumn(tx, "messages", column.name, column.typ); err != nil {
+			return fmt.Errorf("ensure messages.%s: %w", column.name, err)
+		}
 	}
 	for _, column := range []struct {
 		table string

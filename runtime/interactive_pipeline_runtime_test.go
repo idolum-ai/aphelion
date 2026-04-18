@@ -92,6 +92,9 @@ func TestHandleInboundThreadsRuntimeAwarenessToGovernorAndIdolum(t *testing.T) {
 	if !strings.Contains(provider.seenGovernorSystem[0], "- run_kind: interactive") {
 		t.Fatalf("governor prompt missing run kind: %q", provider.seenGovernorSystem[0])
 	}
+	if !strings.Contains(provider.seenGovernorSystem[0], "- event_origin: user") {
+		t.Fatalf("governor prompt missing event origin: %q", provider.seenGovernorSystem[0])
+	}
 	if !strings.Contains(provider.seenGovernorSystem[0], "- prompt_root: "+cfg.Agent.PromptRoot) {
 		t.Fatalf("governor prompt missing prompt root: %q", provider.seenGovernorSystem[0])
 	}
