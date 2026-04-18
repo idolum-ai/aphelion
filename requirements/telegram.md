@@ -297,12 +297,19 @@ At minimum for v0:
 - `/reinstall`
 - `/set_persona_model`
 - `/set_governor_effort`
-- `/toggle_persona_effort`
-- `/toggle_governor_effort`
 
 These commands should be handled directly by the Telegram/runtime boundary rather than routed through the ordinary governor turn path.
 
 Telegram Bot API command identifiers should use underscore form rather than hyphen form so they remain valid commands and display correctly in Telegram clients.
+
+### Button order language
+
+Binary decision prompts should keep a stable side language:
+
+- left button = stop/deny/reject
+- right button = continue/approve/allow
+
+This includes continuation approval and durable decision prompts, so users do not need to relearn button-side meaning between flows.
 
 ### `/start`
 
@@ -382,6 +389,7 @@ Current selector options:
 
 - `claude-sonnet-4-6`
 - `claude-opus-4-6`
+- `claude-opus-4-7`
 
 Selection should persist as runtime recipe state and affect future face proposal/render calls.
 
@@ -397,28 +405,6 @@ Current selector options:
 - `xhigh`
 
 Selection should persist as runtime recipe state and override the interactive/recovery governor effort without changing heartbeat/cron defaults.
-
-### `/toggle_persona_effort` (quick-toggle compatibility alias)
-
-Toggle Idolum's face recipe between:
-
-- `sonnet`
-- `opus`
-
-For now this is a narrow runtime-owned operator control rather than a user-configurable recipe framework.
-
-This command should affect future face proposal/render calls only. It should not rewrite constitutional files, governor authority, or tool policy.
-
-### `/toggle_governor_effort` (quick-toggle compatibility alias)
-
-Toggle the governor reasoning recipe for interactive work between:
-
-- `medium`
-- `high`
-
-For now this is also a hardcoded runtime-owned operator control rather than a general config surface.
-
-This command should affect ordinary interactive turns and recovery turns. Heartbeat and cron should keep their lower maintenance defaults unless explicitly changed elsewhere later.
 
 ## Outbound Delivery
 

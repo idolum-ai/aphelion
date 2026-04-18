@@ -40,8 +40,6 @@ type commandRouter interface {
 	StopContinuation(chatID int64) (core.StopResult, error)
 	TriggerContinuation(ctx context.Context, chatID int64) error
 	QueueReinstall(ctx context.Context, msg core.InboundMessage) error
-	TogglePersonaEffort() (string, error)
-	ToggleGovernorEffort() (string, error)
 	CurrentEfforts() (persona string, governor string)
 	CurrentPersonaModel() string
 	PersonaModelOptions() []string
@@ -60,8 +58,6 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "reinstall", Description: "Queue a rebuild/reinstall/restart request"},
 	{Command: "set_persona_model", Description: "Choose Idolum persona model"},
 	{Command: "set_governor_effort", Description: "Choose governor reasoning effort"},
-	{Command: "toggle_persona_effort", Description: "Quick-toggle Idolum between Sonnet and Opus"},
-	{Command: "toggle_governor_effort", Description: "Quick-toggle governor effort between medium and high"},
 }
 
 const recipeCallbackPrefix = "recipe:"
@@ -140,18 +136,6 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		return sendPersonaModelSelector(ctx, sender, router, msg)
 	case "set_governor_effort":
 		return sendGovernorEffortSelector(ctx, sender, router, msg)
-	case "toggle_persona_effort":
-		mode, toggleErr := router.TogglePersonaEffort()
-		if toggleErr != nil {
-			return true, toggleErr
-		}
-		text = face.RenderTelegramTogglePersona(mode)
-	case "toggle_governor_effort":
-		mode, toggleErr := router.ToggleGovernorEffort()
-		if toggleErr != nil {
-			return true, toggleErr
-		}
-		text = face.RenderTelegramToggleGovernor(mode)
 	default:
 		return false, nil
 	}

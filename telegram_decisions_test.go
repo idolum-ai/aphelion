@@ -226,6 +226,16 @@ func TestTelegramExecApproverDeletesPromptOnApprove(t *testing.T) {
 	if !strings.Contains(sender.inline[0].text, "Perform a destructive change") {
 		t.Fatalf("inline text = %q, want proposal summary", sender.inline[0].text)
 	}
+	if len(sender.inline[0].rows) == 0 {
+		t.Fatalf("rows = %#v, want button rows", sender.inline[0].rows)
+	}
+	choiceRow := sender.inline[0].rows[len(sender.inline[0].rows)-1]
+	if len(choiceRow) != 2 {
+		t.Fatalf("choice row = %#v, want exactly 2 buttons", choiceRow)
+	}
+	if choiceRow[0].Text != "Deny" || choiceRow[1].Text != "Approve" {
+		t.Fatalf("choice order = %#v, want [Deny, Approve]", choiceRow)
+	}
 }
 
 func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
@@ -477,5 +487,41 @@ func TestHandleArtifactRetentionMessageTimeoutDefaultsToSession(t *testing.T) {
 	}
 	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "session by default") {
 		t.Fatalf("edits = %#v, want session-timeout confirmation", sender.edits)
+	}
+}
+
+func TestInlineButtonRowsNormalizesAffirmativeNegativePairOrder(t *testing.T) {
+	t.Parallel()
+
+	rows := inlineButtonRows(decision.PendingDecision{
+		ID:      "decision-1",
+		Request: decision.Request{Choices: []decision.Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("rows = %#v, want one row", rows)
+	}
+	if len(rows[0]) != 2 {
+		t.Fatalf("buttons = %#v, want two buttons", rows[0])
+	}
+	if rows[0][0].Text != "Deny" || rows[0][1].Text != "Approve" {
+		t.Fatalf("choice order = %#v, want [Deny, Approve]", rows[0])
+	}
+}
+
+func TestInlineButtonRowsPreservesStopQueueOrder(t *testing.T) {
+	t.Parallel()
+
+	rows := inlineButtonRows(decision.PendingDecision{
+		ID:      "decision-2",
+		Request: decision.Request{Choices: []decision.Choice{{ID: "stop", Label: "Stop"}, {ID: "queue", Label: "Queue"}}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("rows = %#v, want one row", rows)
+	}
+	if len(rows[0]) != 2 {
+		t.Fatalf("buttons = %#v, want two buttons", rows[0])
+	}
+	if rows[0][0].Text != "Stop" || rows[0][1].Text != "Queue" {
+		t.Fatalf("choice order = %#v, want [Stop, Queue]", rows[0])
 	}
 }
