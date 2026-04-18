@@ -34,6 +34,13 @@ Those concerns remain in `runtime`.
 (brokerage parsing, floor materialization, render-decision helpers). Those
 remain in `pipeline`.
 
+For interactive DM species specifically, runtime now uses an explicit assembler
+boundary before `turn.Machine` execution:
+
+- runtime shell resolves principal/scope/session lock + transport context
+- runtime species assembler constructs coordinator/ports and invokes `turn`
+- `turn` applies stage order and commit/delivery orchestration
+
 ## Package Map
 
 - `engine.go`, `stages.go`: state machine orchestration

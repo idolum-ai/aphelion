@@ -62,146 +62,18 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 	if msg.Origin == core.InboundOriginTurnAuthorization {
 		eventAwareness.TurnAuthorizationKind = inboundOriginDetailLabel(msg)
 	}
-	assembled, err := r.assembleInteractiveLikeTurn(ctx, interactiveLikeAssemblyInput{
-		Scope:                scope,
-		Key:                  key,
-		Msg:                  msg,
-		RunKind:              session.TurnRunKindInteractive,
-		Channel:              "telegram",
-		PrincipalRole:        string(actor.Role),
-		AuditChannel:         "telegram",
-		EventAwareness:       eventAwareness,
-		PromptContextErrHint: "load workspace prompt context",
-		PolicyReason:         "mapped from pipeline interactive face policy",
+	assembler := r.interactiveDMAssembler
+	if assembler == nil {
+		assembler = newInteractiveDMTurnAssembler(r)
+	}
+	return assembler.Run(ctx, interactiveDMTurnAssemblyInput{
+		Msg:            msg,
+		Actor:          actor,
+		Key:            key,
+		Scope:          scope,
+		Tools:          tools,
+		EventAwareness: eventAwareness,
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	now := assembled.Now
-	sess := assembled.Sess
-	prepared := assembled.Prepared
-	facePolicy := assembled.FacePolicy
-	useMaterialFloor := assembled.UseMaterialFloor
-	exec := assembled.Exec
-	promptContext := assembled.PromptContext
-	hiddenInputs := assembled.HiddenInputs
-	baseGovernorAwareness := assembled.BaseGovernorAwareness
-	audit := assembled.Audit
-	machine := assembled.Machine
-	defer r.emitTurnAudit(audit)
-
-	sess.ChatType = "dm"
-	sess.UserName = msg.SenderName
-	turnState := newInteractiveTurnState(sess)
-	coordinator := &interactiveTurnCoordinator{
-		runtime:               r,
-		actor:                 actor,
-		scope:                 scope,
-		msg:                   msg,
-		key:                   key,
-		state:                 turnState,
-		prepared:              prepared,
-		exec:                  exec,
-		facePolicy:            facePolicy,
-		useMaterialFloor:      useMaterialFloor,
-		governorName:          machine.Options.GovernorName,
-		faceName:              machine.Options.FaceName,
-		channelName:           machine.Options.Channel,
-		principalRole:         string(actor.Role),
-		hiddenInputs:          hiddenInputs,
-		promptContext:         promptContext,
-		tools:                 tools,
-		currentFaceModel:      r.currentFaceRenderer(),
-		baseGovernorAwareness: baseGovernorAwareness,
-		audit:                 audit,
-	}
-	machine.Governor = coordinator
-	machine.Face = coordinator
-	machine.Persistence = &turnPersistencePort{
-		runtime:      r,
-		key:          key,
-		sess:         sess,
-		sessionState: turnState,
-		msg:          msg,
-		actor:        actor,
-		errCtx: turnCommitErrorContext{
-			ConvertMessages: "convert new messages",
-			LoadPlanState:   "load plan state before save",
-			LoadOperation:   "load operation state before save",
-			SaveSession:     "save session",
-			RecordOutbound:  "record outbound reply",
-		},
-		audit: audit,
-	}
-	machine.Delivery = &turnDeliveryPort{
-		runtime:         r,
-		key:             key,
-		sess:            sess,
-		sessionState:    turnState,
-		msg:             msg,
-		inboundWasVoice: prepared.InboundWasVoice,
-		deliver:         true,
-		recordOutbound:  true,
-		audit:           audit,
-		sendErrCtx:      "send outbound reply",
-		recordErrCtx:    "record outbound reply",
-		hooks: turnCommitHooks{
-			QueueReviewEvents: func(result *turn.Result) error {
-				if !shouldGenerateReviewEvent(actor, key) {
-					return nil
-				}
-				turnSess := turnState.session()
-				if turnSess == nil {
-					return fmt.Errorf("queue review events: turn session unavailable")
-				}
-				sceneText, toolLog := interactiveReviewEventPayload(result)
-				ledgerText := interactivePreparedLedgerText(prepared.LedgerText, result)
-				return r.enqueueReviewEventsForTurn(
-					actor,
-					msg,
-					turnSess.TurnCount,
-					ledgerText,
-					sceneText,
-					toolLog,
-				)
-			},
-			DeliverReviewEvents: func(*turn.Result) error {
-				if actor.Role != principal.RoleAdmin {
-					return nil
-				}
-				turnSess := turnState.session()
-				if turnSess == nil {
-					return fmt.Errorf("deliver review events: turn session unavailable")
-				}
-				return r.deliverReviewEvents(ctx, key, turnSess)
-			},
-			PostReplyContinuationUI: func(postCtx context.Context, result *turn.Result) error {
-				ledgerText := interactivePreparedLedgerText(prepared.LedgerText, result)
-				return r.offerContinuationApproval(postCtx, key, msg, ledgerText)
-			},
-		},
-	}
-
-	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:          session.TurnRunKindInteractive,
-		SessionKey:       key,
-		Inbound:          msg,
-		Session:          sess,
-		InboundWasVoice:  prepared.InboundWasVoice,
-		Now:              now,
-		PreparedUserText: prepared.LedgerText,
-	})
-	if err != nil && (turnResult == nil || !turnResult.Commit.Persisted) {
-		return nil, err
-	}
-	if turnResult == nil || turnResult.Turn == nil {
-		return nil, fmt.Errorf("interactive turn did not return a result")
-	}
-	if err != nil {
-		return turnResult.Turn, err
-	}
-	return turnResult.Turn, nil
 }
 
 type faceUsageConsumer interface {

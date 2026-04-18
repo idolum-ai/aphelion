@@ -79,19 +79,20 @@ type Runtime struct {
 	staleTurnWatchdogHook    func(runs []session.TurnRun)
 	staleWatchdogTriggered   atomic.Bool
 
-	scopeResolver     *sandbox.Resolver
-	durableGroupChild durableGroupChildExecutor
-	constitutionGate  TurnConstitutionGate
-	turnAuditSink     func(TurnAudit)
-	sessionMu         sync.Mutex
-	sessionLocks      map[string]*sync.Mutex
-	statusStageMu     sync.RWMutex
-	statusStageByChat map[int64]statusTurnPhase
-	faceModelsMu      sync.Mutex
-	recipeMu          sync.Mutex
-	recipeFileMu      sync.Mutex
-	recipePath        string
-	recipeState       runtimeRecipeState
+	scopeResolver          *sandbox.Resolver
+	durableGroupChild      durableGroupChildExecutor
+	constitutionGate       TurnConstitutionGate
+	turnAuditSink          func(TurnAudit)
+	interactiveDMAssembler interactiveDMTurnAssembler
+	sessionMu              sync.Mutex
+	sessionLocks           map[string]*sync.Mutex
+	statusStageMu          sync.RWMutex
+	statusStageByChat      map[int64]statusTurnPhase
+	faceModelsMu           sync.Mutex
+	recipeMu               sync.Mutex
+	recipeFileMu           sync.Mutex
+	recipePath             string
+	recipeState            runtimeRecipeState
 }
 
 func (r *Runtime) ContinuationState(chatID int64) (session.ContinuationState, error) {
@@ -401,7 +402,7 @@ func New(
 		inbound = fetcher
 	}
 
-	return &Runtime{
+	rt := &Runtime{
 		cfg:      cfg,
 		store:    store,
 		provider: activeProvider,
@@ -449,7 +450,9 @@ func New(
 		constitutionGate:         DefaultTurnConstitutionGate(),
 		sessionLocks:             make(map[string]*sync.Mutex),
 		statusStageByChat:        make(map[int64]statusTurnPhase),
-	}, nil
+	}
+	rt.interactiveDMAssembler = newInteractiveDMTurnAssembler(rt)
+	return rt, nil
 }
 
 func (r *Runtime) SetTurnAuditSink(sink func(TurnAudit)) {
