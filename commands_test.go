@@ -533,6 +533,90 @@ func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandHelpHidesAdminRestartForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		personaEffort:  "sonnet",
+		governorEffort: "medium",
+		canRestart:     false,
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1002,
+		Text:     "/help",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if strings.Contains(sender.msgs[0].Text, "\n/restart - ") {
+		t.Fatalf("help text = %q, want admin-only /restart hidden for non-admins", sender.msgs[0].Text)
+	}
+}
+
+func TestHandleTelegramCommandHelpShowsAdminRestartForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		personaEffort:  "sonnet",
+		governorEffort: "medium",
+		canRestart:     true,
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1001,
+		Text:     "/help",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if !strings.Contains(sender.msgs[0].Text, "\n/restart - ") {
+		t.Fatalf("help text = %q, want admin /restart command listed", sender.msgs[0].Text)
+	}
+}
+
+func TestHandleTelegramCommandStartHidesAdminRestartForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		personaEffort:  "sonnet",
+		governorEffort: "medium",
+		canRestart:     false,
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1002,
+		Text:     "/start",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if strings.Contains(sender.msgs[0].Text, "\n/restart - ") {
+		t.Fatalf("start text = %q, want admin-only /restart hidden for non-admins", sender.msgs[0].Text)
+	}
+}
+
 func TestHandleTelegramCommandSetPersonaModel(t *testing.T) {
 	t.Parallel()
 

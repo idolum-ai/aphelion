@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 	"github.com/idolum-ai/aphelion/turn"
@@ -35,6 +37,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	if r == nil || r.outbound == nil || r.store == nil {
 		return nil
 	}
+	priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
 	sender, ok := r.outbound.(interface {
 		SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
 	})
@@ -65,6 +68,11 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		return fmt.Errorf("persist continuation state: %w", err)
 	}
 	if !consensus.eligible() {
+		if shouldNotifyContinuationBlocked(priorState, priorExists, consensus) {
+			if err := r.sendContinuationBlockedNotice(ctx, msg, state); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -81,6 +89,21 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	return nil
 }
 
+func shouldNotifyContinuationBlocked(priorState session.ContinuationState, priorExists bool, consensus continuationConsensus) bool {
+	if consensus.eligible() {
+		return false
+	}
+	if consensus.PersonaIntent.Decision == session.ContinuationIntentDecisionContinue ||
+		consensus.GovernorIntent.Decision == session.ContinuationIntentDecisionContinue {
+		return true
+	}
+	if !priorExists {
+		return false
+	}
+	priorState = session.NormalizeContinuationState(priorState)
+	return priorState.Status == session.ContinuationStatusPending || priorState.Status == session.ContinuationStatusApproved
+}
+
 func (r *Runtime) buildContinuationConsensus(key session.SessionKey, result *turn.Result) continuationConsensus {
 	planState, _ := r.store.PlanState(key)
 	operationState, _ := r.store.OperationState(key)
@@ -88,7 +111,7 @@ func (r *Runtime) buildContinuationConsensus(key session.SessionKey, result *tur
 	operationState = session.NormalizeOperationState(operationState)
 
 	personaIntent := continuationPersonaIntent(result, planState, operationState)
-	governorIntent := continuationGovernorIntent(planState, operationState)
+	governorIntent := continuationGovernorIntent(result, planState, operationState)
 
 	return continuationConsensus{
 		PersonaIntent:  personaIntent,
@@ -100,44 +123,44 @@ func (r *Runtime) buildContinuationConsensus(key session.SessionKey, result *tur
 }
 
 func continuationPersonaIntent(result *turn.Result, planState session.PlanState, operationState session.OperationState) session.ContinuationIntent {
-	rationale := continuationPersonaRationale(result)
-	intent := session.ContinuationIntent{
-		Decision:   session.ContinuationIntentDecisionHold,
-		Rationale:  rationale,
-		NextStep:   clampContinuationText(continuationNextStep(planState, operationState), 220),
-		Confidence: "low",
+	intent := session.ContinuationIntent{}
+	if result != nil {
+		intent = result.PersonaIntent
 	}
-	if rationale != "" {
-		intent.Decision = session.ContinuationIntentDecisionContinue
-		intent.Confidence = "medium"
+	intent = normalizeParsedContinuationIntent(intent)
+	if intent.NextStep == "" {
+		intent.NextStep = clampContinuationText(continuationNextStep(planState, operationState), 220)
 	}
 	return intent
 }
 
-func continuationGovernorIntent(planState session.PlanState, operationState session.OperationState) session.ContinuationIntent {
-	rationale := continuationGovernorConsensus(planState, operationState)
-	ratified := governorContinuationRatified(planState, operationState)
-	intent := session.ContinuationIntent{
-		Decision:    session.ContinuationIntentDecisionHold,
-		Rationale:   rationale,
-		NextStep:    clampContinuationText(continuationNextStep(planState, operationState), 220),
-		Constraints: clampContinuationText(firstNonEmptyContinuation(operationState.Proposal.BoundedEffect, operationState.Stage), 220),
-		Confidence:  "low",
-		Ratified:    ratified,
+func continuationGovernorIntent(result *turn.Result, planState session.PlanState, operationState session.OperationState) session.ContinuationIntent {
+	intent := session.ContinuationIntent{}
+	if result != nil {
+		intent = result.GovernorIntent
 	}
-	if rationale != "" && ratified {
-		intent.Decision = session.ContinuationIntentDecisionContinue
-		intent.Confidence = "high"
+	intent = normalizeParsedContinuationIntent(intent)
+	if intent.NextStep == "" {
+		intent.NextStep = clampContinuationText(continuationNextStep(planState, operationState), 220)
+	}
+	if intent.Constraints == "" {
+		intent.Constraints = clampContinuationText(firstNonEmptyContinuation(operationState.Proposal.BoundedEffect, operationState.Stage), 220)
 	}
 	return intent
 }
 
 func continuationHandshakeBlockedReason(persona session.ContinuationIntent, governor session.ContinuationIntent) string {
+	if persona.Decision == "" {
+		return "persona_intent_missing"
+	}
 	if strings.TrimSpace(persona.Rationale) == "" {
 		return "persona_rationale_missing"
 	}
 	if persona.Decision != session.ContinuationIntentDecisionContinue {
 		return "persona_not_willing"
+	}
+	if governor.Decision == "" {
+		return "governor_intent_missing"
 	}
 	if strings.TrimSpace(governor.Rationale) == "" {
 		return "governor_rationale_missing"
@@ -151,46 +174,96 @@ func continuationHandshakeBlockedReason(persona session.ContinuationIntent, gove
 	return ""
 }
 
-func continuationPersonaRationale(result *turn.Result) string {
-	if result == nil {
-		return ""
+func (r *Runtime) sendContinuationBlockedNotice(ctx context.Context, msg core.InboundMessage, state session.ContinuationState) error {
+	if r == nil || r.outbound == nil {
+		return nil
 	}
-	return clampContinuationText(result.ProposalNote, 220)
+	text := strings.TrimSpace(r.renderContinuationBlockedNotice(ctx, msg, state))
+	if text == "" {
+		return nil
+	}
+	_, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
+		ChatID: msg.ChatID,
+		Text:   text,
+	})
+	if err != nil {
+		return fmt.Errorf("send continuation blocked notice: %w", err)
+	}
+	return nil
 }
 
-func continuationGovernorConsensus(planState session.PlanState, operationState session.OperationState) string {
-	planState = session.NormalizePlanState(planState)
-	operationState = session.NormalizeOperationState(operationState)
-	return firstNonEmptyContinuation(
-		clampContinuationText(operationState.Proposal.WhyNow, 220),
-		clampContinuationText(operationState.Proposal.Summary, 220),
-		clampContinuationText(operationState.Summary, 220),
-		clampContinuationText(continuationNextStep(planState, operationState), 220),
-		clampContinuationText(operationState.Stage, 220),
-		clampContinuationText(planState.Explanation, 220),
-	)
+func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, msg core.InboundMessage, state session.ContinuationState) string {
+	fallback := renderContinuationBlockedFallback(state)
+	if r == nil {
+		return fallback
+	}
+	if r.faceBackend == face.BackendFloorFallback {
+		return fallback
+	}
+	renderer := r.currentFaceRenderer()
+	if renderer == nil {
+		return fallback
+	}
+	workspaceRoot := ""
+	if r.cfg != nil {
+		workspaceRoot = strings.TrimSpace(r.cfg.Agent.PromptRoot)
+	}
+
+	rendered, err := renderer.Render(ctx, face.RenderRequest{
+		GovernorName:    prompt.DefaultGovernorName,
+		FaceName:        face.DefaultFaceName,
+		Channel:         "telegram",
+		Mode:            "repair",
+		PrincipalRole:   "approved_user",
+		WorkspaceRoot:   workspaceRoot,
+		FloorText:       fallback,
+		LatestUserInput: strings.TrimSpace(msg.Text),
+		CandidateReply:  fallback,
+		RepairNotes: []string{
+			"Keep this in first person as Idolum.",
+			"Explain why continuation is unavailable right now.",
+		},
+		Runtime: prompt.RuntimeAwareness{
+			ContinuationStatus:         string(state.Status),
+			ContinuationActive:         state.Active(),
+			ContinuationPersonaIntent:  string(state.PersonaIntent.Decision),
+			ContinuationPersonaWhy:     state.PersonaIntent.Rationale,
+			ContinuationGovernorIntent: string(state.GovernorIntent.Decision),
+			ContinuationGovernorWhy:    state.GovernorIntent.Rationale,
+			ContinuationRatified:       state.GovernorIntent.Ratified,
+			ContinuationBlockedReason:  state.HandshakeBlockedReason,
+		},
+	})
+	if err != nil {
+		return fallback
+	}
+	rendered = strings.TrimSpace(rendered)
+	if rendered == "" {
+		return fallback
+	}
+	return rendered
 }
 
-func governorContinuationRatified(planState session.PlanState, operationState session.OperationState) bool {
-	planState = session.NormalizePlanState(planState)
-	operationState = session.NormalizeOperationState(operationState)
-	if operationState.Proposal.Status == session.ProposalStatusApproved {
-		return true
+func renderContinuationBlockedFallback(state session.ContinuationState) string {
+	reason := strings.TrimSpace(state.HandshakeBlockedReason)
+	switch reason {
+	case "persona_intent_missing":
+		return "I can't continue yet because I did not publish a continuation intent for this turn."
+	case "persona_rationale_missing":
+		return "I can't continue yet because I did not provide a clear continuation rationale."
+	case "persona_not_willing":
+		return "I can't continue yet because I chose to hold this thread instead of auto-continuing."
+	case "governor_intent_missing":
+		return "I can't continue yet because Aphelion did not publish a continuation intent for this turn."
+	case "governor_rationale_missing":
+		return "I can't continue yet because Aphelion did not provide a continuation rationale."
+	case "governor_not_ratified":
+		return "I can't continue yet because Aphelion did not ratify continuation for this turn."
+	case "governor_not_willing":
+		return "I can't continue yet because Aphelion explicitly held continuation for this turn."
+	default:
+		return "I can't continue this thread yet because the continuation handshake is still blocked."
 	}
-	if operationState.Status == session.OperationStatusActive || operationState.Status == session.OperationStatusBlocked {
-		return true
-	}
-	return hasActivePlanStep(planState)
-}
-
-func hasActivePlanStep(planState session.PlanState) bool {
-	planState = session.NormalizePlanState(planState)
-	for _, step := range planState.Steps {
-		if step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending {
-			return true
-		}
-	}
-	return false
 }
 
 func summarizeContinuationPlan(planState session.PlanState, operationState session.OperationState, promptInput string) (objective string, nextStep string) {

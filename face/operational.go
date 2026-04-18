@@ -37,8 +37,8 @@ type ToolProgressNotice struct {
 	Entries []ToolProgressEntry
 }
 
-func RenderTelegramStart(personaEffort, governorEffort string) string {
-	return strings.Join([]string{
+func RenderTelegramStart(personaEffort, governorEffort string, includeAdminCommands bool) string {
+	lines := []string{
 		"Idolum is here.",
 		"",
 		"Commands:",
@@ -46,18 +46,23 @@ func RenderTelegramStart(personaEffort, governorEffort string) string {
 		"/status - show live status and controls",
 		"/stop - stop current work in this chat",
 		"/detach - detach this chat from pending work",
-		"/restart - force an immediate gateway restart",
+	}
+	if includeAdminCommands {
+		lines = append(lines, "/restart - force an immediate gateway restart")
+	}
+	lines = append(lines,
 		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
 		"/set_governor_effort - choose governor reasoning effort",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
 		fmt.Sprintf("Current governor effort: %s", strings.TrimSpace(governorEffort)),
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
-func RenderTelegramHelp(personaEffort, governorEffort string) string {
-	return strings.Join([]string{
+func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminCommands bool) string {
+	lines := []string{
 		"Here is the current command surface.",
 		"",
 		"/start - show intro and command help",
@@ -65,14 +70,19 @@ func RenderTelegramHelp(personaEffort, governorEffort string) string {
 		"/status - show live status and controls",
 		"/stop - stop current work in this chat",
 		"/detach - detach this chat from pending work",
-		"/restart - force an immediate gateway restart",
+	}
+	if includeAdminCommands {
+		lines = append(lines, "/restart - force an immediate gateway restart")
+	}
+	lines = append(lines,
 		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
 		"/set_governor_effort - choose governor reasoning effort",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
 		fmt.Sprintf("Current governor effort: %s", strings.TrimSpace(governorEffort)),
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
 func RenderTelegramStatus(status core.SessionStatus, personaEffort, governorEffort string) string {

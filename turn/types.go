@@ -60,6 +60,8 @@ type Result struct {
 	MaterialFloor   core.MaterialPacket
 	PlanState       session.PlanState
 	OperationState  session.OperationState
+	PersonaIntent   session.ContinuationIntent
+	GovernorIntent  session.ContinuationIntent
 	RenderedStream  bool
 	RenderedID      int64
 	RenderedType    string

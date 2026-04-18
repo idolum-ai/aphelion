@@ -25,6 +25,12 @@ Current command surface:
 - `/set_governor_effort`
   - Opens inline effort selector buttons for governor reasoning.
 
+Visibility notes:
+
+- `/start` and `/help` are role-aware.
+  - Admin users see `/restart`.
+  - Non-admin users do not see `/restart`.
+
 ## Inline Buttons
 
 ### Design language
@@ -97,10 +103,22 @@ When a turn offers continuation approval, an inline prompt is shown with:
 
 Offer conditions:
 
-- Persona must publish explicit continuation intent (`continue|hold|stop`) plus rationale.
-- Governor must publish explicit continuation intent (`continue|hold|stop`) plus rationale and ratification signal.
+- Persona proposal note must include explicit continuation contract fields:
+  - `CONTINUATION_SCHEMA_VERSION: 1`
+  - `CONTINUATION_INTENT: continue|hold|stop`
+  - `CONTINUATION_RATIONALE: ...`
+  - `CONTINUATION_NEXT_STEP: ...`
+  - `CONTINUATION_CONFIDENCE: low|medium|high`
+- Governor ratification artifact must include explicit continuation contract fields:
+  - `CONTINUATION_SCHEMA_VERSION: 1`
+  - `CONTINUATION_INTENT: continue|hold|stop`
+  - `CONTINUATION_RATIONALE: ...`
+  - `CONTINUATION_RATIFIED: yes|no`
+  - `CONTINUATION_NEXT_STEP: ...`
+  - `CONTINUATION_CONSTRAINTS: ...`
+  - `CONTINUATION_CONFIDENCE: low|medium|high`
 - Prompt is shown only when both intents are `continue`, both rationales are non-empty, and governor is ratified.
-- When handshake fails, continuation state is persisted as idle with an explicit blocked reason (for machine visibility) and no prompt is shown.
+- When handshake fails, continuation state is persisted as idle with an explicit blocked reason and a first-person blocked notice is sent in chat (persona-rendered with deterministic fallback).
 
 ### Runtime decision prompts
 
