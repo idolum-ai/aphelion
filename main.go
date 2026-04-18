@@ -234,14 +234,6 @@ func (c telegramCommandControl) QueueReinstall(ctx context.Context, msg core.Inb
 	return nil
 }
 
-func (c telegramCommandControl) TogglePersonaEffort() (string, error) {
-	return c.rt.TogglePersonaEffort()
-}
-
-func (c telegramCommandControl) ToggleGovernorEffort() (string, error) {
-	return c.rt.ToggleGovernorEffort()
-}
-
 func (c telegramCommandControl) CurrentEfforts() (string, string) {
 	return c.rt.CurrentEfforts()
 }

@@ -43,15 +43,13 @@ func RenderTelegramStart(personaEffort, governorEffort string) string {
 		"",
 		"Commands:",
 		"/help - show command help",
-		"/status - show whether I am currently working",
+		"/status - show live status and controls",
 		"/stop - stop current work in this chat",
 		"/detach - detach this chat from pending work",
 		"/restart - force an immediate gateway restart",
 		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
 		"/set_governor_effort - choose governor reasoning effort",
-		"/toggle_persona_effort - quick-toggle Sonnet/Opus",
-		"/toggle_governor_effort - quick-toggle medium/high",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
 		fmt.Sprintf("Current governor effort: %s", strings.TrimSpace(governorEffort)),
@@ -64,15 +62,13 @@ func RenderTelegramHelp(personaEffort, governorEffort string) string {
 		"",
 		"/start - show intro and command help",
 		"/help - show this help",
-		"/status - show current work state",
+		"/status - show live status and controls",
 		"/stop - stop current work in this chat",
 		"/detach - detach this chat from pending work",
 		"/restart - force an immediate gateway restart",
 		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
 		"/set_governor_effort - choose governor reasoning effort",
-		"/toggle_persona_effort - quick-toggle Sonnet/Opus",
-		"/toggle_governor_effort - quick-toggle medium/high",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
 		fmt.Sprintf("Current governor effort: %s", strings.TrimSpace(governorEffort)),
@@ -157,16 +153,6 @@ func RenderTelegramRestartDenied() string {
 
 func RenderTelegramQueuedReinstall() string {
 	return "Queued a reinstall request as a normal turn in this chat."
-}
-
-func RenderTelegramTogglePersona(mode string) string {
-	mode = strings.TrimSpace(mode)
-	return fmt.Sprintf("Idolum persona effort is now %s. Future rendered turns will use the %s recipe.", mode, titleCaseWord(mode))
-}
-
-func RenderTelegramToggleGovernor(mode string) string {
-	mode = strings.TrimSpace(mode)
-	return fmt.Sprintf("Governor effort is now %s. Future interactive turns will use %s reasoning.", mode, mode)
 }
 
 func RenderTelegramPersonaModelSelector(current string, options []string) string {
@@ -280,11 +266,4 @@ func RenderToolProgress(notice ToolProgressNotice) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func titleCaseWord(value string) string {
-	if value == "" {
-		return ""
-	}
-	return strings.ToUpper(value[:1]) + strings.ToLower(value[1:])
 }

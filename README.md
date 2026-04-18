@@ -41,6 +41,7 @@ Details:
 - [runtime/README.md](runtime/README.md)
 - [turn/README.md](turn/README.md)
 - [pipeline/README.md](pipeline/README.md)
+- [docs/telegram-ui-features.md](docs/telegram-ui-features.md)
 - `requirements/` specs for component-level behavior
 
 ## Status
@@ -58,7 +59,7 @@ Runnable v0:
 - Telegram typing + real tool-backed progress feedback
 - Heartbeat and config-driven cron
 - Telegram voice transcription + optional TTS replies
-- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`, `/detach`, `/restart`, `/reinstall`
+- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
 
 ## Run
 

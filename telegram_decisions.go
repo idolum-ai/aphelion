@@ -93,7 +93,7 @@ func (a *telegramExecApprover) ConfirmExec(ctx context.Context, req toolpkg.Exec
 		SenderID:      req.Principal.TelegramUserID,
 		Prompt:        "Approve this proposal?",
 		Details:       formatExecProposalDetails(req),
-		Choices:       []decision.Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+		Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
 		DefaultChoice: "deny",
 		Timeout:       a.timeout,
 	})
@@ -382,7 +382,7 @@ func inlineButtonRows(pending decision.PendingDecision) [][]telegram.InlineButto
 		}})
 	}
 	row := make([]telegram.InlineButton, 0, len(pending.Choices))
-	for _, choice := range pending.Choices {
+	for _, choice := range orderedDecisionChoices(pending.Choices) {
 		row = append(row, telegram.InlineButton{
 			Text:         strings.TrimSpace(choice.Label),
 			CallbackData: decision.EncodeCallbackData(pending.ID, choice.ID),
@@ -390,6 +390,37 @@ func inlineButtonRows(pending decision.PendingDecision) [][]telegram.InlineButto
 	}
 	rows = append(rows, row)
 	return rows
+}
+
+func orderedDecisionChoices(choices []decision.Choice) []decision.Choice {
+	out := append([]decision.Choice(nil), choices...)
+	if len(out) != 2 {
+		return out
+	}
+	leftID := strings.ToLower(strings.TrimSpace(out[0].ID))
+	rightID := strings.ToLower(strings.TrimSpace(out[1].ID))
+	if isAffirmativeChoiceID(leftID) && isNegativeChoiceID(rightID) {
+		out[0], out[1] = out[1], out[0]
+	}
+	return out
+}
+
+func isNegativeChoiceID(id string) bool {
+	switch id {
+	case "deny", "stop", "cancel", "reject", "abort":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAffirmativeChoiceID(id string) bool {
+	switch id {
+	case "approve", "continue", "queue", "allow", "accept", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 var stopPatterns = []string{

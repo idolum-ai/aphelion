@@ -165,55 +165,6 @@ func (r *Runtime) currentRecipeSnapshot() recipeSnapshot {
 	}
 }
 
-func (r *Runtime) TogglePersonaEffort() (string, error) {
-	if r == nil {
-		return "", fmt.Errorf("runtime is nil")
-	}
-	r.recipeMu.Lock()
-	prev := r.recipeState
-	currentModel := normalizePersonaModel(r.recipeState.PersonaModel)
-	if currentModel == "" {
-		currentModel = personaModelForEffort(r.recipeState.PersonaEffort)
-	}
-	nextModel := personaModelOpus
-	if currentModel == personaModelOpus46 || currentModel == personaModelOpus47 {
-		nextModel = personaModelSonnet
-	}
-	r.recipeState.PersonaModel = nextModel
-	r.recipeState.PersonaEffort = personaEffortForModel(nextModel)
-	state := r.recipeState
-	r.recipeMu.Unlock()
-	if err := saveRuntimeRecipeState(r.recipePath, state, &r.recipeFileMu); err != nil {
-		r.recipeMu.Lock()
-		r.recipeState = prev
-		r.recipeMu.Unlock()
-		return "", err
-	}
-	return personaEffortForModel(nextModel), nil
-}
-
-func (r *Runtime) ToggleGovernorEffort() (string, error) {
-	if r == nil {
-		return "", fmt.Errorf("runtime is nil")
-	}
-	r.recipeMu.Lock()
-	prev := r.recipeState
-	next := governorEffortHigh
-	if r.recipeState.GovernorEffort == governorEffortHigh {
-		next = governorEffortMedium
-	}
-	r.recipeState.GovernorEffort = next
-	state := r.recipeState
-	r.recipeMu.Unlock()
-	if err := saveRuntimeRecipeState(r.recipePath, state, &r.recipeFileMu); err != nil {
-		r.recipeMu.Lock()
-		r.recipeState = prev
-		r.recipeMu.Unlock()
-		return "", err
-	}
-	return next, nil
-}
-
 func (r *Runtime) CurrentEfforts() (persona string, governor string) {
 	snapshot := r.currentRecipeSnapshot()
 	return snapshot.PersonaEffort, snapshot.GovernorEffort

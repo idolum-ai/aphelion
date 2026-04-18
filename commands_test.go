@@ -108,8 +108,6 @@ type stubCommandRouter struct {
 	personaEffort               string
 	governorEffort              string
 	canRestart                  bool
-	toggledPersona              string
-	toggledGovernor             string
 	personaModel                string
 	personaModelOptions         []string
 	governorEffortOptions       []string
@@ -166,14 +164,6 @@ func (s stubCommandRouter) StatusSystem(senderID int64) (core.SystemStatusSnapsh
 		return core.SystemStatusSnapshot{}, s.statusSystemErr
 	}
 	return s.statusSystem, nil
-}
-
-func (s stubCommandRouter) TogglePersonaEffort() (string, error) {
-	return s.toggledPersona, nil
-}
-
-func (s stubCommandRouter) ToggleGovernorEffort() (string, error) {
-	return s.toggledGovernor, nil
 }
 
 func (s stubCommandRouter) CurrentEfforts() (string, string) {
@@ -289,7 +279,6 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/status@my_bot", want: "status", ok: true},
 		{text: "/restart", want: "restart", ok: true},
 		{text: "/reinstall", want: "reinstall", ok: true},
-		{text: "/toggle_persona_effort", want: "toggle_persona_effort", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
 		{text: "/set_governor_effort", want: "set_governor_effort", ok: true},
 		{text: "/tmp/file", ok: false},
@@ -463,52 +452,6 @@ func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
 	}
 	if !foundSystem || !foundHot || !foundFind {
 		t.Fatalf("admin status keyboard rows = %#v, want admin controls", sender.inline[0].rows)
-	}
-}
-
-func TestHandleTelegramCommandTogglePersonaEffort(t *testing.T) {
-	t.Parallel()
-
-	sender := &stubCommandSender{}
-	router := stubCommandRouter{toggledPersona: "opus"}
-	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
-		ChatID: 7,
-		Text:   "/toggle_persona_effort",
-	})
-	if err != nil {
-		t.Fatalf("handleTelegramCommand() err = %v", err)
-	}
-	if !handled {
-		t.Fatal("handled = false, want true")
-	}
-	if len(sender.msgs) != 1 {
-		t.Fatalf("message count = %d, want 1", len(sender.msgs))
-	}
-	if got := sender.msgs[0].Text; got == "" || got == "Idolum persona effort is now sonnet." {
-		t.Fatalf("toggle text = %q, want persona toggle status", got)
-	}
-}
-
-func TestHandleTelegramCommandToggleGovernorEffort(t *testing.T) {
-	t.Parallel()
-
-	sender := &stubCommandSender{}
-	router := stubCommandRouter{toggledGovernor: "high"}
-	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
-		ChatID: 7,
-		Text:   "/toggle_governor_effort",
-	})
-	if err != nil {
-		t.Fatalf("handleTelegramCommand() err = %v", err)
-	}
-	if !handled {
-		t.Fatal("handled = false, want true")
-	}
-	if len(sender.msgs) != 1 {
-		t.Fatalf("message count = %d, want 1", len(sender.msgs))
-	}
-	if got := sender.msgs[0].Text; got == "" || got == "Governor effort is now medium." {
-		t.Fatalf("toggle text = %q, want governor toggle status", got)
 	}
 }
 
