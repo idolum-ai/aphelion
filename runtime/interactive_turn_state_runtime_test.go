@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/turn"
@@ -94,5 +95,32 @@ func TestInteractiveTurnStateApplyExecutionDisablesVoiceWhenMediaPresent(t *test
 
 	if state.replyWithVoice() {
 		t.Fatal("replyWithVoice = true, want false when turn output contains media")
+	}
+}
+
+func TestInteractivePreparedLedgerTextPrefersResultPreparedText(t *testing.T) {
+	t.Parallel()
+
+	got := interactivePreparedLedgerText("fallback text", &turn.Result{
+		Prepared: pipeline.TurnPrepareContract{
+			LedgerText: "result prepared text",
+		},
+	})
+	if got != "result prepared text" {
+		t.Fatalf("interactivePreparedLedgerText() = %q, want result prepared text", got)
+	}
+}
+
+func TestInteractivePreparedLedgerTextFallsBackToCapturedPreparedText(t *testing.T) {
+	t.Parallel()
+
+	got := interactivePreparedLedgerText("fallback text", &turn.Result{})
+	if got != "fallback text" {
+		t.Fatalf("interactivePreparedLedgerText() = %q, want fallback text", got)
+	}
+
+	got = interactivePreparedLedgerText("fallback text", nil)
+	if got != "fallback text" {
+		t.Fatalf("interactivePreparedLedgerText(nil) = %q, want fallback text", got)
 	}
 }
