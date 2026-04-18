@@ -27,7 +27,7 @@ type commandRouter interface {
 	Stop(chatID int64) core.StopResult
 	Status(chatID int64) core.SessionStatus
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
-	RevokeContinuation(chatID int64) (session.ContinuationState, error)
+	StopContinuation(chatID int64) (core.StopResult, error)
 	TriggerContinuation(ctx context.Context, chatID int64) error
 	TogglePersonaEffort() (string, error)
 	ToggleGovernorEffort() (string, error)
@@ -179,11 +179,11 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			}
 			return true, nil
 		case "stop":
-			state, err := router.RevokeContinuation(chatID)
+			stopped, err := router.StopContinuation(chatID)
 			if err != nil {
 				return true, err
 			}
-			text = renderContinuationDecision(state, false)
+			text = face.RenderTelegramStop(stopped)
 			if messageID != 0 {
 				if err := sender.EditMessageText(ctx, chatID, messageID, text, ""); err != nil {
 					return true, err
@@ -308,20 +308,17 @@ func decodeContinuationCallbackData(data string) (string, bool) {
 }
 
 func renderContinuationDecision(state session.ContinuationState, approved bool) string {
-	if approved {
-		text := "Continuation approved."
-		if state.RemainingTurns > 0 {
-			text += fmt.Sprintf(" Remaining turns: %d.", state.RemainingTurns)
-		}
-		if state.StageSummary != "" {
-			text += " Next: " + state.StageSummary
-		}
-		return text
+	if !approved {
+		return ""
 	}
-	if state.Status == session.ContinuationStatusRevoked {
-		return "Stopped the current continuation and revoked approval for this chat."
+	text := "Continuation approved."
+	if state.RemainingTurns > 0 {
+		text += fmt.Sprintf(" Remaining turns: %d.", state.RemainingTurns)
 	}
-	return "There was no active continuation approval to revoke."
+	if state.StageSummary != "" {
+		text += " Next: " + state.StageSummary
+	}
+	return text
 }
 
 func personaModelButtonLabel(model string) string {

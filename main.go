@@ -71,15 +71,17 @@ func (c telegramCommandControl) ApproveContinuation(chatID int64, approverID int
 	return c.rt.ApproveContinuation(chatID, approverID)
 }
 
-func (c telegramCommandControl) RevokeContinuation(chatID int64) (session.ContinuationState, error) {
+func (c telegramCommandControl) StopContinuation(chatID int64) (core.StopResult, error) {
 	revoke, err := c.rt.RevokeContinuation(chatID)
 	if err != nil {
-		return revoke.State, err
+		return core.StopResult{}, err
 	}
+	result := core.StopResult{ContinuationRevoked: revoke.Revoked}
 	if revoke.Revoked {
-		_ = c.router.Stop(chatID)
+		result = c.router.Stop(chatID)
+		result.ContinuationRevoked = true
 	}
-	return revoke.State, nil
+	return result, nil
 }
 
 func (c telegramCommandControl) TriggerContinuation(ctx context.Context, chatID int64) error {
