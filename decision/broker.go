@@ -20,6 +20,9 @@ const (
 	KindArtifactRetention Kind = "artifact_retention"
 )
 
+// WaitIndefinitely disables the broker timeout and waits until the decision is resolved or the request context is canceled.
+const WaitIndefinitely time.Duration = -1
+
 type Choice struct {
 	ID    string
 	Label string
@@ -59,18 +62,21 @@ type Broker struct {
 	nextID   uint64
 	notifier Notifier
 	pending  map[string]*pendingDecision
+	byOwner  map[string]string
 }
 
 type pendingDecision struct {
 	request  PendingDecision
 	delivery Delivery
 	resultCh chan string
+	ownerKey string
 }
 
 func NewBroker(notifier Notifier) *Broker {
 	return &Broker{
 		notifier: notifier,
 		pending:  make(map[string]*pendingDecision),
+		byOwner:  make(map[string]string),
 	}
 }
 
@@ -86,32 +92,44 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 	}
 
 	decisionID := b.nextDecisionID()
+	normalized := normalizeRequest(req)
+	ownerKey := decisionOwnerKey(normalized)
 	pending := &pendingDecision{
 		request: PendingDecision{
 			ID:      decisionID,
-			Request: normalizeRequest(req),
+			Request: normalized,
 		},
 		resultCh: make(chan string, 1),
+		ownerKey: ownerKey,
 	}
 
 	b.mu.Lock()
+	b.supersedeOwnerLocked(ownerKey)
 	b.pending[decisionID] = pending
+	if ownerKey != "" {
+		b.byOwner[ownerKey] = decisionID
+	}
 	b.mu.Unlock()
 
 	if b.notifier != nil {
 		delivery, err := b.notifier(ctx, pending.request)
 		if err != nil {
-			b.mu.Lock()
-			delete(b.pending, decisionID)
-			b.mu.Unlock()
+			b.clear(decisionID)
 			return Result{}, err
 		}
 		pending.delivery = delivery
 	}
 
 	timeout := pending.request.Timeout
-	if timeout <= 0 {
-		timeout = 30 * time.Second
+	if timeout < 0 {
+		select {
+		case choice := <-pending.resultCh:
+			b.clear(decisionID)
+			return Result{Choice: choice, Delivery: pending.delivery}, nil
+		case <-ctx.Done():
+			b.clear(decisionID)
+			return Result{}, ctx.Err()
+		}
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -158,8 +176,36 @@ func (b *Broker) Resolve(id string, choice string) bool {
 
 func (b *Broker) clear(id string) {
 	b.mu.Lock()
-	delete(b.pending, id)
+	pending, ok := b.pending[id]
+	if ok {
+		delete(b.pending, id)
+		if pending.ownerKey != "" {
+			if ownerID, exists := b.byOwner[pending.ownerKey]; exists && ownerID == id {
+				delete(b.byOwner, pending.ownerKey)
+			}
+		}
+	}
 	b.mu.Unlock()
+}
+
+func (b *Broker) supersedeOwnerLocked(ownerKey string) {
+	if ownerKey == "" {
+		return
+	}
+	existingID, ok := b.byOwner[ownerKey]
+	if !ok {
+		return
+	}
+	existing := b.pending[existingID]
+	if existing != nil {
+		// Resolve the previous pending decision to its default so only one remains active per owner.
+		select {
+		case existing.resultCh <- existing.request.DefaultChoice:
+		default:
+		}
+		delete(b.pending, existingID)
+	}
+	delete(b.byOwner, ownerKey)
 }
 
 func (b *Broker) nextDecisionID() string {
@@ -167,10 +213,20 @@ func (b *Broker) nextDecisionID() string {
 	return strconvBase36(next)
 }
 
+func decisionOwnerKey(req Request) string {
+	if req.SenderID != 0 {
+		return fmt.Sprintf("sender:%d", req.SenderID)
+	}
+	if req.ChatID != 0 {
+		return fmt.Sprintf("chat:%d", req.ChatID)
+	}
+	return ""
+}
+
 func normalizeRequest(req Request) Request {
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	req.Details = strings.TrimSpace(req.Details)
-	if req.Timeout <= 0 {
+	if req.Timeout == 0 {
 		req.Timeout = 30 * time.Second
 	}
 	return req

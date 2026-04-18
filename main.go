@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	turnTimeout     = 10 * time.Minute
+	turnTimeout     = 0 * time.Minute
 	exitCodeFailure = 1
 	exitCodeConfig  = 78
 )
@@ -45,6 +45,13 @@ type configStartupError struct {
 type telegramCommandControl struct {
 	router *core.Router
 	rt     *runtime.Runtime
+}
+
+func newTurnContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout > 0 {
+		return context.WithTimeout(parent, timeout)
+	}
+	return context.WithCancel(parent)
 }
 
 func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
@@ -304,7 +311,7 @@ func run() error {
 			return nil
 		}
 
-		turnCtx, cancel := context.WithTimeout(parent, turnTimeout)
+		turnCtx, cancel := newTurnContext(parent, turnTimeout)
 		go func() {
 			defer cancel()
 			router.Route(turnCtx, msg)
