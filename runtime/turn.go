@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
-	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
@@ -54,70 +52,46 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 	defer unlock()
 
 	tools := r.toolsForPrincipal(actor, key)
-	sess, err := r.store.Load(key)
-	if err != nil {
-		return nil, fmt.Errorf("load session: %w", err)
-	}
-	applySessionScope(sess, key)
 
 	scope, err := r.scopeForPrincipal(actor)
 	if err != nil {
 		return nil, fmt.Errorf("resolve principal scope: %w", err)
 	}
-	now := time.Now().UTC()
-	prepared, err := r.prepareInboundTurn(ctx, scope, msg)
-	if err != nil {
-		return nil, err
-	}
-	audit := newTurnAuditRecorder(key, "telegram", string(actor.Role), prepared.LedgerText)
-	defer r.emitTurnAudit(audit)
-	facePolicy := pipeline.DecideInteractiveFacePolicy(prepared.LedgerText)
-	useMaterialFloor := pipeline.ShouldUseMaterialFloorContract(facePolicy)
-	exec := r.executionForTurn(prepared)
-	promptContext, err := r.promptContextForScope(scope, now)
-	if err != nil {
-		return nil, fmt.Errorf("load workspace prompt context: %w", err)
-	}
-	hiddenInputs := r.assembleInteractiveHiddenInputs(ctx, scope, now, prepared.LedgerText, sess.LastFloorMetadata)
-	hiddenInputs.addCoreAll(prepared.ArtifactDecisionInputs)
 	eventAwareness := turn.EventAwareness{Origin: inboundOriginLabel(msg)}
 	if msg.Origin == core.InboundOriginTurnAuthorization {
 		eventAwareness.TurnAuthorizationKind = inboundOriginDetailLabel(msg)
 	}
-	baseGovernorAwareness := turn.ApplyOperationAwareness(
-		turn.ApplyPlanAwareness(
-			turn.ApplyEventAwareness(
-				turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindInteractive, "telegram", exec), hiddenInputs.toTurnAwareness()),
-				eventAwareness,
-			),
-			sess.PlanState,
-		),
-		sess.OperationState,
-	)
-	if useMaterialFloor {
-		baseGovernorAwareness.ArtifactMode = "floor"
+	assembled, err := r.assembleInteractiveLikeTurn(ctx, interactiveLikeAssemblyInput{
+		Scope:                scope,
+		Key:                  key,
+		Msg:                  msg,
+		RunKind:              session.TurnRunKindInteractive,
+		Channel:              "telegram",
+		PrincipalRole:        string(actor.Role),
+		AuditChannel:         "telegram",
+		EventAwareness:       eventAwareness,
+		PromptContextErrHint: "load workspace prompt context",
+		PolicyReason:         "mapped from pipeline interactive face policy",
+	})
+	if err != nil {
+		return nil, err
 	}
+
+	now := assembled.Now
+	sess := assembled.Sess
+	prepared := assembled.Prepared
+	facePolicy := assembled.FacePolicy
+	useMaterialFloor := assembled.UseMaterialFloor
+	exec := assembled.Exec
+	promptContext := assembled.PromptContext
+	hiddenInputs := assembled.HiddenInputs
+	baseGovernorAwareness := assembled.BaseGovernorAwareness
+	audit := assembled.Audit
+	machine := assembled.Machine
+	defer r.emitTurnAudit(audit)
+
 	sess.ChatType = "dm"
 	sess.UserName = msg.SenderName
-	machine := &turn.Machine{
-		Governor: nil,
-		Face:     nil,
-		Options: turn.Options{
-			GovernorName: prompt.DefaultGovernorName,
-			FaceName:     face.DefaultFaceName,
-			Channel:      "telegram",
-			Style:        "observant, high-agency, warm, and emotionally lucid",
-		},
-		RuntimeAwareness: baseGovernorAwareness,
-		PolicyFunc: func(turn.Request) turn.Policy {
-			return turn.Policy{
-				Brokerage: false,
-				Proposal:  facePolicy.Proposal,
-				Render:    facePolicy.Render,
-				Reason:    "mapped from pipeline interactive face policy",
-			}
-		},
-	}
 	coordinator := &interactiveTurnCoordinator{
 		runtime:               r,
 		actor:                 actor,
@@ -129,9 +103,9 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 		exec:                  exec,
 		facePolicy:            facePolicy,
 		useMaterialFloor:      useMaterialFloor,
-		governorName:          prompt.DefaultGovernorName,
-		faceName:              face.DefaultFaceName,
-		channelName:           "telegram",
+		governorName:          machine.Options.GovernorName,
+		faceName:              machine.Options.FaceName,
+		channelName:           machine.Options.Channel,
 		principalRole:         string(actor.Role),
 		hiddenInputs:          hiddenInputs,
 		promptContext:         promptContext,
