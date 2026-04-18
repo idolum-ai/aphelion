@@ -297,13 +297,13 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 		RecordOutbound: func(ctx context.Context, messageID int64, kind string) error {
 			return p.recordOutboundWithContext(ctx, p.sess, p.key, messageID, kind)
 		},
-		PostCommit: func(context.Context) error {
-			return p.runPostCommitHooks()
+		PostCommit: func(postCtx context.Context) error {
+			return p.runPostCommitHooks(postCtx)
 		},
 	})
 }
 
-func (p *turnDeliveryPort) runPostCommitHooks() error {
+func (p *turnDeliveryPort) runPostCommitHooks(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
@@ -323,7 +323,7 @@ func (p *turnDeliveryPort) runPostCommitHooks() error {
 		}
 	}
 	if p.hooks.PostReplyContinuationUI != nil {
-		if err := p.hooks.PostReplyContinuationUI(context.Background()); err != nil {
+		if err := p.hooks.PostReplyContinuationUI(ctx); err != nil {
 			return err
 		}
 	}

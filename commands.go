@@ -318,7 +318,10 @@ func renderContinuationDecision(state session.ContinuationState, approved bool) 
 		}
 		return text
 	}
-	return "Continuation stopped. Feedback welcome when you're ready."
+	if state.Status == session.ContinuationStatusRevoked {
+		return "Stopped the current continuation and revoked approval for this chat."
+	}
+	return "There was no active continuation approval to revoke."
 }
 
 func personaModelButtonLabel(model string) string {

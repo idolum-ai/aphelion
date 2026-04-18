@@ -174,3 +174,33 @@ func TestTriggerContinuationFailsClosedWithoutRecordedApprover(t *testing.T) {
 		t.Fatalf("TriggerContinuation() err = %v, want missing approver error", err)
 	}
 }
+
+func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8105, UserID: 0, Scope: telegramDMScopeRef(8105)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, ApprovedBy: 1002}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 8105); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.lastGovernorMsgs) == 0 {
+		t.Fatal("lastGovernorMsgs empty, want continuation turn input")
+	}
+	last := provider.lastGovernorMsgs[len(provider.lastGovernorMsgs)-1]
+	if last.Role != "user" {
+		t.Fatalf("last role = %q, want user-compatible provider input", last.Role)
+	}
+	if last.Content != "[approved continuation event]" {
+		t.Fatalf("last content = %q, want machine-authored continuation event text", last.Content)
+	}
+}

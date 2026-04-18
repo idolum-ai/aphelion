@@ -22,12 +22,29 @@ import (
 const maxReviewEventsPerTurn = 10
 
 func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (result *core.TurnResult, err error) {
+	return r.handleInteractiveInbound(ctx, msg, nil)
+}
+
+func (r *Runtime) handleInternalContinuation(ctx context.Context, actor principal.Principal, msg core.InboundMessage) (result *core.TurnResult, err error) {
+	if actor.TelegramUserID <= 0 && strings.TrimSpace(actor.DurableAgentID) == "" {
+		return nil, ErrPrincipalDenied
+	}
+	return r.handleInteractiveInbound(ctx, msg, &actor)
+}
+
+func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.InboundMessage, forcedActor *principal.Principal) (result *core.TurnResult, err error) {
 	if strings.TrimSpace(msg.DurableAgentID) != "" {
 		return r.handleDurableTelegramGroupInbound(ctx, msg)
 	}
-	actor, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
-	if !ok {
-		return nil, ErrPrincipalDenied
+	actor := principal.Principal{}
+	if forcedActor != nil {
+		actor = *forcedActor
+	} else {
+		resolved, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
+		if !ok {
+			return nil, ErrPrincipalDenied
+		}
+		actor = resolved
 	}
 	stopTyping := r.startChatActionLoop(ctx, msg.ChatID, "typing")
 	defer stopTyping()

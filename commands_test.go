@@ -127,7 +127,13 @@ func (s *stubCommandRouter) ApproveContinuation(chatID int64, approverID int64) 
 
 func (s *stubCommandRouter) RevokeContinuation(chatID int64) (session.ContinuationState, error) {
 	s.revokeContinuationInput = chatID
-	s.continuationState = session.ContinuationState{Status: session.ContinuationStatusRevoked}
+	if s.continuationState.Status == session.ContinuationStatusPending || s.continuationState.Status == session.ContinuationStatusApproved {
+		s.continuationState = session.ContinuationState{Status: session.ContinuationStatusRevoked}
+		return s.continuationState, nil
+	}
+	if s.continuationState.Status == "" {
+		s.continuationState = session.ContinuationState{Status: session.ContinuationStatusIdle}
+	}
 	return s.continuationState, nil
 }
 
@@ -461,5 +467,53 @@ func TestPersonaModelButtonLabelIncludesOpus47(t *testing.T) {
 	t.Parallel()
 	if got := personaModelButtonLabel("claude-opus-4-7"); got != "Opus 4.7" {
 		t.Fatalf("personaModelButtonLabel() = %q, want Opus 4.7", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationStopRevoked(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{continuationState: session.ContinuationState{Status: session.ContinuationStatusApproved}}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-stop",
+		Data:    encodeContinuationCallbackData("stop"),
+		Message: &telegram.Message{MessageID: 94, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	}
+	if sender.edits[0].text != "Stopped the current continuation and revoked approval for this chat." {
+		t.Fatalf("edit text = %q, want truthful revoke message", sender.edits[0].text)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationStopNoActiveApproval(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{continuationState: session.ContinuationState{Status: session.ContinuationStatusIdle}}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-stop-none",
+		Data:    encodeContinuationCallbackData("stop"),
+		Message: &telegram.Message{MessageID: 95, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	}
+	if sender.edits[0].text != "There was no active continuation approval to revoke." {
+		t.Fatalf("edit text = %q, want truthful no-op message", sender.edits[0].text)
 	}
 }

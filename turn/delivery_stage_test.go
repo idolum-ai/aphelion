@@ -270,3 +270,32 @@ func TestRunDeliveryStageNilResultNoOps(t *testing.T) {
 		t.Fatal("callbacks called with nil result")
 	}
 }
+
+func TestRunDeliveryStagePassesLiveContextToPostCommit(t *testing.T) {
+	t.Parallel()
+
+	key := struct{}{}
+	ctx := context.WithValue(context.Background(), key, "live")
+	var seen any
+	_, err := RunDeliveryStage(ctx, DeliveryStageInput{
+		Request: DeliveryRequest{
+			Message: core.OutboundMessage{Text: "reply"},
+			Result:  &Result{},
+		},
+		Deliver: true,
+	}, DeliveryStageCallbacks{
+		Send: func(context.Context, core.OutboundMessage, bool) (int64, string, error) {
+			return 1, "text", nil
+		},
+		PostCommit: func(postCtx context.Context) error {
+			seen = postCtx.Value(key)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunDeliveryStage() err = %v", err)
+	}
+	if seen != "live" {
+		t.Fatalf("post commit context value = %#v, want live", seen)
+	}
+}

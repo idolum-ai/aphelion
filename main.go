@@ -56,8 +56,9 @@ func newTurnContext(parent context.Context, timeout time.Duration) (context.Cont
 
 func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
 	result := c.router.Stop(chatID)
-	if _, err := c.rt.RevokeContinuation(chatID); err == nil {
-		result.ContinuationRevoked = true
+	revoke, err := c.rt.RevokeContinuation(chatID)
+	if err == nil {
+		result.ContinuationRevoked = revoke.Revoked
 	}
 	return result
 }
@@ -71,14 +72,14 @@ func (c telegramCommandControl) ApproveContinuation(chatID int64, approverID int
 }
 
 func (c telegramCommandControl) RevokeContinuation(chatID int64) (session.ContinuationState, error) {
-	state, err := c.rt.RevokeContinuation(chatID)
+	revoke, err := c.rt.RevokeContinuation(chatID)
 	if err != nil {
-		return state, err
+		return revoke.State, err
 	}
-	stop := c.router.Stop(chatID)
-	stop.ContinuationRevoked = state.Status == session.ContinuationStatusRevoked
-	_ = stop
-	return state, nil
+	if revoke.Revoked {
+		_ = c.router.Stop(chatID)
+	}
+	return revoke.State, nil
 }
 
 func (c telegramCommandControl) TriggerContinuation(ctx context.Context, chatID int64) error {

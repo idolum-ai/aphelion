@@ -105,21 +105,29 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 	return state, nil
 }
 
-func (r *Runtime) RevokeContinuation(chatID int64) (session.ContinuationState, error) {
+type ContinuationRevokeResult struct {
+	State   session.ContinuationState
+	Revoked bool
+}
+
+func (r *Runtime) RevokeContinuation(chatID int64) (ContinuationRevokeResult, error) {
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
 	state, err := r.store.ContinuationState(key)
 	if err != nil {
-		return session.ContinuationState{}, err
+		return ContinuationRevokeResult{}, err
 	}
 	state = session.NormalizeContinuationState(state)
-	state.Status = session.ContinuationStatusRevoked
-	state.RemainingTurns = 0
-	state.ApprovedBy = 0
-	state.UpdatedAt = time.Now().UTC()
-	if err := r.store.UpdateContinuationState(key, state); err != nil {
-		return session.ContinuationState{}, err
+	revoked := state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
+	if revoked {
+		state.Status = session.ContinuationStatusRevoked
+		state.RemainingTurns = 0
+		state.ApprovedBy = 0
+		state.UpdatedAt = time.Now().UTC()
+		if err := r.store.UpdateContinuationState(key, state); err != nil {
+			return ContinuationRevokeResult{}, err
+		}
 	}
-	return state, nil
+	return ContinuationRevokeResult{State: state, Revoked: revoked}, nil
 }
 
 func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
@@ -141,6 +149,14 @@ func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
 	if !ok {
 		return fmt.Errorf("continuation approver %d is not admitted", approverID)
 	}
+	return r.runApprovedContinuation(ctx, actor, chatID, state)
+}
+
+func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.Principal, chatID int64, state session.ContinuationState) error {
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
+		return nil
+	}
 	state.RemainingTurns--
 	if state.RemainingTurns <= 0 {
 		state.Status = session.ContinuationStatusIdle
@@ -151,13 +167,26 @@ func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return err
 	}
-	_, err = r.HandleInbound(ctx, core.InboundMessage{
+	_, err := r.handleInternalContinuation(ctx, actor, core.InboundMessage{
 		ChatID:     chatID,
 		SenderID:   actor.TelegramUserID,
-		SenderName: "continuation",
-		Text:       "Continue the previously approved next step.",
+		SenderName: actorLabel(actor),
+		Text:       "[approved continuation event]",
 	})
 	return err
+}
+
+func actorLabel(actor principal.Principal) string {
+	if actor.Role == principal.RoleAdmin {
+		return "admin"
+	}
+	if actor.Role == principal.RoleApprovedUser {
+		return "approved_user"
+	}
+	if strings.TrimSpace(actor.DurableAgentID) != "" {
+		return strings.TrimSpace(actor.DurableAgentID)
+	}
+	return "machine"
 }
 
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
