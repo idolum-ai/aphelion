@@ -49,9 +49,16 @@ type configStartupError struct {
 }
 
 type telegramCommandControl struct {
-	router   *core.Router
-	rt       *runtime.Runtime
-	resolver *principal.Resolver
+	router                 *core.Router
+	rt                     *runtime.Runtime
+	resolver               *principal.Resolver
+	decisionDetacher       pendingDecisionDetacher
+	detachPendingOnRestart bool
+}
+
+type pendingDecisionDetacher interface {
+	DetachByOwner(ctx context.Context, ownerKey string) (int, error)
+	DetachAll(ctx context.Context) (int, error)
 }
 
 func newTurnContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -70,6 +77,25 @@ func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
 	return result
 }
 
+func (c telegramCommandControl) Detach(chatID int64, senderID int64) (core.DetachResult, error) {
+	stopped := c.Stop(chatID)
+	result := core.DetachResult{
+		ActiveCanceled:      stopped.ActiveCanceled,
+		QueuedDropped:       stopped.QueuedDropped,
+		ContinuationRevoked: stopped.ContinuationRevoked,
+	}
+	if c.decisionDetacher == nil {
+		return result, nil
+	}
+	ownerKey := decision.OwnerKey(chatID, senderID)
+	removed, err := c.decisionDetacher.DetachByOwner(context.Background(), ownerKey)
+	if err != nil {
+		return core.DetachResult{}, err
+	}
+	result.PendingDecisionsDetached = removed
+	return result, nil
+}
+
 func (c telegramCommandControl) Restart(chatID int64) error {
 	if c.router != nil {
 		c.router.Stop(chatID)
@@ -77,6 +103,14 @@ func (c telegramCommandControl) Restart(chatID int64) error {
 	if c.rt != nil {
 		if _, err := c.rt.RevokeContinuation(chatID); err != nil {
 			log.Printf("WARN restart revoke continuation failed chat_id=%d err=%v", chatID, err)
+		}
+	}
+	if c.detachPendingOnRestart && c.decisionDetacher != nil {
+		removed, err := c.decisionDetacher.DetachAll(context.Background())
+		if err != nil {
+			log.Printf("WARN restart detach pending decisions failed err=%v", err)
+		} else if removed > 0 {
+			log.Printf("WARN restart detached %d pending decision(s) before exit", removed)
 		}
 	}
 	log.Printf("WARN restart requested via telegram chat_id=%d", chatID)
@@ -347,8 +381,14 @@ func run() error {
 	}
 
 	router := core.NewRouter(rt.AgentFunc())
-	commandControl := telegramCommandControl{router: router, rt: rt, resolver: principalResolver}
 	decisionBroker := newTelegramDecisionBroker(tgClient, decision.WithDurableStore(newTelegramDecisionDurableStore(store)))
+	commandControl := telegramCommandControl{
+		router:                 router,
+		rt:                     rt,
+		resolver:               principalResolver,
+		decisionDetacher:       decisionBroker,
+		detachPendingOnRestart: cfg.Telegram.DetachPendingOnRestart,
+	}
 	loadDecisionCtx, cancelDecisionLoad := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := decisionBroker.Load(loadDecisionCtx); err != nil {
 		cancelDecisionLoad()

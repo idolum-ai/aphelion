@@ -292,6 +292,9 @@ At minimum for v0:
 - `/help`
 - `/status`
 - `/stop`
+- `/detach`
+- `/restart`
+- `/reinstall`
 - `/set_persona_model`
 - `/set_governor_effort`
 - `/toggle_persona_effort`
@@ -318,6 +321,27 @@ Show whether the current DM session is idle or actively processing a turn, and w
 Cancel the in-flight turn for the current DM session and drop any queued follow-up messages that have not started yet.
 
 This command must be real, not decorative. If Telegram advertises `/stop`, the user should not have to wait for the current turn to finish before the stop takes effect.
+
+### `/detach`
+
+Detach the caller from pending state in the current DM chat.
+
+At minimum this should:
+
+- stop active turn execution for the chat
+- clear queued follow-up messages for the chat
+- revoke continuation approval for the chat
+- detach durable pending decisions for owner key `chat:<chat_id>:sender:<sender_id>`
+
+The command should be idempotent and safe to repeat.
+
+### `/restart`
+
+Admin-only forced gateway restart.
+
+Before process exit, restart should detach pending approvals when `telegram.detach_pending_on_restart = true`.
+
+Default behavior should set `detach_pending_on_restart` to enabled.
 
 ### `/set_persona_model`
 
@@ -1311,6 +1335,12 @@ The normal flow should be:
 2. Telegram renders inline keyboard with callback data containing the decision id
 3. callback handler resolves that decision id
 4. waiting runtime path resumes with the chosen result
+
+If a decision was detached (for example via `/detach` or restart-time detach), callback resolution should:
+
+- acknowledge the callback query
+- return a stale/no-longer-active message
+- avoid any side effects
 
 ### Router integration
 

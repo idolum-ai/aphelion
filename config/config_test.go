@@ -39,6 +39,9 @@ workspace = "./workspace"
 	if cfg.Telegram.PollTimeout != 30 {
 		t.Fatalf("poll timeout = %d, want 30", cfg.Telegram.PollTimeout)
 	}
+	if !cfg.Telegram.DetachPendingOnRestart {
+		t.Fatalf("detach_pending_on_restart = %t, want true by default", cfg.Telegram.DetachPendingOnRestart)
+	}
 	if cfg.Telegram.StreamEditInterval != "300ms" || cfg.Telegram.StreamCursor != " ▉" {
 		t.Fatalf("telegram streaming defaults = %#v, want 300ms/block cursor", cfg.Telegram)
 	}
@@ -309,6 +312,7 @@ func TestLoadParsesBasicTypedFields(t *testing.T) {
 	raw := `
 [telegram]
 bot_token = "tg-test"
+detach_pending_on_restart = false
 poll_timeout = 11
 stream_edit_interval = "450ms"
 stream_cursor = " .."
@@ -458,6 +462,9 @@ elevenlabs_voice_id = "voice-123"
 
 	if cfg.Telegram.PollTimeout != 11 {
 		t.Fatalf("poll_timeout = %d, want 11", cfg.Telegram.PollTimeout)
+	}
+	if cfg.Telegram.DetachPendingOnRestart {
+		t.Fatalf("detach_pending_on_restart = %t, want false", cfg.Telegram.DetachPendingOnRestart)
 	}
 	if cfg.Telegram.Media.DownloadMaxSize != "12MB" || cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "4MB" {
 		t.Fatalf("telegram.media = %#v, want explicit overrides", cfg.Telegram.Media)

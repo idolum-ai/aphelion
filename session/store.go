@@ -1758,6 +1758,34 @@ func (s *SQLiteStore) DeletePendingDecision(id string) error {
 	return nil
 }
 
+func (s *SQLiteStore) DeletePendingDecisionsByOwner(ownerKey string) (int, error) {
+	ownerKey = strings.TrimSpace(ownerKey)
+	if ownerKey == "" {
+		return 0, nil
+	}
+	res, err := s.db.Exec(`DELETE FROM pending_decisions WHERE owner_key = ?`, ownerKey)
+	if err != nil {
+		return 0, fmt.Errorf("delete pending decisions by owner: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected deleting pending decisions by owner: %w", err)
+	}
+	return int(affected), nil
+}
+
+func (s *SQLiteStore) DeleteAllPendingDecisions() (int, error) {
+	res, err := s.db.Exec(`DELETE FROM pending_decisions`)
+	if err != nil {
+		return 0, fmt.Errorf("delete all pending decisions: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected deleting all pending decisions: %w", err)
+	}
+	return int(affected), nil
+}
+
 func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT

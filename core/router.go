@@ -52,6 +52,13 @@ type StopResult struct {
 	ContinuationRevoked bool
 }
 
+type DetachResult struct {
+	ActiveCanceled           bool
+	QueuedDropped            bool
+	ContinuationRevoked      bool
+	PendingDecisionsDetached int
+}
+
 // NewRouter constructs a Router using fn for each routed turn.
 func NewRouter(fn AgentFunc) *Router {
 	return &Router{

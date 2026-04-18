@@ -603,6 +603,7 @@ type brokerMemoryDurableStore struct {
 	loadErr   error
 	upsertErr error
 	deleteErr error
+	detachErr error
 }
 
 func newBrokerMemoryDurableStore() *brokerMemoryDurableStore {
@@ -650,6 +651,38 @@ func (s *brokerMemoryDurableStore) DeletePending(_ context.Context, id string) e
 	defer s.mu.Unlock()
 	delete(s.rows, id)
 	return nil
+}
+
+func (s *brokerMemoryDurableStore) DetachByOwner(_ context.Context, ownerKey string) (int, error) {
+	if s.detachErr != nil {
+		return 0, s.detachErr
+	}
+	ownerKey = strings.TrimSpace(ownerKey)
+	if ownerKey == "" {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for id, row := range s.rows {
+		if strings.TrimSpace(row.OwnerKey) != ownerKey {
+			continue
+		}
+		delete(s.rows, id)
+		count++
+	}
+	return count, nil
+}
+
+func (s *brokerMemoryDurableStore) DetachAll(_ context.Context) (int, error) {
+	if s.detachErr != nil {
+		return 0, s.detachErr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := len(s.rows)
+	s.rows = make(map[string]DurableDecision)
+	return count, nil
 }
 
 func (s *brokerMemoryDurableStore) has(id string) bool {
@@ -839,5 +872,125 @@ func TestBrokerLoadKeepsOnlyNewestPendingDecisionPerOwner(t *testing.T) {
 	}
 	if store.has("older") {
 		t.Fatal("durable store still contains stale older decision")
+	}
+}
+
+func TestBrokerDetachByOwnerClearsPendingAndUnblocksWaiters(t *testing.T) {
+	t.Parallel()
+
+	store := newBrokerMemoryDurableStore()
+	pendingSeen := make(chan PendingDecision, 1)
+	broker := NewBroker(func(_ context.Context, pending PendingDecision) (Delivery, error) {
+		pendingSeen <- pending
+		return Delivery{MessageID: 901}, nil
+	}, WithDurableStore(store))
+
+	resultCh := make(chan Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			Kind:          KindProposalApproval,
+			ChatID:        77,
+			SenderID:      88,
+			Prompt:        "Detach me",
+			Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+			DefaultChoice: "deny",
+			Timeout:       WaitIndefinitely,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- result
+	}()
+
+	var pending PendingDecision
+	select {
+	case pending = <-pendingSeen:
+	case <-time.After(time.Second):
+		t.Fatal("request did not publish pending decision")
+	}
+	if _, ok := broker.Peek(pending.ID); !ok {
+		t.Fatal("Peek() = false, want pending decision")
+	}
+	count, err := broker.DetachByOwner(context.Background(), "chat:77:sender:88")
+	if err != nil {
+		t.Fatalf("DetachByOwner() err = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("DetachByOwner() count = %d, want 1", count)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("Request() err = %v", err)
+	case result := <-resultCh:
+		if result.Choice != "deny" {
+			t.Fatalf("result choice = %q, want default deny", result.Choice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Request() did not resolve after detach")
+	}
+	if _, ok := broker.Peek(pending.ID); ok {
+		t.Fatal("Peek() = true after detach, want false")
+	}
+	if store.has(pending.ID) {
+		t.Fatalf("durable store still contains detached id=%q", pending.ID)
+	}
+}
+
+func TestBrokerDetachAllClearsEverything(t *testing.T) {
+	t.Parallel()
+
+	store := newBrokerMemoryDurableStore()
+	store.rows["d1"] = DurableDecision{
+		Pending: PendingDecision{
+			ID: "d1",
+			Request: Request{
+				Kind:          KindProposalApproval,
+				ChatID:        1,
+				SenderID:      10,
+				Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+				DefaultChoice: "deny",
+				Timeout:       WaitIndefinitely,
+			},
+		},
+		Seq:      1,
+		OwnerKey: "chat:1:sender:10",
+	}
+	store.rows["d2"] = DurableDecision{
+		Pending: PendingDecision{
+			ID: "d2",
+			Request: Request{
+				Kind:          KindProposalApproval,
+				ChatID:        2,
+				SenderID:      20,
+				Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+				DefaultChoice: "deny",
+				Timeout:       WaitIndefinitely,
+			},
+		},
+		Seq:      2,
+		OwnerKey: "chat:2:sender:20",
+	}
+
+	broker := NewBroker(nil, WithDurableStore(store))
+	if err := broker.Load(context.Background()); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	count, err := broker.DetachAll(context.Background())
+	if err != nil {
+		t.Fatalf("DetachAll() err = %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("DetachAll() count = %d, want 2", count)
+	}
+	if _, ok := broker.Peek("d1"); ok {
+		t.Fatal("Peek(d1) = true after DetachAll, want false")
+	}
+	if _, ok := broker.Peek("d2"); ok {
+		t.Fatal("Peek(d2) = true after DetachAll, want false")
+	}
+	if store.has("d1") || store.has("d2") {
+		t.Fatalf("durable store rows still present after DetachAll: %#v", store.rows)
 	}
 }

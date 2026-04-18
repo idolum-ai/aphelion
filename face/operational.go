@@ -45,6 +45,7 @@ func RenderTelegramStart(personaEffort, governorEffort string) string {
 		"/help - show command help",
 		"/status - show whether I am currently working",
 		"/stop - stop current work in this chat",
+		"/detach - detach this chat from pending work",
 		"/restart - force an immediate gateway restart",
 		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
@@ -65,6 +66,7 @@ func RenderTelegramHelp(personaEffort, governorEffort string) string {
 		"/help - show this help",
 		"/status - show current work state",
 		"/stop - stop current work in this chat",
+		"/detach - detach this chat from pending work",
 		"/restart - force an immediate gateway restart",
 		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
@@ -119,6 +121,30 @@ func RenderTelegramStop(stopped core.StopResult) string {
 	default:
 		return "Continuation approval was already inactive for this chat."
 	}
+}
+
+func RenderTelegramDetach(detached core.DetachResult) string {
+	parts := make([]string, 0, 4)
+	if detached.ActiveCanceled {
+		parts = append(parts, "stopped current turn")
+	}
+	if detached.QueuedDropped {
+		parts = append(parts, "cleared queued work")
+	}
+	if detached.ContinuationRevoked {
+		parts = append(parts, "revoked continuation")
+	}
+	if detached.PendingDecisionsDetached > 0 {
+		label := "pending decision"
+		if detached.PendingDecisionsDetached != 1 {
+			label += "s"
+		}
+		parts = append(parts, fmt.Sprintf("detached %d %s", detached.PendingDecisionsDetached, label))
+	}
+	if len(parts) == 0 {
+		return "Nothing was pending to detach for this chat."
+	}
+	return "Detached this chat from pending work: " + strings.Join(parts, ", ") + "."
 }
 
 func RenderTelegramRestart() string {

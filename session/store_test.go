@@ -433,6 +433,84 @@ func TestPendingDecisionRoundTripAndReload(t *testing.T) {
 	}
 }
 
+func TestDeletePendingDecisionsByOwnerAndAll(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	records := []PendingDecisionRecord{
+		{
+			ID:            "decision-a",
+			Sequence:      1,
+			OwnerKey:      "chat:7:sender:99",
+			Kind:          "proposal_approval",
+			ChatID:        7,
+			SenderID:      99,
+			Prompt:        "A",
+			ChoicesJSON:   `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
+			DefaultChoice: "deny",
+		},
+		{
+			ID:            "decision-b",
+			Sequence:      2,
+			OwnerKey:      "chat:7:sender:99",
+			Kind:          "proposal_approval",
+			ChatID:        7,
+			SenderID:      99,
+			Prompt:        "B",
+			ChoicesJSON:   `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
+			DefaultChoice: "deny",
+		},
+		{
+			ID:            "decision-c",
+			Sequence:      3,
+			OwnerKey:      "chat:8:sender:100",
+			Kind:          "proposal_approval",
+			ChatID:        8,
+			SenderID:      100,
+			Prompt:        "C",
+			ChoicesJSON:   `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
+			DefaultChoice: "deny",
+		},
+	}
+	for _, record := range records {
+		if err := store.UpsertPendingDecision(record); err != nil {
+			t.Fatalf("UpsertPendingDecision(%s) err = %v", record.ID, err)
+		}
+	}
+
+	removed, err := store.DeletePendingDecisionsByOwner("chat:7:sender:99")
+	if err != nil {
+		t.Fatalf("DeletePendingDecisionsByOwner() err = %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("DeletePendingDecisionsByOwner() removed = %d, want 2", removed)
+	}
+	pending, err := store.PendingDecisions()
+	if err != nil {
+		t.Fatalf("PendingDecisions() err = %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != "decision-c" {
+		t.Fatalf("pending after owner detach = %#v, want only decision-c", pending)
+	}
+
+	removed, err = store.DeleteAllPendingDecisions()
+	if err != nil {
+		t.Fatalf("DeleteAllPendingDecisions() err = %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("DeleteAllPendingDecisions() removed = %d, want 1", removed)
+	}
+	pending, err = store.PendingDecisions()
+	if err != nil {
+		t.Fatalf("PendingDecisions(after all delete) err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending len after all delete = %d, want 0", len(pending))
+	}
+}
+
 func TestOperationStateRoundTripAndUpdate(t *testing.T) {
 	t.Parallel()
 

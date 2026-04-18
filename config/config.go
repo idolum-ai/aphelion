@@ -36,16 +36,17 @@ type IdentityConfig struct {
 }
 
 type TelegramConfig struct {
-	BotToken            string                       `toml:"bot_token"`
-	PollTimeout         int                          `toml:"poll_timeout"`
-	StreamEditInterval  string                       `toml:"stream_edit_interval"`
-	StreamCursor        string                       `toml:"stream_cursor"`
-	ToolProgress        string                       `toml:"tool_progress"`
-	ToolProgressStyle   string                       `toml:"tool_progress_style"`
-	ToolProgressWindow  int                          `toml:"tool_progress_window"`
-	ToolProgressCleanup bool                         `toml:"tool_progress_cleanup"`
-	Media               TelegramMediaConfig          `toml:"media"`
-	DurableGroups       []TelegramDurableGroupConfig `toml:"durable_groups"`
+	BotToken               string                       `toml:"bot_token"`
+	DetachPendingOnRestart bool                         `toml:"detach_pending_on_restart"`
+	PollTimeout            int                          `toml:"poll_timeout"`
+	StreamEditInterval     string                       `toml:"stream_edit_interval"`
+	StreamCursor           string                       `toml:"stream_cursor"`
+	ToolProgress           string                       `toml:"tool_progress"`
+	ToolProgressStyle      string                       `toml:"tool_progress_style"`
+	ToolProgressWindow     int                          `toml:"tool_progress_window"`
+	ToolProgressCleanup    bool                         `toml:"tool_progress_cleanup"`
+	Media                  TelegramMediaConfig          `toml:"media"`
+	DurableGroups          []TelegramDurableGroupConfig `toml:"durable_groups"`
 }
 
 type TelegramDurableGroupConfig struct {
@@ -298,13 +299,14 @@ func (a AgentConfig) EffectiveUserMemoryRoot() string {
 func Default() Config {
 	return Config{
 		Telegram: TelegramConfig{
-			PollTimeout:         30,
-			StreamEditInterval:  "300ms",
-			StreamCursor:        " ▉",
-			ToolProgress:        "all",
-			ToolProgressStyle:   "semantic",
-			ToolProgressWindow:  4,
-			ToolProgressCleanup: false,
+			DetachPendingOnRestart: true,
+			PollTimeout:            30,
+			StreamEditInterval:     "300ms",
+			StreamCursor:           " ▉",
+			ToolProgress:           "all",
+			ToolProgressStyle:      "semantic",
+			ToolProgressWindow:     4,
+			ToolProgressCleanup:    false,
 			Media: TelegramMediaConfig{
 				DownloadMaxSize:  "20MB",
 				AutoVisionPhotos: true,
