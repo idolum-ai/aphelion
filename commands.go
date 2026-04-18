@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -20,8 +21,10 @@ type commandSender interface {
 }
 
 type commandCallbackSender interface {
+	commandSender
 	AnswerCallbackQuery(ctx context.Context, id string, text string) error
 	EditMessageText(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
+	EditMessageTextWithInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]telegram.InlineButton) error
 }
 
 type commandRouter interface {
@@ -29,6 +32,8 @@ type commandRouter interface {
 	Restart(chatID int64) error
 	CanRestart(senderID int64) bool
 	Status(chatID int64) core.SessionStatus
+	StatusChat(chatID int64) (core.ChatStatusSnapshot, error)
+	StatusSystem(senderID int64) (core.SystemStatusSnapshot, error)
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
@@ -47,7 +52,7 @@ type commandRouter interface {
 var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "start", Description: "Show intro and command help"},
 	{Command: "help", Description: "Show available commands"},
-	{Command: "status", Description: "Show current work state"},
+	{Command: "status", Description: "Show live status and controls"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "restart", Description: "Force an immediate gateway restart"},
 	{Command: "reinstall", Description: "Queue a rebuild/reinstall/restart request"},
@@ -59,7 +64,22 @@ var defaultTelegramCommands = []telegram.BotCommand{
 
 const recipeCallbackPrefix = "recipe:"
 const continuationCallbackPrefix = "continuation:"
+const statusCallbackPrefix = "status:"
 const staleContinuationCallbackText = "This continuation prompt is no longer active. Use the newest prompt."
+const staleStatusCallbackText = "This status action is no longer available. Run /status again."
+const adminStatusOnlyText = "This status view is available to Telegram admins only."
+const statusMessageChunkLimit = 3800
+
+type statusView string
+
+const (
+	statusViewChat       statusView = "chat"
+	statusViewPending    statusView = "pending"
+	statusViewSystem     statusView = "system"
+	statusViewHotChats   statusView = "hot"
+	statusViewFindChat   statusView = "find"
+	statusViewChatTarget statusView = "chat_target"
+)
 
 func registerTelegramCommands(ctx context.Context, client *telegram.Client) error {
 	if client == nil {
@@ -86,7 +106,14 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 	case "help":
 		text = face.RenderTelegramHelp(personaEffort, governorEffort)
 	case "status":
-		text = face.RenderTelegramStatus(router.Status(msg.ChatID), personaEffort, governorEffort)
+		rendered, rows, renderErr := renderStatusView(router, msg.ChatID, msg.SenderID, statusViewChat, msg.ChatID, personaEffort, governorEffort)
+		if renderErr != nil {
+			return true, renderErr
+		}
+		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
+			return true, err
+		}
+		return true, nil
 	case "stop":
 		text = face.RenderTelegramStop(router.Stop(msg.ChatID))
 	case "restart":
@@ -170,6 +197,53 @@ func sendGovernorEffortSelector(ctx context.Context, sender commandSender, route
 func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery) (bool, error) {
 	if sender == nil || router == nil {
 		return false, nil
+	}
+	if view, targetChatID, ok := decodeStatusCallbackData(cb.Data); ok {
+		chatID := int64(0)
+		messageID := int64(0)
+		if cb.Message != nil {
+			messageID = cb.Message.MessageID
+			if cb.Message.Chat != nil {
+				chatID = cb.Message.Chat.ID
+			}
+		}
+		senderID := int64(0)
+		if cb.From != nil {
+			senderID = cb.From.ID
+		}
+		if statusViewRequiresAdmin(view, chatID, targetChatID) && !router.CanRestart(senderID) {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), adminStatusOnlyText); err != nil {
+				if !telegram.IsStaleCallbackQueryError(err) {
+					return true, err
+				}
+			}
+			return true, nil
+		}
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil {
+			if !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+		}
+		personaEffort, governorEffort := router.CurrentEfforts()
+		rendered, rows, err := renderStatusView(router, chatID, senderID, view, targetChatID, personaEffort, governorEffort)
+		if err != nil {
+			return true, err
+		}
+		if chatID == 0 {
+			chatID = targetChatID
+		}
+		if chatID == 0 {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleStatusCallbackText); err != nil {
+				if !telegram.IsStaleCallbackQueryError(err) {
+					return true, err
+				}
+			}
+			return true, nil
+		}
+		if err := deliverStatusCallbackView(ctx, sender, chatID, messageID, rendered, rows); err != nil {
+			return true, err
+		}
+		return true, nil
 	}
 	if decisionID, action, ok := decodeContinuationCallbackData(cb.Data); ok {
 		chatID := int64(0)
@@ -395,6 +469,268 @@ func renderContinuationDecision(state session.ContinuationState, approved bool) 
 		text += " Next: " + state.StageSummary
 	}
 	return text
+}
+
+func renderStatusView(router commandRouter, currentChatID int64, senderID int64, view statusView, targetChatID int64, personaEffort string, governorEffort string) (string, [][]telegram.InlineButton, error) {
+	if router == nil {
+		return "", nil, fmt.Errorf("status router is unavailable")
+	}
+	isAdmin := router.CanRestart(senderID)
+	if view == "" {
+		view = statusViewChat
+	}
+	if targetChatID == 0 {
+		targetChatID = currentChatID
+	}
+
+	var (
+		text         string
+		systemStatus core.SystemStatusSnapshot
+		systemLoaded bool
+	)
+
+	switch view {
+	case statusViewChat:
+		chat, err := router.StatusChat(currentChatID)
+		if err != nil {
+			return "", nil, err
+		}
+		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
+	case statusViewPending:
+		chat, err := router.StatusChat(currentChatID)
+		if err != nil {
+			return "", nil, err
+		}
+		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, true)
+	case statusViewChatTarget:
+		chat, err := router.StatusChat(targetChatID)
+		if err != nil {
+			return "", nil, err
+		}
+		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
+	case statusViewSystem:
+		if !isAdmin {
+			return "", nil, fmt.Errorf("admin status view denied")
+		}
+		status, err := router.StatusSystem(senderID)
+		if err != nil {
+			return "", nil, err
+		}
+		systemStatus = status
+		systemLoaded = true
+		text = face.RenderTelegramStatusSystem(status, personaEffort, governorEffort)
+	case statusViewHotChats:
+		if !isAdmin {
+			return "", nil, fmt.Errorf("admin status view denied")
+		}
+		status, err := router.StatusSystem(senderID)
+		if err != nil {
+			return "", nil, err
+		}
+		systemStatus = status
+		systemLoaded = true
+		text = face.RenderTelegramStatusHotChats(status)
+	case statusViewFindChat:
+		if !isAdmin {
+			return "", nil, fmt.Errorf("admin status view denied")
+		}
+		status, err := router.StatusSystem(senderID)
+		if err != nil {
+			return "", nil, err
+		}
+		systemStatus = status
+		systemLoaded = true
+		text = face.RenderTelegramStatusFindChat(status)
+	default:
+		chat, err := router.StatusChat(currentChatID)
+		if err != nil {
+			return "", nil, err
+		}
+		view = statusViewChat
+		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
+	}
+	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded)
+	return text, rows, nil
+}
+
+func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64, isAdmin bool, system core.SystemStatusSnapshot, systemLoaded bool) [][]telegram.InlineButton {
+	if targetChatID == 0 {
+		targetChatID = currentChatID
+	}
+	activeView := view
+	if activeView == "" {
+		activeView = statusViewChat
+	}
+
+	rows := [][]telegram.InlineButton{
+		{
+			{Text: "This Chat", CallbackData: encodeStatusCallbackData(statusViewChat, currentChatID)},
+			{Text: "Pending Only", CallbackData: encodeStatusCallbackData(statusViewPending, currentChatID)},
+			{Text: "Refresh", CallbackData: encodeStatusCallbackData(activeView, targetChatID)},
+		},
+	}
+	if isAdmin {
+		rows = append(rows, []telegram.InlineButton{
+			{Text: "System Overview", CallbackData: encodeStatusCallbackData(statusViewSystem, 0)},
+			{Text: "Hot Chats", CallbackData: encodeStatusCallbackData(statusViewHotChats, 0)},
+			{Text: "Find Chat", CallbackData: encodeStatusCallbackData(statusViewFindChat, 0)},
+		})
+	}
+	if isAdmin && systemLoaded && view == statusViewFindChat {
+		maxChats := len(system.HotChats)
+		if maxChats > 12 {
+			maxChats = 12
+		}
+		for i := 0; i < maxChats; i += 2 {
+			row := make([]telegram.InlineButton, 0, 2)
+			chatA := system.HotChats[i]
+			row = append(row, telegram.InlineButton{
+				Text:         fmt.Sprintf("Chat %d", chatA.ChatID),
+				CallbackData: encodeStatusCallbackData(statusViewChatTarget, chatA.ChatID),
+			})
+			if i+1 < maxChats {
+				chatB := system.HotChats[i+1]
+				row = append(row, telegram.InlineButton{
+					Text:         fmt.Sprintf("Chat %d", chatB.ChatID),
+					CallbackData: encodeStatusCallbackData(statusViewChatTarget, chatB.ChatID),
+				})
+			}
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func statusViewRequiresAdmin(view statusView, callbackChatID int64, targetChatID int64) bool {
+	switch view {
+	case statusViewSystem, statusViewHotChats, statusViewFindChat:
+		return true
+	case statusViewChatTarget:
+		return targetChatID != 0 && (callbackChatID == 0 || targetChatID != callbackChatID)
+	default:
+		return false
+	}
+}
+
+func encodeStatusCallbackData(view statusView, chatID int64) string {
+	switch view {
+	case statusViewChat:
+		return statusCallbackPrefix + "chat"
+	case statusViewPending:
+		return statusCallbackPrefix + "pending"
+	case statusViewSystem:
+		return statusCallbackPrefix + "system"
+	case statusViewHotChats:
+		return statusCallbackPrefix + "hot"
+	case statusViewFindChat:
+		return statusCallbackPrefix + "find"
+	case statusViewChatTarget:
+		return statusCallbackPrefix + "chat:" + strconv.FormatInt(chatID, 10)
+	default:
+		return statusCallbackPrefix + "chat"
+	}
+}
+
+func decodeStatusCallbackData(data string) (statusView, int64, bool) {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, statusCallbackPrefix) {
+		return "", 0, false
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, statusCallbackPrefix))
+	if payload == "" {
+		return "", 0, false
+	}
+	parts := strings.Split(payload, ":")
+	if len(parts) == 1 {
+		switch parts[0] {
+		case "chat":
+			return statusViewChat, 0, true
+		case "pending":
+			return statusViewPending, 0, true
+		case "system":
+			return statusViewSystem, 0, true
+		case "hot":
+			return statusViewHotChats, 0, true
+		case "find":
+			return statusViewFindChat, 0, true
+		default:
+			return "", 0, false
+		}
+	}
+	if len(parts) == 2 && parts[0] == "chat" {
+		chatID, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+		if err != nil || chatID == 0 {
+			return "", 0, false
+		}
+		return statusViewChatTarget, chatID, true
+	}
+	return "", 0, false
+}
+
+func deliverStatusCallbackView(ctx context.Context, sender commandCallbackSender, chatID int64, messageID int64, text string, rows [][]telegram.InlineButton) error {
+	if sender == nil {
+		return nil
+	}
+	chunks := splitStatusTextChunks(text, statusMessageChunkLimit)
+	if len(chunks) == 0 {
+		chunks = []string{"status_scope=chat\nsummary unavailable"}
+	}
+	first := chunks[0]
+	if messageID != 0 {
+		if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, first, "", rows); err != nil {
+			return err
+		}
+	} else {
+		if _, err := sender.SendInlineKeyboard(ctx, chatID, first, rows, nil); err != nil {
+			return err
+		}
+	}
+	for i := 1; i < len(chunks); i++ {
+		if _, err := sender.SendMessage(ctx, core.OutboundMessage{
+			ChatID: chatID,
+			Text:   chunks[i],
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func splitStatusTextChunks(text string, limit int) []string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if limit <= 0 {
+		limit = statusMessageChunkLimit
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+	chunks := make([]string, 0, (len(runes)/limit)+1)
+	for len(runes) > 0 {
+		if len(runes) <= limit {
+			chunk := strings.TrimSpace(string(runes))
+			if chunk != "" {
+				chunks = append(chunks, chunk)
+			}
+			break
+		}
+		cut := limit
+		for i := cut; i > cut/2; i-- {
+			if runes[i-1] == '\n' {
+				cut = i
+				break
+			}
+		}
+		chunk := strings.TrimSpace(string(runes[:cut]))
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		runes = runes[cut:]
+	}
+	return chunks
 }
 
 func personaModelButtonLabel(model string) string {

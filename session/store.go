@@ -780,6 +780,58 @@ func (s *SQLiteStore) ContinuationStateIfExists(key SessionKey) (ContinuationSta
 	return decodeContinuationState(raw.String), true, nil
 }
 
+func (s *SQLiteStore) ContinuationStates() ([]ContinuationStateRecord, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			chat_id, user_id, scope_kind, scope_id, durable_agent_id, continuation_state_json, updated_at
+		FROM sessions
+		ORDER BY updated_at DESC, session_id DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query continuation states: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]ContinuationStateRecord, 0, 16)
+	for rows.Next() {
+		var (
+			record          ContinuationStateRecord
+			scopeKind       sql.NullString
+			scopeID         sql.NullString
+			durableAgentID  sql.NullString
+			continuationRaw sql.NullString
+			updatedRaw      string
+		)
+		if err := rows.Scan(
+			&record.Key.ChatID, &record.Key.UserID, &scopeKind, &scopeID, &durableAgentID, &continuationRaw, &updatedRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan continuation state record: %w", err)
+		}
+		record.Key.Scope = NormalizeScopeRef(ScopeRef{
+			Kind:           ScopeKind(nullToString(scopeKind)),
+			ID:             nullToString(scopeID),
+			DurableAgentID: nullToString(durableAgentID),
+		})
+		record.State = decodeContinuationState(continuationRaw.String)
+		record.State = NormalizeContinuationState(record.State)
+		switch record.State.Status {
+		case ContinuationStatusPending, ContinuationStatusApproved, ContinuationStatusRevoked:
+		default:
+			continue
+		}
+		updatedAt, err := parseSQLiteTime(updatedRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse continuation state updated_at: %w", err)
+		}
+		record.UpdatedAt = updatedAt
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate continuation states: %w", err)
+	}
+	return records, nil
+}
+
 func (s *SQLiteStore) UpdatePlanStateWithEvent(key SessionKey, state PlanState, kind PlanEventKind) error {
 	return s.updatePlanState(key, state, kind)
 }
@@ -2182,6 +2234,46 @@ func (s *SQLiteStore) LatestTurnRun(key SessionKey) (*TurnRun, error) {
 		return nil, err
 	}
 	return &run, nil
+}
+
+func (s *SQLiteStore) LatestTurnRunsByChat(limit int) ([]TurnRun, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := s.db.Query(`
+		SELECT
+			tr.id, tr.session_id, tr.chat_id, tr.user_id, tr.scope_kind, tr.scope_id, tr.durable_agent_id, tr.kind, tr.status, tr.request_text, tr.started_at, tr.completed_at,
+			tr.last_activity_at, tr.last_tool_name, tr.last_tool_preview, tr.tool_calls_started, tr.tool_calls_finished, tr.last_tool_result_preview, tr.last_tool_error,
+			tr.progress_message_id, tr.error_text, tr.recovery_summary, tr.recovery_logged_at
+		FROM turn_runs tr
+		INNER JOIN (
+			SELECT chat_id, MAX(id) AS max_id
+			FROM turn_runs
+			WHERE chat_id != 0
+			GROUP BY chat_id
+		) latest
+		ON latest.chat_id = tr.chat_id AND latest.max_id = tr.id
+		ORDER BY tr.last_activity_at DESC, tr.id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query latest turn runs by chat: %w", err)
+	}
+	defer rows.Close()
+
+	runs := make([]TurnRun, 0, limit)
+	for rows.Next() {
+		run, err := scanTurnRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate latest turn runs by chat: %w", err)
+	}
+	return runs, nil
 }
 
 func (s *SQLiteStore) TurnRun(id int64) (*TurnRun, error) {

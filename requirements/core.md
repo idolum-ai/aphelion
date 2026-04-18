@@ -41,6 +41,27 @@ This spec is **staged**. The initial "core runnable" milestone is the minimal en
 - **Agent**: The native governor path. Runs a single conversational turn via the provider/tool loop.
 - **Session Store**: SQLite via CGo. Persists conversation history, system prompt snapshots, metadata. Start with a single-connection SQLite access model (`SetMaxOpenConns(1)`); add a dedicated writer goroutine only if contention or correctness requires it.
 
+## Status Aggregation Source Of Truth
+
+Operational `/status` views combine multiple sources:
+
+- router in-memory state (`active_turn_ids`, `queue_depth_by_chat`)
+- `pending_decisions` durable rows
+- session continuation state rows
+- latest `turn_runs` per chat
+- stale running turn sweep + pending recovery rows
+- runtime stale-watchdog health flag/threshold
+
+Pending totals must be deterministic from these rules:
+
+1. queue depth > 0 contributes one `queue` pending item per chat
+2. each durable pending decision contributes one `decision` item
+3. continuation status `pending` or `approved` contributes one `continuation` item
+4. each interrupted unrecovered turn contributes one `recovery` item
+5. each stale running turn contributes one `stale_turn` item
+
+Status rendering should remain summary-first and bounded, but keep stable key labels for machine parsing.
+
 ## Message Types
 
 ```go
