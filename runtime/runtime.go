@@ -85,6 +85,8 @@ type Runtime struct {
 	turnAuditSink     func(TurnAudit)
 	sessionMu         sync.Mutex
 	sessionLocks      map[string]*sync.Mutex
+	statusStageMu     sync.RWMutex
+	statusStageByChat map[int64]statusTurnPhase
 	faceModelsMu      sync.Mutex
 	recipeMu          sync.Mutex
 	recipeFileMu      sync.Mutex
@@ -446,6 +448,7 @@ func New(
 		durableGroupChild:        newSandboxDurableGroupChildExecutor(cfg),
 		constitutionGate:         DefaultTurnConstitutionGate(),
 		sessionLocks:             make(map[string]*sync.Mutex),
+		statusStageByChat:        make(map[int64]statusTurnPhase),
 	}, nil
 }
 

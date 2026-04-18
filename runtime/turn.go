@@ -46,6 +46,7 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 	}
 	stopTyping := r.startChatActionLoop(ctx, msg.ChatID, "typing")
 	defer stopTyping()
+	defer r.clearChatTurnPhase(msg.ChatID)
 
 	key := session.SessionKey{ChatID: msg.ChatID, UserID: 0, Scope: telegramDMScopeRef(msg.ChatID)}
 	unlock := r.lockSession(key)

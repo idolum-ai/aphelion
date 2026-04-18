@@ -349,6 +349,98 @@ func TestSystemStatusSnapshotBuildsAdminViewAndHotChats(t *testing.T) {
 	}
 }
 
+func TestChatStatusSnapshotIncludesLiveTurnPhase(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	rt.markChatTurnPhase(7344, "render", "authoring scene reply")
+	t.Cleanup(func() {
+		rt.clearChatTurnPhase(7344)
+	})
+
+	snapshot, err := rt.ChatStatusSnapshot(7344, core.RouterStatusSnapshot{
+		ActiveTurnsByChat: map[int64][]uint64{7344: {61}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if snapshot.TurnPhase != "render" {
+		t.Fatalf("TurnPhase = %q, want render", snapshot.TurnPhase)
+	}
+	if snapshot.TurnPhaseSummary != "authoring scene reply" {
+		t.Fatalf("TurnPhaseSummary = %q, want phase summary", snapshot.TurnPhaseSummary)
+	}
+	if snapshot.TurnPhaseUpdatedAt.IsZero() {
+		t.Fatalf("TurnPhaseUpdatedAt = %s, want non-zero timestamp", snapshot.TurnPhaseUpdatedAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestChatStatusSnapshotIncludesHiddenInputDeliveryAndPlanProgress(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7345, UserID: 0, Scope: telegramDMScopeRef(7345)}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "status telemetry probe")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, "send outbound reply: telegram timeout"); err != nil {
+		t.Fatalf("CompleteTurnRun() err = %v", err)
+	}
+
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.LastFloorMetadata = encodeFloorMetadata(core.FloorMetadata{
+		HiddenInputs: []core.HiddenInput{
+			{Category: "unresolved_memory_state", Summary: "follow-up question still open"},
+			{Category: "semantic_recurrence", Summary: "same decision loops across recent turns"},
+		},
+		ProvenanceSummary: "pending review events keep converging around approvals",
+	})
+	sess.PlanState = session.PlanState{
+		Steps: []session.PlanStep{
+			{Step: "Audit pending approvals", Status: session.PlanStatusCompleted},
+			{Step: "Publish operator summary", Status: session.PlanStatusCompleted},
+		},
+	}
+	sess.TurnCount = 4
+	if err := store.Save(sess, nil, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(7345, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if snapshot.HiddenInputSummary == "" {
+		t.Fatalf("HiddenInputSummary = %q, want hidden-input provenance summary", snapshot.HiddenInputSummary)
+	}
+	if len(snapshot.HiddenInputCategories) != 2 {
+		t.Fatalf("HiddenInputCategories = %#v, want two categories", snapshot.HiddenInputCategories)
+	}
+	if snapshot.PlanCompletedSteps != 2 || snapshot.PlanTotalSteps != 2 || !snapshot.PlanFullyExecuted {
+		t.Fatalf("plan progress = (%d/%d fully=%t), want 2/2 fully executed", snapshot.PlanCompletedSteps, snapshot.PlanTotalSteps, snapshot.PlanFullyExecuted)
+	}
+	if snapshot.DeliveryStatus != "delivery_failed" {
+		t.Fatalf("DeliveryStatus = %q, want delivery_failed", snapshot.DeliveryStatus)
+	}
+	if !strings.Contains(snapshot.DeliverySummary, "no retry queue") {
+		t.Fatalf("DeliverySummary = %q, want no-retry guidance", snapshot.DeliverySummary)
+	}
+}
+
 func containsPendingKind(items []core.PendingItemKind, target core.PendingItemKind) bool {
 	for _, item := range items {
 		if item == target {

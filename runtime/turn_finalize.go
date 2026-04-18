@@ -238,6 +238,7 @@ func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitReques
 	if p == nil || p.runtime == nil {
 		return nil, fmt.Errorf("turn persistence port is unavailable")
 	}
+	p.runtime.markChatTurnPhase(p.key.ChatID, "persist", "writing turn result and sidecars to durable storage")
 	if req.Result == nil {
 		return nil, fmt.Errorf("turn persistence request missing result")
 	}
@@ -303,6 +304,7 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 	if p == nil || p.runtime == nil {
 		return nil, fmt.Errorf("turn delivery port is unavailable")
 	}
+	p.runtime.markChatTurnPhase(p.key.ChatID, "deliver", "sending or finalizing outbound delivery")
 	return turn.RunDeliveryStage(ctx, turn.DeliveryStageInput{
 		Request:        req,
 		Deliver:        p.deliver,

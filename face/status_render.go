@@ -32,11 +32,26 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 			}
 			lines = append(lines, latestLine)
 		}
+		if phaseLine := renderTurnPhaseLine(snapshot); phaseLine != "" {
+			lines = append(lines, phaseLine)
+		}
 		if operationLine := renderOperationStatusLine(snapshot); operationLine != "" {
 			lines = append(lines, operationLine)
 		}
 		if planLine := renderPlanStatusLine(snapshot); planLine != "" {
 			lines = append(lines, planLine)
+		}
+		if planProgressLine := renderPlanProgressLine(snapshot); planProgressLine != "" {
+			lines = append(lines, planProgressLine)
+		}
+		if hiddenInputLine := renderHiddenInputStatusLine(snapshot); hiddenInputLine != "" {
+			lines = append(lines, hiddenInputLine)
+		}
+		if deliveryLine := renderDeliveryStatusLine(snapshot); deliveryLine != "" {
+			lines = append(lines, deliveryLine)
+		}
+		if detachedLine := renderDetachedWorkLine(snapshot); detachedLine != "" {
+			lines = append(lines, detachedLine)
 		}
 		if snapshot.Continuation != nil {
 			cont := snapshot.Continuation
@@ -57,6 +72,21 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 		fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)),
 	)
 	return strings.Join(lines, "\n")
+}
+
+func renderTurnPhaseLine(snapshot core.ChatStatusSnapshot) string {
+	phase := strings.TrimSpace(snapshot.TurnPhase)
+	if phase == "" {
+		return ""
+	}
+	line := "turn_phase phase=" + phase
+	if summary := strings.TrimSpace(snapshot.TurnPhaseSummary); summary != "" {
+		line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
+	}
+	if !snapshot.TurnPhaseUpdatedAt.IsZero() {
+		line += " updated_at=" + formatStatusTime(snapshot.TurnPhaseUpdatedAt)
+	}
+	return line
 }
 
 func renderOperationStatusLine(snapshot core.ChatStatusSnapshot) string {
@@ -95,8 +125,82 @@ func renderPlanStatusLine(snapshot core.ChatStatusSnapshot) string {
 	return line
 }
 
+func renderPlanProgressLine(snapshot core.ChatStatusSnapshot) string {
+	if snapshot.PlanTotalSteps <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"plan_progress completed=%d total=%d fully_executed=%t",
+		snapshot.PlanCompletedSteps,
+		snapshot.PlanTotalSteps,
+		snapshot.PlanFullyExecuted,
+	)
+}
+
+func renderHiddenInputStatusLine(snapshot core.ChatStatusSnapshot) string {
+	categories := snapshot.HiddenInputCategories
+	summary := strings.TrimSpace(snapshot.HiddenInputSummary)
+	if len(categories) == 0 && summary == "" {
+		return ""
+	}
+	line := "hidden_inputs"
+	if len(categories) > 0 {
+		line += " categories=" + strings.Join(categories, ",")
+	}
+	if summary != "" {
+		line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
+	}
+	return line
+}
+
+func renderDeliveryStatusLine(snapshot core.ChatStatusSnapshot) string {
+	status := strings.TrimSpace(snapshot.DeliveryStatus)
+	summary := strings.TrimSpace(snapshot.DeliverySummary)
+	if status == "" && summary == "" {
+		return ""
+	}
+	line := "delivery"
+	if status != "" {
+		line += " status=" + status
+	}
+	if summary != "" {
+		line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
+	}
+	return line
+}
+
+func renderDetachedWorkLine(snapshot core.ChatStatusSnapshot) string {
+	decisions := 0
+	continuations := 0
+	recoveries := 0
+	for _, item := range snapshot.PendingItems {
+		switch item.Kind {
+		case core.PendingItemKindDecision:
+			decisions++
+		case core.PendingItemKindContinuation:
+			continuations++
+		case core.PendingItemKindRecovery:
+			recoveries++
+		}
+	}
+	staleTurns := len(snapshot.StaleRunningTurns)
+	if decisions == 0 && continuations == 0 && recoveries == 0 && staleTurns == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"detached_work decisions=%d continuations=%d recoveries=%d stale_turns=%d",
+		decisions,
+		continuations,
+		recoveries,
+		staleTurns,
+	)
+}
+
 func chatSummaryState(snapshot core.ChatStatusSnapshot) string {
 	if len(snapshot.ActiveTurnIDs) > 0 {
+		return "working"
+	}
+	if strings.TrimSpace(snapshot.TurnPhase) != "" {
 		return "working"
 	}
 	if strings.EqualFold(strings.TrimSpace(snapshot.OperationStatus), "blocked") || hasBlockingPendingItem(snapshot.PendingItems) {
@@ -156,6 +260,9 @@ func chatCurrentSignal(snapshot core.ChatStatusSnapshot, state string) string {
 		if hasBlockingPendingItem(snapshot.PendingItems) {
 			return "awaiting_approval"
 		}
+	}
+	if phase := strings.TrimSpace(snapshot.TurnPhase); phase != "" {
+		return "phase:" + phase
 	}
 	if state == "queued" && snapshot.QueueDepth > 0 {
 		return fmt.Sprintf("queue:%d", snapshot.QueueDepth)

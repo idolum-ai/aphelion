@@ -136,6 +136,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		ChatID: msg.ChatID,
 		Scope:  durableAgentScopeRef(registered),
 	}
+	defer r.clearChatTurnPhase(msg.ChatID)
 	preparedMsg := msg
 	preparedMsg.Text = durableGroupInboundText(msg)
 	livePolicy := core.NormalizeDurableAgentLivePolicy(registered.LivePolicy)

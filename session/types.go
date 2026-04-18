@@ -337,6 +337,14 @@ type ContinuationStateRecord struct {
 	UpdatedAt time.Time
 }
 
+type SessionStatusState struct {
+	PlanState           PlanState
+	OperationState      OperationState
+	LastFloorMetadata   string
+	TurnCount           int
+	OutboundCountAtTurn int
+}
+
 // Message is one persisted conversation message.
 type Message struct {
 	ID                int64

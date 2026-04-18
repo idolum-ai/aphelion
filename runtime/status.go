@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -109,14 +110,22 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 	}
 	if r != nil && r.store != nil {
 		key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
-		planState, operationState, exists, stateErr := r.store.PlanAndOperationStateIfExists(key)
+		statusState, exists, stateErr := r.store.StatusStateIfExists(key)
 		if stateErr != nil {
 			return core.ChatStatusSnapshot{}, stateErr
 		}
 		if exists {
-			snapshot.OperationStatus, snapshot.OperationStage, snapshot.OperationSummary = operationStatusFields(operationState)
-			snapshot.PlanStepStatus, snapshot.PlanStep = planStatusFields(planState)
+			snapshot.OperationStatus, snapshot.OperationStage, snapshot.OperationSummary = operationStatusFields(statusState.OperationState)
+			snapshot.PlanStepStatus, snapshot.PlanStep = planStatusFields(statusState.PlanState)
+			snapshot.PlanCompletedSteps, snapshot.PlanTotalSteps, snapshot.PlanFullyExecuted = planProgressFields(statusState.PlanState)
+			snapshot.HiddenInputCategories, snapshot.HiddenInputSummary = hiddenInputStatusFields(statusState.LastFloorMetadata)
+			snapshot.DeliveryStatus, snapshot.DeliverySummary = deliveryStatusFields(snapshot.LatestTurnRun, statusState.OutboundCountAtTurn)
 		}
+	}
+	if phase, ok := r.chatTurnPhase(chatID); ok {
+		snapshot.TurnPhase = strings.TrimSpace(phase.Phase)
+		snapshot.TurnPhaseSummary = strings.TrimSpace(phase.Summary)
+		snapshot.TurnPhaseUpdatedAt = phase.UpdatedAt
 	}
 	for _, stale := range system.StaleRunningTurns {
 		if stale.ChatID == chatID {
@@ -510,6 +519,99 @@ func planStatusFields(state session.PlanState) (status string, step string) {
 		}
 	}
 	return strings.TrimSpace(string(picked.Status)), truncateStatusDiagnostic(strings.TrimSpace(picked.Step), 160)
+}
+
+func planProgressFields(state session.PlanState) (completed int, total int, fullyExecuted bool) {
+	normalized := session.NormalizePlanState(state)
+	total = len(normalized.Steps)
+	if total == 0 {
+		return 0, 0, false
+	}
+	for _, step := range normalized.Steps {
+		if session.NormalizePlanStatus(step.Status) == session.PlanStatusCompleted {
+			completed++
+		}
+	}
+	return completed, total, completed == total
+}
+
+func hiddenInputStatusFields(raw string) ([]string, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, ""
+	}
+	var metadata core.FloorMetadata
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+		return nil, ""
+	}
+
+	seen := map[string]struct{}{}
+	categories := make([]string, 0, len(metadata.HiddenInputs))
+	for _, input := range metadata.HiddenInputs {
+		category := strings.TrimSpace(input.Category)
+		if category == "" {
+			continue
+		}
+		if _, ok := seen[category]; ok {
+			continue
+		}
+		seen[category] = struct{}{}
+		categories = append(categories, category)
+	}
+	sort.Strings(categories)
+
+	summary := strings.TrimSpace(metadata.ProvenanceSummary)
+	if summary == "" {
+		parts := make([]string, 0, 2)
+		for _, input := range metadata.HiddenInputs {
+			if detail := strings.TrimSpace(input.Summary); detail != "" {
+				parts = append(parts, detail)
+			}
+			if len(parts) == 2 {
+				break
+			}
+		}
+		summary = strings.Join(parts, "; ")
+	}
+	return categories, truncateStatusDiagnostic(summary, 160)
+}
+
+func deliveryStatusFields(latest *core.TurnRunStatusSnapshot, outboundCountAtTurn int) (status string, summary string) {
+	if latest == nil {
+		return "", ""
+	}
+	runStatus := strings.ToLower(strings.TrimSpace(latest.Status))
+	switch runStatus {
+	case "running":
+		return "in_flight", "turn is still executing"
+	case "completed":
+		if outboundCountAtTurn > 0 {
+			return "delivered", "latest persisted turn has a recorded outbound delivery"
+		}
+		return "persisted_not_delivered", "latest turn persisted but no outbound delivery is recorded"
+	case "failed":
+		errText := strings.ToLower(strings.TrimSpace(latest.ErrorText))
+		if strings.Contains(errText, "send outbound reply") || strings.Contains(errText, "send durable group reply") {
+			if outboundCountAtTurn > 0 {
+				return "delivery_error_recovered", "delivery reported an error, but outbound delivery is recorded"
+			}
+			return "delivery_failed", "persisted turn failed during delivery; no retry queue is active"
+		}
+		if outboundCountAtTurn > 0 {
+			return "failed_after_delivery", "turn failed after outbound delivery was recorded"
+		}
+		return "failed_before_delivery", "turn failed before outbound delivery was recorded"
+	case "interrupted":
+		if outboundCountAtTurn > 0 {
+			return "interrupted_after_delivery", "turn was interrupted after outbound delivery was recorded"
+		}
+		return "interrupted_before_delivery", "turn was interrupted before outbound delivery was recorded"
+	default:
+		if outboundCountAtTurn > 0 {
+			return "delivered", "outbound delivery is recorded for the latest turn"
+		}
+		return "", ""
+	}
 }
 
 func truncateStatusDiagnostic(text string, maxRunes int) string {
