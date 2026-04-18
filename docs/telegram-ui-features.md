@@ -95,6 +95,12 @@ When a turn offers continuation approval, an inline prompt is shown with:
 - `Stop`
 - `Continue`
 
+Offer conditions:
+
+- Persona rationale must be present (Idolum proposal note for the turn).
+- Governor rationale must be present and ratified (active/ratified plan-operation context).
+- If either side is missing, no continuation prompt is shown and stale pending continuation state is cleared.
+
 ### Runtime decision prompts
 
 Decision prompts are shown with inline buttons. Depending on context, users can see:

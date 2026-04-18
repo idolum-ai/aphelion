@@ -11,10 +11,22 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
+	"github.com/idolum-ai/aphelion/turn"
 )
 
-func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string) error {
-	if r == nil || r.outbound == nil {
+type continuationConsensus struct {
+	PersonaRationale  string
+	GovernorRationale string
+	PlanState         session.PlanState
+	OperationState    session.OperationState
+}
+
+func (c continuationConsensus) eligible() bool {
+	return strings.TrimSpace(c.PersonaRationale) != "" && strings.TrimSpace(c.GovernorRationale) != ""
+}
+
+func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) error {
+	if r == nil || r.outbound == nil || r.store == nil {
 		return nil
 	}
 	sender, ok := r.outbound.(interface {
@@ -23,9 +35,14 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	if !ok {
 		return nil
 	}
-	planState, _ := r.store.PlanState(key)
-	operationState, _ := r.store.OperationState(key)
-	objective, nextStep := summarizeContinuationPlan(planState, operationState, promptInput)
+	consensus := r.buildContinuationConsensus(key, result)
+	if !consensus.eligible() {
+		if err := r.clearPendingContinuationOffer(key); err != nil {
+			return fmt.Errorf("clear stale continuation approval: %w", err)
+		}
+		return nil
+	}
+	objective, nextStep := summarizeContinuationPlan(consensus.PlanState, consensus.OperationState, promptInput)
 	decisionID := newContinuationDecisionID()
 	state := session.ContinuationState{
 		Kind:           session.TurnAuthorizationKindContinuation,
@@ -39,11 +56,100 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return fmt.Errorf("persist continuation state: %w", err)
 	}
-	_, err := sender.SendInlineKeyboard(ctx, msg.ChatID, renderContinuationPrompt(state), continuationApprovalButtonRows(decisionID), nil)
+	_, err := sender.SendInlineKeyboard(
+		ctx,
+		msg.ChatID,
+		renderContinuationPrompt(state, consensus.PersonaRationale, consensus.GovernorRationale),
+		continuationApprovalButtonRows(decisionID),
+		nil,
+	)
 	if err != nil {
 		return fmt.Errorf("send continuation approval: %w", err)
 	}
 	return nil
+}
+
+func (r *Runtime) buildContinuationConsensus(key session.SessionKey, result *turn.Result) continuationConsensus {
+	planState, _ := r.store.PlanState(key)
+	operationState, _ := r.store.OperationState(key)
+	planState = session.NormalizePlanState(planState)
+	operationState = session.NormalizeOperationState(operationState)
+
+	governorRationale := continuationGovernorConsensus(planState, operationState)
+	if !governorContinuationRatified(planState, operationState) {
+		governorRationale = ""
+	}
+
+	return continuationConsensus{
+		PersonaRationale:  continuationPersonaRationale(result),
+		GovernorRationale: governorRationale,
+		PlanState:         planState,
+		OperationState:    operationState,
+	}
+}
+
+func continuationPersonaRationale(result *turn.Result) string {
+	if result == nil {
+		return ""
+	}
+	return clampContinuationText(result.ProposalNote, 220)
+}
+
+func continuationGovernorConsensus(planState session.PlanState, operationState session.OperationState) string {
+	planState = session.NormalizePlanState(planState)
+	operationState = session.NormalizeOperationState(operationState)
+	return firstNonEmptyContinuation(
+		clampContinuationText(operationState.Proposal.WhyNow, 220),
+		clampContinuationText(operationState.Proposal.Summary, 220),
+		clampContinuationText(operationState.Summary, 220),
+		clampContinuationText(continuationNextStep(planState, operationState), 220),
+		clampContinuationText(operationState.Stage, 220),
+		clampContinuationText(planState.Explanation, 220),
+	)
+}
+
+func governorContinuationRatified(planState session.PlanState, operationState session.OperationState) bool {
+	planState = session.NormalizePlanState(planState)
+	operationState = session.NormalizeOperationState(operationState)
+	if operationState.Proposal.Status == session.ProposalStatusApproved {
+		return true
+	}
+	if operationState.Status == session.OperationStatusActive || operationState.Status == session.OperationStatusBlocked {
+		return true
+	}
+	return hasActivePlanStep(planState)
+}
+
+func hasActivePlanStep(planState session.PlanState) bool {
+	planState = session.NormalizePlanState(planState)
+	for _, step := range planState.Steps {
+		if step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runtime) clearPendingContinuationOffer(key session.SessionKey) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	state, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending && state.Status != session.ContinuationStatusApproved {
+		return nil
+	}
+	return r.store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:      session.TurnAuthorizationKindContinuation,
+		Status:    session.ContinuationStatusIdle,
+		UpdatedAt: time.Now().UTC(),
+	})
 }
 
 func summarizeContinuationPlan(planState session.PlanState, operationState session.OperationState, promptInput string) (objective string, nextStep string) {
@@ -101,8 +207,26 @@ func firstNonEmptyContinuation(values ...string) string {
 	return ""
 }
 
-func renderContinuationPrompt(state session.ContinuationState) string {
+func clampContinuationText(value string, maxChars int) string {
+	value = strings.TrimSpace(value)
+	if value == "" || maxChars <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= maxChars {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:maxChars])) + "…"
+}
+
+func renderContinuationPrompt(state session.ContinuationState, personaRationale string, governorRationale string) string {
 	lines := []string{"I can continue from here."}
+	if personaRationale != "" {
+		lines = append(lines, "", "Persona rationale:", personaRationale)
+	}
+	if governorRationale != "" {
+		lines = append(lines, "", "Governor rationale:", governorRationale)
+	}
 	if state.Objective != "" {
 		lines = append(lines, "", "Objective:", state.Objective)
 	}
