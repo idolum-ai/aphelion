@@ -42,6 +42,8 @@ type activeTurn struct {
 type SessionStatus struct {
 	Active bool
 	Queued bool
+	// QueueDepth is the count of queued follow-up messages for this chat.
+	QueueDepth int
 	// Diagnostics includes optional status details from higher-level runtime layers.
 	Diagnostics []string
 }
@@ -117,9 +119,33 @@ func (r *Router) Status(chatID int64) SessionStatus {
 	queue := r.queues[chatID]
 	_, active := r.active[chatID]
 	return SessionStatus{
-		Active: active,
-		Queued: len(queue) > 0,
+		Active:     active,
+		Queued:     len(queue) > 0,
+		QueueDepth: len(queue),
 	}
+}
+
+func (r *Router) Snapshot() RouterStatusSnapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	snapshot := RouterStatusSnapshot{
+		ActiveTurnsByChat: make(map[int64][]uint64, len(r.active)),
+		QueueDepthByChat:  make(map[int64]int, len(r.queues)),
+	}
+	for chatID, active := range r.active {
+		if active.id == 0 {
+			continue
+		}
+		snapshot.ActiveTurnsByChat[chatID] = []uint64{active.id}
+	}
+	for chatID, queue := range r.queues {
+		if len(queue) <= 0 {
+			continue
+		}
+		snapshot.QueueDepthByChat[chatID] = len(queue)
+	}
+	return snapshot
 }
 
 func (r *Router) Stop(chatID int64) StopResult {

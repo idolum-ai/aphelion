@@ -14,12 +14,13 @@ import (
 )
 
 type stubCommandSender struct {
-	msgs      []core.OutboundMessage
-	inline    []stubInlineCall
-	edits     []stubEditCall
-	editErr   error
-	answers   []stubAnswerCall
-	answerErr error
+	msgs       []core.OutboundMessage
+	inline     []stubInlineCall
+	edits      []stubEditCall
+	editInline []stubEditInlineCall
+	editErr    error
+	answers    []stubAnswerCall
+	answerErr  error
 }
 
 type stubInlineCall struct {
@@ -34,6 +35,14 @@ type stubEditCall struct {
 	messageID int64
 	text      string
 	parseMode string
+}
+
+type stubEditInlineCall struct {
+	chatID    int64
+	messageID int64
+	text      string
+	parseMode string
+	rows      [][]telegram.InlineButton
 }
 
 type stubAnswerCall struct {
@@ -66,6 +75,17 @@ func (s *stubCommandSender) EditMessageText(_ context.Context, chatID int64, mes
 	return s.editErr
 }
 
+func (s *stubCommandSender) EditMessageTextWithInlineKeyboard(_ context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]telegram.InlineButton) error {
+	s.editInline = append(s.editInline, stubEditInlineCall{
+		chatID:    chatID,
+		messageID: messageID,
+		text:      text,
+		parseMode: parseMode,
+		rows:      rows,
+	})
+	return s.editErr
+}
+
 func (s *stubCommandSender) AnswerCallbackQuery(_ context.Context, id string, text string) error {
 	s.answers = append(s.answers, stubAnswerCall{
 		id:   id,
@@ -76,6 +96,10 @@ func (s *stubCommandSender) AnswerCallbackQuery(_ context.Context, id string, te
 
 type stubCommandRouter struct {
 	status                      core.SessionStatus
+	statusChat                  core.ChatStatusSnapshot
+	statusSystem                core.SystemStatusSnapshot
+	statusChatErr               error
+	statusSystemErr             error
 	stop                        core.StopResult
 	detach                      core.DetachResult
 	detachErr                   error
@@ -123,6 +147,25 @@ func (s *stubCommandRouter) Detach(chatID int64, senderID int64) (core.DetachRes
 
 func (s stubCommandRouter) Status(chatID int64) core.SessionStatus {
 	return s.status
+}
+
+func (s stubCommandRouter) StatusChat(chatID int64) (core.ChatStatusSnapshot, error) {
+	if s.statusChatErr != nil {
+		return core.ChatStatusSnapshot{}, s.statusChatErr
+	}
+	snapshot := s.statusChat
+	if snapshot.ChatID == 0 {
+		snapshot.ChatID = chatID
+	}
+	return snapshot, nil
+}
+
+func (s stubCommandRouter) StatusSystem(senderID int64) (core.SystemStatusSnapshot, error) {
+	_ = senderID
+	if s.statusSystemErr != nil {
+		return core.SystemStatusSnapshot{}, s.statusSystemErr
+	}
+	return s.statusSystem, nil
 }
 
 func (s stubCommandRouter) TogglePersonaEffort() (string, error) {
@@ -331,10 +374,13 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
-		status: core.SessionStatus{
-			Active:      true,
-			Queued:      true,
-			Diagnostics: []string{"Latest persisted turn: running (interactive)."},
+		statusChat: core.ChatStatusSnapshot{
+			ChatID:        7,
+			ActiveTurnIDs: []uint64{91},
+			QueueDepth:    2,
+			PendingItems: []core.PendingItem{
+				{Kind: core.PendingItemKindQueue, ChatID: 7, Summary: "queue_depth=2"},
+			},
 		},
 		personaEffort:  "sonnet",
 		governorEffort: "medium",
@@ -349,14 +395,74 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.msgs) != 1 {
-		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.msgs[0].Text; got == "" || got == "Current state: idle." {
-		t.Fatalf("status text = %q, want active status", got)
+	if got := sender.inline[0].text; !strings.Contains(got, "status_scope=chat") {
+		t.Fatalf("status text = %q, want chat scope status", got)
 	}
-	if got := sender.msgs[0].Text; !strings.Contains(got, "Latest persisted turn: running (interactive).") {
-		t.Fatalf("status text = %q, want diagnostics included", got)
+	foundThisChat := false
+	foundPending := false
+	foundRefresh := false
+	for _, row := range sender.inline[0].rows {
+		for _, button := range row {
+			switch button.Text {
+			case "This Chat":
+				foundThisChat = true
+			case "Pending Only":
+				foundPending = true
+			case "Refresh":
+				foundRefresh = true
+			}
+		}
+	}
+	if !foundThisChat || !foundPending || !foundRefresh {
+		t.Fatalf("status keyboard rows = %#v, want user status controls", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat:     core.ChatStatusSnapshot{ChatID: 7},
+		statusSystem:   core.SystemStatusSnapshot{},
+		personaEffort:  "opus",
+		governorEffort: "high",
+		canRestart:     true,
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1001,
+		Text:     "/status",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	foundSystem := false
+	foundHot := false
+	foundFind := false
+	for _, row := range sender.inline[0].rows {
+		for _, button := range row {
+			switch button.Text {
+			case "System Overview":
+				foundSystem = true
+			case "Hot Chats":
+				foundHot = true
+			case "Find Chat":
+				foundFind = true
+			}
+		}
+	}
+	if !foundSystem || !foundHot || !foundFind {
+		t.Fatalf("admin status keyboard rows = %#v, want admin controls", sender.inline[0].rows)
 	}
 }
 
@@ -462,6 +568,167 @@ func TestHandleTelegramCommandSetGovernorEffort(t *testing.T) {
 	}
 	if len(sender.inline[0].rows) == 0 {
 		t.Fatalf("rows = %#v, want non-empty", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandCallbackStatusSystemForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		statusSystem: core.SystemStatusSnapshot{
+			ActiveChatIDs: []int64{7, 8},
+			HotChats: []core.ChatStatusRollup{
+				{ChatID: 7, PendingCount: 2},
+				{ChatID: 8, PendingCount: 1},
+			},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-status-system",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "status:system",
+		Message: &telegram.Message{
+			MessageID: 96,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "status_scope=system") {
+		t.Fatalf("system status text = %q, want system scope", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackStatusSystemDeniedForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-status-system-denied",
+		From: &telegram.User{ID: 1002, Username: "approved"},
+		Data: "status:system",
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if !strings.Contains(strings.ToLower(sender.answers[0].text), "admin") {
+		t.Fatalf("answer text = %q, want admin-only denial", sender.answers[0].text)
+	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline count = %d, want 0 for denied callback", len(sender.editInline))
+	}
+}
+
+func TestHandleTelegramCommandCallbackStatusFindChatShowsChatButtons(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		statusSystem: core.SystemStatusSnapshot{
+			HotChats: []core.ChatStatusRollup{
+				{ChatID: 9001, PendingCount: 3},
+				{ChatID: 9002, PendingCount: 1},
+			},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-status-find",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "status:find",
+		Message: &telegram.Message{
+			MessageID: 98,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	foundChatButton := false
+	for _, row := range sender.editInline[0].rows {
+		for _, button := range row {
+			if strings.Contains(button.CallbackData, "status:chat:9001") {
+				foundChatButton = true
+			}
+		}
+	}
+	if !foundChatButton {
+		t.Fatalf("rows = %#v, want chat drill-down callback", sender.editInline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandCallbackStatusChunksOverflowDeterministically(t *testing.T) {
+	t.Parallel()
+
+	pending := make([]core.PendingItem, 0, 120)
+	for i := 0; i < 120; i++ {
+		pending = append(pending, core.PendingItem{
+			Kind:    core.PendingItemKindDecision,
+			ChatID:  int64(7000 + i%3),
+			ID:      "decision-overflow-" + strings.Repeat("x", 20),
+			Summary: strings.Repeat("very long pending summary ", 4),
+		})
+	}
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		statusSystem: core.SystemStatusSnapshot{
+			PendingItems: pending,
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-status-overflow",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "status:system",
+		Message: &telegram.Message{
+			MessageID: 99,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if len([]rune(sender.editInline[0].text)) > 3800 {
+		t.Fatalf("edited text rune length = %d, want <= 3800", len([]rune(sender.editInline[0].text)))
+	}
+	if len(sender.msgs) == 0 {
+		t.Fatalf("follow-up messages = %#v, want overflow chunks", sender.msgs)
 	}
 }
 

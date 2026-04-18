@@ -136,6 +136,44 @@ func (c telegramCommandControl) Status(chatID int64) core.SessionStatus {
 	return status
 }
 
+func (c telegramCommandControl) StatusChat(chatID int64) (core.ChatStatusSnapshot, error) {
+	routerSnapshot := core.RouterStatusSnapshot{}
+	if c.router != nil {
+		routerSnapshot = c.router.Snapshot()
+	}
+	if c.rt == nil {
+		chat := core.ChatStatusSnapshot{
+			GeneratedAt:   time.Now().UTC(),
+			ChatID:        chatID,
+			RestartHealth: core.RestartHealthSnapshot{},
+		}
+		if ids := routerSnapshot.ActiveTurnsByChat[chatID]; len(ids) > 0 {
+			chat.ActiveTurnIDs = append(chat.ActiveTurnIDs, ids...)
+		}
+		chat.QueueDepth = routerSnapshot.QueueDepthByChat[chatID]
+		return chat, nil
+	}
+	return c.rt.ChatStatusSnapshot(chatID, routerSnapshot)
+}
+
+func (c telegramCommandControl) StatusSystem(senderID int64) (core.SystemStatusSnapshot, error) {
+	if !c.CanRestart(senderID) {
+		return core.SystemStatusSnapshot{}, fmt.Errorf("status view denied")
+	}
+	routerSnapshot := core.RouterStatusSnapshot{}
+	if c.router != nil {
+		routerSnapshot = c.router.Snapshot()
+	}
+	if c.rt == nil {
+		return core.SystemStatusSnapshot{
+			GeneratedAt:       time.Now().UTC(),
+			ActiveTurnsByChat: routerSnapshot.ActiveTurnsByChat,
+			QueueDepthByChat:  routerSnapshot.QueueDepthByChat,
+		}, nil
+	}
+	return c.rt.SystemStatusSnapshot(routerSnapshot)
+}
+
 func (c telegramCommandControl) ContinuationState(chatID int64) (session.ContinuationState, error) {
 	if c.rt == nil {
 		return session.ContinuationState{}, nil

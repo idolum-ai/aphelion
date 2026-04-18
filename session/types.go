@@ -331,6 +331,12 @@ type PendingDecisionRecord struct {
 	UpdatedAt         time.Time
 }
 
+type ContinuationStateRecord struct {
+	Key       SessionKey
+	State     ContinuationState
+	UpdatedAt time.Time
+}
+
 // Message is one persisted conversation message.
 type Message struct {
 	ID                int64

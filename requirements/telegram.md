@@ -314,7 +314,38 @@ Show the current command list and what each command does.
 
 ### `/status`
 
-Show whether the current DM session is idle or actively processing a turn, and whether queued follow-up messages are waiting behind the current turn.
+`/status` is button-driven (no command arguments).
+
+The first response is a summary-first status snapshot plus inline controls.
+
+User controls:
+
+- `This Chat`
+- `Pending Only`
+- `Refresh`
+
+Admin-only controls (visible only to Telegram admins):
+
+- `System Overview`
+- `Hot Chats`
+- `Find Chat`
+
+`Find Chat` must remain callback-first:
+
+- show recent active/pending chats as drill-down buttons (`status:chat:<chat_id>`)
+- avoid slash-command parameters for view selection
+
+Status payloads must include stable key labels so they remain machine-parseable later.
+
+At minimum, status snapshots should surface:
+
+- active turns count + per-chat ids
+- queue depth per chat
+- pending decision prompts (kind/chat/age/stale)
+- continuation state (pending/approved/revoked + remaining turns)
+- latest persisted turn-run state (status/kind/last activity/last tool/error)
+- stale running turn indicators
+- stale-turn watchdog/restart health indicator
 
 ### `/stop`
 
@@ -1341,6 +1372,14 @@ If a decision was detached (for example via `/detach` or restart-time detach), c
 - acknowledge the callback query
 - return a stale/no-longer-active message
 - avoid any side effects
+
+Status callbacks follow the same transport rules:
+
+- callback ids are encoded as `status:<mode>` or `status:chat:<chat_id>`
+- admin-only modes (`system`, `hot`, `find`, cross-chat drill-down) must be denied for non-admin callers
+- callback queries should be acknowledged
+- status messages should be edited in place when possible, preserving inline buttons
+- if output exceeds Telegram limits, split deterministically and send overflow as follow-up text chunks
 
 ### Router integration
 
