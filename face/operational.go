@@ -45,6 +45,8 @@ func RenderTelegramStart(personaEffort, governorEffort string) string {
 		"/help - show command help",
 		"/status - show whether I am currently working",
 		"/stop - stop current work in this chat",
+		"/restart - force an immediate gateway restart",
+		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
 		"/set_governor_effort - choose governor reasoning effort",
 		"/toggle_persona_effort - quick-toggle Sonnet/Opus",
@@ -63,6 +65,8 @@ func RenderTelegramHelp(personaEffort, governorEffort string) string {
 		"/help - show this help",
 		"/status - show current work state",
 		"/stop - stop current work in this chat",
+		"/restart - force an immediate gateway restart",
+		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
 		"/set_governor_effort - choose governor reasoning effort",
 		"/toggle_persona_effort - quick-toggle Sonnet/Opus",
@@ -108,6 +112,14 @@ func RenderTelegramStop(stopped core.StopResult) string {
 	default:
 		return "Continuation approval was already inactive for this chat."
 	}
+}
+
+func RenderTelegramRestart() string {
+	return "Restarting the gateway now. Active and queued work will be dropped."
+}
+
+func RenderTelegramQueuedReinstall() string {
+	return "Queued a reinstall request as a normal turn in this chat."
 }
 
 func RenderTelegramTogglePersona(mode string) string {
@@ -224,11 +236,11 @@ func RenderToolProgress(notice ToolProgressNotice) string {
 		if text == "" {
 			continue
 		}
-		line := "- " + text
 		if entry.Count > 1 {
-			line = fmt.Sprintf("- %s (%dx)", text, entry.Count)
+			lines = append(lines, fmt.Sprintf("- %s ×%d", text, entry.Count))
+		} else {
+			lines = append(lines, "- "+text)
 		}
-		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }

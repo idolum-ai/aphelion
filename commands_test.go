@@ -93,6 +93,9 @@ type stubCommandRouter struct {
 	stopContinuationInput       int64
 	stopContinuationResult      core.StopResult
 	triggerContinuationInput    int64
+	restartInput                int64
+	restartCalls                int
+	queuedReinstallMsg          *core.InboundMessage
 }
 
 func (s stubCommandRouter) Stop(chatID int64) core.StopResult {
@@ -134,6 +137,19 @@ func (s *stubCommandRouter) StopContinuation(chatID int64) (core.StopResult, err
 func (s *stubCommandRouter) TriggerContinuation(ctx context.Context, chatID int64) error {
 	s.triggerContinuationInput = chatID
 	_ = ctx
+	return nil
+}
+
+func (s *stubCommandRouter) QueueReinstall(ctx context.Context, msg core.InboundMessage) error {
+	copied := msg
+	s.queuedReinstallMsg = &copied
+	_ = ctx
+	return nil
+}
+
+func (s *stubCommandRouter) Restart(chatID int64) error {
+	s.restartInput = chatID
+	s.restartCalls++
 	return nil
 }
 
@@ -188,6 +204,8 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/stop", want: "stop", ok: true},
 		{text: "/help extra", want: "help", ok: true},
 		{text: "/status@my_bot", want: "status", ok: true},
+		{text: "/restart", want: "restart", ok: true},
+		{text: "/reinstall", want: "reinstall", ok: true},
 		{text: "/toggle_persona_effort", want: "toggle_persona_effort", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
 		{text: "/set_governor_effort", want: "set_governor_effort", ok: true},
@@ -512,5 +530,56 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersNoOpStopResult(t *t
 	}
 	if sender.edits[0].text != "Continuation approval was already inactive for this chat." {
 		t.Fatalf("edit text = %q, want inactive continuation text", sender.edits[0].text)
+	}
+}
+
+func TestHandleTelegramCommandReinstallQueuesRequest(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{}
+	msg := core.InboundMessage{ChatID: 7, SenderID: 1001, SenderName: "admin", MessageID: 11, Text: "/reinstall"}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, msg)
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.queuedReinstallMsg == nil {
+		t.Fatal("queuedReinstallMsg = nil, want queued message")
+	}
+	if router.queuedReinstallMsg.ChatID != msg.ChatID || router.queuedReinstallMsg.SenderID != msg.SenderID {
+		t.Fatalf("queued reinstall msg = %#v, want original routing identity", router.queuedReinstallMsg)
+	}
+	if router.queuedReinstallMsg.Text != msg.Text {
+		t.Fatalf("queued reinstall text = %q, want original command text at command-router boundary", router.queuedReinstallMsg.Text)
+	}
+	if len(sender.msgs) != 1 || sender.msgs[0].Text != "Queued a reinstall request as a normal turn in this chat." {
+		t.Fatalf("sender msgs = %#v, want queued reinstall ack", sender.msgs)
+	}
+}
+
+func TestHandleTelegramCommandRestartForcesRestart(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{}
+	msg := core.InboundMessage{ChatID: 7, SenderID: 1001, SenderName: "admin", MessageID: 12, Text: "/restart"}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, msg)
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.restartCalls != 1 || router.restartInput != msg.ChatID {
+		t.Fatalf("restart calls/input = (%d,%d), want (1,%d)", router.restartCalls, router.restartInput, msg.ChatID)
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("sender msgs = %#v, want one restart ack", sender.msgs)
+	}
+	if sender.msgs[0].Text != "Restarting the gateway now. Active and queued work will be dropped." {
+		t.Fatalf("restart ack text = %q, want restart confirmation", sender.msgs[0].Text)
 	}
 }

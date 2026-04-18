@@ -36,7 +36,10 @@ const (
 	turnTimeout     = 0 * time.Minute
 	exitCodeFailure = 1
 	exitCodeConfig  = 78
+	restartExitWait = 250 * time.Millisecond
 )
+
+var processExit = os.Exit
 
 const reinstallTemplateMessage = "Rebuild, reinstall, restart, and verify the aphelion user service on this host using the current checked-out branch state. Use the normal local deploy path for a source install: build the binary, run --check-config, run init, restart the systemd user service, and run verify-deploy. Treat this as an operational change: inspect the current service/install state first, then execute the bounded redeploy steps, and report what happened truthfully."
 
@@ -64,6 +67,23 @@ func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
 		result.ContinuationRevoked = revoke.Revoked
 	}
 	return result
+}
+
+func (c telegramCommandControl) Restart(chatID int64) error {
+	if c.router != nil {
+		c.router.Stop(chatID)
+	}
+	if c.rt != nil {
+		if _, err := c.rt.RevokeContinuation(chatID); err != nil {
+			log.Printf("WARN restart revoke continuation failed chat_id=%d err=%v", chatID, err)
+		}
+	}
+	log.Printf("WARN restart requested via telegram chat_id=%d", chatID)
+	go func() {
+		time.Sleep(restartExitWait)
+		processExit(exitCodeFailure)
+	}()
+	return nil
 }
 
 func (c telegramCommandControl) Status(chatID int64) core.SessionStatus {

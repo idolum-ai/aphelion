@@ -25,10 +25,12 @@ type commandCallbackSender interface {
 
 type commandRouter interface {
 	Stop(chatID int64) core.StopResult
+	Restart(chatID int64) error
 	Status(chatID int64) core.SessionStatus
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
 	TriggerContinuation(ctx context.Context, chatID int64) error
+	QueueReinstall(ctx context.Context, msg core.InboundMessage) error
 	TogglePersonaEffort() (string, error)
 	ToggleGovernorEffort() (string, error)
 	CurrentEfforts() (persona string, governor string)
@@ -44,6 +46,8 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "help", Description: "Show available commands"},
 	{Command: "status", Description: "Show current work state"},
 	{Command: "stop", Description: "Stop current work in this chat"},
+	{Command: "restart", Description: "Force an immediate gateway restart"},
+	{Command: "reinstall", Description: "Queue a rebuild/reinstall/restart request"},
 	{Command: "set_persona_model", Description: "Choose Idolum persona model"},
 	{Command: "set_governor_effort", Description: "Choose governor reasoning effort"},
 	{Command: "toggle_persona_effort", Description: "Quick-toggle Idolum between Sonnet and Opus"},
@@ -71,6 +75,7 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 
 	personaEffort, governorEffort := router.CurrentEfforts()
 	var text string
+	restartRequested := false
 	switch command {
 	case "start":
 		text = face.RenderTelegramStart(personaEffort, governorEffort)
@@ -80,6 +85,14 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		text = face.RenderTelegramStatus(router.Status(msg.ChatID), personaEffort, governorEffort)
 	case "stop":
 		text = face.RenderTelegramStop(router.Stop(msg.ChatID))
+	case "restart":
+		text = face.RenderTelegramRestart()
+		restartRequested = true
+	case "reinstall":
+		if err := router.QueueReinstall(ctx, msg); err != nil {
+			return true, err
+		}
+		text = face.RenderTelegramQueuedReinstall()
 	case "set_persona_model":
 		return sendPersonaModelSelector(ctx, sender, router, msg)
 	case "set_governor_effort":
@@ -105,6 +118,11 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		Text:    text,
 		ReplyTo: replyToMessageID(msg.MessageID),
 	})
+	if restartRequested {
+		if restartErr := router.Restart(msg.ChatID); restartErr != nil {
+			return true, restartErr
+		}
+	}
 	if err != nil {
 		return true, err
 	}

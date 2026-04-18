@@ -34,3 +34,13 @@ func TestNewTurnContextWithTimeoutHasDeadline(t *testing.T) {
 		t.Fatal("Deadline() ok = false, want true when timeout is set")
 	}
 }
+
+func TestQueueReinstallUsesTemplatedInboundMessage(t *testing.T) {
+	t.Parallel()
+	if reinstallTemplateMessage == "" {
+		t.Fatal("reinstallTemplateMessage empty")
+	}
+	if reinstallTemplateMessage == "/reinstall" {
+		t.Fatal("reinstallTemplateMessage collapsed to command text")
+	}
+}

@@ -70,13 +70,7 @@ func newTelegramExecApprover(sender telegramDecisionSender, broker *decision.Bro
 
 func newTelegramDecisionBroker(sender telegramDecisionSender, opts ...decision.BrokerOption) *decision.Broker {
 	return decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
-		text := strings.TrimSpace(pending.Prompt)
-		if details := strings.TrimSpace(pending.Details); details != "" {
-			if text != "" {
-				text += "\n\n"
-			}
-			text += details
-		}
+		text := renderPendingDecisionSummary(pending)
 		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, inlineButtonRows(pending), replyToMessageID(pending.MessageID))
 		if err != nil {
 			return decision.Delivery{}, err
