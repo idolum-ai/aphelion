@@ -77,13 +77,14 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 	}
 
 	personaEffort, governorEffort := router.CurrentEfforts()
+	isAdmin := router.CanRestart(msg.SenderID)
 	var text string
 	restartRequested := false
 	switch command {
 	case "start":
-		text = face.RenderTelegramStart(personaEffort, governorEffort)
+		text = face.RenderTelegramStart(personaEffort, governorEffort, isAdmin)
 	case "help":
-		text = face.RenderTelegramHelp(personaEffort, governorEffort)
+		text = face.RenderTelegramHelp(personaEffort, governorEffort, isAdmin)
 	case "status":
 		rendered, rows, renderErr := renderStatusView(ctx, router, msg.ChatID, msg.SenderID, statusViewChat, msg.ChatID, personaEffort, governorEffort)
 		if renderErr != nil {
@@ -102,7 +103,7 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		}
 		text = face.RenderTelegramDetach(detached)
 	case "restart":
-		if router.CanRestart(msg.SenderID) {
+		if isAdmin {
 			text = face.RenderTelegramRestart()
 			restartRequested = true
 		} else {

@@ -55,6 +55,8 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 	result.MaterialFloor = gov.MaterialFloor
 	result.PlanState = gov.PlanState
 	result.OperationState = gov.OperationState
+	result.PersonaIntent = gov.PersonaIntent
+	result.GovernorIntent = gov.GovernorIntent
 	if result.Turn != nil {
 		result.Turn.TokenUsage = addTokenUsage(result.Turn.TokenUsage, gov.Usage)
 	}

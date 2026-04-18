@@ -292,6 +292,9 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	)
 	out.LastFaceAwareness = turn.ApplyContinuationAwareness(out.LastFaceAwareness, sess.ContinuationState)
 
+	personaIntent, _ := parseContinuationIntentContract(brokerage.IdolumNote)
+	governorIntent, _ := parseContinuationIntentContract(brokerage.RatificationRecord)
+
 	governorResult := &turn.GovernorResult{
 		Turn:            turnResult,
 		OutHistory:      outHistory,
@@ -301,6 +304,8 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		MaterialFloor:   materialFloor,
 		PlanState:       sess.PlanState,
 		OperationState:  sess.OperationState,
+		PersonaIntent:   personaIntent,
+		GovernorIntent:  governorIntent,
 		Prepared:        input.Prepared,
 		Usage:           extraUsage,
 	}

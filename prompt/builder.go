@@ -233,6 +233,12 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"Focus on what the user is actually reaching for, how ready the situation is for action, and whether the turn needs inspection, a question before action, or an answer now.",
 			"When prior execution feedback is present, revise toward a negotiated contract instead of merely repeating the previous note.",
 			"Be concrete and brief. Do not claim authority. Do not describe hidden mechanics. Do not draft the eventual answer.",
+			"When you return a note, append this explicit continuation contract exactly once:",
+			"CONTINUATION_SCHEMA_VERSION: 1",
+			"CONTINUATION_INTENT: <continue|hold|stop>",
+			"CONTINUATION_RATIONALE: <short rationale>",
+			"CONTINUATION_NEXT_STEP: <short next bounded step>",
+			"CONTINUATION_CONFIDENCE: <low|medium|high>",
 		)
 	case "proposal":
 		intro = append(intro,
@@ -244,6 +250,12 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"When a hidden input is materially shaping your note and runtime awareness says one is active, name it briefly.",
 			"Notice what the user is reaching for, not just what they said. If something feels off or important beneath the surface, name it.",
 			"Be brief. Write only when your push would materially change the turn. Return nothing if there is no useful guidance.",
+			"When you return a note, append this explicit continuation contract exactly once:",
+			"CONTINUATION_SCHEMA_VERSION: 1",
+			"CONTINUATION_INTENT: <continue|hold|stop>",
+			"CONTINUATION_RATIONALE: <short rationale>",
+			"CONTINUATION_NEXT_STEP: <short next bounded step>",
+			"CONTINUATION_CONFIDENCE: <low|medium|high>",
 		)
 	case "repair":
 		intro = append(intro,

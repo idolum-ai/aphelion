@@ -45,6 +45,8 @@ type GovernorResult struct {
 	MaterialFloor   core.MaterialPacket
 	PlanState       session.PlanState
 	OperationState  session.OperationState
+	PersonaIntent   session.ContinuationIntent
+	GovernorIntent  session.ContinuationIntent
 	Usage           core.TokenUsage
 }
 
@@ -125,9 +127,9 @@ type DeliveryPort interface {
 // DeliveryRequest is the explicit outbound handoff from orchestration to the
 // channel delivery surface.
 type DeliveryRequest struct {
-	Message        core.OutboundMessage
+	Message         core.OutboundMessage
 	InboundWasVoice bool
-	Result         *Result
+	Result          *Result
 }
 
 // DeliveryResult records the machine-visible outcome of outbound delivery.
