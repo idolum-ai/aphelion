@@ -58,7 +58,7 @@ Runnable v0:
 - Telegram typing + real tool-backed progress feedback
 - Heartbeat and config-driven cron
 - Telegram voice transcription + optional TTS replies
-- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`
+- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`, `/restart`, `/reinstall`
 
 ## Run
 
@@ -266,7 +266,8 @@ Inside Telegram:
 
 - `/start` shows the intro and command help
 - `/help` shows the command list
-- `/status` reports whether the current chat is idle or working
+- `/status` opens a button-driven status view (`This Chat`, `Pending Only`, `Refresh`)
+- admins also get `System Overview`, `Hot Chats`, and `Find Chat` buttons from `/status`
 - `/stop` cancels the current turn and clears any queued follow-up messages for that chat
 
 Config failures now exit once with a dedicated config error and the service will not

@@ -345,6 +345,55 @@ func TestStopCancelsActiveTurnAndClearsQueue(t *testing.T) {
 	}
 }
 
+func TestSnapshotReportsActiveTurnIDsAndQueueDepth(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	router := NewRouter(func(ctx context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+		if msg.Text == "first" {
+			started <- struct{}{}
+			<-release
+		}
+		return &TurnResult{}, nil
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		router.Route(context.Background(), InboundMessage{ChatID: 31, Text: "first"})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("active turn did not start")
+	}
+
+	router.Route(context.Background(), InboundMessage{ChatID: 31, Text: "second"})
+	router.Route(context.Background(), InboundMessage{ChatID: 31, Text: "third"})
+
+	snapshot := router.Snapshot()
+	if got := snapshot.QueueDepthByChat[31]; got != 2 {
+		t.Fatalf("queue depth = %d, want 2", got)
+	}
+	if got := len(snapshot.ActiveTurnsByChat[31]); got != 1 {
+		t.Fatalf("active turns = %d, want 1", got)
+	}
+
+	close(release)
+	<-done
+
+	final := router.Snapshot()
+	if _, ok := final.QueueDepthByChat[31]; ok {
+		t.Fatalf("final queue depth map = %#v, want cleared chat", final.QueueDepthByChat)
+	}
+	if _, ok := final.ActiveTurnsByChat[31]; ok {
+		t.Fatalf("final active turns map = %#v, want cleared chat", final.ActiveTurnsByChat)
+	}
+}
+
 func TestStopReturnsIdleWhenNothingRunning(t *testing.T) {
 	t.Parallel()
 
