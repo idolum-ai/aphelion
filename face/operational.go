@@ -86,6 +86,13 @@ func RenderTelegramStatus(status core.SessionStatus, personaEffort, governorEffo
 	if status.Queued {
 		lines = append(lines, "A newer message is queued behind the current turn.")
 	}
+	for _, diagnostic := range status.Diagnostics {
+		diagnostic = strings.TrimSpace(diagnostic)
+		if diagnostic == "" {
+			continue
+		}
+		lines = append(lines, diagnostic)
+	}
 	lines = append(lines,
 		fmt.Sprintf("Persona effort: %s.", strings.TrimSpace(personaEffort)),
 		fmt.Sprintf("Governor effort: %s.", strings.TrimSpace(governorEffort)),
@@ -116,6 +123,10 @@ func RenderTelegramStop(stopped core.StopResult) string {
 
 func RenderTelegramRestart() string {
 	return "Restarting the gateway now. Active and queued work will be dropped."
+}
+
+func RenderTelegramRestartDenied() string {
+	return "Restart denied. Only Telegram admins can run /restart."
 }
 
 func RenderTelegramQueuedReinstall() string {

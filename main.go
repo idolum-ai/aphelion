@@ -49,8 +49,9 @@ type configStartupError struct {
 }
 
 type telegramCommandControl struct {
-	router *core.Router
-	rt     *runtime.Runtime
+	router   *core.Router
+	rt       *runtime.Runtime
+	resolver *principal.Resolver
 }
 
 func newTurnContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -87,7 +88,29 @@ func (c telegramCommandControl) Restart(chatID int64) error {
 }
 
 func (c telegramCommandControl) Status(chatID int64) core.SessionStatus {
-	return c.router.Status(chatID)
+	status := c.router.Status(chatID)
+	if c.rt == nil {
+		return status
+	}
+	diagnostics, err := c.rt.StatusDiagnostics(chatID)
+	if err != nil {
+		log.Printf("WARN telegram status diagnostics failed chat_id=%d err=%v", chatID, err)
+		status.Diagnostics = append(status.Diagnostics, "Runtime diagnostics are temporarily unavailable.")
+		return status
+	}
+	status.Diagnostics = append(status.Diagnostics, diagnostics...)
+	return status
+}
+
+func (c telegramCommandControl) CanRestart(senderID int64) bool {
+	if c.rt != nil {
+		return c.rt.IsTelegramAdmin(senderID)
+	}
+	if c.resolver == nil {
+		return false
+	}
+	actor, ok := c.resolver.ResolveTelegramUser(senderID)
+	return ok && actor.Role == principal.RoleAdmin
 }
 
 func (c telegramCommandControl) ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error) {
@@ -306,7 +329,7 @@ func run() error {
 	}
 
 	router := core.NewRouter(rt.AgentFunc())
-	commandControl := telegramCommandControl{router: router, rt: rt}
+	commandControl := telegramCommandControl{router: router, rt: rt, resolver: principalResolver}
 	decisionBroker := newTelegramDecisionBroker(tgClient, decision.WithDurableStore(newTelegramDecisionDurableStore(store)))
 	loadDecisionCtx, cancelDecisionLoad := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := decisionBroker.Load(loadDecisionCtx); err != nil {

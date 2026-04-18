@@ -40,6 +40,8 @@ type activeTurn struct {
 type SessionStatus struct {
 	Active bool
 	Queued bool
+	// Diagnostics includes optional status details from higher-level runtime layers.
+	Diagnostics []string
 }
 
 type StopResult struct {

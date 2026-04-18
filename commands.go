@@ -26,6 +26,7 @@ type commandCallbackSender interface {
 type commandRouter interface {
 	Stop(chatID int64) core.StopResult
 	Restart(chatID int64) error
+	CanRestart(senderID int64) bool
 	Status(chatID int64) core.SessionStatus
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
@@ -86,8 +87,12 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 	case "stop":
 		text = face.RenderTelegramStop(router.Stop(msg.ChatID))
 	case "restart":
-		text = face.RenderTelegramRestart()
-		restartRequested = true
+		if router.CanRestart(msg.SenderID) {
+			text = face.RenderTelegramRestart()
+			restartRequested = true
+		} else {
+			text = face.RenderTelegramRestartDenied()
+		}
 	case "reinstall":
 		if err := router.QueueReinstall(ctx, msg); err != nil {
 			return true, err

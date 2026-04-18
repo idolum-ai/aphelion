@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -76,6 +77,7 @@ type stubCommandRouter struct {
 	stop                        core.StopResult
 	personaEffort               string
 	governorEffort              string
+	canRestart                  bool
 	toggledPersona              string
 	toggledGovernor             string
 	personaModel                string
@@ -151,6 +153,11 @@ func (s *stubCommandRouter) Restart(chatID int64) error {
 	s.restartInput = chatID
 	s.restartCalls++
 	return nil
+}
+
+func (s stubCommandRouter) CanRestart(senderID int64) bool {
+	_ = senderID
+	return s.canRestart
 }
 
 func (s stubCommandRouter) CurrentPersonaModel() string {
@@ -253,7 +260,11 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
-		status:         core.SessionStatus{Active: true, Queued: true},
+		status: core.SessionStatus{
+			Active:      true,
+			Queued:      true,
+			Diagnostics: []string{"Latest persisted turn: running (interactive)."},
+		},
 		personaEffort:  "sonnet",
 		governorEffort: "medium",
 	}
@@ -272,6 +283,9 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 	}
 	if got := sender.msgs[0].Text; got == "" || got == "Current state: idle." {
 		t.Fatalf("status text = %q, want active status", got)
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "Latest persisted turn: running (interactive).") {
+		t.Fatalf("status text = %q, want diagnostics included", got)
 	}
 }
 
@@ -564,7 +578,7 @@ func TestHandleTelegramCommandRestartForcesRestart(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{}
+	router := &stubCommandRouter{canRestart: true}
 	msg := core.InboundMessage{ChatID: 7, SenderID: 1001, SenderName: "admin", MessageID: 12, Text: "/restart"}
 	handled, err := handleTelegramCommand(context.Background(), sender, router, msg)
 	if err != nil {
@@ -581,5 +595,29 @@ func TestHandleTelegramCommandRestartForcesRestart(t *testing.T) {
 	}
 	if sender.msgs[0].Text != "Restarting the gateway now. Active and queued work will be dropped." {
 		t.Fatalf("restart ack text = %q, want restart confirmation", sender.msgs[0].Text)
+	}
+}
+
+func TestHandleTelegramCommandRestartDeniedForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{canRestart: false}
+	msg := core.InboundMessage{ChatID: 7, SenderID: 2002, SenderName: "approved", MessageID: 13, Text: "/restart"}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, msg)
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.restartCalls != 0 {
+		t.Fatalf("restart calls = %d, want 0 for denied restart", router.restartCalls)
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("sender msgs = %#v, want one deny ack", sender.msgs)
+	}
+	if sender.msgs[0].Text != "Restart denied. Only Telegram admins can run /restart." {
+		t.Fatalf("deny ack text = %q, want denied confirmation", sender.msgs[0].Text)
 	}
 }
