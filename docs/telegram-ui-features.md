@@ -58,6 +58,7 @@ Admin-only:
 
 Chat-scoped status now reports live work telemetry, not only router occupancy:
 
+- `quick_read` one-line human summary (Haiku-backed when a native provider key is configured), prepended ahead of the raw status block.
 - `turn_phase` for active in-flight stage (`face_proposal`, `brokerage`, `governor`, `render`, `persist`, `deliver`) when available.
 - `operation` and `plan_step` from persisted session sidecars.
 - `plan_progress` with completed/total steps and `fully_executed=true|false`.

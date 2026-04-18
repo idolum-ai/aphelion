@@ -29,7 +29,7 @@ const (
 	statusViewChatTarget statusView = "chat_target"
 )
 
-func renderStatusView(router commandRouter, currentChatID int64, senderID int64, view statusView, targetChatID int64, personaEffort string, governorEffort string) (string, [][]telegram.InlineButton, error) {
+func renderStatusView(ctx context.Context, router commandRouter, currentChatID int64, senderID int64, view statusView, targetChatID int64, personaEffort string, governorEffort string) (string, [][]telegram.InlineButton, error) {
 	if router == nil {
 		return "", nil, fmt.Errorf("status router is unavailable")
 	}
@@ -107,8 +107,29 @@ func renderStatusView(router commandRouter, currentChatID int64, senderID int64,
 		view = statusViewChat
 		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
 	}
+	text = appendStatusReadableSummary(ctx, router, view, text)
 	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded)
 	return text, rows, nil
+}
+
+func appendStatusReadableSummary(ctx context.Context, router commandRouter, view statusView, text string) string {
+	if router == nil || !statusViewSupportsReadableSummary(view) {
+		return text
+	}
+	summary := strings.TrimSpace(router.StatusReadableSummary(ctx, string(view), text))
+	if summary == "" {
+		return text
+	}
+	return "quick_read " + summary + "\n\n" + text
+}
+
+func statusViewSupportsReadableSummary(view statusView) bool {
+	switch view {
+	case statusViewChat, statusViewPending, statusViewChatTarget, statusViewSystem, statusViewHotChats:
+		return true
+	default:
+		return false
+	}
 }
 
 func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64, isAdmin bool, system core.SystemStatusSnapshot, systemLoaded bool) [][]telegram.InlineButton {
