@@ -2014,6 +2014,43 @@ func (s *SQLiteStore) InterruptRunningTurnRuns() ([]TurnRun, error) {
 	return interrupted, nil
 }
 
+func (s *SQLiteStore) StaleRunningTurnRuns(cutoff time.Time, limit int) ([]TurnRun, error) {
+	if cutoff.IsZero() {
+		return nil, fmt.Errorf("stale turn run cutoff is required")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := s.db.Query(`
+		SELECT
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
+			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
+			progress_message_id, error_text, recovery_summary, recovery_logged_at
+		FROM turn_runs
+		WHERE status = ? AND last_activity_at <= ?
+		ORDER BY last_activity_at ASC, id ASC
+		LIMIT ?
+	`, string(TurnRunStatusRunning), cutoff.UTC().Format(time.RFC3339Nano), limit)
+	if err != nil {
+		return nil, fmt.Errorf("query stale running turn runs: %w", err)
+	}
+	defer rows.Close()
+
+	stale := make([]TurnRun, 0, limit)
+	for rows.Next() {
+		run, err := scanTurnRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		stale = append(stale, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stale running turn runs: %w", err)
+	}
+	return stale, nil
+}
+
 func (s *SQLiteStore) PendingRecoveryTurnRuns(limit int) ([]TurnRun, error) {
 	if limit <= 0 {
 		limit = 20

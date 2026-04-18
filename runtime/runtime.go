@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -70,6 +71,13 @@ type Runtime struct {
 
 	idleExpiry time.Duration
 	expireIdle func(maxIdle time.Duration) (int, error)
+
+	staleTurnThreshold       time.Duration
+	staleTurnLimit           int
+	staleTurnSweep           func(cutoff time.Time, limit int) ([]session.TurnRun, error)
+	interruptRunningTurnRuns func() ([]session.TurnRun, error)
+	staleTurnWatchdogHook    func(runs []session.TurnRun)
+	staleWatchdogTriggered   atomic.Bool
 
 	scopeResolver     *sandbox.Resolver
 	durableGroupChild durableGroupChildExecutor
@@ -420,6 +428,10 @@ func New(
 		toolProgressCleanup: cfg.Telegram.ToolProgressCleanup,
 		idleExpiry:          idleExpiry,
 		expireIdle:          store.ExpireIdle,
+		staleTurnThreshold:  defaultStaleTurnThreshold,
+		staleTurnLimit:      defaultStaleTurnLimit,
+		staleTurnSweep:      store.StaleRunningTurnRuns,
+		interruptRunningTurnRuns: store.InterruptRunningTurnRuns,
 		recipePath:          recipePath,
 		recipeState:         recipeState,
 		scopeResolver:       scopeResolver,

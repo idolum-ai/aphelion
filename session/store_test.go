@@ -1761,6 +1761,50 @@ func TestTurnRunLifecycleAndRecovery(t *testing.T) {
 	}
 }
 
+func TestStaleRunningTurnRuns(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 905, UserID: 0}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	staleRun, err := store.BeginTurnRun(key, TurnRunKindInteractive, "stale run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun(stale) err = %v", err)
+	}
+	freshRun, err := store.BeginTurnRun(key, TurnRunKindInteractive, "fresh run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun(fresh) err = %v", err)
+	}
+	if err := store.CompleteTurnRun(freshRun.ID, TurnRunStatusCompleted, ""); err != nil {
+		t.Fatalf("CompleteTurnRun(fresh) err = %v", err)
+	}
+
+	staleAt := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := store.db.Exec(`UPDATE turn_runs SET last_activity_at = ? WHERE id = ?`, staleAt, staleRun.ID); err != nil {
+		t.Fatalf("mark stale run activity: %v", err)
+	}
+
+	cutoff := time.Now().UTC().Add(-5 * time.Minute)
+	runs, err := store.StaleRunningTurnRuns(cutoff, 10)
+	if err != nil {
+		t.Fatalf("StaleRunningTurnRuns() err = %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("stale runs len = %d, want 1", len(runs))
+	}
+	if runs[0].ID != staleRun.ID {
+		t.Fatalf("stale run id = %d, want %d", runs[0].ID, staleRun.ID)
+	}
+	if runs[0].Status != TurnRunStatusRunning {
+		t.Fatalf("stale run status = %q, want running", runs[0].Status)
+	}
+}
+
 func TestCompleteTurnRun(t *testing.T) {
 	t.Parallel()
 
