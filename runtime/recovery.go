@@ -76,59 +76,43 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	exec := r.executionForTurn(prepared)
 	governorAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindRecovery, "system", exec)
 
-	coordinator := &maintenanceTurnCoordinator{
-		runtime:               r,
-		species:               maintenanceTurnRecovery,
-		key:                   maintenanceKey,
-		sess:                  maintenanceSession,
-		scope:                 scope,
-		prepared:              prepared,
-		exec:                  exec,
-		promptContext:         promptContext,
-		recoveryRuns:          runs,
-		useMaterialFloor:      false,
-		governorName:          prompt.DefaultGovernorName,
-		faceName:              face.DefaultFaceName,
-		channelName:           "system",
-		principalRole:         "admin",
-		sessionUserName:       "startup-recovery",
-		currentFaceModel:      nil,
-		baseGovernorAwareness: governorAwareness,
+	assembler := r.maintenanceAssembler
+	if assembler == nil {
+		assembler = newMaintenanceTurnAssembler(r)
 	}
-
-	machine := &turn.Machine{
-		Governor: coordinator,
-		Persistence: &maintenanceTurnPersistencePort{
-			runtime: r,
-			key:     maintenanceKey,
-			sess:    maintenanceSession,
-			errCtx: turnCommitErrorContext{
-				ConvertMessages: "convert recovery messages",
-				LoadPlanState:   "load recovery plan state before save",
-				LoadOperation:   "load recovery operation state before save",
-				SaveSession:     "save recovery maintenance session",
-			},
-		},
-		Options: turn.Options{
-			GovernorName: prompt.DefaultGovernorName,
-			FaceName:     face.DefaultFaceName,
-			Channel:      "system",
-			Style:        "observant, high-agency, warm, and emotionally lucid",
-		},
-		RuntimeAwareness: governorAwareness,
+	turnResult, err := assembler.Run(ctx, maintenanceTurnAssemblyInput{
+		Species:               maintenanceTurnRecovery,
+		RunKind:               session.TurnRunKindRecovery,
+		Key:                   maintenanceKey,
+		Sess:                  maintenanceSession,
+		Scope:                 scope,
+		Prepared:              prepared,
+		Exec:                  exec,
+		PromptContext:         promptContext,
+		RecoveryRuns:          runs,
+		UseMaterialFloor:      false,
+		GovernorName:          prompt.DefaultGovernorName,
+		FaceName:              face.DefaultFaceName,
+		Channel:               "system",
+		PrincipalRole:         "admin",
+		SessionUserName:       "startup-recovery",
+		BaseGovernorAwareness: governorAwareness,
+		RuntimeAwareness:      governorAwareness,
 		PolicyFunc: func(turn.Request) turn.Policy {
 			return turn.Policy{Reason: "startup_recovery_maintenance"}
 		},
-	}
-	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:    session.TurnRunKindRecovery,
-		SessionKey: maintenanceKey,
+		ErrContext: turnCommitErrorContext{
+			ConvertMessages: "convert recovery messages",
+			LoadPlanState:   "load recovery plan state before save",
+			LoadOperation:   "load recovery operation state before save",
+			SaveSession:     "save recovery maintenance session",
+		},
 		Inbound: core.InboundMessage{
 			ChatID: maintenanceKey.ChatID,
 			Text:   requestText,
 		},
-		Session: maintenanceSession,
-		Now:     now,
+		Now:         now,
+		UseFacePort: false,
 	})
 	if err != nil {
 		return err

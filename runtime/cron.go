@@ -71,64 +71,48 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 	faceAwareness := r.governorRuntimeAwareness(scope, session.TurnRunKindCron, "telegram", exec)
 	announce := strings.EqualFold(strings.TrimSpace(job.Delivery), "announce")
 
-	coordinator := &maintenanceTurnCoordinator{
-		runtime:               r,
-		species:               maintenanceTurnCron,
-		key:                   key,
-		sess:                  cronSession,
-		scope:                 scope,
-		prepared:              prepared,
-		exec:                  exec,
-		promptContext:         nil,
-		useMaterialFloor:      true,
-		governorName:          prompt.DefaultGovernorName,
-		faceName:              face.DefaultFaceName,
-		channelName:           "telegram",
-		principalRole:         "admin",
-		sessionUserName:       "cron:" + job.ID,
-		renderLatestUserInput: "[cron:" + job.ID + "]",
-		renderDeliveryMode:    "cron_delivery",
-		cronJobID:             job.ID,
-		currentFaceModel:      r.currentFaceRenderer(),
-		baseGovernorAwareness: governorAwareness,
+	assembler := r.maintenanceAssembler
+	if assembler == nil {
+		assembler = newMaintenanceTurnAssembler(r)
 	}
-	machine := &turn.Machine{
-		Governor: coordinator,
-		Face:     coordinator,
-		Persistence: &maintenanceTurnPersistencePort{
-			runtime: r,
-			key:     key,
-			sess:    cronSession,
-			errCtx: turnCommitErrorContext{
-				ConvertMessages: "convert cron messages",
-				LoadPlanState:   "load cron plan state before save",
-				LoadOperation:   "load cron operation state before save",
-				SaveSession:     "save cron session",
-			},
-		},
-		Options: turn.Options{
-			GovernorName: prompt.DefaultGovernorName,
-			FaceName:     face.DefaultFaceName,
-			Channel:      "telegram",
-			Style:        "observant, high-agency, warm, and emotionally lucid",
-		},
-		RuntimeAwareness: faceAwareness,
+	turnResult, err := assembler.Run(ctx, maintenanceTurnAssemblyInput{
+		Species:               maintenanceTurnCron,
+		RunKind:               session.TurnRunKindCron,
+		Key:                   key,
+		Sess:                  cronSession,
+		Scope:                 scope,
+		Prepared:              prepared,
+		Exec:                  exec,
+		UseMaterialFloor:      true,
+		GovernorName:          prompt.DefaultGovernorName,
+		FaceName:              face.DefaultFaceName,
+		Channel:               "telegram",
+		PrincipalRole:         "admin",
+		SessionUserName:       "cron:" + job.ID,
+		RenderLatestUserInput: "[cron:" + job.ID + "]",
+		RenderDeliveryMode:    "cron_delivery",
+		CronJobID:             job.ID,
+		CurrentFaceModel:      r.currentFaceRenderer(),
+		BaseGovernorAwareness: governorAwareness,
+		RuntimeAwareness:      faceAwareness,
 		PolicyFunc: func(turn.Request) turn.Policy {
 			return turn.Policy{
 				Render: announce,
 				Reason: "cron_delivery_policy",
 			}
 		},
-	}
-	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:    session.TurnRunKindCron,
-		SessionKey: key,
+		ErrContext: turnCommitErrorContext{
+			ConvertMessages: "convert cron messages",
+			LoadPlanState:   "load cron plan state before save",
+			LoadOperation:   "load cron operation state before save",
+			SaveSession:     "save cron session",
+		},
 		Inbound: core.InboundMessage{
 			ChatID: key.ChatID,
 			Text:   requestText,
 		},
-		Session: cronSession,
-		Now:     time.Now().UTC(),
+		Now:         time.Now().UTC(),
+		UseFacePort: true,
 	})
 	if err != nil {
 		return err

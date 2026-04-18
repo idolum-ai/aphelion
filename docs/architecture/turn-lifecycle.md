@@ -27,13 +27,25 @@ Code anchors:
 
 ## Maintenance Species
 
-Heartbeat, cron, and startup recovery also route through `turn.Machine`, with
-species-specific policy and delivery behavior in runtime adapters.
+Heartbeat, cron, and startup recovery are a separate execution family from
+interactive-like turns.
+
+Maintenance family order:
+
+1. Runtime maintenance loop synthesizes maintenance request text (instead of ingesting transport-originating inbound user text), plus hidden-input/runtime context.
+2. Runtime maintenance assembler builds one-turn coordinator/ports for maintenance species.
+3. `turn.Machine` runs stage order according to maintenance policy.
+4. `turn` persists maintenance ledger updates.
+5. Runtime maintenance loop executes species-specific post-turn fanout (for example heartbeat/cron admin outbound or startup recovery catch-up).
 
 Code anchors:
 
+- [`runtime/heartbeat.go`](../../runtime/heartbeat.go)
+- [`runtime/cron.go`](../../runtime/cron.go)
+- [`runtime/recovery.go`](../../runtime/recovery.go)
+- [`runtime/maintenance_turn_assembly.go`](../../runtime/maintenance_turn_assembly.go)
 - [`runtime/maintenance_turn.go`](../../runtime/maintenance_turn.go)
-- [`turn/policy.go`](../../turn/policy.go)
+- [`turn/engine.go`](../../turn/engine.go)
 
 ## Durable Child Species
 

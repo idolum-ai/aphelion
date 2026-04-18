@@ -137,50 +137,32 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		hiddenInputAwareness,
 	)
 
-	coordinator := &maintenanceTurnCoordinator{
-		runtime:               r,
-		species:               maintenanceTurnHeartbeat,
-		key:                   maintenanceKey,
-		sess:                  maintenanceSession,
-		scope:                 scope,
-		prepared:              prepared,
-		exec:                  exec,
-		promptContext:         promptContext,
-		hiddenInputs:          hiddenInputs,
-		useMaterialFloor:      true,
-		governorName:          prompt.DefaultGovernorName,
-		faceName:              face.DefaultFaceName,
-		channelName:           "telegram",
-		principalRole:         "admin",
-		sessionUserName:       "heartbeat",
-		renderLatestUserInput: "[heartbeat]",
-		proposalDeliveryMode:  "heartbeat_proposal",
-		renderDeliveryMode:    "heartbeat_delivery",
-		currentFaceModel:      r.currentFaceRenderer(),
-		baseGovernorAwareness: governorAwareness,
+	assembler := r.maintenanceAssembler
+	if assembler == nil {
+		assembler = newMaintenanceTurnAssembler(r)
 	}
-
-	machine := &turn.Machine{
-		Governor: coordinator,
-		Face:     coordinator,
-		Persistence: &maintenanceTurnPersistencePort{
-			runtime: r,
-			key:     maintenanceKey,
-			sess:    maintenanceSession,
-			errCtx: turnCommitErrorContext{
-				ConvertMessages: "convert heartbeat messages",
-				LoadPlanState:   "load heartbeat plan state before save",
-				LoadOperation:   "load heartbeat operation state before save",
-				SaveSession:     "save heartbeat session",
-			},
-		},
-		Options: turn.Options{
-			GovernorName: prompt.DefaultGovernorName,
-			FaceName:     face.DefaultFaceName,
-			Channel:      "telegram",
-			Style:        "observant, high-agency, warm, and emotionally lucid",
-		},
-		RuntimeAwareness: faceAwareness,
+	turnResult, err := assembler.Run(ctx, maintenanceTurnAssemblyInput{
+		Species:               maintenanceTurnHeartbeat,
+		RunKind:               session.TurnRunKindHeartbeat,
+		Key:                   maintenanceKey,
+		Sess:                  maintenanceSession,
+		Scope:                 scope,
+		Prepared:              prepared,
+		Exec:                  exec,
+		PromptContext:         promptContext,
+		HiddenInputs:          hiddenInputs,
+		UseMaterialFloor:      true,
+		GovernorName:          prompt.DefaultGovernorName,
+		FaceName:              face.DefaultFaceName,
+		Channel:               "telegram",
+		PrincipalRole:         "admin",
+		SessionUserName:       "heartbeat",
+		RenderLatestUserInput: "[heartbeat]",
+		ProposalDeliveryMode:  "heartbeat_proposal",
+		RenderDeliveryMode:    "heartbeat_delivery",
+		CurrentFaceModel:      r.currentFaceRenderer(),
+		BaseGovernorAwareness: governorAwareness,
+		RuntimeAwareness:      faceAwareness,
 		PolicyFunc: func(turn.Request) turn.Policy {
 			return turn.Policy{
 				Proposal: eligibleForOutreach,
@@ -188,16 +170,18 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 				Reason:   "heartbeat_outreach_policy",
 			}
 		},
-	}
-	turnResult, err := machine.Handle(ctx, turn.Request{
-		RunKind:    session.TurnRunKindHeartbeat,
-		SessionKey: maintenanceKey,
+		ErrContext: turnCommitErrorContext{
+			ConvertMessages: "convert heartbeat messages",
+			LoadPlanState:   "load heartbeat plan state before save",
+			LoadOperation:   "load heartbeat operation state before save",
+			SaveSession:     "save heartbeat session",
+		},
 		Inbound: core.InboundMessage{
 			ChatID: maintenanceKey.ChatID,
 			Text:   requestText,
 		},
-		Session: maintenanceSession,
-		Now:     now,
+		Now:         now,
+		UseFacePort: true,
 	})
 	if err != nil {
 		return err
