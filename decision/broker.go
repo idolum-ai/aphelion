@@ -70,6 +70,7 @@ type pendingDecision struct {
 	delivery Delivery
 	resultCh chan string
 	ownerKey string
+	seq      uint64
 }
 
 func NewBroker(notifier Notifier) *Broker {
@@ -91,7 +92,7 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("default choice %q is not present", req.DefaultChoice)
 	}
 
-	decisionID := b.nextDecisionID()
+	decisionSeq, decisionID := b.nextDecision()
 	normalized := normalizeRequest(req)
 	ownerKey := decisionOwnerKey(normalized)
 	pending := &pendingDecision{
@@ -101,14 +102,11 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 		},
 		resultCh: make(chan string, 1),
 		ownerKey: ownerKey,
+		seq:      decisionSeq,
 	}
 
 	b.mu.Lock()
-	b.supersedeOwnerLocked(ownerKey)
 	b.pending[decisionID] = pending
-	if ownerKey != "" {
-		b.byOwner[ownerKey] = decisionID
-	}
 	b.mu.Unlock()
 
 	if b.notifier != nil {
@@ -118,6 +116,10 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 			return Result{}, err
 		}
 		pending.delivery = delivery
+	}
+
+	if stale := b.activateOwner(decisionID); stale {
+		return Result{Choice: pending.request.DefaultChoice, Delivery: pending.delivery}, nil
 	}
 
 	timeout := pending.request.Timeout
@@ -188,37 +190,60 @@ func (b *Broker) clear(id string) {
 	b.mu.Unlock()
 }
 
-func (b *Broker) supersedeOwnerLocked(ownerKey string) {
-	if ownerKey == "" {
-		return
-	}
-	existingID, ok := b.byOwner[ownerKey]
+func (b *Broker) activateOwner(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	pending, ok := b.pending[id]
 	if !ok {
-		return
+		return false
+	}
+	ownerKey := pending.ownerKey
+	if ownerKey == "" {
+		return false
+	}
+
+	existingID, ok := b.byOwner[ownerKey]
+	if !ok || existingID == id {
+		b.byOwner[ownerKey] = id
+		return false
 	}
 	existing := b.pending[existingID]
-	if existing != nil {
-		// Resolve the previous pending decision to its default so only one remains active per owner.
+	if existing == nil {
+		b.byOwner[ownerKey] = id
+		return false
+	}
+	if existing.seq > pending.seq {
+		delete(b.pending, id)
 		select {
-		case existing.resultCh <- existing.request.DefaultChoice:
+		case pending.resultCh <- pending.request.DefaultChoice:
 		default:
 		}
-		delete(b.pending, existingID)
+		return true
 	}
-	delete(b.byOwner, ownerKey)
+	select {
+	case existing.resultCh <- existing.request.DefaultChoice:
+	default:
+	}
+	delete(b.pending, existingID)
+	b.byOwner[ownerKey] = id
+	return false
 }
 
-func (b *Broker) nextDecisionID() string {
+func (b *Broker) nextDecision() (uint64, string) {
 	next := atomic.AddUint64(&b.nextID, 1)
-	return strconvBase36(next)
+	return next, strconvBase36(next)
 }
 
 func decisionOwnerKey(req Request) string {
-	if req.SenderID != 0 {
-		return fmt.Sprintf("sender:%d", req.SenderID)
+	if req.ChatID != 0 && req.SenderID != 0 {
+		return fmt.Sprintf("chat:%d:sender:%d", req.ChatID, req.SenderID)
 	}
 	if req.ChatID != 0 {
 		return fmt.Sprintf("chat:%d", req.ChatID)
+	}
+	if req.SenderID != 0 {
+		return fmt.Sprintf("sender:%d", req.SenderID)
 	}
 	return ""
 }

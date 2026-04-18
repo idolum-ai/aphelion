@@ -26,7 +26,7 @@ type commandCallbackSender interface {
 type commandRouter interface {
 	Stop(chatID int64) core.StopResult
 	Status(chatID int64) core.SessionStatus
-	ApproveContinuation(chatID int64) (session.ContinuationState, error)
+	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	RevokeContinuation(chatID int64) (session.ContinuationState, error)
 	TriggerContinuation(ctx context.Context, chatID int64) error
 	TogglePersonaEffort() (string, error)
@@ -160,7 +160,11 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		var text string
 		switch action {
 		case "approve":
-			state, err := router.ApproveContinuation(chatID)
+			approverID := int64(0)
+			if cb.From != nil {
+				approverID = cb.From.ID
+			}
+			state, err := router.ApproveContinuation(chatID, approverID)
 			if err != nil {
 				return true, err
 			}

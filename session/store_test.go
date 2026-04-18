@@ -333,7 +333,7 @@ func TestContinuationStateRoundTripAndUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() err = %v", err)
 	}
-	sess.ContinuationState = ContinuationState{Status: ContinuationStatusPending, Objective: "implement continuation controls", StageSummary: "Attach approval UI", RemainingTurns: 1}
+	sess.ContinuationState = ContinuationState{Status: ContinuationStatusPending, Objective: "implement continuation controls", StageSummary: "Attach approval UI", RemainingTurns: 1, ApprovedBy: 1002}
 	if err := store.Save(sess, []Message{{Role: "assistant", Content: "ok", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
 		t.Fatalf("Save() err = %v", err)
 	}
@@ -344,7 +344,7 @@ func TestContinuationStateRoundTripAndUpdate(t *testing.T) {
 	if reloaded.ContinuationState.Status != ContinuationStatusPending {
 		t.Fatalf("status = %q, want pending", reloaded.ContinuationState.Status)
 	}
-	updated := ContinuationState{Status: ContinuationStatusApproved, Objective: "implement continuation controls", RemainingTurns: 1}
+	updated := ContinuationState{Status: ContinuationStatusApproved, Objective: "implement continuation controls", RemainingTurns: 1, ApprovedBy: 1002}
 	if err := store.UpdateContinuationState(key, updated); err != nil {
 		t.Fatalf("UpdateContinuationState() err = %v", err)
 	}
@@ -354,6 +354,9 @@ func TestContinuationStateRoundTripAndUpdate(t *testing.T) {
 	}
 	if got.Status != ContinuationStatusApproved {
 		t.Fatalf("status = %q, want approved", got.Status)
+	}
+	if got.ApprovedBy != 1002 {
+		t.Fatalf("approved_by = %d, want 1002", got.ApprovedBy)
 	}
 }
 

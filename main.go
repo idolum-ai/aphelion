@@ -66,8 +66,8 @@ func (c telegramCommandControl) Status(chatID int64) core.SessionStatus {
 	return c.router.Status(chatID)
 }
 
-func (c telegramCommandControl) ApproveContinuation(chatID int64) (session.ContinuationState, error) {
-	return c.rt.ApproveContinuation(chatID)
+func (c telegramCommandControl) ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error) {
+	return c.rt.ApproveContinuation(chatID, approverID)
 }
 
 func (c telegramCommandControl) RevokeContinuation(chatID int64) (session.ContinuationState, error) {

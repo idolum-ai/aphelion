@@ -72,25 +72,26 @@ func (s *stubCommandSender) AnswerCallbackQuery(_ context.Context, id string, te
 }
 
 type stubCommandRouter struct {
-	status                   core.SessionStatus
-	stop                     core.StopResult
-	personaEffort            string
-	governorEffort           string
-	toggledPersona           string
-	toggledGovernor          string
-	personaModel             string
-	personaModelOptions      []string
-	governorEffortOptions    []string
-	setPersonaModelInput     string
-	setGovernorEffortInput   string
-	setPersonaModelReturn    string
-	setGovernorEffortReturn  string
-	setPersonaModelErr       error
-	setGovernorEffortErr     error
-	continuationState        session.ContinuationState
-	approveContinuationInput int64
-	revokeContinuationInput  int64
-	triggerContinuationInput int64
+	status                      core.SessionStatus
+	stop                        core.StopResult
+	personaEffort               string
+	governorEffort              string
+	toggledPersona              string
+	toggledGovernor             string
+	personaModel                string
+	personaModelOptions         []string
+	governorEffortOptions       []string
+	setPersonaModelInput        string
+	setGovernorEffortInput      string
+	setPersonaModelReturn       string
+	setGovernorEffortReturn     string
+	setPersonaModelErr          error
+	setGovernorEffortErr        error
+	continuationState           session.ContinuationState
+	approveContinuationInput    int64
+	approveContinuationApprover int64
+	revokeContinuationInput     int64
+	triggerContinuationInput    int64
 }
 
 func (s stubCommandRouter) Stop(chatID int64) core.StopResult {
@@ -113,10 +114,13 @@ func (s stubCommandRouter) CurrentEfforts() (string, string) {
 	return s.personaEffort, s.governorEffort
 }
 
-func (s *stubCommandRouter) ApproveContinuation(chatID int64) (session.ContinuationState, error) {
+func (s *stubCommandRouter) ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error) {
 	s.approveContinuationInput = chatID
+	s.approveContinuationApprover = approverID
 	if s.continuationState.Status == "" {
-		s.continuationState = session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, StageSummary: "Resume the next bounded step."}
+		s.continuationState = session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, StageSummary: "Resume the next bounded step.", ApprovedBy: approverID}
+	} else {
+		s.continuationState.ApprovedBy = approverID
 	}
 	return s.continuationState, nil
 }
@@ -429,6 +433,7 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	router := stubCommandRouter{continuationState: session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, StageSummary: "Resume the next bounded step."}}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-continue",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
 		Data:    encodeContinuationCallbackData("approve"),
 		Message: &telegram.Message{MessageID: 93, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
@@ -440,6 +445,9 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	}
 	if router.approveContinuationInput != 7 {
 		t.Fatalf("approveContinuationInput = %d, want 7", router.approveContinuationInput)
+	}
+	if router.approveContinuationApprover != 1002 {
+		t.Fatalf("approveContinuationApprover = %d, want 1002", router.approveContinuationApprover)
 	}
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)

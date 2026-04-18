@@ -89,7 +89,7 @@ func (r *Runtime) ContinuationState(chatID int64) (session.ContinuationState, er
 	return r.store.ContinuationState(key)
 }
 
-func (r *Runtime) ApproveContinuation(chatID int64) (session.ContinuationState, error) {
+func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error) {
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
 	state, err := r.store.ContinuationState(key)
 	if err != nil {
@@ -97,6 +97,7 @@ func (r *Runtime) ApproveContinuation(chatID int64) (session.ContinuationState, 
 	}
 	state = session.NormalizeContinuationState(state)
 	state.Status = session.ContinuationStatusApproved
+	state.ApprovedBy = approverID
 	state.UpdatedAt = time.Now().UTC()
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, err
@@ -113,6 +114,7 @@ func (r *Runtime) RevokeContinuation(chatID int64) (session.ContinuationState, e
 	state = session.NormalizeContinuationState(state)
 	state.Status = session.ContinuationStatusRevoked
 	state.RemainingTurns = 0
+	state.ApprovedBy = 0
 	state.UpdatedAt = time.Now().UTC()
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, err
@@ -131,9 +133,18 @@ func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
 		return nil
 	}
+	approverID := state.ApprovedBy
+	if approverID <= 0 {
+		return fmt.Errorf("continuation approver is not recorded")
+	}
+	actor, ok := r.resolver.ResolveTelegramUser(approverID)
+	if !ok {
+		return fmt.Errorf("continuation approver %d is not admitted", approverID)
+	}
 	state.RemainingTurns--
 	if state.RemainingTurns <= 0 {
 		state.Status = session.ContinuationStatusIdle
+		state.ApprovedBy = 0
 	}
 	state.UpdatedAt = time.Now().UTC()
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
@@ -142,7 +153,7 @@ func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
 	}
 	_, err = r.HandleInbound(ctx, core.InboundMessage{
 		ChatID:     chatID,
-		SenderID:   positiveFirst(r.cfg.Principals.Telegram.AdminUserIDs),
+		SenderID:   actor.TelegramUserID,
 		SenderName: "continuation",
 		Text:       "Continue the previously approved next step.",
 	})

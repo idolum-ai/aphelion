@@ -154,6 +154,7 @@ type ContinuationState struct {
 	Objective      string             `json:"objective,omitempty"`
 	StageSummary   string             `json:"stage_summary,omitempty"`
 	RemainingTurns int                `json:"remaining_turns,omitempty"`
+	ApprovedBy     int64              `json:"approved_by,omitempty"`
 	UpdatedAt      time.Time          `json:"updated_at,omitempty"`
 }
 
@@ -461,7 +462,10 @@ func NormalizeContinuationState(state ContinuationState) ContinuationState {
 	if state.RemainingTurns < 0 {
 		state.RemainingTurns = 0
 	}
-	if state.UpdatedAt.IsZero() && (state.Status != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0) {
+	if state.Status == ContinuationStatusIdle || state.Status == ContinuationStatusRevoked {
+		state.ApprovedBy = 0
+	}
+	if state.UpdatedAt.IsZero() && (state.Status != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state
