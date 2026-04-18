@@ -84,6 +84,7 @@ func (r *Runtime) renderTurnCoordinatorFace(ctx context.Context, input turnCoord
 	if input.LastGovernor == nil || input.LastGovernor.Turn == nil {
 		return turnRenderResult{}, nil
 	}
+	r.markChatTurnPhase(input.Msg.ChatID, "render", "authoring visible scene from governor floor")
 	gov := input.LastGovernor
 	mediaOnlyReply := len(gov.Turn.Media) > 0 && strings.TrimSpace(gov.Turn.Text) == ""
 	replyText := ""
@@ -191,6 +192,9 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	baseGovernorAwareness := input.BaseGovernorAwareness
 	brokerage := seedTurnBrokerageFromFaceNote(input.FaceNote)
 	extraUsage := core.TokenUsage{}
+	if brokerage.Active {
+		r.markChatTurnPhase(input.Msg.ChatID, "brokerage", "converging proposal and ratification before governor execution")
+	}
 	promptState := r.buildTurnCoordinatorGovernorPrompt(input, baseGovernorAwareness, brokerage)
 	systemBlocks := promptState.SystemBlocks
 	systemPrompt := promptState.SystemPrompt
@@ -224,6 +228,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	var monitorErr error
 	defer monitor.Finish(ctx, monitorErr)
 	tools := monitor.observeTools(input.Tools)
+	r.markChatTurnPhase(input.Msg.ChatID, "governor", "running governor and tool loop")
 
 	systemCount := 1
 	if strings.TrimSpace(systemPrompt) == "" {

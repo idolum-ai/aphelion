@@ -50,6 +50,7 @@ func (c *durableGroupTurnCoordinator) Propose(ctx context.Context, req turn.Face
 	if c == nil || c.runtime == nil {
 		return nil, fmt.Errorf("durable group coordinator unavailable")
 	}
+	c.runtime.markChatTurnPhase(c.msg.ChatID, "face_proposal", "drafting relationship note before execution")
 
 	awareness := req.Runtime
 	awareness.ArtifactMode = "scene"

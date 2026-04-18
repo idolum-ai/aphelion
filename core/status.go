@@ -52,20 +52,30 @@ type RestartHealthSnapshot struct {
 }
 
 type ChatStatusSnapshot struct {
-	GeneratedAt       time.Time
-	ChatID            int64
-	ActiveTurnIDs     []uint64
-	QueueDepth        int
-	OperationStatus   string
-	OperationStage    string
-	OperationSummary  string
-	PlanStepStatus    string
-	PlanStep          string
-	PendingItems      []PendingItem
-	Continuation      *ContinuationStatusSnapshot
-	LatestTurnRun     *TurnRunStatusSnapshot
-	StaleRunningTurns []TurnRunStatusSnapshot
-	RestartHealth     RestartHealthSnapshot
+	GeneratedAt           time.Time
+	ChatID                int64
+	ActiveTurnIDs         []uint64
+	QueueDepth            int
+	TurnPhase             string
+	TurnPhaseSummary      string
+	TurnPhaseUpdatedAt    time.Time
+	OperationStatus       string
+	OperationStage        string
+	OperationSummary      string
+	PlanStepStatus        string
+	PlanStep              string
+	PlanCompletedSteps    int
+	PlanTotalSteps        int
+	PlanFullyExecuted     bool
+	HiddenInputCategories []string
+	HiddenInputSummary    string
+	DeliveryStatus        string
+	DeliverySummary       string
+	PendingItems          []PendingItem
+	Continuation          *ContinuationStatusSnapshot
+	LatestTurnRun         *TurnRunStatusSnapshot
+	StaleRunningTurns     []TurnRunStatusSnapshot
+	RestartHealth         RestartHealthSnapshot
 }
 
 type ChatStatusRollup struct {

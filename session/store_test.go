@@ -2025,6 +2025,85 @@ func TestPlanAndOperationStateIfExistsReturnsPersistedState(t *testing.T) {
 	}
 }
 
+func TestStatusStateIfExistsDoesNotCreateSession(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1909, UserID: 0}
+	state, exists, err := store.StatusStateIfExists(key)
+	if err != nil {
+		t.Fatalf("StatusStateIfExists() err = %v", err)
+	}
+	if exists {
+		t.Fatalf("StatusStateIfExists() = (%#v, %v), want no pre-existing state", state, exists)
+	}
+
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(1) FROM sessions WHERE session_id = ?`, SessionIDForKey(key)).Scan(&count); err != nil {
+		t.Fatalf("query sessions count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("sessions row count = %d, want 0", count)
+	}
+}
+
+func TestStatusStateIfExistsReturnsPersistedStateAndOutboundCount(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1910, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.PlanState = PlanState{
+		Steps: []PlanStep{{
+			Step:   "Await admin approval",
+			Status: PlanStatusInProgress,
+		}},
+	}
+	sess.OperationState = OperationState{
+		Status:  OperationStatusBlocked,
+		Stage:   "approval_wait",
+		Summary: "Waiting for admin review",
+	}
+	sess.LastFloorMetadata = `{"hidden_inputs":[{"category":"unresolved_memory_state","summary":"follow-up question still open"}],"provenance_summary":"latent unresolved memory persists"}`
+	sess.TurnCount = 3
+	if err := store.Save(sess, nil, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+	if err := store.RecordOutbound(key, sess.TurnCount, 4501, "message"); err != nil {
+		t.Fatalf("RecordOutbound() err = %v", err)
+	}
+
+	state, exists, err := store.StatusStateIfExists(key)
+	if err != nil {
+		t.Fatalf("StatusStateIfExists() err = %v", err)
+	}
+	if !exists {
+		t.Fatal("StatusStateIfExists() exists = false, want true")
+	}
+	if len(state.PlanState.Steps) != 1 || state.PlanState.Steps[0].Step != "Await admin approval" {
+		t.Fatalf("plan state = %#v, want persisted plan step", state.PlanState)
+	}
+	if state.OperationState.Status != OperationStatusBlocked || state.OperationState.Stage != "approval_wait" {
+		t.Fatalf("operation state = %#v, want persisted blocked operation", state.OperationState)
+	}
+	if state.LastFloorMetadata == "" {
+		t.Fatalf("LastFloorMetadata = %q, want persisted metadata", state.LastFloorMetadata)
+	}
+	if state.TurnCount != 3 {
+		t.Fatalf("TurnCount = %d, want 3", state.TurnCount)
+	}
+	if state.OutboundCountAtTurn != 1 {
+		t.Fatalf("OutboundCountAtTurn = %d, want 1", state.OutboundCountAtTurn)
+	}
+}
+
 func TestCompleteTurnRun(t *testing.T) {
 	t.Parallel()
 

@@ -781,23 +781,52 @@ func (s *SQLiteStore) ContinuationStateIfExists(key SessionKey) (ContinuationSta
 }
 
 func (s *SQLiteStore) PlanAndOperationStateIfExists(key SessionKey) (PlanState, OperationState, bool, error) {
-	sessionID := SessionIDForKey(key)
-	var (
-		planRaw      sql.NullString
-		operationRaw sql.NullString
-	)
-	err := s.db.QueryRow(`
-		SELECT plan_state_json, operation_state_json
-		FROM sessions
-		WHERE session_id = ?
-	`, sessionID).Scan(&planRaw, &operationRaw)
-	if errors.Is(err, sql.ErrNoRows) {
+	state, exists, err := s.StatusStateIfExists(key)
+	if err != nil {
+		return PlanState{}, OperationState{}, false, err
+	}
+	if !exists {
 		return PlanState{}, OperationState{}, false, nil
 	}
-	if err != nil {
-		return PlanState{}, OperationState{}, false, fmt.Errorf("load plan and operation state: %w", err)
+	return state.PlanState, state.OperationState, true, nil
+}
+
+func (s *SQLiteStore) StatusStateIfExists(key SessionKey) (SessionStatusState, bool, error) {
+	sessionID := SessionIDForKey(key)
+	var (
+		planRaw           sql.NullString
+		operationRaw      sql.NullString
+		lastFloorMetadata sql.NullString
+		turnCount         int
+		outboundCount     int
+	)
+	err := s.db.QueryRow(`
+		SELECT
+			plan_state_json,
+			operation_state_json,
+			last_floor_metadata,
+			turn_count,
+			(
+				SELECT COUNT(1)
+				FROM outbound_messages o
+				WHERE o.session_id = sessions.session_id AND o.turn_index = sessions.turn_count
+			) AS outbound_count_at_turn
+		FROM sessions
+		WHERE session_id = ?
+	`, sessionID).Scan(&planRaw, &operationRaw, &lastFloorMetadata, &turnCount, &outboundCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SessionStatusState{}, false, nil
 	}
-	return decodePlanState(planRaw.String), decodeOperationState(operationRaw.String), true, nil
+	if err != nil {
+		return SessionStatusState{}, false, fmt.Errorf("load status state: %w", err)
+	}
+	return SessionStatusState{
+		PlanState:           decodePlanState(planRaw.String),
+		OperationState:      decodeOperationState(operationRaw.String),
+		LastFloorMetadata:   strings.TrimSpace(lastFloorMetadata.String),
+		TurnCount:           turnCount,
+		OutboundCountAtTurn: outboundCount,
+	}, true, nil
 }
 
 func (s *SQLiteStore) ContinuationStates() ([]ContinuationStateRecord, error) {

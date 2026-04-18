@@ -348,9 +348,14 @@ At minimum, status snapshots should surface:
 
 - active turns count + per-chat ids
 - queue depth per chat
+- live in-flight turn phase (`face_proposal|brokerage|governor|render|persist|deliver`) when available
 - pending decision prompts (kind/chat/age/stale)
 - continuation state (pending/approved/revoked + remaining turns)
 - latest persisted turn-run state (status/kind/last activity/last tool/error)
+- persisted operation + plan sidecar status (`operation`, `plan_step`, `plan_progress`)
+- hidden-input carryover state from floor metadata (categories + provenance summary)
+- delivery-path status (in-flight, delivered, persisted-not-delivered, delivery-failed)
+- detached/outstanding work counters (decisions, continuations, recovery, stale runs)
 - stale running turn indicators
 - stale-turn watchdog/restart health indicator
 

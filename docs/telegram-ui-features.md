@@ -54,6 +54,18 @@ Admin-only:
 
 - `Chat <chat_id>` buttons for recent active/pending chats (up to 12 chats shown).
 
+### `/status` content signals
+
+Chat-scoped status now reports live work telemetry, not only router occupancy:
+
+- `turn_phase` for active in-flight stage (`face_proposal`, `brokerage`, `governor`, `render`, `persist`, `deliver`) when available.
+- `operation` and `plan_step` from persisted session sidecars.
+- `plan_progress` with completed/total steps and `fully_executed=true|false`.
+- `hidden_inputs` categories plus provenance summary carried in floor metadata.
+- `delivery` state that distinguishes in-flight, delivered, persisted-without-delivery, and delivery-failure paths.
+- `detached_work` counters for pending decisions/continuations/recovery/stale-turn work.
+- `current_signal` as a compact one-line machine signal (phase/tool/queue/blocked source).
+
 ### `/set_persona_model` selector
 
 Buttons are generated from runtime options:
