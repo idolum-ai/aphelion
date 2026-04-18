@@ -84,7 +84,7 @@ func RenderTelegramStatus(status core.SessionStatus, personaEffort, governorEffo
 	}
 	lines := []string{fmt.Sprintf("Current state: %s.", state)}
 	if status.Queued {
-		lines = append(lines, "A newer message is queued behind the current turn.")
+		lines = append(lines, "Queued follow-up messages are waiting behind the current turn.")
 	}
 	for _, diagnostic := range status.Diagnostics {
 		diagnostic = strings.TrimSpace(diagnostic)
@@ -248,7 +248,7 @@ func RenderToolProgress(notice ToolProgressNotice) string {
 			continue
 		}
 		if entry.Count > 1 {
-			lines = append(lines, fmt.Sprintf("- %s ×%d", text, entry.Count))
+			lines = append(lines, fmt.Sprintf("- %s (%dx)", text, entry.Count))
 		} else {
 			lines = append(lines, "- "+text)
 		}

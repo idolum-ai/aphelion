@@ -186,18 +186,16 @@ func TestTelegramExecApproverDeletesPromptOnApprove(t *testing.T) {
 	t.Parallel()
 
 	sender := &decisionTestSender{}
-	broker := newTelegramDecisionBroker(sender)
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		if len(sender.inline) == 0 || len(sender.inline[0].rows) == 0 || len(sender.inline[0].rows[0]) == 0 {
-			return
+	var broker *decision.Broker
+	broker = decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		text := renderPendingDecisionSummary(pending)
+		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, inlineButtonRows(pending), replyToMessageID(pending.MessageID))
+		if err != nil {
+			return decision.Delivery{}, err
 		}
-		data := sender.inline[0].rows[0][0].CallbackData
-		id, choice, ok := decision.DecodeCallbackData(data)
-		if ok {
-			broker.Resolve(id, choice)
-		}
-	}()
+		go broker.Resolve(pending.ID, "approve")
+		return decision.Delivery{MessageID: msgID}, nil
+	})
 	approver := newTelegramExecApprover(sender, broker)
 
 	decisionResult, err := approver.ConfirmExec(context.Background(), toolpkg.ExecApprovalRequest{

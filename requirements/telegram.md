@@ -311,11 +311,11 @@ Show the current command list and what each command does.
 
 ### `/status`
 
-Show whether the current DM session is idle or actively processing a turn, and whether a newer message is queued behind the current turn.
+Show whether the current DM session is idle or actively processing a turn, and whether queued follow-up messages are waiting behind the current turn.
 
 ### `/stop`
 
-Cancel the in-flight turn for the current DM session and drop any queued latest-wins message that has not started yet.
+Cancel the in-flight turn for the current DM session and drop any queued follow-up messages that have not started yet.
 
 This command must be real, not decorative. If Telegram advertises `/stop`, the user should not have to wait for the current turn to finish before the stop takes effect.
 
@@ -1221,9 +1221,10 @@ When a user sends a message while the agent is mid-turn (tools running, LLM stre
     - The new message includes context: "[Previous request was interrupted. Last tool output: ...]"
 
 3b. User taps "Let it finish":
-    - Queue the new message (latest-wins, cap 1)
+    - Queue the new message
     - Edit the keyboard message to: "Got it — I'll process your message next. ⏳"
-    - After current turn completes, process the queued message as the next turn
+    - After current turn completes, compact queued messages into one follow-up input and process that as the next turn
+    - During compaction, keep only artifacts from the newest queued message; drop older queued artifacts
 
 3c. No tap (timeout 30s):
     - Default to "Let it finish" (queue the message)
@@ -1317,14 +1318,14 @@ The router's `Route()` method changes slightly:
 
 ```go
 func (r *Router) Route(ctx context.Context, msg InboundMessage) {
-    lock, queue, session := r.resolveSession(msg.ChatID)
+    lock, session := r.resolveSession(msg.ChatID)
     
     if !lock.TryLock() {
         // Session is busy — trigger interrupt handler instead of silent queue
         if r.interruptHandler != nil {
             r.interruptHandler.OnMessageWhileBusy(ctx, msg, r.activeCancels[msg.ChatID])
         } else {
-            r.enqueueLatest(queue, msg) // Fallback: silent queue
+            r.enqueue(msg.ChatID, msg) // Fallback: queue for later compaction
         }
         return
     }
@@ -1344,7 +1345,7 @@ interrupt_timeout = "30s"         # Auto-queue after this timeout
 ### Tests
 
 - **TestInterruptStop**: User sends message while busy → taps Stop → current turn cancelled, new message processed.
-- **TestInterruptQueue**: User sends message while busy → taps Let it finish → message queued, processed after current turn.
+- **TestInterruptQueue**: User sends message while busy → taps Let it finish → message queued, then included in the next compacted follow-up turn.
 - **TestInterruptTimeout**: No tap → message auto-queued after 30s.
 - **TestInterruptKeyboardSent**: Message while busy → inline keyboard reply sent to user.
 - **TestInterruptCallbackAck**: Callback query → answerCallbackQuery sent (Telegram requires this).

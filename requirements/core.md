@@ -32,7 +32,7 @@ This spec is **staged**. The initial "core runnable" milestone is the minimal en
 ### Components
 
 - **Telegram**: Long-polls the Bot API. Normalizes updates into `InboundMessage`. Sends `OutboundMessage` back. Knows Telegram formatting. Doesn't know about LLMs.
-- **Router**: Maps inbound messages to sessions by chat ID. Dispatches agent turns as goroutines. Enforces one-turn-at-a-time per session via per-session mutexes. Queues overflow.
+- **Router**: Maps inbound messages to sessions by chat ID. Dispatches agent turns as goroutines. Enforces one-turn-at-a-time per session via per-session mutexes. Queues follow-up messages while busy, then compacts the queued slice into one follow-up turn.
 - **Runtime**: House shell. Owns transport wiring, principal/scope resolution, session locking, background loops, and assembly of concrete ports for turn execution.
 - **turn**: Owns one-turn stage order and policy for interactive, durable-child, and maintenance species.
 - **pipeline**: Owns governor/face conversational transformations (brokerage parsing, floor shaping, render/fallback contracts) consumed by turn/runtime.
@@ -98,7 +98,7 @@ type Media struct {
 
 ### Concurrency
 
-- **One turn at a time per session.** Per-session `sync.Mutex`. If a message arrives during a turn, it's buffered in a channel (cap 1, latest wins).
+- **One turn at a time per session.** Per-session `sync.Mutex`. If messages arrive during a turn, they are queued and then compacted into one follow-up input after the active turn finishes.
 - **Multiple sessions run concurrently.** Different ChatIDs don't block each other. Each turn is its own goroutine.
 - **Tool execution is sequential within a turn.** Tools run in the agent's goroutine. Sub-agents are separate (see below).
 - **Context cancellation.** Every turn gets a `context.Context` with a timeout. SIGTERM cancels all active contexts → graceful drain.
@@ -325,7 +325,8 @@ Each test should be a standalone Go test in the corresponding package.
 - **TestRouteToSession**: Inbound message with ChatID X → router creates/retrieves session X, dispatches to agent.
 - **TestSessionMutex**: Two concurrent inbound messages for the same ChatID → second blocks until first turn completes. Verify sequential execution (no interleaving).
 - **TestConcurrentSessions**: Two concurrent inbound messages for different ChatIDs → both turns run in parallel. Verify wall-clock time < 2x single turn.
-- **TestQueueOverflow**: Three messages arrive for the same ChatID while a turn is running → only the latest queued message is processed after the current turn. Earlier queued messages are dropped.
+- **TestQueueCompaction**: Multiple messages arrive for the same ChatID while a turn is running → queued messages are compacted into one follow-up input processed after the current turn.
+- **TestQueueCompactionKeepsLatestArtifactsOnly**: When queued messages include artifacts, compaction drops older queued artifacts and keeps only the newest queued artifact set.
 - **TestSessionResolution**: Messages from different ChatIDs map to different sessions. Same ChatID always maps to same session.
 
 ### agent/turn

@@ -267,7 +267,7 @@ Inside Telegram:
 - `/start` shows the intro and command help
 - `/help` shows the command list
 - `/status` reports whether the current chat is idle or working
-- `/stop` cancels the current turn and clears any queued latest message for that chat
+- `/stop` cancels the current turn and clears any queued follow-up messages for that chat
 
 Config failures now exit once with a dedicated config error and the service will not
 crash-loop. `make install-user-service`, `make update`, and `make update-release`

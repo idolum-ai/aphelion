@@ -104,6 +104,12 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 		return session.ContinuationState{}, err
 	}
 	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending {
+		return state, fmt.Errorf("continuation is not pending")
+	}
+	if state.RemainingTurns <= 0 {
+		return state, fmt.Errorf("continuation has no remaining turns")
+	}
 	state.Status = session.ContinuationStatusApproved
 	state.ApprovedBy = approverID
 	state.UpdatedAt = time.Now().UTC()
@@ -128,6 +134,7 @@ func (r *Runtime) RevokeContinuation(chatID int64) (ContinuationRevokeResult, er
 	revoked := state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
 	if revoked {
 		state.Status = session.ContinuationStatusRevoked
+		state.DecisionID = ""
 		state.RemainingTurns = 0
 		state.ApprovedBy = 0
 		state.UpdatedAt = time.Now().UTC()
@@ -168,6 +175,7 @@ func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.P
 	state.RemainingTurns--
 	if state.RemainingTurns <= 0 {
 		state.Status = session.ContinuationStatusIdle
+		state.DecisionID = ""
 		state.ApprovedBy = 0
 	}
 	state.UpdatedAt = time.Now().UTC()
@@ -419,25 +427,25 @@ func New(
 			HeartbeatMaxChars:   cfg.Memory.Semantic.HeartbeatMaxChars,
 			DailyNotesDir:       cfg.Agent.DailyNotesDir,
 		}),
-		governorBackend:     governorAuth.Backend,
-		streamEditInterval:  streamEditInterval,
-		streamCursor:        streamCursor,
-		toolProgressMode:    strings.ToLower(strings.TrimSpace(cfg.Telegram.ToolProgress)),
-		toolProgressStyle:   toolProgressStyle,
-		toolProgressWindow:  toolProgressWindow,
-		toolProgressCleanup: cfg.Telegram.ToolProgressCleanup,
-		idleExpiry:          idleExpiry,
-		expireIdle:          store.ExpireIdle,
-		staleTurnThreshold:  defaultStaleTurnThreshold,
-		staleTurnLimit:      defaultStaleTurnLimit,
-		staleTurnSweep:      store.StaleRunningTurnRuns,
+		governorBackend:          governorAuth.Backend,
+		streamEditInterval:       streamEditInterval,
+		streamCursor:             streamCursor,
+		toolProgressMode:         strings.ToLower(strings.TrimSpace(cfg.Telegram.ToolProgress)),
+		toolProgressStyle:        toolProgressStyle,
+		toolProgressWindow:       toolProgressWindow,
+		toolProgressCleanup:      cfg.Telegram.ToolProgressCleanup,
+		idleExpiry:               idleExpiry,
+		expireIdle:               store.ExpireIdle,
+		staleTurnThreshold:       defaultStaleTurnThreshold,
+		staleTurnLimit:           defaultStaleTurnLimit,
+		staleTurnSweep:           store.StaleRunningTurnRuns,
 		interruptRunningTurnRuns: store.InterruptRunningTurnRuns,
-		recipePath:          recipePath,
-		recipeState:         recipeState,
-		scopeResolver:       scopeResolver,
-		durableGroupChild:   newSandboxDurableGroupChildExecutor(cfg),
-		constitutionGate:    DefaultTurnConstitutionGate(),
-		sessionLocks:        make(map[string]*sync.Mutex),
+		recipePath:               recipePath,
+		recipeState:              recipeState,
+		scopeResolver:            scopeResolver,
+		durableGroupChild:        newSandboxDurableGroupChildExecutor(cfg),
+		constitutionGate:         DefaultTurnConstitutionGate(),
+		sessionLocks:             make(map[string]*sync.Mutex),
 	}, nil
 }
 

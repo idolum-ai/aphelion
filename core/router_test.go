@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -135,7 +136,7 @@ func TestConcurrentSessions(t *testing.T) {
 	}
 }
 
-func TestQueueOverflow(t *testing.T) {
+func TestQueueCompaction(t *testing.T) {
 	t.Parallel()
 
 	firstStarted := make(chan struct{}, 1)
@@ -179,8 +180,75 @@ func TestQueueOverflow(t *testing.T) {
 	if len(processed) != 2 {
 		t.Fatalf("expected 2 processed messages, got %d: %v", len(processed), processed)
 	}
-	if processed[0] != "first" || processed[1] != "third" {
-		t.Fatalf("expected [first third], got %v", processed)
+	if processed[0] != "first" {
+		t.Fatalf("first processed = %q, want first", processed[0])
+	}
+	if got := processed[1]; !strings.Contains(got, "Merged 2 queued follow-up messages") {
+		t.Fatalf("compacted message = %q, want merge header", got)
+	}
+	if got := processed[1]; !strings.Contains(got, "1. second") || !strings.Contains(got, "2. third") {
+		t.Fatalf("compacted message = %q, want queued texts in order", got)
+	}
+}
+
+func TestQueueCompactionKeepsLatestArtifactsOnly(t *testing.T) {
+	t.Parallel()
+
+	firstStarted := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+
+	var (
+		mu                sync.Mutex
+		secondTurnText    string
+		secondTurnMessage InboundMessage
+	)
+
+	router := NewRouter(func(_ context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+		if msg.Text == "first" {
+			firstStarted <- struct{}{}
+			<-releaseFirst
+			return &TurnResult{}, nil
+		}
+		mu.Lock()
+		secondTurnText = msg.Text
+		secondTurnMessage = msg
+		mu.Unlock()
+		return &TurnResult{}, nil
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		router.Route(context.Background(), InboundMessage{ChatID: 56, Text: "first"})
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("first message did not start")
+	}
+
+	router.Route(context.Background(), InboundMessage{
+		ChatID:    56,
+		Text:      "older queued",
+		Artifacts: []Artifact{{ID: "old-artifact", Filename: "old.txt"}},
+	})
+	router.Route(context.Background(), InboundMessage{
+		ChatID:    56,
+		Text:      "newest queued",
+		Artifacts: []Artifact{{ID: "new-artifact", Filename: "new.txt"}},
+	})
+
+	close(releaseFirst)
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(secondTurnText, "1. older queued") || !strings.Contains(secondTurnText, "2. newest queued") {
+		t.Fatalf("second turn text = %q, want compacted queue lines", secondTurnText)
+	}
+	if len(secondTurnMessage.Artifacts) != 1 || secondTurnMessage.Artifacts[0].ID != "new-artifact" {
+		t.Fatalf("second turn artifacts = %#v, want only latest queued artifacts", secondTurnMessage.Artifacts)
 	}
 }
 

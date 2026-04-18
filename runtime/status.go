@@ -50,9 +50,12 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 		return nil, err
 	}
 
-	continuation, err := r.store.ContinuationState(key)
+	continuation, exists, err := r.store.ContinuationStateIfExists(key)
 	if err != nil {
 		return nil, err
+	}
+	if !exists {
+		return lines, nil
 	}
 	continuation = session.NormalizeContinuationState(continuation)
 	if continuation.Status == session.ContinuationStatusPending || continuation.Status == session.ContinuationStatusApproved || continuation.Status == session.ContinuationStatusRevoked {
@@ -83,4 +86,3 @@ func truncateStatusDiagnostic(text string, maxRunes int) string {
 	}
 	return string(runes[:maxRunes-1]) + "…"
 }
-

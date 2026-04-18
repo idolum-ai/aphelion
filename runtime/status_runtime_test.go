@@ -67,6 +67,18 @@ func TestStatusDiagnosticsReturnsEmptyWithoutSessionHistory(t *testing.T) {
 	if len(lines) != 0 {
 		t.Fatalf("StatusDiagnostics() len = %d, want 0", len(lines))
 	}
+
+	state, exists, err := store.ContinuationStateIfExists(session.SessionKey{
+		ChatID: 9222,
+		UserID: 0,
+		Scope:  telegramDMScopeRef(9222),
+	})
+	if err != nil {
+		t.Fatalf("ContinuationStateIfExists() err = %v", err)
+	}
+	if exists {
+		t.Fatalf("ContinuationStateIfExists() = %#v, exists=%v; want no row after status probe", state, exists)
+	}
 }
 
 func TestIsTelegramAdmin(t *testing.T) {
@@ -88,4 +100,3 @@ func TestIsTelegramAdmin(t *testing.T) {
 		t.Fatal("IsTelegramAdmin(0) = true, want false")
 	}
 }
-

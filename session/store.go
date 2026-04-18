@@ -749,6 +749,21 @@ func (s *SQLiteStore) UpdateContinuationState(key SessionKey, state Continuation
 }
 
 func (s *SQLiteStore) ContinuationState(key SessionKey) (ContinuationState, error) {
+	state, exists, err := s.ContinuationStateIfExists(key)
+	if err != nil {
+		return ContinuationState{}, err
+	}
+	if exists {
+		return state, nil
+	}
+	sess, createErr := s.createEmptySession(key)
+	if createErr != nil {
+		return ContinuationState{}, createErr
+	}
+	return sess.ContinuationState, nil
+}
+
+func (s *SQLiteStore) ContinuationStateIfExists(key SessionKey) (ContinuationState, bool, error) {
 	sessionID := SessionIDForKey(key)
 	var raw sql.NullString
 	err := s.db.QueryRow(`
@@ -757,16 +772,12 @@ func (s *SQLiteStore) ContinuationState(key SessionKey) (ContinuationState, erro
 		WHERE session_id = ?
 	`, sessionID).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		sess, createErr := s.createEmptySession(key)
-		if createErr != nil {
-			return ContinuationState{}, createErr
-		}
-		return sess.ContinuationState, nil
+		return ContinuationState{}, false, nil
 	}
 	if err != nil {
-		return ContinuationState{}, fmt.Errorf("load continuation state: %w", err)
+		return ContinuationState{}, false, fmt.Errorf("load continuation state: %w", err)
 	}
-	return decodeContinuationState(raw.String), nil
+	return decodeContinuationState(raw.String), true, nil
 }
 
 func (s *SQLiteStore) UpdatePlanStateWithEvent(key SessionKey, state PlanState, kind PlanEventKind) error {
@@ -1909,6 +1920,27 @@ func (s *SQLiteStore) UpdateTurnRunProgressMessage(id int64, progressMessageID i
 	)
 	if err != nil {
 		return fmt.Errorf("update turn run progress message: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) TouchTurnRunActivity(id int64) error {
+	if id == 0 {
+		return fmt.Errorf("turn run id is required")
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE turn_runs
+		SET
+			last_activity_at = ?
+		WHERE id = ? AND status = ?
+	`,
+		time.Now().UTC().Format(time.RFC3339Nano),
+		id,
+		string(TurnRunStatusRunning),
+	)
+	if err != nil {
+		return fmt.Errorf("touch turn run activity: %w", err)
 	}
 	return nil
 }

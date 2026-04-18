@@ -158,6 +158,7 @@ const (
 type TurnAuthorizationState struct {
 	Kind           TurnAuthorizationKind   `json:"kind,omitempty"`
 	Status         TurnAuthorizationStatus `json:"status,omitempty"`
+	DecisionID     string                  `json:"decision_id,omitempty"`
 	Objective      string                  `json:"objective,omitempty"`
 	StageSummary   string                  `json:"stage_summary,omitempty"`
 	RemainingTurns int                     `json:"remaining_turns,omitempty"`
@@ -506,9 +507,10 @@ func (s OperationState) Active() bool {
 func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthorizationState {
 	state.Kind = TurnAuthorizationKind(strings.TrimSpace(string(state.Kind)))
 	state.Status = TurnAuthorizationStatus(strings.TrimSpace(string(state.Status)))
+	state.DecisionID = strings.TrimSpace(state.DecisionID)
 	state.Objective = strings.TrimSpace(state.Objective)
 	state.StageSummary = strings.TrimSpace(state.StageSummary)
-	if state.Kind == "" && (state.Status != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
+	if state.Kind == "" && (state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
 		state.Kind = TurnAuthorizationKindContinuation
 	}
 	if state.RemainingTurns < 0 {
@@ -516,8 +518,9 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	}
 	if state.Status == TurnAuthorizationStatusIdle || state.Status == TurnAuthorizationStatusRevoked {
 		state.ApprovedBy = 0
+		state.DecisionID = ""
 	}
-	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
+	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state

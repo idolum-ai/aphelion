@@ -88,6 +88,15 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if state.StageSummary != "Summarize the actual next-step plan in the continuation prompt" {
 		t.Fatalf("stage summary = %q, want in-progress plan step", state.StageSummary)
 	}
+	if strings.TrimSpace(state.DecisionID) == "" {
+		t.Fatal("DecisionID empty, want persisted continuation decision id")
+	}
+	if got := sender.inline[0].rows[0][0].CallbackData; !strings.Contains(got, state.DecisionID) {
+		t.Fatalf("stop callback = %q, want decision id %q", got, state.DecisionID)
+	}
+	if got := sender.inline[0].rows[0][1].CallbackData; !strings.Contains(got, state.DecisionID) {
+		t.Fatalf("continue callback = %q, want decision id %q", got, state.DecisionID)
+	}
 }
 
 func TestApproveContinuationPersistsApproverIdentity(t *testing.T) {
@@ -116,6 +125,30 @@ func TestApproveContinuationPersistsApproverIdentity(t *testing.T) {
 	}
 	if got.ApprovedBy != 1002 {
 		t.Fatalf("persisted ApprovedBy = %d, want 1002", got.ApprovedBy)
+	}
+}
+
+func TestApproveContinuationRejectsNonPendingState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8106, UserID: 0, Scope: telegramDMScopeRef(8106)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "decision",
+		RemainingTurns: 1,
+		ApprovedBy:     1002,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	_, err = rt.ApproveContinuation(8106, 1001)
+	if err == nil || !strings.Contains(err.Error(), "not pending") {
+		t.Fatalf("ApproveContinuation() err = %v, want not pending error", err)
 	}
 }
 

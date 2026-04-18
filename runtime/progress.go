@@ -8,12 +8,15 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 )
+
+var turnRunActivityHeartbeatInterval = 30 * time.Second
 
 type messageEditor interface {
 	EditMessageText(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
@@ -52,11 +55,12 @@ func (o *observedToolRegistry) Execute(ctx context.Context, name string, input j
 }
 
 type turnMonitor struct {
-	runtime  *Runtime
-	key      session.SessionKey
-	runID    int64
-	progress *toolProgressReporter
-	audit    *turnAuditRecorder
+	runtime                  *Runtime
+	key                      session.SessionKey
+	runID                    int64
+	progress                 *toolProgressReporter
+	audit                    *turnAuditRecorder
+	stopRunActivityHeartbeat context.CancelFunc
 }
 
 func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunKind, requestText string, progress *toolProgressReporter, audit *turnAuditRecorder) *turnMonitor {
@@ -80,6 +84,7 @@ func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunK
 			}
 		}
 	}
+	monitor.startRunActivityHeartbeat()
 	return monitor
 }
 
@@ -124,9 +129,35 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	}
 }
 
+func (m *turnMonitor) startRunActivityHeartbeat() {
+	if m == nil || m.runtime == nil || m.runID == 0 {
+		return
+	}
+	interval := turnRunActivityHeartbeatInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	heartbeatCtx, cancel := context.WithCancel(context.Background())
+	m.stopRunActivityHeartbeat = cancel
+	go runPeriodic(heartbeatCtx, interval, func(runCtx context.Context) {
+		select {
+		case <-runCtx.Done():
+			return
+		default:
+		}
+		if err := m.runtime.store.TouchTurnRunActivity(m.runID); err != nil {
+			log.Printf("WARN touch turn run activity id=%d err=%v", m.runID, err)
+		}
+	})
+}
+
 func (m *turnMonitor) Finish(ctx context.Context, turnErr error) {
 	if m.progress != nil {
 		m.progress.Finish(ctx)
+	}
+	if m.stopRunActivityHeartbeat != nil {
+		m.stopRunActivityHeartbeat()
+		m.stopRunActivityHeartbeat = nil
 	}
 	if m.runID == 0 {
 		return

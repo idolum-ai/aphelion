@@ -26,9 +26,11 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	planState, _ := r.store.PlanState(key)
 	operationState, _ := r.store.OperationState(key)
 	objective, nextStep := summarizeContinuationPlan(planState, operationState, promptInput)
+	decisionID := newContinuationDecisionID()
 	state := session.ContinuationState{
 		Kind:           session.TurnAuthorizationKindContinuation,
 		Status:         session.ContinuationStatusPending,
+		DecisionID:     decisionID,
 		Objective:      objective,
 		StageSummary:   nextStep,
 		RemainingTurns: 1,
@@ -37,7 +39,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return fmt.Errorf("persist continuation state: %w", err)
 	}
-	_, err := sender.SendInlineKeyboard(ctx, msg.ChatID, renderContinuationPrompt(state), continuationApprovalButtonRows(), nil)
+	_, err := sender.SendInlineKeyboard(ctx, msg.ChatID, renderContinuationPrompt(state), continuationApprovalButtonRows(decisionID), nil)
 	if err != nil {
 		return fmt.Errorf("send continuation approval: %w", err)
 	}
@@ -111,9 +113,22 @@ func renderContinuationPrompt(state session.ContinuationState) string {
 	return strings.Join(lines, "\n")
 }
 
-func continuationApprovalButtonRows() [][]telegram.InlineButton {
+func continuationApprovalButtonRows(decisionID string) [][]telegram.InlineButton {
 	return [][]telegram.InlineButton{{
-		{Text: "Stop", CallbackData: "continuation:stop"},
-		{Text: "Continue", CallbackData: "continuation:approve"},
+		{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, "stop")},
+		{Text: "Continue", CallbackData: encodeContinuationCallbackData(decisionID, "approve")},
 	}}
+}
+
+func newContinuationDecisionID() string {
+	return fmt.Sprintf("%x", time.Now().UTC().UnixNano())
+}
+
+func encodeContinuationCallbackData(decisionID string, action string) string {
+	decisionID = strings.TrimSpace(decisionID)
+	action = strings.TrimSpace(action)
+	if decisionID == "" {
+		return "continuation:" + action
+	}
+	return "continuation:" + decisionID + ":" + action
 }

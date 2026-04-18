@@ -17,7 +17,7 @@ import (
 const (
 	defaultInterruptTimeout         = 30 * time.Second
 	defaultStopWordTimeout          = 15 * time.Second
-	defaultExecApprovalTimeout      = decision.WaitIndefinitely
+	defaultExecApprovalTimeout      = 30 * time.Second
 	defaultArtifactRetentionTimeout = 45 * time.Second
 )
 

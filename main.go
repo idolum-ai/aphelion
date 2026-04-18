@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	turnTimeout     = 0 * time.Minute
+	turnTimeout     = 10 * time.Minute
 	exitCodeFailure = 1
 	exitCodeConfig  = 78
 	restartExitWait = 250 * time.Millisecond
@@ -102,6 +102,13 @@ func (c telegramCommandControl) Status(chatID int64) core.SessionStatus {
 	return status
 }
 
+func (c telegramCommandControl) ContinuationState(chatID int64) (session.ContinuationState, error) {
+	if c.rt == nil {
+		return session.ContinuationState{}, nil
+	}
+	return c.rt.ContinuationState(chatID)
+}
+
 func (c telegramCommandControl) CanRestart(senderID int64) bool {
 	if c.rt != nil {
 		return c.rt.IsTelegramAdmin(senderID)
@@ -126,7 +133,18 @@ func (c telegramCommandControl) StopContinuation(chatID int64) (core.StopResult,
 }
 
 func (c telegramCommandControl) TriggerContinuation(ctx context.Context, chatID int64) error {
-	return c.rt.TriggerContinuation(ctx, chatID)
+	_ = ctx
+	if c.rt == nil {
+		return nil
+	}
+	go func() {
+		triggerCtx, cancel := newTurnContext(context.Background(), turnTimeout)
+		defer cancel()
+		if err := c.rt.TriggerContinuation(triggerCtx, chatID); err != nil {
+			log.Printf("WARN trigger continuation failed chat_id=%d err=%v", chatID, err)
+		}
+	}()
+	return nil
 }
 
 func (c telegramCommandControl) QueueReinstall(ctx context.Context, msg core.InboundMessage) error {

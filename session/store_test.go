@@ -1805,6 +1805,83 @@ func TestStaleRunningTurnRuns(t *testing.T) {
 	}
 }
 
+func TestTouchTurnRunActivity(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 906, UserID: 0}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, TurnRunKindInteractive, "long running turn")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	before, err := store.LatestTurnRun(key)
+	if err != nil {
+		t.Fatalf("LatestTurnRun(before) err = %v", err)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	if err := store.TouchTurnRunActivity(run.ID); err != nil {
+		t.Fatalf("TouchTurnRunActivity() err = %v", err)
+	}
+	after, err := store.LatestTurnRun(key)
+	if err != nil {
+		t.Fatalf("LatestTurnRun(after) err = %v", err)
+	}
+	if !after.LastActivityAt.After(before.LastActivityAt) {
+		t.Fatalf("last_activity_at = %s, want > %s", after.LastActivityAt.Format(time.RFC3339Nano), before.LastActivityAt.Format(time.RFC3339Nano))
+	}
+
+	if err := store.CompleteTurnRun(run.ID, TurnRunStatusCompleted, ""); err != nil {
+		t.Fatalf("CompleteTurnRun() err = %v", err)
+	}
+	completed, err := store.LatestTurnRun(key)
+	if err != nil {
+		t.Fatalf("LatestTurnRun(completed) err = %v", err)
+	}
+	lastActivity := completed.LastActivityAt
+
+	time.Sleep(2 * time.Millisecond)
+	if err := store.TouchTurnRunActivity(run.ID); err != nil {
+		t.Fatalf("TouchTurnRunActivity(completed) err = %v", err)
+	}
+	completedAfterTouch, err := store.LatestTurnRun(key)
+	if err != nil {
+		t.Fatalf("LatestTurnRun(completedAfterTouch) err = %v", err)
+	}
+	if !completedAfterTouch.LastActivityAt.Equal(lastActivity) {
+		t.Fatalf("completed last_activity_at changed from %s to %s; expected unchanged for non-running turns", lastActivity.Format(time.RFC3339Nano), completedAfterTouch.LastActivityAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestContinuationStateIfExistsDoesNotCreateSession(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1906, UserID: 0}
+	state, exists, err := store.ContinuationStateIfExists(key)
+	if err != nil {
+		t.Fatalf("ContinuationStateIfExists() err = %v", err)
+	}
+	if exists {
+		t.Fatalf("ContinuationStateIfExists() = %#v, exists=%v; want no pre-existing continuation state", state, exists)
+	}
+
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(1) FROM sessions WHERE session_id = ?`, SessionIDForKey(key)).Scan(&count); err != nil {
+		t.Fatalf("query sessions count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("sessions row count = %d, want 0", count)
+	}
+}
+
 func TestCompleteTurnRun(t *testing.T) {
 	t.Parallel()
 

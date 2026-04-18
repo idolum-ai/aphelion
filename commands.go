@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -28,6 +29,7 @@ type commandRouter interface {
 	Restart(chatID int64) error
 	CanRestart(senderID int64) bool
 	Status(chatID int64) core.SessionStatus
+	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
 	TriggerContinuation(ctx context.Context, chatID int64) error
@@ -57,6 +59,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 
 const recipeCallbackPrefix = "recipe:"
 const continuationCallbackPrefix = "continuation:"
+const staleContinuationCallbackText = "This continuation prompt is no longer active. Use the newest prompt."
 
 func registerTelegramCommands(ctx context.Context, client *telegram.Client) error {
 	if client == nil {
@@ -168,17 +171,29 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if sender == nil || router == nil {
 		return false, nil
 	}
-	if action, ok := decodeContinuationCallbackData(cb.Data); ok {
-		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil {
-			if !telegram.IsStaleCallbackQueryError(err) {
-				return true, err
-			}
-		}
+	if decisionID, action, ok := decodeContinuationCallbackData(cb.Data); ok {
 		chatID := int64(0)
 		messageID := int64(0)
 		if cb.Message != nil && cb.Message.Chat != nil {
 			chatID = cb.Message.Chat.ID
 			messageID = cb.Message.MessageID
+		}
+		state, err := router.ContinuationState(chatID)
+		if err != nil {
+			return true, err
+		}
+		if !continuationCallbackMatchesState(state, decisionID, action) {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleContinuationCallbackText); err != nil {
+				if !telegram.IsStaleCallbackQueryError(err) {
+					return true, err
+				}
+			}
+			return true, nil
+		}
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil {
+			if !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
 		}
 		var text string
 		switch action {
@@ -191,14 +206,14 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			if err != nil {
 				return true, err
 			}
+			if err := router.TriggerContinuation(ctx, chatID); err != nil {
+				return true, err
+			}
 			text = renderContinuationDecision(state, true)
 			if messageID != 0 {
 				if err := sender.EditMessageText(ctx, chatID, messageID, text, ""); err != nil {
-					return true, err
+					log.Printf("WARN continuation approve message update failed chat_id=%d message_id=%d err=%v", chatID, messageID, err)
 				}
-			}
-			if err := router.TriggerContinuation(ctx, chatID); err != nil {
-				return true, err
 			}
 			return true, nil
 		case "stop":
@@ -309,25 +324,63 @@ func decodeRecipeCallbackData(data string) (kind string, value string, ok bool) 
 
 func continuationApprovalRows() [][]telegram.InlineButton {
 	return [][]telegram.InlineButton{{
-		{Text: "Stop", CallbackData: encodeContinuationCallbackData("stop")},
-		{Text: "Continue", CallbackData: encodeContinuationCallbackData("approve")},
+		{Text: "Stop", CallbackData: encodeContinuationCallbackData("decision", "stop")},
+		{Text: "Continue", CallbackData: encodeContinuationCallbackData("decision", "approve")},
 	}}
 }
 
-func encodeContinuationCallbackData(action string) string {
-	return continuationCallbackPrefix + strings.TrimSpace(action)
+func encodeContinuationCallbackData(decisionID string, action string) string {
+	decisionID = strings.TrimSpace(decisionID)
+	action = strings.TrimSpace(action)
+	if decisionID == "" {
+		return continuationCallbackPrefix + action
+	}
+	return continuationCallbackPrefix + decisionID + ":" + action
 }
 
-func decodeContinuationCallbackData(data string) (string, bool) {
+func decodeContinuationCallbackData(data string) (decisionID string, action string, ok bool) {
 	trimmed := strings.TrimSpace(data)
 	if !strings.HasPrefix(trimmed, continuationCallbackPrefix) {
-		return "", false
+		return "", "", false
 	}
-	action := strings.TrimSpace(strings.TrimPrefix(trimmed, continuationCallbackPrefix))
-	if action == "" {
-		return "", false
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, continuationCallbackPrefix))
+	if payload == "" {
+		return "", "", false
 	}
-	return action, true
+	parts := strings.SplitN(payload, ":", 2)
+	if len(parts) == 1 {
+		action = strings.TrimSpace(parts[0])
+		if action == "" {
+			return "", "", false
+		}
+		return "", action, true
+	}
+	decisionID = strings.TrimSpace(parts[0])
+	action = strings.TrimSpace(parts[1])
+	if decisionID == "" || action == "" {
+		return "", "", false
+	}
+	return decisionID, action, true
+}
+
+func continuationCallbackMatchesState(state session.ContinuationState, decisionID string, action string) bool {
+	state = session.NormalizeContinuationState(state)
+	decisionID = strings.TrimSpace(decisionID)
+	action = strings.TrimSpace(action)
+	if decisionID == "" || state.DecisionID == "" {
+		return false
+	}
+	if decisionID != state.DecisionID {
+		return false
+	}
+	switch action {
+	case "approve":
+		return state.Status == session.ContinuationStatusPending && state.RemainingTurns > 0
+	case "stop":
+		return state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
+	default:
+		return false
+	}
 }
 
 func renderContinuationDecision(state session.ContinuationState, approved bool) string {

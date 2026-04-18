@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ type stubCommandSender struct {
 	msgs      []core.OutboundMessage
 	inline    []stubInlineCall
 	edits     []stubEditCall
+	editErr   error
 	answers   []stubAnswerCall
 	answerErr error
 }
@@ -61,7 +63,7 @@ func (s *stubCommandSender) EditMessageText(_ context.Context, chatID int64, mes
 		text:      text,
 		parseMode: parseMode,
 	})
-	return nil
+	return s.editErr
 }
 
 func (s *stubCommandSender) AnswerCallbackQuery(_ context.Context, id string, text string) error {
@@ -90,6 +92,8 @@ type stubCommandRouter struct {
 	setPersonaModelErr          error
 	setGovernorEffortErr        error
 	continuationState           session.ContinuationState
+	continuationStateInput      int64
+	continuationStateErr        error
 	approveContinuationInput    int64
 	approveContinuationApprover int64
 	stopContinuationInput       int64
@@ -120,13 +124,28 @@ func (s stubCommandRouter) CurrentEfforts() (string, string) {
 	return s.personaEffort, s.governorEffort
 }
 
+func (s *stubCommandRouter) ContinuationState(chatID int64) (session.ContinuationState, error) {
+	s.continuationStateInput = chatID
+	if s.continuationStateErr != nil {
+		return session.ContinuationState{}, s.continuationStateErr
+	}
+	return s.continuationState, nil
+}
+
 func (s *stubCommandRouter) ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error) {
 	s.approveContinuationInput = chatID
 	s.approveContinuationApprover = approverID
 	if s.continuationState.Status == "" {
-		s.continuationState = session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, StageSummary: "Resume the next bounded step.", ApprovedBy: approverID}
+		s.continuationState = session.ContinuationState{
+			Status:         session.ContinuationStatusApproved,
+			DecisionID:     "decision",
+			RemainingTurns: 1,
+			StageSummary:   "Resume the next bounded step.",
+			ApprovedBy:     approverID,
+		}
 	} else {
 		s.continuationState.ApprovedBy = approverID
+		s.continuationState.Status = session.ContinuationStatusApproved
 	}
 	return s.continuationState, nil
 }
@@ -462,11 +481,16 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := stubCommandRouter{continuationState: session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, StageSummary: "Resume the next bounded step."}}
+	router := stubCommandRouter{continuationState: session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-1",
+		RemainingTurns: 1,
+		StageSummary:   "Resume the next bounded step.",
+	}}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-continue",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
-		Data:    encodeContinuationCallbackData("approve"),
+		Data:    encodeContinuationCallbackData("decision-1", "approve"),
 		Message: &telegram.Message{MessageID: 93, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
 	if err != nil {
@@ -480,6 +504,39 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	}
 	if router.approveContinuationApprover != 1002 {
 		t.Fatalf("approveContinuationApprover = %d, want 1002", router.approveContinuationApprover)
+	}
+	if router.triggerContinuationInput != 7 {
+		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
+	}
+	if router.continuationStateInput != 7 {
+		t.Fatalf("continuationStateInput = %d, want 7", router.continuationStateInput)
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationApproveContinuesWhenEditFails(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{editErr: errors.New("telegram editMessageText failed: message is not modified")}
+	router := stubCommandRouter{continuationState: session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-2",
+		RemainingTurns: 1,
+		StageSummary:   "Resume the next bounded step.",
+	}}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-continue-edit-fail",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-2", "approve"),
+		Message: &telegram.Message{MessageID: 193, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
 	}
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
@@ -500,10 +557,13 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersCombinedStopResult(
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := stubCommandRouter{stopContinuationResult: core.StopResult{ContinuationRevoked: true}}
+	router := stubCommandRouter{
+		continuationState:      session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "decision-3", RemainingTurns: 1},
+		stopContinuationResult: core.StopResult{ContinuationRevoked: true},
+	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-stop",
-		Data:    encodeContinuationCallbackData("stop"),
+		Data:    encodeContinuationCallbackData("decision-3", "stop"),
 		Message: &telegram.Message{MessageID: 94, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
 	if err != nil {
@@ -527,10 +587,13 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersNoOpStopResult(t *t
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := stubCommandRouter{stopContinuationResult: core.StopResult{}}
+	router := stubCommandRouter{
+		continuationState:      session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "decision-4", RemainingTurns: 1},
+		stopContinuationResult: core.StopResult{},
+	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-stop-none",
-		Data:    encodeContinuationCallbackData("stop"),
+		Data:    encodeContinuationCallbackData("decision-4", "stop"),
 		Message: &telegram.Message{MessageID: 95, Chat: &telegram.Chat{ID: 7, Type: "private"}},
 	})
 	if err != nil {
@@ -544,6 +607,46 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersNoOpStopResult(t *t
 	}
 	if sender.edits[0].text != "Continuation approval was already inactive for this chat." {
 		t.Fatalf("edit text = %q, want inactive continuation text", sender.edits[0].text)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationRejectsStaleDecisionID(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		continuationState: session.ContinuationState{
+			Status:         session.ContinuationStatusPending,
+			DecisionID:     "decision-current",
+			RemainingTurns: 1,
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-stale",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-old", "approve"),
+		Message: &telegram.Message{MessageID: 196, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 0 {
+		t.Fatalf("approveContinuationInput = %d, want 0 for stale callback", router.approveContinuationInput)
+	}
+	if router.triggerContinuationInput != 0 {
+		t.Fatalf("triggerContinuationInput = %d, want 0 for stale callback", router.triggerContinuationInput)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if sender.answers[0].text != staleContinuationCallbackText {
+		t.Fatalf("answer text = %q, want stale callback warning", sender.answers[0].text)
+	}
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 for stale callback", len(sender.edits))
 	}
 }
 
