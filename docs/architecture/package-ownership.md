@@ -7,6 +7,7 @@
 `runtime` is the house shell.
 
 - Owns transport ingress/egress, principal/scope/session wiring, and long-lived loops.
+- Owns pre-turn shell handoff into species assemblers.
 - Adapts concrete ports into `turn.Machine`.
 - Does not own one-turn stage ordering.
 
@@ -14,6 +15,8 @@ Code anchors:
 
 - [`runtime/runtime.go`](../../runtime/runtime.go)
 - [`runtime/turn.go`](../../runtime/turn.go)
+- [`runtime/interactive_dm_turn.go`](../../runtime/interactive_dm_turn.go)
+- [`runtime/interactive_like_assembly.go`](../../runtime/interactive_like_assembly.go)
 - [`runtime/maintenance_turn.go`](../../runtime/maintenance_turn.go)
 - [`runtime/durable_group.go`](../../runtime/durable_group.go)
 
@@ -59,4 +62,3 @@ Related requirements:
 - [`requirements/core.md`](../../requirements/core.md)
 - [`requirements/governor.md`](../../requirements/governor.md)
 - [`requirements/turn-pipeline-refactor.md`](../../requirements/turn-pipeline-refactor.md)
-
