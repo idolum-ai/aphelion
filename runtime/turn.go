@@ -92,13 +92,14 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 
 	sess.ChatType = "dm"
 	sess.UserName = msg.SenderName
+	turnState := newInteractiveTurnState(sess)
 	coordinator := &interactiveTurnCoordinator{
 		runtime:               r,
 		actor:                 actor,
 		scope:                 scope,
 		msg:                   msg,
 		key:                   key,
-		sess:                  sess,
+		state:                 turnState,
 		prepared:              prepared,
 		exec:                  exec,
 		facePolicy:            facePolicy,
@@ -117,11 +118,12 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 	machine.Governor = coordinator
 	machine.Face = coordinator
 	machine.Persistence = &turnPersistencePort{
-		runtime: r,
-		key:     key,
-		sess:    sess,
-		msg:     msg,
-		actor:   actor,
+		runtime:      r,
+		key:          key,
+		sess:         sess,
+		sessionState: turnState,
+		msg:          msg,
+		actor:        actor,
 		errCtx: turnCommitErrorContext{
 			ConvertMessages: "convert new messages",
 			LoadPlanState:   "load plan state before save",
@@ -135,6 +137,7 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 		runtime:         r,
 		key:             key,
 		sess:            sess,
+		sessionState:    turnState,
 		msg:             msg,
 		inboundWasVoice: prepared.InboundWasVoice,
 		deliver:         true,
@@ -143,26 +146,35 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 		sendErrCtx:      "send outbound reply",
 		recordErrCtx:    "record outbound reply",
 		hooks: turnCommitHooks{
-			QueueReviewEvents: func() error {
+			QueueReviewEvents: func(result *turn.Result) error {
 				if !shouldGenerateReviewEvent(actor, key) {
 					return nil
 				}
+				turnSess := turnState.session()
+				if turnSess == nil {
+					return fmt.Errorf("queue review events: turn session unavailable")
+				}
+				sceneText, toolLog := interactiveReviewEventPayload(result)
 				return r.enqueueReviewEventsForTurn(
 					actor,
 					msg,
-					sess.TurnCount,
+					turnSess.TurnCount,
 					prepared.LedgerText,
-					strings.TrimSpace(coordinator.lastRenderedReply),
-					coordinator.getTurnToolLog(),
+					sceneText,
+					toolLog,
 				)
 			},
-			DeliverReviewEvents: func() error {
+			DeliverReviewEvents: func(*turn.Result) error {
 				if actor.Role != principal.RoleAdmin {
 					return nil
 				}
-				return r.deliverReviewEvents(ctx, key, sess)
+				turnSess := turnState.session()
+				if turnSess == nil {
+					return fmt.Errorf("deliver review events: turn session unavailable")
+				}
+				return r.deliverReviewEvents(ctx, key, turnSess)
 			},
-			PostReplyContinuationUI: func(postCtx context.Context) error {
+			PostReplyContinuationUI: func(postCtx context.Context, _ *turn.Result) error {
 				return r.offerContinuationApproval(postCtx, key, msg, prepared.LedgerText)
 			},
 		},

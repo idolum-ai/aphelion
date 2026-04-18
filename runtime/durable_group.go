@@ -223,8 +223,12 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		sendErrCtx:      "send durable group reply",
 		recordErrCtx:    "record durable group outbound reply",
 		hooks: turnCommitHooks{
-			QueueDurableArtifact: func() error {
-				artifact := durableGroupReviewArtifact(registered, livePolicy, msg, coordinator.lastRenderedReply)
+			QueueDurableArtifact: func(result *turn.Result) error {
+				replyText := ""
+				if result != nil {
+					replyText = strings.TrimSpace(result.VisibleReply)
+				}
+				artifact := durableGroupReviewArtifact(registered, livePolicy, msg, replyText)
 				if artifact == nil {
 					return nil
 				}

@@ -44,7 +44,6 @@ type durableGroupTurnCoordinator struct {
 	allowStream           bool
 	lastGovernor          *turn.GovernorResult
 	lastFaceAwareness     prompt.RuntimeAwareness
-	lastRenderedReply     string
 }
 
 func (c *durableGroupTurnCoordinator) Propose(ctx context.Context, req turn.FaceProposalRequest) (*turn.FaceProposalResult, error) {
@@ -130,7 +129,6 @@ func (c *durableGroupTurnCoordinator) Render(ctx context.Context, req turn.FaceR
 	if c.lastGovernor == nil || c.lastGovernor.Turn == nil {
 		return &turn.FaceRenderResult{}, nil
 	}
-	c.lastRenderedReply = strings.TrimSpace(rendered.ReplyText)
 	return &turn.FaceRenderResult{
 		Text:         strings.TrimSpace(rendered.ReplyText),
 		Usage:        rendered.Usage,
