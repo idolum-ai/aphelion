@@ -170,3 +170,49 @@ func TestApplyBrokerageAwarenessSummarizesContracts(t *testing.T) {
 		t.Fatalf("RatifiedExecutionContract = %q, want empty", got)
 	}
 }
+
+func TestApplyContinuationAwarenessCopiesHandshakeSignals(t *testing.T) {
+	base := prompt.RuntimeAwareness{
+		ContinuationPersonaIntent: "old",
+		ContinuationGovernorWhy:   "old",
+	}
+	state := session.ContinuationState{
+		Status: session.ContinuationStatusPending,
+		PersonaIntent: session.ContinuationIntent{
+			Decision:  session.ContinuationIntentDecisionContinue,
+			Rationale: "persona sees a concrete next step",
+		},
+		GovernorIntent: session.ContinuationIntent{
+			Decision:  session.ContinuationIntentDecisionContinue,
+			Rationale: "governor ratified the active plan",
+			Ratified:  true,
+		},
+		HandshakeBlockedReason: " ",
+	}
+
+	aw := ApplyContinuationAwareness(base, state)
+	if got, want := aw.ContinuationStatus, "pending"; got != want {
+		t.Fatalf("ContinuationStatus = %q, want %q", got, want)
+	}
+	if !aw.ContinuationActive {
+		t.Fatal("ContinuationActive = false, want true")
+	}
+	if got, want := aw.ContinuationPersonaIntent, "continue"; got != want {
+		t.Fatalf("ContinuationPersonaIntent = %q, want %q", got, want)
+	}
+	if got, want := aw.ContinuationPersonaWhy, "persona sees a concrete next step"; got != want {
+		t.Fatalf("ContinuationPersonaWhy = %q, want %q", got, want)
+	}
+	if got, want := aw.ContinuationGovernorIntent, "continue"; got != want {
+		t.Fatalf("ContinuationGovernorIntent = %q, want %q", got, want)
+	}
+	if got, want := aw.ContinuationGovernorWhy, "governor ratified the active plan"; got != want {
+		t.Fatalf("ContinuationGovernorWhy = %q, want %q", got, want)
+	}
+	if !aw.ContinuationRatified {
+		t.Fatal("ContinuationRatified = false, want true")
+	}
+	if got := aw.ContinuationBlockedReason; got != "" {
+		t.Fatalf("ContinuationBlockedReason = %q, want empty", got)
+	}
+}

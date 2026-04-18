@@ -95,6 +95,13 @@ When a turn offers continuation approval, an inline prompt is shown with:
 - `Stop`
 - `Continue`
 
+Offer conditions:
+
+- Persona must publish explicit continuation intent (`continue|hold|stop`) plus rationale.
+- Governor must publish explicit continuation intent (`continue|hold|stop`) plus rationale and ratification signal.
+- Prompt is shown only when both intents are `continue`, both rationales are non-empty, and governor is ratified.
+- When handshake fails, continuation state is persisted as idle with an explicit blocked reason (for machine visibility) and no prompt is shown.
+
 ### Runtime decision prompts
 
 Decision prompts are shown with inline buttons. Depending on context, users can see:

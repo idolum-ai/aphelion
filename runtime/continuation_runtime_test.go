@@ -20,6 +20,7 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "grounded reply"
 	provider.faceReplyText = "visible scene"
+	provider.proposalReplyText = "Continue now because the scoped plan is actively in progress."
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -69,6 +70,21 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if !strings.Contains(sender.inline[0].text, "Summarize the actual next-step plan in the continuation prompt") {
 		t.Fatalf("inline text = %q, want in-progress plan step as next action", sender.inline[0].text)
 	}
+	if !strings.Contains(sender.inline[0].text, "Persona rationale:") {
+		t.Fatalf("inline text = %q, want persona rationale block", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "Persona intent:") {
+		t.Fatalf("inline text = %q, want persona intent block", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "Continue now because the scoped plan is actively in progress.") {
+		t.Fatalf("inline text = %q, want proposal rationale summary", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "Governor rationale:") {
+		t.Fatalf("inline text = %q, want governor rationale block", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "Governor intent:") {
+		t.Fatalf("inline text = %q, want governor intent block", sender.inline[0].text)
+	}
 	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {
 		t.Fatalf("rows = %#v, want Stop/Continue row", sender.inline[0].rows)
 	}
@@ -91,11 +107,147 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if strings.TrimSpace(state.DecisionID) == "" {
 		t.Fatal("DecisionID empty, want persisted continuation decision id")
 	}
+	if state.PersonaIntent.Decision != session.ContinuationIntentDecisionContinue {
+		t.Fatalf("persona decision = %q, want continue", state.PersonaIntent.Decision)
+	}
+	if strings.TrimSpace(state.PersonaIntent.Rationale) == "" {
+		t.Fatal("persona rationale empty, want persisted rationale")
+	}
+	if state.GovernorIntent.Decision != session.ContinuationIntentDecisionContinue {
+		t.Fatalf("governor decision = %q, want continue", state.GovernorIntent.Decision)
+	}
+	if !state.GovernorIntent.Ratified {
+		t.Fatal("governor ratified = false, want true")
+	}
+	if state.HandshakeBlockedReason != "" {
+		t.Fatalf("handshake blocked reason = %q, want empty", state.HandshakeBlockedReason)
+	}
 	if got := sender.inline[0].rows[0][0].CallbackData; !strings.Contains(got, state.DecisionID) {
 		t.Fatalf("stop callback = %q, want decision id %q", got, state.DecisionID)
 	}
 	if got := sender.inline[0].rows[0][1].CallbackData; !strings.Contains(got, state.DecisionID) {
 		t.Fatalf("continue callback = %q, want decision id %q", got, state.DecisionID)
+	}
+}
+
+func TestHandleInboundSkipsContinuationWhenPersonaRationaleMissing(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "grounded reply"
+	provider.faceReplyText = "visible scene"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8111, UserID: 0, Scope: telegramDMScopeRef(8111)}
+	if err := store.UpdatePlanState(key, session.PlanState{
+		Explanation: "Keep moving.",
+		Steps: []session.PlanStep{
+			{Step: "Ship the remaining tests", Status: session.PlanStatusInProgress},
+		},
+	}); err != nil {
+		t.Fatalf("UpdatePlanState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		Objective: "Finalize continuation behavior.",
+		Proposal: session.OperationProposal{
+			Summary: "Only ask for continuation when rationale is clear.",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "stale-persona",
+		RemainingTurns: 1,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8111, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 0 {
+		t.Fatalf("inline count = %d, want 0 without persona rationale", len(sender.inline))
+	}
+
+	state, err := store.ContinuationState(session.SessionKey{ChatID: 8111, UserID: 0})
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusIdle {
+		t.Fatalf("status = %q, want idle when clearing stale pending continuation", state.Status)
+	}
+	if state.DecisionID != "" {
+		t.Fatalf("decision id = %q, want cleared", state.DecisionID)
+	}
+	if state.PersonaIntent.Decision != session.ContinuationIntentDecisionHold {
+		t.Fatalf("persona decision = %q, want hold", state.PersonaIntent.Decision)
+	}
+	if state.HandshakeBlockedReason != "persona_rationale_missing" {
+		t.Fatalf("handshake blocked reason = %q, want persona_rationale_missing", state.HandshakeBlockedReason)
+	}
+}
+
+func TestHandleInboundSkipsContinuationWhenGovernorRationaleMissing(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "grounded reply"
+	provider.faceReplyText = "visible scene"
+	provider.proposalReplyText = "I should continue because there is a concrete next step."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8112, UserID: 0, Scope: telegramDMScopeRef(8112)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "stale-governor",
+		RemainingTurns: 1,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8112, SenderID: 1001, SenderName: "admin", Text: "hello", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 0 {
+		t.Fatalf("inline count = %d, want 0 without governor rationale", len(sender.inline))
+	}
+
+	state, err := store.ContinuationState(session.SessionKey{ChatID: 8112, UserID: 0})
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusIdle {
+		t.Fatalf("status = %q, want idle when clearing stale pending continuation", state.Status)
+	}
+	if state.DecisionID != "" {
+		t.Fatalf("decision id = %q, want cleared", state.DecisionID)
+	}
+	if state.GovernorIntent.Decision != session.ContinuationIntentDecisionHold {
+		t.Fatalf("governor decision = %q, want hold", state.GovernorIntent.Decision)
+	}
+	if state.HandshakeBlockedReason != "governor_rationale_missing" {
+		t.Fatalf("handshake blocked reason = %q, want governor_rationale_missing", state.HandshakeBlockedReason)
 	}
 }
 
@@ -181,11 +333,14 @@ func TestTriggerContinuationRunsAsApprovedUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if got.Status != session.ContinuationStatusPending {
-		t.Fatalf("status = %q, want pending after the new continuation offer", got.Status)
+	if got.Status != session.ContinuationStatusIdle {
+		t.Fatalf("status = %q, want idle when continuation consensus is missing", got.Status)
 	}
 	if got.ApprovedBy != 0 {
-		t.Fatalf("ApprovedBy = %d, want cleared before the new pending offer", got.ApprovedBy)
+		t.Fatalf("ApprovedBy = %d, want cleared after approved continuation turn", got.ApprovedBy)
+	}
+	if got.HandshakeBlockedReason == "" {
+		t.Fatal("HandshakeBlockedReason empty, want explicit reason when continuation is not offered again")
 	}
 }
 

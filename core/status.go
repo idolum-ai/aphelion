@@ -37,12 +37,16 @@ type TurnRunStatusSnapshot struct {
 }
 
 type ContinuationStatusSnapshot struct {
-	ChatID         int64
-	Status         string
-	RemainingTurns int
-	DecisionID     string
-	ApprovedBy     int64
-	UpdatedAt      time.Time
+	ChatID           int64
+	Status           string
+	RemainingTurns   int
+	DecisionID       string
+	ApprovedBy       int64
+	PersonaIntent    string
+	GovernorIntent   string
+	GovernorRatified bool
+	BlockedReason    string
+	UpdatedAt        time.Time
 }
 
 type RestartHealthSnapshot struct {
