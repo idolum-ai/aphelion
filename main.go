@@ -19,6 +19,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/openai"
 	"github.com/idolum-ai/aphelion/principal"
@@ -36,6 +37,8 @@ const (
 	exitCodeFailure = 1
 	exitCodeConfig  = 78
 )
+
+const reinstallTemplateMessage = "Rebuild, reinstall, restart, and verify the aphelion user service on this host using the current checked-out branch state. Use the normal local deploy path for a source install: build the binary, run --check-config, run init, restart the systemd user service, and run verify-deploy. Treat this as an operational change: inspect the current service/install state first, then execute the bounded redeploy steps, and report what happened truthfully."
 
 type configStartupError struct {
 	Path string
@@ -81,6 +84,21 @@ func (c telegramCommandControl) StopContinuation(chatID int64) (core.StopResult,
 
 func (c telegramCommandControl) TriggerContinuation(ctx context.Context, chatID int64) error {
 	return c.rt.TriggerContinuation(ctx, chatID)
+}
+
+func (c telegramCommandControl) QueueReinstall(ctx context.Context, msg core.InboundMessage) error {
+	if c.router == nil {
+		return fmt.Errorf("router is not configured")
+	}
+	queued := msg
+	queued.Text = reinstallTemplateMessage
+	queued.Raw = nil
+	turnCtx, cancel := newTurnContext(ctx, turnTimeout)
+	go func() {
+		defer cancel()
+		c.router.Route(turnCtx, queued)
+	}()
+	return nil
 }
 
 func (c telegramCommandControl) TogglePersonaEffort() (string, error) {
@@ -269,7 +287,13 @@ func run() error {
 
 	router := core.NewRouter(rt.AgentFunc())
 	commandControl := telegramCommandControl{router: router, rt: rt}
-	decisionBroker := newTelegramDecisionBroker(tgClient)
+	decisionBroker := newTelegramDecisionBroker(tgClient, decision.WithDurableStore(newTelegramDecisionDurableStore(store)))
+	loadDecisionCtx, cancelDecisionLoad := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := decisionBroker.Load(loadDecisionCtx); err != nil {
+		cancelDecisionLoad()
+		return fmt.Errorf("load pending decisions: %w", err)
+	}
+	cancelDecisionLoad()
 	decisionHandler := newTelegramDecisionHandler(tgClient, router, decisionBroker)
 	tools.WithExecApprover(newTelegramExecApprover(tgClient, decisionBroker))
 

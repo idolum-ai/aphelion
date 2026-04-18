@@ -311,6 +311,25 @@ type TurnRun struct {
 	RecoveryLoggedAt      time.Time
 }
 
+// PendingDecisionRecord persists broker decisions that are awaiting callback resolution.
+type PendingDecisionRecord struct {
+	ID                string
+	Sequence          uint64
+	OwnerKey          string
+	Kind              string
+	ChatID            int64
+	SenderID          int64
+	MessageID         int64
+	Prompt            string
+	Details           string
+	ChoicesJSON       string
+	DefaultChoice     string
+	TimeoutNanos      int64
+	DeliveryMessageID int64
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
 // Message is one persisted conversation message.
 type Message struct {
 	ID                int64

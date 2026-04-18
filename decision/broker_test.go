@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -593,5 +594,250 @@ func TestBrokerRequestNotifierFailureDoesNotSupersedeExistingPendingDecision(t *
 		}
 	case <-time.After(time.Second):
 		t.Fatal("first Request() did not resolve after explicit approval")
+	}
+}
+
+type brokerMemoryDurableStore struct {
+	mu        sync.Mutex
+	rows      map[string]DurableDecision
+	loadErr   error
+	upsertErr error
+	deleteErr error
+}
+
+func newBrokerMemoryDurableStore() *brokerMemoryDurableStore {
+	return &brokerMemoryDurableStore{
+		rows: make(map[string]DurableDecision),
+	}
+}
+
+func (s *brokerMemoryDurableStore) LoadPending(_ context.Context) ([]DurableDecision, error) {
+	if s.loadErr != nil {
+		return nil, s.loadErr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]DurableDecision, 0, len(s.rows))
+	for _, row := range s.rows {
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func (s *brokerMemoryDurableStore) UpsertPending(_ context.Context, pending DurableDecision) error {
+	if s.upsertErr != nil {
+		return s.upsertErr
+	}
+	id := strings.TrimSpace(pending.Pending.ID)
+	if id == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rows[id] = pending
+	return nil
+}
+
+func (s *brokerMemoryDurableStore) DeletePending(_ context.Context, id string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.rows, id)
+	return nil
+}
+
+func (s *brokerMemoryDurableStore) has(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.rows[id]
+	return ok
+}
+
+func (s *brokerMemoryDurableStore) get(id string) (DurableDecision, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.rows[id]
+	return value, ok
+}
+
+func TestBrokerRequestPersistsAndClearsDurablePendingDecision(t *testing.T) {
+	t.Parallel()
+
+	store := newBrokerMemoryDurableStore()
+	pendingSeen := make(chan PendingDecision, 1)
+	broker := NewBroker(func(_ context.Context, pending PendingDecision) (Delivery, error) {
+		pendingSeen <- pending
+		return Delivery{MessageID: 98}, nil
+	}, WithDurableStore(store))
+
+	resultCh := make(chan Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			Kind:          KindProposalApproval,
+			ChatID:        9,
+			SenderID:      42,
+			Prompt:        "Confirm durable approval?",
+			Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+			DefaultChoice: "deny",
+			Timeout:       WaitIndefinitely,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- result
+	}()
+
+	var pending PendingDecision
+	select {
+	case pending = <-pendingSeen:
+	case <-time.After(time.Second):
+		t.Fatal("request did not publish a pending decision")
+	}
+
+	waitFor := func(deadline time.Duration, check func() bool) bool {
+		timer := time.NewTimer(deadline)
+		defer timer.Stop()
+		tick := time.NewTicker(2 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			if check() {
+				return true
+			}
+			select {
+			case <-timer.C:
+				return false
+			case <-tick.C:
+			}
+		}
+	}
+
+	if !waitFor(100*time.Millisecond, func() bool {
+		durable, ok := store.get(pending.ID)
+		return ok && durable.Delivery.MessageID == 98
+	}) {
+		t.Fatalf("durable store does not contain delivered pending decision id=%q", pending.ID)
+	}
+
+	if !broker.Resolve(pending.ID, "approve") {
+		t.Fatal("Resolve() = false, want true")
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Request() err = %v, want nil", err)
+	case result := <-resultCh:
+		if result.Choice != "approve" {
+			t.Fatalf("choice = %q, want approve", result.Choice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Request() did not resolve after approval")
+	}
+
+	if !waitFor(100*time.Millisecond, func() bool { return !store.has(pending.ID) }) {
+		t.Fatalf("durable store still contains id=%q after resolve", pending.ID)
+	}
+}
+
+func TestBrokerResolveClearsDurableDecisionLoadedAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	store := newBrokerMemoryDurableStore()
+	store.rows["durable-1"] = DurableDecision{
+		Pending: PendingDecision{
+			ID: "durable-1",
+			Request: Request{
+				Kind:          KindProposalApproval,
+				ChatID:        7,
+				SenderID:      42,
+				Prompt:        "Confirm restart-loaded approval?",
+				Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+				DefaultChoice: "deny",
+				Timeout:       WaitIndefinitely,
+			},
+		},
+		Seq:      9,
+		OwnerKey: "chat:7:sender:42",
+		Delivery: Delivery{MessageID: 7001},
+	}
+
+	broker := NewBroker(nil, WithDurableStore(store))
+	if err := broker.Load(context.Background()); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	if _, ok := broker.Peek("durable-1"); !ok {
+		t.Fatal("Peek() did not return loaded durable decision")
+	}
+	if !broker.Resolve("durable-1", "approve") {
+		t.Fatal("Resolve() = false, want true for loaded decision")
+	}
+	if _, ok := broker.Peek("durable-1"); ok {
+		t.Fatal("Peek() = true after resolve, want false")
+	}
+	if store.has("durable-1") {
+		t.Fatal("durable store still contains resolved decision")
+	}
+}
+
+func TestBrokerLoadKeepsOnlyNewestPendingDecisionPerOwner(t *testing.T) {
+	t.Parallel()
+
+	store := newBrokerMemoryDurableStore()
+	store.rows["older"] = DurableDecision{
+		Pending: PendingDecision{
+			ID: "older",
+			Request: Request{
+				Kind:          KindProposalApproval,
+				ChatID:        7,
+				SenderID:      11,
+				Prompt:        "Older request",
+				Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+				DefaultChoice: "deny",
+				Timeout:       WaitIndefinitely,
+			},
+		},
+		Seq:      10,
+		OwnerKey: "chat:7:sender:11",
+		Delivery: Delivery{MessageID: 10},
+	}
+	store.rows["newer"] = DurableDecision{
+		Pending: PendingDecision{
+			ID: "newer",
+			Request: Request{
+				Kind:          KindProposalApproval,
+				ChatID:        7,
+				SenderID:      11,
+				Prompt:        "Newer request",
+				Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+				DefaultChoice: "deny",
+				Timeout:       WaitIndefinitely,
+			},
+		},
+		Seq:      11,
+		OwnerKey: "chat:7:sender:11",
+		Delivery: Delivery{MessageID: 11},
+	}
+
+	broker := NewBroker(nil, WithDurableStore(store))
+	if err := broker.Load(context.Background()); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	if _, ok := broker.Peek("older"); ok {
+		t.Fatal("Peek(older) = true, want false after supersede on load")
+	}
+	if _, ok := broker.Peek("newer"); !ok {
+		t.Fatal("Peek(newer) = false, want true")
+	}
+	if store.has("older") {
+		t.Fatal("durable store still contains stale older decision")
 	}
 }

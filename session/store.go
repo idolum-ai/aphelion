@@ -182,6 +182,24 @@ func (s *SQLiteStore) init() error {
 			recovery_summary TEXT,
 			recovery_logged_at TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS pending_decisions (
+			decision_id TEXT PRIMARY KEY,
+			decision_seq INTEGER NOT NULL DEFAULT 0,
+			owner_key TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			sender_id INTEGER NOT NULL DEFAULT 0,
+			message_id INTEGER NOT NULL DEFAULT 0,
+			prompt TEXT NOT NULL DEFAULT '',
+			details TEXT NOT NULL DEFAULT '',
+			choices_json TEXT NOT NULL DEFAULT '[]',
+			default_choice TEXT NOT NULL DEFAULT '',
+			timeout_ns INTEGER NOT NULL DEFAULT 0,
+			delivery_message_id INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_pending_decisions_owner_seq ON pending_decisions(owner_key, decision_seq DESC)`,
 		`CREATE TABLE IF NOT EXISTS durable_agents (
 			agent_id TEXT PRIMARY KEY,
 			parent_agent_id TEXT,
@@ -1647,6 +1665,147 @@ func (s *SQLiteStore) MarkReviewDelivered(ids []int64) error {
 	return nil
 }
 
+func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error {
+	record.ID = strings.TrimSpace(record.ID)
+	if record.ID == "" {
+		return fmt.Errorf("pending decision id is required")
+	}
+	if record.Sequence > 9223372036854775807 {
+		return fmt.Errorf("pending decision sequence is too large")
+	}
+
+	now := time.Now().UTC()
+	createdAt := record.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	updatedAt := record.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = now
+	}
+	record.OwnerKey = strings.TrimSpace(record.OwnerKey)
+	record.Kind = strings.TrimSpace(record.Kind)
+	record.Prompt = strings.TrimSpace(record.Prompt)
+	record.Details = strings.TrimSpace(record.Details)
+	record.DefaultChoice = strings.TrimSpace(record.DefaultChoice)
+	choicesJSON := strings.TrimSpace(record.ChoicesJSON)
+	if choicesJSON == "" {
+		choicesJSON = "[]"
+	}
+
+	_, err := s.db.Exec(`
+		INSERT INTO pending_decisions(
+			decision_id, decision_seq, owner_key, kind, chat_id, sender_id, message_id,
+			prompt, details, choices_json, default_choice, timeout_ns, delivery_message_id,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(decision_id) DO UPDATE SET
+			decision_seq = excluded.decision_seq,
+			owner_key = excluded.owner_key,
+			kind = excluded.kind,
+			chat_id = excluded.chat_id,
+			sender_id = excluded.sender_id,
+			message_id = excluded.message_id,
+			prompt = excluded.prompt,
+			details = excluded.details,
+			choices_json = excluded.choices_json,
+			default_choice = excluded.default_choice,
+			timeout_ns = excluded.timeout_ns,
+			delivery_message_id = excluded.delivery_message_id,
+			updated_at = excluded.updated_at
+	`,
+		record.ID,
+		int64(record.Sequence),
+		record.OwnerKey,
+		record.Kind,
+		record.ChatID,
+		record.SenderID,
+		record.MessageID,
+		record.Prompt,
+		record.Details,
+		choicesJSON,
+		record.DefaultChoice,
+		record.TimeoutNanos,
+		record.DeliveryMessageID,
+		createdAt.UTC().Format(time.RFC3339Nano),
+		updatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert pending decision: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) DeletePendingDecision(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	if _, err := s.db.Exec(`DELETE FROM pending_decisions WHERE decision_id = ?`, id); err != nil {
+		return fmt.Errorf("delete pending decision: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			decision_id, decision_seq, owner_key, kind, chat_id, sender_id, message_id,
+			prompt, details, choices_json, default_choice, timeout_ns, delivery_message_id,
+			created_at, updated_at
+		FROM pending_decisions
+		ORDER BY decision_seq ASC, decision_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query pending decisions: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]PendingDecisionRecord, 0)
+	for rows.Next() {
+		var (
+			record       PendingDecisionRecord
+			sequenceRaw  int64
+			createdAtRaw string
+			updatedAtRaw string
+		)
+		if err := rows.Scan(
+			&record.ID, &sequenceRaw, &record.OwnerKey, &record.Kind, &record.ChatID, &record.SenderID, &record.MessageID,
+			&record.Prompt, &record.Details, &record.ChoicesJSON, &record.DefaultChoice, &record.TimeoutNanos, &record.DeliveryMessageID,
+			&createdAtRaw, &updatedAtRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan pending decision: %w", err)
+		}
+		if sequenceRaw > 0 {
+			record.Sequence = uint64(sequenceRaw)
+		}
+		record.Prompt = strings.TrimSpace(record.Prompt)
+		record.Details = strings.TrimSpace(record.Details)
+		record.OwnerKey = strings.TrimSpace(record.OwnerKey)
+		record.Kind = strings.TrimSpace(record.Kind)
+		record.DefaultChoice = strings.TrimSpace(record.DefaultChoice)
+		record.ChoicesJSON = strings.TrimSpace(record.ChoicesJSON)
+		if record.ChoicesJSON == "" {
+			record.ChoicesJSON = "[]"
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse pending decision created_at: %w", err)
+		}
+		updatedAt, err := parseSQLiteTime(updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse pending decision updated_at: %w", err)
+		}
+		record.CreatedAt = createdAt
+		record.UpdatedAt = updatedAt
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending decisions: %w", err)
+	}
+	return records, nil
+}
+
 func (s *SQLiteStore) BeginTurnRun(key SessionKey, kind TurnRunKind, requestText string) (*TurnRun, error) {
 	now := time.Now().UTC()
 	kind = TurnRunKind(strings.TrimSpace(string(kind)))
@@ -2026,6 +2185,7 @@ func (s *SQLiteStore) ResetRuntime() error {
 	}()
 
 	statements := []string{
+		`DELETE FROM pending_decisions`,
 		`DELETE FROM review_events`,
 		`DELETE FROM turn_runs`,
 		`DELETE FROM outbound_messages`,

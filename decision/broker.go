@@ -5,6 +5,7 @@ package decision
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,12 +58,27 @@ type PendingDecision struct {
 
 type Notifier func(context.Context, PendingDecision) (Delivery, error)
 
+type DurableDecision struct {
+	Pending  PendingDecision
+	Seq      uint64
+	OwnerKey string
+	Delivery Delivery
+}
+
+type DurableStore interface {
+	LoadPending(ctx context.Context) ([]DurableDecision, error)
+	UpsertPending(ctx context.Context, pending DurableDecision) error
+	DeletePending(ctx context.Context, id string) error
+}
+
 type Broker struct {
 	mu       sync.Mutex
 	nextID   uint64
 	notifier Notifier
 	pending  map[string]*pendingDecision
 	byOwner  map[string]string
+	durable  DurableStore
+	loaded   bool
 }
 
 type pendingDecision struct {
@@ -73,17 +89,157 @@ type pendingDecision struct {
 	seq      uint64
 }
 
-func NewBroker(notifier Notifier) *Broker {
-	return &Broker{
+type BrokerOption func(*Broker)
+
+func WithDurableStore(store DurableStore) BrokerOption {
+	return func(b *Broker) {
+		b.durable = store
+	}
+}
+
+func NewBroker(notifier Notifier, opts ...BrokerOption) *Broker {
+	b := &Broker{
 		notifier: notifier,
 		pending:  make(map[string]*pendingDecision),
 		byOwner:  make(map[string]string),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(b)
+		}
+	}
+	if b.durable == nil {
+		b.loaded = true
+	}
+	return b
+}
+
+func (b *Broker) Load(ctx context.Context) error {
+	if b == nil {
+		return fmt.Errorf("decision broker is nil")
+	}
+
+	b.mu.Lock()
+	if b.loaded {
+		b.mu.Unlock()
+		return nil
+	}
+	store := b.durable
+	b.mu.Unlock()
+	if store == nil {
+		b.mu.Lock()
+		b.loaded = true
+		b.mu.Unlock()
+		return nil
+	}
+
+	persisted, err := store.LoadPending(ctx)
+	if err != nil {
+		return fmt.Errorf("load pending decisions: %w", err)
+	}
+
+	loadedPending := make(map[string]*pendingDecision, len(persisted))
+	maxSeq := uint64(0)
+	for _, row := range persisted {
+		id := strings.TrimSpace(row.Pending.ID)
+		if id == "" {
+			continue
+		}
+		req := normalizeRequest(row.Pending.Request)
+		if len(req.Choices) == 0 || !containsChoice(req.Choices, req.DefaultChoice) {
+			continue
+		}
+		ownerKey := strings.TrimSpace(row.OwnerKey)
+		if ownerKey == "" {
+			ownerKey = decisionOwnerKey(req)
+		}
+		seq := row.Seq
+		if seq == 0 {
+			if parsed, ok := parseBase36(id); ok {
+				seq = parsed
+			}
+		}
+		pending := &pendingDecision{
+			request: PendingDecision{
+				ID:      id,
+				Request: req,
+			},
+			delivery: row.Delivery,
+			resultCh: make(chan string, 1),
+			ownerKey: ownerKey,
+			seq:      seq,
+		}
+		loadedPending[id] = pending
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+
+	loadedByOwner := make(map[string]string, len(loadedPending))
+	for id, pending := range loadedPending {
+		if pending.ownerKey == "" {
+			continue
+		}
+		existingID, ok := loadedByOwner[pending.ownerKey]
+		if !ok {
+			loadedByOwner[pending.ownerKey] = id
+			continue
+		}
+		existing := loadedPending[existingID]
+		if existing == nil || existing.seq < pending.seq {
+			loadedByOwner[pending.ownerKey] = id
+		}
+	}
+
+	staleIDs := make([]string, 0)
+	for id, pending := range loadedPending {
+		if pending.ownerKey == "" {
+			continue
+		}
+		if loadedByOwner[pending.ownerKey] != id {
+			delete(loadedPending, id)
+			staleIDs = append(staleIDs, id)
+		}
+	}
+
+	b.mu.Lock()
+	if b.loaded {
+		b.mu.Unlock()
+		return nil
+	}
+	b.pending = loadedPending
+	b.byOwner = loadedByOwner
+	if maxSeq > 0 {
+		atomic.StoreUint64(&b.nextID, maxSeq)
+	}
+	b.loaded = true
+	b.mu.Unlock()
+
+	for _, id := range staleIDs {
+		_ = store.DeletePending(ctx, id)
+	}
+	return nil
+}
+
+func (b *Broker) ensureLoaded(ctx context.Context) error {
+	if b == nil {
+		return fmt.Errorf("decision broker is nil")
+	}
+	b.mu.Lock()
+	loaded := b.loaded
+	b.mu.Unlock()
+	if loaded {
+		return nil
+	}
+	return b.Load(ctx)
 }
 
 func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 	if b == nil {
 		return Result{}, fmt.Errorf("decision broker is nil")
+	}
+	if err := b.ensureLoaded(ctx); err != nil {
+		return Result{}, err
 	}
 	if len(req.Choices) == 0 {
 		return Result{}, fmt.Errorf("decision choices are required")
@@ -108,17 +264,25 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 	b.mu.Lock()
 	b.pending[decisionID] = pending
 	b.mu.Unlock()
+	if err := b.upsertPending(ctx, pending); err != nil {
+		_ = b.clearWithContext(ctx, decisionID)
+		return Result{}, err
+	}
 
 	if b.notifier != nil {
 		delivery, err := b.notifier(ctx, pending.request)
 		if err != nil {
-			b.clear(decisionID)
+			_ = b.clearWithContext(ctx, decisionID)
 			return Result{}, err
 		}
 		pending.delivery = delivery
+		if err := b.upsertPending(ctx, pending); err != nil {
+			_ = b.clearWithContext(ctx, decisionID)
+			return Result{}, err
+		}
 	}
 
-	if stale := b.activateOwner(decisionID); stale {
+	if stale := b.activateOwner(ctx, decisionID); stale {
 		return Result{Choice: pending.request.DefaultChoice, Delivery: pending.delivery}, nil
 	}
 
@@ -126,10 +290,10 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 	if timeout < 0 {
 		select {
 		case choice := <-pending.resultCh:
-			b.clear(decisionID)
+			_ = b.clearWithContext(ctx, decisionID)
 			return Result{Choice: choice, Delivery: pending.delivery}, nil
 		case <-ctx.Done():
-			b.clear(decisionID)
+			_ = b.clearWithContext(ctx, decisionID)
 			return Result{}, ctx.Err()
 		}
 	}
@@ -138,19 +302,22 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 
 	select {
 	case choice := <-pending.resultCh:
-		b.clear(decisionID)
+		_ = b.clearWithContext(ctx, decisionID)
 		return Result{Choice: choice, Delivery: pending.delivery}, nil
 	case <-timer.C:
-		b.clear(decisionID)
+		_ = b.clearWithContext(ctx, decisionID)
 		return Result{Choice: pending.request.DefaultChoice, Delivery: pending.delivery, TimedOut: true}, nil
 	case <-ctx.Done():
-		b.clear(decisionID)
+		_ = b.clearWithContext(ctx, decisionID)
 		return Result{}, ctx.Err()
 	}
 }
 
 func (b *Broker) Resolve(id string, choice string) bool {
 	if b == nil {
+		return false
+	}
+	if err := b.ensureLoaded(context.Background()); err != nil {
 		return false
 	}
 	id = strings.TrimSpace(id)
@@ -170,13 +337,59 @@ func (b *Broker) Resolve(id string, choice string) bool {
 	}
 	select {
 	case pending.resultCh <- choice:
+		_ = b.clearWithContext(context.Background(), id)
 		return true
 	default:
 		return false
 	}
 }
 
-func (b *Broker) clear(id string) {
+func (b *Broker) Peek(id string) (PendingDecision, bool) {
+	if b == nil {
+		return PendingDecision{}, false
+	}
+	if err := b.ensureLoaded(context.Background()); err != nil {
+		return PendingDecision{}, false
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return PendingDecision{}, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	pending := b.pending[id]
+	if pending == nil {
+		return PendingDecision{}, false
+	}
+	return pending.request, true
+}
+
+func (b *Broker) upsertPending(ctx context.Context, pending *pendingDecision) error {
+	if b == nil || pending == nil {
+		return nil
+	}
+	b.mu.Lock()
+	store := b.durable
+	b.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	return store.UpsertPending(ctx, DurableDecision{
+		Pending:  pending.request,
+		Seq:      pending.seq,
+		OwnerKey: pending.ownerKey,
+		Delivery: pending.delivery,
+	})
+}
+
+func (b *Broker) clearWithContext(ctx context.Context, id string) error {
+	if b == nil {
+		return nil
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
 	b.mu.Lock()
 	pending, ok := b.pending[id]
 	if ok {
@@ -187,46 +400,70 @@ func (b *Broker) clear(id string) {
 			}
 		}
 	}
+	store := b.durable
 	b.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	return store.DeletePending(ctx, id)
 }
 
-func (b *Broker) activateOwner(id string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (b *Broker) clear(id string) {
+	_ = b.clearWithContext(context.Background(), id)
+}
 
+func (b *Broker) activateOwner(ctx context.Context, id string) bool {
+	var staleID string
+	var stalePending *pendingDecision
+	var supersededID string
+	var supersededPending *pendingDecision
+
+	b.mu.Lock()
 	pending, ok := b.pending[id]
 	if !ok {
+		b.mu.Unlock()
 		return false
 	}
 	ownerKey := pending.ownerKey
 	if ownerKey == "" {
+		b.mu.Unlock()
 		return false
 	}
 
 	existingID, ok := b.byOwner[ownerKey]
 	if !ok || existingID == id {
 		b.byOwner[ownerKey] = id
+		b.mu.Unlock()
 		return false
 	}
 	existing := b.pending[existingID]
 	if existing == nil {
 		b.byOwner[ownerKey] = id
+		b.mu.Unlock()
 		return false
 	}
 	if existing.seq > pending.seq {
 		delete(b.pending, id)
+		staleID = id
+		stalePending = pending
+		b.mu.Unlock()
 		select {
-		case pending.resultCh <- pending.request.DefaultChoice:
+		case stalePending.resultCh <- stalePending.request.DefaultChoice:
 		default:
 		}
+		_ = b.clearWithContext(ctx, staleID)
 		return true
-	}
-	select {
-	case existing.resultCh <- existing.request.DefaultChoice:
-	default:
 	}
 	delete(b.pending, existingID)
 	b.byOwner[ownerKey] = id
+	supersededID = existingID
+	supersededPending = existing
+	b.mu.Unlock()
+	select {
+	case supersededPending.resultCh <- supersededPending.request.DefaultChoice:
+	default:
+	}
+	_ = b.clearWithContext(ctx, supersededID)
 	return false
 }
 
@@ -299,4 +536,28 @@ func strconvBase36(v uint64) string {
 		v /= 36
 	}
 	return string(buf[i:])
+}
+
+func parseBase36(raw string) (uint64, bool) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return 0, false
+	}
+	var out uint64
+	for _, ch := range raw {
+		var digit uint64
+		switch {
+		case ch >= '0' && ch <= '9':
+			digit = uint64(ch - '0')
+		case ch >= 'a' && ch <= 'z':
+			digit = uint64(ch-'a') + 10
+		default:
+			return 0, false
+		}
+		if out > (math.MaxUint64-digit)/36 {
+			return 0, false
+		}
+		out = out*36 + digit
+	}
+	return out, true
 }

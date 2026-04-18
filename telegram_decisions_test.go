@@ -344,6 +344,26 @@ func TestHandleCallbackQueryReturnsNonStaleAckError(t *testing.T) {
 	}
 }
 
+func TestHandleCallbackQueryReturnsStaleMessageForMissingDecision(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, decision.NewBroker(nil))
+
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-stale",
+		Data: decision.EncodeCallbackData("missing-decision", "approve"),
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery() err = %v, want nil", err)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers = %#v, want one callback answer", sender.answers)
+	}
+	if !strings.Contains(sender.answers[0].text, "no longer active") {
+		t.Fatalf("answer text = %q, want stale-decision hint", sender.answers[0].text)
+	}
+}
+
 func TestHandleArtifactRetentionMessagePromptsAndRoutesChosenPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -351,13 +371,16 @@ func TestHandleArtifactRetentionMessagePromptsAndRoutesChosenPolicy(t *testing.T
 	broker := newTelegramDecisionBroker(sender)
 	go func() {
 		for i := 0; i < 100; i++ {
-			if len(sender.inline) > 0 && len(sender.inline[0].rows) > 0 && len(sender.inline[0].rows[0]) > 0 {
-				data := sender.inline[0].rows[0][2].CallbackData
-				id, choice, ok := decision.DecodeCallbackData(data)
-				if ok {
-					broker.Resolve(id, choice)
+			if len(sender.inline) > 0 && len(sender.inline[0].rows) > 0 {
+				for _, row := range sender.inline[0].rows {
+					for _, button := range row {
+						id, choice, ok := decision.DecodeCallbackData(button.CallbackData)
+						if ok && choice == "local" {
+							broker.Resolve(id, choice)
+							return
+						}
+					}
 				}
-				return
 			}
 			time.Sleep(5 * time.Millisecond)
 		}

@@ -68,7 +68,7 @@ func newTelegramExecApprover(sender telegramDecisionSender, broker *decision.Bro
 	}
 }
 
-func newTelegramDecisionBroker(sender telegramDecisionSender) *decision.Broker {
+func newTelegramDecisionBroker(sender telegramDecisionSender, opts ...decision.BrokerOption) *decision.Broker {
 	return decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
 		text := strings.TrimSpace(pending.Prompt)
 		if details := strings.TrimSpace(pending.Details); details != "" {
@@ -82,7 +82,7 @@ func newTelegramDecisionBroker(sender telegramDecisionSender) *decision.Broker {
 			return decision.Delivery{}, err
 		}
 		return decision.Delivery{MessageID: msgID}, nil
-	})
+	}, opts...)
 }
 
 func (a *telegramExecApprover) ConfirmExec(ctx context.Context, req toolpkg.ExecApprovalRequest) (toolpkg.ExecApprovalDecision, error) {
@@ -330,22 +330,62 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 	if h == nil || h.sender == nil || h.broker == nil {
 		return nil
 	}
-	if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, ""); err != nil {
-		if !telegram.IsStaleCallbackQueryError(err) {
-			return err
-		}
-	}
 	id, choice, ok := decision.DecodeCallbackData(cb.Data)
 	if !ok {
+		if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return err
+		}
 		return nil
 	}
-	h.broker.Resolve(id, choice)
+	if choice == "expand" {
+		pending, found := h.broker.Peek(id)
+		if !found {
+			if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, "This approval is no longer active. Use the newest prompt."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return err
+			}
+			return nil
+		}
+		chatID := int64(0)
+		messageID := int64(0)
+		if cb.Message != nil {
+			messageID = cb.Message.MessageID
+			if cb.Message.Chat != nil {
+				chatID = cb.Message.Chat.ID
+			}
+		}
+		if chatID == 0 {
+			chatID = pending.ChatID
+		}
+		if messageID != 0 {
+			if err := h.sender.EditMessageText(ctx, chatID, messageID, renderPendingDecisionExpanded(pending), ""); err != nil {
+				return err
+			}
+		}
+		if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return err
+		}
+		return nil
+	}
+	answerText := ""
+	if !h.broker.Resolve(id, choice) {
+		answerText = "This approval is no longer active. Use the newest prompt."
+	}
+	if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, answerText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+		return err
+	}
 	return nil
 }
 
 func inlineButtonRows(pending decision.PendingDecision) [][]telegram.InlineButton {
 	if len(pending.Choices) == 0 {
 		return nil
+	}
+	rows := make([][]telegram.InlineButton, 0, 2)
+	if strings.TrimSpace(pending.Details) != "" {
+		rows = append(rows, []telegram.InlineButton{{
+			Text:         "Expand details",
+			CallbackData: decision.EncodeCallbackData(pending.ID, "expand"),
+		}})
 	}
 	row := make([]telegram.InlineButton, 0, len(pending.Choices))
 	for _, choice := range pending.Choices {
@@ -354,7 +394,8 @@ func inlineButtonRows(pending decision.PendingDecision) [][]telegram.InlineButto
 			CallbackData: decision.EncodeCallbackData(pending.ID, choice.ID),
 		})
 	}
-	return [][]telegram.InlineButton{row}
+	rows = append(rows, row)
+	return rows
 }
 
 var stopPatterns = []string{
@@ -400,4 +441,160 @@ func queueChoiceLabel(text string) string {
 		return "No, keep going"
 	}
 	return "⏳ Let it finish"
+}
+
+func renderPendingDecisionSummary(pending decision.PendingDecision) string {
+	prompt := strings.TrimSpace(pending.Prompt)
+	summary := strings.TrimSpace(summarizePendingDecision(pending))
+	if summary == "" {
+		return renderPendingDecisionExpanded(pending)
+	}
+	if prompt == "" {
+		return summary
+	}
+	return strings.TrimSpace(prompt + "\n\n" + summary)
+}
+
+func renderPendingDecisionExpanded(pending decision.PendingDecision) string {
+	text := strings.TrimSpace(pending.Prompt)
+	if details := strings.TrimSpace(pending.Details); details != "" {
+		if text != "" {
+			text += "\n\n"
+		}
+		text += details
+	}
+	return strings.TrimSpace(text)
+}
+
+func summarizePendingDecision(pending decision.PendingDecision) string {
+	details := strings.TrimSpace(pending.Details)
+	if details == "" {
+		return ""
+	}
+	switch pending.Kind {
+	case decision.KindProposalApproval:
+		return summarizeProposalApprovalDetails(details)
+	case decision.KindArtifactRetention:
+		return summarizeArtifactRetentionDetails(details)
+	default:
+		return summarizeGenericDecisionDetails(details)
+	}
+}
+
+func summarizeProposalApprovalDetails(details string) string {
+	sections := splitDecisionSections(details)
+	summary := firstNonEmpty(sections["summary"])
+	kind := firstNonEmpty(sections["kind"])
+	why := firstNonEmpty(sections["why now"])
+	effect := firstNonEmpty(sections["if approved"])
+	trigger := firstNonEmpty(sections["trigger"])
+	command := firstNonEmpty(sections["command"])
+	lines := make([]string, 0, 6)
+	if summary != "" {
+		lines = append(lines, summary)
+	}
+	meta := make([]string, 0, 2)
+	if kind != "" {
+		meta = append(meta, "Kind: "+kind)
+	}
+	if trigger != "" {
+		meta = append(meta, "Trigger: "+trigger)
+	}
+	if len(meta) > 0 {
+		lines = append(lines, strings.Join(meta, " · "))
+	}
+	if why != "" {
+		lines = append(lines, compactSentence("Why now: "+why))
+	}
+	if effect != "" {
+		lines = append(lines, compactSentence("If approved: "+effect))
+	}
+	if command != "" {
+		lines = append(lines, "Command hidden by default. Use Expand details to inspect it.")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func summarizeArtifactRetentionDetails(details string) string {
+	sections := splitDecisionSections(details)
+	artifacts := strings.TrimSpace(sections["artifacts"])
+	items := []string{}
+	for _, line := range strings.Split(artifacts, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+		if line != "" {
+			items = append(items, line)
+		}
+	}
+	if len(items) == 0 {
+		return compactSentence(details)
+	}
+	preview := items[0]
+	if len(items) > 1 {
+		preview += fmt.Sprintf(" +%d more", len(items)-1)
+	}
+	return strings.TrimSpace(strings.Join([]string{
+		"Choose how long to keep the inbound artifact.",
+		"Artifact: " + preview,
+		"Use Expand details to inspect the full artifact list.",
+	}, "\n"))
+}
+
+func summarizeGenericDecisionDetails(details string) string {
+	return compactSentence(details)
+}
+
+func splitDecisionSections(details string) map[string]string {
+	out := map[string]string{}
+	lines := strings.Split(strings.TrimSpace(details), "\n")
+	current := "summary"
+	buf := []string{}
+	flush := func() {
+		text := strings.TrimSpace(strings.Join(buf, "\n"))
+		if text != "" && strings.TrimSpace(out[current]) == "" {
+			out[current] = text
+		}
+		buf = buf[:0]
+	}
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			if len(buf) > 0 {
+				buf = append(buf, "")
+			}
+			continue
+		}
+		if strings.HasSuffix(line, ":") {
+			flush()
+			current = strings.ToLower(strings.TrimSuffix(line, ":"))
+			continue
+		}
+		buf = append(buf, line)
+	}
+	flush()
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func compactSentence(text string) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if text == "" {
+		return ""
+	}
+	if len(text) <= 220 {
+		return text
+	}
+	cut := text[:220]
+	if idx := strings.LastIndex(cut, " "); idx > 80 {
+		cut = cut[:idx]
+	}
+	return strings.TrimSpace(cut) + "…"
 }
