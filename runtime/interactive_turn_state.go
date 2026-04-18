@@ -79,3 +79,12 @@ func interactiveReviewEventPayload(result *turn.Result) (sceneText string, toolL
 	toolLog = append(toolLog, result.Turn.ToolLog...)
 	return sceneText, toolLog
 }
+
+func interactivePreparedLedgerText(capturedPreparedText string, result *turn.Result) string {
+	if result != nil {
+		if preparedText := strings.TrimSpace(result.Prepared.LedgerText); preparedText != "" {
+			return preparedText
+		}
+	}
+	return strings.TrimSpace(capturedPreparedText)
+}

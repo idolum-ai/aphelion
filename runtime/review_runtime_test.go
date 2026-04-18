@@ -192,6 +192,12 @@ func TestHandleInboundGeneratesReviewEventForApprovedUser(t *testing.T) {
 	if !strings.Contains(event.Summary, "scope=telegram_dm:222") {
 		t.Fatalf("summary missing source scope: %q", event.Summary)
 	}
+	if !strings.Contains(event.Summary, "reply: idolum rendered") {
+		t.Fatalf("summary missing rendered reply text: %q", event.Summary)
+	}
+	if strings.Contains(event.Summary, "reply: governor canonical") {
+		t.Fatalf("summary used governor floor text instead of rendered scene: %q", event.Summary)
+	}
 	if len([]rune(event.Summary)) > session.DefaultReviewSummaryMaxChars {
 		t.Fatalf("summary len = %d, want <= %d", len([]rune(event.Summary)), session.DefaultReviewSummaryMaxChars)
 	}

@@ -155,11 +155,12 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 					return fmt.Errorf("queue review events: turn session unavailable")
 				}
 				sceneText, toolLog := interactiveReviewEventPayload(result)
+				ledgerText := interactivePreparedLedgerText(prepared.LedgerText, result)
 				return r.enqueueReviewEventsForTurn(
 					actor,
 					msg,
 					turnSess.TurnCount,
-					prepared.LedgerText,
+					ledgerText,
 					sceneText,
 					toolLog,
 				)
@@ -174,8 +175,9 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 				}
 				return r.deliverReviewEvents(ctx, key, turnSess)
 			},
-			PostReplyContinuationUI: func(postCtx context.Context, _ *turn.Result) error {
-				return r.offerContinuationApproval(postCtx, key, msg, prepared.LedgerText)
+			PostReplyContinuationUI: func(postCtx context.Context, result *turn.Result) error {
+				ledgerText := interactivePreparedLedgerText(prepared.LedgerText, result)
+				return r.offerContinuationApproval(postCtx, key, msg, ledgerText)
 			},
 		},
 	}
