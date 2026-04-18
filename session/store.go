@@ -780,6 +780,26 @@ func (s *SQLiteStore) ContinuationStateIfExists(key SessionKey) (ContinuationSta
 	return decodeContinuationState(raw.String), true, nil
 }
 
+func (s *SQLiteStore) PlanAndOperationStateIfExists(key SessionKey) (PlanState, OperationState, bool, error) {
+	sessionID := SessionIDForKey(key)
+	var (
+		planRaw      sql.NullString
+		operationRaw sql.NullString
+	)
+	err := s.db.QueryRow(`
+		SELECT plan_state_json, operation_state_json
+		FROM sessions
+		WHERE session_id = ?
+	`, sessionID).Scan(&planRaw, &operationRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PlanState{}, OperationState{}, false, nil
+	}
+	if err != nil {
+		return PlanState{}, OperationState{}, false, fmt.Errorf("load plan and operation state: %w", err)
+	}
+	return decodePlanState(planRaw.String), decodeOperationState(operationRaw.String), true, nil
+}
+
 func (s *SQLiteStore) ContinuationStates() ([]ContinuationStateRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT

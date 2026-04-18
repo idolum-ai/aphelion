@@ -455,6 +455,43 @@ func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID:           7,
+			OperationStatus:  "blocked",
+			OperationStage:   "approval_wait",
+			OperationSummary: "Waiting for admin review",
+			PlanStepStatus:   "in_progress",
+			PlanStep:         "Await admin approval",
+		},
+		personaEffort:  "opus",
+		governorEffort: "high",
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID: 7,
+		Text:   "/status",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "summary state=blocked") {
+		t.Fatalf("status text = %q, want blocked summary state", got)
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "current_signal=operation:blocked:approval_wait") {
+		t.Fatalf("status text = %q, want blocked operation signal", got)
+	}
+}
+
 func TestHandleTelegramCommandSetPersonaModel(t *testing.T) {
 	t.Parallel()
 

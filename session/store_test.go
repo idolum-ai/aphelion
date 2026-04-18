@@ -1960,6 +1960,71 @@ func TestContinuationStateIfExistsDoesNotCreateSession(t *testing.T) {
 	}
 }
 
+func TestPlanAndOperationStateIfExistsDoesNotCreateSession(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1907, UserID: 0}
+	plan, operation, exists, err := store.PlanAndOperationStateIfExists(key)
+	if err != nil {
+		t.Fatalf("PlanAndOperationStateIfExists() err = %v", err)
+	}
+	if exists {
+		t.Fatalf("PlanAndOperationStateIfExists() = (%#v, %#v, %v), want no pre-existing state", plan, operation, exists)
+	}
+
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(1) FROM sessions WHERE session_id = ?`, SessionIDForKey(key)).Scan(&count); err != nil {
+		t.Fatalf("query sessions count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("sessions row count = %d, want 0", count)
+	}
+}
+
+func TestPlanAndOperationStateIfExistsReturnsPersistedState(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1908, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.PlanState = PlanState{
+		Steps: []PlanStep{{
+			Step:   "Await admin approval",
+			Status: PlanStatusInProgress,
+		}},
+	}
+	sess.OperationState = OperationState{
+		Status:  OperationStatusBlocked,
+		Stage:   "approval_wait",
+		Summary: "Waiting for admin review",
+	}
+	if err := store.Save(sess, nil, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	plan, operation, exists, err := store.PlanAndOperationStateIfExists(key)
+	if err != nil {
+		t.Fatalf("PlanAndOperationStateIfExists() err = %v", err)
+	}
+	if !exists {
+		t.Fatal("PlanAndOperationStateIfExists() exists = false, want true")
+	}
+	if len(plan.Steps) != 1 || plan.Steps[0].Step != "Await admin approval" || plan.Steps[0].Status != PlanStatusInProgress {
+		t.Fatalf("plan state = %#v, want persisted in-progress step", plan)
+	}
+	if operation.Status != OperationStatusBlocked || operation.Stage != "approval_wait" || operation.Summary != "Waiting for admin review" {
+		t.Fatalf("operation state = %#v, want persisted blocked operation state", operation)
+	}
+}
+
 func TestCompleteTurnRun(t *testing.T) {
 	t.Parallel()
 

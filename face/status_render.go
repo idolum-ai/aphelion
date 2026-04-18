@@ -19,10 +19,7 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 	if pendingOnly {
 		lines = append(lines, fmt.Sprintf("summary pending_items=%d", len(snapshot.PendingItems)))
 	} else {
-		state := "idle"
-		if len(snapshot.ActiveTurnIDs) > 0 {
-			state = "working"
-		}
+		state := chatSummaryState(snapshot)
 		lines = append(lines, fmt.Sprintf("summary state=%s active_turns=%d queue_depth=%d pending_items=%d", state, len(snapshot.ActiveTurnIDs), snapshot.QueueDepth, len(snapshot.PendingItems)))
 		if snapshot.LatestTurnRun != nil {
 			latest := snapshot.LatestTurnRun
@@ -35,6 +32,12 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 			}
 			lines = append(lines, latestLine)
 		}
+		if operationLine := renderOperationStatusLine(snapshot); operationLine != "" {
+			lines = append(lines, operationLine)
+		}
+		if planLine := renderPlanStatusLine(snapshot); planLine != "" {
+			lines = append(lines, planLine)
+		}
 		if snapshot.Continuation != nil {
 			cont := snapshot.Continuation
 			line := fmt.Sprintf("continuation status=%s remaining_turns=%d", cont.Status, cont.RemainingTurns)
@@ -46,6 +49,7 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 			}
 			lines = append(lines, line)
 		}
+		lines = append(lines, "current_signal="+chatCurrentSignal(snapshot, state))
 		lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
 	}
 	lines = append(lines, renderPendingItemBlock(snapshot.PendingItems, 12)...)
@@ -53,6 +57,124 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 		fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)),
 	)
 	return strings.Join(lines, "\n")
+}
+
+func renderOperationStatusLine(snapshot core.ChatStatusSnapshot) string {
+	status := strings.TrimSpace(snapshot.OperationStatus)
+	stage := strings.TrimSpace(snapshot.OperationStage)
+	summary := strings.TrimSpace(snapshot.OperationSummary)
+	if status == "" && stage == "" && summary == "" {
+		return ""
+	}
+	line := "operation"
+	if status != "" {
+		line += " status=" + status
+	}
+	if stage != "" {
+		line += " stage=" + stage
+	}
+	if summary != "" {
+		line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
+	}
+	return line
+}
+
+func renderPlanStatusLine(snapshot core.ChatStatusSnapshot) string {
+	step := strings.TrimSpace(snapshot.PlanStep)
+	status := strings.TrimSpace(snapshot.PlanStepStatus)
+	if step == "" && status == "" {
+		return ""
+	}
+	line := "plan_step"
+	if status != "" {
+		line += " status=" + status
+	}
+	if step != "" {
+		line += " step=" + quoteStatusField(truncateStatusField(step, 120))
+	}
+	return line
+}
+
+func chatSummaryState(snapshot core.ChatStatusSnapshot) string {
+	if len(snapshot.ActiveTurnIDs) > 0 {
+		return "working"
+	}
+	if strings.EqualFold(strings.TrimSpace(snapshot.OperationStatus), "blocked") || hasBlockingPendingItem(snapshot.PendingItems) {
+		return "blocked"
+	}
+	if latest := snapshot.LatestTurnRun; latest != nil && strings.EqualFold(strings.TrimSpace(latest.Status), "interrupted") {
+		return "interrupted"
+	}
+	if snapshot.QueueDepth > 0 {
+		return "queued"
+	}
+	if latest := snapshot.LatestTurnRun; latest != nil && strings.EqualFold(strings.TrimSpace(latest.Status), "failed") {
+		return "failed"
+	}
+	return "idle"
+}
+
+func hasBlockingPendingItem(items []core.PendingItem) bool {
+	for _, item := range items {
+		switch item.Kind {
+		case core.PendingItemKindDecision, core.PendingItemKindContinuation:
+			return true
+		}
+	}
+	return false
+}
+
+func chatCurrentSignal(snapshot core.ChatStatusSnapshot, state string) string {
+	if latest := snapshot.LatestTurnRun; latest != nil {
+		kind := strings.TrimSpace(latest.Kind)
+		if kind == "" {
+			kind = "interactive"
+		}
+		status := strings.TrimSpace(latest.Status)
+		if status == "" {
+			status = "unknown"
+		}
+		if state == "working" {
+			if tool := strings.TrimSpace(latest.LastToolName); tool != "" {
+				return "tool:" + tool
+			}
+			return "turn:" + kind + ":" + status
+		}
+		if state == "interrupted" {
+			return "turn:" + kind + ":interrupted"
+		}
+	}
+	if state == "blocked" {
+		opStatus := strings.TrimSpace(snapshot.OperationStatus)
+		if opStatus != "" {
+			opStage := strings.TrimSpace(snapshot.OperationStage)
+			if opStage != "" {
+				return "operation:" + opStatus + ":" + opStage
+			}
+			return "operation:" + opStatus
+		}
+		if hasBlockingPendingItem(snapshot.PendingItems) {
+			return "awaiting_approval"
+		}
+	}
+	if state == "queued" && snapshot.QueueDepth > 0 {
+		return fmt.Sprintf("queue:%d", snapshot.QueueDepth)
+	}
+	if latest := snapshot.LatestTurnRun; latest != nil {
+		kind := strings.TrimSpace(latest.Kind)
+		if kind == "" {
+			kind = "interactive"
+		}
+		status := strings.TrimSpace(latest.Status)
+		if status == "" {
+			status = "unknown"
+		}
+		return "turn:" + kind + ":" + status
+	}
+	if step := strings.TrimSpace(snapshot.PlanStep); step != "" {
+		return "plan_step"
+	}
+	return state
 }
 
 func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffort string, governorEffort string) string {

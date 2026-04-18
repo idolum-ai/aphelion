@@ -151,6 +151,24 @@ func TestChatStatusSnapshotAggregatesRouterStoreAndPendingSignals(t *testing.T) 
 	if err := store.CompleteTurnRun(recovery.ID, session.TurnRunStatusInterrupted, "process restart"); err != nil {
 		t.Fatalf("CompleteTurnRun(interrupted) err = %v", err)
 	}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(session) err = %v", err)
+	}
+	sess.OperationState = session.OperationState{
+		Status:  session.OperationStatusBlocked,
+		Stage:   "approval_wait",
+		Summary: "Waiting for admin review",
+	}
+	sess.PlanState = session.PlanState{
+		Steps: []session.PlanStep{{
+			Step:   "Await admin approval",
+			Status: session.PlanStatusInProgress,
+		}},
+	}
+	if err := store.Save(sess, nil, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(session state) err = %v", err)
+	}
 
 	rt.staleTurnThreshold = time.Second
 	rt.staleTurnSweep = func(cutoff time.Time, limit int) ([]session.TurnRun, error) {
@@ -185,6 +203,21 @@ func TestChatStatusSnapshotAggregatesRouterStoreAndPendingSignals(t *testing.T) 
 	}
 	if snapshot.Continuation == nil || snapshot.Continuation.Status != string(session.ContinuationStatusPending) {
 		t.Fatalf("Continuation = %#v, want pending continuation", snapshot.Continuation)
+	}
+	if snapshot.OperationStatus != "blocked" {
+		t.Fatalf("OperationStatus = %q, want blocked", snapshot.OperationStatus)
+	}
+	if snapshot.OperationStage != "approval_wait" {
+		t.Fatalf("OperationStage = %q, want approval_wait", snapshot.OperationStage)
+	}
+	if snapshot.OperationSummary != "Waiting for admin review" {
+		t.Fatalf("OperationSummary = %q, want waiting summary", snapshot.OperationSummary)
+	}
+	if snapshot.PlanStepStatus != "in_progress" {
+		t.Fatalf("PlanStepStatus = %q, want in_progress", snapshot.PlanStepStatus)
+	}
+	if snapshot.PlanStep != "Await admin approval" {
+		t.Fatalf("PlanStep = %q, want Await admin approval", snapshot.PlanStep)
 	}
 	if snapshot.LatestTurnRun == nil {
 		t.Fatal("LatestTurnRun = nil, want latest run data")

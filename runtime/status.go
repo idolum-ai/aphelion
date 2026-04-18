@@ -107,6 +107,17 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		copied := run
 		snapshot.LatestTurnRun = &copied
 	}
+	if r != nil && r.store != nil {
+		key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+		planState, operationState, exists, stateErr := r.store.PlanAndOperationStateIfExists(key)
+		if stateErr != nil {
+			return core.ChatStatusSnapshot{}, stateErr
+		}
+		if exists {
+			snapshot.OperationStatus, snapshot.OperationStage, snapshot.OperationSummary = operationStatusFields(operationState)
+			snapshot.PlanStepStatus, snapshot.PlanStep = planStatusFields(planState)
+		}
+	}
 	for _, stale := range system.StaleRunningTurns {
 		if stale.ChatID == chatID {
 			snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, stale)
@@ -467,6 +478,38 @@ func firstNonEmptyStatus(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func operationStatusFields(state session.OperationState) (status string, stage string, summary string) {
+	normalized := session.NormalizeOperationState(state)
+	status = strings.TrimSpace(string(normalized.Status))
+	stage = strings.TrimSpace(normalized.Stage)
+	summary = strings.TrimSpace(firstNonEmptyStatus(normalized.Summary, normalized.Objective))
+	summary = truncateStatusDiagnostic(summary, 160)
+	return status, stage, summary
+}
+
+func planStatusFields(state session.PlanState) (status string, step string) {
+	normalized := session.NormalizePlanState(state)
+	if len(normalized.Steps) == 0 {
+		explanation := strings.TrimSpace(normalized.Explanation)
+		if explanation != "" {
+			return "", truncateStatusDiagnostic(explanation, 160)
+		}
+		return "", ""
+	}
+
+	picked := normalized.Steps[0]
+	for _, candidate := range normalized.Steps {
+		if candidate.Status == session.PlanStatusInProgress {
+			picked = candidate
+			break
+		}
+		if candidate.Status == session.PlanStatusPending && picked.Status == session.PlanStatusCompleted {
+			picked = candidate
+		}
+	}
+	return strings.TrimSpace(string(picked.Status)), truncateStatusDiagnostic(strings.TrimSpace(picked.Step), 160)
 }
 
 func truncateStatusDiagnostic(text string, maxRunes int) string {
