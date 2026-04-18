@@ -324,6 +324,69 @@ func TestSendInlineKeyboardPayload(t *testing.T) {
 	}
 }
 
+func TestSendInlineKeyboardSplitsLongTextIntoFollowUpMessages(t *testing.T) {
+	var bodies []map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/sendMessage" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var body map[string]interface{}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			bodies = append(bodies, body)
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = int64(300 + len(bodies))
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	longText := strings.Repeat("pending approval details ", 250)
+	replyTo := int64(88)
+	got, err := client.SendInlineKeyboard(context.Background(), 5, longText, [][]InlineButton{
+		{{Text: "Approve", CallbackData: "decision:1:approve"}},
+	}, &replyTo)
+	if err != nil {
+		t.Fatalf("SendInlineKeyboard() err = %v", err)
+	}
+	if got != 301 {
+		t.Fatalf("message id = %d, want first chunk id 301", got)
+	}
+	if len(bodies) < 2 {
+		t.Fatalf("request count = %d, want multiple chunks", len(bodies))
+	}
+	if _, ok := bodies[0]["reply_markup"]; !ok {
+		t.Fatalf("first chunk missing reply_markup: %#v", bodies[0])
+	}
+	if bodies[0]["reply_to_message_id"] != float64(88) {
+		t.Fatalf("first chunk reply_to_message_id = %v, want 88", bodies[0]["reply_to_message_id"])
+	}
+	for i := 1; i < len(bodies); i++ {
+		if _, ok := bodies[i]["reply_markup"]; ok {
+			t.Fatalf("chunk %d unexpectedly includes reply_markup", i+1)
+		}
+		if _, ok := bodies[i]["reply_to_message_id"]; ok {
+			t.Fatalf("chunk %d unexpectedly includes reply_to_message_id", i+1)
+		}
+	}
+	for i, body := range bodies {
+		text, _ := body["text"].(string)
+		if runeCount(text) > telegramTextChunkLimit {
+			t.Fatalf("chunk %d length = %d, want <= %d", i+1, runeCount(text), telegramTextChunkLimit)
+		}
+	}
+}
+
 func TestAnswerCallbackQueryPayload(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{
@@ -602,6 +665,42 @@ func TestEditMessageTextPayload(t *testing.T) {
 	}
 	if _, ok := requestBody["parse_mode"]; ok {
 		t.Fatalf("parse_mode = %v, want omitted", requestBody["parse_mode"])
+	}
+}
+
+func TestEditMessageTextTruncatesOversizedText(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/editMessageText" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, editMessageResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	longText := strings.Repeat("x", telegramTextChunkLimit+200)
+	if err := client.EditMessageText(context.Background(), 5, 42, longText, ""); err != nil {
+		t.Fatalf("EditMessageText() err = %v", err)
+	}
+	text, _ := requestBody["text"].(string)
+	if runeCount(text) > telegramTextChunkLimit {
+		t.Fatalf("edited text length = %d, want <= %d", runeCount(text), telegramTextChunkLimit)
+	}
+	if !strings.HasSuffix(text, "…") {
+		t.Fatalf("edited text = %q, want truncation ellipsis", text)
 	}
 }
 

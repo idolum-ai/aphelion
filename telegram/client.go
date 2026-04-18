@@ -218,6 +218,7 @@ func (c *Client) EditMessageText(ctx context.Context, chatID int64, messageID in
 	if messageID == 0 {
 		return errors.New("message_id is required")
 	}
+	text = truncateTelegramText(text, telegramTextChunkLimit)
 	formatted := prepareFormattedText(text, parseMode)
 	body := map[string]interface{}{
 		"chat_id":    chatID,
@@ -273,25 +274,45 @@ func (c *Client) SendInlineKeyboard(ctx context.Context, chatID int64, text stri
 		return 0, errors.New("inline keyboard rows are required")
 	}
 
-	body := map[string]interface{}{
-		"chat_id": chatID,
-		"text":    strings.TrimSpace(text),
-		"reply_markup": inlineKeyboardMarkup{
-			InlineKeyboard: rows,
-		},
-	}
-	if replyTo != nil {
-		body["reply_to_message_id"] = *replyTo
+	chunks := splitTelegramTextChunks(text, telegramTextChunkLimit)
+	if len(chunks) == 0 {
+		chunks = []string{"Decision required."}
 	}
 
-	resp, err := c.sendMessageRequest(ctx, body)
-	if err != nil {
-		return 0, err
+	firstMessageID := int64(0)
+	for i, chunk := range chunks {
+		if i == 0 {
+			body := map[string]interface{}{
+				"chat_id": chatID,
+				"text":    chunk,
+				"reply_markup": inlineKeyboardMarkup{
+					InlineKeyboard: rows,
+				},
+			}
+			if replyTo != nil {
+				body["reply_to_message_id"] = *replyTo
+			}
+
+			resp, err := c.sendMessageRequest(ctx, body)
+			if err != nil {
+				return 0, err
+			}
+			if !resp.Ok {
+				return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
+			}
+			firstMessageID = resp.Result.MessageID
+			continue
+		}
+
+		messageID, err := c.sendMessageChunk(ctx, chatID, chunk, "", nil)
+		if err != nil {
+			return 0, err
+		}
+		if firstMessageID == 0 {
+			firstMessageID = messageID
+		}
 	}
-	if !resp.Ok {
-		return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
-	}
-	return resp.Result.MessageID, nil
+	return firstMessageID, nil
 }
 
 func (c *Client) AnswerCallbackQuery(ctx context.Context, callbackQueryID string, text string) error {
@@ -785,6 +806,21 @@ func trimLeadingTelegramChunkRunes(runes []rune) []rune {
 		break
 	}
 	return runes[start:]
+}
+
+func truncateTelegramText(text string, limit int) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	if limit <= 0 {
+		limit = telegramTextChunkLimit
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	if limit == 1 {
+		return "…"
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func telegramHTTPError(method string, resp *http.Response) error {
