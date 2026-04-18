@@ -450,10 +450,6 @@ func DefaultConfigPath() string {
 	return defaultHomePath(".aphelion", "aphelion.toml")
 }
 
-func LegacyConfigPath() string {
-	return defaultHomePath(".config", "aphelion", "config.toml")
-}
-
 func ResolveConfigPath(override string) (string, error) {
 	if strings.TrimSpace(override) != "" {
 		return expandPath(override)
@@ -465,10 +461,6 @@ func ResolveConfigPath(override string) (string, error) {
 	primary := DefaultConfigPath()
 	if fileExists(primary) {
 		return primary, nil
-	}
-	legacy := LegacyConfigPath()
-	if fileExists(legacy) {
-		return legacy, nil
 	}
 	return primary, nil
 }

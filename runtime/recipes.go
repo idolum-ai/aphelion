@@ -28,7 +28,6 @@ const (
 
 type runtimeRecipeState struct {
 	PersonaModel   string `json:"persona_model"`
-	PersonaEffort  string `json:"persona_effort,omitempty"` // legacy compatibility field
 	GovernorEffort string `json:"governor_effort"`
 }
 
@@ -55,7 +54,6 @@ func defaultRuntimeRecipeState(cfg *config.Config) runtimeRecipeState {
 		GovernorEffort: governorEffortMedium,
 	}
 	if cfg == nil {
-		state.PersonaEffort = personaEffortForModel(state.PersonaModel)
 		return state
 	}
 	if strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.Anthropic.Model)), "opus") ||
@@ -70,7 +68,6 @@ func defaultRuntimeRecipeState(cfg *config.Config) runtimeRecipeState {
 	if defaultEffort != "" {
 		state.GovernorEffort = defaultEffort
 	}
-	state.PersonaEffort = personaEffortForModel(state.PersonaModel)
 	return state
 }
 
@@ -78,13 +75,9 @@ func normalizeRuntimeRecipeState(state runtimeRecipeState, cfg *config.Config) r
 	defaults := defaultRuntimeRecipeState(cfg)
 	model := normalizePersonaModel(state.PersonaModel)
 	if model == "" {
-		model = personaModelForEffort(state.PersonaEffort)
-	}
-	if model == "" {
 		model = defaults.PersonaModel
 	}
 	state.PersonaModel = model
-	state.PersonaEffort = personaEffortForModel(model)
 	effort := normalizeGovernorEffort(state.GovernorEffort)
 	if effort == "" {
 		effort = defaults.GovernorEffort
@@ -153,9 +146,6 @@ func (r *Runtime) currentRecipeSnapshot() recipeSnapshot {
 	defer r.recipeMu.Unlock()
 	model := normalizePersonaModel(r.recipeState.PersonaModel)
 	if model == "" {
-		model = personaModelForEffort(r.recipeState.PersonaEffort)
-	}
-	if model == "" {
 		model = personaModelSonnet
 	}
 	return recipeSnapshot{
@@ -189,7 +179,6 @@ func (r *Runtime) SetPersonaModel(model string) (string, error) {
 	r.recipeMu.Lock()
 	prev := r.recipeState
 	r.recipeState.PersonaModel = model
-	r.recipeState.PersonaEffort = personaEffortForModel(model)
 	state := r.recipeState
 	r.recipeMu.Unlock()
 	if err := saveRuntimeRecipeState(r.recipePath, state, &r.recipeFileMu); err != nil {
@@ -238,17 +227,6 @@ func normalizePersonaModel(model string) string {
 	switch value {
 	case personaModelSonnet, personaModelOpus46, personaModelOpus47:
 		return value
-	default:
-		return ""
-	}
-}
-
-func personaModelForEffort(effort string) string {
-	switch strings.ToLower(strings.TrimSpace(effort)) {
-	case personaEffortOpus:
-		return personaModelOpus
-	case personaEffortSonnet:
-		return personaModelSonnet
 	default:
 		return ""
 	}

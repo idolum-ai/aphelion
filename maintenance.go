@@ -115,7 +115,6 @@ func runPathsCommand(args []string) error {
 	}
 
 	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
-	fmt.Fprintf(os.Stdout, "legacy_config_path: %s\n", config.LegacyConfigPath())
 	fmt.Fprintf(os.Stdout, "prompt_root: %s\n", cfg.Agent.PromptRoot)
 	fmt.Fprintf(os.Stdout, "exec_root: %s\n", cfg.Agent.ExecRoot)
 	fmt.Fprintf(os.Stdout, "shared_memory_root: %s\n", cfg.Agent.SharedMemoryRoot)

@@ -67,10 +67,6 @@ Config file default:
 
 `~/.aphelion/aphelion.toml`
 
-Legacy fallback:
-
-`~/.config/aphelion/config.toml`
-
 Required principal bootstrap:
 
 ```toml
