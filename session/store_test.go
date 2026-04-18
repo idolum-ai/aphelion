@@ -333,7 +333,22 @@ func TestContinuationStateRoundTripAndUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() err = %v", err)
 	}
-	sess.ContinuationState = ContinuationState{Status: ContinuationStatusPending, Objective: "implement continuation controls", StageSummary: "Attach approval UI", RemainingTurns: 1, ApprovedBy: 1002}
+	sess.ContinuationState = ContinuationState{
+		Status:         ContinuationStatusPending,
+		Objective:      "implement continuation controls",
+		StageSummary:   "Attach approval UI",
+		RemainingTurns: 1,
+		ApprovedBy:     1002,
+		PersonaIntent: ContinuationIntent{
+			Decision:  ContinuationIntentDecisionContinue,
+			Rationale: "persona asks to continue",
+		},
+		GovernorIntent: ContinuationIntent{
+			Decision:  ContinuationIntentDecisionContinue,
+			Rationale: "governor ratified the next step",
+			Ratified:  true,
+		},
+	}
 	if err := store.Save(sess, []Message{{Role: "assistant", Content: "ok", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
 		t.Fatalf("Save() err = %v", err)
 	}
@@ -344,7 +359,25 @@ func TestContinuationStateRoundTripAndUpdate(t *testing.T) {
 	if reloaded.ContinuationState.Status != ContinuationStatusPending {
 		t.Fatalf("status = %q, want pending", reloaded.ContinuationState.Status)
 	}
-	updated := ContinuationState{Status: ContinuationStatusApproved, Objective: "implement continuation controls", RemainingTurns: 1, ApprovedBy: 1002}
+	updated := ContinuationState{
+		Status:         ContinuationStatusApproved,
+		Objective:      "implement continuation controls",
+		RemainingTurns: 1,
+		ApprovedBy:     1002,
+		PersonaIntent: ContinuationIntent{
+			Decision:   ContinuationIntentDecisionContinue,
+			Rationale:  "persona asks to continue",
+			Confidence: "high",
+		},
+		GovernorIntent: ContinuationIntent{
+			Decision:    ContinuationIntentDecisionContinue,
+			Rationale:   "governor ratified the next step",
+			Constraints: "bounded to this turn",
+			Confidence:  "high",
+			Ratified:    true,
+		},
+		HandshakeBlockedReason: " ",
+	}
 	if err := store.UpdateContinuationState(key, updated); err != nil {
 		t.Fatalf("UpdateContinuationState() err = %v", err)
 	}
@@ -357,6 +390,18 @@ func TestContinuationStateRoundTripAndUpdate(t *testing.T) {
 	}
 	if got.ApprovedBy != 1002 {
 		t.Fatalf("approved_by = %d, want 1002", got.ApprovedBy)
+	}
+	if got.PersonaIntent.Decision != ContinuationIntentDecisionContinue {
+		t.Fatalf("persona intent decision = %q, want continue", got.PersonaIntent.Decision)
+	}
+	if got.GovernorIntent.Decision != ContinuationIntentDecisionContinue {
+		t.Fatalf("governor intent decision = %q, want continue", got.GovernorIntent.Decision)
+	}
+	if !got.GovernorIntent.Ratified {
+		t.Fatal("governor intent ratified = false, want true")
+	}
+	if got.HandshakeBlockedReason != "" {
+		t.Fatalf("handshake blocked reason = %q, want empty after normalize", got.HandshakeBlockedReason)
 	}
 }
 

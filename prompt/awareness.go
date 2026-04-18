@@ -56,6 +56,14 @@ type RuntimeAwareness struct {
 	ProposalBoundedEffect      string
 	OperationFindings          []string
 	OperationArtifacts         []string
+	ContinuationStatus         string
+	ContinuationActive         bool
+	ContinuationPersonaIntent  string
+	ContinuationPersonaWhy     string
+	ContinuationGovernorIntent string
+	ContinuationGovernorWhy    string
+	ContinuationRatified       bool
+	ContinuationBlockedReason  string
 	PromptRoot                 string
 	ExecRoot                   string
 	SharedMemoryRoot           string
@@ -105,6 +113,14 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, nonEmptyAwarenessLine("proposal_kind", aw.ProposalKind))
 	lines = append(lines, nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus))
 	lines = append(lines, nonEmptyAwarenessLine("proposal_summary", aw.ProposalSummary))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_status", aw.ContinuationStatus))
+	lines = append(lines, fmt.Sprintf("- continuation_active: %t", aw.ContinuationActive))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_persona_intent", aw.ContinuationPersonaIntent))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_persona_rationale", aw.ContinuationPersonaWhy))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_governor_intent", aw.ContinuationGovernorIntent))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_governor_rationale", aw.ContinuationGovernorWhy))
+	lines = append(lines, fmt.Sprintf("- continuation_governor_ratified: %t", aw.ContinuationRatified))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_blocked_reason", aw.ContinuationBlockedReason))
 	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
 	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	lines = append(lines, nonEmptyAwarenessLine("prompt_root", aw.PromptRoot))
@@ -151,6 +167,12 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode st
 	lines = append(lines, fmt.Sprintf("- stream_reply: %t", aw.StreamReply))
 	lines = append(lines, fmt.Sprintf("- proposal_active: %t", aw.ProposalActive))
 	lines = append(lines, nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_status", aw.ContinuationStatus))
+	lines = append(lines, fmt.Sprintf("- continuation_active: %t", aw.ContinuationActive))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_persona_intent", aw.ContinuationPersonaIntent))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_governor_intent", aw.ContinuationGovernorIntent))
+	lines = append(lines, fmt.Sprintf("- continuation_governor_ratified: %t", aw.ContinuationRatified))
+	lines = append(lines, nonEmptyAwarenessLine("continuation_blocked_reason", aw.ContinuationBlockedReason))
 	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
 	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	return strings.Join(compactLines(lines), "\n")

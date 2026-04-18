@@ -155,15 +155,36 @@ const (
 	TurnAuthorizationStatusRevoked  TurnAuthorizationStatus = "revoked"
 )
 
+type ContinuationIntentDecision string
+
+const (
+	ContinuationIntentDecisionContinue ContinuationIntentDecision = "continue"
+	ContinuationIntentDecisionStop     ContinuationIntentDecision = "stop"
+	ContinuationIntentDecisionHold     ContinuationIntentDecision = "hold"
+)
+
+type ContinuationIntent struct {
+	Decision    ContinuationIntentDecision `json:"decision,omitempty"`
+	Rationale   string                     `json:"rationale,omitempty"`
+	NextStep    string                     `json:"next_step,omitempty"`
+	Constraints string                     `json:"constraints,omitempty"`
+	Confidence  string                     `json:"confidence,omitempty"`
+	Ratified    bool                       `json:"ratified,omitempty"`
+	UpdatedAt   time.Time                  `json:"updated_at,omitempty"`
+}
+
 type TurnAuthorizationState struct {
-	Kind           TurnAuthorizationKind   `json:"kind,omitempty"`
-	Status         TurnAuthorizationStatus `json:"status,omitempty"`
-	DecisionID     string                  `json:"decision_id,omitempty"`
-	Objective      string                  `json:"objective,omitempty"`
-	StageSummary   string                  `json:"stage_summary,omitempty"`
-	RemainingTurns int                     `json:"remaining_turns,omitempty"`
-	ApprovedBy     int64                   `json:"approved_by,omitempty"`
-	UpdatedAt      time.Time               `json:"updated_at,omitempty"`
+	Kind                   TurnAuthorizationKind   `json:"kind,omitempty"`
+	Status                 TurnAuthorizationStatus `json:"status,omitempty"`
+	DecisionID             string                  `json:"decision_id,omitempty"`
+	Objective              string                  `json:"objective,omitempty"`
+	StageSummary           string                  `json:"stage_summary,omitempty"`
+	RemainingTurns         int                     `json:"remaining_turns,omitempty"`
+	ApprovedBy             int64                   `json:"approved_by,omitempty"`
+	PersonaIntent          ContinuationIntent      `json:"persona_intent,omitempty"`
+	GovernorIntent         ContinuationIntent      `json:"governor_intent,omitempty"`
+	HandshakeBlockedReason string                  `json:"handshake_blocked_reason,omitempty"`
+	UpdatedAt              time.Time               `json:"updated_at,omitempty"`
 }
 
 type ContinuationStatus = TurnAuthorizationStatus
@@ -524,6 +545,9 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	state.DecisionID = strings.TrimSpace(state.DecisionID)
 	state.Objective = strings.TrimSpace(state.Objective)
 	state.StageSummary = strings.TrimSpace(state.StageSummary)
+	state.PersonaIntent = normalizeContinuationIntent(state.PersonaIntent)
+	state.GovernorIntent = normalizeContinuationIntent(state.GovernorIntent)
+	state.HandshakeBlockedReason = normalizeContinuationStage(state.HandshakeBlockedReason)
 	if state.Kind == "" && (state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
 		state.Kind = TurnAuthorizationKindContinuation
 	}
@@ -609,6 +633,44 @@ func normalizeOperationProposal(proposal OperationProposal) OperationProposal {
 
 func normalizeOperationStage(stage string) string {
 	return normalizeEnumValue(stage)
+}
+
+func normalizeContinuationIntent(intent ContinuationIntent) ContinuationIntent {
+	intent.Decision = normalizeContinuationIntentDecision(intent.Decision)
+	intent.Rationale = strings.TrimSpace(intent.Rationale)
+	intent.NextStep = strings.TrimSpace(intent.NextStep)
+	intent.Constraints = strings.TrimSpace(intent.Constraints)
+	intent.Confidence = normalizeContinuationConfidence(intent.Confidence)
+	if intent.UpdatedAt.IsZero() && (intent.Decision != "" || intent.Rationale != "" || intent.NextStep != "" || intent.Constraints != "" || intent.Confidence != "" || intent.Ratified) {
+		intent.UpdatedAt = time.Now().UTC()
+	}
+	return intent
+}
+
+func normalizeContinuationIntentDecision(decision ContinuationIntentDecision) ContinuationIntentDecision {
+	switch normalizeEnumValue(string(decision)) {
+	case string(ContinuationIntentDecisionContinue):
+		return ContinuationIntentDecisionContinue
+	case string(ContinuationIntentDecisionStop):
+		return ContinuationIntentDecisionStop
+	case string(ContinuationIntentDecisionHold):
+		return ContinuationIntentDecisionHold
+	default:
+		return ""
+	}
+}
+
+func normalizeContinuationConfidence(confidence string) string {
+	switch normalizeEnumValue(confidence) {
+	case "low", "medium", "high":
+		return normalizeEnumValue(confidence)
+	default:
+		return ""
+	}
+}
+
+func normalizeContinuationStage(value string) string {
+	return normalizeEnumValue(value)
 }
 
 func normalizeEnumValue(value string) string {

@@ -15,14 +15,20 @@ import (
 )
 
 type continuationConsensus struct {
-	PersonaRationale  string
-	GovernorRationale string
-	PlanState         session.PlanState
-	OperationState    session.OperationState
+	PersonaIntent  session.ContinuationIntent
+	GovernorIntent session.ContinuationIntent
+	BlockedReason  string
+	PlanState      session.PlanState
+	OperationState session.OperationState
 }
 
 func (c continuationConsensus) eligible() bool {
-	return strings.TrimSpace(c.PersonaRationale) != "" && strings.TrimSpace(c.GovernorRationale) != ""
+	return strings.TrimSpace(c.BlockedReason) == "" &&
+		c.PersonaIntent.Decision == session.ContinuationIntentDecisionContinue &&
+		c.GovernorIntent.Decision == session.ContinuationIntentDecisionContinue &&
+		strings.TrimSpace(c.PersonaIntent.Rationale) != "" &&
+		strings.TrimSpace(c.GovernorIntent.Rationale) != "" &&
+		c.GovernorIntent.Ratified
 }
 
 func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) error {
@@ -35,32 +41,38 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	if !ok {
 		return nil
 	}
+
 	consensus := r.buildContinuationConsensus(key, result)
-	if !consensus.eligible() {
-		if err := r.clearPendingContinuationOffer(key); err != nil {
-			return fmt.Errorf("clear stale continuation approval: %w", err)
-		}
-		return nil
-	}
 	objective, nextStep := summarizeContinuationPlan(consensus.PlanState, consensus.OperationState, promptInput)
-	decisionID := newContinuationDecisionID()
+
 	state := session.ContinuationState{
-		Kind:           session.TurnAuthorizationKindContinuation,
-		Status:         session.ContinuationStatusPending,
-		DecisionID:     decisionID,
-		Objective:      objective,
-		StageSummary:   nextStep,
-		RemainingTurns: 1,
-		UpdatedAt:      time.Now().UTC(),
+		Kind:                   session.TurnAuthorizationKindContinuation,
+		Status:                 session.ContinuationStatusIdle,
+		Objective:              objective,
+		StageSummary:           nextStep,
+		RemainingTurns:         0,
+		PersonaIntent:          consensus.PersonaIntent,
+		GovernorIntent:         consensus.GovernorIntent,
+		HandshakeBlockedReason: consensus.BlockedReason,
+		UpdatedAt:              time.Now().UTC(),
+	}
+	if consensus.eligible() {
+		state.Status = session.ContinuationStatusPending
+		state.DecisionID = newContinuationDecisionID()
+		state.RemainingTurns = 1
 	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return fmt.Errorf("persist continuation state: %w", err)
 	}
+	if !consensus.eligible() {
+		return nil
+	}
+
 	_, err := sender.SendInlineKeyboard(
 		ctx,
 		msg.ChatID,
-		renderContinuationPrompt(state, consensus.PersonaRationale, consensus.GovernorRationale),
-		continuationApprovalButtonRows(decisionID),
+		renderContinuationPrompt(state),
+		continuationApprovalButtonRows(state.DecisionID),
 		nil,
 	)
 	if err != nil {
@@ -75,17 +87,68 @@ func (r *Runtime) buildContinuationConsensus(key session.SessionKey, result *tur
 	planState = session.NormalizePlanState(planState)
 	operationState = session.NormalizeOperationState(operationState)
 
-	governorRationale := continuationGovernorConsensus(planState, operationState)
-	if !governorContinuationRatified(planState, operationState) {
-		governorRationale = ""
-	}
+	personaIntent := continuationPersonaIntent(result, planState, operationState)
+	governorIntent := continuationGovernorIntent(planState, operationState)
 
 	return continuationConsensus{
-		PersonaRationale:  continuationPersonaRationale(result),
-		GovernorRationale: governorRationale,
-		PlanState:         planState,
-		OperationState:    operationState,
+		PersonaIntent:  personaIntent,
+		GovernorIntent: governorIntent,
+		BlockedReason:  continuationHandshakeBlockedReason(personaIntent, governorIntent),
+		PlanState:      planState,
+		OperationState: operationState,
 	}
+}
+
+func continuationPersonaIntent(result *turn.Result, planState session.PlanState, operationState session.OperationState) session.ContinuationIntent {
+	rationale := continuationPersonaRationale(result)
+	intent := session.ContinuationIntent{
+		Decision:   session.ContinuationIntentDecisionHold,
+		Rationale:  rationale,
+		NextStep:   clampContinuationText(continuationNextStep(planState, operationState), 220),
+		Confidence: "low",
+	}
+	if rationale != "" {
+		intent.Decision = session.ContinuationIntentDecisionContinue
+		intent.Confidence = "medium"
+	}
+	return intent
+}
+
+func continuationGovernorIntent(planState session.PlanState, operationState session.OperationState) session.ContinuationIntent {
+	rationale := continuationGovernorConsensus(planState, operationState)
+	ratified := governorContinuationRatified(planState, operationState)
+	intent := session.ContinuationIntent{
+		Decision:    session.ContinuationIntentDecisionHold,
+		Rationale:   rationale,
+		NextStep:    clampContinuationText(continuationNextStep(planState, operationState), 220),
+		Constraints: clampContinuationText(firstNonEmptyContinuation(operationState.Proposal.BoundedEffect, operationState.Stage), 220),
+		Confidence:  "low",
+		Ratified:    ratified,
+	}
+	if rationale != "" && ratified {
+		intent.Decision = session.ContinuationIntentDecisionContinue
+		intent.Confidence = "high"
+	}
+	return intent
+}
+
+func continuationHandshakeBlockedReason(persona session.ContinuationIntent, governor session.ContinuationIntent) string {
+	if strings.TrimSpace(persona.Rationale) == "" {
+		return "persona_rationale_missing"
+	}
+	if persona.Decision != session.ContinuationIntentDecisionContinue {
+		return "persona_not_willing"
+	}
+	if strings.TrimSpace(governor.Rationale) == "" {
+		return "governor_rationale_missing"
+	}
+	if !governor.Ratified {
+		return "governor_not_ratified"
+	}
+	if governor.Decision != session.ContinuationIntentDecisionContinue {
+		return "governor_not_willing"
+	}
+	return ""
 }
 
 func continuationPersonaRationale(result *turn.Result) string {
@@ -128,28 +191,6 @@ func hasActivePlanStep(planState session.PlanState) bool {
 		}
 	}
 	return false
-}
-
-func (r *Runtime) clearPendingContinuationOffer(key session.SessionKey) error {
-	if r == nil || r.store == nil {
-		return nil
-	}
-	state, exists, err := r.store.ContinuationStateIfExists(key)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return nil
-	}
-	state = session.NormalizeContinuationState(state)
-	if state.Status != session.ContinuationStatusPending && state.Status != session.ContinuationStatusApproved {
-		return nil
-	}
-	return r.store.UpdateContinuationState(key, session.ContinuationState{
-		Kind:      session.TurnAuthorizationKindContinuation,
-		Status:    session.ContinuationStatusIdle,
-		UpdatedAt: time.Now().UTC(),
-	})
 }
 
 func summarizeContinuationPlan(planState session.PlanState, operationState session.OperationState, promptInput string) (objective string, nextStep string) {
@@ -219,13 +260,26 @@ func clampContinuationText(value string, maxChars int) string {
 	return strings.TrimSpace(string(runes[:maxChars])) + "…"
 }
 
-func renderContinuationPrompt(state session.ContinuationState, personaRationale string, governorRationale string) string {
+func renderContinuationPrompt(state session.ContinuationState) string {
 	lines := []string{"I can continue from here."}
-	if personaRationale != "" {
-		lines = append(lines, "", "Persona rationale:", personaRationale)
+	if state.PersonaIntent.Decision != "" {
+		lines = append(lines, "", "Persona intent:", string(state.PersonaIntent.Decision))
 	}
-	if governorRationale != "" {
-		lines = append(lines, "", "Governor rationale:", governorRationale)
+	if state.PersonaIntent.Rationale != "" {
+		lines = append(lines, "", "Persona rationale:", state.PersonaIntent.Rationale)
+	}
+	if state.GovernorIntent.Decision != "" {
+		governorIntent := string(state.GovernorIntent.Decision)
+		if state.GovernorIntent.Ratified {
+			governorIntent += " (ratified)"
+		}
+		lines = append(lines, "", "Governor intent:", governorIntent)
+	}
+	if state.GovernorIntent.Rationale != "" {
+		lines = append(lines, "", "Governor rationale:", state.GovernorIntent.Rationale)
+	}
+	if state.GovernorIntent.Constraints != "" {
+		lines = append(lines, "", "Constraints:", state.GovernorIntent.Constraints)
 	}
 	if state.Objective != "" {
 		lines = append(lines, "", "Objective:", state.Objective)

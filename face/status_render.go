@@ -62,6 +62,18 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 			if cont.ApprovedBy > 0 {
 				line += fmt.Sprintf(" approved_by=%d", cont.ApprovedBy)
 			}
+			if cont.PersonaIntent != "" {
+				line += " persona_intent=" + cont.PersonaIntent
+			}
+			if cont.GovernorIntent != "" {
+				line += " governor_intent=" + cont.GovernorIntent
+			}
+			if cont.GovernorRatified {
+				line += " governor_ratified=true"
+			}
+			if cont.BlockedReason != "" {
+				line += " blocked_reason=" + cont.BlockedReason
+			}
 			lines = append(lines, line)
 		}
 		lines = append(lines, "current_signal="+chatCurrentSignal(snapshot, state))

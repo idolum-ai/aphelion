@@ -204,12 +204,16 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 			continue
 		}
 		snapshot.Continuations = append(snapshot.Continuations, core.ContinuationStatusSnapshot{
-			ChatID:         row.Key.ChatID,
-			Status:         status,
-			RemainingTurns: state.RemainingTurns,
-			DecisionID:     strings.TrimSpace(state.DecisionID),
-			ApprovedBy:     state.ApprovedBy,
-			UpdatedAt:      coalesceTime(row.UpdatedAt, state.UpdatedAt),
+			ChatID:           row.Key.ChatID,
+			Status:           status,
+			RemainingTurns:   state.RemainingTurns,
+			DecisionID:       strings.TrimSpace(state.DecisionID),
+			ApprovedBy:       state.ApprovedBy,
+			PersonaIntent:    strings.TrimSpace(string(state.PersonaIntent.Decision)),
+			GovernorIntent:   strings.TrimSpace(string(state.GovernorIntent.Decision)),
+			GovernorRatified: state.GovernorIntent.Ratified,
+			BlockedReason:    strings.TrimSpace(state.HandshakeBlockedReason),
+			UpdatedAt:        coalesceTime(row.UpdatedAt, state.UpdatedAt),
 		})
 		if state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved {
 			updatedAt := coalesceTime(row.UpdatedAt, state.UpdatedAt)
@@ -449,7 +453,24 @@ func continuationItemID(state session.ContinuationState, chatID int64) string {
 }
 
 func renderContinuationSummary(state session.ContinuationState) string {
-	return fmt.Sprintf("status=%s remaining_turns=%d", strings.TrimSpace(string(state.Status)), state.RemainingTurns)
+	state = session.NormalizeContinuationState(state)
+	parts := []string{
+		fmt.Sprintf("status=%s", strings.TrimSpace(string(state.Status))),
+		fmt.Sprintf("remaining_turns=%d", state.RemainingTurns),
+	}
+	if decision := strings.TrimSpace(string(state.PersonaIntent.Decision)); decision != "" {
+		parts = append(parts, "persona_intent="+decision)
+	}
+	if decision := strings.TrimSpace(string(state.GovernorIntent.Decision)); decision != "" {
+		parts = append(parts, "governor_intent="+decision)
+	}
+	if state.GovernorIntent.Ratified {
+		parts = append(parts, "governor_ratified=true")
+	}
+	if reason := strings.TrimSpace(state.HandshakeBlockedReason); reason != "" {
+		parts = append(parts, "blocked_reason="+reason)
+	}
+	return strings.Join(parts, " ")
 }
 
 func statusAge(now time.Time, preferred time.Time, fallback time.Time) time.Duration {

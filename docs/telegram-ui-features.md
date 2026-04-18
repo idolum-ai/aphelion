@@ -97,9 +97,10 @@ When a turn offers continuation approval, an inline prompt is shown with:
 
 Offer conditions:
 
-- Persona rationale must be present (Idolum proposal note for the turn).
-- Governor rationale must be present and ratified (active/ratified plan-operation context).
-- If either side is missing, no continuation prompt is shown and stale pending continuation state is cleared.
+- Persona must publish explicit continuation intent (`continue|hold|stop`) plus rationale.
+- Governor must publish explicit continuation intent (`continue|hold|stop`) plus rationale and ratification signal.
+- Prompt is shown only when both intents are `continue`, both rationales are non-empty, and governor is ratified.
+- When handshake fails, continuation state is persisted as idle with an explicit blocked reason (for machine visibility) and no prompt is shown.
 
 ### Runtime decision prompts
 

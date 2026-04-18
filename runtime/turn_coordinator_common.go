@@ -217,6 +217,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 			turn.ApplyPlanAwareness(baseGovernorAwareness, sess.PlanState),
 			sess.OperationState,
 		)
+		governorAwareness = turn.ApplyContinuationAwareness(governorAwareness, sess.ContinuationState)
 		promptState = r.buildTurnCoordinatorGovernorPrompt(input, governorAwareness, brokerage)
 		systemBlocks = promptState.SystemBlocks
 		systemPrompt = promptState.SystemPrompt
@@ -289,6 +290,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		),
 		sess.OperationState,
 	)
+	out.LastFaceAwareness = turn.ApplyContinuationAwareness(out.LastFaceAwareness, sess.ContinuationState)
 
 	governorResult := &turn.GovernorResult{
 		Turn:            turnResult,

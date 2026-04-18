@@ -73,11 +73,17 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if !strings.Contains(sender.inline[0].text, "Persona rationale:") {
 		t.Fatalf("inline text = %q, want persona rationale block", sender.inline[0].text)
 	}
+	if !strings.Contains(sender.inline[0].text, "Persona intent:") {
+		t.Fatalf("inline text = %q, want persona intent block", sender.inline[0].text)
+	}
 	if !strings.Contains(sender.inline[0].text, "Continue now because the scoped plan is actively in progress.") {
 		t.Fatalf("inline text = %q, want proposal rationale summary", sender.inline[0].text)
 	}
 	if !strings.Contains(sender.inline[0].text, "Governor rationale:") {
 		t.Fatalf("inline text = %q, want governor rationale block", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "Governor intent:") {
+		t.Fatalf("inline text = %q, want governor intent block", sender.inline[0].text)
 	}
 	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {
 		t.Fatalf("rows = %#v, want Stop/Continue row", sender.inline[0].rows)
@@ -100,6 +106,21 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	}
 	if strings.TrimSpace(state.DecisionID) == "" {
 		t.Fatal("DecisionID empty, want persisted continuation decision id")
+	}
+	if state.PersonaIntent.Decision != session.ContinuationIntentDecisionContinue {
+		t.Fatalf("persona decision = %q, want continue", state.PersonaIntent.Decision)
+	}
+	if strings.TrimSpace(state.PersonaIntent.Rationale) == "" {
+		t.Fatal("persona rationale empty, want persisted rationale")
+	}
+	if state.GovernorIntent.Decision != session.ContinuationIntentDecisionContinue {
+		t.Fatalf("governor decision = %q, want continue", state.GovernorIntent.Decision)
+	}
+	if !state.GovernorIntent.Ratified {
+		t.Fatal("governor ratified = false, want true")
+	}
+	if state.HandshakeBlockedReason != "" {
+		t.Fatalf("handshake blocked reason = %q, want empty", state.HandshakeBlockedReason)
 	}
 	if got := sender.inline[0].rows[0][0].CallbackData; !strings.Contains(got, state.DecisionID) {
 		t.Fatalf("stop callback = %q, want decision id %q", got, state.DecisionID)
@@ -169,6 +190,12 @@ func TestHandleInboundSkipsContinuationWhenPersonaRationaleMissing(t *testing.T)
 	if state.DecisionID != "" {
 		t.Fatalf("decision id = %q, want cleared", state.DecisionID)
 	}
+	if state.PersonaIntent.Decision != session.ContinuationIntentDecisionHold {
+		t.Fatalf("persona decision = %q, want hold", state.PersonaIntent.Decision)
+	}
+	if state.HandshakeBlockedReason != "persona_rationale_missing" {
+		t.Fatalf("handshake blocked reason = %q, want persona_rationale_missing", state.HandshakeBlockedReason)
+	}
 }
 
 func TestHandleInboundSkipsContinuationWhenGovernorRationaleMissing(t *testing.T) {
@@ -215,6 +242,12 @@ func TestHandleInboundSkipsContinuationWhenGovernorRationaleMissing(t *testing.T
 	}
 	if state.DecisionID != "" {
 		t.Fatalf("decision id = %q, want cleared", state.DecisionID)
+	}
+	if state.GovernorIntent.Decision != session.ContinuationIntentDecisionHold {
+		t.Fatalf("governor decision = %q, want hold", state.GovernorIntent.Decision)
+	}
+	if state.HandshakeBlockedReason != "governor_rationale_missing" {
+		t.Fatalf("handshake blocked reason = %q, want governor_rationale_missing", state.HandshakeBlockedReason)
 	}
 }
 
@@ -305,6 +338,9 @@ func TestTriggerContinuationRunsAsApprovedUser(t *testing.T) {
 	}
 	if got.ApprovedBy != 0 {
 		t.Fatalf("ApprovedBy = %d, want cleared after approved continuation turn", got.ApprovedBy)
+	}
+	if got.HandshakeBlockedReason == "" {
+		t.Fatal("HandshakeBlockedReason empty, want explicit reason when continuation is not offered again")
 	}
 }
 

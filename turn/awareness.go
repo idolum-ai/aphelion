@@ -97,6 +97,20 @@ func ApplyOperationAwareness(aw prompt.RuntimeAwareness, state session.Operation
 	return aw
 }
 
+// ApplyContinuationAwareness composes continuation-handshake signals into runtime awareness.
+func ApplyContinuationAwareness(aw prompt.RuntimeAwareness, state session.ContinuationState) prompt.RuntimeAwareness {
+	state = session.NormalizeContinuationState(state)
+	aw.ContinuationStatus = strings.TrimSpace(string(state.Status))
+	aw.ContinuationActive = state.Active()
+	aw.ContinuationPersonaIntent = strings.TrimSpace(string(state.PersonaIntent.Decision))
+	aw.ContinuationPersonaWhy = strings.TrimSpace(state.PersonaIntent.Rationale)
+	aw.ContinuationGovernorIntent = strings.TrimSpace(string(state.GovernorIntent.Decision))
+	aw.ContinuationGovernorWhy = strings.TrimSpace(state.GovernorIntent.Rationale)
+	aw.ContinuationRatified = state.GovernorIntent.Ratified
+	aw.ContinuationBlockedReason = strings.TrimSpace(state.HandshakeBlockedReason)
+	return aw
+}
+
 // ApplyBrokerageAwareness composes brokerage context into runtime awareness.
 func ApplyBrokerageAwareness(aw prompt.RuntimeAwareness, b BrokerageAwareness) prompt.RuntimeAwareness {
 	aw.BrokerageActive = b.Active
