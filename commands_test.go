@@ -98,6 +98,7 @@ type stubCommandRouter struct {
 	status                      core.SessionStatus
 	statusChat                  core.ChatStatusSnapshot
 	statusSystem                core.SystemStatusSnapshot
+	statusReadableSummary       string
 	statusChatErr               error
 	statusSystemErr             error
 	stop                        core.StopResult
@@ -164,6 +165,13 @@ func (s stubCommandRouter) StatusSystem(senderID int64) (core.SystemStatusSnapsh
 		return core.SystemStatusSnapshot{}, s.statusSystemErr
 	}
 	return s.statusSystem, nil
+}
+
+func (s stubCommandRouter) StatusReadableSummary(ctx context.Context, view string, statusText string) string {
+	_ = ctx
+	_ = view
+	_ = statusText
+	return s.statusReadableSummary
 }
 
 func (s stubCommandRouter) CurrentEfforts() (string, string) {
@@ -407,6 +415,39 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 	}
 	if !foundThisChat || !foundPending || !foundRefresh {
 		t.Fatalf("status keyboard rows = %#v, want user status controls", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandStatusIncludesReadableSummary(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID: 7,
+		},
+		statusReadableSummary: "Chat 7 is idle right now; no blocking pending items.",
+		personaEffort:         "sonnet",
+		governorEffort:        "medium",
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID: 7,
+		Text:   "/status",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "quick_read Chat 7 is idle right now; no blocking pending items.") {
+		t.Fatalf("status text = %q, want readable quick summary", got)
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "status_scope=chat") {
+		t.Fatalf("status text = %q, want machine status body", got)
 	}
 }
 

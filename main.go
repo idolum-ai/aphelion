@@ -174,6 +174,13 @@ func (c telegramCommandControl) StatusSystem(senderID int64) (core.SystemStatusS
 	return c.rt.SystemStatusSnapshot(routerSnapshot)
 }
 
+func (c telegramCommandControl) StatusReadableSummary(ctx context.Context, view string, statusText string) string {
+	if c.rt == nil {
+		return ""
+	}
+	return c.rt.StatusReadableSummary(ctx, view, statusText)
+}
+
 func (c telegramCommandControl) ContinuationState(chatID int64) (session.ContinuationState, error) {
 	if c.rt == nil {
 		return session.ContinuationState{}, nil

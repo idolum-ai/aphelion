@@ -264,6 +264,7 @@ Inside Telegram:
 - `/start` shows the intro and command help
 - `/help` shows the command list
 - `/status` opens a button-driven status view (`This Chat`, `Pending Only`, `Refresh`)
+- `/status` prepends a concise `quick_read` summary when a native provider key is available, then shows raw status telemetry
 - admins also get `System Overview`, `Hot Chats`, and `Find Chat` buttons from `/status`
 - `/stop` cancels the current turn and clears any queued follow-up messages for that chat
 - `/detach` clears active/queued/continuation state and detaches pending approvals for you in this chat

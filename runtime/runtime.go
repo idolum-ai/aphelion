@@ -89,6 +89,9 @@ type Runtime struct {
 	sessionLocks           map[string]*sync.Mutex
 	statusStageMu          sync.RWMutex
 	statusStageByChat      map[int64]statusTurnPhase
+	statusReadableMu       sync.Mutex
+	statusReadableProvider agent.Provider
+	statusReadableReady    bool
 	faceModelsMu           sync.Mutex
 	recipeMu               sync.Mutex
 	recipeFileMu           sync.Mutex

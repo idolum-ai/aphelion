@@ -34,6 +34,7 @@ type commandRouter interface {
 	Status(chatID int64) core.SessionStatus
 	StatusChat(chatID int64) (core.ChatStatusSnapshot, error)
 	StatusSystem(senderID int64) (core.SystemStatusSnapshot, error)
+	StatusReadableSummary(ctx context.Context, view string, statusText string) string
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
@@ -84,7 +85,7 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 	case "help":
 		text = face.RenderTelegramHelp(personaEffort, governorEffort)
 	case "status":
-		rendered, rows, renderErr := renderStatusView(router, msg.ChatID, msg.SenderID, statusViewChat, msg.ChatID, personaEffort, governorEffort)
+		rendered, rows, renderErr := renderStatusView(ctx, router, msg.ChatID, msg.SenderID, statusViewChat, msg.ChatID, personaEffort, governorEffort)
 		if renderErr != nil {
 			return true, renderErr
 		}
@@ -197,7 +198,7 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			}
 		}
 		personaEffort, governorEffort := router.CurrentEfforts()
-		rendered, rows, err := renderStatusView(router, chatID, senderID, view, targetChatID, personaEffort, governorEffort)
+		rendered, rows, err := renderStatusView(ctx, router, chatID, senderID, view, targetChatID, personaEffort, governorEffort)
 		if err != nil {
 			return true, err
 		}
