@@ -7,7 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -23,6 +26,27 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 
+	key := session.SessionKey{ChatID: 8101, UserID: 0, Scope: telegramDMScopeRef(8101)}
+	if err := store.UpdatePlanState(key, session.PlanState{
+		Explanation: "Fix the continuation UI before merge.",
+		Steps: []session.PlanStep{
+			{Step: "Swap continuation button order so stop is left and continue is right", Status: session.PlanStatusCompleted},
+			{Step: "Summarize the actual next-step plan in the continuation prompt", Status: session.PlanStatusInProgress},
+		},
+	}); err != nil {
+		t.Fatalf("UpdatePlanState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		Objective: "Land the continuation UI polish cleanly.",
+		Summary:   "Use plan/proposal content instead of the request preamble.",
+		Proposal: session.OperationProposal{
+			Summary:       "Patch continuation UI button order and summary text.",
+			BoundedEffect: "Local code/test changes limited to continuation UI generation and directly affected tests.",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{ChatID: 8101, SenderID: 1001, SenderName: "admin", Text: "keep going on the implementation", MessageID: 1})
 	if err != nil {
 		t.Fatalf("HandleInbound() err = %v", err)
@@ -36,8 +60,20 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if !strings.Contains(sender.inline[0].text, "Approve 1 more turn") {
 		t.Fatalf("inline text = %q, want continuation approval prompt", sender.inline[0].text)
 	}
+	if strings.Contains(sender.inline[0].text, "keep going on the implementation") {
+		t.Fatalf("inline text = %q, want plan/proposal summary instead of user preamble", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "Land the continuation UI polish cleanly.") {
+		t.Fatalf("inline text = %q, want operation objective in summary", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "Summarize the actual next-step plan in the continuation prompt") {
+		t.Fatalf("inline text = %q, want in-progress plan step as next action", sender.inline[0].text)
+	}
 	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {
 		t.Fatalf("rows = %#v, want Stop/Continue row", sender.inline[0].rows)
+	}
+	if sender.inline[0].rows[0][0].Text != "Stop" || sender.inline[0].rows[0][1].Text != "Continue" {
+		t.Fatalf("button order = %#v, want left=Stop right=Continue", sender.inline[0].rows[0])
 	}
 	state, err := store.ContinuationState(session.SessionKey{ChatID: 8101, UserID: 0})
 	if err != nil {
@@ -45,5 +81,96 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	}
 	if state.Status != session.ContinuationStatusPending {
 		t.Fatalf("status = %q, want pending", state.Status)
+	}
+	if state.Objective != "Land the continuation UI polish cleanly." {
+		t.Fatalf("objective = %q, want operation objective", state.Objective)
+	}
+	if state.StageSummary != "Summarize the actual next-step plan in the continuation prompt" {
+		t.Fatalf("stage summary = %q, want in-progress plan step", state.StageSummary)
+	}
+}
+
+func TestApproveContinuationPersistsApproverIdentity(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8102, UserID: 0, Scope: telegramDMScopeRef(8102)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{Status: session.ContinuationStatusPending, RemainingTurns: 1}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	state, err := rt.ApproveContinuation(8102, 1002)
+	if err != nil {
+		t.Fatalf("ApproveContinuation() err = %v", err)
+	}
+	if state.ApprovedBy != 1002 {
+		t.Fatalf("ApprovedBy = %d, want 1002", state.ApprovedBy)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.ApprovedBy != 1002 {
+		t.Fatalf("persisted ApprovedBy = %d, want 1002", got.ApprovedBy)
+	}
+}
+
+func TestTriggerContinuationRunsAsApprovedUser(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &toolRequestingProvider{}
+	tools := &principalRecordingTools{defs: []agent.ToolDef{testExecToolDef()}, supportsPrincipal: true}
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+
+	key := session.SessionKey{ChatID: 8103, UserID: 0, Scope: telegramDMScopeRef(8103)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, ApprovedBy: 1002}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 8103); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if tools.lastPrincipal.Role != principal.RoleApprovedUser {
+		t.Fatalf("last principal role = %q, want approved_user", tools.lastPrincipal.Role)
+	}
+	if tools.lastPrincipal.TelegramUserID != 1002 {
+		t.Fatalf("last principal user id = %d, want 1002", tools.lastPrincipal.TelegramUserID)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusPending {
+		t.Fatalf("status = %q, want pending after the new continuation offer", got.Status)
+	}
+	if got.ApprovedBy != 0 {
+		t.Fatalf("ApprovedBy = %d, want cleared before the new pending offer", got.ApprovedBy)
+	}
+}
+
+func TestTriggerContinuationFailsClosedWithoutRecordedApprover(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8104, UserID: 0, Scope: telegramDMScopeRef(8104)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	err = rt.TriggerContinuation(context.Background(), 8104)
+	if err == nil || !strings.Contains(err.Error(), "approver is not recorded") {
+		t.Fatalf("TriggerContinuation() err = %v, want missing approver error", err)
 	}
 }
