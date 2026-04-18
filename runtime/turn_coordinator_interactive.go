@@ -26,7 +26,7 @@ type interactiveTurnCoordinator struct {
 	scope                 sandbox.Scope
 	msg                   core.InboundMessage
 	key                   session.SessionKey
-	sess                  *session.Session
+	state                 *interactiveTurnState
 	prepared              pipeline.TurnPrepareContract
 	exec                  pipeline.TurnExecutionContract
 	facePolicy            pipeline.FacePolicy
@@ -41,13 +41,6 @@ type interactiveTurnCoordinator struct {
 	currentFaceModel      face.Renderer
 	baseGovernorAwareness prompt.RuntimeAwareness
 	audit                 *turnAuditRecorder
-	lastGovernor          *turn.GovernorResult
-	lastFaceAwareness     prompt.RuntimeAwareness
-	// replyWithVoice captures the active channel-aware voice preference for render.
-	replyWithVoice bool
-	// lastRenderedReply caches the visible reply text from the last render call.
-	lastRenderedReply string
-	lastToolLog       []string
 }
 
 func (c *interactiveTurnCoordinator) Propose(ctx context.Context, req turn.FaceProposalRequest) (*turn.FaceProposalResult, error) {
@@ -111,20 +104,20 @@ func (c *interactiveTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 	}
 	fallbackOpts := pipeline.FallbackOptions{
 		Channel: c.requestChannel(),
-		Voice:   c.replyWithVoice,
+		Voice:   c.state.replyWithVoice(),
 	}
 	rendered, err := c.runtime.renderTurnCoordinatorFace(ctx, turnCoordinatorRenderInput{
 		Scope:                 c.scope,
 		Msg:                   c.msg,
 		Channel:               c.requestChannel(),
 		PrincipalRole:         c.principalRoleOrActor(),
-		LastGovernor:          c.lastGovernor,
-		LastFaceAwareness:     c.lastFaceAwareness,
+		LastGovernor:          c.state.governor(),
+		LastFaceAwareness:     c.state.faceAwareness(),
 		BaseGovernorAwareness: c.baseGovernorAwareness,
 		FacePolicy:            c.facePolicy,
 		UseMaterialFloor:      c.useMaterialFloor,
 		CurrentFaceModel:      c.currentFaceModel,
-		ReplyWithVoice:        c.replyWithVoice,
+		ReplyWithVoice:        c.state.replyWithVoice(),
 		AllowStream:           true,
 		PromptInput:           c.prepared.LedgerText,
 		Audit:                 c.audit,
@@ -133,13 +126,8 @@ func (c *interactiveTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 	if err != nil {
 		return nil, err
 	}
-	if c.lastGovernor == nil || c.lastGovernor.Turn == nil {
+	if c.state.governor() == nil || c.state.governor().Turn == nil {
 		return &turn.FaceRenderResult{}, nil
-	}
-	c.lastRenderedReply = strings.TrimSpace(rendered.ReplyText)
-	c.lastToolLog = nil
-	if c.lastGovernor != nil && c.lastGovernor.Turn != nil {
-		c.lastToolLog = c.lastGovernor.Turn.ToolLog
 	}
 	return &turn.FaceRenderResult{
 		Text:         strings.TrimSpace(rendered.ReplyText),
@@ -158,14 +146,18 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 	if runKind == "" {
 		runKind = session.TurnRunKindInteractive
 	}
-	c.sess.ChatType = "dm"
-	c.sess.UserName = c.msg.SenderName
+	sess := c.state.session()
+	if sess == nil {
+		return nil, fmt.Errorf("interactive turn state missing session")
+	}
+	sess.ChatType = "dm"
+	sess.UserName = c.msg.SenderName
 
 	output, err := c.runtime.executeTurnCoordinator(ctx, turnCoordinatorExecuteInput{
 		Scope:                 c.scope,
 		Msg:                   c.msg,
 		Key:                   c.key,
-		Sess:                  c.sess,
+		Sess:                  sess,
 		Prepared:              c.prepared,
 		Exec:                  c.exec,
 		UseMaterialFloor:      c.useMaterialFloor,
@@ -186,18 +178,8 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 	if err != nil {
 		return nil, err
 	}
-	c.sess = output.Sess
-	c.lastFaceAwareness = output.LastFaceAwareness
-	c.lastGovernor = output.GovernorResult
-	c.replyWithVoice = c.runtime.shouldReplyWithVoice(c.prepared.InboundWasVoice) && len(output.GovernorResult.Turn.Media) == 0
+	c.state.applyExecution(output, c.runtime.shouldReplyWithVoice(c.prepared.InboundWasVoice))
 	return output.GovernorResult, nil
-}
-
-func (c *interactiveTurnCoordinator) getTurnToolLog() []string {
-	if c == nil || c.lastGovernor == nil || c.lastGovernor.Turn == nil {
-		return nil
-	}
-	return c.lastGovernor.Turn.ToolLog
 }
 
 func (c *interactiveTurnCoordinator) requestChannel() string {

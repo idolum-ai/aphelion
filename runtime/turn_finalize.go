@@ -207,10 +207,10 @@ type turnCommitInput struct {
 }
 
 type turnCommitHooks struct {
-	QueueReviewEvents       func() error
-	DeliverReviewEvents     func() error
-	QueueDurableArtifact    func() error
-	PostReplyContinuationUI func(ctx context.Context) error
+	QueueReviewEvents       func(result *turn.Result) error
+	DeliverReviewEvents     func(result *turn.Result) error
+	QueueDurableArtifact    func(result *turn.Result) error
+	PostReplyContinuationUI func(ctx context.Context, result *turn.Result) error
 }
 
 type turnCommitErrorContext struct {
@@ -222,13 +222,16 @@ type turnCommitErrorContext struct {
 }
 
 type turnPersistencePort struct {
-	runtime *Runtime
-	key     session.SessionKey
-	sess    *session.Session
-	msg     core.InboundMessage
-	actor   principal.Principal
-	errCtx  turnCommitErrorContext
-	audit   *turnAuditRecorder
+	runtime      *Runtime
+	key          session.SessionKey
+	sess         *session.Session
+	sessionState interface {
+		session() *session.Session
+	}
+	msg    core.InboundMessage
+	actor  principal.Principal
+	errCtx turnCommitErrorContext
+	audit  *turnAuditRecorder
 }
 
 func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitRequest) (*turn.CommitResult, error) {
@@ -238,9 +241,13 @@ func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitReques
 	if req.Result == nil {
 		return nil, fmt.Errorf("turn persistence request missing result")
 	}
+	sess := p.currentSession()
+	if sess == nil {
+		return nil, fmt.Errorf("turn persistence session unavailable")
+	}
 	result, err := p.runtime.persistTurn(ctx, turnCommitInput{
 		Key:             p.key,
-		Sess:            p.sess,
+		Sess:            sess,
 		Msg:             p.msg,
 		Actor:           p.actor,
 		Prepared:        req.Result.Prepared,
@@ -263,10 +270,25 @@ func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitReques
 	return &turn.CommitResult{Persisted: result.Committed}, nil
 }
 
+func (p *turnPersistencePort) currentSession() *session.Session {
+	if p == nil {
+		return nil
+	}
+	if p.sessionState != nil {
+		if sess := p.sessionState.session(); sess != nil {
+			return sess
+		}
+	}
+	return p.sess
+}
+
 type turnDeliveryPort struct {
-	runtime         *Runtime
-	key             session.SessionKey
-	sess            *session.Session
+	runtime      *Runtime
+	key          session.SessionKey
+	sess         *session.Session
+	sessionState interface {
+		session() *session.Session
+	}
 	msg             core.InboundMessage
 	inboundWasVoice bool
 	deliver         bool
@@ -302,39 +324,51 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 			}
 		},
 		RecordOutbound: func(ctx context.Context, messageID int64, kind string) error {
-			return p.recordOutboundWithContext(ctx, p.sess, p.key, messageID, kind)
+			return p.recordOutboundWithContext(ctx, p.currentSession(), p.key, messageID, kind)
 		},
 		PostCommit: func(postCtx context.Context) error {
-			return p.runPostCommitHooks(postCtx)
+			return p.runPostCommitHooks(postCtx, req.Result)
 		},
 	})
 }
 
-func (p *turnDeliveryPort) runPostCommitHooks(ctx context.Context) error {
+func (p *turnDeliveryPort) runPostCommitHooks(ctx context.Context, result *turn.Result) error {
 	if p == nil {
 		return nil
 	}
 	if p.hooks.QueueReviewEvents != nil {
-		if err := p.hooks.QueueReviewEvents(); err != nil {
+		if err := p.hooks.QueueReviewEvents(result); err != nil {
 			return err
 		}
 	}
 	if p.hooks.DeliverReviewEvents != nil {
-		if err := p.hooks.DeliverReviewEvents(); err != nil {
+		if err := p.hooks.DeliverReviewEvents(result); err != nil {
 			return err
 		}
 	}
 	if p.hooks.QueueDurableArtifact != nil {
-		if err := p.hooks.QueueDurableArtifact(); err != nil {
+		if err := p.hooks.QueueDurableArtifact(result); err != nil {
 			return err
 		}
 	}
 	if p.hooks.PostReplyContinuationUI != nil {
-		if err := p.hooks.PostReplyContinuationUI(ctx); err != nil {
+		if err := p.hooks.PostReplyContinuationUI(ctx, result); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (p *turnDeliveryPort) currentSession() *session.Session {
+	if p == nil {
+		return nil
+	}
+	if p.sessionState != nil {
+		if sess := p.sessionState.session(); sess != nil {
+			return sess
+		}
+	}
+	return p.sess
 }
 
 func (p *turnDeliveryPort) recordOutboundWithContext(_ context.Context, sess *session.Session, key session.SessionKey, outboundID int64, outboundType string) error {
