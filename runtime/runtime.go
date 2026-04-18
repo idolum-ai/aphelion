@@ -84,6 +84,7 @@ type Runtime struct {
 	constitutionGate       TurnConstitutionGate
 	turnAuditSink          func(TurnAudit)
 	interactiveDMAssembler interactiveDMTurnAssembler
+	maintenanceAssembler   maintenanceTurnAssembler
 	sessionMu              sync.Mutex
 	sessionLocks           map[string]*sync.Mutex
 	statusStageMu          sync.RWMutex

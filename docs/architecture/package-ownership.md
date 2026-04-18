@@ -8,6 +8,7 @@
 
 - Owns transport ingress/egress, principal/scope/session wiring, and long-lived loops.
 - Owns pre-turn shell handoff into species assemblers.
+- Owns two execution-family assembly spines: interactive-like (`interactive_like_assembly.go`) and maintenance (`maintenance_turn_assembly.go`).
 - Adapts concrete ports into `turn.Machine`.
 - Does not own one-turn stage ordering.
 
@@ -17,6 +18,7 @@ Code anchors:
 - [`runtime/turn.go`](../../runtime/turn.go)
 - [`runtime/interactive_dm_turn.go`](../../runtime/interactive_dm_turn.go)
 - [`runtime/interactive_like_assembly.go`](../../runtime/interactive_like_assembly.go)
+- [`runtime/maintenance_turn_assembly.go`](../../runtime/maintenance_turn_assembly.go)
 - [`runtime/maintenance_turn.go`](../../runtime/maintenance_turn.go)
 - [`runtime/durable_group.go`](../../runtime/durable_group.go)
 
@@ -56,6 +58,8 @@ Code anchors:
 
 - [`turn/dependency_guard_test.go`](../../turn/dependency_guard_test.go) enforces that `turn` does not depend on `runtime`.
 - [`runtime/architecture_invariants_runtime_test.go`](../../runtime/architecture_invariants_runtime_test.go) pins floor/scene and persist-before-deliver behavior.
+- [`runtime/interactive_like_assembly_test.go`](../../runtime/interactive_like_assembly_test.go) defends shared interactive-like assembly behavior across DM and durable-group species.
+- [`runtime/maintenance_assembly_boundary_runtime_test.go`](../../runtime/maintenance_assembly_boundary_runtime_test.go) defends maintenance-family assembly boundary behavior across heartbeat, cron, and startup recovery species.
 
 Related requirements:
 
