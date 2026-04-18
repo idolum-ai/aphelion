@@ -58,7 +58,7 @@ Runnable v0:
 - Telegram typing + real tool-backed progress feedback
 - Heartbeat and config-driven cron
 - Telegram voice transcription + optional TTS replies
-- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`, `/restart`, `/reinstall`
+- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`, `/detach`, `/restart`, `/reinstall`
 
 ## Run
 
@@ -269,6 +269,8 @@ Inside Telegram:
 - `/status` opens a button-driven status view (`This Chat`, `Pending Only`, `Refresh`)
 - admins also get `System Overview`, `Hot Chats`, and `Find Chat` buttons from `/status`
 - `/stop` cancels the current turn and clears any queued follow-up messages for that chat
+- `/detach` clears active/queued/continuation state and detaches pending approvals for you in this chat
+- `/restart` (admin only) forces gateway restart and detaches pending approvals before exit by default
 
 Config failures now exit once with a dedicated config error and the service will not
 crash-loop. `make install-user-service`, `make update`, and `make update-release`

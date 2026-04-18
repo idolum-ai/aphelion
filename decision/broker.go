@@ -69,6 +69,8 @@ type DurableStore interface {
 	LoadPending(ctx context.Context) ([]DurableDecision, error)
 	UpsertPending(ctx context.Context, pending DurableDecision) error
 	DeletePending(ctx context.Context, id string) error
+	DetachByOwner(ctx context.Context, ownerKey string) (int, error)
+	DetachAll(ctx context.Context) (int, error)
 }
 
 type Broker struct {
@@ -364,6 +366,84 @@ func (b *Broker) Peek(id string) (PendingDecision, bool) {
 	return pending.request, true
 }
 
+func (b *Broker) DetachByOwner(ctx context.Context, ownerKey string) (int, error) {
+	if b == nil {
+		return 0, fmt.Errorf("decision broker is nil")
+	}
+	if err := b.ensureLoaded(ctx); err != nil {
+		return 0, err
+	}
+	ownerKey = strings.TrimSpace(ownerKey)
+	if ownerKey == "" {
+		return 0, nil
+	}
+
+	detached := make([]*pendingDecision, 0, 1)
+	b.mu.Lock()
+	for id, pending := range b.pending {
+		if pending == nil || pending.ownerKey != ownerKey {
+			continue
+		}
+		delete(b.pending, id)
+		detached = append(detached, pending)
+	}
+	delete(b.byOwner, ownerKey)
+	store := b.durable
+	b.mu.Unlock()
+
+	for _, pending := range detached {
+		resolveDefaultChoice(pending)
+	}
+	if store == nil {
+		return len(detached), nil
+	}
+	removed, err := store.DetachByOwner(ctx, ownerKey)
+	if err != nil {
+		return len(detached), err
+	}
+	if removed > len(detached) {
+		return removed, nil
+	}
+	return len(detached), nil
+}
+
+func (b *Broker) DetachAll(ctx context.Context) (int, error) {
+	if b == nil {
+		return 0, fmt.Errorf("decision broker is nil")
+	}
+	if err := b.ensureLoaded(ctx); err != nil {
+		return 0, err
+	}
+
+	detached := make([]*pendingDecision, 0, len(b.pending))
+	b.mu.Lock()
+	for id, pending := range b.pending {
+		if pending == nil {
+			continue
+		}
+		delete(b.pending, id)
+		detached = append(detached, pending)
+	}
+	b.byOwner = make(map[string]string)
+	store := b.durable
+	b.mu.Unlock()
+
+	for _, pending := range detached {
+		resolveDefaultChoice(pending)
+	}
+	if store == nil {
+		return len(detached), nil
+	}
+	removed, err := store.DetachAll(ctx)
+	if err != nil {
+		return len(detached), err
+	}
+	if removed > len(detached) {
+		return removed, nil
+	}
+	return len(detached), nil
+}
+
 func (b *Broker) upsertPending(ctx context.Context, pending *pendingDecision) error {
 	if b == nil || pending == nil {
 		return nil
@@ -505,6 +585,24 @@ func containsChoice(choices []Choice, id string) bool {
 		}
 	}
 	return false
+}
+
+func OwnerKey(chatID int64, senderID int64) string {
+	return decisionOwnerKey(Request{ChatID: chatID, SenderID: senderID})
+}
+
+func resolveDefaultChoice(pending *pendingDecision) {
+	if pending == nil {
+		return
+	}
+	defaultChoice := strings.TrimSpace(pending.request.DefaultChoice)
+	if defaultChoice == "" {
+		return
+	}
+	select {
+	case pending.resultCh <- defaultChoice:
+	default:
+	}
 }
 
 func EncodeCallbackData(id string, choice string) string {

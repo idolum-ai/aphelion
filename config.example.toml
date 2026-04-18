@@ -3,6 +3,7 @@ user_agent = ""
 
 [telegram]
 bot_token = "telegram-bot-token"
+detach_pending_on_restart = true
 poll_timeout = 30
 stream_edit_interval = "300ms"
 stream_cursor = " ▉"

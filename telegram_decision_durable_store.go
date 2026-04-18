@@ -103,3 +103,17 @@ func (s *telegramDecisionDurableStore) DeletePending(_ context.Context, id strin
 	}
 	return s.store.DeletePendingDecision(id)
 }
+
+func (s *telegramDecisionDurableStore) DetachByOwner(_ context.Context, ownerKey string) (int, error) {
+	if s == nil || s.store == nil {
+		return 0, nil
+	}
+	return s.store.DeletePendingDecisionsByOwner(ownerKey)
+}
+
+func (s *telegramDecisionDurableStore) DetachAll(_ context.Context) (int, error) {
+	if s == nil || s.store == nil {
+		return 0, nil
+	}
+	return s.store.DeleteAllPendingDecisions()
+}

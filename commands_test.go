@@ -101,6 +101,10 @@ type stubCommandRouter struct {
 	statusChatErr               error
 	statusSystemErr             error
 	stop                        core.StopResult
+	detach                      core.DetachResult
+	detachErr                   error
+	detachChatID                int64
+	detachSenderID              int64
 	personaEffort               string
 	governorEffort              string
 	canRestart                  bool
@@ -130,6 +134,15 @@ type stubCommandRouter struct {
 
 func (s stubCommandRouter) Stop(chatID int64) core.StopResult {
 	return s.stop
+}
+
+func (s *stubCommandRouter) Detach(chatID int64, senderID int64) (core.DetachResult, error) {
+	s.detachChatID = chatID
+	s.detachSenderID = senderID
+	if s.detachErr != nil {
+		return core.DetachResult{}, s.detachErr
+	}
+	return s.detach, nil
 }
 
 func (s stubCommandRouter) Status(chatID int64) core.SessionStatus {
@@ -271,6 +284,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		ok   bool
 	}{
 		{text: "/stop", want: "stop", ok: true},
+		{text: "/detach", want: "detach", ok: true},
 		{text: "/help extra", want: "help", ok: true},
 		{text: "/status@my_bot", want: "status", ok: true},
 		{text: "/restart", want: "restart", ok: true},
@@ -314,6 +328,44 @@ func TestHandleTelegramCommandStop(t *testing.T) {
 	}
 	if sender.msgs[0].ReplyTo == nil || *sender.msgs[0].ReplyTo != 11 {
 		t.Fatalf("reply_to = %#v, want 11", sender.msgs[0].ReplyTo)
+	}
+}
+
+func TestHandleTelegramCommandDetach(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		detach: core.DetachResult{
+			ActiveCanceled:           true,
+			QueuedDropped:            true,
+			ContinuationRevoked:      true,
+			PendingDecisionsDetached: 2,
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  99,
+		MessageID: 12,
+		Text:      "/detach",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.detachChatID != 7 || router.detachSenderID != 99 {
+		t.Fatalf("detach inputs = (%d,%d), want (7,99)", router.detachChatID, router.detachSenderID)
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "Detached") || !strings.Contains(got, "2 pending") {
+		t.Fatalf("detach text = %q, want detach summary including pending count", got)
+	}
+	if sender.msgs[0].ReplyTo == nil || *sender.msgs[0].ReplyTo != 12 {
+		t.Fatalf("reply_to = %#v, want 12", sender.msgs[0].ReplyTo)
 	}
 }
 

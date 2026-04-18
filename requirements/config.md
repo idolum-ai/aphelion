@@ -45,6 +45,7 @@ project_name = ""        # Never sent to providers. Used only in local logs.
 # ─── Telegram ───
 [telegram]
 bot_token = ""
+detach_pending_on_restart = true # Clear durable pending decisions before restart exits
 allowed_chats = []       # Chat IDs allowed to interact. Empty = allow all.
 poll_timeout = 30        # Long-poll timeout in seconds
 # Formatting
