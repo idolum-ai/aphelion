@@ -143,6 +143,23 @@ type durableAgentPolicyOverridesInput struct {
 	SharedInferenceReuseScope string `json:"shared_inference_reuse_scope,omitempty"`
 }
 
+type durableAgentWizardAnswersInput struct {
+	Address          string   `json:"address,omitempty"`
+	Account          string   `json:"account,omitempty"`
+	Adapter          string   `json:"adapter,omitempty"`
+	Query            string   `json:"query,omitempty"`
+	Charter          string   `json:"charter,omitempty"`
+	Autonomy         string   `json:"autonomy,omitempty"`
+	WakeupMode       string   `json:"wakeup_mode,omitempty"`
+	PollInterval     string   `json:"poll_interval,omitempty"`
+	SurfaceRules     []string `json:"surface_rules,omitempty"`
+	SummarizePDFs    *bool    `json:"summarize_pdfs,omitempty"`
+	SynthesisCadence string   `json:"synthesis_cadence,omitempty"`
+	Capabilities     []string `json:"capabilities,omitempty"`
+	NeverRetain      []string `json:"never_retain,omitempty"`
+	DriftPolicy      string   `json:"drift_policy,omitempty"`
+}
+
 type durableAgentInput struct {
 	Action                    string                            `json:"action"`
 	AgentID                   string                            `json:"agent_id,omitempty"`
@@ -166,6 +183,7 @@ type durableAgentInput struct {
 	NetworkPolicy             string                            `json:"network_policy,omitempty"`
 	SecretScopes              []string                          `json:"secret_scopes,omitempty"`
 	ChannelConfig             json.RawMessage                   `json:"channel_config,omitempty"`
+	WizardAnswers             *durableAgentWizardAnswersInput   `json:"wizard_answers,omitempty"`
 	Operation                 string                            `json:"operation,omitempty"`
 	Secret                    string                            `json:"secret,omitempty"`
 	History                   int                               `json:"history,omitempty"`
@@ -410,7 +428,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: email"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
@@ -451,7 +469,27 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						"wakeup_mode": {"type": "string", "description": "Optional wakeup mode for create. Example: poll"},
 						"network_policy": {"type": "string", "description": "Optional network policy for create"},
 						"secret_scopes": {"type": "array", "items": {"type": "string"}, "description": "Optional secret scopes for create"},
-					"channel_config": {"type": "object", "description": "Optional structured channel configuration for create"},
+						"channel_config": {"type": "object", "description": "Optional structured channel configuration for create"},
+						"wizard_answers": {
+							"type": "object",
+							"description": "Wizard answer patch for wizard_answer (email child setup).",
+							"properties": {
+								"address": {"type": "string"},
+								"account": {"type": "string"},
+								"adapter": {"type": "string"},
+								"query": {"type": "string"},
+								"charter": {"type": "string"},
+								"autonomy": {"type": "string"},
+								"wakeup_mode": {"type": "string"},
+								"poll_interval": {"type": "string"},
+								"surface_rules": {"type": "array", "items": {"type": "string"}},
+								"summarize_pdfs": {"type": "boolean"},
+								"synthesis_cadence": {"type": "string"},
+								"capabilities": {"type": "array", "items": {"type": "string"}},
+								"never_retain": {"type": "array", "items": {"type": "string"}},
+								"drift_policy": {"type": "string"}
+							}
+						},
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},
 					"secret": {"type": "string", "description": "Replacement control-plane secret for enrollment_update when operation=rotate_secret"},
 					"history": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Recent policy update entries to show for policy_show"}

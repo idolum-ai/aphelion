@@ -33,7 +33,9 @@ import (
 )
 
 const (
-	turnTimeout     = 10 * time.Minute
+	// turnTimeout <= 0 disables per-turn deadlines so long deliberations can run until
+	// explicit user control (/stop, /detach, or thinking-card controls) interrupts them.
+	turnTimeout     = 0
 	exitCodeFailure = 1
 	exitCodeConfig  = 78
 	restartExitWait = 250 * time.Millisecond

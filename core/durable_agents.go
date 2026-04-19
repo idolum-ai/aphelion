@@ -108,6 +108,52 @@ type DurableAgentContinuityState struct {
 	PendingQuestions   []DurableAgentPendingQuestion   `json:"pending_questions,omitempty"`
 	ReviewRefs         []DurableAgentReviewReference   `json:"review_refs,omitempty"`
 	RatifiedOutcomes   []DurableAgentRatifiedOutcome   `json:"ratified_outcomes,omitempty"`
+	SetupWizard        *DurableAgentSetupWizardState   `json:"setup_wizard,omitempty"`
+	EmailPending       *DurableAgentEmailPendingState  `json:"email_pending,omitempty"`
+}
+
+type DurableAgentSetupWizardState struct {
+	SchemaVersion int                            `json:"schema_version,omitempty"`
+	ChannelKind   string                         `json:"channel_kind,omitempty"`
+	Status        string                         `json:"status,omitempty"`
+	CurrentStep   string                         `json:"current_step,omitempty"`
+	Answers       DurableAgentSetupWizardAnswers `json:"answers,omitempty"`
+	Missing       []string                       `json:"missing,omitempty"`
+	StartedAt     time.Time                      `json:"started_at,omitempty"`
+	UpdatedAt     time.Time                      `json:"updated_at,omitempty"`
+}
+
+type DurableAgentSetupWizardAnswers struct {
+	Address          string   `json:"address,omitempty"`
+	Account          string   `json:"account,omitempty"`
+	Adapter          string   `json:"adapter,omitempty"`
+	Query            string   `json:"query,omitempty"`
+	Charter          string   `json:"charter,omitempty"`
+	Autonomy         string   `json:"autonomy,omitempty"`
+	WakeupMode       string   `json:"wakeup_mode,omitempty"`
+	PollInterval     string   `json:"poll_interval,omitempty"`
+	SurfaceRules     []string `json:"surface_rules,omitempty"`
+	SummarizePDFs    *bool    `json:"summarize_pdfs,omitempty"`
+	SynthesisCadence string   `json:"synthesis_cadence,omitempty"`
+	Capabilities     []string `json:"capabilities,omitempty"`
+	NeverRetain      []string `json:"never_retain,omitempty"`
+	DriftPolicy      string   `json:"drift_policy,omitempty"`
+}
+
+type DurableAgentEmailPendingState struct {
+	Threads []DurableAgentEmailPendingThread `json:"threads,omitempty"`
+}
+
+type DurableAgentEmailPendingThread struct {
+	ThreadID        string    `json:"thread_id,omitempty"`
+	MessageID       string    `json:"message_id,omitempty"`
+	From            string    `json:"from,omitempty"`
+	Subject         string    `json:"subject,omitempty"`
+	Snippet         string    `json:"snippet,omitempty"`
+	Body            string    `json:"body,omitempty"`
+	ReceivedAt      time.Time `json:"received_at,omitempty"`
+	Labels          []string  `json:"labels,omitempty"`
+	AttachmentNames []string  `json:"attachment_names,omitempty"`
 }
 
 type DurableAgentRecentInteraction struct {
@@ -277,6 +323,7 @@ type DurableReviewArtifact struct {
 }
 
 const durableAgentContinuityMaxItems = 12
+const durableAgentEmailPendingMaxItems = 200
 
 const DefaultDurableAgentControlProtocolVersion = "v1"
 
@@ -348,6 +395,10 @@ func NormalizeDurableAgentChannelConfig(cfg DurableAgentChannelConfig) DurableAg
 		cfg.Email = &normalized
 	}
 	return cfg
+}
+
+func NormalizeDurableAgentSetupWizardAnswers(answers DurableAgentSetupWizardAnswers) DurableAgentSetupWizardAnswers {
+	return normalizeDurableAgentSetupWizardAnswers(answers)
 }
 
 func NormalizeDurableAgentEmailChannelConfig(cfg DurableAgentEmailChannelConfig) DurableAgentEmailChannelConfig {
@@ -638,6 +689,8 @@ func NormalizeDurableAgentContinuityState(state DurableAgentContinuityState) Dur
 	state.PendingQuestions = normalizeDurableAgentPendingQuestions(state.PendingQuestions)
 	state.ReviewRefs = normalizeDurableAgentReviewReferences(state.ReviewRefs)
 	state.RatifiedOutcomes = normalizeDurableAgentRatifiedOutcomes(state.RatifiedOutcomes)
+	state.SetupWizard = normalizeDurableAgentSetupWizardState(state.SetupWizard)
+	state.EmailPending = normalizeDurableAgentEmailPendingState(state.EmailPending)
 	return state
 }
 
@@ -657,7 +710,9 @@ func (s DurableAgentContinuityState) IsZero() bool {
 	return len(s.RecentInteractions) == 0 &&
 		len(s.PendingQuestions) == 0 &&
 		len(s.ReviewRefs) == 0 &&
-		len(s.RatifiedOutcomes) == 0
+		len(s.RatifiedOutcomes) == 0 &&
+		s.SetupWizard == nil &&
+		s.EmailPending == nil
 }
 
 func (s DurableAgentContinuityState) WithReviewArtifact(reviewEventID int64, artifact DurableReviewArtifact, at time.Time) DurableAgentContinuityState {
@@ -1013,6 +1068,114 @@ func normalizeDurableAgentRatifiedOutcomes(values []DurableAgentRatifiedOutcome)
 	return out
 }
 
+func normalizeDurableAgentSetupWizardState(state *DurableAgentSetupWizardState) *DurableAgentSetupWizardState {
+	if state == nil {
+		return nil
+	}
+	normalized := *state
+	if normalized.SchemaVersion <= 0 {
+		normalized.SchemaVersion = 1
+	}
+	normalized.ChannelKind = strings.TrimSpace(normalized.ChannelKind)
+	normalized.Status = normalizeDurableAgentSetupWizardStatus(normalized.Status)
+	normalized.CurrentStep = strings.TrimSpace(normalized.CurrentStep)
+	normalized.Answers = normalizeDurableAgentSetupWizardAnswers(normalized.Answers)
+	normalized.Missing = normalizeDurableAgentStringSet(normalized.Missing)
+	if normalized.Status == "" && normalized.ChannelKind == "" && normalized.CurrentStep == "" &&
+		len(normalized.Missing) == 0 && durableAgentSetupWizardAnswersZero(normalized.Answers) &&
+		normalized.StartedAt.IsZero() && normalized.UpdatedAt.IsZero() {
+		return nil
+	}
+	return &normalized
+}
+
+func normalizeDurableAgentSetupWizardStatus(value string) string {
+	switch strings.TrimSpace(value) {
+	case "in_progress", "ready", "finalized", "cancelled":
+		return strings.TrimSpace(value)
+	default:
+		return ""
+	}
+}
+
+func normalizeDurableAgentSetupWizardAnswers(answers DurableAgentSetupWizardAnswers) DurableAgentSetupWizardAnswers {
+	answers.Address = strings.TrimSpace(answers.Address)
+	answers.Account = strings.TrimSpace(answers.Account)
+	answers.Adapter = normalizeDurableAgentEmailAdapter(answers.Adapter)
+	answers.Query = strings.TrimSpace(answers.Query)
+	answers.Charter = strings.TrimSpace(answers.Charter)
+	answers.Autonomy = strings.TrimSpace(answers.Autonomy)
+	answers.WakeupMode = strings.TrimSpace(answers.WakeupMode)
+	answers.PollInterval = strings.TrimSpace(answers.PollInterval)
+	answers.SurfaceRules = normalizeDurableAgentStringSet(answers.SurfaceRules)
+	answers.SynthesisCadence = strings.TrimSpace(answers.SynthesisCadence)
+	answers.Capabilities = normalizeDurableAgentStringSet(answers.Capabilities)
+	answers.NeverRetain = normalizeDurableAgentStringSet(answers.NeverRetain)
+	answers.DriftPolicy = strings.TrimSpace(answers.DriftPolicy)
+	return answers
+}
+
+func durableAgentSetupWizardAnswersZero(answers DurableAgentSetupWizardAnswers) bool {
+	return answers.Address == "" &&
+		answers.Account == "" &&
+		answers.Adapter == "" &&
+		answers.Query == "" &&
+		answers.Charter == "" &&
+		answers.Autonomy == "" &&
+		answers.WakeupMode == "" &&
+		answers.PollInterval == "" &&
+		len(answers.SurfaceRules) == 0 &&
+		answers.SummarizePDFs == nil &&
+		answers.SynthesisCadence == "" &&
+		len(answers.Capabilities) == 0 &&
+		len(answers.NeverRetain) == 0 &&
+		answers.DriftPolicy == ""
+}
+
+func normalizeDurableAgentEmailPendingState(state *DurableAgentEmailPendingState) *DurableAgentEmailPendingState {
+	if state == nil {
+		return nil
+	}
+	normalized := DurableAgentEmailPendingState{
+		Threads: normalizeDurableAgentEmailPendingThreads(state.Threads),
+	}
+	if len(normalized.Threads) == 0 {
+		return nil
+	}
+	return &normalized
+}
+
+func normalizeDurableAgentEmailPendingThreads(values []DurableAgentEmailPendingThread) []DurableAgentEmailPendingThread {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]DurableAgentEmailPendingThread, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value.ThreadID = strings.TrimSpace(value.ThreadID)
+		value.MessageID = strings.TrimSpace(value.MessageID)
+		value.From = clampDurableAgentField(value.From, 512)
+		value.Subject = clampDurableAgentField(value.Subject, 512)
+		value.Snippet = clampDurableAgentField(value.Snippet, 1200)
+		value.Body = clampDurableAgentField(value.Body, 2400)
+		value.Labels = normalizeDurableAgentStringSet(value.Labels)
+		value.AttachmentNames = normalizeDurableAgentStringSet(value.AttachmentNames)
+		if value.ThreadID == "" {
+			continue
+		}
+		key := firstNonEmptyDurableAgent(value.ThreadID, value.MessageID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+		if len(out) == durableAgentEmailPendingMaxItems {
+			break
+		}
+	}
+	return out
+}
+
 func prependDurableAgentRecentInteraction(values []DurableAgentRecentInteraction, next DurableAgentRecentInteraction) []DurableAgentRecentInteraction {
 	return append([]DurableAgentRecentInteraction{next}, values...)
 }
@@ -1040,6 +1203,27 @@ func upsertDurableAgentPendingQuestion(values []DurableAgentPendingQuestion, nex
 
 func normalizeDurableAgentText(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+func clampDurableAgentField(value string, max int) string {
+	normalized := normalizeDurableAgentText(value)
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(normalized)
+	if len(runes) <= max {
+		return normalized
+	}
+	return string(runes[:max])
+}
+
+func firstNonEmptyDurableAgent(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func normalizeDurableAgentCSV(value string) []string {

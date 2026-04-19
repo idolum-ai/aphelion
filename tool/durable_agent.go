@@ -82,8 +82,18 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 		return renderDurableAgentEnrollment(*enrollment), nil
 	case "enrollment_update":
 		return r.updateDurableAgentEnrollment(in)
+	case "wizard_start":
+		return r.startDurableAgentWizard(in, key)
+	case "wizard_answer":
+		return r.answerDurableAgentWizard(in)
+	case "wizard_show":
+		return r.showDurableAgentWizard(in)
+	case "wizard_finalize":
+		return r.finalizeDurableAgentWizard(in, key)
+	case "wizard_cancel":
+		return r.cancelDurableAgentWizard(in)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel")
 	}
 }
 
@@ -217,6 +227,252 @@ func (r *Registry) activateDurableAgent(in durableAgentInput) (string, error) {
 	return renderDurableAgentLifecycle("activate", *agent), nil
 }
 
+func (r *Registry) startDurableAgentWizard(in durableAgentInput, key session.SessionKey) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for wizard_start")
+	}
+	channelKind := strings.TrimSpace(in.ChannelKind)
+	if channelKind == "" {
+		channelKind = "email"
+	}
+	if channelKind != "email" {
+		return "", fmt.Errorf("durable_agent wizard_start currently supports channel_kind=email")
+	}
+
+	createIn := in
+	createIn.Action = "create"
+	createIn.ChannelKind = channelKind
+	if strings.TrimSpace(createIn.WakeupMode) == "" {
+		createIn.WakeupMode = "poll"
+	}
+	if _, err := r.createDurableAgent(createIn, key); err != nil {
+		return "", err
+	}
+
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	wizard := seedDurableAgentWizardFromAgent(*agent)
+	if continuity.SetupWizard != nil {
+		wizard = *continuity.SetupWizard
+		if wizard.StartedAt.IsZero() {
+			wizard.StartedAt = now
+		}
+	}
+	wizard.SchemaVersion = 1
+	wizard.ChannelKind = channelKind
+	wizard.UpdatedAt = now
+	if wizard.StartedAt.IsZero() {
+		wizard.StartedAt = now
+	}
+	missing := durableAgentWizardMissingAnswers(wizard)
+	wizard.Missing = missing
+	wizard.CurrentStep = firstWizardStep(missing)
+	if len(missing) == 0 {
+		wizard.Status = "ready"
+	} else {
+		wizard.Status = "in_progress"
+	}
+	continuity.SetupWizard = &wizard
+	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
+		return "", err
+	}
+	return renderDurableAgentWizardShow(*agent, wizard), nil
+}
+
+func (r *Registry) answerDurableAgentWizard(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for wizard_answer")
+	}
+	if in.WizardAnswers == nil {
+		return "", fmt.Errorf("durable_agent wizard_answer requires wizard_answers")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	if continuity.SetupWizard == nil {
+		return "", fmt.Errorf("durable agent %q has no active setup wizard; use wizard_start first", agent.AgentID)
+	}
+
+	wizard := *continuity.SetupWizard
+	wizard.SchemaVersion = 1
+	wizard.ChannelKind = firstNonEmpty(strings.TrimSpace(wizard.ChannelKind), strings.TrimSpace(agent.ChannelKind), "email")
+	wizard.Answers = mergeDurableAgentWizardAnswers(wizard.Answers, *in.WizardAnswers)
+	wizard.UpdatedAt = time.Now().UTC()
+	if wizard.StartedAt.IsZero() {
+		wizard.StartedAt = wizard.UpdatedAt
+	}
+	missing := durableAgentWizardMissingAnswers(wizard)
+	wizard.Missing = missing
+	wizard.CurrentStep = firstWizardStep(missing)
+	if len(missing) == 0 {
+		wizard.Status = "ready"
+	} else {
+		wizard.Status = "in_progress"
+	}
+
+	updatedAgent, err := applyDurableWizardAnswersToAgent(*agent, wizard.Answers)
+	if err != nil {
+		return "", err
+	}
+	if err := r.store.UpsertDurableAgent(updatedAgent); err != nil {
+		return "", err
+	}
+	agent = &updatedAgent
+
+	continuity.SetupWizard = &wizard
+	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
+		return "", err
+	}
+	return renderDurableAgentWizardShow(*agent, wizard), nil
+}
+
+func (r *Registry) showDurableAgentWizard(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for wizard_show")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	_, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	if continuity.SetupWizard == nil {
+		return "", fmt.Errorf("durable agent %q has no active setup wizard; use wizard_start first", agent.AgentID)
+	}
+	wizard := *continuity.SetupWizard
+	wizard.Missing = durableAgentWizardMissingAnswers(wizard)
+	wizard.CurrentStep = firstWizardStep(wizard.Missing)
+	if wizard.Status == "" {
+		if len(wizard.Missing) == 0 {
+			wizard.Status = "ready"
+		} else {
+			wizard.Status = "in_progress"
+		}
+	}
+	return renderDurableAgentWizardShow(*agent, wizard), nil
+}
+
+func (r *Registry) finalizeDurableAgentWizard(in durableAgentInput, key session.SessionKey) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for wizard_finalize")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	if continuity.SetupWizard == nil {
+		return "", fmt.Errorf("durable agent %q has no active setup wizard; use wizard_start first", agent.AgentID)
+	}
+	wizard := *continuity.SetupWizard
+	wizard.Missing = durableAgentWizardMissingAnswers(wizard)
+	if len(wizard.Missing) > 0 {
+		return "", fmt.Errorf("missing wizard answers: %s", strings.Join(wizard.Missing, ", "))
+	}
+	wizard.CurrentStep = ""
+	wizard.Status = "finalized"
+	wizard.UpdatedAt = time.Now().UTC()
+
+	updatedAgent, err := applyDurableWizardAnswersToAgent(*agent, wizard.Answers)
+	if err != nil {
+		return "", err
+	}
+	if updatedAgent.ReviewTargetChatID == 0 && key.ChatID != 0 {
+		updatedAgent.ReviewTargetChatID = key.ChatID
+	}
+	if strings.TrimSpace(updatedAgent.Status) == "" {
+		updatedAgent.Status = "draft"
+	}
+	if strings.TrimSpace(updatedAgent.Status) != "active" {
+		updatedAgent.Status = "draft"
+	}
+	if err := r.store.UpsertDurableAgent(updatedAgent); err != nil {
+		return "", err
+	}
+
+	continuity.SetupWizard = &wizard
+	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
+		return "", err
+	}
+	return renderDurableAgentWizardFinalize(updatedAgent, wizard), nil
+}
+
+func (r *Registry) cancelDurableAgentWizard(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for wizard_cancel")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	if continuity.SetupWizard == nil {
+		return "", fmt.Errorf("durable agent %q has no active setup wizard; use wizard_start first", agent.AgentID)
+	}
+	wizard := *continuity.SetupWizard
+	wizard.Status = "cancelled"
+	wizard.CurrentStep = ""
+	wizard.Missing = nil
+	wizard.UpdatedAt = time.Now().UTC()
+	continuity.SetupWizard = &wizard
+	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
+		return "", err
+	}
+	return renderDurableAgentWizardShow(*agent, wizard), nil
+}
+
+func (r *Registry) loadDurableAgentContinuity(agentID string) (*core.DurableAgentState, core.DurableAgentContinuityState, error) {
+	state, err := r.store.DurableAgentState(agentID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, core.DurableAgentContinuityState{}, err
+		}
+		state = &core.DurableAgentState{AgentID: strings.TrimSpace(agentID)}
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return nil, core.DurableAgentContinuityState{}, err
+	}
+	return state, continuity, nil
+}
+
+func (r *Registry) saveDurableAgentContinuity(state *core.DurableAgentState, continuity core.DurableAgentContinuityState) error {
+	if state == nil {
+		return fmt.Errorf("durable agent continuity state is nil")
+	}
+	raw, err := continuity.Marshal()
+	if err != nil {
+		return err
+	}
+	state.StateJSON = raw
+	return r.store.SaveDurableAgentState(*state)
+}
+
 func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAgentInput) (string, error) {
 	agentID := strings.TrimSpace(in.AgentID)
 	if agentID == "" {
@@ -292,6 +548,312 @@ func (r *Registry) updateDurableAgentEnrollment(in durableAgentInput) (string, e
 		return "", err
 	}
 	return renderDurableAgentEnrollment(*enrollment), nil
+}
+
+var durableAgentWizardStepOrder = []string{
+	"address",
+	"adapter",
+	"autonomy",
+	"surface_rules",
+	"summarize_pdfs",
+	"synthesis_cadence",
+	"wakeup_mode",
+	"poll_interval",
+	"capabilities",
+	"never_retain",
+	"charter",
+}
+
+func seedDurableAgentWizardFromAgent(agent core.DurableAgent) core.DurableAgentSetupWizardState {
+	wizard := core.DurableAgentSetupWizardState{
+		SchemaVersion: 1,
+		ChannelKind:   strings.TrimSpace(agent.ChannelKind),
+		Answers: core.DurableAgentSetupWizardAnswers{
+			Charter:      strings.TrimSpace(agent.LivePolicy.Charter),
+			Autonomy:     durableAgentAutonomyFromPolicy(agent.LivePolicy),
+			WakeupMode:   strings.TrimSpace(agent.WakeupMode),
+			Capabilities: append([]string(nil), agent.LivePolicy.CapabilityEnvelope...),
+			DriftPolicy:  strings.TrimSpace(agent.LivePolicy.DriftPolicy),
+		},
+	}
+	if agent.ChannelConfig.Email != nil {
+		email := agent.ChannelConfig.Email
+		wizard.Answers.Address = strings.TrimSpace(email.Address)
+		wizard.Answers.Account = strings.TrimSpace(email.Account)
+		wizard.Answers.Adapter = strings.TrimSpace(email.Adapter)
+		wizard.Answers.Query = strings.TrimSpace(email.Query)
+		wizard.Answers.PollInterval = strings.TrimSpace(email.PollInterval)
+		wizard.Answers.SurfaceRules = append([]string(nil), email.SurfaceRules...)
+		value := email.SummarizePDFs
+		wizard.Answers.SummarizePDFs = &value
+		wizard.Answers.SynthesisCadence = strings.TrimSpace(email.SynthesisCadence)
+		wizard.Answers.NeverRetain = append([]string(nil), email.NeverRetain...)
+	}
+	return wizard
+}
+
+func mergeDurableAgentWizardAnswers(current core.DurableAgentSetupWizardAnswers, patch durableAgentWizardAnswersInput) core.DurableAgentSetupWizardAnswers {
+	if strings.TrimSpace(patch.Address) != "" {
+		current.Address = strings.TrimSpace(patch.Address)
+	}
+	if strings.TrimSpace(patch.Account) != "" {
+		current.Account = strings.TrimSpace(patch.Account)
+	}
+	if strings.TrimSpace(patch.Adapter) != "" {
+		current.Adapter = strings.TrimSpace(patch.Adapter)
+	}
+	if strings.TrimSpace(patch.Query) != "" {
+		current.Query = strings.TrimSpace(patch.Query)
+	}
+	if strings.TrimSpace(patch.Charter) != "" {
+		current.Charter = strings.TrimSpace(patch.Charter)
+	}
+	if strings.TrimSpace(patch.Autonomy) != "" {
+		current.Autonomy = strings.TrimSpace(patch.Autonomy)
+	}
+	if strings.TrimSpace(patch.WakeupMode) != "" {
+		current.WakeupMode = strings.TrimSpace(patch.WakeupMode)
+	}
+	if strings.TrimSpace(patch.PollInterval) != "" {
+		current.PollInterval = strings.TrimSpace(patch.PollInterval)
+	}
+	if patch.SurfaceRules != nil {
+		current.SurfaceRules = normalizePolicyCapabilities(patch.SurfaceRules)
+	}
+	if patch.SummarizePDFs != nil {
+		value := *patch.SummarizePDFs
+		current.SummarizePDFs = &value
+	}
+	if strings.TrimSpace(patch.SynthesisCadence) != "" {
+		current.SynthesisCadence = strings.TrimSpace(patch.SynthesisCadence)
+	}
+	if patch.Capabilities != nil {
+		current.Capabilities = normalizePolicyCapabilities(patch.Capabilities)
+	}
+	if patch.NeverRetain != nil {
+		current.NeverRetain = normalizePolicyCapabilities(patch.NeverRetain)
+	}
+	if strings.TrimSpace(patch.DriftPolicy) != "" {
+		current.DriftPolicy = strings.TrimSpace(patch.DriftPolicy)
+	}
+	return core.NormalizeDurableAgentSetupWizardAnswers(current)
+}
+
+func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.DurableAgentSetupWizardAnswers) (core.DurableAgent, error) {
+	answers = core.NormalizeDurableAgentSetupWizardAnswers(answers)
+	agent.ChannelKind = "email"
+	wakeupMode := normalizeDurableEmailWakeupMode(answers.WakeupMode)
+	if wakeupMode == "" && strings.TrimSpace(agent.WakeupMode) != "" {
+		wakeupMode = normalizeDurableEmailWakeupMode(agent.WakeupMode)
+	}
+	if wakeupMode == "" {
+		wakeupMode = "poll"
+	}
+	agent.WakeupMode = wakeupMode
+
+	patch := effectiveDurableAgentPolicyPatch{
+		Charter:     strings.TrimSpace(answers.Charter),
+		Autonomy:    strings.TrimSpace(answers.Autonomy),
+		DriftPolicy: strings.TrimSpace(answers.DriftPolicy),
+	}
+	if len(answers.Capabilities) > 0 {
+		patch.Capabilities = append([]string(nil), answers.Capabilities...)
+		patch.CapabilitiesSet = true
+	}
+	policy := agent.LivePolicy
+	if strings.TrimSpace(policy.Charter) == "" &&
+		len(policy.CapabilityEnvelope) == 0 &&
+		strings.TrimSpace(policy.OutboundMode) == "" &&
+		strings.TrimSpace(policy.DriftPolicy) == "" &&
+		strings.TrimSpace(policy.PublicSurfaceMode) == "" &&
+		strings.TrimSpace(policy.SharedInferenceReuse) == "" &&
+		strings.TrimSpace(policy.SharedInferenceReuseScope) == "" {
+		policy = defaultDurableAgentLivePolicy("email", patch.Charter)
+	}
+	if err := applyDurableAgentPolicyPatch(&policy, patch); err != nil {
+		return core.DurableAgent{}, err
+	}
+	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(policy)
+
+	channelConfig := core.NormalizeDurableAgentChannelConfig(agent.ChannelConfig)
+	if channelConfig.Email == nil {
+		channelConfig.Email = &core.DurableAgentEmailChannelConfig{}
+	}
+	email := channelConfig.Email
+	if answers.Address != "" {
+		email.Address = answers.Address
+	}
+	if answers.Account != "" {
+		email.Account = answers.Account
+	} else if strings.TrimSpace(email.Account) == "" && strings.TrimSpace(email.Address) != "" {
+		email.Account = strings.TrimSpace(email.Address)
+	}
+	if answers.Adapter != "" {
+		email.Adapter = answers.Adapter
+	}
+	if answers.Query != "" {
+		email.Query = answers.Query
+	} else if strings.TrimSpace(email.Query) == "" {
+		email.Query = "label:inbox"
+	}
+	if answers.PollInterval != "" {
+		email.PollInterval = answers.PollInterval
+	}
+	if answers.SurfaceRules != nil {
+		email.SurfaceRules = append([]string(nil), answers.SurfaceRules...)
+	}
+	if answers.SummarizePDFs != nil {
+		email.SummarizePDFs = *answers.SummarizePDFs
+	}
+	if answers.SynthesisCadence != "" {
+		email.SynthesisCadence = answers.SynthesisCadence
+	}
+	if answers.NeverRetain != nil {
+		email.NeverRetain = append([]string(nil), answers.NeverRetain...)
+	}
+	channelConfig.Email = email
+	agent.ChannelConfig = core.NormalizeDurableAgentChannelConfig(channelConfig)
+	if strings.TrimSpace(agent.Status) == "" {
+		agent.Status = "draft"
+	}
+	return agent, nil
+}
+
+func durableAgentWizardMissingAnswers(wizard core.DurableAgentSetupWizardState) []string {
+	answers := core.NormalizeDurableAgentSetupWizardAnswers(wizard.Answers)
+	missing := make([]string, 0, len(durableAgentWizardStepOrder))
+	if strings.TrimSpace(answers.Address) == "" {
+		missing = append(missing, "address")
+	}
+	if strings.TrimSpace(answers.Adapter) == "" {
+		missing = append(missing, "adapter")
+	}
+	if strings.TrimSpace(answers.Autonomy) == "" {
+		missing = append(missing, "autonomy")
+	}
+	if len(answers.SurfaceRules) == 0 {
+		missing = append(missing, "surface_rules")
+	}
+	if answers.SummarizePDFs == nil {
+		missing = append(missing, "summarize_pdfs")
+	}
+	if strings.TrimSpace(answers.SynthesisCadence) == "" {
+		missing = append(missing, "synthesis_cadence")
+	}
+	mode := normalizeDurableEmailWakeupMode(answers.WakeupMode)
+	if mode == "" {
+		missing = append(missing, "wakeup_mode")
+	} else if durableEmailWakeupModeIncludesPoll(mode) && strings.TrimSpace(answers.PollInterval) == "" {
+		missing = append(missing, "poll_interval")
+	}
+	if len(answers.Capabilities) == 0 {
+		missing = append(missing, "capabilities")
+	}
+	if len(answers.NeverRetain) == 0 {
+		missing = append(missing, "never_retain")
+	}
+	if strings.TrimSpace(answers.Charter) == "" {
+		missing = append(missing, "charter")
+	}
+	return normalizePolicyCapabilities(missing)
+}
+
+func firstWizardStep(missing []string) string {
+	if len(missing) == 0 {
+		return ""
+	}
+	missingSet := make(map[string]struct{}, len(missing))
+	for _, item := range missing {
+		missingSet[strings.TrimSpace(item)] = struct{}{}
+	}
+	for _, step := range durableAgentWizardStepOrder {
+		if _, ok := missingSet[step]; ok {
+			return step
+		}
+	}
+	return strings.TrimSpace(missing[0])
+}
+
+func wizardQuestionForStep(step string) string {
+	switch strings.TrimSpace(step) {
+	case "address":
+		return "What inbox address should this child own?"
+	case "adapter":
+		return "Which inbox adapter should be used (for example gog_cli)?"
+	case "autonomy":
+		return "Should the child be observe_only, local_drafts, review_before_reply, or reply_within_charter?"
+	case "surface_rules":
+		return "Which signal rules should surface upward as important?"
+	case "summarize_pdfs":
+		return "Should PDFs be summarized automatically?"
+	case "synthesis_cadence":
+		return "How often should this child synthesize upward (for example 4h)?"
+	case "wakeup_mode":
+		return "Should wakeups be poll, push, or poll_or_push?"
+	case "poll_interval":
+		return "What poll interval should be used (for example 5m)?"
+	case "capabilities":
+		return "Which capabilities are allowed in the child charter?"
+	case "never_retain":
+		return "Which classes must never be retained?"
+	case "charter":
+		return "What is the child charter summary?"
+	default:
+		return ""
+	}
+}
+
+func normalizeDurableEmailWakeupMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "poll":
+		return "poll"
+	case "push":
+		return "push"
+	case "poll_or_push", "both":
+		return "poll_or_push"
+	default:
+		return ""
+	}
+}
+
+func durableEmailWakeupModeIncludesPoll(mode string) bool {
+	mode = normalizeDurableEmailWakeupMode(mode)
+	return mode == "poll" || mode == "poll_or_push"
+}
+
+func renderDurableAgentWizardShow(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState) string {
+	var b strings.Builder
+	b.WriteString("action: durable-agent wizard show\n")
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	fmt.Fprintf(&b, "channel_kind: %s\n", firstNonEmpty(strings.TrimSpace(wizard.ChannelKind), strings.TrimSpace(agent.ChannelKind), "email"))
+	fmt.Fprintf(&b, "wizard_status: %s\n", firstNonEmpty(strings.TrimSpace(wizard.Status), "in_progress"))
+	fmt.Fprintf(&b, "current_step: %s\n", firstNonEmpty(strings.TrimSpace(wizard.CurrentStep), "-"))
+	fmt.Fprintf(&b, "missing: %s\n", firstNonEmpty(strings.Join(wizard.Missing, ","), "-"))
+	if question := wizardQuestionForStep(wizard.CurrentStep); question != "" {
+		fmt.Fprintf(&b, "next_question: %s\n", question)
+	}
+	fmt.Fprintf(&b, "address: %s\n", strings.TrimSpace(wizard.Answers.Address))
+	fmt.Fprintf(&b, "adapter: %s\n", strings.TrimSpace(wizard.Answers.Adapter))
+	fmt.Fprintf(&b, "autonomy: %s\n", strings.TrimSpace(wizard.Answers.Autonomy))
+	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(wizard.Answers.WakeupMode))
+	fmt.Fprintf(&b, "poll_interval: %s\n", strings.TrimSpace(wizard.Answers.PollInterval))
+	fmt.Fprintf(&b, "synthesis_cadence: %s\n", strings.TrimSpace(wizard.Answers.SynthesisCadence))
+	fmt.Fprintf(&b, "charter: %s\n", strings.TrimSpace(wizard.Answers.Charter))
+	return b.String()
+}
+
+func renderDurableAgentWizardFinalize(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState) string {
+	var b strings.Builder
+	b.WriteString("action: durable-agent wizard finalize\n")
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	fmt.Fprintf(&b, "channel_kind: %s\n", strings.TrimSpace(agent.ChannelKind))
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "draft"))
+	fmt.Fprintf(&b, "wizard_status: %s\n", firstNonEmpty(strings.TrimSpace(wizard.Status), "finalized"))
+	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
+	fmt.Fprintf(&b, "outbound_mode: %s\n", strings.TrimSpace(agent.LivePolicy.OutboundMode))
+	renderDurableAgentChannelConfig(&b, agent)
+	b.WriteString("next: connection_test then activate\n")
+	return b.String()
 }
 
 func renderDurableAgentList(agents []core.DurableAgent) string {
@@ -715,7 +1277,7 @@ func defaultDurableAgentLivePolicy(channelKind string, charter string) core.Dura
 	case "email":
 		return core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 			Charter:                   strings.TrimSpace(charter),
-			CapabilityEnvelope:        []string{"read_channel", "bounded_review_artifact"},
+			CapabilityEnvelope:        []string{"read_channel", "bounded_review_artifact", "summarize_pdf"},
 			OutboundMode:              "read_only",
 			DriftPolicy:               "admin_review",
 			PublicSurfaceMode:         "explicit_parent_relay_only",

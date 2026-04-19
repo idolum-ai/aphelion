@@ -10,6 +10,8 @@ personas.
 - Parent runtime owns durable-agent registry and wake loops.
 - Child execution stays scoped by charter and channel policy.
 - Upward communication is through bounded review artifacts and summaries.
+- Email children support poll, push, or poll-or-push wake modes.
+- Email synthesis respects cadence buffering (`synthesis_cadence`) and enforces channel `never_retain` scrubbing before review emission.
 
 Code anchors:
 
@@ -29,4 +31,3 @@ Related requirements:
 - [`requirements/durable-agents.md`](../../requirements/durable-agents.md)
 - [`requirements/security.md`](../../requirements/security.md)
 - [`requirements/operations.md`](../../requirements/operations.md)
-

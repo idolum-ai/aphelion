@@ -149,15 +149,28 @@ Decision prompts are shown with inline buttons. Depending on context, users can 
   - `Keep for session`
   - `Save locally`
 
+### Deliberation thinking card controls
+
+When a turn enters long-running deliberation/tool execution, Telegram shows one auto-updating card:
+
+- Header starts with `Thinking...` and includes elapsed time while active.
+- Card includes inline controls:
+  - `Detach`
+  - `Stop`
+- `Detach` stops active work, clears queue, revokes continuation, and detaches sender-owned pending decisions.
+- `Stop` stops active work for the chat and revokes continuation.
+- When deliberation ends, controls are removed from the card (or the card is deleted when `telegram.tool_progress_cleanup=true`).
+
 ## Callback Behavior
 
 - Status and selector callbacks edit the same Telegram message in place when possible.
 - Status output can be chunked; extra chunks are sent as follow-up messages.
 - Stale callback actions are acknowledged with a stale-message notice instead of applying old state.
 - Non-admin access to admin-only status views is denied via callback acknowledgement.
+- Deliberation control callbacks are run-id scoped; stale controls are ignored with a stale notice.
 
 ## Operational UI Signals
 
 - Typing indicator is emitted while active work is running in chats that support local reply delivery.
-- Tool/progress updates are shown as concise status text in the chat.
+- Tool/progress updates are emitted as a single live `Thinking...` card per turn.
 - Restart and detach actions return explicit user-visible summaries.

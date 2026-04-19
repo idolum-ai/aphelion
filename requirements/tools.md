@@ -172,8 +172,15 @@ It should support, at minimum:
 - updating or ratifying a draft child's charter
 - testing a channel connection
 - activating a child once its charter and connection are ready
+- guided setup wizard actions (`wizard_start`, `wizard_answer`, `wizard_show`, `wizard_finalize`, `wizard_cancel`) so conversational setup can persist as explicit machine state
 
 Creation and activation remain admin-only, but they should be reachable from ordinary conversation rather than only from startup config.
+
+Wizard state should be durable, resumable, and explicit:
+
+- persisted outside ephemeral turn context (for example in durable-agent state JSON)
+- represented as a finite state machine with explicit `status`, `current_step`, and `missing` fields
+- replayable after restart so setup can continue without re-asking answered questions
 
 For `policy_apply`, the governance surface should prefer a conversational patch shape:
 

@@ -6,14 +6,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/telegram"
 )
 
 var turnRunActivityHeartbeatInterval = 30 * time.Second
@@ -22,8 +25,16 @@ type messageEditor interface {
 	EditMessageText(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
 }
 
+type messageKeyboardEditor interface {
+	EditMessageTextWithInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]telegram.InlineButton) error
+}
+
 type messageDeleter interface {
 	DeleteMessage(ctx context.Context, chatID int64, messageID int64) error
+}
+
+type inlineKeyboardSender interface {
+	SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
 }
 
 type toolObserver interface {
@@ -78,6 +89,7 @@ func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunK
 	}
 	monitor.runID = run.ID
 	if progress != nil {
+		progress.BindTurnRun(run.ID)
 		progress.recordMessageID = func(messageID int64) {
 			if err := r.store.UpdateTurnRunProgressMessage(run.ID, messageID); err != nil {
 				log.Printf("WARN update turn run progress id=%d msg_id=%d err=%v", run.ID, messageID, err)
@@ -148,6 +160,9 @@ func (m *turnMonitor) startRunActivityHeartbeat() {
 		if err := m.runtime.store.TouchTurnRunActivity(m.runID); err != nil {
 			log.Printf("WARN touch turn run activity id=%d err=%v", m.runID, err)
 		}
+		if m.progress != nil {
+			m.progress.Heartbeat(runCtx)
+		}
 	})
 }
 
@@ -175,8 +190,11 @@ func (m *turnMonitor) Finish(ctx context.Context, turnErr error) {
 }
 
 type toolProgressReporter struct {
+	mu              sync.Mutex
 	sender          OutboundSender
+	inlineSender    inlineKeyboardSender
 	editor          messageEditor
+	keyboardEditor  messageKeyboardEditor
 	deleter         messageDeleter
 	chatID          int64
 	replyTo         *int64
@@ -192,6 +210,10 @@ type toolProgressReporter struct {
 	audit           *turnAuditRecorder
 	taskSummary     string
 	currentPlanStep string
+	runID           int64
+	controls        [][]telegram.InlineButton
+	startedAt       time.Time
+	finished        bool
 }
 
 type toolProgressEntry struct {
@@ -231,6 +253,12 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, planState ses
 	if editor, ok := r.outbound.(messageEditor); ok {
 		reporter.editor = editor
 	}
+	if sender, ok := r.outbound.(inlineKeyboardSender); ok {
+		reporter.inlineSender = sender
+	}
+	if keyboardEditor, ok := r.outbound.(messageKeyboardEditor); ok {
+		reporter.keyboardEditor = keyboardEditor
+	}
 	if deleter, ok := r.outbound.(messageDeleter); ok {
 		reporter.deleter = deleter
 	}
@@ -238,9 +266,27 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, planState ses
 	return reporter
 }
 
+func (p *toolProgressReporter) BindTurnRun(runID int64) {
+	if p == nil || runID <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.runID = runID
+	p.controls = deliberationControlRows(runID)
+}
+
 func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, input json.RawMessage) {
 	if p == nil {
 		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.finished {
+		return
+	}
+	if p.startedAt.IsZero() {
+		p.startedAt = time.Now().UTC()
 	}
 	entry := p.makeEntry(name, input)
 
@@ -259,8 +305,29 @@ func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, inp
 	if !update {
 		return
 	}
+	p.sendOrEditLocked(ctx, false, true)
+}
 
-	text := p.render()
+func (p *toolProgressReporter) Heartbeat(ctx context.Context) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.finished {
+		return
+	}
+	if p.startedAt.IsZero() {
+		p.startedAt = time.Now().UTC()
+	}
+	p.sendOrEditLocked(ctx, false, true)
+}
+
+func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, withControls bool) {
+	if p == nil {
+		return
+	}
+	text := p.renderLocked(done)
 	if p.validateText != nil {
 		filtered, violations := p.validateText(text)
 		if p.audit != nil {
@@ -272,11 +339,17 @@ func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, inp
 		p.audit.RecordProgress(text)
 	}
 	if p.messageID == 0 {
-		msgID, err := p.sender.SendMessage(ctx, core.OutboundMessage{
-			ChatID:  p.chatID,
-			Text:    text,
-			ReplyTo: p.replyTo,
-		})
+		msgID := int64(0)
+		var err error
+		if withControls && len(p.controls) > 0 && p.inlineSender != nil {
+			msgID, err = p.inlineSender.SendInlineKeyboard(ctx, p.chatID, text, p.controls, p.replyTo)
+		} else {
+			msgID, err = p.sender.SendMessage(ctx, core.OutboundMessage{
+				ChatID:  p.chatID,
+				Text:    text,
+				ReplyTo: p.replyTo,
+			})
+		}
 		if err != nil {
 			log.Printf("WARN send tool progress chat_id=%d err=%v", p.chatID, err)
 			return
@@ -288,6 +361,13 @@ func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, inp
 		return
 	}
 
+	if withControls && len(p.controls) > 0 && p.keyboardEditor != nil {
+		if err := p.keyboardEditor.EditMessageTextWithInlineKeyboard(ctx, p.chatID, p.messageID, text, "", p.controls); err != nil {
+			log.Printf("WARN edit tool progress inline chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+		} else {
+			return
+		}
+	}
 	if p.editor == nil {
 		return
 	}
@@ -300,12 +380,37 @@ func (p *toolProgressReporter) ToolFinished(_ context.Context, _ string, _ error
 }
 
 func (p *toolProgressReporter) Finish(ctx context.Context) {
-	if p == nil || p.messageID == 0 || !p.cleanup || p.deleter == nil {
+	if p == nil {
 		return
 	}
-	if err := p.deleter.DeleteMessage(ctx, p.chatID, p.messageID); err != nil {
-		log.Printf("WARN delete tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.messageID == 0 || p.finished {
+		return
 	}
+	p.finished = true
+	if p.cleanup && p.deleter != nil {
+		if err := p.deleter.DeleteMessage(ctx, p.chatID, p.messageID); err != nil {
+			log.Printf("WARN delete tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+		}
+		return
+	}
+	p.sendOrEditLocked(ctx, true, false)
+}
+
+func deliberationControlRows(runID int64) [][]telegram.InlineButton {
+	if runID <= 0 {
+		return nil
+	}
+	detachData := core.EncodeDeliberationControlCallbackData(runID, core.DeliberationControlActionDetach)
+	stopData := core.EncodeDeliberationControlCallbackData(runID, core.DeliberationControlActionStop)
+	if detachData == "" || stopData == "" {
+		return nil
+	}
+	return [][]telegram.InlineButton{{
+		{Text: "Detach", CallbackData: detachData},
+		{Text: "Stop", CallbackData: stopData},
+	}}
 }
 
 func (r *Runtime) filterProgressText(text string) (string, []ConstitutionViolation) {
@@ -322,7 +427,7 @@ func (r *Runtime) filterProgressText(text string) (string, []ConstitutionViolati
 	}), violations
 }
 
-func (p *toolProgressReporter) render() string {
+func (p *toolProgressReporter) renderLocked(done bool) string {
 	notice := face.ToolProgressNotice{}
 	if len(p.entries) > p.window {
 		notice.Omitted = len(p.entries) - p.window
@@ -337,7 +442,38 @@ func (p *toolProgressReporter) render() string {
 			Count: entry.Count,
 		})
 	}
-	return face.RenderToolProgress(notice)
+	rendered := face.RenderToolProgress(notice)
+	lines := strings.Split(rendered, "\n")
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	lines[0] = p.progressHeading(done)
+	return strings.Join(lines, "\n")
+}
+
+func (p *toolProgressReporter) progressHeading(done bool) string {
+	if done {
+		return "Done."
+	}
+	if p.startedAt.IsZero() {
+		return "Thinking..."
+	}
+	elapsed := time.Since(p.startedAt)
+	if elapsed < time.Second {
+		return "Thinking..."
+	}
+	seconds := int(elapsed.Seconds())
+	if seconds < 60 {
+		return fmt.Sprintf("Thinking... (%ds)", seconds)
+	}
+	minutes := seconds / 60
+	seconds = seconds % 60
+	if minutes < 60 {
+		return fmt.Sprintf("Thinking... (%dm %02ds)", minutes, seconds)
+	}
+	hours := minutes / 60
+	minutes = minutes % 60
+	return fmt.Sprintf("Thinking... (%dh %02dm)", hours, minutes)
 }
 
 func (p *toolProgressReporter) addEntry(entry toolProgressEntry) bool {

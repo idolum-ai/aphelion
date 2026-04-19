@@ -173,6 +173,9 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if sender == nil || router == nil {
 		return false, nil
 	}
+	if runID, action, ok := core.DecodeDeliberationControlCallbackData(cb.Data); ok {
+		return handleDeliberationControlCallback(ctx, sender, router, cb, runID, action)
+	}
 	if view, targetChatID, ok := decodeStatusCallbackData(cb.Data); ok {
 		chatID := int64(0)
 		messageID := int64(0)

@@ -232,6 +232,7 @@ type fakeSender struct {
 	voice        []voiceSend
 	actions      []chatAction
 	edits        []messageEdit
+	editInline   []messageEditInline
 	editCount    int
 	deletes      []messageDelete
 	editErr      error
@@ -330,6 +331,13 @@ type messageEdit struct {
 	Text      string
 }
 
+type messageEditInline struct {
+	ChatID    int64
+	MessageID int64
+	Text      string
+	Rows      [][]telegram.InlineButton
+}
+
 type messageDelete struct {
 	ChatID    int64
 	MessageID int64
@@ -357,6 +365,17 @@ func (f *fakeSender) EditMessageText(_ context.Context, chatID int64, messageID 
 		return f.editErr
 	}
 	f.edits = append(f.edits, messageEdit{ChatID: chatID, MessageID: messageID, Text: text})
+	return nil
+}
+
+func (f *fakeSender) EditMessageTextWithInlineKeyboard(_ context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]telegram.InlineButton) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.editCount++
+	if f.editErr != nil {
+		return f.editErr
+	}
+	f.editInline = append(f.editInline, messageEditInline{ChatID: chatID, MessageID: messageID, Text: text, Rows: rows})
 	return nil
 }
 
