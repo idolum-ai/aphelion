@@ -90,14 +90,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 }
 
 func shouldNotifyContinuationBlocked(priorState session.ContinuationState, priorExists bool, consensus continuationConsensus) bool {
-	if consensus.eligible() {
-		return false
-	}
-	if consensus.PersonaIntent.Decision == session.ContinuationIntentDecisionContinue ||
-		consensus.GovernorIntent.Decision == session.ContinuationIntentDecisionContinue {
-		return true
-	}
-	if !priorExists {
+	if consensus.eligible() || !priorExists {
 		return false
 	}
 	priorState = session.NormalizeContinuationState(priorState)

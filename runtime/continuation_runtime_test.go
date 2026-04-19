@@ -351,6 +351,14 @@ func TestHandleInboundSendsPersonaVoicedContinuationBlockedNotice(t *testing.T) 
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
+	key := session.SessionKey{ChatID: 8114, UserID: 0, Scope: telegramDMScopeRef(8114)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "stale-pending",
+		RemainingTurns: 1,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
 		ChatID: 8114, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1,
@@ -370,6 +378,42 @@ func TestHandleInboundSendsPersonaVoicedContinuationBlockedNotice(t *testing.T) 
 	}
 	if !strings.HasPrefix(strings.TrimSpace(notice), "I ") {
 		t.Fatalf("blocked notice = %q, want first-person phrasing", notice)
+	}
+}
+
+func TestHandleInboundDoesNotSendContinuationBlockedNoticeWithoutPriorActiveContinuation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "grounded reply"
+	provider.faceReplyText = "visible scene"
+	provider.repairReplyText = "I can't continue yet because Aphelion did not ratify this continuation request."
+	provider.proposalReplyText = testPersonaContinuationProposal(
+		session.ContinuationIntentDecisionContinue,
+		"I can continue after one more approval.",
+	)
+	provider.planningReplyText = testGovernorContinuationRatification(
+		session.ContinuationIntentDecisionContinue,
+		"Governor rationale exists but ratification is withheld.",
+		false,
+	)
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8115, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent count = %d, want only main reply when no prior continuation was active", len(sender.sent))
 	}
 }
 
