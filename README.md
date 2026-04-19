@@ -67,6 +67,18 @@ Config file default:
 
 `~/.aphelion/aphelion.toml`
 
+Config and service boundary:
+
+- `~/.aphelion/aphelion.toml` is Aphelion runtime config (providers, Telegram behavior, agent paths, session DB, memory/workspace roots).
+- `~/.config/systemd/user/aphelion.service` is OS service config (how Linux starts/restarts Aphelion, working directory, and `ExecStart` command).
+- The service points to the config file via `ExecStart=... --config ...`; changing one does not replace the other.
+
+Service install overrides:
+
+- `APHELION_CONFIG`: config file path passed to `--config` during service install/update.
+- `APHELION_EXEC`: binary path to run in the unit (`ExecStart`).
+- `APHELION_WORKDIR`: working directory written to the unit.
+
 Required principal bootstrap:
 
 ```toml
