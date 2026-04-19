@@ -291,6 +291,7 @@ At minimum for v0:
 - `/start`
 - `/help`
 - `/status`
+- `/debug`
 - `/stop`
 - `/detach`
 - `/restart`
@@ -358,6 +359,52 @@ At minimum, status snapshots should surface:
 - detached/outstanding work counters (decisions, continuations, recovery, stale runs)
 - stale running turn indicators
 - stale-turn watchdog/restart health indicator
+
+### `/debug`
+
+`/debug` should stay command-routed (not a callback-only status subview) and bypass ordinary governor turns the same way `/status` does.
+
+`/debug` is a diagnostic surface for when `/status` is too compressed:
+
+- include chat status plus `debug_chat` details:
+  - latest turn request text
+  - last tool preview/result/error
+  - decoded exec command when preview includes `{"command": ...}`
+- prepend `quick_read` summary when readable summaries are available
+- chunk output to stay within Telegram message limits
+
+Admin callers should additionally receive:
+
+- full system status block
+- `debug_system` details (pending-kind counters + latest turn rollups by chat)
+- full durables status block
+
+### Natural language durable-email bootstrap
+
+Admin DM inputs that clearly request creating an email durable child should be normalized into a safe wizard-driving instruction before ordinary turn routing.
+
+Normalization goals:
+
+- preserve the user's intent in plain text
+- force the workflow onto `durable_agent` wizard actions (`wizard_start`, `wizard_answer`, `wizard_show`, `wizard_finalize`, `connection_test`, `activate`)
+- explicitly prohibit `exec`/`go run` routes for this workflow
+- require one-question-at-a-time collection for missing wizard fields
+- carry forward a detected email address when present in user text
+
+### Durable wizard inline controls
+
+When outbound text includes an email wizard machine block (`action: durable-agent wizard show`), Telegram delivery should attach inline controls to that message.
+
+Requirements:
+
+- step-aware preset answer buttons for structured wizard steps (autonomy, wakeup mode, summarize PDFs, cadence/interval, charter/capability/retention presets)
+- in-progress control row: left `Cancel`, right `Refresh`
+- ready control row: left `Cancel`, right `Finalize`
+- callbacks are admin-only
+- callbacks must be stale-safe:
+  - mismatched current-step callbacks are acknowledged as stale and ignored
+  - malformed wizard cards are acknowledged as stale and ignored
+- valid callbacks must execute deterministic wizard actions (`wizard_answer`, `wizard_show`, `wizard_finalize`, `wizard_cancel`) and edit the same Telegram message in place
 
 ### `/stop`
 

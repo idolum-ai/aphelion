@@ -44,6 +44,7 @@ func RenderTelegramStart(personaEffort, governorEffort string, includeAdminComma
 		"Commands:",
 		"/help - show command help",
 		"/status - show live status and controls",
+		"/debug - show detailed runtime debug snapshot",
 		"/stop - stop current work in this chat",
 		"/detach - detach this chat from pending work",
 	}
@@ -68,6 +69,7 @@ func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminComman
 		"/start - show intro and command help",
 		"/help - show this help",
 		"/status - show live status and controls",
+		"/debug - show detailed runtime debug snapshot",
 		"/stop - stop current work in this chat",
 		"/detach - detach this chat from pending work",
 	}

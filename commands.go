@@ -47,12 +47,14 @@ type commandRouter interface {
 	SetPersonaModel(model string) (string, error)
 	GovernorEffortOptions() []string
 	SetGovernorEffort(effort string) (string, error)
+	RunDurableWizard(ctx context.Context, chatID int64, senderID int64, action string, agentID string, wizardAnswers map[string]any) (string, error)
 }
 
 var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "start", Description: "Show intro and command help"},
 	{Command: "help", Description: "Show available commands"},
 	{Command: "status", Description: "Show live status and controls"},
+	{Command: "debug", Description: "Show a detailed debug snapshot"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "detach", Description: "Detach from pending work in this chat"},
 	{Command: "restart", Description: "Force an immediate gateway restart"},
@@ -93,6 +95,48 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		}
 		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
 			return true, err
+		}
+		return true, nil
+	case "debug":
+		chat, err := router.StatusChat(msg.ChatID)
+		if err != nil {
+			return true, err
+		}
+		var (
+			system   *core.SystemStatusSnapshot
+			durables *core.DurableAgentsStatusSnapshot
+		)
+		if isAdmin {
+			sys, err := router.StatusSystem(msg.SenderID)
+			if err != nil {
+				return true, err
+			}
+			system = &sys
+			durs, err := router.StatusDurables(msg.SenderID)
+			if err != nil {
+				return true, err
+			}
+			durables = &durs
+		}
+		rendered := face.RenderTelegramDebug(chat, system, durables, personaEffort, governorEffort)
+		if summary := strings.TrimSpace(router.StatusReadableSummary(ctx, "debug", rendered)); summary != "" {
+			rendered = "quick_read " + summary + "\n\n" + rendered
+		}
+		chunks := splitStatusTextChunks(rendered, statusMessageChunkLimit)
+		if len(chunks) == 0 {
+			chunks = []string{"debug_scope=chat\nsummary unavailable"}
+		}
+		for i, chunk := range chunks {
+			out := core.OutboundMessage{
+				ChatID: msg.ChatID,
+				Text:   chunk,
+			}
+			if i == 0 {
+				out.ReplyTo = replyToMessageID(msg.MessageID)
+			}
+			if _, err := sender.SendMessage(ctx, out); err != nil {
+				return true, err
+			}
 		}
 		return true, nil
 	case "stop":
@@ -283,6 +327,9 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		default:
 			return true, nil
 		}
+	}
+	if action, step, option, ok := decodeDurableWizardCallbackData(cb.Data); ok {
+		return handleDurableWizardCallback(ctx, sender, router, cb, action, step, option)
 	}
 	kind, value, ok := decodeRecipeCallbackData(cb.Data)
 	if !ok {

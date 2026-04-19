@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -56,11 +58,16 @@ type telegramCommandControl struct {
 	resolver               *principal.Resolver
 	decisionDetacher       pendingDecisionDetacher
 	detachPendingOnRestart bool
+	durableTools           durableWizardToolExecutor
 }
 
 type pendingDecisionDetacher interface {
 	DetachByOwner(ctx context.Context, ownerKey string) (int, error)
 	DetachAll(ctx context.Context) (int, error)
+}
+
+type durableWizardToolExecutor interface {
+	ExecuteForSessionPrincipal(ctx context.Context, p principal.Principal, key session.SessionKey, name string, input json.RawMessage) (string, error)
 }
 
 func newTurnContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -279,6 +286,49 @@ func (c telegramCommandControl) SetGovernorEffort(effort string) (string, error)
 	return c.rt.SetGovernorEffort(effort)
 }
 
+func (c telegramCommandControl) RunDurableWizard(ctx context.Context, chatID int64, senderID int64, action string, agentID string, wizardAnswers map[string]any) (string, error) {
+	if c.durableTools == nil {
+		return "", fmt.Errorf("durable wizard controls are unavailable")
+	}
+	if !c.CanRestart(senderID) {
+		return "", fmt.Errorf("durable wizard controls are admin only")
+	}
+
+	actor := principal.Principal{
+		Role:           principal.RoleAdmin,
+		TelegramUserID: senderID,
+	}
+	if c.resolver != nil {
+		resolved, ok := c.resolver.ResolveTelegramUser(senderID)
+		if !ok || resolved.Role != principal.RoleAdmin {
+			return "", fmt.Errorf("durable wizard controls are admin only")
+		}
+		actor = resolved
+	}
+
+	request := map[string]any{
+		"action":   strings.TrimSpace(action),
+		"agent_id": strings.TrimSpace(agentID),
+	}
+	if len(wizardAnswers) > 0 {
+		request["wizard_answers"] = wizardAnswers
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return "", err
+	}
+
+	key := session.SessionKey{
+		ChatID: chatID,
+		UserID: 0,
+		Scope: session.ScopeRef{
+			Kind: session.ScopeKindTelegramDM,
+			ID:   strconv.FormatInt(chatID, 10),
+		},
+	}
+	return c.durableTools.ExecuteForSessionPrincipal(ctx, actor, key, "durable_agent", payload)
+}
+
 func (e *configStartupError) Error() string {
 	return fmt.Sprintf("config %s: %v (run 'aphelion --config %s --check-config' to validate)", e.Path, e.Err, e.Path)
 }
@@ -397,7 +447,9 @@ func run() error {
 		}
 	}
 
-	rt, err := runtime.New(cfg, store, llm, tools, tgClient)
+	tgOutbound := newTelegramUIClient(tgClient)
+
+	rt, err := runtime.New(cfg, store, llm, tools, tgOutbound)
 	if err != nil {
 		return err
 	}
@@ -432,13 +484,14 @@ func run() error {
 	}
 
 	router := core.NewRouter(rt.AgentFunc())
-	decisionBroker := newTelegramDecisionBroker(tgClient, decision.WithDurableStore(newTelegramDecisionDurableStore(store)))
+	decisionBroker := newTelegramDecisionBroker(tgOutbound, decision.WithDurableStore(newTelegramDecisionDurableStore(store)))
 	commandControl := telegramCommandControl{
 		router:                 router,
 		rt:                     rt,
 		resolver:               principalResolver,
 		decisionDetacher:       decisionBroker,
 		detachPendingOnRestart: cfg.Telegram.DetachPendingOnRestart,
+		durableTools:           tools,
 	}
 	loadDecisionCtx, cancelDecisionLoad := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := decisionBroker.Load(loadDecisionCtx); err != nil {
@@ -446,8 +499,8 @@ func run() error {
 		return fmt.Errorf("load pending decisions: %w", err)
 	}
 	cancelDecisionLoad()
-	decisionHandler := newTelegramDecisionHandler(tgClient, router, decisionBroker)
-	tools.WithExecApprover(newTelegramExecApprover(tgClient, decisionBroker))
+	decisionHandler := newTelegramDecisionHandler(tgOutbound, router, decisionBroker)
+	tools.WithExecApprover(newTelegramExecApprover(tgOutbound, decisionBroker))
 
 	registerCtx, cancelRegister := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := registerTelegramCommands(registerCtx, tgClient); err != nil {
@@ -475,7 +528,8 @@ func run() error {
 	rt.StartCronLoop(ctx, log.Printf)
 
 	poller := telegram.NewPoller(tgClient, func(parent context.Context, msg core.InboundMessage) error {
-		handled, err := handleTelegramCommand(parent, tgClient, commandControl, msg)
+		msg = rewriteDurableWizardIntent(msg, commandControl)
+		handled, err := handleTelegramCommand(parent, tgOutbound, commandControl, msg)
 		if err != nil {
 			return err
 		}
@@ -506,7 +560,7 @@ func run() error {
 		telegram.WithDurableGroups(cfg.Telegram.DurableGroups),
 		telegram.WithBotIdentity(botUser),
 		telegram.WithCallbackHandler(func(parent context.Context, cb telegram.CallbackQuery) error {
-			if handled, err := handleTelegramCommandCallback(parent, tgClient, commandControl, cb); err != nil {
+			if handled, err := handleTelegramCommandCallback(parent, tgOutbound, commandControl, cb); err != nil {
 				return err
 			} else if handled {
 				return nil

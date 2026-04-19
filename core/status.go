@@ -26,14 +26,19 @@ type PendingItem struct {
 }
 
 type TurnRunStatusSnapshot struct {
-	ID             int64
-	ChatID         int64
-	Kind           string
-	Status         string
-	LastActivityAt time.Time
-	LastToolName   string
-	ErrorText      string
-	StartedAt      time.Time
+	ID                    int64
+	ChatID                int64
+	Kind                  string
+	Status                string
+	RequestText           string
+	LastActivityAt        time.Time
+	ProgressMessageID     int64
+	LastToolName          string
+	LastToolPreview       string
+	LastToolResultPreview string
+	LastToolError         string
+	ErrorText             string
+	StartedAt             time.Time
 }
 
 type ContinuationStatusSnapshot struct {
