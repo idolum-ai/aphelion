@@ -359,6 +359,9 @@ func run() error {
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
+	if extra, ok := firstPositionalArg(flags.Args()); ok {
+		return fmt.Errorf("unknown command %q (known maintenance commands: init|paths|gc|forget|reset|import-audit|import-semantic|verify-deploy|durable-agent)", extra)
+	}
 
 	configPath, err := config.ResolveConfigPath(*configPathFlag)
 	if err != nil {
@@ -767,6 +770,17 @@ func isConfiguredProvider(name string, cfg *config.Config) bool {
 	default:
 		return false
 	}
+}
+
+func firstPositionalArg(args []string) (string, bool) {
+	for _, raw := range args {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		return trimmed, true
+	}
+	return "", false
 }
 
 func exitCode(err error) int {
