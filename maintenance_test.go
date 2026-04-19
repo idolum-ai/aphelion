@@ -586,6 +586,153 @@ func TestRunDurableAgentForensicShowReadsRestrictedSidecar(t *testing.T) {
 	}
 }
 
+func TestRunDurableAgentListShowsRegisteredAgents(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	for _, agent := range []core.DurableAgent{
+		{
+			AgentID:            "family-group",
+			ReviewTargetChatID: 1001,
+			ChannelKind:        "telegram_group",
+			Status:             "active",
+			BootstrapLLM: core.NodeLLMBootstrap{
+				Backend:        "native",
+				NativeProvider: "openrouter",
+				APIKey:         "sk-or-group",
+				Model:          "openrouter/test-model",
+			},
+			LivePolicy: core.DurableAgentLivePolicy{
+				OutboundMode: "reply_with_parent_review",
+			},
+			PolicyVersion: 2,
+		},
+		{
+			AgentID:            "mail-digest",
+			ReviewTargetChatID: 1001,
+			ChannelKind:        "email",
+			Status:             "draft",
+			BootstrapLLM: core.NodeLLMBootstrap{
+				Backend:        "native",
+				NativeProvider: "openrouter",
+				APIKey:         "sk-or-mail",
+				Model:          "openrouter/test-model",
+			},
+			LivePolicy: core.DurableAgentLivePolicy{
+				OutboundMode: "read_only",
+			},
+			PolicyVersion: 1,
+		},
+	} {
+		if err := store.UpsertDurableAgent(agent); err != nil {
+			t.Fatalf("UpsertDurableAgent(%s) err = %v", agent.AgentID, err)
+		}
+	}
+
+	out, err := captureStdout(t, func() error {
+		return runDurableAgentListCommand([]string{"--config", cfgPath})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentListCommand() err = %v", err)
+	}
+	if !strings.Contains(out, "action: durable-agent list") || !strings.Contains(out, "count: 2") {
+		t.Fatalf("durable-agent list output = %q, want action/count", out)
+	}
+	if !strings.Contains(out, "agent_id=family-group") || !strings.Contains(out, "agent_id=mail-digest") {
+		t.Fatalf("durable-agent list output = %q, want both agents", out)
+	}
+}
+
+func TestRunDurableAgentHealthShowsStateAndEnrollment(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	agent := core.DurableAgent{
+		AgentID:            "family-group",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		Status:             "active",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-group",
+			Model:          "openrouter/test-model",
+		},
+		LivePolicy: core.DurableAgentLivePolicy{
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		PolicyVersion: 7,
+		PolicyHash:    "abcdef1234567890",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:         agent.AgentID,
+		LastApplyStatus: "failed",
+		LastApplyError:  "child runtime unavailable",
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		KeyFingerprint:   "child-key-fp",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+		Status:           "active",
+		LastSequence:     12,
+		LastSeenAt:       time.Now().UTC().Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+
+	out, err := captureStdout(t, func() error {
+		return runDurableAgentHealthCommand([]string{"--config", cfgPath, "--agent", "family-group"})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentHealthCommand() err = %v", err)
+	}
+	for _, needle := range []string{
+		"action: durable-agent health",
+		"agent_id: family-group",
+		"health: degraded",
+		"last_apply_status: failed",
+		"last_apply_error: child runtime unavailable",
+		"enrollment: present",
+		"enrollment_status: active",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("durable-agent health output = %q, want substring %q", out, needle)
+		}
+	}
+}
+
 func TestRunDurableAgentBootstrapWriteExportsRemoteBootstrap(t *testing.T) {
 	t.Parallel()
 

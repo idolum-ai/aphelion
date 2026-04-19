@@ -34,6 +34,7 @@ type commandRouter interface {
 	Status(chatID int64) core.SessionStatus
 	StatusChat(chatID int64) (core.ChatStatusSnapshot, error)
 	StatusSystem(senderID int64) (core.SystemStatusSnapshot, error)
+	StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error)
 	StatusReadableSummary(ctx context.Context, view string, statusText string) string
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
@@ -171,6 +172,9 @@ func sendGovernorEffortSelector(ctx context.Context, sender commandSender, route
 func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery) (bool, error) {
 	if sender == nil || router == nil {
 		return false, nil
+	}
+	if runID, action, ok := core.DecodeDeliberationControlCallbackData(cb.Data); ok {
+		return handleDeliberationControlCallback(ctx, sender, router, cb, runID, action)
 	}
 	if view, targetChatID, ok := decodeStatusCallbackData(cb.Data); ok {
 		chatID := int64(0)

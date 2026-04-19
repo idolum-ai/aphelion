@@ -98,10 +98,14 @@ type stubCommandRouter struct {
 	status                      core.SessionStatus
 	statusChat                  core.ChatStatusSnapshot
 	statusSystem                core.SystemStatusSnapshot
+	statusDurables              core.DurableAgentsStatusSnapshot
 	statusReadableSummary       string
 	statusChatErr               error
 	statusSystemErr             error
+	statusDurablesErr           error
 	stop                        core.StopResult
+	stopInput                   int64
+	stopCalls                   int
 	detach                      core.DetachResult
 	detachErr                   error
 	detachChatID                int64
@@ -131,7 +135,9 @@ type stubCommandRouter struct {
 	queuedReinstallMsg          *core.InboundMessage
 }
 
-func (s stubCommandRouter) Stop(chatID int64) core.StopResult {
+func (s *stubCommandRouter) Stop(chatID int64) core.StopResult {
+	s.stopInput = chatID
+	s.stopCalls++
 	return s.stop
 }
 
@@ -165,6 +171,14 @@ func (s stubCommandRouter) StatusSystem(senderID int64) (core.SystemStatusSnapsh
 		return core.SystemStatusSnapshot{}, s.statusSystemErr
 	}
 	return s.statusSystem, nil
+}
+
+func (s stubCommandRouter) StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error) {
+	_ = senderID
+	if s.statusDurablesErr != nil {
+		return core.DurableAgentsStatusSnapshot{}, s.statusDurablesErr
+	}
+	return s.statusDurables, nil
 }
 
 func (s stubCommandRouter) StatusReadableSummary(ctx context.Context, view string, statusText string) string {
@@ -479,6 +493,7 @@ func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
 	foundSystem := false
 	foundHot := false
 	foundFind := false
+	foundDurables := false
 	for _, row := range sender.inline[0].rows {
 		for _, button := range row {
 			switch button.Text {
@@ -488,10 +503,12 @@ func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
 				foundHot = true
 			case "Find Chat":
 				foundFind = true
+			case "Durables":
+				foundDurables = true
 			}
 		}
 	}
-	if !foundSystem || !foundHot || !foundFind {
+	if !foundSystem || !foundHot || !foundFind || !foundDurables {
 		t.Fatalf("admin status keyboard rows = %#v, want admin controls", sender.inline[0].rows)
 	}
 }
@@ -716,6 +733,54 @@ func TestHandleTelegramCommandCallbackStatusSystemForAdmin(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandCallbackStatusDurablesForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		statusDurables: core.DurableAgentsStatusSnapshot{
+			TotalAgents: 1,
+			Agents: []core.DurableAgentStatusSnapshot{
+				{
+					AgentID:            "family-group",
+					ChannelKind:        "telegram_group",
+					Status:             "active",
+					Health:             "ok",
+					PolicyVersion:      2,
+					PolicyHash:         "abc123",
+					PolicyDrift:        "admin_review",
+					PolicyOutboundMode: "read_only",
+				},
+			},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-status-durables",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "status:durables",
+		Message: &telegram.Message{
+			MessageID: 196,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "status_scope=durables") {
+		t.Fatalf("durables status text = %q, want durables scope", got)
+	}
+}
+
 func TestHandleTelegramCommandCallbackStatusSystemDeniedForNonAdmin(t *testing.T) {
 	t.Parallel()
 
@@ -834,6 +899,145 @@ func TestHandleTelegramCommandCallbackStatusChunksOverflowDeterministically(t *t
 	}
 	if len(sender.msgs) == 0 {
 		t.Fatalf("follow-up messages = %#v, want overflow chunks", sender.msgs)
+	}
+}
+
+func TestHandleTelegramCommandCallbackDeliberationStop(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		stop: core.StopResult{ActiveCanceled: true, QueuedDropped: true},
+		statusChat: core.ChatStatusSnapshot{
+			ChatID: 7,
+			LatestTurnRun: &core.TurnRunStatusSnapshot{
+				ID:     501,
+				ChatID: 7,
+				Status: string(session.TurnRunStatusRunning),
+			},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-delib-stop",
+		From: &telegram.User{ID: 1002, Username: "approved"},
+		Data: core.EncodeDeliberationControlCallbackData(501, core.DeliberationControlActionStop),
+		Message: &telegram.Message{
+			MessageID: 240,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.stopCalls != 1 || router.stopInput != 7 {
+		t.Fatalf("stop calls/input = (%d,%d), want (1,7)", router.stopCalls, router.stopInput)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	}
+	if got := sender.edits[0].text; !strings.Contains(got, "Stopped the current turn and cleared queued work for this chat.") {
+		t.Fatalf("edited text = %q, want stop summary", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackDeliberationDetach(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		detach: core.DetachResult{
+			ActiveCanceled:           true,
+			QueuedDropped:            true,
+			ContinuationRevoked:      true,
+			PendingDecisionsDetached: 1,
+		},
+		statusChat: core.ChatStatusSnapshot{
+			ChatID: 7,
+			LatestTurnRun: &core.TurnRunStatusSnapshot{
+				ID:     777,
+				ChatID: 7,
+				Status: string(session.TurnRunStatusRunning),
+			},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-delib-detach",
+		From: &telegram.User{ID: 1002, Username: "approved"},
+		Data: core.EncodeDeliberationControlCallbackData(777, core.DeliberationControlActionDetach),
+		Message: &telegram.Message{
+			MessageID: 241,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.detachChatID != 7 || router.detachSenderID != 1002 {
+		t.Fatalf("detach inputs = (%d,%d), want (7,1002)", router.detachChatID, router.detachSenderID)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	}
+	if got := sender.edits[0].text; !strings.Contains(got, "Detached this chat from pending work") {
+		t.Fatalf("edited text = %q, want detach summary", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackDeliberationRejectsStaleRun(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID: 7,
+			LatestTurnRun: &core.TurnRunStatusSnapshot{
+				ID:     700,
+				ChatID: 7,
+				Status: string(session.TurnRunStatusCompleted),
+			},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-delib-stale",
+		From: &telegram.User{ID: 1002, Username: "approved"},
+		Data: core.EncodeDeliberationControlCallbackData(701, core.DeliberationControlActionStop),
+		Message: &telegram.Message{
+			MessageID: 242,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.stopCalls != 0 {
+		t.Fatalf("stopCalls = %d, want 0 for stale callback", router.stopCalls)
+	}
+	if router.detachChatID != 0 {
+		t.Fatalf("detachChatID = %d, want 0 for stale callback", router.detachChatID)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if sender.answers[0].text != staleDeliberationCallbackText {
+		t.Fatalf("answer text = %q, want stale callback warning", sender.answers[0].text)
+	}
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 for stale callback", len(sender.edits))
 	}
 }
 

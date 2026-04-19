@@ -33,7 +33,9 @@ import (
 )
 
 const (
-	turnTimeout     = 10 * time.Minute
+	// turnTimeout <= 0 disables per-turn deadlines so long deliberations can run until
+	// explicit user control (/stop, /detach, or thinking-card controls) interrupts them.
+	turnTimeout     = 0
 	exitCodeFailure = 1
 	exitCodeConfig  = 78
 	restartExitWait = 250 * time.Millisecond
@@ -172,6 +174,18 @@ func (c telegramCommandControl) StatusSystem(senderID int64) (core.SystemStatusS
 		}, nil
 	}
 	return c.rt.SystemStatusSnapshot(routerSnapshot)
+}
+
+func (c telegramCommandControl) StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error) {
+	if !c.CanRestart(senderID) {
+		return core.DurableAgentsStatusSnapshot{}, fmt.Errorf("status view denied")
+	}
+	if c.rt == nil {
+		return core.DurableAgentsStatusSnapshot{
+			GeneratedAt: time.Now().UTC(),
+		}, nil
+	}
+	return c.rt.DurableAgentsStatusSnapshot()
 }
 
 func (c telegramCommandControl) StatusReadableSummary(ctx context.Context, view string, statusText string) string {

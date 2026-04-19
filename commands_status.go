@@ -26,6 +26,7 @@ const (
 	statusViewSystem     statusView = "system"
 	statusViewHotChats   statusView = "hot"
 	statusViewFindChat   statusView = "find"
+	statusViewDurables   statusView = "durables"
 	statusViewChatTarget statusView = "chat_target"
 )
 
@@ -99,6 +100,15 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		systemStatus = status
 		systemLoaded = true
 		text = face.RenderTelegramStatusFindChat(status)
+	case statusViewDurables:
+		if !isAdmin {
+			return "", nil, fmt.Errorf("admin status view denied")
+		}
+		status, err := router.StatusDurables(senderID)
+		if err != nil {
+			return "", nil, err
+		}
+		text = face.RenderTelegramStatusDurables(status)
 	default:
 		chat, err := router.StatusChat(currentChatID)
 		if err != nil {
@@ -125,7 +135,7 @@ func appendStatusReadableSummary(ctx context.Context, router commandRouter, view
 
 func statusViewSupportsReadableSummary(view statusView) bool {
 	switch view {
-	case statusViewChat, statusViewPending, statusViewChatTarget, statusViewSystem, statusViewHotChats:
+	case statusViewChat, statusViewPending, statusViewChatTarget, statusViewSystem, statusViewHotChats, statusViewDurables:
 		return true
 	default:
 		return false
@@ -153,6 +163,9 @@ func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64
 			{Text: "System Overview", CallbackData: encodeStatusCallbackData(statusViewSystem, 0)},
 			{Text: "Hot Chats", CallbackData: encodeStatusCallbackData(statusViewHotChats, 0)},
 			{Text: "Find Chat", CallbackData: encodeStatusCallbackData(statusViewFindChat, 0)},
+		})
+		rows = append(rows, []telegram.InlineButton{
+			{Text: "Durables", CallbackData: encodeStatusCallbackData(statusViewDurables, 0)},
 		})
 	}
 	if isAdmin && systemLoaded && view == statusViewFindChat {
@@ -182,7 +195,7 @@ func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64
 
 func statusViewRequiresAdmin(view statusView, callbackChatID int64, targetChatID int64) bool {
 	switch view {
-	case statusViewSystem, statusViewHotChats, statusViewFindChat:
+	case statusViewSystem, statusViewHotChats, statusViewFindChat, statusViewDurables:
 		return true
 	case statusViewChatTarget:
 		return targetChatID != 0 && (callbackChatID == 0 || targetChatID != callbackChatID)
@@ -203,6 +216,8 @@ func encodeStatusCallbackData(view statusView, chatID int64) string {
 		return statusCallbackPrefix + "hot"
 	case statusViewFindChat:
 		return statusCallbackPrefix + "find"
+	case statusViewDurables:
+		return statusCallbackPrefix + "durables"
 	case statusViewChatTarget:
 		return statusCallbackPrefix + "chat:" + strconv.FormatInt(chatID, 10)
 	default:
@@ -232,6 +247,8 @@ func decodeStatusCallbackData(data string) (statusView, int64, bool) {
 			return statusViewHotChats, 0, true
 		case "find":
 			return statusViewFindChat, 0, true
+		case "durables":
+			return statusViewDurables, 0, true
 		default:
 			return "", 0, false
 		}

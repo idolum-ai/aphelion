@@ -76,6 +76,73 @@ func TestSemanticToolProgressLabel(t *testing.T) {
 	}
 }
 
+func TestToolProgressReporterDeliberationControlsLifecycle(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	reporter := &toolProgressReporter{
+		sender:         sender,
+		inlineSender:   sender,
+		editor:         sender,
+		keyboardEditor: sender,
+		chatID:         42,
+		mode:           "all",
+		style:          "semantic",
+		window:         4,
+		seenKeys:       make(map[string]struct{}),
+		taskSummary:    "investigate stuck turn",
+	}
+	reporter.BindTurnRun(91)
+
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"rg first"}`))
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"rg second"}`))
+	reporter.Finish(context.Background())
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline len = %d, want 1 initial progress message with controls", len(sender.inline))
+	}
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {
+		t.Fatalf("inline rows = %#v, want detach/stop controls", sender.inline[0].rows)
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline len = %d, want 1 in-progress update retaining controls", len(sender.editInline))
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits len = %d, want 1 completion edit without controls", len(sender.edits))
+	}
+	if !strings.HasPrefix(sender.edits[0].Text, "Done.") {
+		t.Fatalf("completion text = %q, want Done heading", sender.edits[0].Text)
+	}
+}
+
+func TestToolProgressReporterHeartbeatCanStartThinkingCard(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	reporter := &toolProgressReporter{
+		sender:       sender,
+		inlineSender: sender,
+		chatID:       42,
+		mode:         "all",
+		style:        "semantic",
+		window:       4,
+		seenKeys:     make(map[string]struct{}),
+	}
+	reporter.BindTurnRun(109)
+	reporter.Heartbeat(context.Background())
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline len = %d, want 1 heartbeat-started thinking card", len(sender.inline))
+	}
+	if !strings.Contains(sender.inline[0].text, "Thinking") {
+		t.Fatalf("inline text = %q, want thinking heading", sender.inline[0].text)
+	}
+}
+
 func TestStartTurnMonitorRunActivityHeartbeatUpdatesLastActivity(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

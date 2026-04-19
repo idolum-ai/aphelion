@@ -122,7 +122,7 @@ type Media struct {
 - **One turn at a time per session.** Per-session `sync.Mutex`. If messages arrive during a turn, they are queued and then compacted into one follow-up input after the active turn finishes.
 - **Multiple sessions run concurrently.** Different ChatIDs don't block each other. Each turn is its own goroutine.
 - **Tool execution is sequential within a turn.** Tools run in the agent's goroutine. Sub-agents are separate (see below).
-- **Context cancellation.** Every turn gets a `context.Context` with a timeout. SIGTERM cancels all active contexts → graceful drain.
+- **Context cancellation.** Every turn gets a cancelable `context.Context` (no hard per-turn deadline by default). User controls (`/stop`, `/detach`, thinking-card controls) and SIGTERM cancel active contexts for graceful drain.
 
 ### Ownership Boundaries
 

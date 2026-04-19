@@ -168,6 +168,13 @@ Inspect effective paths and loaded prompt files:
 make paths
 ```
 
+Inspect durable-agent inventory and health:
+
+```bash
+./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
+./bin/aphelion durable-agent health --config ~/.aphelion/aphelion.toml --agent family-group
+```
+
 Safe maintenance cleanup:
 
 ```bash
@@ -265,7 +272,7 @@ Inside Telegram:
 - `/help` shows the command list
 - `/status` opens a button-driven status view (`This Chat`, `Pending Only`, `Refresh`)
 - `/status` prepends a concise `quick_read` summary when a native provider key is available, then shows raw status telemetry
-- admins also get `System Overview`, `Hot Chats`, and `Find Chat` buttons from `/status`
+- admins also get `System Overview`, `Hot Chats`, `Find Chat`, and `Durables` buttons from `/status`
 - `/stop` cancels the current turn and clears any queued follow-up messages for that chat
 - `/detach` clears active/queued/continuation state and detaches pending approvals for you in this chat
 - `/restart` (admin only) forces gateway restart and detaches pending approvals before exit by default

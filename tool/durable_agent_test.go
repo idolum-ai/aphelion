@@ -62,6 +62,28 @@ func TestDurableAgentToolDefinitionIncludesPolicyPatchSurface(t *testing.T) {
 	}
 }
 
+func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(newToolTestStore(t))
+	var durableDefJSON string
+	for _, def := range registry.Definitions() {
+		if def.Name == "durable_agent" {
+			durableDefJSON = string(def.Parameters)
+			break
+		}
+	}
+	if durableDefJSON == "" {
+		t.Fatal("durable_agent definition missing")
+	}
+	if !strings.Contains(durableDefJSON, `"wizard_start"`) {
+		t.Fatalf("durable_agent definition missing wizard action enum: %s", durableDefJSON)
+	}
+	if !strings.Contains(durableDefJSON, `"wizard_answers"`) {
+		t.Fatalf("durable_agent definition missing wizard_answers field: %s", durableDefJSON)
+	}
+}
+
 func TestDurableAgentToolListAndPolicyShow(t *testing.T) {
 	t.Parallel()
 
@@ -648,6 +670,156 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 	}
 	if activated.Status != "active" {
 		t.Fatalf("activated status = %q, want active", activated.Status)
+	}
+}
+
+func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+
+	startOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
+	}
+	if !strings.Contains(startOut, "action: durable-agent wizard show") || !strings.Contains(startOut, "wizard_status: in_progress") {
+		t.Fatalf("wizard_start output = %q, want in-progress wizard summary", startOut)
+	}
+	if !strings.Contains(startOut, "current_step: address") {
+		t.Fatalf("wizard_start output = %q, want first address step", startOut)
+	}
+
+	answerOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"wizard_answer",
+			"agent_id":"idolum-email",
+			"wizard_answers":{
+				"address":"idolum@example.com",
+				"account":"idolum@example.com",
+				"adapter":"gog_cli",
+				"query":"label:inbox newer_than:7d",
+				"charter":"Review the inbox, surface important threads, summarize PDFs, and never send mail.",
+				"autonomy":"observe_only",
+				"wakeup_mode":"poll_or_push",
+				"poll_interval":"5m",
+				"surface_rules":["job opportunity","external inquiry"],
+				"summarize_pdfs":true,
+				"synthesis_cadence":"4h",
+				"capabilities":["read_channel","bounded_review_artifact","summarize_pdf"],
+				"never_retain":["oauth_token","password"],
+				"drift_policy":"admin_review"
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_answer) err = %v", err)
+	}
+	if !strings.Contains(answerOut, "wizard_status: ready") {
+		t.Fatalf("wizard_answer output = %q, want ready wizard status", answerOut)
+	}
+
+	finalizeOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_finalize) err = %v", err)
+	}
+	if !strings.Contains(finalizeOut, "action: durable-agent wizard finalize") {
+		t.Fatalf("wizard_finalize output = %q, want wizard finalize action", finalizeOut)
+	}
+	if !strings.Contains(finalizeOut, "status: draft") {
+		t.Fatalf("wizard_finalize output = %q, want draft status", finalizeOut)
+	}
+
+	agent, err := store.DurableAgent("idolum-email")
+	if err != nil {
+		t.Fatalf("DurableAgent(idolum-email) err = %v", err)
+	}
+	if agent.Status != "draft" {
+		t.Fatalf("agent status = %q, want draft", agent.Status)
+	}
+	if agent.WakeupMode != "poll_or_push" {
+		t.Fatalf("agent wakeup_mode = %q, want poll_or_push", agent.WakeupMode)
+	}
+	if agent.LivePolicy.OutboundMode != "read_only" {
+		t.Fatalf("agent outbound_mode = %q, want read_only", agent.LivePolicy.OutboundMode)
+	}
+	if agent.ChannelConfig.Email == nil {
+		t.Fatal("agent channel_config.email = nil, want configured email child")
+	}
+	if agent.ChannelConfig.Email.SynthesisCadence != "4h" {
+		t.Fatalf("email synthesis_cadence = %q, want 4h", agent.ChannelConfig.Email.SynthesisCadence)
+	}
+	if len(agent.ChannelConfig.Email.NeverRetain) != 2 || agent.ChannelConfig.Email.NeverRetain[0] != "oauth_token" {
+		t.Fatalf("email never_retain = %#v, want oauth_token/password", agent.ChannelConfig.Email.NeverRetain)
+	}
+
+	state, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if continuity.SetupWizard == nil {
+		t.Fatal("continuity setup_wizard = nil, want finalized wizard state")
+	}
+	if continuity.SetupWizard.Status != "finalized" {
+		t.Fatalf("continuity setup_wizard status = %q, want finalized", continuity.SetupWizard.Status)
+	}
+}
+
+func TestDurableAgentToolEmailWizardFinalizeRequiresCompleteAnswers(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_answer","agent_id":"idolum-email","wizard_answers":{"address":"idolum@example.com","adapter":"gog_cli"}}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_answer partial) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(wizard_finalize partial) err = nil, want missing-answer error")
+	}
+	if !strings.Contains(err.Error(), "missing wizard answers") {
+		t.Fatalf("err = %v, want missing wizard answers guidance", err)
 	}
 }
 

@@ -119,3 +119,55 @@ func TestRenderTelegramStatusChatIncludesTurnPhaseHiddenInputsDeliveryAndDetache
 		}
 	}
 }
+
+func TestRenderTelegramStatusDurablesIncludesHealthCards(t *testing.T) {
+	t.Parallel()
+
+	out := RenderTelegramStatusDurables(core.DurableAgentsStatusSnapshot{
+		TotalAgents:    1,
+		ActiveAgents:   1,
+		DegradedAgents: 1,
+		Agents: []core.DurableAgentStatusSnapshot{
+			{
+				AgentID:                  "family-group",
+				ChannelKind:              "telegram_group",
+				Status:                   "active",
+				Health:                   "degraded",
+				ReviewTargetChatID:       1001,
+				PolicyVersion:            4,
+				PolicyHash:               "8f829f8793fcb1234567890",
+				PolicyOutboundMode:       "reply_with_parent_review",
+				PolicyDrift:              "admin_review",
+				CapabilityEnvelope:       []string{"group_reply", "bounded_review_artifact"},
+				LastApplyStatus:          "failed",
+				LastApplyError:           "policy apply timed out while child was offline",
+				LastAppliedPolicyVersion: 3,
+			},
+		},
+	})
+
+	for _, needle := range []string{
+		"status_scope=durables",
+		"summary total=1 active=1 dormant=0 degraded=1 inactive=0",
+		"- id=family-group channel=telegram_group status=active health=degraded review_chat=1001",
+		"policy version=4 hash=8f829f8793fc outbound=reply_with_parent_review",
+		"runtime apply_error=\"policy apply timed out while child was offline\"",
+		"enrollment status=none",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusDurables() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
+func TestRenderTelegramStatusDurablesShowsEmptyState(t *testing.T) {
+	t.Parallel()
+
+	out := RenderTelegramStatusDurables(core.DurableAgentsStatusSnapshot{})
+	if !strings.Contains(out, "status_scope=durables") {
+		t.Fatalf("RenderTelegramStatusDurables() = %q, want durables scope", out)
+	}
+	if !strings.Contains(out, "agents:\n- none") {
+		t.Fatalf("RenderTelegramStatusDurables() = %q, want empty durable list marker", out)
+	}
+}

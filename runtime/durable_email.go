@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -113,7 +114,7 @@ func (r *Runtime) pollDurableEmailAgents(ctx context.Context, now time.Time) err
 	}
 	var errs []string
 	for _, agent := range agents {
-		if !durableEmailPollingEnabled(agent) {
+		if !durableEmailWakeEnabled(agent) {
 			continue
 		}
 		if err := r.pollDurableEmailAgent(ctx, agent, now); err != nil {
@@ -126,9 +127,9 @@ func (r *Runtime) pollDurableEmailAgents(ctx context.Context, now time.Time) err
 	return nil
 }
 
-func durableEmailPollingEnabled(agent core.DurableAgent) bool {
+func durableEmailWakeEnabled(agent core.DurableAgent) bool {
 	return strings.TrimSpace(agent.ChannelKind) == "email" &&
-		strings.TrimSpace(agent.WakeupMode) == "poll" &&
+		durableEmailWakeMode(strings.TrimSpace(agent.WakeupMode)) != "" &&
 		strings.TrimSpace(agent.Status) == "active" &&
 		agent.ChannelConfig.Email != nil &&
 		strings.TrimSpace(agent.ChannelConfig.Email.Adapter) == "gog_cli"
@@ -142,27 +143,65 @@ func (r *Runtime) pollDurableEmailAgent(ctx context.Context, agent core.DurableA
 		}
 		state = &core.DurableAgentState{AgentID: agent.AgentID}
 	}
-	interval := durableEmailPollInterval(agent)
-	if !state.LastWakeAt.IsZero() && now.Before(state.LastWakeAt.Add(interval)) {
-		return nil
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return fmt.Errorf("parse durable email continuity state: %w", err)
 	}
-
-	threads, cursor, err := r.fetchDurableEmailThreads(ctx, agent, state.Cursor)
+	scope, err := r.scopeForDurableAgent(agent)
 	if err != nil {
 		return err
 	}
+
+	mode := durableEmailWakeMode(agent.WakeupMode)
+	interval := durableEmailPollInterval(agent)
+	pollDue := mode != "push" && (state.LastWakeAt.IsZero() || !now.Before(state.LastWakeAt.Add(interval)))
+	pushThreadIDs, pushWake, err := durableEmailConsumePushWake(scope.WorkingRoot, agent.AgentID)
+	if err != nil {
+		return err
+	}
+	if !pollDue && !pushWake {
+		return nil
+	}
+
+	threads, cursor, err := r.fetchDurableEmailThreads(ctx, agent, state.Cursor, pushThreadIDs)
+	if err != nil {
+		return err
+	}
+	var neverRetainRedactions int
+	threads, neverRetainRedactions = durableEmailApplyNeverRetain(agent, threads)
+	pendingThreads := append([]durableEmailThreadDigest(nil), durableEmailPendingThreads(continuity)...)
+	pendingThreads = durableEmailAppendUniquePending(pendingThreads, threads)
+	continuity.EmailPending = durableEmailPendingState(pendingThreads)
+
 	state.Cursor = cursor
 	state.Status = "dormant"
 	state.LastWakeAt = now
+	stateJSON, err := continuity.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal durable email continuity state: %w", err)
+	}
+	state.StateJSON = stateJSON
 	if err := r.store.SaveDurableAgentState(*state); err != nil {
 		return err
 	}
-	if len(threads) == 0 {
+	if len(pendingThreads) == 0 {
 		return nil
 	}
-	artifact := durableEmailReviewArtifact(agent, threads)
+	if !durableEmailSynthesisDue(agent, state, now) {
+		return nil
+	}
+	artifact := durableEmailReviewArtifact(agent, pendingThreads, now, neverRetainRedactions)
 	if artifact == nil {
 		return nil
+	}
+	continuity.EmailPending = nil
+	stateJSON, err = continuity.Marshal()
+	if err != nil {
+		return fmt.Errorf("marshal durable email continuity state: %w", err)
+	}
+	state.StateJSON = stateJSON
+	if err := r.store.SaveDurableAgentState(*state); err != nil {
+		return err
 	}
 	_, err = durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, *artifact)
 	return err
@@ -177,22 +216,25 @@ func durableEmailPollInterval(agent core.DurableAgent) time.Duration {
 	return defaultDurableEmailPollEvery
 }
 
-func (r *Runtime) fetchDurableEmailThreads(ctx context.Context, agent core.DurableAgent, cursor string) ([]durableEmailThreadDigest, string, error) {
+func (r *Runtime) fetchDurableEmailThreads(ctx context.Context, agent core.DurableAgent, cursor string, forcedThreadIDs []string) ([]durableEmailThreadDigest, string, error) {
 	scope, err := r.scopeForDurableAgent(agent)
 	if err != nil {
 		return nil, "", err
 	}
-	searchArgs := durableEmailBaseCommand(agent)
-	searchArgs = append(searchArgs, "gmail", "search")
-	searchArgs = append(searchArgs, firstNonEmpty(strings.TrimSpace(agent.ChannelConfig.Email.Query), "label:inbox"))
-	searchArgs = append(searchArgs, "--json", "--results-only", "--max", strconv.Itoa(durableEmailSearchLimit), "--no-input")
-	raw, err := durableEmailCommandRunner(ctx, searchArgs...)
-	if err != nil {
-		return nil, "", err
-	}
-	threadIDs, err := parseDurableEmailSearchThreadIDs(raw)
-	if err != nil {
-		return nil, "", err
+	threadIDs := normalizeDurableEmailThreadIDs(forcedThreadIDs)
+	if len(threadIDs) == 0 {
+		searchArgs := durableEmailBaseCommand(agent)
+		searchArgs = append(searchArgs, "gmail", "search")
+		searchArgs = append(searchArgs, firstNonEmpty(strings.TrimSpace(agent.ChannelConfig.Email.Query), "label:inbox"))
+		searchArgs = append(searchArgs, "--json", "--results-only", "--max", strconv.Itoa(durableEmailSearchLimit), "--no-input")
+		raw, err := durableEmailCommandRunner(ctx, searchArgs...)
+		if err != nil {
+			return nil, "", err
+		}
+		threadIDs, err = parseDurableEmailSearchThreadIDs(raw)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	seen := durableEmailCursorSet(cursor)
 	newestCursor := durableEmailMergeCursor(threadIDs, seen)
@@ -227,6 +269,235 @@ func (r *Runtime) fetchDurableEmailThreads(ctx context.Context, agent core.Durab
 		out = append(out, digest)
 	}
 	return out, newestCursor, nil
+}
+
+func durableEmailWakeMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "poll":
+		return "poll"
+	case "push":
+		return "push"
+	case "poll_or_push", "both":
+		return "poll_or_push"
+	default:
+		return ""
+	}
+}
+
+func durableEmailNormalizeSynthesisCadence(agent core.DurableAgent) time.Duration {
+	if agent.ChannelConfig.Email == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(agent.ChannelConfig.Email.SynthesisCadence)
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
+
+func durableEmailSynthesisDue(agent core.DurableAgent, state *core.DurableAgentState, now time.Time) bool {
+	if state == nil {
+		return true
+	}
+	cadence := durableEmailNormalizeSynthesisCadence(agent)
+	if cadence <= 0 {
+		return true
+	}
+	if state.LastReviewAt.IsZero() {
+		return true
+	}
+	return !now.Before(state.LastReviewAt.Add(cadence))
+}
+
+func durableEmailPushInboxDir(workingRoot string, agentID string) string {
+	return filepath.Join(strings.TrimSpace(workingRoot), ".aphelion", "email-push", strings.TrimSpace(agentID), "inbox")
+}
+
+type durableEmailPushEvent struct {
+	ThreadIDs []string `json:"thread_ids,omitempty"`
+}
+
+func durableEmailConsumePushWake(workingRoot string, agentID string) ([]string, bool, error) {
+	dir := durableEmailPushInboxDir(workingRoot, agentID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if len(entries) == 0 {
+		return nil, false, nil
+	}
+	threads := make([]string, 0, len(entries))
+	triggered := false
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		triggered = true
+		raw, readErr := os.ReadFile(path)
+		if readErr == nil {
+			var event durableEmailPushEvent
+			if decodeErr := json.Unmarshal(raw, &event); decodeErr == nil {
+				threads = append(threads, event.ThreadIDs...)
+			}
+		}
+		_ = os.Remove(path)
+	}
+	return normalizeDurableEmailThreadIDs(threads), triggered, nil
+}
+
+func normalizeDurableEmailThreadIDs(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func durableEmailPendingThreads(continuity core.DurableAgentContinuityState) []durableEmailThreadDigest {
+	if continuity.EmailPending == nil || len(continuity.EmailPending.Threads) == 0 {
+		return nil
+	}
+	out := make([]durableEmailThreadDigest, 0, len(continuity.EmailPending.Threads))
+	for _, thread := range continuity.EmailPending.Threads {
+		out = append(out, durableEmailThreadDigest{
+			ThreadID:        strings.TrimSpace(thread.ThreadID),
+			MessageID:       strings.TrimSpace(thread.MessageID),
+			From:            strings.TrimSpace(thread.From),
+			Subject:         strings.TrimSpace(thread.Subject),
+			Snippet:         strings.TrimSpace(thread.Snippet),
+			Body:            strings.TrimSpace(thread.Body),
+			ReceivedAt:      thread.ReceivedAt,
+			Labels:          append([]string(nil), thread.Labels...),
+			AttachmentNames: append([]string(nil), thread.AttachmentNames...),
+		})
+	}
+	return out
+}
+
+func durableEmailPendingState(threads []durableEmailThreadDigest) *core.DurableAgentEmailPendingState {
+	if len(threads) == 0 {
+		return nil
+	}
+	out := make([]core.DurableAgentEmailPendingThread, 0, len(threads))
+	for _, thread := range threads {
+		id := strings.TrimSpace(thread.ThreadID)
+		if id == "" {
+			continue
+		}
+		out = append(out, core.DurableAgentEmailPendingThread{
+			ThreadID:        id,
+			MessageID:       strings.TrimSpace(thread.MessageID),
+			From:            strings.TrimSpace(thread.From),
+			Subject:         strings.TrimSpace(thread.Subject),
+			Snippet:         strings.TrimSpace(thread.Snippet),
+			Body:            strings.TrimSpace(thread.Body),
+			ReceivedAt:      thread.ReceivedAt,
+			Labels:          append([]string(nil), thread.Labels...),
+			AttachmentNames: append([]string(nil), thread.AttachmentNames...),
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return &core.DurableAgentEmailPendingState{Threads: out}
+}
+
+func durableEmailAppendUniquePending(current []durableEmailThreadDigest, next []durableEmailThreadDigest) []durableEmailThreadDigest {
+	if len(next) == 0 {
+		return current
+	}
+	seen := make(map[string]struct{}, len(current)+len(next))
+	out := make([]durableEmailThreadDigest, 0, len(current)+len(next))
+	for _, thread := range current {
+		id := strings.TrimSpace(thread.ThreadID)
+		if id == "" {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, thread)
+	}
+	for _, thread := range next {
+		id := strings.TrimSpace(thread.ThreadID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, thread)
+	}
+	return out
+}
+
+func durableEmailApplyNeverRetain(agent core.DurableAgent, threads []durableEmailThreadDigest) ([]durableEmailThreadDigest, int) {
+	if len(threads) == 0 || agent.ChannelConfig.Email == nil || len(agent.ChannelConfig.Email.NeverRetain) == 0 {
+		return threads, 0
+	}
+	rules := make([]string, 0, len(agent.ChannelConfig.Email.NeverRetain))
+	for _, rule := range agent.ChannelConfig.Email.NeverRetain {
+		rule = strings.ToLower(strings.TrimSpace(rule))
+		if rule == "" {
+			continue
+		}
+		rules = append(rules, rule)
+	}
+	if len(rules) == 0 {
+		return threads, 0
+	}
+	redactions := 0
+	out := make([]durableEmailThreadDigest, 0, len(threads))
+	for _, thread := range threads {
+		if durableEmailThreadMatchesNeverRetain(thread, rules) {
+			redactions++
+			thread.From = ""
+			thread.Subject = ""
+			thread.Snippet = ""
+			thread.Body = ""
+			thread.AttachmentNames = nil
+		}
+		out = append(out, thread)
+	}
+	return out, redactions
+}
+
+func durableEmailThreadMatchesNeverRetain(thread durableEmailThreadDigest, rules []string) bool {
+	corpus := strings.ToLower(strings.Join([]string{
+		thread.From,
+		thread.Subject,
+		thread.Snippet,
+		thread.Body,
+		strings.Join(thread.AttachmentNames, " "),
+	}, "\n"))
+	if corpus == "" {
+		return false
+	}
+	for _, rule := range rules {
+		if strings.Contains(corpus, rule) {
+			return true
+		}
+	}
+	return false
 }
 
 func durableEmailBaseCommand(agent core.DurableAgent) []string {
@@ -448,7 +719,7 @@ func durableEmailMergeCursor(latest []string, seen map[string]bool) string {
 	return strings.Join(ordered, ",")
 }
 
-func durableEmailReviewArtifact(agent core.DurableAgent, threads []durableEmailThreadDigest) *core.DurableReviewArtifact {
+func durableEmailReviewArtifact(agent core.DurableAgent, threads []durableEmailThreadDigest, now time.Time, neverRetainRedactions int) *core.DurableReviewArtifact {
 	if len(threads) == 0 {
 		return nil
 	}
@@ -469,6 +740,9 @@ func durableEmailReviewArtifact(agent core.DurableAgent, threads []durableEmailT
 	if len(attachments) > 0 && agent.ChannelConfig.Email != nil && agent.ChannelConfig.Email.SummarizePDFs {
 		riskFlags = append(riskFlags, "pdf_attachment")
 	}
+	if neverRetainRedactions > 0 {
+		riskFlags = append(riskFlags, "never_retain_enforced")
+	}
 
 	summary := fmt.Sprintf("Inbox check reviewed %d new email thread(s).", len(threads))
 	if len(important) > 0 {
@@ -481,6 +755,9 @@ func durableEmailReviewArtifact(agent core.DurableAgent, threads []durableEmailT
 	}
 	if len(attachments) > 0 {
 		localActions = append(localActions, "Surfaced attachments for bounded parent review.")
+	}
+	if neverRetainRedactions > 0 {
+		localActions = append(localActions, fmt.Sprintf("Applied never_retain scrubbing to %d thread(s).", neverRetainRedactions))
 	}
 
 	questions := []string{}
@@ -497,11 +774,14 @@ func durableEmailReviewArtifact(agent core.DurableAgent, threads []durableEmailT
 		"attachments":       strings.Join(uniqueStrings(attachments), ","),
 		"important_threads": strconv.Itoa(len(important)),
 	}
+	if neverRetainRedactions > 0 {
+		metadata["never_retain_redactions"] = strconv.Itoa(neverRetainRedactions)
+	}
 
 	return &core.DurableReviewArtifact{
 		AgentID:       strings.TrimSpace(agent.AgentID),
 		Summary:       summary,
-		IntervalLabel: time.Now().UTC().Format(time.RFC3339),
+		IntervalLabel: now.UTC().Format(time.RFC3339),
 		LocalActions:  localActions,
 		Questions:     questions,
 		RiskFlags:     uniqueStrings(riskFlags),

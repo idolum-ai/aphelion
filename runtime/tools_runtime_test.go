@@ -181,14 +181,20 @@ func TestHandleInboundAdminCanManageDurableAgentThroughConversationTool(t *testi
 
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
-	if len(sender.sent) != 2 {
-		t.Fatalf("sent len = %d, want progress + final reply", len(sender.sent))
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline len = %d, want 1 progress card", len(sender.inline))
 	}
-	if !strings.Contains(sender.sent[0].Text, "Working on Set family-group to read only") {
-		t.Fatalf("progress text = %q, want conversation-derived durable_agent progress entry", sender.sent[0].Text)
+	if !strings.Contains(sender.inline[0].text, "Thinking") {
+		t.Fatalf("progress text = %q, want thinking header", sender.inline[0].text)
 	}
-	if sender.sent[1].Text != "Policy updated through conversation." {
-		t.Fatalf("final reply = %q, want conversational policy update reply", sender.sent[1].Text)
+	if !strings.Contains(sender.inline[0].text, "Working on Set family-group to read only") {
+		t.Fatalf("progress text = %q, want conversation-derived durable_agent progress entry", sender.inline[0].text)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want final reply only", len(sender.sent))
+	}
+	if sender.sent[0].Text != "Policy updated through conversation." {
+		t.Fatalf("final reply = %q, want conversational policy update reply", sender.sent[0].Text)
 	}
 }
 
@@ -219,26 +225,35 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	}
 
 	sender.mu.Lock()
-	if len(sender.sent) != 2 {
-		t.Fatalf("sent len = %d, want 2 (progress + reply)", len(sender.sent))
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline len = %d, want 1 progress card", len(sender.inline))
 	}
-	if !strings.Contains(sender.sent[0].Text, "Working on it") {
-		t.Fatalf("progress text = %q, want tool progress message", sender.sent[0].Text)
+	if !strings.Contains(sender.inline[0].text, "Thinking") {
+		t.Fatalf("progress text = %q, want thinking header", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.sent[0].Text, "Working on inspect") {
-		t.Fatalf("progress text = %q, want task-derived progress label", sender.sent[0].Text)
+	if !strings.Contains(sender.inline[0].text, "Working on inspect") {
+		t.Fatalf("progress text = %q, want task-derived progress label", sender.inline[0].text)
 	}
-	if strings.Contains(sender.sent[0].Text, "rg first") {
-		t.Fatalf("progress text = %q, want task-derived progress instead of raw command", sender.sent[0].Text)
+	if strings.Contains(sender.inline[0].text, "rg first") {
+		t.Fatalf("progress text = %q, want task-derived progress instead of raw command", sender.inline[0].text)
 	}
-	if sender.sent[0].ReplyTo == nil || *sender.sent[0].ReplyTo != 99 {
-		t.Fatalf("progress reply_to = %#v, want 99", sender.sent[0].ReplyTo)
+	if sender.inline[0].replyTo == nil || *sender.inline[0].replyTo != 99 {
+		t.Fatalf("progress reply_to = %#v, want 99", sender.inline[0].replyTo)
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if !strings.Contains(sender.editInline[0].Text, "Working on inspect (2x)") {
+		t.Fatalf("edit text = %q, want aggregated task-derived tool progress", sender.editInline[0].Text)
 	}
 	if len(sender.edits) != 1 {
-		t.Fatalf("edit count = %d, want 1", len(sender.edits))
+		t.Fatalf("final edit count = %d, want 1 completion edit without controls", len(sender.edits))
 	}
-	if !strings.Contains(sender.edits[0].Text, "Working on inspect (2x)") {
-		t.Fatalf("edit text = %q, want aggregated task-derived tool progress", sender.edits[0].Text)
+	if !strings.HasPrefix(sender.edits[0].Text, "Done.") {
+		t.Fatalf("completion text = %q, want Done heading", sender.edits[0].Text)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want final reply only", len(sender.sent))
 	}
 	sender.mu.Unlock()
 

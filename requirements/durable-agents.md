@@ -623,8 +623,14 @@ Typical flow:
    `Idolum` proposes creating an email durable child and asks for approval before capability or connection work begins.
 2. Setup questions:
    The parent asks only the missing questions needed to form a bounded charter.
+   The setup surface should be an explicit wizard state machine with durable fields such as:
+   - `status` (`in_progress`, `ready`, `finalized`, `cancelled`)
+   - `current_step`
+   - `missing` answer list
+   - machine-readable `answers`
 3. Draft persistence:
    The registry persists the child in a `draft` or other non-active state while the charter is still being formed.
+   Wizard state must survive process restart so setup can resume without re-asking completed steps.
 4. Connection test:
    The chosen ingress adapter and scoped credentials are tested.
 5. Activation:
@@ -641,11 +647,13 @@ The public surface should remain one coherent `Idolum` conversation, even when t
 3. Email ingress:
    The email adapter receives or polls a new message and normalizes body text, metadata, and attachments into child-local artifacts.
 4. Child-local processing:
-   The child classifies urgency, extracts allowed document content, and decides whether the message is routine, escalatory, or drift-seeking.
+   The child classifies urgency, extracts allowed document content, enforces `never_retain` scrubbing rules, and decides whether the message is routine, escalatory, or drift-seeking.
+   `never_retain` enforcement should be explicit in review metadata (for example with redaction counters or risk flags).
 5. Local action:
    If policy allows it, the child may prepare a draft reply or take another bounded local action.
 6. Upward synthesis:
    The child emits a bounded review artifact summarizing what happened, what it did locally, what files matter, and any drift candidates or suspicious requests.
+   If `synthesis_cadence` is configured, review emission is cadence-gated and intermediate inbox observations are buffered in durable child state until the cadence window opens.
 7. Parent review:
    The parent house sees the bounded artifact first, not the raw inbox transcript.
 8. Admin ratification:
@@ -660,7 +668,7 @@ The public surface should remain one coherent `Idolum` conversation, even when t
 The first concrete slice should be intentionally narrow:
 
 - read-only email child
-- poll-driven wakeups
+- wakeups through polling, push, or both (`poll_or_push`)
 - no outbound mail
 - scoped inbox credentials for the child only
 - bounded upward digests through review artifacts

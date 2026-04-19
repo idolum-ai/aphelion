@@ -441,6 +441,140 @@ func TestChatStatusSnapshotIncludesHiddenInputDeliveryAndPlanProgress(t *testing
 	}
 }
 
+func TestDurableAgentsStatusSnapshotIncludesHealthSignals(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agentDormant := core.DurableAgent{
+		AgentID:            "agent-dormant",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		Status:             "active",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-dormant",
+			Model:          "openrouter/test-model",
+		},
+		LivePolicy: core.DurableAgentLivePolicy{
+			CapabilityEnvelope: []string{"group_reply"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		PolicyVersion: 3,
+		PolicyHash:    "hash-dormant",
+	}
+	if err := store.UpsertDurableAgent(agentDormant); err != nil {
+		t.Fatalf("UpsertDurableAgent(agent-dormant) err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:                  "agent-dormant",
+		DormantAt:                time.Now().UTC().Add(-15 * time.Minute),
+		LastWakeAt:               time.Now().UTC().Add(-30 * time.Minute),
+		LastReviewAt:             time.Now().UTC().Add(-25 * time.Minute),
+		LastAppliedPolicyVersion: 3,
+		LastAppliedPolicyAt:      time.Now().UTC().Add(-40 * time.Minute),
+		LastApplyStatus:          "ok",
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState(agent-dormant) err = %v", err)
+	}
+
+	agentDegraded := core.DurableAgent{
+		AgentID:            "agent-degraded",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		Status:             "active",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-degraded",
+			Model:          "openrouter/test-model",
+		},
+		LivePolicy: core.DurableAgentLivePolicy{
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "reply_with_parent_review",
+			DriftPolicy:        "admin_review",
+		},
+		PolicyVersion: 5,
+		PolicyHash:    "hash-degraded",
+	}
+	if err := store.UpsertDurableAgent(agentDegraded); err != nil {
+		t.Fatalf("UpsertDurableAgent(agent-degraded) err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:         "agent-degraded",
+		LastApplyStatus: "failed",
+		LastApplyError:  "child runtime unavailable",
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState(agent-degraded) err = %v", err)
+	}
+
+	agentInactive := core.DurableAgent{
+		AgentID:            "agent-inactive",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		Status:             "draft",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-inactive",
+			Model:          "openrouter/test-model",
+		},
+		LivePolicy: core.DurableAgentLivePolicy{
+			CapabilityEnvelope: []string{"read_channel"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		PolicyVersion: 1,
+		PolicyHash:    "hash-inactive",
+	}
+	if err := store.UpsertDurableAgent(agentInactive); err != nil {
+		t.Fatalf("UpsertDurableAgent(agent-inactive) err = %v", err)
+	}
+
+	snapshot, err := rt.DurableAgentsStatusSnapshot()
+	if err != nil {
+		t.Fatalf("DurableAgentsStatusSnapshot() err = %v", err)
+	}
+	if snapshot.TotalAgents != 3 {
+		t.Fatalf("TotalAgents = %d, want 3", snapshot.TotalAgents)
+	}
+	if snapshot.ActiveAgents != 2 {
+		t.Fatalf("ActiveAgents = %d, want 2", snapshot.ActiveAgents)
+	}
+	if snapshot.DormantAgents != 1 {
+		t.Fatalf("DormantAgents = %d, want 1", snapshot.DormantAgents)
+	}
+	if snapshot.DegradedAgents != 1 {
+		t.Fatalf("DegradedAgents = %d, want 1", snapshot.DegradedAgents)
+	}
+	if snapshot.InactiveAgents != 1 {
+		t.Fatalf("InactiveAgents = %d, want 1", snapshot.InactiveAgents)
+	}
+	if len(snapshot.Agents) != 3 {
+		t.Fatalf("Agents len = %d, want 3", len(snapshot.Agents))
+	}
+
+	healthByID := map[string]string{}
+	for _, agent := range snapshot.Agents {
+		healthByID[agent.AgentID] = agent.Health
+	}
+	if healthByID["agent-dormant"] != "dormant" {
+		t.Fatalf("agent-dormant health = %q, want dormant", healthByID["agent-dormant"])
+	}
+	if healthByID["agent-degraded"] != "degraded" {
+		t.Fatalf("agent-degraded health = %q, want degraded", healthByID["agent-degraded"])
+	}
+	if healthByID["agent-inactive"] != "inactive" {
+		t.Fatalf("agent-inactive health = %q, want inactive", healthByID["agent-inactive"])
+	}
+}
+
 func containsPendingKind(items []core.PendingItemKind, target core.PendingItemKind) bool {
 	for _, item := range items {
 		if item == target {
