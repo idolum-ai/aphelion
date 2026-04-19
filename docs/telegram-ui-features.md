@@ -128,6 +128,7 @@ Offer conditions:
   - `CONTINUATION_CONSTRAINTS: ...`
   - `CONTINUATION_CONFIDENCE: low|medium|high`
 - Prompt is shown only when both intents are `continue`, both rationales are non-empty, and governor is ratified.
+- Prompt text is rendered as one first-person system voice (Haiku/face render when available, deterministic fallback otherwise), not as a split `Persona`/`Governor` dialogue block.
 - When handshake fails, continuation state is persisted as idle with an explicit blocked reason and a first-person blocked notice is sent in chat (persona-rendered with deterministic fallback).
 
 ### Runtime decision prompts
@@ -155,10 +156,10 @@ When a turn enters long-running deliberation/tool execution, Telegram shows one 
 
 - Header starts with `Thinking...` and includes elapsed time while active.
 - Card includes inline controls:
-  - `Detach`
-  - `Stop`
-- `Detach` stops active work, clears queue, revokes continuation, and detaches sender-owned pending decisions.
-- `Stop` stops active work for the chat and revokes continuation.
+  - `Stop & Clean Up`
+  - `Stop Turn`
+- `Stop & Clean Up` stops active work, clears queue, revokes continuation, and detaches sender-owned pending decisions.
+- `Stop Turn` stops active work for the chat and revokes continuation.
 - When deliberation ends, controls are removed from the card (or the card is deleted when `telegram.tool_progress_cleanup=true`).
 
 ## Callback Behavior

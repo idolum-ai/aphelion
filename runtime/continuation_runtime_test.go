@@ -66,7 +66,7 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if !strings.Contains(sender.inline[0].text, "Approve 1 more turn") {
+	if !strings.Contains(sender.inline[0].text, "Should I continue for 1 more turn") {
 		t.Fatalf("inline text = %q, want continuation approval prompt", sender.inline[0].text)
 	}
 	if strings.Contains(sender.inline[0].text, "keep going on the implementation") {
@@ -78,20 +78,23 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if !strings.Contains(sender.inline[0].text, "Summarize the actual next-step plan in the continuation prompt") {
 		t.Fatalf("inline text = %q, want in-progress plan step as next action", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.inline[0].text, "Persona rationale:") {
-		t.Fatalf("inline text = %q, want persona rationale block", sender.inline[0].text)
-	}
-	if !strings.Contains(sender.inline[0].text, "Persona intent:") {
-		t.Fatalf("inline text = %q, want persona intent block", sender.inline[0].text)
-	}
 	if !strings.Contains(sender.inline[0].text, "Continue now because the scoped plan is actively in progress.") {
 		t.Fatalf("inline text = %q, want explicit persona rationale summary", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.inline[0].text, "Governor rationale:") {
-		t.Fatalf("inline text = %q, want governor rationale block", sender.inline[0].text)
+	if !strings.Contains(sender.inline[0].text, "The operation remains active and ratified for one bounded follow-up.") {
+		t.Fatalf("inline text = %q, want explicit governor rationale summary", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.inline[0].text, "Governor intent:") {
-		t.Fatalf("inline text = %q, want governor intent block", sender.inline[0].text)
+	if strings.Contains(strings.ToLower(sender.inline[0].text), "persona intent:") {
+		t.Fatalf("inline text = %q, want single-system framing without persona/governor blocks", sender.inline[0].text)
+	}
+	if strings.Contains(strings.ToLower(sender.inline[0].text), "governor intent:") {
+		t.Fatalf("inline text = %q, want single-system framing without persona/governor blocks", sender.inline[0].text)
+	}
+	if strings.Contains(strings.ToLower(sender.inline[0].text), "persona rationale:") {
+		t.Fatalf("inline text = %q, want single-system framing without persona/governor blocks", sender.inline[0].text)
+	}
+	if strings.Contains(strings.ToLower(sender.inline[0].text), "governor rationale:") {
+		t.Fatalf("inline text = %q, want single-system framing without persona/governor blocks", sender.inline[0].text)
 	}
 	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {
 		t.Fatalf("rows = %#v, want Stop/Continue row", sender.inline[0].rows)
@@ -135,6 +138,59 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	}
 	if got := sender.inline[0].rows[0][1].CallbackData; !strings.Contains(got, state.DecisionID) {
 		t.Fatalf("continue callback = %q, want decision id %q", got, state.DecisionID)
+	}
+}
+
+func TestHandleInboundContinuationApprovalPromptFallsBackWhenRenderedTextUsesSplitRoleLabels(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "grounded reply"
+	provider.faceReplyText = "visible scene"
+	provider.repairReplyText = strings.Join([]string{
+		"I can continue from here.",
+		"",
+		"Persona intent:",
+		"continue",
+		"",
+		"Governor intent:",
+		"continue",
+		"",
+		"Approve 1 more turn(s)?",
+	}, "\n")
+	provider.proposalReplyText = testPersonaContinuationProposal(
+		session.ContinuationIntentDecisionContinue,
+		"I should continue because this turn has a clear next step.",
+	)
+	provider.planningReplyText = testGovernorContinuationRatification(
+		session.ContinuationIntentDecisionContinue,
+		"The bounded next step remains ratified.",
+		true,
+	)
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8116, SenderID: 1001, SenderName: "admin", Text: "continue", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	inline := strings.ToLower(sender.inline[0].text)
+	if strings.Contains(inline, "persona intent:") || strings.Contains(inline, "governor intent:") {
+		t.Fatalf("inline text = %q, want fallback without split-role labels", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "Should I continue for 1 more turn") {
+		t.Fatalf("inline text = %q, want single-system fallback approval question", sender.inline[0].text)
 	}
 }
 

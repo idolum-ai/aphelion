@@ -79,7 +79,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	_, err := sender.SendInlineKeyboard(
 		ctx,
 		msg.ChatID,
-		renderContinuationPrompt(state),
+		r.renderContinuationPrompt(ctx, msg, state),
 		continuationApprovalButtonRows(state.DecisionID),
 		nil,
 	)
@@ -326,34 +326,106 @@ func clampContinuationText(value string, maxChars int) string {
 	return strings.TrimSpace(string(runes[:maxChars])) + "…"
 }
 
-func renderContinuationPrompt(state session.ContinuationState) string {
-	lines := []string{"I can continue from here."}
-	if state.PersonaIntent.Decision != "" {
-		lines = append(lines, "", "Persona intent:", string(state.PersonaIntent.Decision))
+func (r *Runtime) renderContinuationPrompt(ctx context.Context, msg core.InboundMessage, state session.ContinuationState) string {
+	fallback := renderContinuationPromptFallback(state)
+	if r == nil {
+		return fallback
 	}
-	if state.PersonaIntent.Rationale != "" {
-		lines = append(lines, "", "Persona rationale:", state.PersonaIntent.Rationale)
+	if r.faceBackend == face.BackendFloorFallback {
+		return fallback
 	}
-	if state.GovernorIntent.Decision != "" {
-		governorIntent := string(state.GovernorIntent.Decision)
-		if state.GovernorIntent.Ratified {
-			governorIntent += " (ratified)"
+	renderer := r.currentFaceRenderer()
+	if renderer == nil {
+		return fallback
+	}
+	workspaceRoot := ""
+	if r.cfg != nil {
+		workspaceRoot = strings.TrimSpace(r.cfg.Agent.PromptRoot)
+	}
+
+	rendered, err := renderer.Render(ctx, face.RenderRequest{
+		GovernorName:    prompt.DefaultGovernorName,
+		FaceName:        face.DefaultFaceName,
+		Channel:         "telegram",
+		Mode:            "repair",
+		PrincipalRole:   "approved_user",
+		WorkspaceRoot:   workspaceRoot,
+		FloorText:       fallback,
+		LatestUserInput: strings.TrimSpace(msg.Text),
+		CandidateReply:  fallback,
+		RepairNotes: []string{
+			"Keep this in first person as Idolum.",
+			"Frame continuation as one coherent system thought, not a dialogue between internal roles.",
+			"Do not use labels like Persona intent, Persona rationale, Governor intent, or Governor rationale.",
+			"Keep the boundaries, objective, and next step explicit.",
+		},
+		Runtime: prompt.RuntimeAwareness{
+			ContinuationStatus:         string(state.Status),
+			ContinuationActive:         state.Active(),
+			ContinuationPersonaIntent:  string(state.PersonaIntent.Decision),
+			ContinuationPersonaWhy:     state.PersonaIntent.Rationale,
+			ContinuationGovernorIntent: string(state.GovernorIntent.Decision),
+			ContinuationGovernorWhy:    state.GovernorIntent.Rationale,
+			ContinuationRatified:       state.GovernorIntent.Ratified,
+			ContinuationBlockedReason:  state.HandshakeBlockedReason,
+			OperationObjective:         state.Objective,
+			OperationSummary:           state.StageSummary,
+			ProposalBoundedEffect:      state.GovernorIntent.Constraints,
+		},
+	})
+	if err != nil {
+		return fallback
+	}
+	rendered = strings.TrimSpace(rendered)
+	if rendered == "" {
+		return fallback
+	}
+	if continuationPromptHasSplitRoleLabels(rendered) {
+		return fallback
+	}
+	return rendered
+}
+
+func continuationPromptHasSplitRoleLabels(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"persona intent:",
+		"persona rationale:",
+		"governor intent:",
+		"governor rationale:",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
 		}
-		lines = append(lines, "", "Governor intent:", governorIntent)
 	}
-	if state.GovernorIntent.Rationale != "" {
-		lines = append(lines, "", "Governor rationale:", state.GovernorIntent.Rationale)
+	return false
+}
+
+func renderContinuationPromptFallback(state session.ContinuationState) string {
+	lines := []string{"I can continue from here."}
+	reasons := make([]string, 0, 2)
+	if reason := strings.TrimSpace(state.PersonaIntent.Rationale); reason != "" {
+		reasons = append(reasons, reason)
 	}
-	if state.GovernorIntent.Constraints != "" {
-		lines = append(lines, "", "Constraints:", state.GovernorIntent.Constraints)
+	if reason := strings.TrimSpace(state.GovernorIntent.Rationale); reason != "" {
+		reasons = append(reasons, reason)
 	}
-	if state.Objective != "" {
-		lines = append(lines, "", "Objective:", state.Objective)
+	if len(reasons) > 0 {
+		lines = append(lines, "", "Why continuing makes sense:", strings.Join(reasons, " "))
 	}
-	if state.StageSummary != "" {
-		lines = append(lines, "", "Next:", state.StageSummary)
+	if constraints := strings.TrimSpace(state.GovernorIntent.Constraints); constraints != "" {
+		lines = append(lines, "", "Boundaries:", constraints)
 	}
-	lines = append(lines, "", fmt.Sprintf("Approve %d more turn(s)?", state.RemainingTurns))
+	if objective := strings.TrimSpace(state.Objective); objective != "" {
+		lines = append(lines, "", "Objective:", objective)
+	}
+	if nextStep := strings.TrimSpace(state.StageSummary); nextStep != "" {
+		lines = append(lines, "", "Next step:", nextStep)
+	}
+	lines = append(lines, "", fmt.Sprintf("Should I continue for %d more turn(s)?", state.RemainingTurns))
 	return strings.Join(lines, "\n")
 }
 
