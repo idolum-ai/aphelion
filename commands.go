@@ -63,6 +63,15 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "set_governor_effort", Description: "Choose governor reasoning effort"},
 }
 
+const debugCallbackPrefix = "debug:"
+const staleDebugCallbackText = "This debug action is no longer available. Run /debug again."
+
+type debugView string
+
+const (
+	debugViewMore debugView = "more"
+)
+
 func registerTelegramCommands(ctx context.Context, client *telegram.Client) error {
 	if client == nil {
 		return fmt.Errorf("telegram client is required")
@@ -98,45 +107,21 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		}
 		return true, nil
 	case "debug":
-		chat, err := router.StatusChat(msg.ChatID)
+		quickText, fullText, err := renderDebugSnapshot(ctx, router, msg.ChatID, msg.SenderID, personaEffort, governorEffort)
 		if err != nil {
 			return true, err
 		}
-		var (
-			system   *core.SystemStatusSnapshot
-			durables *core.DurableAgentsStatusSnapshot
-		)
-		if isAdmin {
-			sys, err := router.StatusSystem(msg.SenderID)
-			if err != nil {
-				return true, err
-			}
-			system = &sys
-			durs, err := router.StatusDurables(msg.SenderID)
-			if err != nil {
-				return true, err
-			}
-			durables = &durs
+		if strings.TrimSpace(fullText) == "" {
+			fullText = "debug_scope=chat\nsummary unavailable"
 		}
-		rendered := face.RenderTelegramDebug(chat, system, durables, personaEffort, governorEffort)
-		if summary := strings.TrimSpace(router.StatusReadableSummary(ctx, "debug", rendered)); summary != "" {
-			rendered = "quick_read " + summary + "\n\n" + rendered
+		if strings.TrimSpace(quickText) == "" {
+			quickText = "quick_read unavailable. Tap Read More for the full debug snapshot."
 		}
-		chunks := splitStatusTextChunks(rendered, statusMessageChunkLimit)
-		if len(chunks) == 0 {
-			chunks = []string{"debug_scope=chat\nsummary unavailable"}
-		}
-		for i, chunk := range chunks {
-			out := core.OutboundMessage{
-				ChatID: msg.ChatID,
-				Text:   chunk,
-			}
-			if i == 0 {
-				out.ReplyTo = replyToMessageID(msg.MessageID)
-			}
-			if _, err := sender.SendMessage(ctx, out); err != nil {
-				return true, err
-			}
+		rows := [][]telegram.InlineButton{{
+			{Text: "Read More", CallbackData: encodeDebugCallbackData(debugViewMore)},
+		}}
+		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, quickText, rows, replyToMessageID(msg.MessageID)); err != nil {
+			return true, err
 		}
 		return true, nil
 	case "stop":
@@ -219,6 +204,42 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	}
 	if runID, action, ok := core.DecodeDeliberationControlCallbackData(cb.Data); ok {
 		return handleDeliberationControlCallback(ctx, sender, router, cb, runID, action)
+	}
+	if view, ok := decodeDebugCallbackData(cb.Data); ok {
+		chatID := int64(0)
+		messageID := int64(0)
+		senderID := int64(0)
+		if cb.Message != nil {
+			messageID = cb.Message.MessageID
+			if cb.Message.Chat != nil {
+				chatID = cb.Message.Chat.ID
+			}
+		}
+		if cb.From != nil {
+			senderID = cb.From.ID
+		}
+		if chatID == 0 || messageID == 0 || view != debugViewMore {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleDebugCallbackText); err != nil {
+				if !telegram.IsStaleCallbackQueryError(err) {
+					return true, err
+				}
+			}
+			return true, nil
+		}
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil {
+			if !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+		}
+		personaEffort, governorEffort := router.CurrentEfforts()
+		_, fullText, err := renderDebugSnapshot(ctx, router, chatID, senderID, personaEffort, governorEffort)
+		if err != nil {
+			return true, err
+		}
+		if err := deliverDebugCallbackView(ctx, sender, chatID, messageID, fullText); err != nil {
+			return true, err
+		}
+		return true, nil
 	}
 	if view, targetChatID, ok := decodeStatusCallbackData(cb.Data); ok {
 		chatID := int64(0)
@@ -413,4 +434,91 @@ func replyToMessageID(id int64) *int64 {
 		return nil
 	}
 	return &id
+}
+
+func renderDebugSnapshot(ctx context.Context, router commandRouter, chatID int64, senderID int64, personaEffort string, governorEffort string) (string, string, error) {
+	chat, err := router.StatusChat(chatID)
+	if err != nil {
+		return "", "", err
+	}
+	var (
+		system   *core.SystemStatusSnapshot
+		durables *core.DurableAgentsStatusSnapshot
+	)
+	if router.CanRestart(senderID) {
+		sys, err := router.StatusSystem(senderID)
+		if err != nil {
+			return "", "", err
+		}
+		system = &sys
+		durs, err := router.StatusDurables(senderID)
+		if err != nil {
+			return "", "", err
+		}
+		durables = &durs
+	}
+	full := face.RenderTelegramDebug(chat, system, durables, personaEffort, governorEffort)
+	full = strings.TrimSpace(full)
+	summary := strings.TrimSpace(router.StatusReadableSummary(ctx, "debug", full))
+	quick := ""
+	if summary != "" {
+		quick = "quick_read " + summary
+		full = "quick_read " + summary + "\n\n" + full
+	}
+	return quick, full, nil
+}
+
+func encodeDebugCallbackData(view debugView) string {
+	switch view {
+	case debugViewMore:
+		return debugCallbackPrefix + "more"
+	default:
+		return debugCallbackPrefix + "more"
+	}
+}
+
+func decodeDebugCallbackData(data string) (debugView, bool) {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, debugCallbackPrefix) {
+		return "", false
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, debugCallbackPrefix))
+	switch payload {
+	case "more":
+		return debugViewMore, true
+	default:
+		return "", false
+	}
+}
+
+func deliverDebugCallbackView(ctx context.Context, sender commandCallbackSender, chatID int64, messageID int64, text string) error {
+	if sender == nil {
+		return nil
+	}
+	chunks := splitStatusTextChunks(text, statusMessageChunkLimit)
+	if len(chunks) == 0 {
+		chunks = []string{"debug_scope=chat\nsummary unavailable"}
+	}
+	first := chunks[0]
+	if messageID != 0 {
+		if err := sender.EditMessageText(ctx, chatID, messageID, first, ""); err != nil {
+			return err
+		}
+	} else {
+		if _, err := sender.SendMessage(ctx, core.OutboundMessage{
+			ChatID: chatID,
+			Text:   first,
+		}); err != nil {
+			return err
+		}
+	}
+	for i := 1; i < len(chunks); i++ {
+		if _, err := sender.SendMessage(ctx, core.OutboundMessage{
+			ChatID: chatID,
+			Text:   chunks[i],
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

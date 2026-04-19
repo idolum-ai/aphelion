@@ -13,7 +13,9 @@ Current command surface:
 - `/status`
   - Opens status output with inline status controls (no command arguments).
 - `/debug`
-  - Shows a detailed debug snapshot for the current chat. Admin users also get system and durable-agent sections.
+  - Starts with a collapsed `quick_read` summary plus a `Read More` button.
+  - `Read More` expands in place to the full detailed debug snapshot for the current chat.
+  - Admin users get system and durable-agent sections in the expanded view.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
 - `/detach`
@@ -87,7 +89,8 @@ Durables status (`Durables` button, admin-only):
 
 ### `/debug` content signals
 
-`/debug` is a command reply (not a status callback view). It is intended for operational diagnosis when `/status` is too compressed.
+`/debug` starts as a collapsed command reply with `quick_read`, then expands via `Read More`.
+It is intended for operational diagnosis when `/status` is too compressed.
 
 - prepends `quick_read` summary when the readable-summary provider is available
 - includes the full chat status block (`status_scope=chat`)
@@ -215,10 +218,10 @@ When a turn enters long-running deliberation/tool execution, Telegram shows one 
 
 - Header starts with `Thinking...` and includes elapsed time while active.
 - Card includes inline controls:
-  - `Stop & Clean Up`
-  - `Stop Turn`
-- `Stop & Clean Up` stops active work, clears queue, revokes continuation, and detaches sender-owned pending decisions.
-- `Stop Turn` stops active work for the chat and revokes continuation.
+  - `Reassess`
+  - `Stop`
+- `Reassess` stops active work, clears queue, revokes continuation, and detaches sender-owned pending decisions.
+- `Stop` stops active work for the chat and revokes continuation.
 - When deliberation ends, controls are removed from the card (or the card is deleted when `telegram.tool_progress_cleanup=true`).
 
 ## Callback Behavior

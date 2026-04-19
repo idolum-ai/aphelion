@@ -630,23 +630,26 @@ func TestHandleTelegramCommandDebugForNonAdminShowsChatDebugOnly(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.msgs) == 0 {
-		t.Fatalf("message count = %d, want >= 1", len(sender.msgs))
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.msgs[0].Text; !strings.Contains(got, "quick_read Chat 7 is working and currently running exec.") {
+	if got := sender.inline[0].text; !strings.Contains(got, "quick_read Chat 7 is working and currently running exec.") {
 		t.Fatalf("debug text = %q, want quick summary", got)
 	}
-	if got := sender.msgs[0].Text; !strings.Contains(got, "status_scope=chat") {
-		t.Fatalf("debug text = %q, want chat status section", got)
+	if got := sender.inline[0].text; strings.Contains(got, "status_scope=chat") {
+		t.Fatalf("debug text = %q, do not want full chat section before read more", got)
 	}
-	if got := sender.msgs[0].Text; !strings.Contains(got, "debug_chat:") {
-		t.Fatalf("debug text = %q, want debug_chat section", got)
-	}
-	if got := sender.msgs[0].Text; !strings.Contains(got, "last_exec_command=\"curl -fsS https://api.github.com/zen\"") {
-		t.Fatalf("debug text = %q, want decoded last exec command", got)
-	}
-	if got := sender.msgs[0].Text; strings.Contains(got, "status_scope=system") {
+	if got := sender.inline[0].text; strings.Contains(got, "status_scope=system") {
 		t.Fatalf("debug text = %q, do not want admin system section for non-admin", got)
+	}
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 1 {
+		t.Fatalf("rows = %#v, want one Read More button", sender.inline[0].rows)
+	}
+	if got := sender.inline[0].rows[0][0].Text; got != "Read More" {
+		t.Fatalf("button text = %q, want Read More", got)
+	}
+	if got := sender.inline[0].rows[0][0].CallbackData; got != "debug:more" {
+		t.Fatalf("callback = %q, want debug:more", got)
 	}
 }
 
@@ -672,9 +675,10 @@ func TestHandleTelegramCommandDebugForAdminIncludesSystemAndDurables(t *testing.
 				},
 			},
 		},
-		personaEffort:  "opus",
-		governorEffort: "high",
-		canRestart:     true,
+		personaEffort:         "opus",
+		governorEffort:        "high",
+		canRestart:            true,
+		statusReadableSummary: "Admin debug snapshot ready.",
 	}
 	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
 		ChatID:   7,
@@ -687,21 +691,81 @@ func TestHandleTelegramCommandDebugForAdminIncludesSystemAndDurables(t *testing.
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.msgs) == 0 {
-		t.Fatalf("message count = %d, want >= 1", len(sender.msgs))
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	full := sender.msgs[0].Text
-	for _, msg := range sender.msgs[1:] {
+	if got := sender.inline[0].text; !strings.Contains(got, "quick_read Admin debug snapshot ready.") {
+		t.Fatalf("debug text = %q, want quick summary in collapsed view", got)
+	}
+	if got := sender.inline[0].text; strings.Contains(got, "status_scope=chat") {
+		t.Fatalf("debug text = %q, do not want full snapshot in collapsed view", got)
+	}
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 1 {
+		t.Fatalf("rows = %#v, want one Read More button", sender.inline[0].rows)
+	}
+	if got := sender.inline[0].rows[0][0].CallbackData; got != "debug:more" {
+		t.Fatalf("callback = %q, want debug:more", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackDebugReadMoreExpandsFullSnapshot(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID: 7,
+			LatestTurnRun: &core.TurnRunStatusSnapshot{
+				ID:                    91,
+				Status:                "running",
+				Kind:                  "interactive",
+				RequestText:           "debug this run",
+				LastToolName:          "exec",
+				LastToolPreview:       `{"command":"curl -fsS https://api.github.com/zen"}`,
+				LastToolResultPreview: "stdout: Keep it logically awesome.",
+			},
+		},
+		statusReadableSummary: "Chat 7 is working and currently running exec.",
+		personaEffort:         "sonnet",
+		governorEffort:        "medium",
+		canRestart:            false,
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-debug-more",
+		From: &telegram.User{ID: 1002, Username: "approved"},
+		Data: "debug:more",
+		Message: &telegram.Message{
+			MessageID: 201,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	}
+	full := sender.edits[0].text
+	for _, msg := range sender.msgs {
 		full += "\n" + msg.Text
 	}
 	if !strings.Contains(full, "status_scope=chat") {
-		t.Fatalf("debug text = %q, want chat section", full)
+		t.Fatalf("full debug text = %q, want chat section", full)
 	}
-	if !strings.Contains(full, "status_scope=system") {
-		t.Fatalf("debug text = %q, want system section for admin", full)
+	if !strings.Contains(full, "debug_chat:") {
+		t.Fatalf("full debug text = %q, want debug_chat section", full)
 	}
-	if !strings.Contains(full, "status_scope=durables") {
-		t.Fatalf("debug text = %q, want durables section for admin", full)
+	if !strings.Contains(full, "last_exec_command=\"curl -fsS https://api.github.com/zen\"") {
+		t.Fatalf("full debug text = %q, want decoded last exec command", full)
+	}
+	if strings.Contains(full, "status_scope=system") {
+		t.Fatalf("full debug text = %q, do not want admin sections for non-admin", full)
 	}
 }
 
