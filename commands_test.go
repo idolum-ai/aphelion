@@ -98,9 +98,11 @@ type stubCommandRouter struct {
 	status                      core.SessionStatus
 	statusChat                  core.ChatStatusSnapshot
 	statusSystem                core.SystemStatusSnapshot
+	statusDurables              core.DurableAgentsStatusSnapshot
 	statusReadableSummary       string
 	statusChatErr               error
 	statusSystemErr             error
+	statusDurablesErr           error
 	stop                        core.StopResult
 	detach                      core.DetachResult
 	detachErr                   error
@@ -165,6 +167,14 @@ func (s stubCommandRouter) StatusSystem(senderID int64) (core.SystemStatusSnapsh
 		return core.SystemStatusSnapshot{}, s.statusSystemErr
 	}
 	return s.statusSystem, nil
+}
+
+func (s stubCommandRouter) StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error) {
+	_ = senderID
+	if s.statusDurablesErr != nil {
+		return core.DurableAgentsStatusSnapshot{}, s.statusDurablesErr
+	}
+	return s.statusDurables, nil
 }
 
 func (s stubCommandRouter) StatusReadableSummary(ctx context.Context, view string, statusText string) string {
@@ -479,6 +489,7 @@ func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
 	foundSystem := false
 	foundHot := false
 	foundFind := false
+	foundDurables := false
 	for _, row := range sender.inline[0].rows {
 		for _, button := range row {
 			switch button.Text {
@@ -488,10 +499,12 @@ func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
 				foundHot = true
 			case "Find Chat":
 				foundFind = true
+			case "Durables":
+				foundDurables = true
 			}
 		}
 	}
-	if !foundSystem || !foundHot || !foundFind {
+	if !foundSystem || !foundHot || !foundFind || !foundDurables {
 		t.Fatalf("admin status keyboard rows = %#v, want admin controls", sender.inline[0].rows)
 	}
 }
@@ -713,6 +726,54 @@ func TestHandleTelegramCommandCallbackStatusSystemForAdmin(t *testing.T) {
 	}
 	if got := sender.editInline[0].text; !strings.Contains(got, "status_scope=system") {
 		t.Fatalf("system status text = %q, want system scope", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackStatusDurablesForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		statusDurables: core.DurableAgentsStatusSnapshot{
+			TotalAgents: 1,
+			Agents: []core.DurableAgentStatusSnapshot{
+				{
+					AgentID:            "family-group",
+					ChannelKind:        "telegram_group",
+					Status:             "active",
+					Health:             "ok",
+					PolicyVersion:      2,
+					PolicyHash:         "abc123",
+					PolicyDrift:        "admin_review",
+					PolicyOutboundMode: "read_only",
+				},
+			},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-status-durables",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "status:durables",
+		Message: &telegram.Message{
+			MessageID: 196,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "status_scope=durables") {
+		t.Fatalf("durables status text = %q, want durables scope", got)
 	}
 }
 

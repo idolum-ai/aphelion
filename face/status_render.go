@@ -383,6 +383,73 @@ func RenderTelegramStatusFindChat(snapshot core.SystemStatusSnapshot) string {
 	return strings.Join(lines, "\n")
 }
 
+func RenderTelegramStatusDurables(snapshot core.DurableAgentsStatusSnapshot) string {
+	lines := []string{
+		fmt.Sprintf("status_scope=durables generated_at=%s", formatStatusTime(snapshot.GeneratedAt)),
+		fmt.Sprintf(
+			"summary total=%d active=%d dormant=%d degraded=%d inactive=%d",
+			snapshot.TotalAgents,
+			snapshot.ActiveAgents,
+			snapshot.DormantAgents,
+			snapshot.DegradedAgents,
+			snapshot.InactiveAgents,
+		),
+	}
+	if len(snapshot.Agents) == 0 {
+		lines = append(lines, "agents:")
+		lines = append(lines, "- none")
+		return strings.Join(lines, "\n")
+	}
+
+	lines = append(lines, "agents:")
+	max := len(snapshot.Agents)
+	if max > 20 {
+		max = 20
+	}
+	for i := 0; i < max; i++ {
+		agent := snapshot.Agents[i]
+		lines = append(lines, fmt.Sprintf(
+			"- id=%s channel=%s status=%s health=%s review_chat=%d",
+			strings.TrimSpace(agent.AgentID),
+			strings.TrimSpace(agent.ChannelKind),
+			firstNonEmpty(strings.TrimSpace(agent.Status), "active"),
+			firstNonEmpty(strings.TrimSpace(agent.Health), "ok"),
+			agent.ReviewTargetChatID,
+		))
+		lines = append(lines, fmt.Sprintf(
+			"  policy version=%d hash=%s outbound=%s drift=%s capabilities=%s",
+			agent.PolicyVersion,
+			formatStatusHash(agent.PolicyHash),
+			firstNonEmpty(strings.TrimSpace(agent.PolicyOutboundMode), "-"),
+			firstNonEmpty(strings.TrimSpace(agent.PolicyDrift), "-"),
+			formatStringList(agent.CapabilityEnvelope),
+		))
+		lines = append(lines, fmt.Sprintf(
+			"  runtime last_wake=%s last_review=%s dormant_at=%s apply_status=%s applied_version=%d applied_at=%s",
+			formatStatusTime(agent.LastWakeAt),
+			formatStatusTime(agent.LastReviewAt),
+			formatStatusTime(agent.DormantAt),
+			firstNonEmpty(strings.TrimSpace(agent.LastApplyStatus), "-"),
+			agent.LastAppliedPolicyVersion,
+			formatStatusTime(agent.LastAppliedPolicyAt),
+		))
+		if applyErr := strings.TrimSpace(agent.LastApplyError); applyErr != "" {
+			lines = append(lines, "  runtime apply_error="+quoteStatusField(truncateStatusField(applyErr, 120)))
+		}
+		lines = append(lines, fmt.Sprintf(
+			"  enrollment status=%s last_seen=%s last_seq=%d revoked_at=%s",
+			firstNonEmpty(strings.TrimSpace(agent.EnrollmentStatus), "none"),
+			formatStatusTime(agent.EnrollmentLastSeenAt),
+			agent.EnrollmentLastSequence,
+			formatStatusTime(agent.EnrollmentRevokedAt),
+		))
+	}
+	if len(snapshot.Agents) > max {
+		lines = append(lines, fmt.Sprintf("- omitted=%d", len(snapshot.Agents)-max))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func renderPendingItemBlock(items []core.PendingItem, max int) []string {
 	lines := []string{"pending_items:"}
 	if len(items) == 0 {
@@ -424,6 +491,35 @@ func formatInt64List(values []int64) string {
 		parts = append(parts, strconv.FormatInt(value, 10))
 	}
 	return strings.Join(parts, ",")
+}
+
+func formatStringList(values []string) string {
+	if len(values) == 0 {
+		return "-"
+	}
+	trimmed := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		trimmed = append(trimmed, value)
+	}
+	if len(trimmed) == 0 {
+		return "-"
+	}
+	return strings.Join(trimmed, ",")
+}
+
+func formatStatusHash(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "-"
+	}
+	if len(raw) <= 12 {
+		return raw
+	}
+	return raw[:12]
 }
 
 func formatStatusTime(ts time.Time) string {

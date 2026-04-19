@@ -55,6 +55,7 @@ Admin-only:
 - `System Overview`
 - `Hot Chats`
 - `Find Chat`
+- `Durables`
 
 `Find Chat` drill-down:
 
@@ -72,6 +73,15 @@ Chat-scoped status now reports live work telemetry, not only router occupancy:
 - `delivery` state that distinguishes in-flight, delivered, persisted-without-delivery, and delivery-failure paths.
 - `detached_work` counters for pending decisions/continuations/recovery/stale-turn work.
 - `current_signal` as a compact one-line machine signal (phase/tool/queue/blocked source).
+
+Durables status (`Durables` button, admin-only):
+
+- `status_scope=durables` with aggregate counts (`total`, `active`, `dormant`, `degraded`, `inactive`).
+- Per-agent health cards with:
+  - identity and topology (`agent_id`, `channel`, `status`, `health`, `review_chat`)
+  - policy posture (`policy_version`, `policy_hash`, `outbound`, `drift`, `capabilities`)
+  - runtime pulse (`last_wake`, `last_review`, `dormant_at`, apply status/error)
+  - remote enrollment pulse (`enrollment status`, `last_seen`, `last_seq`, revocation state)
 
 ### `/set_persona_model` selector
 

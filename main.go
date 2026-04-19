@@ -174,6 +174,18 @@ func (c telegramCommandControl) StatusSystem(senderID int64) (core.SystemStatusS
 	return c.rt.SystemStatusSnapshot(routerSnapshot)
 }
 
+func (c telegramCommandControl) StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error) {
+	if !c.CanRestart(senderID) {
+		return core.DurableAgentsStatusSnapshot{}, fmt.Errorf("status view denied")
+	}
+	if c.rt == nil {
+		return core.DurableAgentsStatusSnapshot{
+			GeneratedAt: time.Now().UTC(),
+		}, nil
+	}
+	return c.rt.DurableAgentsStatusSnapshot()
+}
+
 func (c telegramCommandControl) StatusReadableSummary(ctx context.Context, view string, statusText string) string {
 	if c.rt == nil {
 		return ""

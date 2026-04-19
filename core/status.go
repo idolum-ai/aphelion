@@ -105,6 +105,45 @@ type SystemStatusSnapshot struct {
 	RestartHealth        RestartHealthSnapshot
 }
 
+type DurableAgentStatusSnapshot struct {
+	AgentID                    string
+	ChannelKind                string
+	Status                     string
+	Health                     string
+	ReviewTargetChatID         int64
+	ParentScopeKind            string
+	ParentScopeID              string
+	WakeupMode                 string
+	NetworkPolicy              string
+	PolicyVersion              int64
+	PolicyHash                 string
+	PolicyOutboundMode         string
+	PolicyDrift                string
+	CapabilityEnvelope         []string
+	LastWakeAt                 time.Time
+	LastReviewAt               time.Time
+	DormantAt                  time.Time
+	LastAppliedPolicyVersion   int64
+	LastAppliedPolicyAt        time.Time
+	LastApplyStatus            string
+	LastApplyError             string
+	EnrollmentStatus           string
+	EnrollmentLastSeenAt       time.Time
+	EnrollmentLastSequence     int64
+	EnrollmentRevokedAt        time.Time
+	EnrollmentParentControlURL string
+}
+
+type DurableAgentsStatusSnapshot struct {
+	GeneratedAt    time.Time
+	TotalAgents    int
+	ActiveAgents   int
+	DormantAgents  int
+	DegradedAgents int
+	InactiveAgents int
+	Agents         []DurableAgentStatusSnapshot
+}
+
 type RouterStatusSnapshot struct {
 	ActiveTurnsByChat map[int64][]uint64
 	QueueDepthByChat  map[int64]int
