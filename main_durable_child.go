@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	runtimepkg "github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
@@ -26,6 +27,9 @@ func (durableChildNoopOutbound) SendMessage(context.Context, core.OutboundMessag
 
 func runDurableTelegramGroupChildBootstrap(ctx context.Context, bootstrap runtimepkg.DurableAgentChildBootstrap, msg core.InboundMessage) (*runtimepkg.DurableGroupChildResult, error) {
 	cfg := &bootstrap.Config
+	if err := validateDurableChildBootstrapConfig(cfg); err != nil {
+		return nil, err
+	}
 	if err := prepareFilesystem(cfg); err != nil {
 		return nil, err
 	}
@@ -56,11 +60,27 @@ func runDurableTelegramGroupChildBootstrap(ctx context.Context, bootstrap runtim
 		return nil, err
 	}
 
-	result, err := rt.RunDurableTelegramGroupChild(context.Background(), msg)
+	result, err := rt.RunDurableTelegramGroupChild(ctx, msg)
 	if err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+func validateDurableChildBootstrapConfig(cfg *config.Config) error {
+	if cfg == nil {
+		return fmt.Errorf("durable child bootstrap config is required")
+	}
+	if strings.TrimSpace(cfg.Telegram.BotToken) != "" {
+		return fmt.Errorf("durable child bootstrap must not include telegram.bot_token")
+	}
+	if len(cfg.Telegram.DurableGroups) > 0 {
+		return fmt.Errorf("durable child bootstrap must not include telegram.durable_groups")
+	}
+	if len(cfg.Principals.Telegram.AdminUserIDs) > 0 || len(cfg.Principals.Telegram.ApprovedUserIDs) > 0 {
+		return fmt.Errorf("durable child bootstrap must not include principals.telegram")
+	}
+	return nil
 }
 
 func runDurableAgentChildCommand(args []string) error {

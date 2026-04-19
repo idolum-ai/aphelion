@@ -25,6 +25,8 @@ Code anchors:
 - Child credentials and local storage roots are child-scoped.
 - Child work does not directly mutate parent prompt/memory surfaces.
 - Durable child runtime reuses `turn` orchestration where lifecycle aligns.
+- Child bootstraps must not carry parent Telegram polling credentials or parent principal IDs.
+- Parent-child coordination uses bounded runtime channels (local bootstrap/stdout and remote control-plane HTTP), not child Telegram polling.
 
 Related requirements:
 

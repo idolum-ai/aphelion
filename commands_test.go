@@ -133,6 +133,13 @@ type stubCommandRouter struct {
 	restartInput                int64
 	restartCalls                int
 	queuedReinstallMsg          *core.InboundMessage
+	durableWizardChatID         int64
+	durableWizardSenderID       int64
+	durableWizardAction         string
+	durableWizardAgentID        string
+	durableWizardAnswers        map[string]any
+	durableWizardResult         string
+	durableWizardErr            error
 }
 
 func (s *stubCommandRouter) Stop(chatID int64) core.StopResult {
@@ -287,6 +294,30 @@ func (s *stubCommandRouter) SetGovernorEffort(effort string) (string, error) {
 	return effort, nil
 }
 
+func (s *stubCommandRouter) RunDurableWizard(ctx context.Context, chatID int64, senderID int64, action string, agentID string, wizardAnswers map[string]any) (string, error) {
+	_ = ctx
+	s.durableWizardChatID = chatID
+	s.durableWizardSenderID = senderID
+	s.durableWizardAction = action
+	s.durableWizardAgentID = agentID
+	if wizardAnswers != nil {
+		copied := make(map[string]any, len(wizardAnswers))
+		for key, value := range wizardAnswers {
+			copied[key] = value
+		}
+		s.durableWizardAnswers = copied
+	} else {
+		s.durableWizardAnswers = nil
+	}
+	if s.durableWizardErr != nil {
+		return "", s.durableWizardErr
+	}
+	if strings.TrimSpace(s.durableWizardResult) != "" {
+		return s.durableWizardResult, nil
+	}
+	return "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: adapter\nmissing: adapter,autonomy\nnext_question: Which inbox adapter should be used (for example gog_cli)?\naddress: idolum@example.com\nadapter: \nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n", nil
+}
+
 func TestParseTelegramCommand(t *testing.T) {
 	t.Parallel()
 
@@ -301,6 +332,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/status@my_bot", want: "status", ok: true},
 		{text: "/restart", want: "restart", ok: true},
 		{text: "/reinstall", want: "reinstall", ok: true},
+		{text: "/debug", want: "debug", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
 		{text: "/set_governor_effort", want: "set_governor_effort", ok: true},
 		{text: "/tmp/file", ok: false},
@@ -313,6 +345,21 @@ func TestParseTelegramCommand(t *testing.T) {
 		if ok != tt.ok || got != tt.want {
 			t.Fatalf("parseTelegramCommand(%q) = (%q, %v), want (%q, %v)", tt.text, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeDebug(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "debug" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /debug command entry", defaultTelegramCommands)
 	}
 }
 
@@ -550,6 +597,114 @@ func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandDebugForNonAdminShowsChatDebugOnly(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID: 7,
+			LatestTurnRun: &core.TurnRunStatusSnapshot{
+				ID:                    91,
+				Status:                "running",
+				Kind:                  "interactive",
+				RequestText:           "debug this run",
+				LastToolName:          "exec",
+				LastToolPreview:       `{"command":"curl -fsS https://api.github.com/zen"}`,
+				LastToolResultPreview: "stdout: Keep it logically awesome.",
+			},
+		},
+		statusReadableSummary: "Chat 7 is working and currently running exec.",
+		personaEffort:         "sonnet",
+		governorEffort:        "medium",
+		canRestart:            false,
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1002,
+		Text:     "/debug",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) == 0 {
+		t.Fatalf("message count = %d, want >= 1", len(sender.msgs))
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "quick_read Chat 7 is working and currently running exec.") {
+		t.Fatalf("debug text = %q, want quick summary", got)
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "status_scope=chat") {
+		t.Fatalf("debug text = %q, want chat status section", got)
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "debug_chat:") {
+		t.Fatalf("debug text = %q, want debug_chat section", got)
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "last_exec_command=\"curl -fsS https://api.github.com/zen\"") {
+		t.Fatalf("debug text = %q, want decoded last exec command", got)
+	}
+	if got := sender.msgs[0].Text; strings.Contains(got, "status_scope=system") {
+		t.Fatalf("debug text = %q, do not want admin system section for non-admin", got)
+	}
+}
+
+func TestHandleTelegramCommandDebugForAdminIncludesSystemAndDurables(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID: 7,
+		},
+		statusSystem: core.SystemStatusSnapshot{
+			ActiveTurnCount: 1,
+		},
+		statusDurables: core.DurableAgentsStatusSnapshot{
+			TotalAgents: 1,
+			Agents: []core.DurableAgentStatusSnapshot{
+				{
+					AgentID:     "family-group",
+					ChannelKind: "telegram_group",
+					Status:      "active",
+					Health:      "ok",
+				},
+			},
+		},
+		personaEffort:  "opus",
+		governorEffort: "high",
+		canRestart:     true,
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1001,
+		Text:     "/debug",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) == 0 {
+		t.Fatalf("message count = %d, want >= 1", len(sender.msgs))
+	}
+	full := sender.msgs[0].Text
+	for _, msg := range sender.msgs[1:] {
+		full += "\n" + msg.Text
+	}
+	if !strings.Contains(full, "status_scope=chat") {
+		t.Fatalf("debug text = %q, want chat section", full)
+	}
+	if !strings.Contains(full, "status_scope=system") {
+		t.Fatalf("debug text = %q, want system section for admin", full)
+	}
+	if !strings.Contains(full, "status_scope=durables") {
+		t.Fatalf("debug text = %q, want durables section for admin", full)
+	}
+}
+
 func TestHandleTelegramCommandHelpHidesAdminRestartForNonAdmin(t *testing.T) {
 	t.Parallel()
 
@@ -604,6 +759,9 @@ func TestHandleTelegramCommandHelpShowsAdminRestartForAdmin(t *testing.T) {
 	if !strings.Contains(sender.msgs[0].Text, "\n/restart - ") {
 		t.Fatalf("help text = %q, want admin /restart command listed", sender.msgs[0].Text)
 	}
+	if !strings.Contains(sender.msgs[0].Text, "\n/debug - ") {
+		t.Fatalf("help text = %q, want /debug command listed", sender.msgs[0].Text)
+	}
 }
 
 func TestHandleTelegramCommandStartHidesAdminRestartForNonAdmin(t *testing.T) {
@@ -631,6 +789,9 @@ func TestHandleTelegramCommandStartHidesAdminRestartForNonAdmin(t *testing.T) {
 	}
 	if strings.Contains(sender.msgs[0].Text, "\n/restart - ") {
 		t.Fatalf("start text = %q, want admin-only /restart hidden for non-admins", sender.msgs[0].Text)
+	}
+	if !strings.Contains(sender.msgs[0].Text, "\n/debug - ") {
+		t.Fatalf("start text = %q, want /debug command listed", sender.msgs[0].Text)
 	}
 }
 
@@ -1275,6 +1436,129 @@ func TestHandleTelegramCommandCallbackContinuationRejectsStaleDecisionID(t *test
 	}
 	if len(sender.edits) != 0 {
 		t.Fatalf("edits count = %d, want 0 for stale callback", len(sender.edits))
+	}
+}
+
+func TestDurableWizardInlineRowsFromTextInProgress(t *testing.T) {
+	t.Parallel()
+
+	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: autonomy\nmissing: autonomy,surface_rules\nnext_question: Should the child be observe_only, local_drafts, review_before_reply, or reply_within_charter?\naddress: idolum@example.com\nadapter: gog_cli\nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n"
+	rows := durableWizardInlineRowsFromText(text)
+	if len(rows) < 2 {
+		t.Fatalf("rows len = %d, want at least option row and controls", len(rows))
+	}
+	foundObserveOnly := false
+	for _, row := range rows {
+		for _, button := range row {
+			if strings.EqualFold(button.Text, "Observe only") {
+				foundObserveOnly = true
+			}
+		}
+	}
+	if !foundObserveOnly {
+		t.Fatalf("rows = %#v, want Observe only button", rows)
+	}
+	last := rows[len(rows)-1]
+	if len(last) != 2 || last[0].Text != "Cancel" || last[1].Text != "Refresh" {
+		t.Fatalf("last row = %#v, want [Cancel|Refresh] controls", last)
+	}
+}
+
+func TestDurableWizardInlineRowsFromTextReady(t *testing.T) {
+	t.Parallel()
+
+	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: ready\ncurrent_step: -\nmissing: -\naddress: idolum@example.com\nadapter: gog_cli\nautonomy: observe_only\nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter: Read-only child.\n"
+	rows := durableWizardInlineRowsFromText(text)
+	if len(rows) != 1 {
+		t.Fatalf("rows len = %d, want 1 finalize control row", len(rows))
+	}
+	if len(rows[0]) != 2 || rows[0][0].Text != "Cancel" || rows[0][1].Text != "Finalize" {
+		t.Fatalf("row = %#v, want [Cancel|Finalize]", rows[0])
+	}
+}
+
+func TestHandleTelegramCommandCallbackDurableWizardAnswer(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart:          true,
+		durableWizardResult: "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: ready\ncurrent_step: -\nmissing: -\naddress: idolum@example.com\nadapter: gog_cli\nautonomy: observe_only\nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter: Read-only child.\n",
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-durable-answer",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeDurableWizardAnswerCallbackData("autonomy", "observe_only"),
+		Message: &telegram.Message{
+			MessageID: 210,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+			Text:      "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: autonomy\nmissing: autonomy,surface_rules\naddress: idolum@example.com\nadapter: gog_cli\nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.durableWizardChatID != 7 || router.durableWizardSenderID != 1001 {
+		t.Fatalf("wizard callback routing = (%d,%d), want (7,1001)", router.durableWizardChatID, router.durableWizardSenderID)
+	}
+	if router.durableWizardAction != "wizard_answer" {
+		t.Fatalf("durableWizardAction = %q, want wizard_answer", router.durableWizardAction)
+	}
+	if router.durableWizardAgentID != "idolum-email" {
+		t.Fatalf("durableWizardAgentID = %q, want idolum-email", router.durableWizardAgentID)
+	}
+	if got := router.durableWizardAnswers["autonomy"]; got != "observe_only" {
+		t.Fatalf("durableWizardAnswers[autonomy] = %#v, want observe_only", got)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if len(sender.editInline[0].rows) != 1 || len(sender.editInline[0].rows[0]) != 2 {
+		t.Fatalf("rows = %#v, want finalize controls", sender.editInline[0].rows)
+	}
+	if sender.editInline[0].rows[0][0].Text != "Cancel" || sender.editInline[0].rows[0][1].Text != "Finalize" {
+		t.Fatalf("row = %#v, want [Cancel|Finalize]", sender.editInline[0].rows[0])
+	}
+}
+
+func TestHandleTelegramCommandCallbackDurableWizardRejectsStaleStep(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-durable-stale",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeDurableWizardAnswerCallbackData("autonomy", "observe_only"),
+		Message: &telegram.Message{
+			MessageID: 211,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+			Text:      "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: adapter\nmissing: adapter,autonomy\naddress: idolum@example.com\nadapter: \nautonomy: \n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.durableWizardAction != "" {
+		t.Fatalf("durableWizardAction = %q, want no wizard execution for stale callback", router.durableWizardAction)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if sender.answers[0].text != staleDurableWizardCallbackText {
+		t.Fatalf("answer text = %q, want stale wizard callback warning", sender.answers[0].text)
+	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline count = %d, want 0 for stale callback", len(sender.editInline))
 	}
 }
 

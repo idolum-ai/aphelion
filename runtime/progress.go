@@ -408,8 +408,8 @@ func deliberationControlRows(runID int64) [][]telegram.InlineButton {
 		return nil
 	}
 	return [][]telegram.InlineButton{{
-		{Text: "Detach", CallbackData: detachData},
-		{Text: "Stop", CallbackData: stopData},
+		{Text: "Stop & Clean Up", CallbackData: detachData},
+		{Text: "Stop Turn", CallbackData: stopData},
 	}}
 }
 

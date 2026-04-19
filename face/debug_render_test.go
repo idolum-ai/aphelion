@@ -1,0 +1,91 @@
+//go:build linux
+
+package face
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/idolum-ai/aphelion/core"
+)
+
+func TestRenderTelegramDebugIncludesChatToolContext(t *testing.T) {
+	t.Parallel()
+
+	out := RenderTelegramDebug(core.ChatStatusSnapshot{
+		ChatID: 7,
+		LatestTurnRun: &core.TurnRunStatusSnapshot{
+			ID:                    44,
+			Status:                "running",
+			Kind:                  "interactive",
+			RequestText:           "Check whether a durable agent was created.",
+			LastToolName:          "exec",
+			LastToolPreview:       `{"command":"curl -fsS https://api.github.com/zen"}`,
+			LastToolResultPreview: "stdout: Keep it logically awesome.",
+			LastToolError:         "context canceled",
+		},
+	}, nil, nil, "sonnet", "medium")
+
+	for _, needle := range []string{
+		"status_scope=chat",
+		"debug_chat:",
+		"latest_turn id=44",
+		"latest_request=\"Check whether a durable agent was created.\"",
+		"last_tool_preview=\"{'command':'curl -fsS https://api.github.com/zen'}\"",
+		"last_exec_command=\"curl -fsS https://api.github.com/zen\"",
+		"last_tool_result=\"stdout: Keep it logically awesome.\"",
+		"last_tool_error=\"context canceled\"",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramDebug() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
+func TestRenderTelegramDebugIncludesAdminSystemAndDurablesSections(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	out := RenderTelegramDebug(
+		core.ChatStatusSnapshot{ChatID: 7},
+		&core.SystemStatusSnapshot{
+			GeneratedAt: now,
+			PendingItems: []core.PendingItem{
+				{Kind: core.PendingItemKindDecision, ChatID: 7},
+				{Kind: core.PendingItemKindContinuation, ChatID: 7},
+			},
+			LatestTurnRunsByChat: map[int64]core.TurnRunStatusSnapshot{
+				7: {
+					Status:       "running",
+					Kind:         "interactive",
+					RequestText:  "Run durable-agent wizard checks",
+					LastToolName: "exec",
+				},
+			},
+		},
+		&core.DurableAgentsStatusSnapshot{
+			TotalAgents: 1,
+			Agents: []core.DurableAgentStatusSnapshot{
+				{AgentID: "family-group", ChannelKind: "telegram_group", Status: "active", Health: "ok"},
+			},
+		},
+		"opus",
+		"high",
+	)
+
+	for _, needle := range []string{
+		"status_scope=chat",
+		"status_scope=system",
+		"debug_system:",
+		"pending_counts queue=0 decision=1 continuation=1 recovery=0 stale_turn=0",
+		"latest_turns:",
+		"chat_id=7 status=running kind=interactive",
+		"status_scope=durables",
+		"- id=family-group channel=telegram_group status=active health=ok",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramDebug() = %q, want substring %q", out, needle)
+		}
+	}
+}

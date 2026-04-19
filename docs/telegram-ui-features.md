@@ -12,6 +12,8 @@ Current command surface:
   - Shows command help.
 - `/status`
   - Opens status output with inline status controls (no command arguments).
+- `/debug`
+  - Shows a detailed debug snapshot for the current chat. Admin users also get system and durable-agent sections.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
 - `/detach`
@@ -83,6 +85,63 @@ Durables status (`Durables` button, admin-only):
   - runtime pulse (`last_wake`, `last_review`, `dormant_at`, apply status/error)
   - remote enrollment pulse (`enrollment status`, `last_seen`, `last_seq`, revocation state)
 
+### `/debug` content signals
+
+`/debug` is a command reply (not a status callback view). It is intended for operational diagnosis when `/status` is too compressed.
+
+- prepends `quick_read` summary when the readable-summary provider is available
+- includes the full chat status block (`status_scope=chat`)
+- adds `debug_chat` detail lines with latest turn internals:
+  - `latest_request`
+  - `last_tool_preview`
+  - decoded `last_exec_command` when available
+  - `last_tool_result`, `last_tool_error`, `turn_error`
+- admin users additionally receive:
+  - full `status_scope=system`
+  - `debug_system` (pending-kind counters + latest turn rollups per chat)
+  - full `status_scope=durables`
+- output is chunked when needed to fit Telegram message size limits
+
+### Natural-language durable setup trigger
+
+For admin users, natural language requests to create an email durable child are auto-normalized into a safe wizard-driving instruction before the turn reaches the model.
+
+Examples that should trigger:
+
+- “Create a durable email agent”
+- “I want to give you your own email address”
+
+Behavior:
+
+- rewrite favors `durable_agent` wizard actions
+- explicitly blocks `exec`/`go run` style paths for this workflow
+- tells the assistant to ask one concise question at a time for missing wizard fields
+- preserves the original user sentence in the rewritten instruction
+- if an email address is present in the user text, it is passed as known wizard context
+
+### Durable wizard inline controls
+
+When a response contains a machine-readable email-wizard card (`action: durable-agent wizard show`), Telegram auto-attaches inline buttons for the active step.
+
+Step answer buttons are predefined for structured fields such as:
+
+- autonomy mode
+- wakeup mode
+- summarize PDFs yes/no
+- cadence and poll-interval presets
+- charter/capability/retention presets
+
+Control row layout follows the same left/right language used elsewhere:
+
+- in-progress wizard: `Cancel` (left) and `Refresh` (right)
+- ready wizard: `Cancel` (left) and `Finalize` (right)
+
+Callback behavior:
+
+- buttons are admin-only
+- stale/mismatched callbacks are acknowledged and ignored
+- valid callbacks run deterministic `durable_agent` wizard actions (`wizard_answer`, `wizard_show`, `wizard_finalize`, `wizard_cancel`) and edit the same message in place
+
 ### `/set_persona_model` selector
 
 Buttons are generated from runtime options:
@@ -128,6 +187,7 @@ Offer conditions:
   - `CONTINUATION_CONSTRAINTS: ...`
   - `CONTINUATION_CONFIDENCE: low|medium|high`
 - Prompt is shown only when both intents are `continue`, both rationales are non-empty, and governor is ratified.
+- Prompt text is rendered as one first-person system voice (Haiku/face render when available, deterministic fallback otherwise), not as a split `Persona`/`Governor` dialogue block.
 - When handshake fails, continuation state is persisted as idle with an explicit blocked reason and a first-person blocked notice is sent in chat (persona-rendered with deterministic fallback).
 
 ### Runtime decision prompts
@@ -155,10 +215,10 @@ When a turn enters long-running deliberation/tool execution, Telegram shows one 
 
 - Header starts with `Thinking...` and includes elapsed time while active.
 - Card includes inline controls:
-  - `Detach`
-  - `Stop`
-- `Detach` stops active work, clears queue, revokes continuation, and detaches sender-owned pending decisions.
-- `Stop` stops active work for the chat and revokes continuation.
+  - `Stop & Clean Up`
+  - `Stop Turn`
+- `Stop & Clean Up` stops active work, clears queue, revokes continuation, and detaches sender-owned pending decisions.
+- `Stop Turn` stops active work for the chat and revokes continuation.
 - When deliberation ends, controls are removed from the card (or the card is deleted when `telegram.tool_progress_cleanup=true`).
 
 ## Callback Behavior

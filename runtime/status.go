@@ -422,14 +422,19 @@ func buildHotChatRollups(snapshot core.SystemStatusSnapshot) []core.ChatStatusRo
 
 func turnRunSnapshot(run session.TurnRun) core.TurnRunStatusSnapshot {
 	return core.TurnRunStatusSnapshot{
-		ID:             run.ID,
-		ChatID:         run.ChatID,
-		Kind:           strings.TrimSpace(string(run.Kind)),
-		Status:         strings.TrimSpace(string(run.Status)),
-		LastActivityAt: run.LastActivityAt,
-		LastToolName:   strings.TrimSpace(run.LastToolName),
-		ErrorText:      strings.TrimSpace(firstNonEmptyStatus(run.ErrorText, run.LastToolError)),
-		StartedAt:      run.StartedAt,
+		ID:                    run.ID,
+		ChatID:                run.ChatID,
+		Kind:                  strings.TrimSpace(string(run.Kind)),
+		Status:                strings.TrimSpace(string(run.Status)),
+		RequestText:           truncateStatusDiagnostic(strings.TrimSpace(run.RequestText), 220),
+		LastActivityAt:        run.LastActivityAt,
+		ProgressMessageID:     run.ProgressMessageID,
+		LastToolName:          strings.TrimSpace(run.LastToolName),
+		LastToolPreview:       truncateStatusDiagnostic(strings.TrimSpace(run.LastToolPreview), 220),
+		LastToolResultPreview: truncateStatusDiagnostic(strings.TrimSpace(run.LastToolResultPreview), 220),
+		LastToolError:         truncateStatusDiagnostic(strings.TrimSpace(run.LastToolError), 220),
+		ErrorText:             strings.TrimSpace(firstNonEmptyStatus(run.ErrorText, run.LastToolError)),
+		StartedAt:             run.StartedAt,
 	}
 }
 
