@@ -112,10 +112,10 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		if strings.TrimSpace(fullText) == "" {
-			fullText = "debug_scope=chat\nsummary unavailable"
+			fullText = humanizeTelegramTelemetryText("debug_scope=chat\nsummary unavailable")
 		}
 		if strings.TrimSpace(quickText) == "" {
-			quickText = "quick_read unavailable. Tap Read More for the full debug snapshot."
+			quickText = "Quick Read: unavailable. Tap Read More for the full debug snapshot."
 		}
 		rows := [][]telegram.InlineButton{{
 			{Text: "Read More", CallbackData: encodeDebugCallbackData(debugViewMore)},
@@ -465,6 +465,8 @@ func renderDebugSnapshot(ctx context.Context, router commandRouter, chatID int64
 		quick = "quick_read " + summary
 		full = "quick_read " + summary + "\n\n" + full
 	}
+	quick = humanizeTelegramTelemetryText(quick)
+	full = humanizeTelegramTelemetryText(full)
 	return quick, full, nil
 }
 
@@ -497,7 +499,7 @@ func deliverDebugCallbackView(ctx context.Context, sender commandCallbackSender,
 	}
 	chunks := splitStatusTextChunks(text, statusMessageChunkLimit)
 	if len(chunks) == 0 {
-		chunks = []string{"debug_scope=chat\nsummary unavailable"}
+		chunks = []string{humanizeTelegramTelemetryText("debug_scope=chat\nsummary unavailable")}
 	}
 	first := chunks[0]
 	if messageID != 0 {

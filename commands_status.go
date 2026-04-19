@@ -118,6 +118,7 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
 	}
 	text = appendStatusReadableSummary(ctx, router, view, text)
+	text = humanizeTelegramTelemetryText(text)
 	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded)
 	return text, rows, nil
 }
@@ -269,7 +270,7 @@ func deliverStatusCallbackView(ctx context.Context, sender commandCallbackSender
 	}
 	chunks := splitStatusTextChunks(text, statusMessageChunkLimit)
 	if len(chunks) == 0 {
-		chunks = []string{"status_scope=chat\nsummary unavailable"}
+		chunks = []string{humanizeTelegramTelemetryText("status_scope=chat\nsummary unavailable")}
 	}
 	first := chunks[0]
 	if messageID != 0 {

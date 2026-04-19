@@ -366,17 +366,17 @@ At minimum, status snapshots should surface:
 
 `/debug` is a diagnostic surface for when `/status` is too compressed:
 
-- include chat status plus `debug_chat` details:
+- include chat status plus `Debug Chat:` details:
   - latest turn request text
   - last tool preview/result/error
   - decoded exec command when preview includes `{"command": ...}`
-- prepend `quick_read` summary when readable summaries are available
+- prepend `Quick Read:` summary when readable summaries are available
 - chunk output to stay within Telegram message limits
 
 Admin callers should additionally receive:
 
 - full system status block
-- `debug_system` details (pending-kind counters + latest turn rollups by chat)
+- `Debug System:` details (pending-kind counters + latest turn rollups by chat)
 - full durables status block
 
 ### Natural language durable-email bootstrap

@@ -456,7 +456,7 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "status_scope=chat") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Status Scope: chat") {
 		t.Fatalf("status text = %q, want chat scope status", got)
 	}
 	foundThisChat := false
@@ -504,10 +504,10 @@ func TestHandleTelegramCommandStatusIncludesReadableSummary(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "quick_read Chat 7 is idle right now; no blocking pending items.") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Quick Read: Chat 7 is idle right now; no blocking pending items.") {
 		t.Fatalf("status text = %q, want readable quick summary", got)
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "status_scope=chat") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Status Scope: chat") {
 		t.Fatalf("status text = %q, want machine status body", got)
 	}
 }
@@ -592,7 +592,7 @@ func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "summary state=blocked") {
 		t.Fatalf("status text = %q, want blocked summary state", got)
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "current_signal=operation:blocked:approval_wait") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Current Signal: operation:blocked:approval_wait") {
 		t.Fatalf("status text = %q, want blocked operation signal", got)
 	}
 }
@@ -633,7 +633,7 @@ func TestHandleTelegramCommandDebugForNonAdminShowsChatDebugOnly(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "quick_read Chat 7 is working and currently running exec.") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Quick Read: Chat 7 is working and currently running exec.") {
 		t.Fatalf("debug text = %q, want quick summary", got)
 	}
 	if got := sender.inline[0].text; strings.Contains(got, "status_scope=chat") {
@@ -694,7 +694,7 @@ func TestHandleTelegramCommandDebugForAdminIncludesSystemAndDurables(t *testing.
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "quick_read Admin debug snapshot ready.") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Quick Read: Admin debug snapshot ready.") {
 		t.Fatalf("debug text = %q, want quick summary in collapsed view", got)
 	}
 	if got := sender.inline[0].text; strings.Contains(got, "status_scope=chat") {
@@ -755,13 +755,13 @@ func TestHandleTelegramCommandCallbackDebugReadMoreExpandsFullSnapshot(t *testin
 	for _, msg := range sender.msgs {
 		full += "\n" + msg.Text
 	}
-	if !strings.Contains(full, "status_scope=chat") {
+	if !strings.Contains(full, "Status Scope: chat") {
 		t.Fatalf("full debug text = %q, want chat section", full)
 	}
-	if !strings.Contains(full, "debug_chat:") {
+	if !strings.Contains(full, "Debug Chat:") {
 		t.Fatalf("full debug text = %q, want debug_chat section", full)
 	}
-	if !strings.Contains(full, "last_exec_command=\"curl -fsS https://api.github.com/zen\"") {
+	if !strings.Contains(full, "Last Exec Command: \"curl -fsS https://api.github.com/zen\"") {
 		t.Fatalf("full debug text = %q, want decoded last exec command", full)
 	}
 	if strings.Contains(full, "status_scope=system") {
@@ -953,7 +953,7 @@ func TestHandleTelegramCommandCallbackStatusSystemForAdmin(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
 	}
-	if got := sender.editInline[0].text; !strings.Contains(got, "status_scope=system") {
+	if got := sender.editInline[0].text; !strings.Contains(got, "Status Scope: system") {
 		t.Fatalf("system status text = %q, want system scope", got)
 	}
 }
@@ -1001,7 +1001,7 @@ func TestHandleTelegramCommandCallbackStatusDurablesForAdmin(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
 	}
-	if got := sender.editInline[0].text; !strings.Contains(got, "status_scope=durables") {
+	if got := sender.editInline[0].text; !strings.Contains(got, "Status Scope: durables") {
 		t.Fatalf("durables status text = %q, want durables scope", got)
 	}
 }

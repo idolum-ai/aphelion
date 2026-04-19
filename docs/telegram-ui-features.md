@@ -13,7 +13,7 @@ Current command surface:
 - `/status`
   - Opens status output with inline status controls (no command arguments).
 - `/debug`
-  - Starts with a collapsed `quick_read` summary plus a `Read More` button.
+  - Starts with a collapsed `Quick Read:` summary plus a `Read More` button.
   - `Read More` expands in place to the full detailed debug snapshot for the current chat.
   - Admin users get system and durable-agent sections in the expanded view.
 - `/stop`
@@ -69,7 +69,8 @@ Admin-only:
 
 Chat-scoped status now reports live work telemetry, not only router occupancy:
 
-- `quick_read` one-line human summary (Haiku-backed when a native provider key is configured), prepended ahead of the raw status block.
+- `Quick Read:` one-line human summary (Haiku-backed when a native provider key is configured), prepended ahead of the status block.
+- snake_case telemetry labels are rendered as human-readable labels with colons (for example, `status_scope=chat` appears as `Status Scope: chat`).
 - `turn_phase` for active in-flight stage (`face_proposal`, `brokerage`, `governor`, `render`, `persist`, `deliver`) when available.
 - `operation` and `plan_step` from persisted session sidecars.
 - `plan_progress` with completed/total steps and `fully_executed=true|false`.
@@ -80,7 +81,7 @@ Chat-scoped status now reports live work telemetry, not only router occupancy:
 
 Durables status (`Durables` button, admin-only):
 
-- `status_scope=durables` with aggregate counts (`total`, `active`, `dormant`, `degraded`, `inactive`).
+- `Status Scope: durables` with aggregate counts (`total`, `active`, `dormant`, `degraded`, `inactive`).
 - Per-agent health cards with:
   - identity and topology (`agent_id`, `channel`, `status`, `health`, `review_chat`)
   - policy posture (`policy_version`, `policy_hash`, `outbound`, `drift`, `capabilities`)
@@ -89,20 +90,20 @@ Durables status (`Durables` button, admin-only):
 
 ### `/debug` content signals
 
-`/debug` starts as a collapsed command reply with `quick_read`, then expands via `Read More`.
+`/debug` starts as a collapsed command reply with `Quick Read:`, then expands via `Read More`.
 It is intended for operational diagnosis when `/status` is too compressed.
 
-- prepends `quick_read` summary when the readable-summary provider is available
-- includes the full chat status block (`status_scope=chat`)
-- adds `debug_chat` detail lines with latest turn internals:
+- prepends `Quick Read:` summary when the readable-summary provider is available
+- includes the full chat status block (`Status Scope: chat`)
+- adds `Debug Chat:` detail lines with latest turn internals:
   - `latest_request`
   - `last_tool_preview`
   - decoded `last_exec_command` when available
   - `last_tool_result`, `last_tool_error`, `turn_error`
 - admin users additionally receive:
-  - full `status_scope=system`
-  - `debug_system` (pending-kind counters + latest turn rollups per chat)
-  - full `status_scope=durables`
+  - full `Status Scope: system`
+  - `Debug System:` (pending-kind counters + latest turn rollups per chat)
+  - full `Status Scope: durables`
 - output is chunked when needed to fit Telegram message size limits
 
 ### Natural-language durable setup trigger
