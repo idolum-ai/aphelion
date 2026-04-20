@@ -477,9 +477,123 @@ func durableTelegramDMGovernorContext(agent core.DurableAgent, policy core.Durab
 
 func durableTelegramReviewArtifact(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage, replyText string) *core.DurableReviewArtifact {
 	if durableTelegramChannel(agent.ChannelKind) == durableTelegramChannelDM {
-		return nil
+		return durableTelegramDMReviewArtifact(agent, policy, msg, replyText)
 	}
 	return durableGroupReviewArtifact(agent, policy, msg, replyText)
+}
+
+func durableTelegramDMReviewArtifact(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage, replyText string) *core.DurableReviewArtifact {
+	assessment := durableGroupAssessInteraction(msg.Text)
+	allowLocalReply := durableGroupAllowsLocalReply(policy)
+	triggerKinds := durableTelegramDMTriggerKinds(assessment, allowLocalReply, len(msg.Artifacts) > 0)
+	shouldEscalate := !allowLocalReply || durableGroupShouldEscalate(policy, assessment)
+	if !shouldEscalate {
+		return nil
+	}
+
+	sender := strings.TrimSpace(msg.SenderName)
+	if sender == "" && msg.SenderID != 0 {
+		sender = fmt.Sprintf("user_%d", msg.SenderID)
+	}
+	if sender == "" {
+		sender = "direct_user"
+	}
+	summary := strings.TrimSpace(msg.Text)
+	if summary == "" {
+		summary = "[no text]"
+	}
+	metadata := map[string]string{
+		"chat_id":             strconv.FormatInt(msg.ChatID, 10),
+		"chat_title":          strings.TrimSpace(msg.ChatTitle),
+		"sender_id":           strconv.FormatInt(msg.SenderID, 10),
+		"sender_name":         sender,
+		"source_excerpt":      truncateRunes(summary, 240),
+		"channel_kind":        durableTelegramChannelDM,
+		"durable_agent_id":    strings.TrimSpace(agent.AgentID),
+		"policy_outbound":     strings.TrimSpace(policy.OutboundMode),
+		"trigger_kinds":       strings.Join(triggerKinds, ","),
+		"question_detected":   boolString(assessment.DirectQuestion),
+		"child_local_subject": "true",
+	}
+	if allowLocalReply {
+		metadata["local_response"] = truncateRunes(strings.TrimSpace(replyText), 240)
+	} else if strings.TrimSpace(replyText) != "" {
+		metadata["draft_response"] = truncateRunes(strings.TrimSpace(replyText), 240)
+	}
+	if len(assessment.DriftSignals) > 0 {
+		metadata["drift_detected"] = "true"
+	}
+	return &core.DurableReviewArtifact{
+		AgentID:       strings.TrimSpace(agent.AgentID),
+		Summary:       durableTelegramDMReviewSummary(sender, assessment, policy, allowLocalReply),
+		IntervalLabel: strconv.FormatInt(msg.MessageID, 10),
+		LocalActions:  durableTelegramDMReviewLocalActions(policy, assessment, allowLocalReply),
+		Questions:     durableTelegramDMReviewQuestions(policy, assessment, allowLocalReply),
+		RiskFlags:     uniqueStrings(append(append([]string{}, triggerKinds...), assessment.DriftSignals...)),
+		Metadata:      metadata,
+	}
+}
+
+func durableTelegramDMTriggerKinds(assessment durableGroupInteractionAssessment, allowLocalReply bool, hasArtifacts bool) []string {
+	out := append([]string(nil), assessment.TriggerKinds...)
+	if !allowLocalReply {
+		out = append(out, "withheld_local_reply")
+	}
+	if hasArtifacts {
+		out = append(out, "artifact_attachment")
+	}
+	return uniqueStrings(out)
+}
+
+func durableTelegramDMReviewSummary(sender string, assessment durableGroupInteractionAssessment, policy core.DurableAgentLivePolicy, allowLocalReply bool) string {
+	switch {
+	case len(assessment.DriftSignals) > 0:
+		return fmt.Sprintf("Telegram DM from child-local subject %s may be pressuring durable charter drift.", sender)
+	case !allowLocalReply && strings.TrimSpace(policy.OutboundMode) == "reply_with_parent_review":
+		return fmt.Sprintf("Telegram DM from child-local subject %s is awaiting parent review before any reply.", sender)
+	case !allowLocalReply && strings.TrimSpace(policy.OutboundMode) == "draft_only":
+		return fmt.Sprintf("Telegram DM from child-local subject %s produced a local draft for parent review.", sender)
+	case assessment.DirectQuestion:
+		return fmt.Sprintf("Telegram DM question from child-local subject %s was surfaced for bounded review.", sender)
+	default:
+		return fmt.Sprintf("Telegram DM from child-local subject %s was surfaced for bounded review.", sender)
+	}
+}
+
+func durableTelegramDMReviewLocalActions(policy core.DurableAgentLivePolicy, assessment durableGroupInteractionAssessment, allowLocalReply bool) []string {
+	actions := make([]string, 0, 3)
+	switch {
+	case allowLocalReply:
+		actions = append(actions, "Replied locally within the current durable DM charter.")
+	case strings.TrimSpace(policy.OutboundMode) == "reply_with_parent_review":
+		actions = append(actions, "Held the direct-message reply because live policy requires parent review.")
+	case strings.TrimSpace(policy.OutboundMode) == "draft_only":
+		actions = append(actions, "Prepared a direct-message draft but did not reply because live policy is draft_only.")
+	case strings.TrimSpace(policy.OutboundMode) == "read_only":
+		actions = append(actions, "Stayed silent in direct-message lane because live policy is read_only.")
+	default:
+		actions = append(actions, "Did not reply locally under the current durable DM live policy.")
+	}
+	if len(assessment.DriftSignals) > 0 {
+		actions = append(actions, "Did not widen standing role, authority, memory, or secret scope.")
+	}
+	if assessment.DirectQuestion && !allowLocalReply {
+		actions = append(actions, "Surfaced the direct-message question upward for parent review instead of answering in-channel.")
+	}
+	return uniqueStrings(actions)
+}
+
+func durableTelegramDMReviewQuestions(policy core.DurableAgentLivePolicy, assessment durableGroupInteractionAssessment, allowLocalReply bool) []string {
+	questions := make([]string, 0, 3)
+	if len(assessment.DriftSignals) > 0 {
+		questions = append(questions, "Should this durable DM child's charter or authority be adjusted in response to this pressure?")
+	}
+	if !allowLocalReply {
+		questions = append(questions, "Approve, edit, or reject the held direct-message response?")
+	} else if assessment.DirectQuestion {
+		questions = append(questions, "Should this direct-message question be retained for continuity follow-up?")
+	}
+	return uniqueStrings(questions)
 }
 
 func durableGroupReviewArtifact(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage, replyText string) *core.DurableReviewArtifact {

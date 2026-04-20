@@ -130,3 +130,134 @@ func TestHandleInboundDurableTelegramDMRejectsNonPrivateChat(t *testing.T) {
 		t.Fatalf("sent messages = %d, want 0 on rejected chat type", len(sender.sent))
 	}
 }
+
+func TestHandleInboundDurableTelegramDMReplyWithParentReviewQueuesArtifact(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I drafted a response but I am holding for review."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:                "ops-child",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_dm",
+		AllowedTelegramUserIDs: []int64{555},
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Hold direct responses for parent review.",
+			OutboundMode: "reply_with_parent_review",
+			DriftPolicy:  "admin_review",
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         777,
+		ChatType:       "private",
+		SenderID:       555,
+		SenderName:     "operator",
+		Text:           "Can you send the update now?",
+		MessageID:      23,
+		DurableAgentID: "ops-child",
+		Timestamp:      time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent messages = %d, want 0 when parent review is required", len(sender.sent))
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events = %d, want 1", len(events))
+	}
+	if !strings.Contains(events[0].Summary, "child-local subject") {
+		t.Fatalf("summary = %q, want child-local subject framing", events[0].Summary)
+	}
+	for _, needle := range []string{
+		`"channel_kind":"telegram_dm"`,
+		`"sender_name":"operator"`,
+		`"source_excerpt":"Can you send the update now?"`,
+		`"trigger_kinds":"direct_question,withheld_local_reply"`,
+		`"draft_response":"I drafted a response but I am holding for review."`,
+	} {
+		if !strings.Contains(events[0].MetadataJSON, needle) {
+			t.Fatalf("metadata = %q, want substring %q", events[0].MetadataJSON, needle)
+		}
+	}
+}
+
+func TestHandleInboundDurableTelegramDMDraftOnlyQueuesArtifactWithoutQuestion(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Drafted a concise response."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:                "ops-child",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_dm",
+		AllowedTelegramUserIDs: []int64{555},
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Draft only in direct-message lane.",
+			OutboundMode: "draft_only",
+			DriftPolicy:  "admin_review",
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         777,
+		ChatType:       "private",
+		SenderID:       555,
+		SenderName:     "operator",
+		Text:           "thanks for checking this",
+		MessageID:      24,
+		DurableAgentID: "ops-child",
+		Timestamp:      time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent messages = %d, want 0 for draft_only", len(sender.sent))
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events = %d, want 1", len(events))
+	}
+	for _, needle := range []string{
+		`"channel_kind":"telegram_dm"`,
+		`"trigger_kinds":"withheld_local_reply"`,
+		`"draft_response":"Drafted a concise response."`,
+	} {
+		if !strings.Contains(events[0].MetadataJSON, needle) {
+			t.Fatalf("metadata = %q, want substring %q", events[0].MetadataJSON, needle)
+		}
+	}
+}
