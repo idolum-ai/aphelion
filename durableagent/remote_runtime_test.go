@@ -290,6 +290,15 @@ func TestRemoteRuntimeUploadReviewArtifactQueuesParentReviewAndUpdatesLocalConti
 	if !strings.Contains(continuity.PendingQuestions[0].Question, "standing family reminder") {
 		t.Fatalf("PendingQuestions[0].Question = %q, want uploaded question", continuity.PendingQuestions[0].Question)
 	}
+	if continuity.Conversation == nil || len(continuity.Conversation.Messages) != 1 {
+		t.Fatalf("Conversation = %#v, want one child message", continuity.Conversation)
+	}
+	if continuity.Conversation.Messages[0].Role != "child" {
+		t.Fatalf("Conversation.Messages[0].Role = %q, want child", continuity.Conversation.Messages[0].Role)
+	}
+	if !strings.Contains(continuity.Conversation.Messages[0].Text, "Calendar drift is building") {
+		t.Fatalf("Conversation.Messages[0].Text = %q, want artifact summary", continuity.Conversation.Messages[0].Text)
+	}
 
 	enrollment, err := childStore.DurableAgentRemoteEnrollment(agent.AgentID)
 	if err != nil {

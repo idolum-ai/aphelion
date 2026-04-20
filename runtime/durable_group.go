@@ -175,6 +175,10 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	preparedMsg.Text = durableTelegramInboundText(registered, msg)
 	livePolicy := core.NormalizeDurableAgentLivePolicy(registered.LivePolicy)
 	allowLocalReply := durableGroupAllowsLocalReply(livePolicy)
+	pendingParentConversation, err := r.pendingDurableAgentParentConversation(registered.AgentID, 3)
+	if err != nil {
+		return nil, fmt.Errorf("load durable agent parent conversation: %w", err)
+	}
 	channel := durableTelegramChannel(registered.ChannelKind)
 	assembled, err := r.assembleInteractiveLikeTurn(ctx, interactiveLikeAssemblyInput{
 		Scope:                scope,
@@ -209,28 +213,29 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	sess.ChatTitle = strings.TrimSpace(msg.ChatTitle)
 	sess.UserName = strings.TrimSpace(msg.SenderName)
 	coordinator := &durableGroupTurnCoordinator{
-		runtime:               r,
-		registered:            registered,
-		livePolicy:            livePolicy,
-		scope:                 scope,
-		msg:                   msg,
-		key:                   key,
-		sess:                  sess,
-		prepared:              prepared,
-		exec:                  exec,
-		facePolicy:            facePolicy,
-		useMaterialFloor:      useMaterialFloor,
-		governorName:          machine.Options.GovernorName,
-		faceName:              machine.Options.FaceName,
-		channelName:           machine.Options.Channel,
-		principalRole:         "durable_agent",
-		hiddenInputs:          hiddenInputs,
-		promptContext:         promptContext,
-		tools:                 agent.ToolRegistry(nil),
-		currentFaceModel:      r.currentFaceRenderer(),
-		baseGovernorAwareness: baseGovernorAwareness,
-		audit:                 audit,
-		allowStream:           opts.AllowStream,
+		runtime:                   r,
+		registered:                registered,
+		livePolicy:                livePolicy,
+		scope:                     scope,
+		msg:                       msg,
+		key:                       key,
+		sess:                      sess,
+		prepared:                  prepared,
+		exec:                      exec,
+		facePolicy:                facePolicy,
+		useMaterialFloor:          useMaterialFloor,
+		governorName:              machine.Options.GovernorName,
+		faceName:                  machine.Options.FaceName,
+		channelName:               machine.Options.Channel,
+		principalRole:             "durable_agent",
+		hiddenInputs:              hiddenInputs,
+		promptContext:             promptContext,
+		tools:                     agent.ToolRegistry(nil),
+		currentFaceModel:          r.currentFaceRenderer(),
+		baseGovernorAwareness:     baseGovernorAwareness,
+		audit:                     audit,
+		allowStream:               opts.AllowStream,
+		pendingParentConversation: pendingParentConversation,
 	}
 	machine.Governor = coordinator
 	machine.Face = coordinator
@@ -294,6 +299,13 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(pendingParentConversation) > 0 {
+		if ackErr := r.acknowledgeDurableAgentParentConversation(registered.AgentID, now); ackErr != nil {
+			log.Printf("WARN durable parent conversation acknowledge failed agent_id=%s err=%v", registered.AgentID, ackErr)
+		} else if queueErr := r.queueDurableAgentParentConversationAck(registered, pendingParentConversation, strings.TrimSpace(turnResult.VisibleReply), now); queueErr != nil {
+			log.Printf("WARN durable parent conversation ack artifact failed agent_id=%s err=%v", registered.AgentID, queueErr)
+		}
 	}
 	return &DurableGroupChildResult{
 		TurnResult:      *turnResult.Turn,
@@ -422,14 +434,14 @@ func (r *Runtime) durableGroupSenderAuthorized(agent core.DurableAgent, senderID
 	return false
 }
 
-func durableTelegramGovernorContext(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage) string {
+func durableTelegramGovernorContext(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage, pendingParentConversation []core.DurableAgentConversationMessage) string {
 	if durableTelegramChannel(agent.ChannelKind) == durableTelegramChannelDM {
-		return durableTelegramDMGovernorContext(agent, policy, msg)
+		return durableTelegramDMGovernorContext(agent, policy, msg, pendingParentConversation)
 	}
-	return durableGroupGovernorContext(agent, policy, msg)
+	return durableGroupGovernorContext(agent, policy, msg, pendingParentConversation)
 }
 
-func durableGroupGovernorContext(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage) string {
+func durableGroupGovernorContext(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage, pendingParentConversation []core.DurableAgentConversationMessage) string {
 	lines := []string{
 		"You are handling a durable-agent Telegram group turn.",
 		"The group and its members are child-local subjects, not house principals.",
@@ -449,10 +461,11 @@ func durableGroupGovernorContext(agent core.DurableAgent, policy core.DurableAge
 	if title := strings.TrimSpace(msg.ChatTitle); title != "" {
 		lines = append(lines, "Chat title: "+title)
 	}
+	lines = append(lines, durableParentConversationGovernorLines(pendingParentConversation)...)
 	return strings.Join(lines, "\n")
 }
 
-func durableTelegramDMGovernorContext(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage) string {
+func durableTelegramDMGovernorContext(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage, pendingParentConversation []core.DurableAgentConversationMessage) string {
 	lines := []string{
 		"You are handling a durable-agent Telegram direct-message turn.",
 		"The sender is a child-local subject for this durable channel.",
@@ -472,6 +485,7 @@ func durableTelegramDMGovernorContext(agent core.DurableAgent, policy core.Durab
 	if sender := strings.TrimSpace(msg.SenderName); sender != "" {
 		lines = append(lines, "Sender: "+sender)
 	}
+	lines = append(lines, durableParentConversationGovernorLines(pendingParentConversation)...)
 	return strings.Join(lines, "\n")
 }
 
@@ -861,6 +875,115 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func durableParentConversationGovernorLines(messages []core.DurableAgentConversationMessage) []string {
+	if len(messages) == 0 {
+		return nil
+	}
+	lines := []string{
+		fmt.Sprintf("Pending parent guidance: %d message(s).", len(messages)),
+		"Apply parent guidance when it stays within safety and current durable charter bounds.",
+	}
+	for i, message := range messages {
+		text := truncateRunes(strings.TrimSpace(message.Text), 240)
+		if text == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("Parent note %d: %s", i+1, text))
+	}
+	return lines
+}
+
+func (r *Runtime) pendingDurableAgentParentConversation(agentID string, limit int) ([]core.DurableAgentConversationMessage, error) {
+	state, err := r.store.DurableAgentState(strings.TrimSpace(agentID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return nil, err
+	}
+	return continuity.PendingParentConversationMessages(limit), nil
+}
+
+func (r *Runtime) acknowledgeDurableAgentParentConversation(agentID string, at time.Time) error {
+	state, err := r.store.DurableAgentState(strings.TrimSpace(agentID))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return err
+	}
+	updated := continuity.AcknowledgeParentConversationMessages(at)
+	raw, err := updated.Marshal()
+	if err != nil {
+		return err
+	}
+	state.StateJSON = raw
+	return r.store.SaveDurableAgentState(*state)
+}
+
+func (r *Runtime) queueDurableAgentParentConversationAck(agent core.DurableAgent, messages []core.DurableAgentConversationMessage, localReply string, at time.Time) error {
+	if len(messages) == 0 || agent.ReviewTargetChatID == 0 {
+		return nil
+	}
+	summary := durableAgentParentConversationAckSummary(messages, localReply)
+	if summary == "" {
+		return nil
+	}
+	metadata := map[string]string{
+		"durable_agent_id":    strings.TrimSpace(agent.AgentID),
+		"channel_kind":        durableTelegramChannel(agent.ChannelKind),
+		"trigger_kinds":       "parent_conversation",
+		"parent_note_count":   strconv.Itoa(len(messages)),
+		"parent_note_excerpt": truncateRunes(strings.TrimSpace(messages[0].Text), 240),
+		"acknowledged_at":     at.UTC().Format(time.RFC3339),
+		"child_local_subject": "false",
+	}
+	if trimmedReply := strings.TrimSpace(localReply); trimmedReply != "" {
+		metadata["local_response"] = truncateRunes(trimmedReply, 240)
+	}
+	artifact := core.DurableReviewArtifact{
+		AgentID:       strings.TrimSpace(agent.AgentID),
+		Summary:       summary,
+		IntervalLabel: at.UTC().Format(time.RFC3339),
+		LocalActions: []string{
+			"Processed pending parent guidance during this durable child turn.",
+		},
+		RiskFlags:    []string{"parent_conversation_sync"},
+		ArtifactRefs: []string{fmt.Sprintf("conversation://durable-agent/%s", strings.TrimSpace(agent.AgentID))},
+		Metadata:     metadata,
+	}
+	_, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact)
+	return err
+}
+
+func durableAgentParentConversationAckSummary(messages []core.DurableAgentConversationMessage, localReply string) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	head := truncateRunes(strings.TrimSpace(messages[0].Text), 200)
+	if head == "" {
+		head = "parent guidance received"
+	}
+	summary := ""
+	if len(messages) == 1 {
+		summary = fmt.Sprintf("Processed pending parent guidance: %q.", head)
+	} else {
+		summary = fmt.Sprintf("Processed %d pending parent guidance notes; latest: %q.", len(messages), head)
+	}
+	if trimmedReply := strings.TrimSpace(localReply); trimmedReply != "" {
+		summary = summary + " Local response: " + truncateRunes(trimmedReply, 220)
+	}
+	return strings.TrimSpace(summary)
 }
 
 func (r *Runtime) markDurableAgentAwake(agentID string, cursorMessageID int64) error {

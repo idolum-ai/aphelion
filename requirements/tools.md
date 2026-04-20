@@ -173,6 +173,7 @@ It should support, at minimum:
 - testing a channel connection
 - activating a child once its charter and connection are ready
 - guided setup wizard actions (`wizard_start`, `wizard_answer`, `wizard_show`, `wizard_finalize`, `wizard_cancel`) so conversational setup can persist as explicit machine state
+- durable parent-child conversation actions (`conversation_send`, `conversation_show`) so parent guidance and child acknowledgements can persist as explicit threaded state
 
 Creation and activation remain admin-only, but they should be reachable from ordinary conversation rather than only from startup config.
 

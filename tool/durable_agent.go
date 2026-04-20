@@ -106,8 +106,12 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 		return r.probeDurableAgentCapacity(in)
 	case "capacity_attest":
 		return r.attestDurableAgentCapacity(in)
+	case "conversation_show":
+		return r.showDurableAgentConversation(in)
+	case "conversation_send":
+		return r.sendDurableAgentConversation(in)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|capacity_show|capacity_negotiate|capacity_probe|capacity_attest")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|capacity_show|capacity_negotiate|capacity_probe|capacity_attest|conversation_show|conversation_send")
 	}
 }
 
@@ -781,6 +785,46 @@ func (r *Registry) markDurableAgentCapacityStale(agentID string) error {
 	return r.saveDurableAgentContinuity(state, continuity)
 }
 
+func (r *Registry) showDurableAgentConversation(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for conversation_show")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	_, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	return renderDurableAgentConversation("show", *agent, continuity, in.History), nil
+}
+
+func (r *Registry) sendDurableAgentConversation(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for conversation_send")
+	}
+	message := strings.TrimSpace(in.Message)
+	if message == "" {
+		return "", fmt.Errorf("durable_agent message is required for conversation_send")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	continuity = continuity.WithConversationMessage("parent", message, time.Now().UTC())
+	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
+		return "", err
+	}
+	return renderDurableAgentConversation("send", *agent, continuity, in.History), nil
+}
+
 func durableAgentCapacityContractReadyForAttestation(contract core.DurableAgentCapabilityContract) bool {
 	return strings.TrimSpace(contract.ChildSelfAssessment) != "" &&
 		len(contract.SuccessCriteria) > 0 &&
@@ -1367,6 +1411,59 @@ func renderDurableAgentCapacity(action string, agent core.DurableAgent, contract
 		b.WriteString("next: capacity_negotiate then capacity_attest\n")
 	}
 	return b.String()
+}
+
+func renderDurableAgentConversation(action string, agent core.DurableAgent, continuity core.DurableAgentContinuityState, history int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "action: durable-agent conversation %s\n", strings.TrimSpace(action))
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	total := 0
+	if continuity.Conversation != nil {
+		total = len(continuity.Conversation.Messages)
+	}
+	fmt.Fprintf(&b, "messages: %d\n", total)
+	fmt.Fprintf(&b, "pending_parent_messages: %d\n", len(continuity.PendingParentConversationMessages(0)))
+	window := durableAgentConversationWindow(continuity, history)
+	if len(window) == 0 {
+		b.WriteString("conversation: -\n")
+		b.WriteString("next: conversation_send\n")
+		return b.String()
+	}
+	b.WriteString("conversation:\n")
+	for _, message := range window {
+		ts := "-"
+		if !message.CreatedAt.IsZero() {
+			ts = message.CreatedAt.UTC().Format(time.RFC3339)
+		}
+		line := fmt.Sprintf("- [%s] %s: %s", ts, message.Role, message.Text)
+		if message.Role == "parent" && !message.AcknowledgedAt.IsZero() {
+			line += " (acknowledged)"
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	b.WriteString("next: conversation_send\n")
+	return b.String()
+}
+
+func durableAgentConversationWindow(continuity core.DurableAgentContinuityState, history int) []core.DurableAgentConversationMessage {
+	continuity = core.NormalizeDurableAgentContinuityState(continuity)
+	if continuity.Conversation == nil || len(continuity.Conversation.Messages) == 0 {
+		return nil
+	}
+	limit := history
+	if limit <= 0 {
+		limit = 8
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	if limit > len(continuity.Conversation.Messages) {
+		limit = len(continuity.Conversation.Messages)
+	}
+	out := make([]core.DurableAgentConversationMessage, 0, limit)
+	out = append(out, continuity.Conversation.Messages[:limit]...)
+	return out
 }
 
 func formatDurableAgentTelegramUserIDs(values []int64) string {

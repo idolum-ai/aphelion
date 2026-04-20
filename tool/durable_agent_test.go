@@ -88,6 +88,9 @@ func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"capacity_negotiate"`) || !strings.Contains(durableDefJSON, `"capacity_contract"`) {
 		t.Fatalf("durable_agent definition missing capacity contract surface: %s", durableDefJSON)
 	}
+	if !strings.Contains(durableDefJSON, `"conversation_show"`) || !strings.Contains(durableDefJSON, `"conversation_send"`) || !strings.Contains(durableDefJSON, `"message"`) {
+		t.Fatalf("durable_agent definition missing conversation surface: %s", durableDefJSON)
+	}
 }
 
 func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
@@ -165,6 +168,83 @@ func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
 	}
 	if len(agent.AllowedTelegramUserIDs) != 1 || agent.AllowedTelegramUserIDs[0] != 2002 {
 		t.Fatalf("AllowedTelegramUserIDs = %#v, want [2002]", agent.AllowedTelegramUserIDs)
+	}
+}
+
+func TestDurableAgentToolConversationSendAndShow(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review inbox and surface important threads.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	sendOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"conversation_send","agent_id":"idolum-email","message":"Please flag recruiter threads aggressively and keep digest concise."}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(conversation_send) err = %v", err)
+	}
+	if !strings.Contains(sendOut, "action: durable-agent conversation send") {
+		t.Fatalf("conversation_send output = %q, want conversation action", sendOut)
+	}
+	if !strings.Contains(sendOut, "pending_parent_messages: 1") {
+		t.Fatalf("conversation_send output = %q, want pending parent count", sendOut)
+	}
+	if !strings.Contains(sendOut, "Please flag recruiter threads aggressively") {
+		t.Fatalf("conversation_send output = %q, want echoed message", sendOut)
+	}
+
+	showOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"conversation_show","agent_id":"idolum-email","history":5}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(conversation_show) err = %v", err)
+	}
+	if !strings.Contains(showOut, "action: durable-agent conversation show") {
+		t.Fatalf("conversation_show output = %q, want conversation show action", showOut)
+	}
+	if !strings.Contains(showOut, "pending_parent_messages: 1") {
+		t.Fatalf("conversation_show output = %q, want pending parent count", showOut)
+	}
+
+	state, err := store.DurableAgentState("idolum-email")
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if continuity.Conversation == nil || len(continuity.Conversation.Messages) != 1 {
+		t.Fatalf("conversation messages = %#v, want 1", continuity.Conversation)
+	}
+	if continuity.Conversation.Messages[0].Role != "parent" {
+		t.Fatalf("conversation role = %q, want parent", continuity.Conversation.Messages[0].Role)
+	}
+	if continuity.Conversation.Messages[0].AcknowledgedAt.IsZero() != true {
+		t.Fatalf("conversation acknowledged_at = %v, want zero", continuity.Conversation.Messages[0].AcknowledgedAt)
 	}
 }
 

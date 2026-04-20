@@ -207,6 +207,9 @@ func (r *RemoteRuntime) UploadReviewArtifact(ctx context.Context, bootstrapPath 
 		return nil, fmt.Errorf("parse durable agent continuity state: %w", err)
 	}
 	continuity = continuity.WithReviewArtifact(resp.ReviewEventID, artifact, now)
+	if childMessage := durableConversationChildMessageFromArtifact(artifact); childMessage != "" {
+		continuity = continuity.WithConversationMessage("child", childMessage, now)
+	}
 	stateJSON, err := continuity.Marshal()
 	if err != nil {
 		return nil, fmt.Errorf("marshal durable agent continuity state: %w", err)

@@ -83,6 +83,9 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 		return 0, fmt.Errorf("parse durable agent continuity state: %w", err)
 	}
 	continuity = continuity.WithReviewArtifact(eventID, artifact, now)
+	if childMessage := durableConversationChildMessageFromArtifact(artifact); childMessage != "" {
+		continuity = continuity.WithConversationMessage("child", childMessage, now)
+	}
 	stateJSON, err := continuity.Marshal()
 	if err != nil {
 		return 0, fmt.Errorf("marshal durable agent continuity state: %w", err)
@@ -209,4 +212,21 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func durableConversationChildMessageFromArtifact(artifact core.DurableReviewArtifact) string {
+	parts := make([]string, 0, 3)
+	if summary := normalizeWhitespace(artifact.Summary); summary != "" {
+		parts = append(parts, summary)
+	}
+	if len(artifact.LocalActions) > 0 {
+		action := normalizeWhitespace(artifact.LocalActions[0])
+		if action != "" {
+			parts = append(parts, "Local action: "+action)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return clampChars(strings.Join(parts, " "), 1200)
 }

@@ -110,9 +110,21 @@ type DurableAgentContinuityState struct {
 	PendingQuestions   []DurableAgentPendingQuestion   `json:"pending_questions,omitempty"`
 	ReviewRefs         []DurableAgentReviewReference   `json:"review_refs,omitempty"`
 	RatifiedOutcomes   []DurableAgentRatifiedOutcome   `json:"ratified_outcomes,omitempty"`
+	Conversation       *DurableAgentConversationState  `json:"conversation,omitempty"`
 	SetupWizard        *DurableAgentSetupWizardState   `json:"setup_wizard,omitempty"`
 	EmailPending       *DurableAgentEmailPendingState  `json:"email_pending,omitempty"`
 	CapabilityContract *DurableAgentCapabilityContract `json:"capability_contract,omitempty"`
+}
+
+type DurableAgentConversationState struct {
+	Messages []DurableAgentConversationMessage `json:"messages,omitempty"`
+}
+
+type DurableAgentConversationMessage struct {
+	Role           string    `json:"role,omitempty"`
+	Text           string    `json:"text,omitempty"`
+	CreatedAt      time.Time `json:"created_at,omitempty"`
+	AcknowledgedAt time.Time `json:"acknowledged_at,omitempty"`
 }
 
 type DurableAgentSetupWizardState struct {
@@ -342,6 +354,7 @@ type DurableReviewArtifact struct {
 }
 
 const durableAgentContinuityMaxItems = 12
+const durableAgentConversationMaxItems = 48
 const durableAgentEmailPendingMaxItems = 200
 
 const DefaultDurableAgentControlProtocolVersion = "v1"
@@ -731,6 +744,7 @@ func NormalizeDurableAgentContinuityState(state DurableAgentContinuityState) Dur
 	state.PendingQuestions = normalizeDurableAgentPendingQuestions(state.PendingQuestions)
 	state.ReviewRefs = normalizeDurableAgentReviewReferences(state.ReviewRefs)
 	state.RatifiedOutcomes = normalizeDurableAgentRatifiedOutcomes(state.RatifiedOutcomes)
+	state.Conversation = normalizeDurableAgentConversationState(state.Conversation)
 	state.SetupWizard = normalizeDurableAgentSetupWizardState(state.SetupWizard)
 	state.EmailPending = normalizeDurableAgentEmailPendingState(state.EmailPending)
 	state.CapabilityContract = normalizeDurableAgentCapabilityContract(state.CapabilityContract)
@@ -754,6 +768,7 @@ func (s DurableAgentContinuityState) IsZero() bool {
 		len(s.PendingQuestions) == 0 &&
 		len(s.ReviewRefs) == 0 &&
 		len(s.RatifiedOutcomes) == 0 &&
+		s.Conversation == nil &&
 		s.SetupWizard == nil &&
 		s.EmailPending == nil &&
 		s.CapabilityContract == nil
@@ -811,6 +826,78 @@ func (s DurableAgentContinuityState) WithRatifiedOutcome(summary string, policyV
 		SourceReviewEventID: sourceReviewEventID,
 		AppliedAt:           appliedAt.UTC(),
 	})
+	return NormalizeDurableAgentContinuityState(s)
+}
+
+func (s DurableAgentContinuityState) WithConversationMessage(role string, text string, createdAt time.Time) DurableAgentContinuityState {
+	s = NormalizeDurableAgentContinuityState(s)
+	role = normalizeDurableAgentConversationRole(role)
+	text = clampDurableAgentField(text, 1200)
+	if role == "" || text == "" {
+		return s
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	next := DurableAgentConversationMessage{
+		Role:      role,
+		Text:      text,
+		CreatedAt: createdAt.UTC(),
+	}
+	if s.Conversation == nil {
+		s.Conversation = &DurableAgentConversationState{}
+	}
+	s.Conversation.Messages = append([]DurableAgentConversationMessage{next}, s.Conversation.Messages...)
+	return NormalizeDurableAgentContinuityState(s)
+}
+
+func (s DurableAgentContinuityState) PendingParentConversationMessages(limit int) []DurableAgentConversationMessage {
+	s = NormalizeDurableAgentContinuityState(s)
+	if s.Conversation == nil || len(s.Conversation.Messages) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = durableAgentConversationMaxItems
+	}
+	out := make([]DurableAgentConversationMessage, 0, limit)
+	for _, message := range s.Conversation.Messages {
+		if message.Role != "parent" {
+			continue
+		}
+		if !message.AcknowledgedAt.IsZero() {
+			continue
+		}
+		out = append(out, message)
+		if len(out) == limit {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (s DurableAgentContinuityState) AcknowledgeParentConversationMessages(at time.Time) DurableAgentContinuityState {
+	s = NormalizeDurableAgentContinuityState(s)
+	if s.Conversation == nil || len(s.Conversation.Messages) == 0 {
+		return s
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	updated := false
+	for i := range s.Conversation.Messages {
+		message := &s.Conversation.Messages[i]
+		if message.Role != "parent" || !message.AcknowledgedAt.IsZero() {
+			continue
+		}
+		message.AcknowledgedAt = at.UTC()
+		updated = true
+	}
+	if !updated {
+		return s
+	}
 	return NormalizeDurableAgentContinuityState(s)
 }
 
@@ -1112,6 +1199,52 @@ func normalizeDurableAgentRatifiedOutcomes(values []DurableAgentRatifiedOutcome)
 	return out
 }
 
+func normalizeDurableAgentConversationState(state *DurableAgentConversationState) *DurableAgentConversationState {
+	if state == nil {
+		return nil
+	}
+	normalized := DurableAgentConversationState{
+		Messages: normalizeDurableAgentConversationMessages(state.Messages),
+	}
+	if len(normalized.Messages) == 0 {
+		return nil
+	}
+	return &normalized
+}
+
+func normalizeDurableAgentConversationMessages(values []DurableAgentConversationMessage) []DurableAgentConversationMessage {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]DurableAgentConversationMessage, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value.Role = normalizeDurableAgentConversationRole(value.Role)
+		value.Text = clampDurableAgentField(value.Text, 1200)
+		value.CreatedAt = value.CreatedAt.UTC()
+		value.AcknowledgedAt = value.AcknowledgedAt.UTC()
+		if value.Role == "" || value.Text == "" {
+			continue
+		}
+		if value.Role != "parent" {
+			value.AcknowledgedAt = time.Time{}
+		}
+		key := fmt.Sprintf("%s:%s:%s", value.Role, value.Text, value.CreatedAt.UTC().Format(time.RFC3339Nano))
+		if value.CreatedAt.IsZero() {
+			key = fmt.Sprintf("%s:%s", value.Role, value.Text)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+		if len(out) == durableAgentConversationMaxItems {
+			break
+		}
+	}
+	return out
+}
+
 func normalizeDurableAgentSetupWizardState(state *DurableAgentSetupWizardState) *DurableAgentSetupWizardState {
 	if state == nil {
 		return nil
@@ -1205,6 +1338,19 @@ func normalizeDurableAgentCapabilityState(value string) string {
 		return "verified"
 	case "stale":
 		return "stale"
+	default:
+		return ""
+	}
+}
+
+func normalizeDurableAgentConversationRole(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "parent":
+		return "parent"
+	case "child":
+		return "child"
+	case "system":
+		return "system"
 	default:
 		return ""
 	}

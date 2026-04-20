@@ -20,30 +20,31 @@ import (
 )
 
 type durableGroupTurnCoordinator struct {
-	runtime               *Runtime
-	registered            core.DurableAgent
-	livePolicy            core.DurableAgentLivePolicy
-	scope                 sandbox.Scope
-	msg                   core.InboundMessage
-	key                   session.SessionKey
-	sess                  *session.Session
-	prepared              pipeline.TurnPrepareContract
-	exec                  pipeline.TurnExecutionContract
-	facePolicy            pipeline.FacePolicy
-	useMaterialFloor      bool
-	governorName          string
-	faceName              string
-	channelName           string
-	principalRole         string
-	hiddenInputs          hiddenInputSet
-	promptContext         *workspace.PromptContext
-	tools                 agent.ToolRegistry
-	currentFaceModel      face.Renderer
-	baseGovernorAwareness prompt.RuntimeAwareness
-	audit                 *turnAuditRecorder
-	allowStream           bool
-	lastGovernor          *turn.GovernorResult
-	lastFaceAwareness     prompt.RuntimeAwareness
+	runtime                   *Runtime
+	registered                core.DurableAgent
+	livePolicy                core.DurableAgentLivePolicy
+	scope                     sandbox.Scope
+	msg                       core.InboundMessage
+	key                       session.SessionKey
+	sess                      *session.Session
+	prepared                  pipeline.TurnPrepareContract
+	exec                      pipeline.TurnExecutionContract
+	facePolicy                pipeline.FacePolicy
+	useMaterialFloor          bool
+	governorName              string
+	faceName                  string
+	channelName               string
+	principalRole             string
+	hiddenInputs              hiddenInputSet
+	promptContext             *workspace.PromptContext
+	tools                     agent.ToolRegistry
+	currentFaceModel          face.Renderer
+	baseGovernorAwareness     prompt.RuntimeAwareness
+	audit                     *turnAuditRecorder
+	allowStream               bool
+	pendingParentConversation []core.DurableAgentConversationMessage
+	lastGovernor              *turn.GovernorResult
+	lastFaceAwareness         prompt.RuntimeAwareness
 }
 
 func (c *durableGroupTurnCoordinator) Propose(ctx context.Context, req turn.FaceProposalRequest) (*turn.FaceProposalResult, error) {
@@ -171,7 +172,7 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		GovernorName:          c.coordinatorGovernorName(),
 		RequestFaceNote:       c.requestFaceNote,
 		ExtraSystemMessages: []agent.Message{
-			{Role: "system", Content: durableTelegramGovernorContext(c.registered, c.livePolicy, c.msg)},
+			{Role: "system", Content: durableTelegramGovernorContext(c.registered, c.livePolicy, c.msg, c.pendingParentConversation)},
 		},
 		RunErrPrefix:        "run durable group turn",
 		InvalidOutputPrefix: "invalid durable group turn output",

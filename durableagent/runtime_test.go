@@ -118,6 +118,15 @@ func TestQueueReviewArtifactReusesReviewQueue(t *testing.T) {
 	if len(continuity.ReviewRefs[0].RiskFlags) != 1 || continuity.ReviewRefs[0].RiskFlags[0] != "durable drift pressure" {
 		t.Fatalf("ReviewRefs[0].RiskFlags = %#v, want preserved durable drift pressure", continuity.ReviewRefs[0].RiskFlags)
 	}
+	if continuity.Conversation == nil || len(continuity.Conversation.Messages) != 1 {
+		t.Fatalf("Conversation = %#v, want 1 child message", continuity.Conversation)
+	}
+	if continuity.Conversation.Messages[0].Role != "child" {
+		t.Fatalf("Conversation.Messages[0].Role = %q, want child", continuity.Conversation.Messages[0].Role)
+	}
+	if !strings.Contains(continuity.Conversation.Messages[0].Text, "Group pressure is recurring") {
+		t.Fatalf("Conversation.Messages[0].Text = %q, want artifact summary", continuity.Conversation.Messages[0].Text)
+	}
 }
 
 func TestQueueReviewArtifactRedactsSecretLikeMetadataIntoForensicSidecar(t *testing.T) {
