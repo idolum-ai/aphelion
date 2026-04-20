@@ -90,7 +90,7 @@ type durableEmailPartBody struct {
 	AttachmentID string `json:"attachmentId,omitempty"`
 }
 
-func (r *Runtime) StartDurableEmailLoop(ctx context.Context, logger func(string, ...any)) {
+func (r *Runtime) StartDurableWakeLoop(ctx context.Context, logger func(string, ...any)) {
 	if r == nil || r.store == nil {
 		return
 	}
@@ -99,9 +99,13 @@ func (r *Runtime) StartDurableEmailLoop(ctx context.Context, logger func(string,
 	}
 	go runPeriodic(ctx, durableEmailLoopCadence, func(runCtx context.Context) {
 		if err := r.pollDurableEmailAgents(runCtx, time.Now().UTC()); err != nil {
-			logger("WARN durable email poll failed: %v", err)
+			logger("WARN durable wake poll failed: %v", err)
 		}
 	})
+}
+
+func (r *Runtime) StartDurableEmailLoop(ctx context.Context, logger func(string, ...any)) {
+	r.StartDurableWakeLoop(ctx, logger)
 }
 
 func (r *Runtime) pollDurableEmailAgents(ctx context.Context, now time.Time) error {
@@ -117,8 +121,8 @@ func (r *Runtime) pollDurableEmailAgents(ctx context.Context, now time.Time) err
 		if !durableEmailWakeEnabled(agent) {
 			continue
 		}
-		if r.shouldRunDurableEmailInChild(agent) {
-			if err := r.pollDurableEmailAgentViaChild(ctx, agent, now); err != nil {
+		if r.shouldRunDurableWakeInChild(agent) {
+			if err := r.pollDurableAgentWakeViaChild(ctx, agent, now); err != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", agent.AgentID, err))
 			}
 			continue
@@ -133,25 +137,25 @@ func (r *Runtime) pollDurableEmailAgents(ctx context.Context, now time.Time) err
 	return nil
 }
 
-func (r *Runtime) shouldRunDurableEmailInChild(agent core.DurableAgent) bool {
-	if r == nil || r.durableEmailChild == nil {
+func (r *Runtime) shouldRunDurableWakeInChild(agent core.DurableAgent) bool {
+	if r == nil || r.durableWakeChild == nil {
 		return false
 	}
 	return core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM).Configured()
 }
 
-func (r *Runtime) pollDurableEmailAgentViaChild(ctx context.Context, agent core.DurableAgent, now time.Time) error {
-	if r == nil || r.durableEmailChild == nil {
+func (r *Runtime) pollDurableAgentWakeViaChild(ctx context.Context, agent core.DurableAgent, now time.Time) error {
+	if r == nil || r.durableWakeChild == nil {
 		return r.pollDurableEmailAgent(ctx, agent, now)
 	}
 	scope, err := r.scopeForDurableAgent(agent)
 	if err != nil {
 		return err
 	}
-	if !r.durableEmailChild.Supports(scope, agent) {
+	if !r.durableWakeChild.Supports(scope, agent) {
 		return r.pollDurableEmailAgent(ctx, agent, now)
 	}
-	return r.durableEmailChild.Run(ctx, scope, agent, now)
+	return r.durableWakeChild.Run(ctx, scope, agent, now)
 }
 
 func durableEmailWakeEnabled(agent core.DurableAgent) bool {

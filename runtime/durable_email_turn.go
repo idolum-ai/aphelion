@@ -19,28 +19,37 @@ import (
 
 const durableEmailTurnContextBodyLimit = 600
 
-func (r *Runtime) RunDurableEmailChild(ctx context.Context, agentID string, now time.Time) error {
+func (r *Runtime) RunDurableAgentChildWake(ctx context.Context, agentID string, now time.Time) error {
 	if r == nil || r.store == nil {
-		return fmt.Errorf("durable email child runtime is unavailable")
+		return fmt.Errorf("durable child wake runtime is unavailable")
 	}
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
-		return fmt.Errorf("durable email child agent id is required")
+		return fmt.Errorf("durable child wake agent id is required")
 	}
 	agent, err := r.store.DurableAgent(agentID)
 	if err != nil {
-		return fmt.Errorf("load durable email agent: %w", err)
+		return fmt.Errorf("load durable child wake agent: %w", err)
 	}
 	if agent == nil {
-		return fmt.Errorf("durable email agent %q not found", agentID)
-	}
-	if !durableEmailWakeEnabled(*agent) {
-		return nil
+		return fmt.Errorf("durable agent %q not found", agentID)
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	return r.runDurableEmailChildTurn(ctx, *agent, now.UTC())
+	switch strings.TrimSpace(agent.ChannelKind) {
+	case "email":
+		if !durableEmailWakeEnabled(*agent) {
+			return nil
+		}
+		return r.runDurableEmailChildTurn(ctx, *agent, now.UTC())
+	default:
+		return fmt.Errorf("durable agent %q channel %q does not support child wake execution", agent.AgentID, strings.TrimSpace(agent.ChannelKind))
+	}
+}
+
+func (r *Runtime) RunDurableEmailChild(ctx context.Context, agentID string, now time.Time) error {
+	return r.RunDurableAgentChildWake(ctx, agentID, now)
 }
 
 func (r *Runtime) runDurableEmailChildTurn(ctx context.Context, agent core.DurableAgent, now time.Time) error {

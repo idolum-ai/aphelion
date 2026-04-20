@@ -447,7 +447,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"properties": {
 					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
-						"channel_kind": {"type": "string", "description": "Required for create. Example: email"},
+						"channel_kind": {"type": "string", "description": "Required for create. Example: inbox (currently mapped to email adapter profile)"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
 						"review_target_chat_id": {"type": "integer", "description": "Optional admin review target chat id override for create"},
 						"reason": {"type": "string", "description": "Optional operator reason for the change"},
@@ -486,10 +486,10 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						"wakeup_mode": {"type": "string", "description": "Optional wakeup mode for create. Example: poll"},
 						"network_policy": {"type": "string", "description": "Optional network policy for create"},
 						"secret_scopes": {"type": "array", "items": {"type": "string"}, "description": "Optional secret scopes for create"},
-						"channel_config": {"type": "object", "description": "Optional structured channel configuration for create"},
+						"channel_config": {"type": "object", "description": "Optional structured channel configuration for create. Current inbox profile accepts either email or alias inbox object."},
 						"wizard_answers": {
 							"type": "object",
-							"description": "Wizard answer patch for wizard_answer (email child setup).",
+							"description": "Wizard answer patch for wizard_answer (durable child setup; current profile support is inbox/email).",
 							"properties": {
 								"address": {"type": "string"},
 								"account": {"type": "string"},

@@ -2,19 +2,18 @@
 
 ![Durable topology](diagrams/04-durable-topology.svg)
 
-Durable children are bounded channel-specific organs, not alternate public
-personas.
+Durable children are bounded child Aphelions, not alternate public personas.
 
 ## Live Shape
 
 - Parent runtime owns durable-agent registry and wake loops.
-- Child execution stays scoped by charter and channel policy.
+- Child execution stays scoped by charter, tool scope, and live policy.
 - Upward communication is through bounded review artifacts and summaries.
 - Telegram relay turns can target a child inline from DM using `agent:<agent_id> ...` and execute in child scope.
-- Email children support poll, push, or poll-or-push wake modes.
-- Email children with a configured child bootstrap run polling through isolated child execution (`durable-agent child-run --agent ...`); legacy inline polling remains only as a fallback for unbootstrapped agents.
-- Bootstrapped email wakes now execute a child-local turn (prompt context + governor/face loop + principal-scoped tools) before emitting bounded upward review artifacts.
-- Email synthesis respects cadence buffering (`synthesis_cadence`) and enforces channel `never_retain` scrubbing before review emission.
+- Child wakes can be transport-triggered (`telegram_update`) or scheduler-triggered (`poll`, `push`, `poll_or_push`) depending on the child role.
+- Child wake execution runs through isolated child execution (`durable-agent child-run --agent ...`) when a child bootstrap LLM is configured; the current email wake adapter retains inline fallback for unbootstrapped agents.
+- Bootstrapped child wakes execute a child-local turn (prompt context + governor/face loop + principal-scoped tools) before emitting bounded upward review artifacts.
+- The current `email` adapter (via `gog_cli`) keeps cadence buffering (`synthesis_cadence`) and channel `never_retain` scrubbing before review emission.
 
 Code anchors:
 

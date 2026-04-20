@@ -15,19 +15,19 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-type durableEmailChildExecutor interface {
+type durableWakeChildExecutor interface {
 	Supports(scope sandbox.Scope, agent core.DurableAgent) bool
 	Run(ctx context.Context, scope sandbox.Scope, agent core.DurableAgent, now time.Time) error
 }
 
-type sandboxDurableEmailChildExecutor struct {
+type sandboxDurableWakeChildExecutor struct {
 	cfg        *config.Config
 	binaryPath string
 	runner     *sandbox.Runner
 	supported  bool
 }
 
-func newSandboxDurableEmailChildExecutor(cfg *config.Config) durableEmailChildExecutor {
+func newSandboxDurableWakeChildExecutor(cfg *config.Config) durableWakeChildExecutor {
 	if cfg == nil {
 		return nil
 	}
@@ -39,7 +39,7 @@ func newSandboxDurableEmailChildExecutor(cfg *config.Config) durableEmailChildEx
 	if binaryPath == "" {
 		return nil
 	}
-	return &sandboxDurableEmailChildExecutor{
+	return &sandboxDurableWakeChildExecutor{
 		cfg:        cfg,
 		binaryPath: binaryPath,
 		runner:     sandbox.NewRunner(),
@@ -47,7 +47,7 @@ func newSandboxDurableEmailChildExecutor(cfg *config.Config) durableEmailChildEx
 	}
 }
 
-func (e *sandboxDurableEmailChildExecutor) Supports(scope sandbox.Scope, agent core.DurableAgent) bool {
+func (e *sandboxDurableWakeChildExecutor) Supports(scope sandbox.Scope, agent core.DurableAgent) bool {
 	if e == nil || !e.supported || e.runner == nil {
 		return false
 	}
@@ -57,13 +57,13 @@ func (e *sandboxDurableEmailChildExecutor) Supports(scope sandbox.Scope, agent c
 	return e.runner.Supports(scope)
 }
 
-func (e *sandboxDurableEmailChildExecutor) Run(ctx context.Context, scope sandbox.Scope, agent core.DurableAgent, now time.Time) error {
+func (e *sandboxDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox.Scope, agent core.DurableAgent, now time.Time) error {
 	if !e.Supports(scope, agent) {
-		return fmt.Errorf("durable email child executor is unavailable for scope %q", scope.Principal.Role)
+		return fmt.Errorf("durable child wake executor is unavailable for scope %q", scope.Principal.Role)
 	}
 	payloadRoot := filepath.Join(scope.SharedMemoryRoot, ".aphelion", "child-email-run")
 	if err := os.MkdirAll(payloadRoot, 0o700); err != nil {
-		return fmt.Errorf("create durable email child payload root: %w", err)
+		return fmt.Errorf("create durable child wake payload root: %w", err)
 	}
 
 	bootstrapPath, err := writeJSONTemp(payloadRoot, "bootstrap-*.json", DurableAgentChildBootstrap{
@@ -81,7 +81,7 @@ func (e *sandboxDurableEmailChildExecutor) Run(ctx context.Context, scope sandbo
 		extraReadonly = append(extraReadonly, strings.TrimSpace(bootstrap.CodexHome))
 	}
 
-	command := durableAgentEmailChildCommand(e.binaryPath, bootstrapPath, agent.AgentID, now)
+	command := durableAgentWakeChildCommand(e.binaryPath, bootstrapPath, agent.AgentID, now)
 	res, err := e.runner.Run(ctx, sandbox.ExecRequest{
 		Scope:              scope,
 		Command:            command,
@@ -91,14 +91,14 @@ func (e *sandboxDurableEmailChildExecutor) Run(ctx context.Context, scope sandbo
 	})
 	if err != nil {
 		if strings.TrimSpace(res.Stderr) != "" {
-			return fmt.Errorf("durable email child runner failed: %w: %s", err, strings.TrimSpace(res.Stderr))
+			return fmt.Errorf("durable child wake runner failed: %w: %s", err, strings.TrimSpace(res.Stderr))
 		}
-		return fmt.Errorf("durable email child runner failed: %w", err)
+		return fmt.Errorf("durable child wake runner failed: %w", err)
 	}
 	return nil
 }
 
-func durableAgentEmailChildCommand(binaryPath string, bootstrapPath string, agentID string, now time.Time) string {
+func durableAgentWakeChildCommand(binaryPath string, bootstrapPath string, agentID string, now time.Time) string {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}

@@ -379,9 +379,9 @@ func durableWizardAnswersForChoice(step string, option string) (map[string]any, 
 	case "capabilities":
 		switch option {
 		case "read_core":
-			return map[string]any{"capabilities": []string{"email_read", "email_thread_summarize", "pdf_summarize", "review_artifact_emit"}}, true
+			return map[string]any{"capabilities": []string{"read_channel", "bounded_review_artifact", "summarize_pdf"}}, true
 		case "read_classify":
-			return map[string]any{"capabilities": []string{"email_read", "email_thread_summarize", "email_classify", "attachment_extract_text", "pdf_summarize", "review_artifact_emit"}}, true
+			return map[string]any{"capabilities": []string{"read_channel", "classify_channel_signal", "extract_attachment_text", "bounded_review_artifact", "summarize_pdf"}}, true
 		}
 	case "never_retain":
 		switch option {
@@ -393,9 +393,9 @@ func durableWizardAnswersForChoice(step string, option string) (map[string]any, 
 	case "charter":
 		switch option {
 		case "readonly_digest":
-			return map[string]any{"charter": "Read-only email child that polls the inbox, summarizes important threads and PDFs, and never sends email."}, true
+			return map[string]any{"charter": "Read-only child that checks a configured channel, summarizes important threads and PDFs, and never sends outbound messages."}, true
 		case "jobs_digest":
-			return map[string]any{"charter": "Read-only inbox scout focused on opportunities and inbound interest; summarize what matters and never send email."}, true
+			return map[string]any{"charter": "Read-only scout focused on opportunities and inbound interest; summarize what matters and never send outbound messages."}, true
 		}
 	}
 	return nil, false

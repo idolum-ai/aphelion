@@ -26,7 +26,8 @@ func TestRewriteDurableWizardIntentRewritesAdminNaturalLanguage(t *testing.T) {
 		t.Fatalf("rewriteDurableWizardIntent() text unchanged = %q, want rewritten wizard instruction", got.Text)
 	}
 	for _, needle := range []string{
-		"Start the email durable-agent setup wizard now.",
+		"Start the durable-child setup wizard now.",
+		"Default to the inbox profile (email adapter)",
 		"Use ONLY the durable_agent tool",
 		"Do NOT use exec",
 		"Original user request:",
@@ -35,6 +36,26 @@ func TestRewriteDurableWizardIntentRewritesAdminNaturalLanguage(t *testing.T) {
 		if !strings.Contains(got.Text, needle) {
 			t.Fatalf("rewritten text = %q, want substring %q", got.Text, needle)
 		}
+	}
+}
+
+func TestRewriteDurableWizardIntentRewritesGenericDurableChildRequest(t *testing.T) {
+	t.Parallel()
+
+	router := &stubCommandRouter{canRestart: true}
+	msg := core.InboundMessage{
+		ChatID:     7,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "create a durable child agent for triage work",
+	}
+
+	got := rewriteDurableWizardIntent(msg, router)
+	if got.Text == msg.Text {
+		t.Fatalf("rewriteDurableWizardIntent() text unchanged = %q, want rewritten wizard instruction", got.Text)
+	}
+	if !strings.Contains(got.Text, "Start the durable-child setup wizard now.") {
+		t.Fatalf("rewritten text = %q, want durable-child wizard kickoff", got.Text)
 	}
 }
 

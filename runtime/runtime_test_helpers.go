@@ -277,15 +277,15 @@ func (e inlineDurableGroupChildExecutor) Run(ctx context.Context, _ sandbox.Scop
 	return e.run(ctx, msg)
 }
 
-type inlineDurableEmailChildExecutor struct {
+type inlineDurableWakeChildExecutor struct {
 	run func(context.Context, sandbox.Scope, core.DurableAgent, time.Time) error
 }
 
-func (e inlineDurableEmailChildExecutor) Supports(sandbox.Scope, core.DurableAgent) bool {
+func (e inlineDurableWakeChildExecutor) Supports(sandbox.Scope, core.DurableAgent) bool {
 	return e.run != nil
 }
 
-func (e inlineDurableEmailChildExecutor) Run(ctx context.Context, scope sandbox.Scope, agent core.DurableAgent, now time.Time) error {
+func (e inlineDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox.Scope, agent core.DurableAgent, now time.Time) error {
 	if e.run == nil {
 		return nil
 	}

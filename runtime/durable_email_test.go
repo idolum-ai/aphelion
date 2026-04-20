@@ -451,7 +451,7 @@ func TestPollDurableEmailAgentsUsesChildExecutionWhenBootstrapConfigured(t *test
 	}
 
 	childRuns := 0
-	rt.durableEmailChild = inlineDurableEmailChildExecutor{
+	rt.durableWakeChild = inlineDurableWakeChildExecutor{
 		run: func(_ context.Context, scope sandbox.Scope, got core.DurableAgent, _ time.Time) error {
 			childRuns++
 			if strings.TrimSpace(got.AgentID) != "idolum-email-child" {
@@ -478,7 +478,7 @@ func TestPollDurableEmailAgentsUsesChildExecutionWhenBootstrapConfigured(t *test
 	}
 }
 
-func TestRunDurableEmailChildPersistsTurnAndQueuesReviewArtifact(t *testing.T) {
+func TestRunDurableAgentChildWakePersistsTurnAndQueuesReviewArtifact(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Child-reviewed inbox summary with actionable priorities."
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -535,8 +535,8 @@ func TestRunDurableEmailChildPersistsTurnAndQueuesReviewArtifact(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	if err := rt.RunDurableEmailChild(context.Background(), agent.AgentID, now); err != nil {
-		t.Fatalf("RunDurableEmailChild() err = %v", err)
+	if err := rt.RunDurableAgentChildWake(context.Background(), agent.AgentID, now); err != nil {
+		t.Fatalf("RunDurableAgentChildWake() err = %v", err)
 	}
 
 	key := session.SessionKey{
@@ -566,7 +566,7 @@ func TestRunDurableEmailChildPersistsTurnAndQueuesReviewArtifact(t *testing.T) {
 	}
 }
 
-func TestRunDurableEmailChildUsesDurablePrincipalScopedTools(t *testing.T) {
+func TestRunDurableAgentChildWakeUsesDurablePrincipalScopedTools(t *testing.T) {
 	cfg, store, _, sender := buildRuntimeFixtures(t)
 	provider := &toolRequestingProvider{}
 	tools := &principalRecordingTools{
@@ -626,8 +626,8 @@ func TestRunDurableEmailChildUsesDurablePrincipalScopedTools(t *testing.T) {
 		}
 	}
 
-	if err := rt.RunDurableEmailChild(context.Background(), agent.AgentID, time.Now().UTC()); err != nil {
-		t.Fatalf("RunDurableEmailChild() err = %v", err)
+	if err := rt.RunDurableAgentChildWake(context.Background(), agent.AgentID, time.Now().UTC()); err != nil {
+		t.Fatalf("RunDurableAgentChildWake() err = %v", err)
 	}
 
 	if provider.firstToolCount != 1 {
@@ -641,5 +641,41 @@ func TestRunDurableEmailChildUsesDurablePrincipalScopedTools(t *testing.T) {
 	}
 	if tools.lastPrincipal.DurableAgentID != agent.AgentID {
 		t.Fatalf("last durable agent id = %q, want %q", tools.lastPrincipal.DurableAgentID, agent.AgentID)
+	}
+}
+
+func TestRunDurableAgentChildWakeRejectsUnsupportedChannel(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-telegram-agent",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_dm",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle direct Telegram messages.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "draft_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "telegram_update",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	err = rt.RunDurableAgentChildWake(context.Background(), agent.AgentID, time.Now().UTC())
+	if err == nil {
+		t.Fatal("RunDurableAgentChildWake() err = nil, want unsupported channel error")
+	}
+	if !strings.Contains(err.Error(), "does not support child wake execution") {
+		t.Fatalf("RunDurableAgentChildWake() err = %v, want unsupported channel detail", err)
 	}
 }

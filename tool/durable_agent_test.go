@@ -1011,8 +1011,14 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 	if !strings.Contains(createOut, "action: durable-agent create") || !strings.Contains(createOut, "status: draft") {
 		t.Fatalf("create output = %q, want durable-agent create draft summary", createOut)
 	}
+	if !strings.Contains(createOut, "channel_kind: email") || !strings.Contains(createOut, "channel_profile: inbox") {
+		t.Fatalf("create output = %q, want internal channel kind with inbox profile alias", createOut)
+	}
 	if !strings.Contains(createOut, "email_address: idolum@example.com") {
 		t.Fatalf("create output = %q, want email address summary", createOut)
+	}
+	if !strings.Contains(createOut, "channel_address: idolum@example.com") {
+		t.Fatalf("create output = %q, want channel address summary alias", createOut)
 	}
 
 	draft, err := store.DurableAgent("idolum-email")
@@ -1055,6 +1061,54 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 	}
 	if activated.Status != "active" {
 		t.Fatalf("activated status = %q, want active", activated.Status)
+	}
+}
+
+func TestDurableAgentToolCreateSupportsInboxAliasChannelKindAndConfig(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+
+	createOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"create",
+			"agent_id":"idolum-inbox-alias",
+			"channel_kind":"inbox",
+			"wakeup_mode":"poll",
+			"channel_config":{
+				"inbox":{
+					"address":"idolum@example.com",
+					"adapter":"gog_cli"
+				}
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(create inbox alias) err = %v", err)
+	}
+	if !strings.Contains(createOut, "channel_kind: email") || !strings.Contains(createOut, "channel_profile: inbox") {
+		t.Fatalf("create output = %q, want canonical channel kind with inbox alias profile", createOut)
+	}
+
+	agent, err := store.DurableAgent("idolum-inbox-alias")
+	if err != nil {
+		t.Fatalf("DurableAgent(idolum-inbox-alias) err = %v", err)
+	}
+	if agent.ChannelKind != "email" {
+		t.Fatalf("ChannelKind = %q, want canonical email", agent.ChannelKind)
+	}
+	if agent.ChannelConfig.Email == nil {
+		t.Fatal("ChannelConfig.Email = nil, want normalized inbox/email config")
+	}
+	if agent.ChannelConfig.Email.Address != "idolum@example.com" {
+		t.Fatalf("ChannelConfig.Email.Address = %q, want idolum@example.com", agent.ChannelConfig.Email.Address)
+	}
+	if agent.ChannelConfig.Email.Adapter != "gog_cli" {
+		t.Fatalf("ChannelConfig.Email.Adapter = %q, want gog_cli", agent.ChannelConfig.Email.Adapter)
 	}
 }
 

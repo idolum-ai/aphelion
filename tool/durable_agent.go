@@ -159,7 +159,7 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 	if agentID == "" {
 		return "", fmt.Errorf("durable_agent agent_id is required for create")
 	}
-	channelKind := strings.TrimSpace(in.ChannelKind)
+	channelKind := normalizeDurableAgentChannelKind(in.ChannelKind)
 	if channelKind == "" {
 		return "", fmt.Errorf("durable_agent channel_kind is required for create")
 	}
@@ -177,7 +177,7 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 		agent = *existing
 	}
 	agent.AgentID = agentID
-	agent.ChannelKind = firstNonEmpty(channelKind, agent.ChannelKind)
+	agent.ChannelKind = normalizeDurableAgentChannelKind(firstNonEmpty(channelKind, agent.ChannelKind))
 	agent.ParentScopeKind = firstNonEmpty(agent.ParentScopeKind, string(key.Scope.Kind))
 	agent.ParentScopeID = firstNonEmpty(agent.ParentScopeID, key.Scope.ID)
 	if in.ReviewTargetChatID > 0 {
@@ -258,10 +258,11 @@ func (r *Registry) startDurableAgentWizard(in durableAgentInput, key session.Ses
 	}
 	channelKind := strings.TrimSpace(in.ChannelKind)
 	if channelKind == "" {
-		channelKind = "email"
+		channelKind = "inbox"
 	}
+	channelKind = normalizeDurableAgentChannelKind(channelKind)
 	if channelKind != "email" {
-		return "", fmt.Errorf("durable_agent wizard_start currently supports channel_kind=email")
+		return "", fmt.Errorf("durable_agent wizard_start currently supports channel_kind=inbox (alias: email)")
 	}
 
 	createIn := in
@@ -333,7 +334,11 @@ func (r *Registry) answerDurableAgentWizard(in durableAgentInput) (string, error
 
 	wizard := *continuity.SetupWizard
 	wizard.SchemaVersion = 1
-	wizard.ChannelKind = firstNonEmpty(strings.TrimSpace(wizard.ChannelKind), strings.TrimSpace(agent.ChannelKind), "email")
+	wizard.ChannelKind = firstNonEmpty(
+		strings.TrimSpace(wizard.ChannelKind),
+		normalizeDurableAgentChannelKind(strings.TrimSpace(agent.ChannelKind)),
+		"email",
+	)
 	wizard.Answers = mergeDurableAgentWizardAnswers(wizard.Answers, *in.WizardAnswers)
 	wizard.UpdatedAt = time.Now().UTC()
 	if wizard.StartedAt.IsZero() {
@@ -506,7 +511,7 @@ func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAge
 	if err != nil {
 		return "", err
 	}
-	switch strings.TrimSpace(agent.ChannelKind) {
+	switch normalizeDurableAgentChannelKind(agent.ChannelKind) {
 	case "email":
 		if agent.ChannelConfig.Email == nil {
 			return "", fmt.Errorf("durable agent %q has no email channel_config", agent.AgentID)
@@ -1018,7 +1023,7 @@ func mergeDurableAgentWizardAnswers(current core.DurableAgentSetupWizardAnswers,
 
 func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.DurableAgentSetupWizardAnswers) (core.DurableAgent, error) {
 	answers = core.NormalizeDurableAgentSetupWizardAnswers(answers)
-	agent.ChannelKind = "email"
+	agent.ChannelKind = normalizeDurableAgentChannelKind("inbox")
 	wakeupMode := normalizeDurableEmailWakeupMode(answers.WakeupMode)
 	if wakeupMode == "" && strings.TrimSpace(agent.WakeupMode) != "" {
 		wakeupMode = normalizeDurableEmailWakeupMode(agent.WakeupMode)
@@ -1154,9 +1159,9 @@ func firstWizardStep(missing []string) string {
 func wizardQuestionForStep(step string) string {
 	switch strings.TrimSpace(step) {
 	case "address":
-		return "What inbox address should this child own?"
+		return "What channel address should this child own?"
 	case "adapter":
-		return "Which inbox adapter should be used (for example gog_cli)?"
+		return "Which channel adapter should be used (for example gog_cli for inbox/email)?"
 	case "autonomy":
 		return "Should the child be observe_only, local_drafts, review_before_reply, or reply_within_charter?"
 	case "surface_rules":
@@ -1198,11 +1203,33 @@ func durableEmailWakeupModeIncludesPoll(mode string) bool {
 	return mode == "poll" || mode == "poll_or_push"
 }
 
+func normalizeDurableAgentChannelKind(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ""
+	case "inbox", "email":
+		return "email"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func durableAgentWizardDisplayChannelKind(value string) string {
+	switch normalizeDurableAgentChannelKind(value) {
+	case "email":
+		return "inbox"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
 func renderDurableAgentWizardShow(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState) string {
 	var b strings.Builder
+	channelKind := normalizeDurableAgentChannelKind(firstNonEmpty(strings.TrimSpace(wizard.ChannelKind), strings.TrimSpace(agent.ChannelKind), "email"))
 	b.WriteString("action: durable-agent wizard show\n")
 	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
-	fmt.Fprintf(&b, "channel_kind: %s\n", firstNonEmpty(strings.TrimSpace(wizard.ChannelKind), strings.TrimSpace(agent.ChannelKind), "email"))
+	fmt.Fprintf(&b, "channel_kind: %s\n", channelKind)
+	fmt.Fprintf(&b, "channel_profile: %s\n", durableAgentWizardDisplayChannelKind(channelKind))
 	fmt.Fprintf(&b, "wizard_status: %s\n", firstNonEmpty(strings.TrimSpace(wizard.Status), "in_progress"))
 	fmt.Fprintf(&b, "current_step: %s\n", firstNonEmpty(strings.TrimSpace(wizard.CurrentStep), "-"))
 	fmt.Fprintf(&b, "missing: %s\n", firstNonEmpty(strings.Join(wizard.Missing, ","), "-"))
@@ -1221,9 +1248,11 @@ func renderDurableAgentWizardShow(agent core.DurableAgent, wizard core.DurableAg
 
 func renderDurableAgentWizardFinalize(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState) string {
 	var b strings.Builder
+	channelKind := normalizeDurableAgentChannelKind(strings.TrimSpace(agent.ChannelKind))
 	b.WriteString("action: durable-agent wizard finalize\n")
 	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
-	fmt.Fprintf(&b, "channel_kind: %s\n", strings.TrimSpace(agent.ChannelKind))
+	fmt.Fprintf(&b, "channel_kind: %s\n", channelKind)
+	fmt.Fprintf(&b, "channel_profile: %s\n", durableAgentWizardDisplayChannelKind(channelKind))
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "draft"))
 	fmt.Fprintf(&b, "wizard_status: %s\n", firstNonEmpty(strings.TrimSpace(wizard.Status), "finalized"))
 	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
@@ -1245,7 +1274,7 @@ func renderDurableAgentList(agents []core.DurableAgent) string {
 		fmt.Fprintf(&b, "%d. agent_id=%s channel=%s status=%s policy_version=%d outbound_mode=%s allowed_users=%s\n",
 			i+1,
 			strings.TrimSpace(agent.AgentID),
-			strings.TrimSpace(agent.ChannelKind),
+			durableAgentWizardDisplayChannelKind(strings.TrimSpace(agent.ChannelKind)),
 			firstNonEmpty(strings.TrimSpace(agent.Status), "active"),
 			agent.PolicyVersion,
 			strings.TrimSpace(agent.LivePolicy.OutboundMode),
@@ -1258,9 +1287,11 @@ func renderDurableAgentList(agents []core.DurableAgent) string {
 
 func renderDurableAgentPolicy(agent core.DurableAgent, updates []session.DurableAgentPolicyUpdate) string {
 	var b strings.Builder
+	channelKind := normalizeDurableAgentChannelKind(strings.TrimSpace(agent.ChannelKind))
 	b.WriteString("action: durable-agent policy show\n")
 	fmt.Fprintf(&b, "agent_id: %s\n", agent.AgentID)
-	fmt.Fprintf(&b, "channel_kind: %s\n", agent.ChannelKind)
+	fmt.Fprintf(&b, "channel_kind: %s\n", channelKind)
+	fmt.Fprintf(&b, "channel_profile: %s\n", durableAgentWizardDisplayChannelKind(channelKind))
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "active"))
 	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
 	fmt.Fprintf(&b, "policy_version: %d\n", agent.PolicyVersion)
@@ -1353,9 +1384,11 @@ func renderDurableAgentEnrollment(enrollment core.DurableAgentRemoteEnrollment) 
 
 func renderDurableAgentLifecycle(action string, agent core.DurableAgent) string {
 	var b strings.Builder
+	channelKind := normalizeDurableAgentChannelKind(strings.TrimSpace(agent.ChannelKind))
 	fmt.Fprintf(&b, "action: durable-agent %s\n", strings.TrimSpace(action))
 	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
-	fmt.Fprintf(&b, "channel_kind: %s\n", strings.TrimSpace(agent.ChannelKind))
+	fmt.Fprintf(&b, "channel_kind: %s\n", channelKind)
+	fmt.Fprintf(&b, "channel_profile: %s\n", durableAgentWizardDisplayChannelKind(channelKind))
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "active"))
 	fmt.Fprintf(&b, "review_target_chat_id: %d\n", agent.ReviewTargetChatID)
 	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
@@ -1483,6 +1516,15 @@ func renderDurableAgentChannelConfig(b *strings.Builder, agent core.DurableAgent
 		return
 	}
 	email := agent.ChannelConfig.Email
+	fmt.Fprintf(b, "channel_address: %s\n", strings.TrimSpace(email.Address))
+	fmt.Fprintf(b, "channel_account: %s\n", strings.TrimSpace(email.Account))
+	fmt.Fprintf(b, "channel_adapter: %s\n", strings.TrimSpace(email.Adapter))
+	fmt.Fprintf(b, "channel_query: %s\n", strings.TrimSpace(email.Query))
+	fmt.Fprintf(b, "channel_poll_interval: %s\n", strings.TrimSpace(email.PollInterval))
+	fmt.Fprintf(b, "channel_summarize_pdfs: %t\n", email.SummarizePDFs)
+	fmt.Fprintf(b, "channel_synthesis_cadence: %s\n", strings.TrimSpace(email.SynthesisCadence))
+	fmt.Fprintf(b, "channel_surface_rules: %s\n", strings.Join(email.SurfaceRules, ","))
+	fmt.Fprintf(b, "channel_never_retain: %s\n", strings.Join(email.NeverRetain, ","))
 	fmt.Fprintf(b, "email_address: %s\n", strings.TrimSpace(email.Address))
 	fmt.Fprintf(b, "email_account: %s\n", strings.TrimSpace(email.Account))
 	fmt.Fprintf(b, "email_adapter: %s\n", strings.TrimSpace(email.Adapter))
@@ -1766,7 +1808,7 @@ func durableAgentSharedContextToReuse(value string) (string, string, error) {
 }
 
 func defaultDurableAgentLivePolicy(channelKind string, charter string) core.DurableAgentLivePolicy {
-	switch strings.TrimSpace(channelKind) {
+	switch normalizeDurableAgentChannelKind(channelKind) {
 	case "email":
 		return core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 			Charter:                   strings.TrimSpace(charter),
@@ -1787,9 +1829,22 @@ func mergeDurableAgentChannelConfig(existing core.DurableAgentChannelConfig, raw
 	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "" {
 		return existing, nil
 	}
-	var update core.DurableAgentChannelConfig
-	if err := json.Unmarshal(raw, &update); err != nil {
+	type channelConfigInput struct {
+		Email *core.DurableAgentEmailChannelConfig `json:"email,omitempty"`
+		Inbox *core.DurableAgentEmailChannelConfig `json:"inbox,omitempty"`
+	}
+	var updateRaw channelConfigInput
+	if err := json.Unmarshal(raw, &updateRaw); err != nil {
 		return core.DurableAgentChannelConfig{}, fmt.Errorf("decode durable_agent channel_config: %w", err)
+	}
+	update := core.DurableAgentChannelConfig{}
+	switch {
+	case updateRaw.Email != nil:
+		cfg := *updateRaw.Email
+		update.Email = &cfg
+	case updateRaw.Inbox != nil:
+		cfg := *updateRaw.Inbox
+		update.Email = &cfg
 	}
 	update = core.NormalizeDurableAgentChannelConfig(update)
 	if update.Email != nil {
@@ -1837,17 +1892,17 @@ func mergeDurableAgentEmailChannelConfig(dst *core.DurableAgentEmailChannelConfi
 }
 
 func validateDurableAgentActivation(agent core.DurableAgent) error {
-	switch strings.TrimSpace(agent.ChannelKind) {
+	switch normalizeDurableAgentChannelKind(agent.ChannelKind) {
 	case "email":
 		email := agent.ChannelConfig.Email
 		if email == nil {
-			return fmt.Errorf("durable agent %q cannot activate without email channel_config", agent.AgentID)
+			return fmt.Errorf("durable agent %q cannot activate without inbox/email channel_config", agent.AgentID)
 		}
 		if strings.TrimSpace(email.Address) == "" {
-			return fmt.Errorf("durable agent %q cannot activate without an email address", agent.AgentID)
+			return fmt.Errorf("durable agent %q cannot activate without a channel address", agent.AgentID)
 		}
 		if strings.TrimSpace(email.Adapter) == "" {
-			return fmt.Errorf("durable agent %q cannot activate without an email adapter", agent.AgentID)
+			return fmt.Errorf("durable agent %q cannot activate without a channel adapter", agent.AgentID)
 		}
 		if strings.TrimSpace(agent.WakeupMode) == "" {
 			return fmt.Errorf("durable agent %q cannot activate without a wakeup_mode", agent.AgentID)

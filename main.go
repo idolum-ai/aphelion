@@ -527,7 +527,7 @@ func run() error {
 	})
 	rt.StartStaleTurnWatchdogLoop(ctx, log.Printf)
 	rt.StartHeartbeatLoop(ctx, log.Printf)
-	rt.StartDurableEmailLoop(ctx, log.Printf)
+	rt.StartDurableWakeLoop(ctx, log.Printf)
 	rt.StartCronLoop(ctx, log.Printf)
 
 	poller := telegram.NewPoller(tgClient, func(parent context.Context, msg core.InboundMessage) error {

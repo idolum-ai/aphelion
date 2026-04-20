@@ -70,7 +70,7 @@ func runDurableTelegramGroupChildBootstrap(ctx context.Context, bootstrap runtim
 	return result, nil
 }
 
-func runDurableEmailChildBootstrap(ctx context.Context, bootstrap runtimepkg.DurableAgentChildBootstrap, agentID string, now time.Time) error {
+func runDurableAgentChildWakeBootstrap(ctx context.Context, bootstrap runtimepkg.DurableAgentChildBootstrap, agentID string, now time.Time) error {
 	cfg := &bootstrap.Config
 	if err := validateDurableChildBootstrapConfig(cfg); err != nil {
 		return err
@@ -133,7 +133,7 @@ func runDurableEmailChildBootstrap(ctx context.Context, bootstrap runtimepkg.Dur
 	if err != nil {
 		return err
 	}
-	return rt.RunDurableEmailChild(ctx, agentID, now)
+	return rt.RunDurableAgentChildWake(ctx, agentID, now)
 }
 
 func validateDurableChildBootstrapConfig(cfg *config.Config) error {
@@ -191,7 +191,7 @@ func runDurableAgentChildCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	return runDurableEmailChildBootstrap(context.Background(), bootstrap, *agentID, now)
+	return runDurableAgentChildWakeBootstrap(context.Background(), bootstrap, *agentID, now)
 }
 
 func decodeJSONFile(path string, out any) error {

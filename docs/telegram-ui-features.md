@@ -109,10 +109,11 @@ It is intended for operational diagnosis when `/status` is too compressed.
 
 ### Natural-language durable setup trigger
 
-For admin users, natural language requests to create an email durable child are auto-normalized into a safe wizard-driving instruction before the turn reaches the model.
+For admin users, natural language requests to create a durable child are auto-normalized into a safe wizard-driving instruction before the turn reaches the model.
 
 Examples that should trigger:
 
+- “Create a durable child agent”
 - “Create a durable email agent”
 - “I want to give you your own email address”
 
@@ -122,11 +123,11 @@ Behavior:
 - explicitly blocks `exec`/`go run` style paths for this workflow
 - tells the assistant to ask one concise question at a time for missing wizard fields
 - preserves the original user sentence in the rewritten instruction
-- if an email address is present in the user text, it is passed as known wizard context
+- if an email address is present in the user text, it is passed as known context for the inbox adapter profile
 
 ### Durable wizard inline controls
 
-When a response contains a machine-readable email-wizard card (`action: durable-agent wizard show`), Telegram auto-attaches inline buttons for the active step.
+When a response contains a machine-readable durable-wizard card (`action: durable-agent wizard show`), Telegram auto-attaches inline buttons for the active step.
 
 Step answer buttons are predefined for structured fields such as:
 
