@@ -86,6 +86,31 @@ func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
 	return result
 }
 
+func (c telegramCommandControl) New(chatID int64, senderID int64) (core.NewSessionResult, error) {
+	stopped := c.Stop(chatID)
+	result := core.NewSessionResult{
+		ActiveCanceled:      stopped.ActiveCanceled,
+		QueuedDropped:       stopped.QueuedDropped,
+		ContinuationRevoked: stopped.ContinuationRevoked,
+	}
+	if c.decisionDetacher != nil {
+		ownerKey := decision.OwnerKey(chatID, senderID)
+		removed, err := c.decisionDetacher.DetachByOwner(context.Background(), ownerKey)
+		if err != nil {
+			return core.NewSessionResult{}, err
+		}
+		result.PendingDecisionsDetached = removed
+	}
+	if c.rt != nil {
+		cleared, err := c.rt.ClearChatSessionContext(chatID)
+		if err != nil {
+			return core.NewSessionResult{}, err
+		}
+		result.ContextCleared = cleared
+	}
+	return result, nil
+}
+
 func (c telegramCommandControl) Detach(chatID int64, senderID int64) (core.DetachResult, error) {
 	stopped := c.Stop(chatID)
 	result := core.DetachResult{

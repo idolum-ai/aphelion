@@ -106,6 +106,18 @@ func (r *Runtime) ContinuationState(chatID int64) (session.ContinuationState, er
 	return r.store.ContinuationState(key)
 }
 
+func (r *Runtime) ClearChatSessionContext(chatID int64) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	removed, err := r.store.DeleteSession(key)
+	if err != nil {
+		return false, err
+	}
+	return removed > 0, nil
+}
+
 func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error) {
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
 	state, err := r.store.ContinuationState(key)

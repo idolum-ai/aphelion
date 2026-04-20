@@ -46,6 +46,7 @@ func RenderTelegramStart(personaEffort, governorEffort string, includeAdminComma
 		"/status - show live status and controls",
 		"/debug - show detailed runtime debug snapshot",
 		"/stop - stop current work in this chat",
+		"/new - start a fresh chat session context",
 		"/detach - detach this chat from pending work",
 	}
 	if includeAdminCommands {
@@ -71,6 +72,7 @@ func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminComman
 		"/status - show live status and controls",
 		"/debug - show detailed runtime debug snapshot",
 		"/stop - stop current work in this chat",
+		"/new - start a fresh chat session context",
 		"/detach - detach this chat from pending work",
 	}
 	if includeAdminCommands {
@@ -129,6 +131,32 @@ func RenderTelegramStop(stopped core.StopResult) string {
 	default:
 		return "Continuation approval was already inactive for this chat."
 	}
+}
+
+func RenderTelegramNewSession(result core.NewSessionResult) string {
+	parts := make([]string, 0, 5)
+	if result.ActiveCanceled {
+		parts = append(parts, "stopped current turn")
+	}
+	if result.QueuedDropped {
+		parts = append(parts, "cleared queued work")
+	}
+	if result.ContinuationRevoked {
+		parts = append(parts, "revoked continuation")
+	}
+	if result.PendingDecisionsDetached > 0 {
+		label := "pending decision"
+		if result.PendingDecisionsDetached != 1 {
+			label += "s"
+		}
+		parts = append(parts, fmt.Sprintf("detached %d %s", result.PendingDecisionsDetached, label))
+	}
+	if result.ContextCleared {
+		parts = append(parts, "cleared prior session context")
+	} else {
+		parts = append(parts, "session context was already clear")
+	}
+	return "Started a new session for this chat: " + strings.Join(parts, ", ") + ". Memories were not changed."
 }
 
 func RenderTelegramDetach(detached core.DetachResult) string {

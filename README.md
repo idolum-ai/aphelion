@@ -59,7 +59,7 @@ Runnable v0:
 - Telegram typing + real tool-backed progress feedback
 - Heartbeat and config-driven cron
 - Telegram voice transcription + optional TTS replies
-- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
+- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
 
 ## Run
 
@@ -285,6 +285,7 @@ Inside Telegram:
 - `/status` prepends a concise `Quick Read:` summary when a native provider key is available, then shows humanized status telemetry labels
 - admins also get `System Overview`, `Hot Chats`, `Find Chat`, and `Durables` buttons from `/status`
 - `/stop` cancels the current turn and clears any queued follow-up messages for that chat
+- `/new` starts a fresh chat session context for this chat without clearing memories
 - `/detach` clears active/queued/continuation state and detaches pending approvals for you in this chat
 - `/restart` (admin only) forces gateway restart and detaches pending approvals before exit by default
 

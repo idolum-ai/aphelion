@@ -18,6 +18,8 @@ Current command surface:
   - Admin users get system and durable-agent sections in the expanded view.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
+- `/new`
+  - Starts a fresh chat session context (same chat), preserving memories.
 - `/detach`
   - Stops active work, clears queued work, revokes continuation, and detaches pending decisions owned by this chat+sender.
 - `/restart`

@@ -28,6 +28,7 @@ type commandCallbackSender interface {
 
 type commandRouter interface {
 	Stop(chatID int64) core.StopResult
+	New(chatID int64, senderID int64) (core.NewSessionResult, error)
 	Detach(chatID int64, senderID int64) (core.DetachResult, error)
 	Restart(chatID int64) error
 	CanRestart(senderID int64) bool
@@ -56,6 +57,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "status", Description: "Show live status and controls"},
 	{Command: "debug", Description: "Show a detailed debug snapshot"},
 	{Command: "stop", Description: "Stop current work in this chat"},
+	{Command: "new", Description: "Start a fresh chat session context"},
 	{Command: "detach", Description: "Detach from pending work in this chat"},
 	{Command: "restart", Description: "Force an immediate gateway restart"},
 	{Command: "reinstall", Description: "Queue a rebuild/reinstall/restart request"},
@@ -126,6 +128,12 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		return true, nil
 	case "stop":
 		text = face.RenderTelegramStop(router.Stop(msg.ChatID))
+	case "new":
+		reset, resetErr := router.New(msg.ChatID, msg.SenderID)
+		if resetErr != nil {
+			return true, resetErr
+		}
+		text = face.RenderTelegramNewSession(reset)
 	case "detach":
 		detached, detachErr := router.Detach(msg.ChatID, msg.SenderID)
 		if detachErr != nil {

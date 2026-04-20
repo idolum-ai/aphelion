@@ -106,6 +106,10 @@ type stubCommandRouter struct {
 	stop                        core.StopResult
 	stopInput                   int64
 	stopCalls                   int
+	newResult                   core.NewSessionResult
+	newErr                      error
+	newChatID                   int64
+	newSenderID                 int64
 	detach                      core.DetachResult
 	detachErr                   error
 	detachChatID                int64
@@ -146,6 +150,15 @@ func (s *stubCommandRouter) Stop(chatID int64) core.StopResult {
 	s.stopInput = chatID
 	s.stopCalls++
 	return s.stop
+}
+
+func (s *stubCommandRouter) New(chatID int64, senderID int64) (core.NewSessionResult, error) {
+	s.newChatID = chatID
+	s.newSenderID = senderID
+	if s.newErr != nil {
+		return core.NewSessionResult{}, s.newErr
+	}
+	return s.newResult, nil
 }
 
 func (s *stubCommandRouter) Detach(chatID int64, senderID int64) (core.DetachResult, error) {
@@ -327,6 +340,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		ok   bool
 	}{
 		{text: "/stop", want: "stop", ok: true},
+		{text: "/new", want: "new", ok: true},
 		{text: "/detach", want: "detach", ok: true},
 		{text: "/help extra", want: "help", ok: true},
 		{text: "/status@my_bot", want: "status", ok: true},
@@ -363,6 +377,21 @@ func TestDefaultTelegramCommandsIncludeDebug(t *testing.T) {
 	}
 }
 
+func TestDefaultTelegramCommandsIncludeNew(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "new" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /new command entry", defaultTelegramCommands)
+	}
+}
+
 func TestHandleTelegramCommandStop(t *testing.T) {
 	t.Parallel()
 
@@ -386,6 +415,45 @@ func TestHandleTelegramCommandStop(t *testing.T) {
 	}
 	if sender.msgs[0].ReplyTo == nil || *sender.msgs[0].ReplyTo != 11 {
 		t.Fatalf("reply_to = %#v, want 11", sender.msgs[0].ReplyTo)
+	}
+}
+
+func TestHandleTelegramCommandNew(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		newResult: core.NewSessionResult{
+			ActiveCanceled:           true,
+			QueuedDropped:            true,
+			ContinuationRevoked:      true,
+			PendingDecisionsDetached: 1,
+			ContextCleared:           true,
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  99,
+		MessageID: 13,
+		Text:      "/new",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.newChatID != 7 || router.newSenderID != 99 {
+		t.Fatalf("new inputs = (%d,%d), want (7,99)", router.newChatID, router.newSenderID)
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "Started a new session for this chat") || !strings.Contains(got, "Memories were not changed") {
+		t.Fatalf("new text = %q, want new-session summary", got)
+	}
+	if sender.msgs[0].ReplyTo == nil || *sender.msgs[0].ReplyTo != 13 {
+		t.Fatalf("reply_to = %#v, want 13", sender.msgs[0].ReplyTo)
 	}
 }
 
