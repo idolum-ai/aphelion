@@ -750,6 +750,11 @@ func (r *Registry) attestDurableAgentCapacity(in durableAgentInput) (string, err
 	default:
 		return "", fmt.Errorf("capacity_attest status must be verified or stale")
 	}
+	if desiredState == "verified" {
+		if len(contract.ProbeResults) == 0 || contract.LastProbedAt.IsZero() {
+			return "", fmt.Errorf("durable agent %q capability contract requires probe_results and last_probed_at before verified attestation", agent.AgentID)
+		}
+	}
 	contract.Status = desiredState
 	contract.LastAttestedAt = time.Now().UTC()
 	continuity.CapabilityContract = &contract

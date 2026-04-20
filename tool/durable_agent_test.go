@@ -326,6 +326,69 @@ func TestDurableAgentToolCapacityContractFlow(t *testing.T) {
 	}
 }
 
+func TestDurableAgentToolCapacityAttestRequiresProbeEvidence(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-email-no-probe",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review inbox and surface important threads.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapCeiling: core.NormalizeDurableAgentBootstrapCeiling(core.DurableAgentBootstrapCeiling{
+			CapabilityEnvelope:   []string{"read_channel", "bounded_review_artifact"},
+			AllowedOutboundModes: []string{"read_only", "draft_only"},
+		}),
+		PolicyVersion:     1,
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "poll",
+		Status:            "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"capacity_negotiate",
+			"agent_id":"idolum-email-no-probe",
+			"capacity_contract":{
+				"parent_proposal":"You are bounded to inbox triage and summary only.",
+				"child_self_assessment":"I can triage and summarize threads but cannot send mail.",
+				"success_criteria":["important threads surfaced within 5m"],
+				"evidence_signals":["review artifact includes surfaced_count"]
+			}
+		}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(capacity_negotiate) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"capacity_attest","agent_id":"idolum-email-no-probe"}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(capacity_attest) err = nil, want probe evidence requirement")
+	}
+	if !strings.Contains(err.Error(), "probe_results") {
+		t.Fatalf("err = %v, want probe_results requirement", err)
+	}
+}
+
 func TestDurableAgentToolListAndPolicyShow(t *testing.T) {
 	t.Parallel()
 
