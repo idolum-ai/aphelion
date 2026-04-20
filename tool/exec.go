@@ -187,6 +187,8 @@ type durableAgentInput struct {
 	Operation                 string                            `json:"operation,omitempty"`
 	Secret                    string                            `json:"secret,omitempty"`
 	History                   int                               `json:"history,omitempty"`
+	TelegramUserID            int64                             `json:"telegram_user_id,omitempty"`
+	TelegramUserIDs           []int64                           `json:"telegram_user_ids,omitempty"`
 }
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
@@ -428,7 +430,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: email"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
@@ -492,7 +494,9 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						},
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},
 					"secret": {"type": "string", "description": "Replacement control-plane secret for enrollment_update when operation=rotate_secret"},
-					"history": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Recent policy update entries to show for policy_show"}
+					"history": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Recent policy update entries to show for policy_show"},
+					"telegram_user_id": {"type": "integer", "minimum": 1, "description": "Single Telegram user id for access_grant or access_revoke"},
+					"telegram_user_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}, "description": "Telegram user ids for access_grant or access_revoke"}
 				},
 				"required": ["action"]
 			}`),
@@ -786,6 +790,16 @@ func resolveMemoryRoot(scope sandbox.Scope, requested string) (string, string, e
 	case "principal":
 		root := strings.TrimSpace(scope.UserMemory)
 		if root == "" {
+			if scope.Principal.Role == principal.RoleAdmin {
+				sharedRoot := strings.TrimSpace(scope.SharedMemoryRoot)
+				if sharedRoot == "" {
+					sharedRoot = strings.TrimSpace(scope.WorkingRoot)
+				}
+				if sharedRoot == "" {
+					return "", "", fmt.Errorf("shared memory root is not configured")
+				}
+				return sharedRoot, "shared", nil
+			}
 			return "", "", fmt.Errorf("principal memory root is not available for this principal")
 		}
 		return root, requested, nil

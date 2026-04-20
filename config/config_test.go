@@ -330,7 +330,6 @@ max_pdf_bytes = "4MB"
 
 [principals.telegram]
 admin_user_ids = [123]
-approved_user_ids = [456]
 
 [governor]
 backend = "native"
@@ -1081,7 +1080,7 @@ api_key = "sk-ant-test"
 	}
 }
 
-func TestLoadRejectsPrincipalOverlap(t *testing.T) {
+func TestLoadRejectsApprovedUserPrincipals(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -1103,10 +1102,38 @@ api_key = "sk-ant-test"
 
 	_, err := Load(configPath)
 	if err == nil {
-		t.Fatal("Load() err = nil, want overlap validation error")
+		t.Fatal("Load() err = nil, want approved-user deprecation error")
 	}
-	if !strings.Contains(err.Error(), "both admin and approved_user") {
-		t.Fatalf("error = %v, want overlap message", err)
+	if !strings.Contains(err.Error(), "approved_user_ids is not supported") {
+		t.Fatalf("error = %v, want approved-user deprecation message", err)
+	}
+}
+
+func TestLoadRejectsMultipleAdminPrincipals(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123, 456]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want single-admin validation error")
+	}
+	if !strings.Contains(err.Error(), "must contain exactly one user id") {
+		t.Fatalf("error = %v, want single-admin validation message", err)
 	}
 }
 

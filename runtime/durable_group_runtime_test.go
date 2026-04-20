@@ -27,11 +27,12 @@ func TestHandleInboundHandlesDurableTelegramGroup(t *testing.T) {
 	}
 	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:      "Help locally in the family group without changing standing role or authority.",
 			OutboundMode: "reply_with_policy_authorization",
@@ -97,6 +98,56 @@ func TestHandleInboundHandlesDurableTelegramGroup(t *testing.T) {
 	}
 }
 
+func TestHandleInboundDurableTelegramGroupUnauthorizedSenderIsIgnored(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "group ok"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Help locally in the family group without changing standing role or authority.",
+			OutboundMode: "reply_with_policy_authorization",
+			DriftPolicy:  "admin_review",
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         -100200,
+		ChatType:       "group",
+		ChatTitle:      "Family",
+		SenderID:       555,
+		SenderName:     "alice",
+		Text:           "hello there",
+		MessageID:      6,
+		DurableAgentID: "family-group",
+		Timestamp:      time.Now(),
+		Raw:            json.RawMessage(`{"source":"telegram-group"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent messages = %d, want 0 for unauthorized sender", len(sender.sent))
+	}
+	if _, err := store.DurableAgentState("family-group"); err == nil || !strings.Contains(err.Error(), "no rows") {
+		t.Fatalf("DurableAgentState() err = %v, want no rows for ignored sender", err)
+	}
+}
+
 func TestHandleInboundDurableTelegramGroupDeliversChildMedia(t *testing.T) {
 	t.Parallel()
 
@@ -107,11 +158,12 @@ func TestHandleInboundDurableTelegramGroupDeliversChildMedia(t *testing.T) {
 	}
 	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group-media",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
+		AgentID:                "family-group-media",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:      "Help locally in the family group.",
 			OutboundMode: "reply_with_policy_authorization",
@@ -179,11 +231,12 @@ func TestHandleInboundDurableTelegramGroupQueuesReviewOnDriftPressure(t *testing
 	}
 	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:      "Help locally in the family group without changing standing role or authority.",
 			OutboundMode: "reply_with_policy_authorization",
@@ -249,11 +302,12 @@ func TestHandleInboundDurableTelegramGroupReadOnlyPolicySkipsLocalReply(t *testi
 	}
 	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:            "Observe the family group and escalate only when necessary.",
 			OutboundMode:       "read_only",
@@ -304,11 +358,12 @@ func TestHandleInboundDurableTelegramGroupReadOnlyPolicyQueuesReviewForFamilyQue
 	}
 	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:            "Observe the family group and surface important family coordination questions.",
 			OutboundMode:       "read_only",
@@ -369,11 +424,12 @@ func TestHandleInboundDurableTelegramGroupPolicyAuthorizationSurfacesFamilyUpdat
 	}
 	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:      "Help locally in the family group while surfacing important continuity updates upward.",
 			OutboundMode: "reply_with_policy_authorization",
@@ -433,11 +489,12 @@ func TestHandleInboundDurableTelegramGroupReplyWithParentReviewQueuesDraftWithou
 	}
 	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:      "Hold direct group questions for parent review before replying.",
 			OutboundMode: "reply_with_parent_review",
@@ -497,11 +554,12 @@ func TestHandleInboundDurableTelegramGroupRecordsAppliedPolicyState(t *testing.T
 	}
 	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:      "Help locally in the family group while surfacing important continuity updates upward.",
 			OutboundMode: "read_only",
@@ -573,11 +631,12 @@ func TestHandleInboundDurableTelegramGroupRecordsPolicyApplyFailure(t *testing.T
 		},
 	}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
 		LivePolicy: core.DurableAgentLivePolicy{
 			Charter:      "Help locally in the family group while surfacing important continuity updates upward.",
 			OutboundMode: "reply_with_policy_authorization",

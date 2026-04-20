@@ -7,12 +7,12 @@ For v0, a principal is deliberately simple:
 - one Telegram user
 - talking to the bot in a private chat
 - admitted explicitly through config
-- assigned a fixed role in config
+- assigned a fixed role at ingress
 
 This spec intentionally avoids a generic identity system, approval workflow, or in-band role mutation. The point of the principal layer in v0 is only to answer:
 
 1. is this Telegram DM allowed?
-2. if allowed, is the user `admin` or `approved_user`?
+2. if allowed, is the user the configured `admin`?
 
 ## Scope
 
@@ -20,8 +20,8 @@ This spec intentionally avoids a generic identity system, approval workflow, or 
 
 - Telegram-only principals
 - DM-only admission
-- config-owned principal list
-- explicit roles: `admin` and `approved_user`
+- config-owned admin principal list
+- explicit ingress role: `admin`
 - unknown users are denied at ingress
 
 ### Deferred after v0
@@ -45,22 +45,16 @@ Do **not** use DM `chat_id` as the principal key, even if private chat IDs often
 
 ## Roles
 
-Two roles exist in v0:
+Two role types exist in the runtime:
 
-- `admin`
-- `approved_user`
+- `admin` (single global operator)
+- `durable_agent` (scoped child principal created by the admin pair)
 
 ### `admin`
 
 - may operate on the global workspace
 - may mutate shared memory and persona/bootstrap files
 - may receive review digests from non-admin sessions
-
-### `approved_user`
-
-- may use the bot in DMs
-- must remain isolated from global mutable state
-- may later produce bounded review digests for the admin DM
 
 ## Config Ownership
 
@@ -69,17 +63,17 @@ Principals are defined in config.
 ```toml
 [principals.telegram]
 admin_user_ids = [123456789]
-approved_user_ids = [234567890, 345678901]
 ```
 
 Rules:
 
 - IDs are Telegram `from.id` values
-- at least one admin must exist
-- a user ID may appear in only one role list
-- users not present in either list are denied
+- exactly one admin must exist
+- users not present as the admin are denied in admin DM scope
+- non-admin user access is granted per durable agent (allowlist), not through global principal lists
 
-For v0, changing admission means editing config and restarting the daemon.
+For v0, changing admin admission means editing config and restarting the daemon.
+Durable-agent user access is changed through durable-agent governance actions.
 
 ## Resolution
 
@@ -88,15 +82,12 @@ Principal resolution happens before session creation.
 ```go
 type Principal struct {
     TelegramUserID int64
-    Role           string // "admin" | "approved_user"
+    Role           string // "admin" at DM ingress
 }
 
 func ResolveTelegramPrincipal(userID int64, cfg *Config) *Principal {
     if contains(cfg.Principals.Telegram.AdminUserIDs, userID) {
         return &Principal{TelegramUserID: userID, Role: "admin"}
-    }
-    if contains(cfg.Principals.Telegram.ApprovedUserIDs, userID) {
-        return &Principal{TelegramUserID: userID, Role: "approved_user"}
     }
     return nil
 }
@@ -148,8 +139,8 @@ Those can be added later if needed. They are not required for the first correct 
 ## Test Plan
 
 - **TestResolveTelegramAdminPrincipal**: configured admin `user_id` resolves as `admin`
-- **TestResolveTelegramApprovedPrincipal**: configured approved `user_id` resolves as `approved_user`
 - **TestResolveTelegramUnknownPrincipal**: unknown `user_id` resolves to nil
-- **TestConfigRejectsDuplicatePrincipalRoleAssignment**: same `user_id` cannot appear in both role lists
+- **TestConfigRejectsApprovedUserIDs**: `approved_user_ids` config is rejected
+- **TestConfigRejectsMultipleAdmins**: exactly one admin is required
 - **TestIngressRejectsUnknownDMBeforeSessionCreation**: unknown Telegram DM does not create or resume a session
 - **TestIngressRoutesConfiguredPrincipal**: configured Telegram principal is allowed into the DM session path

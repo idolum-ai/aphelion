@@ -84,7 +84,6 @@ Required principal bootstrap:
 ```toml
 [principals.telegram]
 admin_user_ids = [123456789]
-approved_user_ids = []
 ```
 
 Recommended root layout for this repo:
@@ -103,8 +102,8 @@ tool will use that broader directory as its default shell scope. Keep `prompt_ro
 and `exec_root` separate.
 
 Prompt files are read from `agent.prompt_root` on every turn. Dynamic memory files
-are read from `agent.shared_memory_root` for admin turns and from the isolated
-per-user memory root for approved-user turns. Current supported files and defaults:
+are read from `agent.shared_memory_root` for admin/global turns and from principal-local
+memory roots for isolated child principals. Current supported files and defaults:
 
 - Stable bootstrap files: `SOUL.md`, `IDENTITY.md`, `USER.md`, `AGENTS.md`, `TOOLS.md`, `BOOTSTRAP.md`
 - Dynamic files: `MEMORY.md`, `HEARTBEAT.md`

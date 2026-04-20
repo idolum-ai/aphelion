@@ -31,19 +31,20 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 
 	for _, agent := range agents {
 		row := core.DurableAgentStatusSnapshot{
-			AgentID:            strings.TrimSpace(agent.AgentID),
-			ChannelKind:        strings.TrimSpace(agent.ChannelKind),
-			Status:             firstNonEmpty(strings.TrimSpace(agent.Status), "active"),
-			ReviewTargetChatID: agent.ReviewTargetChatID,
-			ParentScopeKind:    strings.TrimSpace(agent.ParentScopeKind),
-			ParentScopeID:      strings.TrimSpace(agent.ParentScopeID),
-			WakeupMode:         strings.TrimSpace(agent.WakeupMode),
-			NetworkPolicy:      strings.TrimSpace(agent.NetworkPolicy),
-			PolicyVersion:      agent.PolicyVersion,
-			PolicyHash:         strings.TrimSpace(agent.PolicyHash),
-			PolicyOutboundMode: strings.TrimSpace(agent.LivePolicy.OutboundMode),
-			PolicyDrift:        strings.TrimSpace(agent.LivePolicy.DriftPolicy),
-			CapabilityEnvelope: append([]string(nil), agent.LivePolicy.CapabilityEnvelope...),
+			AgentID:                strings.TrimSpace(agent.AgentID),
+			ChannelKind:            strings.TrimSpace(agent.ChannelKind),
+			Status:                 firstNonEmpty(strings.TrimSpace(agent.Status), "active"),
+			ReviewTargetChatID:     agent.ReviewTargetChatID,
+			ParentScopeKind:        strings.TrimSpace(agent.ParentScopeKind),
+			ParentScopeID:          strings.TrimSpace(agent.ParentScopeID),
+			WakeupMode:             strings.TrimSpace(agent.WakeupMode),
+			NetworkPolicy:          strings.TrimSpace(agent.NetworkPolicy),
+			PolicyVersion:          agent.PolicyVersion,
+			PolicyHash:             strings.TrimSpace(agent.PolicyHash),
+			PolicyOutboundMode:     strings.TrimSpace(agent.LivePolicy.OutboundMode),
+			PolicyDrift:            strings.TrimSpace(agent.LivePolicy.DriftPolicy),
+			CapabilityEnvelope:     append([]string(nil), agent.LivePolicy.CapabilityEnvelope...),
+			AllowedTelegramUserIDs: append([]int64(nil), agent.AllowedTelegramUserIDs...),
 		}
 
 		state, err := r.store.DurableAgentState(agent.AgentID)

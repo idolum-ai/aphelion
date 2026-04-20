@@ -846,6 +846,9 @@ func validate(cfg *Config) error {
 	if len(cfg.Principals.Telegram.AdminUserIDs) == 0 {
 		return fmt.Errorf("principals.telegram.admin_user_ids must contain at least one user id; add [principals.telegram] admin_user_ids = [123456789]")
 	}
+	if len(cfg.Principals.Telegram.AdminUserIDs) != 1 {
+		return fmt.Errorf("principals.telegram.admin_user_ids must contain exactly one user id")
+	}
 	if cfg.DurableAgents.ControlPlane.Enabled && strings.TrimSpace(cfg.DurableAgents.ControlPlane.Listen) == "" {
 		return fmt.Errorf("durable_agents.control_plane.listen is required when durable_agents.control_plane.enabled = true")
 	}
@@ -866,19 +869,8 @@ func validate(cfg *Config) error {
 		}
 		admin[id] = struct{}{}
 	}
-
-	approved := make(map[int64]struct{}, len(cfg.Principals.Telegram.ApprovedUserIDs))
-	for _, id := range cfg.Principals.Telegram.ApprovedUserIDs {
-		if id <= 0 {
-			return fmt.Errorf("principals.telegram.approved_user_ids must contain positive user ids")
-		}
-		if _, exists := approved[id]; exists {
-			return fmt.Errorf("principals.telegram.approved_user_ids contains duplicate user id %d", id)
-		}
-		if _, exists := admin[id]; exists {
-			return fmt.Errorf("principals.telegram user id %d cannot be both admin and approved_user", id)
-		}
-		approved[id] = struct{}{}
+	if len(cfg.Principals.Telegram.ApprovedUserIDs) > 0 {
+		return fmt.Errorf("principals.telegram.approved_user_ids is not supported; use durable-agent access grants instead")
 	}
 	return nil
 }

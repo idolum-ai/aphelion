@@ -1053,12 +1053,13 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 			Model:          "openrouter/group-model",
 			MaxTokens:      256,
 		},
-		ControlPlaneSecret: "group-control-secret",
-		LocalStorageRoots:  []string{"/tmp/family-group"},
-		NetworkPolicy:      "restricted",
-		WakeupMode:         "event",
-		SecretScopes:       []string{"telegram_bot"},
-		Status:             "active",
+		ControlPlaneSecret:     "group-control-secret",
+		LocalStorageRoots:      []string{"/tmp/family-group"},
+		NetworkPolicy:          "restricted",
+		WakeupMode:             "event",
+		SecretScopes:           []string{"telegram_bot"},
+		AllowedTelegramUserIDs: []int64{2002, 2001, 2001},
+		Status:                 "active",
 	}
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
@@ -1076,6 +1077,9 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 	if len(got.SecretScopes) != 1 || got.SecretScopes[0] != "telegram_bot" {
 		t.Fatalf("SecretScopes = %#v, want telegram_bot", got.SecretScopes)
+	}
+	if len(got.AllowedTelegramUserIDs) != 2 || got.AllowedTelegramUserIDs[0] != 2001 || got.AllowedTelegramUserIDs[1] != 2002 {
+		t.Fatalf("AllowedTelegramUserIDs = %#v, want [2001 2002]", got.AllowedTelegramUserIDs)
 	}
 	if len(got.BootstrapCeiling.AllowedOutboundModes) != 2 || got.BootstrapCeiling.AllowedOutboundModes[0] != "draft_only" {
 		t.Fatalf("BootstrapCeiling.AllowedOutboundModes = %#v, want preserved ceiling", got.BootstrapCeiling.AllowedOutboundModes)

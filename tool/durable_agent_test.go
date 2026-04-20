@@ -82,6 +82,87 @@ func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"wizard_answers"`) {
 		t.Fatalf("durable_agent definition missing wizard_answers field: %s", durableDefJSON)
 	}
+	if !strings.Contains(durableDefJSON, `"access_grant"`) || !strings.Contains(durableDefJSON, `"telegram_user_ids"`) {
+		t.Fatalf("durable_agent definition missing access control surface: %s", durableDefJSON)
+	}
+}
+
+func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-group",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "child-key",
+			Model:          "openrouter/group-model",
+		},
+		PolicyVersion:     1,
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "telegram_update",
+		Status:            "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	grantOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"access_grant","agent_id":"family-group","telegram_user_ids":[2002,2001]}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(access_grant) err = %v", err)
+	}
+	if !strings.Contains(grantOut, "action: durable-agent access grant") || !strings.Contains(grantOut, "allowed_telegram_user_ids: 2001,2002") {
+		t.Fatalf("grant output = %q, want access grant summary", grantOut)
+	}
+
+	showOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"access_show","agent_id":"family-group"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(access_show) err = %v", err)
+	}
+	if !strings.Contains(showOut, "allowed_telegram_user_ids: 2001,2002") {
+		t.Fatalf("show output = %q, want allowlist visibility", showOut)
+	}
+
+	revokeOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"access_revoke","agent_id":"family-group","telegram_user_id":2001}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(access_revoke) err = %v", err)
+	}
+	if !strings.Contains(revokeOut, "allowed_telegram_user_ids: 2002") {
+		t.Fatalf("revoke output = %q, want narrowed allowlist", revokeOut)
+	}
+
+	agent, err := store.DurableAgent("family-group")
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if len(agent.AllowedTelegramUserIDs) != 1 || agent.AllowedTelegramUserIDs[0] != 2002 {
+		t.Fatalf("AllowedTelegramUserIDs = %#v, want [2002]", agent.AllowedTelegramUserIDs)
+	}
 }
 
 func TestDurableAgentToolListAndPolicyShow(t *testing.T) {

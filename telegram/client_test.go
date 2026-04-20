@@ -387,6 +387,107 @@ func TestSendInlineKeyboardSplitsLongTextIntoFollowUpMessages(t *testing.T) {
 	}
 }
 
+func TestSendInlineKeyboardAutoFormatsMarkdownSubset(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = 223
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	got, err := client.SendInlineKeyboard(context.Background(), 5, "try *this* and `that`", [][]InlineButton{
+		{
+			{Text: "Approve", CallbackData: "decision:1:approve"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendInlineKeyboard() err = %v", err)
+	}
+	if got != 223 {
+		t.Fatalf("message id = %d, want 223", got)
+	}
+	if requestBody["parse_mode"] != ParseModeHTML {
+		t.Fatalf("parse_mode = %v, want %s", requestBody["parse_mode"], ParseModeHTML)
+	}
+	if requestBody["text"] != "try <i>this</i> and <code>that</code>" {
+		t.Fatalf("text = %v, want transformed HTML", requestBody["text"])
+	}
+}
+
+func TestSendInlineKeyboardFallsBackToPlainTextOnParseError(t *testing.T) {
+	call := 0
+	var bodies []map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			call++
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			var body map[string]interface{}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			bodies = append(bodies, body)
+			if call == 1 {
+				return encodeJSONResponse(t, sendMessageResponse{Ok: false, Description: "Bad Request: can't parse entities"}), nil
+			}
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = 224
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	got, err := client.SendInlineKeyboard(context.Background(), 5, "try *this*", [][]InlineButton{
+		{
+			{Text: "Approve", CallbackData: "decision:1:approve"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendInlineKeyboard() err = %v", err)
+	}
+	if got != 224 {
+		t.Fatalf("message id = %d, want 224", got)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("request count = %d, want 2", len(bodies))
+	}
+	if _, ok := bodies[0]["parse_mode"]; !ok {
+		t.Fatal("first request missing parse_mode")
+	}
+	if _, ok := bodies[1]["parse_mode"]; ok {
+		t.Fatal("fallback request should omit parse_mode")
+	}
+	if _, ok := bodies[0]["reply_markup"]; !ok {
+		t.Fatal("first request missing reply_markup")
+	}
+	if _, ok := bodies[1]["reply_markup"]; !ok {
+		t.Fatal("fallback request missing reply_markup")
+	}
+	if bodies[1]["text"] != "try *this*" {
+		t.Fatalf("fallback text = %v, want original plain text", bodies[1]["text"])
+	}
+}
+
 func TestAnswerCallbackQueryPayload(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{

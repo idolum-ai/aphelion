@@ -30,6 +30,15 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 	if err != nil {
 		return nil, err
 	}
+	if !r.durableGroupSenderAuthorized(*registered, msg.SenderID) {
+		log.Printf(
+			"INFO durable group inbound denied agent_id=%s sender_id=%d chat_id=%d",
+			strings.TrimSpace(registered.AgentID),
+			msg.SenderID,
+			msg.ChatID,
+		)
+		return nil, nil
+	}
 	livePolicy := core.NormalizeDurableAgentLivePolicy(registered.LivePolicy)
 	allowLocalReply := durableGroupAllowsLocalReply(livePolicy)
 
@@ -308,6 +317,21 @@ func durableGroupInboundText(msg core.InboundMessage) string {
 		return fmt.Sprintf("Telegram group %q message from %s:\n%s", title, sender, text)
 	}
 	return fmt.Sprintf("Telegram group message from %s:\n%s", sender, text)
+}
+
+func (r *Runtime) durableGroupSenderAuthorized(agent core.DurableAgent, senderID int64) bool {
+	if senderID <= 0 {
+		return false
+	}
+	if r != nil && r.IsTelegramAdmin(senderID) {
+		return true
+	}
+	for _, allowed := range core.NormalizeDurableAgentAllowedTelegramUserIDs(agent.AllowedTelegramUserIDs) {
+		if allowed == senderID {
+			return true
+		}
+	}
+	return false
 }
 
 func durableGroupGovernorContext(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage) string {

@@ -92,8 +92,14 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 		return r.finalizeDurableAgentWizard(in, key)
 	case "wizard_cancel":
 		return r.cancelDurableAgentWizard(in)
+	case "access_show":
+		return r.showDurableAgentAccess(in)
+	case "access_grant":
+		return r.grantDurableAgentAccess(in)
+	case "access_revoke":
+		return r.revokeDurableAgentAccess(in)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke")
 	}
 }
 
@@ -174,6 +180,9 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 	}
 	if len(in.SecretScopes) > 0 {
 		agent.SecretScopes = append([]string(nil), in.SecretScopes...)
+	}
+	if in.TelegramUserID != 0 || len(in.TelegramUserIDs) > 0 {
+		agent.AllowedTelegramUserIDs = core.NormalizeDurableAgentAllowedTelegramUserIDs(append(append([]int64(nil), in.TelegramUserID), in.TelegramUserIDs...))
 	}
 	patch := effectiveDurableAgentPolicyPatchFromInput(in)
 	policy := agent.LivePolicy
@@ -550,6 +559,105 @@ func (r *Registry) updateDurableAgentEnrollment(in durableAgentInput) (string, e
 	return renderDurableAgentEnrollment(*enrollment), nil
 }
 
+func (r *Registry) showDurableAgentAccess(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for access_show")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	return renderDurableAgentAccess("show", *agent, nil, false), nil
+}
+
+func (r *Registry) grantDurableAgentAccess(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for access_grant")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	requested, err := durableAgentAccessUserIDs(in)
+	if err != nil {
+		return "", err
+	}
+	combined := append(append([]int64(nil), agent.AllowedTelegramUserIDs...), requested...)
+	next := core.NormalizeDurableAgentAllowedTelegramUserIDs(combined)
+	changed := !equalInt64Slices(agent.AllowedTelegramUserIDs, next)
+	agent.AllowedTelegramUserIDs = next
+	if changed {
+		if err := r.store.UpsertDurableAgent(*agent); err != nil {
+			return "", err
+		}
+	}
+	return renderDurableAgentAccess("grant", *agent, requested, changed), nil
+}
+
+func (r *Registry) revokeDurableAgentAccess(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for access_revoke")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	requested, err := durableAgentAccessUserIDs(in)
+	if err != nil {
+		return "", err
+	}
+	remove := make(map[int64]struct{}, len(requested))
+	for _, userID := range requested {
+		remove[userID] = struct{}{}
+	}
+	next := make([]int64, 0, len(agent.AllowedTelegramUserIDs))
+	for _, userID := range core.NormalizeDurableAgentAllowedTelegramUserIDs(agent.AllowedTelegramUserIDs) {
+		if _, drop := remove[userID]; drop {
+			continue
+		}
+		next = append(next, userID)
+	}
+	next = core.NormalizeDurableAgentAllowedTelegramUserIDs(next)
+	changed := !equalInt64Slices(agent.AllowedTelegramUserIDs, next)
+	agent.AllowedTelegramUserIDs = next
+	if changed {
+		if err := r.store.UpsertDurableAgent(*agent); err != nil {
+			return "", err
+		}
+	}
+	return renderDurableAgentAccess("revoke", *agent, requested, changed), nil
+}
+
+func durableAgentAccessUserIDs(in durableAgentInput) ([]int64, error) {
+	values := make([]int64, 0, len(in.TelegramUserIDs)+1)
+	if in.TelegramUserID != 0 {
+		values = append(values, in.TelegramUserID)
+	}
+	values = append(values, in.TelegramUserIDs...)
+	values = core.NormalizeDurableAgentAllowedTelegramUserIDs(values)
+	if len(values) == 0 {
+		return nil, fmt.Errorf("durable_agent telegram_user_id or telegram_user_ids is required")
+	}
+	return values, nil
+}
+
+func equalInt64Slices(left []int64, right []int64) bool {
+	left = core.NormalizeDurableAgentAllowedTelegramUserIDs(left)
+	right = core.NormalizeDurableAgentAllowedTelegramUserIDs(right)
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
 var durableAgentWizardStepOrder = []string{
 	"address",
 	"adapter",
@@ -865,13 +973,14 @@ func renderDurableAgentList(agents []core.DurableAgent) string {
 		return b.String()
 	}
 	for i, agent := range agents {
-		fmt.Fprintf(&b, "%d. agent_id=%s channel=%s status=%s policy_version=%d outbound_mode=%s\n",
+		fmt.Fprintf(&b, "%d. agent_id=%s channel=%s status=%s policy_version=%d outbound_mode=%s allowed_users=%s\n",
 			i+1,
 			strings.TrimSpace(agent.AgentID),
 			strings.TrimSpace(agent.ChannelKind),
 			firstNonEmpty(strings.TrimSpace(agent.Status), "active"),
 			agent.PolicyVersion,
 			strings.TrimSpace(agent.LivePolicy.OutboundMode),
+			formatDurableAgentTelegramUserIDs(agent.AllowedTelegramUserIDs),
 		)
 	}
 	b.WriteString("[/DURABLE_AGENTS]")
@@ -900,6 +1009,7 @@ func renderDurableAgentPolicy(agent core.DurableAgent, updates []session.Durable
 	fmt.Fprintf(&b, "public_surface_mode: %s\n", agent.LivePolicy.PublicSurfaceMode)
 	fmt.Fprintf(&b, "shared_inference_reuse: %s\n", agent.LivePolicy.SharedInferenceReuse)
 	fmt.Fprintf(&b, "shared_inference_reuse_scope: %s\n", agent.LivePolicy.SharedInferenceReuseScope)
+	fmt.Fprintf(&b, "allowed_telegram_user_ids: %s\n", formatDurableAgentTelegramUserIDs(agent.AllowedTelegramUserIDs))
 	fmt.Fprintf(&b, "bootstrap_capabilities: %s\n", strings.Join(agent.BootstrapCeiling.CapabilityEnvelope, ","))
 	fmt.Fprintf(&b, "bootstrap_allowed_outbound_modes: %s\n", strings.Join(agent.BootstrapCeiling.AllowedOutboundModes, ","))
 	fmt.Fprintf(&b, "bootstrap_allowed_public_surface_modes: %s\n", strings.Join(agent.BootstrapCeiling.AllowedPublicSurfaceModes, ","))
@@ -981,8 +1091,33 @@ func renderDurableAgentLifecycle(action string, agent core.DurableAgent) string 
 	fmt.Fprintf(&b, "review_target_chat_id: %d\n", agent.ReviewTargetChatID)
 	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
 	fmt.Fprintf(&b, "outbound_mode: %s\n", strings.TrimSpace(agent.LivePolicy.OutboundMode))
+	fmt.Fprintf(&b, "allowed_telegram_user_ids: %s\n", formatDurableAgentTelegramUserIDs(agent.AllowedTelegramUserIDs))
 	renderDurableAgentChannelConfig(&b, agent)
 	return b.String()
+}
+
+func renderDurableAgentAccess(action string, agent core.DurableAgent, requested []int64, changed bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "action: durable-agent access %s\n", strings.TrimSpace(action))
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	if len(requested) > 0 {
+		fmt.Fprintf(&b, "requested_user_ids: %s\n", formatDurableAgentTelegramUserIDs(requested))
+	}
+	fmt.Fprintf(&b, "changed: %t\n", changed)
+	fmt.Fprintf(&b, "allowed_telegram_user_ids: %s\n", formatDurableAgentTelegramUserIDs(agent.AllowedTelegramUserIDs))
+	return b.String()
+}
+
+func formatDurableAgentTelegramUserIDs(values []int64) string {
+	values = core.NormalizeDurableAgentAllowedTelegramUserIDs(values)
+	if len(values) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, fmt.Sprintf("%d", value))
+	}
+	return strings.Join(parts, ",")
 }
 
 func renderDurableAgentChannelConfig(b *strings.Builder, agent core.DurableAgent) {

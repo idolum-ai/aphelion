@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 23
+	schemaVersion                       = 24
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -222,6 +222,7 @@ func (s *SQLiteStore) init() error {
 			network_policy TEXT,
 			wakeup_mode TEXT,
 			secret_scopes_json TEXT NOT NULL DEFAULT '[]',
+			allowed_telegram_user_ids_json TEXT NOT NULL DEFAULT '[]',
 			status TEXT NOT NULL DEFAULT 'active',
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -2493,6 +2494,7 @@ func upsertDurableAgentExec(exec sqlExecer, agent core.DurableAgent) (core.Durab
 	if err := core.ValidateDurableAgentLivePolicyWithinCeiling(agent.LivePolicy, agent.BootstrapCeiling); err != nil {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent live_policy: %w", err)
 	}
+	agent.AllowedTelegramUserIDs = core.NormalizeDurableAgentAllowedTelegramUserIDs(agent.AllowedTelegramUserIDs)
 
 	livePolicyJSON, policyHash, err := marshalDurableAgentLivePolicy(agent.LivePolicy)
 	if err != nil {
@@ -2518,6 +2520,10 @@ func upsertDurableAgentExec(exec sqlExecer, agent core.DurableAgent) (core.Durab
 	if err != nil {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent secret_scopes: %w", err)
 	}
+	allowedTelegramUserIDsJSON, err := marshalInt64Slice(agent.AllowedTelegramUserIDs)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent allowed_telegram_user_ids: %w", err)
+	}
 
 	now := time.Now().UTC()
 	createdAt := nonZeroTimeOrNow(agent.CreatedAt, now).UTC().Format(time.RFC3339Nano)
@@ -2531,8 +2537,8 @@ func upsertDurableAgentExec(exec sqlExecer, agent core.DurableAgent) (core.Durab
 		INSERT INTO durable_agents(
 			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
 			channel_kind, live_policy_json, channel_config_json, bootstrap_ceiling_json, bootstrap_provider_json, control_plane_secret, policy_version, policy_hash, policy_issued_at,
-			local_storage_roots_json, network_policy, wakeup_mode, secret_scopes_json, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			local_storage_roots_json, network_policy, wakeup_mode, secret_scopes_json, allowed_telegram_user_ids_json, status, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(agent_id) DO UPDATE SET
 			parent_agent_id = excluded.parent_agent_id,
 			parent_scope_kind = excluded.parent_scope_kind,
@@ -2551,12 +2557,13 @@ func upsertDurableAgentExec(exec sqlExecer, agent core.DurableAgent) (core.Durab
 			network_policy = excluded.network_policy,
 			wakeup_mode = excluded.wakeup_mode,
 			secret_scopes_json = excluded.secret_scopes_json,
+			allowed_telegram_user_ids_json = excluded.allowed_telegram_user_ids_json,
 			status = excluded.status,
 			updated_at = excluded.updated_at
 	`,
 		agent.AgentID, nullableString(agent.ParentAgentID), nullableString(agent.ParentScopeKind), nullableString(agent.ParentScopeID), agent.ReviewTargetChatID,
 		agent.ChannelKind, livePolicyJSON, channelConfigJSON, bootstrapCeilingJSON, bootstrapProviderJSON, strings.TrimSpace(agent.ControlPlaneSecret), policyVersion, policyHash, nullableTime(policyIssuedAt), string(storageRootsJSON),
-		nullableString(agent.NetworkPolicy), nullableString(agent.WakeupMode), string(secretScopesJSON), nullableString(agent.Status), createdAt, updatedAt,
+		nullableString(agent.NetworkPolicy), nullableString(agent.WakeupMode), string(secretScopesJSON), string(allowedTelegramUserIDsJSON), nullableString(agent.Status), createdAt, updatedAt,
 	)
 	if err != nil {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent: %w", err)
@@ -2884,7 +2891,7 @@ func (s *SQLiteStore) ListDurableAgents() ([]core.DurableAgent, error) {
 		SELECT
 			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
 			channel_kind, live_policy_json, COALESCE(channel_config_json, ''), COALESCE(bootstrap_ceiling_json, ''), COALESCE(bootstrap_provider_json, ''), COALESCE(control_plane_secret, ''), policy_version, policy_hash, policy_issued_at, local_storage_roots_json, network_policy,
-			wakeup_mode, secret_scopes_json, status, created_at, updated_at
+			wakeup_mode, secret_scopes_json, COALESCE(allowed_telegram_user_ids_json, '[]'), status, created_at, updated_at
 		FROM durable_agents
 		ORDER BY created_at ASC, agent_id ASC
 	`)
@@ -3213,6 +3220,9 @@ func applyMigrations(tx *sql.Tx) error {
 	}
 	if err := ensureTableColumn(tx, "durable_agents", "control_plane_secret", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("ensure durable_agents.control_plane_secret: %w", err)
+	}
+	if err := ensureTableColumn(tx, "durable_agents", "allowed_telegram_user_ids_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		return fmt.Errorf("ensure durable_agents.allowed_telegram_user_ids_json: %w", err)
 	}
 	for _, column := range []struct {
 		name string
@@ -3640,6 +3650,14 @@ func marshalStringSlice(values []string) ([]byte, error) {
 	return json.Marshal(values)
 }
 
+func marshalInt64Slice(values []int64) ([]byte, error) {
+	values = core.NormalizeDurableAgentAllowedTelegramUserIDs(values)
+	if len(values) == 0 {
+		return []byte("[]"), nil
+	}
+	return json.Marshal(values)
+}
+
 func queryDurableAgent(q interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }, agentID string) (*core.DurableAgent, error) {
@@ -3647,7 +3665,7 @@ func queryDurableAgent(q interface {
 		SELECT
 			agent_id, parent_agent_id, parent_scope_kind, parent_scope_id, review_target_chat_id,
 			channel_kind, live_policy_json, COALESCE(channel_config_json, ''), COALESCE(bootstrap_ceiling_json, ''), COALESCE(bootstrap_provider_json, ''), COALESCE(control_plane_secret, ''), policy_version, policy_hash, policy_issued_at, local_storage_roots_json, network_policy,
-			wakeup_mode, secret_scopes_json, status, created_at, updated_at
+			wakeup_mode, secret_scopes_json, COALESCE(allowed_telegram_user_ids_json, '[]'), status, created_at, updated_at
 		FROM durable_agents
 		WHERE agent_id = ?
 	`, strings.TrimSpace(agentID))
@@ -3824,6 +3842,18 @@ func unmarshalStringSlice(raw string) ([]string, error) {
 	return values, nil
 }
 
+func unmarshalInt64Slice(raw string) ([]int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var values []int64
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, err
+	}
+	return core.NormalizeDurableAgentAllowedTelegramUserIDs(values), nil
+}
+
 func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.DurableAgent, error) {
 	var (
 		agent                 core.DurableAgent
@@ -3842,6 +3872,7 @@ func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.Durabl
 		networkPolicy         sql.NullString
 		wakeupMode            sql.NullString
 		secretScopesJSON      string
+		allowedUserIDsJSON    string
 		status                sql.NullString
 		createdAtRaw          string
 		updatedAtRaw          string
@@ -3849,7 +3880,7 @@ func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.Durabl
 	if err := scanner.Scan(
 		&agent.AgentID, &parentAgentID, &parentScopeKind, &parentScopeID, &agent.ReviewTargetChatID,
 		&agent.ChannelKind, &livePolicyJSON, &channelConfigJSON, &bootstrapCeilingJSON, &bootstrapProviderJSON, &controlPlaneSecret, &policyVersion, &policyHash, &policyIssuedAt, &storageRootsJSON, &networkPolicy,
-		&wakeupMode, &secretScopesJSON, &status, &createdAtRaw, &updatedAtRaw,
+		&wakeupMode, &secretScopesJSON, &allowedUserIDsJSON, &status, &createdAtRaw, &updatedAtRaw,
 	); err != nil {
 		return core.DurableAgent{}, fmt.Errorf("scan durable agent: %w", err)
 	}
@@ -3901,6 +3932,10 @@ func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.Durabl
 	agent.SecretScopes, err = unmarshalStringSlice(secretScopesJSON)
 	if err != nil {
 		return core.DurableAgent{}, fmt.Errorf("decode durable agent secret scopes: %w", err)
+	}
+	agent.AllowedTelegramUserIDs, err = unmarshalInt64Slice(allowedUserIDsJSON)
+	if err != nil {
+		return core.DurableAgent{}, fmt.Errorf("decode durable agent allowed telegram user ids: %w", err)
 	}
 	agent.CreatedAt, err = parseSQLiteTime(createdAtRaw)
 	if err != nil {

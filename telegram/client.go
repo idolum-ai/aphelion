@@ -321,25 +321,11 @@ func (c *Client) SendInlineKeyboard(ctx context.Context, chatID int64, text stri
 	firstMessageID := int64(0)
 	for i, chunk := range chunks {
 		if i == 0 {
-			body := map[string]interface{}{
-				"chat_id": chatID,
-				"text":    chunk,
-				"reply_markup": inlineKeyboardMarkup{
-					InlineKeyboard: rows,
-				},
-			}
-			if replyTo != nil {
-				body["reply_to_message_id"] = *replyTo
-			}
-
-			resp, err := c.sendMessageRequest(ctx, body)
+			messageID, err := c.sendInlineKeyboardChunk(ctx, chatID, chunk, rows, replyTo)
 			if err != nil {
 				return 0, err
 			}
-			if !resp.Ok {
-				return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
-			}
-			firstMessageID = resp.Result.MessageID
+			firstMessageID = messageID
 			continue
 		}
 
@@ -352,6 +338,55 @@ func (c *Client) SendInlineKeyboard(ctx context.Context, chatID int64, text stri
 		}
 	}
 	return firstMessageID, nil
+}
+
+func (c *Client) sendInlineKeyboardChunk(ctx context.Context, chatID int64, text string, rows [][]InlineButton, replyTo *int64) (int64, error) {
+	formatted := prepareFormattedText(text, "")
+	body := map[string]interface{}{
+		"chat_id": chatID,
+		"text":    formatted.Text,
+		"reply_markup": inlineKeyboardMarkup{
+			InlineKeyboard: rows,
+		},
+	}
+	if formatted.ParseMode != "" {
+		body["parse_mode"] = formatted.ParseMode
+	}
+	if replyTo != nil {
+		body["reply_to_message_id"] = *replyTo
+	}
+	resp, err := c.sendMessageRequest(ctx, body)
+	if err != nil {
+		return 0, err
+	}
+	if !resp.Ok {
+		if formatted.ParseMode != "" && isTelegramParseError(resp.Description) {
+			return c.sendInlineKeyboardFallback(ctx, chatID, formatted.PlainText, rows, replyTo)
+		}
+		return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
+	}
+	return resp.Result.MessageID, nil
+}
+
+func (c *Client) sendInlineKeyboardFallback(ctx context.Context, chatID int64, text string, rows [][]InlineButton, replyTo *int64) (int64, error) {
+	body := map[string]interface{}{
+		"chat_id": chatID,
+		"text":    text,
+		"reply_markup": inlineKeyboardMarkup{
+			InlineKeyboard: rows,
+		},
+	}
+	if replyTo != nil {
+		body["reply_to_message_id"] = *replyTo
+	}
+	resp, err := c.sendMessageRequest(ctx, body)
+	if err != nil {
+		return 0, err
+	}
+	if !resp.Ok {
+		return 0, fmt.Errorf("telegram sendMessage failed: %s", resp.Description)
+	}
+	return resp.Result.MessageID, nil
 }
 
 func (c *Client) AnswerCallbackQuery(ctx context.Context, callbackQueryID string, text string) error {

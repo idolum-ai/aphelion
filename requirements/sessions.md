@@ -721,7 +721,7 @@ idle_expiry = "24h"
 
 [principals.telegram]
 admin_user_ids = [123456789]
-approved_user_ids = [234567890]
+# exactly one admin user is supported
 ```
 
 ### v0.5

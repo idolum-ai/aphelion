@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -58,27 +59,28 @@ type DurableAgentBootstrapCeiling struct {
 }
 
 type DurableAgent struct {
-	AgentID            string
-	ParentAgentID      string
-	ParentScopeKind    string
-	ParentScopeID      string
-	ReviewTargetChatID int64
-	ChannelKind        string
-	LivePolicy         DurableAgentLivePolicy
-	ChannelConfig      DurableAgentChannelConfig
-	BootstrapCeiling   DurableAgentBootstrapCeiling
-	BootstrapLLM       NodeLLMBootstrap
-	ControlPlaneSecret string
-	PolicyVersion      int64
-	PolicyHash         string
-	PolicyIssuedAt     time.Time
-	LocalStorageRoots  []string
-	NetworkPolicy      string
-	WakeupMode         string
-	SecretScopes       []string
-	Status             string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	AgentID                string
+	ParentAgentID          string
+	ParentScopeKind        string
+	ParentScopeID          string
+	ReviewTargetChatID     int64
+	ChannelKind            string
+	LivePolicy             DurableAgentLivePolicy
+	ChannelConfig          DurableAgentChannelConfig
+	BootstrapCeiling       DurableAgentBootstrapCeiling
+	BootstrapLLM           NodeLLMBootstrap
+	ControlPlaneSecret     string
+	PolicyVersion          int64
+	PolicyHash             string
+	PolicyIssuedAt         time.Time
+	LocalStorageRoots      []string
+	NetworkPolicy          string
+	WakeupMode             string
+	SecretScopes           []string
+	AllowedTelegramUserIDs []int64
+	Status                 string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 type DurableAgentState struct {
@@ -411,6 +413,29 @@ func NormalizeDurableAgentEmailChannelConfig(cfg DurableAgentEmailChannelConfig)
 	cfg.SynthesisCadence = strings.TrimSpace(cfg.SynthesisCadence)
 	cfg.NeverRetain = normalizeDurableAgentStringSet(cfg.NeverRetain)
 	return cfg
+}
+
+func NormalizeDurableAgentAllowedTelegramUserIDs(values []int64) []int64 {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{}, len(values))
+	out := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func (cfg DurableAgentChannelConfig) IsZero() bool {

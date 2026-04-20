@@ -125,6 +125,7 @@ type DurableAgentStatusSnapshot struct {
 	PolicyOutboundMode         string
 	PolicyDrift                string
 	CapabilityEnvelope         []string
+	AllowedTelegramUserIDs     []int64
 	LastWakeAt                 time.Time
 	LastReviewAt               time.Time
 	DormantAt                  time.Time

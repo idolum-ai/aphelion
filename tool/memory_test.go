@@ -61,6 +61,48 @@ func TestMemoryToolAdminWritesSharedKnowledge(t *testing.T) {
 	}
 }
 
+func TestMemoryToolAdminPrincipalScopeFallsBackToSharedMemory(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			SharedMemoryRoot:  filepath.Join(tmp, "shared-memory"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+
+	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver)
+	setFakeBubblewrapRunner(t, registry)
+	out, err := registry.ExecuteForPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		"memory",
+		json.RawMessage(`{"action":"add","scope":"principal","store":"knowledge","content":"Admin global note."}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForPrincipal(memory principal scope) err = %v", err)
+	}
+	if !strings.Contains(out, "scope=shared") {
+		t.Fatalf("output = %q, want admin principal scope normalized to shared", out)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(tmp, "shared-memory", "memory", "knowledge.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() err = %v", err)
+	}
+	if !strings.Contains(string(raw), "Admin global note.") {
+		t.Fatalf("knowledge.md = %q, want persisted shared note", string(raw))
+	}
+}
+
 func TestMemoryToolApprovedUserWritesPrincipalMemory(t *testing.T) {
 	t.Parallel()
 

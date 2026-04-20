@@ -281,7 +281,7 @@ idle_expiry = "24h"           # Expire sessions after this much inactivity
 # v0 principal bootstrap:
 [principals.telegram]
 admin_user_ids = [123456789]
-approved_user_ids = [234567890]
+# exactly one admin user is supported
 
 # Deferred after v0:
 # Context management thresholds — push close to the provider's actual limit.
@@ -296,7 +296,7 @@ compaction_strategy = "summarize"  # "summarize" (LLM-assisted) | "truncate" (dr
 [sessions.groups]
 scope = "per_user"            # "per_user" (one session per user per group) | "shared" (one session per group)
 
-# v0.5 approved multi-user DMs:
+# v0.5 review controls:
 [reviews]
 enabled = true
 digest_every = "30m"
@@ -607,14 +607,14 @@ Not supported in v1. Restart is cheap (<100ms cold start).
 - **Required for the governor/face architecture**: a governor backend selection policy, Codex-friendly governor ownership boundaries, and an explicit face rendering slot even if the first implementation is thin.
 - **Required for DM admission and authority**: a config-owned principal model for Telegram DMs, at least one admin principal, and clear config ownership for later authority roles and isolated roots.
 - **Required for a hardened local system tool**: sandbox controls, HTTP transport tuning, failover policy, and credential sealing.
-- **Reserved architectural surface**: group-session controls, approved multi-user DM reviews, additional providers, embeddings, voice, cron, and deeper Linux controls. These should have stable config ownership even before they are fully wired.
+- **Reserved architectural surface**: group-session controls, durable-agent access/governance surfaces, additional providers, embeddings, voice, cron, and deeper Linux controls. These should have stable config ownership even before they are fully wired.
 
 ## Decisions
 
 - **TOML.** Human-friendly, comment-friendly, Go ecosystem default.
 - **Single file.** No `config.d/`, no merge logic. One file, one truth.
 - **Broad schema by design.** Config breadth is intentional architectural headroom, not accidental scope creep. The system should remain adaptable instead of freezing around the first successful surface.
-- **Admission and authority are first-class config concerns.** In v0, config is the source of truth for which Telegram users may use the bot and whether they are `admin` or `approved_user`.
+- **Admission and authority are first-class config concerns.** In v0, config is the source of truth for the single Telegram admin principal and the roots/policies used by scoped child principals.
 - **Governor and face are separate config concerns.** Decision-making and presentation should be independently configurable even if one implementation path is initially minimal.
 - **memfd with F_SEAL for credentials.** Immutable in-memory secrets. Defense in depth.
 - **No hot reload.** Simplicity. Single-binary restart is fast.
