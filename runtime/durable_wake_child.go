@@ -47,6 +47,27 @@ func newSandboxDurableWakeChildExecutor(cfg *config.Config) durableWakeChildExec
 	}
 }
 
+func (r *Runtime) shouldRunDurableWakeInChild(agent core.DurableAgent) bool {
+	if r == nil || r.durableWakeChild == nil {
+		return false
+	}
+	return core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM).Configured()
+}
+
+func (r *Runtime) pollDurableAgentWakeViaChild(ctx context.Context, agent core.DurableAgent, now time.Time) error {
+	if r == nil || r.durableWakeChild == nil {
+		return r.runDurableAgentChildWakeLoaded(ctx, agent, now)
+	}
+	scope, err := r.scopeForDurableAgent(agent)
+	if err != nil {
+		return err
+	}
+	if !r.durableWakeChild.Supports(scope, agent) {
+		return r.runDurableAgentChildWakeLoaded(ctx, agent, now)
+	}
+	return r.durableWakeChild.Run(ctx, scope, agent, now)
+}
+
 func (e *sandboxDurableWakeChildExecutor) Supports(scope sandbox.Scope, agent core.DurableAgent) bool {
 	if e == nil || !e.supported || e.runner == nil {
 		return false
@@ -61,7 +82,7 @@ func (e *sandboxDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox
 	if !e.Supports(scope, agent) {
 		return fmt.Errorf("durable child wake executor is unavailable for scope %q", scope.Principal.Role)
 	}
-	payloadRoot := filepath.Join(scope.SharedMemoryRoot, ".aphelion", "child-email-run")
+	payloadRoot := filepath.Join(scope.SharedMemoryRoot, ".aphelion", "child-wake-run")
 	if err := os.MkdirAll(payloadRoot, 0o700); err != nil {
 		return fmt.Errorf("create durable child wake payload root: %w", err)
 	}

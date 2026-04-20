@@ -11,17 +11,17 @@ Durable children are bounded child Aphelions, not alternate public personas.
 - Upward communication is through bounded review artifacts and summaries.
 - Telegram relay turns can target a child inline from DM using `agent:<agent_id> ...` and execute in child scope.
 - Child wakes can be transport-triggered (`telegram_update`) or scheduler-triggered (`poll`, `push`, `poll_or_push`) depending on the child role.
-- Child wake execution runs through isolated child execution (`durable-agent child-run --agent ...`) when a child bootstrap LLM is configured; the current email wake adapter retains inline fallback for unbootstrapped agents.
-- Bootstrapped child wakes execute a child-local turn (prompt context + governor/face loop + principal-scoped tools) before emitting bounded upward review artifacts.
-- The current `email` adapter (via `gog_cli`) keeps cadence buffering (`synthesis_cadence`) and channel `never_retain` scrubbing before review emission.
+- Child wake ingress is selected through pluggable runtime adapters; each adapter contributes wake payload synthesis and review finalization semantics.
+- All wake-driven durable work runs through one child-turn substrate (prompt context + governor/face loop + principal-scoped tools), either in-process or isolated (`durable-agent child-run --agent ...`) when bootstrap/isolation is configured.
 
 Code anchors:
 
 - [`durableagent/runtime.go`](../../durableagent/runtime.go)
 - [`runtime/durable_group.go`](../../runtime/durable_group.go)
-- [`runtime/durable_email.go`](../../runtime/durable_email.go)
-- [`runtime/durable_email_child.go`](../../runtime/durable_email_child.go)
-- [`runtime/durable_email_turn.go`](../../runtime/durable_email_turn.go)
+- [`runtime/durable_wake.go`](../../runtime/durable_wake.go)
+- [`runtime/durable_wake_loop.go`](../../runtime/durable_wake_loop.go)
+- [`runtime/durable_wake_child.go`](../../runtime/durable_wake_child.go)
+- [`runtime/durable_wake_turn.go`](../../runtime/durable_wake_turn.go)
 - [`runtime/durable_child.go`](../../runtime/durable_child.go)
 - [`main_durable_child.go`](../../main_durable_child.go)
 

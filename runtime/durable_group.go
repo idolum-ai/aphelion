@@ -435,9 +435,6 @@ func (r *Runtime) durableGroupSenderAuthorized(agent core.DurableAgent, senderID
 }
 
 func durableTelegramGovernorContext(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage, pendingParentConversation []core.DurableAgentConversationMessage) string {
-	if strings.TrimSpace(agent.ChannelKind) == "email" {
-		return durableEmailGovernorContext(agent, policy, msg, pendingParentConversation)
-	}
 	if durableTelegramChannel(agent.ChannelKind) == durableTelegramChannelDM {
 		return durableTelegramDMGovernorContext(agent, policy, msg, pendingParentConversation)
 	}

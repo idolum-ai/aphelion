@@ -1,0 +1,253 @@
+//go:build linux
+
+package runtime
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/durableagent"
+	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
+)
+
+type testDurableWakeAdapter struct {
+	channelKind  string
+	queueReview  bool
+	prepareCalls int
+	finalized    bool
+	lastSummary  string
+}
+
+func (a *testDurableWakeAdapter) Name() string {
+	return "test_adapter"
+}
+
+func (a *testDurableWakeAdapter) Supports(agent core.DurableAgent) bool {
+	return strings.TrimSpace(agent.ChannelKind) == strings.TrimSpace(a.channelKind)
+}
+
+func (a *testDurableWakeAdapter) Prepare(_ context.Context, rt *Runtime, agent core.DurableAgent, now time.Time) (*durableWakeTurnPlan, error) {
+	a.prepareCalls++
+	key := session.SessionKey{
+		ChatID: durableWakeSyntheticChatID(agent.AgentID),
+		Scope:  durableAgentScopeRef(agent),
+	}
+	return &durableWakeTurnPlan{
+		Channel:      strings.TrimSpace(a.channelKind),
+		AuditChannel: strings.TrimSpace(a.channelKind),
+		Key:          key,
+		Inbound: core.InboundMessage{
+			ChatID:         key.ChatID,
+			ChatType:       strings.TrimSpace(a.channelKind),
+			ChatTitle:      "durable-wake-test",
+			SenderName:     "adapter",
+			Text:           "Summarize the adapter wake payload.",
+			MessageID:      durableWakeMessageID(now),
+			DurableAgentID: agent.AgentID,
+			Timestamp:      now,
+		},
+		SessionChatType:      strings.TrimSpace(a.channelKind),
+		SessionUserName:      "adapter",
+		PromptContextErrHint: "load durable wake prompt context",
+		PolicyReason:         "mapped from interactive face policy for durable wake channels",
+		PersistenceErrCtx: turnCommitErrorContext{
+			ConvertMessages: "convert durable wake messages",
+			LoadPlanState:   "load durable wake plan state before save",
+			LoadOperation:   "load durable wake operation state before save",
+			SaveSession:     "save durable wake session",
+			RecordOutbound:  "record durable wake outbound reply",
+		},
+		SendErrCtx:   "send durable wake reply",
+		RecordErrCtx: "record durable wake outbound reply",
+		GovernorContext: func(agent core.DurableAgent, policy core.DurableAgentLivePolicy, msg core.InboundMessage, pending []core.DurableAgentConversationMessage) string {
+			_ = policy
+			return fmt.Sprintf("You are handling a durable-agent wake through a pluggable adapter.\nAgent: %s\nPayload: %s\nPending: %d", agent.AgentID, msg.Text, len(pending))
+		},
+		Finalize: func(turnSummary string) error {
+			a.finalized = true
+			a.lastSummary = strings.TrimSpace(turnSummary)
+			if !a.queueReview {
+				return nil
+			}
+			_, err := durableagent.NewRuntime(rt.store).QueueReviewArtifact(agent, core.DurableReviewArtifact{
+				AgentID:       strings.TrimSpace(agent.AgentID),
+				Summary:       strings.TrimSpace(turnSummary),
+				IntervalLabel: now.UTC().Format(time.RFC3339),
+				LocalActions:  []string{"Processed durable wake payload through child-turn substrate."},
+				Metadata: map[string]string{
+					"channel_kind": strings.TrimSpace(agent.ChannelKind),
+				},
+			})
+			return err
+		},
+	}, nil
+}
+
+func TestPollDurableWakeAgentsUsesPluggableIngressAdapter(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Pluggable adapter wake summary."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-test-adapter",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle test adapter wakes.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	adapter := &testDurableWakeAdapter{channelKind: "test_adapter", queueReview: true}
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{adapter}
+	rt.durableWakeChild = nil
+
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+	if adapter.prepareCalls != 1 {
+		t.Fatalf("adapter prepare calls = %d, want 1", adapter.prepareCalls)
+	}
+	if !adapter.finalized {
+		t.Fatal("adapter finalize was not called")
+	}
+	if !strings.Contains(adapter.lastSummary, "Pluggable adapter wake summary.") {
+		t.Fatalf("adapter last summary = %q, want provider summary", adapter.lastSummary)
+	}
+
+	sender.mu.Lock()
+	if got := len(sender.sent); got != 0 {
+		t.Fatalf("sent len = %d, want 0 for read-only durable wake", got)
+	}
+	sender.mu.Unlock()
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("PendingReviewEvents() len = %d, want 1", len(events))
+	}
+	if !strings.Contains(events[0].Summary, "Pluggable adapter wake summary") {
+		t.Fatalf("review summary = %q, want child-turn summary", events[0].Summary)
+	}
+
+	key := session.SessionKey{
+		ChatID: durableWakeSyntheticChatID(agent.AgentID),
+		Scope:  durableAgentScopeRef(agent),
+	}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(durable wake session) err = %v", err)
+	}
+	if sess.TurnCount == 0 {
+		t.Fatalf("durable wake session turn_count = %d, want > 0", sess.TurnCount)
+	}
+}
+
+func TestPollDurableWakeAgentsUsesChildExecutorWhenBootstrapConfigured(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Child-executor wake summary."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-child-executor",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Handle test adapter wakes.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	adapter := &testDurableWakeAdapter{channelKind: "test_adapter", queueReview: true}
+	childRuns := 0
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{adapter}
+	rt.durableWakeChild = inlineDurableWakeChildExecutor{run: func(_ context.Context, scope sandbox.Scope, child core.DurableAgent, now time.Time) error {
+		_ = scope
+		_ = now
+		if strings.TrimSpace(child.AgentID) != agent.AgentID {
+			t.Fatalf("child executor agent_id = %q, want %q", child.AgentID, agent.AgentID)
+		}
+		childRuns++
+		return nil
+	}}
+
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+	if childRuns != 1 {
+		t.Fatalf("child executor runs = %d, want 1", childRuns)
+	}
+	if adapter.prepareCalls != 0 {
+		t.Fatalf("adapter prepare calls = %d, want 0 when child executor handles wake", adapter.prepareCalls)
+	}
+}
+
+func TestRunDurableAgentChildWakeRejectsUnsupportedChannel(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Unsupported channel should not run"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-unsupported-channel",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "unsupported_channel",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Attempt unsupported wake channel.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	err = rt.RunDurableAgentChildWake(context.Background(), agent.AgentID, time.Now().UTC())
+	if err == nil {
+		t.Fatal("RunDurableAgentChildWake() err = nil, want unsupported channel error")
+	}
+	if !strings.Contains(err.Error(), "no wake ingress adapter") {
+		t.Fatalf("RunDurableAgentChildWake() err = %v, want unsupported channel detail", err)
+	}
+}

@@ -43,6 +43,7 @@ type durableGroupTurnCoordinator struct {
 	audit                     *turnAuditRecorder
 	allowStream               bool
 	pendingParentConversation []core.DurableAgentConversationMessage
+	governorContextBuilder    durableWakeGovernorContextBuilder
 	lastGovernor              *turn.GovernorResult
 	lastFaceAwareness         prompt.RuntimeAwareness
 }
@@ -172,7 +173,7 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		GovernorName:          c.coordinatorGovernorName(),
 		RequestFaceNote:       c.requestFaceNote,
 		ExtraSystemMessages: []agent.Message{
-			{Role: "system", Content: durableTelegramGovernorContext(c.registered, c.livePolicy, c.msg, c.pendingParentConversation)},
+			{Role: "system", Content: c.governorContext()},
 		},
 		RunErrPrefix:        "run durable group turn",
 		InvalidOutputPrefix: "invalid durable group turn output",
@@ -184,6 +185,16 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 	c.lastFaceAwareness = output.LastFaceAwareness
 	c.lastGovernor = output.GovernorResult
 	return output.GovernorResult, nil
+}
+
+func (c *durableGroupTurnCoordinator) governorContext() string {
+	if c == nil {
+		return ""
+	}
+	if c.governorContextBuilder != nil {
+		return strings.TrimSpace(c.governorContextBuilder(c.registered, c.livePolicy, c.msg, c.pendingParentConversation))
+	}
+	return durableTelegramGovernorContext(c.registered, c.livePolicy, c.msg, c.pendingParentConversation)
 }
 
 func (c *durableGroupTurnCoordinator) requestChannel() string {
