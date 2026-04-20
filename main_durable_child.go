@@ -15,8 +15,11 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/memory"
 	runtimepkg "github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 type durableChildNoopOutbound struct{}
@@ -83,7 +86,54 @@ func runDurableEmailChildBootstrap(ctx context.Context, bootstrap runtimepkg.Dur
 		return err
 	}
 	defer store.Close()
-	return runtimepkg.RunDurableEmailPollOnce(ctx, cfg, store, agentID, now)
+
+	httpClient := &http.Client{Timeout: 90 * time.Second}
+	llm, err := buildNativeProviderChain(cfg, httpClient)
+	if err != nil {
+		return err
+	}
+	sandboxResolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		return err
+	}
+	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
+	tools.WithSemanticEngine(memory.NewSemanticEngine(memory.SemanticOptions{
+		Enabled:             cfg.Memory.Semantic.Enabled,
+		DBPath:              memory.DefaultSemanticDBPath(cfg.Sessions.DBPath),
+		Sources:             cfg.Memory.Semantic.Sources,
+		IncludeDailyNotes:   cfg.Memory.Semantic.IncludeDailyNotes,
+		IncludeQuestions:    cfg.Memory.Semantic.IncludeQuestions,
+		IncludeRhizome:      cfg.Memory.Semantic.IncludeRhizome,
+		InteractiveTopK:     cfg.Memory.Semantic.InteractiveTopK,
+		HeartbeatTopK:       cfg.Memory.Semantic.HeartbeatTopK,
+		InteractiveMaxChars: cfg.Memory.Semantic.InteractiveMaxChars,
+		HeartbeatMaxChars:   cfg.Memory.Semantic.HeartbeatMaxChars,
+		DailyNotesDir:       cfg.Agent.DailyNotesDir,
+	}))
+	fileStore, retrievalStore, err := buildOpenAIPlatformServices(cfg, httpClient)
+	if err != nil {
+		return err
+	}
+	if fileStore != nil {
+		tools.WithFileStore(fileStore, cfg.OpenAI.Files.Purpose)
+	}
+	if retrievalStore != nil {
+		tools.WithRetrievalStore(retrievalStore, cfg.OpenAI.VectorStores.DefaultStore)
+	}
+	rt, err := runtimepkg.New(cfg, store, llm, tools, durableChildNoopOutbound{})
+	if err != nil {
+		return err
+	}
+	return rt.RunDurableEmailChild(ctx, agentID, now)
 }
 
 func validateDurableChildBootstrapConfig(cfg *config.Config) error {

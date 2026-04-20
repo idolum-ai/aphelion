@@ -13,6 +13,7 @@ personas.
 - Telegram relay turns can target a child inline from DM using `agent:<agent_id> ...` and execute in child scope.
 - Email children support poll, push, or poll-or-push wake modes.
 - Email children with a configured child bootstrap run polling through isolated child execution (`durable-agent child-run --agent ...`); legacy inline polling remains only as a fallback for unbootstrapped agents.
+- Bootstrapped email wakes now execute a child-local turn (prompt context + governor/face loop + principal-scoped tools) before emitting bounded upward review artifacts.
 - Email synthesis respects cadence buffering (`synthesis_cadence`) and enforces channel `never_retain` scrubbing before review emission.
 
 Code anchors:
@@ -21,6 +22,7 @@ Code anchors:
 - [`runtime/durable_group.go`](../../runtime/durable_group.go)
 - [`runtime/durable_email.go`](../../runtime/durable_email.go)
 - [`runtime/durable_email_child.go`](../../runtime/durable_email_child.go)
+- [`runtime/durable_email_turn.go`](../../runtime/durable_email_turn.go)
 - [`runtime/durable_child.go`](../../runtime/durable_child.go)
 - [`main_durable_child.go`](../../main_durable_child.go)
 

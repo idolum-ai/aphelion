@@ -11,7 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
+	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -471,5 +475,171 @@ func TestPollDurableEmailAgentsUsesChildExecutionWhenBootstrapConfigured(t *test
 	}
 	if childRuns != 1 {
 		t.Fatalf("childRuns = %d, want 1", childRuns)
+	}
+}
+
+func TestRunDurableEmailChildPersistsTurnAndQueuesReviewArtifact(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Child-reviewed inbox summary with actionable priorities."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email-turn",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review inbox through child turn synthesis.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		ChannelConfig: core.DurableAgentChannelConfig{
+			Email: &core.DurableAgentEmailChannelConfig{
+				Address:          "idolum@example.com",
+				Account:          "idolum@example.com",
+				Adapter:          "gog_cli",
+				Query:            "label:inbox newer_than:7d",
+				PollInterval:     "1m",
+				SynthesisCadence: "1m",
+				SurfaceRules:     []string{"job opportunity"},
+			},
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	origRunner := durableEmailCommandRunner
+	defer func() { durableEmailCommandRunner = origRunner }()
+	durableEmailCommandRunner = func(_ context.Context, args ...string) ([]byte, error) {
+		cmd := strings.Join(args, " ")
+		switch {
+		case strings.Contains(cmd, "gmail search"):
+			return []byte(`[{"id":"thread-turn-1"}]`), nil
+		case strings.Contains(cmd, "gmail thread get thread-turn-1"):
+			return []byte(`{
+				"id":"thread-turn-1",
+				"messages":[{"id":"msg-turn-1","threadId":"thread-turn-1","snippet":"Job opportunity for Idolum","internalDate":"1710000000000","payload":{"headers":[{"name":"From","value":"Jobs <jobs@example.com>"},{"name":"Subject","value":"Job opportunity for Idolum"}],"parts":[{"mimeType":"text/plain","body":{"data":"We want Idolum to review this role."}}]}}]
+			}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected durable email command: %s", cmd)
+		}
+	}
+
+	now := time.Now().UTC()
+	if err := rt.RunDurableEmailChild(context.Background(), agent.AgentID, now); err != nil {
+		t.Fatalf("RunDurableEmailChild() err = %v", err)
+	}
+
+	key := session.SessionKey{
+		ChatID: durableEmailSyntheticChatID(agent.AgentID),
+		Scope:  durableAgentScopeRef(agent),
+	}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load(email child session) err = %v", err)
+	}
+	if sess.TurnCount == 0 {
+		t.Fatalf("email child session turn_count = %d, want > 0", sess.TurnCount)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("PendingReviewEvents() len = %d, want 1", len(events))
+	}
+	if !strings.Contains(events[0].Summary, "Child-reviewed inbox summary") {
+		t.Fatalf("review summary = %q, want child turn synthesis summary", events[0].Summary)
+	}
+	if !strings.Contains(events[0].MetadataJSON, "child_turn_summary") {
+		t.Fatalf("review metadata = %q, want child_turn_summary marker", events[0].MetadataJSON)
+	}
+}
+
+func TestRunDurableEmailChildUsesDurablePrincipalScopedTools(t *testing.T) {
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &toolRequestingProvider{}
+	tools := &principalRecordingTools{
+		defs:              []agent.ToolDef{testExecToolDef()},
+		supportsPrincipal: true,
+	}
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email-tools",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review inbox with tool access.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		ChannelConfig: core.DurableAgentChannelConfig{
+			Email: &core.DurableAgentEmailChannelConfig{
+				Address:          "idolum@example.com",
+				Account:          "idolum@example.com",
+				Adapter:          "gog_cli",
+				Query:            "label:inbox newer_than:7d",
+				PollInterval:     "1m",
+				SynthesisCadence: "1m",
+			},
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	origRunner := durableEmailCommandRunner
+	defer func() { durableEmailCommandRunner = origRunner }()
+	durableEmailCommandRunner = func(_ context.Context, args ...string) ([]byte, error) {
+		cmd := strings.Join(args, " ")
+		switch {
+		case strings.Contains(cmd, "gmail search"):
+			return []byte(`[{"id":"thread-tools-1"}]`), nil
+		case strings.Contains(cmd, "gmail thread get thread-tools-1"):
+			return []byte(`{
+				"id":"thread-tools-1",
+				"messages":[{"id":"msg-tools-1","threadId":"thread-tools-1","snippet":"Inbox update","internalDate":"1710000000000","payload":{"headers":[{"name":"From","value":"Ops <ops@example.com>"},{"name":"Subject","value":"Inbox update"}],"parts":[{"mimeType":"text/plain","body":{"data":"Run a quick check."}}]}}]
+			}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected durable email command: %s", cmd)
+		}
+	}
+
+	if err := rt.RunDurableEmailChild(context.Background(), agent.AgentID, time.Now().UTC()); err != nil {
+		t.Fatalf("RunDurableEmailChild() err = %v", err)
+	}
+
+	if provider.firstToolCount != 1 {
+		t.Fatalf("first tool count = %d, want 1", provider.firstToolCount)
+	}
+	if tools.executeForPrincipalCalls != 1 {
+		t.Fatalf("executeForPrincipal calls = %d, want 1", tools.executeForPrincipalCalls)
+	}
+	if tools.lastPrincipal.Role != principal.RoleDurableAgent {
+		t.Fatalf("last principal role = %q, want durable_agent", tools.lastPrincipal.Role)
+	}
+	if tools.lastPrincipal.DurableAgentID != agent.AgentID {
+		t.Fatalf("last durable agent id = %q, want %q", tools.lastPrincipal.DurableAgentID, agent.AgentID)
 	}
 }

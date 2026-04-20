@@ -15,10 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
-	"github.com/idolum-ai/aphelion/session"
 )
 
 const (
@@ -106,37 +104,6 @@ func (r *Runtime) StartDurableEmailLoop(ctx context.Context, logger func(string,
 	})
 }
 
-func RunDurableEmailPollOnce(ctx context.Context, cfg *config.Config, store *session.SQLiteStore, agentID string, now time.Time) error {
-	if cfg == nil {
-		return fmt.Errorf("durable email poll config is nil")
-	}
-	if store == nil {
-		return fmt.Errorf("durable email poll store is nil")
-	}
-	agentID = strings.TrimSpace(agentID)
-	if agentID == "" {
-		return fmt.Errorf("durable email poll agent id is required")
-	}
-	agent, err := store.DurableAgent(agentID)
-	if err != nil {
-		return fmt.Errorf("load durable email agent: %w", err)
-	}
-	if agent == nil {
-		return fmt.Errorf("durable email agent %q not found", agentID)
-	}
-	if !durableEmailWakeEnabled(*agent) {
-		return nil
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	rt := &Runtime{
-		cfg:   normalizeRuntimeConfig(cfg),
-		store: store,
-	}
-	return rt.pollDurableEmailAgent(ctx, *agent, now.UTC())
-}
-
 func (r *Runtime) pollDurableEmailAgents(ctx context.Context, now time.Time) error {
 	if r == nil || r.store == nil {
 		return nil
@@ -196,52 +163,8 @@ func durableEmailWakeEnabled(agent core.DurableAgent) bool {
 }
 
 func (r *Runtime) pollDurableEmailAgent(ctx context.Context, agent core.DurableAgent, now time.Time) error {
-	state, err := r.store.DurableAgentState(agent.AgentID)
+	state, continuity, pendingThreads, neverRetainRedactions, err := r.collectDurableEmailPendingThreads(ctx, agent, now)
 	if err != nil {
-		if !strings.Contains(err.Error(), "no rows") {
-			return err
-		}
-		state = &core.DurableAgentState{AgentID: agent.AgentID}
-	}
-	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
-	if err != nil {
-		return fmt.Errorf("parse durable email continuity state: %w", err)
-	}
-	scope, err := r.scopeForDurableAgent(agent)
-	if err != nil {
-		return err
-	}
-
-	mode := durableEmailWakeMode(agent.WakeupMode)
-	interval := durableEmailPollInterval(agent)
-	pollDue := mode != "push" && (state.LastWakeAt.IsZero() || !now.Before(state.LastWakeAt.Add(interval)))
-	pushThreadIDs, pushWake, err := durableEmailConsumePushWake(scope.WorkingRoot, agent.AgentID)
-	if err != nil {
-		return err
-	}
-	if !pollDue && !pushWake {
-		return nil
-	}
-
-	threads, cursor, err := r.fetchDurableEmailThreads(ctx, agent, state.Cursor, pushThreadIDs)
-	if err != nil {
-		return err
-	}
-	var neverRetainRedactions int
-	threads, neverRetainRedactions = durableEmailApplyNeverRetain(agent, threads)
-	pendingThreads := append([]durableEmailThreadDigest(nil), durableEmailPendingThreads(continuity)...)
-	pendingThreads = durableEmailAppendUniquePending(pendingThreads, threads)
-	continuity.EmailPending = durableEmailPendingState(pendingThreads)
-
-	state.Cursor = cursor
-	state.Status = "dormant"
-	state.LastWakeAt = now
-	stateJSON, err := continuity.Marshal()
-	if err != nil {
-		return fmt.Errorf("marshal durable email continuity state: %w", err)
-	}
-	state.StateJSON = stateJSON
-	if err := r.store.SaveDurableAgentState(*state); err != nil {
 		return err
 	}
 	if len(pendingThreads) == 0 {
@@ -254,8 +177,67 @@ func (r *Runtime) pollDurableEmailAgent(ctx context.Context, agent core.DurableA
 	if artifact == nil {
 		return nil
 	}
+	return r.finalizeDurableEmailSynthesis(agent, state, continuity, *artifact)
+}
+
+func (r *Runtime) collectDurableEmailPendingThreads(ctx context.Context, agent core.DurableAgent, now time.Time) (*core.DurableAgentState, core.DurableAgentContinuityState, []durableEmailThreadDigest, int, error) {
+	state, err := r.store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		if !strings.Contains(err.Error(), "no rows") {
+			return nil, core.DurableAgentContinuityState{}, nil, 0, err
+		}
+		state = &core.DurableAgentState{AgentID: agent.AgentID}
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		return nil, core.DurableAgentContinuityState{}, nil, 0, fmt.Errorf("parse durable email continuity state: %w", err)
+	}
+	scope, err := r.scopeForDurableAgent(agent)
+	if err != nil {
+		return nil, core.DurableAgentContinuityState{}, nil, 0, err
+	}
+
+	mode := durableEmailWakeMode(agent.WakeupMode)
+	interval := durableEmailPollInterval(agent)
+	pollDue := mode != "push" && (state.LastWakeAt.IsZero() || !now.Before(state.LastWakeAt.Add(interval)))
+	pushThreadIDs, pushWake, err := durableEmailConsumePushWake(scope.WorkingRoot, agent.AgentID)
+	if err != nil {
+		return nil, core.DurableAgentContinuityState{}, nil, 0, err
+	}
+	if !pollDue && !pushWake {
+		return state, continuity, nil, 0, nil
+	}
+
+	threads, cursor, err := r.fetchDurableEmailThreads(ctx, agent, state.Cursor, pushThreadIDs)
+	if err != nil {
+		return nil, core.DurableAgentContinuityState{}, nil, 0, err
+	}
+	var neverRetainRedactions int
+	threads, neverRetainRedactions = durableEmailApplyNeverRetain(agent, threads)
+	pendingThreads := append([]durableEmailThreadDigest(nil), durableEmailPendingThreads(continuity)...)
+	pendingThreads = durableEmailAppendUniquePending(pendingThreads, threads)
+	continuity.EmailPending = durableEmailPendingState(pendingThreads)
+
+	state.Cursor = cursor
+	state.Status = "dormant"
+	state.LastWakeAt = now
+	stateJSON, err := continuity.Marshal()
+	if err != nil {
+		return nil, core.DurableAgentContinuityState{}, nil, 0, fmt.Errorf("marshal durable email continuity state: %w", err)
+	}
+	state.StateJSON = stateJSON
+	if err := r.store.SaveDurableAgentState(*state); err != nil {
+		return nil, core.DurableAgentContinuityState{}, nil, 0, err
+	}
+	return state, continuity, pendingThreads, neverRetainRedactions, nil
+}
+
+func (r *Runtime) finalizeDurableEmailSynthesis(agent core.DurableAgent, state *core.DurableAgentState, continuity core.DurableAgentContinuityState, artifact core.DurableReviewArtifact) error {
+	if state == nil {
+		return fmt.Errorf("durable email synthesis state is nil")
+	}
 	continuity.EmailPending = nil
-	stateJSON, err = continuity.Marshal()
+	stateJSON, err := continuity.Marshal()
 	if err != nil {
 		return fmt.Errorf("marshal durable email continuity state: %w", err)
 	}
@@ -263,7 +245,7 @@ func (r *Runtime) pollDurableEmailAgent(ctx context.Context, agent core.DurableA
 	if err := r.store.SaveDurableAgentState(*state); err != nil {
 		return err
 	}
-	_, err = durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, *artifact)
+	_, err = durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact)
 	return err
 }
 
