@@ -98,8 +98,16 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 		return r.grantDurableAgentAccess(in)
 	case "access_revoke":
 		return r.revokeDurableAgentAccess(in)
+	case "capacity_show":
+		return r.showDurableAgentCapacity(in)
+	case "capacity_negotiate":
+		return r.negotiateDurableAgentCapacity(in)
+	case "capacity_probe":
+		return r.probeDurableAgentCapacity(in)
+	case "capacity_attest":
+		return r.attestDurableAgentCapacity(in)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|capacity_show|capacity_negotiate|capacity_probe|capacity_attest")
 	}
 }
 
@@ -134,6 +142,9 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 	}
 	updated, update, err := r.store.ApplyDurableAgentLivePolicy(agent.AgentID, policy, in.ReviewEventID, reason)
 	if err != nil {
+		return "", err
+	}
+	if err := r.markDurableAgentCapacityStale(agent.AgentID); err != nil {
 		return "", err
 	}
 	return renderDurableAgentPolicyApply(*updated, update), nil
@@ -631,6 +642,215 @@ func (r *Registry) revokeDurableAgentAccess(in durableAgentInput) (string, error
 	return renderDurableAgentAccess("revoke", *agent, requested, changed), nil
 }
 
+func (r *Registry) showDurableAgentCapacity(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for capacity_show")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	_, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	return renderDurableAgentCapacity("show", *agent, durableAgentCapacityContractFromContinuity(continuity)), nil
+}
+
+func (r *Registry) negotiateDurableAgentCapacity(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for capacity_negotiate")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	contract := durableAgentCapacityContractFromContinuity(continuity)
+	contract = mergeDurableAgentCapacityContract(contract, in.CapacityContract)
+	contract.LastNegotiatedAt = time.Now().UTC()
+	switch {
+	case durableAgentCapacityContractReadyForAttestation(contract):
+		contract.Status = "provisional"
+	default:
+		contract.Status = "unattested"
+	}
+	continuity.CapabilityContract = &contract
+	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
+		return "", err
+	}
+	return renderDurableAgentCapacity("negotiate", *agent, contract), nil
+}
+
+func (r *Registry) probeDurableAgentCapacity(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for capacity_probe")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	if continuity.CapabilityContract == nil {
+		return "", fmt.Errorf("durable agent %q has no capability contract; use capacity_negotiate first", agent.AgentID)
+	}
+	contract := mergeDurableAgentCapacityContract(*continuity.CapabilityContract, in.CapacityContract)
+	contract.LastProbedAt = time.Now().UTC()
+	if contract.Status == "" || contract.Status == "unattested" || contract.Status == "stale" {
+		if durableAgentCapacityContractReadyForAttestation(contract) {
+			contract.Status = "provisional"
+		} else {
+			contract.Status = "unattested"
+		}
+	}
+	continuity.CapabilityContract = &contract
+	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
+		return "", err
+	}
+	return renderDurableAgentCapacity("probe", *agent, contract), nil
+}
+
+func (r *Registry) attestDurableAgentCapacity(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for capacity_attest")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		return "", err
+	}
+	if continuity.CapabilityContract == nil {
+		return "", fmt.Errorf("durable agent %q has no capability contract; use capacity_negotiate first", agent.AgentID)
+	}
+	contract := mergeDurableAgentCapacityContract(*continuity.CapabilityContract, in.CapacityContract)
+	if !durableAgentCapacityContractReadyForAttestation(contract) {
+		return "", fmt.Errorf("durable agent %q capability contract is incomplete; include child_self_assessment, success_criteria, and evidence_signals", agent.AgentID)
+	}
+	desiredState := "verified"
+	if in.CapacityContract != nil {
+		if value := normalizeDurableAgentCapacityContractState(in.CapacityContract.Status); value != "" {
+			desiredState = value
+		}
+	}
+	switch desiredState {
+	case "verified", "stale":
+	default:
+		return "", fmt.Errorf("capacity_attest status must be verified or stale")
+	}
+	contract.Status = desiredState
+	contract.LastAttestedAt = time.Now().UTC()
+	continuity.CapabilityContract = &contract
+	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
+		return "", err
+	}
+	return renderDurableAgentCapacity("attest", *agent, contract), nil
+}
+
+func (r *Registry) markDurableAgentCapacityStale(agentID string) error {
+	state, continuity, err := r.loadDurableAgentContinuity(agentID)
+	if err != nil {
+		return err
+	}
+	if continuity.CapabilityContract == nil {
+		return nil
+	}
+	contract := *continuity.CapabilityContract
+	if strings.TrimSpace(contract.Status) != "verified" {
+		return nil
+	}
+	contract.Status = "stale"
+	continuity.CapabilityContract = &contract
+	return r.saveDurableAgentContinuity(state, continuity)
+}
+
+func durableAgentCapacityContractReadyForAttestation(contract core.DurableAgentCapabilityContract) bool {
+	return strings.TrimSpace(contract.ChildSelfAssessment) != "" &&
+		len(contract.SuccessCriteria) > 0 &&
+		len(contract.EvidenceSignals) > 0
+}
+
+func durableAgentCapacityContractFromContinuity(continuity core.DurableAgentContinuityState) core.DurableAgentCapabilityContract {
+	if continuity.CapabilityContract == nil {
+		return core.DurableAgentCapabilityContract{Status: "unattested"}
+	}
+	contract := *continuity.CapabilityContract
+	if strings.TrimSpace(contract.Status) == "" {
+		contract.Status = "unattested"
+	}
+	return contract
+}
+
+func mergeDurableAgentCapacityContract(current core.DurableAgentCapabilityContract, patch *durableAgentCapacityContractInput) core.DurableAgentCapabilityContract {
+	if patch == nil {
+		if strings.TrimSpace(current.Status) == "" {
+			current.Status = "unattested"
+		}
+		return current
+	}
+	if status := normalizeDurableAgentCapacityContractState(patch.Status); status != "" {
+		current.Status = status
+	}
+	if strings.TrimSpace(patch.ParentProposal) != "" {
+		current.ParentProposal = strings.TrimSpace(patch.ParentProposal)
+	}
+	if strings.TrimSpace(patch.ChildSelfAssessment) != "" {
+		current.ChildSelfAssessment = strings.TrimSpace(patch.ChildSelfAssessment)
+	}
+	if patch.Can != nil {
+		current.Can = normalizePolicyCapabilities(patch.Can)
+	}
+	if patch.Cannot != nil {
+		current.Cannot = normalizePolicyCapabilities(patch.Cannot)
+	}
+	if patch.Uncertain != nil {
+		current.Uncertain = normalizePolicyCapabilities(patch.Uncertain)
+	}
+	if patch.SuccessCriteria != nil {
+		current.SuccessCriteria = normalizePolicyCapabilities(patch.SuccessCriteria)
+	}
+	if patch.EvidenceSignals != nil {
+		current.EvidenceSignals = normalizePolicyCapabilities(patch.EvidenceSignals)
+	}
+	if patch.ProbeChecklist != nil {
+		current.ProbeChecklist = normalizePolicyCapabilities(patch.ProbeChecklist)
+	}
+	if patch.ProbeResults != nil {
+		current.ProbeResults = normalizePolicyCapabilities(patch.ProbeResults)
+	}
+	if strings.TrimSpace(current.Status) == "" {
+		current.Status = "unattested"
+	}
+	return current
+}
+
+func normalizeDurableAgentCapacityContractState(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "unattested":
+		return "unattested"
+	case "provisional":
+		return "provisional"
+	case "verified":
+		return "verified"
+	case "stale":
+		return "stale"
+	default:
+		return ""
+	}
+}
+
 func durableAgentAccessUserIDs(in durableAgentInput) ([]int64, error) {
 	values := make([]int64, 0, len(in.TelegramUserIDs)+1)
 	if in.TelegramUserID != 0 {
@@ -1105,6 +1325,42 @@ func renderDurableAgentAccess(action string, agent core.DurableAgent, requested 
 	}
 	fmt.Fprintf(&b, "changed: %t\n", changed)
 	fmt.Fprintf(&b, "allowed_telegram_user_ids: %s\n", formatDurableAgentTelegramUserIDs(agent.AllowedTelegramUserIDs))
+	return b.String()
+}
+
+func renderDurableAgentCapacity(action string, agent core.DurableAgent, contract core.DurableAgentCapabilityContract) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "action: durable-agent capacity %s\n", strings.TrimSpace(action))
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	fmt.Fprintf(&b, "capacity_state: %s\n", firstNonEmpty(strings.TrimSpace(contract.Status), "unattested"))
+	fmt.Fprintf(&b, "parent_proposal: %s\n", strings.TrimSpace(contract.ParentProposal))
+	fmt.Fprintf(&b, "child_self_assessment: %s\n", strings.TrimSpace(contract.ChildSelfAssessment))
+	fmt.Fprintf(&b, "can: %s\n", firstNonEmpty(strings.Join(contract.Can, ","), "-"))
+	fmt.Fprintf(&b, "cannot: %s\n", firstNonEmpty(strings.Join(contract.Cannot, ","), "-"))
+	fmt.Fprintf(&b, "uncertain: %s\n", firstNonEmpty(strings.Join(contract.Uncertain, ","), "-"))
+	fmt.Fprintf(&b, "success_criteria: %s\n", firstNonEmpty(strings.Join(contract.SuccessCriteria, ","), "-"))
+	fmt.Fprintf(&b, "evidence_signals: %s\n", firstNonEmpty(strings.Join(contract.EvidenceSignals, ","), "-"))
+	fmt.Fprintf(&b, "probe_checklist: %s\n", firstNonEmpty(strings.Join(contract.ProbeChecklist, ","), "-"))
+	fmt.Fprintf(&b, "probe_results: %s\n", firstNonEmpty(strings.Join(contract.ProbeResults, ","), "-"))
+	if !contract.LastNegotiatedAt.IsZero() {
+		fmt.Fprintf(&b, "last_negotiated_at: %s\n", contract.LastNegotiatedAt.UTC().Format(time.RFC3339))
+	}
+	if !contract.LastProbedAt.IsZero() {
+		fmt.Fprintf(&b, "last_probed_at: %s\n", contract.LastProbedAt.UTC().Format(time.RFC3339))
+	}
+	if !contract.LastAttestedAt.IsZero() {
+		fmt.Fprintf(&b, "last_attested_at: %s\n", contract.LastAttestedAt.UTC().Format(time.RFC3339))
+	}
+	switch strings.TrimSpace(contract.Status) {
+	case "unattested":
+		b.WriteString("next: capacity_negotiate\n")
+	case "provisional":
+		b.WriteString("next: capacity_probe or capacity_attest\n")
+	case "verified":
+		b.WriteString("next: monitor and re-attest after policy drift\n")
+	case "stale":
+		b.WriteString("next: capacity_negotiate then capacity_attest\n")
+	}
 	return b.String()
 }
 

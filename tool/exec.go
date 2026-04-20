@@ -160,35 +160,49 @@ type durableAgentWizardAnswersInput struct {
 	DriftPolicy      string   `json:"drift_policy,omitempty"`
 }
 
+type durableAgentCapacityContractInput struct {
+	Status              string   `json:"status,omitempty"`
+	ParentProposal      string   `json:"parent_proposal,omitempty"`
+	ChildSelfAssessment string   `json:"child_self_assessment,omitempty"`
+	Can                 []string `json:"can,omitempty"`
+	Cannot              []string `json:"cannot,omitempty"`
+	Uncertain           []string `json:"uncertain,omitempty"`
+	SuccessCriteria     []string `json:"success_criteria,omitempty"`
+	EvidenceSignals     []string `json:"evidence_signals,omitempty"`
+	ProbeChecklist      []string `json:"probe_checklist,omitempty"`
+	ProbeResults        []string `json:"probe_results,omitempty"`
+}
+
 type durableAgentInput struct {
-	Action                    string                            `json:"action"`
-	AgentID                   string                            `json:"agent_id,omitempty"`
-	ChannelKind               string                            `json:"channel_kind,omitempty"`
-	ReviewEventID             int64                             `json:"review_event_id,omitempty"`
-	ReviewTargetChatID        int64                             `json:"review_target_chat_id,omitempty"`
-	Reason                    string                            `json:"reason,omitempty"`
-	PolicyPatch               *durableAgentPolicyPatchInput     `json:"policy_patch,omitempty"`
-	PolicyOverrides           *durableAgentPolicyOverridesInput `json:"policy_overrides,omitempty"`
-	Charter                   string                            `json:"charter,omitempty"`
-	Autonomy                  string                            `json:"autonomy,omitempty"`
-	Visibility                string                            `json:"visibility,omitempty"`
-	SharedContext             string                            `json:"shared_context,omitempty"`
-	Capabilities              []string                          `json:"capabilities,omitempty"`
-	OutboundMode              string                            `json:"outbound_mode,omitempty"`
-	DriftPolicy               string                            `json:"drift_policy,omitempty"`
-	PublicSurfaceMode         string                            `json:"public_surface_mode,omitempty"`
-	SharedInferenceReuse      string                            `json:"shared_inference_reuse,omitempty"`
-	SharedInferenceReuseScope string                            `json:"shared_inference_reuse_scope,omitempty"`
-	WakeupMode                string                            `json:"wakeup_mode,omitempty"`
-	NetworkPolicy             string                            `json:"network_policy,omitempty"`
-	SecretScopes              []string                          `json:"secret_scopes,omitempty"`
-	ChannelConfig             json.RawMessage                   `json:"channel_config,omitempty"`
-	WizardAnswers             *durableAgentWizardAnswersInput   `json:"wizard_answers,omitempty"`
-	Operation                 string                            `json:"operation,omitempty"`
-	Secret                    string                            `json:"secret,omitempty"`
-	History                   int                               `json:"history,omitempty"`
-	TelegramUserID            int64                             `json:"telegram_user_id,omitempty"`
-	TelegramUserIDs           []int64                           `json:"telegram_user_ids,omitempty"`
+	Action                    string                             `json:"action"`
+	AgentID                   string                             `json:"agent_id,omitempty"`
+	ChannelKind               string                             `json:"channel_kind,omitempty"`
+	ReviewEventID             int64                              `json:"review_event_id,omitempty"`
+	ReviewTargetChatID        int64                              `json:"review_target_chat_id,omitempty"`
+	Reason                    string                             `json:"reason,omitempty"`
+	PolicyPatch               *durableAgentPolicyPatchInput      `json:"policy_patch,omitempty"`
+	PolicyOverrides           *durableAgentPolicyOverridesInput  `json:"policy_overrides,omitempty"`
+	Charter                   string                             `json:"charter,omitempty"`
+	Autonomy                  string                             `json:"autonomy,omitempty"`
+	Visibility                string                             `json:"visibility,omitempty"`
+	SharedContext             string                             `json:"shared_context,omitempty"`
+	Capabilities              []string                           `json:"capabilities,omitempty"`
+	OutboundMode              string                             `json:"outbound_mode,omitempty"`
+	DriftPolicy               string                             `json:"drift_policy,omitempty"`
+	PublicSurfaceMode         string                             `json:"public_surface_mode,omitempty"`
+	SharedInferenceReuse      string                             `json:"shared_inference_reuse,omitempty"`
+	SharedInferenceReuseScope string                             `json:"shared_inference_reuse_scope,omitempty"`
+	WakeupMode                string                             `json:"wakeup_mode,omitempty"`
+	NetworkPolicy             string                             `json:"network_policy,omitempty"`
+	SecretScopes              []string                           `json:"secret_scopes,omitempty"`
+	ChannelConfig             json.RawMessage                    `json:"channel_config,omitempty"`
+	WizardAnswers             *durableAgentWizardAnswersInput    `json:"wizard_answers,omitempty"`
+	CapacityContract          *durableAgentCapacityContractInput `json:"capacity_contract,omitempty"`
+	Operation                 string                             `json:"operation,omitempty"`
+	Secret                    string                             `json:"secret,omitempty"`
+	History                   int                                `json:"history,omitempty"`
+	TelegramUserID            int64                              `json:"telegram_user_id,omitempty"`
+	TelegramUserIDs           []int64                            `json:"telegram_user_ids,omitempty"`
 }
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
@@ -430,7 +444,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: email"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
@@ -490,6 +504,22 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"capabilities": {"type": "array", "items": {"type": "string"}},
 								"never_retain": {"type": "array", "items": {"type": "string"}},
 								"drift_policy": {"type": "string"}
+							}
+						},
+						"capacity_contract": {
+							"type": "object",
+							"description": "Bidirectional parent-child capacity contract details for capacity_negotiate/probe/attest actions.",
+							"properties": {
+								"status": {"type": "string", "enum": ["unattested", "provisional", "verified", "stale"]},
+								"parent_proposal": {"type": "string"},
+								"child_self_assessment": {"type": "string"},
+								"can": {"type": "array", "items": {"type": "string"}},
+								"cannot": {"type": "array", "items": {"type": "string"}},
+								"uncertain": {"type": "array", "items": {"type": "string"}},
+								"success_criteria": {"type": "array", "items": {"type": "string"}},
+								"evidence_signals": {"type": "array", "items": {"type": "string"}},
+								"probe_checklist": {"type": "array", "items": {"type": "string"}},
+								"probe_results": {"type": "array", "items": {"type": "string"}}
 							}
 						},
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},

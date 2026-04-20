@@ -425,6 +425,18 @@ func RenderTelegramStatusDurables(snapshot core.DurableAgentsStatusSnapshot) str
 			formatStringList(agent.CapabilityEnvelope),
 		))
 		lines = append(lines, fmt.Sprintf(
+			"  capacity state=%s can=%d cannot=%d uncertain=%d success=%d evidence=%d negotiated_at=%s probed_at=%s attested_at=%s",
+			firstNonEmpty(strings.TrimSpace(agent.CapacityState), "unattested"),
+			agent.CapacityCanCount,
+			agent.CapacityCannotCount,
+			agent.CapacityUncertainCount,
+			agent.CapacitySuccessCriteriaCount,
+			agent.CapacityEvidenceSignalCount,
+			formatStatusTime(agent.CapacityLastNegotiatedAt),
+			formatStatusTime(agent.CapacityLastProbedAt),
+			formatStatusTime(agent.CapacityLastAttestedAt),
+		))
+		lines = append(lines, fmt.Sprintf(
 			"  runtime last_wake=%s last_review=%s dormant_at=%s apply_status=%s applied_version=%d applied_at=%s",
 			formatStatusTime(agent.LastWakeAt),
 			formatStatusTime(agent.LastReviewAt),

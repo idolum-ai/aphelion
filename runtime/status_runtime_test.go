@@ -575,6 +575,83 @@ func TestDurableAgentsStatusSnapshotIncludesHealthSignals(t *testing.T) {
 	}
 }
 
+func TestDurableAgentsStatusSnapshotIncludesCapacityContractSignals(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "agent-capacity",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		Status:             "active",
+		LivePolicy: core.DurableAgentLivePolicy{
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		PolicyVersion: 2,
+		PolicyHash:    "hash-capacity",
+		WakeupMode:    "poll",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent(agent-capacity) err = %v", err)
+	}
+
+	now := time.Now().UTC().Add(-5 * time.Minute)
+	continuity := core.DurableAgentContinuityState{
+		CapabilityContract: &core.DurableAgentCapabilityContract{
+			Status:           "verified",
+			Can:              []string{"triage_inbox", "summarize_thread"},
+			Cannot:           []string{"send_mail"},
+			Uncertain:        []string{"ocr_heavy_pdf"},
+			SuccessCriteria:  []string{"surface important threads within 5m"},
+			EvidenceSignals:  []string{"review artifact includes surfaced_count"},
+			LastNegotiatedAt: now.Add(-5 * time.Minute),
+			LastProbedAt:     now.Add(-3 * time.Minute),
+			LastAttestedAt:   now,
+		},
+	}
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:   "agent-capacity",
+		StateJSON: raw,
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState(agent-capacity) err = %v", err)
+	}
+
+	snapshot, err := rt.DurableAgentsStatusSnapshot()
+	if err != nil {
+		t.Fatalf("DurableAgentsStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.Agents) != 1 {
+		t.Fatalf("Agents len = %d, want 1", len(snapshot.Agents))
+	}
+	row := snapshot.Agents[0]
+	if row.AgentID != "agent-capacity" {
+		t.Fatalf("AgentID = %q, want agent-capacity", row.AgentID)
+	}
+	if row.CapacityState != "verified" {
+		t.Fatalf("CapacityState = %q, want verified", row.CapacityState)
+	}
+	if row.CapacityCanCount != 2 || row.CapacityCannotCount != 1 || row.CapacityUncertainCount != 1 {
+		t.Fatalf("capacity counts = can:%d cannot:%d uncertain:%d, want 2/1/1", row.CapacityCanCount, row.CapacityCannotCount, row.CapacityUncertainCount)
+	}
+	if row.CapacitySuccessCriteriaCount != 1 || row.CapacityEvidenceSignalCount != 1 {
+		t.Fatalf("capacity criteria counts = success:%d evidence:%d, want 1/1", row.CapacitySuccessCriteriaCount, row.CapacityEvidenceSignalCount)
+	}
+	if row.CapacityLastAttestedAt.IsZero() {
+		t.Fatal("CapacityLastAttestedAt is zero, want attestation timestamp")
+	}
+}
+
 func containsPendingKind(items []core.PendingItemKind, target core.PendingItemKind) bool {
 	for _, item := range items {
 		if item == target {

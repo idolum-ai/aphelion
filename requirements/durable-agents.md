@@ -528,6 +528,25 @@ The conversation may ask one missing question at a time, for example:
 The answers belong to the charter formed by the admin and parent together.
 They do not come from external senders or from the child improvising its own standing role.
 
+## Bidirectional Capacity Contract
+
+Authorization alone is not enough. Durable governance should include a child-legible capacity contract that is negotiated, probed, and attested.
+
+Minimum contract loop:
+
+1. Parent proposes bounded charter intent and success/evidence expectations.
+2. Child answers in first-person operational terms:
+   - what it can do
+   - what it cannot do
+   - where it is uncertain
+   - what success looks like from child scope
+   - how completion can be evidenced
+3. Parent and child ratify a provisional contract.
+4. Probe results are recorded against that contract.
+5. Contract is attested (`verified`) or marked stale when policy drift occurs.
+
+The registry/runtime should retain these contract facts as durable machine-readable state, and `/status` should expose the current capacity state (`unattested|provisional|verified|stale`) plus the latest negotiation/probe/attestation timestamps.
+
 ## Registry Shape
 
 The durable-agent registry should keep using the existing durable-agent record as the durable identity and policy object.

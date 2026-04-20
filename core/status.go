@@ -111,33 +111,42 @@ type SystemStatusSnapshot struct {
 }
 
 type DurableAgentStatusSnapshot struct {
-	AgentID                    string
-	ChannelKind                string
-	Status                     string
-	Health                     string
-	ReviewTargetChatID         int64
-	ParentScopeKind            string
-	ParentScopeID              string
-	WakeupMode                 string
-	NetworkPolicy              string
-	PolicyVersion              int64
-	PolicyHash                 string
-	PolicyOutboundMode         string
-	PolicyDrift                string
-	CapabilityEnvelope         []string
-	AllowedTelegramUserIDs     []int64
-	LastWakeAt                 time.Time
-	LastReviewAt               time.Time
-	DormantAt                  time.Time
-	LastAppliedPolicyVersion   int64
-	LastAppliedPolicyAt        time.Time
-	LastApplyStatus            string
-	LastApplyError             string
-	EnrollmentStatus           string
-	EnrollmentLastSeenAt       time.Time
-	EnrollmentLastSequence     int64
-	EnrollmentRevokedAt        time.Time
-	EnrollmentParentControlURL string
+	AgentID                      string
+	ChannelKind                  string
+	Status                       string
+	Health                       string
+	ReviewTargetChatID           int64
+	ParentScopeKind              string
+	ParentScopeID                string
+	WakeupMode                   string
+	NetworkPolicy                string
+	PolicyVersion                int64
+	PolicyHash                   string
+	PolicyOutboundMode           string
+	PolicyDrift                  string
+	CapabilityEnvelope           []string
+	AllowedTelegramUserIDs       []int64
+	CapacityState                string
+	CapacityCanCount             int
+	CapacityCannotCount          int
+	CapacityUncertainCount       int
+	CapacitySuccessCriteriaCount int
+	CapacityEvidenceSignalCount  int
+	CapacityLastNegotiatedAt     time.Time
+	CapacityLastProbedAt         time.Time
+	CapacityLastAttestedAt       time.Time
+	LastWakeAt                   time.Time
+	LastReviewAt                 time.Time
+	DormantAt                    time.Time
+	LastAppliedPolicyVersion     int64
+	LastAppliedPolicyAt          time.Time
+	LastApplyStatus              string
+	LastApplyError               string
+	EnrollmentStatus             string
+	EnrollmentLastSeenAt         time.Time
+	EnrollmentLastSequence       int64
+	EnrollmentRevokedAt          time.Time
+	EnrollmentParentControlURL   string
 }
 
 type DurableAgentsStatusSnapshot struct {

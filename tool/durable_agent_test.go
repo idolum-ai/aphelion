@@ -85,6 +85,9 @@ func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"access_grant"`) || !strings.Contains(durableDefJSON, `"telegram_user_ids"`) {
 		t.Fatalf("durable_agent definition missing access control surface: %s", durableDefJSON)
 	}
+	if !strings.Contains(durableDefJSON, `"capacity_negotiate"`) || !strings.Contains(durableDefJSON, `"capacity_contract"`) {
+		t.Fatalf("durable_agent definition missing capacity contract surface: %s", durableDefJSON)
+	}
 }
 
 func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
@@ -162,6 +165,164 @@ func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
 	}
 	if len(agent.AllowedTelegramUserIDs) != 1 || agent.AllowedTelegramUserIDs[0] != 2002 {
 		t.Fatalf("AllowedTelegramUserIDs = %#v, want [2002]", agent.AllowedTelegramUserIDs)
+	}
+}
+
+func TestDurableAgentToolCapacityContractFlow(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review inbox and surface important threads.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapCeiling: core.NormalizeDurableAgentBootstrapCeiling(core.DurableAgentBootstrapCeiling{
+			CapabilityEnvelope:   []string{"read_channel", "bounded_review_artifact"},
+			AllowedOutboundModes: []string{"read_only", "draft_only"},
+		}),
+		PolicyVersion:     1,
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "poll",
+		Status:            "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	showOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"capacity_show","agent_id":"idolum-email"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(capacity_show) err = %v", err)
+	}
+	if !strings.Contains(showOut, "capacity_state: unattested") {
+		t.Fatalf("capacity_show output = %q, want unattested state", showOut)
+	}
+
+	negotiateOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"capacity_negotiate",
+			"agent_id":"idolum-email",
+			"capacity_contract":{
+				"parent_proposal":"You are bounded to inbox triage and summary only.",
+				"child_self_assessment":"I can triage and summarize threads, but I cannot send mail and I'm uncertain about OCR-heavy PDFs.",
+				"can":["triage_inbox","summarize_thread"],
+				"cannot":["send_mail"],
+				"uncertain":["ocr_heavy_pdf"],
+				"success_criteria":["important threads surfaced within 5m"],
+				"evidence_signals":["review artifact includes surfaced_count"],
+				"probe_checklist":["process one synthetic inbox sample"]
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(capacity_negotiate) err = %v", err)
+	}
+	if !strings.Contains(negotiateOut, "action: durable-agent capacity negotiate") {
+		t.Fatalf("capacity_negotiate output = %q, want negotiate action", negotiateOut)
+	}
+	if !strings.Contains(negotiateOut, "capacity_state: provisional") {
+		t.Fatalf("capacity_negotiate output = %q, want provisional state", negotiateOut)
+	}
+	if !strings.Contains(negotiateOut, "can: triage_inbox,summarize_thread") {
+		t.Fatalf("capacity_negotiate output = %q, want can list", negotiateOut)
+	}
+
+	state, err := store.DurableAgentState("idolum-email")
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if continuity.CapabilityContract == nil {
+		t.Fatalf("CapabilityContract = nil, want persisted contract")
+	}
+	if continuity.CapabilityContract.Status != "provisional" {
+		t.Fatalf("CapabilityContract.Status = %q, want provisional", continuity.CapabilityContract.Status)
+	}
+	if continuity.CapabilityContract.LastNegotiatedAt.IsZero() {
+		t.Fatal("CapabilityContract.LastNegotiatedAt is zero, want timestamp")
+	}
+
+	probeOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"capacity_probe",
+			"agent_id":"idolum-email",
+			"capacity_contract":{
+				"probe_results":["synthetic sample triaged in 2m; surfaced two high-priority threads"]
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(capacity_probe) err = %v", err)
+	}
+	if !strings.Contains(probeOut, "action: durable-agent capacity probe") {
+		t.Fatalf("capacity_probe output = %q, want probe action", probeOut)
+	}
+	if !strings.Contains(probeOut, "probe_results: synthetic sample triaged in 2m; surfaced two high-priority threads") {
+		t.Fatalf("capacity_probe output = %q, want probe results", probeOut)
+	}
+
+	attestOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"capacity_attest","agent_id":"idolum-email"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(capacity_attest) err = %v", err)
+	}
+	if !strings.Contains(attestOut, "action: durable-agent capacity attest") {
+		t.Fatalf("capacity_attest output = %q, want attest action", attestOut)
+	}
+	if !strings.Contains(attestOut, "capacity_state: verified") {
+		t.Fatalf("capacity_attest output = %q, want verified state", attestOut)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"policy_apply","agent_id":"idolum-email","autonomy":"local_drafts","reason":"policy adjustment requires fresh attestation"}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(policy_apply) err = %v", err)
+	}
+	staleOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"capacity_show","agent_id":"idolum-email"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(capacity_show after policy_apply) err = %v", err)
+	}
+	if !strings.Contains(staleOut, "capacity_state: stale") {
+		t.Fatalf("capacity_show output = %q, want stale state after policy change", staleOut)
 	}
 }
 

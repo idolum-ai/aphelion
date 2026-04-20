@@ -112,6 +112,7 @@ type DurableAgentContinuityState struct {
 	RatifiedOutcomes   []DurableAgentRatifiedOutcome   `json:"ratified_outcomes,omitempty"`
 	SetupWizard        *DurableAgentSetupWizardState   `json:"setup_wizard,omitempty"`
 	EmailPending       *DurableAgentEmailPendingState  `json:"email_pending,omitempty"`
+	CapabilityContract *DurableAgentCapabilityContract `json:"capability_contract,omitempty"`
 }
 
 type DurableAgentSetupWizardState struct {
@@ -140,6 +141,22 @@ type DurableAgentSetupWizardAnswers struct {
 	Capabilities     []string `json:"capabilities,omitempty"`
 	NeverRetain      []string `json:"never_retain,omitempty"`
 	DriftPolicy      string   `json:"drift_policy,omitempty"`
+}
+
+type DurableAgentCapabilityContract struct {
+	Status              string    `json:"status,omitempty"`
+	ParentProposal      string    `json:"parent_proposal,omitempty"`
+	ChildSelfAssessment string    `json:"child_self_assessment,omitempty"`
+	Can                 []string  `json:"can,omitempty"`
+	Cannot              []string  `json:"cannot,omitempty"`
+	Uncertain           []string  `json:"uncertain,omitempty"`
+	SuccessCriteria     []string  `json:"success_criteria,omitempty"`
+	EvidenceSignals     []string  `json:"evidence_signals,omitempty"`
+	ProbeChecklist      []string  `json:"probe_checklist,omitempty"`
+	ProbeResults        []string  `json:"probe_results,omitempty"`
+	LastNegotiatedAt    time.Time `json:"last_negotiated_at,omitempty"`
+	LastProbedAt        time.Time `json:"last_probed_at,omitempty"`
+	LastAttestedAt      time.Time `json:"last_attested_at,omitempty"`
 }
 
 type DurableAgentEmailPendingState struct {
@@ -716,6 +733,7 @@ func NormalizeDurableAgentContinuityState(state DurableAgentContinuityState) Dur
 	state.RatifiedOutcomes = normalizeDurableAgentRatifiedOutcomes(state.RatifiedOutcomes)
 	state.SetupWizard = normalizeDurableAgentSetupWizardState(state.SetupWizard)
 	state.EmailPending = normalizeDurableAgentEmailPendingState(state.EmailPending)
+	state.CapabilityContract = normalizeDurableAgentCapabilityContract(state.CapabilityContract)
 	return state
 }
 
@@ -737,7 +755,8 @@ func (s DurableAgentContinuityState) IsZero() bool {
 		len(s.ReviewRefs) == 0 &&
 		len(s.RatifiedOutcomes) == 0 &&
 		s.SetupWizard == nil &&
-		s.EmailPending == nil
+		s.EmailPending == nil &&
+		s.CapabilityContract == nil
 }
 
 func (s DurableAgentContinuityState) WithReviewArtifact(reviewEventID int64, artifact DurableReviewArtifact, at time.Time) DurableAgentContinuityState {
@@ -1138,6 +1157,57 @@ func normalizeDurableAgentSetupWizardAnswers(answers DurableAgentSetupWizardAnsw
 	answers.NeverRetain = normalizeDurableAgentStringSet(answers.NeverRetain)
 	answers.DriftPolicy = strings.TrimSpace(answers.DriftPolicy)
 	return answers
+}
+
+func normalizeDurableAgentCapabilityContract(contract *DurableAgentCapabilityContract) *DurableAgentCapabilityContract {
+	if contract == nil {
+		return nil
+	}
+	normalized := *contract
+	normalized.Status = normalizeDurableAgentCapabilityState(normalized.Status)
+	normalized.ParentProposal = strings.TrimSpace(normalized.ParentProposal)
+	normalized.ChildSelfAssessment = strings.TrimSpace(normalized.ChildSelfAssessment)
+	normalized.Can = normalizeDurableAgentStringSet(normalized.Can)
+	normalized.Cannot = normalizeDurableAgentStringSet(normalized.Cannot)
+	normalized.Uncertain = normalizeDurableAgentStringSet(normalized.Uncertain)
+	normalized.SuccessCriteria = normalizeDurableAgentStringSet(normalized.SuccessCriteria)
+	normalized.EvidenceSignals = normalizeDurableAgentStringSet(normalized.EvidenceSignals)
+	normalized.ProbeChecklist = normalizeDurableAgentStringSet(normalized.ProbeChecklist)
+	normalized.ProbeResults = normalizeDurableAgentStringSet(normalized.ProbeResults)
+	if normalized.Status == "" {
+		normalized.Status = "unattested"
+	}
+	if normalized.Status == "unattested" &&
+		normalized.ParentProposal == "" &&
+		normalized.ChildSelfAssessment == "" &&
+		len(normalized.Can) == 0 &&
+		len(normalized.Cannot) == 0 &&
+		len(normalized.Uncertain) == 0 &&
+		len(normalized.SuccessCriteria) == 0 &&
+		len(normalized.EvidenceSignals) == 0 &&
+		len(normalized.ProbeChecklist) == 0 &&
+		len(normalized.ProbeResults) == 0 &&
+		normalized.LastNegotiatedAt.IsZero() &&
+		normalized.LastProbedAt.IsZero() &&
+		normalized.LastAttestedAt.IsZero() {
+		return nil
+	}
+	return &normalized
+}
+
+func normalizeDurableAgentCapabilityState(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "unattested":
+		return "unattested"
+	case "provisional":
+		return "provisional"
+	case "verified":
+		return "verified"
+	case "stale":
+		return "stale"
+	default:
+		return ""
+	}
 }
 
 func durableAgentSetupWizardAnswersZero(answers DurableAgentSetupWizardAnswers) bool {

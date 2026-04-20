@@ -45,6 +45,7 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 			PolicyDrift:            strings.TrimSpace(agent.LivePolicy.DriftPolicy),
 			CapabilityEnvelope:     append([]string(nil), agent.LivePolicy.CapabilityEnvelope...),
 			AllowedTelegramUserIDs: append([]int64(nil), agent.AllowedTelegramUserIDs...),
+			CapacityState:          "unattested",
 		}
 
 		state, err := r.store.DurableAgentState(agent.AgentID)
@@ -60,6 +61,22 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 			row.LastAppliedPolicyAt = state.LastAppliedPolicyAt
 			row.LastApplyStatus = strings.TrimSpace(state.LastApplyStatus)
 			row.LastApplyError = strings.TrimSpace(state.LastApplyError)
+			continuity, parseErr := core.ParseDurableAgentContinuityState(state.StateJSON)
+			if parseErr != nil {
+				return core.DurableAgentsStatusSnapshot{}, parseErr
+			}
+			if continuity.CapabilityContract != nil {
+				contract := *continuity.CapabilityContract
+				row.CapacityState = firstNonEmpty(strings.TrimSpace(contract.Status), "unattested")
+				row.CapacityCanCount = len(contract.Can)
+				row.CapacityCannotCount = len(contract.Cannot)
+				row.CapacityUncertainCount = len(contract.Uncertain)
+				row.CapacitySuccessCriteriaCount = len(contract.SuccessCriteria)
+				row.CapacityEvidenceSignalCount = len(contract.EvidenceSignals)
+				row.CapacityLastNegotiatedAt = contract.LastNegotiatedAt
+				row.CapacityLastProbedAt = contract.LastProbedAt
+				row.CapacityLastAttestedAt = contract.LastAttestedAt
+			}
 		}
 
 		enrollment, err := r.store.DurableAgentRemoteEnrollment(agent.AgentID)
