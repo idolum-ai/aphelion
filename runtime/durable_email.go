@@ -15,8 +15,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 const (
@@ -104,6 +106,37 @@ func (r *Runtime) StartDurableEmailLoop(ctx context.Context, logger func(string,
 	})
 }
 
+func RunDurableEmailPollOnce(ctx context.Context, cfg *config.Config, store *session.SQLiteStore, agentID string, now time.Time) error {
+	if cfg == nil {
+		return fmt.Errorf("durable email poll config is nil")
+	}
+	if store == nil {
+		return fmt.Errorf("durable email poll store is nil")
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return fmt.Errorf("durable email poll agent id is required")
+	}
+	agent, err := store.DurableAgent(agentID)
+	if err != nil {
+		return fmt.Errorf("load durable email agent: %w", err)
+	}
+	if agent == nil {
+		return fmt.Errorf("durable email agent %q not found", agentID)
+	}
+	if !durableEmailWakeEnabled(*agent) {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	rt := &Runtime{
+		cfg:   normalizeRuntimeConfig(cfg),
+		store: store,
+	}
+	return rt.pollDurableEmailAgent(ctx, *agent, now.UTC())
+}
+
 func (r *Runtime) pollDurableEmailAgents(ctx context.Context, now time.Time) error {
 	if r == nil || r.store == nil {
 		return nil
@@ -117,6 +150,12 @@ func (r *Runtime) pollDurableEmailAgents(ctx context.Context, now time.Time) err
 		if !durableEmailWakeEnabled(agent) {
 			continue
 		}
+		if r.shouldRunDurableEmailInChild(agent) {
+			if err := r.pollDurableEmailAgentViaChild(ctx, agent, now); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", agent.AgentID, err))
+			}
+			continue
+		}
 		if err := r.pollDurableEmailAgent(ctx, agent, now); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", agent.AgentID, err))
 		}
@@ -125,6 +164,27 @@ func (r *Runtime) pollDurableEmailAgents(ctx context.Context, now time.Time) err
 		return fmt.Errorf(strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func (r *Runtime) shouldRunDurableEmailInChild(agent core.DurableAgent) bool {
+	if r == nil || r.durableEmailChild == nil {
+		return false
+	}
+	return core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM).Configured()
+}
+
+func (r *Runtime) pollDurableEmailAgentViaChild(ctx context.Context, agent core.DurableAgent, now time.Time) error {
+	if r == nil || r.durableEmailChild == nil {
+		return r.pollDurableEmailAgent(ctx, agent, now)
+	}
+	scope, err := r.scopeForDurableAgent(agent)
+	if err != nil {
+		return err
+	}
+	if !r.durableEmailChild.Supports(scope, agent) {
+		return r.pollDurableEmailAgent(ctx, agent, now)
+	}
+	return r.durableEmailChild.Run(ctx, scope, agent, now)
 }
 
 func durableEmailWakeEnabled(agent core.DurableAgent) bool {

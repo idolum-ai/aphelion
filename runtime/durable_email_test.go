@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func TestPollDurableEmailAgentsQueuesReviewDigestFromGogInbox(t *testing.T) {
@@ -404,5 +405,71 @@ func TestPollDurableEmailAgentsPushWakeProcessesInboxEventFiles(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("push inbox entries = %d, want consumed event files", len(entries))
+	}
+}
+
+func TestPollDurableEmailAgentsUsesChildExecutionWhenBootstrapConfigured(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Email digest prepared."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email-child",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review inbox via isolated child execution.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		ChannelConfig: core.DurableAgentChannelConfig{
+			Email: &core.DurableAgentEmailChannelConfig{
+				Address:          "idolum@example.com",
+				Account:          "idolum@example.com",
+				Adapter:          "gog_cli",
+				Query:            "label:inbox newer_than:7d",
+				PollInterval:     "1m",
+				SynthesisCadence: "5m",
+			},
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	childRuns := 0
+	rt.durableEmailChild = inlineDurableEmailChildExecutor{
+		run: func(_ context.Context, scope sandbox.Scope, got core.DurableAgent, _ time.Time) error {
+			childRuns++
+			if strings.TrimSpace(got.AgentID) != "idolum-email-child" {
+				t.Fatalf("child agent id = %q, want idolum-email-child", got.AgentID)
+			}
+			if strings.TrimSpace(scope.Principal.DurableAgentID) != "idolum-email-child" {
+				t.Fatalf("child scope durable agent id = %q, want idolum-email-child", scope.Principal.DurableAgentID)
+			}
+			return nil
+		},
+	}
+
+	origRunner := durableEmailCommandRunner
+	defer func() { durableEmailCommandRunner = origRunner }()
+	durableEmailCommandRunner = func(_ context.Context, _ ...string) ([]byte, error) {
+		return nil, fmt.Errorf("legacy durable email command runner should not execute when child runtime is configured")
+	}
+
+	if err := rt.pollDurableEmailAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableEmailAgents() err = %v", err)
+	}
+	if childRuns != 1 {
+		t.Fatalf("childRuns = %d, want 1", childRuns)
 	}
 }

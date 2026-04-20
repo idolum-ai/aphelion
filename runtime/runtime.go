@@ -81,6 +81,7 @@ type Runtime struct {
 
 	scopeResolver          *sandbox.Resolver
 	durableGroupChild      durableGroupChildExecutor
+	durableEmailChild      durableEmailChildExecutor
 	constitutionGate       TurnConstitutionGate
 	turnAuditSink          func(TurnAudit)
 	interactiveDMAssembler interactiveDMTurnAssembler
@@ -451,6 +452,7 @@ func New(
 		recipeState:              recipeState,
 		scopeResolver:            scopeResolver,
 		durableGroupChild:        newSandboxDurableGroupChildExecutor(cfg),
+		durableEmailChild:        newSandboxDurableEmailChildExecutor(cfg),
 		constitutionGate:         DefaultTurnConstitutionGate(),
 		sessionLocks:             make(map[string]*sync.Mutex),
 		statusStageByChat:        make(map[int64]statusTurnPhase),

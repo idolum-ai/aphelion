@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
@@ -274,6 +275,21 @@ func (e inlineDurableGroupChildExecutor) Supports(sandbox.Scope, core.DurableAge
 
 func (e inlineDurableGroupChildExecutor) Run(ctx context.Context, _ sandbox.Scope, _ core.DurableAgent, msg core.InboundMessage) (*DurableGroupChildResult, error) {
 	return e.run(ctx, msg)
+}
+
+type inlineDurableEmailChildExecutor struct {
+	run func(context.Context, sandbox.Scope, core.DurableAgent, time.Time) error
+}
+
+func (e inlineDurableEmailChildExecutor) Supports(sandbox.Scope, core.DurableAgent) bool {
+	return e.run != nil
+}
+
+func (e inlineDurableEmailChildExecutor) Run(ctx context.Context, scope sandbox.Scope, agent core.DurableAgent, now time.Time) error {
+	if e.run == nil {
+		return nil
+	}
+	return e.run(ctx, scope, agent, now)
 }
 
 func durableGroupTestBootstrapLLM() core.NodeLLMBootstrap {
