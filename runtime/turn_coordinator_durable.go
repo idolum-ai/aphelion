@@ -171,7 +171,7 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		GovernorName:          c.coordinatorGovernorName(),
 		RequestFaceNote:       c.requestFaceNote,
 		ExtraSystemMessages: []agent.Message{
-			{Role: "system", Content: durableGroupGovernorContext(c.registered, c.livePolicy, c.msg)},
+			{Role: "system", Content: durableTelegramGovernorContext(c.registered, c.livePolicy, c.msg)},
 		},
 		RunErrPrefix:        "run durable group turn",
 		InvalidOutputPrefix: "invalid durable group turn output",

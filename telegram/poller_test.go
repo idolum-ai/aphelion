@@ -4,6 +4,7 @@ package telegram
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,5 +64,36 @@ func TestPollerDispatchesCallbackQueries(t *testing.T) {
 	case <-handlerCalled:
 		t.Fatal("message handler should not run for callback query")
 	default:
+	}
+}
+
+func TestPollerAllowUnresolvedPrivateMessagePredicate(t *testing.T) {
+	t.Parallel()
+
+	poller := NewPoller(
+		NewClient("TOKEN"),
+		func(_ context.Context, _ core.InboundMessage) error { return nil },
+		WithUnresolvedPrivatePredicate(func(msg *Message) bool {
+			return strings.HasPrefix(strings.TrimSpace(msg.Text), "agent:")
+		}),
+	)
+
+	if !poller.allowUnresolvedPrivateMessage(&Message{
+		Chat: &Chat{Type: "private"},
+		Text: "agent:family-group hello",
+	}) {
+		t.Fatal("allowUnresolvedPrivateMessage() = false, want true for durable relay prefix")
+	}
+	if poller.allowUnresolvedPrivateMessage(&Message{
+		Chat: &Chat{Type: "private"},
+		Text: "hello",
+	}) {
+		t.Fatal("allowUnresolvedPrivateMessage() = true, want false for ordinary private message")
+	}
+	if poller.allowUnresolvedPrivateMessage(&Message{
+		Chat: &Chat{Type: "group"},
+		Text: "agent:family-group hello",
+	}) {
+		t.Fatal("allowUnresolvedPrivateMessage() = true, want false for non-private chat")
 	}
 }

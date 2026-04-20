@@ -125,7 +125,7 @@ Each durable agent should have:
 
 - `agent_id`
 - `parent_agent_id` or parent house identity
-- `channel_kind` (`email`, `telegram_group`, `web_chat`, `remote_host`, etc.)
+- `channel_kind` (`email`, `telegram_group`, `telegram_dm`, `web_chat`, `remote_host`, etc.)
 - `charter`
 - `capability_envelope`
 - `local_storage_roots`

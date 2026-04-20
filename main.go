@@ -532,6 +532,7 @@ func run() error {
 
 	poller := telegram.NewPoller(tgClient, func(parent context.Context, msg core.InboundMessage) error {
 		msg = rewriteDurableWizardIntent(msg, commandControl)
+		msg = rewriteDurableRelayIntent(msg)
 		handled, err := handleTelegramCommand(parent, tgOutbound, commandControl, msg)
 		if err != nil {
 			return err
@@ -561,6 +562,7 @@ func run() error {
 		telegram.WithMediaConfig(cfg.Telegram.Media),
 		telegram.WithPrincipalResolver(principalResolver),
 		telegram.WithDurableGroups(cfg.Telegram.DurableGroups),
+		telegram.WithUnresolvedPrivatePredicate(shouldAllowUnresolvedPrivateDurableRelayMessage),
 		telegram.WithBotIdentity(botUser),
 		telegram.WithCallbackHandler(func(parent context.Context, cb telegram.CallbackQuery) error {
 			if handled, err := handleTelegramCommandCallback(parent, tgOutbound, commandControl, cb); err != nil {
@@ -586,6 +588,18 @@ func run() error {
 		strings.Join(cfg.Providers.FallbackChain, ","),
 	)
 	return poller.Run(ctx)
+}
+
+func shouldAllowUnresolvedPrivateDurableRelayMessage(msg *telegram.Message) bool {
+	if msg == nil {
+		return false
+	}
+	text := strings.TrimSpace(msg.Text)
+	if text == "" {
+		text = strings.TrimSpace(msg.Caption)
+	}
+	_, _, ok := parseDurableRelayIntent(text)
+	return ok
 }
 
 func prepareFilesystem(cfg *config.Config) error {

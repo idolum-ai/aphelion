@@ -15,6 +15,7 @@ import (
 
 type UpdateHandler func(context.Context, core.InboundMessage) error
 type CallbackHandler func(context.Context, CallbackQuery) error
+type UnresolvedPrivatePredicate func(*Message) bool
 
 type PollerOption func(*Poller)
 
@@ -27,6 +28,7 @@ type Poller struct {
 	durableGroups      map[int64]durableGroupRoute
 	botUser            *User
 	callbackHandler    CallbackHandler
+	allowUnresolvedDM  UnresolvedPrivatePredicate
 }
 
 func NewPoller(client *Client, handler UpdateHandler, opts ...PollerOption) *Poller {
@@ -79,6 +81,12 @@ func WithCallbackHandler(handler CallbackHandler) PollerOption {
 	}
 }
 
+func WithUnresolvedPrivatePredicate(predicate UnresolvedPrivatePredicate) PollerOption {
+	return func(p *Poller) {
+		p.allowUnresolvedDM = predicate
+	}
+}
+
 func (p *Poller) Run(ctx context.Context) error {
 	if p.client == nil || p.handler == nil {
 		return errors.New("poller client and handler are required")
@@ -119,7 +127,11 @@ func (p *Poller) Run(ctx context.Context) error {
 				continue
 			}
 			if p.resolver != nil && shouldResolvePrincipal(upd.Message) {
+				allowMessage := true
 				if _, ok := p.resolver.ResolveTelegramUser(senderID(upd.Message.From)); !ok {
+					allowMessage = p.allowUnresolvedPrivateMessage(upd.Message)
+				}
+				if !allowMessage {
 					if next := upd.UpdateID + 1; next > offset {
 						offset = next
 					}
@@ -141,6 +153,13 @@ func (p *Poller) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (p *Poller) allowUnresolvedPrivateMessage(msg *Message) bool {
+	if p == nil || p.allowUnresolvedDM == nil || msg == nil || msg.Chat == nil || msg.Chat.Type != "private" {
+		return false
+	}
+	return p.allowUnresolvedDM(msg)
 }
 
 func (p *Poller) dispatchCallback(ctx context.Context, cb CallbackQuery) error {

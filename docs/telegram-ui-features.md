@@ -147,6 +147,24 @@ Callback behavior:
 - stale/mismatched callbacks are acknowledged and ignored
 - valid callbacks run deterministic `durable_agent` wizard actions (`wizard_answer`, `wizard_show`, `wizard_finalize`, `wizard_cancel`) and edit the same message in place
 
+### Durable child relay syntax
+
+Telegram DM can route a single message directly to an active durable Telegram child without a slash command:
+
+- `agent:<agent_id> <message>`
+
+Examples:
+
+- `agent:ops-child summarize today’s incidents`
+- `agent:ops-child should we escalate this to review?`
+
+Behavior:
+
+- bypasses normal slash-command handling for that message
+- routes the turn as `durable_agent` scoped execution
+- delivers the child reply in the same chat when channel policy allows local reply
+- sender must still be authorized by the child (`allowed_telegram_user_ids` or admin role)
+
 ### `/set_persona_model` selector
 
 Buttons are generated from runtime options:

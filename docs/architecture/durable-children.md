@@ -10,6 +10,7 @@ personas.
 - Parent runtime owns durable-agent registry and wake loops.
 - Child execution stays scoped by charter and channel policy.
 - Upward communication is through bounded review artifacts and summaries.
+- Telegram relay turns can target a child inline from DM using `agent:<agent_id> ...` and execute in child scope.
 - Email children support poll, push, or poll-or-push wake modes.
 - Email synthesis respects cadence buffering (`synthesis_cadence`) and enforces channel `never_retain` scrubbing before review emission.
 

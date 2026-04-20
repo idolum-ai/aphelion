@@ -238,6 +238,21 @@ Group ingress is inert by default.
 
 Only groups explicitly configured in `[[telegram.durable_groups]]` should activate the durable-group adapter.
 
+## Durable Telegram DM relay
+
+Durable children may expose a bounded direct-message transport lane in Telegram.
+
+Relay entrypoint syntax:
+
+- `agent:<agent_id> <message>`
+
+Routing rules:
+
+- relay-shaped private messages can bypass ordinary principal pre-filtering in the poller
+- runtime authorization still enforces child-scoped access (`allowed_telegram_user_ids` or admin)
+- the durable child executes inside its own durable scope and replies in the same chat when policy allows
+- unresolved private messages that do not match the relay syntax remain dropped by the principal gate
+
 ### Child execution
 
 When an admitted group message arrives:
