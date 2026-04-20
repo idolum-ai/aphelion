@@ -136,6 +136,65 @@ func TestConcurrentSessions(t *testing.T) {
 	}
 }
 
+func TestConcurrentSessionsSameChatDifferentDurableAgents(t *testing.T) {
+	t.Parallel()
+
+	firstStarted := make(chan struct{}, 1)
+	secondStarted := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+
+	router := NewRouter(func(_ context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+		switch msg.DurableAgentID {
+		case "agent-a":
+			firstStarted <- struct{}{}
+			<-releaseFirst
+		case "agent-b":
+			secondStarted <- struct{}{}
+		default:
+			t.Fatalf("unexpected durable agent id: %q", msg.DurableAgentID)
+		}
+		return &TurnResult{}, nil
+	})
+
+	doneFirst := make(chan struct{})
+	go func() {
+		defer close(doneFirst)
+		router.Route(context.Background(), InboundMessage{
+			ChatID:         99,
+			ChatType:       "private",
+			DurableAgentID: "agent-a",
+			Text:           "first",
+		})
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("first durable agent turn did not start")
+	}
+
+	doneSecond := make(chan struct{})
+	go func() {
+		defer close(doneSecond)
+		router.Route(context.Background(), InboundMessage{
+			ChatID:         99,
+			ChatType:       "private",
+			DurableAgentID: "agent-b",
+			Text:           "second",
+		})
+	}()
+
+	select {
+	case <-secondStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("second durable agent turn did not start while first durable session was active")
+	}
+
+	close(releaseFirst)
+	<-doneFirst
+	<-doneSecond
+}
+
 func TestQueueCompaction(t *testing.T) {
 	t.Parallel()
 

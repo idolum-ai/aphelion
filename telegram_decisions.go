@@ -34,6 +34,14 @@ type telegramDecisionRouter interface {
 	Route(ctx context.Context, msg core.InboundMessage)
 }
 
+type telegramDecisionMessageStatusRouter interface {
+	StatusForMessage(msg core.InboundMessage) core.SessionStatus
+}
+
+type telegramDecisionMessageStopRouter interface {
+	StopForMessage(msg core.InboundMessage) core.StopResult
+}
+
 type telegramDecisionHandler struct {
 	sender                   telegramDecisionSender
 	router                   telegramDecisionRouter
@@ -272,7 +280,11 @@ func (h *telegramDecisionHandler) HandleBusyMessage(ctx context.Context, msg cor
 	if h == nil || h.sender == nil || h.router == nil || h.broker == nil {
 		return false, nil
 	}
-	if !h.router.Status(msg.ChatID).Active {
+	status := h.router.Status(msg.ChatID)
+	if scoped, ok := h.router.(telegramDecisionMessageStatusRouter); ok {
+		status = scoped.StatusForMessage(msg)
+	}
+	if !status.Active {
 		return false, nil
 	}
 
@@ -303,7 +315,11 @@ func (h *telegramDecisionHandler) HandleBusyMessage(ctx context.Context, msg cor
 		if result.Delivery.MessageID != 0 {
 			_ = h.sender.DeleteMessage(ctx, msg.ChatID, result.Delivery.MessageID)
 		}
-		h.router.Stop(msg.ChatID)
+		if scoped, ok := h.router.(telegramDecisionMessageStopRouter); ok {
+			scoped.StopForMessage(msg)
+		} else {
+			h.router.Stop(msg.ChatID)
+		}
 		if !isOnlyStopWord(msg.Text) {
 			h.router.Route(ctx, msg)
 		}

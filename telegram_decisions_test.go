@@ -69,17 +69,31 @@ func (s *decisionTestSender) AnswerCallbackQuery(_ context.Context, id string, t
 }
 
 type decisionTestRouter struct {
-	status    core.SessionStatus
-	stopCalls []int64
-	routed    []core.InboundMessage
+	status             core.SessionStatus
+	statusForMessageFn func(core.InboundMessage) core.SessionStatus
+	stopCalls          []int64
+	stopForMessage     []core.InboundMessage
+	routed             []core.InboundMessage
 }
 
 func (r *decisionTestRouter) Status(chatID int64) core.SessionStatus {
 	return r.status
 }
 
+func (r *decisionTestRouter) StatusForMessage(msg core.InboundMessage) core.SessionStatus {
+	if r.statusForMessageFn != nil {
+		return r.statusForMessageFn(msg)
+	}
+	return r.status
+}
+
 func (r *decisionTestRouter) Stop(chatID int64) core.StopResult {
 	r.stopCalls = append(r.stopCalls, chatID)
+	return core.StopResult{ActiveCanceled: true}
+}
+
+func (r *decisionTestRouter) StopForMessage(msg core.InboundMessage) core.StopResult {
+	r.stopForMessage = append(r.stopForMessage, msg)
 	return core.StopResult{ActiveCanceled: true}
 }
 
@@ -143,8 +157,11 @@ func TestHandleBusyTelegramMessageStopWordOnlyCancelsWithoutRouting(t *testing.T
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(router.stopCalls) != 1 {
-		t.Fatalf("stopCalls = %#v, want one stop", router.stopCalls)
+	if len(router.stopForMessage) != 1 {
+		t.Fatalf("stopForMessage = %#v, want one scoped stop", router.stopForMessage)
+	}
+	if len(router.stopCalls) != 0 {
+		t.Fatalf("stopCalls = %#v, want no chat-wide stop", router.stopCalls)
 	}
 	if len(router.routed) != 0 {
 		t.Fatalf("routed = %#v, want no routed follow-up", router.routed)
@@ -174,11 +191,93 @@ func TestHandleBusyTelegramMessageStopWordWithContentRoutesAfterStop(t *testing.
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(router.stopCalls) != 1 {
-		t.Fatalf("stopCalls = %#v, want one stop", router.stopCalls)
+	if len(router.stopForMessage) != 1 {
+		t.Fatalf("stopForMessage = %#v, want one scoped stop", router.stopForMessage)
+	}
+	if len(router.stopCalls) != 0 {
+		t.Fatalf("stopCalls = %#v, want no chat-wide stop", router.stopCalls)
 	}
 	if len(router.routed) != 1 || router.routed[0].Text != msg.Text {
 		t.Fatalf("routed = %#v, want original follow-up message", router.routed)
+	}
+}
+
+func TestHandleBusyTelegramMessageUsesStatusForMessageWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	router := &decisionTestRouter{
+		status: core.SessionStatus{Active: false},
+		statusForMessageFn: func(msg core.InboundMessage) core.SessionStatus {
+			if msg.DurableAgentID == "agent-a" {
+				return core.SessionStatus{Active: true}
+			}
+			return core.SessionStatus{Active: false}
+		},
+	}
+	broker := decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		return decision.Delivery{MessageID: 41}, nil
+	})
+	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler.interruptTimeout = 10 * time.Millisecond
+	handler.stopWordTimeout = 10 * time.Millisecond
+
+	msg := core.InboundMessage{
+		ChatID:         7,
+		MessageID:      99,
+		DurableAgentID: "agent-a",
+		Text:           "next task",
+	}
+	handled, err := handler.HandleBusyMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleBusyMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want one routed message", router.routed)
+	}
+}
+
+func TestHandleBusyTelegramMessageUsesStopForMessageWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	var broker *decision.Broker
+	broker = decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		go broker.Resolve(pending.ID, "stop")
+		return decision.Delivery{MessageID: 22}, nil
+	})
+	router := &decisionTestRouter{
+		status: core.SessionStatus{Active: false},
+		statusForMessageFn: func(msg core.InboundMessage) core.SessionStatus {
+			if msg.DurableAgentID == "agent-a" {
+				return core.SessionStatus{Active: true}
+			}
+			return core.SessionStatus{Active: false}
+		},
+	}
+	handler := newTelegramDecisionHandler(sender, router, broker)
+
+	msg := core.InboundMessage{
+		ChatID:         7,
+		MessageID:      15,
+		DurableAgentID: "agent-a",
+		Text:           "wait",
+	}
+	handled, err := handler.HandleBusyMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleBusyMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(router.stopForMessage) != 1 {
+		t.Fatalf("stopForMessage = %#v, want one scoped stop call", router.stopForMessage)
+	}
+	if len(router.stopCalls) != 0 {
+		t.Fatalf("stopCalls = %#v, want no chat-wide stop calls", router.stopCalls)
 	}
 }
 
