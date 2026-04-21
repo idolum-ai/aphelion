@@ -19,6 +19,7 @@ const (
 	defaultStopWordTimeout          = 15 * time.Second
 	defaultExecApprovalTimeout      = 30 * time.Second
 	defaultArtifactRetentionTimeout = 45 * time.Second
+	defaultMemoryDelegationTimeout  = 45 * time.Second
 )
 
 type telegramDecisionSender interface {
@@ -57,6 +58,12 @@ type telegramExecApprover struct {
 	timeout time.Duration
 }
 
+type telegramDurableMemoryDelegationApprover struct {
+	sender  telegramDecisionSender
+	broker  *decision.Broker
+	timeout time.Duration
+}
+
 func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker) *telegramDecisionHandler {
 	return &telegramDecisionHandler{
 		sender:                   sender,
@@ -73,6 +80,14 @@ func newTelegramExecApprover(sender telegramDecisionSender, broker *decision.Bro
 		sender:  sender,
 		broker:  broker,
 		timeout: defaultExecApprovalTimeout,
+	}
+}
+
+func newTelegramDurableMemoryDelegationApprover(sender telegramDecisionSender, broker *decision.Broker) *telegramDurableMemoryDelegationApprover {
+	return &telegramDurableMemoryDelegationApprover{
+		sender:  sender,
+		broker:  broker,
+		timeout: defaultMemoryDelegationTimeout,
 	}
 }
 
@@ -126,6 +141,42 @@ func (a *telegramExecApprover) ConfirmExec(ctx context.Context, req toolpkg.Exec
 	return toolpkg.ExecApprovalDecision{Approved: false}, nil
 }
 
+func (a *telegramDurableMemoryDelegationApprover) ConfirmDurableMemoryDelegation(ctx context.Context, req toolpkg.DurableMemoryDelegationApprovalRequest) (toolpkg.DurableMemoryDelegationApprovalDecision, error) {
+	if a == nil || a.sender == nil || a.broker == nil {
+		return toolpkg.DurableMemoryDelegationApprovalDecision{}, fmt.Errorf("telegram durable memory delegation approver is not configured")
+	}
+	if req.SessionKey.ChatID == 0 {
+		return toolpkg.DurableMemoryDelegationApprovalDecision{}, fmt.Errorf("memory delegation requires explicit confirmation but no interactive chat is available")
+	}
+	result, err := a.broker.Request(ctx, decision.Request{
+		Kind:          decision.KindMemoryDelegation,
+		ChatID:        req.SessionKey.ChatID,
+		SenderID:      req.Principal.TelegramUserID,
+		Prompt:        "Approve memory delegation to the child?",
+		Details:       formatDurableMemoryDelegationDetails(req),
+		Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+		DefaultChoice: "deny",
+		Timeout:       a.timeout,
+	})
+	if err != nil {
+		return toolpkg.DurableMemoryDelegationApprovalDecision{}, err
+	}
+	if result.Choice == "approve" {
+		if result.Delivery.MessageID != 0 {
+			_ = a.sender.DeleteMessage(ctx, req.SessionKey.ChatID, result.Delivery.MessageID)
+		}
+		return toolpkg.DurableMemoryDelegationApprovalDecision{Approved: true}, nil
+	}
+	if result.Delivery.MessageID != 0 {
+		text := "Memory delegation denied."
+		if result.TimedOut {
+			text = "Memory delegation denied — approval timed out."
+		}
+		_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, text, "")
+	}
+	return toolpkg.DurableMemoryDelegationApprovalDecision{Approved: false, TimedOut: result.TimedOut}, nil
+}
+
 func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
 	lines := make([]string, 0, 8)
 	if summary := strings.TrimSpace(req.Proposal.Summary); summary != "" {
@@ -145,6 +196,43 @@ func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
 	}
 	if command := strings.TrimSpace(req.Command); command != "" {
 		lines = append(lines, "", "Command:", command)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func formatDurableMemoryDelegationDetails(req toolpkg.DurableMemoryDelegationApprovalRequest) string {
+	lines := make([]string, 0, 12)
+	lines = append(lines, "Memory delegation request.")
+	if agentID := strings.TrimSpace(req.Agent.AgentID); agentID != "" {
+		lines = append(lines, "", "Agent:", agentID)
+	}
+	if channel := strings.TrimSpace(req.Agent.ChannelKind); channel != "" {
+		lines = append(lines, "Channel:", channel)
+	}
+	if charter := strings.TrimSpace(req.Agent.LivePolicy.Charter); charter != "" {
+		lines = append(lines, "", "Charter:", charter)
+	}
+	if reason := strings.TrimSpace(req.Reason); reason != "" {
+		lines = append(lines, "", "Why now:", reason)
+	}
+	if len(req.Entries) > 0 {
+		lines = append(lines, "", "Items:")
+		for i, entry := range req.Entries {
+			source := strings.TrimSpace(entry.SourceStore)
+			if source == "" {
+				source = "-"
+			}
+			target := strings.TrimSpace(entry.TargetStore)
+			if target == "" {
+				target = "-"
+			}
+			ref := strings.TrimSpace(entry.CandidateID)
+			if ref == "" {
+				ref = "-"
+			}
+			lines = append(lines, fmt.Sprintf("%d. candidate=%s source=%s target=%s", i+1, ref, source, target))
+			lines = append(lines, "   "+truncateDecisionSummaryText(strings.TrimSpace(entry.Content), 220))
+		}
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
@@ -517,6 +605,8 @@ func summarizePendingDecision(pending decision.PendingDecision) string {
 		return summarizeProposalApprovalDetails(details)
 	case decision.KindArtifactRetention:
 		return summarizeArtifactRetentionDetails(details)
+	case decision.KindMemoryDelegation:
+		return summarizeMemoryDelegationDetails(details)
 	default:
 		return summarizeGenericDecisionDetails(details)
 	}
@@ -580,6 +670,37 @@ func summarizeArtifactRetentionDetails(details string) string {
 	}, "\n"))
 }
 
+func summarizeMemoryDelegationDetails(details string) string {
+	sections := splitDecisionSections(details)
+	agent := firstNonEmpty(sections["agent"])
+	why := firstNonEmpty(sections["why now"])
+	items := firstNonEmpty(sections["items"])
+	itemPreview := ""
+	if items != "" {
+		for _, line := range strings.Split(items, "\n") {
+			line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+			if line != "" {
+				itemPreview = line
+				break
+			}
+		}
+	}
+	lines := make([]string, 0, 4)
+	if agent != "" {
+		lines = append(lines, "Memory delegation for "+agent+".")
+	} else {
+		lines = append(lines, "Memory delegation request.")
+	}
+	if itemPreview != "" {
+		lines = append(lines, "Item: "+compactSentence(itemPreview))
+	}
+	if why != "" {
+		lines = append(lines, compactSentence("Why now: "+why))
+	}
+	lines = append(lines, "Use Expand details to inspect all delegated items.")
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 func summarizeGenericDecisionDetails(details string) string {
 	return compactSentence(details)
 }
@@ -638,4 +759,19 @@ func compactSentence(text string) string {
 		cut = cut[:idx]
 	}
 	return strings.TrimSpace(cut) + "…"
+}
+
+func truncateDecisionSummaryText(text string, limit int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if text == "" || limit <= 0 || len(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return text[:limit]
+	}
+	cut := text[:limit-3]
+	if idx := strings.LastIndex(cut, " "); idx > 40 {
+		cut = cut[:idx]
+	}
+	return strings.TrimSpace(cut) + "..."
 }

@@ -20,7 +20,8 @@ const (
 )
 
 type SQLiteStore struct {
-	db *sql.DB
+	db     *sql.DB
+	dbPath string
 }
 
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
@@ -33,12 +34,19 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)
 
-	s := &SQLiteStore{db: db}
+	s := &SQLiteStore{db: db, dbPath: strings.TrimSpace(dbPath)}
 	if err := s.init(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+func (s *SQLiteStore) DBPath() string {
+	if s == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.dbPath)
 }
 
 func (s *SQLiteStore) init() error {

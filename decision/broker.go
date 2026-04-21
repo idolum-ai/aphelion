@@ -19,6 +19,7 @@ const (
 	KindStopWord          Kind = "stop_word"
 	KindProposalApproval  Kind = "proposal_approval"
 	KindArtifactRetention Kind = "artifact_retention"
+	KindMemoryDelegation  Kind = "memory_delegation"
 )
 
 // WaitIndefinitely disables the broker timeout and waits until the decision is resolved or the request context is canceled.

@@ -26,18 +26,19 @@ import (
 const defaultMaxOutputBytes = 32 * 1024
 
 type Registry struct {
-	workspace      string
-	timeout        time.Duration
-	maxOutputBytes int
-	execApprover   ExecApprover
-	sandbox        *sandbox.Resolver
-	runner         *sandbox.Runner
-	store          *session.SQLiteStore
-	fileStore      memstore.FileStore
-	filePurpose    string
-	retrievalStore memstore.RetrievalStore
-	defaultStore   string
-	semantic       *memstore.SemanticEngine
+	workspace                       string
+	timeout                         time.Duration
+	maxOutputBytes                  int
+	execApprover                    ExecApprover
+	durableMemoryDelegationApprover DurableMemoryDelegationApprover
+	sandbox                         *sandbox.Resolver
+	runner                          *sandbox.Runner
+	store                           *session.SQLiteStore
+	fileStore                       memstore.FileStore
+	filePurpose                     string
+	retrievalStore                  memstore.RetrievalStore
+	defaultStore                    string
+	semantic                        *memstore.SemanticEngine
 }
 
 type execInput struct {
@@ -173,6 +174,21 @@ type durableAgentCapacityContractInput struct {
 	ProbeResults        []string `json:"probe_results,omitempty"`
 }
 
+type durableAgentMemoryDelegationEntryInput struct {
+	CandidateID string `json:"candidate_id,omitempty"`
+	SourceStore string `json:"source_store,omitempty"`
+	TargetStore string `json:"target_store,omitempty"`
+	Content     string `json:"content,omitempty"`
+}
+
+type durableAgentMemoryDelegationInput struct {
+	Limit        int                                      `json:"limit,omitempty"`
+	CandidateIDs []string                                 `json:"candidate_ids,omitempty"`
+	Entries      []durableAgentMemoryDelegationEntryInput `json:"entries,omitempty"`
+	TargetStore  string                                   `json:"target_store,omitempty"`
+	Reason       string                                   `json:"reason,omitempty"`
+}
+
 type durableAgentInput struct {
 	Action                    string                             `json:"action"`
 	AgentID                   string                             `json:"agent_id,omitempty"`
@@ -198,6 +214,7 @@ type durableAgentInput struct {
 	ChannelConfig             json.RawMessage                    `json:"channel_config,omitempty"`
 	WizardAnswers             *durableAgentWizardAnswersInput    `json:"wizard_answers,omitempty"`
 	CapacityContract          *durableAgentCapacityContractInput `json:"capacity_contract,omitempty"`
+	MemoryDelegation          *durableAgentMemoryDelegationInput `json:"memory_delegation,omitempty"`
 	Operation                 string                             `json:"operation,omitempty"`
 	Secret                    string                             `json:"secret,omitempty"`
 	Message                   string                             `json:"message,omitempty"`
@@ -233,6 +250,11 @@ func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
 
 func (r *Registry) WithExecApprover(approver ExecApprover) *Registry {
 	r.execApprover = approver
+	return r
+}
+
+func (r *Registry) WithDurableMemoryDelegationApprover(approver DurableMemoryDelegationApprover) *Registry {
+	r.durableMemoryDelegationApprover = approver
 	return r
 }
 
@@ -445,7 +467,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send", "memory_review", "memory_delegate"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: inbox (currently mapped to email adapter profile)"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
@@ -523,6 +545,29 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"probe_results": {"type": "array", "items": {"type": "string"}}
 							}
 						},
+						"memory_delegation": {
+							"type": "object",
+							"description": "Memory delegation review/apply payload for memory_review and memory_delegate actions.",
+							"properties": {
+								"limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Candidate limit for memory_review"},
+								"candidate_ids": {"type": "array", "items": {"type": "string"}, "description": "Candidate ids selected from memory_review output"},
+								"target_store": {"type": "string", "enum": ["memory", "knowledge", "decisions", "questions", "rhizome"], "description": "Optional default child memory store for delegated items"},
+								"reason": {"type": "string", "description": "Why this delegation is being requested"},
+								"entries": {
+									"type": "array",
+									"description": "Optional explicit memory entries for delegation",
+									"items": {
+										"type": "object",
+										"properties": {
+											"candidate_id": {"type": "string", "description": "Optional candidate id from memory_review output"},
+											"source_store": {"type": "string", "enum": ["memory", "knowledge", "decisions", "questions", "rhizome"]},
+											"target_store": {"type": "string", "enum": ["memory", "knowledge", "decisions", "questions", "rhizome"]},
+											"content": {"type": "string"}
+										}
+									}
+								}
+							}
+						},
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},
 					"secret": {"type": "string", "description": "Replacement control-plane secret for enrollment_update when operation=rotate_secret"},
 					"message": {"type": "string", "description": "Parent message text for conversation_send"},
@@ -592,7 +637,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	case "openai_vector_store":
 		return r.openAIVectorStore(ctx, input, p)
 	case "durable_agent":
-		return r.durableAgent(ctx, input, p, key)
+		return r.durableAgent(ctx, input, p, key, scope)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
