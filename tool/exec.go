@@ -31,6 +31,7 @@ type Registry struct {
 	maxOutputBytes                  int
 	execApprover                    ExecApprover
 	durableMemoryDelegationApprover DurableMemoryDelegationApprover
+	durableSnapshotRestoreApprover  DurableSnapshotRestoreApprover
 	sandbox                         *sandbox.Resolver
 	runner                          *sandbox.Runner
 	store                           *session.SQLiteStore
@@ -189,6 +190,12 @@ type durableAgentMemoryDelegationInput struct {
 	Reason       string                                   `json:"reason,omitempty"`
 }
 
+type durableAgentSnapshotInput struct {
+	SnapshotID string `json:"snapshot_id,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+}
+
 type durableAgentInput struct {
 	Action                    string                             `json:"action"`
 	AgentID                   string                             `json:"agent_id,omitempty"`
@@ -215,6 +222,7 @@ type durableAgentInput struct {
 	WizardAnswers             *durableAgentWizardAnswersInput    `json:"wizard_answers,omitempty"`
 	CapacityContract          *durableAgentCapacityContractInput `json:"capacity_contract,omitempty"`
 	MemoryDelegation          *durableAgentMemoryDelegationInput `json:"memory_delegation,omitempty"`
+	Snapshot                  *durableAgentSnapshotInput         `json:"snapshot,omitempty"`
 	Operation                 string                             `json:"operation,omitempty"`
 	Secret                    string                             `json:"secret,omitempty"`
 	Message                   string                             `json:"message,omitempty"`
@@ -255,6 +263,11 @@ func (r *Registry) WithExecApprover(approver ExecApprover) *Registry {
 
 func (r *Registry) WithDurableMemoryDelegationApprover(approver DurableMemoryDelegationApprover) *Registry {
 	r.durableMemoryDelegationApprover = approver
+	return r
+}
+
+func (r *Registry) WithDurableSnapshotRestoreApprover(approver DurableSnapshotRestoreApprover) *Registry {
+	r.durableSnapshotRestoreApprover = approver
 	return r
 }
 
@@ -467,7 +480,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send", "memory_review", "memory_delegate"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send", "memory_review", "memory_delegate", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: inbox (currently mapped to email adapter profile)"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
@@ -566,6 +579,15 @@ func (r *Registry) Definitions() []agent.ToolDef {
 										}
 									}
 								}
+							}
+						},
+						"snapshot": {
+							"type": "object",
+							"description": "Durable child snapshot payload for snapshot_create/list/restore actions.",
+							"properties": {
+								"snapshot_id": {"type": "string", "description": "Snapshot id for snapshot_restore"},
+								"reason": {"type": "string", "description": "Snapshot creation or restore rationale"},
+								"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Snapshot list limit"}
 							}
 						},
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},

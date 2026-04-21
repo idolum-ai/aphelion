@@ -20,6 +20,7 @@ const (
 	defaultExecApprovalTimeout      = 30 * time.Second
 	defaultArtifactRetentionTimeout = 45 * time.Second
 	defaultMemoryDelegationTimeout  = 45 * time.Second
+	defaultSnapshotRestoreTimeout   = 45 * time.Second
 )
 
 type telegramDecisionSender interface {
@@ -64,6 +65,12 @@ type telegramDurableMemoryDelegationApprover struct {
 	timeout time.Duration
 }
 
+type telegramDurableSnapshotRestoreApprover struct {
+	sender  telegramDecisionSender
+	broker  *decision.Broker
+	timeout time.Duration
+}
+
 func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker) *telegramDecisionHandler {
 	return &telegramDecisionHandler{
 		sender:                   sender,
@@ -88,6 +95,14 @@ func newTelegramDurableMemoryDelegationApprover(sender telegramDecisionSender, b
 		sender:  sender,
 		broker:  broker,
 		timeout: defaultMemoryDelegationTimeout,
+	}
+}
+
+func newTelegramDurableSnapshotRestoreApprover(sender telegramDecisionSender, broker *decision.Broker) *telegramDurableSnapshotRestoreApprover {
+	return &telegramDurableSnapshotRestoreApprover{
+		sender:  sender,
+		broker:  broker,
+		timeout: defaultSnapshotRestoreTimeout,
 	}
 }
 
@@ -177,6 +192,42 @@ func (a *telegramDurableMemoryDelegationApprover) ConfirmDurableMemoryDelegation
 	return toolpkg.DurableMemoryDelegationApprovalDecision{Approved: false, TimedOut: result.TimedOut}, nil
 }
 
+func (a *telegramDurableSnapshotRestoreApprover) ConfirmDurableSnapshotRestore(ctx context.Context, req toolpkg.DurableSnapshotRestoreApprovalRequest) (toolpkg.DurableSnapshotRestoreApprovalDecision, error) {
+	if a == nil || a.sender == nil || a.broker == nil {
+		return toolpkg.DurableSnapshotRestoreApprovalDecision{}, fmt.Errorf("telegram durable snapshot restore approver is not configured")
+	}
+	if req.SessionKey.ChatID == 0 {
+		return toolpkg.DurableSnapshotRestoreApprovalDecision{}, fmt.Errorf("snapshot restore requires explicit confirmation but no interactive chat is available")
+	}
+	result, err := a.broker.Request(ctx, decision.Request{
+		Kind:          decision.KindSnapshotRestore,
+		ChatID:        req.SessionKey.ChatID,
+		SenderID:      req.Principal.TelegramUserID,
+		Prompt:        "Restore this child snapshot?",
+		Details:       formatDurableSnapshotRestoreDetails(req),
+		Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+		DefaultChoice: "deny",
+		Timeout:       a.timeout,
+	})
+	if err != nil {
+		return toolpkg.DurableSnapshotRestoreApprovalDecision{}, err
+	}
+	if result.Choice == "approve" {
+		if result.Delivery.MessageID != 0 {
+			_ = a.sender.DeleteMessage(ctx, req.SessionKey.ChatID, result.Delivery.MessageID)
+		}
+		return toolpkg.DurableSnapshotRestoreApprovalDecision{Approved: true}, nil
+	}
+	if result.Delivery.MessageID != 0 {
+		text := "Snapshot restore denied."
+		if result.TimedOut {
+			text = "Snapshot restore denied — approval timed out."
+		}
+		_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, text, "")
+	}
+	return toolpkg.DurableSnapshotRestoreApprovalDecision{Approved: false, TimedOut: result.TimedOut}, nil
+}
+
 func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
 	lines := make([]string, 0, 8)
 	if summary := strings.TrimSpace(req.Proposal.Summary); summary != "" {
@@ -233,6 +284,27 @@ func formatDurableMemoryDelegationDetails(req toolpkg.DurableMemoryDelegationApp
 			lines = append(lines, fmt.Sprintf("%d. candidate=%s source=%s target=%s", i+1, ref, source, target))
 			lines = append(lines, "   "+truncateDecisionSummaryText(strings.TrimSpace(entry.Content), 220))
 		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func formatDurableSnapshotRestoreDetails(req toolpkg.DurableSnapshotRestoreApprovalRequest) string {
+	lines := make([]string, 0, 12)
+	lines = append(lines, "Durable child snapshot restore request.")
+	if agentID := strings.TrimSpace(req.Agent.AgentID); agentID != "" {
+		lines = append(lines, "", "Agent:", agentID)
+	}
+	if snapshotID := strings.TrimSpace(req.SnapshotID); snapshotID != "" {
+		lines = append(lines, "Snapshot:", snapshotID)
+	}
+	if channel := strings.TrimSpace(req.Agent.ChannelKind); channel != "" {
+		lines = append(lines, "Channel:", channel)
+	}
+	if !req.SnapshotCreatedAt.IsZero() {
+		lines = append(lines, "Created At:", req.SnapshotCreatedAt.UTC().Format(time.RFC3339))
+	}
+	if reason := strings.TrimSpace(req.SnapshotReason); reason != "" {
+		lines = append(lines, "", "Reason:", reason)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
@@ -607,6 +679,8 @@ func summarizePendingDecision(pending decision.PendingDecision) string {
 		return summarizeArtifactRetentionDetails(details)
 	case decision.KindMemoryDelegation:
 		return summarizeMemoryDelegationDetails(details)
+	case decision.KindSnapshotRestore:
+		return summarizeSnapshotRestoreDetails(details)
 	default:
 		return summarizeGenericDecisionDetails(details)
 	}
@@ -698,6 +772,27 @@ func summarizeMemoryDelegationDetails(details string) string {
 		lines = append(lines, compactSentence("Why now: "+why))
 	}
 	lines = append(lines, "Use Expand details to inspect all delegated items.")
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func summarizeSnapshotRestoreDetails(details string) string {
+	sections := splitDecisionSections(details)
+	agent := firstNonEmpty(sections["agent"])
+	snapshot := firstNonEmpty(sections["snapshot"])
+	reason := firstNonEmpty(sections["reason"])
+	lines := make([]string, 0, 4)
+	if agent != "" {
+		lines = append(lines, "Snapshot restore for "+agent+".")
+	} else {
+		lines = append(lines, "Durable child snapshot restore request.")
+	}
+	if snapshot != "" {
+		lines = append(lines, "Snapshot: "+snapshot)
+	}
+	if reason != "" {
+		lines = append(lines, compactSentence("Reason: "+reason))
+	}
+	lines = append(lines, "Use Expand details to inspect restore metadata.")
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 

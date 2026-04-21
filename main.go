@@ -538,6 +538,7 @@ func run() error {
 	decisionHandler := newTelegramDecisionHandler(tgOutbound, router, decisionBroker)
 	tools.WithExecApprover(newTelegramExecApprover(tgOutbound, decisionBroker))
 	tools.WithDurableMemoryDelegationApprover(newTelegramDurableMemoryDelegationApprover(tgOutbound, decisionBroker))
+	tools.WithDurableSnapshotRestoreApprover(newTelegramDurableSnapshotRestoreApprover(tgOutbound, decisionBroker))
 
 	registerCtx, cancelRegister := context.WithTimeout(context.Background(), 15*time.Second)
 	if err := registerTelegramCommands(registerCtx, tgClient); err != nil {

@@ -441,6 +441,60 @@ func TestTelegramDurableMemoryDelegationApproverPromptsWithButtons(t *testing.T)
 	}
 }
 
+func TestTelegramDurableSnapshotRestoreApproverPromptsWithButtons(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	var broker *decision.Broker
+	broker = decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		text := renderPendingDecisionSummary(pending)
+		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, inlineButtonRows(pending), replyToMessageID(pending.MessageID))
+		if err != nil {
+			return decision.Delivery{}, err
+		}
+		go broker.Resolve(pending.ID, "approve")
+		return decision.Delivery{MessageID: msgID}, nil
+	})
+	approver := newTelegramDurableSnapshotRestoreApprover(sender, broker)
+
+	decisionResult, err := approver.ConfirmDurableSnapshotRestore(context.Background(), toolpkg.DurableSnapshotRestoreApprovalRequest{
+		Principal:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		SessionKey: session.SessionKey{ChatID: 7},
+		Agent: core.DurableAgent{
+			AgentID:     "idolum-child",
+			ChannelKind: "telegram_group",
+		},
+		SnapshotID:        "20260421T120000.000000000Z-k3f3f",
+		SnapshotReason:    "Rollback after a bad child-local drift.",
+		SnapshotCreatedAt: time.Date(2026, time.April, 21, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ConfirmDurableSnapshotRestore() err = %v", err)
+	}
+	if !decisionResult.Approved {
+		t.Fatal("Approved = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one snapshot restore prompt", sender.inline)
+	}
+	if !strings.Contains(strings.ToLower(sender.inline[0].text), "snapshot") {
+		t.Fatalf("inline text = %q, want snapshot wording", sender.inline[0].text)
+	}
+	if !strings.Contains(sender.inline[0].text, "idolum-child") {
+		t.Fatalf("inline text = %q, want agent id", sender.inline[0].text)
+	}
+	choiceRow := sender.inline[0].rows[len(sender.inline[0].rows)-1]
+	if len(choiceRow) != 2 {
+		t.Fatalf("choice row = %#v, want two buttons", choiceRow)
+	}
+	if choiceRow[0].Text != "Deny" || choiceRow[1].Text != "Approve" {
+		t.Fatalf("choice order = %#v, want [Deny, Approve]", choiceRow)
+	}
+	if len(sender.deletes) != 1 {
+		t.Fatalf("deletes = %#v, want prompt delete on approval", sender.deletes)
+	}
+}
+
 func TestHandleCallbackQueryIgnoresExpiredAckAndResolvesDecision(t *testing.T) {
 	t.Parallel()
 

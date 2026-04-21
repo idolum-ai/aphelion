@@ -20,6 +20,7 @@ const (
 	KindProposalApproval  Kind = "proposal_approval"
 	KindArtifactRetention Kind = "artifact_retention"
 	KindMemoryDelegation  Kind = "memory_delegation"
+	KindSnapshotRestore   Kind = "snapshot_restore"
 )
 
 // WaitIndefinitely disables the broker timeout and waits until the decision is resolved or the request context is canceled.
