@@ -49,6 +49,8 @@ type commandRouter interface {
 	GovernorEffortOptions() []string
 	SetGovernorEffort(effort string) (string, error)
 	RunDurableWizard(ctx context.Context, chatID int64, senderID int64, action string, agentID string, wizardAnswers map[string]any) (string, error)
+	DurableAgentsList(senderID int64) ([]core.DurableAgentStatusSnapshot, error)
+	StartDurableAgentConversation(ctx context.Context, chatID int64, senderID int64, agentID string) (string, error)
 }
 
 var defaultTelegramCommands = []telegram.BotCommand{
@@ -56,6 +58,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "help", Description: "Show available commands"},
 	{Command: "status", Description: "Show live status and controls"},
 	{Command: "debug", Description: "Show a detailed debug snapshot"},
+	{Command: "agents", Description: "List durable agents and controls"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "new", Description: "Start a fresh chat session context"},
 	{Command: "detach", Description: "Detach from pending work in this chat"},
@@ -123,6 +126,20 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			{Text: "Read More", CallbackData: encodeDebugCallbackData(debugViewMore)},
 		}}
 		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, quickText, rows, replyToMessageID(msg.MessageID)); err != nil {
+			return true, err
+		}
+		return true, nil
+	case "agents":
+		if !router.CanRestart(msg.SenderID) {
+			text = "Durable-agent controls are admin only."
+			break
+		}
+		agents, err := router.DurableAgentsList(msg.SenderID)
+		if err != nil {
+			return true, err
+		}
+		rendered, rows := renderDurableAgentsCommand(agents)
+		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
 			return true, err
 		}
 		return true, nil
@@ -359,6 +376,9 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	}
 	if action, step, option, ok := decodeDurableWizardCallbackData(cb.Data); ok {
 		return handleDurableWizardCallback(ctx, sender, router, cb, action, step, option)
+	}
+	if action, agentID, ok := decodeDurableAgentsCallbackData(cb.Data); ok {
+		return handleDurableAgentsCallback(ctx, sender, router, cb, action, agentID)
 	}
 	kind, value, ok := decodeRecipeCallbackData(cb.Data)
 	if !ok {

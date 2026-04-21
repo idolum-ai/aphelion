@@ -16,6 +16,10 @@ Current command surface:
   - Starts with a collapsed `Quick Read:` summary plus a `Read More` button.
   - `Read More` expands in place to the full detailed debug snapshot for the current chat.
   - Admin users get system and durable-agent sections in the expanded view.
+- `/agents`
+  - Admin-only durable-agent launcher.
+  - Lists durable agents with inline `Start Chat` buttons.
+  - Starts a background parent-child conversation kickoff for the selected durable agent.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
   - When `memory.aggressive.flush_on_session_boundary` is enabled, it also runs a bounded memory flush first.
@@ -257,6 +261,9 @@ When a turn enters long-running deliberation/tool execution, Telegram shows one 
 - Stale callback actions are acknowledged with a stale-message notice instead of applying old state.
 - Non-admin access to admin-only status views is denied via callback acknowledgement.
 - Deliberation control callbacks are run-id scoped; stale controls are ignored with a stale notice.
+- Durable-agent launcher callbacks are admin-only and run-id agnostic:
+  - `Start Chat: <agent_id>` triggers a background durable `conversation_send` kickoff.
+  - `Refresh` reloads the durable-agent list in place.
 
 ## Operational UI Signals
 

@@ -12,6 +12,7 @@ Durable children are bounded child Aphelions, not alternate public personas.
 - Telegram relay turns can target a child inline from DM using `agent:<agent_id> ...` and execute in child scope.
 - Child wakes can be transport-triggered (`telegram_update`) or scheduler-triggered (`poll`, `push`, `poll_or_push`) depending on the child role.
 - Child wake ingress is selected through pluggable runtime adapters; each adapter contributes wake payload synthesis and review finalization semantics.
+- The default deployment includes one example scheduled child (`idolum-daily-review`) using the same durable wake substrate: it stages yesterday's transcript into child-local files and starts a plain scheduled check-in chat upward.
 - All wake-driven durable work runs through one child-turn substrate (prompt context + governor/face loop + principal-scoped tools), either in-process or isolated (`durable-agent child-run --agent ...`) when bootstrap/isolation is configured.
 
 Code anchors:

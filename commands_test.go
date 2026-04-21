@@ -144,6 +144,14 @@ type stubCommandRouter struct {
 	durableWizardAnswers        map[string]any
 	durableWizardResult         string
 	durableWizardErr            error
+	durableAgentsList           []core.DurableAgentStatusSnapshot
+	durableAgentsListErr        error
+	durableAgentsListSenderID   int64
+	startDurableChatID          int64
+	startDurableSenderID        int64
+	startDurableAgentID         string
+	startDurableResult          string
+	startDurableErr             error
 }
 
 func (s *stubCommandRouter) Stop(chatID int64) core.StopResult {
@@ -331,6 +339,28 @@ func (s *stubCommandRouter) RunDurableWizard(ctx context.Context, chatID int64, 
 	return "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: adapter\nmissing: adapter,autonomy\nnext_question: Which inbox adapter should be used (for example gog_cli)?\naddress: idolum@example.com\nadapter: \nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n", nil
 }
 
+func (s *stubCommandRouter) DurableAgentsList(senderID int64) ([]core.DurableAgentStatusSnapshot, error) {
+	s.durableAgentsListSenderID = senderID
+	if s.durableAgentsListErr != nil {
+		return nil, s.durableAgentsListErr
+	}
+	return append([]core.DurableAgentStatusSnapshot(nil), s.durableAgentsList...), nil
+}
+
+func (s *stubCommandRouter) StartDurableAgentConversation(ctx context.Context, chatID int64, senderID int64, agentID string) (string, error) {
+	_ = ctx
+	s.startDurableChatID = chatID
+	s.startDurableSenderID = senderID
+	s.startDurableAgentID = agentID
+	if s.startDurableErr != nil {
+		return "", s.startDurableErr
+	}
+	if strings.TrimSpace(s.startDurableResult) != "" {
+		return s.startDurableResult, nil
+	}
+	return "Started background conversation with durable agent " + strings.TrimSpace(agentID) + ".", nil
+}
+
 func TestParseTelegramCommand(t *testing.T) {
 	t.Parallel()
 
@@ -347,6 +377,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/restart", want: "restart", ok: true},
 		{text: "/reinstall", want: "reinstall", ok: true},
 		{text: "/debug", want: "debug", ok: true},
+		{text: "/agents", want: "agents", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
 		{text: "/set_governor_effort", want: "set_governor_effort", ok: true},
 		{text: "/tmp/file", ok: false},
@@ -359,6 +390,21 @@ func TestParseTelegramCommand(t *testing.T) {
 		if ok != tt.ok || got != tt.want {
 			t.Fatalf("parseTelegramCommand(%q) = (%q, %v), want (%q, %v)", tt.text, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeAgents(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "agents" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /agents command entry", defaultTelegramCommands)
 	}
 }
 
@@ -544,6 +590,102 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 	}
 	if !foundThisChat || !foundPending || !foundRefresh {
 		t.Fatalf("status keyboard rows = %#v, want user status controls", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandAgentsShowsButtons(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart: true,
+		durableAgentsList: []core.DurableAgentStatusSnapshot{
+			{
+				AgentID:     "idolum-daily-review",
+				ChannelKind: "daily_review",
+				Status:      "active",
+				Health:      "ok",
+			},
+			{
+				AgentID:     "ops-child",
+				ChannelKind: "telegram_dm",
+				Status:      "active",
+				Health:      "dormant",
+			},
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 55,
+		Text:      "/agents",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.durableAgentsListSenderID != 1001 {
+		t.Fatalf("durableAgentsListSenderID = %d, want 1001", router.durableAgentsListSenderID)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "Durable Agents") {
+		t.Fatalf("agents text = %q, want Durable Agents heading", got)
+	}
+	foundStart := false
+	foundRefresh := false
+	for _, row := range sender.inline[0].rows {
+		for _, button := range row {
+			if strings.Contains(button.CallbackData, "agents:start:idolum-daily-review") {
+				foundStart = true
+			}
+			if button.CallbackData == "agents:refresh" {
+				foundRefresh = true
+			}
+		}
+	}
+	if !foundStart || !foundRefresh {
+		t.Fatalf("agents rows = %#v, want start and refresh callbacks", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandCallbackAgentsStartInvokesBackgroundConversation(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart:         true,
+		startDurableResult: "Started background conversation with durable agent idolum-daily-review (wake requested).",
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:   "cb-agents-start",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "agents:start:idolum-daily-review",
+		Message: &telegram.Message{
+			MessageID: 88,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.startDurableChatID != 7 || router.startDurableSenderID != 1001 {
+		t.Fatalf("start durable routing = chat:%d sender:%d, want chat:7 sender:1001", router.startDurableChatID, router.startDurableSenderID)
+	}
+	if router.startDurableAgentID != "idolum-daily-review" {
+		t.Fatalf("startDurableAgentID = %q, want idolum-daily-review", router.startDurableAgentID)
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "wake requested") {
+		t.Fatalf("ack text = %q, want wake status", got)
 	}
 }
 

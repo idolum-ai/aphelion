@@ -58,8 +58,9 @@ Runnable v0:
 - Idolum-rendered replies
 - Telegram typing + real tool-backed progress feedback
 - Heartbeat and config-driven cron
+- Default daily-review durable child (`idolum-daily-review`) that wakes daily, stages yesterday's transcript into child-local files, and opens a scheduled child-to-parent check-in
 - Telegram voice transcription + optional TTS replies
-- Telegram slash commands: `/start`, `/help`, `/status`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
+- Telegram slash commands: `/start`, `/help`, `/status`, `/debug`, `/agents`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
 
 ## Run
 
@@ -185,6 +186,10 @@ Inspect durable-agent inventory and health:
 ./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
 ./bin/aphelion durable-agent health --config ~/.aphelion/aphelion.toml --agent family-group
 ```
+
+Daily-review durable child staging path (per child workspace):
+
+`<durable-workspace>/.aphelion/daily-review/YYYY-MM-DD/transcript.md`
 
 Safe maintenance cleanup:
 

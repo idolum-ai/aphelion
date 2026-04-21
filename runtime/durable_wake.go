@@ -46,7 +46,9 @@ type durableWakeIngressAdapter interface {
 }
 
 func defaultDurableWakeIngressAdapters() []durableWakeIngressAdapter {
-	return nil
+	return []durableWakeIngressAdapter{
+		newDailyReviewDurableWakeAdapter(),
+	}
 }
 
 func (r *Runtime) durableWakeAdapterForAgent(agent core.DurableAgent) durableWakeIngressAdapter {

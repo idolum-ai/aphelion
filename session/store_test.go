@@ -264,6 +264,54 @@ func TestSearchMessagesFiltersByScopeAndReturnsNewestFirst(t *testing.T) {
 	}
 }
 
+func TestMessagesInWindowReturnsChronologicalEntries(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.TurnCount = 1
+	if err := store.Save(sess, []Message{
+		{Role: "user", Content: "window-early", TurnIndex: 1},
+		{Role: "user", Content: "window-mid", TurnIndex: 1},
+		{Role: "user", Content: "window-late", TurnIndex: 1},
+	}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	times := map[string]time.Time{
+		"window-early": time.Date(2026, time.April, 20, 9, 0, 0, 0, time.UTC),
+		"window-mid":   time.Date(2026, time.April, 20, 13, 30, 0, 0, time.UTC),
+		"window-late":  time.Date(2026, time.April, 21, 10, 0, 0, 0, time.UTC),
+	}
+	for content, at := range times {
+		if _, err := store.db.Exec(`UPDATE messages SET created_at = ? WHERE content = ?`, at.Format(time.RFC3339Nano), content); err != nil {
+			t.Fatalf("retime message %q err = %v", content, err)
+		}
+	}
+
+	start := time.Date(2026, time.April, 20, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, time.April, 21, 0, 0, 0, 0, time.UTC)
+	hits, err := store.MessagesInWindow(start, end, 10)
+	if err != nil {
+		t.Fatalf("MessagesInWindow() err = %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("MessagesInWindow() len = %d, want 2", len(hits))
+	}
+	if hits[0].Content != "window-early" || hits[1].Content != "window-mid" {
+		t.Fatalf("MessagesInWindow() ordering/content = %#v, want early then mid", hits)
+	}
+	if !hits[0].CreatedAt.Before(hits[1].CreatedAt) {
+		t.Fatalf("MessagesInWindow() created_at ordering = %s then %s, want ascending", hits[0].CreatedAt, hits[1].CreatedAt)
+	}
+}
+
 func TestPlanStateRoundTripAndUpdate(t *testing.T) {
 	t.Parallel()
 

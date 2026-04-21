@@ -1400,6 +1400,63 @@ func (s *SQLiteStore) SearchMessages(query string, limit int, scope *SessionKey)
 	return hits, nil
 }
 
+func (s *SQLiteStore) MessagesInWindow(start time.Time, end time.Time, limit int) ([]SearchHit, error) {
+	if start.IsZero() || end.IsZero() {
+		return nil, fmt.Errorf("message window requires non-zero start and end")
+	}
+	start = start.UTC()
+	end = end.UTC()
+	if !start.Before(end) {
+		return nil, fmt.Errorf("message window requires start < end")
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+
+	rows, err := s.db.Query(`
+		SELECT session_id, chat_id, user_id, turn_index, role, content, floor_content, created_at
+		FROM messages
+		WHERE compacted = 0
+			AND created_at >= ?
+			AND created_at < ?
+		ORDER BY created_at ASC, id ASC
+		LIMIT ?
+	`, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), limit)
+	if err != nil {
+		return nil, fmt.Errorf("messages in window: %w", err)
+	}
+	defer rows.Close()
+
+	hits := make([]SearchHit, 0, limit)
+	for rows.Next() {
+		var (
+			hit          SearchHit
+			createdAtRaw string
+			floorContent sql.NullString
+		)
+		if err := rows.Scan(
+			&hit.SessionID, &hit.ChatID, &hit.UserID, &hit.TurnIndex, &hit.Role,
+			&hit.Content, &floorContent, &createdAtRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan window message hit: %w", err)
+		}
+		hit.FloorContent = nullToString(floorContent)
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse window message created_at: %w", err)
+		}
+		hit.CreatedAt = createdAt
+		hits = append(hits, hit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate window message hits: %w", err)
+	}
+	return hits, nil
+}
+
 func (s *SQLiteStore) SearchArtifacts(query string, limit int, scope *SessionKey) ([]ArtifactRecord, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
