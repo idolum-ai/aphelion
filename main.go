@@ -498,7 +498,7 @@ func run() error {
 		return err
 	}
 	if extra, ok := firstPositionalArg(flags.Args()); ok {
-		return fmt.Errorf("unknown command %q (known maintenance commands: init|paths|gc|forget|reset|import-audit|import-semantic|verify-deploy|durable-agent)", extra)
+		return fmt.Errorf("unknown command %q (known maintenance commands: init|paths|gc|forget|reset|import-audit|import-semantic|verify-deploy|durable-agent|version)", extra)
 	}
 
 	configPath, err := config.ResolveConfigPath(*configPathFlag)
