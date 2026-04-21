@@ -18,12 +18,15 @@ Current command surface:
   - Admin users get system and durable-agent sections in the expanded view.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
+  - When `memory.aggressive.flush_on_session_boundary` is enabled, it also runs a bounded memory flush first.
 - `/new`
   - Starts a fresh chat session context (same chat), preserving memories.
+  - When `memory.aggressive.flush_on_session_boundary` is enabled, it flushes recent session context before resetting.
 - `/detach`
   - Stops active work, clears queued work, revokes continuation, and detaches pending decisions owned by this chat+sender.
 - `/restart`
   - Admin-only forced gateway restart.
+  - When `memory.aggressive.flush_on_session_boundary` is enabled, it flushes recent session context before restart.
 - `/reinstall`
   - Queues a rebuild/reinstall/restart request as normal routed work.
 - `/set_persona_model`

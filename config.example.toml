@@ -113,6 +113,12 @@ heartbeat_top_k = 12
 interactive_max_chars = 4000
 heartbeat_max_chars = 12000
 
+[memory.aggressive]
+enabled = false
+capture_every_turn = false
+prefetch_every_turn = false
+flush_on_session_boundary = false
+
 [memory.reflection]
 enabled = true
 every = "6h"

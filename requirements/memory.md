@@ -792,6 +792,12 @@ semantic_indexing = false
 enabled = true
 every = "6h"
 
+[memory.aggressive]
+enabled = false
+capture_every_turn = false
+prefetch_every_turn = false
+flush_on_session_boundary = false
+
 [memory.decay]
 enabled = true
 hot_days = 3
@@ -814,6 +820,14 @@ enabled = false
 provider = "openai"
 model = "text-embedding-3-small"
 ```
+
+### Aggressive Memory Mode
+
+`memory.aggressive` is an optional high-retention mode that trades additional model calls for stronger continuity.
+
+- `capture_every_turn`: runs a bounded extraction pass after each committed interactive turn and appends durable items into curated stores.
+- `prefetch_every_turn`: performs semantic recall before governor execution and injects a bounded `AUTO_RECALL_MEMORY` block into turn context.
+- `flush_on_session_boundary`: flushes recent session context into curated memory when user boundaries are invoked (`/stop`, `/new`, `/restart`).
 
 ## Tests
 

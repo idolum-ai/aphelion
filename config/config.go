@@ -175,6 +175,7 @@ type MemoryConfig struct {
 	SessionSearch    bool                   `toml:"session_search"`
 	SemanticIndexing bool                   `toml:"semantic_indexing"`
 	Semantic         MemorySemanticConfig   `toml:"semantic"`
+	Aggressive       MemoryAggressiveConfig `toml:"aggressive"`
 	Reflection       MemoryReflectionConfig `toml:"reflection"`
 	Decay            MemoryDecayConfig      `toml:"decay"`
 	Identity         MemoryIdentityConfig   `toml:"identity"`
@@ -197,6 +198,13 @@ type MemorySemanticConfig struct {
 type MemoryReflectionConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Every   string `toml:"every"`
+}
+
+type MemoryAggressiveConfig struct {
+	Enabled                bool `toml:"enabled"`
+	CaptureEveryTurn       bool `toml:"capture_every_turn"`
+	PrefetchEveryTurn      bool `toml:"prefetch_every_turn"`
+	FlushOnSessionBoundary bool `toml:"flush_on_session_boundary"`
 }
 
 type MemoryDecayConfig struct {
@@ -401,6 +409,12 @@ func Default() Config {
 				HeartbeatTopK:       12,
 				InteractiveMaxChars: 4000,
 				HeartbeatMaxChars:   12000,
+			},
+			Aggressive: MemoryAggressiveConfig{
+				Enabled:                false,
+				CaptureEveryTurn:       false,
+				PrefetchEveryTurn:      false,
+				FlushOnSessionBoundary: false,
 			},
 			Reflection: MemoryReflectionConfig{
 				Enabled: true,

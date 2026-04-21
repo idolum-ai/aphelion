@@ -187,6 +187,8 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 
 type turnCommitInput struct {
 	Key             session.SessionKey
+	Scope           sandbox.Scope
+	RunKind         session.TurnRunKind
 	Sess            *session.Session
 	Msg             core.InboundMessage
 	Actor           principal.Principal
@@ -224,6 +226,7 @@ type turnCommitErrorContext struct {
 type turnPersistencePort struct {
 	runtime      *Runtime
 	key          session.SessionKey
+	scope        sandbox.Scope
 	sess         *session.Session
 	sessionState interface {
 		session() *session.Session
@@ -248,6 +251,8 @@ func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitReques
 	}
 	result, err := p.runtime.persistTurn(ctx, turnCommitInput{
 		Key:             p.key,
+		Scope:           p.scope,
+		RunKind:         req.Request.RunKind,
 		Sess:            sess,
 		Msg:             p.msg,
 		Actor:           p.actor,
@@ -450,6 +455,9 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 	out.Committed = stageResult.Committed
 	if out.Committed && input.Audit != nil && input.Result != nil {
 		input.Audit.RecordFinalReply(input.ReplyText, input.Result.Media, out.OutboundType)
+	}
+	if out.Committed && input.Result != nil {
+		r.maybeCaptureTurnMemory(ctx, input)
 	}
 	return out, nil
 }

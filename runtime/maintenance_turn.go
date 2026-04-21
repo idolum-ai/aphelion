@@ -327,6 +327,7 @@ func (p *maintenanceTurnPersistencePort) Persist(ctx context.Context, req turn.C
 
 	result, err := p.runtime.persistTurn(ctx, turnCommitInput{
 		Key:             p.key,
+		RunKind:         req.Request.RunKind,
 		Sess:            p.sess,
 		Prepared:        req.Result.Prepared,
 		OutHistory:      req.Result.OutHistory,

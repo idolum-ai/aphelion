@@ -78,11 +78,17 @@ func newTurnContext(parent context.Context, timeout time.Duration) (context.Cont
 }
 
 func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
-	result := c.router.Stop(chatID)
-	revoke, err := c.rt.RevokeContinuation(chatID)
-	if err == nil {
-		result.ContinuationRevoked = revoke.Revoked
+	result := core.StopResult{}
+	if c.router != nil {
+		result = c.router.Stop(chatID)
 	}
+	if c.rt != nil {
+		revoke, err := c.rt.RevokeContinuation(chatID)
+		if err == nil {
+			result.ContinuationRevoked = revoke.Revoked
+		}
+	}
+	c.maybeFlushMemory(chatID, "stop")
 	return result
 }
 
@@ -131,14 +137,7 @@ func (c telegramCommandControl) Detach(chatID int64, senderID int64) (core.Detac
 }
 
 func (c telegramCommandControl) Restart(chatID int64) error {
-	if c.router != nil {
-		c.router.Stop(chatID)
-	}
-	if c.rt != nil {
-		if _, err := c.rt.RevokeContinuation(chatID); err != nil {
-			log.Printf("WARN restart revoke continuation failed chat_id=%d err=%v", chatID, err)
-		}
-	}
+	_ = c.Stop(chatID)
 	if c.detachPendingOnRestart && c.decisionDetacher != nil {
 		removed, err := c.decisionDetacher.DetachAll(context.Background())
 		if err != nil {
@@ -153,6 +152,15 @@ func (c telegramCommandControl) Restart(chatID int64) error {
 		processExit(exitCodeFailure)
 	}()
 	return nil
+}
+
+func (c telegramCommandControl) maybeFlushMemory(chatID int64, reason string) {
+	if c.rt == nil {
+		return
+	}
+	if err := c.rt.FlushChatMemory(context.Background(), chatID, reason); err != nil {
+		log.Printf("WARN memory flush skipped chat_id=%d reason=%s err=%v", chatID, strings.TrimSpace(reason), err)
+	}
 }
 
 func (c telegramCommandControl) Status(chatID int64) core.SessionStatus {

@@ -109,6 +109,7 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 	machine.Persistence = &turnPersistencePort{
 		runtime:      r,
 		key:          key,
+		scope:        input.Scope,
 		sess:         sess,
 		sessionState: turnState,
 		msg:          msg,

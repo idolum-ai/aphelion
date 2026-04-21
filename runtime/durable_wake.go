@@ -264,6 +264,7 @@ func (r *Runtime) runDurableWakeConversation(
 	machine.Persistence = &turnPersistencePort{
 		runtime: r,
 		key:     key,
+		scope:   scope,
 		sess:    sess,
 		errCtx:  errCtx,
 		audit:   audit,

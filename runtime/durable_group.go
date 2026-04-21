@@ -242,6 +242,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	machine.Persistence = &turnPersistencePort{
 		runtime: r,
 		key:     key,
+		scope:   scope,
 		sess:    sess,
 		errCtx: turnCommitErrorContext{
 			ConvertMessages: "convert durable telegram messages",

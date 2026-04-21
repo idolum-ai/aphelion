@@ -102,6 +102,9 @@ workspace = "./workspace"
 	if cfg.Memory.Semantic.Enabled || cfg.Memory.Semantic.Backend != "local" || cfg.Memory.Semantic.Refresh != "manual" {
 		t.Fatalf("memory.semantic defaults = %#v, want disabled/local/manual", cfg.Memory.Semantic)
 	}
+	if cfg.Memory.Aggressive.Enabled || cfg.Memory.Aggressive.CaptureEveryTurn || cfg.Memory.Aggressive.PrefetchEveryTurn || cfg.Memory.Aggressive.FlushOnSessionBoundary {
+		t.Fatalf("memory.aggressive defaults = %#v, want all disabled", cfg.Memory.Aggressive)
+	}
 	if !cfg.Memory.Decay.Enabled || cfg.Memory.Decay.HotDays != 3 || cfg.Memory.Decay.WarmDays != 14 || cfg.Memory.Decay.ColdDays != 30 {
 		t.Fatalf("memory.decay defaults = %#v, want enabled 3/14/30", cfg.Memory.Decay)
 	}
@@ -401,6 +404,12 @@ heartbeat_top_k = 15
 interactive_max_chars = 5000
 heartbeat_max_chars = 14000
 
+[memory.aggressive]
+enabled = true
+capture_every_turn = true
+prefetch_every_turn = true
+flush_on_session_boundary = true
+
 [memory.decay]
 enabled = true
 hot_days = 2
@@ -530,6 +539,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if !cfg.Memory.Semantic.Enabled || cfg.Memory.Semantic.Backend != "local" || cfg.Memory.Semantic.Refresh != "heartbeat" {
 		t.Fatalf("memory.semantic = %#v, want enabled/local/heartbeat", cfg.Memory.Semantic)
+	}
+	if !cfg.Memory.Aggressive.Enabled || !cfg.Memory.Aggressive.CaptureEveryTurn || !cfg.Memory.Aggressive.PrefetchEveryTurn || !cfg.Memory.Aggressive.FlushOnSessionBoundary {
+		t.Fatalf("memory.aggressive = %#v, want all enabled", cfg.Memory.Aggressive)
 	}
 	if got, want := cfg.Memory.Semantic.Sources, []string{"MEMORY.md", "memory/knowledge.md"}; !equalStrings(got, want) {
 		t.Fatalf("memory.semantic.sources = %#v, want %#v", got, want)

@@ -288,6 +288,7 @@ Inside Telegram:
 - `/new` starts a fresh chat session context for this chat without clearing memories
 - `/detach` clears active/queued/continuation state and detaches pending approvals for you in this chat
 - `/restart` (admin only) forces gateway restart and detaches pending approvals before exit by default
+- when `memory.aggressive.flush_on_session_boundary = true`, `/stop`, `/new`, and `/restart` trigger a bounded session-memory flush before boundary actions complete
 
 Config failures now exit once with a dedicated config error and the service will not
 crash-loop. `make install-user-service`, `make update`, and `make update-release`

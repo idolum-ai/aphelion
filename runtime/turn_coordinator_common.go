@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -235,11 +236,16 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	if strings.TrimSpace(systemPrompt) == "" {
 		systemCount = 0
 	}
-	turnInput := make([]agent.Message, 0, len(history)+2+len(input.ExtraSystemMessages)+systemCount)
+	extraSystemMessages := append([]agent.Message(nil), input.ExtraSystemMessages...)
+	if recall := r.maybeAggressivePrefetchSystemMessage(ctx, input.Scope, runKind, input.Prepared.LedgerText, time.Now().UTC()); strings.TrimSpace(recall) != "" {
+		extraSystemMessages = append(extraSystemMessages, agent.Message{Role: "system", Content: recall})
+	}
+
+	turnInput := make([]agent.Message, 0, len(history)+2+len(extraSystemMessages)+systemCount)
 	if systemPrompt != "" {
 		turnInput = append(turnInput, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
 	}
-	turnInput = append(turnInput, input.ExtraSystemMessages...)
+	turnInput = append(turnInput, extraSystemMessages...)
 	if advisory := brokerageContextForGovernor(brokerage); advisory != "" {
 		turnInput = append(turnInput, agent.Message{Role: "system", Content: advisory})
 	}

@@ -24,36 +24,38 @@ import (
 )
 
 type fakeProvider struct {
-	mu                  sync.Mutex
-	callCount           int
-	err                 error
-	replyText           string
-	thinkingText        string
-	reflectionReplyText string
-	compactionReplyText string
-	proposalReplyText   string
-	proposalReplies     []string
-	brokerageReplyText  string
-	brokerageReplies    []string
-	planningReplyText   string
-	planningReplies     []string
-	faceReplyText       string
-	repairReplyText     string
-	repairReplies       []string
-	streamFaceText      string
-	faceErr             error
-	proposalErr         error
-	proposalErrAfter    int
-	proposalCallCount   int
-	seenGovernorSystem  []string
-	seenFaceSystem      []string
-	seenProposalSystem  []string
-	seenBrokerageSystem []string
-	seenPlanningSystem  []string
-	lastGovernorMsgs    []agent.Message
-	responseUsage       core.TokenUsage
-	lastReasoning       agent.ReasoningConfig
-	reasoningBySystem   map[string]agent.ReasoningConfig
+	mu                     sync.Mutex
+	callCount              int
+	err                    error
+	replyText              string
+	thinkingText           string
+	reflectionReplyText    string
+	memoryCaptureReplyText string
+	memoryFlushReplyText   string
+	compactionReplyText    string
+	proposalReplyText      string
+	proposalReplies        []string
+	brokerageReplyText     string
+	brokerageReplies       []string
+	planningReplyText      string
+	planningReplies        []string
+	faceReplyText          string
+	repairReplyText        string
+	repairReplies          []string
+	streamFaceText         string
+	faceErr                error
+	proposalErr            error
+	proposalErrAfter       int
+	proposalCallCount      int
+	seenGovernorSystem     []string
+	seenFaceSystem         []string
+	seenProposalSystem     []string
+	seenBrokerageSystem    []string
+	seenPlanningSystem     []string
+	lastGovernorMsgs       []agent.Message
+	responseUsage          core.TokenUsage
+	lastReasoning          agent.ReasoningConfig
+	reasoningBySystem      map[string]agent.ReasoningConfig
 }
 
 type planningErrorProvider struct {
@@ -142,6 +144,20 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 			reply := strings.TrimSpace(f.compactionReplyText)
 			if reply == "" {
 				reply = "Compacted summary of earlier turns."
+			}
+			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
+		}
+		if strings.Contains(userText, aggressiveMemoryCaptureMarker) {
+			reply := strings.TrimSpace(f.memoryCaptureReplyText)
+			if reply == "" {
+				reply = "[MEMORY]\n[/MEMORY]\n[KNOWLEDGE]\n[/KNOWLEDGE]\n[DECISIONS]\n[/DECISIONS]\n[QUESTIONS]\n[/QUESTIONS]\n[RHIZOME]\n[/RHIZOME]"
+			}
+			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
+		}
+		if strings.Contains(userText, aggressiveMemoryFlushMarker) {
+			reply := strings.TrimSpace(f.memoryFlushReplyText)
+			if reply == "" {
+				reply = "[MEMORY]\n[/MEMORY]\n[KNOWLEDGE]\n[/KNOWLEDGE]\n[DECISIONS]\n[/DECISIONS]\n[QUESTIONS]\n[/QUESTIONS]\n[RHIZOME]\n[/RHIZOME]"
 			}
 			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 		}
