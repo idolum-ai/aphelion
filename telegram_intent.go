@@ -11,6 +11,10 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 )
 
+type memoryFocusRouter interface {
+	MemoryFocus(chatID int64) (core.MemoryFocus, bool)
+}
+
 var durableWizardAddressPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 
 func rewriteDurableRelayIntent(msg core.InboundMessage) core.InboundMessage {
@@ -164,4 +168,36 @@ func durableWizardInstructionText(original string, email string) string {
 		lines = append(lines, fmt.Sprintf("Known value: address=%s account=%s", email, email))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func rewriteMemoryFocusInbound(msg core.InboundMessage, router memoryFocusRouter) core.InboundMessage {
+	if router == nil {
+		return msg
+	}
+	if strings.TrimSpace(msg.DurableAgentID) != "" {
+		return msg
+	}
+	raw := strings.TrimSpace(msg.Text)
+	if raw == "" {
+		return msg
+	}
+	if _, ok := parseTelegramCommand(raw); ok {
+		return msg
+	}
+	focus, ok := router.MemoryFocus(msg.ChatID)
+	if !ok || !focus.Active() {
+		return msg
+	}
+	lines := []string{
+		"MEMORY_FOCUS_CONTEXT",
+		fmt.Sprintf("source=%s", strings.TrimSpace(string(focus.Source))),
+		fmt.Sprintf("label=%s", strings.TrimSpace(focus.Label)),
+		fmt.Sprintf("query=%s", strings.TrimSpace(focus.Query)),
+	}
+	if excerpt := strings.TrimSpace(focus.Excerpt); excerpt != "" {
+		lines = append(lines, fmt.Sprintf("excerpt=%s", excerpt))
+	}
+	lines = append(lines, "Use this memory focus as the active topic unless the user explicitly pivots.", "", raw)
+	msg.Text = strings.Join(lines, "\n")
+	return msg
 }

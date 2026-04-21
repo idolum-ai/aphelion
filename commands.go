@@ -51,6 +51,10 @@ type commandRouter interface {
 	RunDurableWizard(ctx context.Context, chatID int64, senderID int64, action string, agentID string, wizardAnswers map[string]any) (string, error)
 	DurableAgentsList(senderID int64) ([]core.DurableAgentStatusSnapshot, error)
 	StartDurableAgentConversation(ctx context.Context, chatID int64, senderID int64, agentID string) (string, error)
+	MemoryReviewSnapshot(ctx context.Context, chatID int64, senderID int64, source memoryReviewSource) (memoryReviewSnapshot, error)
+	MemoryFocus(chatID int64) (core.MemoryFocus, bool)
+	SetMemoryFocus(chatID int64, focus core.MemoryFocus)
+	ClearMemoryFocus(chatID int64) bool
 }
 
 var defaultTelegramCommands = []telegram.BotCommand{
@@ -59,6 +63,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "status", Description: "Show live status and controls"},
 	{Command: "debug", Description: "Show a detailed debug snapshot"},
 	{Command: "agents", Description: "List durable agents and controls"},
+	{Command: "memory", Description: "Review memory and set focus"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "new", Description: "Start a fresh chat session context"},
 	{Command: "detach", Description: "Detach from pending work in this chat"},
@@ -139,6 +144,17 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		rendered, rows := renderDurableAgentsCommand(agents)
+		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
+			return true, err
+		}
+		return true, nil
+	case "memory":
+		snapshot, err := router.MemoryReviewSnapshot(ctx, msg.ChatID, msg.SenderID, memoryReviewSourceSession)
+		if err != nil {
+			return true, err
+		}
+		focus, _ := router.MemoryFocus(msg.ChatID)
+		rendered, rows := renderMemoryReviewPanel(snapshot, focus)
 		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
 			return true, err
 		}
@@ -379,6 +395,9 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	}
 	if action, agentID, ok := decodeDurableAgentsCallbackData(cb.Data); ok {
 		return handleDurableAgentsCallback(ctx, sender, router, cb, action, agentID)
+	}
+	if action, source, index, ok := decodeMemoryReviewCallbackData(cb.Data); ok {
+		return handleMemoryReviewCallback(ctx, sender, router, cb, action, source, index)
 	}
 	kind, value, ok := decodeRecipeCallbackData(cb.Data)
 	if !ok {

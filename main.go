@@ -435,6 +435,38 @@ func (c telegramCommandControl) StartDurableAgentConversation(ctx context.Contex
 	return fmt.Sprintf("Started background conversation with durable agent %s (%s).", agentID, wakeStatus), nil
 }
 
+func (c telegramCommandControl) MemoryReviewSnapshot(ctx context.Context, chatID int64, senderID int64, source memoryReviewSource) (memoryReviewSnapshot, error) {
+	if c.rt == nil {
+		return memoryReviewSnapshot{
+			GeneratedAt: time.Now().UTC(),
+			Source:      core.NormalizeMemoryReviewSource(string(source)),
+			Query:       "",
+		}, nil
+	}
+	return c.rt.MemoryReviewSnapshot(ctx, chatID, senderID, core.NormalizeMemoryReviewSource(string(source)))
+}
+
+func (c telegramCommandControl) MemoryFocus(chatID int64) (core.MemoryFocus, bool) {
+	if c.rt == nil {
+		return core.MemoryFocus{}, false
+	}
+	return c.rt.MemoryFocus(chatID)
+}
+
+func (c telegramCommandControl) SetMemoryFocus(chatID int64, focus core.MemoryFocus) {
+	if c.rt == nil {
+		return
+	}
+	c.rt.SetMemoryFocus(chatID, focus)
+}
+
+func (c telegramCommandControl) ClearMemoryFocus(chatID int64) bool {
+	if c.rt == nil {
+		return false
+	}
+	return c.rt.ClearMemoryFocus(chatID)
+}
+
 func (e *configStartupError) Error() string {
 	return fmt.Sprintf("config %s: %v (run 'aphelion --config %s --check-config' to validate)", e.Path, e.Err, e.Path)
 }
@@ -644,6 +676,7 @@ func run() error {
 	poller := telegram.NewPoller(tgClient, func(parent context.Context, msg core.InboundMessage) error {
 		msg = rewriteDurableWizardIntent(msg, commandControl)
 		msg = rewriteDurableRelayIntent(msg)
+		msg = rewriteMemoryFocusInbound(msg, commandControl)
 		handled, err := handleTelegramCommand(parent, tgOutbound, commandControl, msg)
 		if err != nil {
 			return err

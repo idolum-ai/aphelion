@@ -5,6 +5,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/telegram"
@@ -154,5 +155,65 @@ func TestShouldAllowUnresolvedPrivateDurableRelayMessage(t *testing.T) {
 		Text: "hello",
 	}) {
 		t.Fatal("shouldAllowUnresolvedPrivateDurableRelayMessage() = true, want false for normal chat")
+	}
+}
+
+func TestRewriteMemoryFocusInboundPrefixesFocusContext(t *testing.T) {
+	t.Parallel()
+
+	router := &stubCommandRouter{
+		memoryFocusByChat: map[int64]core.MemoryFocus{
+			7: {
+				Source:  "session_recent",
+				ItemID:  "session:12:user",
+				Label:   "turn=12 role=user",
+				Excerpt: "Can you investigate alternatives for the architecture?",
+				Query:   "investigation thread",
+				SetAt:   time.Now().UTC(),
+			},
+		},
+	}
+	msg := core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1001,
+		Text:     "Let's continue with this topic.",
+	}
+	got := rewriteMemoryFocusInbound(msg, router)
+	if got.Text == msg.Text {
+		t.Fatalf("rewriteMemoryFocusInbound() text unchanged = %q, want focus-prefixed text", got.Text)
+	}
+	for _, needle := range []string{
+		"MEMORY_FOCUS_CONTEXT",
+		"source=session_recent",
+		"label=turn=12 role=user",
+		"query=investigation thread",
+		"Let's continue with this topic.",
+	} {
+		if !strings.Contains(got.Text, needle) {
+			t.Fatalf("rewritten text = %q, want substring %q", got.Text, needle)
+		}
+	}
+}
+
+func TestRewriteMemoryFocusInboundLeavesSlashCommandUntouched(t *testing.T) {
+	t.Parallel()
+
+	router := &stubCommandRouter{
+		memoryFocusByChat: map[int64]core.MemoryFocus{
+			7: {
+				Source: "session_recent",
+				ItemID: "session:12:user",
+				Label:  "turn=12 role=user",
+			},
+		},
+	}
+	msg := core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1001,
+		Text:     "/status",
+	}
+	got := rewriteMemoryFocusInbound(msg, router)
+	if got.Text != msg.Text {
+		t.Fatalf("rewriteMemoryFocusInbound() = %q, want unchanged slash command %q", got.Text, msg.Text)
 	}
 }

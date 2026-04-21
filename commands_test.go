@@ -152,6 +152,14 @@ type stubCommandRouter struct {
 	startDurableAgentID         string
 	startDurableResult          string
 	startDurableErr             error
+	memoryReviewBySource        map[memoryReviewSource]memoryReviewSnapshot
+	memoryReviewErr             error
+	memoryReviewChatID          int64
+	memoryReviewSenderID        int64
+	memoryReviewSource          memoryReviewSource
+	memoryFocusByChat           map[int64]core.MemoryFocus
+	clearMemoryFocusChatID      int64
+	clearMemoryFocusResult      bool
 }
 
 func (s *stubCommandRouter) Stop(chatID int64) core.StopResult {
@@ -361,6 +369,55 @@ func (s *stubCommandRouter) StartDurableAgentConversation(ctx context.Context, c
 	return "Started background conversation with durable agent " + strings.TrimSpace(agentID) + ".", nil
 }
 
+func (s *stubCommandRouter) MemoryReviewSnapshot(ctx context.Context, chatID int64, senderID int64, source memoryReviewSource) (memoryReviewSnapshot, error) {
+	_ = ctx
+	s.memoryReviewChatID = chatID
+	s.memoryReviewSenderID = senderID
+	s.memoryReviewSource = source
+	if s.memoryReviewErr != nil {
+		return memoryReviewSnapshot{}, s.memoryReviewErr
+	}
+	if s.memoryReviewBySource == nil {
+		return memoryReviewSnapshot{
+			Source: source,
+			Query:  "default seed",
+		}, nil
+	}
+	if snapshot, ok := s.memoryReviewBySource[source]; ok {
+		return snapshot, nil
+	}
+	return memoryReviewSnapshot{
+		Source: source,
+		Query:  "default seed",
+	}, nil
+}
+
+func (s *stubCommandRouter) MemoryFocus(chatID int64) (core.MemoryFocus, bool) {
+	if s.memoryFocusByChat == nil {
+		return core.MemoryFocus{}, false
+	}
+	focus, ok := s.memoryFocusByChat[chatID]
+	return focus, ok
+}
+
+func (s *stubCommandRouter) SetMemoryFocus(chatID int64, focus core.MemoryFocus) {
+	if s.memoryFocusByChat == nil {
+		s.memoryFocusByChat = make(map[int64]core.MemoryFocus)
+	}
+	s.memoryFocusByChat[chatID] = focus
+}
+
+func (s *stubCommandRouter) ClearMemoryFocus(chatID int64) bool {
+	s.clearMemoryFocusChatID = chatID
+	if s.memoryFocusByChat != nil {
+		if _, ok := s.memoryFocusByChat[chatID]; ok {
+			delete(s.memoryFocusByChat, chatID)
+			return true
+		}
+	}
+	return s.clearMemoryFocusResult
+}
+
 func TestParseTelegramCommand(t *testing.T) {
 	t.Parallel()
 
@@ -378,6 +435,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/reinstall", want: "reinstall", ok: true},
 		{text: "/debug", want: "debug", ok: true},
 		{text: "/agents", want: "agents", ok: true},
+		{text: "/memory", want: "memory", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
 		{text: "/set_governor_effort", want: "set_governor_effort", ok: true},
 		{text: "/tmp/file", ok: false},
@@ -390,6 +448,21 @@ func TestParseTelegramCommand(t *testing.T) {
 		if ok != tt.ok || got != tt.want {
 			t.Fatalf("parseTelegramCommand(%q) = (%q, %v), want (%q, %v)", tt.text, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeMemory(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "memory" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /memory command entry", defaultTelegramCommands)
 	}
 }
 
@@ -652,6 +725,65 @@ func TestHandleTelegramCommandAgentsShowsButtons(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandMemoryShowsButtons(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		memoryReviewBySource: map[memoryReviewSource]memoryReviewSnapshot{
+			memoryReviewSourceSession: {
+				Source: memoryReviewSourceSession,
+				Query:  "investigation thread",
+				Items: []memoryReviewItem{
+					{
+						ID:      "session:12:user",
+						Label:   "turn=12 role=user",
+						Excerpt: "Can you investigate alternatives for the architecture?",
+					},
+					{
+						ID:      "session:13:assistant",
+						Label:   "turn=13 role=assistant",
+						Excerpt: "I identified three options with different trade-offs.",
+					},
+				},
+			},
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 21,
+		Text:      "/memory",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.memoryReviewChatID != 7 || router.memoryReviewSenderID != 1001 || router.memoryReviewSource != memoryReviewSourceSession {
+		t.Fatalf("memory review routing = chat:%d sender:%d source:%q", router.memoryReviewChatID, router.memoryReviewSenderID, router.memoryReviewSource)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "Memory Review") {
+		t.Fatalf("memory text = %q, want Memory Review heading", got)
+	}
+	foundFocus := false
+	for _, row := range sender.inline[0].rows {
+		for _, button := range row {
+			if strings.Contains(button.CallbackData, "memory:focus:session:1") {
+				foundFocus = true
+				break
+			}
+		}
+	}
+	if !foundFocus {
+		t.Fatalf("rows = %#v, want focus callback button", sender.inline[0].rows)
+	}
+}
+
 func TestHandleTelegramCommandCallbackAgentsStartInvokesBackgroundConversation(t *testing.T) {
 	t.Parallel()
 
@@ -686,6 +818,55 @@ func TestHandleTelegramCommandCallbackAgentsStartInvokesBackgroundConversation(t
 	}
 	if got := sender.msgs[0].Text; !strings.Contains(got, "wake requested") {
 		t.Fatalf("ack text = %q, want wake status", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackMemoryFocusSetsFocus(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		memoryReviewBySource: map[memoryReviewSource]memoryReviewSnapshot{
+			memoryReviewSourceSession: {
+				Source: memoryReviewSourceSession,
+				Query:  "investigation thread",
+				Items: []memoryReviewItem{
+					{
+						ID:      "session:12:user",
+						Label:   "turn=12 role=user",
+						Excerpt: "Can you investigate alternatives for the architecture?",
+					},
+				},
+			},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:   "cb-memory-focus",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "memory:focus:session:1",
+		Message: &telegram.Message{
+			MessageID: 95,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	focus, ok := router.MemoryFocus(7)
+	if !ok {
+		t.Fatal("memory focus not set")
+	}
+	if focus.ItemID != "session:12:user" {
+		t.Fatalf("focus item id = %q, want session:12:user", focus.ItemID)
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "Active Focus") {
+		t.Fatalf("memory panel text = %q, want Active Focus section", got)
 	}
 }
 

@@ -20,6 +20,10 @@ Current command surface:
   - Admin-only durable-agent launcher.
   - Lists durable agents with inline `Start Chat` buttons.
   - Starts a background parent-child conversation kickoff for the selected durable agent.
+- `/memory`
+  - Opens memory review with inline controls across session history and semantic memory views.
+  - Lets the user set an active memory focus from a candidate item (`Focus 1/2/3`).
+  - Active focus is injected as bounded turn context on subsequent non-command chat messages until cleared.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
   - When `memory.aggressive.flush_on_session_boundary` is enabled, it also runs a bounded memory flush first.
@@ -195,6 +199,30 @@ Buttons are generated from runtime options:
 - `XHIGH`
 
 The currently active option is prefixed with `•`.
+
+### `/memory` review controls
+
+- Source selectors:
+  - `Session`
+  - `Semantic Shared`
+  - `Semantic Local`
+- Candidate selectors:
+  - `Focus 1`
+  - `Focus 2`
+  - `Focus 3`
+- Control row:
+  - `Clear Focus`
+  - `Refresh`
+
+Behavior:
+
+- panel includes:
+  - source id
+  - query seed
+  - active focus summary (or `none`)
+  - candidate items with labels and excerpts
+- focus applies to subsequent non-command inbound messages by prepending a machine-only `MEMORY_FOCUS_CONTEXT` block.
+- slash commands and durable relay payloads are not rewritten by memory-focus injection.
 
 ### Continuation approval prompt
 

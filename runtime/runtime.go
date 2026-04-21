@@ -99,6 +99,8 @@ type Runtime struct {
 	recipeFileMu           sync.Mutex
 	recipePath             string
 	recipeState            runtimeRecipeState
+	memoryFocusMu          sync.RWMutex
+	memoryFocusByChat      map[int64]core.MemoryFocus
 }
 
 func (r *Runtime) ContinuationState(chatID int64) (session.ContinuationState, error) {
@@ -115,6 +117,7 @@ func (r *Runtime) ClearChatSessionContext(chatID int64) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	r.ClearMemoryFocus(chatID)
 	return removed > 0, nil
 }
 
@@ -463,6 +466,7 @@ func New(
 		interruptRunningTurnRuns: store.InterruptRunningTurnRuns,
 		recipePath:               recipePath,
 		recipeState:              recipeState,
+		memoryFocusByChat:        make(map[int64]core.MemoryFocus),
 		scopeResolver:            scopeResolver,
 		durableGroupChild:        newSandboxDurableGroupChildExecutor(cfg),
 		durableWakeChild:         newSandboxDurableWakeChildExecutor(cfg),
