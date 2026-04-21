@@ -87,6 +87,10 @@ type Runtime struct {
 	turnAuditSink          func(TurnAudit)
 	interactiveDMAssembler interactiveDMTurnAssembler
 	maintenanceAssembler   maintenanceTurnAssembler
+	operationalAlertMu     sync.Mutex
+	operationalAlerts      map[string]operationalAlertState
+	operationalAlertClock  func() time.Time
+	operationalAlertWindow time.Duration
 	sessionMu              sync.Mutex
 	sessionLocks           map[string]*sync.Mutex
 	statusStageMu          sync.RWMutex
@@ -472,6 +476,9 @@ func New(
 		durableWakeChild:         newSandboxDurableWakeChildExecutor(cfg),
 		durableWakeAdapters:      defaultDurableWakeIngressAdapters(),
 		constitutionGate:         DefaultTurnConstitutionGate(),
+		operationalAlerts:        make(map[string]operationalAlertState),
+		operationalAlertClock:    time.Now,
+		operationalAlertWindow:   10 * time.Minute,
 		sessionLocks:             make(map[string]*sync.Mutex),
 		statusStageByChat:        make(map[int64]statusTurnPhase),
 	}
@@ -550,6 +557,7 @@ func (r *Runtime) startIdleExpiryLoop(ctx context.Context, cadence time.Duration
 		expired, err := r.expireIdle(r.idleExpiry)
 		if err != nil {
 			logger("WARN idle expiry sweep failed: %v", err)
+			r.reportOperationalIssue(runCtx, "idle_expiry", err)
 			return
 		}
 		if expired > 0 {

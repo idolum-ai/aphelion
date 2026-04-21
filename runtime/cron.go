@@ -36,11 +36,17 @@ func (r *Runtime) StartCronLoop(ctx context.Context, logger func(string, ...any)
 		cadence, err := time.ParseDuration(strings.TrimSpace(job.Every))
 		if err != nil || cadence <= 0 {
 			logger("WARN cron job disabled due to invalid cadence id=%s every=%q err=%v", job.ID, job.Every, err)
+			if err != nil {
+				r.reportOperationalIssue(ctx, "cron:"+strings.TrimSpace(job.ID), fmt.Errorf("invalid cadence %q: %w", job.Every, err))
+			} else {
+				r.reportOperationalIssue(ctx, "cron:"+strings.TrimSpace(job.ID), fmt.Errorf("invalid cadence %q", job.Every))
+			}
 			continue
 		}
 		go runPeriodic(ctx, cadence, func(runCtx context.Context) {
 			if err := r.runCronJobOnce(runCtx, job); err != nil {
 				logger("WARN cron job failed id=%s err=%v", job.ID, err)
+				r.reportOperationalIssue(runCtx, "cron:"+strings.TrimSpace(job.ID), err)
 			}
 		})
 	}

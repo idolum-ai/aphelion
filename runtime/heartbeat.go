@@ -33,12 +33,18 @@ func (r *Runtime) StartHeartbeatLoop(ctx context.Context, logger func(string, ..
 	cadence, err := time.ParseDuration(strings.TrimSpace(r.cfg.Heartbeat.Every))
 	if err != nil || cadence <= 0 {
 		logger("WARN heartbeat disabled due to invalid cadence: %q err=%v", r.cfg.Heartbeat.Every, err)
+		if err != nil {
+			r.reportOperationalIssue(ctx, "heartbeat", fmt.Errorf("invalid heartbeat cadence %q: %w", r.cfg.Heartbeat.Every, err))
+		} else {
+			r.reportOperationalIssue(ctx, "heartbeat", fmt.Errorf("invalid heartbeat cadence %q", r.cfg.Heartbeat.Every))
+		}
 		return
 	}
 
 	go runPeriodic(ctx, cadence, func(runCtx context.Context) {
 		if err := r.runHeartbeatOnce(runCtx, time.Now()); err != nil {
 			logger("WARN heartbeat failed: %v", err)
+			r.reportOperationalIssue(runCtx, "heartbeat", err)
 		}
 	})
 }

@@ -19,6 +19,7 @@ func (r *Runtime) StartDurableWakeLoop(ctx context.Context, logger func(string, 
 	go runPeriodic(ctx, durableWakeLoopCadence, func(runCtx context.Context) {
 		if err := r.pollDurableWakeAgents(runCtx, time.Now().UTC()); err != nil {
 			logger("WARN durable wake poll failed: %v", err)
+			r.reportOperationalIssue(runCtx, "durable_wake", err)
 		}
 	})
 }

@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -48,6 +49,7 @@ func (r *Runtime) startStaleTurnWatchdogLoop(ctx context.Context, cadence time.D
 		stale, err := r.staleTurnSweep(cutoff, r.staleTurnLimit)
 		if err != nil {
 			logger("WARN stale turn watchdog sweep failed: %v", err)
+			r.reportOperationalIssue(runCtx, "stale_watchdog", err)
 			return
 		}
 		if len(stale) == 0 {
@@ -58,11 +60,13 @@ func (r *Runtime) startStaleTurnWatchdogLoop(ctx context.Context, cadence time.D
 		}
 
 		logger("WARN stale turn watchdog detected %d stale running turn(s); threshold=%s", len(stale), r.staleTurnThreshold)
+		r.reportOperationalIssue(runCtx, "stale_watchdog", fmt.Errorf("detected %d stale running turn(s); threshold=%s", len(stale), r.staleTurnThreshold))
 		interrupted := stale
 		if r.interruptRunningTurnRuns != nil {
 			runs, interruptErr := r.interruptRunningTurnRuns()
 			if interruptErr != nil {
 				logger("WARN stale turn watchdog failed to interrupt running turns: %v", interruptErr)
+				r.reportOperationalIssue(runCtx, "stale_watchdog", interruptErr)
 			} else if len(runs) > 0 {
 				interrupted = runs
 			}
@@ -86,4 +90,3 @@ func staleTurnWatchdogCadence(threshold time.Duration) time.Duration {
 	}
 	return cadence
 }
-
