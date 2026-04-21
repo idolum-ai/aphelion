@@ -190,30 +190,32 @@ func (m *turnMonitor) Finish(ctx context.Context, turnErr error) {
 }
 
 type toolProgressReporter struct {
-	mu              sync.Mutex
-	sender          OutboundSender
-	inlineSender    inlineKeyboardSender
-	editor          messageEditor
-	keyboardEditor  messageKeyboardEditor
-	deleter         messageDeleter
-	chatID          int64
-	replyTo         *int64
-	mode            string
-	style           string
-	window          int
-	cleanup         bool
-	messageID       int64
-	entries         []toolProgressEntry
-	seenKeys        map[string]struct{}
-	recordMessageID func(messageID int64)
-	validateText    func(string) (string, []ConstitutionViolation)
-	audit           *turnAuditRecorder
-	taskSummary     string
-	currentPlanStep string
-	runID           int64
-	controls        [][]telegram.InlineButton
-	startedAt       time.Time
-	finished        bool
+	mu               sync.Mutex
+	sender           OutboundSender
+	inlineSender     inlineKeyboardSender
+	editor           messageEditor
+	keyboardEditor   messageKeyboardEditor
+	deleter          messageDeleter
+	reportIssue      func(ctx context.Context, err error)
+	chatID           int64
+	replyTo          *int64
+	suppressControls bool
+	mode             string
+	style            string
+	window           int
+	cleanup          bool
+	messageID        int64
+	entries          []toolProgressEntry
+	seenKeys         map[string]struct{}
+	recordMessageID  func(messageID int64)
+	validateText     func(string) (string, []ConstitutionViolation)
+	audit            *turnAuditRecorder
+	taskSummary      string
+	currentPlanStep  string
+	runID            int64
+	controls         [][]telegram.InlineButton
+	startedAt        time.Time
+	finished         bool
 }
 
 type toolProgressEntry struct {
@@ -230,19 +232,28 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, planState ses
 	if mode == "off" || r.outbound == nil {
 		return nil
 	}
+	target := r.resolveToolProgressTarget(msg)
+	if target.ChatID == 0 {
+		return nil
+	}
 
 	reporter := &toolProgressReporter{
-		sender:          r.outbound,
-		chatID:          msg.ChatID,
-		replyTo:         replyToMessageID(msg.MessageID),
-		mode:            mode,
-		style:           strings.ToLower(strings.TrimSpace(r.toolProgressStyle)),
-		window:          r.toolProgressWindow,
-		cleanup:         r.toolProgressCleanup,
-		seenKeys:        make(map[string]struct{}),
-		audit:           audit,
-		taskSummary:     summarizeProgressTask(msg.Text),
-		currentPlanStep: currentProgressPlanStep(planState),
+		sender:           r.outbound,
+		reportIssue:      nil,
+		chatID:           target.ChatID,
+		replyTo:          target.ReplyTo,
+		suppressControls: target.SuppressControls,
+		mode:             mode,
+		style:            strings.ToLower(strings.TrimSpace(r.toolProgressStyle)),
+		window:           r.toolProgressWindow,
+		cleanup:          r.toolProgressCleanup,
+		seenKeys:         make(map[string]struct{}),
+		audit:            audit,
+		taskSummary:      summarizeProgressTask(msg.Text),
+		currentPlanStep:  currentProgressPlanStep(planState),
+	}
+	if target.SuppressControls {
+		reporter.reportIssue = r.reportToolProgressIssue
 	}
 	if reporter.style == "" {
 		reporter.style = "semantic"
@@ -266,8 +277,80 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, planState ses
 	return reporter
 }
 
+type toolProgressTarget struct {
+	ChatID           int64
+	ReplyTo          *int64
+	SuppressControls bool
+}
+
+func (r *Runtime) resolveToolProgressTarget(msg core.InboundMessage) toolProgressTarget {
+	target := toolProgressTarget{
+		ChatID:  msg.ChatID,
+		ReplyTo: replyToMessageID(msg.MessageID),
+	}
+	if r == nil {
+		return target
+	}
+	if toolProgressUsesInboundTelegramChat(msg) {
+		return target
+	}
+	relayChatID := r.resolveInternalProgressRelayChat(msg)
+	if relayChatID == 0 {
+		return target
+	}
+	target.ChatID = relayChatID
+	target.ReplyTo = nil
+	target.SuppressControls = true
+	return target
+}
+
+func toolProgressUsesInboundTelegramChat(msg core.InboundMessage) bool {
+	chatType := strings.ToLower(strings.TrimSpace(msg.ChatType))
+	if chatType == "" {
+		return msg.ChatID > 0
+	}
+	switch chatType {
+	case "private", "group", "supergroup", "channel", "dm", "telegram_dm", "telegram_group":
+		return msg.ChatID != 0
+	default:
+		return false
+	}
+}
+
+func (r *Runtime) resolveInternalProgressRelayChat(msg core.InboundMessage) int64 {
+	if r == nil || r.cfg == nil {
+		return 0
+	}
+	if r.store != nil {
+		agentID := strings.TrimSpace(msg.DurableAgentID)
+		if agentID != "" {
+			if agent, err := r.store.DurableAgent(agentID); err == nil && agent != nil && agent.ReviewTargetChatID > 0 {
+				return agent.ReviewTargetChatID
+			}
+		}
+	}
+	adminIDs := uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)
+	if len(adminIDs) == 0 {
+		return 0
+	}
+	if targetChatID := r.lastActiveAdminChat(adminIDs); targetChatID != 0 {
+		return targetChatID
+	}
+	return adminIDs[0]
+}
+
+func (r *Runtime) reportToolProgressIssue(ctx context.Context, err error) {
+	if r == nil || err == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.reportOperationalIssue(ctx, "tool_progress", err)
+}
+
 func (p *toolProgressReporter) BindTurnRun(runID int64) {
-	if p == nil || runID <= 0 {
+	if p == nil || runID <= 0 || p.suppressControls {
 		return
 	}
 	p.mu.Lock()
@@ -378,6 +461,9 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		}
 		if err != nil {
 			log.Printf("WARN send tool progress chat_id=%d err=%v", p.chatID, err)
+			if p.reportIssue != nil {
+				p.reportIssue(ctx, fmt.Errorf("send tool progress chat_id=%d: %w", p.chatID, err))
+			}
 			return
 		}
 		p.messageID = msgID
@@ -390,6 +476,9 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 	if withControls && len(p.controls) > 0 && p.keyboardEditor != nil {
 		if err := p.keyboardEditor.EditMessageTextWithInlineKeyboard(ctx, p.chatID, p.messageID, text, "", p.controls); err != nil {
 			log.Printf("WARN edit tool progress inline chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+			if p.reportIssue != nil {
+				p.reportIssue(ctx, fmt.Errorf("edit tool progress inline chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
+			}
 		} else {
 			return
 		}
@@ -399,6 +488,9 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 	}
 	if err := p.editor.EditMessageText(ctx, p.chatID, p.messageID, text, ""); err != nil {
 		log.Printf("WARN edit tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+		if p.reportIssue != nil {
+			p.reportIssue(ctx, fmt.Errorf("edit tool progress chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
+		}
 	}
 }
 
@@ -418,6 +510,9 @@ func (p *toolProgressReporter) Finish(ctx context.Context) {
 	if p.cleanup && p.deleter != nil {
 		if err := p.deleter.DeleteMessage(ctx, p.chatID, p.messageID); err != nil {
 			log.Printf("WARN delete tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+			if p.reportIssue != nil {
+				p.reportIssue(ctx, fmt.Errorf("delete tool progress chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
+			}
 		}
 		return
 	}

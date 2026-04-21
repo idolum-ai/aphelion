@@ -5,10 +5,12 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -202,4 +204,102 @@ func TestStartTurnMonitorRunActivityHeartbeatUpdatesLastActivity(t *testing.T) {
 	}
 
 	monitor.Finish(context.Background(), nil)
+}
+
+func TestNewToolProgressReporterRoutesInternalDurableProgressToAdminChat(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-email",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "headless",
+		BootstrapLLM:       durableGroupTestBootstrapLLM(),
+		Status:             "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	reporter := rt.newToolProgressReporter(core.InboundMessage{
+		ChatID:         1921139064,
+		ChatType:       "durable_parent_conversation",
+		MessageID:      55,
+		DurableAgentID: "idolum-email",
+		Text:           "internal durable wake",
+	}, session.PlanState{}, nil)
+	if reporter == nil {
+		t.Fatal("newToolProgressReporter() = nil, want reporter")
+	}
+	if reporter.chatID != 1001 {
+		t.Fatalf("reporter.chatID = %d, want admin review chat 1001", reporter.chatID)
+	}
+	if reporter.replyTo != nil {
+		t.Fatalf("reporter.replyTo = %#v, want nil for relayed internal progress", reporter.replyTo)
+	}
+	reporter.BindTurnRun(7)
+	if len(reporter.controls) != 0 {
+		t.Fatalf("reporter.controls = %#v, want no controls for relayed internal progress", reporter.controls)
+	}
+
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"echo hello"}`))
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sender.sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].ChatID != 1001 {
+		t.Fatalf("sender.sent chat_id = %d, want admin review chat 1001", sender.sent[0].ChatID)
+	}
+}
+
+func TestNewToolProgressReporterKeepsTelegramChatTarget(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	reporter := rt.newToolProgressReporter(core.InboundMessage{
+		ChatID:    6313146,
+		ChatType:  "private",
+		MessageID: 77,
+		Text:      "normal telegram chat",
+	}, session.PlanState{}, nil)
+	if reporter == nil {
+		t.Fatal("newToolProgressReporter() = nil, want reporter")
+	}
+	if reporter.chatID != 6313146 {
+		t.Fatalf("reporter.chatID = %d, want 6313146", reporter.chatID)
+	}
+	if reporter.replyTo == nil || *reporter.replyTo != 77 {
+		t.Fatalf("reporter.replyTo = %#v, want pointer to 77", reporter.replyTo)
+	}
+}
+
+func TestToolProgressReporterReportsSendErrors(t *testing.T) {
+	sender := &fakeSender{sendErr: errors.New("telegram sendMessage failed: chat not found")}
+	var reported []string
+	reporter := &toolProgressReporter{
+		sender: sender,
+		reportIssue: func(_ context.Context, err error) {
+			reported = append(reported, err.Error())
+		},
+		chatID:   42,
+		mode:     "all",
+		style:    "semantic",
+		window:   4,
+		seenKeys: make(map[string]struct{}),
+	}
+
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"echo fail"}`))
+
+	if len(reported) != 1 {
+		t.Fatalf("reported len = %d, want 1", len(reported))
+	}
+	if !strings.Contains(reported[0], "send tool progress chat_id=42") {
+		t.Fatalf("reported[0] = %q, want send tool progress context", reported[0])
+	}
 }
