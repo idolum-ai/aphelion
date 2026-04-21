@@ -329,6 +329,9 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	if !strings.Contains(got, "produced only after governor ratification/execution and a later render pass") {
 		t.Fatalf("proposal prompt missing post-governor rendering contract: %q", got)
 	}
+	if !strings.Contains(got, "Only text inside that Surface block is shown live during deliberation") {
+		t.Fatalf("proposal prompt missing explicit Surface visibility guidance: %q", got)
+	}
 }
 
 func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
@@ -366,6 +369,9 @@ func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
 	}
 	if !strings.Contains(got, "produced only after governor ratification/execution and a later render pass") {
 		t.Fatalf("brokerage prompt missing post-governor rendering contract: %q", got)
+	}
+	if !strings.Contains(got, "Only text inside that Surface block is shown live during deliberation") {
+		t.Fatalf("brokerage prompt missing explicit Surface visibility guidance: %q", got)
 	}
 }
 

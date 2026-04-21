@@ -124,6 +124,7 @@ func (r *Runtime) ratifyTurnBrokerage(
 			"If you want one short live progress update during this internal ratification exchange, append this optional markdown block:",
 			"### Surface",
 			"<one short user-facing progress line>",
+			"Only text inside that Surface block is surfaced live during this exchange; all other text here stays internal.",
 			"",
 			"User message:",
 			strings.TrimSpace(userText),

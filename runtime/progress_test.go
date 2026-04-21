@@ -143,6 +143,32 @@ func TestToolProgressReporterHeartbeatCanStartThinkingCard(t *testing.T) {
 	}
 }
 
+func TestToolProgressReporterSurfaceStartsThinkingCard(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	reporter := &toolProgressReporter{
+		sender:       sender,
+		inlineSender: sender,
+		chatID:       42,
+		mode:         "all",
+		style:        "semantic",
+		window:       4,
+		seenKeys:     make(map[string]struct{}),
+	}
+	reporter.BindTurnRun(204)
+	reporter.Surface(context.Background(), "Starting the commit scan now.")
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline len = %d, want 1 surfaced thinking card", len(sender.inline))
+	}
+	if !strings.Contains(sender.inline[0].text, "Starting the commit scan now.") {
+		t.Fatalf("inline text = %q, want surfaced prose", sender.inline[0].text)
+	}
+}
+
 func TestStartTurnMonitorRunActivityHeartbeatUpdatesLastActivity(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
