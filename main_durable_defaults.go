@@ -93,6 +93,30 @@ func syncDefaultDailyReviewDurableAgent(cfg *config.Config, store *session.SQLit
 	return nil
 }
 
+func syncDurableAgentBootstrapInheritance(cfg *config.Config, store *session.SQLiteStore) error {
+	if cfg == nil || store == nil {
+		return nil
+	}
+	inherited := core.NormalizeNodeLLMBootstrap(defaultDurableAgentBootstrapFromConfig(cfg))
+	if !inherited.Configured() {
+		return nil
+	}
+	agents, err := store.ListDurableAgents()
+	if err != nil {
+		return fmt.Errorf("list durable agents for bootstrap inheritance: %w", err)
+	}
+	for _, agent := range agents {
+		if core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM).Configured() {
+			continue
+		}
+		agent.BootstrapLLM = inherited
+		if err := store.UpsertDurableAgent(agent); err != nil {
+			return fmt.Errorf("backfill durable agent bootstrap inheritance agent=%s: %w", strings.TrimSpace(agent.AgentID), err)
+		}
+	}
+	return nil
+}
+
 func defaultDailyReviewLivePolicy() core.DurableAgentLivePolicy {
 	return core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 		Charter: "Run one scheduled daily review of yesterday's transcript and open a plain parent-child check-in with concise action items for tomorrow.",

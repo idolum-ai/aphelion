@@ -184,14 +184,23 @@ func (r *Runtime) buildTurnCoordinatorGovernorPrompt(input turnCoordinatorExecut
 
 func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordinatorExecuteInput) (turnCoordinatorExecuteOutput, error) {
 	out := turnCoordinatorExecuteOutput{Sess: input.Sess}
+	monitorErr := error(nil)
 
 	runKind := input.RunKind
 	if runKind == "" {
 		runKind = session.TurnRunKindInteractive
 	}
 
+	progress := r.newToolProgressReporter(input.Msg, input.Sess.PlanState, input.Audit)
+	monitor := r.startTurnMonitor(input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit)
+	defer monitor.Finish(ctx, monitorErr)
+
 	baseGovernorAwareness := input.BaseGovernorAwareness
-	brokerage := seedTurnBrokerageFromFaceNote(input.FaceNote)
+	initialSurface, faceNote := extractDeliberationSurfaceMarkdown(input.FaceNote)
+	if progress != nil && initialSurface != "" {
+		progress.Surface(ctx, initialSurface)
+	}
+	brokerage := seedTurnBrokerageFromFaceNote(faceNote)
 	extraUsage := core.TokenUsage{}
 	if brokerage.Active {
 		r.markChatTurnPhase(input.Msg.ChatID, "brokerage", "converging proposal and ratification before governor execution")
@@ -203,12 +212,43 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 
 	sess, history, maybeErr := r.maybeCompactSession(ctx, input.Key, input.Sess, systemBlocks, input.Prepared.UserText, brokerage.IdolumNote)
 	if maybeErr != nil {
-		return out, fmt.Errorf("maybe compact session: %w", maybeErr)
+		monitorErr = fmt.Errorf("maybe compact session: %w", maybeErr)
+		return out, monitorErr
 	}
 	out.Sess = sess
 
-	if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" && input.RequestFaceNote != nil {
-		updated, usage := r.convergeTurnBrokerage(ctx, input.Exec, baseGovernorAwareness, systemBlocks, history, input.Prepared.UserText, brokerage, input.RequestFaceNote, input.Audit)
+	requestFaceNote := input.RequestFaceNote
+	if requestFaceNote != nil {
+		requestFaceNote = func(ctx context.Context, mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error) {
+			note, usage, err := input.RequestFaceNote(ctx, mode, awareness, priorProposal, feedback)
+			if err != nil {
+				return note, usage, err
+			}
+			surface, cleaned := extractDeliberationSurfaceMarkdown(note)
+			if progress != nil && surface != "" {
+				progress.Surface(ctx, surface)
+			}
+			return cleaned, usage, nil
+		}
+	}
+
+	if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.IdolumNote) != "" && requestFaceNote != nil {
+		updated, usage := r.convergeTurnBrokerage(
+			ctx,
+			input.Exec,
+			baseGovernorAwareness,
+			systemBlocks,
+			history,
+			input.Prepared.UserText,
+			brokerage,
+			requestFaceNote,
+			input.Audit,
+			func(ctx context.Context, text string) {
+				if progress != nil {
+					progress.Surface(ctx, text)
+				}
+			},
+		)
 		extraUsage = addTokenUsage(extraUsage, usage)
 		brokerage = updated
 		if brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.Ratification) == "accept" {
@@ -225,10 +265,6 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		sess.SystemPrompt = systemPrompt
 	}
 
-	progress := r.newToolProgressReporter(input.Msg, sess.PlanState, input.Audit)
-	monitor := r.startTurnMonitor(input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit)
-	var monitorErr error
-	defer monitor.Finish(ctx, monitorErr)
 	tools := monitor.observeTools(input.Tools)
 	r.markChatTurnPhase(input.Msg.ChatID, "governor", "running governor and tool loop")
 

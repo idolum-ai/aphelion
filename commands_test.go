@@ -980,7 +980,7 @@ func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "summary state=blocked") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Summary: State: blocked") {
 		t.Fatalf("status text = %q, want blocked summary state", got)
 	}
 	if got := sender.inline[0].text; !strings.Contains(got, "Current Signal: operation:blocked:approval_wait") {

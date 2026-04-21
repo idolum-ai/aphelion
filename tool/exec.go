@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
@@ -40,6 +41,7 @@ type Registry struct {
 	retrievalStore                  memstore.RetrievalStore
 	defaultStore                    string
 	semantic                        *memstore.SemanticEngine
+	durableAgentBootstrapLLM        core.NodeLLMBootstrap
 }
 
 type execInput struct {
@@ -285,6 +287,11 @@ func (r *Registry) WithRetrievalStore(store memstore.RetrievalStore, defaultStor
 
 func (r *Registry) WithSemanticEngine(engine *memstore.SemanticEngine) *Registry {
 	r.semantic = engine
+	return r
+}
+
+func (r *Registry) WithDurableAgentBootstrapLLM(bootstrap core.NodeLLMBootstrap) *Registry {
+	r.durableAgentBootstrapLLM = core.NormalizeNodeLLMBootstrap(bootstrap)
 	return r
 }
 

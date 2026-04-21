@@ -434,6 +434,7 @@ func TestConvergeTurnBrokeragePropagatesLiveContextToFaceNote(t *testing.T) {
 			return "Push the revised plan.", core.TokenUsage{}, nil
 		},
 		nil,
+		nil,
 	)
 
 	if !called {

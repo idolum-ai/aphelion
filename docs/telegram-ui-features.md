@@ -83,7 +83,7 @@ Admin-only:
 Chat-scoped status now reports live work telemetry, not only router occupancy:
 
 - `Quick Read:` one-line human summary (Haiku-backed when a native provider key is configured), prepended ahead of the status block.
-- snake_case telemetry labels are rendered as human-readable labels with colons (for example, `status_scope=chat` appears as `Status Scope: chat`).
+- Telemetry labels are rendered as human-readable labels with colons (including snake_case and known status/debug lead labels; for example, `status_scope=chat` appears as `Status Scope: chat`, and `summary state=idle` appears as `Summary: State: idle`).
 - `turn_phase` for active in-flight stage (`face_proposal`, `brokerage`, `governor`, `render`, `persist`, `deliver`) when available.
 - `operation` and `plan_step` from persisted session sidecars.
 - `plan_progress` with completed/total steps and `fully_executed=true|false`.

@@ -323,6 +323,32 @@ func (p *toolProgressReporter) Heartbeat(ctx context.Context) {
 	p.sendOrEditLocked(ctx, false, true)
 }
 
+func (p *toolProgressReporter) Surface(ctx context.Context, text string) {
+	if p == nil {
+		return
+	}
+	normalized := normalizeProgressSurfaceText(text)
+	if normalized == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.finished {
+		return
+	}
+	if p.startedAt.IsZero() {
+		p.startedAt = time.Now().UTC()
+	}
+	entry := toolProgressEntry{
+		Key:  "surface:" + normalized,
+		Text: normalized,
+	}
+	if !p.addEntry(entry) {
+		return
+	}
+	p.sendOrEditLocked(ctx, false, true)
+}
+
 func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, withControls bool) {
 	if p == nil {
 		return
@@ -572,6 +598,23 @@ func summarizeProgressTask(text string) string {
 		summary = strings.TrimSpace(summary[:80])
 	}
 	return strings.TrimRight(summary, ".,:;!?")
+}
+
+func normalizeProgressSurfaceText(raw string) string {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	lines := strings.Split(raw, "\n")
+	parts := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts = append(parts, line)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return truncatePreview(strings.Join(parts, " "), 220)
 }
 
 func toolInputPreview(input json.RawMessage) string {

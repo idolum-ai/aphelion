@@ -24,10 +24,11 @@ func TestHumanizeTelegramTelemetryText(t *testing.T) {
 	for _, needle := range []string{
 		"Quick Read: Chat 7 is idle right now.",
 		"Status Scope: chat Chat ID: 7 Generated At: 2026-04-19T22:02:14Z",
-		"summary state=idle Active Turns: 0 Queue Depth: 0 Pending Items: 0",
+		"Summary: State: idle Active Turns: 0 Queue Depth: 0 Pending Items: 0",
 		"Debug Chat:",
-		"Latest Turn: id=744 status=completed kind=interactive Last Activity: 2026-04-19T22:01:16Z",
+		"Latest Turn: ID: 744 Status: completed Kind: interactive Last Activity: 2026-04-19T22:01:16Z",
 		"Pending Items:",
+		"- none",
 	} {
 		if !strings.Contains(got, needle) {
 			t.Fatalf("humanizeTelegramTelemetryText() = %q, want substring %q", got, needle)

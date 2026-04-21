@@ -36,6 +36,12 @@ func TestBuildGovernorPromptPlacesAuthorityFirst(t *testing.T) {
 	if !strings.Contains(got, "## Runtime Awareness") {
 		t.Fatalf("prompt missing runtime awareness block: %q", got)
 	}
+	if !strings.Contains(got, "## Turn Sequencing") {
+		t.Fatalf("prompt missing turn sequencing block: %q", got)
+	}
+	if !strings.Contains(got, "face deliberation (proposal/brokerage) -> governor execution -> face render -> delivery") {
+		t.Fatalf("prompt missing explicit per-turn sequencing contract: %q", got)
+	}
 }
 
 func TestBuildGovernorPromptPlacesManifestBeforeToolsPolicy(t *testing.T) {
@@ -317,6 +323,12 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	if !strings.Contains(got, "reaching for") {
 		t.Fatalf("proposal prompt missing subtext observation guidance: %q", got)
 	}
+	if !strings.Contains(got, "internal deliberation only and is never sent directly to the user") {
+		t.Fatalf("proposal prompt missing internal-deliberation visibility guidance: %q", got)
+	}
+	if !strings.Contains(got, "produced only after governor ratification/execution and a later render pass") {
+		t.Fatalf("proposal prompt missing post-governor rendering contract: %q", got)
+	}
 }
 
 func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
@@ -348,6 +360,12 @@ func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
 	}
 	if !strings.Contains(got, "whether the turn needs inspection, a question before action, or an answer now") {
 		t.Fatalf("brokerage prompt missing execution-shape guidance: %q", got)
+	}
+	if !strings.Contains(got, "internal deliberation only and is never sent directly to the user") {
+		t.Fatalf("brokerage prompt missing internal-deliberation visibility guidance: %q", got)
+	}
+	if !strings.Contains(got, "produced only after governor ratification/execution and a later render pass") {
+		t.Fatalf("brokerage prompt missing post-governor rendering contract: %q", got)
 	}
 }
 

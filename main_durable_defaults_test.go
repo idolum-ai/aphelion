@@ -142,3 +142,124 @@ func TestSyncDefaultDailyReviewDurableAgentPreservesExistingPolicy(t *testing.T)
 		t.Fatalf("PolicyVersion = %d, want preserved 5", agent.PolicyVersion)
 	}
 }
+
+func TestSyncDurableAgentBootstrapInheritanceBackfillsMissingBootstrap(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "sessions.db")
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "draft-missing-bootstrap",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_dm",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Handle delegated DM triage."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_dm", core.DefaultTelegramGroupLivePolicy("Handle delegated DM triage.")),
+		Status:             "draft",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent(draft missing bootstrap) err = %v", err)
+	}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "existing-bootstrap",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_dm",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Handle delegated DM triage."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_dm", core.DefaultTelegramGroupLivePolicy("Handle delegated DM triage.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-existing",
+			Model:          "openrouter/child-model",
+		},
+		Status: "draft",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent(existing bootstrap) err = %v", err)
+	}
+
+	cfg := &config.Config{
+		Sessions: config.SessionsConfig{DBPath: dbPath},
+		Governor: config.GovernorConfig{
+			Backend:        "native",
+			NativeProvider: "anthropic",
+		},
+		Providers: config.ProvidersConfig{
+			Anthropic: config.AnthropicConfig{
+				APIKey:    "sk-parent-default",
+				Model:     "claude-sonnet-4-6",
+				MaxTokens: 4096,
+			},
+		},
+	}
+
+	if err := syncDurableAgentBootstrapInheritance(cfg, store); err != nil {
+		t.Fatalf("syncDurableAgentBootstrapInheritance() err = %v", err)
+	}
+
+	missing, err := store.DurableAgent("draft-missing-bootstrap")
+	if err != nil {
+		t.Fatalf("DurableAgent(draft-missing-bootstrap) err = %v", err)
+	}
+	if got := core.NormalizeNodeLLMBootstrap(missing.BootstrapLLM); !got.Configured() {
+		t.Fatalf("missing BootstrapLLM = %#v, want inherited configured bootstrap", missing.BootstrapLLM)
+	}
+	if missing.BootstrapLLM.NativeProvider != "anthropic" || missing.BootstrapLLM.APIKey != "sk-parent-default" {
+		t.Fatalf("missing BootstrapLLM = %#v, want inherited anthropic bootstrap", missing.BootstrapLLM)
+	}
+
+	existing, err := store.DurableAgent("existing-bootstrap")
+	if err != nil {
+		t.Fatalf("DurableAgent(existing-bootstrap) err = %v", err)
+	}
+	if existing.BootstrapLLM.NativeProvider != "openrouter" || existing.BootstrapLLM.APIKey != "sk-existing" {
+		t.Fatalf("existing BootstrapLLM = %#v, want preserved existing bootstrap", existing.BootstrapLLM)
+	}
+}
+
+func TestSyncDurableAgentBootstrapInheritanceNoopWithoutParentBootstrap(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "sessions.db")
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "draft-missing-bootstrap",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_dm",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Handle delegated DM triage."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_dm", core.DefaultTelegramGroupLivePolicy("Handle delegated DM triage.")),
+		Status:             "draft",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent(draft missing bootstrap) err = %v", err)
+	}
+
+	cfg := &config.Config{
+		Sessions: config.SessionsConfig{DBPath: dbPath},
+	}
+	if err := syncDurableAgentBootstrapInheritance(cfg, store); err != nil {
+		t.Fatalf("syncDurableAgentBootstrapInheritance() err = %v", err)
+	}
+
+	agent, err := store.DurableAgent("draft-missing-bootstrap")
+	if err != nil {
+		t.Fatalf("DurableAgent(draft-missing-bootstrap) err = %v", err)
+	}
+	if got := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM); got.Configured() {
+		t.Fatalf("BootstrapLLM = %#v, want no inherited bootstrap when parent has none", agent.BootstrapLLM)
+	}
+}

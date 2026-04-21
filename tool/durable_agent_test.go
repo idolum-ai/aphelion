@@ -1064,6 +1064,101 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 	}
 }
 
+func TestDurableAgentToolCreateInheritsBootstrapFromParentDefault(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
+		Backend:        "native",
+		NativeProvider: "anthropic",
+		APIKey:         "sk-parent-default",
+		Model:          "claude-sonnet-4-6",
+		MaxTokens:      2048,
+	})
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"create",
+			"agent_id":"idolum-inherit-create",
+			"channel_kind":"telegram_dm",
+			"charter":"Handle delegated DM triage."
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(create with inherited bootstrap) err = %v", err)
+	}
+
+	created, err := store.DurableAgent("idolum-inherit-create")
+	if err != nil {
+		t.Fatalf("DurableAgent(created) err = %v", err)
+	}
+	if got := core.NormalizeNodeLLMBootstrap(created.BootstrapLLM); !got.Configured() {
+		t.Fatalf("created BootstrapLLM = %#v, want inherited configured bootstrap", created.BootstrapLLM)
+	}
+	if created.BootstrapLLM.Backend != "native" || created.BootstrapLLM.NativeProvider != "anthropic" {
+		t.Fatalf("created BootstrapLLM = %#v, want inherited native anthropic bootstrap", created.BootstrapLLM)
+	}
+	if created.BootstrapLLM.APIKey != "sk-parent-default" {
+		t.Fatalf("created BootstrapLLM.APIKey = %q, want inherited sk-parent-default", created.BootstrapLLM.APIKey)
+	}
+}
+
+func TestDurableAgentToolActivateBackfillsBootstrapFromParentDefault(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
+		Backend:        "native",
+		NativeProvider: "anthropic",
+		APIKey:         "sk-parent-default",
+		Model:          "claude-sonnet-4-6",
+		MaxTokens:      2048,
+	})
+
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-inherit-activate",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_dm",
+		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Handle delegated DM triage."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_dm", core.DefaultTelegramGroupLivePolicy("Handle delegated DM triage.")),
+		WakeupMode:         "telegram_update",
+		Status:             "draft",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent(draft without bootstrap) err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"activate","agent_id":"idolum-inherit-activate"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(activate with inherited bootstrap) err = %v", err)
+	}
+
+	activated, err := store.DurableAgent("idolum-inherit-activate")
+	if err != nil {
+		t.Fatalf("DurableAgent(activated) err = %v", err)
+	}
+	if activated.Status != "active" {
+		t.Fatalf("activated status = %q, want active", activated.Status)
+	}
+	if got := core.NormalizeNodeLLMBootstrap(activated.BootstrapLLM); !got.Configured() {
+		t.Fatalf("activated BootstrapLLM = %#v, want inherited configured bootstrap", activated.BootstrapLLM)
+	}
+	if activated.BootstrapLLM.APIKey != "sk-parent-default" {
+		t.Fatalf("activated BootstrapLLM.APIKey = %q, want inherited sk-parent-default", activated.BootstrapLLM.APIKey)
+	}
+}
+
 func TestDurableAgentToolCreateSupportsInboxAliasChannelKindAndConfig(t *testing.T) {
 	t.Parallel()
 

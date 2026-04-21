@@ -234,6 +234,7 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 		return "", err
 	}
 	agent.ChannelConfig = channelConfig
+	r.inheritDurableAgentBootstrapIfMissing(&agent)
 	agent.Status = "draft"
 
 	if err := r.store.UpsertDurableAgent(agent); err != nil {
@@ -258,6 +259,7 @@ func (r *Registry) activateDurableAgent(in durableAgentInput) (string, error) {
 	if err := validateDurableAgentActivation(*agent); err != nil {
 		return "", err
 	}
+	r.inheritDurableAgentBootstrapIfMissing(agent)
 	agent.Status = "active"
 	if err := r.store.UpsertDurableAgent(*agent); err != nil {
 		return "", err
@@ -450,6 +452,7 @@ func (r *Registry) finalizeDurableAgentWizard(in durableAgentInput, key session.
 	if strings.TrimSpace(updatedAgent.Status) != "active" {
 		updatedAgent.Status = "draft"
 	}
+	r.inheritDurableAgentBootstrapIfMissing(&updatedAgent)
 	if err := r.store.UpsertDurableAgent(updatedAgent); err != nil {
 		return "", err
 	}
@@ -2554,6 +2557,20 @@ func validateDurableAgentActivation(agent core.DurableAgent) error {
 		}
 	}
 	return nil
+}
+
+func (r *Registry) inheritDurableAgentBootstrapIfMissing(agent *core.DurableAgent) {
+	if r == nil || agent == nil {
+		return
+	}
+	if core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM).Configured() {
+		return
+	}
+	inherited := core.NormalizeNodeLLMBootstrap(r.durableAgentBootstrapLLM)
+	if !inherited.Configured() {
+		return
+	}
+	agent.BootstrapLLM = inherited
 }
 
 func durableAgentAutonomyFromPolicy(policy core.DurableAgentLivePolicy) string {

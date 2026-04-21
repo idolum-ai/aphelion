@@ -26,6 +26,7 @@ type turnBrokerage struct {
 	SuggestedExecutionContract *pipeline.ExecutionContract
 	Ratification               string
 	SignalJudgment             string
+	RatificationSurface        string
 	RatificationRecord         string
 	RatifiedSteps              []string
 	RatifiedExecutionContract  *pipeline.ExecutionContract
@@ -120,6 +121,10 @@ func (r *Runtime) ratifyTurnBrokerage(
 			"CONTINUATION_CONSTRAINTS: <short bounded constraints>",
 			"CONTINUATION_CONFIDENCE: <low|medium|high>",
 			"",
+			"If you want one short live progress update during this internal ratification exchange, append this optional markdown block:",
+			"### Surface",
+			"<one short user-facing progress line>",
+			"",
 			"User message:",
 			strings.TrimSpace(userText),
 		}, "\n"),
@@ -130,10 +135,12 @@ func (r *Runtime) ratifyTurnBrokerage(
 		return brokerage, core.TokenUsage{}, err
 	}
 
-	parsed, parseErr := parseBrokerageRatification(resp.Content)
+	surfaceText, parseText := extractDeliberationSurfaceMarkdown(resp.Content)
+	parsed, parseErr := parseBrokerageRatification(parseText)
 	if parseErr != nil {
 		return brokerage, resp.Usage, fmt.Errorf("parse brokerage ratification: %w", parseErr)
 	}
+	brokerage.RatificationSurface = strings.TrimSpace(surfaceText)
 	brokerage.RatificationRecord = parsed.RatificationRecord
 	brokerage.Ratification = parsed.Ratification
 	brokerage.SignalJudgment = parsed.SignalJudgment
@@ -207,6 +214,7 @@ func (r *Runtime) convergeTurnBrokerage(
 	brokerage turnBrokerage,
 	requestFaceNote brokerageFaceRequester,
 	audit *turnAuditRecorder,
+	emitSurface func(ctx context.Context, text string),
 ) (turnBrokerage, core.TokenUsage) {
 	return turn.ConvergeBrokerage(ctx, turn.BrokerageConvergeInput[turnBrokerage]{
 		Initial:   brokerage,
@@ -237,6 +245,7 @@ func (r *Runtime) convergeTurnBrokerage(
 			state.SuggestedExecutionContract = pipeline.ParseExecutionContract(revised)
 			state.Ratification = ""
 			state.SignalJudgment = ""
+			state.RatificationSurface = ""
 			state.RatificationRecord = ""
 			state.RatifiedSteps = nil
 			state.RatifiedExecutionContract = nil
@@ -247,6 +256,9 @@ func (r *Runtime) convergeTurnBrokerage(
 			return fallback, fallbackUsage
 		},
 		OnRound: func(round int, before turnBrokerage, after turnBrokerage, err error) {
+			if emitSurface != nil {
+				emitSurface(ctx, after.RatificationSurface)
+			}
 			if audit == nil {
 				return
 			}
@@ -286,6 +298,7 @@ func (r *Runtime) fallbackToPlainProposal(
 ) (turnBrokerage, core.TokenUsage) {
 	brokerage.Ratification = ""
 	brokerage.SignalJudgment = ""
+	brokerage.RatificationSurface = ""
 	brokerage.RatificationRecord = ""
 	brokerage.RatifiedSteps = nil
 	brokerage.RatifiedExecutionContract = nil

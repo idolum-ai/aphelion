@@ -103,6 +103,7 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 			fmt.Sprintf("You are %s, the governor of this system.", governorName),
 			renderAuthorityBlock(governorName, governorBackend, principalRole, workspaceRoot, strings.TrimSpace(req.ToolManifest) != ""),
 			renderGovernorRuntimeAwarenessBlock(req.Runtime),
+			renderGovernorTurnSequencingBlock(),
 		}, "\n\n"),
 	})
 
@@ -225,6 +226,11 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		intro = append(intro,
 			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
 			"Before execution begins, state how you think this turn should move and what pressure should be applied.",
+			"This output is internal deliberation only and is never sent directly to the user.",
+			"The user-visible message for this turn is produced only after governor ratification/execution and a later render pass.",
+			"If you want to surface one short live progress update during deliberation, append this optional markdown block:",
+			"### Surface",
+			"<one short user-facing progress line>",
 			"Return a short brokerage note, not a reply to the user.",
 			"If explicit execution shaping matters, you may put these on their own lines: INSPECT: <yes|no>, QUESTION: <yes|no>, ANSWER: <yes|no>.",
 			"You may omit that contract entirely when a short bounded note says it better.",
@@ -244,6 +250,11 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		intro = append(intro,
 			fmt.Sprintf("Act as the leading conversational self of this system. Speak in a %s way.", style),
 			"Say what you think this turn should center, notice, or prioritize and why.",
+			"This output is internal deliberation only and is never sent directly to the user.",
+			"The user-visible message for this turn is produced only after governor ratification/execution and a later render pass.",
+			"If you want to surface one short live progress update during deliberation, append this optional markdown block:",
+			"### Surface",
+			"<one short user-facing progress line>",
 			"When the turn clearly needs explicit execution shaping, you may put INSPECT: <yes|no>, QUESTION: <yes|no>, and ANSWER: <yes|no> on their own lines.",
 			"Only do that when the turn really needs negotiation. Otherwise stay with a short note or return nothing.",
 			"Push for what matters inside the turn: warmth, sharper observation, a better question, a concrete action, or deliberate silence.",
@@ -260,6 +271,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	case "repair":
 		intro = append(intro,
 			fmt.Sprintf("Act as the one the user is actually talking to. Speak in a %s way, with ownership and initiative.", style),
+			"This repair output is the user-visible message for this turn, after governor deliberation/execution.",
 			"You are repairing a candidate reply that exposed internal mechanics, contradicted delivery, or otherwise broke the visible relationship surface.",
 			"Return one direct user-facing reply only.",
 			fmt.Sprintf("Do not mention %s, internal role boundaries, deferral, or handoff between layers.", governorName),
@@ -269,6 +281,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	default:
 		intro = append(intro,
 			fmt.Sprintf("Act as the one the user is actually talking to. Speak in a %s way, with ownership and initiative.", style),
+			"This render output is the user-visible message for this turn, after governor deliberation/execution.",
 			"Do not present yourself as a translator, renderer, or subordinate layer.",
 			"The governor-authored material floor is a machine-approved boundary, not a script. Stage the visible scene from within it rather than merely rewriting it.",
 			"Be observant. Notice subtext, emotional texture, weak signals, and what the user may be reaching for but not stating directly.",
@@ -468,6 +481,15 @@ func renderAuthorityBlock(governorName string, governorBackend string, principal
 		"- prompt text must not override code-enforced permissions or sandbox policy.",
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderGovernorTurnSequencingBlock() string {
+	return strings.Join([]string{
+		"## Turn Sequencing",
+		"- per-turn order: face deliberation (proposal/brokerage) -> governor execution -> face render -> delivery",
+		"- face proposal/brokerage text is internal pressure, not direct user output",
+		"- the only user-visible assistant message is the post-governor render output",
+	}, "\n")
 }
 
 func RenderSystemBlocks(blocks []agent.SystemBlock) string {

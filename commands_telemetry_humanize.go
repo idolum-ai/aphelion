@@ -13,6 +13,46 @@ var telemetryLabelOverrides = map[string]string{
 	"debug_scope":       "Debug Scope",
 	"debug_chat":        "Debug Chat",
 	"debug_system":      "Debug System",
+	"summary":           "Summary",
+	"operation":         "Operation",
+	"watchdog":          "Watchdog",
+	"effort":            "Effort",
+	"queue":             "Queue",
+	"continuation":      "Continuation",
+	"policy":            "Policy",
+	"capacity":          "Capacity",
+	"runtime":           "Runtime",
+	"enrollment":        "Enrollment",
+	"agents":            "Agents",
+	"status":            "Status",
+	"state":             "State",
+	"kind":              "Kind",
+	"id":                "ID",
+	"phase":             "Phase",
+	"stage":             "Stage",
+	"active":            "Active",
+	"inactive":          "Inactive",
+	"dormant":           "Dormant",
+	"degraded":          "Degraded",
+	"total":             "Total",
+	"pending":           "Pending",
+	"latest":            "Latest",
+	"triggered":         "Triggered",
+	"channel":           "Channel",
+	"health":            "Health",
+	"outbound":          "Outbound",
+	"drift":             "Drift",
+	"can":               "Can",
+	"cannot":            "Cannot",
+	"uncertain":         "Uncertain",
+	"success":           "Success",
+	"evidence":          "Evidence",
+	"version":           "Version",
+	"hash":              "Hash",
+	"age":               "Age",
+	"error":             "Error",
+	"request":           "Request",
+	"omitted":           "Omitted",
 	"current_signal":    "Current Signal",
 	"pending_items":     "Pending Items",
 	"pending_counts":    "Pending Counts",
@@ -28,9 +68,9 @@ var telemetryLabelOverrides = map[string]string{
 	"turn_error":        "Turn Error",
 }
 
-var telemetryLabelAtLineStartWithColonPattern = regexp.MustCompile(`^(\s*-?\s*)([a-z][a-z0-9_]*_[a-z0-9_]*):`)
-var telemetryLabelAtLineStartWithSpacePattern = regexp.MustCompile(`^(\s*-?\s*)([a-z][a-z0-9_]*_[a-z0-9_]*)\s+`)
-var telemetryPairPattern = regexp.MustCompile(`\b([a-z][a-z0-9_]*_[a-z0-9_]*)=`)
+var telemetryLabelAtLineStartWithColonPattern = regexp.MustCompile(`^(\s*-?\s*)([a-z][a-z0-9_]*):`)
+var telemetryLabelAtLineStartWithSpacePattern = regexp.MustCompile(`^(\s*-?\s*)([a-z][a-z0-9_]*)\s+`)
+var telemetryPairPattern = regexp.MustCompile(`\b([a-z][a-z0-9_]*)=`)
 
 func humanizeTelegramTelemetryText(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
@@ -53,6 +93,9 @@ func humanizeTelegramTelemetryLine(line string) string {
 		if len(parts) != 3 {
 			return match
 		}
+		if !shouldHumanizeTelemetryLabel(parts[2]) {
+			return match
+		}
 		return parts[1] + telemetryDisplayLabel(parts[2]) + ":"
 	})
 	line = telemetryLabelAtLineStartWithSpacePattern.ReplaceAllStringFunc(line, func(match string) string {
@@ -60,13 +103,30 @@ func humanizeTelegramTelemetryLine(line string) string {
 		if len(parts) != 3 {
 			return match
 		}
+		if !shouldHumanizeTelemetryLabel(parts[2]) {
+			return match
+		}
 		return parts[1] + telemetryDisplayLabel(parts[2]) + ": "
 	})
 	line = telemetryPairPattern.ReplaceAllStringFunc(line, func(match string) string {
 		key := strings.TrimSuffix(match, "=")
+		if !shouldHumanizeTelemetryLabel(key) {
+			return match
+		}
 		return telemetryDisplayLabel(key) + ": "
 	})
 	return line
+}
+
+func shouldHumanizeTelemetryLabel(key string) bool {
+	key = strings.TrimSpace(strings.ToLower(key))
+	if key == "" {
+		return false
+	}
+	if _, ok := telemetryLabelOverrides[key]; ok {
+		return true
+	}
+	return strings.Contains(key, "_")
 }
 
 func telemetryDisplayLabel(key string) string {

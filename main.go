@@ -530,6 +530,9 @@ func run() error {
 	if err := syncDefaultDailyReviewDurableAgent(cfg, store); err != nil {
 		return err
 	}
+	if err := syncDurableAgentBootstrapInheritance(cfg, store); err != nil {
+		return err
+	}
 
 	httpClient := &http.Client{Timeout: 90 * time.Second}
 	llm, err := buildNativeProviderChain(cfg, httpClient)
@@ -549,6 +552,7 @@ func run() error {
 		return err
 	}
 	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
+	tools.WithDurableAgentBootstrapLLM(defaultDurableAgentBootstrapFromConfig(cfg))
 	tools.WithSemanticEngine(memory.NewSemanticEngine(memory.SemanticOptions{
 		Enabled:             cfg.Memory.Semantic.Enabled,
 		DBPath:              memory.DefaultSemanticDBPath(cfg.Sessions.DBPath),
