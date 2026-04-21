@@ -301,16 +301,19 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	if err != nil {
 		return nil, err
 	}
+	turnReply := strings.TrimSpace(turnResult.VisibleReply)
 	if len(pendingParentConversation) > 0 {
-		if ackErr := r.acknowledgeDurableAgentParentConversation(registered.AgentID, now); ackErr != nil {
+		if durableWakeInferenceUnavailable(turnReply) {
+			log.Printf("WARN durable parent conversation not acknowledged due to transient inference failure agent_id=%s", registered.AgentID)
+		} else if ackErr := r.acknowledgeDurableAgentParentConversation(registered.AgentID, now); ackErr != nil {
 			log.Printf("WARN durable parent conversation acknowledge failed agent_id=%s err=%v", registered.AgentID, ackErr)
-		} else if queueErr := r.queueDurableAgentParentConversationAck(registered, pendingParentConversation, strings.TrimSpace(turnResult.VisibleReply), now); queueErr != nil {
+		} else if queueErr := r.queueDurableAgentParentConversationAck(registered, pendingParentConversation, turnReply, now); queueErr != nil {
 			log.Printf("WARN durable parent conversation ack artifact failed agent_id=%s err=%v", registered.AgentID, queueErr)
 		}
 	}
 	return &DurableGroupChildResult{
 		TurnResult:      *turnResult.Turn,
-		ReplyText:       strings.TrimSpace(turnResult.VisibleReply),
+		ReplyText:       turnReply,
 		AllowLocalReply: allowLocalReply,
 		InboundWasVoice: prepared.InboundWasVoice,
 		TurnIndex:       sess.TurnCount,
@@ -942,7 +945,7 @@ func (r *Runtime) queueDurableAgentParentConversationAck(agent core.DurableAgent
 	}
 	metadata := map[string]string{
 		"durable_agent_id":    strings.TrimSpace(agent.AgentID),
-		"channel_kind":        durableTelegramChannel(agent.ChannelKind),
+		"channel_kind":        firstNonEmpty(durableTelegramChannel(agent.ChannelKind), strings.TrimSpace(agent.ChannelKind)),
 		"trigger_kinds":       "parent_conversation",
 		"parent_note_count":   strconv.Itoa(len(messages)),
 		"parent_note_excerpt": truncateRunes(strings.TrimSpace(messages[0].Text), 240),

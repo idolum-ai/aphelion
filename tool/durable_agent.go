@@ -2102,8 +2102,22 @@ func renderDurableAgentConversation(action string, agent core.DurableAgent, cont
 	if continuity.Conversation != nil {
 		total = len(continuity.Conversation.Messages)
 	}
+	threadState, lastParentAt, lastChildAt, lastParentAckAt, lastChildError := durableAgentConversationState(continuity)
 	fmt.Fprintf(&b, "messages: %d\n", total)
 	fmt.Fprintf(&b, "pending_parent_messages: %d\n", len(continuity.PendingParentConversationMessages(0)))
+	fmt.Fprintf(&b, "thread_state: %s\n", threadState)
+	if !lastParentAt.IsZero() {
+		fmt.Fprintf(&b, "last_parent_message_at: %s\n", lastParentAt.UTC().Format(time.RFC3339))
+	}
+	if !lastChildAt.IsZero() {
+		fmt.Fprintf(&b, "last_child_message_at: %s\n", lastChildAt.UTC().Format(time.RFC3339))
+	}
+	if !lastParentAckAt.IsZero() {
+		fmt.Fprintf(&b, "last_parent_acknowledged_at: %s\n", lastParentAckAt.UTC().Format(time.RFC3339))
+	}
+	if lastChildError != "" {
+		fmt.Fprintf(&b, "last_child_error: %s\n", truncateCompact(lastChildError, 220))
+	}
 	window := durableAgentConversationWindow(continuity, history)
 	if len(window) == 0 {
 		b.WriteString("conversation: -\n")
@@ -2145,6 +2159,50 @@ func durableAgentConversationWindow(continuity core.DurableAgentContinuityState,
 	out := make([]core.DurableAgentConversationMessage, 0, limit)
 	out = append(out, continuity.Conversation.Messages[:limit]...)
 	return out
+}
+
+func durableAgentConversationState(continuity core.DurableAgentContinuityState) (state string, lastParentAt, lastChildAt, lastParentAckAt time.Time, lastChildError string) {
+	continuity = core.NormalizeDurableAgentContinuityState(continuity)
+	pending := len(continuity.PendingParentConversationMessages(0))
+	if continuity.Conversation == nil || len(continuity.Conversation.Messages) == 0 {
+		if pending > 0 {
+			return "awaiting_child_pickup", time.Time{}, time.Time{}, time.Time{}, ""
+		}
+		return "idle", time.Time{}, time.Time{}, time.Time{}, ""
+	}
+
+	for _, message := range continuity.Conversation.Messages {
+		switch strings.TrimSpace(message.Role) {
+		case "parent":
+			if lastParentAt.IsZero() {
+				lastParentAt = message.CreatedAt.UTC()
+			}
+			if !message.AcknowledgedAt.IsZero() && lastParentAckAt.IsZero() {
+				lastParentAckAt = message.AcknowledgedAt.UTC()
+			}
+		case "child":
+			if lastChildAt.IsZero() {
+				lastChildAt = message.CreatedAt.UTC()
+			}
+			if lastChildError == "" && strings.Contains(strings.TrimSpace(message.Text), "Inference backends are unavailable after retries and fallback.") {
+				lastChildError = strings.TrimSpace(message.Text)
+			}
+		}
+	}
+
+	switch {
+	case pending > 0 && lastChildError != "":
+		state = "retrying_after_inference_failure"
+	case pending > 0:
+		state = "awaiting_child_pickup"
+	case !lastChildAt.IsZero() && lastChildError != "":
+		state = "child_blocked_inference"
+	case !lastChildAt.IsZero():
+		state = "awaiting_parent_guidance"
+	default:
+		state = "conversation_open"
+	}
+	return state, lastParentAt, lastChildAt, lastParentAckAt, lastChildError
 }
 
 func formatDurableAgentTelegramUserIDs(values []int64) string {

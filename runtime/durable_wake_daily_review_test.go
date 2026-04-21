@@ -68,15 +68,24 @@ func TestDailyReviewWakeStagesTranscriptAndQueuesScheduledCheckIn(t *testing.T) 
 		t.Fatalf("pollDurableWakeAgents() err = %v", err)
 	}
 
+	sender.mu.Lock()
+	if got := len(sender.sent); got != 1 {
+		t.Fatalf("sent len = %d, want 1 immediate daily-review relay", got)
+	}
+	if sender.sent[0].ChatID != 1001 {
+		t.Fatalf("sent chat_id = %d, want 1001", sender.sent[0].ChatID)
+	}
+	if !strings.Contains(strings.ToLower(sender.sent[0].Text), "scheduled check-in") {
+		t.Fatalf("sent text = %q, want scheduled check-in framing", sender.sent[0].Text)
+	}
+	sender.mu.Unlock()
+
 	events, err := store.PendingReviewEvents(1001, 10)
 	if err != nil {
 		t.Fatalf("PendingReviewEvents() err = %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("PendingReviewEvents() len = %d, want 1", len(events))
-	}
-	if !strings.Contains(strings.ToLower(events[0].Summary), "scheduled check-in") {
-		t.Fatalf("review summary = %q, want scheduled check-in framing", events[0].Summary)
+	if len(events) != 0 {
+		t.Fatalf("PendingReviewEvents() len = %d, want 0 after immediate relay", len(events))
 	}
 
 	scope, err := rt.scopeForDurableAgent(agent)

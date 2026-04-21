@@ -134,8 +134,14 @@ func TestPollDurableWakeAgentsUsesPluggableIngressAdapter(t *testing.T) {
 	}
 
 	sender.mu.Lock()
-	if got := len(sender.sent); got != 0 {
-		t.Fatalf("sent len = %d, want 0 for read-only durable wake", got)
+	if got := len(sender.sent); got != 1 {
+		t.Fatalf("sent len = %d, want 1 immediate durable review relay", got)
+	}
+	if sender.sent[0].ChatID != 1001 {
+		t.Fatalf("sent chat_id = %d, want 1001", sender.sent[0].ChatID)
+	}
+	if !strings.Contains(sender.sent[0].Text, "Review digest.") {
+		t.Fatalf("sent text = %q, want review digest relay", sender.sent[0].Text)
 	}
 	sender.mu.Unlock()
 
@@ -143,11 +149,8 @@ func TestPollDurableWakeAgentsUsesPluggableIngressAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PendingReviewEvents() err = %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("PendingReviewEvents() len = %d, want 1", len(events))
-	}
-	if !strings.Contains(events[0].Summary, "Pluggable adapter wake summary") {
-		t.Fatalf("review summary = %q, want child-turn summary", events[0].Summary)
+	if len(events) != 0 {
+		t.Fatalf("PendingReviewEvents() len = %d, want 0 after immediate relay", len(events))
 	}
 
 	key := session.SessionKey{
@@ -213,6 +216,147 @@ func TestPollDurableWakeAgentsUsesChildExecutorWhenBootstrapConfigured(t *testin
 	if adapter.prepareCalls != 0 {
 		t.Fatalf("adapter prepare calls = %d, want 0 when child executor handles wake", adapter.prepareCalls)
 	}
+}
+
+func TestPollDurableWakeAgentsDeliversReviewEventsAfterChildExecutorWake(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "unused in child executor path"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-child-relay",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Relay child review artifacts upward immediately.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{
+		&testDurableWakeAdapter{channelKind: "test_adapter", queueReview: true},
+	}
+	rt.durableWakeChild = inlineDurableWakeChildExecutor{run: func(_ context.Context, _ sandbox.Scope, child core.DurableAgent, now time.Time) error {
+		_, queueErr := durableagent.NewRuntime(store).QueueReviewArtifact(child, core.DurableReviewArtifact{
+			AgentID:       child.AgentID,
+			Summary:       "child executor completed a bounded review",
+			IntervalLabel: now.UTC().Format(time.RFC3339),
+			LocalActions:  []string{"Processed one parent message."},
+		})
+		return queueErr
+	}}
+
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	if got := len(sender.sent); got != 1 {
+		t.Fatalf("sent len = %d, want 1 immediate relay after child wake", got)
+	}
+	if sender.sent[0].ChatID != 1001 {
+		t.Fatalf("sent chat_id = %d, want 1001", sender.sent[0].ChatID)
+	}
+	if !strings.Contains(sender.sent[0].Text, "Review digest.") {
+		t.Fatalf("sent text = %q, want review digest relay", sender.sent[0].Text)
+	}
+	sender.mu.Unlock()
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("PendingReviewEvents() len = %d, want 0 after immediate relay", len(events))
+	}
+}
+
+func TestPollDurableWakeAgentsKeepsParentConversationPendingOnInferenceFailure(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-retry",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "headless",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Apply parent guidance when inference is available.",
+			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Please process the latest parent note.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:   agent.AgentID,
+		StateJSON: raw,
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	rt.durableWakeChild = nil
+	err = rt.pollDurableWakeAgents(context.Background(), time.Now().UTC())
+	if err == nil {
+		t.Fatal("pollDurableWakeAgents() err = nil, want durable wake inference unavailable")
+	}
+	if !strings.Contains(err.Error(), "durable wake inference unavailable") {
+		t.Fatalf("pollDurableWakeAgents() err = %v, want durable wake inference unavailable", err)
+	}
+
+	updatedState, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	updatedContinuity, err := core.ParseDurableAgentContinuityState(updatedState.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if pending := updatedContinuity.PendingParentConversationMessages(10); len(pending) != 1 {
+		t.Fatalf("pending parent messages = %d, want 1 after transient inference failure", len(pending))
+	}
+	if updatedState.LastApplyStatus != "failed" {
+		t.Fatalf("last_apply_status = %q, want failed", updatedState.LastApplyStatus)
+	}
+	if strings.TrimSpace(updatedState.LastApplyError) == "" {
+		t.Fatalf("last_apply_error = %q, want non-empty failure reason", updatedState.LastApplyError)
+	}
+
+	sender.mu.Lock()
+	if got := len(sender.sent); got != 0 {
+		t.Fatalf("sent len = %d, want 0 review digests when wake failed before ack", got)
+	}
+	sender.mu.Unlock()
 }
 
 func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *testing.T) {
@@ -288,15 +432,21 @@ func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *
 	if err != nil {
 		t.Fatalf("PendingReviewEvents() err = %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("PendingReviewEvents() len = %d, want 1", len(events))
+	if len(events) != 0 {
+		t.Fatalf("PendingReviewEvents() len = %d, want 0 after immediate relay", len(events))
 	}
-	if !strings.Contains(events[0].Summary, "Processed pending parent guidance") {
-		t.Fatalf("review summary = %q, want parent conversation ack summary", events[0].Summary)
+
+	sender.mu.Lock()
+	if got := len(sender.sent); got != 1 {
+		t.Fatalf("sent len = %d, want 1 immediate parent-conversation review relay", got)
 	}
-	if !strings.Contains(events[0].MetadataJSON, "\"channel_kind\":\"headless\"") {
-		t.Fatalf("metadata = %q, want channel_kind=headless", events[0].MetadataJSON)
+	if !strings.Contains(sender.sent[0].Text, "Processed pending parent guidance") {
+		t.Fatalf("sent text = %q, want parent conversation ack summary", sender.sent[0].Text)
 	}
+	if !strings.Contains(sender.sent[0].Text, "channel=headless") {
+		t.Fatalf("sent text = %q, want channel=headless marker", sender.sent[0].Text)
+	}
+	sender.mu.Unlock()
 }
 
 func TestRunDurableAgentChildWakeSkipsWithoutPendingParentConversation(t *testing.T) {

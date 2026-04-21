@@ -208,6 +208,9 @@ func TestDurableAgentToolConversationSendAndShow(t *testing.T) {
 	if !strings.Contains(sendOut, "pending_parent_messages: 1") {
 		t.Fatalf("conversation_send output = %q, want pending parent count", sendOut)
 	}
+	if !strings.Contains(sendOut, "thread_state: awaiting_child_pickup") {
+		t.Fatalf("conversation_send output = %q, want explicit thread state", sendOut)
+	}
 	if !strings.Contains(sendOut, "Please flag recruiter threads aggressively") {
 		t.Fatalf("conversation_send output = %q, want echoed message", sendOut)
 	}
@@ -228,6 +231,9 @@ func TestDurableAgentToolConversationSendAndShow(t *testing.T) {
 	if !strings.Contains(showOut, "pending_parent_messages: 1") {
 		t.Fatalf("conversation_show output = %q, want pending parent count", showOut)
 	}
+	if !strings.Contains(showOut, "thread_state: awaiting_child_pickup") {
+		t.Fatalf("conversation_show output = %q, want explicit thread state", showOut)
+	}
 
 	state, err := store.DurableAgentState("idolum-email")
 	if err != nil {
@@ -245,6 +251,66 @@ func TestDurableAgentToolConversationSendAndShow(t *testing.T) {
 	}
 	if continuity.Conversation.Messages[0].AcknowledgedAt.IsZero() != true {
 		t.Fatalf("conversation acknowledged_at = %v, want zero", continuity.Conversation.Messages[0].AcknowledgedAt)
+	}
+}
+
+func TestDurableAgentToolConversationShowIncludesRetryStateOnInferenceFailure(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "headless",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "anthropic",
+			APIKey:         "sk-ant-test",
+			Model:          "claude-sonnet-4-6",
+			MaxTokens:      4096,
+		},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process parent notes when inference is available.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Please summarize the latest intake.", time.Now().UTC().Add(-2*time.Minute))
+	continuity = continuity.WithConversationMessage("child", "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:   "idolum-email",
+		StateJSON: raw,
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	showOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"conversation_show","agent_id":"idolum-email","history":6}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(conversation_show) err = %v", err)
+	}
+	if !strings.Contains(showOut, "thread_state: retrying_after_inference_failure") {
+		t.Fatalf("conversation_show output = %q, want retrying thread state", showOut)
+	}
+	if !strings.Contains(showOut, "last_child_error: Inference backends are unavailable after retries and fallback.") {
+		t.Fatalf("conversation_show output = %q, want surfaced child inference error", showOut)
 	}
 }
 

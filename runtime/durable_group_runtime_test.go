@@ -202,6 +202,87 @@ func TestHandleInboundDurableTelegramGroupAppliesPendingParentConversation(t *te
 	}
 }
 
+func TestHandleInboundDurableTelegramGroupKeepsParentConversationPendingOnInferenceFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Apply parent guidance when inference is available.",
+			OutboundMode: "reply_with_policy_authorization",
+			DriftPolicy:  "admin_review",
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Keep replies concise and pragmatic.", time.Now().UTC().Add(-2*time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:   "family-group",
+		StateJSON: raw,
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         -100200,
+		ChatType:       "group",
+		ChatTitle:      "Family",
+		SenderID:       555,
+		SenderName:     "alice",
+		Text:           "hello there",
+		MessageID:      14,
+		DurableAgentID: "family-group",
+		Timestamp:      time.Now(),
+		Raw:            json.RawMessage(`{"source":"telegram-group"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1 local failure response", len(sender.sent))
+	}
+
+	state, err := store.DurableAgentState("family-group")
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	continuityAfter, err := core.ParseDurableAgentContinuityState(state.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if pending := continuityAfter.PendingParentConversationMessages(10); len(pending) != 1 {
+		t.Fatalf("PendingParentConversationMessages() len = %d, want 1 after transient inference failure", len(pending))
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("pending review events = %d, want 0 when parent guidance ack is withheld", len(events))
+	}
+}
+
 func TestHandleInboundDurableTelegramGroupUnauthorizedSenderIsIgnored(t *testing.T) {
 	t.Parallel()
 

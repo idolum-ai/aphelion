@@ -16,6 +16,8 @@ import (
 	"github.com/idolum-ai/aphelion/turn"
 )
 
+const durableWakeInferenceUnavailableSignal = "Inference backends are unavailable after retries and fallback."
+
 type durableWakeGovernorContextBuilder func(
 	agent core.DurableAgent,
 	policy core.DurableAgentLivePolicy,
@@ -48,6 +50,7 @@ type durableWakeIngressAdapter interface {
 func defaultDurableWakeIngressAdapters() []durableWakeIngressAdapter {
 	return []durableWakeIngressAdapter{
 		newDailyReviewDurableWakeAdapter(),
+		newDurableParentConversationWakeAdapter(),
 	}
 }
 
@@ -83,17 +86,47 @@ func (r *Runtime) pollDurableWakeAgents(ctx context.Context, now time.Time) erro
 		if r.shouldRunDurableWakeInChild(agent) {
 			if err := r.pollDurableAgentWakeViaChild(ctx, agent, now); err != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", agent.AgentID, err))
+			} else if err := r.deliverDurableReviewEventsForAgent(ctx, agent); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: deliver durable review events: %v", agent.AgentID, err))
 			}
 			continue
 		}
 		if err := r.runDurableAgentChildWakeLoaded(ctx, agent, now); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", agent.AgentID, err))
+		} else if err := r.deliverDurableReviewEventsForAgent(ctx, agent); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: deliver durable review events: %v", agent.AgentID, err))
 		}
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf(strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func (r *Runtime) deliverDurableReviewEventsForAgent(ctx context.Context, agent core.DurableAgent) error {
+	if r == nil || r.store == nil || r.outbound == nil {
+		return nil
+	}
+	chatID := agent.ReviewTargetChatID
+	if chatID <= 0 {
+		return nil
+	}
+	key := session.SessionKey{
+		ChatID: chatID,
+		Scope:  telegramDMScopeRef(chatID),
+	}
+	unlock := r.lockSession(key)
+	defer unlock()
+
+	sess, err := r.store.Load(key)
+	if err != nil {
+		return fmt.Errorf("load durable review target session: %w", err)
+	}
+	applySessionScope(sess, key)
+	if strings.TrimSpace(sess.ChatType) == "" {
+		sess.ChatType = "dm"
+	}
+	return r.deliverReviewEvents(ctx, key, sess)
 }
 
 func (r *Runtime) runDurableAgentChildWakeLoaded(ctx context.Context, agent core.DurableAgent, now time.Time) error {
@@ -166,6 +199,18 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		}
 		return fmt.Errorf("run durable wake turn: %w", err)
 	}
+	if durableWakeInferenceUnavailable(turnSummary) {
+		inferenceErr := fmt.Errorf("durable wake inference unavailable")
+		if markErr := r.markDurableAgentPolicyApplyFailure(agent, inferenceErr); markErr != nil {
+			return fmt.Errorf("%w (and failed to record apply failure: %v)", inferenceErr, markErr)
+		}
+		if plan.Finalize != nil {
+			if err := plan.Finalize(turnSummary); err != nil {
+				return err
+			}
+		}
+		return inferenceErr
+	}
 	if err := r.markDurableAgentPolicyApplied(agent); err != nil {
 		return fmt.Errorf("record durable wake applied policy: %w", err)
 	}
@@ -180,6 +225,10 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		}
 	}
 	return nil
+}
+
+func durableWakeInferenceUnavailable(summary string) bool {
+	return strings.Contains(strings.TrimSpace(summary), durableWakeInferenceUnavailableSignal)
 }
 
 func (r *Runtime) runDurableWakeConversation(
