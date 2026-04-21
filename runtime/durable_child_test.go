@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/config"
@@ -22,6 +23,7 @@ func TestDurableAgentChildConfigUsesNativeBootstrapWithoutParentCredentials(t *t
 	parent.Governor.NativeProvider = "anthropic"
 	parent.Face.Backend = "provider"
 	parent.Providers.Default = "anthropic"
+	parent.Providers.FallbackChain = []string{"openrouter"}
 	parent.Providers.Anthropic.APIKey = "sk-ant-parent"
 	parent.Providers.OpenRouter.APIKey = "sk-or-parent"
 	parent.Providers.OpenAI.APIKey = "sk-openai-parent"
@@ -51,6 +53,12 @@ func TestDurableAgentChildConfigUsesNativeBootstrapWithoutParentCredentials(t *t
 	}
 
 	child := durableAgentChildConfig(&parent, agent, scope)
+	if child.Agent.UserWorkspaceRoot != scope.UserWorkspace {
+		t.Fatalf("Agent.UserWorkspaceRoot = %q, want %q", child.Agent.UserWorkspaceRoot, scope.UserWorkspace)
+	}
+	if child.Agent.UserMemoryRoot != scope.UserMemory {
+		t.Fatalf("Agent.UserMemoryRoot = %q, want %q", child.Agent.UserMemoryRoot, scope.UserMemory)
+	}
 	if child.Telegram.BotToken != "" {
 		t.Fatalf("Telegram.BotToken = %q, want empty", child.Telegram.BotToken)
 	}
@@ -63,8 +71,14 @@ func TestDurableAgentChildConfigUsesNativeBootstrapWithoutParentCredentials(t *t
 	if child.Face.Backend != "provider" {
 		t.Fatalf("Face.Backend = %q, want provider", child.Face.Backend)
 	}
-	if child.Providers.Anthropic.APIKey != "" {
-		t.Fatalf("Providers.Anthropic.APIKey = %q, want cleared parent key", child.Providers.Anthropic.APIKey)
+	if child.Providers.Default != "openrouter" {
+		t.Fatalf("Providers.Default = %q, want openrouter", child.Providers.Default)
+	}
+	if !reflect.DeepEqual(child.Providers.FallbackChain, []string{"anthropic"}) {
+		t.Fatalf("Providers.FallbackChain = %#v, want []string{\"anthropic\"}", child.Providers.FallbackChain)
+	}
+	if child.Providers.Anthropic.APIKey != "sk-ant-parent" {
+		t.Fatalf("Providers.Anthropic.APIKey = %q, want inherited parent fallback key", child.Providers.Anthropic.APIKey)
 	}
 	if child.Providers.OpenAI.APIKey != "" {
 		t.Fatalf("Providers.OpenAI.APIKey = %q, want cleared parent key", child.Providers.OpenAI.APIKey)
@@ -80,6 +94,59 @@ func TestDurableAgentChildConfigUsesNativeBootstrapWithoutParentCredentials(t *t
 	}
 	if child.Providers.OpenRouter.MaxTokens != 321 {
 		t.Fatalf("Providers.OpenRouter.MaxTokens = %d, want 321", child.Providers.OpenRouter.MaxTokens)
+	}
+}
+
+func TestDurableAgentChildConfigInheritsParentFallbackForNativePrimary(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parent := config.Default()
+	parent.Telegram.BotToken = "tg-parent"
+	parent.Sessions.DBPath = filepath.Join(root, "sessions.db")
+	parent.Governor.Backend = "native"
+	parent.Governor.NativeProvider = "anthropic"
+	parent.Face.Backend = "provider"
+	parent.Providers.Default = "anthropic"
+	parent.Providers.FallbackChain = []string{"openrouter"}
+	parent.Providers.Anthropic.APIKey = "sk-ant-parent"
+	parent.Providers.OpenRouter.APIKey = "sk-or-parent"
+	parent.Agent.PromptRoot = filepath.Join(root, "prompt")
+
+	scope, err := sandbox.DurableAgentScope(
+		"family-group",
+		parent.Agent.PromptRoot,
+		filepath.Join(root, "workspace"),
+		filepath.Join(root, "memory"),
+		"default",
+	)
+	if err != nil {
+		t.Fatalf("DurableAgentScope() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID: "family-group",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "anthropic",
+			APIKey:         "sk-ant-child",
+			Model:          "claude-child-model",
+			MaxTokens:      999,
+		},
+	}
+
+	child := durableAgentChildConfig(&parent, agent, scope)
+	if child.Providers.Default != "anthropic" {
+		t.Fatalf("Providers.Default = %q, want anthropic", child.Providers.Default)
+	}
+	if !reflect.DeepEqual(child.Providers.FallbackChain, []string{"openrouter"}) {
+		t.Fatalf("Providers.FallbackChain = %#v, want []string{\"openrouter\"}", child.Providers.FallbackChain)
+	}
+	if child.Providers.Anthropic.APIKey != "sk-ant-child" {
+		t.Fatalf("Providers.Anthropic.APIKey = %q, want child primary key override", child.Providers.Anthropic.APIKey)
+	}
+	if child.Providers.OpenRouter.APIKey != "sk-or-parent" {
+		t.Fatalf("Providers.OpenRouter.APIKey = %q, want inherited parent fallback key", child.Providers.OpenRouter.APIKey)
 	}
 }
 

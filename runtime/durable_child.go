@@ -130,7 +130,6 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 	copy.Telegram.BotToken = ""
 	copy.Telegram.DurableGroups = nil
 	copy.Principals = config.PrincipalsConfig{}
-	copy.Providers = config.ProvidersConfig{}
 	copy.OpenAI.Files.Enabled = false
 	copy.OpenAI.VectorStores.Enabled = false
 	copy.Heartbeat.Enabled = false
@@ -141,8 +140,8 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 	copy.Agent.Workspace = scope.WorkingRoot
 	copy.Agent.ExecRoot = scope.WorkingRoot
 	copy.Agent.SharedMemoryRoot = scope.SharedMemoryRoot
-	copy.Agent.UserWorkspaceRoot = ""
-	copy.Agent.UserMemoryRoot = ""
+	copy.Agent.UserWorkspaceRoot = firstNonEmpty(strings.TrimSpace(scope.UserWorkspace), strings.TrimSpace(scope.WorkingRoot))
+	copy.Agent.UserMemoryRoot = firstNonEmpty(strings.TrimSpace(scope.UserMemory), strings.TrimSpace(scope.SharedMemoryRoot))
 	copy.Agent.PromptRoot = firstNonEmpty(strings.TrimSpace(parent.Agent.PromptRoot), strings.TrimSpace(scope.GlobalRoot))
 	if copy.Agent.PromptRoot == "" {
 		copy.Agent.PromptRoot = scope.GlobalRoot
@@ -164,32 +163,106 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 			CodexHome:  bootstrap.CodexHome,
 			BaseURL:    bootstrap.CodexBaseURL,
 		}
+		copy.Providers = config.ProvidersConfig{}
 	case "native":
 		copy.Governor.Backend = "native"
 		copy.Governor.NativeProvider = bootstrap.NativeProvider
-		copy.Providers = config.ProvidersConfig{
-			Default:       bootstrap.NativeProvider,
-			FallbackChain: nil,
-		}
-	}
-	switch bootstrap.NativeProvider {
-	case "anthropic":
-		copy.Providers.Anthropic = config.AnthropicConfig{
-			APIKey:        bootstrap.APIKey,
-			Model:         firstNonEmpty(bootstrap.Model, config.Default().Providers.Anthropic.Model),
-			MaxTokens:     firstPositive(bootstrap.MaxTokens, config.Default().Providers.Anthropic.MaxTokens),
-			ContextWindow: config.Default().Providers.Anthropic.ContextWindow,
-		}
-	case "openrouter":
-		copy.Providers.OpenRouter = config.OpenRouterConfig{
-			APIKey:        bootstrap.APIKey,
-			BaseURL:       firstNonEmpty(bootstrap.BaseURL, config.Default().Providers.OpenRouter.BaseURL),
-			Model:         firstNonEmpty(bootstrap.Model, config.Default().Providers.OpenRouter.Model),
-			MaxTokens:     firstPositive(bootstrap.MaxTokens, config.Default().Providers.OpenRouter.MaxTokens),
-			ContextWindow: config.Default().Providers.OpenRouter.ContextWindow,
-		}
+		copy.Providers = durableChildProviders(parent, bootstrap)
 	}
 	return &copy
+}
+
+func durableChildProviders(parent *config.Config, bootstrap core.NodeLLMBootstrap) config.ProvidersConfig {
+	bootstrap = core.NormalizeNodeLLMBootstrap(bootstrap)
+	providers := config.ProvidersConfig{}
+	if parent != nil {
+		providers = parent.Providers
+	}
+
+	primary := normalizeNativeProviderName(bootstrap.NativeProvider)
+	providers.Default = primary
+	providers.FallbackChain = durableChildFallbackChain(parent, primary)
+	providers.OpenAI = config.OpenAIProviderConfig{}
+
+	defaults := config.Default().Providers
+	switch primary {
+	case "anthropic":
+		anthropic := providers.Anthropic
+		anthropic.APIKey = firstNonEmpty(strings.TrimSpace(bootstrap.APIKey), strings.TrimSpace(anthropic.APIKey))
+		anthropic.Model = firstNonEmpty(strings.TrimSpace(bootstrap.Model), strings.TrimSpace(anthropic.Model), defaults.Anthropic.Model)
+		anthropic.MaxTokens = firstPositive(bootstrap.MaxTokens, anthropic.MaxTokens, defaults.Anthropic.MaxTokens)
+		anthropic.ContextWindow = firstPositive(anthropic.ContextWindow, defaults.Anthropic.ContextWindow)
+		providers.Anthropic = anthropic
+	case "openrouter":
+		openRouter := providers.OpenRouter
+		openRouter.APIKey = firstNonEmpty(strings.TrimSpace(bootstrap.APIKey), strings.TrimSpace(openRouter.APIKey))
+		openRouter.BaseURL = firstNonEmpty(strings.TrimSpace(bootstrap.BaseURL), strings.TrimSpace(openRouter.BaseURL), defaults.OpenRouter.BaseURL)
+		openRouter.Model = firstNonEmpty(strings.TrimSpace(bootstrap.Model), strings.TrimSpace(openRouter.Model), defaults.OpenRouter.Model)
+		openRouter.MaxTokens = firstPositive(bootstrap.MaxTokens, openRouter.MaxTokens, defaults.OpenRouter.MaxTokens)
+		openRouter.ContextWindow = firstPositive(openRouter.ContextWindow, defaults.OpenRouter.ContextWindow)
+		providers.OpenRouter = openRouter
+	}
+	return providers
+}
+
+func durableChildFallbackChain(parent *config.Config, primary string) []string {
+	primary = normalizeNativeProviderName(primary)
+	ordered := durableChildOrderedNativeProviders(parent)
+	if len(ordered) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(ordered))
+	out := make([]string, 0, len(ordered))
+	for _, candidate := range ordered {
+		candidate = normalizeNativeProviderName(candidate)
+		if candidate == "" || candidate == primary {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func durableChildOrderedNativeProviders(parent *config.Config) []string {
+	if parent == nil {
+		return nil
+	}
+	candidates := append(
+		[]string{
+			strings.TrimSpace(parent.Governor.NativeProvider),
+			strings.TrimSpace(parent.Providers.Default),
+		},
+		parent.Providers.FallbackChain...,
+	)
+	seen := make(map[string]struct{}, len(candidates))
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		name := normalizeNativeProviderName(candidate)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func normalizeNativeProviderName(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "anthropic":
+		return "anthropic"
+	case "openrouter":
+		return "openrouter"
+	default:
+		return ""
+	}
 }
 
 func faceBackendForChildBootstrap(bootstrap core.NodeLLMBootstrap) string {
