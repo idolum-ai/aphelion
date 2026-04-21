@@ -187,6 +187,33 @@ Inspect durable-agent inventory and health:
 ./bin/aphelion durable-agent health --config ~/.aphelion/aphelion.toml --agent family-group
 ```
 
+Configure a durable Telegram group agent:
+
+1. Ask the admin agent to gather the target Telegram `chat_id` and participant `user_id` values.
+2. Add an entry under `[[telegram.durable_groups]]` in `~/.aphelion/aphelion.toml`.
+3. Rebuild/reinstall/restart so the poller loads the new group admission route.
+4. Grant non-admin participant access on the durable agent (`durable_agent access_grant`).
+5. Validate behavior in-group by mention/reply (or set `respond_on = "all"`).
+
+Example config shape:
+
+```toml
+[[telegram.durable_groups]]
+chat_id = -1001234567890
+agent_id = "research-group"
+charter = "Help the group investigate topics and summarize findings without widening standing authority."
+respond_on = "mentions"         # "mentions" | "all"
+review_target_chat_id = 123456789
+llm_backend = "native"          # "native" | "codex"
+llm_provider = "openrouter"     # required for native
+llm_api_key = "..."
+llm_model = "anthropic/claude-sonnet-4-6"
+```
+
+Current behavior note:
+
+- The durable setup wizard is currently inbox/email-focused; Telegram group admission is still driven by `telegram.durable_groups` config and restart.
+
 Daily-review durable child staging path (per child workspace):
 
 `<durable-workspace>/.aphelion/daily-review/YYYY-MM-DD/transcript.md`
