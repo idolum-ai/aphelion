@@ -59,7 +59,7 @@ func TestHandleInboundDeliversPendingReviewEventsForAdmin(t *testing.T) {
 	if !strings.Contains(sender.sent[1].Text, "Review digest.") {
 		t.Fatalf("second message missing digest label: %q", sender.sent[1].Text)
 	}
-	if !strings.Contains(sender.sent[1].Text, "source_chat=7001") {
+	if !strings.Contains(sender.sent[1].Text, "Source Chat: 7001") {
 		t.Fatalf("second message missing source chat: %q", sender.sent[1].Text)
 	}
 

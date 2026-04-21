@@ -215,7 +215,91 @@ func TestPollDurableWakeAgentsUsesChildExecutorWhenBootstrapConfigured(t *testin
 	}
 }
 
-func TestRunDurableAgentChildWakeRejectsUnsupportedChannel(t *testing.T) {
+func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Processed the parent guidance and compiled the requested summary."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "headless",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process parent requests over email artifacts and summarize upward.",
+			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Summarize the most relevant job links.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:   agent.AgentID,
+		StateJSON: raw,
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	rt.durableWakeChild = nil
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+
+	foundParentContext := false
+	for _, systemPrompt := range provider.seenGovernorSystem {
+		if strings.Contains(systemPrompt, "Parent note 1: Summarize the most relevant job links.") {
+			foundParentContext = true
+			break
+		}
+	}
+	if !foundParentContext {
+		t.Fatalf("governor prompts = %#v, want pending parent note context", provider.seenGovernorSystem)
+	}
+
+	updatedState, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	updatedContinuity, err := core.ParseDurableAgentContinuityState(updatedState.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if pending := updatedContinuity.PendingParentConversationMessages(10); len(pending) != 0 {
+		t.Fatalf("pending parent messages = %d, want 0 after wake", len(pending))
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("PendingReviewEvents() len = %d, want 1", len(events))
+	}
+	if !strings.Contains(events[0].Summary, "Processed pending parent guidance") {
+		t.Fatalf("review summary = %q, want parent conversation ack summary", events[0].Summary)
+	}
+	if !strings.Contains(events[0].MetadataJSON, "\"channel_kind\":\"headless\"") {
+		t.Fatalf("metadata = %q, want channel_kind=headless", events[0].MetadataJSON)
+	}
+}
+
+func TestRunDurableAgentChildWakeSkipsWithoutPendingParentConversation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Unsupported channel should not run"
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -244,10 +328,10 @@ func TestRunDurableAgentChildWakeRejectsUnsupportedChannel(t *testing.T) {
 	}
 
 	err = rt.RunDurableAgentChildWake(context.Background(), agent.AgentID, time.Now().UTC())
-	if err == nil {
-		t.Fatal("RunDurableAgentChildWake() err = nil, want unsupported channel error")
+	if err != nil {
+		t.Fatalf("RunDurableAgentChildWake() err = %v, want nil for empty parent queue", err)
 	}
-	if !strings.Contains(err.Error(), "no wake ingress adapter") {
-		t.Fatalf("RunDurableAgentChildWake() err = %v, want unsupported channel detail", err)
+	if len(provider.seenGovernorSystem) != 0 {
+		t.Fatalf("governor prompts = %#v, want no child turn without pending parent conversation", provider.seenGovernorSystem)
 	}
 }

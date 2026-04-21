@@ -36,6 +36,7 @@ var telemetryLabelOverrides = map[string]string{
 	"degraded":          "Degraded",
 	"total":             "Total",
 	"pending":           "Pending",
+	"count":             "Count",
 	"latest":            "Latest",
 	"triggered":         "Triggered",
 	"channel":           "Channel",
@@ -71,6 +72,7 @@ var telemetryLabelOverrides = map[string]string{
 var telemetryLabelAtLineStartWithColonPattern = regexp.MustCompile(`^(\s*-?\s*)([a-z][a-z0-9_]*):`)
 var telemetryLabelAtLineStartWithSpacePattern = regexp.MustCompile(`^(\s*-?\s*)([a-z][a-z0-9_]*)\s+`)
 var telemetryPairPattern = regexp.MustCompile(`\b([a-z][a-z0-9_]*)=`)
+var telemetryBracketTagLinePattern = regexp.MustCompile(`^\s*\[(/?)([A-Z0-9_]+)\]\s*$`)
 
 func humanizeTelegramTelemetryText(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
@@ -85,6 +87,10 @@ func humanizeTelegramTelemetryText(text string) string {
 }
 
 func humanizeTelegramTelemetryLine(line string) string {
+	if strings.TrimSpace(line) == "" {
+		return line
+	}
+	line = humanizeTelegramBracketTagLine(line)
 	if strings.TrimSpace(line) == "" {
 		return line
 	}
@@ -116,6 +122,21 @@ func humanizeTelegramTelemetryLine(line string) string {
 		return telemetryDisplayLabel(key) + ": "
 	})
 	return line
+}
+
+func humanizeTelegramBracketTagLine(line string) string {
+	parts := telemetryBracketTagLinePattern.FindStringSubmatch(line)
+	if len(parts) != 3 {
+		return line
+	}
+	if parts[1] == "/" {
+		return ""
+	}
+	label := telemetryDisplayLabel(strings.ToLower(strings.TrimSpace(parts[2])))
+	if label == "" {
+		return line
+	}
+	return label + ":"
 }
 
 func shouldHumanizeTelemetryLabel(key string) bool {
@@ -156,10 +177,16 @@ func telemetryWordDisplay(word string) string {
 		return "IDs"
 	case "api":
 		return "API"
+	case "ai":
+		return "AI"
 	case "pdf":
 		return "PDF"
+	case "llm":
+		return "LLM"
 	case "imap":
 		return "IMAP"
+	case "openai":
+		return "OpenAI"
 	case "utc":
 		return "UTC"
 	default:

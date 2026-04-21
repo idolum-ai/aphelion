@@ -246,29 +246,26 @@ func RenderTelegramSetGovernorEffort(effort string) string {
 }
 
 func RenderReviewDigest(notice ReviewDigestNotice) string {
-	meta := []string{
-		fmt.Sprintf("source_chat=%d", notice.SourceChatID),
-		fmt.Sprintf("source_user=%d", notice.SourceUserID),
-		"source_role=" + strings.TrimSpace(notice.SourceRole),
-	}
+	lines := []string{"Review digest."}
+	lines = append(lines,
+		fmt.Sprintf("Source Chat: %d", notice.SourceChatID),
+		fmt.Sprintf("Source User: %d", notice.SourceUserID),
+		"Source Role: "+firstNonEmpty(strings.TrimSpace(notice.SourceRole), "-"),
+	)
 	if scope := strings.TrimSpace(notice.SourceScope); scope != "" {
-		meta = append(meta, "source_scope="+scope)
+		lines = append(lines, "Source Scope: "+scope)
 	}
 	if agent := strings.TrimSpace(notice.SourceAgent); agent != "" {
-		meta = append(meta, "source_agent="+agent)
+		lines = append(lines, "Source Agent: "+agent)
 	}
 	if parent := strings.TrimSpace(notice.ParentScope); parent != "" {
-		meta = append(meta, "parent_scope="+parent)
+		lines = append(lines, "Parent Scope: "+parent)
 	}
 	if turns := strings.TrimSpace(notice.TurnRange); turns != "" {
-		meta = append(meta, "turns="+turns)
-	}
-	lines := []string{
-		"Review digest.",
-		strings.Join(meta, " "),
+		lines = append(lines, "Turns: "+turns)
 	}
 	if summary := strings.TrimSpace(notice.Summary); summary != "" {
-		lines = append(lines, "", summary)
+		lines = append(lines, "", "Summary:", summary)
 	}
 	return strings.Join(lines, "\n")
 }

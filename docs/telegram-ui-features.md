@@ -84,6 +84,7 @@ Chat-scoped status now reports live work telemetry, not only router occupancy:
 
 - `Quick Read:` one-line human summary (Haiku-backed when a native provider key is configured), prepended ahead of the status block.
 - Telemetry labels are rendered as human-readable labels with colons (including snake_case and known status/debug lead labels; for example, `status_scope=chat` appears as `Status Scope: chat`, and `summary state=idle` appears as `Summary: State: idle`).
+- Bracketed machine envelopes are humanized in Telegram-facing status/debug output (for example, `[PLAN_UPDATED]` renders as `Plan Updated:` and closing tags are removed).
 - `turn_phase` for active in-flight stage (`face_proposal`, `brokerage`, `governor`, `render`, `persist`, `deliver`) when available.
 - `operation` and `plan_step` from persisted session sidecars.
 - `plan_progress` with completed/total steps and `fully_executed=true|false`.
@@ -119,6 +120,8 @@ It is intended for operational diagnosis when `/status` is too compressed.
   - `Debug System:` (pending-kind counters + latest turn rollups per chat)
   - full `Status Scope: durables`
 - output is chunked when needed to fit Telegram message size limits
+
+Review digest deliveries to admin chat are rendered with labeled metadata lines (`Source Chat:`, `Source User:`, `Source Role:`, optional scope/agent lines) plus a `Summary:` section.
 
 ### Natural-language durable setup trigger
 
