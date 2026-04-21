@@ -32,7 +32,7 @@ Current command surface:
 - `/set_persona_model`
   - Opens inline model selector buttons for Idolum.
 - `/set_governor_effort`
-  - Opens inline effort selector buttons for governor reasoning.
+  - Opens inline effort selector buttons for system reasoning.
 
 Visibility notes:
 

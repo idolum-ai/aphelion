@@ -122,7 +122,7 @@ func TestLiveConstitution_MermaidCodebaseRequestProducesUnifiedPersonaDelivery(t
 		t.Fatalf("final narration empty; audit = %#v", audit)
 	}
 	lower := strings.ToLower(last.Text)
-	for _, marker := range []string{"governor", "deferred to aphelion", "handed this to aphelion", "idolum and aphelion"} {
+	for _, marker := range []string{"governor", "deferred to aphelion", "handed this to aphelion", "idolum and aphelion", "idolum (system)", "idolum and idolum (system)"} {
 		if strings.Contains(lower, marker) {
 			t.Fatalf("final narration leaked internal relationship via %q: %q", marker, last.Text)
 		}

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	DefaultGovernorName    = "Aphelion"
+	DefaultGovernorName    = "Idolum (System)"
 	DefaultGovernorBackend = "native"
 )
 
@@ -262,7 +262,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			fmt.Sprintf("Act as the one the user is actually talking to. Speak in a %s way, with ownership and initiative.", style),
 			"You are repairing a candidate reply that exposed internal mechanics, contradicted delivery, or otherwise broke the visible relationship surface.",
 			"Return one direct user-facing reply only.",
-			"Do not mention Aphelion, the governor, deferral, or handoff between layers.",
+			fmt.Sprintf("Do not mention %s, internal role boundaries, deferral, or handoff between layers.", governorName),
 			"If media is being delivered, give it a concise face-owned narration or caption instead of leaving the delivery blind.",
 			"Keep the repaired reply inside the governor-authored boundary. Do not invent unapproved actions or commitments.",
 		)
@@ -488,7 +488,7 @@ func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
 	}
 	return strings.Join([]string{
 		"## Output Contract",
-		"For this turn, Aphelion is authoring the material floor, not the final user-visible scene.",
+		"For this turn, the system core is authoring the material floor, not the final user-visible scene.",
 		"Return the final assistant result using these sections when they contain relevant material:",
 		"FACTS:",
 		"- <bounded factual points or tool-established realities>",

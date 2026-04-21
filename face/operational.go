@@ -55,10 +55,10 @@ func RenderTelegramStart(personaEffort, governorEffort string, includeAdminComma
 	lines = append(lines,
 		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
-		"/set_governor_effort - choose governor reasoning effort",
+		"/set_governor_effort - choose system reasoning effort",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
-		fmt.Sprintf("Current governor effort: %s", strings.TrimSpace(governorEffort)),
+		fmt.Sprintf("Current system effort: %s", strings.TrimSpace(governorEffort)),
 	)
 	return strings.Join(lines, "\n")
 }
@@ -81,10 +81,10 @@ func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminComman
 	lines = append(lines,
 		"/reinstall - queue a rebuild/reinstall/restart request",
 		"/set_persona_model - choose Idolum model",
-		"/set_governor_effort - choose governor reasoning effort",
+		"/set_governor_effort - choose system reasoning effort",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
-		fmt.Sprintf("Current governor effort: %s", strings.TrimSpace(governorEffort)),
+		fmt.Sprintf("Current system effort: %s", strings.TrimSpace(governorEffort)),
 	)
 	return strings.Join(lines, "\n")
 }
@@ -107,7 +107,7 @@ func RenderTelegramStatus(status core.SessionStatus, personaEffort, governorEffo
 	}
 	lines = append(lines,
 		fmt.Sprintf("Persona effort: %s.", strings.TrimSpace(personaEffort)),
-		fmt.Sprintf("Governor effort: %s.", strings.TrimSpace(governorEffort)),
+		fmt.Sprintf("System effort: %s.", strings.TrimSpace(governorEffort)),
 	)
 	return strings.Join(lines, "\n")
 }
@@ -215,7 +215,7 @@ func RenderTelegramPersonaModelSelector(current string, options []string) string
 
 func RenderTelegramGovernorEffortSelector(current string, options []string) string {
 	lines := []string{
-		"Select governor reasoning effort for interactive/recovery turns.",
+		"Select system reasoning effort for interactive/recovery turns.",
 		fmt.Sprintf("Current: %s", strings.TrimSpace(current)),
 	}
 	if len(options) > 0 {
@@ -238,7 +238,7 @@ func RenderTelegramSetPersonaModel(model string) string {
 
 func RenderTelegramSetGovernorEffort(effort string) string {
 	effort = strings.TrimSpace(effort)
-	return fmt.Sprintf("Governor effort is now %s.", effort)
+	return fmt.Sprintf("System effort is now %s.", effort)
 }
 
 func RenderReviewDigest(notice ReviewDigestNotice) string {

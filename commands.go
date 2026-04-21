@@ -62,7 +62,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "restart", Description: "Force an immediate gateway restart"},
 	{Command: "reinstall", Description: "Queue a rebuild/reinstall/restart request"},
 	{Command: "set_persona_model", Description: "Choose Idolum persona model"},
-	{Command: "set_governor_effort", Description: "Choose governor reasoning effort"},
+	{Command: "set_governor_effort", Description: "Choose system reasoning effort"},
 }
 
 const debugCallbackPrefix = "debug:"

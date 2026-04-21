@@ -247,13 +247,13 @@ func renderContinuationBlockedFallback(state session.ContinuationState) string {
 	case "persona_not_willing":
 		return "I can't continue yet because I chose to hold this thread instead of auto-continuing."
 	case "governor_intent_missing":
-		return "I can't continue yet because Aphelion did not publish a continuation intent for this turn."
+		return fmt.Sprintf("I can't continue yet because %s did not publish a continuation intent for this turn.", prompt.DefaultGovernorName)
 	case "governor_rationale_missing":
-		return "I can't continue yet because Aphelion did not provide a continuation rationale."
+		return fmt.Sprintf("I can't continue yet because %s did not provide a continuation rationale.", prompt.DefaultGovernorName)
 	case "governor_not_ratified":
-		return "I can't continue yet because Aphelion did not ratify continuation for this turn."
+		return fmt.Sprintf("I can't continue yet because %s did not ratify continuation for this turn.", prompt.DefaultGovernorName)
 	case "governor_not_willing":
-		return "I can't continue yet because Aphelion explicitly held continuation for this turn."
+		return fmt.Sprintf("I can't continue yet because %s explicitly held continuation for this turn.", prompt.DefaultGovernorName)
 	default:
 		return "I can't continue this thread yet because the continuation handshake is still blocked."
 	}

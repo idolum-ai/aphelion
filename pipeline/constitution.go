@@ -120,13 +120,19 @@ func detectGovernorRelationshipLeakage(text string) string {
 		"asked aphelion",
 		"aphelion handled",
 		"aphelion will handle",
+		"deferred to idolum (system)",
+		"handed this to idolum (system)",
+		"asked idolum (system)",
+		"idolum (system) handled",
+		"idolum (system) will handle",
 		"idolum and aphelion",
+		"idolum and idolum (system)",
 		"i deferred this",
 		"i deferred it",
 		"i passed this to",
 	} {
 		if strings.Contains(lower, marker) {
-			return "user-visible text exposes the idolum/aphelion relationship boundary"
+			return "user-visible text exposes internal relationship boundaries"
 		}
 	}
 	return ""
