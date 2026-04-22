@@ -63,14 +63,18 @@ Primary references:
 ### Workload C: TES retention and fallback discipline
 
 - Current state:
-  - TES rows are retained indefinitely unless `DeleteSession` or `ResetRuntime`
-    is used.
+  - TES retention is optional via `sessions.tes_retention`.
+  - When enabled, prune runs preserve `min_retained_rows`, cap delete batches by
+    `max_delete_per_gc`, and export candidate rows to
+    `sessions.tes_retention.export_dir` before deletion.
 - Required migration behavior:
-  - define explicit retention policy before pruning;
-  - provide deterministic export/rollup before deleting old TES ranges;
+  - keep retention config and export-before-prune guarantees explicit;
+  - preserve deterministic export bundles for every non-empty prune run;
   - keep `turn_runs` as compatibility fallback only (not canonical execution
     truth).
 - Operator check after upgrades:
+  - verify retention summary in deploy verification includes export path policy;
+  - verify non-empty prune runs produce export bundles before deletion;
   - run `/status` and `/debug` and verify fallback is explicitly marked when
     used.
 
@@ -85,6 +89,10 @@ Primary references:
 - `go test ./...`
 - manual runbook check:
   - startup/recovery
+  - TES retention safety:
+    - deploy verification boot probe includes retention summary
+    - retention no-op run leaves TES unchanged
+    - retention prune run emits export bundle + bounded delete
   - `/status` source-attribution wording
   - `/debug` source-attribution wording
   - decision and continuation pending-state visibility
