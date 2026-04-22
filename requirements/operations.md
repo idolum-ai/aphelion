@@ -39,6 +39,27 @@ That choice matters:
 - the visible transcript remains the user-facing conversation
 - operation state is machine-owned sidecar state, not a hidden replacement transcript
 
+## Truth-Class Contract (Normative)
+
+Operation protocol fields participate in the shared four-class surface taxonomy:
+
+- `operation` and embedded `proposal` are `operational current-state store`
+  surfaces for mutable declared work state.
+- execution sequencing and tool/delivery evidence remains `canonical` in TES
+  (`session.execution_events`), not in operation sidecars.
+- user-visible rendering of operation state (`/status`, `/debug`, quick-read) is
+  a `projection`.
+- compatibility fallback (for example `turn_runs`) may be consulted only when
+  canonical and operational current-state coverage is missing or incomplete for a
+  specific claim.
+
+Operational implications:
+
+- operation sidecars can describe intent, stage, and pending gates;
+- operation sidecars cannot silently rewrite canonical execution history;
+- fallback evidence must be source-attributed and must not override canonical or
+  operational truth.
+
 ## Core Rule
 
 Aphelion should assume that both humans and model actors are intelligent and autonomous.

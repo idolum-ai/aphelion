@@ -18,6 +18,19 @@ Use only these four terms when classifying architecture surfaces:
 - `compatibility fallback`: transitional store kept for migration/recovery until
   canonical or operational surfaces fully cover the use case.
 
+## Truth-Class Invariants
+
+These invariants are normative for architecture and requirements alignment:
+
+- A surface claim must map to exactly one truth class for the specific question
+  being answered.
+- `compatibility fallback` may be used only when the matching canonical and
+  operational current-state coverage is missing or incomplete.
+- `compatibility fallback` must never override available canonical truth or
+  operational current-state declarations for the same question.
+- Operator projections (`/status`, `/debug`, quick-read) must preserve source
+  attribution when compatibility fallback data is used.
+
 ## Normative Map
 
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
@@ -25,6 +38,7 @@ Use only these four terms when classifying architecture surfaces:
 - [constitution-and-delivery.md](constitution-and-delivery.md): floor/scene and commit/delivery invariants.
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.
+- [transparent-execution-sequence.md](transparent-execution-sequence.md): canonical execution timeline and projection/fallback precedence.
 - [coordinator-boundary-audit.md](coordinator-boundary-audit.md): adapter-boundary readout and wrapper decisions.
 - [migration-appendix.md](migration-appendix.md): refactor closeout and present-vs-intended reference.
 - [diagrams/README.md](diagrams/README.md): canonical and archived diagram assets.

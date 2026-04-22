@@ -49,6 +49,16 @@ Classifications below use the shared truth classes defined in
 | Quick-read and progress render blocks | projection | What compact operator narration should be surfaced now? |
 | `turn_runs` | compatibility fallback | What recovery/runtime hints are available when newer surfaces are incomplete? |
 
+## Compatibility Fallback Invariants
+
+- `compatibility fallback` rows (currently `turn_runs`) are migration/recovery
+  support only.
+- Fallback rows may answer a question only when matching canonical and
+  operational current-state sources are missing or incomplete.
+- Fallback rows must not silently override canonical or operational answers.
+- When `/status` or `/debug` uses fallback rows, that usage should be surfaced
+  as source attribution.
+
 Staged identity decision:
 
 - `session.durable_agents` and `session.durable_agent_state` are currently

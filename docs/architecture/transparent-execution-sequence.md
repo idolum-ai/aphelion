@@ -55,6 +55,18 @@ TES write/read behavior currently relies on the following indexes:
 - If projection claims conflict with TES evidence, projection text must degrade to
   deterministic, evidence-backed summaries.
 
+### Truth-Class Precedence Rules
+
+- TES is canonical for execution-sequence questions ("what happened, in what
+  order, and with what runtime evidence").
+- Operational current-state stores remain authoritative for mutable declared
+  "now" state where TES is not the canonical question.
+- Compatibility fallback surfaces (for example `turn_runs`) are valid only when
+  both canonical and operational coverage is unavailable or incomplete for the
+  requested claim.
+- Compatibility fallback evidence must be source-attributed and must not replace
+  canonical TES claims when TES evidence exists.
+
 ### Target Policy to Ratify (Not Yet Implemented)
 
 - Introduce explicit TES retention windows per deployment profile (for example:

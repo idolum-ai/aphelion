@@ -26,8 +26,48 @@ The key rule is:
 
 Interrupted execution follows the same pattern:
 
-- structured turn-run facts = machine-authored source of truth
+- TES execution events = canonical machine-authored source of truth
+- structured turn-run facts = compatibility fallback when TES coverage is missing
 - governor recovery analysis = maintenance interpretation layered on top
+
+## Truth-Class Contract (Normative)
+
+Session-adjacent surfaces must be classified using exactly these classes:
+
+- `canonical`
+- `projection`
+- `operational current-state store`
+- `compatibility fallback`
+
+Session requirements align to that contract as follows:
+
+- canonical:
+  - `session.execution_events` for execution-sequence truth
+  - `session.messages` for scene transcript truth
+  - `messages.floor_content` and `messages.floor_metadata` for recorded floor
+    payloads
+  - `session.outbound_messages` for transport-ledger recorded deliveries
+  - `session.review_events` rows with `status='delivered'` for delivered review
+    transcript history
+- operational current-state store:
+  - plan and operation sidecars
+  - pending decision and continuation state
+  - latest floor snapshots (`sessions.last_floor_text`,
+    `sessions.last_floor_metadata`)
+  - `session.review_events` rows with `status='pending'` for governance queue
+    state
+- projection:
+  - `/status`, `/debug`, and quick-read rendering surfaces
+- compatibility fallback:
+  - `turn_runs` recovery/runtime hints
+
+Compatibility fallback invariants:
+
+- fallback is valid only when matching canonical and operational current-state
+  coverage is unavailable or incomplete;
+- fallback must not override canonical or operational answers for the same
+  question;
+- projections should expose fallback source attribution when fallback is used.
 
 ## Scope
 
@@ -293,7 +333,8 @@ type TurnRun struct {
 }
 ```
 
-These records answer questions the visible transcript cannot:
+These records are compatibility fallback execution hints and answer questions the
+visible transcript cannot when TES coverage is unavailable:
 
 - what was in flight when the host restarted
 - whether real tool execution had started
