@@ -69,6 +69,14 @@ Compatibility fallback invariants:
   question;
 - projections should expose fallback source attribution when fallback is used.
 
+TES retention invariants:
+
+- when `sessions.tes_retention.enabled = true`, prune candidates must be
+  exported to `sessions.tes_retention.export_dir` before deletion;
+- TES prune must fail closed if export writing fails;
+- TES prune must preserve at least `min_retained_rows` newest rows and delete at
+  most `max_delete_per_gc` rows per run.
+
 ## Scope
 
 ### v0 required
