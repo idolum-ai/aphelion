@@ -25,6 +25,10 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 	if err != nil {
 		return core.DurableAgentsStatusSnapshot{}, err
 	}
+	durableEvents, err := r.durableStatusEventState(time.Now().UTC().Add(-30*24*time.Hour), 4000)
+	if err != nil {
+		return core.DurableAgentsStatusSnapshot{}, err
+	}
 	sort.Slice(agents, func(i, j int) bool {
 		return strings.TrimSpace(agents[i].AgentID) < strings.TrimSpace(agents[j].AgentID)
 	})
@@ -92,7 +96,9 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 			row.EnrollmentParentControlURL = strings.TrimSpace(enrollment.ParentControlURL)
 		}
 
-		row.Health = durableAgentHealthFromStatus(row)
+		eventState := durableEvents[strings.TrimSpace(agent.AgentID)]
+		row = overlayDurableStatusFromEvents(row, eventState)
+		row.Health = durableAgentHealthFromStatusWithEvents(row, eventState)
 		if strings.EqualFold(row.Status, "active") {
 			snapshot.ActiveAgents++
 		}
@@ -126,4 +132,117 @@ func durableAgentHealthFromStatus(snapshot core.DurableAgentStatusSnapshot) stri
 		return "dormant"
 	}
 	return "ok"
+}
+
+type durableStatusEventProjection struct {
+	LastWakeStartedAt   time.Time
+	LastWakeCompletedAt time.Time
+	LastWakeFailedAt    time.Time
+	LastAwakeAt         time.Time
+	LastDormantAt       time.Time
+	LastPolicyAppliedAt time.Time
+	LastPolicyFailedAt  time.Time
+	LastPolicyError     string
+	LastParentAckAt     time.Time
+}
+
+func (r *Runtime) durableStatusEventState(since time.Time, limit int) (map[string]durableStatusEventProjection, error) {
+	if r == nil || r.store == nil {
+		return map[string]durableStatusEventProjection{}, nil
+	}
+	events, err := r.store.ExecutionEventsByTypes([]string{
+		core.ExecutionEventDurableWakeStarted,
+		core.ExecutionEventDurableWakeCompleted,
+		core.ExecutionEventDurableWakeFailed,
+		core.ExecutionEventDurableStateAwake,
+		core.ExecutionEventDurableStateDormant,
+		core.ExecutionEventDurablePolicyApplied,
+		core.ExecutionEventDurablePolicyApplyFailed,
+		core.ExecutionEventDurableParentAck,
+	}, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(events, func(i, j int) bool { return executionEventBefore(events[i], events[j]) })
+
+	out := make(map[string]durableStatusEventProjection, 16)
+	for _, event := range events {
+		payload := executionEventPayload(event.PayloadJSON)
+		agentID := strings.TrimSpace(event.Scope.DurableAgentID)
+		if agentID == "" {
+			agentID = strings.TrimSpace(payloadString(payload, "agent_id"))
+		}
+		if agentID == "" {
+			continue
+		}
+		state := out[agentID]
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventDurableWakeStarted:
+			state.LastWakeStartedAt = event.CreatedAt
+		case core.ExecutionEventDurableWakeCompleted:
+			state.LastWakeCompletedAt = event.CreatedAt
+		case core.ExecutionEventDurableWakeFailed:
+			state.LastWakeFailedAt = event.CreatedAt
+		case core.ExecutionEventDurableStateAwake:
+			state.LastAwakeAt = event.CreatedAt
+		case core.ExecutionEventDurableStateDormant:
+			state.LastDormantAt = event.CreatedAt
+		case core.ExecutionEventDurablePolicyApplied:
+			state.LastPolicyAppliedAt = event.CreatedAt
+			state.LastPolicyError = ""
+		case core.ExecutionEventDurablePolicyApplyFailed:
+			state.LastPolicyFailedAt = event.CreatedAt
+			if errText := strings.TrimSpace(payloadString(payload, "error")); errText != "" {
+				state.LastPolicyError = errText
+			}
+		case core.ExecutionEventDurableParentAck:
+			state.LastParentAckAt = event.CreatedAt
+		}
+		out[agentID] = state
+	}
+	return out, nil
+}
+
+func overlayDurableStatusFromEvents(
+	row core.DurableAgentStatusSnapshot,
+	state durableStatusEventProjection,
+) core.DurableAgentStatusSnapshot {
+	if !state.LastAwakeAt.IsZero() && state.LastAwakeAt.After(row.LastWakeAt) {
+		row.LastWakeAt = state.LastAwakeAt
+	}
+	if !state.LastDormantAt.IsZero() && state.LastDormantAt.After(row.DormantAt) {
+		row.DormantAt = state.LastDormantAt
+	}
+	if !state.LastPolicyAppliedAt.IsZero() && state.LastPolicyAppliedAt.After(row.LastAppliedPolicyAt) {
+		row.LastAppliedPolicyAt = state.LastPolicyAppliedAt
+		row.LastApplyStatus = "applied"
+		row.LastApplyError = ""
+	}
+	if !state.LastPolicyFailedAt.IsZero() && state.LastPolicyFailedAt.After(row.LastAppliedPolicyAt) {
+		row.LastApplyStatus = "failed"
+		if strings.TrimSpace(state.LastPolicyError) != "" {
+			row.LastApplyError = strings.TrimSpace(state.LastPolicyError)
+		}
+	}
+	return row
+}
+
+func durableAgentHealthFromStatusWithEvents(
+	row core.DurableAgentStatusSnapshot,
+	state durableStatusEventProjection,
+) string {
+	health := durableAgentHealthFromStatus(row)
+	if !strings.EqualFold(strings.TrimSpace(row.Status), "active") {
+		return health
+	}
+	if !state.LastWakeFailedAt.IsZero() {
+		lastSuccess := coalesceTime(state.LastWakeCompletedAt, state.LastPolicyAppliedAt)
+		if lastSuccess.IsZero() || state.LastWakeFailedAt.After(lastSuccess) {
+			return "degraded"
+		}
+	}
+	if !state.LastDormantAt.IsZero() && (state.LastAwakeAt.IsZero() || state.LastDormantAt.After(state.LastAwakeAt)) {
+		return "dormant"
+	}
+	return health
 }

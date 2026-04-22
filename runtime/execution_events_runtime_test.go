@@ -72,12 +72,6 @@ func TestChatStatusSnapshotUsesExecutionEventPhase(t *testing.T) {
 		t.Fatalf("AppendExecutionEvent() err = %v", err)
 	}
 
-	rt.setChatTurnPhase(chatID, statusTurnPhase{
-		Phase:     "render",
-		Summary:   "fallback phase",
-		UpdatedAt: time.Now().UTC(),
-	})
-
 	snapshot, err := rt.ChatStatusSnapshot(chatID, core.RouterStatusSnapshot{})
 	if err != nil {
 		t.Fatalf("ChatStatusSnapshot() err = %v", err)

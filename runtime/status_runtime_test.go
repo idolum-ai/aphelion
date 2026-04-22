@@ -761,7 +761,7 @@ func TestSystemStatusSnapshotIncludesLatestTurnProjectionFromExecutionEvents(t *
 	}
 }
 
-func TestChatStatusSnapshotIncludesLiveTurnPhase(t *testing.T) {
+func TestChatStatusSnapshotIncludesTurnPhaseFromExecutionEvents(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -770,10 +770,17 @@ func TestChatStatusSnapshotIncludesLiveTurnPhase(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 
-	rt.markChatTurnPhase(7344, "render", "authoring scene reply")
-	t.Cleanup(func() {
-		rt.clearChatTurnPhase(7344)
-	})
+	key := session.SessionKey{ChatID: 7344, UserID: 0, Scope: telegramDMScopeRef(7344)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventTurnStageChanged,
+		Stage:       "render",
+		Status:      "active",
+		PayloadJSON: `{"phase":"render","summary":"authoring scene reply"}`,
+		CreatedAt:   now,
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(turn stage changed) err = %v", err)
+	}
 
 	snapshot, err := rt.ChatStatusSnapshot(7344, core.RouterStatusSnapshot{
 		ActiveTurnsByChat: map[int64][]uint64{7344: {61}},
@@ -1061,6 +1068,148 @@ func TestDurableAgentsStatusSnapshotIncludesCapacityContractSignals(t *testing.T
 	}
 	if row.CapacityLastAttestedAt.IsZero() {
 		t.Fatal("CapacityLastAttestedAt is zero, want attestation timestamp")
+	}
+}
+
+func TestDurableAgentsStatusSnapshotOverlaysPolicyFailureFromExecutionEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "agent-events-failure",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		Status:             "active",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-events-failure",
+			Model:          "openrouter/test-model",
+		},
+		LivePolicy: core.DurableAgentLivePolicy{
+			CapabilityEnvelope: []string{"group_reply"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		PolicyVersion: 1,
+		PolicyHash:    "hash-events-failure",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:             agent.AgentID,
+		LastApplyStatus:     "applied",
+		LastAppliedPolicyAt: time.Now().UTC().Add(-5 * time.Minute),
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	key := session.SessionKey{
+		ChatID: agent.ReviewTargetChatID,
+		Scope: session.ScopeRef{
+			Kind:           session.ScopeKindDurableAgent,
+			ID:             agent.AgentID,
+			DurableAgentID: agent.AgentID,
+		},
+	}
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventDurablePolicyApplyFailed,
+		Stage:       "durable",
+		Status:      "failed",
+		PayloadJSON: `{"agent_id":"agent-events-failure","error":"child runtime unavailable"}`,
+		CreatedAt:   time.Now().UTC().Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(durable policy failed) err = %v", err)
+	}
+
+	snapshot, err := rt.DurableAgentsStatusSnapshot()
+	if err != nil {
+		t.Fatalf("DurableAgentsStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.Agents) != 1 {
+		t.Fatalf("Agents len = %d, want 1", len(snapshot.Agents))
+	}
+	row := snapshot.Agents[0]
+	if row.LastApplyStatus != "failed" {
+		t.Fatalf("LastApplyStatus = %q, want failed from TES overlay", row.LastApplyStatus)
+	}
+	if !strings.Contains(strings.ToLower(row.LastApplyError), "child runtime unavailable") {
+		t.Fatalf("LastApplyError = %q, want TES error propagation", row.LastApplyError)
+	}
+	if row.Health != "degraded" {
+		t.Fatalf("Health = %q, want degraded after TES policy failure", row.Health)
+	}
+}
+
+func TestDurableAgentsStatusSnapshotMarksDormantFromExecutionEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "agent-events-dormant",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		Status:             "active",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-events-dormant",
+			Model:          "openrouter/test-model",
+		},
+		LivePolicy: core.DurableAgentLivePolicy{
+			CapabilityEnvelope: []string{"group_reply"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		PolicyVersion: 1,
+		PolicyHash:    "hash-events-dormant",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	key := session.SessionKey{
+		ChatID: agent.ReviewTargetChatID,
+		Scope: session.ScopeRef{
+			Kind:           session.ScopeKindDurableAgent,
+			ID:             agent.AgentID,
+			DurableAgentID: agent.AgentID,
+		},
+	}
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventDurableStateDormant,
+		Stage:       "durable",
+		Status:      "dormant",
+		PayloadJSON: `{"agent_id":"agent-events-dormant"}`,
+		CreatedAt:   time.Now().UTC().Add(-30 * time.Second),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(durable dormant) err = %v", err)
+	}
+
+	snapshot, err := rt.DurableAgentsStatusSnapshot()
+	if err != nil {
+		t.Fatalf("DurableAgentsStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.Agents) != 1 {
+		t.Fatalf("Agents len = %d, want 1", len(snapshot.Agents))
+	}
+	row := snapshot.Agents[0]
+	if row.Health != "dormant" {
+		t.Fatalf("Health = %q, want dormant from TES event", row.Health)
+	}
+	if row.DormantAt.IsZero() {
+		t.Fatalf("DormantAt = %s, want non-zero from TES event", row.DormantAt.Format(time.RFC3339Nano))
 	}
 }
 

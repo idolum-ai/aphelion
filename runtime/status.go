@@ -136,13 +136,6 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 			snapshot.TurnPhaseUpdatedAt = phase.UpdatedAt
 		}
 	}
-	if strings.TrimSpace(snapshot.TurnPhase) == "" && r != nil {
-		if phase, ok := r.chatTurnPhase(chatID); ok {
-			snapshot.TurnPhase = strings.TrimSpace(phase.Phase)
-			snapshot.TurnPhaseSummary = strings.TrimSpace(phase.Summary)
-			snapshot.TurnPhaseUpdatedAt = phase.UpdatedAt
-		}
-	}
 	for _, stale := range system.StaleRunningTurns {
 		if stale.ChatID == chatID {
 			snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, stale)

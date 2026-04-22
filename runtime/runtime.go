@@ -93,8 +93,6 @@ type Runtime struct {
 	operationalAlertWindow time.Duration
 	sessionMu              sync.Mutex
 	sessionLocks           map[string]*sync.Mutex
-	statusStageMu          sync.RWMutex
-	statusStageByChat      map[int64]statusTurnPhase
 	statusReadableMu       sync.Mutex
 	statusReadableProvider agent.Provider
 	statusReadableReady    bool
@@ -503,7 +501,6 @@ func New(
 		operationalAlertClock:    time.Now,
 		operationalAlertWindow:   10 * time.Minute,
 		sessionLocks:             make(map[string]*sync.Mutex),
-		statusStageByChat:        make(map[int64]statusTurnPhase),
 	}
 	rt.interactiveDMAssembler = newInteractiveDMTurnAssembler(rt)
 	return rt, nil

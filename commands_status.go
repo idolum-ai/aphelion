@@ -128,10 +128,138 @@ func appendStatusReadableSummary(ctx context.Context, router commandRouter, view
 		return text
 	}
 	summary := strings.TrimSpace(router.StatusReadableSummary(ctx, string(view), text))
+	summary = groundStatusReadableSummary(view, summary, text)
+	if summary == "" {
+		summary = composeStatusReadableSummary(view, text)
+	}
 	if summary == "" {
 		return text
 	}
 	return "quick_read " + summary + "\n\n" + text
+}
+
+func groundStatusReadableSummary(view statusView, summary string, statusText string) string {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return ""
+	}
+	expectedState := strings.TrimSpace(statusSummaryStateToken(statusText))
+	detectedState := strings.TrimSpace(detectSummaryStateWord(summary))
+	if expectedState != "" && detectedState != "" && expectedState != detectedState {
+		return ""
+	}
+	if pending, ok := parseStatusSummaryIntToken(statusText, "pending_items"); ok {
+		lower := strings.ToLower(summary)
+		if pending > 0 && (strings.Contains(lower, "no pending") || strings.Contains(lower, "0 pending")) {
+			return ""
+		}
+	}
+	_ = view
+	return summary
+}
+
+func composeStatusReadableSummary(view statusView, statusText string) string {
+	switch view {
+	case statusViewChat, statusViewPending, statusViewChatTarget:
+		state := firstNonEmptyStatusSummary(statusSummaryStateToken(statusText), "unknown")
+		pendingValue := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "pending_items"), "0")
+		signal := firstNonEmptyStatusSummary(statusCurrentSignal(statusText), "unknown")
+		return fmt.Sprintf("Chat is %s; pending items=%s; signal=%s.", state, pendingValue, signal)
+	case statusViewSystem:
+		active := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "active_turns"), "0")
+		queued := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "queued_chats"), "0")
+		pending := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "pending_items"), "0")
+		return fmt.Sprintf("System has active turns=%s; queued chats=%s; pending items=%s.", active, queued, pending)
+	case statusViewHotChats:
+		hot := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "hot_chats"), "0")
+		return fmt.Sprintf("Hot chats listed=%s.", hot)
+	case statusViewDurables:
+		total := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "total"), "0")
+		active := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "active"), "0")
+		degraded := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "degraded"), "0")
+		inactive := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "inactive"), "0")
+		return fmt.Sprintf("Durables total=%s; active=%s; degraded=%s; inactive=%s.", total, active, degraded, inactive)
+	default:
+		return ""
+	}
+}
+
+func statusSummaryStateToken(statusText string) string {
+	return statusSummaryToken(statusText, "state")
+}
+
+func statusSummaryToken(statusText string, token string) string {
+	statusText = strings.TrimSpace(statusText)
+	token = strings.TrimSpace(token)
+	if statusText == "" || token == "" {
+		return ""
+	}
+	for _, line := range strings.Split(statusText, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "summary ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		for _, field := range fields {
+			if !strings.Contains(field, "=") {
+				continue
+			}
+			parts := strings.SplitN(field, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			if strings.TrimSpace(parts[0]) == token {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	return ""
+}
+
+func statusCurrentSignal(statusText string) string {
+	for _, line := range strings.Split(strings.TrimSpace(statusText), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "current_signal=") {
+			continue
+		}
+		return strings.TrimSpace(strings.TrimPrefix(line, "current_signal="))
+	}
+	return ""
+}
+
+func parseStatusSummaryIntToken(statusText string, token string) (int, bool) {
+	raw := statusSummaryToken(statusText, token)
+	if raw == "" {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func detectSummaryStateWord(summary string) string {
+	lower := strings.ToLower(strings.TrimSpace(summary))
+	if lower == "" {
+		return ""
+	}
+	for _, state := range []string{"idle", "working", "blocked", "queued", "failed", "interrupted"} {
+		if strings.Contains(lower, state) {
+			return state
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyStatusSummary(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func statusViewSupportsReadableSummary(view statusView) bool {

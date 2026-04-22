@@ -93,8 +93,8 @@ Code anchors:
 
 ## Current Projection Usage
 
-`ChatStatusSnapshot` now prefers TES stage events for `TurnPhase` and
-`TurnPhaseSummary`, with the in-memory phase map as fallback.
+`ChatStatusSnapshot` now derives `TurnPhase` and `TurnPhaseSummary` from TES
+`turn.stage.changed` events only.
 
 `SystemStatusSnapshot` is now TES-first for detached control/recovery overlays:
 
@@ -114,6 +114,10 @@ chat and system views via `RecentExecution` projections sourced from
 `/status` latest-turn fields now prefer TES turn projections (derived from
 `turn.*` + `tool.*` execution events) with `turn_runs` as fallback for missing
 coverage windows.
+
+Collapsed `/status` quick-read text is now grounded against rendered status
+tokens. If the generated summary contradicts the underlying status payload, it
+is replaced with a deterministic snapshot-based summary.
 
 Collapsed `/debug` quick-read text is now grounded against chat execution state:
 inconsistent readable summaries are replaced with a deterministic, snapshot-based

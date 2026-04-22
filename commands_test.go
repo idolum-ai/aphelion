@@ -904,6 +904,44 @@ func TestHandleTelegramCommandStatusIncludesReadableSummary(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandStatusRewritesInconsistentReadableSummary(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID:          7,
+			OperationStatus: "blocked",
+			PendingItems: []core.PendingItem{
+				{Kind: core.PendingItemKindDecision, ChatID: 7, ID: "decision-1", Summary: "kind=proposal_approval"},
+			},
+		},
+		statusReadableSummary: "Chat 7 is idle right now; no pending items.",
+		personaEffort:         "sonnet",
+		governorEffort:        "medium",
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID: 7,
+		Text:   "/status",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	text := strings.ToLower(sender.inline[0].text)
+	if strings.Contains(text, "idle right now; no pending items") {
+		t.Fatalf("status text = %q, do not want inconsistent readable summary", sender.inline[0].text)
+	}
+	if !strings.Contains(text, "quick read: chat is blocked") {
+		t.Fatalf("status text = %q, want grounded blocked quick summary", sender.inline[0].text)
+	}
+}
+
 func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
 	t.Parallel()
 
