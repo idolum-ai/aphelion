@@ -35,8 +35,9 @@ Classifications below use the shared truth classes defined in
 | `session.outbound_messages` | canonical | Which outbound deliveries were recorded at the transport ledger level (not guaranteed human render)? |
 | `session.review_events (status='delivered')` | canonical | Which bounded review artifacts were shown to humans? |
 | Parent/child memory files and `rhizome_*` tables | canonical | What durable meaning has been retained over time? |
-| `session.durable_agents` | operational current-state store | What durable-child policy/config is currently declared? |
-| `session.durable_agent_state` | operational current-state store | What durable-child runtime/apply status is currently declared? |
+| `session.durable_agents` | canonical | What durable-child identity/config is currently declared? |
+| `session.durable_agent_state (identity/config-bearing fields)` | canonical | Which child identity/config handshake facts are currently declared? |
+| `session.durable_agent_state (runtime/apply/transient posture fields)` | operational current-state store | What durable-child runtime/apply status is currently declared? |
 | `sessions.last_floor_text` | operational current-state store | What floor text is currently declared for the active session? |
 | `sessions.last_floor_metadata` | operational current-state store | What floor metadata is currently declared for the active session? |
 | `sessions.plan_state_json` | operational current-state store | What plan intent is currently declared? |
@@ -61,11 +62,10 @@ Classifications below use the shared truth classes defined in
 
 Staged identity decision:
 
-- `session.durable_agents` and `session.durable_agent_state` are currently
-  classified as operational current-state stores.
-- Target direction is to promote these stores into canonical identity/config
-  surfaces after runtime/apply fields are fully normalized around identity
-  semantics.
+- `session.durable_agents` is canonical for durable child identity/config.
+- `session.durable_agent_state` is split by meaning:
+  - identity/config-bearing fields are canonical identity/config.
+  - runtime/apply/transient posture fields remain operational current-state.
 
 ## Why This Matters
 

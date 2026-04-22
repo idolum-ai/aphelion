@@ -1603,6 +1603,107 @@ func TestDurableAgentsStatusSnapshotMarksDormantFromExecutionEvents(t *testing.T
 	}
 }
 
+func TestDurableAgentsStatusSnapshotKeepsCanonicalIdentityWhenOperationalStateConflicts(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "agent-identity-boundary",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		Status:             "active",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-or-identity-boundary",
+			Model:          "openrouter/test-model",
+		},
+		LivePolicy: core.DurableAgentLivePolicy{
+			CapabilityEnvelope: []string{"group_reply"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		},
+		PolicyVersion: 11,
+		PolicyHash:    "hash-identity-boundary",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	// This operational state status intentionally conflicts with canonical durable identity.
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:         agent.AgentID,
+		Status:          "inactive",
+		LastApplyStatus: "failed",
+		LastApplyError:  "simulated runtime fault",
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	snapshot, err := rt.DurableAgentsStatusSnapshot()
+	if err != nil {
+		t.Fatalf("DurableAgentsStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.Agents) != 1 {
+		t.Fatalf("Agents len = %d, want 1", len(snapshot.Agents))
+	}
+	row := snapshot.Agents[0]
+	if row.AgentID != agent.AgentID {
+		t.Fatalf("AgentID = %q, want %q", row.AgentID, agent.AgentID)
+	}
+	if row.Status != "active" {
+		t.Fatalf("Status = %q, want canonical durable_agents status active", row.Status)
+	}
+	if row.ChannelKind != "telegram_group" {
+		t.Fatalf("ChannelKind = %q, want canonical durable_agents channel telegram_group", row.ChannelKind)
+	}
+	if strings.TrimSpace(row.IdentitySource) != "canonical:session.durable_agents" {
+		t.Fatalf("IdentitySource = %q, want canonical:session.durable_agents", row.IdentitySource)
+	}
+}
+
+func TestDurableAgentsStatusSnapshotDoesNotFabricateIdentityFromTESOnlyEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	ghostID := "ghost-agent"
+	key := session.SessionKey{
+		ChatID: 1001,
+		Scope: session.ScopeRef{
+			Kind:           session.ScopeKindDurableAgent,
+			ID:             ghostID,
+			DurableAgentID: ghostID,
+		},
+	}
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventDurableWakeStarted,
+		Stage:       "durable",
+		Status:      "running",
+		PayloadJSON: `{"agent_id":"ghost-agent"}`,
+		CreatedAt:   time.Now().UTC().Add(-10 * time.Second),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(ghost durable wake) err = %v", err)
+	}
+
+	snapshot, err := rt.DurableAgentsStatusSnapshot()
+	if err != nil {
+		t.Fatalf("DurableAgentsStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.Agents) != 0 {
+		t.Fatalf("Agents = %#v, want no fabricated durable identity rows from TES-only events", snapshot.Agents)
+	}
+}
+
 func containsPendingKind(items []core.PendingItemKind, target core.PendingItemKind) bool {
 	for _, item := range items {
 		if item == target {

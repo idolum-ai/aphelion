@@ -42,15 +42,18 @@ Primary references:
 ### Workload B: Durable identity/config staging
 
 - Current state:
-  - `session.durable_agents` and `session.durable_agent_state` are still treated
-    as operational current-state stores.
+  - `session.durable_agents` is canonical for durable child identity/config.
+  - `session.durable_agent_state` is split:
+    - identity/config-bearing fields are canonical.
+    - runtime/apply/transient posture fields are operational current-state.
 - Target direction:
-  - Promote durable identity/config-bearing fields to canonical identity/config.
-  - Keep runtime/apply/transient posture fields operational until separated or
-    normalized.
+  - Continue shrinking operational posture fields to strictly runtime/apply
+    state (no identity leakage).
+  - Keep source attribution explicit where canonical identity and operational
+    posture are shown together.
 - Operator check after upgrades:
   - verify durable identity claims in `/status` and `/debug` match canonical
-    identity/config sources once promoted.
+    identity/config sources while runtime posture remains operational.
 
 Primary references:
 

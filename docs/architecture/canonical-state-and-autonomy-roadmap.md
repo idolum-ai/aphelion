@@ -89,10 +89,12 @@ Design stance:
 - identity is mutable current-state description
 - bootstrap changes should update identity/config, not rewrite memory
 - operator inspection of "what is this agent now?" should read from identity
-- migration decision: `session.durable_agents` and
-  `session.durable_agent_state` are currently operational current-state stores
-  and are intended to be promoted into canonical identity/config surfaces (no
-  separate identity store is planned unless that promotion fails)
+- migration decision now enforced:
+  - `session.durable_agents` is canonical identity/config for durable children.
+  - `session.durable_agent_state` is split by meaning:
+    - identity/config-bearing fields are canonical identity/config.
+    - runtime/apply/transient posture fields remain operational current-state.
+  - no separate identity store is planned unless this split proves insufficient.
 
 This is especially important for durable children. If a child's substrate changes,
 its identity surface should reflect that immediately and explicitly.
@@ -210,8 +212,9 @@ Classifications use the shared truth classes from
 | `session.outbound_messages` | canonical | Which outbound deliveries were recorded at the transport ledger level? | Canonical delivery ledger only; not proof that a human client rendered/read the message. |
 | `session.review_events (status='delivered')` | canonical | Which bounded review artifacts were shown to humans? | Delivered review artifacts are part of transcript history. |
 | Parent/child memory files and `rhizome_*` tables | canonical | What was retained over time and why? | Durable historical meaning (facts, decisions, questions, patterns). |
-| `session.durable_agents` | operational current-state store | What durable-child policy/config is currently declared? | Mutable child identity and capability envelope. |
-| `session.durable_agent_state` | operational current-state store | What durable-child runtime/apply state is currently declared? | Live child runtime and policy-apply posture. |
+| `session.durable_agents` | canonical | What durable-child identity/config is currently declared? | Mutable child identity and capability envelope. |
+| `session.durable_agent_state (identity/config-bearing fields)` | canonical | Which child identity/config handshake facts are currently declared? | Canonical child control-plane identity/config handshake state. |
+| `session.durable_agent_state (runtime/apply/transient posture fields)` | operational current-state store | What durable-child runtime/apply state is currently declared? | Live child runtime and policy-apply posture. |
 | `sessions.last_floor_text` | operational current-state store | What floor text is currently declared for the active session? | Latest floor-text snapshot used for current turn context. |
 | `sessions.last_floor_metadata` | operational current-state store | What floor metadata is currently declared for the active session? | Latest floor-metadata snapshot used for current turn context. |
 | `sessions.plan_state_json` | operational current-state store | What plan intent is currently declared? | Runtime-declared plan state for the active session. |
