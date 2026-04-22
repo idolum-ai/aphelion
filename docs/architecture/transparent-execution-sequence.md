@@ -13,6 +13,7 @@ delivery.
   - `AppendExecutionEvents`
   - `ExecutionEventsBySession`
   - `ExecutionEventsByChat`
+  - `ExecutionEventsByTypes`
 
 Code anchor: [`session/store.go`](../../session/store.go)
 
@@ -29,6 +30,11 @@ Code anchor: [`session/store.go`](../../session/store.go)
   - `turn.completed`
   - `turn.failed`
   - `turn.interrupted`
+- Provider attempts
+  - `provider.attempt.started`
+  - `provider.attempt.retried`
+  - `provider.attempt.failed`
+  - `provider.attempt.succeeded`
 - Tool lifecycle
   - `tool.started`
   - `tool.succeeded`
@@ -45,6 +51,16 @@ Code anchor: [`session/store.go`](../../session/store.go)
   - `continuation.revoked`
   - `continuation.consumed`
   - `continuation.blocked`
+- Decision control
+  - `decision.opened`
+  - `decision.resolved`
+  - `decision.expired`
+  - `decision.detached`
+- Startup recovery
+  - `recovery.detected`
+  - `recovery.issued`
+  - `recovery.completed`
+  - `recovery.failed`
 
 Code anchors:
 
@@ -70,6 +86,17 @@ Code anchors:
 
 `ChatStatusSnapshot` now prefers TES stage events for `TurnPhase` and
 `TurnPhaseSummary`, with the in-memory phase map as fallback.
+
+`SystemStatusSnapshot` is now TES-first for detached control/recovery overlays:
+
+- Decisions: `decision.*` events define current pending decision visibility.
+  Legacy `pending_decisions` rows are used only as fallback when no TES state is
+  available for a given `decision_id`.
+- Continuations: `continuation.*` events define current continuation status per
+  chat when present; legacy continuation state remains fallback.
+- Startup recovery: a pending startup recovery item is derived from
+  `recovery.issued` until a terminal `recovery.completed|recovery.failed` event
+  is observed after issuance.
 
 Code anchor: [`runtime/status.go`](../../runtime/status.go)
 

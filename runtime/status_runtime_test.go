@@ -349,6 +349,220 @@ func TestSystemStatusSnapshotBuildsAdminViewAndHotChats(t *testing.T) {
 	}
 }
 
+func TestSystemStatusSnapshotPrefersDecisionEventsOverLegacyPendingRows(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := store.UpsertPendingDecision(session.PendingDecisionRecord{
+		ID:            "decision-from-events",
+		Sequence:      1,
+		OwnerKey:      "chat:9001:sender:1002",
+		Kind:          "proposal_approval",
+		ChatID:        9001,
+		SenderID:      1002,
+		MessageID:     111,
+		Prompt:        "Approve from events?",
+		DefaultChoice: "deny",
+		ChoicesJSON:   `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
+		CreatedAt:     now.Add(-2 * time.Minute),
+		UpdatedAt:     now.Add(-90 * time.Second),
+	}); err != nil {
+		t.Fatalf("UpsertPendingDecision(decision-from-events) err = %v", err)
+	}
+	if err := store.UpsertPendingDecision(session.PendingDecisionRecord{
+		ID:            "decision-legacy-only",
+		Sequence:      2,
+		OwnerKey:      "chat:9002:sender:1002",
+		Kind:          "proposal_approval",
+		ChatID:        9002,
+		SenderID:      1002,
+		MessageID:     222,
+		Prompt:        "Legacy only decision?",
+		DefaultChoice: "deny",
+		ChoicesJSON:   `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
+		CreatedAt:     now.Add(-2 * time.Minute),
+		UpdatedAt:     now.Add(-90 * time.Second),
+	}); err != nil {
+		t.Fatalf("UpsertPendingDecision(decision-legacy-only) err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9001, UserID: 0, Scope: telegramDMScopeRef(9001)}
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType: core.ExecutionEventDecisionOpened,
+			Stage:     "decision",
+			Status:    "pending",
+			PayloadJSON: `{
+				"decision_id":"decision-from-events",
+				"decision_kind":"proposal_approval",
+				"owner_key":"chat:9001:sender:1002",
+				"prompt":"Approve from events?"
+			}`,
+			CreatedAt: now.Add(-80 * time.Second),
+		},
+		{
+			EventType: core.ExecutionEventDecisionResolved,
+			Stage:     "decision",
+			Status:    "resolved",
+			PayloadJSON: `{
+				"decision_id":"decision-from-events",
+				"decision_kind":"proposal_approval",
+				"owner_key":"chat:9001:sender:1002",
+				"choice":"deny",
+				"reason":"callback"
+			}`,
+			CreatedAt: now.Add(-70 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(decision events) err = %v", err)
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+
+	if pendingDecisionByID(snapshot.PendingItems, "decision-from-events") {
+		t.Fatalf("PendingItems unexpectedly contains decision-from-events after TES resolved event: %#v", snapshot.PendingItems)
+	}
+	if !pendingDecisionByID(snapshot.PendingItems, "decision-legacy-only") {
+		t.Fatalf("PendingItems missing legacy fallback decision decision-legacy-only: %#v", snapshot.PendingItems)
+	}
+}
+
+func TestChatStatusSnapshotPrefersContinuationEventsOverLegacyContinuationState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9011, UserID: 0, Scope: telegramDMScopeRef(9011)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		RemainingTurns: 2,
+		DecisionID:     "continuation-legacy",
+		UpdatedAt:      time.Now().UTC().Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState(legacy pending) err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType: core.ExecutionEventContinuationOffered,
+			Stage:     "continuation",
+			Status:    "pending",
+			PayloadJSON: `{
+				"decision_id":"continuation-legacy",
+				"remaining_turns":2
+			}`,
+			CreatedAt: now.Add(-90 * time.Second),
+		},
+		{
+			EventType: core.ExecutionEventContinuationRevoked,
+			Stage:     "continuation",
+			Status:    "revoked",
+			PayloadJSON: `{
+				"decision_id":"continuation-legacy",
+				"remaining_turns":0
+			}`,
+			CreatedAt: now.Add(-60 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(continuation events) err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(9011, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if snapshot.Continuation == nil {
+		t.Fatalf("Continuation = nil, want TES-derived continuation snapshot")
+	}
+	if snapshot.Continuation.Status != "revoked" {
+		t.Fatalf("Continuation.Status = %q, want revoked from TES", snapshot.Continuation.Status)
+	}
+	if snapshot.Continuation.RemainingTurns != 0 {
+		t.Fatalf("Continuation.RemainingTurns = %d, want 0 after revoke", snapshot.Continuation.RemainingTurns)
+	}
+	if pendingKindCount(snapshot.PendingItems, core.PendingItemKindContinuation) != 0 {
+		t.Fatalf("Pending continuation item should be absent after revoke: %#v", snapshot.PendingItems)
+	}
+}
+
+func TestSystemStatusSnapshotDerivesRecoveryPendingFromExecutionEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType: core.ExecutionEventRecoveryDetected,
+			Stage:     "recovery",
+			Status:    "detected",
+			PayloadJSON: `{
+				"pending_count": 2
+			}`,
+			CreatedAt: now.Add(-2 * time.Minute),
+		},
+		{
+			EventType: core.ExecutionEventRecoveryIssued,
+			Stage:     "recovery",
+			Status:    "issued",
+			PayloadJSON: `{
+				"pending_count": 2
+			}`,
+			CreatedAt: now.Add(-90 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(recovery pending) err = %v", err)
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	if !pendingRecoveryByID(snapshot.PendingItems, "recovery:startup") {
+		t.Fatalf("PendingItems missing TES-derived startup recovery item: %#v", snapshot.PendingItems)
+	}
+
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType: core.ExecutionEventRecoveryCompleted,
+		Stage:     "recovery",
+		Status:    "completed",
+		PayloadJSON: `{
+			"pending_count": 2,
+			"recovered_count": 2
+		}`,
+		CreatedAt: now.Add(-30 * time.Second),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(recovery completed) err = %v", err)
+	}
+
+	snapshot, err = rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot(after completion) err = %v", err)
+	}
+	if pendingRecoveryByID(snapshot.PendingItems, "recovery:startup") {
+		t.Fatalf("PendingItems still contains startup recovery item after completion: %#v", snapshot.PendingItems)
+	}
+}
+
 func TestChatStatusSnapshotIncludesLiveTurnPhase(t *testing.T) {
 	t.Parallel()
 
@@ -655,6 +869,42 @@ func TestDurableAgentsStatusSnapshotIncludesCapacityContractSignals(t *testing.T
 func containsPendingKind(items []core.PendingItemKind, target core.PendingItemKind) bool {
 	for _, item := range items {
 		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func pendingDecisionByID(items []core.PendingItem, id string) bool {
+	id = strings.TrimSpace(id)
+	for _, item := range items {
+		if item.Kind != core.PendingItemKindDecision {
+			continue
+		}
+		if strings.TrimSpace(item.ID) == id {
+			return true
+		}
+	}
+	return false
+}
+
+func pendingKindCount(items []core.PendingItem, kind core.PendingItemKind) int {
+	count := 0
+	for _, item := range items {
+		if item.Kind == kind {
+			count++
+		}
+	}
+	return count
+}
+
+func pendingRecoveryByID(items []core.PendingItem, id string) bool {
+	id = strings.TrimSpace(id)
+	for _, item := range items {
+		if item.Kind != core.PendingItemKindRecovery {
+			continue
+		}
+		if strings.TrimSpace(item.ID) == id {
 			return true
 		}
 	}

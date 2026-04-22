@@ -184,11 +184,34 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		return snapshot, nil
 	}
 
+	decisionEventState, err := r.decisionEventStates(now.Add(-7*24*time.Hour), 2000)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
+	for _, state := range decisionEventState {
+		if !state.pending() {
+			continue
+		}
+		updatedAt := coalesceTime(state.UpdatedAt, state.CreatedAt)
+		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+			Kind:      core.PendingItemKindDecision,
+			ChatID:    state.ChatID,
+			ID:        state.DecisionID,
+			Summary:   renderDecisionSummaryFromFields(state.Kind, state.Prompt),
+			Age:       statusAge(now, updatedAt, state.CreatedAt),
+			CreatedAt: state.CreatedAt,
+			UpdatedAt: updatedAt,
+		})
+	}
+
 	pendingDecisions, err := r.store.PendingDecisions()
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
 	for _, pending := range pendingDecisions {
+		if _, covered := decisionEventState[strings.TrimSpace(pending.ID)]; covered {
+			continue
+		}
 		age := statusAge(now, pending.UpdatedAt, pending.CreatedAt)
 		timeout := time.Duration(pending.TimeoutNanos)
 		stale := timeout > 0 && age > timeout
@@ -204,11 +227,32 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		})
 	}
 
+	continuationEventState, err := r.continuationEventStates(now.Add(-7*24*time.Hour), 2000)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
 	continuations, err := r.store.ContinuationStates()
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
+	continuationChatSeen := make(map[int64]struct{}, len(continuationEventState))
 	for _, row := range continuations {
+		if eventState, covered := continuationEventState[row.Key.ChatID]; covered {
+			snapshot.Continuations = append(snapshot.Continuations, eventState)
+			continuationChatSeen[row.Key.ChatID] = struct{}{}
+			if continuationSnapshotIsPending(eventState) {
+				snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+					Kind:      core.PendingItemKindContinuation,
+					ChatID:    row.Key.ChatID,
+					ID:        continuationSnapshotItemID(eventState, row.Key.ChatID),
+					Summary:   renderContinuationSnapshotSummary(eventState),
+					Age:       statusAge(now, eventState.UpdatedAt, time.Time{}),
+					UpdatedAt: eventState.UpdatedAt,
+				})
+			}
+			continue
+		}
+
 		state := session.NormalizeContinuationState(row.State)
 		status := strings.TrimSpace(string(state.Status))
 		if status == "" {
@@ -238,6 +282,22 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 			})
 		}
 	}
+	for chatID, eventState := range continuationEventState {
+		if _, seen := continuationChatSeen[chatID]; seen {
+			continue
+		}
+		snapshot.Continuations = append(snapshot.Continuations, eventState)
+		if continuationSnapshotIsPending(eventState) {
+			snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+				Kind:      core.PendingItemKindContinuation,
+				ChatID:    chatID,
+				ID:        continuationSnapshotItemID(eventState, chatID),
+				Summary:   renderContinuationSnapshotSummary(eventState),
+				Age:       statusAge(now, eventState.UpdatedAt, time.Time{}),
+				UpdatedAt: eventState.UpdatedAt,
+			})
+		}
+	}
 
 	latestRuns, err := r.store.LatestTurnRunsByChat(500)
 	if err != nil {
@@ -261,6 +321,13 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 			CreatedAt: run.StartedAt,
 			UpdatedAt: run.LastActivityAt,
 		})
+	}
+	recoveryPending, recoveryPendingOK, err := r.recoveryPendingFromEvents(now.Add(-7*24*time.Hour), 2000)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
+	if recoveryPendingOK {
+		snapshot.PendingItems = append(snapshot.PendingItems, recoveryPending)
 	}
 
 	staleRuns, err := r.staleRunningTurnRuns(now)
@@ -447,6 +514,270 @@ func turnRunSnapshot(run session.TurnRun) core.TurnRunStatusSnapshot {
 		ErrorText:             strings.TrimSpace(firstNonEmptyStatus(run.ErrorText, run.LastToolError)),
 		StartedAt:             run.StartedAt,
 	}
+}
+
+type decisionEventProjection struct {
+	DecisionID    string
+	ChatID        int64
+	Kind          string
+	Prompt        string
+	LastEventType string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+func (p decisionEventProjection) pending() bool {
+	return strings.TrimSpace(p.DecisionID) != "" && strings.TrimSpace(p.LastEventType) == core.ExecutionEventDecisionOpened
+}
+
+func (r *Runtime) decisionEventStates(since time.Time, limit int) (map[string]decisionEventProjection, error) {
+	if r == nil || r.store == nil {
+		return map[string]decisionEventProjection{}, nil
+	}
+	events, err := r.store.ExecutionEventsByTypes([]string{
+		core.ExecutionEventDecisionOpened,
+		core.ExecutionEventDecisionResolved,
+		core.ExecutionEventDecisionExpired,
+		core.ExecutionEventDecisionDetached,
+	}, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(events, func(i, j int) bool { return executionEventBefore(events[i], events[j]) })
+
+	out := make(map[string]decisionEventProjection, len(events))
+	for _, event := range events {
+		payload := executionEventPayload(event.PayloadJSON)
+		decisionID := payloadString(payload, "decision_id")
+		if decisionID == "" {
+			continue
+		}
+
+		state := out[decisionID]
+		state.DecisionID = decisionID
+		if state.ChatID == 0 {
+			state.ChatID = event.ChatID
+		}
+		if state.Kind == "" {
+			state.Kind = payloadString(payload, "decision_kind")
+		}
+		if state.Prompt == "" {
+			state.Prompt = payloadString(payload, "prompt")
+		}
+		if state.CreatedAt.IsZero() {
+			state.CreatedAt = event.CreatedAt
+		}
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventDecisionOpened {
+			state.CreatedAt = event.CreatedAt
+		}
+		state.LastEventType = strings.TrimSpace(event.EventType)
+		state.UpdatedAt = event.CreatedAt
+		out[decisionID] = state
+	}
+	return out, nil
+}
+
+func renderDecisionSummaryFromFields(kind string, prompt string) string {
+	kind = strings.TrimSpace(kind)
+	prompt = truncateStatusDiagnostic(strings.TrimSpace(prompt), 80)
+	if kind == "" {
+		return "prompt=" + prompt
+	}
+	if prompt == "" {
+		return "kind=" + kind
+	}
+	return fmt.Sprintf("kind=%s prompt=%s", kind, prompt)
+}
+
+func (r *Runtime) continuationEventStates(since time.Time, limit int) (map[int64]core.ContinuationStatusSnapshot, error) {
+	if r == nil || r.store == nil {
+		return map[int64]core.ContinuationStatusSnapshot{}, nil
+	}
+	events, err := r.store.ExecutionEventsByTypes([]string{
+		core.ExecutionEventContinuationOffered,
+		core.ExecutionEventContinuationApproved,
+		core.ExecutionEventContinuationRevoked,
+		core.ExecutionEventContinuationConsumed,
+		core.ExecutionEventContinuationBlocked,
+	}, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(events, func(i, j int) bool { return executionEventBefore(events[i], events[j]) })
+
+	out := make(map[int64]core.ContinuationStatusSnapshot, len(events))
+	for _, event := range events {
+		chatID := event.ChatID
+		if chatID == 0 {
+			continue
+		}
+		state := out[chatID]
+		state.ChatID = chatID
+
+		payload := executionEventPayload(event.PayloadJSON)
+		if decisionID := payloadString(payload, "decision_id"); decisionID != "" {
+			state.DecisionID = decisionID
+		}
+		if remaining, ok := payloadInt64(payload, "remaining_turns"); ok {
+			state.RemainingTurns = int(remaining)
+		}
+		if approvedBy, ok := payloadInt64(payload, "approved_by_user"); ok {
+			state.ApprovedBy = approvedBy
+		}
+		if reason := payloadString(payload, "reason"); reason != "" {
+			state.BlockedReason = reason
+		}
+
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventContinuationOffered:
+			state.Status = "pending"
+		case core.ExecutionEventContinuationApproved:
+			state.Status = "approved"
+		case core.ExecutionEventContinuationRevoked:
+			state.Status = "revoked"
+		case core.ExecutionEventContinuationConsumed:
+			state.Status = "consumed"
+		case core.ExecutionEventContinuationBlocked:
+			state.Status = "blocked"
+		}
+		state.UpdatedAt = event.CreatedAt
+		out[chatID] = state
+	}
+	return out, nil
+}
+
+func continuationSnapshotIsPending(state core.ContinuationStatusSnapshot) bool {
+	status := strings.ToLower(strings.TrimSpace(state.Status))
+	return status == "pending" || status == "approved"
+}
+
+func continuationSnapshotItemID(state core.ContinuationStatusSnapshot, chatID int64) string {
+	if decisionID := strings.TrimSpace(state.DecisionID); decisionID != "" {
+		return decisionID
+	}
+	return "continuation:" + strconv.FormatInt(chatID, 10)
+}
+
+func renderContinuationSnapshotSummary(state core.ContinuationStatusSnapshot) string {
+	parts := []string{
+		fmt.Sprintf("status=%s", strings.TrimSpace(state.Status)),
+		fmt.Sprintf("remaining_turns=%d", state.RemainingTurns),
+	}
+	if decisionID := strings.TrimSpace(state.DecisionID); decisionID != "" {
+		parts = append(parts, "decision_id="+decisionID)
+	}
+	if state.ApprovedBy != 0 {
+		parts = append(parts, fmt.Sprintf("approved_by=%d", state.ApprovedBy))
+	}
+	if reason := strings.TrimSpace(state.BlockedReason); reason != "" {
+		parts = append(parts, "blocked_reason="+reason)
+	}
+	return strings.Join(parts, " ")
+}
+
+func (r *Runtime) recoveryPendingFromEvents(since time.Time, limit int) (core.PendingItem, bool, error) {
+	if r == nil || r.store == nil {
+		return core.PendingItem{}, false, nil
+	}
+	events, err := r.store.ExecutionEventsByTypes([]string{
+		core.ExecutionEventRecoveryIssued,
+		core.ExecutionEventRecoveryCompleted,
+		core.ExecutionEventRecoveryFailed,
+	}, since, limit)
+	if err != nil {
+		return core.PendingItem{}, false, err
+	}
+	sort.Slice(events, func(i, j int) bool { return executionEventBefore(events[i], events[j]) })
+
+	var latestIssued session.ExecutionEvent
+	var latestTerminal session.ExecutionEvent
+	for _, event := range events {
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventRecoveryIssued:
+			latestIssued = event
+		case core.ExecutionEventRecoveryCompleted, core.ExecutionEventRecoveryFailed:
+			if latestIssued.ID != 0 && !event.CreatedAt.Before(latestIssued.CreatedAt) {
+				latestTerminal = event
+			}
+		}
+	}
+	if latestIssued.ID == 0 {
+		return core.PendingItem{}, false, nil
+	}
+	if latestTerminal.ID != 0 && !latestTerminal.CreatedAt.Before(latestIssued.CreatedAt) {
+		return core.PendingItem{}, false, nil
+	}
+
+	payload := executionEventPayload(latestIssued.PayloadJSON)
+	pendingCount, _ := payloadInt64(payload, "pending_count")
+	summary := "status=issued"
+	if pendingCount > 0 {
+		summary = fmt.Sprintf("status=issued pending_count=%d", pendingCount)
+	}
+	updatedAt := latestIssued.CreatedAt
+	return core.PendingItem{
+		Kind:      core.PendingItemKindRecovery,
+		ChatID:    latestIssued.ChatID,
+		ID:        "recovery:startup",
+		Summary:   summary,
+		Age:       statusAge(time.Now().UTC(), updatedAt, time.Time{}),
+		CreatedAt: latestIssued.CreatedAt,
+		UpdatedAt: updatedAt,
+	}, true, nil
+}
+
+func executionEventBefore(left session.ExecutionEvent, right session.ExecutionEvent) bool {
+	if !left.CreatedAt.Equal(right.CreatedAt) {
+		return left.CreatedAt.Before(right.CreatedAt)
+	}
+	if left.ID != right.ID {
+		return left.ID < right.ID
+	}
+	return left.Seq < right.Seq
+}
+
+func executionEventPayload(raw string) map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil
+	}
+	return payload
+}
+
+func payloadString(payload map[string]any, key string) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	value, ok := payload[strings.TrimSpace(key)]
+	if !ok || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func payloadInt64(payload map[string]any, key string) (int64, bool) {
+	value := payloadString(payload, key)
+	if value == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }
 
 func renderDecisionSummary(record session.PendingDecisionRecord) string {

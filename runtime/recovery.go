@@ -37,8 +37,23 @@ func (r *Runtime) StartStartupRecovery(ctx context.Context, logger func(string, 
 }
 
 func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (err error) {
-	if _, err := r.store.InterruptRunningTurnRuns(); err != nil {
+	maintenanceKey := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}
+	defer func() {
+		if err != nil {
+			r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryFailed, "recovery", "failed", map[string]any{
+				"error": trimError(err.Error()),
+			}, time.Now().UTC())
+		}
+	}()
+
+	interrupted, err := r.store.InterruptRunningTurnRuns()
+	if err != nil {
 		return fmt.Errorf("interrupt running turn runs: %w", err)
+	}
+	if len(interrupted) > 0 {
+		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
+			"interrupted_count": len(interrupted),
+		}, time.Now().UTC())
 	}
 
 	runs, err := r.store.PendingRecoveryTurnRuns(maxStartupRecoveryRuns)
@@ -48,13 +63,15 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if len(runs) == 0 {
 		return nil
 	}
+	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
+		"pending_count": len(runs),
+	}, time.Now().UTC())
 
 	scope, err := r.scopeForPrincipal(principal.Principal{Role: principal.RoleAdmin})
 	if err != nil {
 		return fmt.Errorf("resolve recovery scope: %w", err)
 	}
 
-	maintenanceKey := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}
 	unlock := r.lockSession(maintenanceKey)
 	defer unlock()
 
@@ -69,6 +86,11 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		return fmt.Errorf("load recovery prompt context: %w", err)
 	}
 	requestText := renderStartupRecoveryRequest(runs)
+	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryIssued, "recovery", "issued", map[string]any{
+		"pending_count": len(runs),
+		"request_text":  truncatePreview(strings.TrimSpace(requestText), 220),
+	}, time.Now().UTC())
+
 	prepared := pipeline.TurnPrepareContract{
 		UserText:   requestText,
 		LedgerText: requestText,
@@ -121,6 +143,12 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		return fmt.Errorf("startup recovery turn did not return a result")
 	}
 	if !turnResult.Commit.Persisted {
+		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryCompleted, "recovery", "completed", map[string]any{
+			"pending_count":   len(runs),
+			"persisted":       false,
+			"delivery_sent":   false,
+			"recovered_count": 0,
+		}, time.Now().UTC())
 		return nil
 	}
 	floorText := strings.TrimSpace(turnResult.FloorText)
@@ -135,6 +163,12 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err := r.deliverStartupRecoveryCatchup(ctx, maintenanceSession.SystemPrompt, runs, floorText); err != nil {
 		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
 	}
+	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryCompleted, "recovery", "completed", map[string]any{
+		"pending_count":   len(runs),
+		"persisted":       true,
+		"delivery_sent":   true,
+		"recovered_count": len(ids),
+	}, time.Now().UTC())
 	return nil
 }
 

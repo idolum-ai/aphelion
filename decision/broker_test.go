@@ -68,6 +68,9 @@ func TestBrokerRequestFallsBackToDefaultChoiceOnTimeout(t *testing.T) {
 	if !result.TimedOut {
 		t.Fatal("TimedOut = false, want true")
 	}
+	if strings.TrimSpace(result.DecisionID) == "" {
+		t.Fatal("DecisionID empty, want generated decision id")
+	}
 }
 
 func TestBrokerRequestReturnsNotifierError(t *testing.T) {
@@ -154,6 +157,9 @@ func TestBrokerRequestWaitsIndefinitelyUntilResolved(t *testing.T) {
 	case err := <-errCh:
 		t.Fatalf("Request() err = %v, want nil", err)
 	case result := <-resultCh:
+		if strings.TrimSpace(result.DecisionID) == "" {
+			t.Fatal("DecisionID empty, want generated decision id")
+		}
 		if result.Choice != "approve" {
 			t.Fatalf("choice = %q, want approve", result.Choice)
 		}
@@ -162,6 +168,118 @@ func TestBrokerRequestWaitsIndefinitelyUntilResolved(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Request() did not resolve after approval")
+	}
+}
+
+func TestBrokerObserverReceivesOpenedAndResolvedEvents(t *testing.T) {
+	t.Parallel()
+
+	var (
+		eventsMu sync.Mutex
+		events   []Event
+		broker   *Broker
+	)
+	broker = NewBroker(func(_ context.Context, pending PendingDecision) (Delivery, error) {
+		go broker.Resolve(pending.ID, "queue")
+		return Delivery{MessageID: 50}, nil
+	}, WithObserver(func(_ context.Context, event Event) {
+		eventsMu.Lock()
+		events = append(events, event)
+		eventsMu.Unlock()
+	}))
+
+	result, err := broker.Request(context.Background(), Request{
+		Kind:          KindInterrupt,
+		ChatID:        77,
+		SenderID:      1001,
+		Prompt:        "Still working. What next?",
+		Choices:       []Choice{{ID: "stop", Label: "Stop"}, {ID: "queue", Label: "Queue"}},
+		DefaultChoice: "queue",
+		Timeout:       time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Request() err = %v", err)
+	}
+	if strings.TrimSpace(result.DecisionID) == "" {
+		t.Fatal("DecisionID empty")
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	if len(events) < 2 {
+		t.Fatalf("events len = %d, want >= 2", len(events))
+	}
+	if events[0].Type != EventTypeOpened {
+		t.Fatalf("events[0].Type = %q, want opened", events[0].Type)
+	}
+	if events[0].Decision.ID != result.DecisionID {
+		t.Fatalf("opened decision id = %q, want %q", events[0].Decision.ID, result.DecisionID)
+	}
+	resolvedFound := false
+	for _, event := range events {
+		if event.Type != EventTypeResolved {
+			continue
+		}
+		resolvedFound = true
+		if event.Choice != "queue" {
+			t.Fatalf("resolved choice = %q, want queue", event.Choice)
+		}
+		if event.Reason != "callback" {
+			t.Fatalf("resolved reason = %q, want callback", event.Reason)
+		}
+	}
+	if !resolvedFound {
+		t.Fatalf("events = %#v, want resolved event", events)
+	}
+}
+
+func TestBrokerObserverReceivesExpiredEvent(t *testing.T) {
+	t.Parallel()
+
+	var (
+		eventsMu sync.Mutex
+		events   []Event
+	)
+	broker := NewBroker(func(_ context.Context, _ PendingDecision) (Delivery, error) {
+		return Delivery{MessageID: 33}, nil
+	}, WithObserver(func(_ context.Context, event Event) {
+		eventsMu.Lock()
+		events = append(events, event)
+		eventsMu.Unlock()
+	}))
+
+	result, err := broker.Request(context.Background(), Request{
+		Kind:          KindProposalApproval,
+		ChatID:        7,
+		Prompt:        "Confirm command?",
+		Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+		DefaultChoice: "deny",
+		Timeout:       10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Request() err = %v", err)
+	}
+	if !result.TimedOut {
+		t.Fatal("TimedOut = false, want true")
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	expiredFound := false
+	for _, event := range events {
+		if event.Type != EventTypeExpired {
+			continue
+		}
+		expiredFound = true
+		if !event.TimedOut {
+			t.Fatal("expired event TimedOut = false, want true")
+		}
+		if event.Reason != "timeout" {
+			t.Fatalf("expired reason = %q, want timeout", event.Reason)
+		}
+	}
+	if !expiredFound {
+		t.Fatalf("events = %#v, want expired event", events)
 	}
 }
 

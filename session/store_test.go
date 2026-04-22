@@ -2588,3 +2588,60 @@ func TestExecutionEventsQueriesBySessionAndChat(t *testing.T) {
 		t.Fatalf("chatEvents first seq = %d, want latest seq 3", chatEvents[0].Seq)
 	}
 }
+
+func TestExecutionEventsByTypesFiltersAndOrdersByCreatedAt(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	keyA := SessionKey{ChatID: 4201, UserID: 0}
+	keyB := SessionKey{ChatID: 4202, UserID: 0}
+	if _, err := store.AppendExecutionEvents(keyA, []ExecutionEventInput{
+		{
+			EventType:   "decision.opened",
+			Stage:       "decision",
+			Status:      "pending",
+			PayloadJSON: `{"decision_id":"d1"}`,
+			CreatedAt:   now.Add(-30 * time.Second),
+		},
+		{
+			EventType:   "continuation.offered",
+			Stage:       "continuation",
+			Status:      "pending",
+			PayloadJSON: `{"decision_id":"c1"}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(keyA) err = %v", err)
+	}
+	if _, err := store.AppendExecutionEvents(keyB, []ExecutionEventInput{
+		{
+			EventType:   "decision.resolved",
+			Stage:       "decision",
+			Status:      "resolved",
+			PayloadJSON: `{"decision_id":"d1"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(keyB) err = %v", err)
+	}
+
+	events, err := store.ExecutionEventsByTypes([]string{
+		"decision.opened",
+		"decision.resolved",
+	}, now.Add(-40*time.Second), 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsByTypes() err = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len = %d, want 2", len(events))
+	}
+	if events[0].EventType != "decision.resolved" || events[1].EventType != "decision.opened" {
+		t.Fatalf("events order/types = (%q,%q), want desc created_at decision.resolved then decision.opened", events[0].EventType, events[1].EventType)
+	}
+	if events[0].ChatID != 4202 || events[1].ChatID != 4201 {
+		t.Fatalf("events chat ids = (%d,%d), want (4202,4201)", events[0].ChatID, events[1].ChatID)
+	}
+}

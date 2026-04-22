@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -21,6 +22,15 @@ func (r *Runtime) RouterEventHandler() core.RouterEventHandler {
 	}
 	return func(ctx context.Context, event core.RouterEvent) {
 		r.handleRouterEvent(ctx, event)
+	}
+}
+
+func (r *Runtime) DecisionEventObserver() decision.Observer {
+	if r == nil {
+		return nil
+	}
+	return func(ctx context.Context, event decision.Event) {
+		r.handleDecisionEvent(ctx, event)
 	}
 }
 
@@ -57,6 +67,67 @@ func (r *Runtime) handleRouterEvent(_ context.Context, event core.RouterEvent) {
 	r.recordExecutionEvent(key, eventType, "ingress", "", payload, event.CreatedAt)
 }
 
+func (r *Runtime) handleDecisionEvent(_ context.Context, event decision.Event) {
+	if r == nil || r.store == nil {
+		return
+	}
+	eventType := ""
+	status := ""
+	switch event.Type {
+	case decision.EventTypeOpened:
+		eventType = core.ExecutionEventDecisionOpened
+		status = "pending"
+	case decision.EventTypeResolved:
+		eventType = core.ExecutionEventDecisionResolved
+		status = "resolved"
+	case decision.EventTypeExpired:
+		eventType = core.ExecutionEventDecisionExpired
+		status = "expired"
+	case decision.EventTypeDetached:
+		eventType = core.ExecutionEventDecisionDetached
+		status = "detached"
+	default:
+		return
+	}
+	req := event.Decision.Request
+	key := session.SessionKey{
+		ChatID: req.ChatID,
+		UserID: 0,
+		Scope:  decisionScopeRef(req.ChatID),
+	}
+	payload := map[string]any{
+		"decision_id":   strings.TrimSpace(event.Decision.ID),
+		"decision_kind": strings.TrimSpace(string(req.Kind)),
+		"owner_key":     strings.TrimSpace(event.OwnerKey),
+		"seq":           event.Seq,
+		"choice":        strings.TrimSpace(event.Choice),
+		"timed_out":     event.TimedOut,
+		"reason":        strings.TrimSpace(event.Reason),
+		"default":       strings.TrimSpace(req.DefaultChoice),
+		"prompt":        truncatePreview(strings.TrimSpace(req.Prompt), 200),
+		"details":       truncatePreview(strings.TrimSpace(req.Details), 220),
+	}
+	if req.SenderID != 0 {
+		payload["sender_id"] = req.SenderID
+	}
+	if req.MessageID != 0 {
+		payload["message_id"] = req.MessageID
+	}
+	if len(req.Choices) > 0 {
+		choices := make([]string, 0, len(req.Choices))
+		for _, choice := range req.Choices {
+			id := strings.TrimSpace(choice.ID)
+			if id != "" {
+				choices = append(choices, id)
+			}
+		}
+		if len(choices) > 0 {
+			payload["choices"] = strings.Join(choices, ",")
+		}
+	}
+	r.recordExecutionEvent(key, eventType, "decision", status, payload, event.CreatedAt)
+}
+
 func executionKeyFromRouterEvent(event core.RouterEvent) session.SessionKey {
 	scope := session.ScopeRef{}
 	agentID := strings.TrimSpace(event.DurableAgentID)
@@ -77,6 +148,16 @@ func executionKeyFromRouterEvent(event core.RouterEvent) session.SessionKey {
 		UserID: 0,
 		Scope:  scope,
 	}
+}
+
+func decisionScopeRef(chatID int64) session.ScopeRef {
+	if chatID == 0 {
+		return session.ScopeRef{}
+	}
+	if chatID < 0 {
+		return telegramGroupScopeRef(chatID)
+	}
+	return telegramDMScopeRef(chatID)
 }
 
 func (r *Runtime) appendExecutionEvent(

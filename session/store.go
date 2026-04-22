@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -2278,6 +2279,71 @@ func (s *SQLiteStore) ExecutionEventsByChat(chatID int64, since time.Time, limit
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate execution events by chat: %w", err)
+	}
+	return events, nil
+}
+
+func (s *SQLiteStore) ExecutionEventsByTypes(eventTypes []string, since time.Time, limit int) ([]ExecutionEvent, error) {
+	if len(eventTypes) == 0 {
+		return nil, nil
+	}
+	normalized := make([]string, 0, len(eventTypes))
+	seen := make(map[string]struct{}, len(eventTypes))
+	for _, raw := range eventTypes {
+		eventType := strings.TrimSpace(raw)
+		if eventType == "" {
+			continue
+		}
+		if _, ok := seen[eventType]; ok {
+			continue
+		}
+		seen[eventType] = struct{}{}
+		normalized = append(normalized, eventType)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	sort.Strings(normalized)
+
+	if limit <= 0 {
+		limit = 500
+	}
+	placeholders := make([]string, 0, len(normalized))
+	args := make([]any, 0, len(normalized)+2)
+	for _, eventType := range normalized {
+		placeholders = append(placeholders, "?")
+		args = append(args, eventType)
+	}
+	query := `
+		SELECT
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, seq, event_type, stage, status, caused_by_seq, payload_json, created_at
+		FROM execution_events
+		WHERE event_type IN (` + strings.Join(placeholders, ",") + `)`
+	if !since.IsZero() {
+		query += " AND created_at >= ?"
+		args = append(args, since.UTC().Format(time.RFC3339Nano))
+	}
+	query += `
+		ORDER BY created_at DESC, id DESC
+		LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query execution events by type: %w", err)
+	}
+	defer rows.Close()
+
+	events := make([]ExecutionEvent, 0, limit)
+	for rows.Next() {
+		event, err := scanExecutionEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate execution events by type: %w", err)
 	}
 	return events, nil
 }

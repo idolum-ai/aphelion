@@ -13,11 +13,15 @@ const (
 	ExecutionEventIngressCompacted = "ingress.compacted"
 	ExecutionEventIngressSelected  = "ingress.selected"
 
-	ExecutionEventTurnStarted      = "turn.started"
-	ExecutionEventTurnStageChanged = "turn.stage.changed"
-	ExecutionEventTurnCompleted    = "turn.completed"
-	ExecutionEventTurnFailed       = "turn.failed"
-	ExecutionEventTurnInterrupted  = "turn.interrupted"
+	ExecutionEventTurnStarted              = "turn.started"
+	ExecutionEventTurnStageChanged         = "turn.stage.changed"
+	ExecutionEventTurnCompleted            = "turn.completed"
+	ExecutionEventTurnFailed               = "turn.failed"
+	ExecutionEventTurnInterrupted          = "turn.interrupted"
+	ExecutionEventProviderAttemptStarted   = "provider.attempt.started"
+	ExecutionEventProviderAttemptRetried   = "provider.attempt.retried"
+	ExecutionEventProviderAttemptFailed    = "provider.attempt.failed"
+	ExecutionEventProviderAttemptSucceeded = "provider.attempt.succeeded"
 
 	ExecutionEventToolStarted   = "tool.started"
 	ExecutionEventToolSucceeded = "tool.succeeded"
@@ -34,6 +38,16 @@ const (
 	ExecutionEventContinuationRevoked  = "continuation.revoked"
 	ExecutionEventContinuationConsumed = "continuation.consumed"
 	ExecutionEventContinuationBlocked  = "continuation.blocked"
+
+	ExecutionEventDecisionOpened   = "decision.opened"
+	ExecutionEventDecisionResolved = "decision.resolved"
+	ExecutionEventDecisionExpired  = "decision.expired"
+	ExecutionEventDecisionDetached = "decision.detached"
+
+	ExecutionEventRecoveryDetected  = "recovery.detected"
+	ExecutionEventRecoveryIssued    = "recovery.issued"
+	ExecutionEventRecoveryCompleted = "recovery.completed"
+	ExecutionEventRecoveryFailed    = "recovery.failed"
 )
 
 type RouterEvent struct {

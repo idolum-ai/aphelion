@@ -48,9 +48,10 @@ type Delivery struct {
 }
 
 type Result struct {
-	Choice   string
-	Delivery Delivery
-	TimedOut bool
+	DecisionID string
+	Choice     string
+	Delivery   Delivery
+	TimedOut   bool
 }
 
 type PendingDecision struct {
@@ -82,6 +83,7 @@ type Broker struct {
 	pending  map[string]*pendingDecision
 	byOwner  map[string]string
 	durable  DurableStore
+	observer Observer
 	loaded   bool
 }
 
@@ -93,11 +95,39 @@ type pendingDecision struct {
 	seq      uint64
 }
 
+type EventType string
+
+const (
+	EventTypeOpened   EventType = "opened"
+	EventTypeResolved EventType = "resolved"
+	EventTypeExpired  EventType = "expired"
+	EventTypeDetached EventType = "detached"
+)
+
+type Event struct {
+	Type      EventType
+	Decision  PendingDecision
+	OwnerKey  string
+	Seq       uint64
+	Choice    string
+	TimedOut  bool
+	Reason    string
+	CreatedAt time.Time
+}
+
+type Observer func(context.Context, Event)
+
 type BrokerOption func(*Broker)
 
 func WithDurableStore(store DurableStore) BrokerOption {
 	return func(b *Broker) {
 		b.durable = store
+	}
+}
+
+func WithObserver(observer Observer) BrokerOption {
+	return func(b *Broker) {
+		b.observer = observer
 	}
 }
 
@@ -287,16 +317,19 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 	}
 
 	if stale := b.activateOwner(ctx, decisionID); stale {
-		return Result{Choice: pending.request.DefaultChoice, Delivery: pending.delivery}, nil
+		b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "stale_on_activation")
+		return Result{DecisionID: pending.request.ID, Choice: pending.request.DefaultChoice, Delivery: pending.delivery}, nil
 	}
+	b.emitEvent(ctx, pending, EventTypeOpened, "", false, "")
 
 	timeout := pending.request.Timeout
 	if timeout < 0 {
 		select {
 		case choice := <-pending.resultCh:
 			_ = b.clearWithContext(ctx, decisionID)
-			return Result{Choice: choice, Delivery: pending.delivery}, nil
+			return Result{DecisionID: pending.request.ID, Choice: choice, Delivery: pending.delivery}, nil
 		case <-ctx.Done():
+			b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "context_canceled")
 			_ = b.clearWithContext(ctx, decisionID)
 			return Result{}, ctx.Err()
 		}
@@ -307,11 +340,13 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 	select {
 	case choice := <-pending.resultCh:
 		_ = b.clearWithContext(ctx, decisionID)
-		return Result{Choice: choice, Delivery: pending.delivery}, nil
+		return Result{DecisionID: pending.request.ID, Choice: choice, Delivery: pending.delivery}, nil
 	case <-timer.C:
+		b.emitEvent(ctx, pending, EventTypeExpired, strings.TrimSpace(pending.request.DefaultChoice), true, "timeout")
 		_ = b.clearWithContext(ctx, decisionID)
-		return Result{Choice: pending.request.DefaultChoice, Delivery: pending.delivery, TimedOut: true}, nil
+		return Result{DecisionID: pending.request.ID, Choice: pending.request.DefaultChoice, Delivery: pending.delivery, TimedOut: true}, nil
 	case <-ctx.Done():
+		b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "context_canceled")
 		_ = b.clearWithContext(ctx, decisionID)
 		return Result{}, ctx.Err()
 	}
@@ -341,6 +376,7 @@ func (b *Broker) Resolve(id string, choice string) bool {
 	}
 	select {
 	case pending.resultCh <- choice:
+		b.emitEvent(context.Background(), pending, EventTypeResolved, choice, false, "callback")
 		_ = b.clearWithContext(context.Background(), id)
 		return true
 	default:
@@ -394,6 +430,7 @@ func (b *Broker) DetachByOwner(ctx context.Context, ownerKey string) (int, error
 	b.mu.Unlock()
 
 	for _, pending := range detached {
+		b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "owner_detach")
 		resolveDefaultChoice(pending)
 	}
 	if store == nil {
@@ -431,6 +468,7 @@ func (b *Broker) DetachAll(ctx context.Context) (int, error) {
 	b.mu.Unlock()
 
 	for _, pending := range detached {
+		b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "detach_all")
 		resolveDefaultChoice(pending)
 	}
 	if store == nil {
@@ -525,6 +563,7 @@ func (b *Broker) activateOwner(ctx context.Context, id string) bool {
 		staleID = id
 		stalePending = pending
 		b.mu.Unlock()
+		b.emitEvent(ctx, stalePending, EventTypeDetached, strings.TrimSpace(stalePending.request.DefaultChoice), false, "stale_superseded")
 		select {
 		case stalePending.resultCh <- stalePending.request.DefaultChoice:
 		default:
@@ -537,6 +576,7 @@ func (b *Broker) activateOwner(ctx context.Context, id string) bool {
 	supersededID = existingID
 	supersededPending = existing
 	b.mu.Unlock()
+	b.emitEvent(ctx, supersededPending, EventTypeDetached, strings.TrimSpace(supersededPending.request.DefaultChoice), false, "superseded_by_newer")
 	select {
 	case supersededPending.resultCh <- supersededPending.request.DefaultChoice:
 	default:
@@ -587,6 +627,29 @@ func containsChoice(choices []Choice, id string) bool {
 
 func OwnerKey(chatID int64, senderID int64) string {
 	return decisionOwnerKey(Request{ChatID: chatID, SenderID: senderID})
+}
+
+func (b *Broker) emitEvent(ctx context.Context, pending *pendingDecision, eventType EventType, choice string, timedOut bool, reason string) {
+	if b == nil || pending == nil {
+		return
+	}
+	b.mu.Lock()
+	observer := b.observer
+	b.mu.Unlock()
+	if observer == nil {
+		return
+	}
+	event := Event{
+		Type:      eventType,
+		Decision:  pending.request,
+		OwnerKey:  strings.TrimSpace(pending.ownerKey),
+		Seq:       pending.seq,
+		Choice:    strings.TrimSpace(choice),
+		TimedOut:  timedOut,
+		Reason:    strings.TrimSpace(reason),
+		CreatedAt: time.Now().UTC(),
+	}
+	observer(ctx, event)
 }
 
 func resolveDefaultChoice(pending *pendingDecision) {

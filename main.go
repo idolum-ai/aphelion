@@ -637,7 +637,11 @@ func run() error {
 	router := core.NewRouter(rt.AgentFunc())
 	router.SetEventHandler(rt.RouterEventHandler())
 	ingress := newIngressSequencer(router, turnTimeout)
-	decisionBroker := newTelegramDecisionBroker(tgOutbound, decision.WithDurableStore(newTelegramDecisionDurableStore(store)))
+	decisionBroker := newTelegramDecisionBroker(
+		tgOutbound,
+		decision.WithDurableStore(newTelegramDecisionDurableStore(store)),
+		decision.WithObserver(rt.DecisionEventObserver()),
+	)
 	commandControl := telegramCommandControl{
 		router:                 router,
 		ingress:                ingress,
