@@ -168,6 +168,8 @@ type DurableAgentStatusSnapshot struct {
 	EnrollmentLastSequence       int64
 	EnrollmentRevokedAt          time.Time
 	EnrollmentParentControlURL   string
+	IdentitySource               string
+	RuntimePostureSource         string
 }
 
 type DurableAgentsStatusSnapshot struct {

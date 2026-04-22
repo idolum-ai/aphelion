@@ -21,15 +21,15 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 	} else {
 		state := chatSummaryState(snapshot)
 		lines = append(lines, fmt.Sprintf("summary state=%s active_turns=%d queue_depth=%d pending_items=%d", state, len(snapshot.ActiveTurnIDs), snapshot.QueueDepth, len(snapshot.PendingItems)))
-			if snapshot.LatestTurnRun != nil {
-				latest := snapshot.LatestTurnRun
-				latestLine := fmt.Sprintf("latest_turn status=%s kind=%s last_activity=%s", latest.Status, latest.Kind, formatStatusTime(latest.LastActivityAt))
-				if source := strings.TrimSpace(latest.Source); source != "" {
-					latestLine += " source=" + source
-				}
-				if latest.LastToolName != "" {
-					latestLine += " last_tool=" + latest.LastToolName
-				}
+		if snapshot.LatestTurnRun != nil {
+			latest := snapshot.LatestTurnRun
+			latestLine := fmt.Sprintf("latest_turn status=%s kind=%s last_activity=%s", latest.Status, latest.Kind, formatStatusTime(latest.LastActivityAt))
+			if source := strings.TrimSpace(latest.Source); source != "" {
+				latestLine += " source=" + source
+			}
+			if latest.LastToolName != "" {
+				latestLine += " last_tool=" + latest.LastToolName
+			}
 			if latest.ErrorText != "" {
 				latestLine += " error=" + quoteStatusField(truncateStatusField(latest.ErrorText, 120))
 			}
@@ -56,15 +56,15 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 		if detachedLine := renderDetachedWorkLine(snapshot); detachedLine != "" {
 			lines = append(lines, detachedLine)
 		}
-			if snapshot.Continuation != nil {
-				cont := snapshot.Continuation
-				line := fmt.Sprintf("continuation status=%s remaining_turns=%d", cont.Status, cont.RemainingTurns)
-				if source := strings.TrimSpace(cont.Source); source != "" {
-					line += " source=" + source
-				}
-				if cont.DecisionID != "" {
-					line += " decision_id=" + cont.DecisionID
-				}
+		if snapshot.Continuation != nil {
+			cont := snapshot.Continuation
+			line := fmt.Sprintf("continuation status=%s remaining_turns=%d", cont.Status, cont.RemainingTurns)
+			if source := strings.TrimSpace(cont.Source); source != "" {
+				line += " source=" + source
+			}
+			if cont.DecisionID != "" {
+				line += " decision_id=" + cont.DecisionID
+			}
 			if cont.ApprovedBy > 0 {
 				line += fmt.Sprintf(" approved_by=%d", cont.ApprovedBy)
 			}
@@ -465,6 +465,11 @@ func RenderTelegramStatusDurables(snapshot core.DurableAgentsStatusSnapshot) str
 			agent.EnrollmentLastSequence,
 			formatStatusTime(agent.EnrollmentRevokedAt),
 		))
+		lines = append(lines, fmt.Sprintf(
+			"  sources identity=%s runtime_posture=%s",
+			firstNonEmpty(strings.TrimSpace(agent.IdentitySource), "-"),
+			firstNonEmpty(strings.TrimSpace(agent.RuntimePostureSource), "-"),
+		))
 	}
 	if len(snapshot.Agents) > max {
 		lines = append(lines, fmt.Sprintf("- omitted=%d", len(snapshot.Agents)-max))
@@ -490,18 +495,18 @@ func renderPendingItemBlock(items []core.PendingItem, max int) []string {
 		if item.Age > 0 {
 			line += " age=" + item.Age.Truncate(time.Second).String()
 		}
-			if item.Stale {
-				line += " stale=true"
-			}
-			if sourceClass := strings.TrimSpace(item.SourceClass); sourceClass != "" {
-				line += " source_class=" + sourceClass
-			}
-			if sourceSurface := strings.TrimSpace(item.SourceSurface); sourceSurface != "" {
-				line += " source_surface=" + sourceSurface
-			}
-			if summary := strings.TrimSpace(item.Summary); summary != "" {
-				line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
-			}
+		if item.Stale {
+			line += " stale=true"
+		}
+		if sourceClass := strings.TrimSpace(item.SourceClass); sourceClass != "" {
+			line += " source_class=" + sourceClass
+		}
+		if sourceSurface := strings.TrimSpace(item.SourceSurface); sourceSurface != "" {
+			line += " source_surface=" + sourceSurface
+		}
+		if summary := strings.TrimSpace(item.Summary); summary != "" {
+			line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
+		}
 		lines = append(lines, line)
 	}
 	if len(items) > max {

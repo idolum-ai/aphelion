@@ -464,21 +464,21 @@ func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testin
 				"choice":"deny",
 				"reason":"callback"
 			}`,
-				CreatedAt: now.Add(-70 * time.Second),
-			},
-			{
-				EventType: core.ExecutionEventDecisionOpened,
-				Stage:     "decision",
-				Status:    "pending",
-				PayloadJSON: `{
+			CreatedAt: now.Add(-70 * time.Second),
+		},
+		{
+			EventType: core.ExecutionEventDecisionOpened,
+			Stage:     "decision",
+			Status:    "pending",
+			PayloadJSON: `{
 					"decision_id":"decision-events-only",
 					"decision_kind":"proposal_approval",
 					"owner_key":"chat:9003:sender:1002",
 					"prompt":"Events only decision?"
 				}`,
-				CreatedAt: now.Add(-50 * time.Second),
-			},
-		}); err != nil {
+			CreatedAt: now.Add(-50 * time.Second),
+		},
+	}); err != nil {
 		t.Fatalf("AppendExecutionEvents(decision events) err = %v", err)
 	}
 
@@ -1347,8 +1347,12 @@ func TestDurableAgentsStatusSnapshotIncludesHealthSignals(t *testing.T) {
 	}
 
 	healthByID := map[string]string{}
+	runtimeSourceByID := map[string]string{}
+	identitySourceByID := map[string]string{}
 	for _, agent := range snapshot.Agents {
 		healthByID[agent.AgentID] = agent.Health
+		runtimeSourceByID[agent.AgentID] = strings.TrimSpace(agent.RuntimePostureSource)
+		identitySourceByID[agent.AgentID] = strings.TrimSpace(agent.IdentitySource)
 	}
 	if healthByID["agent-dormant"] != "dormant" {
 		t.Fatalf("agent-dormant health = %q, want dormant", healthByID["agent-dormant"])
@@ -1358,6 +1362,16 @@ func TestDurableAgentsStatusSnapshotIncludesHealthSignals(t *testing.T) {
 	}
 	if healthByID["agent-inactive"] != "inactive" {
 		t.Fatalf("agent-inactive health = %q, want inactive", healthByID["agent-inactive"])
+	}
+	for id, source := range identitySourceByID {
+		if source != "canonical:session.durable_agents" {
+			t.Fatalf("identity source for %s = %q, want canonical:session.durable_agents", id, source)
+		}
+	}
+	for id, source := range runtimeSourceByID {
+		if source != "operational_current_state_store:session.durable_agent_state" {
+			t.Fatalf("runtime posture source for %s = %q, want operational_current_state_store:session.durable_agent_state", id, source)
+		}
 	}
 }
 
@@ -1512,6 +1526,12 @@ func TestDurableAgentsStatusSnapshotOverlaysPolicyFailureFromExecutionEvents(t *
 	if row.Health != "degraded" {
 		t.Fatalf("Health = %q, want degraded after TES policy failure", row.Health)
 	}
+	if strings.TrimSpace(row.IdentitySource) != "canonical:session.durable_agents" {
+		t.Fatalf("IdentitySource = %q, want canonical:session.durable_agents", row.IdentitySource)
+	}
+	if strings.TrimSpace(row.RuntimePostureSource) != "operational_current_state_store:session.durable_agent_state+projection:tes_execution_events" {
+		t.Fatalf("RuntimePostureSource = %q, want combined operational+projection source", row.RuntimePostureSource)
+	}
 }
 
 func TestDurableAgentsStatusSnapshotMarksDormantFromExecutionEvents(t *testing.T) {
@@ -1577,6 +1597,9 @@ func TestDurableAgentsStatusSnapshotMarksDormantFromExecutionEvents(t *testing.T
 	}
 	if row.DormantAt.IsZero() {
 		t.Fatalf("DormantAt = %s, want non-zero from TES event", row.DormantAt.Format(time.RFC3339Nano))
+	}
+	if strings.TrimSpace(row.RuntimePostureSource) != "projection:tes_execution_events" {
+		t.Fatalf("RuntimePostureSource = %q, want projection:tes_execution_events", row.RuntimePostureSource)
 	}
 }
 

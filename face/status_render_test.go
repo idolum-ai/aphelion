@@ -148,6 +148,8 @@ func TestRenderTelegramStatusDurablesIncludesHealthCards(t *testing.T) {
 				LastApplyStatus:              "failed",
 				LastApplyError:               "policy apply timed out while child was offline",
 				LastAppliedPolicyVersion:     3,
+				IdentitySource:               "canonical:session.durable_agents",
+				RuntimePostureSource:         "operational_current_state_store:session.durable_agent_state+projection:tes_execution_events",
 			},
 		},
 	})
@@ -160,6 +162,7 @@ func TestRenderTelegramStatusDurablesIncludesHealthCards(t *testing.T) {
 		"capacity state=provisional can=2 cannot=1 uncertain=1 success=2 evidence=1",
 		"runtime apply_error=\"policy apply timed out while child was offline\"",
 		"enrollment status=none",
+		"sources identity=canonical:session.durable_agents runtime_posture=operational_current_state_store:session.durable_agent_state+projection:tes_execution_events",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramStatusDurables() = %q, want substring %q", out, needle)

@@ -50,14 +50,17 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 			CapabilityEnvelope:     append([]string(nil), agent.LivePolicy.CapabilityEnvelope...),
 			AllowedTelegramUserIDs: append([]int64(nil), agent.AllowedTelegramUserIDs...),
 			CapacityState:          "unattested",
+			IdentitySource:         "canonical:session.durable_agents",
 		}
 
+		hasRuntimeState := false
 		state, err := r.store.DurableAgentState(agent.AgentID)
 		if err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				return core.DurableAgentsStatusSnapshot{}, err
 			}
 		} else {
+			hasRuntimeState = true
 			row.LastWakeAt = state.LastWakeAt
 			row.LastReviewAt = state.LastReviewAt
 			row.DormantAt = state.DormantAt
@@ -97,6 +100,8 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 		}
 
 		eventState := durableEvents[strings.TrimSpace(agent.AgentID)]
+		hasEventProjection := durableStatusEventProjectionPresent(eventState)
+		row.RuntimePostureSource = durableRuntimePostureSource(hasRuntimeState, hasEventProjection)
 		row = overlayDurableStatusFromEvents(row, eventState)
 		row.Health = durableAgentHealthFromStatusWithEvents(row, eventState)
 		if strings.EqualFold(row.Status, "active") {
@@ -201,6 +206,31 @@ func (r *Runtime) durableStatusEventState(since time.Time, limit int) (map[strin
 		out[agentID] = state
 	}
 	return out, nil
+}
+
+func durableStatusEventProjectionPresent(state durableStatusEventProjection) bool {
+	return !state.LastWakeStartedAt.IsZero() ||
+		!state.LastWakeCompletedAt.IsZero() ||
+		!state.LastWakeFailedAt.IsZero() ||
+		!state.LastAwakeAt.IsZero() ||
+		!state.LastDormantAt.IsZero() ||
+		!state.LastPolicyAppliedAt.IsZero() ||
+		!state.LastPolicyFailedAt.IsZero() ||
+		!state.LastParentAckAt.IsZero() ||
+		strings.TrimSpace(state.LastPolicyError) != ""
+}
+
+func durableRuntimePostureSource(hasRuntimeState bool, hasEventProjection bool) string {
+	if hasRuntimeState && hasEventProjection {
+		return "operational_current_state_store:session.durable_agent_state+projection:tes_execution_events"
+	}
+	if hasRuntimeState {
+		return "operational_current_state_store:session.durable_agent_state"
+	}
+	if hasEventProjection {
+		return "projection:tes_execution_events"
+	}
+	return "operational_current_state_store:session.durable_agent_state"
 }
 
 func overlayDurableStatusFromEvents(
