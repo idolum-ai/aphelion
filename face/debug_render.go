@@ -24,6 +24,7 @@ func RenderTelegramDebug(chat core.ChatStatusSnapshot, system *core.SystemStatus
 
 	if durables != nil {
 		sections = append(sections, RenderTelegramStatusDurables(*durables))
+		sections = append(sections, renderTelegramDebugDurablesDetails(*durables))
 	}
 
 	trimmed := make([]string, 0, len(sections))
@@ -81,6 +82,7 @@ func renderTelegramDebugChatDetails(snapshot core.ChatStatusSnapshot) string {
 	if stale := len(snapshot.StaleRunningTurns); stale > 0 {
 		lines = append(lines, fmt.Sprintf("stale_turns=%d", stale))
 	}
+	lines = append(lines, renderChatSourceAttributionBlock()...)
 	lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 12)...)
 	return strings.Join(lines, "\n")
 }
@@ -157,7 +159,14 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 	if len(chatIDs) > max {
 		lines = append(lines, fmt.Sprintf("- omitted=%d", len(chatIDs)-max))
 	}
+	lines = append(lines, renderSystemSourceAttributionBlock()...)
 	lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 20)...)
+	return strings.Join(lines, "\n")
+}
+
+func renderTelegramDebugDurablesDetails(_ core.DurableAgentsStatusSnapshot) string {
+	lines := []string{"debug_durables:"}
+	lines = append(lines, renderDurablesSourceAttributionBlock()...)
 	return strings.Join(lines, "\n")
 }
 
@@ -193,12 +202,50 @@ func renderExecutionTimelineBlock(events []core.ExecutionEventSummary, limit int
 		if summary := strings.TrimSpace(event.Summary); summary != "" {
 			line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
 		}
+		if isTransportLedgerDeliveryEvent(event.EventType) {
+			line += " source_class=canonical"
+			line += " source_surface=outbound_transport_ledger"
+			line += " visibility=human_render_unknown"
+		}
 		lines = append(lines, line)
 	}
 	if len(events) > max {
 		lines = append(lines, fmt.Sprintf("- omitted=%d", len(events)-max))
 	}
 	return lines
+}
+
+func renderChatSourceAttributionBlock() []string {
+	return []string{
+		"source_attribution_chat:",
+		"- field=summary_state class=projection",
+		"- field=latest_turn class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
+		"- field=operation_plan_hidden_inputs class=projection preferred=canonical:execution_events.turn_sidecars fallback=operational_current_state_store:status_state_json",
+		"- field=delivery class=projection preferred=canonical:execution_events.delivery fallback=operational_current_state_store:status_state_json note=transport_ledger_only",
+	}
+}
+
+func renderSystemSourceAttributionBlock() []string {
+	return []string{
+		"source_attribution_system:",
+		"- field=active_turns_queue_depth class=projection preferred=canonical:execution_events.router fallback=operational_current_state_store:router_runtime",
+		"- field=latest_turns class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
+		"- field=pending_decisions class=projection preferred=canonical:execution_events.decision fallback=operational_current_state_store:pending_decisions",
+		"- field=pending_continuations class=projection preferred=canonical:execution_events.continuation fallback=operational_current_state_store:continuation_state_json",
+	}
+}
+
+func renderDurablesSourceAttributionBlock() []string {
+	return []string{
+		"source_attribution_durables:",
+		"- field=durable_identity class=operational_current_state_store store=session.durable_agents",
+		"- field=durable_runtime_posture class=operational_current_state_store store=session.durable_agent_state",
+	}
+}
+
+func isTransportLedgerDeliveryEvent(eventType string) bool {
+	eventType = strings.TrimSpace(eventType)
+	return strings.HasPrefix(eventType, "delivery.")
 }
 
 func extractDebugExecCommand(preview string) string {

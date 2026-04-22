@@ -508,8 +508,11 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		if err != nil {
 			log.Printf("WARN send tool progress chat_id=%d err=%v", p.chatID, err)
 			p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
-				"method": "send",
-				"error":  trimError(err.Error()),
+				"method":         "send",
+				"error":          trimError(err.Error()),
+				"source_class":   "canonical",
+				"source_surface": "outbound_transport_ledger",
+				"visibility":     "human_render_unknown",
 			})
 			if p.reportIssue != nil {
 				p.reportIssue(ctx, fmt.Errorf("send tool progress chat_id=%d: %w", p.chatID, err))
@@ -518,8 +521,12 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		}
 		p.messageID = msgID
 		p.recordProgressEvent(core.ExecutionEventDeliveryProgressSent, "sent", map[string]any{
-			"message_id":    msgID,
-			"with_controls": withControls && len(p.controls) > 0,
+			"message_id":       msgID,
+			"with_controls":    withControls && len(p.controls) > 0,
+			"source_class":     "canonical",
+			"source_surface":   "outbound_transport_ledger",
+			"visibility":       "human_render_unknown",
+			"transport_status": "acknowledged",
 		})
 		if p.recordMessageID != nil {
 			p.recordMessageID(msgID)
@@ -531,17 +538,24 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		if err := p.keyboardEditor.EditMessageTextWithInlineKeyboard(ctx, p.chatID, p.messageID, text, "", p.controls); err != nil {
 			log.Printf("WARN edit tool progress inline chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 			p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
-				"method":     "edit_inline",
-				"message_id": p.messageID,
-				"error":      trimError(err.Error()),
+				"method":         "edit_inline",
+				"message_id":     p.messageID,
+				"error":          trimError(err.Error()),
+				"source_class":   "canonical",
+				"source_surface": "outbound_transport_ledger",
+				"visibility":     "human_render_unknown",
 			})
 			if p.reportIssue != nil {
 				p.reportIssue(ctx, fmt.Errorf("edit tool progress inline chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
 			}
 		} else {
 			p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
-				"method":     "edit_inline",
-				"message_id": p.messageID,
+				"method":           "edit_inline",
+				"message_id":       p.messageID,
+				"source_class":     "canonical",
+				"source_surface":   "outbound_transport_ledger",
+				"visibility":       "human_render_unknown",
+				"transport_status": "acknowledged",
 			})
 			return
 		}
@@ -552,9 +566,12 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 	if err := p.editor.EditMessageText(ctx, p.chatID, p.messageID, text, ""); err != nil {
 		log.Printf("WARN edit tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 		p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
-			"method":     "edit_text",
-			"message_id": p.messageID,
-			"error":      trimError(err.Error()),
+			"method":         "edit_text",
+			"message_id":     p.messageID,
+			"error":          trimError(err.Error()),
+			"source_class":   "canonical",
+			"source_surface": "outbound_transport_ledger",
+			"visibility":     "human_render_unknown",
 		})
 		if p.reportIssue != nil {
 			p.reportIssue(ctx, fmt.Errorf("edit tool progress chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
@@ -562,8 +579,12 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		return
 	}
 	p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
-		"method":     "edit_text",
-		"message_id": p.messageID,
+		"method":           "edit_text",
+		"message_id":       p.messageID,
+		"source_class":     "canonical",
+		"source_surface":   "outbound_transport_ledger",
+		"visibility":       "human_render_unknown",
+		"transport_status": "acknowledged",
 	})
 }
 

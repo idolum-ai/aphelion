@@ -36,6 +36,8 @@ func TestRenderTelegramDebugIncludesChatToolContext(t *testing.T) {
 		"last_exec_command=\"curl -fsS https://api.github.com/zen\"",
 		"last_tool_result=\"stdout: Keep it logically awesome.\"",
 		"last_tool_error=\"context canceled\"",
+		"source_attribution_chat:",
+		"field=delivery class=projection",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramDebug() = %q, want substring %q", out, needle)
@@ -82,6 +84,9 @@ func TestRenderTelegramDebugIncludesAdminSystemAndDurablesSections(t *testing.T)
 		"latest_turns:",
 		"chat_id=7 status=running kind=interactive",
 		"status_scope=durables",
+		"debug_durables:",
+		"source_attribution_system:",
+		"source_attribution_durables:",
 		"- id=family-group channel=telegram_group status=active health=ok",
 	} {
 		if !strings.Contains(out, needle) {
@@ -115,6 +120,34 @@ func TestRenderTelegramDebugIncludesExecutionTimelineBlocks(t *testing.T) {
 		"execution_timeline:",
 		"type=turn.completed",
 		"type=decision.opened",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramDebug() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
+func TestRenderTelegramDebugMarksDeliveryTimelineAsTransportLedger(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	out := RenderTelegramDebug(
+		core.ChatStatusSnapshot{
+			ChatID: 9,
+			RecentExecution: []core.ExecutionEventSummary{
+				{ChatID: 9, EventType: "delivery.final.sent", Stage: "delivery", Status: "sent", CreatedAt: now},
+			},
+		},
+		nil,
+		nil,
+		"opus",
+		"high",
+	)
+
+	for _, needle := range []string{
+		"type=delivery.final.sent",
+		"source_surface=outbound_transport_ledger",
+		"visibility=human_render_unknown",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramDebug() = %q, want substring %q", out, needle)

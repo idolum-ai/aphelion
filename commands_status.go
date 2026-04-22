@@ -118,6 +118,7 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
 	}
 	text = appendStatusReadableSummary(ctx, router, view, text)
+	text = appendStatusSourceAttribution(view, text)
 	text = humanizeTelegramTelemetryText(text)
 	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded)
 	return text, rows, nil
@@ -154,8 +155,54 @@ func groundStatusReadableSummary(view statusView, summary string, statusText str
 			return ""
 		}
 	}
+	if summaryClaimsHumanVisibleDelivery(summary) && statusDeliveryStatusToken(statusText) != "" {
+		return ""
+	}
 	_ = view
 	return summary
+}
+
+func appendStatusSourceAttribution(view statusView, text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text
+	}
+	if strings.Contains(strings.ToLower(text), "source_attribution:") {
+		return text
+	}
+	block := renderStatusSourceAttribution(view)
+	if block == "" {
+		return text
+	}
+	return text + "\n" + block
+}
+
+func renderStatusSourceAttribution(view statusView) string {
+	lines := []string{"source_attribution:"}
+	switch view {
+	case statusViewChat, statusViewPending, statusViewChatTarget:
+		lines = append(lines,
+			"- field=summary_state class=projection",
+			"- field=latest_turn class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
+			"- field=operation_plan_hidden_inputs class=projection preferred=canonical:execution_events.turn_sidecars fallback=operational_current_state_store:status_state_json",
+			"- field=delivery class=projection preferred=canonical:execution_events.delivery fallback=operational_current_state_store:status_state_json note=transport_ledger_only",
+		)
+	case statusViewSystem, statusViewHotChats, statusViewFindChat:
+		lines = append(lines,
+			"- field=active_turns_queue_depth class=projection preferred=canonical:execution_events.router fallback=operational_current_state_store:router_runtime",
+			"- field=latest_turns class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
+			"- field=pending_decisions class=projection preferred=canonical:execution_events.decision fallback=operational_current_state_store:pending_decisions",
+			"- field=pending_continuations class=projection preferred=canonical:execution_events.continuation fallback=operational_current_state_store:continuation_state_json",
+		)
+	case statusViewDurables:
+		lines = append(lines,
+			"- field=durable_identity class=operational_current_state_store store=session.durable_agents",
+			"- field=durable_runtime_posture class=operational_current_state_store store=session.durable_agent_state",
+		)
+	default:
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
 
 func composeStatusReadableSummary(view statusView, statusText string) string {
@@ -227,6 +274,29 @@ func statusCurrentSignal(statusText string) string {
 	return ""
 }
 
+func statusDeliveryStatusToken(statusText string) string {
+	for _, line := range strings.Split(strings.TrimSpace(statusText), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "delivery ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		for _, field := range fields {
+			if !strings.Contains(field, "=") {
+				continue
+			}
+			parts := strings.SplitN(field, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			if strings.TrimSpace(parts[0]) == "status" {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	return ""
+}
+
 func parseStatusSummaryIntToken(statusText string, token string) (int, bool) {
 	raw := statusSummaryToken(statusText, token)
 	if raw == "" {
@@ -250,6 +320,30 @@ func detectSummaryStateWord(summary string) string {
 		}
 	}
 	return ""
+}
+
+func summaryClaimsHumanVisibleDelivery(summary string) bool {
+	lower := strings.ToLower(strings.TrimSpace(summary))
+	if lower == "" {
+		return false
+	}
+	for _, phrase := range []string{
+		"human saw",
+		"user saw",
+		"you saw",
+		"was shown",
+		"shown to",
+		"displayed to",
+		"read it",
+		"read the message",
+		"received it",
+		"delivered to the user",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmptyStatusSummary(values ...string) string {

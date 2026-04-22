@@ -378,3 +378,59 @@ func TestToolProgressReporterReportsSendErrors(t *testing.T) {
 		t.Fatalf("reported[0] = %q, want send tool progress context", reported[0])
 	}
 }
+
+func TestToolProgressReporterRecordsTransportLedgerSemantics(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7711, UserID: 0, Scope: telegramDMScopeRef(7711)}
+	reporter := &toolProgressReporter{
+		runtime:      rt,
+		executionKey: key,
+		sender:       sender,
+		editor:       sender,
+		chatID:       7711,
+		mode:         "all",
+		style:        "raw",
+		window:       4,
+		seenKeys:     make(map[string]struct{}),
+	}
+	reporter.BindTurnRun(17)
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"echo semantic-tags"}`))
+	reporter.Finish(context.Background())
+
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	sentPayload := payloadForEventType(events, core.ExecutionEventDeliveryProgressSent)
+	if sentPayload == nil {
+		t.Fatalf("missing %s event", core.ExecutionEventDeliveryProgressSent)
+	}
+	if got := strings.TrimSpace(payloadString(sentPayload, "source_class")); got != "canonical" {
+		t.Fatalf("source_class = %q, want canonical", got)
+	}
+	if got := strings.TrimSpace(payloadString(sentPayload, "source_surface")); got != "outbound_transport_ledger" {
+		t.Fatalf("source_surface = %q, want outbound_transport_ledger", got)
+	}
+	if got := strings.TrimSpace(payloadString(sentPayload, "visibility")); got != "human_render_unknown" {
+		t.Fatalf("visibility = %q, want human_render_unknown", got)
+	}
+}
+
+func payloadForEventType(events []session.ExecutionEvent, eventType string) map[string]any {
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != strings.TrimSpace(eventType) {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			return nil
+		}
+		return payload
+	}
+	return nil
+}
