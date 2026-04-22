@@ -1338,6 +1338,13 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 		},
 		Sessions: config.SessionsConfig{
 			DBPath: filepath.Join(root, "state", "sessions.db"),
+			TESRetention: config.SessionsTESRetentionConfig{
+				Enabled:         true,
+				MaxAge:          "168h",
+				MinRetainedRows: 300,
+				MaxDeletePerGC:  50,
+				ExportDir:       filepath.Join(root, "state", "tes-exports"),
+			},
 		},
 		Agent: config.AgentConfig{
 			PromptRoot:        filepath.Join(root, "agent"),
@@ -1419,6 +1426,13 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 	}
 	if len(report.Probes) != 4 {
 		t.Fatalf("probe len = %d, want 4", len(report.Probes))
+	}
+	bootProbe := report.Probes[0]
+	if bootProbe.Name != "boot" {
+		t.Fatalf("first probe = %q, want boot", bootProbe.Name)
+	}
+	if !strings.Contains(bootProbe.Detail, "export_dir=") {
+		t.Fatalf("boot probe detail = %q, want retention summary with export_dir", bootProbe.Detail)
 	}
 
 	db, err := sql.Open("sqlite3", cfg.Sessions.DBPath)
