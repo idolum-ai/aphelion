@@ -438,6 +438,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/memory", want: "memory", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
 		{text: "/set_governor_effort", want: "set_governor_effort", ok: true},
+		{text: "/stop\n\nReply context:\nidolum: Please confirm.", want: "stop", ok: true},
 		{text: "/tmp/file", ok: false},
 		{text: " /start ", want: "start", ok: true},
 		{text: "hello", ok: false},
@@ -1919,6 +1920,70 @@ func TestDurableWizardInlineRowsFromTextInProgress(t *testing.T) {
 	}
 }
 
+func TestDurableWizardInlineRowsFromTextBootstrapProfile(t *testing.T) {
+	t.Parallel()
+
+	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_profile\nmissing: bootstrap_profile,autonomy\nnext_question: Should this child inherit the parent bootstrap defaults or pin a child-custom bootstrap profile?\naddress: idolum@example.com\nadapter: gog_cli\nbootstrap_profile: \nbootstrap_backend: native\nbootstrap_native_provider: anthropic\nbootstrap_model: claude-parent\n"
+	rows := durableWizardInlineRowsFromText(text)
+	if len(rows) < 2 {
+		t.Fatalf("rows len = %d, want at least option row and controls", len(rows))
+	}
+	foundInherit := false
+	foundCustom := false
+	for _, row := range rows {
+		for _, button := range row {
+			if strings.EqualFold(button.Text, "Inherit parent") {
+				foundInherit = true
+			}
+			if strings.EqualFold(button.Text, "Child custom") {
+				foundCustom = true
+			}
+		}
+	}
+	if !foundInherit || !foundCustom {
+		t.Fatalf("rows = %#v, want bootstrap profile buttons", rows)
+	}
+}
+
+func TestDurableWizardInlineRowsFromTextBootstrapProfileCodex(t *testing.T) {
+	t.Parallel()
+
+	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_profile\nmissing: bootstrap_profile,autonomy\nnext_question: This child uses a codex bootstrap backend; keep parent bootstrap defaults?\naddress: idolum@example.com\nadapter: gog_cli\nbootstrap_profile: \nbootstrap_backend: codex\nbootstrap_model: \n"
+	rows := durableWizardInlineRowsFromText(text)
+	if len(rows) < 2 {
+		t.Fatalf("rows len = %d, want at least option row and controls", len(rows))
+	}
+	optionButtons := rows[0]
+	if len(optionButtons) != 1 || optionButtons[0].Text != "Inherit parent" {
+		t.Fatalf("option row = %#v, want only Inherit parent for codex", optionButtons)
+	}
+}
+
+func TestDurableWizardInlineRowsFromTextBootstrapModel(t *testing.T) {
+	t.Parallel()
+
+	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_model\nmissing: bootstrap_model\nnext_question: Which model should this child pin for child-custom bootstrap?\naddress: idolum@example.com\nadapter: gog_cli\nbootstrap_profile: child_custom\nbootstrap_backend: native\nbootstrap_native_provider: anthropic\nbootstrap_model: claude-parent\n"
+	rows := durableWizardInlineRowsFromText(text)
+	if len(rows) < 2 {
+		t.Fatalf("rows len = %d, want option rows plus controls", len(rows))
+	}
+	foundKeepParent := false
+	foundSonnet := false
+	for _, row := range rows {
+		for _, button := range row {
+			if strings.EqualFold(button.Text, "Keep parent model") {
+				foundKeepParent = true
+			}
+			if strings.EqualFold(button.Text, "Sonnet 4.6") {
+				foundSonnet = true
+			}
+		}
+	}
+	if !foundKeepParent || !foundSonnet {
+		t.Fatalf("rows = %#v, want bootstrap model buttons", rows)
+	}
+}
+
 func TestDurableWizardInlineRowsFromTextReady(t *testing.T) {
 	t.Parallel()
 
@@ -1979,6 +2044,67 @@ func TestHandleTelegramCommandCallbackDurableWizardAnswer(t *testing.T) {
 	}
 	if sender.editInline[0].rows[0][0].Text != "Cancel" || sender.editInline[0].rows[0][1].Text != "Finalize" {
 		t.Fatalf("row = %#v, want [Cancel|Finalize]", sender.editInline[0].rows[0])
+	}
+}
+
+func TestHandleTelegramCommandCallbackDurableWizardBootstrapModelKeepParent(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart:          true,
+		durableWizardResult: "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: ready\ncurrent_step: -\nmissing: -\nbootstrap_profile: child_custom\nbootstrap_model: claude-parent\n",
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-durable-bootstrap-model",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeDurableWizardAnswerCallbackData("bootstrap_model", "keep_parent_model"),
+		Message: &telegram.Message{
+			MessageID: 212,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+			Text:      "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_model\nmissing: bootstrap_model\nbootstrap_profile: child_custom\nbootstrap_model: claude-parent\n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.durableWizardAction != "wizard_answer" {
+		t.Fatalf("durableWizardAction = %q, want wizard_answer", router.durableWizardAction)
+	}
+	if got := router.durableWizardAnswers["bootstrap_model"]; got != "claude-parent" {
+		t.Fatalf("durableWizardAnswers[bootstrap_model] = %#v, want claude-parent", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackDurableWizardRejectsCodexChildCustom(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-durable-codex-child-custom",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: encodeDurableWizardAnswerCallbackData("bootstrap_profile", "child_custom"),
+		Message: &telegram.Message{
+			MessageID: 213,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+			Text:      "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_profile\nmissing: bootstrap_profile,autonomy\nbootstrap_backend: codex\nbootstrap_model: \n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.durableWizardAction != "" {
+		t.Fatalf("durableWizardAction = %q, want no wizard execution for invalid codex child_custom", router.durableWizardAction)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != staleDurableWizardCallbackText {
+		t.Fatalf("answers = %#v, want stale durable wizard callback text", sender.answers)
 	}
 }
 

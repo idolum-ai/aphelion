@@ -15,11 +15,14 @@ const (
 )
 
 type InboundMessage struct {
-	ChatID         int64
-	ChatType       string
-	ChatTitle      string
-	SenderID       int64
-	SenderName     string
+	ChatID     int64
+	ChatType   string
+	ChatTitle  string
+	SenderID   int64
+	SenderName string
+	// Text contains the authored user text/caption and may include a synthetic
+	// appended "Reply context:" block during ingress normalization. Consumers that
+	// need authored-only text should strip that augmentation.
 	Text           string
 	Artifacts      []Artifact
 	ReplyTo        *int64

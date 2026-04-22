@@ -218,6 +218,90 @@ func TestNormalizeMessageLocationOnly(t *testing.T) {
 	}
 }
 
+func TestNormalizeMessageIncludesReplyContextAndReplyTo(t *testing.T) {
+	now := time.Now().Unix()
+	msg := &Message{
+		MessageID: 30,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		Text:      "yes, that works",
+		ReplyToMessage: &Message{
+			MessageID: 28,
+			From:      &User{ID: 9, Username: "idolum"},
+			Text:      "Please confirm whether we should proceed with the deploy.",
+		},
+	}
+
+	got := NormalizeMessage(msg)
+	if got == nil {
+		t.Fatal("expected message to be normalized")
+	}
+	if got.ReplyTo == nil || *got.ReplyTo != 28 {
+		t.Fatalf("ReplyTo = %#v, want 28", got.ReplyTo)
+	}
+	if !strings.Contains(got.Text, "yes, that works") {
+		t.Fatalf("text = %q, want user reply content", got.Text)
+	}
+	if !strings.Contains(got.Text, "Reply context:") {
+		t.Fatalf("text = %q, want Reply context section", got.Text)
+	}
+	if !strings.Contains(got.Text, "idolum: Please confirm whether we should proceed with the deploy.") {
+		t.Fatalf("text = %q, want quoted reply context", got.Text)
+	}
+}
+
+func TestNormalizeMessageDropsReplyContextOnlyTextWithoutArtifacts(t *testing.T) {
+	now := time.Now().Unix()
+	msg := &Message{
+		MessageID: 31,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		ReplyToMessage: &Message{
+			MessageID: 30,
+			From:      &User{ID: 9, Username: "idolum"},
+			Text:      "Can you confirm?",
+		},
+	}
+
+	got := NormalizeMessage(msg)
+	if got != nil {
+		t.Fatalf("NormalizeMessage() = %#v, want nil for reply-context-only message without artifacts", got)
+	}
+}
+
+func TestNormalizeMessageTruncatesReplyContextSnippet(t *testing.T) {
+	now := time.Now().Unix()
+	longReply := strings.Repeat("x", replyContextSnippetMaxRunes+80)
+	msg := &Message{
+		MessageID: 32,
+		Date:      now,
+		Chat:      &Chat{ID: 7, Type: "private"},
+		From:      &User{ID: 3, Username: "alice"},
+		Text:      "approved",
+		ReplyToMessage: &Message{
+			MessageID: 30,
+			From:      &User{ID: 9, Username: "idolum"},
+			Text:      longReply,
+		},
+	}
+
+	got := NormalizeMessage(msg)
+	if got == nil {
+		t.Fatal("expected message to be normalized")
+	}
+	if !strings.Contains(got.Text, "Reply context:") {
+		t.Fatalf("text = %q, want reply context section", got.Text)
+	}
+	if !strings.Contains(got.Text, "...") {
+		t.Fatalf("text = %q, want truncated reply context suffix", got.Text)
+	}
+	if strings.Contains(got.Text, longReply) {
+		t.Fatalf("text unexpectedly contains full long reply context")
+	}
+}
+
 func TestSendMessagePayload(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{

@@ -97,6 +97,12 @@ func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
+		Backend:        "native",
+		NativeProvider: "anthropic",
+		APIKey:         "sk-parent-default",
+		Model:          "claude-parent",
+	})
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:            "family-group",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
@@ -1277,6 +1283,12 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
+		Backend:        "native",
+		NativeProvider: "anthropic",
+		APIKey:         "sk-parent-default",
+		Model:          "claude-parent",
+	})
 
 	startOut, err := registry.ExecuteForSessionPrincipal(
 		context.Background(),
@@ -1307,6 +1319,8 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 				"address":"idolum@example.com",
 				"account":"idolum@example.com",
 				"adapter":"gog_cli",
+				"bootstrap_profile":"child_custom",
+				"bootstrap_model":"claude-sonnet-4-6",
 				"query":"label:inbox newer_than:7d",
 				"charter":"Review the inbox, surface important threads, summarize PDFs, and never send mail.",
 				"autonomy":"observe_only",
@@ -1326,6 +1340,12 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(answerOut, "wizard_status: ready") {
 		t.Fatalf("wizard_answer output = %q, want ready wizard status", answerOut)
+	}
+	if !strings.Contains(answerOut, "bootstrap_profile: child_custom") {
+		t.Fatalf("wizard_answer output = %q, want child bootstrap profile surfaced", answerOut)
+	}
+	if !strings.Contains(answerOut, "bootstrap_model: claude-sonnet-4-6") {
+		t.Fatalf("wizard_answer output = %q, want child bootstrap model surfaced", answerOut)
 	}
 
 	finalizeOut, err := registry.ExecuteForSessionPrincipal(
@@ -1357,6 +1377,9 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 	}
 	if agent.LivePolicy.OutboundMode != "read_only" {
 		t.Fatalf("agent outbound_mode = %q, want read_only", agent.LivePolicy.OutboundMode)
+	}
+	if agent.BootstrapLLM.Model != "claude-sonnet-4-6" {
+		t.Fatalf("agent bootstrap model = %q, want claude-sonnet-4-6", agent.BootstrapLLM.Model)
 	}
 	if agent.ChannelConfig.Email == nil {
 		t.Fatal("agent channel_config.email = nil, want configured email child")
@@ -1420,6 +1443,233 @@ func TestDurableAgentToolEmailWizardFinalizeRequiresCompleteAnswers(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "missing wizard answers") {
 		t.Fatalf("err = %v, want missing wizard answers guidance", err)
+	}
+}
+
+func TestDurableAgentToolEmailWizardChildCustomRequiresBootstrapModel(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
+		Backend:        "native",
+		NativeProvider: "anthropic",
+		APIKey:         "sk-parent-default",
+		Model:          "claude-parent",
+	})
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
+	}
+
+	answerOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"wizard_answer",
+			"agent_id":"idolum-email",
+			"wizard_answers":{
+				"address":"idolum@example.com",
+				"adapter":"gog_cli",
+				"bootstrap_profile":"child_custom",
+				"charter":"Read-only inbox child.",
+				"autonomy":"observe_only",
+				"wakeup_mode":"poll",
+				"poll_interval":"5m",
+				"surface_rules":["urgent"],
+				"summarize_pdfs":true,
+				"synthesis_cadence":"4h",
+				"capabilities":["read_channel","bounded_review_artifact","summarize_pdf"],
+				"never_retain":["secrets"],
+				"drift_policy":"admin_review"
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_answer child_custom without model) err = %v", err)
+	}
+	if !strings.Contains(answerOut, "current_step: bootstrap_model") {
+		t.Fatalf("wizard_answer output = %q, want bootstrap_model step", answerOut)
+	}
+
+	_, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(wizard_finalize without bootstrap_model) err = nil, want missing-answer error")
+	}
+	if !strings.Contains(err.Error(), "bootstrap_model") {
+		t.Fatalf("err = %v, want missing bootstrap_model guidance", err)
+	}
+}
+
+func TestDurableAgentToolEmailWizardBootstrapInheritanceAndCustomModel(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
+		Backend:        "native",
+		NativeProvider: "anthropic",
+		APIKey:         "sk-parent-default",
+		Model:          "claude-parent",
+	})
+
+	startOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
+	}
+	if !strings.Contains(startOut, "bootstrap_profile: inherit_parent") {
+		t.Fatalf("wizard_start output = %q, want inherited bootstrap profile", startOut)
+	}
+	if !strings.Contains(startOut, "bootstrap_model: claude-parent") {
+		t.Fatalf("wizard_start output = %q, want inherited bootstrap model surfaced", startOut)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"wizard_answer",
+			"agent_id":"idolum-email",
+			"wizard_answers":{
+				"address":"idolum@example.com",
+				"adapter":"gog_cli",
+				"bootstrap_profile":"child_custom",
+				"bootstrap_model":"claude-custom-child",
+				"charter":"Read-only inbox child.",
+				"autonomy":"observe_only",
+				"wakeup_mode":"poll",
+				"poll_interval":"5m",
+				"surface_rules":["urgent"],
+				"summarize_pdfs":true,
+				"synthesis_cadence":"4h",
+				"capabilities":["read_channel","bounded_review_artifact","summarize_pdf"],
+				"never_retain":["secrets"],
+				"drift_policy":"admin_review"
+			}
+		}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_answer custom bootstrap) err = %v", err)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_finalize custom bootstrap) err = %v", err)
+	}
+
+	agent, err := store.DurableAgent("idolum-email")
+	if err != nil {
+		t.Fatalf("DurableAgent(idolum-email) err = %v", err)
+	}
+	if agent.BootstrapLLM.Model != "claude-custom-child" {
+		t.Fatalf("agent bootstrap model = %q, want claude-custom-child", agent.BootstrapLLM.Model)
+	}
+	if agent.BootstrapLLM.NativeProvider != "anthropic" {
+		t.Fatalf("agent bootstrap native_provider = %q, want anthropic", agent.BootstrapLLM.NativeProvider)
+	}
+	if agent.BootstrapLLM.APIKey != "sk-parent-default" {
+		t.Fatalf("agent bootstrap api_key = %q, want inherited sk-parent-default", agent.BootstrapLLM.APIKey)
+	}
+}
+
+func TestDurableAgentToolEmailWizardCodexChildCustomDoesNotRequireBootstrapModel(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
+		Backend:         "codex",
+		CodexAuthSource: "codex_cli",
+		CodexHome:       "/tmp/codex-home",
+	})
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
+	}
+
+	answerOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"wizard_answer",
+			"agent_id":"idolum-email",
+			"wizard_answers":{
+				"address":"idolum@example.com",
+				"adapter":"gog_cli",
+				"bootstrap_profile":"child_custom",
+				"charter":"Read-only inbox child.",
+				"autonomy":"observe_only",
+				"wakeup_mode":"poll",
+				"poll_interval":"5m",
+				"surface_rules":["urgent"],
+				"summarize_pdfs":true,
+				"synthesis_cadence":"4h",
+				"capabilities":["read_channel","bounded_review_artifact","summarize_pdf"],
+				"never_retain":["secrets"],
+				"drift_policy":"admin_review"
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_answer codex child_custom) err = %v", err)
+	}
+	if !strings.Contains(answerOut, "wizard_status: ready") {
+		t.Fatalf("wizard_answer output = %q, want ready status without bootstrap_model requirement for codex", answerOut)
+	}
+	if strings.Contains(answerOut, "current_step: bootstrap_model") {
+		t.Fatalf("wizard_answer output = %q, do not want bootstrap_model step for codex", answerOut)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+	); err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(wizard_finalize codex child_custom) err = %v", err)
+	}
+
+	agent, err := store.DurableAgent("idolum-email")
+	if err != nil {
+		t.Fatalf("DurableAgent(idolum-email) err = %v", err)
+	}
+	if agent.BootstrapLLM.Backend != "codex" {
+		t.Fatalf("agent bootstrap backend = %q, want codex", agent.BootstrapLLM.Backend)
+	}
+	if agent.BootstrapLLM.CodexHome != "/tmp/codex-home" {
+		t.Fatalf("agent bootstrap codex_home = %q, want /tmp/codex-home", agent.BootstrapLLM.CodexHome)
 	}
 }
 

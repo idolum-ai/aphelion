@@ -152,6 +152,8 @@ type durableAgentWizardAnswersInput struct {
 	Account          string   `json:"account,omitempty"`
 	Adapter          string   `json:"adapter,omitempty"`
 	Query            string   `json:"query,omitempty"`
+	BootstrapProfile string   `json:"bootstrap_profile,omitempty"`
+	BootstrapModel   string   `json:"bootstrap_model,omitempty"`
 	Charter          string   `json:"charter,omitempty"`
 	Autonomy         string   `json:"autonomy,omitempty"`
 	WakeupMode       string   `json:"wakeup_mode,omitempty"`
@@ -537,6 +539,8 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"account": {"type": "string"},
 								"adapter": {"type": "string"},
 								"query": {"type": "string"},
+								"bootstrap_profile": {"type": "string", "enum": ["inherit_parent", "child_custom"], "description": "How bootstrap LLM settings are sourced: inherited from the parent defaults or explicitly customized for this child."},
+								"bootstrap_model": {"type": "string", "description": "Optional child model pin when bootstrap_profile=child_custom; keeps provider credentials from inherited/current bootstrap."},
 								"charter": {"type": "string"},
 								"autonomy": {"type": "string"},
 								"wakeup_mode": {"type": "string"},

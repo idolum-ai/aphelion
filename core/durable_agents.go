@@ -143,6 +143,8 @@ type DurableAgentSetupWizardAnswers struct {
 	Account          string   `json:"account,omitempty"`
 	Adapter          string   `json:"adapter,omitempty"`
 	Query            string   `json:"query,omitempty"`
+	BootstrapProfile string   `json:"bootstrap_profile,omitempty"`
+	BootstrapModel   string   `json:"bootstrap_model,omitempty"`
 	Charter          string   `json:"charter,omitempty"`
 	Autonomy         string   `json:"autonomy,omitempty"`
 	WakeupMode       string   `json:"wakeup_mode,omitempty"`
@@ -1280,6 +1282,8 @@ func normalizeDurableAgentSetupWizardAnswers(answers DurableAgentSetupWizardAnsw
 	answers.Account = strings.TrimSpace(answers.Account)
 	answers.Adapter = normalizeDurableAgentEmailAdapter(answers.Adapter)
 	answers.Query = strings.TrimSpace(answers.Query)
+	answers.BootstrapProfile = normalizeDurableAgentBootstrapProfile(answers.BootstrapProfile)
+	answers.BootstrapModel = strings.TrimSpace(answers.BootstrapModel)
 	answers.Charter = strings.TrimSpace(answers.Charter)
 	answers.Autonomy = strings.TrimSpace(answers.Autonomy)
 	answers.WakeupMode = strings.TrimSpace(answers.WakeupMode)
@@ -1361,6 +1365,8 @@ func durableAgentSetupWizardAnswersZero(answers DurableAgentSetupWizardAnswers) 
 		answers.Account == "" &&
 		answers.Adapter == "" &&
 		answers.Query == "" &&
+		answers.BootstrapProfile == "" &&
+		answers.BootstrapModel == "" &&
 		answers.Charter == "" &&
 		answers.Autonomy == "" &&
 		answers.WakeupMode == "" &&
@@ -1371,6 +1377,17 @@ func durableAgentSetupWizardAnswersZero(answers DurableAgentSetupWizardAnswers) 
 		len(answers.Capabilities) == 0 &&
 		len(answers.NeverRetain) == 0 &&
 		answers.DriftPolicy == ""
+}
+
+func normalizeDurableAgentBootstrapProfile(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "inherit_parent":
+		return "inherit_parent"
+	case "child_custom":
+		return "child_custom"
+	default:
+		return ""
+	}
 }
 
 func normalizeDurableAgentEmailPendingState(state *DurableAgentEmailPendingState) *DurableAgentEmailPendingState {

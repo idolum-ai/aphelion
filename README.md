@@ -212,7 +212,8 @@ llm_model = "anthropic/claude-sonnet-4-6"
 
 Current behavior note:
 
-- The durable setup wizard is currently inbox/email-focused; Telegram group admission is still driven by `telegram.durable_groups` config and restart.
+- The durable setup wizard is currently inbox/email-focused and now explicitly surfaces bootstrap source plus effective backend/provider/model for clarity; model pinning is only offered when the effective bootstrap backend is native.
+- Telegram group admission is still driven by `telegram.durable_groups` config and restart.
 
 Daily-review durable child staging path (per child workspace):
 
@@ -321,6 +322,7 @@ Inside Telegram:
 - `/detach` clears active/queued/continuation state and detaches pending approvals for you in this chat
 - `/restart` (admin only) forces gateway restart and detaches pending approvals before exit by default
 - when `memory.aggressive.flush_on_session_boundary = true`, `/stop`, `/new`, and `/restart` trigger a bounded session-memory flush before boundary actions complete
+- background runtime loop failures (durable wake, heartbeat, cron, stale watchdog, idle expiry) are surfaced to admin DMs as `System warning` messages with repeat-throttling
 
 Config failures now exit once with a dedicated config error and the service will not
 crash-loop. `make install-user-service`, `make update`, and `make update-release`

@@ -200,11 +200,9 @@ func NormalizeMessage(msg *Message) *core.InboundMessage {
 	if msg == nil || msg.Chat == nil || msg.Chat.Type != "private" {
 		return nil
 	}
-	text := msg.Text
-	if text == "" {
-		text = msg.Caption
-	}
-	if text == "" && !hasNormalizableArtifacts(msg) {
+	hasArtifacts := hasNormalizableArtifacts(msg)
+	text := inboundMessageText(msg, hasArtifacts)
+	if text == "" && !hasArtifacts {
 		return nil
 	}
 	return &core.InboundMessage{
@@ -214,6 +212,7 @@ func NormalizeMessage(msg *Message) *core.InboundMessage {
 		SenderID:   senderID(msg.From),
 		SenderName: buildSenderName(msg.From),
 		Text:       text,
+		ReplyTo:    inboundReplyToMessageID(msg),
 		MessageID:  msg.MessageID,
 		Timestamp:  time.Unix(msg.Date, 0),
 		Raw:        msg.Raw,

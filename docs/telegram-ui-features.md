@@ -147,6 +147,8 @@ When a response contains a machine-readable durable-wizard card (`action: durabl
 
 Step answer buttons are predefined for structured fields such as:
 
+- bootstrap profile (`inherit_parent` vs `child_custom`)
+- bootstrap model pin (shown when `child_custom` is selected)
 - autonomy mode
 - wakeup mode
 - summarize PDFs yes/no
@@ -163,6 +165,10 @@ Callback behavior:
 - buttons are admin-only
 - stale/mismatched callbacks are acknowledged and ignored
 - valid callbacks run deterministic `durable_agent` wizard actions (`wizard_answer`, `wizard_show`, `wizard_finalize`, `wizard_cancel`) and edit the same message in place
+
+Bootstrap nuance:
+
+- when the effective bootstrap backend is `codex`, bootstrap profile controls collapse to `Inherit parent` only and no `bootstrap_model` pin step is shown
 
 ### Durable child relay syntax
 

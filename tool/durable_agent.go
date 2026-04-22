@@ -299,8 +299,9 @@ func (r *Registry) startDurableAgentWizard(in durableAgentInput, key session.Ses
 	if err != nil {
 		return "", err
 	}
+	inheritedBootstrap := core.NormalizeNodeLLMBootstrap(r.durableAgentBootstrapLLM)
 	now := time.Now().UTC()
-	wizard := seedDurableAgentWizardFromAgent(*agent)
+	wizard := seedDurableAgentWizardFromAgent(*agent, inheritedBootstrap)
 	if continuity.SetupWizard != nil {
 		wizard = *continuity.SetupWizard
 		if wizard.StartedAt.IsZero() {
@@ -313,7 +314,7 @@ func (r *Registry) startDurableAgentWizard(in durableAgentInput, key session.Ses
 	if wizard.StartedAt.IsZero() {
 		wizard.StartedAt = now
 	}
-	missing := durableAgentWizardMissingAnswers(wizard)
+	missing := durableAgentWizardMissingAnswers(*agent, wizard, inheritedBootstrap)
 	wizard.Missing = missing
 	wizard.CurrentStep = firstWizardStep(missing)
 	if len(missing) == 0 {
@@ -325,7 +326,7 @@ func (r *Registry) startDurableAgentWizard(in durableAgentInput, key session.Ses
 	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
 		return "", err
 	}
-	return renderDurableAgentWizardShow(*agent, wizard), nil
+	return renderDurableAgentWizardShow(*agent, wizard, inheritedBootstrap), nil
 }
 
 func (r *Registry) answerDurableAgentWizard(in durableAgentInput) (string, error) {
@@ -348,6 +349,7 @@ func (r *Registry) answerDurableAgentWizard(in durableAgentInput) (string, error
 		return "", fmt.Errorf("durable agent %q has no active setup wizard; use wizard_start first", agent.AgentID)
 	}
 
+	inheritedBootstrap := core.NormalizeNodeLLMBootstrap(r.durableAgentBootstrapLLM)
 	wizard := *continuity.SetupWizard
 	wizard.SchemaVersion = 1
 	wizard.ChannelKind = firstNonEmpty(
@@ -360,7 +362,7 @@ func (r *Registry) answerDurableAgentWizard(in durableAgentInput) (string, error
 	if wizard.StartedAt.IsZero() {
 		wizard.StartedAt = wizard.UpdatedAt
 	}
-	missing := durableAgentWizardMissingAnswers(wizard)
+	missing := durableAgentWizardMissingAnswers(*agent, wizard, inheritedBootstrap)
 	wizard.Missing = missing
 	wizard.CurrentStep = firstWizardStep(missing)
 	if len(missing) == 0 {
@@ -369,7 +371,7 @@ func (r *Registry) answerDurableAgentWizard(in durableAgentInput) (string, error
 		wizard.Status = "in_progress"
 	}
 
-	updatedAgent, err := applyDurableWizardAnswersToAgent(*agent, wizard.Answers)
+	updatedAgent, err := applyDurableWizardAnswersToAgent(*agent, wizard.Answers, inheritedBootstrap)
 	if err != nil {
 		return "", err
 	}
@@ -382,7 +384,7 @@ func (r *Registry) answerDurableAgentWizard(in durableAgentInput) (string, error
 	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
 		return "", err
 	}
-	return renderDurableAgentWizardShow(*agent, wizard), nil
+	return renderDurableAgentWizardShow(*agent, wizard, inheritedBootstrap), nil
 }
 
 func (r *Registry) showDurableAgentWizard(in durableAgentInput) (string, error) {
@@ -401,8 +403,9 @@ func (r *Registry) showDurableAgentWizard(in durableAgentInput) (string, error) 
 	if continuity.SetupWizard == nil {
 		return "", fmt.Errorf("durable agent %q has no active setup wizard; use wizard_start first", agent.AgentID)
 	}
+	inheritedBootstrap := core.NormalizeNodeLLMBootstrap(r.durableAgentBootstrapLLM)
 	wizard := *continuity.SetupWizard
-	wizard.Missing = durableAgentWizardMissingAnswers(wizard)
+	wizard.Missing = durableAgentWizardMissingAnswers(*agent, wizard, inheritedBootstrap)
 	wizard.CurrentStep = firstWizardStep(wizard.Missing)
 	if wizard.Status == "" {
 		if len(wizard.Missing) == 0 {
@@ -411,7 +414,7 @@ func (r *Registry) showDurableAgentWizard(in durableAgentInput) (string, error) 
 			wizard.Status = "in_progress"
 		}
 	}
-	return renderDurableAgentWizardShow(*agent, wizard), nil
+	return renderDurableAgentWizardShow(*agent, wizard, inheritedBootstrap), nil
 }
 
 func (r *Registry) finalizeDurableAgentWizard(in durableAgentInput, key session.SessionKey) (string, error) {
@@ -430,8 +433,9 @@ func (r *Registry) finalizeDurableAgentWizard(in durableAgentInput, key session.
 	if continuity.SetupWizard == nil {
 		return "", fmt.Errorf("durable agent %q has no active setup wizard; use wizard_start first", agent.AgentID)
 	}
+	inheritedBootstrap := core.NormalizeNodeLLMBootstrap(r.durableAgentBootstrapLLM)
 	wizard := *continuity.SetupWizard
-	wizard.Missing = durableAgentWizardMissingAnswers(wizard)
+	wizard.Missing = durableAgentWizardMissingAnswers(*agent, wizard, inheritedBootstrap)
 	if len(wizard.Missing) > 0 {
 		return "", fmt.Errorf("missing wizard answers: %s", strings.Join(wizard.Missing, ", "))
 	}
@@ -439,7 +443,7 @@ func (r *Registry) finalizeDurableAgentWizard(in durableAgentInput, key session.
 	wizard.Status = "finalized"
 	wizard.UpdatedAt = time.Now().UTC()
 
-	updatedAgent, err := applyDurableWizardAnswersToAgent(*agent, wizard.Answers)
+	updatedAgent, err := applyDurableWizardAnswersToAgent(*agent, wizard.Answers, inheritedBootstrap)
 	if err != nil {
 		return "", err
 	}
@@ -461,7 +465,7 @@ func (r *Registry) finalizeDurableAgentWizard(in durableAgentInput, key session.
 	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
 		return "", err
 	}
-	return renderDurableAgentWizardFinalize(updatedAgent, wizard), nil
+	return renderDurableAgentWizardFinalize(updatedAgent, wizard, inheritedBootstrap), nil
 }
 
 func (r *Registry) cancelDurableAgentWizard(in durableAgentInput) (string, error) {
@@ -480,6 +484,7 @@ func (r *Registry) cancelDurableAgentWizard(in durableAgentInput) (string, error
 	if continuity.SetupWizard == nil {
 		return "", fmt.Errorf("durable agent %q has no active setup wizard; use wizard_start first", agent.AgentID)
 	}
+	inheritedBootstrap := core.NormalizeNodeLLMBootstrap(r.durableAgentBootstrapLLM)
 	wizard := *continuity.SetupWizard
 	wizard.Status = "cancelled"
 	wizard.CurrentStep = ""
@@ -489,7 +494,7 @@ func (r *Registry) cancelDurableAgentWizard(in durableAgentInput) (string, error
 	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
 		return "", err
 	}
-	return renderDurableAgentWizardShow(*agent, wizard), nil
+	return renderDurableAgentWizardShow(*agent, wizard, inheritedBootstrap), nil
 }
 
 func (r *Registry) loadDurableAgentContinuity(agentID string) (*core.DurableAgentState, core.DurableAgentContinuityState, error) {
@@ -1583,6 +1588,8 @@ func equalInt64Slices(left []int64, right []int64) bool {
 var durableAgentWizardStepOrder = []string{
 	"address",
 	"adapter",
+	"bootstrap_profile",
+	"bootstrap_model",
 	"autonomy",
 	"surface_rules",
 	"summarize_pdfs",
@@ -1594,16 +1601,25 @@ var durableAgentWizardStepOrder = []string{
 	"charter",
 }
 
-func seedDurableAgentWizardFromAgent(agent core.DurableAgent) core.DurableAgentSetupWizardState {
+func seedDurableAgentWizardFromAgent(agent core.DurableAgent, inheritedBootstrap core.NodeLLMBootstrap) core.DurableAgentSetupWizardState {
+	currentBootstrap := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
+	inheritedBootstrap = core.NormalizeNodeLLMBootstrap(inheritedBootstrap)
+	bootstrapProfile := durableAgentWizardBootstrapProfile(currentBootstrap, inheritedBootstrap)
+	bootstrapModel := ""
+	if bootstrapProfile == "child_custom" {
+		bootstrapModel = strings.TrimSpace(currentBootstrap.Model)
+	}
 	wizard := core.DurableAgentSetupWizardState{
 		SchemaVersion: 1,
 		ChannelKind:   strings.TrimSpace(agent.ChannelKind),
 		Answers: core.DurableAgentSetupWizardAnswers{
-			Charter:      strings.TrimSpace(agent.LivePolicy.Charter),
-			Autonomy:     durableAgentAutonomyFromPolicy(agent.LivePolicy),
-			WakeupMode:   strings.TrimSpace(agent.WakeupMode),
-			Capabilities: append([]string(nil), agent.LivePolicy.CapabilityEnvelope...),
-			DriftPolicy:  strings.TrimSpace(agent.LivePolicy.DriftPolicy),
+			BootstrapProfile: bootstrapProfile,
+			BootstrapModel:   bootstrapModel,
+			Charter:          strings.TrimSpace(agent.LivePolicy.Charter),
+			Autonomy:         durableAgentAutonomyFromPolicy(agent.LivePolicy),
+			WakeupMode:       strings.TrimSpace(agent.WakeupMode),
+			Capabilities:     append([]string(nil), agent.LivePolicy.CapabilityEnvelope...),
+			DriftPolicy:      strings.TrimSpace(agent.LivePolicy.DriftPolicy),
 		},
 	}
 	if agent.ChannelConfig.Email != nil {
@@ -1623,6 +1639,8 @@ func seedDurableAgentWizardFromAgent(agent core.DurableAgent) core.DurableAgentS
 }
 
 func mergeDurableAgentWizardAnswers(current core.DurableAgentSetupWizardAnswers, patch durableAgentWizardAnswersInput) core.DurableAgentSetupWizardAnswers {
+	current = core.NormalizeDurableAgentSetupWizardAnswers(current)
+	previousProfile := strings.TrimSpace(current.BootstrapProfile)
 	if strings.TrimSpace(patch.Address) != "" {
 		current.Address = strings.TrimSpace(patch.Address)
 	}
@@ -1634,6 +1652,22 @@ func mergeDurableAgentWizardAnswers(current core.DurableAgentSetupWizardAnswers,
 	}
 	if strings.TrimSpace(patch.Query) != "" {
 		current.Query = strings.TrimSpace(patch.Query)
+	}
+	if strings.TrimSpace(patch.BootstrapProfile) != "" {
+		current.BootstrapProfile = strings.TrimSpace(patch.BootstrapProfile)
+		switch core.NormalizeDurableAgentSetupWizardAnswers(current).BootstrapProfile {
+		case "inherit_parent":
+			// Keep inherited model implicit when the parent bootstrap is selected.
+			current.BootstrapModel = ""
+		case "child_custom":
+			if previousProfile != "child_custom" && strings.TrimSpace(patch.BootstrapModel) == "" {
+				// Force an explicit child model decision when switching to child-custom mode.
+				current.BootstrapModel = ""
+			}
+		}
+	}
+	if strings.TrimSpace(patch.BootstrapModel) != "" {
+		current.BootstrapModel = strings.TrimSpace(patch.BootstrapModel)
 	}
 	if strings.TrimSpace(patch.Charter) != "" {
 		current.Charter = strings.TrimSpace(patch.Charter)
@@ -1669,7 +1703,7 @@ func mergeDurableAgentWizardAnswers(current core.DurableAgentSetupWizardAnswers,
 	return core.NormalizeDurableAgentSetupWizardAnswers(current)
 }
 
-func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.DurableAgentSetupWizardAnswers) (core.DurableAgent, error) {
+func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.DurableAgentSetupWizardAnswers, inheritedBootstrap core.NodeLLMBootstrap) (core.DurableAgent, error) {
 	answers = core.NormalizeDurableAgentSetupWizardAnswers(answers)
 	agent.ChannelKind = normalizeDurableAgentChannelKind("inbox")
 	wakeupMode := normalizeDurableEmailWakeupMode(answers.WakeupMode)
@@ -1743,20 +1777,35 @@ func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.Dura
 	}
 	channelConfig.Email = email
 	agent.ChannelConfig = core.NormalizeDurableAgentChannelConfig(channelConfig)
+
+	bootstrap, err := durableAgentBootstrapFromWizardAnswers(agent.BootstrapLLM, answers, inheritedBootstrap)
+	if err != nil {
+		return core.DurableAgent{}, err
+	}
+	agent.BootstrapLLM = core.NormalizeNodeLLMBootstrap(bootstrap)
+
 	if strings.TrimSpace(agent.Status) == "" {
 		agent.Status = "draft"
 	}
 	return agent, nil
 }
 
-func durableAgentWizardMissingAnswers(wizard core.DurableAgentSetupWizardState) []string {
+func durableAgentWizardMissingAnswers(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState, inheritedBootstrap core.NodeLLMBootstrap) []string {
 	answers := core.NormalizeDurableAgentSetupWizardAnswers(wizard.Answers)
+	effectiveBootstrap := durableAgentWizardEffectiveBootstrapForAnswers(agent, answers, inheritedBootstrap)
 	missing := make([]string, 0, len(durableAgentWizardStepOrder))
 	if strings.TrimSpace(answers.Address) == "" {
 		missing = append(missing, "address")
 	}
 	if strings.TrimSpace(answers.Adapter) == "" {
 		missing = append(missing, "adapter")
+	}
+	if strings.TrimSpace(answers.BootstrapProfile) == "" {
+		missing = append(missing, "bootstrap_profile")
+	} else if strings.TrimSpace(answers.BootstrapProfile) == "child_custom" &&
+		strings.TrimSpace(effectiveBootstrap.Backend) == "native" &&
+		strings.TrimSpace(answers.BootstrapModel) == "" {
+		missing = append(missing, "bootstrap_model")
 	}
 	if strings.TrimSpace(answers.Autonomy) == "" {
 		missing = append(missing, "autonomy")
@@ -1804,12 +1853,47 @@ func firstWizardStep(missing []string) string {
 	return strings.TrimSpace(missing[0])
 }
 
-func wizardQuestionForStep(step string) string {
+func durableAgentWizardEffectiveBootstrapForAnswers(agent core.DurableAgent, answers core.DurableAgentSetupWizardAnswers, inheritedBootstrap core.NodeLLMBootstrap) core.NodeLLMBootstrap {
+	effective, err := durableAgentBootstrapFromWizardAnswers(agent.BootstrapLLM, answers, inheritedBootstrap)
+	if err == nil {
+		return core.NormalizeNodeLLMBootstrap(effective)
+	}
+
+	answers = core.NormalizeDurableAgentSetupWizardAnswers(answers)
+	current := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
+	inherited := core.NormalizeNodeLLMBootstrap(inheritedBootstrap)
+	switch strings.TrimSpace(answers.BootstrapProfile) {
+	case "inherit_parent":
+		if inherited.Configured() {
+			return inherited
+		}
+		return current
+	case "child_custom":
+		if current.Configured() {
+			return current
+		}
+		return inherited
+	default:
+		if inherited.Configured() {
+			return inherited
+		}
+		return current
+	}
+}
+
+func wizardQuestionForStep(step string, effectiveBootstrapBackend string) string {
 	switch strings.TrimSpace(step) {
 	case "address":
 		return "What channel address should this child own?"
 	case "adapter":
 		return "Which channel adapter should be used (for example gog_cli for inbox/email)?"
+	case "bootstrap_profile":
+		if strings.TrimSpace(effectiveBootstrapBackend) == "codex" {
+			return "This child uses a codex bootstrap backend; keep parent bootstrap defaults?"
+		}
+		return "Should this child inherit the parent bootstrap defaults or pin a child-custom bootstrap profile?"
+	case "bootstrap_model":
+		return "Which model should this child pin for child-custom bootstrap?"
 	case "autonomy":
 		return "Should the child be observe_only, local_drafts, review_before_reply, or reply_within_charter?"
 	case "surface_rules":
@@ -1830,6 +1914,83 @@ func wizardQuestionForStep(step string) string {
 		return "What is the child charter summary?"
 	default:
 		return ""
+	}
+}
+
+func durableAgentBootstrapFromWizardAnswers(current core.NodeLLMBootstrap, answers core.DurableAgentSetupWizardAnswers, inherited core.NodeLLMBootstrap) (core.NodeLLMBootstrap, error) {
+	current = core.NormalizeNodeLLMBootstrap(current)
+	inherited = core.NormalizeNodeLLMBootstrap(inherited)
+	answers = core.NormalizeDurableAgentSetupWizardAnswers(answers)
+
+	profile := strings.TrimSpace(answers.BootstrapProfile)
+	if profile == "" {
+		profile = durableAgentWizardBootstrapProfile(current, inherited)
+	}
+
+	switch profile {
+	case "inherit_parent":
+		if inherited.Configured() {
+			return inherited, nil
+		}
+		return current, nil
+	case "child_custom":
+		bootstrap := current
+		if !bootstrap.Configured() && inherited.Configured() {
+			bootstrap = inherited
+		}
+		if strings.TrimSpace(answers.BootstrapModel) != "" {
+			if bootstrap.Backend != "native" {
+				return core.NodeLLMBootstrap{}, fmt.Errorf("durable_agent bootstrap_model requires a native bootstrap backend")
+			}
+			bootstrap.Model = strings.TrimSpace(answers.BootstrapModel)
+		}
+		return core.NormalizeNodeLLMBootstrap(bootstrap), nil
+	default:
+		if inherited.Configured() {
+			return inherited, nil
+		}
+		return current, nil
+	}
+}
+
+func durableAgentWizardBootstrapProfile(current core.NodeLLMBootstrap, inherited core.NodeLLMBootstrap) string {
+	current = core.NormalizeNodeLLMBootstrap(current)
+	inherited = core.NormalizeNodeLLMBootstrap(inherited)
+	if current.Configured() {
+		if inherited.Configured() && durableAgentNodeBootstrapEqual(current, inherited) {
+			return "inherit_parent"
+		}
+		return "child_custom"
+	}
+	if inherited.Configured() {
+		return "inherit_parent"
+	}
+	return ""
+}
+
+func durableAgentNodeBootstrapEqual(left core.NodeLLMBootstrap, right core.NodeLLMBootstrap) bool {
+	left = core.NormalizeNodeLLMBootstrap(left)
+	right = core.NormalizeNodeLLMBootstrap(right)
+	return left.Backend == right.Backend &&
+		left.NativeProvider == right.NativeProvider &&
+		left.APIKey == right.APIKey &&
+		left.BaseURL == right.BaseURL &&
+		left.Model == right.Model &&
+		left.MaxTokens == right.MaxTokens &&
+		left.CodexAuthSource == right.CodexAuthSource &&
+		left.CodexHome == right.CodexHome &&
+		left.CodexBaseURL == right.CodexBaseURL
+}
+
+func durableAgentWizardBootstrapFallbackSummary(bootstrap core.NodeLLMBootstrap) string {
+	bootstrap = core.NormalizeNodeLLMBootstrap(bootstrap)
+	switch bootstrap.Backend {
+	case "native":
+		return "inherits parent provider fallback chain"
+	case "codex":
+		return "codex backend; no provider fallback chain"
+	default:
+		return "n/a"
 	}
 }
 
@@ -1871,9 +2032,14 @@ func durableAgentWizardDisplayChannelKind(value string) string {
 	}
 }
 
-func renderDurableAgentWizardShow(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState) string {
+func renderDurableAgentWizardShow(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState, inheritedBootstrap core.NodeLLMBootstrap) string {
 	var b strings.Builder
 	channelKind := normalizeDurableAgentChannelKind(firstNonEmpty(strings.TrimSpace(wizard.ChannelKind), strings.TrimSpace(agent.ChannelKind), "email"))
+	effectiveBootstrap, _ := durableAgentBootstrapFromWizardAnswers(agent.BootstrapLLM, wizard.Answers, inheritedBootstrap)
+	profile := strings.TrimSpace(core.NormalizeDurableAgentSetupWizardAnswers(wizard.Answers).BootstrapProfile)
+	if profile == "" {
+		profile = durableAgentWizardBootstrapProfile(agent.BootstrapLLM, inheritedBootstrap)
+	}
 	b.WriteString("action: durable-agent wizard show\n")
 	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
 	fmt.Fprintf(&b, "channel_kind: %s\n", channelKind)
@@ -1881,11 +2047,17 @@ func renderDurableAgentWizardShow(agent core.DurableAgent, wizard core.DurableAg
 	fmt.Fprintf(&b, "wizard_status: %s\n", firstNonEmpty(strings.TrimSpace(wizard.Status), "in_progress"))
 	fmt.Fprintf(&b, "current_step: %s\n", firstNonEmpty(strings.TrimSpace(wizard.CurrentStep), "-"))
 	fmt.Fprintf(&b, "missing: %s\n", firstNonEmpty(strings.Join(wizard.Missing, ","), "-"))
-	if question := wizardQuestionForStep(wizard.CurrentStep); question != "" {
+	if question := wizardQuestionForStep(wizard.CurrentStep, effectiveBootstrap.Backend); question != "" {
 		fmt.Fprintf(&b, "next_question: %s\n", question)
 	}
 	fmt.Fprintf(&b, "address: %s\n", strings.TrimSpace(wizard.Answers.Address))
 	fmt.Fprintf(&b, "adapter: %s\n", strings.TrimSpace(wizard.Answers.Adapter))
+	fmt.Fprintf(&b, "bootstrap_profile: %s\n", profile)
+	fmt.Fprintf(&b, "bootstrap_backend: %s\n", strings.TrimSpace(effectiveBootstrap.Backend))
+	fmt.Fprintf(&b, "bootstrap_native_provider: %s\n", strings.TrimSpace(effectiveBootstrap.NativeProvider))
+	fmt.Fprintf(&b, "bootstrap_model: %s\n", strings.TrimSpace(effectiveBootstrap.Model))
+	fmt.Fprintf(&b, "bootstrap_fallback: %s\n", durableAgentWizardBootstrapFallbackSummary(effectiveBootstrap))
+	b.WriteString("bootstrap_context_seed: inherited durable prompt context (no wizard override)\n")
 	fmt.Fprintf(&b, "autonomy: %s\n", strings.TrimSpace(wizard.Answers.Autonomy))
 	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(wizard.Answers.WakeupMode))
 	fmt.Fprintf(&b, "poll_interval: %s\n", strings.TrimSpace(wizard.Answers.PollInterval))
@@ -1894,15 +2066,26 @@ func renderDurableAgentWizardShow(agent core.DurableAgent, wizard core.DurableAg
 	return b.String()
 }
 
-func renderDurableAgentWizardFinalize(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState) string {
+func renderDurableAgentWizardFinalize(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState, inheritedBootstrap core.NodeLLMBootstrap) string {
 	var b strings.Builder
 	channelKind := normalizeDurableAgentChannelKind(strings.TrimSpace(agent.ChannelKind))
+	profile := strings.TrimSpace(core.NormalizeDurableAgentSetupWizardAnswers(wizard.Answers).BootstrapProfile)
+	if profile == "" {
+		profile = durableAgentWizardBootstrapProfile(agent.BootstrapLLM, inheritedBootstrap)
+	}
+	bootstrap := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
 	b.WriteString("action: durable-agent wizard finalize\n")
 	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
 	fmt.Fprintf(&b, "channel_kind: %s\n", channelKind)
 	fmt.Fprintf(&b, "channel_profile: %s\n", durableAgentWizardDisplayChannelKind(channelKind))
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "draft"))
 	fmt.Fprintf(&b, "wizard_status: %s\n", firstNonEmpty(strings.TrimSpace(wizard.Status), "finalized"))
+	fmt.Fprintf(&b, "bootstrap_profile: %s\n", profile)
+	fmt.Fprintf(&b, "bootstrap_backend: %s\n", strings.TrimSpace(bootstrap.Backend))
+	fmt.Fprintf(&b, "bootstrap_native_provider: %s\n", strings.TrimSpace(bootstrap.NativeProvider))
+	fmt.Fprintf(&b, "bootstrap_model: %s\n", strings.TrimSpace(bootstrap.Model))
+	fmt.Fprintf(&b, "bootstrap_fallback: %s\n", durableAgentWizardBootstrapFallbackSummary(bootstrap))
+	b.WriteString("bootstrap_context_seed: inherited durable prompt context (no wizard override)\n")
 	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
 	fmt.Fprintf(&b, "outbound_mode: %s\n", strings.TrimSpace(agent.LivePolicy.OutboundMode))
 	renderDurableAgentChannelConfig(&b, agent)

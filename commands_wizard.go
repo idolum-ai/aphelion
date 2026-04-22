@@ -26,10 +26,12 @@ const (
 )
 
 type durableWizardCard struct {
-	Action       string
-	AgentID      string
-	WizardStatus string
-	CurrentStep  string
+	Action           string
+	AgentID          string
+	WizardStatus     string
+	CurrentStep      string
+	BootstrapBackend string
+	BootstrapModel   string
 }
 
 type durableWizardChoice struct {
@@ -129,7 +131,7 @@ func handleDurableWizardCallback(ctx context.Context, sender commandCallbackSend
 			}
 			return true, nil
 		}
-		answers, valid := durableWizardAnswersForChoice(step, option)
+		answers, valid := durableWizardAnswersForChoice(step, option, card)
 		if !valid {
 			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleDurableWizardCallbackText); err != nil {
 				if !telegram.IsStaleCallbackQueryError(err) {
@@ -190,10 +192,12 @@ func parseDurableWizardCard(text string) (durableWizardCard, bool) {
 		return durableWizardCard{}, false
 	}
 	card := durableWizardCard{
-		Action:       action,
-		AgentID:      strings.TrimSpace(fields["agent_id"]),
-		WizardStatus: strings.ToLower(strings.TrimSpace(fields["wizard_status"])),
-		CurrentStep:  strings.ToLower(strings.TrimSpace(fields["current_step"])),
+		Action:           action,
+		AgentID:          strings.TrimSpace(fields["agent_id"]),
+		WizardStatus:     strings.ToLower(strings.TrimSpace(fields["wizard_status"])),
+		CurrentStep:      strings.ToLower(strings.TrimSpace(fields["current_step"])),
+		BootstrapBackend: strings.ToLower(strings.TrimSpace(fields["bootstrap_backend"])),
+		BootstrapModel:   strings.TrimSpace(fields["bootstrap_model"]),
 	}
 	if card.CurrentStep == "-" {
 		card.CurrentStep = ""
@@ -243,7 +247,7 @@ func durableWizardInlineRows(card durableWizardCard) [][]telegram.InlineButton {
 			{Text: "Finalize", CallbackData: encodeDurableWizardActionCallbackData(durableWizardCallbackFinalize)},
 		}}
 	default:
-		rows := durableWizardAnswerRows(card.CurrentStep)
+		rows := durableWizardAnswerRows(card.CurrentStep, card)
 		rows = append(rows, []telegram.InlineButton{
 			{Text: "Cancel", CallbackData: encodeDurableWizardActionCallbackData(durableWizardCallbackCancel)},
 			{Text: "Refresh", CallbackData: encodeDurableWizardActionCallbackData(durableWizardCallbackShow)},
@@ -252,8 +256,8 @@ func durableWizardInlineRows(card durableWizardCard) [][]telegram.InlineButton {
 	}
 }
 
-func durableWizardAnswerRows(step string) [][]telegram.InlineButton {
-	choices := durableWizardChoicesForStep(step)
+func durableWizardAnswerRows(step string, card durableWizardCard) [][]telegram.InlineButton {
+	choices := durableWizardChoicesForStep(step, card)
 	if len(choices) == 0 {
 		return nil
 	}
@@ -275,10 +279,26 @@ func durableWizardAnswerRows(step string) [][]telegram.InlineButton {
 	return rows
 }
 
-func durableWizardChoicesForStep(step string) []durableWizardChoice {
+func durableWizardChoicesForStep(step string, card durableWizardCard) []durableWizardChoice {
 	switch strings.ToLower(strings.TrimSpace(step)) {
 	case "adapter":
 		return []durableWizardChoice{{Key: "gog_cli", Label: "gog_cli"}}
+	case "bootstrap_profile":
+		if strings.TrimSpace(card.BootstrapBackend) == "codex" {
+			return []durableWizardChoice{
+				{Key: "inherit_parent", Label: "Inherit parent"},
+			}
+		}
+		return []durableWizardChoice{
+			{Key: "inherit_parent", Label: "Inherit parent"},
+			{Key: "child_custom", Label: "Child custom"},
+		}
+	case "bootstrap_model":
+		return []durableWizardChoice{
+			{Key: "keep_parent_model", Label: "Keep parent model"},
+			{Key: "claude-sonnet-4-6", Label: "Sonnet 4.6"},
+			{Key: "claude-opus-4-6", Label: "Opus 4.6"},
+		}
 	case "autonomy":
 		return []durableWizardChoice{
 			{Key: "observe_only", Label: "Observe only"},
@@ -334,13 +354,36 @@ func durableWizardChoicesForStep(step string) []durableWizardChoice {
 	}
 }
 
-func durableWizardAnswersForChoice(step string, option string) (map[string]any, bool) {
+func durableWizardAnswersForChoice(step string, option string, card durableWizardCard) (map[string]any, bool) {
 	step = strings.ToLower(strings.TrimSpace(step))
 	option = strings.ToLower(strings.TrimSpace(option))
 	switch step {
 	case "adapter":
 		if option == "gog_cli" {
 			return map[string]any{"adapter": "gog_cli"}, true
+		}
+	case "bootstrap_profile":
+		switch option {
+		case "inherit_parent":
+			return map[string]any{"bootstrap_profile": option}, true
+		case "child_custom":
+			if strings.TrimSpace(card.BootstrapBackend) == "codex" {
+				return nil, false
+			}
+			return map[string]any{"bootstrap_profile": option}, true
+		}
+	case "bootstrap_model":
+		if strings.TrimSpace(card.BootstrapBackend) == "codex" {
+			return nil, false
+		}
+		switch option {
+		case "keep_parent_model":
+			if strings.TrimSpace(card.BootstrapModel) == "" {
+				return nil, false
+			}
+			return map[string]any{"bootstrap_model": strings.TrimSpace(card.BootstrapModel)}, true
+		case "claude-sonnet-4-6", "claude-opus-4-6":
+			return map[string]any{"bootstrap_model": option}, true
 		}
 	case "autonomy":
 		switch option {

@@ -40,11 +40,9 @@ func normalizeDurableGroupMessage(msg *Message, route durableGroupRoute, botUser
 	if msg.Chat.Type != "group" && msg.Chat.Type != "supergroup" {
 		return nil
 	}
-	text := msg.Text
-	if text == "" {
-		text = msg.Caption
-	}
-	if text == "" && !hasNormalizableArtifacts(msg) {
+	hasArtifacts := hasNormalizableArtifacts(msg)
+	text := inboundMessageText(msg, hasArtifacts)
+	if text == "" && !hasArtifacts {
 		return nil
 	}
 	if !durableGroupShouldWake(msg, route, botUser) {
@@ -57,6 +55,7 @@ func normalizeDurableGroupMessage(msg *Message, route durableGroupRoute, botUser
 		SenderID:       senderID(msg.From),
 		SenderName:     buildSenderName(msg.From),
 		Text:           text,
+		ReplyTo:        inboundReplyToMessageID(msg),
 		MessageID:      msg.MessageID,
 		DurableAgentID: route.agentID,
 		Timestamp:      time.Unix(msg.Date, 0),
