@@ -66,6 +66,9 @@ workspace = "./workspace"
 	if cfg.Sessions.TESRetention.Enabled || cfg.Sessions.TESRetention.MaxAge != "720h" || cfg.Sessions.TESRetention.MinRetainedRows != 5000 || cfg.Sessions.TESRetention.MaxDeletePerGC != 1000 {
 		t.Fatalf("session tes retention defaults = %#v, want disabled/720h/5000/1000", cfg.Sessions.TESRetention)
 	}
+	if !strings.HasSuffix(cfg.Sessions.TESRetention.ExportDir, "/.aphelion/state/tes-exports") {
+		t.Fatalf("session tes retention export_dir = %q, want ~/.aphelion/state/tes-exports expansion", cfg.Sessions.TESRetention.ExportDir)
+	}
 	if cfg.Governor.Codex.ContextWindow != 200000 {
 		t.Fatalf("governor.codex.context_window = %d, want 200000", cfg.Governor.Codex.ContextWindow)
 	}
@@ -384,6 +387,7 @@ enabled = true
 max_age = "336h"
 min_retained_rows = 8000
 max_delete_per_gc = 400
+export_dir = "~/tmp/tes-exports"
 
 [agent]
 workspace = "~/workspace"
@@ -539,6 +543,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if !cfg.Sessions.TESRetention.Enabled || cfg.Sessions.TESRetention.MaxAge != "336h" || cfg.Sessions.TESRetention.MinRetainedRows != 8000 || cfg.Sessions.TESRetention.MaxDeletePerGC != 400 {
 		t.Fatalf("sessions.tes_retention = %#v, want enabled/336h/8000/400", cfg.Sessions.TESRetention)
+	}
+	if !strings.HasSuffix(cfg.Sessions.TESRetention.ExportDir, "/tmp/tes-exports") {
+		t.Fatalf("sessions.tes_retention.export_dir = %q, want ~/tmp/tes-exports expansion", cfg.Sessions.TESRetention.ExportDir)
 	}
 	if cfg.Providers.Anthropic.ContextWindow != 190000 {
 		t.Fatalf("providers.anthropic.context_window = %d, want 190000", cfg.Providers.Anthropic.ContextWindow)
@@ -972,6 +979,41 @@ max_delete_per_gc = 301
 	}
 	if !strings.Contains(err.Error(), "sessions.tes_retention.max_delete_per_gc") {
 		t.Fatalf("error = %v, want sessions.tes_retention.max_delete_per_gc message", err)
+	}
+}
+
+func TestLoadRejectsEnabledTESRetentionWithoutExportDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[sessions.tes_retention]
+enabled = true
+max_age = "168h"
+min_retained_rows = 300
+max_delete_per_gc = 200
+export_dir = ""
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want tes retention export_dir validation error")
+	}
+	if !strings.Contains(err.Error(), "sessions.tes_retention.export_dir") {
+		t.Fatalf("error = %v, want sessions.tes_retention.export_dir message", err)
 	}
 }
 

@@ -160,6 +160,7 @@ type SessionsTESRetentionConfig struct {
 	MaxAge          string `toml:"max_age"`
 	MinRetainedRows int    `toml:"min_retained_rows"`
 	MaxDeletePerGC  int    `toml:"max_delete_per_gc"`
+	ExportDir       string `toml:"export_dir"`
 }
 
 type AgentConfig struct {
@@ -384,6 +385,7 @@ func Default() Config {
 				MaxAge:          "720h",
 				MinRetainedRows: 5000,
 				MaxDeletePerGC:  1000,
+				ExportDir:       "~/.aphelion/state/tes-exports",
 			},
 		},
 		Agent: AgentConfig{
@@ -511,6 +513,10 @@ func Load(path string) (*Config, error) {
 	cfg.Sessions.DBPath, err = expandConfiguredPath(cfg.Sessions.DBPath, baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("expand sessions.db_path: %w", err)
+	}
+	cfg.Sessions.TESRetention.ExportDir, err = expandConfiguredPath(cfg.Sessions.TESRetention.ExportDir, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand sessions.tes_retention.export_dir: %w", err)
 	}
 	cfg.Agent.Workspace, err = expandConfiguredPath(cfg.Agent.Workspace, baseDir)
 	if err != nil {
@@ -682,6 +688,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Sessions.TESRetention.MaxDeletePerGC > cfg.Sessions.TESRetention.MinRetainedRows {
 		return fmt.Errorf("sessions.tes_retention.max_delete_per_gc must be <= min_retained_rows")
+	}
+	if cfg.Sessions.TESRetention.Enabled && strings.TrimSpace(cfg.Sessions.TESRetention.ExportDir) == "" {
+		return fmt.Errorf("sessions.tes_retention.export_dir is required when retention is enabled")
 	}
 	if strings.TrimSpace(cfg.Agent.EffectivePromptRoot()) == "" {
 		return fmt.Errorf("agent.prompt_root is required")

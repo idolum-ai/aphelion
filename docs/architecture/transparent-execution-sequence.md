@@ -21,15 +21,25 @@ Code anchor: [`session/store.go`](../../session/store.go)
 
 ### Current Implemented Policy
 
-- Retention: `execution_events` is retained indefinitely per session.
+- Retention modes:
+  - default (`sessions.tes_retention.enabled = false`): retain TES rows until
+    explicit session/runtime deletion.
+  - retention GC (`sessions.tes_retention.enabled = true`): prune old TES rows
+    by `max_age`, while always preserving at least `min_retained_rows` newest
+    rows and deleting at most `max_delete_per_gc` rows per GC pass.
+- Export-before-prune:
+  - every non-empty TES prune writes an ordered export bundle to
+    `sessions.tes_retention.export_dir` before deleting rows.
+  - prune fails closed if export writing fails.
 - Deletion boundaries:
   - Session-scoped deletion removes all events for that session (`DeleteSession`).
   - Runtime reset removes all events (`ResetRuntime`).
-- Compaction: there is no row-level TES compaction yet; message/session compaction
-  does not rewrite or summarize TES rows.
+- Compaction: message/session compaction does not rewrite or summarize TES rows.
 
 Code anchors:
 
+- [`maintenance.go`](../../maintenance.go)
+- [`config/config.go`](../../config/config.go)
 - [`session/store.go`](../../session/store.go) (`DeleteSession`, `ResetRuntime`)
 - [`runtime/compaction.go`](../../runtime/compaction.go)
 
@@ -67,11 +77,11 @@ TES write/read behavior currently relies on the following indexes:
 - Compatibility fallback evidence must be source-attributed and must not replace
   canonical TES claims when TES evidence exists.
 
-### Target Policy to Ratify (Not Yet Implemented)
+### Forward Path
 
-- Introduce explicit TES retention windows per deployment profile (for example:
-  "hot online" and "archived export").
-- Add deterministic rollup/export jobs before pruning old TES ranges.
+- Add optional rollup summaries on top of exported prune bundles for faster
+  historical browsing.
+- Add operator tooling for listing and replaying retention export bundles.
 - Keep enough recent TES history online to preserve debuggability of current and
   recently completed turns without relying on legacy `turn_runs`.
 

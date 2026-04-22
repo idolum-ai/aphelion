@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -1552,6 +1553,152 @@ func TestRunVerifyDeployCommandPrintsFailureReport(t *testing.T) {
 	}
 	if !strings.Contains(out, "golden_path: fail") {
 		t.Fatalf("verify-deploy output = %q, want golden_path failure", out)
+	}
+}
+
+func TestPruneExecutionEventsForRetentionExportsThenPrunes(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "sessions.db")
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+
+	key := session.SessionKey{
+		ChatID: 4242,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "telegram_dm:4242"},
+	}
+	now := time.Date(2026, time.April, 22, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 130; i++ {
+		if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: fmt.Sprintf(`{"index":%d}`, i),
+			CreatedAt:   now.Add(-72*time.Hour + time.Duration(i)*time.Minute),
+		}); err != nil {
+			t.Fatalf("AppendExecutionEvent(%d) err = %v", i, err)
+		}
+	}
+
+	cfg := config.Default()
+	cfg.Sessions.DBPath = dbPath
+	cfg.Sessions.TESRetention.Enabled = true
+	cfg.Sessions.TESRetention.MaxAge = "24h"
+	cfg.Sessions.TESRetention.MinRetainedRows = 100
+	cfg.Sessions.TESRetention.MaxDeletePerGC = 3
+	cfg.Sessions.TESRetention.ExportDir = filepath.Join(root, "tes-exports")
+
+	removed, status, err := pruneExecutionEventsForRetention(&cfg, now)
+	if err != nil {
+		t.Fatalf("pruneExecutionEventsForRetention() err = %v", err)
+	}
+	if removed != 3 {
+		t.Fatalf("removed = %d, want 3", removed)
+	}
+	if !strings.Contains(status, "export=") {
+		t.Fatalf("status = %q, want export path", status)
+	}
+
+	remaining, err := store.ExecutionEventsBySession(key, 0, 1000)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if len(remaining) != 127 {
+		t.Fatalf("remaining events = %d, want 127", len(remaining))
+	}
+	remainingIDs := make(map[int64]struct{}, len(remaining))
+	for _, event := range remaining {
+		remainingIDs[event.ID] = struct{}{}
+	}
+
+	exports, err := filepath.Glob(filepath.Join(cfg.Sessions.TESRetention.ExportDir, "*", "*.json"))
+	if err != nil {
+		t.Fatalf("Glob(export files) err = %v", err)
+	}
+	if len(exports) != 1 {
+		t.Fatalf("export files = %#v, want one export file", exports)
+	}
+	raw, err := os.ReadFile(exports[0])
+	if err != nil {
+		t.Fatalf("ReadFile(%s) err = %v", exports[0], err)
+	}
+	var bundle tesRetentionExportBundle
+	if err := json.Unmarshal(raw, &bundle); err != nil {
+		t.Fatalf("json.Unmarshal(export) err = %v", err)
+	}
+	if bundle.SchemaVersion != "tes_retention_export.v1" {
+		t.Fatalf("SchemaVersion = %q, want tes_retention_export.v1", bundle.SchemaVersion)
+	}
+	if bundle.Count != 3 || len(bundle.Events) != 3 {
+		t.Fatalf("bundle count/events = %d/%d, want 3/3", bundle.Count, len(bundle.Events))
+	}
+	if bundle.FirstID == 0 || bundle.LastID == 0 {
+		t.Fatalf("bundle id bounds = %d/%d, want non-zero", bundle.FirstID, bundle.LastID)
+	}
+	if bundle.Events[0].ID != bundle.FirstID || bundle.Events[len(bundle.Events)-1].ID != bundle.LastID {
+		t.Fatalf("bundle event bounds mismatch: first=%d last=%d events=%#v", bundle.FirstID, bundle.LastID, bundle.Events)
+	}
+	for _, event := range bundle.Events {
+		if _, ok := remainingIDs[event.ID]; ok {
+			t.Fatalf("exported event id %d still present after prune", event.ID)
+		}
+	}
+}
+
+func TestPruneExecutionEventsForRetentionNoOpDoesNotExport(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "sessions.db")
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+
+	key := session.SessionKey{
+		ChatID: 5151,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "telegram_dm:5151"},
+	}
+	now := time.Date(2026, time.April, 22, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 4; i++ {
+		if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: fmt.Sprintf(`{"index":%d}`, i),
+			CreatedAt:   now.Add(-2 * time.Hour).Add(time.Duration(i) * time.Minute),
+		}); err != nil {
+			t.Fatalf("AppendExecutionEvent(%d) err = %v", i, err)
+		}
+	}
+
+	cfg := config.Default()
+	cfg.Sessions.DBPath = dbPath
+	cfg.Sessions.TESRetention.Enabled = true
+	cfg.Sessions.TESRetention.MaxAge = "24h"
+	cfg.Sessions.TESRetention.MinRetainedRows = 100
+	cfg.Sessions.TESRetention.MaxDeletePerGC = 2
+	cfg.Sessions.TESRetention.ExportDir = filepath.Join(root, "tes-exports")
+
+	removed, status, err := pruneExecutionEventsForRetention(&cfg, now)
+	if err != nil {
+		t.Fatalf("pruneExecutionEventsForRetention() err = %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0", removed)
+	}
+	if !strings.Contains(status, "result=no-op") {
+		t.Fatalf("status = %q, want result=no-op", status)
+	}
+	exports, err := filepath.Glob(filepath.Join(cfg.Sessions.TESRetention.ExportDir, "*", "*.json"))
+	if err != nil {
+		t.Fatalf("Glob(export files) err = %v", err)
+	}
+	if len(exports) != 0 {
+		t.Fatalf("export files = %#v, want none for no-op prune", exports)
 	}
 }
 
