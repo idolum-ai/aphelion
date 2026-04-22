@@ -394,6 +394,19 @@ func TestHandleInboundRendersFromStructuredMaterialFloor(t *testing.T) {
 	if !strings.Contains(sess.LastFloorText, "FACTS:") {
 		t.Fatalf("LastFloorText = %q, want text-shaped material floor", sess.LastFloorText)
 	}
+	if len(sess.Messages) < 2 {
+		t.Fatalf("messages len = %d, want at least 2", len(sess.Messages))
+	}
+	last := sess.Messages[len(sess.Messages)-1]
+	if got := strings.TrimSpace(last.Content); got != provider.faceReplyText {
+		t.Fatalf("assistant scene content = %q, want rendered scene %q", got, provider.faceReplyText)
+	}
+	if !strings.Contains(last.FloorContent, "FACTS:") {
+		t.Fatalf("assistant floor content = %q, want structured floor sidecar", last.FloorContent)
+	}
+	if strings.Contains(last.Content, "FACTS:") {
+		t.Fatalf("assistant scene content leaked floor payload: %q", last.Content)
+	}
 }
 
 func TestConvergeTurnBrokeragePropagatesLiveContextToFaceNote(t *testing.T) {
@@ -645,6 +658,12 @@ func TestHandleInboundFaceFailureUsesSerializedFallbackAfterMaterialFloor(t *tes
 	if !strings.Contains(sess.LastFloorText, "FACTS:") {
 		t.Fatalf("session floor sidecar = %q, want structured floor sidecar", sess.LastFloorText)
 	}
+	if len(sess.Messages) < 2 {
+		t.Fatalf("messages len = %d, want at least 2", len(sess.Messages))
+	}
+	if !strings.Contains(sess.Messages[1].FloorContent, "FACTS:") {
+		t.Fatalf("assistant floor content = %q, want structured floor sidecar", sess.Messages[1].FloorContent)
+	}
 }
 
 func TestHandleInboundFloorFallbackBackendSerializesStructuredFloor(t *testing.T) {
@@ -704,6 +723,9 @@ func TestHandleInboundFloorFallbackBackendSerializesStructuredFloor(t *testing.T
 	}
 	if len(sess.Messages) < 2 || sess.Messages[1].Content != want {
 		t.Fatalf("visible transcript assistant content = %q, want serialized floor fallback", sess.Messages[1].Content)
+	}
+	if len(sess.Messages) >= 2 && !strings.Contains(sess.Messages[1].FloorContent, "FACTS:") {
+		t.Fatalf("assistant floor content = %q, want structured floor sidecar", sess.Messages[1].FloorContent)
 	}
 }
 

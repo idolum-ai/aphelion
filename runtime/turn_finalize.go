@@ -199,9 +199,15 @@ type turnCommitInput struct {
 	OutHistory      []agent.Message
 	HistoryInputLen int
 	Result          *core.TurnResult
-	FloorText       string
-	FloorMetadata   string
-	ReplyText       string
+	// FloorText is the governor floor sidecar captured for audit/provenance and
+	// future recovery; it is distinct from the visible scene text.
+	FloorText string
+	// FloorMetadata carries machine-readable sidecar provenance (hidden inputs,
+	// signal judgments, retained artifacts) and stays separate from scene text.
+	FloorMetadata string
+	// ReplyText is the visible assistant scene text that gets delivered/persisted
+	// as transcript content for this turn.
+	ReplyText      string
 	StreamedReply   bool
 	OutboundID      int64
 	OutboundType    string
@@ -416,15 +422,18 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 	if input.Result != nil {
 		usage = input.Result.TokenUsage
 	}
+	sceneText := strings.TrimSpace(input.ReplyText)
+	floorText := strings.TrimSpace(input.FloorText)
+	floorMetadata := strings.TrimSpace(input.FloorMetadata)
 
 	stageResult, err := turn.RunPersistStage(ctx, turn.PersistStageInput{
 		LedgerText:      input.Prepared.LedgerText,
 		OutHistory:      input.OutHistory,
 		HistoryInputLen: input.HistoryInputLen,
 		Session:         input.Sess,
-		ReplyText:       input.ReplyText,
-		FloorText:       input.FloorText,
-		FloorMetadata:   input.FloorMetadata,
+		ReplyText:       sceneText,
+		FloorText:       floorText,
+		FloorMetadata:   floorMetadata,
 		Usage:           usage,
 		ErrorContext: turn.PersistStageErrorContext{
 			ConvertMessages: input.ErrCtx.ConvertMessages,
@@ -464,7 +473,7 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 	}
 	out.Committed = stageResult.Committed
 	if out.Committed && input.Audit != nil && input.Result != nil {
-		input.Audit.RecordFinalReply(input.ReplyText, input.Result.Media, out.OutboundType)
+		input.Audit.RecordFinalReply(sceneText, input.Result.Media, out.OutboundType)
 	}
 	if out.Committed && input.Sess != nil {
 		r.recordTurnSidecarsCapturedEvent(input.Key, input.Sess)

@@ -35,16 +35,20 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 	if r == nil || r.store == nil {
 		return 0, fmt.Errorf("durable agent runtime store is nil")
 	}
-	agent.AgentID = strings.TrimSpace(agent.AgentID)
-	if agent.AgentID == "" {
-		return 0, fmt.Errorf("queue durable review artifact: agent_id is required")
+	// Durable identity comes from the durable-agent registry record. This keeps
+	// identity/config separate from durable_agent_state, which remains an
+	// operational current-state store for continuity/runtime posture.
+	identity, err := normalizeDurableAgentIdentity(agent)
+	if err != nil {
+		return 0, err
 	}
+	agent = identity
 	if agent.ReviewTargetChatID == 0 {
 		return 0, fmt.Errorf("queue durable review artifact: review_target_chat_id is required")
 	}
 
 	artifact.AgentID = firstNonEmpty(strings.TrimSpace(artifact.AgentID), agent.AgentID)
-	artifact, err := PrepareReviewArtifact(agent, artifact)
+	artifact, err = PrepareReviewArtifact(agent, artifact)
 	if err != nil {
 		return 0, fmt.Errorf("prepare durable review artifact: %w", err)
 	}
@@ -77,6 +81,10 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 	if state == nil {
 		state = &core.DurableAgentState{AgentID: agent.AgentID}
 	}
+	if stateAgentID := strings.TrimSpace(state.AgentID); stateAgentID != "" && stateAgentID != agent.AgentID {
+		return 0, fmt.Errorf("queue durable review artifact: durable agent state identity mismatch (state=%q, agent=%q)", stateAgentID, agent.AgentID)
+	}
+	state.AgentID = agent.AgentID
 	now := time.Now().UTC()
 	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
 	if err != nil {
@@ -96,6 +104,26 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 		return 0, err
 	}
 	return eventID, nil
+}
+
+func normalizeDurableAgentIdentity(agent core.DurableAgent) (core.DurableAgent, error) {
+	agent.AgentID = strings.TrimSpace(agent.AgentID)
+	if agent.AgentID == "" {
+		return core.DurableAgent{}, fmt.Errorf("queue durable review artifact: agent_id is required")
+	}
+	agent.ChannelKind = strings.TrimSpace(agent.ChannelKind)
+	parent := session.NormalizeScopeRef(session.ScopeRef{
+		Kind: session.ScopeKind(strings.TrimSpace(agent.ParentScopeKind)),
+		ID:   strings.TrimSpace(agent.ParentScopeID),
+	})
+	if parent.IsZero() {
+		agent.ParentScopeKind = strings.TrimSpace(agent.ParentScopeKind)
+		agent.ParentScopeID = strings.TrimSpace(agent.ParentScopeID)
+	} else {
+		agent.ParentScopeKind = string(parent.Kind)
+		agent.ParentScopeID = parent.ID
+	}
+	return agent, nil
 }
 
 func sourceScope(agent core.DurableAgent) session.ScopeRef {

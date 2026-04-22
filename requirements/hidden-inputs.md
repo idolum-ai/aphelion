@@ -106,6 +106,7 @@ In scene authorship:
 
 In audit state:
 - the floor sidecar should preserve the hidden inputs that shaped the floor when they were material
+- the persisted message split stays explicit: scene text in `messages.content`, floor payload in `messages.floor_content`, and provenance payload in `messages.floor_metadata`
 - this makes the system's behavior reviewable over time
 
 ### What Provenance Is Not
@@ -127,6 +128,7 @@ The governor floor reacts to hidden inputs by:
 - surfacing relevant unresolved commitments as explicit floor fields
 
 The floor does not perform. It reacts structurally. A hidden input that reveals a prior commitment becomes a `COMMITMENTS` or `REFUSALS` field. A hidden input that reveals a permission boundary narrows `ALLOWED_ACTIONS`.
+Its persisted shape is sidecar data (`messages.floor_content` + `messages.floor_metadata`), not user-facing scene text.
 
 ### Scene Reaction
 
@@ -137,6 +139,7 @@ Idolum reacts to hidden inputs by:
 - refusing to smooth over a real tension just because the user did not name it
 
 The scene should feel like it came from somewhere. That somewhere is the hidden input.
+Its persisted shape is transcript content (`messages.content`) and should not silently absorb floor sidecar fields.
 
 ### Brokerage as Signal Negotiation
 

@@ -49,7 +49,8 @@ func ApplyHiddenInputAwareness(aw prompt.RuntimeAwareness, input HiddenInputAwar
 	return aw
 }
 
-// ApplyPlanAwareness composes plan-state fields into runtime awareness.
+// ApplyPlanAwareness composes plan-state fields from the operational
+// current-state store into runtime awareness.
 func ApplyPlanAwareness(aw prompt.RuntimeAwareness, state session.PlanState) prompt.RuntimeAwareness {
 	state = session.NormalizePlanState(state)
 	aw.PlanActive = len(state.Steps) > 0
@@ -58,7 +59,8 @@ func ApplyPlanAwareness(aw prompt.RuntimeAwareness, state session.PlanState) pro
 	return aw
 }
 
-// ApplyOperationAwareness composes operation-state fields into runtime awareness.
+// ApplyOperationAwareness composes operation-state fields from the
+// operational current-state store into runtime awareness.
 func ApplyOperationAwareness(aw prompt.RuntimeAwareness, state session.OperationState) prompt.RuntimeAwareness {
 	state = session.NormalizeOperationState(state)
 	aw.OperationActive = state.Active()
@@ -97,7 +99,8 @@ func ApplyOperationAwareness(aw prompt.RuntimeAwareness, state session.Operation
 	return aw
 }
 
-// ApplyContinuationAwareness composes continuation-handshake signals into runtime awareness.
+// ApplyContinuationAwareness composes continuation-handshake signals from the
+// operational current-state store into runtime awareness.
 func ApplyContinuationAwareness(aw prompt.RuntimeAwareness, state session.ContinuationState) prompt.RuntimeAwareness {
 	state = session.NormalizeContinuationState(state)
 	aw.ContinuationStatus = strings.TrimSpace(string(state.Status))

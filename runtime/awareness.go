@@ -19,6 +19,8 @@ type providerStateReporter interface {
 }
 
 func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.TurnRunKind, channel string, exec pipeline.TurnExecutionContract) prompt.RuntimeAwareness {
+	// Runtime awareness blends immutable runtime configuration with
+	// operational current-state fields projected elsewhere in the pipeline.
 	if strings.TrimSpace(exec.Backend) == "" {
 		exec.Backend = strings.TrimSpace(r.governorBackend)
 	}
