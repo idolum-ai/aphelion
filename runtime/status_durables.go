@@ -54,21 +54,19 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 		}
 
 		hasRuntimeState := false
-		state, err := r.store.DurableAgentState(agent.AgentID)
+		runtimeState, err := r.store.DurableAgentRuntimeState(agent.AgentID)
 		if err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				return core.DurableAgentsStatusSnapshot{}, err
 			}
 		} else {
 			hasRuntimeState = true
-			row.LastWakeAt = state.LastWakeAt
-			row.LastReviewAt = state.LastReviewAt
-			row.DormantAt = state.DormantAt
-			row.LastAppliedPolicyVersion = state.LastAppliedPolicyVersion
-			row.LastAppliedPolicyAt = state.LastAppliedPolicyAt
-			row.LastApplyStatus = strings.TrimSpace(state.LastApplyStatus)
-			row.LastApplyError = strings.TrimSpace(state.LastApplyError)
-			continuity, parseErr := core.ParseDurableAgentContinuityState(state.StateJSON)
+			row.LastWakeAt = runtimeState.LastWakeAt
+			row.LastReviewAt = runtimeState.LastReviewAt
+			row.DormantAt = runtimeState.DormantAt
+			row.LastApplyStatus = strings.TrimSpace(runtimeState.LastApplyStatus)
+			row.LastApplyError = strings.TrimSpace(runtimeState.LastApplyError)
+			continuity, parseErr := core.ParseDurableAgentContinuityState(runtimeState.StateJSON)
 			if parseErr != nil {
 				return core.DurableAgentsStatusSnapshot{}, parseErr
 			}
@@ -84,6 +82,16 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 				row.CapacityLastProbedAt = contract.LastProbedAt
 				row.CapacityLastAttestedAt = contract.LastAttestedAt
 			}
+		}
+		identityState, err := r.store.DurableAgentIdentityState(agent.AgentID)
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return core.DurableAgentsStatusSnapshot{}, err
+			}
+		} else {
+			row.LastAppliedPolicyVersion = identityState.LastAppliedPolicyVersion
+			row.LastAppliedPolicyAt = identityState.LastAppliedPolicyAt
+			row.IdentitySource = "canonical:session.durable_agents+canonical:session.durable_agent_identity_state"
 		}
 
 		enrollment, err := r.store.DurableAgentRemoteEnrollment(agent.AgentID)

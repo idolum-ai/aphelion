@@ -105,6 +105,67 @@ type DurableAgentState struct {
 	UpdatedAt                     time.Time
 }
 
+// DurableAgentIdentityState stores durable policy-handshake identity that
+// should remain canonical and independent from runtime wake posture.
+type DurableAgentIdentityState struct {
+	AgentID                       string
+	LastOfferedPolicyVersion      int64
+	LastOfferedPolicyHash         string
+	LastOfferedPolicyAt           time.Time
+	LastAcknowledgedPolicyVersion int64
+	LastAcknowledgedPolicyHash    string
+	LastAcknowledgedPolicyAt      time.Time
+	LastAppliedPolicyVersion      int64
+	LastAppliedPolicyHash         string
+	LastAppliedPolicyAt           time.Time
+	UpdatedAt                     time.Time
+}
+
+// DurableAgentRuntimeState stores runtime/apply posture and continuity data.
+type DurableAgentRuntimeState struct {
+	AgentID         string
+	Cursor          string
+	Status          string
+	StateJSON       string
+	LastApplyStatus string
+	LastApplyError  string
+	LastWakeAt      time.Time
+	LastReviewAt    time.Time
+	DormantAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func DurableAgentIdentityStateFrom(state DurableAgentState) DurableAgentIdentityState {
+	return DurableAgentIdentityState{
+		AgentID:                       state.AgentID,
+		LastOfferedPolicyVersion:      state.LastOfferedPolicyVersion,
+		LastOfferedPolicyHash:         state.LastOfferedPolicyHash,
+		LastOfferedPolicyAt:           state.LastOfferedPolicyAt,
+		LastAcknowledgedPolicyVersion: state.LastAcknowledgedPolicyVersion,
+		LastAcknowledgedPolicyHash:    state.LastAcknowledgedPolicyHash,
+		LastAcknowledgedPolicyAt:      state.LastAcknowledgedPolicyAt,
+		LastAppliedPolicyVersion:      state.LastAppliedPolicyVersion,
+		LastAppliedPolicyHash:         state.LastAppliedPolicyHash,
+		LastAppliedPolicyAt:           state.LastAppliedPolicyAt,
+		UpdatedAt:                     state.UpdatedAt,
+	}
+}
+
+func DurableAgentRuntimeStateFrom(state DurableAgentState) DurableAgentRuntimeState {
+	return DurableAgentRuntimeState{
+		AgentID:         state.AgentID,
+		Cursor:          state.Cursor,
+		Status:          state.Status,
+		StateJSON:       state.StateJSON,
+		LastApplyStatus: state.LastApplyStatus,
+		LastApplyError:  state.LastApplyError,
+		LastWakeAt:      state.LastWakeAt,
+		LastReviewAt:    state.LastReviewAt,
+		DormantAt:       state.DormantAt,
+		UpdatedAt:       state.UpdatedAt,
+	}
+}
+
 type DurableAgentContinuityState struct {
 	RecentInteractions []DurableAgentRecentInteraction `json:"recent_interactions,omitempty"`
 	PendingQuestions   []DurableAgentPendingQuestion   `json:"pending_questions,omitempty"`

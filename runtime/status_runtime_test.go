@@ -1364,8 +1364,12 @@ func TestDurableAgentsStatusSnapshotIncludesHealthSignals(t *testing.T) {
 		t.Fatalf("agent-inactive health = %q, want inactive", healthByID["agent-inactive"])
 	}
 	for id, source := range identitySourceByID {
-		if source != "canonical:session.durable_agents" {
-			t.Fatalf("identity source for %s = %q, want canonical:session.durable_agents", id, source)
+		want := "canonical:session.durable_agents"
+		if id == "agent-dormant" || id == "agent-degraded" {
+			want = "canonical:session.durable_agents+canonical:session.durable_agent_identity_state"
+		}
+		if source != want {
+			t.Fatalf("identity source for %s = %q, want %s", id, source, want)
 		}
 	}
 	for id, source := range runtimeSourceByID {
@@ -1526,8 +1530,8 @@ func TestDurableAgentsStatusSnapshotOverlaysPolicyFailureFromExecutionEvents(t *
 	if row.Health != "degraded" {
 		t.Fatalf("Health = %q, want degraded after TES policy failure", row.Health)
 	}
-	if strings.TrimSpace(row.IdentitySource) != "canonical:session.durable_agents" {
-		t.Fatalf("IdentitySource = %q, want canonical:session.durable_agents", row.IdentitySource)
+	if strings.TrimSpace(row.IdentitySource) != "canonical:session.durable_agents+canonical:session.durable_agent_identity_state" {
+		t.Fatalf("IdentitySource = %q, want canonical durable agent identity+registry source", row.IdentitySource)
 	}
 	if strings.TrimSpace(row.RuntimePostureSource) != "operational_current_state_store:session.durable_agent_state+projection:tes_execution_events" {
 		t.Fatalf("RuntimePostureSource = %q, want combined operational+projection source", row.RuntimePostureSource)
@@ -1662,8 +1666,8 @@ func TestDurableAgentsStatusSnapshotKeepsCanonicalIdentityWhenOperationalStateCo
 	if row.ChannelKind != "telegram_group" {
 		t.Fatalf("ChannelKind = %q, want canonical durable_agents channel telegram_group", row.ChannelKind)
 	}
-	if strings.TrimSpace(row.IdentitySource) != "canonical:session.durable_agents" {
-		t.Fatalf("IdentitySource = %q, want canonical:session.durable_agents", row.IdentitySource)
+	if strings.TrimSpace(row.IdentitySource) != "canonical:session.durable_agents+canonical:session.durable_agent_identity_state" {
+		t.Fatalf("IdentitySource = %q, want canonical durable agent identity+registry source", row.IdentitySource)
 	}
 }
 

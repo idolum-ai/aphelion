@@ -1334,6 +1334,132 @@ func TestDurableAgentEmailChannelConfigRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDurableAgentStateSplitRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	agent := core.DurableAgent{
+		AgentID:            "state-split-agent",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Observe and report bounded research updates.",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-test",
+			Model:          "openrouter/test-model",
+		},
+		Status: "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	wakeAt := time.Now().UTC().Add(-10 * time.Minute).Round(0)
+	reviewAt := time.Now().UTC().Add(-2 * time.Minute).Round(0)
+	runtimeState := core.DurableAgentRuntimeState{
+		AgentID:         agent.AgentID,
+		Cursor:          "message-42",
+		Status:          "awake",
+		StateJSON:       `{"continuity":"ok"}`,
+		LastApplyStatus: "pending",
+		LastApplyError:  "",
+		LastWakeAt:      wakeAt,
+		LastReviewAt:    reviewAt,
+	}
+	if err := store.SaveDurableAgentRuntimeState(runtimeState); err != nil {
+		t.Fatalf("SaveDurableAgentRuntimeState() err = %v", err)
+	}
+
+	issuedAt := time.Now().UTC().Add(-30 * time.Minute).Round(0)
+	identityState := core.DurableAgentIdentityState{
+		AgentID:                       agent.AgentID,
+		LastOfferedPolicyVersion:      3,
+		LastOfferedPolicyHash:         "hash-offered",
+		LastOfferedPolicyAt:           issuedAt,
+		LastAcknowledgedPolicyVersion: 3,
+		LastAcknowledgedPolicyHash:    "hash-ack",
+		LastAcknowledgedPolicyAt:      issuedAt.Add(2 * time.Minute),
+		LastAppliedPolicyVersion:      3,
+		LastAppliedPolicyHash:         "hash-applied",
+		LastAppliedPolicyAt:           issuedAt.Add(3 * time.Minute),
+	}
+	if err := store.SaveDurableAgentIdentityState(identityState); err != nil {
+		t.Fatalf("SaveDurableAgentIdentityState() err = %v", err)
+	}
+
+	gotRuntime, err := store.DurableAgentRuntimeState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRuntimeState() err = %v", err)
+	}
+	if gotRuntime.Cursor != runtimeState.Cursor || gotRuntime.Status != runtimeState.Status {
+		t.Fatalf("DurableAgentRuntimeState() = %#v, want cursor/status preserved", gotRuntime)
+	}
+	if gotRuntime.LastApplyStatus != "pending" {
+		t.Fatalf("DurableAgentRuntimeState().LastApplyStatus = %q, want pending", gotRuntime.LastApplyStatus)
+	}
+
+	gotIdentity, err := store.DurableAgentIdentityState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentIdentityState() err = %v", err)
+	}
+	if gotIdentity.LastAppliedPolicyVersion != 3 {
+		t.Fatalf("DurableAgentIdentityState().LastAppliedPolicyVersion = %d, want 3", gotIdentity.LastAppliedPolicyVersion)
+	}
+	if gotIdentity.LastAppliedPolicyHash != "hash-applied" {
+		t.Fatalf("DurableAgentIdentityState().LastAppliedPolicyHash = %q, want hash-applied", gotIdentity.LastAppliedPolicyHash)
+	}
+
+	combined, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if combined.Cursor != runtimeState.Cursor {
+		t.Fatalf("DurableAgentState().Cursor = %q, want %q", combined.Cursor, runtimeState.Cursor)
+	}
+	if combined.LastAppliedPolicyVersion != identityState.LastAppliedPolicyVersion {
+		t.Fatalf("DurableAgentState().LastAppliedPolicyVersion = %d, want %d", combined.LastAppliedPolicyVersion, identityState.LastAppliedPolicyVersion)
+	}
+
+	runtimeState.Status = "dormant"
+	runtimeState.DormantAt = time.Now().UTC().Round(0)
+	runtimeState.LastApplyStatus = "failed"
+	runtimeState.LastApplyError = "child runtime unavailable"
+	if err := store.SaveDurableAgentRuntimeState(runtimeState); err != nil {
+		t.Fatalf("SaveDurableAgentRuntimeState(update) err = %v", err)
+	}
+
+	identityAfterRuntimeUpdate, err := store.DurableAgentIdentityState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentIdentityState(after runtime update) err = %v", err)
+	}
+	if identityAfterRuntimeUpdate.LastAppliedPolicyVersion != identityState.LastAppliedPolicyVersion {
+		t.Fatalf("identity changed by runtime update: got %d want %d", identityAfterRuntimeUpdate.LastAppliedPolicyVersion, identityState.LastAppliedPolicyVersion)
+	}
+
+	identityState.LastOfferedPolicyVersion = 4
+	identityState.LastOfferedPolicyHash = "hash-offered-4"
+	identityState.LastOfferedPolicyAt = time.Now().UTC().Round(0)
+	if err := store.SaveDurableAgentIdentityState(identityState); err != nil {
+		t.Fatalf("SaveDurableAgentIdentityState(update) err = %v", err)
+	}
+
+	runtimeAfterIdentityUpdate, err := store.DurableAgentRuntimeState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRuntimeState(after identity update) err = %v", err)
+	}
+	if runtimeAfterIdentityUpdate.Status != runtimeState.Status || runtimeAfterIdentityUpdate.LastApplyStatus != runtimeState.LastApplyStatus {
+		t.Fatalf("runtime changed by identity update: got %#v want status=%q apply_status=%q", runtimeAfterIdentityUpdate, runtimeState.Status, runtimeState.LastApplyStatus)
+	}
+}
+
 func TestApplyDurableAgentLivePolicyRejectsBootstrapCeilingWidening(t *testing.T) {
 	t.Parallel()
 
@@ -2304,6 +2430,118 @@ func TestInitBackfillsArtifactIndexFromExistingSessionFloorMetadata(t *testing.T
 	}
 	if hits[0].MaterializedPath != "/tmp/legacy-roadmap.pdf" {
 		t.Fatalf("MaterializedPath = %q, want /tmp/legacy-roadmap.pdf", hits[0].MaterializedPath)
+	}
+}
+
+func TestInitBackfillsDurableAgentIdentityStateFromLegacyDurableAgentStateColumns(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "legacy-durable-identity-state.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed) err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "legacy-family-group",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Observe and report.",
+			CapabilityEnvelope: []string{"group_reply", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-test",
+			Model:          "openrouter/test-model",
+		},
+		Status: "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.SaveDurableAgentRuntimeState(core.DurableAgentRuntimeState{
+		AgentID:         agent.AgentID,
+		Cursor:          "legacy-cursor",
+		Status:          "dormant",
+		LastApplyStatus: "failed",
+		LastApplyError:  "legacy runtime failure",
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentRuntimeState(seed) err = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close(seed store) err = %v", err)
+	}
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	legacyMutations := []string{
+		`DROP TABLE durable_agent_identity_state`,
+		`DELETE FROM schema_version`,
+		`INSERT INTO schema_version(version) VALUES (25)`,
+		`ALTER TABLE durable_agent_state ADD COLUMN last_offered_policy_version INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE durable_agent_state ADD COLUMN last_offered_policy_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE durable_agent_state ADD COLUMN last_offered_policy_at TEXT`,
+		`ALTER TABLE durable_agent_state ADD COLUMN last_acknowledged_policy_version INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE durable_agent_state ADD COLUMN last_acknowledged_policy_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE durable_agent_state ADD COLUMN last_acknowledged_policy_at TEXT`,
+		`ALTER TABLE durable_agent_state ADD COLUMN last_applied_policy_version INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE durable_agent_state ADD COLUMN last_applied_policy_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE durable_agent_state ADD COLUMN last_applied_policy_at TEXT`,
+		`UPDATE durable_agent_state
+			SET last_offered_policy_version = 7,
+				last_offered_policy_hash = 'legacy-offered-hash',
+				last_offered_policy_at = '2026-04-21T10:00:00Z',
+				last_acknowledged_policy_version = 7,
+				last_acknowledged_policy_hash = 'legacy-ack-hash',
+				last_acknowledged_policy_at = '2026-04-21T10:01:00Z',
+				last_applied_policy_version = 6,
+				last_applied_policy_hash = 'legacy-applied-hash',
+				last_applied_policy_at = '2026-04-21T10:02:00Z'
+			WHERE agent_id = 'legacy-family-group'`,
+	}
+	for _, stmt := range legacyMutations {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("exec legacy mutation %q: %v", stmt, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close sqlite db: %v", err)
+	}
+
+	migrated, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(migrated) err = %v", err)
+	}
+	defer migrated.Close()
+
+	identity, err := migrated.DurableAgentIdentityState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentIdentityState() err = %v", err)
+	}
+	if identity.LastOfferedPolicyVersion != 7 {
+		t.Fatalf("LastOfferedPolicyVersion = %d, want 7", identity.LastOfferedPolicyVersion)
+	}
+	if identity.LastAcknowledgedPolicyVersion != 7 {
+		t.Fatalf("LastAcknowledgedPolicyVersion = %d, want 7", identity.LastAcknowledgedPolicyVersion)
+	}
+	if identity.LastAppliedPolicyVersion != 6 {
+		t.Fatalf("LastAppliedPolicyVersion = %d, want 6", identity.LastAppliedPolicyVersion)
+	}
+	if identity.LastAppliedPolicyHash != "legacy-applied-hash" {
+		t.Fatalf("LastAppliedPolicyHash = %q, want legacy-applied-hash", identity.LastAppliedPolicyHash)
+	}
+
+	runtimeState, err := migrated.DurableAgentRuntimeState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRuntimeState() err = %v", err)
+	}
+	if runtimeState.LastApplyStatus != "failed" || runtimeState.LastApplyError != "legacy runtime failure" {
+		t.Fatalf("runtime state = %#v, want preserved runtime apply posture", runtimeState)
 	}
 }
 
