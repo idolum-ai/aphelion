@@ -30,11 +30,15 @@ Classifications below use the shared truth classes defined in
 | --- | --- | --- |
 | `session.execution_events` | canonical | What happened in runtime, in what order? |
 | `session.messages` | canonical | What scene text was recorded for the session? |
-| `session.outbound_messages` | canonical | Which outbound message deliveries were recorded? |
+| `messages.floor_content` | canonical | What floor text was captured alongside scene text at message-record time? |
+| `messages.floor_metadata` | canonical | What floor metadata/artifact references were captured alongside scene text at message-record time? |
+| `session.outbound_messages` | canonical | Which outbound deliveries were recorded at the transport ledger level (not guaranteed human render)? |
 | `session.review_events (status='delivered')` | canonical | Which bounded review artifacts were shown to humans? |
 | Parent/child memory files and `rhizome_*` tables | canonical | What durable meaning has been retained over time? |
 | `session.durable_agents` | operational current-state store | What durable-child policy/config is currently declared? |
 | `session.durable_agent_state` | operational current-state store | What durable-child runtime/apply status is currently declared? |
+| `sessions.last_floor_text` | operational current-state store | What floor text is currently declared for the active session? |
+| `sessions.last_floor_metadata` | operational current-state store | What floor metadata is currently declared for the active session? |
 | `sessions.plan_state_json` | operational current-state store | What plan intent is currently declared? |
 | `sessions.operation_state_json` | operational current-state store | What operation intent/stage is currently declared? |
 | `pending_decisions` | operational current-state store | What decisions are currently pending and actionable? |
@@ -44,6 +48,14 @@ Classifications below use the shared truth classes defined in
 | `/debug` | projection | How should execution evidence be rendered for diagnosis now? |
 | Quick-read and progress render blocks | projection | What compact operator narration should be surfaced now? |
 | `turn_runs` | compatibility fallback | What recovery/runtime hints are available when newer surfaces are incomplete? |
+
+Staged identity decision:
+
+- `session.durable_agents` and `session.durable_agent_state` are currently
+  classified as operational current-state stores.
+- Target direction is to promote these stores into canonical identity/config
+  surfaces after runtime/apply fields are fully normalized around identity
+  semantics.
 
 ## Why This Matters
 

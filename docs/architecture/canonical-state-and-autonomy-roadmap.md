@@ -89,6 +89,10 @@ Design stance:
 - identity is mutable current-state description
 - bootstrap changes should update identity/config, not rewrite memory
 - operator inspection of "what is this agent now?" should read from identity
+- migration decision: `session.durable_agents` and
+  `session.durable_agent_state` are currently operational current-state stores
+  and are intended to be promoted into canonical identity/config surfaces (no
+  separate identity store is planned unless that promotion fails)
 
 This is especially important for durable children. If a child's substrate changes,
 its identity surface should reflect that immediately and explicitly.
@@ -201,11 +205,15 @@ Classifications use the shared truth classes from
 | --- | --- | --- | --- |
 | `session.execution_events` | canonical | What happened, in what order? | Append-only runtime facts for ingress/turn/tool/delivery/control and durable lifecycle. |
 | `session.messages` | canonical | What scene text was recorded for the session? | User/assistant/tool scene ledger. |
-| `session.outbound_messages` | canonical | Which outbound message deliveries were recorded? | Delivery audit for transport-facing sends. |
+| `messages.floor_content` | canonical | What floor text was captured alongside scene text at message-record time? | Canonical floor-text payload attached to scene records. |
+| `messages.floor_metadata` | canonical | What floor metadata/artifact references were captured alongside scene text at message-record time? | Canonical structured floor payload attached to scene records. |
+| `session.outbound_messages` | canonical | Which outbound deliveries were recorded at the transport ledger level? | Canonical delivery ledger only; not proof that a human client rendered/read the message. |
 | `session.review_events (status='delivered')` | canonical | Which bounded review artifacts were shown to humans? | Delivered review artifacts are part of transcript history. |
 | Parent/child memory files and `rhizome_*` tables | canonical | What was retained over time and why? | Durable historical meaning (facts, decisions, questions, patterns). |
 | `session.durable_agents` | operational current-state store | What durable-child policy/config is currently declared? | Mutable child identity and capability envelope. |
 | `session.durable_agent_state` | operational current-state store | What durable-child runtime/apply state is currently declared? | Live child runtime and policy-apply posture. |
+| `sessions.last_floor_text` | operational current-state store | What floor text is currently declared for the active session? | Latest floor-text snapshot used for current turn context. |
+| `sessions.last_floor_metadata` | operational current-state store | What floor metadata is currently declared for the active session? | Latest floor-metadata snapshot used for current turn context. |
 | `sessions.plan_state_json` | operational current-state store | What plan intent is currently declared? | Runtime-declared plan state for the active session. |
 | `sessions.operation_state_json` | operational current-state store | What operation intent/stage is currently declared? | Runtime-declared operation state for the active session. |
 | `pending_decisions` | operational current-state store | What decisions are currently pending and actionable? | Live governance queue authority until TES-only control projections fully replace it. |
