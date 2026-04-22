@@ -258,38 +258,51 @@ func isGroupLikeChatType(chatType string) bool {
 }
 
 func latestTurnPhaseFromExecutionEvents(events []session.ExecutionEvent) (statusTurnPhase, bool) {
-	for i := len(events) - 1; i >= 0; i-- {
-		event := events[i]
-		if strings.TrimSpace(event.EventType) != core.ExecutionEventTurnStageChanged {
-			continue
-		}
-		summary := ""
-		raw := strings.TrimSpace(event.PayloadJSON)
-		if raw != "" {
-			var payload map[string]any
-			if err := json.Unmarshal([]byte(raw), &payload); err == nil {
-				if value, ok := payload["summary"]; ok {
-					summary = strings.TrimSpace(fmt.Sprint(value))
+	activeTurn := false
+	latestPhase := statusTurnPhase{}
+	for _, event := range events {
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventTurnStarted:
+			activeTurn = true
+			latestPhase = statusTurnPhase{}
+		case core.ExecutionEventTurnCompleted, core.ExecutionEventTurnFailed, core.ExecutionEventTurnInterrupted:
+			activeTurn = false
+			latestPhase = statusTurnPhase{}
+		case core.ExecutionEventTurnStageChanged:
+			if !activeTurn {
+				continue
+			}
+			summary := ""
+			raw := strings.TrimSpace(event.PayloadJSON)
+			if raw != "" {
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(raw), &payload); err == nil {
+					if value, ok := payload["summary"]; ok {
+						summary = strings.TrimSpace(fmt.Sprint(value))
+					}
 				}
 			}
+			phase := strings.TrimSpace(event.Stage)
+			if phase == "" {
+				phase = strings.TrimSpace(event.Status)
+			}
+			if phase == "" {
+				phase = strings.TrimSpace(firstStringField(event.PayloadJSON, "phase"))
+			}
+			if phase == "" {
+				continue
+			}
+			latestPhase = statusTurnPhase{
+				Phase:     phase,
+				Summary:   summary,
+				UpdatedAt: event.CreatedAt,
+			}
 		}
-		phase := strings.TrimSpace(event.Stage)
-		if phase == "" {
-			phase = strings.TrimSpace(event.Status)
-		}
-		if phase == "" {
-			phase = strings.TrimSpace(firstStringField(event.PayloadJSON, "phase"))
-		}
-		if phase == "" {
-			continue
-		}
-		return statusTurnPhase{
-			Phase:     phase,
-			Summary:   summary,
-			UpdatedAt: event.CreatedAt,
-		}, true
 	}
-	return statusTurnPhase{}, false
+	if !activeTurn || strings.TrimSpace(latestPhase.Phase) == "" {
+		return statusTurnPhase{}, false
+	}
+	return latestPhase, true
 }
 
 func firstStringField(rawJSON string, key string) string {

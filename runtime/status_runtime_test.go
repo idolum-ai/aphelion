@@ -772,14 +772,20 @@ func TestChatStatusSnapshotIncludesTurnPhaseFromExecutionEvents(t *testing.T) {
 
 	key := session.SessionKey{ChatID: 7344, UserID: 0, Scope: telegramDMScopeRef(7344)}
 	now := time.Now().UTC()
-	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType:   core.ExecutionEventTurnStarted,
+		Stage:       "turn",
+		Status:      "running",
+		PayloadJSON: `{"turn_kind":"interactive"}`,
+		CreatedAt:   now,
+	}, {
 		EventType:   core.ExecutionEventTurnStageChanged,
 		Stage:       "render",
 		Status:      "active",
 		PayloadJSON: `{"phase":"render","summary":"authoring scene reply"}`,
-		CreatedAt:   now,
-	}); err != nil {
-		t.Fatalf("AppendExecutionEvent(turn stage changed) err = %v", err)
+		CreatedAt:   now.Add(2 * time.Second),
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents(turn lifecycle) err = %v", err)
 	}
 
 	snapshot, err := rt.ChatStatusSnapshot(7344, core.RouterStatusSnapshot{
@@ -796,6 +802,48 @@ func TestChatStatusSnapshotIncludesTurnPhaseFromExecutionEvents(t *testing.T) {
 	}
 	if snapshot.TurnPhaseUpdatedAt.IsZero() {
 		t.Fatalf("TurnPhaseUpdatedAt = %s, want non-zero timestamp", snapshot.TurnPhaseUpdatedAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestChatStatusSnapshotClearsTurnPhaseAfterTerminalEvent(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7346, UserID: 0, Scope: telegramDMScopeRef(7346)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType:   core.ExecutionEventTurnStarted,
+		Stage:       "turn",
+		Status:      "running",
+		PayloadJSON: `{"turn_kind":"interactive"}`,
+		CreatedAt:   now,
+	}, {
+		EventType:   core.ExecutionEventTurnStageChanged,
+		Stage:       "governor",
+		Status:      "active",
+		PayloadJSON: `{"summary":"running governor loop"}`,
+		CreatedAt:   now.Add(time.Second),
+	}, {
+		EventType:   core.ExecutionEventTurnCompleted,
+		Stage:       "turn",
+		Status:      "completed",
+		PayloadJSON: `{"turn_kind":"interactive"}`,
+		CreatedAt:   now.Add(2 * time.Second),
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents(turn lifecycle) err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(7346, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if snapshot.TurnPhase != "" {
+		t.Fatalf("TurnPhase = %q, want empty after completed terminal event", snapshot.TurnPhase)
 	}
 }
 

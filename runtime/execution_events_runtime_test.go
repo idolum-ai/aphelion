@@ -61,15 +61,22 @@ func TestChatStatusSnapshotUsesExecutionEventPhase(t *testing.T) {
 
 	chatID := int64(99102)
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
-	_, err = store.AppendExecutionEvent(key, session.ExecutionEventInput{
+	startedAt := time.Now().UTC()
+	_, err = store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType:   core.ExecutionEventTurnStarted,
+		Stage:       "turn",
+		Status:      "running",
+		PayloadJSON: `{"turn_kind":"interactive"}`,
+		CreatedAt:   startedAt,
+	}, {
 		EventType:   core.ExecutionEventTurnStageChanged,
 		Stage:       "governor",
 		Status:      "active",
 		PayloadJSON: `{"summary":"running governor loop"}`,
-		CreatedAt:   time.Now().UTC(),
-	})
+		CreatedAt:   startedAt.Add(time.Second),
+	}})
 	if err != nil {
-		t.Fatalf("AppendExecutionEvent() err = %v", err)
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
 	}
 
 	snapshot, err := rt.ChatStatusSnapshot(chatID, core.RouterStatusSnapshot{})
