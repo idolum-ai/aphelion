@@ -243,7 +243,7 @@ func renderDurablesSourceAttributionBlock() []string {
 	return []string{
 		"source_attribution_durables:",
 		"- field=durable_identity class=canonical store=session.durable_agents",
-		"- field=durable_runtime_posture class=operational_current_state_store store=session.durable_agent_state",
+		"- field=durable_runtime_posture class=operational_current_state_store preferred=session.durable_agent_state overlay=projection:tes_execution_events",
 	}
 }
 
