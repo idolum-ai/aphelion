@@ -83,6 +83,53 @@ func TestStatusDiagnosticsReturnsEmptyWithoutSessionHistory(t *testing.T) {
 	}
 }
 
+func TestStatusDiagnosticsPrefersTurnProjectionFromExecutionEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9333, UserID: 0, Scope: telegramDMScopeRef(9333)}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "legacy failed row")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, "legacy failure"); err != nil {
+		t.Fatalf("CompleteTurnRun() err = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType:   core.ExecutionEventTurnStarted,
+		Stage:       "turn",
+		Status:      "running",
+		PayloadJSON: `{"turn_kind":"interactive","request_text":"event timeline"}`,
+		CreatedAt:   now.Add(time.Second),
+	}, {
+		EventType:   core.ExecutionEventTurnCompleted,
+		Stage:       "turn",
+		Status:      "completed",
+		PayloadJSON: `{"turn_kind":"interactive","request_text":"event timeline"}`,
+		CreatedAt:   now.Add(2 * time.Second),
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	lines, err := rt.StatusDiagnostics(9333)
+	if err != nil {
+		t.Fatalf("StatusDiagnostics() err = %v", err)
+	}
+	text := strings.ToLower(strings.Join(lines, "\n"))
+	if !strings.Contains(text, "completed") {
+		t.Fatalf("StatusDiagnostics() = %q, want completed state from TES projection", text)
+	}
+	if strings.Contains(text, "failed") {
+		t.Fatalf("StatusDiagnostics() = %q, do not want stale failed state from legacy row", text)
+	}
+}
+
 func TestIsTelegramAdmin(t *testing.T) {
 	t.Parallel()
 
