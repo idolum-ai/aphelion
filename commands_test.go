@@ -1100,6 +1100,47 @@ func TestHandleTelegramCommandDebugForAdminIncludesSystemAndDurables(t *testing.
 	}
 }
 
+func TestHandleTelegramCommandDebugRewritesInconsistentQuickSummary(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID: 7,
+			LatestTurnRun: &core.TurnRunStatusSnapshot{
+				ID:     91,
+				Status: "failed",
+				Kind:   "interactive",
+			},
+		},
+		statusReadableSummary: "Chat 7 is idle and all done.",
+		personaEffort:         "sonnet",
+		governorEffort:        "medium",
+		canRestart:            false,
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1002,
+		Text:     "/debug",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	got := strings.ToLower(sender.inline[0].text)
+	if !strings.Contains(got, "quick read: chat 7 is failed") {
+		t.Fatalf("debug text = %q, want grounded failed quick summary", sender.inline[0].text)
+	}
+	if strings.Contains(got, "idle and all done") {
+		t.Fatalf("debug text = %q, do not want inconsistent readable summary", sender.inline[0].text)
+	}
+}
+
 func TestHandleTelegramCommandCallbackDebugReadMoreExpandsFullSnapshot(t *testing.T) {
 	t.Parallel()
 

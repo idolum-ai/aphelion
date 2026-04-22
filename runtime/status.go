@@ -126,6 +126,10 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 			return core.ChatStatusSnapshot{}, eventsErr
 		}
 		snapshot.RecentExecution = summarizeExecutionEvents(events, 12)
+		if latestFromEvents, ok := latestTurnSnapshotForChatFromExecutionEvents(events, chatID); ok {
+			copied := latestFromEvents
+			snapshot.LatestTurnRun = &copied
+		}
 		if phase, ok := latestTurnPhaseFromExecutionEvents(events); ok {
 			snapshot.TurnPhase = strings.TrimSpace(phase.Phase)
 			snapshot.TurnPhaseSummary = strings.TrimSpace(phase.Summary)
@@ -190,6 +194,9 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		return core.SystemStatusSnapshot{}, err
 	}
 	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
+	for chatID, run := range latestTurnSnapshotsByChatFromExecutionEvents(recentEvents) {
+		snapshot.LatestTurnRunsByChat[chatID] = run
+	}
 
 	decisionEventState, err := r.decisionEventStates(now.Add(-7*24*time.Hour), 2000)
 	if err != nil {
@@ -311,6 +318,9 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		return core.SystemStatusSnapshot{}, err
 	}
 	for _, run := range latestRuns {
+		if _, exists := snapshot.LatestTurnRunsByChat[run.ChatID]; exists {
+			continue
+		}
 		snapshot.LatestTurnRunsByChat[run.ChatID] = turnRunSnapshot(run)
 	}
 
@@ -830,6 +840,138 @@ func summarizeExecutionEventPayload(payload map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func latestTurnSnapshotForChatFromExecutionEvents(events []session.ExecutionEvent, chatID int64) (core.TurnRunStatusSnapshot, bool) {
+	if chatID == 0 || len(events) == 0 {
+		return core.TurnRunStatusSnapshot{}, false
+	}
+	byChat := latestTurnSnapshotsByChatFromExecutionEvents(events)
+	latest, ok := byChat[chatID]
+	if !ok {
+		return core.TurnRunStatusSnapshot{}, false
+	}
+	return latest, true
+}
+
+func latestTurnSnapshotsByChatFromExecutionEvents(events []session.ExecutionEvent) map[int64]core.TurnRunStatusSnapshot {
+	if len(events) == 0 {
+		return map[int64]core.TurnRunStatusSnapshot{}
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+
+	out := make(map[int64]core.TurnRunStatusSnapshot, 16)
+	for _, event := range ordered {
+		chatID := event.ChatID
+		if chatID == 0 {
+			continue
+		}
+		eventType := strings.TrimSpace(event.EventType)
+		payload := executionEventPayload(event.PayloadJSON)
+
+		switch eventType {
+		case core.ExecutionEventTurnStarted:
+			runID, _ := payloadInt64(payload, "run_id")
+			runKind := firstNonEmpty(payloadString(payload, "run_kind"), "interactive")
+			out[chatID] = core.TurnRunStatusSnapshot{
+				ID:             runID,
+				ChatID:         chatID,
+				Kind:           strings.TrimSpace(runKind),
+				Status:         string(session.TurnRunStatusRunning),
+				RequestText:    truncateStatusDiagnostic(strings.TrimSpace(payloadString(payload, "request_text")), 220),
+				StartedAt:      event.CreatedAt,
+				LastActivityAt: event.CreatedAt,
+			}
+		case core.ExecutionEventTurnStageChanged:
+			snapshot := ensureEventTurnSnapshot(out, chatID, event.CreatedAt)
+			if strings.TrimSpace(snapshot.Status) == "" {
+				snapshot.Status = string(session.TurnRunStatusRunning)
+			}
+			out[chatID] = snapshot
+		case core.ExecutionEventToolStarted:
+			snapshot := ensureEventTurnSnapshot(out, chatID, event.CreatedAt)
+			if strings.TrimSpace(snapshot.Status) == "" {
+				snapshot.Status = string(session.TurnRunStatusRunning)
+			}
+			toolName := strings.TrimSpace(payloadString(payload, "tool"))
+			if toolName != "" {
+				snapshot.LastToolName = toolName
+			}
+			preview := strings.TrimSpace(payloadString(payload, "preview"))
+			if preview != "" {
+				snapshot.LastToolPreview = truncateStatusDiagnostic(preview, 220)
+			}
+			out[chatID] = snapshot
+		case core.ExecutionEventToolSucceeded:
+			snapshot := ensureEventTurnSnapshot(out, chatID, event.CreatedAt)
+			if strings.TrimSpace(snapshot.Status) == "" {
+				snapshot.Status = string(session.TurnRunStatusRunning)
+			}
+			toolName := strings.TrimSpace(payloadString(payload, "tool"))
+			if toolName != "" {
+				snapshot.LastToolName = toolName
+			}
+			result := strings.TrimSpace(payloadString(payload, "result_preview"))
+			if result != "" {
+				snapshot.LastToolResultPreview = truncateStatusDiagnostic(result, 220)
+			}
+			out[chatID] = snapshot
+		case core.ExecutionEventToolFailed:
+			snapshot := ensureEventTurnSnapshot(out, chatID, event.CreatedAt)
+			if strings.TrimSpace(snapshot.Status) == "" {
+				snapshot.Status = string(session.TurnRunStatusRunning)
+			}
+			toolName := strings.TrimSpace(payloadString(payload, "tool"))
+			if toolName != "" {
+				snapshot.LastToolName = toolName
+			}
+			result := strings.TrimSpace(payloadString(payload, "result_preview"))
+			if result != "" {
+				snapshot.LastToolResultPreview = truncateStatusDiagnostic(result, 220)
+			}
+			errText := strings.TrimSpace(payloadString(payload, "error"))
+			if errText != "" {
+				snapshot.LastToolError = truncateStatusDiagnostic(errText, 220)
+				snapshot.ErrorText = truncateStatusDiagnostic(errText, 220)
+			}
+			out[chatID] = snapshot
+		case core.ExecutionEventTurnCompleted, core.ExecutionEventTurnFailed, core.ExecutionEventTurnInterrupted:
+			snapshot := ensureEventTurnSnapshot(out, chatID, event.CreatedAt)
+			switch eventType {
+			case core.ExecutionEventTurnCompleted:
+				snapshot.Status = string(session.TurnRunStatusCompleted)
+			case core.ExecutionEventTurnFailed:
+				snapshot.Status = string(session.TurnRunStatusFailed)
+			case core.ExecutionEventTurnInterrupted:
+				snapshot.Status = string(session.TurnRunStatusInterrupted)
+			}
+			if errText := strings.TrimSpace(payloadString(payload, "error")); errText != "" {
+				snapshot.ErrorText = truncateStatusDiagnostic(errText, 220)
+			}
+			out[chatID] = snapshot
+		}
+	}
+	return out
+}
+
+func ensureEventTurnSnapshot(
+	byChat map[int64]core.TurnRunStatusSnapshot,
+	chatID int64,
+	activityAt time.Time,
+) core.TurnRunStatusSnapshot {
+	snapshot := byChat[chatID]
+	snapshot.ChatID = chatID
+	if strings.TrimSpace(snapshot.Kind) == "" {
+		snapshot.Kind = "interactive"
+	}
+	if snapshot.StartedAt.IsZero() {
+		snapshot.StartedAt = activityAt
+	}
+	if snapshot.LastActivityAt.IsZero() || snapshot.LastActivityAt.Before(activityAt) {
+		snapshot.LastActivityAt = activityAt
+	}
+	return snapshot
 }
 
 func minStatusInt(left int, right int) int {

@@ -662,6 +662,105 @@ func TestSystemStatusSnapshotIncludesRecentExecutionTimeline(t *testing.T) {
 	}
 }
 
+func TestChatStatusSnapshotPrefersLatestTurnFromExecutionEventsOverLegacyTurnRun(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9051, UserID: 0, Scope: telegramDMScopeRef(9051)}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "legacy status row")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, "legacy failed row"); err != nil {
+		t.Fatalf("CompleteTurnRun() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_kind":"interactive","request_text":"event-projected run"}`,
+			CreatedAt:   now.Add(10 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"summary":"event-projected completion"}`,
+			CreatedAt:   now.Add(20 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(9051, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if snapshot.LatestTurnRun == nil {
+		t.Fatal("LatestTurnRun = nil, want TES-projected latest turn")
+	}
+	if snapshot.LatestTurnRun.Status != string(session.TurnRunStatusCompleted) {
+		t.Fatalf("LatestTurnRun.Status = %q, want completed from TES", snapshot.LatestTurnRun.Status)
+	}
+	if snapshot.LatestTurnRun.RequestText != "event-projected run" {
+		t.Fatalf("LatestTurnRun.RequestText = %q, want event-projected request text", snapshot.LatestTurnRun.RequestText)
+	}
+}
+
+func TestSystemStatusSnapshotIncludesLatestTurnProjectionFromExecutionEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9052, UserID: 0, Scope: telegramDMScopeRef(9052)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_kind":"interactive","request_text":"system projection run"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: `{"tool":"exec","preview":"{\"command\":\"echo hi\"}"}`,
+			CreatedAt:   now.Add(-5 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	latest, ok := snapshot.LatestTurnRunsByChat[9052]
+	if !ok {
+		t.Fatalf("LatestTurnRunsByChat missing chat 9052: %#v", snapshot.LatestTurnRunsByChat)
+	}
+	if latest.Status != string(session.TurnRunStatusRunning) {
+		t.Fatalf("latest.Status = %q, want running", latest.Status)
+	}
+	if latest.LastToolName != "exec" {
+		t.Fatalf("latest.LastToolName = %q, want exec", latest.LastToolName)
+	}
+}
+
 func TestChatStatusSnapshotIncludesLiveTurnPhase(t *testing.T) {
 	t.Parallel()
 

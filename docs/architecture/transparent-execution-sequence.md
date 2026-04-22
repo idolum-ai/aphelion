@@ -111,6 +111,14 @@ Code anchors:
 chat and system views via `RecentExecution` projections sourced from
 `execution_events`.
 
+`/status` latest-turn fields now prefer TES turn projections (derived from
+`turn.*` + `tool.*` execution events) with `turn_runs` as fallback for missing
+coverage windows.
+
+Collapsed `/debug` quick-read text is now grounded against chat execution state:
+inconsistent readable summaries are replaced with a deterministic, snapshot-based
+summary to avoid "idle/done" drift while turns are failed, blocked, or running.
+
 Code anchor: [`runtime/status.go`](../../runtime/status.go)
 
 ## Scope
