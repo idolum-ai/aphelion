@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 func TestHandleInboundRepairsVisibleGovernorLeakageBeforeDelivery(t *testing.T) {
@@ -207,6 +209,84 @@ func TestHandleInboundBrokerageFallsBackToProposalAfterMaxRounds(t *testing.T) {
 	}
 	if strings.Contains(provider.lastGovernorMsgs[1].Content, "## Execution Contract") {
 		t.Fatalf("governor input should not contain negotiated brokerage after max-round fallback: %q", provider.lastGovernorMsgs[1].Content)
+	}
+}
+
+func TestGroundFinalReplyWithExecutionEvidenceRewritesUngroundedSuccessClaim(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9301, UserID: 0, Scope: telegramDMScopeRef(9301)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnFailed,
+			Stage:       "turn",
+			Status:      "failed",
+			PayloadJSON: `{"error":"tool failed"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, "Done. Everything finished cleanly.")
+	if strings.TrimSpace(note) == "" {
+		t.Fatalf("note = %q, want non-empty grounding note", note)
+	}
+	if !strings.Contains(strings.ToLower(rewritten), "runtime status for this turn is failed") {
+		t.Fatalf("rewritten = %q, want runtime failed correction", rewritten)
+	}
+}
+
+func TestGroundFinalReplyWithExecutionEvidenceKeepsGroundedSuccessClaim(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9302, UserID: 0, Scope: telegramDMScopeRef(9302)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"summary":"done"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, "Done. Everything finished cleanly.")
+	if note != "" {
+		t.Fatalf("note = %q, want empty note", note)
+	}
+	if rewritten != "Done. Everything finished cleanly." {
+		t.Fatalf("rewritten = %q, want unchanged reply", rewritten)
 	}
 }
 

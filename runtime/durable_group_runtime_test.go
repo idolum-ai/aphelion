@@ -96,6 +96,27 @@ func TestHandleInboundHandlesDurableTelegramGroup(t *testing.T) {
 	if state.Cursor != "5" {
 		t.Fatalf("durable agent cursor = %q, want 5", state.Cursor)
 	}
+
+	healthKey := session.SessionKey{
+		ChatID: 1001,
+		Scope: session.ScopeRef{
+			Kind:            session.ScopeKindDurableAgent,
+			ID:              "family-group",
+			DurableAgentID:  "family-group",
+			ParentScopeKind: session.ScopeKindHeartbeat,
+			ParentScopeID:   "admin-house",
+		},
+	}
+	healthEvents, err := store.ExecutionEventsBySession(healthKey, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(healthKey) err = %v", err)
+	}
+	if !containsExecutionEventType(healthEvents, core.ExecutionEventDurableStateAwake) {
+		t.Fatalf("health events missing durable awake transition: %#v", healthEvents)
+	}
+	if !containsExecutionEventType(healthEvents, core.ExecutionEventDurableStateDormant) {
+		t.Fatalf("health events missing durable dormant transition: %#v", healthEvents)
+	}
 }
 
 func TestHandleInboundDurableTelegramGroupAppliesPendingParentConversation(t *testing.T) {
@@ -199,6 +220,24 @@ func TestHandleInboundDurableTelegramGroupAppliesPendingParentConversation(t *te
 	}
 	if !strings.Contains(events[0].MetadataJSON, "\"trigger_kinds\":\"parent_conversation\"") {
 		t.Fatalf("metadata = %q, want parent conversation trigger kind", events[0].MetadataJSON)
+	}
+
+	healthKey := session.SessionKey{
+		ChatID: 1001,
+		Scope: session.ScopeRef{
+			Kind:            session.ScopeKindDurableAgent,
+			ID:              "family-group",
+			DurableAgentID:  "family-group",
+			ParentScopeKind: session.ScopeKindHeartbeat,
+			ParentScopeID:   "admin-house",
+		},
+	}
+	healthEvents, err := store.ExecutionEventsBySession(healthKey, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(healthKey) err = %v", err)
+	}
+	if !containsExecutionEventType(healthEvents, core.ExecutionEventDurableParentAck) {
+		t.Fatalf("health events missing durable parent ack event: %#v", healthEvents)
 	}
 }
 
@@ -865,4 +904,14 @@ func TestHandleInboundDurableTelegramGroupRecordsPolicyApplyFailure(t *testing.T
 	if !strings.Contains(state.LastApplyError, "child policy bootstrap failed") {
 		t.Fatalf("LastApplyError = %q, want child failure message", state.LastApplyError)
 	}
+}
+
+func containsExecutionEventType(events []session.ExecutionEvent, eventType string) bool {
+	eventType = strings.TrimSpace(eventType)
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == eventType {
+			return true
+		}
+	}
+	return false
 }

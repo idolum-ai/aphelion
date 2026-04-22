@@ -2645,3 +2645,49 @@ func TestExecutionEventsByTypesFiltersAndOrdersByCreatedAt(t *testing.T) {
 		t.Fatalf("events chat ids = (%d,%d), want (4202,4201)", events[0].ChatID, events[1].ChatID)
 	}
 }
+
+func TestExecutionEventsRecentReturnsNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Now().UTC()
+	key := SessionKey{ChatID: 4301, UserID: 0}
+	if _, err := store.AppendExecutionEvents(key, []ExecutionEventInput{
+		{
+			EventType:   "turn.started",
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-30 * time.Second),
+		},
+		{
+			EventType:   "tool.started",
+			Stage:       "tool",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   "turn.completed",
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	events, err := store.ExecutionEventsRecent(2)
+	if err != nil {
+		t.Fatalf("ExecutionEventsRecent() err = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len = %d, want 2", len(events))
+	}
+	if events[0].EventType != "turn.completed" || events[1].EventType != "tool.started" {
+		t.Fatalf("events order/types = (%q,%q), want turn.completed then tool.started", events[0].EventType, events[1].EventType)
+	}
+}

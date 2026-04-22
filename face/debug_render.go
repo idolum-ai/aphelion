@@ -42,6 +42,7 @@ func renderTelegramDebugChatDetails(snapshot core.ChatStatusSnapshot) string {
 	latest := snapshot.LatestTurnRun
 	if latest == nil {
 		lines = append(lines, "latest_turn=none")
+		lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 12)...)
 		return strings.Join(lines, "\n")
 	}
 
@@ -80,6 +81,7 @@ func renderTelegramDebugChatDetails(snapshot core.ChatStatusSnapshot) string {
 	if stale := len(snapshot.StaleRunningTurns); stale > 0 {
 		lines = append(lines, fmt.Sprintf("stale_turns=%d", stale))
 	}
+	lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 12)...)
 	return strings.Join(lines, "\n")
 }
 
@@ -116,6 +118,7 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 
 	if len(snapshot.LatestTurnRunsByChat) == 0 {
 		lines = append(lines, "latest_turns=none")
+		lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 20)...)
 		return strings.Join(lines, "\n")
 	}
 
@@ -154,7 +157,48 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 	if len(chatIDs) > max {
 		lines = append(lines, fmt.Sprintf("- omitted=%d", len(chatIDs)-max))
 	}
+	lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 20)...)
 	return strings.Join(lines, "\n")
+}
+
+func renderExecutionTimelineBlock(events []core.ExecutionEventSummary, limit int) []string {
+	lines := []string{"execution_timeline:"}
+	if len(events) == 0 {
+		lines = append(lines, "- none")
+		return lines
+	}
+	max := len(events)
+	if limit > 0 && max > limit {
+		max = limit
+	}
+	for i := 0; i < max; i++ {
+		event := events[i]
+		line := fmt.Sprintf(
+			"- at=%s type=%s stage=%s status=%s chat_id=%d",
+			formatStatusTime(event.CreatedAt),
+			firstNonEmpty(strings.TrimSpace(event.EventType), "-"),
+			firstNonEmpty(strings.TrimSpace(event.Stage), "-"),
+			firstNonEmpty(strings.TrimSpace(event.Status), "-"),
+			event.ChatID,
+		)
+		if event.Seq > 0 {
+			line += fmt.Sprintf(" seq=%d", event.Seq)
+		}
+		if scope := strings.TrimSpace(event.ScopeKind); scope != "" {
+			line += " scope=" + scope
+		}
+		if agentID := strings.TrimSpace(event.AgentID); agentID != "" {
+			line += " agent=" + agentID
+		}
+		if summary := strings.TrimSpace(event.Summary); summary != "" {
+			line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
+		}
+		lines = append(lines, line)
+	}
+	if len(events) > max {
+		lines = append(lines, fmt.Sprintf("- omitted=%d", len(events)-max))
+	}
+	return lines
 }
 
 func extractDebugExecCommand(preview string) string {

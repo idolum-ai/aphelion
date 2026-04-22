@@ -125,6 +125,7 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		if eventsErr != nil {
 			return core.ChatStatusSnapshot{}, eventsErr
 		}
+		snapshot.RecentExecution = summarizeExecutionEvents(events, 12)
 		if phase, ok := latestTurnPhaseFromExecutionEvents(events); ok {
 			snapshot.TurnPhase = strings.TrimSpace(phase.Phase)
 			snapshot.TurnPhaseSummary = strings.TrimSpace(phase.Summary)
@@ -183,6 +184,12 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		snapshot.HotChats = buildHotChatRollups(snapshot)
 		return snapshot, nil
 	}
+
+	recentEvents, err := r.store.ExecutionEventsRecent(40)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
+	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
 
 	decisionEventState, err := r.decisionEventStates(now.Add(-7*24*time.Hour), 2000)
 	if err != nil {
@@ -778,6 +785,58 @@ func payloadInt64(payload map[string]any, key string) (int64, bool) {
 		return 0, false
 	}
 	return parsed, true
+}
+
+func summarizeExecutionEvents(events []session.ExecutionEvent, limit int) []core.ExecutionEventSummary {
+	if len(events) == 0 || limit == 0 {
+		return nil
+	}
+	if limit < 0 {
+		limit = len(events)
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+	out := make([]core.ExecutionEventSummary, 0, minStatusInt(limit, len(ordered)))
+	for i := len(ordered) - 1; i >= 0; i-- {
+		event := ordered[i]
+		payload := executionEventPayload(event.PayloadJSON)
+		out = append(out, core.ExecutionEventSummary{
+			SessionID: strings.TrimSpace(event.SessionID),
+			ChatID:    event.ChatID,
+			ScopeKind: strings.TrimSpace(string(event.Scope.Kind)),
+			ScopeID:   strings.TrimSpace(event.Scope.ID),
+			AgentID:   strings.TrimSpace(event.Scope.DurableAgentID),
+			Seq:       event.Seq,
+			EventType: strings.TrimSpace(event.EventType),
+			Stage:     strings.TrimSpace(event.Stage),
+			Status:    strings.TrimSpace(event.Status),
+			Summary:   summarizeExecutionEventPayload(payload),
+			CreatedAt: event.CreatedAt,
+		})
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func summarizeExecutionEventPayload(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	for _, key := range []string{"summary", "error", "reason", "prompt", "request_text", "decision_id"} {
+		if value := payloadString(payload, key); value != "" {
+			return truncateStatusDiagnostic(value, 160)
+		}
+	}
+	return ""
+}
+
+func minStatusInt(left int, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func renderDecisionSummary(record session.PendingDecisionRecord) string {

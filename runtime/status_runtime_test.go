@@ -563,6 +563,105 @@ func TestSystemStatusSnapshotDerivesRecoveryPendingFromExecutionEvents(t *testin
 	}
 }
 
+func TestChatStatusSnapshotIncludesRecentExecutionTimeline(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9021, UserID: 0, Scope: telegramDMScopeRef(9021)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventIngressAccepted,
+			Stage:       "ingress",
+			Status:      "accepted",
+			PayloadJSON: `{"message_id":11}`,
+			CreatedAt:   now.Add(-30 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"turn_kind":"interactive"}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"summary":"completed delivery"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(chat timeline) err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(9021, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.RecentExecution) != 3 {
+		t.Fatalf("RecentExecution len = %d, want 3", len(snapshot.RecentExecution))
+	}
+	if snapshot.RecentExecution[0].EventType != core.ExecutionEventTurnCompleted {
+		t.Fatalf("RecentExecution[0].EventType = %q, want %q", snapshot.RecentExecution[0].EventType, core.ExecutionEventTurnCompleted)
+	}
+	if snapshot.RecentExecution[1].EventType != core.ExecutionEventTurnStarted {
+		t.Fatalf("RecentExecution[1].EventType = %q, want %q", snapshot.RecentExecution[1].EventType, core.ExecutionEventTurnStarted)
+	}
+}
+
+func TestSystemStatusSnapshotIncludesRecentExecutionTimeline(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	keyA := session.SessionKey{ChatID: 9022, UserID: 0, Scope: telegramDMScopeRef(9022)}
+	keyB := session.SessionKey{ChatID: 9023, UserID: 0, Scope: telegramDMScopeRef(9023)}
+	if _, err := store.AppendExecutionEvents(keyA, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventDecisionOpened,
+			Stage:       "decision",
+			Status:      "pending",
+			PayloadJSON: `{"decision_id":"d-1"}`,
+			CreatedAt:   now.Add(-25 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(keyA) err = %v", err)
+	}
+	if _, err := store.AppendExecutionEvents(keyB, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventRecoveryIssued,
+			Stage:       "recovery",
+			Status:      "issued",
+			PayloadJSON: `{"pending_count":1}`,
+			CreatedAt:   now.Add(-5 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(keyB) err = %v", err)
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.RecentExecution) < 2 {
+		t.Fatalf("RecentExecution len = %d, want at least 2", len(snapshot.RecentExecution))
+	}
+	if snapshot.RecentExecution[0].EventType != core.ExecutionEventRecoveryIssued {
+		t.Fatalf("RecentExecution[0].EventType = %q, want %q", snapshot.RecentExecution[0].EventType, core.ExecutionEventRecoveryIssued)
+	}
+}
+
 func TestChatStatusSnapshotIncludesLiveTurnPhase(t *testing.T) {
 	t.Parallel()
 

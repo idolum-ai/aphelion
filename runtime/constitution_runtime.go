@@ -4,18 +4,22 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/turn"
 )
 
 func (r *Runtime) applyTurnConstitution(
 	ctx context.Context,
+	key session.SessionKey,
 	scope sandbox.Scope,
 	channel string,
 	principalRole string,
@@ -32,6 +36,14 @@ func (r *Runtime) applyTurnConstitution(
 		audit.RecordFinalReply(replyText, media, "")
 	}
 	trimmedReply := strings.TrimSpace(replyText)
+	trimmedReply, groundingNote := r.groundFinalReplyWithExecutionEvidence(key, trimmedReply)
+	if groundingNote != "" && audit != nil {
+		audit.RecordViolations([]ConstitutionViolation{{
+			Rule:    "execution_claim_ungrounded",
+			Surface: "final_reply",
+			Detail:  groundingNote,
+		}})
+	}
 	if r == nil || r.constitutionGate == nil {
 		return trimmedReply
 	}
@@ -84,6 +96,90 @@ func (r *Runtime) applyTurnConstitution(
 			}
 		},
 	})
+}
+
+func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, reply string) (string, string) {
+	reply = strings.TrimSpace(reply)
+	if r == nil || r.store == nil || reply == "" {
+		return reply, ""
+	}
+	if !startsWithSuccessClaim(reply) {
+		return reply, ""
+	}
+	events, err := r.store.ExecutionEventsBySession(key, 0, 300)
+	if err != nil || len(events) == 0 {
+		return reply, ""
+	}
+
+	latestTurnStart := int64(0)
+	latestTerminal := ""
+	latestTerminalAt := ""
+	for _, event := range events {
+		eventType := strings.TrimSpace(event.EventType)
+		switch eventType {
+		case core.ExecutionEventTurnStarted:
+			if event.Seq > latestTurnStart {
+				latestTurnStart = event.Seq
+				latestTerminal = ""
+				latestTerminalAt = ""
+			}
+		case core.ExecutionEventTurnCompleted, core.ExecutionEventTurnFailed, core.ExecutionEventTurnInterrupted:
+			if latestTurnStart == 0 || event.Seq < latestTurnStart {
+				continue
+			}
+			latestTerminal = eventType
+			latestTerminalAt = event.CreatedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	if latestTurnStart == 0 {
+		return reply, ""
+	}
+	if latestTerminal == core.ExecutionEventTurnCompleted {
+		return reply, ""
+	}
+
+	status := "in_progress"
+	switch latestTerminal {
+	case core.ExecutionEventTurnFailed:
+		status = "failed"
+	case core.ExecutionEventTurnInterrupted:
+		status = "interrupted"
+	case "":
+		status = "in_progress"
+	}
+	note := fmt.Sprintf("success claim is not grounded by TES; latest turn status is %s", status)
+	prefix := fmt.Sprintf(
+		"I need to correct that: runtime status for this turn is %s",
+		status,
+	)
+	if latestTerminalAt != "" {
+		prefix += " (as of " + latestTerminalAt + " UTC)"
+	}
+	prefix += "."
+	return prefix + "\n" + reply, note
+}
+
+func startsWithSuccessClaim(reply string) bool {
+	reply = strings.TrimSpace(strings.ToLower(reply))
+	if reply == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"done.",
+		"done ",
+		"completed.",
+		"completed ",
+		"all set",
+		"finished.",
+		"finished ",
+		"tests passed",
+		"successfully ",
+	} {
+		if strings.HasPrefix(reply, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) repairTurnReply(

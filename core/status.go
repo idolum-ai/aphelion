@@ -25,6 +25,20 @@ type PendingItem struct {
 	Stale     bool
 }
 
+type ExecutionEventSummary struct {
+	SessionID string
+	ChatID    int64
+	ScopeKind string
+	ScopeID   string
+	AgentID   string
+	Seq       int64
+	EventType string
+	Stage     string
+	Status    string
+	Summary   string
+	CreatedAt time.Time
+}
+
 type TurnRunStatusSnapshot struct {
 	ID                    int64
 	ChatID                int64
@@ -83,6 +97,7 @@ type ChatStatusSnapshot struct {
 	PendingItems          []PendingItem
 	Continuation          *ContinuationStatusSnapshot
 	LatestTurnRun         *TurnRunStatusSnapshot
+	RecentExecution       []ExecutionEventSummary
 	StaleRunningTurns     []TurnRunStatusSnapshot
 	RestartHealth         RestartHealthSnapshot
 }
@@ -105,6 +120,7 @@ type SystemStatusSnapshot struct {
 	PendingItems         []PendingItem
 	Continuations        []ContinuationStatusSnapshot
 	LatestTurnRunsByChat map[int64]TurnRunStatusSnapshot
+	RecentExecution      []ExecutionEventSummary
 	StaleRunningTurns    []TurnRunStatusSnapshot
 	HotChats             []ChatStatusRollup
 	RestartHealth        RestartHealthSnapshot

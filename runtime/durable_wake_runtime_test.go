@@ -164,6 +164,16 @@ func TestPollDurableWakeAgentsUsesPluggableIngressAdapter(t *testing.T) {
 	if sess.TurnCount == 0 {
 		t.Fatalf("durable wake session turn_count = %d, want > 0", sess.TurnCount)
 	}
+	eventsBySession, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(durable wake session) err = %v", err)
+	}
+	if !containsExecutionEventType(eventsBySession, core.ExecutionEventDurableWakeStarted) {
+		t.Fatalf("durable wake events missing started signal: %#v", eventsBySession)
+	}
+	if !containsExecutionEventType(eventsBySession, core.ExecutionEventDurableWakeCompleted) {
+		t.Fatalf("durable wake events missing completed signal: %#v", eventsBySession)
+	}
 }
 
 func TestPollDurableWakeAgentsUsesChildExecutorWhenBootstrapConfigured(t *testing.T) {

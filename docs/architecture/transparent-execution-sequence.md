@@ -61,6 +61,15 @@ Code anchor: [`session/store.go`](../../session/store.go)
   - `recovery.issued`
   - `recovery.completed`
   - `recovery.failed`
+- Durable runtime lifecycle
+  - `durable.wake.started`
+  - `durable.wake.completed`
+  - `durable.wake.failed`
+  - `durable.state.awake`
+  - `durable.state.dormant`
+  - `durable.policy.applied`
+  - `durable.policy.failed`
+  - `durable.parent.acknowledged`
 
 Code anchors:
 
@@ -97,6 +106,10 @@ Code anchors:
 - Startup recovery: a pending startup recovery item is derived from
   `recovery.issued` until a terminal `recovery.completed|recovery.failed` event
   is observed after issuance.
+
+`/debug` now includes explicit TES timeline blocks (`execution_timeline`) for
+chat and system views via `RecentExecution` projections sourced from
+`execution_events`.
 
 Code anchor: [`runtime/status.go`](../../runtime/status.go)
 

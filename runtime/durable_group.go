@@ -967,6 +967,14 @@ func (r *Runtime) queueDurableAgentParentConversationAck(agent core.DurableAgent
 		Metadata:     metadata,
 	}
 	_, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact)
+	if err == nil {
+		key := r.durableAgentExecutionKey(strings.TrimSpace(agent.AgentID))
+		r.recordExecutionEvent(key, core.ExecutionEventDurableParentAck, "durable", "acknowledged", map[string]any{
+			"agent_id":          strings.TrimSpace(agent.AgentID),
+			"parent_note_count": len(messages),
+			"acknowledged_at":   at.UTC().Format(time.RFC3339),
+		}, at.UTC())
+	}
 	return err
 }
 
@@ -1003,7 +1011,15 @@ func (r *Runtime) markDurableAgentAwake(agentID string, cursorMessageID int64) e
 	state.Cursor = strconv.FormatInt(cursorMessageID, 10)
 	state.LastWakeAt = now
 	state.DormantAt = time.Time{}
-	return r.store.SaveDurableAgentState(*state)
+	if err := r.store.SaveDurableAgentState(*state); err != nil {
+		return err
+	}
+	key := r.durableAgentExecutionKey(strings.TrimSpace(agentID))
+	r.recordExecutionEvent(key, core.ExecutionEventDurableStateAwake, "durable", "awake", map[string]any{
+		"agent_id":          strings.TrimSpace(agentID),
+		"cursor_message_id": cursorMessageID,
+	}, now)
+	return nil
 }
 
 func (r *Runtime) markDurableAgentDormant(agentID string) error {
@@ -1017,7 +1033,14 @@ func (r *Runtime) markDurableAgentDormant(agentID string) error {
 	now := time.Now().UTC()
 	state.Status = "dormant"
 	state.DormantAt = now
-	return r.store.SaveDurableAgentState(*state)
+	if err := r.store.SaveDurableAgentState(*state); err != nil {
+		return err
+	}
+	key := r.durableAgentExecutionKey(strings.TrimSpace(agentID))
+	r.recordExecutionEvent(key, core.ExecutionEventDurableStateDormant, "durable", "dormant", map[string]any{
+		"agent_id": strings.TrimSpace(agentID),
+	}, now)
+	return nil
 }
 
 func (r *Runtime) ensureDurableAgentPolicyOffered(agent core.DurableAgent) error {
@@ -1063,7 +1086,16 @@ func (r *Runtime) markDurableAgentPolicyApplied(agent core.DurableAgent) error {
 	state.LastAppliedPolicyAt = now
 	state.LastApplyStatus = "applied"
 	state.LastApplyError = ""
-	return r.store.SaveDurableAgentState(*state)
+	if err := r.store.SaveDurableAgentState(*state); err != nil {
+		return err
+	}
+	key := r.durableAgentExecutionKey(strings.TrimSpace(agent.AgentID))
+	r.recordExecutionEvent(key, core.ExecutionEventDurablePolicyApplied, "durable", "applied", map[string]any{
+		"agent_id":       strings.TrimSpace(agent.AgentID),
+		"policy_version": agent.PolicyVersion,
+		"policy_hash":    strings.TrimSpace(agent.PolicyHash),
+	}, now)
+	return nil
 }
 
 func (r *Runtime) markDurableAgentPolicyApplyFailure(agent core.DurableAgent, cause error) error {
@@ -1081,7 +1113,49 @@ func (r *Runtime) markDurableAgentPolicyApplyFailure(agent core.DurableAgent, ca
 	}
 	state.LastApplyStatus = "failed"
 	state.LastApplyError = strings.TrimSpace(cause.Error())
-	return r.store.SaveDurableAgentState(*state)
+	if err := r.store.SaveDurableAgentState(*state); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	key := r.durableAgentExecutionKey(strings.TrimSpace(agent.AgentID))
+	r.recordExecutionEvent(key, core.ExecutionEventDurablePolicyApplyFailed, "durable", "failed", map[string]any{
+		"agent_id":       strings.TrimSpace(agent.AgentID),
+		"policy_version": agent.PolicyVersion,
+		"policy_hash":    strings.TrimSpace(agent.PolicyHash),
+		"error":          trimError(cause.Error()),
+	}, now)
+	return nil
+}
+
+func (r *Runtime) durableAgentExecutionKey(agentID string) session.SessionKey {
+	agentID = strings.TrimSpace(agentID)
+	if r == nil || r.store == nil || agentID == "" {
+		return session.SessionKey{Scope: session.ScopeRef{
+			Kind:           session.ScopeKindDurableAgent,
+			ID:             agentID,
+			DurableAgentID: agentID,
+		}}
+	}
+	agent, err := r.store.DurableAgent(agentID)
+	if err != nil || agent == nil {
+		return session.SessionKey{Scope: session.ScopeRef{
+			Kind:           session.ScopeKindDurableAgent,
+			ID:             agentID,
+			DurableAgentID: agentID,
+		}}
+	}
+	key := session.SessionKey{
+		ChatID: agent.ReviewTargetChatID,
+		Scope:  durableAgentScopeRef(*agent),
+	}
+	if key.Scope.IsZero() {
+		key.Scope = session.ScopeRef{
+			Kind:           session.ScopeKindDurableAgent,
+			ID:             agentID,
+			DurableAgentID: agentID,
+		}
+	}
+	return key
 }
 
 func nonZeroPolicyTime(value time.Time) time.Time {

@@ -100,6 +100,7 @@ func (r *Runtime) renderTurnCoordinatorFace(ctx context.Context, input turnCoord
 	return r.renderTurnReply(turnRenderInput{
 		Ctx:              ctx,
 		Scope:            input.Scope,
+		Key:              input.Key,
 		Msg:              input.Msg,
 		Channel:          input.Channel,
 		PrincipalRole:    input.PrincipalRole,

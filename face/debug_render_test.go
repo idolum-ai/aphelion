@@ -89,3 +89,35 @@ func TestRenderTelegramDebugIncludesAdminSystemAndDurablesSections(t *testing.T)
 		}
 	}
 }
+
+func TestRenderTelegramDebugIncludesExecutionTimelineBlocks(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	out := RenderTelegramDebug(
+		core.ChatStatusSnapshot{
+			ChatID: 9,
+			RecentExecution: []core.ExecutionEventSummary{
+				{ChatID: 9, EventType: "turn.completed", Stage: "turn", Status: "completed", CreatedAt: now},
+			},
+		},
+		&core.SystemStatusSnapshot{
+			RecentExecution: []core.ExecutionEventSummary{
+				{ChatID: 9, EventType: "decision.opened", Stage: "decision", Status: "pending", CreatedAt: now.Add(-time.Second)},
+			},
+		},
+		nil,
+		"opus",
+		"high",
+	)
+
+	for _, needle := range []string{
+		"execution_timeline:",
+		"type=turn.completed",
+		"type=decision.opened",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramDebug() = %q, want substring %q", out, needle)
+		}
+	}
+}

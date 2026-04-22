@@ -48,6 +48,15 @@ const (
 	ExecutionEventRecoveryIssued    = "recovery.issued"
 	ExecutionEventRecoveryCompleted = "recovery.completed"
 	ExecutionEventRecoveryFailed    = "recovery.failed"
+
+	ExecutionEventDurableWakeStarted       = "durable.wake.started"
+	ExecutionEventDurableWakeCompleted     = "durable.wake.completed"
+	ExecutionEventDurableWakeFailed        = "durable.wake.failed"
+	ExecutionEventDurableStateAwake        = "durable.state.awake"
+	ExecutionEventDurableStateDormant      = "durable.state.dormant"
+	ExecutionEventDurablePolicyApplied     = "durable.policy.applied"
+	ExecutionEventDurablePolicyApplyFailed = "durable.policy.failed"
+	ExecutionEventDurableParentAck         = "durable.parent.acknowledged"
 )
 
 type RouterEvent struct {

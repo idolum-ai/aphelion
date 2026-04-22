@@ -2348,6 +2348,36 @@ func (s *SQLiteStore) ExecutionEventsByTypes(eventTypes []string, since time.Tim
 	return events, nil
 }
 
+func (s *SQLiteStore) ExecutionEventsRecent(limit int) ([]ExecutionEvent, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`
+		SELECT
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, seq, event_type, stage, status, caused_by_seq, payload_json, created_at
+		FROM execution_events
+		ORDER BY created_at DESC, id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query recent execution events: %w", err)
+	}
+	defer rows.Close()
+
+	events := make([]ExecutionEvent, 0, limit)
+	for rows.Next() {
+		event, err := scanExecutionEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent execution events: %w", err)
+	}
+	return events, nil
+}
+
 func (s *SQLiteStore) BeginTurnRun(key SessionKey, kind TurnRunKind, requestText string) (*TurnRun, error) {
 	now := time.Now().UTC()
 	kind = TurnRunKind(strings.TrimSpace(string(kind)))

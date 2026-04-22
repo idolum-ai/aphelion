@@ -170,6 +170,11 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	if key.Scope.Kind == "" {
 		key.Scope = durableAgentScopeRef(agent)
 	}
+	r.recordExecutionEvent(key, core.ExecutionEventDurableWakeStarted, "durable", "started", map[string]any{
+		"agent_id":      strings.TrimSpace(agent.AgentID),
+		"channel":       firstNonEmpty(strings.TrimSpace(plan.Channel), "durable_wake"),
+		"audit_channel": strings.TrimSpace(plan.AuditChannel),
+	}, now.UTC())
 
 	unlock := r.lockSession(key)
 	defer unlock()
@@ -194,6 +199,10 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 
 	turnSummary, err := r.runDurableWakeConversation(ctx, agent, scope, key, plan, pendingParentConversation)
 	if err != nil {
+		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
+			"agent_id": strings.TrimSpace(agent.AgentID),
+			"error":    trimError(err.Error()),
+		}, time.Now().UTC())
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, err); markErr != nil {
 			return fmt.Errorf("run durable wake turn: %w (and failed to record apply failure: %v)", err, markErr)
 		}
@@ -201,6 +210,10 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	}
 	if durableWakeInferenceUnavailable(turnSummary) {
 		inferenceErr := fmt.Errorf("durable wake inference unavailable")
+		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
+			"agent_id": strings.TrimSpace(agent.AgentID),
+			"error":    trimError(inferenceErr.Error()),
+		}, time.Now().UTC())
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, inferenceErr); markErr != nil {
 			return fmt.Errorf("%w (and failed to record apply failure: %v)", inferenceErr, markErr)
 		}
@@ -212,6 +225,10 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		return inferenceErr
 	}
 	if err := r.markDurableAgentPolicyApplied(agent); err != nil {
+		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
+			"agent_id": strings.TrimSpace(agent.AgentID),
+			"error":    trimError(err.Error()),
+		}, time.Now().UTC())
 		return fmt.Errorf("record durable wake applied policy: %w", err)
 	}
 	if plan.Finalize != nil {
@@ -224,6 +241,10 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			_ = r.queueDurableAgentParentConversationAck(agent, pendingParentConversation, turnSummary, now)
 		}
 	}
+	r.recordExecutionEvent(key, core.ExecutionEventDurableWakeCompleted, "durable", "completed", map[string]any{
+		"agent_id": strings.TrimSpace(agent.AgentID),
+		"summary":  truncatePreview(strings.TrimSpace(turnSummary), 220),
+	}, time.Now().UTC())
 	return nil
 }
 
