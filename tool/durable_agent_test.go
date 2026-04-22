@@ -79,6 +79,9 @@ func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"wizard_start"`) {
 		t.Fatalf("durable_agent definition missing wizard action enum: %s", durableDefJSON)
 	}
+	if !strings.Contains(durableDefJSON, `"bootstrap_update"`) || !strings.Contains(durableDefJSON, `"bootstrap_llm"`) {
+		t.Fatalf("durable_agent definition missing bootstrap update surface: %s", durableDefJSON)
+	}
 	if !strings.Contains(durableDefJSON, `"wizard_answers"`) {
 		t.Fatalf("durable_agent definition missing wizard_answers field: %s", durableDefJSON)
 	}
@@ -597,6 +600,40 @@ func TestDurableAgentToolListAndPolicyShow(t *testing.T) {
 	}
 }
 
+func TestDurableAgentToolBootstrapShowIncludesStateAndHistory(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"})
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
+		BootstrapLLM:       core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"},
+		LocalStorageRoots:  []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:      "default",
+		WakeupMode:         "poll",
+		Status:             "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if _, _, err := store.ApplyDurableAgentBootstrap(agent.AgentID, core.NodeLLMBootstrap{Backend: "native", NativeProvider: "anthropic", APIKey: "sk-child", Model: "claude-child"}, 0, 1001, string(principal.RoleAdmin), "explicit", "switch away from parent"); err != nil {
+		t.Fatalf("ApplyDurableAgentBootstrap() err = %v", err)
+	}
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "durable_agent", json.RawMessage(`{"action":"bootstrap_show","agent_id":"idolum-email","history":5}`))
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_show) err = %v", err)
+	}
+	if !strings.Contains(out, "action: durable-agent bootstrap show") || !strings.Contains(out, "history_count: 1") || !strings.Contains(out, "bootstrap_source_hint: pinned_or_diverged") {
+		t.Fatalf("bootstrap_show output = %q, want state and history", out)
+	}
+}
+
 func TestDurableAgentToolPolicyApplyUsesReviewEventProvenance(t *testing.T) {
 	t.Parallel()
 
@@ -673,6 +710,261 @@ func TestDurableAgentToolPolicyApplyUsesReviewEventProvenance(t *testing.T) {
 	}
 	if len(updates) != 1 || updates[0].SourceReviewEventID != reviewID {
 		t.Fatalf("policy updates = %#v, want one update linked to review event %d", updates, reviewID)
+	}
+}
+
+func TestDurableAgentToolBootstrapUpdateExplicitAndInherit(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
+		Backend:         "codex",
+		CodexAuthSource: "codex_cli",
+		CodexHome:       "/tmp/codex-home",
+	})
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "anthropic",
+			APIKey:         "sk-old",
+			Model:          "claude-old",
+		},
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "poll",
+		Status:            "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: `{"capability_contract":{"status":"verified"}}`}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"switch to codex","bootstrap_llm":{"backend":"codex","codex_auth_source":"codex_cli","codex_home":"/srv/codex-child"}}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_update explicit) err = %v", err)
+	}
+	if !strings.Contains(out, "changed: true") || !strings.Contains(out, "new_bootstrap_backend: codex") {
+		t.Fatalf("bootstrap_update output = %q, want codex change", out)
+	}
+	updated, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if updated.BootstrapLLM.Backend != "codex" || updated.BootstrapLLM.CodexHome != "/srv/codex-child" {
+		t.Fatalf("updated BootstrapLLM = %#v, want codex /srv/codex-child", updated.BootstrapLLM)
+	}
+	_, continuity, err := registry.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		t.Fatalf("loadDurableAgentContinuity() err = %v", err)
+	}
+	if continuity.CapabilityContract == nil || continuity.CapabilityContract.Status != "stale" {
+		t.Fatalf("capacity contract = %#v, want stale after bootstrap update", continuity.CapabilityContract)
+	}
+	updates, err := store.DurableAgentBootstrapUpdates(agent.AgentID, 5)
+	if err != nil {
+		t.Fatalf("DurableAgentBootstrapUpdates() err = %v", err)
+	}
+	if len(updates) != 1 || updates[0].UpdateKind != "explicit" || updates[0].ActorUserID != 1001 {
+		t.Fatalf("bootstrap updates = %#v, want one explicit update by admin 1001", updates)
+	}
+	if updates[0].PreviousBootstrap.APIKey != "" {
+		t.Fatalf("bootstrap updates[0].PreviousBootstrap.APIKey = %q, want redacted empty value", updates[0].PreviousBootstrap.APIKey)
+	}
+
+	out, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"inherit parent codex","bootstrap_profile":"inherit_parent"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_update inherit) err = %v", err)
+	}
+	if !strings.Contains(out, "update_kind: inherit_parent") {
+		t.Fatalf("bootstrap_update inherit output = %q, want inherit_parent kind", out)
+	}
+	updated, err = store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent() after inherit err = %v", err)
+	}
+	if updated.BootstrapLLM.Backend != "codex" || updated.BootstrapLLM.CodexHome != "/tmp/codex-home" {
+		t.Fatalf("updated inherited BootstrapLLM = %#v, want parent codex bootstrap", updated.BootstrapLLM)
+	}
+}
+
+func TestDurableAgentToolBootstrapUpdateNoOpDoesNotStaleCapacity(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
+		Backend:         "codex",
+		CodexAuthSource: "codex_cli",
+		CodexHome:       "/tmp/codex-home",
+	})
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:         "codex",
+			CodexAuthSource: "codex_cli",
+			CodexHome:       "/tmp/codex-home",
+		},
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "poll",
+		Status:            "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: `{"capability_contract":{"status":"verified"}}`}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"noop inherit parent","bootstrap_profile":"inherit_parent"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_update no-op inherit) err = %v", err)
+	}
+	if !strings.Contains(out, "changed: false") {
+		t.Fatalf("bootstrap_update no-op output = %q, want changed: false", out)
+	}
+
+	_, continuity, err := registry.loadDurableAgentContinuity(agent.AgentID)
+	if err != nil {
+		t.Fatalf("loadDurableAgentContinuity() err = %v", err)
+	}
+	if continuity.CapabilityContract == nil || continuity.CapabilityContract.Status != "verified" {
+		t.Fatalf("capacity contract = %#v, want verified to remain after no-op bootstrap update", continuity.CapabilityContract)
+	}
+	updates, err := store.DurableAgentBootstrapUpdates(agent.AgentID, 5)
+	if err != nil {
+		t.Fatalf("DurableAgentBootstrapUpdates() err = %v", err)
+	}
+	if len(updates) != 0 {
+		t.Fatalf("bootstrap updates = %#v, want no history entry for no-op update", updates)
+	}
+}
+
+func TestDurableAgentToolBootstrapUpdateHistoryRedactsAPIKeys(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "anthropic",
+			APIKey:         "sk-old",
+			Model:          "claude-old",
+		},
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "default",
+		WakeupMode:        "poll",
+		Status:            "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"rotate native model+key","bootstrap_llm":{"backend":"native","native_provider":"anthropic","api_key":"sk-new","model":"claude-new"}}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_update explicit native) err = %v", err)
+	}
+
+	updates, err := store.DurableAgentBootstrapUpdates(agent.AgentID, 5)
+	if err != nil {
+		t.Fatalf("DurableAgentBootstrapUpdates() err = %v", err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("bootstrap updates = %#v, want exactly one history entry", updates)
+	}
+	if updates[0].PreviousBootstrap.APIKey != "" || updates[0].NewBootstrap.APIKey != "" {
+		t.Fatalf("bootstrap history leaked api keys: previous=%q new=%q", updates[0].PreviousBootstrap.APIKey, updates[0].NewBootstrap.APIKey)
+	}
+	if updates[0].PreviousBootstrap.Model != "claude-old" || updates[0].NewBootstrap.Model != "claude-new" {
+		t.Fatalf("bootstrap history models = (%q,%q), want (claude-old,claude-new)", updates[0].PreviousBootstrap.Model, updates[0].NewBootstrap.Model)
+	}
+}
+
+func TestDurableAgentToolBootstrapUpdateRequiresReasonAndOneSource(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"})
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
+		BootstrapLLM:       core.NodeLLMBootstrap{Backend: "native", NativeProvider: "anthropic", APIKey: "sk-old", Model: "claude-old"},
+		LocalStorageRoots:  []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:      "default",
+		WakeupMode:         "poll",
+		Status:             "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","bootstrap_profile":"inherit_parent"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "reason is required") {
+		t.Fatalf("bootstrap_update missing reason err = %v, want reason required", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"bad","bootstrap_profile":"inherit_parent","bootstrap_llm":{"backend":"codex","codex_auth_source":"codex_cli","codex_home":"/srv/codex-child"}}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "either bootstrap_profile or bootstrap_llm") {
+		t.Fatalf("bootstrap_update dual source err = %v, want exclusivity error", err)
 	}
 }
 

@@ -65,8 +65,27 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 			return "", err
 		}
 		return renderDurableAgentPolicy(*agent, updates), nil
+	case "bootstrap_show":
+		if strings.TrimSpace(in.AgentID) == "" {
+			return "", fmt.Errorf("durable_agent agent_id is required for bootstrap_show")
+		}
+		agent, err := r.resolveDurableAgent(in.AgentID)
+		if err != nil {
+			return "", err
+		}
+		history := in.History
+		if history <= 0 {
+			history = 5
+		}
+		updates, err := r.store.DurableAgentBootstrapUpdates(agent.AgentID, history)
+		if err != nil {
+			return "", err
+		}
+		return renderDurableAgentBootstrapShow(*agent, updates, core.NormalizeNodeLLMBootstrap(r.durableAgentBootstrapLLM)), nil
 	case "policy_apply":
 		return r.applyDurableAgentPolicy(in)
+	case "bootstrap_update":
+		return r.updateDurableAgentBootstrap(in, p, key)
 	case "enrollment_show":
 		agentID := strings.TrimSpace(in.AgentID)
 		if agentID == "" {
@@ -125,7 +144,7 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 	case "snapshot_restore":
 		return r.restoreDurableAgentSnapshot(ctx, in, p, key)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|policy_apply|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|capacity_show|capacity_negotiate|capacity_probe|capacity_attest|conversation_show|conversation_send|memory_review|memory_delegate|snapshot_create|snapshot_list|snapshot_restore")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|bootstrap_show|policy_apply|bootstrap_update|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|capacity_show|capacity_negotiate|capacity_probe|capacity_attest|conversation_show|conversation_send|memory_review|memory_delegate|snapshot_create|snapshot_list|snapshot_restore")
 	}
 }
 
@@ -166,6 +185,71 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 		return "", err
 	}
 	return renderDurableAgentPolicyApply(*updated, update), nil
+}
+
+func (r *Registry) updateDurableAgentBootstrap(in durableAgentInput, p principal.Principal, key session.SessionKey) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for bootstrap_update")
+	}
+	reason := strings.TrimSpace(in.Reason)
+	if reason == "" {
+		return "", fmt.Errorf("durable_agent reason is required for bootstrap_update")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	if in.ReviewEventID > 0 {
+		event, err := r.store.ReviewEventByID(in.ReviewEventID)
+		if err != nil {
+			return "", err
+		}
+		if event.SourceScope.Kind != session.ScopeKindDurableAgent || !durableAgentReviewTargetsAgent(agent.AgentID, event.SourceScope) {
+			return "", fmt.Errorf("review event %d does not belong to durable agent %s", in.ReviewEventID, agent.AgentID)
+		}
+	}
+	next, updateKind, err := r.resolveDurableAgentBootstrapUpdate(*agent, in)
+	if err != nil {
+		return "", err
+	}
+	updated, update, err := r.store.ApplyDurableAgentBootstrap(agent.AgentID, next, in.ReviewEventID, p.TelegramUserID, string(p.Role), updateKind, reason)
+	if err != nil {
+		return "", err
+	}
+	if update != nil {
+		if err := r.markDurableAgentCapacityStale(agent.AgentID); err != nil {
+			return "", err
+		}
+	}
+	_ = key
+	return renderDurableAgentBootstrapApply(*updated, update), nil
+}
+
+func (r *Registry) resolveDurableAgentBootstrapUpdate(agent core.DurableAgent, in durableAgentInput) (core.NodeLLMBootstrap, string, error) {
+	profile := strings.ToLower(strings.TrimSpace(in.BootstrapProfile))
+	hasExplicit := in.BootstrapLLM != nil
+	switch {
+	case profile != "" && hasExplicit:
+		return core.NodeLLMBootstrap{}, "", fmt.Errorf("durable_agent bootstrap_update accepts either bootstrap_profile or bootstrap_llm, not both")
+	case profile == "" && !hasExplicit:
+		return core.NodeLLMBootstrap{}, "", fmt.Errorf("durable_agent bootstrap_update requires bootstrap_profile=inherit_parent or bootstrap_llm")
+	case profile != "" && profile != "inherit_parent":
+		return core.NodeLLMBootstrap{}, "", fmt.Errorf("durable_agent bootstrap_profile must be inherit_parent for bootstrap_update")
+	}
+	if hasExplicit {
+		bootstrap := core.NormalizeNodeLLMBootstrap(*in.BootstrapLLM)
+		if err := core.ValidateNodeLLMBootstrap(bootstrap); err != nil {
+			return core.NodeLLMBootstrap{}, "", fmt.Errorf("durable_agent bootstrap_llm: %w", err)
+		}
+		return bootstrap, "explicit", nil
+	}
+	inherited := core.NormalizeNodeLLMBootstrap(r.durableAgentBootstrapLLM)
+	if !inherited.Configured() {
+		return core.NodeLLMBootstrap{}, "", fmt.Errorf("durable_agent bootstrap_update inherit_parent requires a configured parent bootstrap")
+	}
+	_ = agent
+	return inherited, "inherit_parent", nil
 }
 
 func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionKey) (string, error) {
@@ -2116,6 +2200,51 @@ func renderDurableAgentList(agents []core.DurableAgent) string {
 	return b.String()
 }
 
+func renderDurableAgentBootstrapShow(agent core.DurableAgent, updates []session.DurableAgentBootstrapUpdate, inherited core.NodeLLMBootstrap) string {
+	var b strings.Builder
+	b.WriteString("action: durable-agent bootstrap show\n")
+	fmt.Fprintf(&b, "agent_id: %s\n", agent.AgentID)
+	fmt.Fprintf(&b, "bootstrap_source_hint: %s\n", durableAgentBootstrapSourceHint(agent.BootstrapLLM, inherited))
+	fmt.Fprintf(&b, "bootstrap_llm_backend: %s\n", agent.BootstrapLLM.Backend)
+	fmt.Fprintf(&b, "bootstrap_native_provider: %s\n", agent.BootstrapLLM.NativeProvider)
+	fmt.Fprintf(&b, "bootstrap_model: %s\n", agent.BootstrapLLM.Model)
+	if strings.TrimSpace(agent.BootstrapLLM.CodexHome) != "" {
+		fmt.Fprintf(&b, "bootstrap_codex_home: %s\n", agent.BootstrapLLM.CodexHome)
+	}
+	fmt.Fprintf(&b, "parent_bootstrap_backend: %s\n", inherited.Backend)
+	if inherited.Configured() && strings.TrimSpace(inherited.CodexHome) != "" {
+		fmt.Fprintf(&b, "parent_bootstrap_codex_home: %s\n", inherited.CodexHome)
+	}
+	fmt.Fprintf(&b, "history_count: %d\n", len(updates))
+	for _, update := range updates {
+		fmt.Fprintf(&b, "- bootstrap_update id=%d kind=%s actor_role=%s", update.ID, strings.TrimSpace(update.UpdateKind), strings.TrimSpace(update.ActorRole))
+		if update.ActorUserID > 0 {
+			fmt.Fprintf(&b, " actor_user_id=%d", update.ActorUserID)
+		}
+		if update.SourceReviewEventID > 0 {
+			fmt.Fprintf(&b, " review_event=%d", update.SourceReviewEventID)
+		}
+		if strings.TrimSpace(update.Reason) != "" {
+			fmt.Fprintf(&b, " reason=%s", update.Reason)
+		}
+		fmt.Fprintf(&b, " applied_at=%s\n", update.AppliedAt.UTC().Format(time.RFC3339Nano))
+	}
+	return b.String()
+}
+
+func durableAgentBootstrapSourceHint(current core.NodeLLMBootstrap, inherited core.NodeLLMBootstrap) string {
+	current = core.NormalizeNodeLLMBootstrap(current)
+	inherited = core.NormalizeNodeLLMBootstrap(inherited)
+	switch {
+	case !current.Configured():
+		return "unset"
+	case inherited.Configured() && durableAgentNodeBootstrapEqual(current, inherited):
+		return "matches_parent_copy"
+	default:
+		return "pinned_or_diverged"
+	}
+}
+
 func renderDurableAgentPolicy(agent core.DurableAgent, updates []session.DurableAgentPolicyUpdate) string {
 	var b strings.Builder
 	channelKind := normalizeDurableAgentChannelKind(strings.TrimSpace(agent.ChannelKind))
@@ -2189,6 +2318,47 @@ func renderDurableAgentPolicyApply(agent core.DurableAgent, update *session.Dura
 	if strings.TrimSpace(update.Reason) != "" {
 		fmt.Fprintf(&b, "reason: %s\n", update.Reason)
 	}
+	return b.String()
+}
+
+func renderDurableAgentBootstrapApply(agent core.DurableAgent, update *session.DurableAgentBootstrapUpdate) string {
+	var b strings.Builder
+	b.WriteString("action: durable-agent bootstrap update\n")
+	fmt.Fprintf(&b, "agent_id: %s\n", agent.AgentID)
+	if update == nil {
+		b.WriteString("changed: false\n")
+		fmt.Fprintf(&b, "bootstrap_llm_backend: %s\n", agent.BootstrapLLM.Backend)
+		fmt.Fprintf(&b, "bootstrap_native_provider: %s\n", agent.BootstrapLLM.NativeProvider)
+		fmt.Fprintf(&b, "bootstrap_model: %s\n", agent.BootstrapLLM.Model)
+		if strings.TrimSpace(agent.BootstrapLLM.CodexHome) != "" {
+			fmt.Fprintf(&b, "bootstrap_codex_home: %s\n", agent.BootstrapLLM.CodexHome)
+		}
+		return b.String()
+	}
+	b.WriteString("changed: true\n")
+	fmt.Fprintf(&b, "update_id: %d\n", update.ID)
+	fmt.Fprintf(&b, "update_kind: %s\n", update.UpdateKind)
+	fmt.Fprintf(&b, "previous_bootstrap_backend: %s\n", update.PreviousBootstrap.Backend)
+	fmt.Fprintf(&b, "new_bootstrap_backend: %s\n", update.NewBootstrap.Backend)
+	fmt.Fprintf(&b, "new_bootstrap_native_provider: %s\n", update.NewBootstrap.NativeProvider)
+	fmt.Fprintf(&b, "new_bootstrap_model: %s\n", update.NewBootstrap.Model)
+	if strings.TrimSpace(update.NewBootstrap.CodexHome) != "" {
+		fmt.Fprintf(&b, "new_bootstrap_codex_home: %s\n", update.NewBootstrap.CodexHome)
+	}
+	if update.SourceReviewEventID > 0 {
+		fmt.Fprintf(&b, "source_review_event_id: %d\n", update.SourceReviewEventID)
+	}
+	if update.ActorUserID > 0 {
+		fmt.Fprintf(&b, "actor_user_id: %d\n", update.ActorUserID)
+	}
+	if strings.TrimSpace(update.ActorRole) != "" {
+		fmt.Fprintf(&b, "actor_role: %s\n", update.ActorRole)
+	}
+	if strings.TrimSpace(update.Reason) != "" {
+		fmt.Fprintf(&b, "reason: %s\n", update.Reason)
+	}
+	b.WriteString("capacity_contract_status: stale_if_verified\n")
+	b.WriteString("note: next durable child wake uses the updated bootstrap\n")
 	return b.String()
 }
 

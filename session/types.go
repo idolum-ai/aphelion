@@ -5,6 +5,8 @@ package session
 import (
 	"strings"
 	"time"
+
+	"github.com/idolum-ai/aphelion/core"
 )
 
 type TurnRunKind string
@@ -304,6 +306,19 @@ type DurableAgentPolicyUpdate struct {
 	NewVersion          int64
 	PolicyHash          string
 	PolicyJSON          string
+	Reason              string
+	AppliedAt           time.Time
+}
+
+type DurableAgentBootstrapUpdate struct {
+	ID                  int64
+	AgentID             string
+	SourceReviewEventID int64
+	ActorUserID         int64
+	ActorRole           string
+	UpdateKind          string
+	PreviousBootstrap   core.NodeLLMBootstrap
+	NewBootstrap        core.NodeLLMBootstrap
 	Reason              string
 	AppliedAt           time.Time
 }

@@ -269,6 +269,19 @@ func (s *SQLiteStore) init() error {
 			applied_at TEXT NOT NULL DEFAULT (datetime('now')),
 			FOREIGN KEY (agent_id) REFERENCES durable_agents(agent_id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS durable_agent_bootstrap_updates (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL,
+			source_review_event_id INTEGER NOT NULL DEFAULT 0,
+			actor_user_id INTEGER NOT NULL DEFAULT 0,
+			actor_role TEXT NOT NULL DEFAULT '',
+			update_kind TEXT NOT NULL DEFAULT '',
+			previous_bootstrap_json TEXT NOT NULL DEFAULT '{}',
+			new_bootstrap_json TEXT NOT NULL DEFAULT '{}',
+			reason TEXT,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (agent_id) REFERENCES durable_agents(agent_id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS durable_agent_remote_enrollments (
 			agent_id TEXT PRIMARY KEY,
 			parent_control_url TEXT NOT NULL DEFAULT '',
@@ -2817,6 +2830,111 @@ func (s *SQLiteStore) DurableAgentPolicyUpdates(agentID string, limit int) ([]Du
 	return updates, nil
 }
 
+func (s *SQLiteStore) ApplyDurableAgentBootstrap(agentID string, next core.NodeLLMBootstrap, sourceReviewEventID int64, actorUserID int64, actorRole string, updateKind string, reason string) (*core.DurableAgent, *DurableAgentBootstrapUpdate, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin apply durable agent bootstrap tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	agent, err := queryDurableAgent(tx, agentID)
+	if err != nil {
+		return nil, nil, err
+	}
+	previous := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
+	next = core.NormalizeNodeLLMBootstrap(next)
+	if err := core.ValidateNodeLLMBootstrap(next); err != nil {
+		return nil, nil, fmt.Errorf("validate durable agent bootstrap_llm: %w", err)
+	}
+	if previous == next {
+		if err := tx.Commit(); err != nil {
+			return nil, nil, fmt.Errorf("commit no-op durable agent bootstrap apply: %w", err)
+		}
+		return agent, nil, nil
+	}
+
+	agent.BootstrapLLM = next
+	updated, err := upsertDurableAgentExec(tx, *agent)
+	if err != nil {
+		return nil, nil, err
+	}
+	previousAudit := redactDurableAgentBootstrapSecrets(previous)
+	newAudit := redactDurableAgentBootstrapSecrets(updated.BootstrapLLM)
+	prevJSON, err := marshalDurableAgentBootstrapLLM(previousAudit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal previous durable agent bootstrap: %w", err)
+	}
+	nextJSON, err := marshalDurableAgentBootstrapLLM(newAudit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal updated durable agent bootstrap: %w", err)
+	}
+	now := time.Now().UTC()
+	res, err := tx.Exec(`
+		INSERT INTO durable_agent_bootstrap_updates(
+			agent_id, source_review_event_id, actor_user_id, actor_role, update_kind, previous_bootstrap_json, new_bootstrap_json, reason, applied_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		updated.AgentID, maxInt64(sourceReviewEventID, 0), maxInt64(actorUserID, 0), strings.TrimSpace(actorRole), strings.TrimSpace(updateKind), prevJSON, nextJSON, nullableString(reason), now.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("insert durable agent bootstrap update: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, nil, fmt.Errorf("durable agent bootstrap update last insert id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("commit durable agent bootstrap apply: %w", err)
+	}
+	return &updated, &DurableAgentBootstrapUpdate{
+		ID:                  id,
+		AgentID:             updated.AgentID,
+		SourceReviewEventID: maxInt64(sourceReviewEventID, 0),
+		ActorUserID:         maxInt64(actorUserID, 0),
+		ActorRole:           strings.TrimSpace(actorRole),
+		UpdateKind:          strings.TrimSpace(updateKind),
+		PreviousBootstrap:   previousAudit,
+		NewBootstrap:        newAudit,
+		Reason:              strings.TrimSpace(reason),
+		AppliedAt:           now,
+	}, nil
+}
+
+func (s *SQLiteStore) DurableAgentBootstrapUpdates(agentID string, limit int) ([]DurableAgentBootstrapUpdate, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, fmt.Errorf("durable agent bootstrap updates: agent_id is required")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.Query(`
+		SELECT id, agent_id, source_review_event_id, actor_user_id, actor_role, update_kind, previous_bootstrap_json, new_bootstrap_json, reason, applied_at
+		FROM durable_agent_bootstrap_updates
+		WHERE agent_id = ?
+		ORDER BY applied_at DESC, id DESC
+		LIMIT ?
+	`, agentID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query durable agent bootstrap updates: %w", err)
+	}
+	defer rows.Close()
+	var updates []DurableAgentBootstrapUpdate
+	for rows.Next() {
+		update, err := scanDurableAgentBootstrapUpdate(rows)
+		if err != nil {
+			return nil, err
+		}
+		updates = append(updates, update)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate durable agent bootstrap updates: %w", err)
+	}
+	return updates, nil
+}
+
 func (s *SQLiteStore) UpsertDurableAgentRemoteEnrollment(enrollment core.DurableAgentRemoteEnrollment) error {
 	enrollment = core.NormalizeDurableAgentRemoteEnrollment(enrollment)
 	if enrollment.AgentID == "" {
@@ -3847,6 +3965,12 @@ func marshalDurableAgentBootstrapLLM(bootstrap core.NodeLLMBootstrap) (string, e
 	return string(raw), nil
 }
 
+func redactDurableAgentBootstrapSecrets(bootstrap core.NodeLLMBootstrap) core.NodeLLMBootstrap {
+	redacted := core.NormalizeNodeLLMBootstrap(bootstrap)
+	redacted.APIKey = ""
+	return redacted
+}
+
 func unmarshalDurableAgentLivePolicy(raw string) (core.DurableAgentLivePolicy, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -4104,6 +4228,39 @@ func scanDurableAgentPolicyUpdate(scanner interface{ Scan(dest ...any) error }) 
 	appliedAt, err := parseSQLiteTime(appliedAtRaw)
 	if err != nil {
 		return DurableAgentPolicyUpdate{}, fmt.Errorf("parse durable agent policy update applied_at: %w", err)
+	}
+	update.AppliedAt = appliedAt
+	return update, nil
+}
+
+func scanDurableAgentBootstrapUpdate(scanner interface{ Scan(dest ...any) error }) (DurableAgentBootstrapUpdate, error) {
+	var (
+		update                DurableAgentBootstrapUpdate
+		actorRole             sql.NullString
+		updateKind            sql.NullString
+		previousBootstrapJSON string
+		newBootstrapJSON      string
+		reason                sql.NullString
+		appliedAtRaw          string
+	)
+	if err := scanner.Scan(&update.ID, &update.AgentID, &update.SourceReviewEventID, &update.ActorUserID, &actorRole, &updateKind, &previousBootstrapJSON, &newBootstrapJSON, &reason, &appliedAtRaw); err != nil {
+		return DurableAgentBootstrapUpdate{}, fmt.Errorf("scan durable agent bootstrap update: %w", err)
+	}
+	var err error
+	update.ActorRole = nullToString(actorRole)
+	update.UpdateKind = nullToString(updateKind)
+	update.PreviousBootstrap, err = unmarshalDurableAgentBootstrapLLM(previousBootstrapJSON)
+	if err != nil {
+		return DurableAgentBootstrapUpdate{}, fmt.Errorf("decode previous durable agent bootstrap update: %w", err)
+	}
+	update.NewBootstrap, err = unmarshalDurableAgentBootstrapLLM(newBootstrapJSON)
+	if err != nil {
+		return DurableAgentBootstrapUpdate{}, fmt.Errorf("decode new durable agent bootstrap update: %w", err)
+	}
+	update.Reason = nullToString(reason)
+	appliedAt, err := parseSQLiteTime(appliedAtRaw)
+	if err != nil {
+		return DurableAgentBootstrapUpdate{}, fmt.Errorf("parse durable agent bootstrap update applied_at: %w", err)
 	}
 	update.AppliedAt = appliedAt
 	return update, nil

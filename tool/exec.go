@@ -207,6 +207,8 @@ type durableAgentInput struct {
 	ReviewEventID             int64                              `json:"review_event_id,omitempty"`
 	ReviewTargetChatID        int64                              `json:"review_target_chat_id,omitempty"`
 	Reason                    string                             `json:"reason,omitempty"`
+	BootstrapProfile          string                             `json:"bootstrap_profile,omitempty"`
+	BootstrapLLM              *core.NodeLLMBootstrap             `json:"bootstrap_llm,omitempty"`
 	PolicyPatch               *durableAgentPolicyPatchInput      `json:"policy_patch,omitempty"`
 	PolicyOverrides           *durableAgentPolicyOverridesInput  `json:"policy_overrides,omitempty"`
 	Charter                   string                             `json:"charter,omitempty"`
@@ -489,12 +491,14 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "policy_apply", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send", "memory_review", "memory_delegate", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send", "memory_review", "memory_delegate", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: inbox (currently mapped to email adapter profile)"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
 						"review_target_chat_id": {"type": "integer", "description": "Optional admin review target chat id override for create"},
 						"reason": {"type": "string", "description": "Optional operator reason for the change"},
+					"bootstrap_profile": {"type": "string", "enum": ["inherit_parent"], "description": "For bootstrap_update: replace the child bootstrap with the parent-default inherited bootstrap."},
+					"bootstrap_llm": {"type": "object", "description": "For bootstrap_update: explicit replacement child bootstrap record.", "properties": {"backend": {"type": "string", "enum": ["native", "codex"]}, "native_provider": {"type": "string"}, "api_key": {"type": "string"}, "base_url": {"type": "string"}, "model": {"type": "string"}, "max_tokens": {"type": "integer", "minimum": 0}, "codex_auth_source": {"type": "string"}, "codex_home": {"type": "string"}, "codex_base_url": {"type": "string"}}},
 						"policy_patch": {
 							"type": "object",
 							"description": "Optional conversational policy patch for policy_apply/create. Prefer this surface.",
@@ -604,7 +608,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},
 					"secret": {"type": "string", "description": "Replacement control-plane secret for enrollment_update when operation=rotate_secret"},
 					"message": {"type": "string", "description": "Parent message text for conversation_send"},
-					"history": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Recent policy update entries to show for policy_show"},
+					"history": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Recent update entries to show for policy_show or bootstrap_show"},
 					"telegram_user_id": {"type": "integer", "minimum": 1, "description": "Single Telegram user id for access_grant or access_revoke"},
 					"telegram_user_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}, "description": "Telegram user ids for access_grant or access_revoke"}
 				},
