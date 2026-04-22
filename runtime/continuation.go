@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -91,7 +92,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	_, err := sender.SendInlineKeyboard(
 		ctx,
 		msg.ChatID,
-		r.renderContinuationPrompt(ctx, msg, state),
+		r.renderContinuationPrompt(ctx, key, msg, state),
 		continuationApprovalButtonRows(state.DecisionID),
 		nil,
 	)
@@ -338,7 +339,7 @@ func clampContinuationText(value string, maxChars int) string {
 	return strings.TrimSpace(string(runes[:maxChars])) + "…"
 }
 
-func (r *Runtime) renderContinuationPrompt(ctx context.Context, msg core.InboundMessage, state session.ContinuationState) string {
+func (r *Runtime) renderContinuationPrompt(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState) string {
 	fallback := renderContinuationPromptFallback(state)
 	if r == nil {
 		return fallback
@@ -395,7 +396,69 @@ func (r *Runtime) renderContinuationPrompt(ctx context.Context, msg core.Inbound
 	if continuationPromptHasSplitRoleLabels(rendered) {
 		return fallback
 	}
-	return rendered
+	grounded, note := r.groundContinuationPromptWithExecutionEvidence(key, state, rendered)
+	if note != "" {
+		log.Printf("WARN continuation prompt grounding fallback chat_id=%d decision_id=%s note=%s", key.ChatID, strings.TrimSpace(state.DecisionID), note)
+	}
+	return grounded
+}
+
+func (r *Runtime) groundContinuationPromptWithExecutionEvidence(
+	key session.SessionKey,
+	state session.ContinuationState,
+	candidate string,
+) (string, string) {
+	candidate = strings.TrimSpace(candidate)
+	fallback := renderContinuationPromptFallback(state)
+	if candidate == "" {
+		return fallback, "rendered continuation prompt is empty"
+	}
+	if r == nil || r.store == nil {
+		return candidate, ""
+	}
+	decisionID := strings.TrimSpace(state.DecisionID)
+	if decisionID == "" {
+		return fallback, "continuation decision id is missing"
+	}
+	events, err := r.store.ExecutionEventsBySession(key, 0, 300)
+	if err != nil || len(events) == 0 {
+		return fallback, "continuation evidence is unavailable"
+	}
+
+	latestType := ""
+	for _, event := range events {
+		eventType := strings.TrimSpace(event.EventType)
+		switch eventType {
+		case core.ExecutionEventContinuationOffered,
+			core.ExecutionEventContinuationApproved,
+			core.ExecutionEventContinuationRevoked,
+			core.ExecutionEventContinuationConsumed,
+			core.ExecutionEventContinuationBlocked:
+		default:
+			continue
+		}
+		payload := executionEventPayload(event.PayloadJSON)
+		if strings.TrimSpace(payloadString(payload, "decision_id")) != decisionID {
+			continue
+		}
+		latestType = eventType
+	}
+	if latestType == "" {
+		return fallback, "no continuation event matches decision id"
+	}
+
+	expectedStatus := session.NormalizeContinuationState(state).Status
+	switch expectedStatus {
+	case session.ContinuationStatusPending:
+		if latestType != core.ExecutionEventContinuationOffered {
+			return fallback, fmt.Sprintf("pending continuation is not grounded by offered event (latest=%s)", latestType)
+		}
+	case session.ContinuationStatusApproved:
+		if latestType != core.ExecutionEventContinuationApproved {
+			return fallback, fmt.Sprintf("approved continuation is not grounded by approved event (latest=%s)", latestType)
+		}
+	}
+	return candidate, ""
 }
 
 func continuationPromptHasSplitRoleLabels(text string) bool {

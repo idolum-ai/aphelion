@@ -83,6 +83,7 @@ Admin-only:
 Chat-scoped status now reports live work telemetry, not only router occupancy:
 
 - `Quick Read:` one-line human summary (Haiku-backed when a native provider key is configured), prepended ahead of the status block.
+- `Quick Read:` is grounded against the rendered status tokens; contradictory generated summaries are replaced with deterministic snapshot text.
 - Telemetry labels are rendered as human-readable labels with colons (including snake_case and known status/debug lead labels; for example, `status_scope=chat` appears as `Status Scope: chat`, and `summary state=idle` appears as `Summary: State: idle`).
 - Bracketed machine envelopes are humanized in Telegram-facing status/debug output (for example, `[PLAN_UPDATED]` renders as `Plan Updated:` and closing tags are removed).
 - `turn_phase` for active in-flight stage (`face_proposal`, `brokerage`, `governor`, `render`, `persist`, `deliver`) when available.
@@ -258,6 +259,7 @@ Offer conditions:
   - `CONTINUATION_CONFIDENCE: low|medium|high`
 - Prompt is shown only when both intents are `continue`, both rationales are non-empty, and governor is ratified.
 - Prompt text is rendered as one first-person system voice (Haiku/face render when available, deterministic fallback otherwise), not as a split `Persona`/`Governor` dialogue block.
+- Prompt delivery is TES-grounded: the displayed continuation prompt must match a live continuation decision event (`continuation.offered`) for the same `decision_id`; otherwise prompt text falls back to deterministic copy.
 - When handshake fails, continuation state is persisted as idle with an explicit blocked reason and a first-person blocked notice is sent in chat (persona-rendered with deterministic fallback).
 
 ### Runtime decision prompts

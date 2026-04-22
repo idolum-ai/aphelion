@@ -44,6 +44,12 @@ Details:
 - [docs/telegram-ui-features.md](docs/telegram-ui-features.md)
 - `requirements/` specs for component-level behavior
 
+Execution transparency:
+
+- Runtime execution truth is recorded in TES (`execution_events`) with ordered, per-session event sequencing.
+- `/status` and `/debug` are TES-first projections with compatibility fallbacks where legacy rows still exist.
+- Final reply and continuation/debug summaries use grounding guards to avoid surfacing claims that are not evidenced by TES.
+
 ## Status
 
 Runnable v0:
@@ -212,7 +218,7 @@ llm_model = "anthropic/claude-sonnet-4-6"
 
 Current behavior note:
 
-- The durable setup wizard is currently inbox/email-focused and now explicitly surfaces bootstrap source plus effective backend/provider/model for clarity; model pinning is only offered when the effective bootstrap backend is native.
+- The durable setup wizard surfaces bootstrap source plus effective backend/provider/model for clarity; model pinning is only offered when the effective bootstrap backend is native.
 - Telegram group admission is still driven by `telegram.durable_groups` config and restart.
 
 Daily-review durable child staging path (per child workspace):

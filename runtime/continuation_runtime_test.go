@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -191,6 +192,99 @@ func TestHandleInboundContinuationApprovalPromptFallsBackWhenRenderedTextUsesSpl
 	}
 	if !strings.Contains(sender.inline[0].text, "Should I continue for 1 more turn") {
 		t.Fatalf("inline text = %q, want single-system fallback approval question", sender.inline[0].text)
+	}
+}
+
+func TestGroundContinuationPromptWithExecutionEvidenceFallsBackWithoutMatchingEvent(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8191, UserID: 0, Scope: telegramDMScopeRef(8191)}
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "continuation-missing",
+		RemainingTurns: 1,
+		Objective:      "Keep the refactor bounded.",
+		StageSummary:   "Write focused tests first.",
+		PersonaIntent: session.ContinuationIntent{
+			Decision:  session.ContinuationIntentDecisionContinue,
+			Rationale: "The thread still has one bounded action left.",
+		},
+		GovernorIntent: session.ContinuationIntent{
+			Decision:  session.ContinuationIntentDecisionContinue,
+			Rationale: "The bounded step is ratified.",
+			Ratified:  true,
+		},
+	}
+
+	candidate := "I can continue from here.\n\nShould I continue for 1 more turn(s)?"
+	grounded, note := rt.groundContinuationPromptWithExecutionEvidence(key, state, candidate)
+	if grounded != renderContinuationPromptFallback(state) {
+		t.Fatalf("grounded prompt = %q, want fallback when TES continuation evidence is missing", grounded)
+	}
+	if !strings.Contains(note, "continuation evidence is unavailable") {
+		t.Fatalf("grounding note = %q, want missing-evidence explanation", note)
+	}
+}
+
+func TestGroundContinuationPromptWithExecutionEvidenceFallsBackAfterRevocation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8192, UserID: 0, Scope: telegramDMScopeRef(8192)}
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "continuation-revoked",
+		RemainingTurns: 1,
+		Objective:      "Keep the refactor bounded.",
+		StageSummary:   "Write focused tests first.",
+		PersonaIntent: session.ContinuationIntent{
+			Decision:  session.ContinuationIntentDecisionContinue,
+			Rationale: "The thread still has one bounded action left.",
+		},
+		GovernorIntent: session.ContinuationIntent{
+			Decision:  session.ContinuationIntentDecisionContinue,
+			Rationale: "The bounded step is ratified.",
+			Ratified:  true,
+		},
+	}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventContinuationOffered,
+			Stage:       "continuation",
+			Status:      "pending",
+			PayloadJSON: `{"decision_id":"continuation-revoked","remaining_turns":1}`,
+			CreatedAt:   now,
+		},
+		{
+			EventType:   core.ExecutionEventContinuationRevoked,
+			Stage:       "continuation",
+			Status:      "revoked",
+			PayloadJSON: `{"decision_id":"continuation-revoked"}`,
+			CreatedAt:   now.Add(time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	candidate := "I can continue from here.\n\nShould I continue for 1 more turn(s)?"
+	grounded, note := rt.groundContinuationPromptWithExecutionEvidence(key, state, candidate)
+	if grounded != renderContinuationPromptFallback(state) {
+		t.Fatalf("grounded prompt = %q, want fallback when latest continuation event is revoked", grounded)
+	}
+	if !strings.Contains(note, "latest=continuation.revoked") {
+		t.Fatalf("grounding note = %q, want revoked latest-event explanation", note)
 	}
 }
 

@@ -26,6 +26,7 @@ Code anchors:
 - Keeps user-visible continuity and machine-audit continuity separate.
 - Preserves floor/scene split without losing recovery/review semantics.
 - Prevents architecture drift into one hidden “memory blob.”
+- Makes `/status`, `/debug`, and progress narration converge on one shared execution timeline instead of independent ad-hoc state machines.
 
 Related requirements:
 

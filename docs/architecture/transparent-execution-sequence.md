@@ -123,6 +123,11 @@ Collapsed `/debug` quick-read text is now grounded against chat execution state:
 inconsistent readable summaries are replaced with a deterministic, snapshot-based
 summary to avoid "idle/done" drift while turns are failed, blocked, or running.
 
+Continuation approval prompt text is now grounded against TES continuation
+events for the same `decision_id` (expected `continuation.offered` while
+pending). If evidence is missing or stale, prompt text falls back to the
+deterministic continuation prompt template.
+
 Code anchor: [`runtime/status.go`](../../runtime/status.go)
 
 ## Scope

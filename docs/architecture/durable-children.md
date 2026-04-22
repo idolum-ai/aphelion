@@ -14,6 +14,8 @@ Durable children are bounded child Aphelions, not alternate public personas.
 - Child wake ingress is selected through pluggable runtime adapters; each adapter contributes wake payload synthesis and review finalization semantics.
 - The default deployment includes one example scheduled child (`idolum-daily-review`) using the same durable wake substrate: it stages yesterday's transcript into child-local files and starts a plain scheduled check-in chat upward.
 - All wake-driven durable work runs through one child-turn substrate (prompt context + governor/face loop + principal-scoped tools), either in-process or isolated (`durable-agent child-run --agent ...`) when bootstrap/isolation is configured.
+- Durable lifecycle and policy events are mirrored into TES (`durable.wake.*`, `durable.state.*`, `durable.policy.*`, `durable.parent.acknowledged`) and used to project admin-facing health and latest-apply visibility.
+- Operational child/runtime failures are surfaced to admin chat through deduplicated operational alerts.
 
 Code anchors:
 
@@ -39,3 +41,4 @@ Related requirements:
 - [`requirements/durable-agents.md`](../../requirements/durable-agents.md)
 - [`requirements/security.md`](../../requirements/security.md)
 - [`requirements/operations.md`](../../requirements/operations.md)
+- [`docs/architecture/transparent-execution-sequence.md`](./transparent-execution-sequence.md)
