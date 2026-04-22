@@ -99,17 +99,6 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 	}
 	if r != nil && r.store != nil {
 		key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
-		statusState, exists, stateErr := r.store.StatusStateIfExists(key)
-		if stateErr != nil {
-			return core.ChatStatusSnapshot{}, stateErr
-		}
-		if exists {
-			snapshot.OperationStatus, snapshot.OperationStage, snapshot.OperationSummary = operationStatusFields(statusState.OperationState)
-			snapshot.PlanStepStatus, snapshot.PlanStep = planStatusFields(statusState.PlanState)
-			snapshot.PlanCompletedSteps, snapshot.PlanTotalSteps, snapshot.PlanFullyExecuted = planProgressFields(statusState.PlanState)
-			snapshot.HiddenInputCategories, snapshot.HiddenInputSummary = hiddenInputStatusFields(statusState.LastFloorMetadata)
-			snapshot.DeliveryStatus, snapshot.DeliverySummary = deliveryStatusFields(snapshot.LatestTurnRun, statusState.OutboundCountAtTurn)
-		}
 		events, eventsErr := r.store.ExecutionEventsBySession(key, 0, 500)
 		if eventsErr != nil {
 			return core.ChatStatusSnapshot{}, eventsErr
@@ -123,6 +112,47 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 			snapshot.TurnPhase = strings.TrimSpace(phase.Phase)
 			snapshot.TurnPhaseSummary = strings.TrimSpace(phase.Summary)
 			snapshot.TurnPhaseUpdatedAt = phase.UpdatedAt
+		}
+		if sidecars, ok := latestStatusSidecarsFromExecutionEvents(events); ok {
+			snapshot.OperationStatus = sidecars.OperationStatus
+			snapshot.OperationStage = sidecars.OperationStage
+			snapshot.OperationSummary = sidecars.OperationSummary
+			snapshot.PlanStepStatus = sidecars.PlanStepStatus
+			snapshot.PlanStep = sidecars.PlanStep
+			snapshot.PlanCompletedSteps = sidecars.PlanCompletedSteps
+			snapshot.PlanTotalSteps = sidecars.PlanTotalSteps
+			snapshot.PlanFullyExecuted = sidecars.PlanFullyExecuted
+			snapshot.HiddenInputCategories = append(snapshot.HiddenInputCategories[:0], sidecars.HiddenInputCategories...)
+			snapshot.HiddenInputSummary = sidecars.HiddenInputSummary
+		}
+		if deliveryStatus, deliverySummary, ok := deliveryStatusFromExecutionEvents(events); ok {
+			snapshot.DeliveryStatus = deliveryStatus
+			snapshot.DeliverySummary = deliverySummary
+		}
+
+		if (snapshot.OperationStatus == "" && snapshot.OperationStage == "" && snapshot.OperationSummary == "") ||
+			(snapshot.PlanStepStatus == "" && snapshot.PlanStep == "" && snapshot.PlanTotalSteps == 0) ||
+			(len(snapshot.HiddenInputCategories) == 0 && snapshot.HiddenInputSummary == "") ||
+			(snapshot.DeliveryStatus == "" && snapshot.DeliverySummary == "") {
+			statusState, exists, stateErr := r.store.StatusStateIfExists(key)
+			if stateErr != nil {
+				return core.ChatStatusSnapshot{}, stateErr
+			}
+			if exists {
+				if snapshot.OperationStatus == "" && snapshot.OperationStage == "" && snapshot.OperationSummary == "" {
+					snapshot.OperationStatus, snapshot.OperationStage, snapshot.OperationSummary = operationStatusFields(statusState.OperationState)
+				}
+				if snapshot.PlanStepStatus == "" && snapshot.PlanStep == "" && snapshot.PlanTotalSteps == 0 {
+					snapshot.PlanStepStatus, snapshot.PlanStep = planStatusFields(statusState.PlanState)
+					snapshot.PlanCompletedSteps, snapshot.PlanTotalSteps, snapshot.PlanFullyExecuted = planProgressFields(statusState.PlanState)
+				}
+				if len(snapshot.HiddenInputCategories) == 0 && snapshot.HiddenInputSummary == "" {
+					snapshot.HiddenInputCategories, snapshot.HiddenInputSummary = hiddenInputStatusFields(statusState.LastFloorMetadata)
+				}
+				if snapshot.DeliveryStatus == "" && snapshot.DeliverySummary == "" {
+					snapshot.DeliveryStatus, snapshot.DeliverySummary = deliveryStatusFields(snapshot.LatestTurnRun, statusState.OutboundCountAtTurn)
+				}
+			}
 		}
 	}
 	for _, stale := range system.StaleRunningTurns {
@@ -479,6 +509,111 @@ func liveRouterSignalsFromExecutionEvents(events []session.ExecutionEvent) (map[
 		}
 	}
 	return activeByChat, queueByChat
+}
+
+type statusSidecarProjection struct {
+	OperationStatus       string
+	OperationStage        string
+	OperationSummary      string
+	PlanStepStatus        string
+	PlanStep              string
+	PlanCompletedSteps    int
+	PlanTotalSteps        int
+	PlanFullyExecuted     bool
+	HiddenInputCategories []string
+	HiddenInputSummary    string
+}
+
+func latestStatusSidecarsFromExecutionEvents(events []session.ExecutionEvent) (statusSidecarProjection, bool) {
+	if len(events) == 0 {
+		return statusSidecarProjection{}, false
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+
+	projection := statusSidecarProjection{}
+	found := false
+	for _, event := range ordered {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventTurnSidecarsCaptured {
+			continue
+		}
+		payload := executionEventPayload(event.PayloadJSON)
+		projection.OperationStatus = strings.TrimSpace(payloadString(payload, "operation_status"))
+		projection.OperationStage = strings.TrimSpace(payloadString(payload, "operation_stage"))
+		projection.OperationSummary = strings.TrimSpace(payloadString(payload, "operation_summary"))
+		projection.PlanStepStatus = strings.TrimSpace(payloadString(payload, "plan_step_status"))
+		projection.PlanStep = strings.TrimSpace(payloadString(payload, "plan_step"))
+		if value, ok := payloadInt64(payload, "plan_completed_steps"); ok {
+			projection.PlanCompletedSteps = int(value)
+		}
+		if value, ok := payloadInt64(payload, "plan_total_steps"); ok {
+			projection.PlanTotalSteps = int(value)
+		}
+		if value, ok := payloadBool(payload, "plan_fully_executed"); ok {
+			projection.PlanFullyExecuted = value
+		}
+		projection.HiddenInputCategories = payloadStringSlice(payload, "hidden_input_categories")
+		if len(projection.HiddenInputCategories) == 0 {
+			projection.HiddenInputCategories = splitStatusCSV(payloadString(payload, "hidden_input_category"))
+		}
+		projection.HiddenInputSummary = strings.TrimSpace(payloadString(payload, "hidden_input_summary"))
+		found = true
+	}
+	return projection, found
+}
+
+func deliveryStatusFromExecutionEvents(events []session.ExecutionEvent) (string, string, bool) {
+	if len(events) == 0 {
+		return "", "", false
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+
+	status := ""
+	summary := ""
+	found := false
+	for _, event := range ordered {
+		payload := executionEventPayload(event.PayloadJSON)
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventDeliveryFinalSent:
+			messageID, _ := payloadInt64(payload, "message_id")
+			kind := strings.TrimSpace(payloadString(payload, "kind"))
+			status = "delivered"
+			if messageID != 0 || kind != "" {
+				summary = fmt.Sprintf("outbound message_id=%d kind=%s", messageID, firstNonEmpty(kind, "telegram"))
+			} else {
+				summary = "outbound delivery recorded in TES"
+			}
+			found = true
+		case core.ExecutionEventDeliveryFinalFailed:
+			status = "delivery_failed"
+			if errText := strings.TrimSpace(payloadString(payload, "error")); errText != "" {
+				summary = truncateStatusDiagnostic(errText, 220)
+			} else {
+				summary = "delivery finalization failed"
+			}
+			found = true
+		case core.ExecutionEventDeliveryProgressSent, core.ExecutionEventDeliveryProgressEdited:
+			if !found {
+				status = "in_flight"
+				summary = "progress delivery is active"
+			}
+		case core.ExecutionEventDeliveryProgressFailed:
+			if !found {
+				status = "delivery_failed"
+				if errText := strings.TrimSpace(payloadString(payload, "error")); errText != "" {
+					summary = truncateStatusDiagnostic(errText, 220)
+				} else {
+					summary = "progress delivery failed"
+				}
+				found = true
+			}
+		}
+	}
+	if strings.TrimSpace(status) == "" {
+		return "", "", false
+	}
+	return status, summary, true
 }
 
 func sortedInt64Keys(values map[int64][]uint64) []int64 {
@@ -847,6 +982,69 @@ func payloadInt64(payload map[string]any, key string) (int64, bool) {
 		return 0, false
 	}
 	return parsed, true
+}
+
+func payloadBool(payload map[string]any, key string) (bool, bool) {
+	value := strings.ToLower(strings.TrimSpace(payloadString(payload, key)))
+	if value == "" {
+		return false, false
+	}
+	switch value {
+	case "1", "true", "yes", "y":
+		return true, true
+	case "0", "false", "no", "n":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func payloadStringSlice(payload map[string]any, key string) []string {
+	if len(payload) == 0 {
+		return nil
+	}
+	raw, ok := payload[strings.TrimSpace(key)]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch typed := raw.(type) {
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			value := strings.TrimSpace(fmt.Sprint(item))
+			if value != "" {
+				out = append(out, value)
+			}
+		}
+		return out
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	default:
+		return splitStatusCSV(strings.TrimSpace(fmt.Sprint(typed)))
+	}
+}
+
+func splitStatusCSV(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func summarizeExecutionEvents(events []session.ExecutionEvent, limit int) []core.ExecutionEventSummary {

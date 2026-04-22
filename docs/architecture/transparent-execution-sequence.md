@@ -27,6 +27,7 @@ Code anchor: [`session/store.go`](../../session/store.go)
 - Turn lifecycle
   - `turn.started`
   - `turn.stage.changed`
+  - `turn.sidecars.captured`
   - `turn.completed`
   - `turn.failed`
   - `turn.interrupted`
@@ -96,6 +97,10 @@ Code anchors:
 
 `ChatStatusSnapshot` now derives `TurnPhase` and `TurnPhaseSummary` from TES
 `turn.stage.changed` events only.
+
+Operation/plan/hidden-input status sidecars are projected from TES
+`turn.sidecars.captured` events when present, with legacy session status reads
+as compatibility fallback only.
 
 `SystemStatusSnapshot` is now TES-first for detached control/recovery overlays:
 

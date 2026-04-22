@@ -246,8 +246,8 @@ func TestGroundFinalReplyWithExecutionEvidenceRewritesUngroundedSuccessClaim(t *
 	if strings.TrimSpace(note) == "" {
 		t.Fatalf("note = %q, want non-empty grounding note", note)
 	}
-	if !strings.Contains(strings.ToLower(rewritten), "runtime status for this turn is failed") {
-		t.Fatalf("rewritten = %q, want runtime failed correction", rewritten)
+	if !strings.Contains(strings.ToLower(rewritten), "completion claim is not grounded") {
+		t.Fatalf("rewritten = %q, want completion-claim grounding correction", rewritten)
 	}
 }
 
@@ -286,6 +286,99 @@ func TestGroundFinalReplyWithExecutionEvidenceKeepsGroundedSuccessClaim(t *testi
 		t.Fatalf("note = %q, want empty note", note)
 	}
 	if rewritten != "Done. Everything finished cleanly." {
+		t.Fatalf("rewritten = %q, want unchanged reply", rewritten)
+	}
+}
+
+func TestGroundFinalReplyWithExecutionEvidenceRewritesUngroundedToolClaim(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9303, UserID: 0, Scope: telegramDMScopeRef(9303)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"summary":"done"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, "I executed command-line checks and applied the patch.")
+	if strings.TrimSpace(note) == "" {
+		t.Fatalf("note = %q, want non-empty grounding note", note)
+	}
+	if !strings.Contains(strings.ToLower(rewritten), "tool-execution claim has no tool events") {
+		t.Fatalf("rewritten = %q, want tool-claim grounding correction", rewritten)
+	}
+}
+
+func TestGroundFinalReplyWithExecutionEvidenceKeepsGroundedTestClaim(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9304, UserID: 0, Scope: telegramDMScopeRef(9304)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: `{"tool":"exec","preview":"{\"command\":\"go test ./...\"}"}`,
+			CreatedAt:   now.Add(-15 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventToolSucceeded,
+			Stage:       "tool",
+			Status:      "succeeded",
+			PayloadJSON: `{"tool":"exec","result_preview":"ok all tests"}`,
+			CreatedAt:   now.Add(-12 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"summary":"done"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	reply := "I ran go test and tests passed."
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, reply)
+	if note != "" {
+		t.Fatalf("note = %q, want empty note", note)
+	}
+	if rewritten != reply {
 		t.Fatalf("rewritten = %q, want unchanged reply", rewritten)
 	}
 }

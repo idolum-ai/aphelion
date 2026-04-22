@@ -762,25 +762,7 @@ func (p *toolProgressReporter) progressHeading(done bool) string {
 	if done {
 		return "Done."
 	}
-	if p.startedAt.IsZero() {
-		return "Thinking..."
-	}
-	elapsed := time.Since(p.startedAt)
-	if elapsed < time.Second {
-		return "Thinking..."
-	}
-	seconds := int(elapsed.Seconds())
-	if seconds < 60 {
-		return fmt.Sprintf("Thinking... (%ds)", seconds)
-	}
-	minutes := seconds / 60
-	seconds = seconds % 60
-	if minutes < 60 {
-		return fmt.Sprintf("Thinking... (%dm %02ds)", minutes, seconds)
-	}
-	hours := minutes / 60
-	minutes = minutes % 60
-	return fmt.Sprintf("Thinking... (%dh %02dm)", hours, minutes)
+	return "Thinking..."
 }
 
 func (p *toolProgressReporter) addEntry(entry toolProgressEntry) bool {

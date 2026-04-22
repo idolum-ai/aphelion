@@ -45,6 +45,7 @@ func TestRouterAndRuntimeEmitExecutionEvents(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventIngressSelected)
 	assertHasEventType(t, events, core.ExecutionEventTurnStarted)
 	assertHasEventType(t, events, core.ExecutionEventTurnCompleted)
+	assertHasEventType(t, events, core.ExecutionEventTurnSidecarsCaptured)
 	assertHasEventType(t, events, core.ExecutionEventProviderAttemptStarted)
 	assertHasEventType(t, events, core.ExecutionEventProviderAttemptSucceeded)
 	assertHasEventType(t, events, core.ExecutionEventTurnStageChanged)

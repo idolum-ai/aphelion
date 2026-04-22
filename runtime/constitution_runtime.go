@@ -103,7 +103,8 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 	if r == nil || r.store == nil || reply == "" {
 		return reply, ""
 	}
-	if !startsWithSuccessClaim(reply) {
+	claims := detectExecutionClaims(reply)
+	if !claims.any() {
 		return reply, ""
 	}
 	events, err := r.store.ExecutionEventsBySession(key, 0, 300)
@@ -114,6 +115,9 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 	latestTurnStart := int64(0)
 	latestTerminal := ""
 	latestTerminalAt := ""
+	hasToolEvidence := false
+	hasTestEvidence := false
+	hasDurableEvidence := false
 	for _, event := range events {
 		eventType := strings.TrimSpace(event.EventType)
 		switch eventType {
@@ -122,6 +126,9 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 				latestTurnStart = event.Seq
 				latestTerminal = ""
 				latestTerminalAt = ""
+				hasToolEvidence = false
+				hasTestEvidence = false
+				hasDurableEvidence = false
 			}
 		case core.ExecutionEventTurnCompleted, core.ExecutionEventTurnFailed, core.ExecutionEventTurnInterrupted:
 			if latestTurnStart == 0 || event.Seq < latestTurnStart {
@@ -129,12 +136,37 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 			}
 			latestTerminal = eventType
 			latestTerminalAt = event.CreatedAt.UTC().Format(time.RFC3339)
+		case core.ExecutionEventToolStarted, core.ExecutionEventToolSucceeded, core.ExecutionEventToolFailed:
+			if latestTurnStart == 0 || event.Seq < latestTurnStart {
+				continue
+			}
+			hasToolEvidence = true
+			payload := executionEventPayload(event.PayloadJSON)
+			preview := strings.ToLower(strings.TrimSpace(payloadString(payload, "preview")))
+			resultPreview := strings.ToLower(strings.TrimSpace(payloadString(payload, "result_preview")))
+			if strings.Contains(preview, "go test") ||
+				strings.Contains(preview, "pytest") ||
+				strings.Contains(preview, "npm test") ||
+				strings.Contains(resultPreview, "go test") ||
+				strings.Contains(resultPreview, "pytest") ||
+				strings.Contains(resultPreview, "npm test") {
+				hasTestEvidence = true
+			}
+		case core.ExecutionEventDurableWakeStarted,
+			core.ExecutionEventDurableWakeCompleted,
+			core.ExecutionEventDurableWakeFailed,
+			core.ExecutionEventDurableStateAwake,
+			core.ExecutionEventDurableStateDormant,
+			core.ExecutionEventDurablePolicyApplied,
+			core.ExecutionEventDurablePolicyApplyFailed,
+			core.ExecutionEventDurableParentAck:
+			if latestTurnStart == 0 || event.Seq < latestTurnStart {
+				continue
+			}
+			hasDurableEvidence = true
 		}
 	}
 	if latestTurnStart == 0 {
-		return reply, ""
-	}
-	if latestTerminal == core.ExecutionEventTurnCompleted {
 		return reply, ""
 	}
 
@@ -147,10 +179,27 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 	case "":
 		status = "in_progress"
 	}
-	note := fmt.Sprintf("success claim is not grounded by TES; latest turn status is %s", status)
+
+	reasons := make([]string, 0, 4)
+	if claims.Completion && latestTerminal != core.ExecutionEventTurnCompleted {
+		reasons = append(reasons, fmt.Sprintf("completion claim is not grounded (turn=%s)", status))
+	}
+	if claims.Tool && !hasToolEvidence {
+		reasons = append(reasons, "tool-execution claim has no tool events")
+	}
+	if claims.Tests && !hasTestEvidence {
+		reasons = append(reasons, "test-execution claim has no test-related tool evidence")
+	}
+	if claims.Durable && !hasDurableEvidence {
+		reasons = append(reasons, "durable-agent claim has no durable lifecycle events")
+	}
+	if len(reasons) == 0 {
+		return reply, ""
+	}
+	note := "execution claims are not grounded by TES: " + strings.Join(reasons, "; ")
 	prefix := fmt.Sprintf(
-		"I need to correct that: runtime status for this turn is %s",
-		status,
+		"I need to correct that: %s",
+		strings.Join(reasons, "; "),
 	)
 	if latestTerminalAt != "" {
 		prefix += " (as of " + latestTerminalAt + " UTC)"
@@ -159,24 +208,118 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 	return prefix + "\n" + reply, note
 }
 
-func startsWithSuccessClaim(reply string) bool {
-	reply = strings.TrimSpace(strings.ToLower(reply))
-	if reply == "" {
-		return false
+type executionClaimSet struct {
+	Completion bool
+	Tool       bool
+	Tests      bool
+	Durable    bool
+}
+
+func (c executionClaimSet) any() bool {
+	return c.Completion || c.Tool || c.Tests || c.Durable
+}
+
+func detectExecutionClaims(reply string) executionClaimSet {
+	lower := strings.ToLower(strings.TrimSpace(reply))
+	if lower == "" {
+		return executionClaimSet{}
 	}
-	for _, marker := range []string{
-		"done.",
-		"done ",
-		"completed.",
-		"completed ",
+	claims := executionClaimSet{}
+	if containsPositiveClaimMarker(lower,
+		"done",
+		"completed",
 		"all set",
-		"finished.",
-		"finished ",
+		"finished",
+		"successfully",
+	) {
+		claims.Completion = true
+	}
+	if containsPositiveClaimMarker(lower,
+		"ran ",
+		"executed ",
+		"used the tool",
+		"called the tool",
+		"executed command",
+		"ran command",
+		"applied the patch",
+		"updated the files",
+	) {
+		claims.Tool = true
+	}
+	if containsPositiveClaimMarker(lower,
 		"tests passed",
-		"successfully ",
-	} {
-		if strings.HasPrefix(reply, marker) {
+		"all tests passed",
+		"go test",
+		"pytest",
+		"npm test",
+	) {
+		claims.Tests = true
+		claims.Tool = true
+	}
+	if containsPositiveClaimMarker(lower,
+		"durable agent",
+		"durable child",
+		"parent-child",
+		"review artifact",
+		"wake loop",
+	) {
+		claims.Durable = true
+	}
+	return claims
+}
+
+func containsAnyClaimMarker(text string, needles ...string) bool {
+	for _, needle := range needles {
+		needle = strings.TrimSpace(needle)
+		if needle == "" {
+			continue
+		}
+		if strings.Contains(text, needle) {
 			return true
+		}
+	}
+	return false
+}
+
+func containsPositiveClaimMarker(text string, needles ...string) bool {
+	for _, needle := range needles {
+		needle = strings.TrimSpace(strings.ToLower(needle))
+		if needle == "" {
+			continue
+		}
+		searchFrom := 0
+		for {
+			idx := strings.Index(text[searchFrom:], needle)
+			if idx < 0 {
+				break
+			}
+			idx += searchFrom
+			start := idx - 32
+			if start < 0 {
+				start = 0
+			}
+			prefix := strings.TrimSpace(text[start:idx])
+			if !containsAnyClaimMarker(prefix,
+				" not ",
+				"not",
+				"did not",
+				"didn't",
+				"won't",
+				"wouldn't",
+				"can't",
+				"cannot",
+				"never",
+				"no ",
+				"avoid",
+				"without",
+				"pretend",
+			) {
+				return true
+			}
+			searchFrom = idx + len(needle)
+			if searchFrom >= len(text) {
+				break
+			}
 		}
 	}
 	return false

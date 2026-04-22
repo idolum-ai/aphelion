@@ -466,8 +466,42 @@ func (r *Runtime) persistTurn(ctx context.Context, input turnCommitInput) (turnC
 	if out.Committed && input.Audit != nil && input.Result != nil {
 		input.Audit.RecordFinalReply(input.ReplyText, input.Result.Media, out.OutboundType)
 	}
+	if out.Committed && input.Sess != nil {
+		r.recordTurnSidecarsCapturedEvent(input.Key, input.Sess)
+	}
 	if out.Committed && input.Result != nil {
 		r.maybeCaptureTurnMemory(ctx, input)
 	}
 	return out, nil
+}
+
+func (r *Runtime) recordTurnSidecarsCapturedEvent(key session.SessionKey, sess *session.Session) {
+	if r == nil || sess == nil {
+		return
+	}
+	opStatus, opStage, opSummary := operationStatusFields(sess.OperationState)
+	planStepStatus, planStep := planStatusFields(sess.PlanState)
+	planCompleted, planTotal, planFullyExecuted := planProgressFields(sess.PlanState)
+	hiddenCategories, hiddenSummary := hiddenInputStatusFields(sess.LastFloorMetadata)
+	payload := map[string]any{
+		"operation_status":        strings.TrimSpace(opStatus),
+		"operation_stage":         strings.TrimSpace(opStage),
+		"operation_summary":       strings.TrimSpace(opSummary),
+		"plan_step_status":        strings.TrimSpace(planStepStatus),
+		"plan_step":               strings.TrimSpace(planStep),
+		"plan_completed_steps":    planCompleted,
+		"plan_total_steps":        planTotal,
+		"plan_fully_executed":     planFullyExecuted,
+		"hidden_input_summary":    strings.TrimSpace(hiddenSummary),
+		"hidden_input_categories": hiddenCategories,
+		"hidden_input_category":   strings.Join(hiddenCategories, ","),
+	}
+	r.recordExecutionEvent(
+		key,
+		core.ExecutionEventTurnSidecarsCaptured,
+		"persist",
+		"captured",
+		payload,
+		time.Now().UTC(),
+	)
 }

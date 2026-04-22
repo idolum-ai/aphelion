@@ -1011,6 +1011,99 @@ func TestChatStatusSnapshotIncludesHiddenInputDeliveryAndPlanProgress(t *testing
 	}
 }
 
+func TestChatStatusSnapshotPrefersSidecarProjectionEventsOverStatusState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7347, UserID: 0, Scope: telegramDMScopeRef(7347)}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.OperationState = session.OperationState{
+		Status:  "active",
+		Stage:   "legacy-stage",
+		Summary: "legacy operation status",
+	}
+	sess.PlanState = session.PlanState{
+		Steps: []session.PlanStep{
+			{Step: "Legacy plan step", Status: session.PlanStatusInProgress},
+		},
+	}
+	sess.LastFloorMetadata = encodeFloorMetadata(core.FloorMetadata{
+		HiddenInputs:      []core.HiddenInput{{Category: "legacy", Summary: "legacy summary"}},
+		ProvenanceSummary: "legacy hidden summary",
+	})
+	if err := store.Save(sess, nil, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(session legacy sidecars) err = %v", err)
+	}
+
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType: core.ExecutionEventTurnSidecarsCaptured,
+		Stage:     "persist",
+		Status:    "captured",
+		PayloadJSON: `{
+			"operation_status":"blocked",
+			"operation_stage":"event-stage",
+			"operation_summary":"event operation status",
+			"plan_step_status":"in_progress",
+			"plan_step":"Event plan step",
+			"plan_completed_steps":1,
+			"plan_total_steps":3,
+			"plan_fully_executed":false,
+			"hidden_input_categories":["event_a","event_b"],
+			"hidden_input_summary":"event hidden summary"
+		}`,
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(turn sidecars captured) err = %v", err)
+	}
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventDeliveryFinalFailed,
+		Stage:       "delivery",
+		Status:      "failed",
+		PayloadJSON: `{"error":"telegram timeout"}`,
+		CreatedAt:   now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(delivery final failed) err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(7347, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if snapshot.OperationStatus != "blocked" || snapshot.OperationStage != "event-stage" {
+		t.Fatalf("operation fields = (%q,%q), want TES sidecar projection", snapshot.OperationStatus, snapshot.OperationStage)
+	}
+	if snapshot.OperationSummary != "event operation status" {
+		t.Fatalf("OperationSummary = %q, want TES sidecar summary", snapshot.OperationSummary)
+	}
+	if snapshot.PlanStep != "Event plan step" || snapshot.PlanStepStatus != "in_progress" {
+		t.Fatalf("plan fields = (%q,%q), want TES sidecar plan state", snapshot.PlanStepStatus, snapshot.PlanStep)
+	}
+	if snapshot.PlanCompletedSteps != 1 || snapshot.PlanTotalSteps != 3 || snapshot.PlanFullyExecuted {
+		t.Fatalf("plan progress = (%d/%d fully=%t), want 1/3 false", snapshot.PlanCompletedSteps, snapshot.PlanTotalSteps, snapshot.PlanFullyExecuted)
+	}
+	if len(snapshot.HiddenInputCategories) != 2 || snapshot.HiddenInputCategories[0] != "event_a" || snapshot.HiddenInputCategories[1] != "event_b" {
+		t.Fatalf("HiddenInputCategories = %#v, want TES event categories", snapshot.HiddenInputCategories)
+	}
+	if snapshot.HiddenInputSummary != "event hidden summary" {
+		t.Fatalf("HiddenInputSummary = %q, want TES event hidden summary", snapshot.HiddenInputSummary)
+	}
+	if snapshot.DeliveryStatus != "delivery_failed" {
+		t.Fatalf("DeliveryStatus = %q, want delivery_failed from TES delivery event", snapshot.DeliveryStatus)
+	}
+	if !strings.Contains(snapshot.DeliverySummary, "telegram timeout") {
+		t.Fatalf("DeliverySummary = %q, want TES delivery error text", snapshot.DeliverySummary)
+	}
+}
+
 func TestDurableAgentsStatusSnapshotIncludesHealthSignals(t *testing.T) {
 	t.Parallel()
 
