@@ -23,10 +23,12 @@ type InboundMessage struct {
 	// Text contains the authored user text/caption and may include a synthetic
 	// appended "Reply context:" block during ingress normalization. Consumers that
 	// need authored-only text should strip that augmentation.
-	Text           string
-	Artifacts      []Artifact
-	ReplyTo        *int64
-	MessageID      int64
+	Text      string
+	Artifacts []Artifact
+	ReplyTo   *int64
+	MessageID int64
+	// IngressSeq is assigned by the router as a per-session, monotonic ingress order.
+	IngressSeq     int64
 	DurableAgentID string
 	Origin         InboundOrigin
 	OriginDetail   string

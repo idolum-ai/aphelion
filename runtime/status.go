@@ -121,11 +121,22 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 			snapshot.HiddenInputCategories, snapshot.HiddenInputSummary = hiddenInputStatusFields(statusState.LastFloorMetadata)
 			snapshot.DeliveryStatus, snapshot.DeliverySummary = deliveryStatusFields(snapshot.LatestTurnRun, statusState.OutboundCountAtTurn)
 		}
+		events, eventsErr := r.store.ExecutionEventsBySession(key, 0, 500)
+		if eventsErr != nil {
+			return core.ChatStatusSnapshot{}, eventsErr
+		}
+		if phase, ok := latestTurnPhaseFromExecutionEvents(events); ok {
+			snapshot.TurnPhase = strings.TrimSpace(phase.Phase)
+			snapshot.TurnPhaseSummary = strings.TrimSpace(phase.Summary)
+			snapshot.TurnPhaseUpdatedAt = phase.UpdatedAt
+		}
 	}
-	if phase, ok := r.chatTurnPhase(chatID); ok {
-		snapshot.TurnPhase = strings.TrimSpace(phase.Phase)
-		snapshot.TurnPhaseSummary = strings.TrimSpace(phase.Summary)
-		snapshot.TurnPhaseUpdatedAt = phase.UpdatedAt
+	if strings.TrimSpace(snapshot.TurnPhase) == "" && r != nil {
+		if phase, ok := r.chatTurnPhase(chatID); ok {
+			snapshot.TurnPhase = strings.TrimSpace(phase.Phase)
+			snapshot.TurnPhaseSummary = strings.TrimSpace(phase.Summary)
+			snapshot.TurnPhaseUpdatedAt = phase.UpdatedAt
+		}
 	}
 	for _, stale := range system.StaleRunningTurns {
 		if stale.ChatID == chatID {

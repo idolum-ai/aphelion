@@ -68,6 +68,12 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		return fmt.Errorf("persist continuation state: %w", err)
 	}
 	if !consensus.eligible() {
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", map[string]any{
+			"reason":          strings.TrimSpace(consensus.BlockedReason),
+			"objective":       strings.TrimSpace(state.Objective),
+			"stage_summary":   strings.TrimSpace(state.StageSummary),
+			"remaining_turns": state.RemainingTurns,
+		}, time.Now().UTC())
 		if shouldNotifyContinuationBlocked(priorState, priorExists, consensus) {
 			if err := r.sendContinuationBlockedNotice(ctx, msg, state); err != nil {
 				return err
@@ -75,6 +81,12 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		}
 		return nil
 	}
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", map[string]any{
+		"decision_id":     strings.TrimSpace(state.DecisionID),
+		"objective":       strings.TrimSpace(state.Objective),
+		"stage_summary":   strings.TrimSpace(state.StageSummary),
+		"remaining_turns": state.RemainingTurns,
+	}, time.Now().UTC())
 
 	_, err := sender.SendInlineKeyboard(
 		ctx,

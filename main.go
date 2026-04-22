@@ -54,6 +54,7 @@ type configStartupError struct {
 
 type telegramCommandControl struct {
 	router                 *core.Router
+	ingress                *ingressSequencer
 	rt                     *runtime.Runtime
 	resolver               *principal.Resolver
 	decisionDetacher       pendingDecisionDetacher
@@ -287,11 +288,13 @@ func (c telegramCommandControl) QueueReinstall(ctx context.Context, msg core.Inb
 	queued := msg
 	queued.Text = reinstallTemplateMessage
 	queued.Raw = nil
+	if c.ingress != nil {
+		c.ingress.Enqueue(ctx, queued)
+		return nil
+	}
 	turnCtx, cancel := newTurnContext(ctx, turnTimeout)
-	go func() {
-		defer cancel()
-		c.router.Route(turnCtx, queued)
-	}()
+	c.router.Route(turnCtx, queued)
+	cancel()
 	return nil
 }
 
@@ -632,9 +635,12 @@ func run() error {
 	}
 
 	router := core.NewRouter(rt.AgentFunc())
+	router.SetEventHandler(rt.RouterEventHandler())
+	ingress := newIngressSequencer(router, turnTimeout)
 	decisionBroker := newTelegramDecisionBroker(tgOutbound, decision.WithDurableStore(newTelegramDecisionDurableStore(store)))
 	commandControl := telegramCommandControl{
 		router:                 router,
+		ingress:                ingress,
 		rt:                     rt,
 		resolver:               principalResolver,
 		decisionDetacher:       decisionBroker,
@@ -699,11 +705,7 @@ func run() error {
 			return nil
 		}
 
-		turnCtx, cancel := newTurnContext(parent, turnTimeout)
-		go func() {
-			defer cancel()
-			router.Route(turnCtx, msg)
-		}()
+		ingress.Enqueue(parent, msg)
 		return nil
 	},
 		telegram.WithPollerTimeout(cfg.Telegram.PollTimeout),

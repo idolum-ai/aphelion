@@ -11,6 +11,7 @@ Aphelion state is intentionally multi-surface.
 - Plan state and operation state sidecars.
 - Review events and outbound delivery records.
 - Turn-run recovery records for startup repair.
+- Execution event timeline (`execution_events`) for ingress/turn/tool/delivery truth.
 
 Code anchors:
 
@@ -18,6 +19,7 @@ Code anchors:
 - [`runtime/turn_finalize.go`](../../runtime/turn_finalize.go)
 - [`runtime/awareness.go`](../../runtime/awareness.go)
 - [`turn/awareness.go`](../../turn/awareness.go)
+- [`docs/architecture/transparent-execution-sequence.md`](./transparent-execution-sequence.md)
 
 ## Why This Matters
 
@@ -31,4 +33,3 @@ Related requirements:
 - [`requirements/operations.md`](../../requirements/operations.md)
 - [`requirements/hidden-inputs.md`](../../requirements/hidden-inputs.md)
 - [`requirements/reliability.md`](../../requirements/reliability.md)
-

@@ -4,6 +4,7 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -2465,5 +2466,125 @@ func TestMessageTurnProvenanceRoundTrip(t *testing.T) {
 	}
 	if got.Messages[0].EventOrigin != "turn_authorization" || got.Messages[0].EventOriginDetail != "continuation" {
 		t.Fatalf("event provenance = (%q, %q), want turn_authorization/continuation", got.Messages[0].EventOrigin, got.Messages[0].EventOriginDetail)
+	}
+}
+
+func TestSQLiteStoreCreatesExecutionEventsTable(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	var count int
+	err := store.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM sqlite_master
+		WHERE type = 'table' AND name = 'execution_events'
+	`).Scan(&count)
+	if err != nil {
+		t.Fatalf("query sqlite_master execution_events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("execution_events table count = %d, want 1", count)
+	}
+}
+
+func TestAppendExecutionEventsMonotonicSequenceAndPayloadNormalization(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 3101, UserID: 0}
+
+	first, err := store.AppendExecutionEvent(key, ExecutionEventInput{
+		EventType:   "ingress.accepted",
+		Stage:       "ingress",
+		Status:      "accepted",
+		PayloadJSON: `{"message_id":1}`,
+	})
+	if err != nil {
+		t.Fatalf("AppendExecutionEvent(first) err = %v", err)
+	}
+	second, err := store.AppendExecutionEvent(key, ExecutionEventInput{
+		EventType:   "turn.started",
+		Stage:       "turn",
+		Status:      "running",
+		CausedBySeq: first.Seq,
+		PayloadJSON: "plain payload text",
+	})
+	if err != nil {
+		t.Fatalf("AppendExecutionEvent(second) err = %v", err)
+	}
+	batch, err := store.AppendExecutionEvents(key, []ExecutionEventInput{
+		{EventType: "tool.started", Stage: "tool", Status: "running", CausedBySeq: second.Seq, PayloadJSON: `{}`},
+		{EventType: "tool.succeeded", Stage: "tool", Status: "completed", CausedBySeq: second.Seq, PayloadJSON: `{}`},
+	})
+	if err != nil {
+		t.Fatalf("AppendExecutionEvents(batch) err = %v", err)
+	}
+
+	if first.Seq != 1 || second.Seq != 2 {
+		t.Fatalf("first/second seq = (%d,%d), want (1,2)", first.Seq, second.Seq)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("batch len = %d, want 2", len(batch))
+	}
+	if batch[0].Seq != 3 || batch[1].Seq != 4 {
+		t.Fatalf("batch seqs = (%d,%d), want (3,4)", batch[0].Seq, batch[1].Seq)
+	}
+	if !json.Valid([]byte(second.PayloadJSON)) {
+		t.Fatalf("normalized second payload is not json: %q", second.PayloadJSON)
+	}
+	if !strings.Contains(second.PayloadJSON, `"text":"plain payload text"`) {
+		t.Fatalf("second payload = %q, want wrapped text payload", second.PayloadJSON)
+	}
+}
+
+func TestExecutionEventsQueriesBySessionAndChat(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	keyA := SessionKey{ChatID: 4101, UserID: 0}
+	keyB := SessionKey{ChatID: 4102, UserID: 0}
+
+	if _, err := store.AppendExecutionEvents(keyA, []ExecutionEventInput{
+		{EventType: "ingress.accepted", Stage: "ingress", Status: "accepted", PayloadJSON: `{"message_id":1}`},
+		{EventType: "turn.started", Stage: "turn", Status: "running", PayloadJSON: `{}`},
+		{EventType: "turn.completed", Stage: "turn", Status: "completed", PayloadJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(keyA) err = %v", err)
+	}
+	if _, err := store.AppendExecutionEvents(keyB, []ExecutionEventInput{
+		{EventType: "ingress.accepted", Stage: "ingress", Status: "accepted", PayloadJSON: `{"message_id":2}`},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(keyB) err = %v", err)
+	}
+
+	eventsA, err := store.ExecutionEventsBySession(keyA, 1, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(keyA) err = %v", err)
+	}
+	if len(eventsA) != 2 {
+		t.Fatalf("eventsA len = %d, want 2", len(eventsA))
+	}
+	if eventsA[0].Seq != 2 || eventsA[1].Seq != 3 {
+		t.Fatalf("eventsA seqs = (%d,%d), want (2,3)", eventsA[0].Seq, eventsA[1].Seq)
+	}
+	if eventsA[0].EventType != "turn.started" || eventsA[1].EventType != "turn.completed" {
+		t.Fatalf("eventsA types = (%q,%q), want turn lifecycle", eventsA[0].EventType, eventsA[1].EventType)
+	}
+
+	chatEvents, err := store.ExecutionEventsByChat(4101, time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsByChat(4101) err = %v", err)
+	}
+	if len(chatEvents) != 3 {
+		t.Fatalf("chatEvents len = %d, want 3", len(chatEvents))
+	}
+	if chatEvents[0].Seq != 3 {
+		t.Fatalf("chatEvents first seq = %d, want latest seq 3", chatEvents[0].Seq)
 	}
 }

@@ -47,7 +47,7 @@ func (c *interactiveTurnCoordinator) Propose(ctx context.Context, req turn.FaceP
 	if c == nil || c.runtime == nil {
 		return nil, fmt.Errorf("interactive coordinator unavailable")
 	}
-	c.runtime.markChatTurnPhase(c.msg.ChatID, "face_proposal", "drafting relationship note before execution")
+	c.runtime.markSessionTurnPhase(c.key, "face_proposal", "drafting relationship note before execution")
 
 	awareness := req.Runtime
 	awareness.ArtifactMode = "scene"
@@ -110,6 +110,7 @@ func (c *interactiveTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 	rendered, err := c.runtime.renderTurnCoordinatorFace(ctx, turnCoordinatorRenderInput{
 		Scope:                 c.scope,
 		Msg:                   c.msg,
+		Key:                   c.key,
 		Channel:               c.requestChannel(),
 		PrincipalRole:         c.principalRoleOrActor(),
 		LastGovernor:          c.state.governor(),

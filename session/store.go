@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 24
+	schemaVersion                       = 25
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -169,8 +169,8 @@ func (s *SQLiteStore) init() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE TABLE IF NOT EXISTS turn_runs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id TEXT NOT NULL,
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				session_id TEXT NOT NULL,
 			chat_id INTEGER NOT NULL DEFAULT 0,
 			user_id INTEGER NOT NULL DEFAULT 0,
 			scope_kind TEXT NOT NULL DEFAULT '',
@@ -189,13 +189,33 @@ func (s *SQLiteStore) init() error {
 			last_tool_result_preview TEXT,
 			last_tool_error TEXT,
 			progress_message_id INTEGER,
-			error_text TEXT,
-			recovery_summary TEXT,
-			recovery_logged_at TEXT
-		)`,
+				error_text TEXT,
+				recovery_summary TEXT,
+				recovery_logged_at TEXT
+			)`,
+		`CREATE TABLE IF NOT EXISTS execution_events (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				session_id TEXT NOT NULL,
+				chat_id INTEGER NOT NULL DEFAULT 0,
+				user_id INTEGER NOT NULL DEFAULT 0,
+				scope_kind TEXT NOT NULL DEFAULT '',
+				scope_id TEXT NOT NULL DEFAULT '',
+				durable_agent_id TEXT NOT NULL DEFAULT '',
+				seq INTEGER NOT NULL,
+				event_type TEXT NOT NULL,
+				stage TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL DEFAULT '',
+				caused_by_seq INTEGER NOT NULL DEFAULT 0,
+				payload_json TEXT NOT NULL DEFAULT '{}',
+				created_at TEXT NOT NULL DEFAULT (datetime('now'))
+			)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_events_session_seq ON execution_events(session_id, seq)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_events_chat_created ON execution_events(chat_id, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_events_type_created ON execution_events(event_type, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_events_durable_created ON execution_events(durable_agent_id, created_at, id)`,
 		`CREATE TABLE IF NOT EXISTS pending_decisions (
-			decision_id TEXT PRIMARY KEY,
-			decision_seq INTEGER NOT NULL DEFAULT 0,
+				decision_id TEXT PRIMARY KEY,
+				decision_seq INTEGER NOT NULL DEFAULT 0,
 			owner_key TEXT NOT NULL DEFAULT '',
 			kind TEXT NOT NULL DEFAULT '',
 			chat_id INTEGER NOT NULL DEFAULT 0,
@@ -2028,6 +2048,240 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 	return records, nil
 }
 
+func (s *SQLiteStore) NextExecutionSeq(key SessionKey) (int64, error) {
+	sessionID := SessionIDForKey(key)
+	var maxSeq sql.NullInt64
+	err := s.db.QueryRow(`
+		SELECT MAX(seq)
+		FROM execution_events
+		WHERE session_id = ?
+	`, sessionID).Scan(&maxSeq)
+	if err != nil {
+		return 0, fmt.Errorf("query latest execution sequence: %w", err)
+	}
+	next := int64(1)
+	if maxSeq.Valid && maxSeq.Int64 > 0 {
+		next = maxSeq.Int64 + 1
+	}
+	return next, nil
+}
+
+func (s *SQLiteStore) AppendExecutionEvent(key SessionKey, input ExecutionEventInput) (ExecutionEvent, error) {
+	events, err := s.AppendExecutionEvents(key, []ExecutionEventInput{input})
+	if err != nil {
+		return ExecutionEvent{}, err
+	}
+	if len(events) == 0 {
+		return ExecutionEvent{}, fmt.Errorf("append execution event: no events written")
+	}
+	return events[0], nil
+}
+
+func (s *SQLiteStore) AppendExecutionEvents(key SessionKey, inputs []ExecutionEventInput) ([]ExecutionEvent, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin append execution events tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	events, err := appendExecutionEventsTx(tx, key, inputs)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit append execution events tx: %w", err)
+	}
+	return events, nil
+}
+
+func appendExecutionEventsTx(tx *sql.Tx, key SessionKey, inputs []ExecutionEventInput) ([]ExecutionEvent, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+	sessionID := SessionIDForKey(key)
+	scope := defaultScopeForKey(key)
+	var maxSeq sql.NullInt64
+	if err := tx.QueryRow(`
+		SELECT MAX(seq)
+		FROM execution_events
+		WHERE session_id = ?
+	`, sessionID).Scan(&maxSeq); err != nil {
+		return nil, fmt.Errorf("query latest execution event seq: %w", err)
+	}
+	nextSeq := int64(1)
+	if maxSeq.Valid && maxSeq.Int64 > 0 {
+		nextSeq = maxSeq.Int64 + 1
+	}
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO execution_events(
+			session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, seq, event_type, stage, status, caused_by_seq, payload_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("prepare append execution event statement: %w", err)
+	}
+	defer stmt.Close()
+
+	events := make([]ExecutionEvent, 0, len(inputs))
+	for _, input := range inputs {
+		eventType := strings.TrimSpace(input.EventType)
+		if eventType == "" {
+			return nil, fmt.Errorf("append execution event: event_type is required")
+		}
+		stage := strings.TrimSpace(input.Stage)
+		status := strings.TrimSpace(input.Status)
+		payloadJSON, err := normalizeExecutionEventPayloadJSON(input.PayloadJSON)
+		if err != nil {
+			return nil, fmt.Errorf("append execution event payload: %w", err)
+		}
+		createdAt := input.CreatedAt.UTC()
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		result, err := stmt.Exec(
+			sessionID,
+			key.ChatID,
+			key.UserID,
+			string(scope.Kind),
+			scope.ID,
+			scope.DurableAgentID,
+			nextSeq,
+			eventType,
+			stage,
+			status,
+			input.CausedBySeq,
+			payloadJSON,
+			createdAt.Format(time.RFC3339Nano),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("insert execution event type=%s seq=%d: %w", eventType, nextSeq, err)
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("execution event last insert id type=%s seq=%d: %w", eventType, nextSeq, err)
+		}
+		events = append(events, ExecutionEvent{
+			ID:          id,
+			SessionID:   sessionID,
+			ChatID:      key.ChatID,
+			UserID:      key.UserID,
+			Scope:       scope,
+			Seq:         nextSeq,
+			EventType:   eventType,
+			Stage:       stage,
+			Status:      status,
+			CausedBySeq: input.CausedBySeq,
+			PayloadJSON: payloadJSON,
+			CreatedAt:   createdAt,
+		})
+		nextSeq++
+	}
+	return events, nil
+}
+
+func normalizeExecutionEventPayloadJSON(payload string) (string, error) {
+	trimmed := strings.TrimSpace(payload)
+	if trimmed == "" {
+		return "{}", nil
+	}
+	if json.Valid([]byte(trimmed)) {
+		return trimmed, nil
+	}
+	data, err := json.Marshal(map[string]string{"text": trimmed})
+	if err != nil {
+		return "", fmt.Errorf("marshal payload wrapper: %w", err)
+	}
+	return string(data), nil
+}
+
+func (s *SQLiteStore) ExecutionEventsBySession(key SessionKey, afterSeq int64, limit int) ([]ExecutionEvent, error) {
+	sessionID := SessionIDForKey(key)
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`
+		SELECT
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, seq, event_type, stage, status, caused_by_seq, payload_json, created_at
+		FROM execution_events
+		WHERE session_id = ? AND seq > ?
+		ORDER BY seq ASC, id ASC
+		LIMIT ?
+	`, sessionID, afterSeq, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query execution events by session: %w", err)
+	}
+	defer rows.Close()
+
+	events := make([]ExecutionEvent, 0, limit)
+	for rows.Next() {
+		event, err := scanExecutionEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate execution events by session: %w", err)
+	}
+	return events, nil
+}
+
+func (s *SQLiteStore) ExecutionEventsByChat(chatID int64, since time.Time, limit int) ([]ExecutionEvent, error) {
+	if chatID == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if since.IsZero() {
+		rows, err = s.db.Query(`
+			SELECT
+				id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, seq, event_type, stage, status, caused_by_seq, payload_json, created_at
+			FROM execution_events
+			WHERE chat_id = ?
+			ORDER BY created_at DESC, id DESC
+			LIMIT ?
+		`, chatID, limit)
+	} else {
+		rows, err = s.db.Query(`
+			SELECT
+				id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, seq, event_type, stage, status, caused_by_seq, payload_json, created_at
+			FROM execution_events
+			WHERE chat_id = ? AND created_at >= ?
+			ORDER BY created_at DESC, id DESC
+			LIMIT ?
+		`, chatID, since.UTC().Format(time.RFC3339Nano), limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query execution events by chat: %w", err)
+	}
+	defer rows.Close()
+
+	events := make([]ExecutionEvent, 0, limit)
+	for rows.Next() {
+		event, err := scanExecutionEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate execution events by chat: %w", err)
+	}
+	return events, nil
+}
+
 func (s *SQLiteStore) BeginTurnRun(key SessionKey, kind TurnRunKind, requestText string) (*TurnRun, error) {
 	now := time.Now().UTC()
 	kind = TurnRunKind(strings.TrimSpace(string(kind)))
@@ -2476,6 +2730,12 @@ func (s *SQLiteStore) DeleteSession(key SessionKey) (int, error) {
 	`, sessionID, sessionID); err != nil {
 		return 0, fmt.Errorf("delete related review events: %w", err)
 	}
+	if _, err := tx.Exec(`
+		DELETE FROM execution_events
+		WHERE session_id = ?
+	`, sessionID); err != nil {
+		return 0, fmt.Errorf("delete related execution events: %w", err)
+	}
 
 	res, err := tx.Exec(`
 		DELETE FROM sessions
@@ -2507,6 +2767,7 @@ func (s *SQLiteStore) ResetRuntime() error {
 	statements := []string{
 		`DELETE FROM pending_decisions`,
 		`DELETE FROM review_events`,
+		`DELETE FROM execution_events`,
 		`DELETE FROM turn_runs`,
 		`DELETE FROM outbound_messages`,
 		`DELETE FROM compaction_log`,
@@ -3388,6 +3649,34 @@ func applyMigrations(tx *sql.Tx) error {
 			return fmt.Errorf("ensure %s.%s: %w", column.table, column.name, err)
 		}
 	}
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS execution_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL,
+		chat_id INTEGER NOT NULL DEFAULT 0,
+		user_id INTEGER NOT NULL DEFAULT 0,
+		scope_kind TEXT NOT NULL DEFAULT '',
+		scope_id TEXT NOT NULL DEFAULT '',
+		durable_agent_id TEXT NOT NULL DEFAULT '',
+		seq INTEGER NOT NULL,
+		event_type TEXT NOT NULL,
+		stage TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT '',
+		caused_by_seq INTEGER NOT NULL DEFAULT 0,
+		payload_json TEXT NOT NULL DEFAULT '{}',
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		return fmt.Errorf("ensure execution_events table: %w", err)
+	}
+	for _, stmt := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_events_session_seq ON execution_events(session_id, seq)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_events_chat_created ON execution_events(chat_id, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_events_type_created ON execution_events(event_type, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_events_durable_created ON execution_events(durable_agent_id, created_at, id)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure execution_events index: %w", err)
+		}
+	}
 
 	if err := ensureSessionColumn(tx, "plan_state_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
 		return fmt.Errorf("ensure sessions.plan_state_json: %w", err)
@@ -3460,6 +3749,10 @@ func ensureSessionIdentityIndexes(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_plan_events_session ON plan_events(session_id, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_events_session_seq ON execution_events(session_id, seq)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_events_chat_created ON execution_events(chat_id, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_events_type_created ON execution_events(event_type, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_events_durable_created ON execution_events(durable_agent_id, created_at, id)`,
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure session identity index: %w", err)
@@ -4454,6 +4747,40 @@ func scanTurnRun(scanner interface{ Scan(dest ...any) error }) (TurnRun, error) 
 	run.ErrorText = nullToString(errorTextRaw)
 	run.RecoverySummary = nullToString(recoverySummaryRaw)
 	return run, nil
+}
+
+func scanExecutionEvent(scanner interface{ Scan(dest ...any) error }) (ExecutionEvent, error) {
+	var (
+		event             ExecutionEvent
+		scopeKindRaw      sql.NullString
+		scopeIDRaw        sql.NullString
+		durableAgentIDRaw sql.NullString
+		stageRaw          sql.NullString
+		statusRaw         sql.NullString
+		payloadRaw        sql.NullString
+		createdAtRaw      string
+	)
+	if err := scanner.Scan(
+		&event.ID, &event.SessionID, &event.ChatID, &event.UserID, &scopeKindRaw, &scopeIDRaw, &durableAgentIDRaw,
+		&event.Seq, &event.EventType, &stageRaw, &statusRaw, &event.CausedBySeq, &payloadRaw, &createdAtRaw,
+	); err != nil {
+		return ExecutionEvent{}, fmt.Errorf("scan execution event: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return ExecutionEvent{}, fmt.Errorf("parse execution event created_at: %w", err)
+	}
+	event.Scope = NormalizeScopeRef(ScopeRef{
+		Kind:           ScopeKind(nullToString(scopeKindRaw)),
+		ID:             nullToString(scopeIDRaw),
+		DurableAgentID: nullToString(durableAgentIDRaw),
+	})
+	event.EventType = strings.TrimSpace(event.EventType)
+	event.Stage = nullToString(stageRaw)
+	event.Status = nullToString(statusRaw)
+	event.PayloadJSON = nullToString(payloadRaw)
+	event.CreatedAt = createdAt
+	return event, nil
 }
 
 func normalizeRhizomeConcepts(concepts []string) []string {

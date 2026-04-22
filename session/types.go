@@ -348,6 +348,32 @@ type TurnRun struct {
 	RecoveryLoggedAt      time.Time
 }
 
+// ExecutionEvent stores one append-only event in the transparent execution sequence.
+type ExecutionEvent struct {
+	ID          int64
+	SessionID   string
+	ChatID      int64
+	UserID      int64
+	Scope       ScopeRef
+	Seq         int64
+	EventType   string
+	Stage       string
+	Status      string
+	CausedBySeq int64
+	PayloadJSON string
+	CreatedAt   time.Time
+}
+
+// ExecutionEventInput is the write input for append-only execution events.
+type ExecutionEventInput struct {
+	EventType   string
+	Stage       string
+	Status      string
+	CausedBySeq int64
+	PayloadJSON string
+	CreatedAt   time.Time
+}
+
 // PendingDecisionRecord persists broker decisions that are awaiting callback resolution.
 type PendingDecisionRecord struct {
 	ID                string

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -88,6 +89,11 @@ func (r *Runtime) startTurnMonitor(key session.SessionKey, kind session.TurnRunK
 		return monitor
 	}
 	monitor.runID = run.ID
+	r.recordExecutionEvent(key, core.ExecutionEventTurnStarted, "turn", string(session.TurnRunStatusRunning), map[string]any{
+		"run_id":       run.ID,
+		"run_kind":     strings.TrimSpace(string(kind)),
+		"request_text": truncatePreview(strings.TrimSpace(requestText), 220),
+	}, time.Now().UTC())
 	if progress != nil {
 		progress.BindTurnRun(run.ID)
 		progress.recordMessageID = func(messageID int64) {
@@ -117,6 +123,11 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 			log.Printf("WARN note turn run tool start id=%d tool=%s err=%v", m.runID, name, err)
 		}
 	}
+	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolStarted, "tool", "started", map[string]any{
+		"run_id":  m.runID,
+		"tool":    strings.TrimSpace(name),
+		"preview": preview,
+	}, time.Now().UTC())
 	if m.progress != nil {
 		m.progress.ToolStarted(ctx, name, input)
 	}
@@ -136,6 +147,18 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 			log.Printf("WARN note turn run tool finish id=%d tool=%s err=%v", m.runID, name, storeErr)
 		}
 	}
+	eventType := core.ExecutionEventToolSucceeded
+	status := "succeeded"
+	if err != nil {
+		eventType = core.ExecutionEventToolFailed
+		status = "failed"
+	}
+	m.runtime.recordExecutionEvent(m.key, eventType, "tool", status, map[string]any{
+		"run_id":         m.runID,
+		"tool":           strings.TrimSpace(name),
+		"result_preview": resultPreview,
+		"error":          errorText,
+	}, time.Now().UTC())
 	if m.progress != nil {
 		m.progress.ToolFinished(ctx, name, err)
 	}
@@ -187,9 +210,26 @@ func (m *turnMonitor) Finish(ctx context.Context, turnErr error) {
 	if err := m.runtime.store.CompleteTurnRun(m.runID, status, errorText); err != nil {
 		log.Printf("WARN complete turn run id=%d status=%s err=%v", m.runID, status, err)
 	}
+	eventType := core.ExecutionEventTurnCompleted
+	eventStatus := "completed"
+	if turnErr != nil {
+		if errors.Is(turnErr, context.Canceled) {
+			eventType = core.ExecutionEventTurnInterrupted
+			eventStatus = "interrupted"
+		} else {
+			eventType = core.ExecutionEventTurnFailed
+			eventStatus = "failed"
+		}
+	}
+	m.runtime.recordExecutionEvent(m.key, eventType, "turn", eventStatus, map[string]any{
+		"run_id": m.runID,
+		"error":  errorText,
+	}, time.Now().UTC())
 }
 
 type toolProgressReporter struct {
+	runtime          *Runtime
+	executionKey     session.SessionKey
 	mu               sync.Mutex
 	sender           OutboundSender
 	inlineSender     inlineKeyboardSender
@@ -224,7 +264,7 @@ type toolProgressEntry struct {
 	Count int
 }
 
-func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, planState session.PlanState, audit *turnAuditRecorder) *toolProgressReporter {
+func (r *Runtime) newToolProgressReporter(key session.SessionKey, msg core.InboundMessage, planState session.PlanState, audit *turnAuditRecorder) *toolProgressReporter {
 	mode := strings.ToLower(strings.TrimSpace(r.toolProgressMode))
 	if mode == "" {
 		mode = "all"
@@ -238,6 +278,8 @@ func (r *Runtime) newToolProgressReporter(msg core.InboundMessage, planState ses
 	}
 
 	reporter := &toolProgressReporter{
+		runtime:          r,
+		executionKey:     key,
 		sender:           r.outbound,
 		reportIssue:      nil,
 		chatID:           target.ChatID,
@@ -461,12 +503,20 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		}
 		if err != nil {
 			log.Printf("WARN send tool progress chat_id=%d err=%v", p.chatID, err)
+			p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
+				"method": "send",
+				"error":  trimError(err.Error()),
+			})
 			if p.reportIssue != nil {
 				p.reportIssue(ctx, fmt.Errorf("send tool progress chat_id=%d: %w", p.chatID, err))
 			}
 			return
 		}
 		p.messageID = msgID
+		p.recordProgressEvent(core.ExecutionEventDeliveryProgressSent, "sent", map[string]any{
+			"message_id":    msgID,
+			"with_controls": withControls && len(p.controls) > 0,
+		})
 		if p.recordMessageID != nil {
 			p.recordMessageID(msgID)
 		}
@@ -476,10 +526,19 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 	if withControls && len(p.controls) > 0 && p.keyboardEditor != nil {
 		if err := p.keyboardEditor.EditMessageTextWithInlineKeyboard(ctx, p.chatID, p.messageID, text, "", p.controls); err != nil {
 			log.Printf("WARN edit tool progress inline chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+			p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
+				"method":     "edit_inline",
+				"message_id": p.messageID,
+				"error":      trimError(err.Error()),
+			})
 			if p.reportIssue != nil {
 				p.reportIssue(ctx, fmt.Errorf("edit tool progress inline chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
 			}
 		} else {
+			p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
+				"method":     "edit_inline",
+				"message_id": p.messageID,
+			})
 			return
 		}
 	}
@@ -488,10 +547,20 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 	}
 	if err := p.editor.EditMessageText(ctx, p.chatID, p.messageID, text, ""); err != nil {
 		log.Printf("WARN edit tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+		p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
+			"method":     "edit_text",
+			"message_id": p.messageID,
+			"error":      trimError(err.Error()),
+		})
 		if p.reportIssue != nil {
 			p.reportIssue(ctx, fmt.Errorf("edit tool progress chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
 		}
+		return
 	}
+	p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
+		"method":     "edit_text",
+		"message_id": p.messageID,
+	})
 }
 
 func (p *toolProgressReporter) ToolFinished(_ context.Context, _ string, _ error) {
@@ -517,6 +586,20 @@ func (p *toolProgressReporter) Finish(ctx context.Context) {
 		return
 	}
 	p.sendOrEditLocked(ctx, true, false)
+}
+
+func (p *toolProgressReporter) recordProgressEvent(eventType string, status string, payload map[string]any) {
+	if p == nil || p.runtime == nil {
+		return
+	}
+	p.runtime.recordExecutionEvent(
+		p.executionKey,
+		eventType,
+		"progress",
+		status,
+		payload,
+		time.Now().UTC(),
+	)
 }
 
 func deliberationControlRows(runID int64) [][]telegram.InlineButton {

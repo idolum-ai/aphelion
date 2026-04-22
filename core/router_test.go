@@ -465,3 +465,111 @@ func TestStopReturnsIdleWhenNothingRunning(t *testing.T) {
 		t.Fatalf("stop result = %+v, want no-op", got)
 	}
 }
+
+func TestRouterIngressSequenceAndEvents(t *testing.T) {
+	t.Parallel()
+
+	firstStarted := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+
+	var (
+		processedMu sync.Mutex
+		processed   []InboundMessage
+		eventsMu    sync.Mutex
+		events      []RouterEvent
+	)
+
+	router := NewRouter(func(_ context.Context, _ *SessionState, msg InboundMessage) (*TurnResult, error) {
+		processedMu.Lock()
+		processed = append(processed, msg)
+		processedMu.Unlock()
+		if msg.Text == "first" {
+			firstStarted <- struct{}{}
+			<-releaseFirst
+		}
+		return &TurnResult{}, nil
+	})
+	router.SetEventHandler(func(_ context.Context, event RouterEvent) {
+		eventsMu.Lock()
+		events = append(events, event)
+		eventsMu.Unlock()
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		router.Route(context.Background(), InboundMessage{ChatID: 9001, Text: "first", MessageID: 11})
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first message did not start")
+	}
+
+	router.Route(context.Background(), InboundMessage{ChatID: 9001, Text: "second", MessageID: 12})
+	router.Route(context.Background(), InboundMessage{ChatID: 9001, Text: "third", MessageID: 13})
+	close(releaseFirst)
+	<-done
+
+	processedMu.Lock()
+	if len(processed) != 2 {
+		t.Fatalf("processed len = %d, want 2", len(processed))
+	}
+	first := processed[0]
+	second := processed[1]
+	processedMu.Unlock()
+
+	if first.IngressSeq != 1 {
+		t.Fatalf("first ingress seq = %d, want 1", first.IngressSeq)
+	}
+	if second.IngressSeq != 3 {
+		t.Fatalf("compacted ingress seq = %d, want latest seq 3", second.IngressSeq)
+	}
+
+	eventsMu.Lock()
+	copied := append([]RouterEvent(nil), events...)
+	eventsMu.Unlock()
+
+	type typed struct {
+		Type       string
+		Seq        int64
+		QueueDepth int
+		Drained    int
+	}
+	got := make([]typed, 0, len(copied))
+	for _, event := range copied {
+		if event.ChatID != 9001 {
+			continue
+		}
+		got = append(got, typed{
+			Type:       event.EventType,
+			Seq:        event.IngressSeq,
+			QueueDepth: event.QueueDepth,
+			Drained:    event.DrainedCount,
+		})
+	}
+
+	if len(got) == 0 {
+		t.Fatal("router events are empty")
+	}
+
+	expected := []typed{
+		{Type: ExecutionEventIngressAccepted, Seq: 1},
+		{Type: ExecutionEventIngressSelected, Seq: 1},
+		{Type: ExecutionEventIngressAccepted, Seq: 2},
+		{Type: ExecutionEventIngressQueued, Seq: 2, QueueDepth: 1},
+		{Type: ExecutionEventIngressAccepted, Seq: 3},
+		{Type: ExecutionEventIngressQueued, Seq: 3, QueueDepth: 2},
+		{Type: ExecutionEventIngressCompacted, Seq: 3, Drained: 2},
+		{Type: ExecutionEventIngressSelected, Seq: 3},
+	}
+	if len(got) != len(expected) {
+		t.Fatalf("event len = %d, want %d\n got=%#v", len(got), len(expected), got)
+	}
+	for i := range expected {
+		if got[i].Type != expected[i].Type || got[i].Seq != expected[i].Seq || got[i].QueueDepth != expected[i].QueueDepth || got[i].Drained != expected[i].Drained {
+			t.Fatalf("event[%d] = %#v, want %#v", i, got[i], expected[i])
+		}
+	}
+}

@@ -144,6 +144,11 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, err
 	}
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationApproved, "continuation", "approved", map[string]any{
+		"decision_id":      strings.TrimSpace(state.DecisionID),
+		"remaining_turns":  state.RemainingTurns,
+		"approved_by_user": approverID,
+	}, time.Now().UTC())
 	return state, nil
 }
 
@@ -169,6 +174,10 @@ func (r *Runtime) RevokeContinuation(chatID int64) (ContinuationRevokeResult, er
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
 			return ContinuationRevokeResult{}, err
 		}
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationRevoked, "continuation", "revoked", map[string]any{
+			"decision_id":     strings.TrimSpace(state.DecisionID),
+			"remaining_turns": state.RemainingTurns,
+		}, time.Now().UTC())
 	}
 	return ContinuationRevokeResult{State: state, Revoked: revoked}, nil
 }
@@ -182,6 +191,11 @@ func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
 		return err
 	}
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
+		key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", map[string]any{
+			"status":          strings.TrimSpace(string(state.Status)),
+			"remaining_turns": state.RemainingTurns,
+		}, time.Now().UTC())
 		return nil
 	}
 	approverID := state.ApprovedBy
@@ -211,6 +225,15 @@ func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.P
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return err
 	}
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", map[string]any{
+		"remaining_turns": state.RemainingTurns,
+		"approved_by_user": func() int64 {
+			if state.ApprovedBy != 0 {
+				return state.ApprovedBy
+			}
+			return actor.TelegramUserID
+		}(),
+	}, time.Now().UTC())
 	_, err := r.handleInternalContinuation(ctx, actor, core.InboundMessage{
 		ChatID:       chatID,
 		SenderID:     actor.TelegramUserID,

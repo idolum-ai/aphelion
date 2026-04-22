@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // AgentFunc executes one agent turn for a session.
@@ -31,8 +32,10 @@ type Router struct {
 	sessions     map[string]*SessionState
 	active       map[string]activeTurn
 	sessionChats map[string]map[int64]struct{}
+	ingressSeq   map[string]int64
 	nextID       uint64
 	logger       routerLogger
+	onEvent      RouterEventHandler
 }
 
 type activeTurn struct {
@@ -79,8 +82,18 @@ func NewRouter(fn AgentFunc) *Router {
 		sessions:     make(map[string]*SessionState),
 		active:       make(map[string]activeTurn),
 		sessionChats: make(map[string]map[int64]struct{}),
+		ingressSeq:   make(map[string]int64),
 		logger:       defaultRouterLogger(),
 	}
+}
+
+func (r *Router) SetEventHandler(handler RouterEventHandler) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onEvent = handler
 }
 
 // Route routes msg to its session. If a turn is active for the session, the message
@@ -88,15 +101,19 @@ func NewRouter(fn AgentFunc) *Router {
 // into a single follow-up input so the next turn has full queue context.
 func (r *Router) Route(ctx context.Context, msg InboundMessage) {
 	sessionID, lock, session := r.resolveSession(msg)
+	msg = r.assignIngressSeq(sessionID, msg)
+	r.emitRouterEvent(ctx, msg, sessionID, ExecutionEventIngressAccepted, 0, 0)
 
 	if !lock.TryLock() {
 		queued := r.enqueue(sessionID, msg)
+		r.emitRouterEvent(ctx, msg, sessionID, ExecutionEventIngressQueued, queued, 0)
 		r.logger.Debug("session busy; queued message", "chat_id", msg.ChatID, "message_id", msg.MessageID, "queued_count", queued)
 		return
 	}
 	defer lock.Unlock()
 
 	current := msg
+	r.emitRouterEvent(ctx, current, sessionID, ExecutionEventIngressSelected, 0, 0)
 	for {
 		turnCtx, cancel := context.WithCancel(ctx)
 		activeID := r.markActive(sessionID, current.ChatID, cancel)
@@ -117,8 +134,10 @@ func (r *Router) Route(ctx context.Context, msg InboundMessage) {
 		if !ok {
 			return
 		}
+		r.emitRouterEvent(ctx, next, sessionID, ExecutionEventIngressCompacted, 0, drained)
 		r.logger.Debug("processing compacted queued messages", "chat_id", next.ChatID, "message_id", next.MessageID, "drained_count", drained)
 		current = next
+		r.emitRouterEvent(ctx, current, sessionID, ExecutionEventIngressSelected, 0, 0)
 	}
 }
 
@@ -370,6 +389,46 @@ func (r *Router) chatsForSessionLocked(sessionID string) []int64 {
 	return []int64{sess.ChatID}
 }
 
+func (r *Router) assignIngressSeq(sessionID string, msg InboundMessage) InboundMessage {
+	if r == nil || strings.TrimSpace(sessionID) == "" {
+		return msg
+	}
+	if msg.IngressSeq > 0 {
+		return msg
+	}
+	r.mu.Lock()
+	next := r.ingressSeq[sessionID] + 1
+	r.ingressSeq[sessionID] = next
+	r.mu.Unlock()
+	msg.IngressSeq = next
+	return msg
+}
+
+func (r *Router) emitRouterEvent(ctx context.Context, msg InboundMessage, sessionID string, eventType string, queueDepth int, drainedCount int) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	handler := r.onEvent
+	r.mu.Unlock()
+	if handler == nil {
+		return
+	}
+	handler(ctx, RouterEvent{
+		EventType:      strings.TrimSpace(eventType),
+		SessionID:      strings.TrimSpace(sessionID),
+		ChatID:         msg.ChatID,
+		UserID:         msg.SenderID,
+		ChatType:       strings.TrimSpace(msg.ChatType),
+		DurableAgentID: strings.TrimSpace(msg.DurableAgentID),
+		MessageID:      msg.MessageID,
+		IngressSeq:     msg.IngressSeq,
+		QueueDepth:     queueDepth,
+		DrainedCount:   drainedCount,
+		CreatedAt:      time.Now().UTC(),
+	})
+}
+
 func routeSessionID(msg InboundMessage) string {
 	if agentID := strings.TrimSpace(msg.DurableAgentID); agentID != "" {
 		return "durable_agent:" + agentID
@@ -385,4 +444,8 @@ func routeSessionID(msg InboundMessage) string {
 		}
 	}
 	return fmt.Sprintf("transport:%d", msg.ChatID)
+}
+
+func SessionIDForInboundMessage(msg InboundMessage) string {
+	return routeSessionID(msg)
 }

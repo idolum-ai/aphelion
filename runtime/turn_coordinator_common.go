@@ -66,6 +66,7 @@ func (r *Runtime) proposeTurnCoordinatorFace(ctx context.Context, input turnCoor
 type turnCoordinatorRenderInput struct {
 	Scope                 sandbox.Scope
 	Msg                   core.InboundMessage
+	Key                   session.SessionKey
 	Channel               string
 	PrincipalRole         string
 	LastGovernor          *turn.GovernorResult
@@ -85,7 +86,7 @@ func (r *Runtime) renderTurnCoordinatorFace(ctx context.Context, input turnCoord
 	if input.LastGovernor == nil || input.LastGovernor.Turn == nil {
 		return turnRenderResult{}, nil
 	}
-	r.markChatTurnPhase(input.Msg.ChatID, "render", "authoring visible scene from governor floor")
+	r.markSessionTurnPhase(input.Key, "render", "authoring visible scene from governor floor")
 	gov := input.LastGovernor
 	mediaOnlyReply := len(gov.Turn.Media) > 0 && strings.TrimSpace(gov.Turn.Text) == ""
 	replyText := ""
@@ -191,7 +192,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		runKind = session.TurnRunKindInteractive
 	}
 
-	progress := r.newToolProgressReporter(input.Msg, input.Sess.PlanState, input.Audit)
+	progress := r.newToolProgressReporter(input.Key, input.Msg, input.Sess.PlanState, input.Audit)
 	monitor := r.startTurnMonitor(input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit)
 	defer monitor.Finish(ctx, monitorErr)
 
@@ -203,7 +204,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	brokerage := seedTurnBrokerageFromFaceNote(faceNote)
 	extraUsage := core.TokenUsage{}
 	if brokerage.Active {
-		r.markChatTurnPhase(input.Msg.ChatID, "brokerage", "converging proposal and ratification before governor execution")
+		r.markSessionTurnPhase(input.Key, "brokerage", "converging proposal and ratification before governor execution")
 	}
 	promptState := r.buildTurnCoordinatorGovernorPrompt(input, baseGovernorAwareness, brokerage)
 	systemBlocks := promptState.SystemBlocks
@@ -266,7 +267,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	}
 
 	tools := monitor.observeTools(input.Tools)
-	r.markChatTurnPhase(input.Msg.ChatID, "governor", "running governor and tool loop")
+	r.markSessionTurnPhase(input.Key, "governor", "running governor and tool loop")
 
 	systemCount := 1
 	if strings.TrimSpace(systemPrompt) == "" {

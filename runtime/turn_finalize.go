@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -241,7 +242,7 @@ func (p *turnPersistencePort) Persist(ctx context.Context, req turn.CommitReques
 	if p == nil || p.runtime == nil {
 		return nil, fmt.Errorf("turn persistence port is unavailable")
 	}
-	p.runtime.markChatTurnPhase(p.key.ChatID, "persist", "writing turn result and sidecars to durable storage")
+	p.runtime.markSessionTurnPhase(p.key, "persist", "writing turn result and sidecars to durable storage")
 	if req.Result == nil {
 		return nil, fmt.Errorf("turn persistence request missing result")
 	}
@@ -309,7 +310,7 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 	if p == nil || p.runtime == nil {
 		return nil, fmt.Errorf("turn delivery port is unavailable")
 	}
-	p.runtime.markChatTurnPhase(p.key.ChatID, "deliver", "sending or finalizing outbound delivery")
+	p.runtime.markSessionTurnPhase(p.key, "deliver", "sending or finalizing outbound delivery")
 	return turn.RunDeliveryStage(ctx, turn.DeliveryStageInput{
 		Request:        req,
 		Deliver:        p.deliver,
@@ -318,11 +319,18 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 		Send: func(ctx context.Context, msg core.OutboundMessage, inboundWasVoice bool) (int64, string, error) {
 			outboundID, outboundType, err := p.runtime.sendReply(ctx, p.msg, msg.Text, msg.Media, inboundWasVoice)
 			if err != nil {
+				p.runtime.recordExecutionEvent(p.key, core.ExecutionEventDeliveryFinalFailed, "delivery", "failed", map[string]any{
+					"error": trimError(err.Error()),
+				}, time.Now().UTC())
 				if p.sendErrCtx == "" {
 					return 0, "", err
 				}
 				return 0, "", fmt.Errorf("%s: %w", p.sendErrCtx, err)
 			}
+			p.runtime.recordExecutionEvent(p.key, core.ExecutionEventDeliveryFinalSent, "delivery", "sent", map[string]any{
+				"message_id": outboundID,
+				"kind":       strings.TrimSpace(outboundType),
+			}, time.Now().UTC())
 			return outboundID, outboundType, nil
 		},
 		RecordFinal: func(text string, media []core.Media, kind string) {

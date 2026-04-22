@@ -13,6 +13,14 @@ Current interactive turn order:
 5. `turn` performs outbound delivery semantics.
 6. Runtime handles process-level follow-up work.
 
+Lifecycle boundaries are mirrored into TES event records:
+
+- ingress (`ingress.*`)
+- turn (`turn.*`)
+- tool (`tool.*`)
+- delivery (`delivery.*`)
+- continuation authorization (`continuation.*`)
+
 Code anchors:
 
 - [`runtime/turn.go`](../../runtime/turn.go)
@@ -24,6 +32,7 @@ Code anchors:
 - [`turn/render_stage.go`](../../turn/render_stage.go)
 - [`turn/persist_stage.go`](../../turn/persist_stage.go)
 - [`turn/delivery_stage.go`](../../turn/delivery_stage.go)
+- [`docs/architecture/transparent-execution-sequence.md`](./transparent-execution-sequence.md)
 
 ## Maintenance Species
 

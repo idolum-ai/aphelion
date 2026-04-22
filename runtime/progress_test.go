@@ -223,7 +223,15 @@ func TestNewToolProgressReporterRoutesInternalDurableProgressToAdminChat(t *test
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
 
-	reporter := rt.newToolProgressReporter(core.InboundMessage{
+	reporter := rt.newToolProgressReporter(session.SessionKey{
+		ChatID: 1921139064,
+		UserID: 0,
+		Scope: session.ScopeRef{
+			Kind:           session.ScopeKindDurableAgent,
+			ID:             "idolum-email",
+			DurableAgentID: "idolum-email",
+		},
+	}, core.InboundMessage{
 		ChatID:         1921139064,
 		ChatType:       "durable_parent_conversation",
 		MessageID:      55,
@@ -262,7 +270,11 @@ func TestNewToolProgressReporterKeepsTelegramChatTarget(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 
-	reporter := rt.newToolProgressReporter(core.InboundMessage{
+	reporter := rt.newToolProgressReporter(session.SessionKey{
+		ChatID: 6313146,
+		UserID: 0,
+		Scope:  telegramDMScopeRef(6313146),
+	}, core.InboundMessage{
 		ChatID:    6313146,
 		ChatType:  "private",
 		MessageID: 77,

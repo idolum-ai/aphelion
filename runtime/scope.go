@@ -209,6 +209,16 @@ func telegramDMScopeRef(chatID int64) session.ScopeRef {
 	}
 }
 
+func telegramGroupScopeRef(chatID int64) session.ScopeRef {
+	if chatID == 0 {
+		return session.ScopeRef{}
+	}
+	return session.ScopeRef{
+		Kind: session.ScopeKindTelegramGroup,
+		ID:   strconv.FormatInt(chatID, 10),
+	}
+}
+
 func heartbeatScopeRef() session.ScopeRef {
 	return session.ScopeRef{
 		Kind: session.ScopeKindHeartbeat,
