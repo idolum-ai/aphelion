@@ -147,11 +147,19 @@ type OpenAIVectorStoresConfig struct {
 }
 
 type SessionsConfig struct {
-	DBPath             string  `toml:"db_path"`
-	IdleExpiry         string  `toml:"idle_expiry"`
-	MaxContextRatio    float64 `toml:"max_context_ratio"`
-	CompactionRatio    float64 `toml:"compaction_ratio"`
-	CompactionStrategy string  `toml:"compaction_strategy"`
+	DBPath             string                     `toml:"db_path"`
+	IdleExpiry         string                     `toml:"idle_expiry"`
+	MaxContextRatio    float64                    `toml:"max_context_ratio"`
+	CompactionRatio    float64                    `toml:"compaction_ratio"`
+	CompactionStrategy string                     `toml:"compaction_strategy"`
+	TESRetention       SessionsTESRetentionConfig `toml:"tes_retention"`
+}
+
+type SessionsTESRetentionConfig struct {
+	Enabled         bool   `toml:"enabled"`
+	MaxAge          string `toml:"max_age"`
+	MinRetainedRows int    `toml:"min_retained_rows"`
+	MaxDeletePerGC  int    `toml:"max_delete_per_gc"`
 }
 
 type AgentConfig struct {
@@ -371,6 +379,12 @@ func Default() Config {
 			MaxContextRatio:    0.75,
 			CompactionRatio:    0.55,
 			CompactionStrategy: "summarize",
+			TESRetention: SessionsTESRetentionConfig{
+				Enabled:         false,
+				MaxAge:          "720h",
+				MinRetainedRows: 5000,
+				MaxDeletePerGC:  1000,
+			},
 		},
 		Agent: AgentConfig{
 			PromptRoot:        "~/.aphelion/agent",
@@ -652,6 +666,22 @@ func validate(cfg *Config) error {
 	case "", "summarize", "truncate":
 	default:
 		return fmt.Errorf("sessions.compaction_strategy must be one of summarize|truncate")
+	}
+	maxAge, err := time.ParseDuration(strings.TrimSpace(cfg.Sessions.TESRetention.MaxAge))
+	if err != nil {
+		return fmt.Errorf("sessions.tes_retention.max_age must be a valid duration: %w", err)
+	}
+	if maxAge < 24*time.Hour {
+		return fmt.Errorf("sessions.tes_retention.max_age must be >= 24h")
+	}
+	if cfg.Sessions.TESRetention.MinRetainedRows < 100 {
+		return fmt.Errorf("sessions.tes_retention.min_retained_rows must be >= 100")
+	}
+	if cfg.Sessions.TESRetention.MaxDeletePerGC <= 0 {
+		return fmt.Errorf("sessions.tes_retention.max_delete_per_gc must be > 0")
+	}
+	if cfg.Sessions.TESRetention.MaxDeletePerGC > cfg.Sessions.TESRetention.MinRetainedRows {
+		return fmt.Errorf("sessions.tes_retention.max_delete_per_gc must be <= min_retained_rows")
 	}
 	if strings.TrimSpace(cfg.Agent.EffectivePromptRoot()) == "" {
 		return fmt.Errorf("agent.prompt_root is required")

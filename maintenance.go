@@ -247,11 +247,17 @@ func runGCCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	prunedTESEvents, tesRetentionState, err := pruneExecutionEventsForRetention(cfg, time.Now().UTC())
+	if err != nil {
+		return err
+	}
 
 	fmt.Fprintf(os.Stdout, "expired_sessions: %d\n", expired)
 	fmt.Fprintf(os.Stdout, "removed_temp_dirs: %d\n", removedTemps)
 	fmt.Fprintf(os.Stdout, "archived_daily_notes: %d\n", archivedNotes)
 	fmt.Fprintf(os.Stdout, "archived_curated_memory: %d\n", archivedCurated)
+	fmt.Fprintf(os.Stdout, "tes_retention: %s\n", tesRetentionState)
+	fmt.Fprintf(os.Stdout, "pruned_execution_events: %d\n", prunedTESEvents)
 	return nil
 }
 
@@ -1645,6 +1651,118 @@ func archiveOversizedCuratedUnderRoot(root string, now time.Time) (int, error) {
 		archived++
 	}
 	return archived, nil
+}
+
+func tesRetentionConfigSafety(cfg *config.Config) (config.SessionsTESRetentionConfig, time.Duration, string, error) {
+	if cfg == nil {
+		return config.SessionsTESRetentionConfig{}, 0, "", fmt.Errorf("config is nil")
+	}
+	policy := cfg.Sessions.TESRetention
+	defaultPolicy := config.Default().Sessions.TESRetention
+	if strings.TrimSpace(policy.MaxAge) == "" {
+		policy.MaxAge = defaultPolicy.MaxAge
+	}
+	if policy.MinRetainedRows <= 0 {
+		policy.MinRetainedRows = defaultPolicy.MinRetainedRows
+	}
+	if policy.MaxDeletePerGC <= 0 {
+		policy.MaxDeletePerGC = defaultPolicy.MaxDeletePerGC
+	}
+	maxAge, err := time.ParseDuration(strings.TrimSpace(policy.MaxAge))
+	if err != nil {
+		return policy, 0, "", fmt.Errorf("sessions.tes_retention.max_age must be a valid duration: %w", err)
+	}
+	if maxAge < 24*time.Hour {
+		return policy, 0, "", fmt.Errorf("sessions.tes_retention.max_age must be >= 24h")
+	}
+	if policy.MinRetainedRows < 100 {
+		return policy, 0, "", fmt.Errorf("sessions.tes_retention.min_retained_rows must be >= 100")
+	}
+	if policy.MaxDeletePerGC <= 0 {
+		return policy, 0, "", fmt.Errorf("sessions.tes_retention.max_delete_per_gc must be > 0")
+	}
+	if policy.MaxDeletePerGC > policy.MinRetainedRows {
+		return policy, 0, "", fmt.Errorf("sessions.tes_retention.max_delete_per_gc must be <= min_retained_rows")
+	}
+	mode := "disabled"
+	if policy.Enabled {
+		mode = "enabled"
+	}
+	summary := fmt.Sprintf("%s max_age=%s min_retained_rows=%d max_delete_per_gc=%d",
+		mode,
+		maxAge.String(),
+		policy.MinRetainedRows,
+		policy.MaxDeletePerGC,
+	)
+	return policy, maxAge, summary, nil
+}
+
+func pruneExecutionEventsForRetention(cfg *config.Config, now time.Time) (int, string, error) {
+	policy, maxAge, summary, err := tesRetentionConfigSafety(cfg)
+	if err != nil {
+		return 0, "", err
+	}
+	if !policy.Enabled {
+		return 0, summary, nil
+	}
+	dbPath := strings.TrimSpace(cfg.Sessions.DBPath)
+	if dbPath == "" {
+		return 0, "", fmt.Errorf("sessions.db_path is required when sessions.tes_retention.enabled = true")
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return 0, summary + " db=missing", nil
+		}
+		return 0, "", fmt.Errorf("stat sessions db %s: %w", dbPath, err)
+	}
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return 0, "", fmt.Errorf("open sqlite for tes retention: %w", err)
+	}
+	defer db.Close()
+
+	cutoff := now.UTC().Add(-maxAge).Format(time.RFC3339Nano)
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return 0, "", fmt.Errorf("begin tes retention prune tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`
+WITH protected AS (
+	SELECT id
+	FROM execution_events
+	ORDER BY created_at DESC, id DESC
+	LIMIT ?
+),
+candidates AS (
+	SELECT id
+	FROM execution_events
+	WHERE created_at < ?
+	  AND id NOT IN (SELECT id FROM protected)
+	ORDER BY created_at ASC, id ASC
+	LIMIT ?
+)
+DELETE FROM execution_events
+WHERE id IN (SELECT id FROM candidates)
+`, policy.MinRetainedRows, cutoff, policy.MaxDeletePerGC)
+	if err != nil {
+		return 0, "", fmt.Errorf("prune execution events by retention policy: %w", err)
+	}
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return 0, "", fmt.Errorf("inspect pruned execution events rows affected: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, "", fmt.Errorf("commit tes retention prune tx: %w", err)
+	}
+
+	status := fmt.Sprintf("%s cutoff=%s", summary, now.UTC().Add(-maxAge).Format(time.RFC3339))
+	if removed == 0 {
+		status += " result=no-op"
+	}
+	return int(removed), status, nil
 }
 
 func min(a int, b int) int {

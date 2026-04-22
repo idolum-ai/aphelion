@@ -63,6 +63,9 @@ workspace = "./workspace"
 	if cfg.Sessions.MaxContextRatio != 0.75 || cfg.Sessions.CompactionRatio != 0.55 || cfg.Sessions.CompactionStrategy != "summarize" {
 		t.Fatalf("session compaction defaults = %#v, want 0.75/0.55/summarize", cfg.Sessions)
 	}
+	if cfg.Sessions.TESRetention.Enabled || cfg.Sessions.TESRetention.MaxAge != "720h" || cfg.Sessions.TESRetention.MinRetainedRows != 5000 || cfg.Sessions.TESRetention.MaxDeletePerGC != 1000 {
+		t.Fatalf("session tes retention defaults = %#v, want disabled/720h/5000/1000", cfg.Sessions.TESRetention)
+	}
 	if cfg.Governor.Codex.ContextWindow != 200000 {
 		t.Fatalf("governor.codex.context_window = %d, want 200000", cfg.Governor.Codex.ContextWindow)
 	}
@@ -376,6 +379,12 @@ max_context_ratio = 0.7
 compaction_ratio = 0.5
 compaction_strategy = "truncate"
 
+[sessions.tes_retention]
+enabled = true
+max_age = "336h"
+min_retained_rows = 8000
+max_delete_per_gc = 400
+
 [agent]
 workspace = "~/workspace"
 max_iterations = 77
@@ -527,6 +536,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Sessions.MaxContextRatio != 0.7 || cfg.Sessions.CompactionRatio != 0.5 || cfg.Sessions.CompactionStrategy != "truncate" {
 		t.Fatalf("sessions compaction = %#v, want 0.7/0.5/truncate", cfg.Sessions)
+	}
+	if !cfg.Sessions.TESRetention.Enabled || cfg.Sessions.TESRetention.MaxAge != "336h" || cfg.Sessions.TESRetention.MinRetainedRows != 8000 || cfg.Sessions.TESRetention.MaxDeletePerGC != 400 {
+		t.Fatalf("sessions.tes_retention = %#v, want enabled/336h/8000/400", cfg.Sessions.TESRetention)
 	}
 	if cfg.Providers.Anthropic.ContextWindow != 190000 {
 		t.Fatalf("providers.anthropic.context_window = %d, want 190000", cfg.Providers.Anthropic.ContextWindow)
@@ -896,6 +908,70 @@ compaction_ratio = 0.60
 	}
 	if !strings.Contains(err.Error(), "sessions.compaction_ratio") {
 		t.Fatalf("error = %v, want sessions.compaction_ratio message", err)
+	}
+}
+
+func TestLoadRejectsInvalidTESRetentionMaxAge(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[sessions.tes_retention]
+max_age = "soon"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want tes retention max_age validation error")
+	}
+	if !strings.Contains(err.Error(), "sessions.tes_retention.max_age") {
+		t.Fatalf("error = %v, want sessions.tes_retention.max_age message", err)
+	}
+}
+
+func TestLoadRejectsTESRetentionDeleteBatchAboveFloor(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[sessions.tes_retention]
+max_age = "168h"
+min_retained_rows = 300
+max_delete_per_gc = 301
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want tes retention max_delete_per_gc validation error")
+	}
+	if !strings.Contains(err.Error(), "sessions.tes_retention.max_delete_per_gc") {
+		t.Fatalf("error = %v, want sessions.tes_retention.max_delete_per_gc message", err)
 	}
 }
 

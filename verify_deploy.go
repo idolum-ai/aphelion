@@ -190,6 +190,10 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 	}
 
 	if err := runProbe("boot", func() (string, error) {
+		_, _, retentionSummary, retentionErr := tesRetentionConfigSafety(cfg)
+		if retentionErr != nil {
+			return "", retentionErr
+		}
 		if err := prepareFilesystem(cfg); err != nil {
 			return "", err
 		}
@@ -214,7 +218,7 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 		if built.Sender == nil {
 			return "", fmt.Errorf("verification runtime builder returned nil sender")
 		}
-		return fmt.Sprintf("runtime initialized for session %s", report.ProbeSessionID), nil
+		return fmt.Sprintf("runtime initialized for session %s (%s)", report.ProbeSessionID, retentionSummary), nil
 	}); err != nil {
 		return report, err
 	}
