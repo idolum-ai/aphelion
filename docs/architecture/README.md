@@ -14,6 +14,7 @@ If these diverge, fix one of them in the same change.
 - [constitution-and-delivery.md](constitution-and-delivery.md): floor/scene and commit/delivery invariants.
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.
+- [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): draft convergence map for canonical truth surfaces and safer autonomy.
 - [coordinator-boundary-audit.md](coordinator-boundary-audit.md): adapter-boundary readout and wrapper decisions.
 - [migration-appendix.md](migration-appendix.md): refactor closeout and present-vs-intended reference.
 - [diagrams/README.md](diagrams/README.md): canonical and archived diagram assets.
