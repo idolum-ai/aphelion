@@ -9,8 +9,9 @@ with durable continuity, bounded sensory organs, and self-correcting behavior.
 It is written from the perspective that recent TES work is the right direction,
 but that the system still needs a clearer answer to a deeper question:
 
-**Which surfaces are canonical truth, which are projections, and which are only
-compatibility residue on the way out?**
+**Which surfaces are canonical truth, which are projections, which are
+operational current-state stores, and which are compatibility fallbacks on the
+way out?**
 
 That question matters because autonomy fails long before capability fails. A
 system can only safely self-direct, self-debug, and later self-improve if it
@@ -160,17 +161,17 @@ These are bounded upward summaries, not canonical state. They matter because the
 shape governance and operator decisions, but they should not be treated as the
 source of execution truth.
 
-## Compatibility Residue
+## Compatibility Fallback Surfaces
 
 Some existing surfaces are still operationally necessary but should be treated as
-compatibility residue unless promoted explicitly.
+compatibility fallbacks unless promoted explicitly.
 
 ### `turn_runs`
 
 `turn_runs` still has value for recovery and operational speed, but directionally
 it should become one of:
 
-- a projection/cache derived from TES for fast access, or
+- a projection or operational current-state store derived from TES for fast access, or
 - a narrowed recovery-specific surface with less architectural authority
 
 It should not remain a peer truth system indefinitely.
@@ -185,7 +186,7 @@ independent semantic authority once TES coverage is sufficient.
 These should move toward:
 
 - canonical event truth in TES
-- current-state projections where needed
+- operational current-state stores where needed
 - compatibility fallback only where migration is incomplete
 
 ## Working Surface Classification Matrix
@@ -193,18 +194,26 @@ These should move toward:
 This matrix is a working map of live surfaces and intended classification. It is
 for review and migration planning; once ratified, equivalent entries should move
 to normative docs.
+Classifications use the shared truth classes from
+[`docs/architecture/README.md`](./README.md).
 
 | Surface / Store | Classification | Canonical Question | Notes |
 | --- | --- | --- | --- |
 | `session.execution_events` | canonical | What happened, in what order? | Append-only runtime facts for ingress/turn/tool/delivery/control and durable lifecycle. |
-| `session.messages` + `session.outbound_messages` + `session.review_events` | canonical | What was shown to / received from users? | User-visible transcript and delivery history. |
-| `session.durable_agents` + `session.durable_agent_state` (+ on-disk child identity/config files) | canonical | What is this agent now? | Mutable present-state identity, policy, and runtime posture. |
+| `session.messages` | canonical | What scene text was recorded for the session? | User/assistant/tool scene ledger. |
+| `session.outbound_messages` | canonical | Which outbound message deliveries were recorded? | Delivery audit for transport-facing sends. |
+| `session.review_events (status='delivered')` | canonical | Which bounded review artifacts were shown to humans? | Delivered review artifacts are part of transcript history. |
 | Parent/child memory files and `rhizome_*` tables | canonical | What was retained over time and why? | Durable historical meaning (facts, decisions, questions, patterns). |
+| `session.durable_agents` | operational current-state store | What durable-child policy/config is currently declared? | Mutable child identity and capability envelope. |
+| `session.durable_agent_state` | operational current-state store | What durable-child runtime/apply state is currently declared? | Live child runtime and policy-apply posture. |
+| `sessions.plan_state_json` | operational current-state store | What plan intent is currently declared? | Runtime-declared plan state for the active session. |
+| `sessions.operation_state_json` | operational current-state store | What operation intent/stage is currently declared? | Runtime-declared operation state for the active session. |
+| `pending_decisions` | operational current-state store | What decisions are currently pending and actionable? | Live governance queue authority until TES-only control projections fully replace it. |
+| `sessions.continuation_state_json` | operational current-state store | What continuation state is currently declared? | Live continuation budget/offer state for the active session. |
+| `session.review_events (status='pending')` | operational current-state store | Which review artifacts are queued for governance delivery? | Pending-review queue state before delivery. |
 | `/status`, `/debug`, quick-read render blocks, Telegram status posts | projection | How should current state be presented now? | Presentation surfaces; should remain TES-backed and deterministic on conflict. |
 | Turn sidecars (`turn.sidecars.captured`) and plan/operation overlays | projection | What concise operator context should be surfaced? | Derived summarization; replaceable if stronger projection exists. |
-| `sessions.plan_state_json` + `sessions.operation_state_json` | cache | What was the latest projected plan/operation snapshot? | Fast-path state caches; non-authoritative if TES disagrees. |
-| `turn_runs` | compatibility/cache | What recovery/runtime hints are available quickly? | Transitional recovery surface; should not be co-equal canonical execution truth. |
-| `pending_decisions` + `sessions.continuation_state_json` | compatibility/cache | What controls are currently pending? | Legacy pending-control read model; TES control events are canonical when present. |
+| `turn_runs` | compatibility fallback | What recovery/runtime hints are available quickly? | Transitional recovery surface; should not be co-equal canonical execution truth. |
 
 ## Canonicality Rules
 
@@ -342,7 +351,7 @@ mostly mean untraceable drift.
 
 ## Recommended Near-Term Sequence
 
-### 1. Finish naming canonical vs projected vs compatibility surfaces
+### 1. Finish naming canonical vs projection vs operational current-state vs compatibility fallback surfaces
 
 Do this explicitly in architecture docs and code comments.
 
@@ -350,8 +359,8 @@ Every major surface should answer one of:
 
 - canonical
 - projection
+- operational current-state store
 - compatibility fallback
-- operational cache
 
 ### 2. Complete TES-first projection migration
 
@@ -386,8 +395,8 @@ If one thing must be remembered from this document, it is this:
 
 **TES should be canonical for what happened. Identity should be canonical for
 what the system is now. Memory should be canonical for what the system has
-retained. Everything else should have to declare itself as projection, cache, or
-compatibility residue.**
+retained. Everything else should have to declare itself as projection,
+operational current-state store, or compatibility fallback.**
 
 That is the boundary set most likely to support real autonomy without losing
 truthfulness, inspectability, or safety.

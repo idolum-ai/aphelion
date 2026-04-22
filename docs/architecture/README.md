@@ -7,6 +7,17 @@ This directory is the live architecture map for the current codebase.
 
 If these diverge, fix one of them in the same change.
 
+## Surface Truth Classes
+
+Use only these four terms when classifying architecture surfaces:
+
+- `canonical`: authoritative source for a specific question.
+- `projection`: rendered/derived view with no independent authority.
+- `operational current-state store`: mutable "what is currently declared now"
+  surface used by runtime operations.
+- `compatibility fallback`: transitional store kept for migration/recovery until
+  canonical or operational surfaces fully cover the use case.
+
 ## Normative Map
 
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.

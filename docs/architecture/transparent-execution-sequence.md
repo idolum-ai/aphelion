@@ -51,7 +51,7 @@ TES write/read behavior currently relies on the following indexes:
 - All user-facing projections should request bounded windows (limit + optional
   time boundary), not unbounded full-table scans.
 - `/status` and `/debug` projections should prefer TES windows first and use
-  compatibility stores only when TES coverage is missing.
+  compatibility fallback stores only when TES coverage is missing.
 - If projection claims conflict with TES evidence, projection text must degrade to
   deterministic, evidence-backed summaries.
 
@@ -185,6 +185,6 @@ Code anchor: [`runtime/status.go`](../../runtime/status.go)
 ## Scope
 
 TES is now the canonical append-only sequence for ingress/turn/tool/progress
-facts. Legacy read models (for example `turn_runs`) still exist for compatibility
-and operational speed, but are expected to converge further toward TES-derived
-projections.
+facts. Legacy read models (for example `turn_runs`) still exist as compatibility
+fallbacks for operational speed, but are expected to converge further toward
+TES-derived projections.

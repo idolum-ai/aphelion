@@ -23,16 +23,27 @@ Code anchors:
 
 ## Classification Matrix
 
-| Surface / Store | Classification | Primary Role |
+Classifications below use the shared truth classes defined in
+[`docs/architecture/README.md`](./README.md).
+
+| Surface / Store | Classification | Canonical Question |
 | --- | --- | --- |
-| `session.execution_events` | canonical | Runtime execution truth (append-only event history). |
-| `session.messages` + `session.outbound_messages` + `session.review_events` | canonical | User-visible transcript and delivery history. |
-| `session.durable_agents` + `session.durable_agent_state` (+ child identity/config files) | canonical | Current mutable identity and policy posture. |
-| Parent/child memory files and `rhizome_*` tables | canonical | Retained historical meaning. |
-| `/status`, `/debug`, quick-read blocks, progress narration | projection | Operator-facing rendering of current state. |
-| `sessions.plan_state_json` + `sessions.operation_state_json` | cache | Fast status snapshots for projection fallback. |
-| `turn_runs` | compatibility/cache | Recovery hints and transitional runtime overlays. |
-| `pending_decisions` + `sessions.continuation_state_json` | compatibility/cache | Legacy control pending-state fallback. |
+| `session.execution_events` | canonical | What happened in runtime, in what order? |
+| `session.messages` | canonical | What scene text was recorded for the session? |
+| `session.outbound_messages` | canonical | Which outbound message deliveries were recorded? |
+| `session.review_events (status='delivered')` | canonical | Which bounded review artifacts were shown to humans? |
+| Parent/child memory files and `rhizome_*` tables | canonical | What durable meaning has been retained over time? |
+| `session.durable_agents` | operational current-state store | What durable-child policy/config is currently declared? |
+| `session.durable_agent_state` | operational current-state store | What durable-child runtime/apply status is currently declared? |
+| `sessions.plan_state_json` | operational current-state store | What plan intent is currently declared? |
+| `sessions.operation_state_json` | operational current-state store | What operation intent/stage is currently declared? |
+| `pending_decisions` | operational current-state store | What decisions are currently pending and actionable? |
+| `sessions.continuation_state_json` | operational current-state store | What continuation state is currently declared? |
+| `session.review_events (status='pending')` | operational current-state store | Which review artifacts are queued for governance delivery? |
+| `/status` | projection | How should system/chat state be rendered for operators now? |
+| `/debug` | projection | How should execution evidence be rendered for diagnosis now? |
+| Quick-read and progress render blocks | projection | What compact operator narration should be surfaced now? |
+| `turn_runs` | compatibility fallback | What recovery/runtime hints are available when newer surfaces are incomplete? |
 
 ## Why This Matters
 
