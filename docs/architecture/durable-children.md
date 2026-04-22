@@ -2,7 +2,8 @@
 
 ![Durable topology](diagrams/04-durable-topology.svg)
 
-Durable children are bounded child Aphelions, not alternate public personas.
+Durable children are bounded child Aphelions. Some may be user-facing personas,
+but they remain subordinate to parent governance and policy boundaries.
 
 ## Live Shape
 

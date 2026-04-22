@@ -7,17 +7,23 @@ This directory is the live architecture map for the current codebase.
 
 If these diverge, fix one of them in the same change.
 
-## Map
+## Normative Map
 
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
 - [turn-lifecycle.md](turn-lifecycle.md): stage order across interactive, maintenance, and durable-child turns.
 - [constitution-and-delivery.md](constitution-and-delivery.md): floor/scene and commit/delivery invariants.
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.
-- [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): draft convergence map for canonical truth surfaces and safer autonomy.
 - [coordinator-boundary-audit.md](coordinator-boundary-audit.md): adapter-boundary readout and wrapper decisions.
 - [migration-appendix.md](migration-appendix.md): refactor closeout and present-vs-intended reference.
 - [diagrams/README.md](diagrams/README.md): canonical and archived diagram assets.
+
+## Draft Roadmaps (Non-Normative)
+
+- [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): draft convergence map for canonical truth surfaces and safer autonomy.
+
+Treat this section as design-direction input. It is not a normative implementation
+contract until explicitly promoted into the normative map above.
 
 ## Canonical Diagrams
 
@@ -32,7 +38,7 @@ If these diverge, fix one of them in the same change.
 ## Update Rule
 
 When touching architectural behavior in `runtime`, `turn`, `pipeline`, `session`,
-or `durableagent`, update these docs in the same PR unless no architecture
-behavior changed.
+or `durableagent`, update the normative docs above in the same PR unless no
+architecture behavior changed.
 
 Use `make docs-architecture` to run architecture docs checks.

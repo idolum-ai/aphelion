@@ -17,6 +17,52 @@ delivery.
 
 Code anchor: [`session/store.go`](../../session/store.go)
 
+## Retention, Compaction, and Indexing Policy
+
+### Current Implemented Policy
+
+- Retention: `execution_events` is retained indefinitely per session.
+- Deletion boundaries:
+  - Session-scoped deletion removes all events for that session (`DeleteSession`).
+  - Runtime reset removes all events (`ResetRuntime`).
+- Compaction: there is no row-level TES compaction yet; message/session compaction
+  does not rewrite or summarize TES rows.
+
+Code anchors:
+
+- [`session/store.go`](../../session/store.go) (`DeleteSession`, `ResetRuntime`)
+- [`runtime/compaction.go`](../../runtime/compaction.go)
+
+### Indexing Policy
+
+TES write/read behavior currently relies on the following indexes:
+
+- `idx_execution_events_session_seq (session_id, seq)` for per-session ordered
+  append/read windows.
+- `idx_execution_events_chat_created (chat_id, created_at, id)` for chat timeline
+  reads.
+- `idx_execution_events_type_created (event_type, created_at, id)` for system-wide
+  event-type projections.
+- `idx_execution_events_durable_created (durable_agent_id, created_at, id)` for
+  durable-agent health and lifecycle projections.
+
+### Query and Projection Policy
+
+- All user-facing projections should request bounded windows (limit + optional
+  time boundary), not unbounded full-table scans.
+- `/status` and `/debug` projections should prefer TES windows first and use
+  compatibility stores only when TES coverage is missing.
+- If projection claims conflict with TES evidence, projection text must degrade to
+  deterministic, evidence-backed summaries.
+
+### Target Policy to Ratify (Not Yet Implemented)
+
+- Introduce explicit TES retention windows per deployment profile (for example:
+  "hot online" and "archived export").
+- Add deterministic rollup/export jobs before pruning old TES ranges.
+- Keep enough recent TES history online to preserve debuggability of current and
+  recently completed turns without relying on legacy `turn_runs`.
+
 ## Event Families
 
 - Ingress

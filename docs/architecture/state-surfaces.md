@@ -21,6 +21,19 @@ Code anchors:
 - [`turn/awareness.go`](../../turn/awareness.go)
 - [`docs/architecture/transparent-execution-sequence.md`](./transparent-execution-sequence.md)
 
+## Classification Matrix
+
+| Surface / Store | Classification | Primary Role |
+| --- | --- | --- |
+| `session.execution_events` | canonical | Runtime execution truth (append-only event history). |
+| `session.messages` + `session.outbound_messages` + `session.review_events` | canonical | User-visible transcript and delivery history. |
+| `session.durable_agents` + `session.durable_agent_state` (+ child identity/config files) | canonical | Current mutable identity and policy posture. |
+| Parent/child memory files and `rhizome_*` tables | canonical | Retained historical meaning. |
+| `/status`, `/debug`, quick-read blocks, progress narration | projection | Operator-facing rendering of current state. |
+| `sessions.plan_state_json` + `sessions.operation_state_json` | cache | Fast status snapshots for projection fallback. |
+| `turn_runs` | compatibility/cache | Recovery hints and transitional runtime overlays. |
+| `pending_decisions` + `sessions.continuation_state_json` | compatibility/cache | Legacy control pending-state fallback. |
+
 ## Why This Matters
 
 - Keeps user-visible continuity and machine-audit continuity separate.

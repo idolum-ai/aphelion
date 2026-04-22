@@ -188,6 +188,24 @@ These should move toward:
 - current-state projections where needed
 - compatibility fallback only where migration is incomplete
 
+## Working Surface Classification Matrix
+
+This matrix is a working map of live surfaces and intended classification. It is
+for review and migration planning; once ratified, equivalent entries should move
+to normative docs.
+
+| Surface / Store | Classification | Canonical Question | Notes |
+| --- | --- | --- | --- |
+| `session.execution_events` | canonical | What happened, in what order? | Append-only runtime facts for ingress/turn/tool/delivery/control and durable lifecycle. |
+| `session.messages` + `session.outbound_messages` + `session.review_events` | canonical | What was shown to / received from users? | User-visible transcript and delivery history. |
+| `session.durable_agents` + `session.durable_agent_state` (+ on-disk child identity/config files) | canonical | What is this agent now? | Mutable present-state identity, policy, and runtime posture. |
+| Parent/child memory files and `rhizome_*` tables | canonical | What was retained over time and why? | Durable historical meaning (facts, decisions, questions, patterns). |
+| `/status`, `/debug`, quick-read render blocks, Telegram status posts | projection | How should current state be presented now? | Presentation surfaces; should remain TES-backed and deterministic on conflict. |
+| Turn sidecars (`turn.sidecars.captured`) and plan/operation overlays | projection | What concise operator context should be surfaced? | Derived summarization; replaceable if stronger projection exists. |
+| `sessions.plan_state_json` + `sessions.operation_state_json` | cache | What was the latest projected plan/operation snapshot? | Fast-path state caches; non-authoritative if TES disagrees. |
+| `turn_runs` | compatibility/cache | What recovery/runtime hints are available quickly? | Transitional recovery surface; should not be co-equal canonical execution truth. |
+| `pending_decisions` + `sessions.continuation_state_json` | compatibility/cache | What controls are currently pending? | Legacy pending-control read model; TES control events are canonical when present. |
+
 ## Canonicality Rules
 
 A simple rule set would help keep the architecture coherent.
@@ -213,8 +231,8 @@ should be treated as a projection by default.
 
 ## What This Implies for Durable Children
 
-Durable children are not alternate public personas. They are bounded organs of a
-larger house.
+Durable children are bounded organs of a larger house. Some may be user-facing,
+but they remain subordinate to parent governance scope and policy boundaries.
 
 That implies three distinct surfaces for each child:
 
