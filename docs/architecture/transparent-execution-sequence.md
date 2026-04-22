@@ -40,6 +40,7 @@ Code anchor: [`session/store.go`](../../session/store.go)
   - `tool.succeeded`
   - `tool.failed`
 - Delivery
+  - `progress.surface`
   - `delivery.progress.sent`
   - `delivery.progress.edited`
   - `delivery.progress.failed`

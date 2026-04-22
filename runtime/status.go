@@ -137,8 +137,8 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	now := time.Now().UTC()
 	snapshot := core.SystemStatusSnapshot{
 		GeneratedAt:          now,
-		ActiveTurnsByChat:    cloneActiveTurnMap(router.ActiveTurnsByChat),
-		QueueDepthByChat:     cloneQueueDepthMap(router.QueueDepthByChat),
+		ActiveTurnsByChat:    make(map[int64][]uint64),
+		QueueDepthByChat:     make(map[int64]int),
 		PendingItems:         make([]core.PendingItem, 0, 16),
 		Continuations:        make([]core.ContinuationStatusSnapshot, 0, 8),
 		LatestTurnRunsByChat: make(map[int64]core.TurnRunStatusSnapshot),
@@ -147,11 +147,54 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		RestartHealth:        r.restartHealthSnapshot(),
 	}
 
+	if r == nil || r.store == nil {
+		snapshot.ActiveTurnsByChat = cloneActiveTurnMap(router.ActiveTurnsByChat)
+		snapshot.QueueDepthByChat = cloneQueueDepthMap(router.QueueDepthByChat)
+		for _, ids := range snapshot.ActiveTurnsByChat {
+			snapshot.ActiveTurnCount += len(ids)
+		}
+		snapshot.ActiveChatIDs = sortedInt64Keys(snapshot.ActiveTurnsByChat)
+		for _, chatID := range sortedInt64KeysFromInt(snapshot.QueueDepthByChat) {
+			depth := snapshot.QueueDepthByChat[chatID]
+			if depth <= 0 {
+				continue
+			}
+			snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+				Kind:    core.PendingItemKindQueue,
+				ChatID:  chatID,
+				ID:      "queue:" + strconv.FormatInt(chatID, 10),
+				Summary: fmt.Sprintf("queue_depth=%d", depth),
+			})
+		}
+		sortPendingItems(snapshot.PendingItems)
+		snapshot.HotChats = buildHotChatRollups(snapshot)
+		return snapshot, nil
+	}
+
+	recentEvents, err := r.store.ExecutionEventsRecent(500)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
+	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
+	activeByChat, queueByChat := liveRouterSignalsFromExecutionEvents(recentEvents)
+	snapshot.ActiveTurnsByChat = activeByChat
+	snapshot.QueueDepthByChat = queueByChat
+	for chatID, ids := range cloneActiveTurnMap(router.ActiveTurnsByChat) {
+		if _, exists := snapshot.ActiveTurnsByChat[chatID]; exists {
+			continue
+		}
+		snapshot.ActiveTurnsByChat[chatID] = ids
+	}
+	for chatID, depth := range cloneQueueDepthMap(router.QueueDepthByChat) {
+		if _, exists := snapshot.QueueDepthByChat[chatID]; exists {
+			continue
+		}
+		snapshot.QueueDepthByChat[chatID] = depth
+	}
 	for _, ids := range snapshot.ActiveTurnsByChat {
 		snapshot.ActiveTurnCount += len(ids)
 	}
 	snapshot.ActiveChatIDs = sortedInt64Keys(snapshot.ActiveTurnsByChat)
-
 	for _, chatID := range sortedInt64KeysFromInt(snapshot.QueueDepthByChat) {
 		depth := snapshot.QueueDepthByChat[chatID]
 		if depth <= 0 {
@@ -164,18 +207,6 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 			Summary: fmt.Sprintf("queue_depth=%d", depth),
 		})
 	}
-
-	if r == nil || r.store == nil {
-		sortPendingItems(snapshot.PendingItems)
-		snapshot.HotChats = buildHotChatRollups(snapshot)
-		return snapshot, nil
-	}
-
-	recentEvents, err := r.store.ExecutionEventsRecent(40)
-	if err != nil {
-		return core.SystemStatusSnapshot{}, err
-	}
-	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
 	for chatID, run := range latestTurnSnapshotsByChatFromExecutionEvents(recentEvents) {
 		snapshot.LatestTurnRunsByChat[chatID] = run
 	}
@@ -409,6 +440,45 @@ func cloneQueueDepthMap(in map[int64]int) map[int64]int {
 		out[chatID] = depth
 	}
 	return out
+}
+
+func liveRouterSignalsFromExecutionEvents(events []session.ExecutionEvent) (map[int64][]uint64, map[int64]int) {
+	activeByChat := make(map[int64][]uint64, 16)
+	queueByChat := make(map[int64]int, 16)
+	if len(events) == 0 {
+		return activeByChat, queueByChat
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+	for _, event := range ordered {
+		chatID := event.ChatID
+		if chatID == 0 {
+			continue
+		}
+		payload := executionEventPayload(event.PayloadJSON)
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventIngressAccepted,
+			core.ExecutionEventIngressQueued,
+			core.ExecutionEventIngressCompacted,
+			core.ExecutionEventIngressSelected:
+			if depth, ok := payloadInt64(payload, "queue_depth"); ok {
+				if depth > 0 {
+					queueByChat[chatID] = int(depth)
+				} else {
+					delete(queueByChat, chatID)
+				}
+			}
+		case core.ExecutionEventTurnStarted:
+			runID, _ := payloadInt64(payload, "run_id")
+			if runID <= 0 {
+				runID = event.Seq
+			}
+			activeByChat[chatID] = []uint64{uint64(runID)}
+		case core.ExecutionEventTurnCompleted, core.ExecutionEventTurnFailed, core.ExecutionEventTurnInterrupted:
+			delete(activeByChat, chatID)
+		}
+	}
+	return activeByChat, queueByChat
 }
 
 func sortedInt64Keys(values map[int64][]uint64) []int64 {

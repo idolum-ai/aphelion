@@ -288,6 +288,65 @@ func TestGroundContinuationPromptWithExecutionEvidenceFallsBackAfterRevocation(t
 	}
 }
 
+func TestGroundContinuationBlockedNoticeWithExecutionEvidenceFallsBackWithoutBlockedEvent(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8193, UserID: 0, Scope: telegramDMScopeRef(8193)}
+	state := session.ContinuationState{
+		Status:                 session.ContinuationStatusIdle,
+		HandshakeBlockedReason: "governor_not_ratified",
+	}
+	candidate := "I can't continue right now."
+	grounded, note := rt.groundContinuationBlockedNoticeWithExecutionEvidence(key, state, candidate)
+	if grounded != renderContinuationBlockedFallback(state) {
+		t.Fatalf("grounded blocked notice = %q, want deterministic fallback without TES evidence", grounded)
+	}
+	if !strings.Contains(note, "continuation evidence is unavailable") {
+		t.Fatalf("grounding note = %q, want missing-evidence explanation", note)
+	}
+}
+
+func TestGroundContinuationBlockedNoticeWithExecutionEvidenceFallsBackWhenLatestIsNotBlocked(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8194, UserID: 0, Scope: telegramDMScopeRef(8194)}
+	state := session.ContinuationState{
+		Status:                 session.ContinuationStatusIdle,
+		HandshakeBlockedReason: "governor_not_ratified",
+	}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventContinuationOffered,
+		Stage:       "continuation",
+		Status:      "pending",
+		PayloadJSON: `{"decision_id":"continuation-foo"}`,
+		CreatedAt:   now,
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent() err = %v", err)
+	}
+
+	candidate := "I can't continue right now."
+	grounded, note := rt.groundContinuationBlockedNoticeWithExecutionEvidence(key, state, candidate)
+	if grounded != renderContinuationBlockedFallback(state) {
+		t.Fatalf("grounded blocked notice = %q, want deterministic fallback when latest event is not blocked", grounded)
+	}
+	if !strings.Contains(note, "latest=continuation.offered") {
+		t.Fatalf("grounding note = %q, want latest continuation event explanation", note)
+	}
+}
+
 func TestHandleInboundSkipsContinuationWhenPersonaRationaleMissing(t *testing.T) {
 	t.Parallel()
 

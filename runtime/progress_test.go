@@ -171,6 +171,69 @@ func TestToolProgressReporterSurfaceStartsThinkingCard(t *testing.T) {
 	}
 }
 
+func TestToolProgressReporterRenderUsesExecutionEventProjectionWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9921, UserID: 0, Scope: telegramDMScopeRef(9921)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_id":7,"run_kind":"interactive"}`,
+			CreatedAt:   now,
+		},
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: `{"run_id":7,"tool":"exec","preview":"{\"command\":\"echo from-event\"}"}`,
+			CreatedAt:   now.Add(time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventProgressSurface,
+			Stage:       "progress",
+			Status:      "active",
+			PayloadJSON: `{"run_id":7,"text":"Surface from TES"}`,
+			CreatedAt:   now.Add(2 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	reporter := &toolProgressReporter{
+		runtime:      rt,
+		executionKey: key,
+		chatID:       9921,
+		mode:         "all",
+		style:        "raw",
+		window:       4,
+		runID:        7,
+		entries: []toolProgressEntry{
+			{Key: "surface:local", Text: "Local-only stale entry", Count: 1},
+		},
+		seenKeys: make(map[string]struct{}),
+	}
+
+	got := reporter.renderLocked(false)
+	if strings.Contains(got, "Local-only stale entry") {
+		t.Fatalf("rendered progress = %q, do not want local stale entries when TES projection is available", got)
+	}
+	if !strings.Contains(got, "echo from-event") {
+		t.Fatalf("rendered progress = %q, want tool preview from TES tool.started event", got)
+	}
+	if !strings.Contains(got, "Surface from TES") {
+		t.Fatalf("rendered progress = %q, want surfaced text from TES progress.surface event", got)
+	}
+}
+
 func TestStartTurnMonitorRunActivityHeartbeatUpdatesLastActivity(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

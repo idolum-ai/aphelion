@@ -464,6 +464,10 @@ func (p *toolProgressReporter) Surface(ctx context.Context, text string) {
 	if p.startedAt.IsZero() {
 		p.startedAt = time.Now().UTC()
 	}
+	p.recordProgressEvent(core.ExecutionEventProgressSurface, "active", map[string]any{
+		"run_id": p.runID,
+		"text":   normalized,
+	})
 	entry := toolProgressEntry{
 		Key:  "surface:" + normalized,
 		Text: normalized,
@@ -632,19 +636,22 @@ func (r *Runtime) filterProgressText(text string) (string, []ConstitutionViolati
 }
 
 func (p *toolProgressReporter) renderLocked(done bool) string {
-	notice := face.ToolProgressNotice{}
-	if len(p.entries) > p.window {
-		notice.Omitted = len(p.entries) - p.window
-	}
-	start := 0
-	if len(p.entries) > p.window {
-		start = len(p.entries) - p.window
-	}
-	for _, entry := range p.entries[start:] {
-		notice.Entries = append(notice.Entries, face.ToolProgressEntry{
-			Text:  entry.Text,
-			Count: entry.Count,
-		})
+	notice, projected := p.renderNoticeFromExecutionEventsLocked()
+	if !projected {
+		notice = face.ToolProgressNotice{}
+		if len(p.entries) > p.window {
+			notice.Omitted = len(p.entries) - p.window
+		}
+		start := 0
+		if len(p.entries) > p.window {
+			start = len(p.entries) - p.window
+		}
+		for _, entry := range p.entries[start:] {
+			notice.Entries = append(notice.Entries, face.ToolProgressEntry{
+				Text:  entry.Text,
+				Count: entry.Count,
+			})
+		}
 	}
 	rendered := face.RenderToolProgress(notice)
 	lines := strings.Split(rendered, "\n")
@@ -653,6 +660,102 @@ func (p *toolProgressReporter) renderLocked(done bool) string {
 	}
 	lines[0] = p.progressHeading(done)
 	return strings.Join(lines, "\n")
+}
+
+func (p *toolProgressReporter) renderNoticeFromExecutionEventsLocked() (face.ToolProgressNotice, bool) {
+	if p == nil || p.runtime == nil || p.runtime.store == nil || p.runID <= 0 {
+		return face.ToolProgressNotice{}, false
+	}
+	events, err := p.runtime.store.ExecutionEventsBySession(p.executionKey, 0, 600)
+	if err != nil || len(events) == 0 {
+		return face.ToolProgressNotice{}, false
+	}
+
+	projected := make([]toolProgressEntry, 0, 8)
+	for _, event := range events {
+		payload := executionEventPayload(event.PayloadJSON)
+		runID, ok := payloadInt64(payload, "run_id")
+		if !ok || runID != p.runID {
+			continue
+		}
+
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventToolStarted:
+			toolName := firstNonEmpty(payloadString(payload, "tool"), "tool")
+			preview := strings.TrimSpace(payloadString(payload, "preview"))
+			entry := toolProgressEntry{
+				Key:  "tool:" + toolName,
+				Text: semanticToolProgressEntry(toolName, nil, p.currentPlanStep, p.taskSummary).Text,
+			}
+			if p.style == "raw" {
+				entry.Text = rawToolProgressEventText(toolName, preview)
+			}
+			addProjectedProgressEntry(&projected, entry)
+		case core.ExecutionEventProgressSurface:
+			text := normalizeProgressSurfaceText(payloadString(payload, "text"))
+			if text == "" {
+				continue
+			}
+			addProjectedProgressEntry(&projected, toolProgressEntry{
+				Key:  "surface:" + text,
+				Text: text,
+			})
+		}
+	}
+	if len(projected) == 0 {
+		return face.ToolProgressNotice{}, false
+	}
+	notice := face.ToolProgressNotice{}
+	if len(projected) > p.window {
+		notice.Omitted = len(projected) - p.window
+	}
+	start := 0
+	if len(projected) > p.window {
+		start = len(projected) - p.window
+	}
+	for _, entry := range projected[start:] {
+		notice.Entries = append(notice.Entries, face.ToolProgressEntry{
+			Text:  entry.Text,
+			Count: entry.Count,
+		})
+	}
+	return notice, true
+}
+
+func rawToolProgressEventText(name string, preview string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "tool"
+	}
+	preview = strings.TrimSpace(preview)
+	if preview == "" {
+		return name
+	}
+	return name + " " + preview
+}
+
+func addProjectedProgressEntry(entries *[]toolProgressEntry, entry toolProgressEntry) {
+	if entries == nil {
+		return
+	}
+	entry.Key = strings.TrimSpace(entry.Key)
+	entry.Text = strings.TrimSpace(entry.Text)
+	if entry.Key == "" {
+		entry.Key = "tool"
+	}
+	if entry.Text == "" {
+		entry.Text = "Using tool"
+	}
+	entry.Count = 1
+	n := len(*entries)
+	if n > 0 {
+		last := &(*entries)[n-1]
+		if last.Key == entry.Key && last.Text == entry.Text {
+			last.Count++
+			return
+		}
+	}
+	*entries = append(*entries, entry)
 }
 
 func (p *toolProgressReporter) progressHeading(done bool) string {

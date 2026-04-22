@@ -32,6 +32,7 @@ const (
 	ExecutionEventDeliveryProgressFailed = "delivery.progress.failed"
 	ExecutionEventDeliveryFinalSent      = "delivery.final.sent"
 	ExecutionEventDeliveryFinalFailed    = "delivery.final.failed"
+	ExecutionEventProgressSurface        = "progress.surface"
 
 	ExecutionEventContinuationOffered  = "continuation.offered"
 	ExecutionEventContinuationApproved = "continuation.approved"

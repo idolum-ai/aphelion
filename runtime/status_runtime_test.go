@@ -808,6 +808,62 @@ func TestSystemStatusSnapshotIncludesLatestTurnProjectionFromExecutionEvents(t *
 	}
 }
 
+func TestSystemStatusSnapshotPrefersExecutionEventLiveSignalsOverRouterSnapshot(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9053, UserID: 0, Scope: telegramDMScopeRef(9053)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventIngressQueued,
+			Stage:       "ingress",
+			PayloadJSON: `{"queue_depth":2}`,
+			CreatedAt:   now,
+		},
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_id":77,"run_kind":"interactive"}`,
+			CreatedAt:   now.Add(time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{
+		ActiveTurnsByChat: map[int64][]uint64{
+			9053: {999},
+			9054: {1000},
+		},
+		QueueDepthByChat: map[int64]int{
+			9053: 5,
+			9054: 3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	if got := snapshot.QueueDepthByChat[9053]; got != 2 {
+		t.Fatalf("QueueDepthByChat[9053] = %d, want 2 from TES", got)
+	}
+	if got := snapshot.QueueDepthByChat[9054]; got != 3 {
+		t.Fatalf("QueueDepthByChat[9054] = %d, want router fallback 3", got)
+	}
+	if got := snapshot.ActiveTurnsByChat[9053]; len(got) != 1 || got[0] != 77 {
+		t.Fatalf("ActiveTurnsByChat[9053] = %#v, want TES run id 77", got)
+	}
+	if got := snapshot.ActiveTurnsByChat[9054]; len(got) != 1 || got[0] != 1000 {
+		t.Fatalf("ActiveTurnsByChat[9054] = %#v, want router fallback [1000]", got)
+	}
+}
+
 func TestChatStatusSnapshotIncludesTurnPhaseFromExecutionEvents(t *testing.T) {
 	t.Parallel()
 

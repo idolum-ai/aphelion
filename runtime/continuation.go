@@ -76,7 +76,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 			"remaining_turns": state.RemainingTurns,
 		}, time.Now().UTC())
 		if shouldNotifyContinuationBlocked(priorState, priorExists, consensus) {
-			if err := r.sendContinuationBlockedNotice(ctx, msg, state); err != nil {
+			if err := r.sendContinuationBlockedNotice(ctx, key, msg, state); err != nil {
 				return err
 			}
 		}
@@ -180,11 +180,11 @@ func continuationHandshakeBlockedReason(persona session.ContinuationIntent, gove
 	return ""
 }
 
-func (r *Runtime) sendContinuationBlockedNotice(ctx context.Context, msg core.InboundMessage, state session.ContinuationState) error {
+func (r *Runtime) sendContinuationBlockedNotice(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState) error {
 	if r == nil || r.outbound == nil {
 		return nil
 	}
-	text := strings.TrimSpace(r.renderContinuationBlockedNotice(ctx, msg, state))
+	text := strings.TrimSpace(r.renderContinuationBlockedNotice(ctx, key, msg, state))
 	if text == "" {
 		return nil
 	}
@@ -198,7 +198,7 @@ func (r *Runtime) sendContinuationBlockedNotice(ctx context.Context, msg core.In
 	return nil
 }
 
-func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, msg core.InboundMessage, state session.ContinuationState) string {
+func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState) string {
 	fallback := renderContinuationBlockedFallback(state)
 	if r == nil {
 		return fallback
@@ -247,7 +247,49 @@ func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, msg core.
 	if rendered == "" {
 		return fallback
 	}
-	return rendered
+	grounded, note := r.groundContinuationBlockedNoticeWithExecutionEvidence(key, state, rendered)
+	if note != "" {
+		log.Printf("WARN continuation blocked notice grounding fallback chat_id=%d note=%s", key.ChatID, note)
+	}
+	return grounded
+}
+
+func (r *Runtime) groundContinuationBlockedNoticeWithExecutionEvidence(
+	key session.SessionKey,
+	state session.ContinuationState,
+	candidate string,
+) (string, string) {
+	candidate = strings.TrimSpace(candidate)
+	fallback := renderContinuationBlockedFallback(state)
+	if candidate == "" {
+		return fallback, "rendered continuation blocked notice is empty"
+	}
+	if r == nil || r.store == nil {
+		return candidate, ""
+	}
+	events, err := r.store.ExecutionEventsBySession(key, 0, 300)
+	if err != nil || len(events) == 0 {
+		return fallback, "continuation evidence is unavailable"
+	}
+	latestType := ""
+	for _, event := range events {
+		eventType := strings.TrimSpace(event.EventType)
+		switch eventType {
+		case core.ExecutionEventContinuationOffered,
+			core.ExecutionEventContinuationApproved,
+			core.ExecutionEventContinuationRevoked,
+			core.ExecutionEventContinuationConsumed,
+			core.ExecutionEventContinuationBlocked:
+			latestType = eventType
+		}
+	}
+	if latestType != core.ExecutionEventContinuationBlocked {
+		return fallback, fmt.Sprintf("blocked notice is not grounded by blocked continuation event (latest=%s)", latestType)
+	}
+	if strings.TrimSpace(state.HandshakeBlockedReason) == "" {
+		return fallback, "blocked notice state has no blocked reason"
+	}
+	return candidate, ""
 }
 
 func renderContinuationBlockedFallback(state session.ContinuationState) string {
