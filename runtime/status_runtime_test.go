@@ -396,7 +396,7 @@ func TestSystemStatusSnapshotBuildsAdminViewAndHotChats(t *testing.T) {
 	}
 }
 
-func TestSystemStatusSnapshotPrefersDecisionEventsOverLegacyPendingRows(t *testing.T) {
+func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -464,9 +464,21 @@ func TestSystemStatusSnapshotPrefersDecisionEventsOverLegacyPendingRows(t *testi
 				"choice":"deny",
 				"reason":"callback"
 			}`,
-			CreatedAt: now.Add(-70 * time.Second),
-		},
-	}); err != nil {
+				CreatedAt: now.Add(-70 * time.Second),
+			},
+			{
+				EventType: core.ExecutionEventDecisionOpened,
+				Stage:     "decision",
+				Status:    "pending",
+				PayloadJSON: `{
+					"decision_id":"decision-events-only",
+					"decision_kind":"proposal_approval",
+					"owner_key":"chat:9003:sender:1002",
+					"prompt":"Events only decision?"
+				}`,
+				CreatedAt: now.Add(-50 * time.Second),
+			},
+		}); err != nil {
 		t.Fatalf("AppendExecutionEvents(decision events) err = %v", err)
 	}
 
@@ -475,15 +487,18 @@ func TestSystemStatusSnapshotPrefersDecisionEventsOverLegacyPendingRows(t *testi
 		t.Fatalf("SystemStatusSnapshot() err = %v", err)
 	}
 
-	if pendingDecisionByID(snapshot.PendingItems, "decision-from-events") {
-		t.Fatalf("PendingItems unexpectedly contains decision-from-events after TES resolved event: %#v", snapshot.PendingItems)
+	if !pendingDecisionByID(snapshot.PendingItems, "decision-from-events") {
+		t.Fatalf("PendingItems missing operational decision decision-from-events: %#v", snapshot.PendingItems)
 	}
 	if !pendingDecisionByID(snapshot.PendingItems, "decision-legacy-only") {
 		t.Fatalf("PendingItems missing legacy fallback decision decision-legacy-only: %#v", snapshot.PendingItems)
 	}
+	if !pendingDecisionByID(snapshot.PendingItems, "decision-events-only") {
+		t.Fatalf("PendingItems missing TES fallback decision decision-events-only: %#v", snapshot.PendingItems)
+	}
 }
 
-func TestChatStatusSnapshotPrefersContinuationEventsOverLegacyContinuationState(t *testing.T) {
+func TestChatStatusSnapshotPrefersOperationalContinuationStateOverTES(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -533,16 +548,124 @@ func TestChatStatusSnapshotPrefersContinuationEventsOverLegacyContinuationState(
 		t.Fatalf("ChatStatusSnapshot() err = %v", err)
 	}
 	if snapshot.Continuation == nil {
-		t.Fatalf("Continuation = nil, want TES-derived continuation snapshot")
+		t.Fatalf("Continuation = nil, want operational continuation snapshot")
 	}
-	if snapshot.Continuation.Status != "revoked" {
-		t.Fatalf("Continuation.Status = %q, want revoked from TES", snapshot.Continuation.Status)
+	if snapshot.Continuation.Status != string(session.ContinuationStatusPending) {
+		t.Fatalf("Continuation.Status = %q, want pending from operational state", snapshot.Continuation.Status)
 	}
-	if snapshot.Continuation.RemainingTurns != 0 {
-		t.Fatalf("Continuation.RemainingTurns = %d, want 0 after revoke", snapshot.Continuation.RemainingTurns)
+	if snapshot.Continuation.RemainingTurns != 2 {
+		t.Fatalf("Continuation.RemainingTurns = %d, want 2 from operational state", snapshot.Continuation.RemainingTurns)
 	}
-	if pendingKindCount(snapshot.PendingItems, core.PendingItemKindContinuation) != 0 {
-		t.Fatalf("Pending continuation item should be absent after revoke: %#v", snapshot.PendingItems)
+	if pendingKindCount(snapshot.PendingItems, core.PendingItemKindContinuation) != 1 {
+		t.Fatalf("Pending continuation item should stay visible from operational state: %#v", snapshot.PendingItems)
+	}
+}
+
+func TestSystemStatusSnapshotIncludesPendingReviewQueueItems(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	for _, event := range []session.ReviewEvent{
+		{
+			SourceChatID:      101,
+			SourceRole:        "approved_user",
+			TargetAdminChatID: 9001,
+			Summary:           "pending-review",
+		},
+		{
+			SourceChatID:      102,
+			SourceRole:        "approved_user",
+			TargetAdminChatID: 9001,
+			Summary:           "delivered-review",
+			Status:            "delivered",
+		},
+	} {
+		if err := store.EnqueueReviewEvent(event); err != nil {
+			t.Fatalf("EnqueueReviewEvent() err = %v", err)
+		}
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	found := false
+	for _, item := range snapshot.PendingItems {
+		if item.Kind != core.PendingItemKindReview {
+			continue
+		}
+		found = true
+		if strings.TrimSpace(item.SourceSurface) != "review_events.pending" {
+			t.Fatalf("review pending SourceSurface = %q, want review_events.pending", item.SourceSurface)
+		}
+	}
+	if !found {
+		t.Fatalf("PendingItems missing pending review item: %#v", snapshot.PendingItems)
+	}
+}
+
+func TestChatStatusSnapshotLatestTurnSourceMarkers(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9311, UserID: 0, Scope: telegramDMScopeRef(9311)}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "fallback run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.CompleteTurnRun(run.ID, session.TurnRunStatusCompleted, ""); err != nil {
+		t.Fatalf("CompleteTurnRun() err = %v", err)
+	}
+
+	fallbackSnapshot, err := rt.ChatStatusSnapshot(9311, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot(fallback) err = %v", err)
+	}
+	if fallbackSnapshot.LatestTurnRun == nil {
+		t.Fatalf("LatestTurnRun = nil, want fallback turn run snapshot")
+	}
+	if got := strings.TrimSpace(fallbackSnapshot.LatestTurnRun.Source); got != "compatibility_fallback:turn_runs" {
+		t.Fatalf("LatestTurnRun.Source = %q, want compatibility_fallback:turn_runs", got)
+	}
+
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_id":42,"run_kind":"interactive","request_text":"tes run"}`,
+			CreatedAt:   time.Now().UTC().Add(-2 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"run_id":42}`,
+			CreatedAt:   time.Now().UTC().Add(-time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	tesSnapshot, err := rt.ChatStatusSnapshot(9311, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot(tes) err = %v", err)
+	}
+	if tesSnapshot.LatestTurnRun == nil {
+		t.Fatalf("LatestTurnRun = nil, want TES turn snapshot")
+	}
+	if got := strings.TrimSpace(tesSnapshot.LatestTurnRun.Source); got != "canonical:execution_events.turn" {
+		t.Fatalf("LatestTurnRun.Source = %q, want canonical:execution_events.turn", got)
 	}
 }
 

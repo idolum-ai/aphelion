@@ -93,6 +93,7 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 	queueCount := 0
 	decisionCount := 0
 	continuationCount := 0
+	reviewCount := 0
 	recoveryCount := 0
 	staleCount := 0
 	for _, item := range snapshot.PendingItems {
@@ -103,6 +104,8 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 			decisionCount++
 		case core.PendingItemKindContinuation:
 			continuationCount++
+		case core.PendingItemKindReview:
+			reviewCount++
 		case core.PendingItemKindRecovery:
 			recoveryCount++
 		case core.PendingItemKindStaleTurn:
@@ -110,10 +113,11 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 		}
 	}
 	lines = append(lines, fmt.Sprintf(
-		"pending_counts queue=%d decision=%d continuation=%d recovery=%d stale_turn=%d",
+		"pending_counts queue=%d decision=%d continuation=%d review=%d recovery=%d stale_turn=%d",
 		queueCount,
 		decisionCount,
 		continuationCount,
+		reviewCount,
 		recoveryCount,
 		staleCount,
 	))
@@ -230,15 +234,15 @@ func renderSystemSourceAttributionBlock() []string {
 		"source_attribution_system:",
 		"- field=active_turns_queue_depth class=projection preferred=canonical:execution_events.router fallback=operational_current_state_store:router_runtime",
 		"- field=latest_turns class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
-		"- field=pending_decisions class=projection preferred=canonical:execution_events.decision fallback=operational_current_state_store:pending_decisions",
-		"- field=pending_continuations class=projection preferred=canonical:execution_events.continuation fallback=operational_current_state_store:continuation_state_json",
+		"- field=pending_decisions class=projection preferred=operational_current_state_store:pending_decisions fallback=canonical:execution_events.decision",
+		"- field=pending_continuations class=projection preferred=operational_current_state_store:continuation_state_json fallback=canonical:execution_events.continuation",
 	}
 }
 
 func renderDurablesSourceAttributionBlock() []string {
 	return []string{
 		"source_attribution_durables:",
-		"- field=durable_identity class=operational_current_state_store store=session.durable_agents",
+		"- field=durable_identity class=canonical store=session.durable_agents",
 		"- field=durable_runtime_posture class=operational_current_state_store store=session.durable_agent_state",
 	}
 }

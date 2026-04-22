@@ -178,3 +178,41 @@ func TestRenderTelegramStatusDurablesShowsEmptyState(t *testing.T) {
 		t.Fatalf("RenderTelegramStatusDurables() = %q, want empty durable list marker", out)
 	}
 }
+
+func TestRenderTelegramStatusChatIncludesSourceMarkers(t *testing.T) {
+	t.Parallel()
+
+	out := RenderTelegramStatusChat(core.ChatStatusSnapshot{
+		ChatID: 17,
+		LatestTurnRun: &core.TurnRunStatusSnapshot{
+			Status: "completed",
+			Kind:   "interactive",
+			Source: "compatibility_fallback:turn_runs",
+		},
+		Continuation: &core.ContinuationStatusSnapshot{
+			Status: "pending",
+			Source: "operational_current_state_store:continuation_state_json",
+		},
+		PendingItems: []core.PendingItem{
+			{
+				Kind:          core.PendingItemKindDecision,
+				ChatID:        17,
+				ID:            "d-1",
+				SourceClass:   "operational_current_state_store",
+				SourceSurface: "pending_decisions",
+			},
+		},
+	}, "medium", "high", false)
+
+	for _, needle := range []string{
+		"latest_turn status=completed kind=interactive",
+		"source=compatibility_fallback:turn_runs",
+		"continuation status=pending",
+		"source=operational_current_state_store:continuation_state_json",
+		"source_class=operational_current_state_store source_surface=pending_decisions",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusChat() = %q, want substring %q", out, needle)
+		}
+	}
+}

@@ -9,20 +9,23 @@ type PendingItemKind string
 const (
 	PendingItemKindDecision     PendingItemKind = "decision"
 	PendingItemKindContinuation PendingItemKind = "continuation"
+	PendingItemKindReview       PendingItemKind = "review"
 	PendingItemKindQueue        PendingItemKind = "queue"
 	PendingItemKindRecovery     PendingItemKind = "recovery"
 	PendingItemKindStaleTurn    PendingItemKind = "stale_turn"
 )
 
 type PendingItem struct {
-	Kind      PendingItemKind
-	ChatID    int64
-	ID        string
-	Summary   string
-	Age       time.Duration
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Stale     bool
+	Kind          PendingItemKind
+	ChatID        int64
+	ID            string
+	Summary       string
+	Age           time.Duration
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	Stale         bool
+	SourceClass   string
+	SourceSurface string
 }
 
 type ExecutionEventSummary struct {
@@ -53,6 +56,7 @@ type TurnRunStatusSnapshot struct {
 	LastToolError         string
 	ErrorText             string
 	StartedAt             time.Time
+	Source                string
 }
 
 type ContinuationStatusSnapshot struct {
@@ -66,6 +70,7 @@ type ContinuationStatusSnapshot struct {
 	GovernorRatified bool
 	BlockedReason    string
 	UpdatedAt        time.Time
+	Source           string
 }
 
 type RestartHealthSnapshot struct {

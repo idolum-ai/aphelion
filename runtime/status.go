@@ -245,42 +245,53 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
-	for _, state := range decisionEventState {
-		if !state.pending() {
-			continue
-		}
-		updatedAt := coalesceTime(state.UpdatedAt, state.CreatedAt)
-		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-			Kind:      core.PendingItemKindDecision,
-			ChatID:    state.ChatID,
-			ID:        state.DecisionID,
-			Summary:   renderDecisionSummaryFromFields(state.Kind, state.Prompt),
-			Age:       statusAge(now, updatedAt, state.CreatedAt),
-			CreatedAt: state.CreatedAt,
-			UpdatedAt: updatedAt,
-		})
-	}
-
 	pendingDecisions, err := r.store.PendingDecisions()
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
+	pendingDecisionSeen := make(map[string]struct{}, len(pendingDecisions))
 	for _, pending := range pendingDecisions {
-		if _, covered := decisionEventState[strings.TrimSpace(pending.ID)]; covered {
-			continue
+		decisionID := strings.TrimSpace(pending.ID)
+		if decisionID != "" {
+			pendingDecisionSeen[decisionID] = struct{}{}
 		}
 		age := statusAge(now, pending.UpdatedAt, pending.CreatedAt)
 		timeout := time.Duration(pending.TimeoutNanos)
 		stale := timeout > 0 && age > timeout
 		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-			Kind:      core.PendingItemKindDecision,
-			ChatID:    pending.ChatID,
-			ID:        strings.TrimSpace(pending.ID),
-			Summary:   renderDecisionSummary(pending),
-			Age:       age,
-			CreatedAt: pending.CreatedAt,
-			UpdatedAt: pending.UpdatedAt,
-			Stale:     stale,
+			Kind:          core.PendingItemKindDecision,
+			ChatID:        pending.ChatID,
+			ID:            decisionID,
+			Summary:       renderDecisionSummary(pending),
+			Age:           age,
+			CreatedAt:     pending.CreatedAt,
+			UpdatedAt:     pending.UpdatedAt,
+			Stale:         stale,
+			SourceClass:   "operational_current_state_store",
+			SourceSurface: "pending_decisions",
+		})
+	}
+	for _, state := range decisionEventState {
+		if !state.pending() {
+			continue
+		}
+		decisionID := strings.TrimSpace(state.DecisionID)
+		if decisionID != "" {
+			if _, covered := pendingDecisionSeen[decisionID]; covered {
+				continue
+			}
+		}
+		updatedAt := coalesceTime(state.UpdatedAt, state.CreatedAt)
+		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+			Kind:          core.PendingItemKindDecision,
+			ChatID:        state.ChatID,
+			ID:            decisionID,
+			Summary:       renderDecisionSummaryFromFields(state.Kind, state.Prompt),
+			Age:           statusAge(now, updatedAt, state.CreatedAt),
+			CreatedAt:     state.CreatedAt,
+			UpdatedAt:     updatedAt,
+			SourceClass:   "canonical",
+			SourceSurface: "execution_events.decision",
 		})
 	}
 
@@ -294,49 +305,55 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	}
 	continuationChatSeen := make(map[int64]struct{}, len(continuationEventState))
 	for _, row := range continuations {
-		if eventState, covered := continuationEventState[row.Key.ChatID]; covered {
-			snapshot.Continuations = append(snapshot.Continuations, eventState)
-			continuationChatSeen[row.Key.ChatID] = struct{}{}
-			if continuationSnapshotIsPending(eventState) {
+		state := session.NormalizeContinuationState(row.State)
+		status := strings.TrimSpace(string(state.Status))
+		chatID := row.Key.ChatID
+		if status != "" {
+			operationalSnapshot := core.ContinuationStatusSnapshot{
+				ChatID:           chatID,
+				Status:           status,
+				RemainingTurns:   state.RemainingTurns,
+				DecisionID:       strings.TrimSpace(state.DecisionID),
+				ApprovedBy:       state.ApprovedBy,
+				PersonaIntent:    strings.TrimSpace(string(state.PersonaIntent.Decision)),
+				GovernorIntent:   strings.TrimSpace(string(state.GovernorIntent.Decision)),
+				GovernorRatified: state.GovernorIntent.Ratified,
+				BlockedReason:    strings.TrimSpace(state.HandshakeBlockedReason),
+				UpdatedAt:        coalesceTime(row.UpdatedAt, state.UpdatedAt),
+				Source:           "operational_current_state_store:continuation_state_json",
+			}
+			snapshot.Continuations = append(snapshot.Continuations, operationalSnapshot)
+			continuationChatSeen[chatID] = struct{}{}
+			if state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved {
+				updatedAt := coalesceTime(row.UpdatedAt, state.UpdatedAt)
 				snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-					Kind:      core.PendingItemKindContinuation,
-					ChatID:    row.Key.ChatID,
-					ID:        continuationSnapshotItemID(eventState, row.Key.ChatID),
-					Summary:   renderContinuationSnapshotSummary(eventState),
-					Age:       statusAge(now, eventState.UpdatedAt, time.Time{}),
-					UpdatedAt: eventState.UpdatedAt,
+					Kind:          core.PendingItemKindContinuation,
+					ChatID:        chatID,
+					ID:            continuationItemID(state, chatID),
+					Summary:       renderContinuationSummary(state),
+					Age:           statusAge(now, updatedAt, time.Time{}),
+					UpdatedAt:     updatedAt,
+					SourceClass:   "operational_current_state_store",
+					SourceSurface: "continuation_state_json",
 				})
 			}
 			continue
 		}
-
-		state := session.NormalizeContinuationState(row.State)
-		status := strings.TrimSpace(string(state.Status))
-		if status == "" {
-			continue
-		}
-		snapshot.Continuations = append(snapshot.Continuations, core.ContinuationStatusSnapshot{
-			ChatID:           row.Key.ChatID,
-			Status:           status,
-			RemainingTurns:   state.RemainingTurns,
-			DecisionID:       strings.TrimSpace(state.DecisionID),
-			ApprovedBy:       state.ApprovedBy,
-			PersonaIntent:    strings.TrimSpace(string(state.PersonaIntent.Decision)),
-			GovernorIntent:   strings.TrimSpace(string(state.GovernorIntent.Decision)),
-			GovernorRatified: state.GovernorIntent.Ratified,
-			BlockedReason:    strings.TrimSpace(state.HandshakeBlockedReason),
-			UpdatedAt:        coalesceTime(row.UpdatedAt, state.UpdatedAt),
-		})
-		if state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved {
-			updatedAt := coalesceTime(row.UpdatedAt, state.UpdatedAt)
-			snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-				Kind:      core.PendingItemKindContinuation,
-				ChatID:    row.Key.ChatID,
-				ID:        continuationItemID(state, row.Key.ChatID),
-				Summary:   renderContinuationSummary(state),
-				Age:       statusAge(now, updatedAt, time.Time{}),
-				UpdatedAt: updatedAt,
-			})
+		if eventState, covered := continuationEventState[chatID]; covered {
+			snapshot.Continuations = append(snapshot.Continuations, eventState)
+			continuationChatSeen[chatID] = struct{}{}
+			if continuationSnapshotIsPending(eventState) {
+				snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+					Kind:          core.PendingItemKindContinuation,
+					ChatID:        chatID,
+					ID:            continuationSnapshotItemID(eventState, chatID),
+					Summary:       renderContinuationSnapshotSummary(eventState),
+					Age:           statusAge(now, eventState.UpdatedAt, time.Time{}),
+					UpdatedAt:     eventState.UpdatedAt,
+					SourceClass:   "canonical",
+					SourceSurface: "execution_events.continuation",
+				})
+			}
 		}
 	}
 	for chatID, eventState := range continuationEventState {
@@ -346,14 +363,35 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		snapshot.Continuations = append(snapshot.Continuations, eventState)
 		if continuationSnapshotIsPending(eventState) {
 			snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-				Kind:      core.PendingItemKindContinuation,
-				ChatID:    chatID,
-				ID:        continuationSnapshotItemID(eventState, chatID),
-				Summary:   renderContinuationSnapshotSummary(eventState),
-				Age:       statusAge(now, eventState.UpdatedAt, time.Time{}),
-				UpdatedAt: eventState.UpdatedAt,
+				Kind:          core.PendingItemKindContinuation,
+				ChatID:        chatID,
+				ID:            continuationSnapshotItemID(eventState, chatID),
+				Summary:       renderContinuationSnapshotSummary(eventState),
+				Age:           statusAge(now, eventState.UpdatedAt, time.Time{}),
+				UpdatedAt:     eventState.UpdatedAt,
+				SourceClass:   "canonical",
+				SourceSurface: "execution_events.continuation",
 			})
 		}
+	}
+
+	pendingReviews, err := r.store.PendingReviewEventsAll(500)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
+	for _, event := range pendingReviews {
+		updatedAt := coalesceTime(event.CreatedAt)
+		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+			Kind:          core.PendingItemKindReview,
+			ChatID:        event.TargetAdminChatID,
+			ID:            fmt.Sprintf("review:%d", event.ID),
+			Summary:       renderPendingReviewSummary(event),
+			Age:           statusAge(now, updatedAt, time.Time{}),
+			CreatedAt:     event.CreatedAt,
+			UpdatedAt:     updatedAt,
+			SourceClass:   "operational_current_state_store",
+			SourceSurface: "review_events.pending",
+		})
 	}
 
 	latestRuns, err := r.store.LatestTurnRunsByChat(500)
@@ -371,17 +409,19 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
-	for _, run := range pendingRecovery {
-		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-			Kind:      core.PendingItemKindRecovery,
-			ChatID:    run.ChatID,
-			ID:        fmt.Sprintf("recovery:%d", run.ID),
-			Summary:   fmt.Sprintf("turn_run_id=%d status=%s", run.ID, run.Status),
-			Age:       statusAge(now, run.LastActivityAt, run.StartedAt),
-			CreatedAt: run.StartedAt,
-			UpdatedAt: run.LastActivityAt,
-		})
-	}
+		for _, run := range pendingRecovery {
+			snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+				Kind:          core.PendingItemKindRecovery,
+				ChatID:        run.ChatID,
+				ID:            fmt.Sprintf("recovery:%d", run.ID),
+				Summary:       fmt.Sprintf("turn_run_id=%d status=%s", run.ID, run.Status),
+				Age:           statusAge(now, run.LastActivityAt, run.StartedAt),
+				CreatedAt:     run.StartedAt,
+				UpdatedAt:     run.LastActivityAt,
+				SourceClass:   "compatibility_fallback",
+				SourceSurface: "turn_runs",
+			})
+		}
 	recoveryPending, recoveryPendingOK, err := r.recoveryPendingFromEvents(now.Add(-7*24*time.Hour), 2000)
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
@@ -394,19 +434,21 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
-	for _, run := range staleRuns {
-		snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, turnRunSnapshot(run))
-		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-			Kind:      core.PendingItemKindStaleTurn,
-			ChatID:    run.ChatID,
-			ID:        fmt.Sprintf("stale:%d", run.ID),
-			Summary:   fmt.Sprintf("turn_run_id=%d last_activity=%s", run.ID, run.LastActivityAt.UTC().Format(time.RFC3339)),
-			Age:       statusAge(now, run.LastActivityAt, run.StartedAt),
-			CreatedAt: run.StartedAt,
-			UpdatedAt: run.LastActivityAt,
-			Stale:     true,
-		})
-	}
+		for _, run := range staleRuns {
+			snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, turnRunSnapshot(run))
+			snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+				Kind:          core.PendingItemKindStaleTurn,
+				ChatID:        run.ChatID,
+				ID:            fmt.Sprintf("stale:%d", run.ID),
+				Summary:       fmt.Sprintf("turn_run_id=%d last_activity=%s", run.ID, run.LastActivityAt.UTC().Format(time.RFC3339)),
+				Age:           statusAge(now, run.LastActivityAt, run.StartedAt),
+				CreatedAt:     run.StartedAt,
+				UpdatedAt:     run.LastActivityAt,
+				Stale:         true,
+				SourceClass:   "operational_current_state_store",
+				SourceSurface: "turn_runs",
+			})
+		}
 
 	sort.Slice(snapshot.Continuations, func(i, j int) bool {
 		if snapshot.Continuations[i].ChatID == snapshot.Continuations[j].ChatID {
@@ -717,6 +759,7 @@ func turnRunSnapshot(run session.TurnRun) core.TurnRunStatusSnapshot {
 		LastToolError:         truncateStatusDiagnostic(strings.TrimSpace(run.LastToolError), 220),
 		ErrorText:             strings.TrimSpace(firstNonEmptyStatus(run.ErrorText, run.LastToolError)),
 		StartedAt:             run.StartedAt,
+		Source:                "compatibility_fallback:turn_runs",
 	}
 }
 
@@ -817,6 +860,9 @@ func (r *Runtime) continuationEventStates(since time.Time, limit int) (map[int64
 		}
 		state := out[chatID]
 		state.ChatID = chatID
+		if strings.TrimSpace(state.Source) == "" {
+			state.Source = "canonical:execution_events.continuation"
+		}
 
 		payload := executionEventPayload(event.PayloadJSON)
 		if decisionID := payloadString(payload, "decision_id"); decisionID != "" {
@@ -832,7 +878,7 @@ func (r *Runtime) continuationEventStates(since time.Time, limit int) (map[int64
 			state.BlockedReason = reason
 		}
 
-		switch strings.TrimSpace(event.EventType) {
+			switch strings.TrimSpace(event.EventType) {
 		case core.ExecutionEventContinuationOffered:
 			state.Status = "pending"
 		case core.ExecutionEventContinuationApproved:
@@ -920,13 +966,15 @@ func (r *Runtime) recoveryPendingFromEvents(since time.Time, limit int) (core.Pe
 	}
 	updatedAt := latestIssued.CreatedAt
 	return core.PendingItem{
-		Kind:      core.PendingItemKindRecovery,
-		ChatID:    latestIssued.ChatID,
-		ID:        "recovery:startup",
-		Summary:   summary,
-		Age:       statusAge(time.Now().UTC(), updatedAt, time.Time{}),
-		CreatedAt: latestIssued.CreatedAt,
-		UpdatedAt: updatedAt,
+		Kind:          core.PendingItemKindRecovery,
+		ChatID:        latestIssued.ChatID,
+		ID:            "recovery:startup",
+		Summary:       summary,
+		Age:           statusAge(time.Now().UTC(), updatedAt, time.Time{}),
+		CreatedAt:     latestIssued.CreatedAt,
+		UpdatedAt:     updatedAt,
+		SourceClass:   "canonical",
+		SourceSurface: "execution_events.recovery",
 	}, true, nil
 }
 
@@ -1121,18 +1169,19 @@ func latestTurnSnapshotsByChatFromExecutionEvents(events []session.ExecutionEven
 		payload := executionEventPayload(event.PayloadJSON)
 
 		switch eventType {
-		case core.ExecutionEventTurnStarted:
-			runID, _ := payloadInt64(payload, "run_id")
-			runKind := firstNonEmpty(payloadString(payload, "run_kind"), "interactive")
-			out[chatID] = core.TurnRunStatusSnapshot{
+			case core.ExecutionEventTurnStarted:
+				runID, _ := payloadInt64(payload, "run_id")
+				runKind := firstNonEmpty(payloadString(payload, "run_kind"), "interactive")
+				out[chatID] = core.TurnRunStatusSnapshot{
 				ID:             runID,
 				ChatID:         chatID,
 				Kind:           strings.TrimSpace(runKind),
 				Status:         string(session.TurnRunStatusRunning),
-				RequestText:    truncateStatusDiagnostic(strings.TrimSpace(payloadString(payload, "request_text")), 220),
-				StartedAt:      event.CreatedAt,
-				LastActivityAt: event.CreatedAt,
-			}
+					RequestText:    truncateStatusDiagnostic(strings.TrimSpace(payloadString(payload, "request_text")), 220),
+					StartedAt:      event.CreatedAt,
+					LastActivityAt: event.CreatedAt,
+					Source:         "canonical:execution_events.turn",
+				}
 		case core.ExecutionEventTurnStageChanged:
 			snapshot := ensureEventTurnSnapshot(out, chatID, event.CreatedAt)
 			if strings.TrimSpace(snapshot.Status) == "" {
@@ -1215,6 +1264,9 @@ func ensureEventTurnSnapshot(
 	if strings.TrimSpace(snapshot.Kind) == "" {
 		snapshot.Kind = "interactive"
 	}
+	if strings.TrimSpace(snapshot.Source) == "" {
+		snapshot.Source = "canonical:execution_events.turn"
+	}
 	if snapshot.StartedAt.IsZero() {
 		snapshot.StartedAt = activityAt
 	}
@@ -1241,6 +1293,20 @@ func renderDecisionSummary(record session.PendingDecisionRecord) string {
 		return "kind=" + kind
 	}
 	return fmt.Sprintf("kind=%s prompt=%s", kind, prompt)
+}
+
+func renderPendingReviewSummary(event session.ReviewEvent) string {
+	parts := []string{
+		"status=pending",
+		fmt.Sprintf("target_chat=%d", event.TargetAdminChatID),
+	}
+	if source := strings.TrimSpace(event.SourceScope.DurableAgentID); source != "" {
+		parts = append(parts, "source_agent="+source)
+	}
+	if summary := strings.TrimSpace(event.Summary); summary != "" {
+		parts = append(parts, "summary="+truncateStatusDiagnostic(summary, 80))
+	}
+	return strings.Join(parts, " ")
 }
 
 func continuationItemID(state session.ContinuationState, chatID int64) string {

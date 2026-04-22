@@ -1841,6 +1841,40 @@ func (s *SQLiteStore) PendingReviewEvents(targetChatID int64, limit int) ([]Revi
 	return events, nil
 }
 
+func (s *SQLiteStore) PendingReviewEventsAll(limit int) ([]ReviewEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := s.db.Query(`
+		SELECT
+			id, source_session_id, source_chat_id, source_user_id, source_role, source_scope_kind, source_scope_id, source_durable_agent_id,
+			target_session_id, target_chat_id, target_scope_kind, target_scope_id, target_durable_agent_id,
+			turn_from, turn_to, summary, metadata_json, status, created_at, delivered_at
+		FROM review_events
+		WHERE status = 'pending'
+		ORDER BY created_at ASC, id ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query pending review events: %w", err)
+	}
+	defer rows.Close()
+
+	events := make([]ReviewEvent, 0, limit)
+	for rows.Next() {
+		event, err := scanReviewEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending review events: %w", err)
+	}
+	return events, nil
+}
+
 func (s *SQLiteStore) MarkReviewDelivered(ids []int64) error {
 	if len(ids) == 0 {
 		return nil

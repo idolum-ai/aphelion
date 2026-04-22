@@ -187,18 +187,18 @@ func renderStatusSourceAttribution(view statusView) string {
 			"- field=operation_plan_hidden_inputs class=projection preferred=canonical:execution_events.turn_sidecars fallback=operational_current_state_store:status_state_json",
 			"- field=delivery class=projection preferred=canonical:execution_events.delivery fallback=operational_current_state_store:status_state_json note=transport_ledger_only",
 		)
-	case statusViewSystem, statusViewHotChats, statusViewFindChat:
-		lines = append(lines,
-			"- field=active_turns_queue_depth class=projection preferred=canonical:execution_events.router fallback=operational_current_state_store:router_runtime",
-			"- field=latest_turns class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
-			"- field=pending_decisions class=projection preferred=canonical:execution_events.decision fallback=operational_current_state_store:pending_decisions",
-			"- field=pending_continuations class=projection preferred=canonical:execution_events.continuation fallback=operational_current_state_store:continuation_state_json",
-		)
-	case statusViewDurables:
-		lines = append(lines,
-			"- field=durable_identity class=operational_current_state_store store=session.durable_agents",
-			"- field=durable_runtime_posture class=operational_current_state_store store=session.durable_agent_state",
-		)
+		case statusViewSystem, statusViewHotChats, statusViewFindChat:
+			lines = append(lines,
+				"- field=active_turns_queue_depth class=projection preferred=canonical:execution_events.router fallback=operational_current_state_store:router_runtime",
+				"- field=latest_turns class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
+				"- field=pending_decisions class=projection preferred=operational_current_state_store:pending_decisions fallback=canonical:execution_events.decision",
+				"- field=pending_continuations class=projection preferred=operational_current_state_store:continuation_state_json fallback=canonical:execution_events.continuation",
+			)
+		case statusViewDurables:
+			lines = append(lines,
+				"- field=durable_identity class=canonical store=session.durable_agents",
+				"- field=durable_runtime_posture class=operational_current_state_store store=session.durable_agent_state",
+			)
 	default:
 		return ""
 	}

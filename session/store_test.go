@@ -210,6 +210,50 @@ func TestReviewEventsPreserveScopeAndMetadata(t *testing.T) {
 	}
 }
 
+func TestPendingReviewEventsAllExcludesDeliveredRows(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	for _, event := range []ReviewEvent{
+		{
+			SourceChatID:      100,
+			SourceRole:        "approved_user",
+			TargetAdminChatID: 9001,
+			Summary:           "pending-a",
+		},
+		{
+			SourceChatID:      101,
+			SourceRole:        "approved_user",
+			TargetAdminChatID: 9002,
+			Summary:           "pending-b",
+		},
+		{
+			SourceChatID:      102,
+			SourceRole:        "approved_user",
+			TargetAdminChatID: 9002,
+			Summary:           "delivered-c",
+			Status:            "delivered",
+		},
+	} {
+		if err := store.EnqueueReviewEvent(event); err != nil {
+			t.Fatalf("EnqueueReviewEvent() err = %v", err)
+		}
+	}
+
+	events, err := store.PendingReviewEventsAll(10)
+	if err != nil {
+		t.Fatalf("PendingReviewEventsAll() err = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("pending review events len = %d, want 2", len(events))
+	}
+	if events[0].Summary != "pending-a" || events[1].Summary != "pending-b" {
+		t.Fatalf("pending review summaries = [%q, %q], want [pending-a, pending-b]", events[0].Summary, events[1].Summary)
+	}
+}
+
 func TestSearchMessagesFiltersByScopeAndReturnsNewestFirst(t *testing.T) {
 	t.Parallel()
 
