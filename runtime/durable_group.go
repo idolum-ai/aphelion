@@ -274,7 +274,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 				if artifact == nil {
 					return nil
 				}
-				if _, hookErr := durableagent.NewRuntime(r.store).QueueReviewArtifact(registered, *artifact); hookErr != nil {
+				if _, hookErr := r.queueDurableReviewArtifactPending(registered, *artifact); hookErr != nil {
 					return fmt.Errorf("queue durable telegram review artifact: %w", hookErr)
 				}
 				return nil
@@ -305,10 +305,30 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	if len(pendingParentConversation) > 0 {
 		if durableWakeInferenceUnavailable(turnReply) {
 			log.Printf("WARN durable parent conversation not acknowledged due to transient inference failure agent_id=%s", registered.AgentID)
-		} else if ackErr := r.acknowledgeDurableAgentParentConversation(registered.AgentID, now); ackErr != nil {
+			return &DurableGroupChildResult{
+				TurnResult:      *turnResult.Turn,
+				ReplyText:       turnReply,
+				AllowLocalReply: allowLocalReply,
+				InboundWasVoice: prepared.InboundWasVoice,
+				TurnIndex:       sess.TurnCount,
+			}, nil
+		}
+
+		if registered.ReviewTargetChatID != 0 {
+			if queueErr := r.queueDurableAgentParentConversationAck(registered, pendingParentConversation, turnReply, now); queueErr != nil {
+				log.Printf("WARN durable parent conversation ack artifact failed agent_id=%s err=%v", registered.AgentID, queueErr)
+				log.Printf("WARN durable parent conversation remains pending because review artifact queue failed agent_id=%s", registered.AgentID)
+				return &DurableGroupChildResult{
+					TurnResult:      *turnResult.Turn,
+					ReplyText:       turnReply,
+					AllowLocalReply: allowLocalReply,
+					InboundWasVoice: prepared.InboundWasVoice,
+					TurnIndex:       sess.TurnCount,
+				}, nil
+			}
+		}
+		if ackErr := r.acknowledgeDurableAgentParentConversation(registered.AgentID, now); ackErr != nil {
 			log.Printf("WARN durable parent conversation acknowledge failed agent_id=%s err=%v", registered.AgentID, ackErr)
-		} else if queueErr := r.queueDurableAgentParentConversationAck(registered, pendingParentConversation, turnReply, now); queueErr != nil {
-			log.Printf("WARN durable parent conversation ack artifact failed agent_id=%s err=%v", registered.AgentID, queueErr)
 		}
 	}
 	return &DurableGroupChildResult{
@@ -966,7 +986,7 @@ func (r *Runtime) queueDurableAgentParentConversationAck(agent core.DurableAgent
 		ArtifactRefs: []string{fmt.Sprintf("conversation://durable-agent/%s", strings.TrimSpace(agent.AgentID))},
 		Metadata:     metadata,
 	}
-	_, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact)
+	_, err := r.queueDurableReviewArtifactPending(agent, artifact)
 	if err == nil {
 		key := r.durableAgentExecutionKey(strings.TrimSpace(agent.AgentID))
 		r.recordExecutionEvent(key, core.ExecutionEventDurableParentAck, "durable", "acknowledged", map[string]any{
@@ -976,6 +996,15 @@ func (r *Runtime) queueDurableAgentParentConversationAck(agent core.DurableAgent
 		}, at.UTC())
 	}
 	return err
+}
+
+func (r *Runtime) queueDurableReviewArtifactPending(agent core.DurableAgent, artifact core.DurableReviewArtifact) (int64, error) {
+	if r == nil || r.store == nil {
+		return 0, fmt.Errorf("queue durable review artifact: runtime store unavailable")
+	}
+	// QueueReviewArtifact writes review_events(status='pending') as the operational queue;
+	// delivery later transitions those rows to status='delivered'.
+	return durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact)
 }
 
 func durableAgentParentConversationAckSummary(messages []core.DurableAgentConversationMessage, localReply string) string {

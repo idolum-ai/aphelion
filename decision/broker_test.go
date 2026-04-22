@@ -283,6 +283,75 @@ func TestBrokerObserverReceivesExpiredEvent(t *testing.T) {
 	}
 }
 
+func TestBrokerResolvedEventEmitsAfterOperationalClear(t *testing.T) {
+	t.Parallel()
+
+	store := newBrokerMemoryDurableStore()
+	pendingSeen := make(chan PendingDecision, 1)
+	resolvedHasPending := make(chan bool, 1)
+	broker := NewBroker(func(_ context.Context, pending PendingDecision) (Delivery, error) {
+		pendingSeen <- pending
+		return Delivery{MessageID: 5150}, nil
+	}, WithDurableStore(store), WithObserver(func(_ context.Context, event Event) {
+		if event.Type != EventTypeResolved {
+			return
+		}
+		resolvedHasPending <- store.has(event.Decision.ID)
+	}))
+
+	resultCh := make(chan Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			Kind:          KindProposalApproval,
+			ChatID:        7,
+			SenderID:      1001,
+			Prompt:        "Confirm command?",
+			Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+			DefaultChoice: "deny",
+			Timeout:       WaitIndefinitely,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- result
+	}()
+
+	var pending PendingDecision
+	select {
+	case pending = <-pendingSeen:
+	case <-time.After(time.Second):
+		t.Fatal("request did not publish pending decision")
+	}
+	if !store.has(pending.ID) {
+		t.Fatalf("durable store missing pending id=%q before resolve", pending.ID)
+	}
+	if !broker.Resolve(pending.ID, "approve") {
+		t.Fatal("Resolve() = false, want true")
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Request() err = %v, want nil", err)
+	case result := <-resultCh:
+		if result.Choice != "approve" {
+			t.Fatalf("choice = %q, want approve", result.Choice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Request() did not resolve after approval")
+	}
+
+	select {
+	case hasPending := <-resolvedHasPending:
+		if hasPending {
+			t.Fatal("resolved event observed while durable pending row still existed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("observer did not receive resolved event")
+	}
+}
+
 func TestBrokerRequestSupersedesPendingDecisionForSameSender(t *testing.T) {
 	t.Parallel()
 
@@ -547,6 +616,8 @@ func TestBrokerRequestOlderDeliveryDoesNotSupersedeNewerDecision(t *testing.T) {
 	releaseFirst := make(chan struct{})
 	firstStarted := make(chan struct{}, 1)
 	pendingSeen := make(chan PendingDecision, 2)
+	detachedCounts := make(map[string]int)
+	var detachedMu sync.Mutex
 	broker := NewBroker(func(_ context.Context, pending PendingDecision) (Delivery, error) {
 		if strings.Contains(pending.Prompt, "first") {
 			firstStarted <- struct{}{}
@@ -554,7 +625,14 @@ func TestBrokerRequestOlderDeliveryDoesNotSupersedeNewerDecision(t *testing.T) {
 		}
 		pendingSeen <- pending
 		return Delivery{MessageID: 83}, nil
-	})
+	}, WithObserver(func(_ context.Context, event Event) {
+		if event.Type != EventTypeDetached {
+			return
+		}
+		detachedMu.Lock()
+		detachedCounts[event.Decision.ID]++
+		detachedMu.Unlock()
+	}))
 
 	firstResultCh := make(chan Result, 1)
 	secondResultCh := make(chan Result, 1)
@@ -616,6 +694,12 @@ func TestBrokerRequestOlderDeliveryDoesNotSupersedeNewerDecision(t *testing.T) {
 	case result := <-firstResultCh:
 		if result.Choice != "deny" {
 			t.Fatalf("first choice = %q, want deny after stale delivery", result.Choice)
+		}
+		detachedMu.Lock()
+		gotDetached := detachedCounts[result.DecisionID]
+		detachedMu.Unlock()
+		if gotDetached != 1 {
+			t.Fatalf("detached events for first stale decision = %d, want 1", gotDetached)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("first request did not resolve after stale delivery")

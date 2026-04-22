@@ -140,6 +140,36 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if got := sender.inline[0].rows[0][1].CallbackData; !strings.Contains(got, state.DecisionID) {
 		t.Fatalf("continue callback = %q, want decision id %q", got, state.DecisionID)
 	}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var offered session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationOffered {
+			offered = event
+		}
+	}
+	if offered.ID == 0 {
+		t.Fatalf("events = %#v, want continuation.offered event", events)
+	}
+	payload := executionEventPayload(offered.PayloadJSON)
+	if payloadString(payload, "decision_id") != state.DecisionID {
+		t.Fatalf("offered payload decision_id = %q, want %q", payloadString(payload, "decision_id"), state.DecisionID)
+	}
+	if payloadString(payload, "objective") != state.Objective {
+		t.Fatalf("offered payload objective = %q, want %q", payloadString(payload, "objective"), state.Objective)
+	}
+	if payloadString(payload, "stage_summary") != state.StageSummary {
+		t.Fatalf("offered payload stage_summary = %q, want %q", payloadString(payload, "stage_summary"), state.StageSummary)
+	}
+	remainingTurns, ok := payloadInt64(payload, "remaining_turns")
+	if !ok || remainingTurns != 1 {
+		t.Fatalf("offered payload remaining_turns = %d (ok=%v), want 1", remainingTurns, ok)
+	}
+	if payloadString(payload, "state_source") != "continuation_state" {
+		t.Fatalf("offered payload state_source = %q, want continuation_state", payloadString(payload, "state_source"))
+	}
 }
 
 func TestHandleInboundContinuationApprovalPromptFallsBackWhenRenderedTextUsesSplitRoleLabels(t *testing.T) {
@@ -421,6 +451,30 @@ func TestHandleInboundSkipsContinuationWhenPersonaRationaleMissing(t *testing.T)
 	}
 	if state.HandshakeBlockedReason != "persona_rationale_missing" {
 		t.Fatalf("handshake blocked reason = %q, want persona_rationale_missing", state.HandshakeBlockedReason)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var blocked session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationBlocked {
+			blocked = event
+		}
+	}
+	if blocked.ID == 0 {
+		t.Fatalf("events = %#v, want continuation.blocked event", events)
+	}
+	payload := executionEventPayload(blocked.PayloadJSON)
+	if payloadString(payload, "reason") != state.HandshakeBlockedReason {
+		t.Fatalf("blocked payload reason = %q, want %q", payloadString(payload, "reason"), state.HandshakeBlockedReason)
+	}
+	remainingTurns, ok := payloadInt64(payload, "remaining_turns")
+	if !ok || remainingTurns != 0 {
+		t.Fatalf("blocked payload remaining_turns = %d (ok=%v), want 0", remainingTurns, ok)
+	}
+	if payloadString(payload, "state_source") != "continuation_state" {
+		t.Fatalf("blocked payload state_source = %q, want continuation_state", payloadString(payload, "state_source"))
 	}
 }
 

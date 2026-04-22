@@ -317,7 +317,7 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 	}
 
 	if stale := b.activateOwner(ctx, decisionID); stale {
-		b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "stale_on_activation")
+		// activateOwner already detached and persisted stale cleanup before returning true.
 		return Result{DecisionID: pending.request.ID, Choice: pending.request.DefaultChoice, Delivery: pending.delivery}, nil
 	}
 	b.emitEvent(ctx, pending, EventTypeOpened, "", false, "")
@@ -329,8 +329,8 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 			_ = b.clearWithContext(ctx, decisionID)
 			return Result{DecisionID: pending.request.ID, Choice: choice, Delivery: pending.delivery}, nil
 		case <-ctx.Done():
-			b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "context_canceled")
 			_ = b.clearWithContext(ctx, decisionID)
+			b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "context_canceled")
 			return Result{}, ctx.Err()
 		}
 	}
@@ -342,12 +342,12 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 		_ = b.clearWithContext(ctx, decisionID)
 		return Result{DecisionID: pending.request.ID, Choice: choice, Delivery: pending.delivery}, nil
 	case <-timer.C:
-		b.emitEvent(ctx, pending, EventTypeExpired, strings.TrimSpace(pending.request.DefaultChoice), true, "timeout")
 		_ = b.clearWithContext(ctx, decisionID)
+		b.emitEvent(ctx, pending, EventTypeExpired, strings.TrimSpace(pending.request.DefaultChoice), true, "timeout")
 		return Result{DecisionID: pending.request.ID, Choice: pending.request.DefaultChoice, Delivery: pending.delivery, TimedOut: true}, nil
 	case <-ctx.Done():
-		b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "context_canceled")
 		_ = b.clearWithContext(ctx, decisionID)
+		b.emitEvent(ctx, pending, EventTypeDetached, strings.TrimSpace(pending.request.DefaultChoice), false, "context_canceled")
 		return Result{}, ctx.Err()
 	}
 }
@@ -376,8 +376,8 @@ func (b *Broker) Resolve(id string, choice string) bool {
 	}
 	select {
 	case pending.resultCh <- choice:
-		b.emitEvent(context.Background(), pending, EventTypeResolved, choice, false, "callback")
 		_ = b.clearWithContext(context.Background(), id)
+		b.emitEvent(context.Background(), pending, EventTypeResolved, choice, false, "callback")
 		return true
 	default:
 		return false

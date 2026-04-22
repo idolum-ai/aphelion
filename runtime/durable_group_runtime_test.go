@@ -767,6 +767,95 @@ func TestHandleInboundDurableTelegramGroupReplyWithParentReviewQueuesDraftWithou
 	}
 }
 
+func TestHandleInboundDurableTelegramGroupDeliveredReviewStaysOutOfPendingQueue(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I can draft a response, but I should wait for parent review."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableGroupChild = inlineDurableGroupChildExecutor{run: rt.RunDurableTelegramGroupChild}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:                "family-group",
+		ParentScopeKind:        string(session.ScopeKindHeartbeat),
+		ParentScopeID:          "admin-house",
+		ReviewTargetChatID:     1001,
+		ChannelKind:            "telegram_group",
+		AllowedTelegramUserIDs: []int64{555},
+		LivePolicy: core.DurableAgentLivePolicy{
+			Charter:      "Hold direct group questions for parent review before replying.",
+			OutboundMode: "reply_with_parent_review",
+			DriftPolicy:  "admin_review",
+		},
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		Status:       "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         -100200,
+		ChatType:       "group",
+		ChatTitle:      "Family",
+		SenderID:       555,
+		SenderName:     "alice",
+		Text:           "Can you remind everyone about dinner?",
+		MessageID:      30,
+		DurableAgentID: "family-group",
+		Timestamp:      time.Now(),
+		Raw:            json.RawMessage(`{"source":"telegram-group"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(first) err = %v", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent messages = %d, want 0 when parent review is required", len(sender.sent))
+	}
+
+	pending, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents(first) err = %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending review events = %d, want 1 after first queued draft", len(pending))
+	}
+	if err := store.MarkReviewDelivered([]int64{pending[0].ID}); err != nil {
+		t.Fatalf("MarkReviewDelivered() err = %v", err)
+	}
+	pending, err = store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents(after deliver) err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending review events = %d, want 0 after delivery", len(pending))
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:         -100200,
+		ChatType:       "group",
+		ChatTitle:      "Family",
+		SenderID:       555,
+		SenderName:     "alice",
+		Text:           "ok",
+		MessageID:      31,
+		DurableAgentID: "family-group",
+		Timestamp:      time.Now(),
+		Raw:            json.RawMessage(`{"source":"telegram-group"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(second) err = %v", err)
+	}
+	pending, err = store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents(second) err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending review events = %d, want 0 after non-escalating follow-up", len(pending))
+	}
+}
+
 func TestHandleInboundDurableTelegramGroupRecordsAppliedPolicyState(t *testing.T) {
 	t.Parallel()
 

@@ -25,6 +25,8 @@ type continuationConsensus struct {
 	OperationState session.OperationState
 }
 
+const continuationOperationalStateNote = "operational continuation_state remains authoritative"
+
 func (c continuationConsensus) eligible() bool {
 	return strings.TrimSpace(c.BlockedReason) == "" &&
 		c.PersonaIntent.Decision == session.ContinuationIntentDecisionContinue &&
@@ -69,12 +71,9 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		return fmt.Errorf("persist continuation state: %w", err)
 	}
 	if !consensus.eligible() {
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", map[string]any{
-			"reason":          strings.TrimSpace(consensus.BlockedReason),
-			"objective":       strings.TrimSpace(state.Objective),
-			"stage_summary":   strings.TrimSpace(state.StageSummary),
-			"remaining_turns": state.RemainingTurns,
-		}, time.Now().UTC())
+		payload := continuationExecutionPayload(state)
+		payload["reason"] = strings.TrimSpace(consensus.BlockedReason)
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", payload, time.Now().UTC())
 		if shouldNotifyContinuationBlocked(priorState, priorExists, consensus) {
 			if err := r.sendContinuationBlockedNotice(ctx, key, msg, state); err != nil {
 				return err
@@ -82,12 +81,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		}
 		return nil
 	}
-	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", map[string]any{
-		"decision_id":     strings.TrimSpace(state.DecisionID),
-		"objective":       strings.TrimSpace(state.Objective),
-		"stage_summary":   strings.TrimSpace(state.StageSummary),
-		"remaining_turns": state.RemainingTurns,
-	}, time.Now().UTC())
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", continuationExecutionPayload(state), time.Now().UTC())
 
 	_, err := sender.SendInlineKeyboard(
 		ctx,
@@ -269,7 +263,7 @@ func (r *Runtime) groundContinuationBlockedNoticeWithExecutionEvidence(
 	}
 	events, err := r.store.ExecutionEventsBySession(key, 0, 300)
 	if err != nil || len(events) == 0 {
-		return fallback, "continuation evidence is unavailable"
+		return fallback, "continuation evidence is unavailable; " + continuationOperationalStateNote
 	}
 	latestType := ""
 	for _, event := range events {
@@ -284,7 +278,7 @@ func (r *Runtime) groundContinuationBlockedNoticeWithExecutionEvidence(
 		}
 	}
 	if latestType != core.ExecutionEventContinuationBlocked {
-		return fallback, fmt.Sprintf("blocked notice is not grounded by blocked continuation event (latest=%s)", latestType)
+		return fallback, fmt.Sprintf("blocked notice is not grounded by blocked continuation event (latest=%s); %s", latestType, continuationOperationalStateNote)
 	}
 	if strings.TrimSpace(state.HandshakeBlockedReason) == "" {
 		return fallback, "blocked notice state has no blocked reason"
@@ -464,7 +458,7 @@ func (r *Runtime) groundContinuationPromptWithExecutionEvidence(
 	}
 	events, err := r.store.ExecutionEventsBySession(key, 0, 300)
 	if err != nil || len(events) == 0 {
-		return fallback, "continuation evidence is unavailable"
+		return fallback, "continuation evidence is unavailable; " + continuationOperationalStateNote
 	}
 
 	latestType := ""
@@ -486,21 +480,31 @@ func (r *Runtime) groundContinuationPromptWithExecutionEvidence(
 		latestType = eventType
 	}
 	if latestType == "" {
-		return fallback, "no continuation event matches decision id"
+		return fallback, "no continuation event matches decision id; " + continuationOperationalStateNote
 	}
 
 	expectedStatus := session.NormalizeContinuationState(state).Status
 	switch expectedStatus {
 	case session.ContinuationStatusPending:
 		if latestType != core.ExecutionEventContinuationOffered {
-			return fallback, fmt.Sprintf("pending continuation is not grounded by offered event (latest=%s)", latestType)
+			return fallback, fmt.Sprintf("pending continuation is not grounded by offered event (latest=%s); %s", latestType, continuationOperationalStateNote)
 		}
 	case session.ContinuationStatusApproved:
 		if latestType != core.ExecutionEventContinuationApproved {
-			return fallback, fmt.Sprintf("approved continuation is not grounded by approved event (latest=%s)", latestType)
+			return fallback, fmt.Sprintf("approved continuation is not grounded by approved event (latest=%s); %s", latestType, continuationOperationalStateNote)
 		}
 	}
 	return candidate, ""
+}
+
+func continuationExecutionPayload(state session.ContinuationState) map[string]any {
+	return map[string]any{
+		"decision_id":     strings.TrimSpace(state.DecisionID),
+		"objective":       strings.TrimSpace(state.Objective),
+		"stage_summary":   strings.TrimSpace(state.StageSummary),
+		"remaining_turns": state.RemainingTurns,
+		"state_source":    "continuation_state",
+	}
 }
 
 func continuationPromptHasSplitRoleLabels(text string) bool {
