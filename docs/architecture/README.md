@@ -47,6 +47,7 @@ These invariants are normative for architecture and requirements alignment:
 
 - [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): draft convergence map for canonical truth surfaces and safer autonomy.
 - [agent-proposed-tools-governor-authority-implementation-plan.md](agent-proposed-tools-governor-authority-implementation-plan.md): implementation sequencing and sub-agent workstream plan for tool-proposal governance.
+- [organic-agent-owned-tools-proposal.md](organic-agent-owned-tools-proposal.md): draft proposal for moving from core-embedded domain tools toward agent-owned external tools with governed install and attestation.
 
 Treat this section as design-direction input. It is not a normative implementation
 contract until explicitly promoted into the normative map above.

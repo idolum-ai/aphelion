@@ -1,0 +1,321 @@
+# Organic Agent-Owned Tools Proposal
+
+_Status: draft design memo._
+
+This document captures the next architectural move after the current
+`tool_authority` rollout.
+
+The immediate lesson from the current branch is that the lifecycle work is
+useful, but the implementation is still too core-centric. Aphelion now has a
+real authority chain for tools:
+
+1. proposal
+2. ratification / override
+3. registration
+4. exposure
+5. invocation-time authorization
+
+That chain is worth keeping.
+
+What should change is **where tool implementation lives**.
+
+The goal is not to turn Aphelion into a growing library of domain tools.
+The goal is to let approved agents propose, provision, attest, register,
+expose, and use **their own tools** while Aphelion remains the governance,
+diagnostics, and continuity substrate.
+
+## Directional Thesis
+
+Aphelion should behave less like a central SDK with ever more built-in
+capabilities and more like an organic system with:
+
+- lightweight contracts that make intent tangible
+- explicit authority records
+- installation and probe evidence
+- drift diagnostics when declaration and behavior diverge
+- repair-oriented status rather than fortress-style locking
+
+The system should preserve security, but security should come primarily from:
+
+- bounded execution environments
+- explicit authority and exposure state
+- attested install/probe records
+- invocation-time authorization
+- diagnosable drift
+
+not from endlessly embedding special-purpose tools in core.
+
+## Architectural Reframe
+
+### Keep in Aphelion core
+
+Aphelion should continue to own:
+
+- proposal and ratification flow
+- registration records
+- exposure policy
+- invocation-time authorization checks
+- canonical execution logging
+- status and drift projection
+- operator-readable diagnostics
+
+### Move out of Aphelion core
+
+Domain implementation should move to agent-owned tools.
+
+Examples:
+
+- browser automation for the email agent
+- camera/monitoring tools for a home agent
+- inbox-specific extractors
+- small environment-specific watchers
+
+These should not require a new specialized core feature every time.
+
+## Current Pressure Points
+
+### 1. Core-embedded domain tools
+
+`tool/search_web.go` is useful as a proving example, but it is architecturally
+an exception. If future domain capabilities follow the same pattern, Aphelion
+will become a collection of bespoke tools instead of a general authority layer.
+
+### 2. Registration is still runtime-definition-centric
+
+`tool/tool_authority.go` currently assumes trusted runtime tool definitions that
+live inside the repo. The next step is to allow registration of approved
+external tool packages / containers / manifests with attestation metadata.
+
+### 3. Dependency installation is not yet first-class
+
+Right now dependency installation is mostly framed as an operational proposal.
+That is necessary, but incomplete. The system needs a durable record of:
+
+- what was requested
+- what was installed
+- where it was installed
+- whether the post-install probe passed
+- what rollback path exists
+
+### 4. Status is lifecycle-aware, but not fully drift-aware
+
+Status can now surface recent proposal / registration / exposure transitions.
+The next step is to compare declared state against executable reality.
+
+Examples of desired diagnostic states:
+
+- proposed-but-never-ratified
+- ratified-but-not-installed
+- installed-but-not-registered
+- registered-but-not-exposed
+- exposed-but-probe-failing
+- contract-diverges-from-behavior
+
+## Proposed External Tool Model
+
+The core abstraction should be a **registered external tool manifest**, not a
+new built-in tool for every domain.
+
+Minimal fields:
+
+- `tool_name`
+- `owner_agent`
+- `execution_mode` (`process`, `container`, `workspace_runner`, later others)
+- `entry_ref`
+- `contract`
+- `install_requirements`
+- `probe`
+- `rollback`
+- `attestation`
+
+### Example manifest shape (draft)
+
+```json
+{
+  "tool_name": "browse_page",
+  "owner_agent": "idolum-email",
+  "execution_mode": "container",
+  "entry_ref": "ghcr.io/idolum/email-browser-tool:pilot",
+  "contract": {
+    "inputs": {
+      "url": "string",
+      "goal": "string"
+    },
+    "outputs": {
+      "title": "string",
+      "final_url": "string",
+      "summary": "string",
+      "links": [{"label": "string", "url": "string"}]
+    },
+    "constraints": [
+      "read_only",
+      "no_login",
+      "no_form_submission",
+      "same_task_navigation_budget<=3",
+      "timeout<=30s"
+    ]
+  },
+  "install_requirements": {
+    "packages": ["playwright", "chromium"],
+    "host_requirements": ["container_runtime"],
+    "notes": "Playwright + Chromium live with the tool image, not in Aphelion core."
+  },
+  "probe": {
+    "kind": "command",
+    "command": ["/tool/probe", "--self-check"]
+  },
+  "rollback": {
+    "kind": "container_remove",
+    "notes": "Remove image and revoke exposure if probe fails repeatedly."
+  },
+  "attestation": {
+    "installer": "aphelion",
+    "installed_at": "2026-04-23T00:00:00Z",
+    "probe_status": "passed"
+  }
+}
+```
+
+The purpose of this manifest is not to simulate an SDK. It is to make
+capability, intent, and recovery tangible.
+
+## Governed Dependency-Install Lane
+
+To let agents propose installing dependencies for their own capabilities, the
+system needs a separate governed lifecycle for installation.
+
+This should not be implicit inside tool registration.
+
+### Install lifecycle
+
+1. **capability need identified**
+2. **install proposal submitted**
+3. **ratified / denied / overridden**
+4. **install executed in bounded environment**
+5. **post-install probe run**
+6. **attestation recorded**
+7. **tool registration allowed**
+8. **exposure allowed**
+
+### Install proposal fields
+
+- `requested_by`
+- `target_environment`
+- `dependencies`
+- `why_now`
+- `bounded_effect`
+- `probe_plan`
+- `rollback_plan`
+- `status`
+
+### Why separate install from registration?
+
+Because these are different truths:
+
+- install answers: *is the environment provisioned?*
+- registration answers: *is this tool recognized by authority state?*
+- exposure answers: *who may use it?*
+- invocation answers: *does this call pass current authorization and runtime checks?*
+
+Keeping those separate makes drift repairable.
+
+## Organic Diagnostics
+
+The more organic model is not weaker. It shifts emphasis.
+
+Instead of building thicker walls inside core, Aphelion should become better at:
+
+- identifying declaration/behavior mismatches
+- surfacing degraded capability states early
+- proposing repairs
+- preserving operator legibility
+
+Examples of status output that this architecture should enable:
+
+- "email agent proposed `browse_page`; install approved; probe failing because Chromium shared libs are missing; tool remains unregistered"
+- "camera watcher tool is installed and registered, but exposure was revoked after repeated probe failures"
+- "tool contract declares read-only behavior, but observed outputs indicate mutation attempts; quarantine recommended"
+
+This is closer to an immune-system model than a padlock model.
+
+## Concrete Migration Plan
+
+### Phase 1 — stabilize current authority substrate
+
+Keep the current `tool_authority` lifecycle and status projections.
+Treat the current `search_web` implementation as a proving example, not the
+future default pattern.
+
+### Phase 2 — add external-tool manifest registration
+
+Extend registration so a tool may be registered from an attested external
+manifest / package / container reference.
+
+Core should validate:
+
+- manifest shape
+- owner agent identity
+- attestation presence
+- probe status
+- authority-managed registration path
+
+### Phase 3 — add governed install + attestation records
+
+Introduce durable install records distinct from tool proposals and registered
+tools.
+
+Minimum records:
+
+- install proposal
+- install execution event(s)
+- probe result
+- attestation record
+- rollback / repair recommendation
+
+### Phase 4 — generic external tool executor
+
+Add one generic execution path in Aphelion for approved external tools.
+
+It should be:
+
+- execution-mode aware
+- contract-aware
+- authority-aware
+- diagnostics-aware
+
+It should **not** be browser-aware, camera-aware, or domain-aware.
+
+### Phase 5 — first external-tool pilot
+
+Use the email agent as the first pilot:
+
+- propose `browse_page`
+- ratify install requirements
+- provision dependencies with attestation
+- register external manifest
+- expose only to the email agent
+- validate one narrow workflow
+
+If this pilot requires special-casing browser behavior inside Aphelion core,
+then the abstraction is wrong and should be revised before expanding further.
+
+## What This Gives Us
+
+If implemented, the system becomes:
+
+- more dynamic: agents can grow tools without waiting for core specialization
+- more expressive: capabilities live where they belong, near the agent using them
+- more secure: authority, install, exposure, and invocation remain explicit
+- more diagnosable: state drift becomes legible
+- more repairable: failure states can lead to bounded recovery steps
+
+## Immediate Recommendation
+
+The next concrete artifact should be a one-page **external-tool manifest spec**
+and a companion **governed install/attestation record spec**.
+
+Not Playwright-in-core.
+Not another built-in domain tool.
+
+Those specs are the shortest path from the current branch to the agent-owned
+future.
