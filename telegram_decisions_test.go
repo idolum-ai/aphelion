@@ -4,8 +4,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +40,7 @@ type decisionEditCall struct {
 	chatID    int64
 	messageID int64
 	text      string
+	at        time.Time
 }
 
 type decisionDeleteCall struct {
@@ -46,6 +51,7 @@ type decisionDeleteCall struct {
 type decisionAnswerCall struct {
 	id   string
 	text string
+	at   time.Time
 }
 
 func (s *decisionTestSender) SendInlineKeyboard(_ context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error) {
@@ -54,7 +60,7 @@ func (s *decisionTestSender) SendInlineKeyboard(_ context.Context, chatID int64,
 }
 
 func (s *decisionTestSender) EditMessageText(_ context.Context, chatID int64, messageID int64, text string, _ string) error {
-	s.edits = append(s.edits, decisionEditCall{chatID: chatID, messageID: messageID, text: text})
+	s.edits = append(s.edits, decisionEditCall{chatID: chatID, messageID: messageID, text: text, at: time.Now().UTC()})
 	return nil
 }
 
@@ -64,7 +70,7 @@ func (s *decisionTestSender) DeleteMessage(_ context.Context, chatID int64, mess
 }
 
 func (s *decisionTestSender) AnswerCallbackQuery(_ context.Context, id string, text string) error {
-	s.answers = append(s.answers, decisionAnswerCall{id: id, text: text})
+	s.answers = append(s.answers, decisionAnswerCall{id: id, text: text, at: time.Now().UTC()})
 	return s.answerErr
 }
 
@@ -706,6 +712,149 @@ func TestHandleArtifactRetentionMessageTimeoutDefaultsToSession(t *testing.T) {
 	}
 	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "session by default") {
 		t.Fatalf("edits = %#v, want session-timeout confirmation", sender.edits)
+	}
+}
+
+func TestTelegramPollerArtifactRetentionCallbackStarvesBehindBlockingMessageHandler(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	router := &decisionTestRouter{}
+	var mu sync.Mutex
+	getUpdatesCalls := 0
+	secondGetUpdatesAt := time.Time{}
+	callbackHandledAt := time.Time{}
+	callbackDataReady := make(chan string, 1)
+	broker := decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		text := renderPendingDecisionSummary(pending)
+		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, inlineButtonRows(pending), replyToMessageID(pending.MessageID))
+		if err != nil {
+			return decision.Delivery{}, err
+		}
+		select {
+		case callbackDataReady <- decision.EncodeCallbackData(pending.ID, "local"):
+		default:
+		}
+		return decision.Delivery{MessageID: msgID}, nil
+	})
+	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler.artifactRetentionTimeout = 25 * time.Millisecond
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/botTOKEN/getUpdates" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		getUpdatesCalls += 1
+		call := getUpdatesCalls
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		now := time.Now().Unix()
+		switch call {
+		case 1:
+			_ = enc.Encode(map[string]any{
+				"ok": true,
+				"result": []any{map[string]any{
+					"update_id": 1,
+					"message": map[string]any{
+						"message_id": 99,
+						"date":       now,
+						"chat":       map[string]any{"id": int64(7), "type": "private"},
+						"from":       map[string]any{"id": int64(42), "first_name": "Test"},
+						"document": map[string]any{
+							"file_id":        "file-1",
+							"file_unique_id": "file-1u",
+							"file_name":      "notes.txt",
+							"mime_type":      "text/plain",
+							"file_size":      12,
+						},
+					},
+				}},
+			})
+		case 2:
+			mu.Lock()
+			secondGetUpdatesAt = time.Now().UTC()
+			mu.Unlock()
+			callbackData := ""
+			select {
+			case callbackData = <-callbackDataReady:
+			case <-time.After(500 * time.Millisecond):
+			}
+			_ = enc.Encode(map[string]any{
+				"ok": true,
+				"result": []any{map[string]any{
+					"update_id": 2,
+					"callback_query": map[string]any{
+						"id":   "cb-1",
+						"data": callbackData,
+						"from": map[string]any{"id": int64(42), "first_name": "Test"},
+						"message": map[string]any{
+							"message_id": 1,
+							"date":       now,
+							"chat":       map[string]any{"id": int64(7), "type": "private"},
+						},
+					},
+				}},
+			})
+		default:
+			_ = enc.Encode(map[string]any{"ok": true, "result": []any{}})
+		}
+	}))
+	defer server.Close()
+
+	client := telegram.NewClient("TOKEN", telegram.WithBaseURL(server.URL+"/botTOKEN/"), telegram.WithHTTPClient(server.Client()))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	poller := telegram.NewPoller(client, func(ctx context.Context, msg core.InboundMessage) error {
+		if handled, err := handler.HandleArtifactRetentionMessage(ctx, msg); err != nil {
+			return err
+		} else if !handled {
+			t.Fatal("retention message was not handled")
+		}
+		return nil
+	}, telegram.WithCallbackHandler(func(ctx context.Context, cb telegram.CallbackQuery) error {
+		mu.Lock()
+		callbackHandledAt = time.Now().UTC()
+		mu.Unlock()
+		defer cancel()
+		return handler.HandleCallbackQuery(ctx, cb)
+	}))
+
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v", err)
+	}
+
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want one timed-out routed message", router.routed)
+	}
+	artifact := router.routed[0].Artifacts[0]
+	if got := artifact.Metadata["aphelion_retention_choice"]; got != "session" {
+		t.Fatalf("retention choice = %q, want session default after timeout", got)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "session by default") {
+		t.Fatalf("edits = %#v, want timeout edit confirming session default", sender.edits)
+	}
+	if len(sender.answers) == 0 || !strings.Contains(sender.answers[len(sender.answers)-1].text, "no longer active") {
+		t.Fatalf("answers = %#v, want stale callback acknowledgement", sender.answers)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if secondGetUpdatesAt.IsZero() {
+		t.Fatal("second getUpdates call was never observed")
+	}
+	if callbackHandledAt.IsZero() {
+		t.Fatal("callback was never handled")
+	}
+	if secondGetUpdatesAt.Before(sender.edits[0].at) {
+		t.Fatalf("second getUpdates at %s before timeout edit at %s; want poller blocked on first message handler", secondGetUpdatesAt, sender.edits[0].at)
+	}
+	if callbackHandledAt.Before(sender.edits[0].at) {
+		t.Fatalf("callback handled at %s before timeout edit at %s; want callback to arrive only after timeout path", callbackHandledAt, sender.edits[0].at)
 	}
 }
 
