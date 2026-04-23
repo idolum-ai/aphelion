@@ -409,19 +409,19 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
-		for _, run := range pendingRecovery {
-			snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-				Kind:          core.PendingItemKindRecovery,
-				ChatID:        run.ChatID,
-				ID:            fmt.Sprintf("recovery:%d", run.ID),
-				Summary:       fmt.Sprintf("turn_run_id=%d status=%s", run.ID, run.Status),
-				Age:           statusAge(now, run.LastActivityAt, run.StartedAt),
-				CreatedAt:     run.StartedAt,
-				UpdatedAt:     run.LastActivityAt,
-				SourceClass:   "compatibility_fallback",
-				SourceSurface: "turn_runs",
-			})
-		}
+	for _, run := range pendingRecovery {
+		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+			Kind:          core.PendingItemKindRecovery,
+			ChatID:        run.ChatID,
+			ID:            fmt.Sprintf("recovery:%d", run.ID),
+			Summary:       fmt.Sprintf("turn_run_id=%d status=%s", run.ID, run.Status),
+			Age:           statusAge(now, run.LastActivityAt, run.StartedAt),
+			CreatedAt:     run.StartedAt,
+			UpdatedAt:     run.LastActivityAt,
+			SourceClass:   "compatibility_fallback",
+			SourceSurface: "turn_runs",
+		})
+	}
 	recoveryPending, recoveryPendingOK, err := r.recoveryPendingFromEvents(now.Add(-7*24*time.Hour), 2000)
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
@@ -434,21 +434,21 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	if err != nil {
 		return core.SystemStatusSnapshot{}, err
 	}
-		for _, run := range staleRuns {
-			snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, turnRunSnapshot(run))
-			snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
-				Kind:          core.PendingItemKindStaleTurn,
-				ChatID:        run.ChatID,
-				ID:            fmt.Sprintf("stale:%d", run.ID),
-				Summary:       fmt.Sprintf("turn_run_id=%d last_activity=%s", run.ID, run.LastActivityAt.UTC().Format(time.RFC3339)),
-				Age:           statusAge(now, run.LastActivityAt, run.StartedAt),
-				CreatedAt:     run.StartedAt,
-				UpdatedAt:     run.LastActivityAt,
-				Stale:         true,
-				SourceClass:   "operational_current_state_store",
-				SourceSurface: "turn_runs",
-			})
-		}
+	for _, run := range staleRuns {
+		snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, turnRunSnapshot(run))
+		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+			Kind:          core.PendingItemKindStaleTurn,
+			ChatID:        run.ChatID,
+			ID:            fmt.Sprintf("stale:%d", run.ID),
+			Summary:       fmt.Sprintf("turn_run_id=%d last_activity=%s", run.ID, run.LastActivityAt.UTC().Format(time.RFC3339)),
+			Age:           statusAge(now, run.LastActivityAt, run.StartedAt),
+			CreatedAt:     run.StartedAt,
+			UpdatedAt:     run.LastActivityAt,
+			Stale:         true,
+			SourceClass:   "operational_current_state_store",
+			SourceSurface: "turn_runs",
+		})
+	}
 
 	sort.Slice(snapshot.Continuations, func(i, j int) bool {
 		if snapshot.Continuations[i].ChatID == snapshot.Continuations[j].ChatID {
@@ -878,7 +878,7 @@ func (r *Runtime) continuationEventStates(since time.Time, limit int) (map[int64
 			state.BlockedReason = reason
 		}
 
-			switch strings.TrimSpace(event.EventType) {
+		switch strings.TrimSpace(event.EventType) {
 		case core.ExecutionEventContinuationOffered:
 			state.Status = "pending"
 		case core.ExecutionEventContinuationApproved:
@@ -1118,7 +1118,7 @@ func summarizeExecutionEvents(events []session.ExecutionEvent, limit int) []core
 			EventType: strings.TrimSpace(event.EventType),
 			Stage:     strings.TrimSpace(event.Stage),
 			Status:    strings.TrimSpace(event.Status),
-			Summary:   summarizeExecutionEventPayload(payload),
+			Summary:   summarizeExecutionEventPayload(strings.TrimSpace(event.EventType), strings.TrimSpace(event.Status), payload),
 			CreatedAt: event.CreatedAt,
 		})
 		if len(out) >= limit {
@@ -1128,7 +1128,72 @@ func summarizeExecutionEvents(events []session.ExecutionEvent, limit int) []core
 	return out
 }
 
-func summarizeExecutionEventPayload(payload map[string]any) string {
+func summarizeExecutionEventPayload(eventType string, eventStatus string, payload map[string]any) string {
+	switch strings.TrimSpace(eventType) {
+	case core.ExecutionEventToolProposalCreated, core.ExecutionEventToolProposalReviewed:
+		reviewStatus := strings.TrimSpace(payloadString(payload, "review_status"))
+		if reviewStatus == "" {
+			reviewStatus = strings.TrimSpace(eventStatus)
+		}
+		parts := make([]string, 0, 8)
+		if proposalID := strings.TrimSpace(payloadString(payload, "proposal_id")); proposalID != "" {
+			parts = append(parts, "proposal_id="+proposalID)
+		}
+		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
+			parts = append(parts, "tool_name="+toolName)
+		}
+		if reviewStatus != "" {
+			parts = append(parts, "review_status="+reviewStatus)
+		}
+		if registeredToolID := strings.TrimSpace(payloadString(payload, "registered_tool_id")); registeredToolID != "" {
+			parts = append(parts, "registered_tool_id="+registeredToolID)
+		}
+		if ratifiedVia := strings.TrimSpace(payloadString(payload, "ratified_via")); ratifiedVia != "" {
+			parts = append(parts, "ratified_via="+ratifiedVia)
+		}
+		if reviewVia := strings.TrimSpace(payloadString(payload, "review_via")); reviewVia != "" {
+			parts = append(parts, "review_via="+reviewVia)
+		}
+		if reason := strings.TrimSpace(payloadString(payload, "transition_reason")); reason != "" {
+			parts = append(parts, "transition_reason="+reason)
+		}
+		if overrideReason := strings.TrimSpace(payloadString(payload, "override_reason")); overrideReason != "" {
+			parts = append(parts, "override_reason="+truncateStatusDiagnostic(overrideReason, 80))
+		}
+		return strings.TrimSpace(strings.Join(parts, " "))
+	case core.ExecutionEventToolRegistered:
+		registered := strings.TrimSpace(eventStatus) == "enabled"
+		if value, ok := payloadBool(payload, "registered"); ok {
+			registered = value
+		}
+		parts := make([]string, 0, 5)
+		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
+			parts = append(parts, "tool_name="+toolName)
+		}
+		parts = append(parts, "registered="+strconv.FormatBool(registered))
+		if ref := strings.TrimSpace(payloadString(payload, "implementation_ref")); ref != "" {
+			parts = append(parts, "implementation_ref="+ref)
+		}
+		if proposalID := strings.TrimSpace(payloadString(payload, "proposal_id")); proposalID != "" {
+			parts = append(parts, "proposal_id="+proposalID)
+		}
+		return strings.TrimSpace(strings.Join(parts, " "))
+	case core.ExecutionEventToolExposureChanged:
+		active := strings.TrimSpace(eventStatus) == "enabled"
+		if value, ok := payloadBool(payload, "active"); ok {
+			active = value
+		}
+		parts := make([]string, 0, 4)
+		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
+			parts = append(parts, "tool_name="+toolName)
+		}
+		if principal := strings.TrimSpace(payloadString(payload, "principal")); principal != "" {
+			parts = append(parts, "principal="+principal)
+		}
+		parts = append(parts, "active="+strconv.FormatBool(active))
+		return strings.TrimSpace(strings.Join(parts, " "))
+	}
+
 	if len(payload) == 0 {
 		return ""
 	}
@@ -1169,19 +1234,19 @@ func latestTurnSnapshotsByChatFromExecutionEvents(events []session.ExecutionEven
 		payload := executionEventPayload(event.PayloadJSON)
 
 		switch eventType {
-			case core.ExecutionEventTurnStarted:
-				runID, _ := payloadInt64(payload, "run_id")
-				runKind := firstNonEmpty(payloadString(payload, "run_kind"), "interactive")
-				out[chatID] = core.TurnRunStatusSnapshot{
+		case core.ExecutionEventTurnStarted:
+			runID, _ := payloadInt64(payload, "run_id")
+			runKind := firstNonEmpty(payloadString(payload, "run_kind"), "interactive")
+			out[chatID] = core.TurnRunStatusSnapshot{
 				ID:             runID,
 				ChatID:         chatID,
 				Kind:           strings.TrimSpace(runKind),
 				Status:         string(session.TurnRunStatusRunning),
-					RequestText:    truncateStatusDiagnostic(strings.TrimSpace(payloadString(payload, "request_text")), 220),
-					StartedAt:      event.CreatedAt,
-					LastActivityAt: event.CreatedAt,
-					Source:         "canonical:execution_events.turn",
-				}
+				RequestText:    truncateStatusDiagnostic(strings.TrimSpace(payloadString(payload, "request_text")), 220),
+				StartedAt:      event.CreatedAt,
+				LastActivityAt: event.CreatedAt,
+				Source:         "canonical:execution_events.turn",
+			}
 		case core.ExecutionEventTurnStageChanged:
 			snapshot := ensureEventTurnSnapshot(out, chatID, event.CreatedAt)
 			if strings.TrimSpace(snapshot.Status) == "" {

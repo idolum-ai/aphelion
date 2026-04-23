@@ -785,6 +785,84 @@ func TestChatStatusSnapshotIncludesRecentExecutionTimeline(t *testing.T) {
 	}
 }
 
+func TestChatStatusSnapshotSummarizesToolAuthorityLifecycleEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 90215, UserID: 0, Scope: telegramDMScopeRef(90215)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType: core.ExecutionEventToolProposalReviewed,
+			Stage:     "tool_authority",
+			Status:    "approved",
+			PayloadJSON: `{
+				"proposal_id":"tp_123",
+				"tool_name":"search_web",
+				"review_status":"approved",
+				"ratified_via":"decision_broker",
+				"transition_reason":"approved"
+			}`,
+			CreatedAt: now.Add(-10 * time.Second),
+		},
+		{
+			EventType: core.ExecutionEventToolRegistered,
+			Stage:     "tool_authority",
+			Status:    "enabled",
+			PayloadJSON: `{
+				"tool_name":"search_web",
+				"registered":true,
+				"implementation_ref":"tool/search_web.go"
+			}`,
+			CreatedAt: now.Add(-5 * time.Second),
+		},
+		{
+			EventType: core.ExecutionEventToolExposureChanged,
+			Stage:     "tool_authority",
+			Status:    "enabled",
+			PayloadJSON: `{
+				"tool_name":"search_web",
+				"principal":"idolum-email",
+				"active":true
+			}`,
+			CreatedAt: now.Add(-2 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(tool authority) err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(90215, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.RecentExecution) < 3 {
+		t.Fatalf("RecentExecution len = %d, want at least 3", len(snapshot.RecentExecution))
+	}
+	if snapshot.RecentExecution[0].EventType != core.ExecutionEventToolExposureChanged {
+		t.Fatalf("RecentExecution[0].EventType = %q, want %q", snapshot.RecentExecution[0].EventType, core.ExecutionEventToolExposureChanged)
+	}
+	if !strings.Contains(snapshot.RecentExecution[0].Summary, "active=true") {
+		t.Fatalf("RecentExecution[0].Summary = %q, want active=true", snapshot.RecentExecution[0].Summary)
+	}
+	if snapshot.RecentExecution[1].EventType != core.ExecutionEventToolRegistered {
+		t.Fatalf("RecentExecution[1].EventType = %q, want %q", snapshot.RecentExecution[1].EventType, core.ExecutionEventToolRegistered)
+	}
+	if !strings.Contains(snapshot.RecentExecution[1].Summary, "registered=true") {
+		t.Fatalf("RecentExecution[1].Summary = %q, want registered=true", snapshot.RecentExecution[1].Summary)
+	}
+	if snapshot.RecentExecution[2].EventType != core.ExecutionEventToolProposalReviewed {
+		t.Fatalf("RecentExecution[2].EventType = %q, want %q", snapshot.RecentExecution[2].EventType, core.ExecutionEventToolProposalReviewed)
+	}
+	if !strings.Contains(snapshot.RecentExecution[2].Summary, "review_status=approved") {
+		t.Fatalf("RecentExecution[2].Summary = %q, want review_status=approved", snapshot.RecentExecution[2].Summary)
+	}
+}
+
 func TestSystemStatusSnapshotIncludesRecentExecutionTimeline(t *testing.T) {
 	t.Parallel()
 

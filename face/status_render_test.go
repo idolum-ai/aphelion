@@ -5,6 +5,7 @@ package face
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 )
@@ -120,6 +121,49 @@ func TestRenderTelegramStatusChatIncludesTurnPhaseHiddenInputsDeliveryAndDetache
 	}
 }
 
+func TestRenderTelegramStatusChatIncludesToolAuthorityLifecycleProjection(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	out := RenderTelegramStatusChat(core.ChatStatusSnapshot{
+		ChatID: 44,
+		RecentExecution: []core.ExecutionEventSummary{
+			{
+				EventType: core.ExecutionEventToolExposureChanged,
+				Status:    "enabled",
+				Summary:   "tool_name=search_web principal=idolum-email active=true",
+				CreatedAt: now.Add(-5 * time.Second),
+			},
+			{
+				EventType: core.ExecutionEventToolRegistered,
+				Status:    "enabled",
+				Summary:   "tool_name=search_web registered=true implementation_ref=tool/search_web.go",
+				CreatedAt: now.Add(-10 * time.Second),
+			},
+			{
+				EventType: core.ExecutionEventToolProposalReviewed,
+				Status:    "approved",
+				Summary:   "proposal_id=tp_123 tool_name=search_web review_status=approved ratified_via=decision_broker",
+				CreatedAt: now.Add(-15 * time.Second),
+			},
+		},
+	}, "medium", "high", false)
+
+	for _, needle := range []string{
+		"tool_authority_lifecycle source=canonical:execution_events.tool_authority",
+		"tool_proposals:",
+		"event=tool.proposal.reviewed status=approved",
+		"tool_registrations:",
+		"event=tool.registered status=enabled",
+		"tool_exposures:",
+		"event=tool.exposure.changed status=enabled",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusChat() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
 func TestRenderTelegramStatusDurablesIncludesHealthCards(t *testing.T) {
 	t.Parallel()
 
@@ -166,6 +210,40 @@ func TestRenderTelegramStatusDurablesIncludesHealthCards(t *testing.T) {
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramStatusDurables() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
+func TestRenderTelegramStatusSystemIncludesToolAuthorityLifecycleProjection(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	out := RenderTelegramStatusSystem(core.SystemStatusSnapshot{
+		RecentExecution: []core.ExecutionEventSummary{
+			{
+				EventType: core.ExecutionEventToolProposalCreated,
+				Status:    "proposed",
+				Summary:   "proposal_id=tp_999 tool_name=search_web review_status=proposed",
+				CreatedAt: now.Add(-20 * time.Second),
+			},
+			{
+				EventType: core.ExecutionEventToolRegistered,
+				Status:    "enabled",
+				Summary:   "tool_name=search_web registered=true implementation_ref=tool/search_web.go",
+				CreatedAt: now.Add(-10 * time.Second),
+			},
+		},
+	}, "medium", "high")
+
+	for _, needle := range []string{
+		"tool_authority_lifecycle source=canonical:execution_events.tool_authority",
+		"tool_proposals:",
+		"event=tool.proposal.created status=proposed",
+		"tool_registrations:",
+		"event=tool.registered status=enabled",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusSystem() = %q, want substring %q", out, needle)
 		}
 	}
 }

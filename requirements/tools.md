@@ -160,6 +160,33 @@ Examples:
 Those are not ordinary shell-command approvals.
 They are bounded operational proposals inside the admin conversation.
 
+## Tool Authority Lifecycle (v1)
+
+Tool capability rollout is a separate lifecycle from generic operation proposals.
+
+The canonical chain is:
+
+1. `proposal` (tool should exist)
+2. `review/ratification` (governor decision)
+3. `registration` (known runtime tool definition)
+4. `exposure` (principal-level allow)
+5. `invocation` (checked against current principal + current policy)
+
+Normative requirements:
+
+- `proposal_submit` creates proposals in `proposed` state only.
+- ordinary approvals should go through broker-backed `proposal_ratify`.
+- `proposal_review` may update non-approved states but must not be the normal direct path to `approved`.
+- if direct approval is needed, it must use an explicit override path with a required operator reason.
+- `register` must bind to a known trusted runtime tool definition; free-form `tool_name` strings are not sufficient.
+- `implementation_ref` is metadata only and must not be treated as executable proof.
+- effective access is decided at invocation time from current principal state plus current exposure policy; stale records do not grant access.
+
+Status/readability requirements:
+
+- status projections should distinguish tool proposal state (`proposed/approved/rejected`) from registration (`registered=true/false`) and exposure (`active=true/false`).
+- tool authority status should be projected from canonical execution events with explicit source attribution.
+
 ## Durable-Agent Governance Tooling
 
 The `durable_agent` governance surface should not be limited to editing already-existing children forever.

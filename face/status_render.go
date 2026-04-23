@@ -56,6 +56,7 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 		if detachedLine := renderDetachedWorkLine(snapshot); detachedLine != "" {
 			lines = append(lines, detachedLine)
 		}
+		lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 3)...)
 		if snapshot.Continuation != nil {
 			cont := snapshot.Continuation
 			line := fmt.Sprintf("continuation status=%s remaining_turns=%d", cont.Status, cont.RemainingTurns)
@@ -340,10 +341,77 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 			lines = append(lines, line)
 		}
 	}
+	lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 5)...)
 	lines = append(lines, renderPendingItemBlock(snapshot.PendingItems, 20)...)
 	lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
 	lines = append(lines, fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)))
 	return strings.Join(lines, "\n")
+}
+
+func renderToolAuthorityLifecycleBlock(events []core.ExecutionEventSummary, maxPerClass int) []string {
+	if len(events) == 0 {
+		return nil
+	}
+	if maxPerClass <= 0 {
+		maxPerClass = 3
+	}
+	proposals := make([]core.ExecutionEventSummary, 0, maxPerClass)
+	registrations := make([]core.ExecutionEventSummary, 0, maxPerClass)
+	exposures := make([]core.ExecutionEventSummary, 0, maxPerClass)
+	for _, event := range events {
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventToolProposalCreated, core.ExecutionEventToolProposalReviewed:
+			if len(proposals) < maxPerClass {
+				proposals = append(proposals, event)
+			}
+		case core.ExecutionEventToolRegistered:
+			if len(registrations) < maxPerClass {
+				registrations = append(registrations, event)
+			}
+		case core.ExecutionEventToolExposureChanged:
+			if len(exposures) < maxPerClass {
+				exposures = append(exposures, event)
+			}
+		}
+		if len(proposals) >= maxPerClass && len(registrations) >= maxPerClass && len(exposures) >= maxPerClass {
+			break
+		}
+	}
+	if len(proposals) == 0 && len(registrations) == 0 && len(exposures) == 0 {
+		return nil
+	}
+
+	lines := []string{"tool_authority_lifecycle source=canonical:execution_events.tool_authority"}
+	if len(proposals) > 0 {
+		lines = append(lines, "tool_proposals:")
+		lines = append(lines, renderToolAuthorityEntries(proposals)...)
+	}
+	if len(registrations) > 0 {
+		lines = append(lines, "tool_registrations:")
+		lines = append(lines, renderToolAuthorityEntries(registrations)...)
+	}
+	if len(exposures) > 0 {
+		lines = append(lines, "tool_exposures:")
+		lines = append(lines, renderToolAuthorityEntries(exposures)...)
+	}
+	return lines
+}
+
+func renderToolAuthorityEntries(events []core.ExecutionEventSummary) []string {
+	lines := make([]string, 0, len(events))
+	for _, event := range events {
+		line := fmt.Sprintf(
+			"- event=%s status=%s at=%s",
+			strings.TrimSpace(event.EventType),
+			firstNonEmpty(strings.TrimSpace(event.Status), "-"),
+			formatStatusTime(event.CreatedAt),
+		)
+		if summary := strings.TrimSpace(event.Summary); summary != "" {
+			line += " details=" + quoteStatusField(truncateStatusField(summary, 140))
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func RenderTelegramStatusHotChats(snapshot core.SystemStatusSnapshot) string {

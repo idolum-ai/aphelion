@@ -236,6 +236,19 @@ Creating a durable email child is an operation:
 
 That lets the setup behave like guided operational work instead of a one-shot static form.
 
+## Relationship To Tool Authority Lifecycle
+
+Operation proposals and tool-authority proposals are related but distinct.
+
+- operation proposals gate bounded work inside an operation (`pending/approved/denied/...`)
+- tool-authority proposals gate capability rollout (`proposed/approved/rejected`, then register/expose)
+
+Normative boundary:
+
+- operational proposal state must not be treated as proof that a tool is registered or exposed.
+- tool invocation authority must come from the tool-authority chain and current invocation-time checks.
+- status should keep these layers separate so "proposal approved" is not conflated with "tool registered/exposed."
+
 ## Persona Rule
 
 The public-facing persona remains `Idolum`.
