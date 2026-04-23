@@ -52,6 +52,7 @@ func TestToolAuthorityProposalRegisterExposeFlow(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
+	registry.WithSearchWeb(&stubSearchWebProvider{})
 	key := adminSessionKey()
 	if _, err := store.Load(key); err != nil {
 		t.Fatalf("Load() err = %v", err)
@@ -203,6 +204,55 @@ func TestToolAuthorityProposalRegisterExposeFlow(t *testing.T) {
 	}
 	if !executionEventTypeExists(events, core.ExecutionEventToolExposureChanged) {
 		t.Fatalf("missing %s event", core.ExecutionEventToolExposureChanged)
+	}
+}
+
+func TestToolAuthorityProposalSubmitRejectsNonProposedStatus(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_submit",
+			"proposal_id":"tp-submit-bad-status",
+			"tool_name":"search_web",
+			"why_now":"Need bounded external search for inbox analysis.",
+			"contract":{"constraints":["read_only"]},
+			"review_status":"approved"
+		}`),
+	)
+	if err == nil {
+		t.Fatal("proposal_submit err = nil, want non-proposed status rejection")
+	}
+	if !strings.Contains(err.Error(), "only accepts review_status=proposed") {
+		t.Fatalf("err = %v, want review_status=proposed requirement", err)
+	}
+}
+
+func TestToolAuthorityRegisterRejectsUnknownRuntimeTool(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"register",
+			"tool_name":"imaginary_tool",
+			"implementation_ref":"tool/imaginary_tool.go"
+		}`),
+	)
+	if err == nil {
+		t.Fatal("register err = nil, want unknown-tool rejection")
+	}
+	if !strings.Contains(err.Error(), "not a known runtime tool definition") {
+		t.Fatalf("err = %v, want known runtime tool definition error", err)
 	}
 }
 

@@ -74,6 +74,9 @@ func (r *Registry) toolAuthorityProposalSubmit(in toolAuthorityInput, actor prin
 	if status == "" {
 		status = session.ToolProposalReviewStatusProposed
 	}
+	if status != session.ToolProposalReviewStatusProposed {
+		return "", fmt.Errorf("tool_authority proposal_submit only accepts review_status=proposed; use proposal_review or proposal_ratify")
+	}
 	contract, err := normalizeContractBlob(in.Contract)
 	if err != nil {
 		return "", err
@@ -271,6 +274,11 @@ func (r *Registry) toolAuthorityRegister(in toolAuthorityInput, actor principal.
 	if toolName == "" {
 		return "", fmt.Errorf("tool_authority register requires tool_name")
 	}
+	trustedToolName, ok := r.canonicalTrustedToolName(toolName)
+	if !ok {
+		return "", fmt.Errorf("tool_authority register tool_name %q is not a known runtime tool definition", toolName)
+	}
+	toolName = trustedToolName
 	implementationRef := strings.TrimSpace(in.ImplementationRef)
 	if implementationRef == "" {
 		return "", fmt.Errorf("tool_authority register requires implementation_ref")
@@ -476,6 +484,23 @@ func boolToStatus(v bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+func (r *Registry) canonicalTrustedToolName(raw string) (string, bool) {
+	target := strings.TrimSpace(raw)
+	if target == "" {
+		return "", false
+	}
+	for _, def := range r.Definitions() {
+		name := strings.TrimSpace(def.Name)
+		if name == "" {
+			continue
+		}
+		if strings.EqualFold(name, target) {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 func renderToolAuthorityHelp() string {
