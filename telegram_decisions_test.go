@@ -530,8 +530,13 @@ func TestTelegramToolProposalRatificationApproverDeletesPromptOnApprove(t *testi
 	t.Parallel()
 
 	sender := &decisionTestSender{}
+	seenKind := make(chan decision.Kind, 1)
 	var broker *decision.Broker
 	broker = decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		select {
+		case seenKind <- pending.Kind:
+		default:
+		}
 		text := renderPendingDecisionSummary(pending)
 		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, inlineButtonRows(pending), replyToMessageID(pending.MessageID))
 		if err != nil {
@@ -570,6 +575,14 @@ func TestTelegramToolProposalRatificationApproverDeletesPromptOnApprove(t *testi
 	}
 	if !strings.Contains(sender.inline[0].text, "search_web") {
 		t.Fatalf("inline text = %q, want tool proposal summary", sender.inline[0].text)
+	}
+	select {
+	case kind := <-seenKind:
+		if kind != decision.KindToolProposalRatification {
+			t.Fatalf("pending kind = %q, want %q", kind, decision.KindToolProposalRatification)
+		}
+	default:
+		t.Fatal("did not observe pending decision kind")
 	}
 }
 

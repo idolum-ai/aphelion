@@ -43,6 +43,8 @@ func (r *Registry) toolAuthority(ctx context.Context, input json.RawMessage, p p
 		return r.toolAuthorityProposalReview(in, p, key)
 	case "proposal_ratify":
 		return r.toolAuthorityProposalRatify(ctx, in, p, key)
+	case "proposal_override":
+		return r.toolAuthorityProposalOverride(in, p, key)
 	case "register":
 		return r.toolAuthorityRegister(in, p, key)
 	case "registered_show":
@@ -75,7 +77,7 @@ func (r *Registry) toolAuthorityProposalSubmit(in toolAuthorityInput, actor prin
 		status = session.ToolProposalReviewStatusProposed
 	}
 	if status != session.ToolProposalReviewStatusProposed {
-		return "", fmt.Errorf("tool_authority proposal_submit only accepts review_status=proposed; use proposal_review or proposal_ratify")
+		return "", fmt.Errorf("tool_authority proposal_submit only accepts review_status=proposed; use proposal_review, proposal_ratify, or proposal_override")
 	}
 	contract, err := normalizeContractBlob(in.Contract)
 	if err != nil {
@@ -151,6 +153,9 @@ func (r *Registry) toolAuthorityProposalReview(in toolAuthorityInput, actor prin
 	if status == "" {
 		return "", fmt.Errorf("tool_authority proposal_review requires review_status proposed, approved, or rejected")
 	}
+	if status == session.ToolProposalReviewStatusApproved {
+		return "", fmt.Errorf("tool_authority proposal_review cannot set approved; use proposal_ratify or proposal_override")
+	}
 	record, ok, err := r.store.ToolProposal(proposalID)
 	if err != nil {
 		return "", err
@@ -177,6 +182,57 @@ func (r *Registry) toolAuthorityProposalReview(in toolAuthorityInput, actor prin
 			"registered_tool_id":  record.RegisteredToolID,
 			"actor_role":          strings.TrimSpace(string(actor.Role)),
 			"actor_user_id":       actor.TelegramUserID,
+			"review_via":          "direct_review",
+			"requested_status":    strings.TrimSpace(in.ReviewStatus),
+			"requested_tool_name": strings.TrimSpace(in.ToolName),
+		},
+	); err != nil {
+		return "", err
+	}
+	return renderToolProposal("[TOOL_PROPOSAL_UPDATED]", record), nil
+}
+
+func (r *Registry) toolAuthorityProposalOverride(in toolAuthorityInput, actor principal.Principal, key session.SessionKey) (string, error) {
+	proposalID := strings.TrimSpace(in.ProposalID)
+	if proposalID == "" {
+		return "", fmt.Errorf("tool_authority proposal_override requires proposal_id")
+	}
+	status := session.NormalizeToolProposalReviewStatus(session.ToolProposalReviewStatus(in.ReviewStatus))
+	if status == "" {
+		return "", fmt.Errorf("tool_authority proposal_override requires review_status proposed, approved, or rejected")
+	}
+	overrideReason := strings.TrimSpace(in.OverrideReason)
+	if overrideReason == "" {
+		return "", fmt.Errorf("tool_authority proposal_override requires override_reason")
+	}
+	record, ok, err := r.store.ToolProposal(proposalID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("tool proposal %q not found", proposalID)
+	}
+	record.ReviewStatus = status
+	if id := strings.TrimSpace(in.RegisteredToolID); id != "" {
+		record.RegisteredToolID = id
+	}
+	record, err = r.store.UpsertToolProposal(record)
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendToolAuthorityEvent(
+		key,
+		core.ExecutionEventToolProposalReviewed,
+		string(record.ReviewStatus),
+		map[string]any{
+			"proposal_id":         record.ProposalID,
+			"tool_name":           record.ToolName,
+			"review_status":       string(record.ReviewStatus),
+			"registered_tool_id":  record.RegisteredToolID,
+			"actor_role":          strings.TrimSpace(string(actor.Role)),
+			"actor_user_id":       actor.TelegramUserID,
+			"review_via":          "override",
+			"override_reason":     overrideReason,
 			"requested_status":    strings.TrimSpace(in.ReviewStatus),
 			"requested_tool_name": strings.TrimSpace(in.ToolName),
 		},
@@ -507,7 +563,7 @@ func renderToolAuthorityHelp() string {
 	return strings.Join([]string{
 		"[TOOL_AUTHORITY]",
 		"actions:",
-		"- proposal_submit | proposal_show | proposal_list | proposal_review | proposal_ratify",
+		"- proposal_submit | proposal_show | proposal_list | proposal_review | proposal_ratify | proposal_override",
 		"- register | registered_show | registered_list",
 		"- exposure_set | exposure_show | exposure_list",
 		"- access_check",

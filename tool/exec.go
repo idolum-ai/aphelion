@@ -126,6 +126,7 @@ type toolAuthorityInput struct {
 	WhyNow            string          `json:"why_now,omitempty"`
 	Contract          json.RawMessage `json:"contract,omitempty"`
 	ReviewStatus      string          `json:"review_status,omitempty"`
+	OverrideReason    string          `json:"override_reason,omitempty"`
 	RegisteredToolID  string          `json:"registered_tool_id,omitempty"`
 	ImplementationRef string          `json:"implementation_ref,omitempty"`
 	Registered        *bool           `json:"registered,omitempty"`
@@ -538,14 +539,15 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "access_check"], "description": "Tool-authority operation"},
-					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show/proposal_review/proposal_ratify/register"},
+					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "proposal_override", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "access_check"], "description": "Tool-authority operation"},
+					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show/proposal_review/proposal_ratify/proposal_override/register"},
 					"proposed_by": {"type": "string", "description": "Proposal author identity for proposal_submit"},
 					"tool_name": {"type": "string", "description": "Tool name for proposal_submit/register/exposure/access actions"},
 					"why_now": {"type": "string", "description": "Why this proposal is needed now"},
 					"contract": {"type": "object", "description": "Opaque contract blob for proposal_submit"},
-					"review_status": {"type": "string", "enum": ["proposed", "approved", "rejected"], "description": "Review status update for proposal_review"},
-					"registered_tool_id": {"type": "string", "description": "Optional registered tool id link for proposal_review"},
+					"review_status": {"type": "string", "enum": ["proposed", "approved", "rejected"], "description": "Review status update for proposal_review/proposal_override"},
+					"override_reason": {"type": "string", "description": "Required operator rationale for proposal_override"},
+					"registered_tool_id": {"type": "string", "description": "Optional registered tool id link for proposal_review/proposal_override"},
 					"implementation_ref": {"type": "string", "description": "Implementation reference for register"},
 					"registered": {"type": "boolean", "description": "Optional explicit registered flag for register; defaults to true"},
 					"principal": {"type": "string", "description": "Principal id for exposure and access checks"},

@@ -185,7 +185,7 @@ func (a *telegramToolProposalRatificationApprover) ConfirmToolProposalRatificati
 	}
 
 	result, err := a.broker.Request(ctx, decision.Request{
-		Kind:          decision.KindProposalApproval,
+		Kind:          decision.KindToolProposalRatification,
 		ChatID:        req.SessionKey.ChatID,
 		SenderID:      req.Principal.TelegramUserID,
 		Prompt:        "Ratify this tool proposal?",
@@ -885,6 +885,8 @@ func summarizePendingDecision(pending decision.PendingDecision) string {
 	switch pending.Kind {
 	case decision.KindProposalApproval:
 		return summarizeProposalApprovalDetails(details)
+	case decision.KindToolProposalRatification:
+		return summarizeToolProposalRatificationDetails(details)
 	case decision.KindArtifactRetention:
 		return summarizeArtifactRetentionDetails(details)
 	case decision.KindMemoryDelegation:
@@ -928,6 +930,10 @@ func summarizeProposalApprovalDetails(details string) string {
 		lines = append(lines, "Command hidden by default. Use Expand details to inspect it.")
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func summarizeToolProposalRatificationDetails(details string) string {
+	return summarizeProposalApprovalDetails(details)
 }
 
 func summarizeArtifactRetentionDetails(details string) string {

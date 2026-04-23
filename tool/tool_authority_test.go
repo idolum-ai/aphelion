@@ -89,16 +89,17 @@ func TestToolAuthorityProposalRegisterExposeFlow(t *testing.T) {
 		key,
 		"tool_authority",
 		json.RawMessage(`{
-			"action":"proposal_review",
+			"action":"proposal_override",
 			"proposal_id":"tp-1",
-			"review_status":"approved"
+			"review_status":"approved",
+			"override_reason":"manual emergency approval"
 		}`),
 	)
 	if err != nil {
-		t.Fatalf("proposal_review err = %v", err)
+		t.Fatalf("proposal_override err = %v", err)
 	}
 	if !strings.Contains(reviewOut, "[TOOL_PROPOSAL_UPDATED]") || !strings.Contains(reviewOut, "review_status: approved") {
-		t.Fatalf("proposal_review output = %q, want approved status", reviewOut)
+		t.Fatalf("proposal_override output = %q, want approved status", reviewOut)
 	}
 
 	registerOut, err := registry.ExecuteForSessionPrincipal(
@@ -253,6 +254,86 @@ func TestToolAuthorityRegisterRejectsUnknownRuntimeTool(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not a known runtime tool definition") {
 		t.Fatalf("err = %v, want known runtime tool definition error", err)
+	}
+}
+
+func TestToolAuthorityProposalReviewRejectsDirectApproval(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_submit",
+			"proposal_id":"tp-review-no-approve",
+			"tool_name":"search_web",
+			"why_now":"Need bounded external search for inbox analysis.",
+			"contract":{"constraints":["read_only"]}
+		}`),
+	); err != nil {
+		t.Fatalf("proposal_submit err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_review",
+			"proposal_id":"tp-review-no-approve",
+			"review_status":"approved"
+		}`),
+	)
+	if err == nil {
+		t.Fatal("proposal_review err = nil, want direct-approval rejection")
+	}
+	if !strings.Contains(err.Error(), "cannot set approved") {
+		t.Fatalf("err = %v, want cannot-set-approved guidance", err)
+	}
+}
+
+func TestToolAuthorityProposalOverrideRequiresReason(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_submit",
+			"proposal_id":"tp-override-reason",
+			"tool_name":"search_web",
+			"why_now":"Need bounded external search for inbox analysis.",
+			"contract":{"constraints":["read_only"]}
+		}`),
+	); err != nil {
+		t.Fatalf("proposal_submit err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_override",
+			"proposal_id":"tp-override-reason",
+			"review_status":"approved"
+		}`),
+	)
+	if err == nil {
+		t.Fatal("proposal_override err = nil, want override_reason requirement")
+	}
+	if !strings.Contains(err.Error(), "requires override_reason") {
+		t.Fatalf("err = %v, want override_reason requirement", err)
 	}
 }
 
