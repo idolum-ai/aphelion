@@ -192,10 +192,12 @@ func renderStatusSourceAttribution(view statusView) string {
 		lines = append(lines,
 			"- field=active_turns_queue_depth class=projection preferred=canonical:execution_events.router fallback=operational_current_state_store:router_runtime",
 			"- field=latest_turns class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
-			"- field=tool_authority_lifecycle class=projection preferred=canonical:execution_events.tool_authority note=distinguishes_proposed_registered_exposed",
 			"- field=pending_decisions class=projection preferred=operational_current_state_store:pending_decisions fallback=canonical:execution_events.decision",
 			"- field=pending_continuations class=projection preferred=operational_current_state_store:continuation_state_json fallback=canonical:execution_events.continuation",
 		)
+		if view == statusViewSystem {
+			lines = append(lines, "- field=tool_authority_lifecycle class=projection preferred=canonical:execution_events.tool_authority note=distinguishes_proposed_registered_exposed")
+		}
 	case statusViewDurables:
 		lines = append(lines,
 			"- field=durable_identity class=canonical store=session.durable_agents",

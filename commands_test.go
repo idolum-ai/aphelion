@@ -2296,3 +2296,22 @@ func TestHandleTelegramCommandRestartDeniedForNonAdmin(t *testing.T) {
 		t.Fatalf("deny ack text = %q, want denied confirmation", sender.msgs[0].Text)
 	}
 }
+
+func TestRenderStatusSourceAttributionLifecycleFieldScope(t *testing.T) {
+	t.Parallel()
+
+	system := renderStatusSourceAttribution(statusViewSystem)
+	if !strings.Contains(system, "field=tool_authority_lifecycle") {
+		t.Fatalf("system source attribution = %q, want tool_authority_lifecycle field", system)
+	}
+
+	hot := renderStatusSourceAttribution(statusViewHotChats)
+	if strings.Contains(hot, "field=tool_authority_lifecycle") {
+		t.Fatalf("hot source attribution = %q, do not want tool_authority_lifecycle field", hot)
+	}
+
+	find := renderStatusSourceAttribution(statusViewFindChat)
+	if strings.Contains(find, "field=tool_authority_lifecycle") {
+		t.Fatalf("find source attribution = %q, do not want tool_authority_lifecycle field", find)
+	}
+}

@@ -257,6 +257,80 @@ func TestToolAuthorityRegisterRejectsUnknownRuntimeTool(t *testing.T) {
 	}
 }
 
+func TestToolAuthorityRegisterRequiresApprovedProposalStatus(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	registry.WithSearchWeb(&stubSearchWebProvider{})
+	key := adminSessionKey()
+	actor := principal.Principal{Role: principal.RoleAdmin}
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_submit",
+			"proposal_id":"tp-register-gate",
+			"tool_name":"search_web",
+			"why_now":"Need bounded external search for inbox analysis.",
+			"contract":{"constraints":["read_only"]}
+		}`),
+	); err != nil {
+		t.Fatalf("proposal_submit err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"register",
+			"proposal_id":"tp-register-gate",
+			"implementation_ref":"tool/search_web.go"
+		}`),
+	)
+	if err == nil {
+		t.Fatal("register err = nil, want proposed-status rejection")
+	}
+	if !strings.Contains(err.Error(), "must be approved before registration") {
+		t.Fatalf("err = %v, want approved-before-registration error", err)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_review",
+			"proposal_id":"tp-register-gate",
+			"review_status":"rejected"
+		}`),
+	); err != nil {
+		t.Fatalf("proposal_review(rejected) err = %v", err)
+	}
+
+	_, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"register",
+			"proposal_id":"tp-register-gate",
+			"implementation_ref":"tool/search_web.go"
+		}`),
+	)
+	if err == nil {
+		t.Fatal("register err = nil, want rejected-status rejection")
+	}
+	if !strings.Contains(err.Error(), "must be approved before registration") {
+		t.Fatalf("err = %v, want approved-before-registration error for rejected proposal", err)
+	}
+}
+
 func TestToolAuthorityProposalReviewRejectsDirectApproval(t *testing.T) {
 	t.Parallel()
 
