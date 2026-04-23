@@ -670,6 +670,7 @@ func run() error {
 	cancelDecisionLoad()
 	decisionHandler := newTelegramDecisionHandler(tgOutbound, router, decisionBroker, store)
 	tools.WithExecApprover(newTelegramExecApprover(tgOutbound, decisionBroker))
+	tools.WithToolProposalRatificationApprover(newTelegramToolProposalRatificationApprover(tgOutbound, decisionBroker))
 	tools.WithDurableMemoryDelegationApprover(newTelegramDurableMemoryDelegationApprover(tgOutbound, decisionBroker))
 	tools.WithDurableSnapshotRestoreApprover(newTelegramDurableSnapshotRestoreApprover(tgOutbound, decisionBroker))
 

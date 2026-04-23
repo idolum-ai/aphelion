@@ -14,7 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func (r *Registry) toolAuthority(_ context.Context, input json.RawMessage, p principal.Principal, key session.SessionKey) (string, error) {
+func (r *Registry) toolAuthority(ctx context.Context, input json.RawMessage, p principal.Principal, key session.SessionKey) (string, error) {
 	if p.Role != principal.RoleAdmin {
 		return "", fmt.Errorf("tool_authority is admin-only")
 	}
@@ -41,6 +41,8 @@ func (r *Registry) toolAuthority(_ context.Context, input json.RawMessage, p pri
 		return r.toolAuthorityProposalList(in)
 	case "proposal_review":
 		return r.toolAuthorityProposalReview(in, p, key)
+	case "proposal_ratify":
+		return r.toolAuthorityProposalRatify(ctx, in, p, key)
 	case "register":
 		return r.toolAuthorityRegister(in, p, key)
 	case "registered_show":
@@ -174,6 +176,70 @@ func (r *Registry) toolAuthorityProposalReview(in toolAuthorityInput, actor prin
 			"actor_user_id":       actor.TelegramUserID,
 			"requested_status":    strings.TrimSpace(in.ReviewStatus),
 			"requested_tool_name": strings.TrimSpace(in.ToolName),
+		},
+	); err != nil {
+		return "", err
+	}
+	return renderToolProposal("[TOOL_PROPOSAL_UPDATED]", record), nil
+}
+
+func (r *Registry) toolAuthorityProposalRatify(ctx context.Context, in toolAuthorityInput, actor principal.Principal, key session.SessionKey) (string, error) {
+	proposalID := strings.TrimSpace(in.ProposalID)
+	if proposalID == "" {
+		return "", fmt.Errorf("tool_authority proposal_ratify requires proposal_id")
+	}
+	if r.toolProposalRatificationApprover == nil {
+		return "", fmt.Errorf("tool_authority proposal_ratify requires ratification approver")
+	}
+	record, ok, err := r.store.ToolProposal(proposalID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("tool proposal %q not found", proposalID)
+	}
+	if record.ReviewStatus != session.ToolProposalReviewStatusProposed {
+		return "", fmt.Errorf(
+			"tool proposal %q review_status=%s cannot be ratified; expected proposed",
+			proposalID,
+			record.ReviewStatus,
+		)
+	}
+
+	decision, err := r.toolProposalRatificationApprover.ConfirmToolProposalRatification(ctx, ToolProposalRatificationApprovalRequest{
+		Principal:  actor,
+		SessionKey: key,
+		Proposal:   record,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	transitionReason := "denied"
+	record.ReviewStatus = session.ToolProposalReviewStatusRejected
+	if decision.Approved {
+		transitionReason = "approved"
+		record.ReviewStatus = session.ToolProposalReviewStatusApproved
+	} else if decision.TimedOut {
+		transitionReason = "timed_out"
+	}
+	record, err = r.store.UpsertToolProposal(record)
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendToolAuthorityEvent(
+		key,
+		core.ExecutionEventToolProposalReviewed,
+		string(record.ReviewStatus),
+		map[string]any{
+			"proposal_id":        record.ProposalID,
+			"tool_name":          record.ToolName,
+			"review_status":      string(record.ReviewStatus),
+			"registered_tool_id": record.RegisteredToolID,
+			"actor_role":         strings.TrimSpace(string(actor.Role)),
+			"actor_user_id":      actor.TelegramUserID,
+			"ratified_via":       "decision_broker",
+			"transition_reason":  transitionReason,
 		},
 	); err != nil {
 		return "", err
@@ -416,7 +482,7 @@ func renderToolAuthorityHelp() string {
 	return strings.Join([]string{
 		"[TOOL_AUTHORITY]",
 		"actions:",
-		"- proposal_submit | proposal_show | proposal_list | proposal_review",
+		"- proposal_submit | proposal_show | proposal_list | proposal_review | proposal_ratify",
 		"- register | registered_show | registered_list",
 		"- exposure_set | exposure_show | exposure_list",
 		"- access_check",

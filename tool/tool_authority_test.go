@@ -14,6 +14,17 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+type stubToolProposalRatificationApprover struct {
+	approved bool
+	timedOut bool
+	request  ToolProposalRatificationApprovalRequest
+}
+
+func (s *stubToolProposalRatificationApprover) ConfirmToolProposalRatification(_ context.Context, req ToolProposalRatificationApprovalRequest) (ToolProposalRatificationApprovalDecision, error) {
+	s.request = req
+	return ToolProposalRatificationApprovalDecision{Approved: s.approved, TimedOut: s.timedOut}, nil
+}
+
 func TestDefinitionsIncludeToolAuthorityWhenStoreConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -192,6 +203,179 @@ func TestToolAuthorityProposalRegisterExposeFlow(t *testing.T) {
 	}
 	if !executionEventTypeExists(events, core.ExecutionEventToolExposureChanged) {
 		t.Fatalf("missing %s event", core.ExecutionEventToolExposureChanged)
+	}
+}
+
+func TestToolAuthorityProposalRatifyApprovalPath(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	approver := &stubToolProposalRatificationApprover{approved: true}
+	registry.WithToolProposalRatificationApprover(approver)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_submit",
+			"proposal_id":"tp-ratify-approve",
+			"proposed_by":"idolum-email",
+			"tool_name":"search_web",
+			"why_now":"Need bounded external search for inbox analysis.",
+			"contract":{"constraints":["read_only"]}
+		}`),
+	); err != nil {
+		t.Fatalf("proposal_submit err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_ratify",
+			"proposal_id":"tp-ratify-approve"
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("proposal_ratify err = %v", err)
+	}
+	if !strings.Contains(out, "review_status: approved") {
+		t.Fatalf("proposal_ratify output = %q, want approved review_status", out)
+	}
+	if approver.request.Proposal.ProposalID != "tp-ratify-approve" {
+		t.Fatalf("approver proposal id = %q, want tp-ratify-approve", approver.request.Proposal.ProposalID)
+	}
+
+	record, ok, err := store.ToolProposal("tp-ratify-approve")
+	if err != nil {
+		t.Fatalf("ToolProposal() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("ToolProposal() ok = false, want stored proposal")
+	}
+	if record.ReviewStatus != session.ToolProposalReviewStatusApproved {
+		t.Fatalf("review_status = %q, want approved", record.ReviewStatus)
+	}
+}
+
+func TestToolAuthorityProposalRatifyTimeoutMapsToRejected(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	approver := &stubToolProposalRatificationApprover{approved: false, timedOut: true}
+	registry.WithToolProposalRatificationApprover(approver)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_submit",
+			"proposal_id":"tp-ratify-timeout",
+			"proposed_by":"idolum-email",
+			"tool_name":"search_web",
+			"why_now":"Need bounded external search for inbox analysis.",
+			"contract":{"constraints":["read_only"]}
+		}`),
+	); err != nil {
+		t.Fatalf("proposal_submit err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_ratify",
+			"proposal_id":"tp-ratify-timeout"
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("proposal_ratify err = %v", err)
+	}
+	if !strings.Contains(out, "review_status: rejected") {
+		t.Fatalf("proposal_ratify output = %q, want rejected review_status", out)
+	}
+
+	record, ok, err := store.ToolProposal("tp-ratify-timeout")
+	if err != nil {
+		t.Fatalf("ToolProposal() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("ToolProposal() ok = false, want stored proposal")
+	}
+	if record.ReviewStatus != session.ToolProposalReviewStatusRejected {
+		t.Fatalf("review_status = %q, want rejected", record.ReviewStatus)
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	foundTimedOut := false
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventToolProposalReviewed {
+			continue
+		}
+		payload := strings.TrimSpace(event.PayloadJSON)
+		if strings.Contains(payload, `"transition_reason":"timed_out"`) {
+			foundTimedOut = true
+			break
+		}
+	}
+	if !foundTimedOut {
+		t.Fatalf("events = %#v, want reviewed event with transition_reason=timed_out", events)
+	}
+}
+
+func TestToolAuthorityProposalRatifyRequiresApprover(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_submit",
+			"proposal_id":"tp-ratify-no-approver",
+			"tool_name":"search_web",
+			"why_now":"Need bounded external search for inbox analysis.",
+			"contract":{"constraints":["read_only"]}
+		}`),
+	); err != nil {
+		t.Fatalf("proposal_submit err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"tool_authority",
+		json.RawMessage(`{
+			"action":"proposal_ratify",
+			"proposal_id":"tp-ratify-no-approver"
+		}`),
+	)
+	if err == nil {
+		t.Fatal("proposal_ratify err = nil, want approver-required error")
+	}
+	if !strings.Contains(err.Error(), "requires ratification approver") {
+		t.Fatalf("err = %v, want ratification approver requirement", err)
 	}
 }
 

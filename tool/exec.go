@@ -27,23 +27,24 @@ import (
 const defaultMaxOutputBytes = 32 * 1024
 
 type Registry struct {
-	workspace                       string
-	timeout                         time.Duration
-	maxOutputBytes                  int
-	execApprover                    ExecApprover
-	durableMemoryDelegationApprover DurableMemoryDelegationApprover
-	durableSnapshotRestoreApprover  DurableSnapshotRestoreApprover
-	sandbox                         *sandbox.Resolver
-	runner                          *sandbox.Runner
-	store                           *session.SQLiteStore
-	fileStore                       memstore.FileStore
-	filePurpose                     string
-	retrievalStore                  memstore.RetrievalStore
-	defaultStore                    string
-	semantic                        *memstore.SemanticEngine
-	durableAgentBootstrapLLM        core.NodeLLMBootstrap
-	searchWeb                       searchWebProvider
-	searchWebState                  *searchWebRuntimeState
+	workspace                        string
+	timeout                          time.Duration
+	maxOutputBytes                   int
+	execApprover                     ExecApprover
+	toolProposalRatificationApprover ToolProposalRatificationApprover
+	durableMemoryDelegationApprover  DurableMemoryDelegationApprover
+	durableSnapshotRestoreApprover   DurableSnapshotRestoreApprover
+	sandbox                          *sandbox.Resolver
+	runner                           *sandbox.Runner
+	store                            *session.SQLiteStore
+	fileStore                        memstore.FileStore
+	filePurpose                      string
+	retrievalStore                   memstore.RetrievalStore
+	defaultStore                     string
+	semantic                         *memstore.SemanticEngine
+	durableAgentBootstrapLLM         core.NodeLLMBootstrap
+	searchWeb                        searchWebProvider
+	searchWebState                   *searchWebRuntimeState
 }
 
 type execInput struct {
@@ -283,6 +284,11 @@ func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
 
 func (r *Registry) WithExecApprover(approver ExecApprover) *Registry {
 	r.execApprover = approver
+	return r
+}
+
+func (r *Registry) WithToolProposalRatificationApprover(approver ToolProposalRatificationApprover) *Registry {
+	r.toolProposalRatificationApprover = approver
 	return r
 }
 
@@ -532,8 +538,8 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "access_check"], "description": "Tool-authority operation"},
-					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show/proposal_review/register"},
+					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "access_check"], "description": "Tool-authority operation"},
+					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show/proposal_review/proposal_ratify/register"},
 					"proposed_by": {"type": "string", "description": "Proposal author identity for proposal_submit"},
 					"tool_name": {"type": "string", "description": "Tool name for proposal_submit/register/exposure/access actions"},
 					"why_now": {"type": "string", "description": "Why this proposal is needed now"},
