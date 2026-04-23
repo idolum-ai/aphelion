@@ -540,15 +540,73 @@ func (h *telegramDecisionHandler) HandleBusyMessage(ctx context.Context, msg cor
 		req.Prompt = "I'm still working on the previous request. What would you like to do?"
 		req.Timeout = h.interruptTimeout
 	}
-
-	result, err := h.broker.Request(ctx, req)
+	ownerKey := decision.OwnerKey(msg.ChatID, msg.SenderID)
+	if ownerKey == "" {
+		return false, fmt.Errorf("busy decision owner key is required")
+	}
+	if h.store == nil {
+		result, err := h.broker.Request(ctx, req)
+		if err != nil {
+			return true, err
+		}
+		h.applyBusyDecisionResult(ctx, msg, result)
+		return true, nil
+	}
+	raw, err := json.Marshal(msg)
 	if err != nil {
+		return true, fmt.Errorf("marshal pending busy message: %w", err)
+	}
+	if err := h.store.UpsertPendingBusyDecision(session.PendingBusyDecisionRecord{
+		OwnerKey:           ownerKey,
+		ChatID:             msg.ChatID,
+		SenderID:           msg.SenderID,
+		InboundMessageJSON: string(raw),
+	}); err != nil {
 		return true, err
 	}
+	go h.awaitBusyDecision(context.Background(), ownerKey, req)
+	return true, nil
+}
 
+func (h *telegramDecisionHandler) awaitBusyDecision(ctx context.Context, ownerKey string, req decision.Request) {
+	result, err := h.broker.Request(ctx, req)
+	if err != nil {
+		if h.store != nil {
+			_ = h.store.DeletePendingBusyDecision(ownerKey)
+		}
+		return
+	}
+	if err := h.resumePendingBusyDecision(ctx, ownerKey, result); err != nil {
+		if h.store != nil {
+			_ = h.store.DeletePendingBusyDecision(ownerKey)
+		}
+	}
+}
+
+func (h *telegramDecisionHandler) resumePendingBusyDecision(ctx context.Context, ownerKey string, result decision.Result) error {
+	if h == nil || h.router == nil || h.store == nil {
+		return nil
+	}
+	record, err := h.store.PendingBusyDecision(ownerKey)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = h.store.DeletePendingBusyDecision(ownerKey) }()
+	var msg core.InboundMessage
+	if err := json.Unmarshal([]byte(record.InboundMessageJSON), &msg); err != nil {
+		return fmt.Errorf("decode pending busy message: %w", err)
+	}
+	h.applyBusyDecisionResult(ctx, msg, result)
+	return nil
+}
+
+func (h *telegramDecisionHandler) applyBusyDecisionResult(ctx context.Context, msg core.InboundMessage, result decision.Result) {
 	switch result.Choice {
 	case "stop":
-		if result.Delivery.MessageID != 0 {
+		if result.Delivery.MessageID != 0 && h.sender != nil {
 			_ = h.sender.DeleteMessage(ctx, msg.ChatID, result.Delivery.MessageID)
 		}
 		if scoped, ok := h.router.(telegramDecisionMessageStopRouter); ok {
@@ -560,7 +618,7 @@ func (h *telegramDecisionHandler) HandleBusyMessage(ctx context.Context, msg cor
 			h.router.Route(ctx, msg)
 		}
 	case "queue":
-		if result.Delivery.MessageID != 0 {
+		if result.Delivery.MessageID != 0 && h.sender != nil {
 			text := "Got it — I'll process your message next. ⏳"
 			if result.TimedOut {
 				text = "Queued your message — processing after current task."
@@ -569,7 +627,6 @@ func (h *telegramDecisionHandler) HandleBusyMessage(ctx context.Context, msg cor
 		}
 		h.router.Route(ctx, msg)
 	}
-	return true, nil
 }
 
 func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb telegram.CallbackQuery) error {

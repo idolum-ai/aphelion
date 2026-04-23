@@ -404,6 +404,17 @@ type PendingArtifactRetentionRecord struct {
 	UpdatedAt          time.Time
 }
 
+// PendingBusyDecisionRecord persists inbound message context while a busy
+// stop/queue decision is outstanding so routing can resume asynchronously.
+type PendingBusyDecisionRecord struct {
+	OwnerKey           string
+	ChatID             int64
+	SenderID           int64
+	InboundMessageJSON string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
 type ContinuationStateRecord struct {
 	Key       SessionKey
 	State     ContinuationState
