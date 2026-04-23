@@ -393,6 +393,17 @@ type PendingDecisionRecord struct {
 	UpdatedAt         time.Time
 }
 
+// PendingArtifactRetentionRecord persists inbound artifact context while a
+// retention decision is outstanding so routing can resume asynchronously.
+type PendingArtifactRetentionRecord struct {
+	OwnerKey           string
+	ChatID             int64
+	SenderID           int64
+	InboundMessageJSON string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
 type ContinuationStateRecord struct {
 	Key       SessionKey
 	State     ContinuationState

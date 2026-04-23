@@ -114,7 +114,7 @@ func TestHandleBusyTelegramMessageQueuesMessageOnTimeout(t *testing.T) {
 	broker := decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
 		return decision.Delivery{MessageID: 41}, nil
 	})
-	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{status: core.SessionStatus{Active: true}}, broker)
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{status: core.SessionStatus{Active: true}}, broker, nil)
 	handler.interruptTimeout = 10 * time.Millisecond
 	handler.stopWordTimeout = 10 * time.Millisecond
 
@@ -150,7 +150,7 @@ func TestHandleBusyTelegramMessageStopWordOnlyCancelsWithoutRouting(t *testing.T
 		return decision.Delivery{MessageID: 11}, nil
 	})
 	router := &decisionTestRouter{status: core.SessionStatus{Active: true}}
-	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler := newTelegramDecisionHandler(sender, router, broker, nil)
 
 	handled, err := handler.HandleBusyMessage(context.Background(), core.InboundMessage{
 		ChatID:    7,
@@ -187,7 +187,7 @@ func TestHandleBusyTelegramMessageStopWordWithContentRoutesAfterStop(t *testing.
 		return decision.Delivery{MessageID: 22}, nil
 	})
 	router := &decisionTestRouter{status: core.SessionStatus{Active: true}}
-	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler := newTelegramDecisionHandler(sender, router, broker, nil)
 
 	msg := core.InboundMessage{ChatID: 7, MessageID: 15, Text: "wait, do X instead"}
 	handled, err := handler.HandleBusyMessage(context.Background(), msg)
@@ -224,7 +224,7 @@ func TestHandleBusyTelegramMessageUsesStatusForMessageWhenAvailable(t *testing.T
 	broker := decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
 		return decision.Delivery{MessageID: 41}, nil
 	})
-	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler := newTelegramDecisionHandler(sender, router, broker, nil)
 	handler.interruptTimeout = 10 * time.Millisecond
 	handler.stopWordTimeout = 10 * time.Millisecond
 
@@ -264,7 +264,7 @@ func TestHandleBusyTelegramMessageUsesStopForMessageWhenAvailable(t *testing.T) 
 			return core.SessionStatus{Active: false}
 		},
 	}
-	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler := newTelegramDecisionHandler(sender, router, broker, nil)
 
 	msg := core.InboundMessage{
 		ChatID:         7,
@@ -514,7 +514,7 @@ func TestHandleCallbackQueryIgnoresExpiredAckAndResolvesDecision(t *testing.T) {
 		pendingSeen <- pending
 		return decision.Delivery{MessageID: 91}, nil
 	})
-	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker)
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker, nil)
 
 	go func() {
 		result, err := broker.Request(context.Background(), decision.Request{
@@ -563,7 +563,7 @@ func TestHandleCallbackQueryReturnsNonStaleAckError(t *testing.T) {
 	}
 	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, decision.NewBroker(func(_ context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
 		return decision.Delivery{MessageID: 1}, nil
-	}))
+	}), nil)
 
 	err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
 		ID:   "cb-1",
@@ -581,7 +581,7 @@ func TestHandleCallbackQueryReturnsStaleMessageForMissingDecision(t *testing.T) 
 	t.Parallel()
 
 	sender := &decisionTestSender{}
-	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, decision.NewBroker(nil))
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, decision.NewBroker(nil), nil)
 
 	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
 		ID:   "cb-stale",
@@ -619,7 +619,7 @@ func TestHandleArtifactRetentionMessagePromptsAndRoutesChosenPolicy(t *testing.T
 		}
 	}()
 	router := &decisionTestRouter{}
-	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler := newTelegramDecisionHandler(sender, router, broker, nil)
 
 	msg := core.InboundMessage{
 		ChatID:    7,
@@ -675,7 +675,7 @@ func TestHandleArtifactRetentionMessageTimeoutDefaultsToSession(t *testing.T) {
 		return decision.Delivery{MessageID: 52}, nil
 	})
 	router := &decisionTestRouter{}
-	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler := newTelegramDecisionHandler(sender, router, broker, nil)
 	handler.artifactRetentionTimeout = 10 * time.Millisecond
 
 	msg := core.InboundMessage{
@@ -720,6 +720,11 @@ func TestTelegramPollerArtifactRetentionCallbackStarvesBehindBlockingMessageHand
 
 	sender := &decisionTestSender{}
 	router := &decisionTestRouter{}
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
 	var mu sync.Mutex
 	getUpdatesCalls := 0
 	secondGetUpdatesAt := time.Time{}
@@ -737,7 +742,7 @@ func TestTelegramPollerArtifactRetentionCallbackStarvesBehindBlockingMessageHand
 		}
 		return decision.Delivery{MessageID: msgID}, nil
 	})
-	handler := newTelegramDecisionHandler(sender, router, broker)
+	handler := newTelegramDecisionHandler(sender, router, broker, store)
 	handler.artifactRetentionTimeout = 25 * time.Millisecond
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -828,18 +833,25 @@ func TestTelegramPollerArtifactRetentionCallbackStarvesBehindBlockingMessageHand
 		t.Fatalf("Poller.Run() err = %v", err)
 	}
 
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for len(router.routed) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if len(router.routed) != 1 {
-		t.Fatalf("routed = %#v, want one timed-out routed message", router.routed)
+		t.Fatalf("routed = %#v, want one routed message after callback", router.routed)
 	}
 	artifact := router.routed[0].Artifacts[0]
-	if got := artifact.Metadata["aphelion_retention_choice"]; got != "session" {
-		t.Fatalf("retention choice = %q, want session default after timeout", got)
+	if got := artifact.Metadata["aphelion_retention_choice"]; got != "local" {
+		t.Fatalf("retention choice = %q, want local callback choice", got)
 	}
-	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "session by default") {
-		t.Fatalf("edits = %#v, want timeout edit confirming session default", sender.edits)
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "save the file locally") {
+		t.Fatalf("edits = %#v, want local-save confirmation", sender.edits)
 	}
-	if len(sender.answers) == 0 || !strings.Contains(sender.answers[len(sender.answers)-1].text, "no longer active") {
-		t.Fatalf("answers = %#v, want stale callback acknowledgement", sender.answers)
+	if len(sender.answers) == 0 {
+		t.Fatalf("answers = %#v, want callback acknowledgement", sender.answers)
+	}
+	if got := sender.answers[len(sender.answers)-1].text; got != "" {
+		t.Fatalf("callback answer = %q, want empty success acknowledgement", got)
 	}
 
 	mu.Lock()
@@ -850,11 +862,14 @@ func TestTelegramPollerArtifactRetentionCallbackStarvesBehindBlockingMessageHand
 	if callbackHandledAt.IsZero() {
 		t.Fatal("callback was never handled")
 	}
-	if secondGetUpdatesAt.Before(sender.edits[0].at) {
-		t.Fatalf("second getUpdates at %s before timeout edit at %s; want poller blocked on first message handler", secondGetUpdatesAt, sender.edits[0].at)
+	if len(sender.edits) == 0 {
+		t.Fatalf("edits = %#v, want one retention-resolution edit", sender.edits)
 	}
-	if callbackHandledAt.Before(sender.edits[0].at) {
-		t.Fatalf("callback handled at %s before timeout edit at %s; want callback to arrive only after timeout path", callbackHandledAt, sender.edits[0].at)
+	if callbackHandledAt.After(sender.edits[0].at.Add(250 * time.Millisecond)) {
+		t.Fatalf("callback handled at %s far after edit at %s; want prompt callback processed promptly", callbackHandledAt, sender.edits[0].at)
+	}
+	if !secondGetUpdatesAt.Before(sender.edits[0].at) {
+		t.Fatalf("second getUpdates at %s should arrive before retention-resolution edit at %s once poller is unblocked", secondGetUpdatesAt, sender.edits[0].at)
 	}
 }
 

@@ -4,12 +4,15 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
@@ -48,6 +51,7 @@ type telegramDecisionHandler struct {
 	sender                   telegramDecisionSender
 	router                   telegramDecisionRouter
 	broker                   *decision.Broker
+	store                    *session.SQLiteStore
 	interruptTimeout         time.Duration
 	stopWordTimeout          time.Duration
 	artifactRetentionTimeout time.Duration
@@ -71,11 +75,12 @@ type telegramDurableSnapshotRestoreApprover struct {
 	timeout time.Duration
 }
 
-func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker) *telegramDecisionHandler {
+func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker, store *session.SQLiteStore) *telegramDecisionHandler {
 	return &telegramDecisionHandler{
 		sender:                   sender,
 		router:                   router,
 		broker:                   broker,
+		store:                    store,
 		interruptTimeout:         defaultInterruptTimeout,
 		stopWordTimeout:          defaultStopWordTimeout,
 		artifactRetentionTimeout: defaultArtifactRetentionTimeout,
@@ -316,8 +321,46 @@ func (h *telegramDecisionHandler) HandleArtifactRetentionMessage(ctx context.Con
 	if !hasArtifactRetentionCandidates(msg) {
 		return false, nil
 	}
+	ownerKey := decision.OwnerKey(msg.ChatID, msg.SenderID)
+	if ownerKey == "" {
+		return false, fmt.Errorf("artifact retention owner key is required")
+	}
+	if h.store == nil {
+		result, err := h.broker.Request(ctx, decision.Request{
+			Kind:          decision.KindArtifactRetention,
+			ChatID:        msg.ChatID,
+			SenderID:      msg.SenderID,
+			MessageID:     msg.MessageID,
+			Prompt:        "How should I retain this inbound file?",
+			Details:       formatArtifactRetentionDetails(msg),
+			Choices:       []decision.Choice{{ID: "turn", Label: "This turn only"}, {ID: "session", Label: "Keep for session"}, {ID: "local", Label: "Save locally"}},
+			DefaultChoice: "session",
+			Timeout:       h.artifactRetentionTimeout,
+		})
+		if err != nil {
+			return true, err
+		}
+		updated := applyArtifactRetentionChoice(msg, result.Choice)
+		if result.Delivery.MessageID != 0 {
+			_ = h.sender.EditMessageText(ctx, msg.ChatID, result.Delivery.MessageID, artifactRetentionResolutionText(result), "")
+		}
+		h.router.Route(ctx, updated)
+		return true, nil
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return true, fmt.Errorf("marshal pending artifact retention message: %w", err)
+	}
+	if err := h.store.UpsertPendingArtifactRetention(session.PendingArtifactRetentionRecord{
+		OwnerKey:           ownerKey,
+		ChatID:             msg.ChatID,
+		SenderID:           msg.SenderID,
+		InboundMessageJSON: string(raw),
+	}); err != nil {
+		return true, err
+	}
 
-	result, err := h.broker.Request(ctx, decision.Request{
+	go h.awaitArtifactRetentionDecision(context.Background(), ownerKey, decision.Request{
 		Kind:          decision.KindArtifactRetention,
 		ChatID:        msg.ChatID,
 		SenderID:      msg.SenderID,
@@ -328,16 +371,49 @@ func (h *telegramDecisionHandler) HandleArtifactRetentionMessage(ctx context.Con
 		DefaultChoice: "session",
 		Timeout:       h.artifactRetentionTimeout,
 	})
-	if err != nil {
-		return true, err
-	}
+	return true, nil
+}
 
+func (h *telegramDecisionHandler) awaitArtifactRetentionDecision(ctx context.Context, ownerKey string, req decision.Request) {
+	result, err := h.broker.Request(ctx, req)
+	if err != nil {
+		if h.store != nil {
+			_ = h.store.DeletePendingArtifactRetention(ownerKey)
+		}
+		return
+	}
+	if err := h.resumePendingArtifactRetention(ctx, ownerKey, result); err != nil {
+		if h.store != nil {
+			_ = h.store.DeletePendingArtifactRetention(ownerKey)
+		}
+	}
+}
+
+func (h *telegramDecisionHandler) resumePendingArtifactRetention(ctx context.Context, ownerKey string, result decision.Result) error {
+	if h == nil || h.router == nil {
+		return nil
+	}
+	if h.store == nil {
+		return nil
+	}
+	record, err := h.store.PendingArtifactRetention(ownerKey)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = h.store.DeletePendingArtifactRetention(ownerKey) }()
+	var msg core.InboundMessage
+	if err := json.Unmarshal([]byte(record.InboundMessageJSON), &msg); err != nil {
+		return fmt.Errorf("decode pending artifact retention message: %w", err)
+	}
 	updated := applyArtifactRetentionChoice(msg, result.Choice)
-	if result.Delivery.MessageID != 0 {
+	if result.Delivery.MessageID != 0 && h.sender != nil {
 		_ = h.sender.EditMessageText(ctx, msg.ChatID, result.Delivery.MessageID, artifactRetentionResolutionText(result), "")
 	}
 	h.router.Route(ctx, updated)
-	return true, nil
+	return nil
 }
 
 func hasArtifactRetentionCandidates(msg core.InboundMessage) bool {

@@ -657,7 +657,7 @@ func run() error {
 		return fmt.Errorf("load pending decisions: %w", err)
 	}
 	cancelDecisionLoad()
-	decisionHandler := newTelegramDecisionHandler(tgOutbound, router, decisionBroker)
+	decisionHandler := newTelegramDecisionHandler(tgOutbound, router, decisionBroker, store)
 	tools.WithExecApprover(newTelegramExecApprover(tgOutbound, decisionBroker))
 	tools.WithDurableMemoryDelegationApprover(newTelegramDurableMemoryDelegationApprover(tgOutbound, decisionBroker))
 	tools.WithDurableSnapshotRestoreApprover(newTelegramDurableSnapshotRestoreApprover(tgOutbound, decisionBroker))

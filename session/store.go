@@ -232,6 +232,14 @@ func (s *SQLiteStore) init() error {
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_pending_decisions_owner_seq ON pending_decisions(owner_key, decision_seq DESC)`,
+		`CREATE TABLE IF NOT EXISTS pending_artifact_retention (
+			owner_key TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			sender_id INTEGER NOT NULL DEFAULT 0,
+			inbound_message_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
 		`CREATE TABLE IF NOT EXISTS durable_agents (
 			agent_id TEXT PRIMARY KEY,
 			parent_agent_id TEXT,
@@ -930,6 +938,82 @@ func (s *SQLiteStore) ContinuationStates() ([]ContinuationStateRecord, error) {
 		return nil, fmt.Errorf("iterate continuation states: %w", err)
 	}
 	return records, nil
+}
+
+func (s *SQLiteStore) UpsertPendingArtifactRetention(record PendingArtifactRetentionRecord) error {
+	record.OwnerKey = strings.TrimSpace(record.OwnerKey)
+	if record.OwnerKey == "" {
+		return fmt.Errorf("pending artifact retention owner_key is required")
+	}
+	record.InboundMessageJSON = strings.TrimSpace(record.InboundMessageJSON)
+	if record.InboundMessageJSON == "" {
+		record.InboundMessageJSON = "{}"
+	}
+	now := time.Now().UTC()
+	createdAt := record.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	updatedAt := record.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = now
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO pending_artifact_retention(
+			owner_key, chat_id, sender_id, inbound_message_json, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(owner_key) DO UPDATE SET
+			chat_id = excluded.chat_id,
+			sender_id = excluded.sender_id,
+			inbound_message_json = excluded.inbound_message_json,
+			updated_at = excluded.updated_at
+	`, record.OwnerKey, record.ChatID, record.SenderID, record.InboundMessageJSON, createdAt.UTC().Format(time.RFC3339Nano), updatedAt.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("upsert pending artifact retention: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) PendingArtifactRetention(ownerKey string) (*PendingArtifactRetentionRecord, error) {
+	ownerKey = strings.TrimSpace(ownerKey)
+	if ownerKey == "" {
+		return nil, sql.ErrNoRows
+	}
+	var record PendingArtifactRetentionRecord
+	var createdAtRaw, updatedAtRaw string
+	err := s.db.QueryRow(`
+		SELECT owner_key, chat_id, sender_id, inbound_message_json, created_at, updated_at
+		FROM pending_artifact_retention
+		WHERE owner_key = ?
+	`, ownerKey).Scan(&record.OwnerKey, &record.ChatID, &record.SenderID, &record.InboundMessageJSON, &createdAtRaw, &updatedAtRaw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("load pending artifact retention: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parse pending artifact retention created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parse pending artifact retention updated_at: %w", err)
+	}
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	return &record, nil
+}
+
+func (s *SQLiteStore) DeletePendingArtifactRetention(ownerKey string) error {
+	ownerKey = strings.TrimSpace(ownerKey)
+	if ownerKey == "" {
+		return nil
+	}
+	if _, err := s.db.Exec(`DELETE FROM pending_artifact_retention WHERE owner_key = ?`, ownerKey); err != nil {
+		return fmt.Errorf("delete pending artifact retention: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) UpdatePlanStateWithEvent(key SessionKey, state PlanState, kind PlanEventKind) error {
@@ -3956,6 +4040,16 @@ func applyMigrations(tx *sql.Tx) error {
 	}
 	if err := ensureTableColumn(tx, "durable_agents", "allowed_telegram_user_ids_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
 		return fmt.Errorf("ensure durable_agents.allowed_telegram_user_ids_json: %w", err)
+	}
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS pending_artifact_retention (
+		owner_key TEXT PRIMARY KEY,
+		chat_id INTEGER NOT NULL DEFAULT 0,
+		sender_id INTEGER NOT NULL DEFAULT 0,
+		inbound_message_json TEXT NOT NULL DEFAULT '{}',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		return fmt.Errorf("ensure pending_artifact_retention table: %w", err)
 	}
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS durable_agent_identity_state (
 		agent_id TEXT PRIMARY KEY,
