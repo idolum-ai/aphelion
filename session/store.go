@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 26
+	schemaVersion                       = 27
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -168,6 +168,32 @@ func (s *SQLiteStore) init() error {
 			event_kind TEXT NOT NULL,
 			plan_state_json TEXT NOT NULL DEFAULT '{}',
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS tool_proposals (
+			proposal_id TEXT PRIMARY KEY,
+			proposed_by TEXT NOT NULL DEFAULT '',
+			tool_name TEXT NOT NULL,
+			why_now TEXT NOT NULL DEFAULT '',
+			contract_json TEXT NOT NULL DEFAULT '{}',
+			review_status TEXT NOT NULL DEFAULT 'proposed' CHECK(review_status IN ('proposed', 'approved', 'rejected')),
+			registered_tool_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS registered_tools (
+			tool_name TEXT PRIMARY KEY,
+			implementation_ref TEXT NOT NULL DEFAULT '',
+			registered INTEGER NOT NULL DEFAULT 0 CHECK(registered IN (0, 1)),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS tool_exposures (
+			tool_name TEXT NOT NULL,
+			principal TEXT NOT NULL,
+			active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY (tool_name, principal)
 		)`,
 		`CREATE TABLE IF NOT EXISTS turn_runs (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1178,6 +1204,441 @@ func (s *SQLiteStore) OperationState(key SessionKey) (OperationState, error) {
 		return OperationState{}, fmt.Errorf("load operation state: %w", err)
 	}
 	return decodeOperationState(raw.String), nil
+}
+
+func (s *SQLiteStore) UpsertToolProposal(proposal ToolProposal) (ToolProposal, error) {
+	proposal = NormalizeToolProposal(proposal)
+	if proposal.ProposalID == "" {
+		return ToolProposal{}, fmt.Errorf("tool proposal id is required")
+	}
+	if proposal.ToolName == "" {
+		return ToolProposal{}, fmt.Errorf("tool proposal tool_name is required")
+	}
+	if proposal.ReviewStatus == "" {
+		proposal.ReviewStatus = ToolProposalReviewStatusProposed
+	}
+	if proposal.Contract == "" {
+		proposal.Contract = "{}"
+	}
+	now := time.Now().UTC()
+	createdAt := nonZeroTimeOrNow(proposal.CreatedAt, now).UTC()
+	updatedAt := nonZeroTimeOrNow(proposal.UpdatedAt, now).UTC()
+	if _, err := s.db.Exec(`
+		INSERT INTO tool_proposals(
+			proposal_id, proposed_by, tool_name, why_now, contract_json, review_status, registered_tool_id, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(proposal_id) DO UPDATE SET
+			proposed_by = excluded.proposed_by,
+			tool_name = excluded.tool_name,
+			why_now = excluded.why_now,
+			contract_json = excluded.contract_json,
+			review_status = excluded.review_status,
+			registered_tool_id = excluded.registered_tool_id,
+			updated_at = excluded.updated_at
+	`,
+		proposal.ProposalID,
+		proposal.ProposedBy,
+		proposal.ToolName,
+		proposal.WhyNow,
+		proposal.Contract,
+		string(proposal.ReviewStatus),
+		proposal.RegisteredToolID,
+		createdAt.Format(time.RFC3339Nano),
+		updatedAt.Format(time.RFC3339Nano),
+	); err != nil {
+		return ToolProposal{}, fmt.Errorf("upsert tool proposal: %w", err)
+	}
+	stored, ok, err := s.ToolProposal(proposal.ProposalID)
+	if err != nil {
+		return ToolProposal{}, err
+	}
+	if !ok {
+		return ToolProposal{}, fmt.Errorf("tool proposal %q not found after upsert", proposal.ProposalID)
+	}
+	return stored, nil
+}
+
+func (s *SQLiteStore) ToolProposal(proposalID string) (ToolProposal, bool, error) {
+	proposalID = strings.TrimSpace(proposalID)
+	if proposalID == "" {
+		return ToolProposal{}, false, nil
+	}
+	var (
+		record       ToolProposal
+		reviewStatus string
+		createdAtRaw string
+		updatedAtRaw string
+	)
+	err := s.db.QueryRow(`
+		SELECT proposal_id, proposed_by, tool_name, why_now, contract_json, review_status, registered_tool_id, created_at, updated_at
+		FROM tool_proposals
+		WHERE proposal_id = ?
+	`, proposalID).Scan(
+		&record.ProposalID,
+		&record.ProposedBy,
+		&record.ToolName,
+		&record.WhyNow,
+		&record.Contract,
+		&reviewStatus,
+		&record.RegisteredToolID,
+		&createdAtRaw,
+		&updatedAtRaw,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ToolProposal{}, false, nil
+	}
+	if err != nil {
+		return ToolProposal{}, false, fmt.Errorf("load tool proposal: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return ToolProposal{}, false, fmt.Errorf("parse tool proposal created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return ToolProposal{}, false, fmt.Errorf("parse tool proposal updated_at: %w", err)
+	}
+	record.ReviewStatus = ToolProposalReviewStatus(reviewStatus)
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	return NormalizeToolProposal(record), true, nil
+}
+
+func (s *SQLiteStore) ToolProposals(limit int, reviewStatus ToolProposalReviewStatus) ([]ToolProposal, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	reviewStatus = NormalizeToolProposalReviewStatus(reviewStatus)
+	query := `
+		SELECT proposal_id, proposed_by, tool_name, why_now, contract_json, review_status, registered_tool_id, created_at, updated_at
+		FROM tool_proposals
+	`
+	args := []any{}
+	if reviewStatus != "" {
+		query += ` WHERE review_status = ?`
+		args = append(args, string(reviewStatus))
+	}
+	query += ` ORDER BY updated_at DESC, proposal_id ASC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tool proposals: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]ToolProposal, 0, limit)
+	for rows.Next() {
+		var (
+			record       ToolProposal
+			statusRaw    string
+			createdAtRaw string
+			updatedAtRaw string
+		)
+		if err := rows.Scan(
+			&record.ProposalID,
+			&record.ProposedBy,
+			&record.ToolName,
+			&record.WhyNow,
+			&record.Contract,
+			&statusRaw,
+			&record.RegisteredToolID,
+			&createdAtRaw,
+			&updatedAtRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan tool proposal: %w", err)
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool proposal created_at: %w", err)
+		}
+		updatedAt, err := parseSQLiteTime(updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool proposal updated_at: %w", err)
+		}
+		record.ReviewStatus = ToolProposalReviewStatus(statusRaw)
+		record.CreatedAt = createdAt
+		record.UpdatedAt = updatedAt
+		out = append(out, NormalizeToolProposal(record))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tool proposals: %w", err)
+	}
+	return out, nil
+}
+
+func (s *SQLiteStore) UpsertRegisteredTool(record RegisteredTool) (RegisteredTool, error) {
+	record = NormalizeRegisteredTool(record)
+	if record.ToolName == "" {
+		return RegisteredTool{}, fmt.Errorf("registered tool name is required")
+	}
+	now := time.Now().UTC()
+	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
+	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
+	if _, err := s.db.Exec(`
+		INSERT INTO registered_tools(tool_name, implementation_ref, registered, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(tool_name) DO UPDATE SET
+			implementation_ref = excluded.implementation_ref,
+			registered = excluded.registered,
+			updated_at = excluded.updated_at
+	`,
+		record.ToolName,
+		record.ImplementationRef,
+		boolToInt(record.Registered),
+		createdAt.Format(time.RFC3339Nano),
+		updatedAt.Format(time.RFC3339Nano),
+	); err != nil {
+		return RegisteredTool{}, fmt.Errorf("upsert registered tool: %w", err)
+	}
+	stored, ok, err := s.RegisteredTool(record.ToolName)
+	if err != nil {
+		return RegisteredTool{}, err
+	}
+	if !ok {
+		return RegisteredTool{}, fmt.Errorf("registered tool %q not found after upsert", record.ToolName)
+	}
+	return stored, nil
+}
+
+func (s *SQLiteStore) RegisteredTool(toolName string) (RegisteredTool, bool, error) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return RegisteredTool{}, false, nil
+	}
+	var (
+		record       RegisteredTool
+		registered   int
+		createdAtRaw string
+		updatedAtRaw string
+	)
+	err := s.db.QueryRow(`
+		SELECT tool_name, implementation_ref, registered, created_at, updated_at
+		FROM registered_tools
+		WHERE tool_name = ?
+	`, toolName).Scan(
+		&record.ToolName,
+		&record.ImplementationRef,
+		&registered,
+		&createdAtRaw,
+		&updatedAtRaw,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RegisteredTool{}, false, nil
+	}
+	if err != nil {
+		return RegisteredTool{}, false, fmt.Errorf("load registered tool: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return RegisteredTool{}, false, fmt.Errorf("parse registered tool created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return RegisteredTool{}, false, fmt.Errorf("parse registered tool updated_at: %w", err)
+	}
+	record.Registered = registered != 0
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	return NormalizeRegisteredTool(record), true, nil
+}
+
+func (s *SQLiteStore) RegisteredTools(limit int) ([]RegisteredTool, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`
+		SELECT tool_name, implementation_ref, registered, created_at, updated_at
+		FROM registered_tools
+		ORDER BY updated_at DESC, tool_name ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query registered tools: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]RegisteredTool, 0, limit)
+	for rows.Next() {
+		var (
+			record       RegisteredTool
+			registered   int
+			createdAtRaw string
+			updatedAtRaw string
+		)
+		if err := rows.Scan(
+			&record.ToolName,
+			&record.ImplementationRef,
+			&registered,
+			&createdAtRaw,
+			&updatedAtRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan registered tool: %w", err)
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse registered tool created_at: %w", err)
+		}
+		updatedAt, err := parseSQLiteTime(updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse registered tool updated_at: %w", err)
+		}
+		record.Registered = registered != 0
+		record.CreatedAt = createdAt
+		record.UpdatedAt = updatedAt
+		out = append(out, NormalizeRegisteredTool(record))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate registered tools: %w", err)
+	}
+	return out, nil
+}
+
+func (s *SQLiteStore) UpsertToolExposure(record ToolExposure) (ToolExposure, error) {
+	record = NormalizeToolExposure(record)
+	if record.ToolName == "" {
+		return ToolExposure{}, fmt.Errorf("tool exposure tool_name is required")
+	}
+	if record.Principal == "" {
+		return ToolExposure{}, fmt.Errorf("tool exposure principal is required")
+	}
+	now := time.Now().UTC()
+	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
+	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
+	if _, err := s.db.Exec(`
+		INSERT INTO tool_exposures(tool_name, principal, active, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(tool_name, principal) DO UPDATE SET
+			active = excluded.active,
+			updated_at = excluded.updated_at
+	`,
+		record.ToolName,
+		record.Principal,
+		boolToInt(record.Active),
+		createdAt.Format(time.RFC3339Nano),
+		updatedAt.Format(time.RFC3339Nano),
+	); err != nil {
+		return ToolExposure{}, fmt.Errorf("upsert tool exposure: %w", err)
+	}
+	stored, ok, err := s.ToolExposure(record.ToolName, record.Principal)
+	if err != nil {
+		return ToolExposure{}, err
+	}
+	if !ok {
+		return ToolExposure{}, fmt.Errorf("tool exposure %q/%q not found after upsert", record.ToolName, record.Principal)
+	}
+	return stored, nil
+}
+
+func (s *SQLiteStore) ToolExposure(toolName string, principal string) (ToolExposure, bool, error) {
+	toolName = strings.TrimSpace(toolName)
+	principal = strings.TrimSpace(principal)
+	if toolName == "" || principal == "" {
+		return ToolExposure{}, false, nil
+	}
+	var (
+		record       ToolExposure
+		active       int
+		createdAtRaw string
+		updatedAtRaw string
+	)
+	err := s.db.QueryRow(`
+		SELECT tool_name, principal, active, created_at, updated_at
+		FROM tool_exposures
+		WHERE tool_name = ? AND principal = ?
+	`, toolName, principal).Scan(
+		&record.ToolName,
+		&record.Principal,
+		&active,
+		&createdAtRaw,
+		&updatedAtRaw,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ToolExposure{}, false, nil
+	}
+	if err != nil {
+		return ToolExposure{}, false, fmt.Errorf("load tool exposure: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return ToolExposure{}, false, fmt.Errorf("parse tool exposure created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return ToolExposure{}, false, fmt.Errorf("parse tool exposure updated_at: %w", err)
+	}
+	record.Active = active != 0
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	return NormalizeToolExposure(record), true, nil
+}
+
+func (s *SQLiteStore) ToolExposures(toolName string, principal string, limit int) ([]ToolExposure, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	toolName = strings.TrimSpace(toolName)
+	principal = strings.TrimSpace(principal)
+
+	query := `
+		SELECT tool_name, principal, active, created_at, updated_at
+		FROM tool_exposures
+	`
+	args := make([]any, 0, 3)
+	clauses := make([]string, 0, 2)
+	if toolName != "" {
+		clauses = append(clauses, "tool_name = ?")
+		args = append(args, toolName)
+	}
+	if principal != "" {
+		clauses = append(clauses, "principal = ?")
+		args = append(args, principal)
+	}
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	query += " ORDER BY updated_at DESC, tool_name ASC, principal ASC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tool exposures: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]ToolExposure, 0, limit)
+	for rows.Next() {
+		var (
+			record       ToolExposure
+			active       int
+			createdAtRaw string
+			updatedAtRaw string
+		)
+		if err := rows.Scan(
+			&record.ToolName,
+			&record.Principal,
+			&active,
+			&createdAtRaw,
+			&updatedAtRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan tool exposure: %w", err)
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool exposure created_at: %w", err)
+		}
+		updatedAt, err := parseSQLiteTime(updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool exposure updated_at: %w", err)
+		}
+		record.Active = active != 0
+		record.CreatedAt = createdAt
+		record.UpdatedAt = updatedAt
+		out = append(out, NormalizeToolExposure(record))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tool exposures: %w", err)
+	}
+	return out, nil
 }
 
 func (s *SQLiteStore) PlanEvents(key SessionKey, limit int) ([]PlanEvent, error) {
@@ -4237,6 +4698,10 @@ func ensureSessionIdentityIndexes(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_review_events_target ON review_events(target_chat_id, status, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_review_events_target_session ON review_events(target_session_id, status, created_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_plan_events_session ON plan_events(session_id, created_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_proposals_tool_status ON tool_proposals(tool_name, review_status, updated_at, proposal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_proposals_status ON tool_proposals(review_status, updated_at, proposal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_registered_tools_state ON registered_tools(registered, updated_at, tool_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_exposures_principal ON tool_exposures(principal, active, tool_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_events_session_seq ON execution_events(session_id, seq)`,

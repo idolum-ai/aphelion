@@ -42,6 +42,8 @@ type Registry struct {
 	defaultStore                    string
 	semantic                        *memstore.SemanticEngine
 	durableAgentBootstrapLLM        core.NodeLLMBootstrap
+	searchWeb                       searchWebProvider
+	searchWebState                  *searchWebRuntimeState
 }
 
 type execInput struct {
@@ -113,6 +115,22 @@ type updateOperationInput struct {
 	Proposal  *updateOperationProposalInput  `json:"proposal,omitempty"`
 	Findings  []updateOperationFindingInput  `json:"findings,omitempty"`
 	Artifacts []updateOperationArtifactInput `json:"artifacts,omitempty"`
+}
+
+type toolAuthorityInput struct {
+	Action            string          `json:"action"`
+	ProposalID        string          `json:"proposal_id,omitempty"`
+	ProposedBy        string          `json:"proposed_by,omitempty"`
+	ToolName          string          `json:"tool_name,omitempty"`
+	WhyNow            string          `json:"why_now,omitempty"`
+	Contract          json.RawMessage `json:"contract,omitempty"`
+	ReviewStatus      string          `json:"review_status,omitempty"`
+	RegisteredToolID  string          `json:"registered_tool_id,omitempty"`
+	ImplementationRef string          `json:"implementation_ref,omitempty"`
+	Registered        *bool           `json:"registered,omitempty"`
+	Principal         string          `json:"principal,omitempty"`
+	Active            *bool           `json:"active,omitempty"`
+	Limit             int             `json:"limit,omitempty"`
 }
 
 type openAIFileInput struct {
@@ -242,6 +260,7 @@ func NewRegistry(workspace string, timeout time.Duration) *Registry {
 		workspace:      workspace,
 		timeout:        timeout,
 		maxOutputBytes: defaultMaxOutputBytes,
+		searchWebState: newSearchWebRuntimeState(),
 	}
 }
 
@@ -312,6 +331,28 @@ func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
 		return p.Role == principal.RoleAdmin
 	}
 	return r.runner.Supports(scope)
+}
+
+func (r *Registry) DefinitionsForPrincipal(p principal.Principal) []agent.ToolDef {
+	defs := r.Definitions()
+	if len(defs) == 0 {
+		return defs
+	}
+
+	filtered := make([]agent.ToolDef, 0, len(defs))
+	for _, def := range defs {
+		name := strings.TrimSpace(def.Name)
+		if !r.authorityManagedTool(name) {
+			filtered = append(filtered, def)
+			continue
+		}
+		allowed, err := r.toolAuthorityAccessAllowed(name, p)
+		if err != nil || !allowed {
+			continue
+		}
+		filtered = append(filtered, def)
+	}
+	return filtered
 }
 
 func (r *Registry) Definitions() []agent.ToolDef {
@@ -486,6 +527,43 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			}`),
 		})
 		defs = append(defs, agent.ToolDef{
+			Name:        "tool_authority",
+			Description: "Manage tool-authority lifecycle records (proposal/review/register/expose) for governor-controlled capability rollout. Admin only.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "access_check"], "description": "Tool-authority operation"},
+					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show/proposal_review/register"},
+					"proposed_by": {"type": "string", "description": "Proposal author identity for proposal_submit"},
+					"tool_name": {"type": "string", "description": "Tool name for proposal_submit/register/exposure/access actions"},
+					"why_now": {"type": "string", "description": "Why this proposal is needed now"},
+					"contract": {"type": "object", "description": "Opaque contract blob for proposal_submit"},
+					"review_status": {"type": "string", "enum": ["proposed", "approved", "rejected"], "description": "Review status update for proposal_review"},
+					"registered_tool_id": {"type": "string", "description": "Optional registered tool id link for proposal_review"},
+					"implementation_ref": {"type": "string", "description": "Implementation reference for register"},
+					"registered": {"type": "boolean", "description": "Optional explicit registered flag for register; defaults to true"},
+					"principal": {"type": "string", "description": "Principal id for exposure and access checks"},
+					"active": {"type": "boolean", "description": "Exposure active flag for exposure_set; defaults to true"},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Optional list limit"}
+				},
+				"required": ["action"]
+			}`),
+		})
+		if r.searchWeb != nil {
+			defs = append(defs, agent.ToolDef{
+				Name:        "search_web",
+				Description: "Run bounded public web discovery and return normalized results only. Read-only and external. No click-through page fetch.",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"query": {"type": "string", "description": "Search query text"},
+						"limit": {"type": "integer", "minimum": 1, "maximum": 5, "description": "Maximum number of normalized hits to return"}
+					},
+					"required": ["query"]
+				}`),
+			})
+		}
+		defs = append(defs, agent.ToolDef{
 			Name:        "durable_agent",
 			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. For policy_apply, prefer policy_patch (conversational policy intent) and use policy_overrides only when a low-level override is explicitly needed. For ordinary behavior/privacy/shared-context changes, use policy_apply directly; enrollment actions are only for remote control-plane lifecycle.",
 			Parameters: json.RawMessage(`{
@@ -656,6 +734,10 @@ func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.
 }
 
 func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
+	if err := r.requireAuthorityToolAccess(name, p); err != nil {
+		return "", err
+	}
+
 	switch name {
 	case "exec":
 		return r.exec(ctx, input, scope, p, key)
@@ -667,6 +749,10 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.updateOperation(ctx, input, key)
 	case "update_plan":
 		return r.updatePlan(ctx, input, key)
+	case "tool_authority":
+		return r.toolAuthority(ctx, input, p, key)
+	case "search_web":
+		return r.searchWebTool(ctx, input, p, key)
 	case "semantic_search":
 		return r.semanticSearch(ctx, input, scope)
 	case "openai_file":

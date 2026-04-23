@@ -24,9 +24,13 @@ const (
 	ExecutionEventProviderAttemptFailed    = "provider.attempt.failed"
 	ExecutionEventProviderAttemptSucceeded = "provider.attempt.succeeded"
 
-	ExecutionEventToolStarted   = "tool.started"
-	ExecutionEventToolSucceeded = "tool.succeeded"
-	ExecutionEventToolFailed    = "tool.failed"
+	ExecutionEventToolStarted          = "tool.started"
+	ExecutionEventToolSucceeded        = "tool.succeeded"
+	ExecutionEventToolFailed           = "tool.failed"
+	ExecutionEventToolProposalCreated  = "tool.proposal.created"
+	ExecutionEventToolProposalReviewed = "tool.proposal.reviewed"
+	ExecutionEventToolRegistered       = "tool.registered"
+	ExecutionEventToolExposureChanged  = "tool.exposure.changed"
 
 	ExecutionEventDeliveryProgressSent   = "delivery.progress.sent"
 	ExecutionEventDeliveryProgressEdited = "delivery.progress.edited"

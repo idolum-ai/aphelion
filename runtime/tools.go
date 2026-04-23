@@ -23,6 +23,10 @@ type principalAwareToolSupport interface {
 	SupportsPrincipal(p principal.Principal) bool
 }
 
+type principalAwareToolDefinitions interface {
+	DefinitionsForPrincipal(p principal.Principal) []agent.ToolDef
+}
+
 type principalScopedTools struct {
 	base      agent.ToolRegistry
 	executor  principalAwareToolExecutor
@@ -32,6 +36,9 @@ type principalScopedTools struct {
 }
 
 func (p *principalScopedTools) Definitions() []agent.ToolDef {
+	if defsByPrincipal, ok := p.base.(principalAwareToolDefinitions); ok {
+		return defsByPrincipal.DefinitionsForPrincipal(p.principal)
+	}
 	return p.base.Definitions()
 }
 

@@ -46,6 +46,7 @@ These invariants are normative for architecture and requirements alignment:
 ## Draft Roadmaps (Non-Normative)
 
 - [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): draft convergence map for canonical truth surfaces and safer autonomy.
+- [agent-proposed-tools-governor-authority-implementation-plan.md](agent-proposed-tools-governor-authority-implementation-plan.md): implementation sequencing and sub-agent workstream plan for tool-proposal governance.
 
 Treat this section as design-direction input. It is not a normative implementation
 contract until explicitly promoted into the normative map above.

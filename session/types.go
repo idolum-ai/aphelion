@@ -142,6 +142,42 @@ type OperationState struct {
 	UpdatedAt time.Time           `json:"updated_at,omitempty"`
 }
 
+type ToolProposalReviewStatus string
+
+const (
+	ToolProposalReviewStatusProposed ToolProposalReviewStatus = "proposed"
+	ToolProposalReviewStatusApproved ToolProposalReviewStatus = "approved"
+	ToolProposalReviewStatusRejected ToolProposalReviewStatus = "rejected"
+)
+
+type ToolProposal struct {
+	ProposalID       string                   `json:"proposal_id"`
+	ProposedBy       string                   `json:"proposed_by,omitempty"`
+	ToolName         string                   `json:"tool_name"`
+	WhyNow           string                   `json:"why_now,omitempty"`
+	Contract         string                   `json:"contract,omitempty"`
+	ReviewStatus     ToolProposalReviewStatus `json:"review_status,omitempty"`
+	RegisteredToolID string                   `json:"registered_tool_id,omitempty"`
+	CreatedAt        time.Time                `json:"created_at,omitempty"`
+	UpdatedAt        time.Time                `json:"updated_at,omitempty"`
+}
+
+type RegisteredTool struct {
+	ToolName          string    `json:"tool_name"`
+	ImplementationRef string    `json:"implementation_ref,omitempty"`
+	Registered        bool      `json:"registered"`
+	CreatedAt         time.Time `json:"created_at,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at,omitempty"`
+}
+
+type ToolExposure struct {
+	ToolName  string    `json:"tool_name"`
+	Principal string    `json:"principal"`
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
 type TurnAuthorizationKind string
 
 const (
@@ -600,6 +636,73 @@ func (s OperationState) Active() bool {
 		normalized.Proposal.Active() ||
 		len(normalized.Findings) > 0 ||
 		len(normalized.Artifacts) > 0
+}
+
+func (p ToolProposal) Active() bool {
+	return strings.TrimSpace(p.ProposalID) != "" ||
+		strings.TrimSpace(p.ProposedBy) != "" ||
+		strings.TrimSpace(p.ToolName) != "" ||
+		strings.TrimSpace(p.WhyNow) != "" ||
+		strings.TrimSpace(p.Contract) != "" ||
+		strings.TrimSpace(string(p.ReviewStatus)) != "" ||
+		strings.TrimSpace(p.RegisteredToolID) != ""
+}
+
+func NormalizeToolProposalReviewStatus(status ToolProposalReviewStatus) ToolProposalReviewStatus {
+	value := normalizeEnumValue(string(status))
+	switch ToolProposalReviewStatus(value) {
+	case ToolProposalReviewStatusProposed, ToolProposalReviewStatusApproved, ToolProposalReviewStatusRejected:
+		return ToolProposalReviewStatus(value)
+	default:
+		return ""
+	}
+}
+
+func NormalizeToolProposal(proposal ToolProposal) ToolProposal {
+	proposal.ProposalID = strings.TrimSpace(proposal.ProposalID)
+	proposal.ProposedBy = strings.TrimSpace(proposal.ProposedBy)
+	proposal.ToolName = strings.TrimSpace(proposal.ToolName)
+	proposal.WhyNow = strings.TrimSpace(proposal.WhyNow)
+	proposal.Contract = strings.TrimSpace(proposal.Contract)
+	proposal.ReviewStatus = NormalizeToolProposalReviewStatus(proposal.ReviewStatus)
+	proposal.RegisteredToolID = strings.TrimSpace(proposal.RegisteredToolID)
+	if proposal.ReviewStatus == "" && proposal.Active() {
+		proposal.ReviewStatus = ToolProposalReviewStatusProposed
+	}
+	if proposal.Contract == "" && proposal.Active() {
+		proposal.Contract = "{}"
+	}
+	if proposal.CreatedAt.IsZero() && proposal.Active() {
+		proposal.CreatedAt = time.Now().UTC()
+	}
+	if proposal.UpdatedAt.IsZero() && proposal.Active() {
+		proposal.UpdatedAt = time.Now().UTC()
+	}
+	return proposal
+}
+
+func NormalizeRegisteredTool(tool RegisteredTool) RegisteredTool {
+	tool.ToolName = strings.TrimSpace(tool.ToolName)
+	tool.ImplementationRef = strings.TrimSpace(tool.ImplementationRef)
+	if tool.CreatedAt.IsZero() && tool.ToolName != "" {
+		tool.CreatedAt = time.Now().UTC()
+	}
+	if tool.UpdatedAt.IsZero() && tool.ToolName != "" {
+		tool.UpdatedAt = time.Now().UTC()
+	}
+	return tool
+}
+
+func NormalizeToolExposure(exposure ToolExposure) ToolExposure {
+	exposure.ToolName = strings.TrimSpace(exposure.ToolName)
+	exposure.Principal = strings.TrimSpace(exposure.Principal)
+	if exposure.CreatedAt.IsZero() && exposure.ToolName != "" && exposure.Principal != "" {
+		exposure.CreatedAt = time.Now().UTC()
+	}
+	if exposure.UpdatedAt.IsZero() && exposure.ToolName != "" && exposure.Principal != "" {
+		exposure.UpdatedAt = time.Now().UTC()
+	}
+	return exposure
 }
 
 func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthorizationState {

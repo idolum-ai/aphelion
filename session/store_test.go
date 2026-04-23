@@ -740,6 +740,141 @@ func TestOperationStateRoundTripAndUpdate(t *testing.T) {
 	}
 }
 
+func TestToolAuthorityRecordsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	proposal, err := store.UpsertToolProposal(ToolProposal{
+		ProposalID: "tp-1",
+		ProposedBy: "idolum-email",
+		ToolName:   "search_web",
+		WhyNow:     "Inbox-only analysis cannot evaluate external postings.",
+		Contract: strings.TrimSpace(`{
+			"inputs":{"query":"string","limit":"int<=5"},
+			"outputs":[{"title":"string","url":"string","snippet":"string"}],
+			"constraints":["read_only","no_clickthrough","max_3_queries_per_task"]
+		}`),
+		ReviewStatus: ToolProposalReviewStatusProposed,
+	})
+	if err != nil {
+		t.Fatalf("UpsertToolProposal(insert) err = %v", err)
+	}
+	if proposal.ReviewStatus != ToolProposalReviewStatusProposed {
+		t.Fatalf("proposal review status = %q, want proposed", proposal.ReviewStatus)
+	}
+	if proposal.Contract == "" {
+		t.Fatal("proposal contract empty, want persisted contract blob")
+	}
+
+	loadedProposal, ok, err := store.ToolProposal("tp-1")
+	if err != nil {
+		t.Fatalf("ToolProposal() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("ToolProposal() ok = false, want persisted proposal")
+	}
+	if loadedProposal.ToolName != "search_web" {
+		t.Fatalf("loaded proposal tool_name = %q, want search_web", loadedProposal.ToolName)
+	}
+
+	proposals, err := store.ToolProposals(10, ToolProposalReviewStatusProposed)
+	if err != nil {
+		t.Fatalf("ToolProposals(proposed) err = %v", err)
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("ToolProposals(proposed) len = %d, want 1", len(proposals))
+	}
+
+	proposal.ReviewStatus = ToolProposalReviewStatusApproved
+	proposal.RegisteredToolID = "search_web"
+	proposal, err = store.UpsertToolProposal(proposal)
+	if err != nil {
+		t.Fatalf("UpsertToolProposal(update) err = %v", err)
+	}
+	if proposal.ReviewStatus != ToolProposalReviewStatusApproved {
+		t.Fatalf("updated proposal review status = %q, want approved", proposal.ReviewStatus)
+	}
+	if proposal.RegisteredToolID != "search_web" {
+		t.Fatalf("updated registered_tool_id = %q, want search_web", proposal.RegisteredToolID)
+	}
+
+	registered, err := store.UpsertRegisteredTool(RegisteredTool{
+		ToolName:          "search_web",
+		ImplementationRef: "tool/search_web.go",
+		Registered:        true,
+	})
+	if err != nil {
+		t.Fatalf("UpsertRegisteredTool(insert) err = %v", err)
+	}
+	if !registered.Registered {
+		t.Fatal("registered.Registered = false, want true")
+	}
+
+	loadedRegistered, ok, err := store.RegisteredTool("search_web")
+	if err != nil {
+		t.Fatalf("RegisteredTool() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("RegisteredTool() ok = false, want true")
+	}
+	if loadedRegistered.ImplementationRef != "tool/search_web.go" {
+		t.Fatalf("loaded registered implementation_ref = %q, want tool/search_web.go", loadedRegistered.ImplementationRef)
+	}
+
+	registeredList, err := store.RegisteredTools(10)
+	if err != nil {
+		t.Fatalf("RegisteredTools() err = %v", err)
+	}
+	if len(registeredList) != 1 {
+		t.Fatalf("RegisteredTools len = %d, want 1", len(registeredList))
+	}
+
+	exposure, err := store.UpsertToolExposure(ToolExposure{
+		ToolName:  "search_web",
+		Principal: "idolum-email",
+		Active:    true,
+	})
+	if err != nil {
+		t.Fatalf("UpsertToolExposure(insert) err = %v", err)
+	}
+	if !exposure.Active {
+		t.Fatal("exposure.Active = false, want true")
+	}
+
+	loadedExposure, ok, err := store.ToolExposure("search_web", "idolum-email")
+	if err != nil {
+		t.Fatalf("ToolExposure() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("ToolExposure() ok = false, want true")
+	}
+	if !loadedExposure.Active {
+		t.Fatal("loaded exposure active = false, want true")
+	}
+
+	exposure.Active = false
+	exposure, err = store.UpsertToolExposure(exposure)
+	if err != nil {
+		t.Fatalf("UpsertToolExposure(update) err = %v", err)
+	}
+	if exposure.Active {
+		t.Fatal("updated exposure active = true, want false")
+	}
+
+	exposures, err := store.ToolExposures("search_web", "", 10)
+	if err != nil {
+		t.Fatalf("ToolExposures() err = %v", err)
+	}
+	if len(exposures) != 1 {
+		t.Fatalf("ToolExposures len = %d, want 1", len(exposures))
+	}
+	if exposures[0].Active {
+		t.Fatal("ToolExposures[0].Active = true, want false after update")
+	}
+}
+
 func TestPlanEventsRoundTripAndRehydrateFromLatestEvent(t *testing.T) {
 	t.Parallel()
 
