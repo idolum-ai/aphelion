@@ -126,7 +126,7 @@ func TestToAgentHistorySynthesizesMissingToolResultsAndDropsOrphans(t *testing.T
 func TestNewMessagesForTurnWithContextCarriesTurnProvenance(t *testing.T) {
 	t.Parallel()
 
-	rows, err := NewMessagesForTurnWithContext("[approved continuation event]", nil, 4, TurnMessageContext{
+	rows, err := NewMessagesForTurnWithContext(continuationApprovedEventTextForTest, nil, 4, TurnMessageContext{
 		ActorUserID:       1002,
 		ActorRole:         "approved_user",
 		EventOrigin:       "turn_authorization",

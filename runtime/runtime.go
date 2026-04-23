@@ -39,6 +39,8 @@ type chatActionSender interface {
 	SendChatAction(ctx context.Context, chatID int64, action string) error
 }
 
+const approvedContinuationEventText = "[user pressed continue button: resume the previous task]"
+
 type inboundArtifactFetcher interface {
 	DownloadFileChecked(ctx context.Context, fileID string, maxBytes int64) ([]byte, error)
 }
@@ -236,7 +238,7 @@ func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.P
 		ChatID:       chatID,
 		SenderID:     actor.TelegramUserID,
 		SenderName:   actorLabel(actor),
-		Text:         "[approved continuation event]",
+		Text:         approvedContinuationEventText,
 		Origin:       core.InboundOriginTurnAuthorization,
 		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})

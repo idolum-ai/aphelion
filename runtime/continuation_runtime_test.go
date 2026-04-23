@@ -817,7 +817,7 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	if last.Role != "user" {
 		t.Fatalf("last role = %q, want user-compatible provider input", last.Role)
 	}
-	if last.Content != "[approved continuation event]" {
+	if last.Content != approvedContinuationEventText {
 		t.Fatalf("last content = %q, want machine-authored continuation event text", last.Content)
 	}
 }

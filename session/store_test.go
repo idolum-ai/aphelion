@@ -2862,7 +2862,7 @@ func TestMessageTurnProvenanceRoundTrip(t *testing.T) {
 	}
 	if err := store.Save(sess, []Message{{
 		Role:              "user",
-		Content:           "[approved continuation event]",
+		Content:           continuationApprovedEventTextForTest,
 		ActorUserID:       1002,
 		ActorRole:         "approved_user",
 		EventOrigin:       "turn_authorization",
