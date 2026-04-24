@@ -203,35 +203,41 @@ const (
 )
 
 type ToolInstallRecord struct {
-	ToolName     string            `json:"tool_name"`
-	Installer    string            `json:"installer,omitempty"`
-	InstallRef   string            `json:"install_ref,omitempty"`
-	Status       ToolInstallStatus `json:"status,omitempty"`
-	ProbeStatus  ToolProbeStatus   `json:"probe_status,omitempty"`
-	ProbeOutput  string            `json:"probe_output,omitempty"`
-	CreatedAt    time.Time         `json:"created_at,omitempty"`
-	UpdatedAt    time.Time         `json:"updated_at,omitempty"`
-	InstalledAt  time.Time         `json:"installed_at,omitempty"`
-	LastProbedAt time.Time         `json:"last_probed_at,omitempty"`
-	AttestedAt   time.Time         `json:"attested_at,omitempty"`
+	ToolName            string            `json:"tool_name"`
+	Installer           string            `json:"installer,omitempty"`
+	InstallRef          string            `json:"install_ref,omitempty"`
+	Status              ToolInstallStatus `json:"status,omitempty"`
+	ProbeStatus         ToolProbeStatus   `json:"probe_status,omitempty"`
+	ProbeOutput         string            `json:"probe_output,omitempty"`
+	ConsecutiveFailures int               `json:"consecutive_failures,omitempty"`
+	CreatedAt           time.Time         `json:"created_at,omitempty"`
+	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
+	InstalledAt         time.Time         `json:"installed_at,omitempty"`
+	LastProbedAt        time.Time         `json:"last_probed_at,omitempty"`
+	LastFailureAt       time.Time         `json:"last_failure_at,omitempty"`
+	AttestedAt          time.Time         `json:"attested_at,omitempty"`
 }
 
 type ToolAuditRecord struct {
-	ToolName    string          `json:"tool_name"`
-	Status      ToolAuditStatus `json:"status,omitempty"`
-	AuditOutput string          `json:"audit_output,omitempty"`
-	CreatedAt   time.Time       `json:"created_at,omitempty"`
-	UpdatedAt   time.Time       `json:"updated_at,omitempty"`
-	AuditedAt   time.Time       `json:"audited_at,omitempty"`
+	ToolName            string          `json:"tool_name"`
+	Status              ToolAuditStatus `json:"status,omitempty"`
+	AuditOutput         string          `json:"audit_output,omitempty"`
+	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
+	CreatedAt           time.Time       `json:"created_at,omitempty"`
+	UpdatedAt           time.Time       `json:"updated_at,omitempty"`
+	AuditedAt           time.Time       `json:"audited_at,omitempty"`
+	LastFailureAt       time.Time       `json:"last_failure_at,omitempty"`
 }
 
 type ToolProbeRecord struct {
-	ToolName    string          `json:"tool_name"`
-	Status      ToolProbeStatus `json:"status,omitempty"`
-	ProbeOutput string          `json:"probe_output,omitempty"`
-	CreatedAt   time.Time       `json:"created_at,omitempty"`
-	UpdatedAt   time.Time       `json:"updated_at,omitempty"`
-	ProbedAt    time.Time       `json:"probed_at,omitempty"`
+	ToolName            string          `json:"tool_name"`
+	Status              ToolProbeStatus `json:"status,omitempty"`
+	ProbeOutput         string          `json:"probe_output,omitempty"`
+	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
+	CreatedAt           time.Time       `json:"created_at,omitempty"`
+	UpdatedAt           time.Time       `json:"updated_at,omitempty"`
+	ProbedAt            time.Time       `json:"probed_at,omitempty"`
+	LastFailureAt       time.Time       `json:"last_failure_at,omitempty"`
 }
 
 type TurnAuthorizationKind string
@@ -820,6 +826,9 @@ func NormalizeToolAuditRecord(record ToolAuditRecord) ToolAuditRecord {
 	record.ToolName = strings.TrimSpace(record.ToolName)
 	record.Status = NormalizeToolAuditStatus(record.Status)
 	record.AuditOutput = strings.TrimSpace(record.AuditOutput)
+	if record.ConsecutiveFailures < 0 {
+		record.ConsecutiveFailures = 0
+	}
 	if record.CreatedAt.IsZero() && record.ToolName != "" {
 		record.CreatedAt = time.Now().UTC()
 	}
@@ -833,6 +842,9 @@ func NormalizeToolProbeRecord(record ToolProbeRecord) ToolProbeRecord {
 	record.ToolName = strings.TrimSpace(record.ToolName)
 	record.Status = NormalizeToolProbeStatus(record.Status)
 	record.ProbeOutput = strings.TrimSpace(record.ProbeOutput)
+	if record.ConsecutiveFailures < 0 {
+		record.ConsecutiveFailures = 0
+	}
 	if record.CreatedAt.IsZero() && record.ToolName != "" {
 		record.CreatedAt = time.Now().UTC()
 	}

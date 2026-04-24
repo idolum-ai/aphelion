@@ -676,6 +676,8 @@ func (r *Registry) toolAuthorityInstallExecute(ctx context.Context, in toolAutho
 	record.UpdatedAt = now
 	if err != nil {
 		record.Status = session.ToolInstallStatusFailed
+		record.ConsecutiveFailures++
+		record.LastFailureAt = now
 		record.AttestedAt = time.Time{}
 		stored, saveErr := r.store.UpsertToolInstallRecord(record)
 		if saveErr != nil {
@@ -691,6 +693,8 @@ func (r *Registry) toolAuthorityInstallExecute(ctx context.Context, in toolAutho
 		return "", err
 	}
 	record.Status = session.ToolInstallStatusInstalled
+	record.ConsecutiveFailures = 0
+	record.LastFailureAt = time.Time{}
 	record.InstalledAt = now
 	record.AttestedAt = time.Time{}
 	stored, err := r.store.UpsertToolInstallRecord(record)
@@ -723,11 +727,20 @@ func (r *Registry) toolAuthorityAuditRun(in toolAuthorityInput, actor principal.
 	} else if !exists {
 		return "", fmt.Errorf("external tool %q requires an install record before audit_run", manifest.Name)
 	}
+	prevAudit, prevAuditExists, err := r.store.ToolAuditRecord(manifest.Name)
+	if err != nil {
+		return "", err
+	}
 	output, err := r.runExternalManifestAudit(manifest)
 	now := time.Now().UTC()
 	record := session.ToolAuditRecord{ToolName: manifest.Name, AuditOutput: output, UpdatedAt: now, AuditedAt: now}
+	if prevAuditExists {
+		record.CreatedAt = prevAudit.CreatedAt
+	}
 	if err != nil {
 		record.Status = session.ToolAuditStatusFailed
+		record.ConsecutiveFailures = prevAudit.ConsecutiveFailures + 1
+		record.LastFailureAt = now
 		stored, saveErr := r.store.UpsertToolAuditRecord(record)
 		if saveErr != nil {
 			return "", saveErr
@@ -736,6 +749,8 @@ func (r *Registry) toolAuthorityAuditRun(in toolAuthorityInput, actor principal.
 		return "", err
 	}
 	record.Status = session.ToolAuditStatusPassed
+	record.ConsecutiveFailures = 0
+	record.LastFailureAt = time.Time{}
 	stored, err := r.store.UpsertToolAuditRecord(record)
 	if err != nil {
 		return "", err
@@ -824,17 +839,28 @@ func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityIn
 	if !exists {
 		return "", fmt.Errorf("external tool %q requires an install record before probe_run", manifest.Name)
 	}
+	prevProbe, _, err := r.store.ToolProbeRecord(manifest.Name)
+	if err != nil {
+		return "", err
+	}
 	probeOutput, err := r.runExternalManifestProbe(ctx, manifest)
 	now := time.Now().UTC()
 	record.ProbeOutput = probeOutput
 	record.LastProbedAt = now
 	if err != nil {
 		record.ProbeStatus = session.ToolProbeStatusFailed
-		if _, saveProbeErr := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusFailed, ProbeOutput: probeOutput, ProbedAt: now}); saveProbeErr != nil {
+		consecutiveFailures := prevProbe.ConsecutiveFailures + 1
+		if _, saveProbeErr := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusFailed, ProbeOutput: probeOutput, ProbedAt: now, ConsecutiveFailures: consecutiveFailures, LastFailureAt: now}); saveProbeErr != nil {
 			return "", saveProbeErr
 		}
 		if record.Status == session.ToolInstallStatusVerified {
-			record.Status = session.ToolInstallStatusStale
+			if consecutiveFailures >= 3 {
+				record.Status = session.ToolInstallStatusFailed
+			} else {
+				record.Status = session.ToolInstallStatusStale
+			}
+		} else if record.Status == session.ToolInstallStatusStale && consecutiveFailures >= 3 {
+			record.Status = session.ToolInstallStatusFailed
 		} else {
 			record.Status = session.ToolInstallStatusFailed
 		}
@@ -855,7 +881,7 @@ func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityIn
 		return "", err
 	}
 	record.ProbeStatus = session.ToolProbeStatusPassed
-	if _, err := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusPassed, ProbeOutput: probeOutput, ProbedAt: now}); err != nil {
+	if _, err := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusPassed, ProbeOutput: probeOutput, ProbedAt: now, ConsecutiveFailures: 0}); err != nil {
 		return "", err
 	}
 	record.UpdatedAt = now
@@ -1157,8 +1183,12 @@ func renderToolProbeRecord(header string, record session.ToolProbeRecord) string
 	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
 	fmt.Fprintf(&b, "probe_output: %s\n", firstNonEmpty(record.ProbeOutput, "-"))
+	fmt.Fprintf(&b, "consecutive_failures: %d\n", record.ConsecutiveFailures)
 	if !record.ProbedAt.IsZero() {
 		fmt.Fprintf(&b, "probed_at: %s\n", record.ProbedAt.UTC().Format(time.RFC3339))
+	}
+	if !record.LastFailureAt.IsZero() {
+		fmt.Fprintf(&b, "last_failure_at: %s\n", record.LastFailureAt.UTC().Format(time.RFC3339))
 	}
 	fmt.Fprintf(&b, "updated_at: %s\n", record.UpdatedAt.UTC().Format(time.RFC3339))
 	return strings.TrimRight(b.String(), "\n")
@@ -1188,8 +1218,12 @@ func renderToolAuditRecord(header string, record session.ToolAuditRecord) string
 	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
 	fmt.Fprintf(&b, "audit_output: %s\n", firstNonEmpty(record.AuditOutput, "-"))
+	fmt.Fprintf(&b, "consecutive_failures: %d\n", record.ConsecutiveFailures)
 	if !record.AuditedAt.IsZero() {
 		fmt.Fprintf(&b, "audited_at: %s\n", record.AuditedAt.UTC().Format(time.RFC3339))
+	}
+	if !record.LastFailureAt.IsZero() {
+		fmt.Fprintf(&b, "last_failure_at: %s\n", record.LastFailureAt.UTC().Format(time.RFC3339))
 	}
 	fmt.Fprintf(&b, "updated_at: %s\n", record.UpdatedAt.UTC().Format(time.RFC3339))
 	return strings.TrimRight(b.String(), "\n")
@@ -1222,6 +1256,7 @@ func renderToolInstallRecord(header string, record session.ToolInstallRecord) st
 	fmt.Fprintf(&b, "install_ref: %s\n", firstNonEmpty(record.InstallRef, "-"))
 	fmt.Fprintf(&b, "probe_status: %s\n", firstNonEmpty(string(record.ProbeStatus), "-"))
 	fmt.Fprintf(&b, "probe_output: %s\n", firstNonEmpty(record.ProbeOutput, "-"))
+	fmt.Fprintf(&b, "consecutive_failures: %d\n", record.ConsecutiveFailures)
 	if !record.InstalledAt.IsZero() {
 		fmt.Fprintf(&b, "installed_at: %s\n", record.InstalledAt.UTC().Format(time.RFC3339))
 	}
@@ -1230,6 +1265,9 @@ func renderToolInstallRecord(header string, record session.ToolInstallRecord) st
 	}
 	if !record.AttestedAt.IsZero() {
 		fmt.Fprintf(&b, "attested_at: %s\n", record.AttestedAt.UTC().Format(time.RFC3339))
+	}
+	if !record.LastFailureAt.IsZero() {
+		fmt.Fprintf(&b, "last_failure_at: %s\n", record.LastFailureAt.UTC().Format(time.RFC3339))
 	}
 	fmt.Fprintf(&b, "updated_at: %s\n", record.UpdatedAt.UTC().Format(time.RFC3339))
 	return strings.TrimRight(b.String(), "\n")

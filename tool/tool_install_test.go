@@ -264,8 +264,8 @@ func TestToolAuthorityInstallExecuteMarksRecordFailedOnInstallError(t *testing.T
 	if err != nil {
 		t.Fatalf("install_show err = %v", err)
 	}
-	if !strings.Contains(showOut, "status: failed") {
-		t.Fatalf("install_show output = %q, want failed status after install error", showOut)
+	if !strings.Contains(showOut, "status: failed") || !strings.Contains(showOut, "consecutive_failures: 1") {
+		t.Fatalf("install_show output = %q, want failed status with failure count after install error", showOut)
 	}
 }
 
@@ -297,7 +297,66 @@ func TestToolAuthorityAuditRunFailsWhenExecutionEntryIsMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("audit_show err = %v", err)
 	}
-	if !strings.Contains(auditShowOut, "status: failed") {
-		t.Fatalf("audit_show output = %q, want failed audit", auditShowOut)
+	if !strings.Contains(auditShowOut, "status: failed") || !strings.Contains(auditShowOut, "consecutive_failures: 1") {
+		t.Fatalf("audit_show output = %q, want failed audit with failure count", auditShowOut)
+	}
+}
+
+func TestToolAuthorityRepeatedFailedProbeEscalatesStaleToFailed(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	runScript := filepath.Join(registry.workspace, "run.sh")
+	if err := os.WriteFile(runScript, []byte("#!/usr/bin/env bash\necho '{}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	probeScript := filepath.Join(registry.workspace, "probe.sh")
+	if err := os.WriteFile(probeScript, []byte("#!/usr/bin/env bash\necho 'broken'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(probe.sh) err = %v", err)
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"installed","installer":"aphelion","install_ref":"workspace:tooling-v1"}`))
+	if err != nil {
+		t.Fatalf("install_set(installed) err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"audit_run","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("audit_run err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1","probe_status":"passed","probe_output":"self-check ok"}`))
+	if err != nil {
+		t.Fatalf("install_set(verified) err = %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"probe_run","tool_name":"browse_page"}`))
+		if err == nil || !strings.Contains(err.Error(), "probe output did not contain expected text") {
+			t.Fatalf("probe_run #%d err = %v, want expected-text mismatch", i+1, err)
+		}
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_show","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("install_show err = %v", err)
+	}
+	if !strings.Contains(showOut, "status: failed") {
+		t.Fatalf("install_show output = %q, want failed after repeated probe failures", showOut)
+	}
+	probeShowOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"probe_show","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("probe_show err = %v", err)
+	}
+	if !strings.Contains(probeShowOut, "consecutive_failures: 3") {
+		t.Fatalf("probe_show output = %q, want three consecutive failures", probeShowOut)
 	}
 }

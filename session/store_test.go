@@ -879,7 +879,7 @@ func TestToolProbeRecordRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
-	record, err := store.UpsertToolProbeRecord(ToolProbeRecord{ToolName: "browse_page", Status: ToolProbeStatusPassed, ProbeOutput: "stdout: probe ok", ProbedAt: time.Now().UTC()})
+	record, err := store.UpsertToolProbeRecord(ToolProbeRecord{ToolName: "browse_page", Status: ToolProbeStatusPassed, ProbeOutput: "stdout: probe ok", ProbedAt: time.Now().UTC(), ConsecutiveFailures: 0})
 	if err != nil {
 		t.Fatalf("UpsertToolProbeRecord(insert) err = %v", err)
 	}
@@ -909,7 +909,7 @@ func TestToolAuditRecordRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
-	record, err := store.UpsertToolAuditRecord(ToolAuditRecord{ToolName: "browse_page", Status: ToolAuditStatusPassed, AuditOutput: "entry_path: /tmp/run.sh", AuditedAt: time.Now().UTC()})
+	record, err := store.UpsertToolAuditRecord(ToolAuditRecord{ToolName: "browse_page", Status: ToolAuditStatusPassed, AuditOutput: "entry_path: /tmp/run.sh", AuditedAt: time.Now().UTC(), ConsecutiveFailures: 0})
 	if err != nil {
 		t.Fatalf("UpsertToolAuditRecord(insert) err = %v", err)
 	}
@@ -940,15 +940,16 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 
 	store := newTestSQLiteStore(t)
 	record, err := store.UpsertToolInstallRecord(ToolInstallRecord{
-		ToolName:     "browse_page",
-		Installer:    "aphelion",
-		InstallRef:   "workspace:tooling-v1",
-		Status:       ToolInstallStatusVerified,
-		ProbeStatus:  ToolProbeStatusPassed,
-		ProbeOutput:  "self-check ok",
-		InstalledAt:  time.Now().UTC(),
-		LastProbedAt: time.Now().UTC(),
-		AttestedAt:   time.Now().UTC(),
+		ToolName:            "browse_page",
+		Installer:           "aphelion",
+		InstallRef:          "workspace:tooling-v1",
+		Status:              ToolInstallStatusVerified,
+		ProbeStatus:         ToolProbeStatusPassed,
+		ProbeOutput:         "self-check ok",
+		InstalledAt:         time.Now().UTC(),
+		LastProbedAt:        time.Now().UTC(),
+		AttestedAt:          time.Now().UTC(),
+		ConsecutiveFailures: 0,
 	})
 	if err != nil {
 		t.Fatalf("UpsertToolInstallRecord(insert) err = %v", err)

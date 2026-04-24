@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 30
+	schemaVersion                       = 31
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -202,27 +202,33 @@ func (s *SQLiteStore) init() error {
 			status TEXT NOT NULL DEFAULT '' CHECK(status IN ('', 'pending', 'installed', 'verified', 'failed', 'stale')),
 			probe_status TEXT NOT NULL DEFAULT '' CHECK(probe_status IN ('', 'passed', 'failed')),
 			probe_output TEXT NOT NULL DEFAULT '',
+			consecutive_failures INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			installed_at TEXT,
 			last_probed_at TEXT,
+			last_failure_at TEXT,
 			attested_at TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS tool_probe_records (
 			tool_name TEXT PRIMARY KEY,
 			status TEXT NOT NULL DEFAULT '' CHECK(status IN ('', 'passed', 'failed')),
 			probe_output TEXT NOT NULL DEFAULT '',
+			consecutive_failures INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-			probed_at TEXT
+			probed_at TEXT,
+			last_failure_at TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS tool_audit_records (
 			tool_name TEXT PRIMARY KEY,
 			status TEXT NOT NULL DEFAULT '' CHECK(status IN ('', 'passed', 'failed')),
 			audit_output TEXT NOT NULL DEFAULT '',
+			consecutive_failures INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-			audited_at TEXT
+			audited_at TEXT,
+			last_failure_at TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS turn_runs (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1678,21 +1684,20 @@ func (s *SQLiteStore) UpsertToolInstallRecord(record ToolInstallRecord) (ToolIns
 	now := time.Now().UTC()
 	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
 	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
-	installedAt := nullableTimeRFC3339(record.InstalledAt)
-	lastProbedAt := nullableTimeRFC3339(record.LastProbedAt)
-	attestedAt := nullableTimeRFC3339(record.AttestedAt)
 	if _, err := s.db.Exec(`
-		INSERT INTO tool_install_records(tool_name, installer, install_ref, status, probe_status, probe_output, created_at, updated_at, installed_at, last_probed_at, attested_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tool_install_records(tool_name, installer, install_ref, status, probe_status, probe_output, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tool_name) DO UPDATE SET
 			installer = excluded.installer,
 			install_ref = excluded.install_ref,
 			status = excluded.status,
 			probe_status = excluded.probe_status,
 			probe_output = excluded.probe_output,
+			consecutive_failures = excluded.consecutive_failures,
 			updated_at = excluded.updated_at,
 			installed_at = excluded.installed_at,
 			last_probed_at = excluded.last_probed_at,
+			last_failure_at = excluded.last_failure_at,
 			attested_at = excluded.attested_at
 	`,
 		record.ToolName,
@@ -1701,11 +1706,13 @@ func (s *SQLiteStore) UpsertToolInstallRecord(record ToolInstallRecord) (ToolIns
 		string(record.Status),
 		string(record.ProbeStatus),
 		record.ProbeOutput,
+		record.ConsecutiveFailures,
 		createdAt.Format(time.RFC3339Nano),
 		updatedAt.Format(time.RFC3339Nano),
-		installedAt,
-		lastProbedAt,
-		attestedAt,
+		nullableTimeRFC3339(record.InstalledAt),
+		nullableTimeRFC3339(record.LastProbedAt),
+		nullableTimeRFC3339(record.LastFailureAt),
+		nullableTimeRFC3339(record.AttestedAt),
 	); err != nil {
 		return ToolInstallRecord{}, fmt.Errorf("upsert tool install record: %w", err)
 	}
@@ -1718,24 +1725,25 @@ func (s *SQLiteStore) UpsertToolInstallRecord(record ToolInstallRecord) (ToolIns
 	}
 	return stored, nil
 }
-
 func (s *SQLiteStore) ToolInstallRecord(toolName string) (ToolInstallRecord, bool, error) {
 	toolName = strings.TrimSpace(toolName)
 	if toolName == "" {
 		return ToolInstallRecord{}, false, nil
 	}
 	var (
-		record          ToolInstallRecord
-		statusRaw       string
-		probeStatusRaw  string
-		createdAtRaw    string
-		updatedAtRaw    string
-		installedAtRaw  sql.NullString
-		lastProbedAtRaw sql.NullString
-		attestedAtRaw   sql.NullString
+		record                 ToolInstallRecord
+		statusRaw              string
+		probeStatusRaw         string
+		consecutiveFailuresRaw int
+		createdAtRaw           string
+		updatedAtRaw           string
+		installedAtRaw         sql.NullString
+		lastProbedAtRaw        sql.NullString
+		lastFailureAtRaw       sql.NullString
+		attestedAtRaw          sql.NullString
 	)
 	err := s.db.QueryRow(`
-		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, created_at, updated_at, installed_at, last_probed_at, attested_at
+		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at
 		FROM tool_install_records
 		WHERE tool_name = ?
 	`, toolName).Scan(
@@ -1745,10 +1753,12 @@ func (s *SQLiteStore) ToolInstallRecord(toolName string) (ToolInstallRecord, boo
 		&statusRaw,
 		&probeStatusRaw,
 		&record.ProbeOutput,
+		&consecutiveFailuresRaw,
 		&createdAtRaw,
 		&updatedAtRaw,
 		&installedAtRaw,
 		&lastProbedAtRaw,
+		&lastFailureAtRaw,
 		&attestedAtRaw,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1767,39 +1777,42 @@ func (s *SQLiteStore) ToolInstallRecord(toolName string) (ToolInstallRecord, boo
 	}
 	record.Status = NormalizeToolInstallStatus(ToolInstallStatus(statusRaw))
 	record.ProbeStatus = NormalizeToolProbeStatus(ToolProbeStatus(probeStatusRaw))
+	record.ConsecutiveFailures = consecutiveFailuresRaw
 	record.CreatedAt = createdAt
 	record.UpdatedAt = updatedAt
 	if installedAtRaw.Valid {
-		installedAt, err := parseSQLiteTime(installedAtRaw.String)
+		record.InstalledAt, err = parseSQLiteTime(installedAtRaw.String)
 		if err != nil {
 			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record installed_at: %w", err)
 		}
-		record.InstalledAt = installedAt
 	}
 	if lastProbedAtRaw.Valid {
-		lastProbedAt, err := parseSQLiteTime(lastProbedAtRaw.String)
+		record.LastProbedAt, err = parseSQLiteTime(lastProbedAtRaw.String)
 		if err != nil {
 			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record last_probed_at: %w", err)
 		}
-		record.LastProbedAt = lastProbedAt
+	}
+	if lastFailureAtRaw.Valid {
+		record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+		if err != nil {
+			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record last_failure_at: %w", err)
+		}
 	}
 	if attestedAtRaw.Valid {
-		attestedAt, err := parseSQLiteTime(attestedAtRaw.String)
+		record.AttestedAt, err = parseSQLiteTime(attestedAtRaw.String)
 		if err != nil {
 			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record attested_at: %w", err)
 		}
-		record.AttestedAt = attestedAt
 	}
 	return NormalizeToolInstallRecord(record), true, nil
 }
-
 func (s *SQLiteStore) ToolInstallRecords(status ToolInstallStatus, limit int) ([]ToolInstallRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	status = NormalizeToolInstallStatus(status)
 	query := `
-		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, created_at, updated_at, installed_at, last_probed_at, attested_at
+		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at
 		FROM tool_install_records
 	`
 	args := make([]any, 0, 2)
@@ -1817,16 +1830,18 @@ func (s *SQLiteStore) ToolInstallRecords(status ToolInstallStatus, limit int) ([
 	out := make([]ToolInstallRecord, 0, limit)
 	for rows.Next() {
 		var (
-			record          ToolInstallRecord
-			statusRaw       string
-			probeStatusRaw  string
-			createdAtRaw    string
-			updatedAtRaw    string
-			installedAtRaw  sql.NullString
-			lastProbedAtRaw sql.NullString
-			attestedAtRaw   sql.NullString
+			record                 ToolInstallRecord
+			statusRaw              string
+			probeStatusRaw         string
+			consecutiveFailuresRaw int
+			createdAtRaw           string
+			updatedAtRaw           string
+			installedAtRaw         sql.NullString
+			lastProbedAtRaw        sql.NullString
+			lastFailureAtRaw       sql.NullString
+			attestedAtRaw          sql.NullString
 		)
-		if err := rows.Scan(&record.ToolName, &record.Installer, &record.InstallRef, &statusRaw, &probeStatusRaw, &record.ProbeOutput, &createdAtRaw, &updatedAtRaw, &installedAtRaw, &lastProbedAtRaw, &attestedAtRaw); err != nil {
+		if err := rows.Scan(&record.ToolName, &record.Installer, &record.InstallRef, &statusRaw, &probeStatusRaw, &record.ProbeOutput, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &installedAtRaw, &lastProbedAtRaw, &lastFailureAtRaw, &attestedAtRaw); err != nil {
 			return nil, fmt.Errorf("scan tool install record: %w", err)
 		}
 		createdAt, err := parseSQLiteTime(createdAtRaw)
@@ -1839,20 +1854,30 @@ func (s *SQLiteStore) ToolInstallRecords(status ToolInstallStatus, limit int) ([
 		}
 		record.Status = NormalizeToolInstallStatus(ToolInstallStatus(statusRaw))
 		record.ProbeStatus = NormalizeToolProbeStatus(ToolProbeStatus(probeStatusRaw))
+		record.ConsecutiveFailures = consecutiveFailuresRaw
 		record.CreatedAt = createdAt
 		record.UpdatedAt = updatedAt
 		if installedAtRaw.Valid {
-			if record.InstalledAt, err = parseSQLiteTime(installedAtRaw.String); err != nil {
+			record.InstalledAt, err = parseSQLiteTime(installedAtRaw.String)
+			if err != nil {
 				return nil, fmt.Errorf("parse tool install record installed_at: %w", err)
 			}
 		}
 		if lastProbedAtRaw.Valid {
-			if record.LastProbedAt, err = parseSQLiteTime(lastProbedAtRaw.String); err != nil {
+			record.LastProbedAt, err = parseSQLiteTime(lastProbedAtRaw.String)
+			if err != nil {
 				return nil, fmt.Errorf("parse tool install record last_probed_at: %w", err)
 			}
 		}
+		if lastFailureAtRaw.Valid {
+			record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool install record last_failure_at: %w", err)
+			}
+		}
 		if attestedAtRaw.Valid {
-			if record.AttestedAt, err = parseSQLiteTime(attestedAtRaw.String); err != nil {
+			record.AttestedAt, err = parseSQLiteTime(attestedAtRaw.String)
+			if err != nil {
 				return nil, fmt.Errorf("parse tool install record attested_at: %w", err)
 			}
 		}
@@ -1878,16 +1903,17 @@ func (s *SQLiteStore) UpsertToolProbeRecord(record ToolProbeRecord) (ToolProbeRe
 	now := time.Now().UTC()
 	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
 	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
-	probedAt := nullableTimeRFC3339(record.ProbedAt)
 	if _, err := s.db.Exec(`
-		INSERT INTO tool_probe_records(tool_name, status, probe_output, created_at, updated_at, probed_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO tool_probe_records(tool_name, status, probe_output, consecutive_failures, created_at, updated_at, probed_at, last_failure_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tool_name) DO UPDATE SET
 			status = excluded.status,
 			probe_output = excluded.probe_output,
+			consecutive_failures = excluded.consecutive_failures,
 			updated_at = excluded.updated_at,
-			probed_at = excluded.probed_at
-	`, record.ToolName, string(record.Status), record.ProbeOutput, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), probedAt); err != nil {
+			probed_at = excluded.probed_at,
+			last_failure_at = excluded.last_failure_at
+	`, record.ToolName, string(record.Status), record.ProbeOutput, record.ConsecutiveFailures, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), nullableTimeRFC3339(record.ProbedAt), nullableTimeRFC3339(record.LastFailureAt)); err != nil {
 		return ToolProbeRecord{}, fmt.Errorf("upsert tool probe record: %w", err)
 	}
 	stored, ok, err := s.ToolProbeRecord(record.ToolName)
@@ -1899,20 +1925,21 @@ func (s *SQLiteStore) UpsertToolProbeRecord(record ToolProbeRecord) (ToolProbeRe
 	}
 	return stored, nil
 }
-
 func (s *SQLiteStore) ToolProbeRecord(toolName string) (ToolProbeRecord, bool, error) {
 	toolName = strings.TrimSpace(toolName)
 	if toolName == "" {
 		return ToolProbeRecord{}, false, nil
 	}
 	var (
-		record       ToolProbeRecord
-		statusRaw    string
-		createdAtRaw string
-		updatedAtRaw string
-		probedAtRaw  sql.NullString
+		record                 ToolProbeRecord
+		statusRaw              string
+		consecutiveFailuresRaw int
+		createdAtRaw           string
+		updatedAtRaw           string
+		probedAtRaw            sql.NullString
+		lastFailureAtRaw       sql.NullString
 	)
-	err := s.db.QueryRow(`SELECT tool_name, status, probe_output, created_at, updated_at, probed_at FROM tool_probe_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &createdAtRaw, &updatedAtRaw, &probedAtRaw)
+	err := s.db.QueryRow(`SELECT tool_name, status, probe_output, consecutive_failures, created_at, updated_at, probed_at, last_failure_at FROM tool_probe_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &probedAtRaw, &lastFailureAtRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ToolProbeRecord{}, false, nil
 	}
@@ -1928,6 +1955,7 @@ func (s *SQLiteStore) ToolProbeRecord(toolName string) (ToolProbeRecord, bool, e
 		return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record updated_at: %w", err)
 	}
 	record.Status = NormalizeToolProbeStatus(ToolProbeStatus(statusRaw))
+	record.ConsecutiveFailures = consecutiveFailuresRaw
 	record.CreatedAt = createdAt
 	record.UpdatedAt = updatedAt
 	if probedAtRaw.Valid {
@@ -1936,15 +1964,20 @@ func (s *SQLiteStore) ToolProbeRecord(toolName string) (ToolProbeRecord, bool, e
 			return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record probed_at: %w", err)
 		}
 	}
+	if lastFailureAtRaw.Valid {
+		record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+		if err != nil {
+			return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record last_failure_at: %w", err)
+		}
+	}
 	return NormalizeToolProbeRecord(record), true, nil
 }
-
 func (s *SQLiteStore) ToolProbeRecords(status ToolProbeStatus, limit int) ([]ToolProbeRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	status = NormalizeToolProbeStatus(status)
-	query := `SELECT tool_name, status, probe_output, created_at, updated_at, probed_at FROM tool_probe_records`
+	query := `SELECT tool_name, status, probe_output, consecutive_failures, created_at, updated_at, probed_at, last_failure_at FROM tool_probe_records`
 	args := make([]any, 0, 2)
 	if status != "" {
 		query += " WHERE status = ?"
@@ -1960,13 +1993,15 @@ func (s *SQLiteStore) ToolProbeRecords(status ToolProbeStatus, limit int) ([]Too
 	out := make([]ToolProbeRecord, 0, limit)
 	for rows.Next() {
 		var (
-			record       ToolProbeRecord
-			statusRaw    string
-			createdAtRaw string
-			updatedAtRaw string
-			probedAtRaw  sql.NullString
+			record                 ToolProbeRecord
+			statusRaw              string
+			consecutiveFailuresRaw int
+			createdAtRaw           string
+			updatedAtRaw           string
+			probedAtRaw            sql.NullString
+			lastFailureAtRaw       sql.NullString
 		)
-		if err := rows.Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &createdAtRaw, &updatedAtRaw, &probedAtRaw); err != nil {
+		if err := rows.Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &probedAtRaw, &lastFailureAtRaw); err != nil {
 			return nil, fmt.Errorf("scan tool probe record: %w", err)
 		}
 		createdAt, err := parseSQLiteTime(createdAtRaw)
@@ -1978,12 +2013,19 @@ func (s *SQLiteStore) ToolProbeRecords(status ToolProbeStatus, limit int) ([]Too
 			return nil, fmt.Errorf("parse tool probe record updated_at: %w", err)
 		}
 		record.Status = NormalizeToolProbeStatus(ToolProbeStatus(statusRaw))
+		record.ConsecutiveFailures = consecutiveFailuresRaw
 		record.CreatedAt = createdAt
 		record.UpdatedAt = updatedAt
 		if probedAtRaw.Valid {
 			record.ProbedAt, err = parseSQLiteTime(probedAtRaw.String)
 			if err != nil {
 				return nil, fmt.Errorf("parse tool probe record probed_at: %w", err)
+			}
+		}
+		if lastFailureAtRaw.Valid {
+			record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool probe record last_failure_at: %w", err)
 			}
 		}
 		out = append(out, NormalizeToolProbeRecord(record))
@@ -1993,7 +2035,6 @@ func (s *SQLiteStore) ToolProbeRecords(status ToolProbeStatus, limit int) ([]Too
 	}
 	return out, nil
 }
-
 func (s *SQLiteStore) UpsertToolAuditRecord(record ToolAuditRecord) (ToolAuditRecord, error) {
 	record = NormalizeToolAuditRecord(record)
 	if record.ToolName == "" {
@@ -2002,16 +2043,17 @@ func (s *SQLiteStore) UpsertToolAuditRecord(record ToolAuditRecord) (ToolAuditRe
 	now := time.Now().UTC()
 	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
 	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
-	auditedAt := nullableTimeRFC3339(record.AuditedAt)
 	if _, err := s.db.Exec(`
-		INSERT INTO tool_audit_records(tool_name, status, audit_output, created_at, updated_at, audited_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO tool_audit_records(tool_name, status, audit_output, consecutive_failures, created_at, updated_at, audited_at, last_failure_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tool_name) DO UPDATE SET
 			status = excluded.status,
 			audit_output = excluded.audit_output,
+			consecutive_failures = excluded.consecutive_failures,
 			updated_at = excluded.updated_at,
-			audited_at = excluded.audited_at
-	`, record.ToolName, string(record.Status), record.AuditOutput, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), auditedAt); err != nil {
+			audited_at = excluded.audited_at,
+			last_failure_at = excluded.last_failure_at
+	`, record.ToolName, string(record.Status), record.AuditOutput, record.ConsecutiveFailures, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), nullableTimeRFC3339(record.AuditedAt), nullableTimeRFC3339(record.LastFailureAt)); err != nil {
 		return ToolAuditRecord{}, fmt.Errorf("upsert tool audit record: %w", err)
 	}
 	stored, ok, err := s.ToolAuditRecord(record.ToolName)
@@ -2023,20 +2065,21 @@ func (s *SQLiteStore) UpsertToolAuditRecord(record ToolAuditRecord) (ToolAuditRe
 	}
 	return stored, nil
 }
-
 func (s *SQLiteStore) ToolAuditRecord(toolName string) (ToolAuditRecord, bool, error) {
 	toolName = strings.TrimSpace(toolName)
 	if toolName == "" {
 		return ToolAuditRecord{}, false, nil
 	}
 	var (
-		record       ToolAuditRecord
-		statusRaw    string
-		createdAtRaw string
-		updatedAtRaw string
-		auditedAtRaw sql.NullString
+		record                 ToolAuditRecord
+		statusRaw              string
+		consecutiveFailuresRaw int
+		createdAtRaw           string
+		updatedAtRaw           string
+		auditedAtRaw           sql.NullString
+		lastFailureAtRaw       sql.NullString
 	)
-	err := s.db.QueryRow(`SELECT tool_name, status, audit_output, created_at, updated_at, audited_at FROM tool_audit_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &createdAtRaw, &updatedAtRaw, &auditedAtRaw)
+	err := s.db.QueryRow(`SELECT tool_name, status, audit_output, consecutive_failures, created_at, updated_at, audited_at, last_failure_at FROM tool_audit_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &auditedAtRaw, &lastFailureAtRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ToolAuditRecord{}, false, nil
 	}
@@ -2052,6 +2095,7 @@ func (s *SQLiteStore) ToolAuditRecord(toolName string) (ToolAuditRecord, bool, e
 		return ToolAuditRecord{}, false, fmt.Errorf("parse tool audit record updated_at: %w", err)
 	}
 	record.Status = NormalizeToolAuditStatus(ToolAuditStatus(statusRaw))
+	record.ConsecutiveFailures = consecutiveFailuresRaw
 	record.CreatedAt = createdAt
 	record.UpdatedAt = updatedAt
 	if auditedAtRaw.Valid {
@@ -2060,15 +2104,20 @@ func (s *SQLiteStore) ToolAuditRecord(toolName string) (ToolAuditRecord, bool, e
 			return ToolAuditRecord{}, false, fmt.Errorf("parse tool audit record audited_at: %w", err)
 		}
 	}
+	if lastFailureAtRaw.Valid {
+		record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+		if err != nil {
+			return ToolAuditRecord{}, false, fmt.Errorf("parse tool audit record last_failure_at: %w", err)
+		}
+	}
 	return NormalizeToolAuditRecord(record), true, nil
 }
-
 func (s *SQLiteStore) ToolAuditRecords(status ToolAuditStatus, limit int) ([]ToolAuditRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	status = NormalizeToolAuditStatus(status)
-	query := `SELECT tool_name, status, audit_output, created_at, updated_at, audited_at FROM tool_audit_records`
+	query := `SELECT tool_name, status, audit_output, consecutive_failures, created_at, updated_at, audited_at, last_failure_at FROM tool_audit_records`
 	args := make([]any, 0, 2)
 	if status != "" {
 		query += " WHERE status = ?"
@@ -2084,13 +2133,15 @@ func (s *SQLiteStore) ToolAuditRecords(status ToolAuditStatus, limit int) ([]Too
 	out := make([]ToolAuditRecord, 0, limit)
 	for rows.Next() {
 		var (
-			record       ToolAuditRecord
-			statusRaw    string
-			createdAtRaw string
-			updatedAtRaw string
-			auditedAtRaw sql.NullString
+			record                 ToolAuditRecord
+			statusRaw              string
+			consecutiveFailuresRaw int
+			createdAtRaw           string
+			updatedAtRaw           string
+			auditedAtRaw           sql.NullString
+			lastFailureAtRaw       sql.NullString
 		)
-		if err := rows.Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &createdAtRaw, &updatedAtRaw, &auditedAtRaw); err != nil {
+		if err := rows.Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &auditedAtRaw, &lastFailureAtRaw); err != nil {
 			return nil, fmt.Errorf("scan tool audit record: %w", err)
 		}
 		createdAt, err := parseSQLiteTime(createdAtRaw)
@@ -2102,12 +2153,19 @@ func (s *SQLiteStore) ToolAuditRecords(status ToolAuditStatus, limit int) ([]Too
 			return nil, fmt.Errorf("parse tool audit record updated_at: %w", err)
 		}
 		record.Status = NormalizeToolAuditStatus(ToolAuditStatus(statusRaw))
+		record.ConsecutiveFailures = consecutiveFailuresRaw
 		record.CreatedAt = createdAt
 		record.UpdatedAt = updatedAt
 		if auditedAtRaw.Valid {
 			record.AuditedAt, err = parseSQLiteTime(auditedAtRaw.String)
 			if err != nil {
 				return nil, fmt.Errorf("parse tool audit record audited_at: %w", err)
+			}
+		}
+		if lastFailureAtRaw.Valid {
+			record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool audit record last_failure_at: %w", err)
 			}
 		}
 		out = append(out, NormalizeToolAuditRecord(record))
@@ -5151,6 +5209,18 @@ func applyMigrations(tx *sql.Tx) error {
 	}
 	if currentVersion > 0 && currentVersion < 26 {
 		if err := backfillDurableAgentIdentityState(tx); err != nil {
+			return err
+		}
+	}
+	for _, spec := range []struct{ table, name, typ string }{
+		{table: "tool_install_records", name: "consecutive_failures", typ: "INTEGER NOT NULL DEFAULT 0"},
+		{table: "tool_install_records", name: "last_failure_at", typ: "TEXT"},
+		{table: "tool_probe_records", name: "consecutive_failures", typ: "INTEGER NOT NULL DEFAULT 0"},
+		{table: "tool_probe_records", name: "last_failure_at", typ: "TEXT"},
+		{table: "tool_audit_records", name: "consecutive_failures", typ: "INTEGER NOT NULL DEFAULT 0"},
+		{table: "tool_audit_records", name: "last_failure_at", typ: "TEXT"},
+	} {
+		if err := ensureTableColumn(tx, spec.table, spec.name, spec.typ); err != nil {
 			return err
 		}
 	}
