@@ -160,6 +160,13 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 			snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, stale)
 		}
 	}
+	if r != nil && r.store != nil {
+		if toolRows, err := r.toolLifecycleStatusSnapshot(20); err != nil {
+			return core.ChatStatusSnapshot{}, err
+		} else {
+			snapshot.ToolLifecycle = toolRows
+		}
+	}
 	return snapshot, nil
 }
 
@@ -1423,6 +1430,35 @@ func renderContinuationSummary(state session.ContinuationState) string {
 		parts = append(parts, "blocked_reason="+reason)
 	}
 	return strings.Join(parts, " ")
+}
+
+func (r *Runtime) toolLifecycleStatusSnapshot(limit int) ([]core.ToolLifecycleStatusSnapshot, error) {
+	if r == nil || r.store == nil {
+		return nil, nil
+	}
+	records, err := r.store.ToolInstallRecords("", limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.ToolLifecycleStatusSnapshot, 0, len(records))
+	for _, record := range records {
+		audit, _, err := r.store.ToolAuditRecord(record.ToolName)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, core.ToolLifecycleStatusSnapshot{
+			ToolName:      record.ToolName,
+			InstallStatus: strings.TrimSpace(string(record.Status)),
+			ProbeStatus:   strings.TrimSpace(string(record.ProbeStatus)),
+			AuditStatus:   strings.TrimSpace(string(audit.Status)),
+			InstallRef:    strings.TrimSpace(record.InstallRef),
+			InstalledAt:   record.InstalledAt,
+			LastProbedAt:  record.LastProbedAt,
+			AuditedAt:     audit.AuditedAt,
+			AttestedAt:    record.AttestedAt,
+		})
+	}
+	return out, nil
 }
 
 func statusAge(now time.Time, preferred time.Time, fallback time.Time) time.Duration {

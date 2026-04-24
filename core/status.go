@@ -79,6 +79,18 @@ type RestartHealthSnapshot struct {
 	StaleTurnLimit     int
 }
 
+type ToolLifecycleStatusSnapshot struct {
+	ToolName      string
+	InstallStatus string
+	ProbeStatus   string
+	AuditStatus   string
+	InstallRef    string
+	InstalledAt   time.Time
+	LastProbedAt  time.Time
+	AuditedAt     time.Time
+	AttestedAt    time.Time
+}
+
 type ChatStatusSnapshot struct {
 	GeneratedAt           time.Time
 	ChatID                int64
@@ -103,6 +115,7 @@ type ChatStatusSnapshot struct {
 	Continuation          *ContinuationStatusSnapshot
 	LatestTurnRun         *TurnRunStatusSnapshot
 	RecentExecution       []ExecutionEventSummary
+	ToolLifecycle         []ToolLifecycleStatusSnapshot
 	StaleRunningTurns     []TurnRunStatusSnapshot
 	RestartHealth         RestartHealthSnapshot
 }

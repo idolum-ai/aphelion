@@ -816,6 +816,53 @@ func TestChatStatusSnapshotSummarizesToolInstallEvents(t *testing.T) {
 	}
 }
 
+func TestChatStatusSnapshotIncludesCanonicalToolLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	installedAt := time.Now().UTC().Add(-2 * time.Minute)
+	lastProbedAt := time.Now().UTC().Add(-1 * time.Minute)
+	auditedAt := time.Now().UTC()
+	if _, err := store.UpsertToolInstallRecord(session.ToolInstallRecord{
+		ToolName:     "browse_page",
+		Installer:    "aphelion",
+		InstallRef:   "workspace:tooling-v3",
+		Status:       session.ToolInstallStatusVerified,
+		ProbeStatus:  session.ToolProbeStatusPassed,
+		InstalledAt:  installedAt,
+		LastProbedAt: lastProbedAt,
+		AttestedAt:   auditedAt,
+	}); err != nil {
+		t.Fatalf("UpsertToolInstallRecord() err = %v", err)
+	}
+	if _, err := store.UpsertToolAuditRecord(session.ToolAuditRecord{
+		ToolName:    "browse_page",
+		Status:      session.ToolAuditStatusPassed,
+		AuditOutput: "entry_path: /workspace/run.sh",
+		AuditedAt:   auditedAt,
+	}); err != nil {
+		t.Fatalf("UpsertToolAuditRecord() err = %v", err)
+	}
+	snapshot, err := rt.ChatStatusSnapshot(90216, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.ToolLifecycle) != 1 {
+		t.Fatalf("ToolLifecycle len = %d, want 1", len(snapshot.ToolLifecycle))
+	}
+	row := snapshot.ToolLifecycle[0]
+	if row.ToolName != "browse_page" || row.InstallStatus != "verified" || row.ProbeStatus != "passed" || row.AuditStatus != "passed" {
+		t.Fatalf("ToolLifecycle[0] = %#v, want browse_page verified/passed/passed", row)
+	}
+	if row.InstallRef != "workspace:tooling-v3" {
+		t.Fatalf("ToolLifecycle[0].InstallRef = %q, want workspace:tooling-v3", row.InstallRef)
+	}
+}
+
 func TestChatStatusSnapshotSummarizesToolAuthorityLifecycleEvents(t *testing.T) {
 	t.Parallel()
 
