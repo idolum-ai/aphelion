@@ -5,6 +5,8 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,5 +68,84 @@ func TestToolAuthorityInstallSetShowListAndRegisterGateForExternalTool(t *testin
 	}
 	if !strings.Contains(registerOut, "tool_name: browse_page") {
 		t.Fatalf("register output = %q, want browse_page registration", registerOut)
+	}
+}
+
+func TestToolAuthorityProbeRunUpdatesInstallRecordFromManifestProbe(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	probeScript := filepath.Join(registry.workspace, "probe.sh")
+	if err := os.WriteFile(probeScript, []byte("#!/usr/bin/env bash\necho 'probe ok'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(probe.sh) err = %v", err)
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"installed","installer":"aphelion","install_ref":"workspace:tooling-v1"}`))
+	if err != nil {
+		t.Fatalf("install_set(installed) err = %v", err)
+	}
+	probeOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"probe_run","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("probe_run err = %v", err)
+	}
+	if !strings.Contains(probeOut, "probe_status: passed") {
+		t.Fatalf("probe_run output = %q, want passed probe status", probeOut)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_show","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("install_show err = %v", err)
+	}
+	if !strings.Contains(showOut, "last_probed_at:") || !strings.Contains(showOut, "probe_output: stdout:") {
+		t.Fatalf("install_show output = %q, want persisted probe evidence", showOut)
+	}
+}
+
+func TestToolAuthorityProbeRunMarksVerifiedExternalToolStaleOnFailure(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	probeScript := filepath.Join(registry.workspace, "probe.sh")
+	if err := os.WriteFile(probeScript, []byte("#!/usr/bin/env bash\necho 'broken'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(probe.sh) err = %v", err)
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1","probe_status":"passed","probe_output":"self-check ok"}`))
+	if err != nil {
+		t.Fatalf("install_set(verified) err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"probe_run","tool_name":"browse_page"}`))
+	if err == nil || !strings.Contains(err.Error(), "probe output did not contain expected text") {
+		t.Fatalf("probe_run failure err = %v, want expected-text mismatch", err)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_show","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("install_show err = %v", err)
+	}
+	if !strings.Contains(showOut, "status: stale") || !strings.Contains(showOut, "probe_status: failed") {
+		t.Fatalf("install_show output = %q, want stale + failed probe after reprobe failure", showOut)
 	}
 }

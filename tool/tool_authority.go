@@ -3,9 +3,11 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -63,6 +65,8 @@ func (r *Registry) toolAuthority(ctx context.Context, input json.RawMessage, p p
 		return r.toolAuthorityInstallShow(in)
 	case "install_list":
 		return r.toolAuthorityInstallList(in)
+	case "probe_run":
+		return r.toolAuthorityProbeRun(ctx, in, p, key)
 	case "access_check":
 		return r.toolAuthorityAccessCheck(in)
 	default:
@@ -605,6 +609,112 @@ func (r *Registry) toolAuthorityInstallList(in toolAuthorityInput) (string, erro
 	return renderToolInstallRecordList(records), nil
 }
 
+func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityInput, actor principal.Principal, key session.SessionKey) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority probe_run requires tool_name")
+	}
+	manifest, ok := r.externalManifestByName(toolName)
+	if !ok {
+		return "", fmt.Errorf("tool_authority probe_run requires an external tool manifest-backed tool_name")
+	}
+	manifest = NormalizeExternalToolManifest(manifest)
+	if len(manifest.Probe.Command) == 0 {
+		return "", fmt.Errorf("external tool %q does not declare a probe command", manifest.Name)
+	}
+	record, exists, err := r.store.ToolInstallRecord(manifest.Name)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("external tool %q requires an install record before probe_run", manifest.Name)
+	}
+	probeOutput, err := r.runExternalManifestProbe(ctx, manifest)
+	now := time.Now().UTC()
+	record.ProbeOutput = probeOutput
+	record.LastProbedAt = now
+	if err != nil {
+		record.ProbeStatus = session.ToolProbeStatusFailed
+		if record.Status == session.ToolInstallStatusVerified {
+			record.Status = session.ToolInstallStatusStale
+		} else {
+			record.Status = session.ToolInstallStatusFailed
+		}
+		record.AttestedAt = time.Time{}
+		record.UpdatedAt = now
+		stored, saveErr := r.store.UpsertToolInstallRecord(record)
+		if saveErr != nil {
+			return "", saveErr
+		}
+		_ = r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
+			"tool_name":     stored.ToolName,
+			"status":        string(stored.Status),
+			"probe_status":  string(stored.ProbeStatus),
+			"install_ref":   stored.InstallRef,
+			"actor_role":    strings.TrimSpace(string(actor.Role)),
+			"actor_user_id": actor.TelegramUserID,
+		})
+		return "", err
+	}
+	record.ProbeStatus = session.ToolProbeStatusPassed
+	record.UpdatedAt = now
+	stored, err := r.store.UpsertToolInstallRecord(record)
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
+		"tool_name":     stored.ToolName,
+		"status":        string(stored.Status),
+		"probe_status":  string(stored.ProbeStatus),
+		"install_ref":   stored.InstallRef,
+		"actor_role":    strings.TrimSpace(string(actor.Role)),
+		"actor_user_id": actor.TelegramUserID,
+	}); err != nil {
+		return "", err
+	}
+	return renderToolInstallRecord("[TOOL_INSTALL]", stored), nil
+}
+
+func (r *Registry) runExternalManifestProbe(ctx context.Context, manifest ExternalToolManifest) (string, error) {
+	manifest = NormalizeExternalToolManifest(manifest)
+	if len(manifest.Probe.Command) == 0 {
+		return "", fmt.Errorf("external tool %q does not declare a probe command", manifest.Name)
+	}
+	workdir, err := resolveWorkdir(r.workspace, manifest.Execution.Workdir)
+	if err != nil {
+		return "", err
+	}
+	timeout := defaultTimeout(15 * time.Second)
+	if manifest.Execution.TimeoutSeconds > 0 {
+		timeout = time.Duration(manifest.Execution.TimeoutSeconds) * time.Second
+	}
+	if manifest.Constraints.MaxRuntimeSeconds > 0 {
+		constraintTimeout := time.Duration(manifest.Constraints.MaxRuntimeSeconds) * time.Second
+		if timeout <= 0 || constraintTimeout < timeout {
+			timeout = constraintTimeout
+		}
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, manifest.Probe.Command[0], manifest.Probe.Command[1:]...)
+	cmd.Dir = workdir
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	output := renderOutput(stdout.String(), stderr.String(), r.maxOutputBytes)
+	if runErr != nil {
+		return output, fmt.Errorf("external tool %q probe execution failed: %s", manifest.Name, output)
+	}
+	if expected := strings.TrimSpace(manifest.Probe.ExpectedOutputContains); expected != "" {
+		if !strings.Contains(stdout.String(), expected) && !strings.Contains(stderr.String(), expected) {
+			return output, fmt.Errorf("external tool %q probe output did not contain expected text %q", manifest.Name, expected)
+		}
+	}
+	return output, nil
+}
+
 func (r *Registry) toolAuthorityAccessCheck(in toolAuthorityInput) (string, error) {
 	toolName := strings.TrimSpace(in.ToolName)
 	principalID := strings.TrimSpace(in.Principal)
@@ -700,7 +810,7 @@ func renderToolAuthorityHelp() string {
 		"- proposal_submit | proposal_show | proposal_list | proposal_review | proposal_ratify | proposal_override",
 		"- register | registered_show | registered_list",
 		"- exposure_set | exposure_show | exposure_list",
-		"- install_set | install_show | install_list",
+		"- install_set | install_show | install_list | probe_run",
 		"- access_check",
 	}, "\n")
 }
