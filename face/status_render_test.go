@@ -127,17 +127,20 @@ func TestRenderTelegramStatusChatIncludesCanonicalToolLifecycleSnapshot(t *testi
 	out := RenderTelegramStatusChat(core.ChatStatusSnapshot{
 		ChatID: 45,
 		ToolLifecycle: []core.ToolLifecycleStatusSnapshot{{
-			ToolName:      "browse_page",
-			InstallStatus: "verified",
-			ProbeStatus:   "passed",
-			AuditStatus:   "passed",
-			InstallRef:    "workspace:tooling-v3",
+			ToolName:           "browse_page",
+			InstallStatus:      "verified",
+			ProbeStatus:        "passed",
+			AuditStatus:        "passed",
+			InstallRef:         "workspace:tooling-v3",
+			TraceStage:         "probe",
+			TraceSummary:       "probe_run passed against the declared probe command",
+			TraceArtifactCount: 1,
 		}},
 	}, "medium", "high", false)
 
 	for _, needle := range []string{
 		"tool_lifecycle source=canonical:session.tool_install_records+tool_audit_records",
-		"- tool_name=browse_page install=verified probe=passed audit=passed install_ref=workspace:tooling-v3",
+		"- tool_name=browse_page install=verified probe=passed audit=passed install_ref=workspace:tooling-v3 trace=probe:probe_run passed against the declared probe command refs=1",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramStatusChat() = %q, want substring %q", out, needle)

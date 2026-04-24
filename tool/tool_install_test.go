@@ -148,8 +148,8 @@ func TestToolAuthorityProbeRunUpdatesInstallRecordFromManifestProbe(t *testing.T
 	if err != nil {
 		t.Fatalf("probe_list err = %v", err)
 	}
-	if !strings.Contains(probeListOut, "browse_page status=passed") {
-		t.Fatalf("probe_list output = %q, want browse_page canonical probe row", probeListOut)
+	if !strings.Contains(probeListOut, "browse_page status=passed") || !strings.Contains(probeListOut, "why=probe_run passed against the declared probe command") || !strings.Contains(probeListOut, "refs=1") {
+		t.Fatalf("probe_list output = %q, want browse_page canonical probe row with traceability", probeListOut)
 	}
 }
 
@@ -238,6 +238,13 @@ func TestToolAuthorityInstallExecuteRunsManifestInstallCommandAndMarksInstalled(
 	if !strings.Contains(out, "rationale: install_execute ran the manifest install command") || !strings.Contains(out, "artifact_ref: file_path ") || !strings.Contains(out, "install.sh") {
 		t.Fatalf("install_execute output = %q, want rendered rationale + install script ref", out)
 	}
+	installListOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_list"}`))
+	if err != nil {
+		t.Fatalf("install_list err = %v", err)
+	}
+	if !strings.Contains(installListOut, "browse_page status=installed") || !strings.Contains(installListOut, "why=install_execute ran the manifest install command") || !strings.Contains(installListOut, "refs=1") {
+		t.Fatalf("install_list output = %q, want compact traceability", installListOut)
+	}
 }
 
 func TestToolAuthorityInstallExecuteMarksRecordFailedOnInstallError(t *testing.T) {
@@ -314,6 +321,13 @@ func TestToolAuthorityAuditRunFailsWhenExecutionEntryIsMissing(t *testing.T) {
 	}
 	if !strings.Contains(auditShowOut, "rationale: audit_run could not resolve the declared execution entry") || !strings.Contains(auditShowOut, "artifact_ref: file_path ") || !strings.Contains(auditShowOut, "missing-run.sh") {
 		t.Fatalf("audit_show output = %q, want rendered rationale + missing entry ref", auditShowOut)
+	}
+	auditListOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"audit_list"}`))
+	if err != nil {
+		t.Fatalf("audit_list err = %v", err)
+	}
+	if !strings.Contains(auditListOut, "browse_page status=failed") || !strings.Contains(auditListOut, "why=audit_run could not resolve the declared execution entry") || !strings.Contains(auditListOut, "refs=1") {
+		t.Fatalf("audit_list output = %q, want compact traceability", auditListOut)
 	}
 }
 

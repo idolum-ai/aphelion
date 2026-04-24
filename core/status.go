@@ -80,15 +80,18 @@ type RestartHealthSnapshot struct {
 }
 
 type ToolLifecycleStatusSnapshot struct {
-	ToolName      string
-	InstallStatus string
-	ProbeStatus   string
-	AuditStatus   string
-	InstallRef    string
-	InstalledAt   time.Time
-	LastProbedAt  time.Time
-	AuditedAt     time.Time
-	AttestedAt    time.Time
+	ToolName           string
+	InstallStatus      string
+	ProbeStatus        string
+	AuditStatus        string
+	InstallRef         string
+	TraceStage         string
+	TraceSummary       string
+	TraceArtifactCount int
+	InstalledAt        time.Time
+	LastProbedAt       time.Time
+	AuditedAt          time.Time
+	AttestedAt         time.Time
 }
 
 type ChatStatusSnapshot struct {

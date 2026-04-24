@@ -1450,16 +1450,38 @@ func (r *Runtime) toolLifecycleStatusSnapshot(limit int) ([]core.ToolLifecycleSt
 		if err != nil {
 			return nil, err
 		}
+		traceStage := ""
+		traceSummary := ""
+		traceArtifactCount := 0
+		traceUpdatedAt := time.Time{}
+		considerTrace := func(stage string, updatedAt time.Time, rationale string, refs []session.RecordReference) {
+			rationale = strings.TrimSpace(rationale)
+			if updatedAt.IsZero() || rationale == "" {
+				return
+			}
+			if traceUpdatedAt.IsZero() || updatedAt.After(traceUpdatedAt) {
+				traceStage = strings.TrimSpace(stage)
+				traceSummary = rationale
+				traceArtifactCount = len(session.NormalizeRecordReferences(refs))
+				traceUpdatedAt = updatedAt
+			}
+		}
+		considerTrace("install", record.UpdatedAt, record.Rationale, record.ArtifactRefs)
+		considerTrace("probe", probe.UpdatedAt, probe.Rationale, probe.ArtifactRefs)
+		considerTrace("audit", audit.UpdatedAt, audit.Rationale, audit.ArtifactRefs)
 		out = append(out, core.ToolLifecycleStatusSnapshot{
-			ToolName:      record.ToolName,
-			InstallStatus: strings.TrimSpace(string(record.Status)),
-			ProbeStatus:   strings.TrimSpace(string(probe.Status)),
-			AuditStatus:   strings.TrimSpace(string(audit.Status)),
-			InstallRef:    strings.TrimSpace(record.InstallRef),
-			InstalledAt:   record.InstalledAt,
-			LastProbedAt:  probe.ProbedAt,
-			AuditedAt:     audit.AuditedAt,
-			AttestedAt:    record.AttestedAt,
+			ToolName:           record.ToolName,
+			InstallStatus:      strings.TrimSpace(string(record.Status)),
+			ProbeStatus:        strings.TrimSpace(string(probe.Status)),
+			AuditStatus:        strings.TrimSpace(string(audit.Status)),
+			InstallRef:         strings.TrimSpace(record.InstallRef),
+			TraceStage:         traceStage,
+			TraceSummary:       traceSummary,
+			TraceArtifactCount: traceArtifactCount,
+			InstalledAt:        record.InstalledAt,
+			LastProbedAt:       probe.ProbedAt,
+			AuditedAt:          audit.AuditedAt,
+			AttestedAt:         record.AttestedAt,
 		})
 	}
 	return out, nil

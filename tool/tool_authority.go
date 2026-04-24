@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1275,6 +1276,14 @@ func renderToolProbeRecordList(records []session.ToolProbeRecord) string {
 		b.WriteString(record.ToolName)
 		b.WriteString(" status=")
 		b.WriteString(firstNonEmpty(string(record.Status), "-"))
+		if why := strings.TrimSpace(record.Rationale); why != "" {
+			b.WriteString(" why=")
+			b.WriteString(why)
+		}
+		if refs := len(session.NormalizeRecordReferences(record.ArtifactRefs)); refs > 0 {
+			b.WriteString(" refs=")
+			b.WriteString(strconv.Itoa(refs))
+		}
 	}
 	return b.String()
 }
@@ -1311,6 +1320,14 @@ func renderToolAuditRecordList(records []session.ToolAuditRecord) string {
 		b.WriteString(record.ToolName)
 		b.WriteString(" status=")
 		b.WriteString(firstNonEmpty(string(record.Status), "-"))
+		if why := strings.TrimSpace(record.Rationale); why != "" {
+			b.WriteString(" why=")
+			b.WriteString(why)
+		}
+		if refs := len(session.NormalizeRecordReferences(record.ArtifactRefs)); refs > 0 {
+			b.WriteString(" refs=")
+			b.WriteString(strconv.Itoa(refs))
+		}
 	}
 	return b.String()
 }
@@ -1363,6 +1380,14 @@ func renderToolInstallRecordList(records []session.ToolInstallRecord) string {
 		if strings.TrimSpace(string(record.ProbeStatus)) != "" {
 			b.WriteString(" probe_status=")
 			b.WriteString(string(record.ProbeStatus))
+		}
+		if why := strings.TrimSpace(record.Rationale); why != "" {
+			b.WriteString(" why=")
+			b.WriteString(why)
+		}
+		if refs := len(session.NormalizeRecordReferences(record.ArtifactRefs)); refs > 0 {
+			b.WriteString(" refs=")
+			b.WriteString(strconv.Itoa(refs))
 		}
 	}
 	return b.String()

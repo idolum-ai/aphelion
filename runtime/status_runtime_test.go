@@ -869,6 +869,62 @@ func TestChatStatusSnapshotIncludesCanonicalToolLifecycleState(t *testing.T) {
 	}
 }
 
+func TestChatStatusSnapshotIncludesCanonicalToolLifecycleTraceability(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	base := time.Now().UTC()
+	if _, err := store.UpsertToolInstallRecord(session.ToolInstallRecord{
+		ToolName:     "browse_page",
+		Installer:    "aphelion",
+		InstallRef:   "workspace:tooling-v3",
+		Status:       session.ToolInstallStatusInstalled,
+		Rationale:    "install_execute ran the manifest install command",
+		ArtifactRefs: []session.RecordReference{{Kind: "file_path", Ref: "/workspace/install.sh"}},
+		UpdatedAt:    base.Add(-2 * time.Minute),
+		InstalledAt:  base.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertToolInstallRecord() err = %v", err)
+	}
+	if _, err := store.UpsertToolAuditRecord(session.ToolAuditRecord{
+		ToolName:     "browse_page",
+		Status:       session.ToolAuditStatusPassed,
+		AuditOutput:  "entry_path: /workspace/run.sh",
+		Rationale:    "audit_run resolved the declared execution entry",
+		ArtifactRefs: []session.RecordReference{{Kind: "file_path", Ref: "/workspace/run.sh"}},
+		UpdatedAt:    base.Add(-1 * time.Minute),
+		AuditedAt:    base.Add(-1 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertToolAuditRecord() err = %v", err)
+	}
+	if _, err := store.UpsertToolProbeRecord(session.ToolProbeRecord{
+		ToolName:     "browse_page",
+		Status:       session.ToolProbeStatusPassed,
+		ProbeOutput:  "stdout: probe ok",
+		Rationale:    "probe_run passed against the declared probe command",
+		ArtifactRefs: []session.RecordReference{{Kind: "file_path", Ref: "/workspace/probe.sh"}},
+		UpdatedAt:    base,
+		ProbedAt:     base,
+	}); err != nil {
+		t.Fatalf("UpsertToolProbeRecord() err = %v", err)
+	}
+	snapshot, err := rt.ChatStatusSnapshot(90217, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.ToolLifecycle) != 1 {
+		t.Fatalf("ToolLifecycle len = %d, want 1", len(snapshot.ToolLifecycle))
+	}
+	row := snapshot.ToolLifecycle[0]
+	if row.TraceStage != "probe" || row.TraceSummary != "probe_run passed against the declared probe command" || row.TraceArtifactCount != 1 {
+		t.Fatalf("ToolLifecycle[0] trace = %#v, want latest probe trace with one ref", row)
+	}
+}
+
 func TestChatStatusSnapshotSummarizesToolAuthorityLifecycleEvents(t *testing.T) {
 	t.Parallel()
 
