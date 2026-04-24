@@ -17,9 +17,11 @@ const (
 	personaModelSonnet   = "claude-sonnet-4-6"
 	personaModelOpus46   = "claude-opus-4-6"
 	personaModelOpus47   = "claude-opus-4-7"
+	personaModelGPT55    = "gpt-5.5"
 	personaModelOpus     = personaModelOpus47
 	personaEffortSonnet  = "sonnet"
 	personaEffortOpus    = "opus"
+	personaEffortGPT     = "gpt"
 	governorEffortLow    = "low"
 	governorEffortMedium = "medium"
 	governorEffortHigh   = "high"
@@ -56,7 +58,11 @@ func defaultRuntimeRecipeState(cfg *config.Config) runtimeRecipeState {
 	if cfg == nil {
 		return state
 	}
-	if strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.Anthropic.Model)), "opus") ||
+	nativeProvider := config.EffectiveNativeProvider(cfg)
+	if nativeProvider == "openai" ||
+		(strings.TrimSpace(cfg.Providers.OpenAI.APIKey) != "" && strings.EqualFold(strings.TrimSpace(cfg.Providers.OpenAI.Model), personaModelGPT55)) {
+		state.PersonaModel = personaModelGPT55
+	} else if strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.Anthropic.Model)), "opus") ||
 		strings.Contains(strings.ToLower(strings.TrimSpace(cfg.Providers.OpenRouter.Model)), "opus") {
 		state.PersonaModel = personaModelOpus
 	}
@@ -165,7 +171,7 @@ func (r *Runtime) CurrentPersonaModel() string {
 }
 
 func (r *Runtime) PersonaModelOptions() []string {
-	return []string{personaModelSonnet, personaModelOpus46, personaModelOpus47}
+	return []string{personaModelSonnet, personaModelOpus46, personaModelOpus47, personaModelGPT55}
 }
 
 func (r *Runtime) SetPersonaModel(model string) (string, error) {
@@ -224,8 +230,9 @@ func (r *Runtime) SetGovernorEffort(effort string) (string, error) {
 func normalizePersonaModel(model string) string {
 	value := strings.ToLower(strings.TrimSpace(model))
 	value = strings.TrimPrefix(value, "anthropic/")
+	value = strings.TrimPrefix(value, "openai/")
 	switch value {
-	case personaModelSonnet, personaModelOpus46, personaModelOpus47:
+	case personaModelSonnet, personaModelOpus46, personaModelOpus47, personaModelGPT55:
 		return value
 	default:
 		return ""
@@ -235,6 +242,8 @@ func normalizePersonaModel(model string) string {
 func personaEffortForModel(model string) string {
 	if normalized := normalizePersonaModel(model); normalized == personaModelOpus46 || normalized == personaModelOpus47 {
 		return personaEffortOpus
+	} else if normalized == personaModelGPT55 {
+		return personaEffortGPT
 	}
 	return personaEffortSonnet
 }

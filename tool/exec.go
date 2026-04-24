@@ -436,9 +436,36 @@ func (r *Registry) externalManifestsForPrincipal(p principal.Principal) []Extern
 		if err != nil || !allowed {
 			continue
 		}
+		if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) && r.store != nil {
+			scope, err := r.externalToolFreshnessScope(p)
+			if err != nil {
+				continue
+			}
+			if err := r.ensureExternalToolFresh(manifest, scope); err != nil {
+				continue
+			}
+		}
 		filtered = append(filtered, manifest)
 	}
 	return filtered
+}
+
+func (r *Registry) externalToolFreshnessScope(p principal.Principal) (sandbox.Scope, error) {
+	if r.sandbox != nil {
+		scope, err := r.sandbox.Resolve(p)
+		if err == nil {
+			return scope, nil
+		}
+	}
+	root := strings.TrimSpace(r.workspace)
+	if root == "" {
+		return sandbox.Scope{}, fmt.Errorf("external tool freshness check requires workspace root")
+	}
+	return sandbox.Scope{
+		Principal:   p,
+		GlobalRoot:  root,
+		WorkingRoot: root,
+	}, nil
 }
 
 func (r *Registry) externalToolDefinitions(manifests []ExternalToolManifest) []agent.ToolDef {
@@ -650,8 +677,8 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"status": {"type": "string", "enum": ["pending", "installed", "verified", "failed", "stale"], "description": "Install/probe lifecycle status for install_set or install_list filtering"},
 					"installer": {"type": "string", "description": "Who installed or provisioned the external tool"},
 					"install_ref": {"type": "string", "description": "Reference to the install artifact, path, image, or package set"},
-					"probe_status": {"type": "string", "enum": ["passed", "failed"], "description": "Latest probe result for install_set"},
-					"probe_output": {"type": "string", "description": "Latest bounded probe output or diagnostic"},
+					"probe_status": {"type": "string", "enum": ["passed", "failed"], "description": "Deprecated for install_set; use probe_run so probe evidence is runtime-authored"},
+					"probe_output": {"type": "string", "description": "Deprecated for install_set; use probe_run so probe evidence is runtime-authored"},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Optional list limit"}
 				},
 				"required": ["action"]
@@ -858,7 +885,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	case "update_plan":
 		return r.updatePlan(ctx, input, key)
 	case "tool_authority":
-		return r.toolAuthority(ctx, input, p, key)
+		return r.toolAuthority(ctx, input, p, key, scope)
 	case "search_web":
 		return r.searchWebTool(ctx, input, p, key)
 	case "semantic_search":
@@ -872,7 +899,10 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	default:
 		if manifest, ok := r.externalManifestByName(name); ok {
 			if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) {
-				return r.externalExecutor.Execute(ctx, manifest, input, scope, r.maxOutputBytes)
+				if err := r.ensureExternalToolFresh(manifest, scope); err != nil {
+					return "", err
+				}
+				return r.externalExecutor.Execute(ctx, manifest, input, scope, r.runner, r.maxOutputBytes)
 			}
 			return "", fmt.Errorf("external tool %q is present in the manifest but not yet executable in core (owner=%s)", manifest.Name, manifest.Owner)
 		}

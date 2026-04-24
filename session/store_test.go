@@ -943,6 +943,8 @@ func TestToolAuditRecordRoundTrip(t *testing.T) {
 		AuditOutput:         "entry_path: /tmp/run.sh",
 		Rationale:           "Runtime resolution succeeded for the declared entrypoint.",
 		ArtifactRefs:        []RecordReference{{Kind: "file_path", Ref: "/tmp/run.sh", Label: "entry path"}},
+		BaselineFingerprint: "sha256:audit-baseline",
+		CurrentFingerprint:  "sha256:audit-current",
 		AuditedAt:           time.Now().UTC(),
 		ConsecutiveFailures: 0,
 	})
@@ -964,6 +966,9 @@ func TestToolAuditRecordRoundTrip(t *testing.T) {
 	}
 	if loaded.Rationale != record.Rationale || len(loaded.ArtifactRefs) != 1 || loaded.ArtifactRefs[0].Ref != "/tmp/run.sh" {
 		t.Fatalf("loaded traceability = (%q, %#v), want rationale + file ref", loaded.Rationale, loaded.ArtifactRefs)
+	}
+	if loaded.BaselineFingerprint != "sha256:audit-baseline" || loaded.CurrentFingerprint != "sha256:audit-current" {
+		t.Fatalf("loaded fingerprints = %q/%q, want persisted audit fingerprints", loaded.BaselineFingerprint, loaded.CurrentFingerprint)
 	}
 	list, err := store.ToolAuditRecords(ToolAuditStatusPassed, 10)
 	if err != nil {
@@ -996,6 +1001,8 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 		InstalledAt:         time.Now().UTC(),
 		LastProbedAt:        time.Now().UTC(),
 		AttestedAt:          time.Now().UTC(),
+		BaselineFingerprint: "sha256:install-baseline",
+		CurrentFingerprint:  "sha256:install-current",
 		ConsecutiveFailures: 0,
 	})
 	if err != nil {
@@ -1017,11 +1024,16 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 	if loaded.Rationale != record.Rationale || len(loaded.ArtifactRefs) != 2 || loaded.ArtifactRefs[0].Kind != "git_commit" {
 		t.Fatalf("loaded traceability = (%q, %#v), want rationale + refs", loaded.Rationale, loaded.ArtifactRefs)
 	}
+	if loaded.BaselineFingerprint != "sha256:install-baseline" || loaded.CurrentFingerprint != "sha256:install-current" {
+		t.Fatalf("loaded fingerprints = %q/%q, want persisted install fingerprints", loaded.BaselineFingerprint, loaded.CurrentFingerprint)
+	}
 	record.Status = ToolInstallStatusStale
 	record.ProbeStatus = ToolProbeStatusFailed
 	record.ProbeOutput = "missing shared libs"
 	record.Rationale = "Workspace drift invalidated the previous verification."
 	record.ArtifactRefs = []RecordReference{{Kind: "file_path", Ref: "tool-manifest.json", Label: "manifest"}}
+	record.StaleReason = "fingerprint drift: baseline=sha256:install-baseline current=sha256:install-current-2"
+	record.CurrentFingerprint = "sha256:install-current-2"
 	if _, err := store.UpsertToolInstallRecord(record); err != nil {
 		t.Fatalf("UpsertToolInstallRecord(update) err = %v", err)
 	}
@@ -1034,6 +1046,9 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 	}
 	if list[0].Rationale != record.Rationale || len(list[0].ArtifactRefs) != 1 || list[0].ArtifactRefs[0].Ref != "tool-manifest.json" {
 		t.Fatalf("ToolInstallRecords traceability = (%q, %#v), want updated rationale + manifest ref", list[0].Rationale, list[0].ArtifactRefs)
+	}
+	if list[0].StaleReason != record.StaleReason || list[0].CurrentFingerprint != "sha256:install-current-2" {
+		t.Fatalf("ToolInstallRecords stale diagnostics = (%q, %q), want persisted stale reason + current fingerprint", list[0].StaleReason, list[0].CurrentFingerprint)
 	}
 }
 

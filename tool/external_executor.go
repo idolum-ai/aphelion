@@ -16,7 +16,7 @@ import (
 
 type ExternalToolExecutor interface {
 	Supports(manifest ExternalToolManifest) bool
-	Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, maxOutputBytes int) (string, error)
+	Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, runner *sandbox.Runner, maxOutputBytes int) (string, error)
 }
 
 type defaultExternalToolExecutor struct{}
@@ -35,10 +35,13 @@ func (defaultExternalToolExecutor) Supports(manifest ExternalToolManifest) bool 
 	return true
 }
 
-func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, maxOutputBytes int) (string, error) {
+func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, runner *sandbox.Runner, maxOutputBytes int) (string, error) {
 	manifest = NormalizeExternalToolManifest(manifest)
 	if err := validateExternalToolManifest(manifest); err != nil {
 		return "", err
+	}
+	if !(defaultExternalToolExecutor{}).Supports(manifest) {
+		return "", fmt.Errorf("external tool %q execution constraints are not supported by the process executor", manifest.Name)
 	}
 	if err := validateExternalToolSchema(manifest.IO.InputSchema, input, "input"); err != nil {
 		return "", err
@@ -63,17 +66,11 @@ func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest Externa
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "bash", "-lc", manifest.Execution.Entry)
-	cmd.Dir = workdir
-	cmd.Stdin = bytes.NewReader(input)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("external tool %q execution failed: %s", manifest.Name, renderOutput(stdout.String(), stderr.String(), maxOutputBytes))
+	stdout, stderr, err := runExternalProcessCommand(runCtx, scope, runner, manifest.Execution.Entry, workdir, input)
+	if err != nil {
+		return "", fmt.Errorf("external tool %q execution failed: %s", manifest.Name, renderOutput(stdout, stderr, maxOutputBytes))
 	}
-	output := bytes.TrimSpace(stdout.Bytes())
+	output := []byte(strings.TrimSpace(stdout))
 	if len(output) == 0 {
 		return "", fmt.Errorf("external tool %q returned empty stdout; expected json output", manifest.Name)
 	}
@@ -84,6 +81,30 @@ func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest Externa
 		return "", err
 	}
 	return string(output), nil
+}
+
+func runExternalProcessCommand(ctx context.Context, scope sandbox.Scope, runner *sandbox.Runner, command string, workdir string, stdin []byte) (string, string, error) {
+	if runner != nil && strings.TrimSpace(string(scope.Principal.Role)) != "" {
+		res, err := runner.Run(ctx, sandbox.ExecRequest{
+			Scope:   scope,
+			Command: command,
+			Workdir: workdir,
+			Stdin:   stdin,
+		})
+		return res.Stdout, res.Stderr, err
+	}
+
+	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+	cmd.Dir = workdir
+	if len(stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
 }
 
 type simpleJSONSchema struct {

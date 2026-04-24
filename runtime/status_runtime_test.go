@@ -828,12 +828,14 @@ func TestChatStatusSnapshotIncludesCanonicalToolLifecycleState(t *testing.T) {
 	lastProbedAt := time.Now().UTC().Add(-1 * time.Minute)
 	auditedAt := time.Now().UTC()
 	if _, err := store.UpsertToolInstallRecord(session.ToolInstallRecord{
-		ToolName:    "browse_page",
-		Installer:   "aphelion",
-		InstallRef:  "workspace:tooling-v3",
-		Status:      session.ToolInstallStatusVerified,
-		InstalledAt: installedAt,
-		AttestedAt:  auditedAt,
+		ToolName:            "browse_page",
+		Installer:           "aphelion",
+		InstallRef:          "workspace:tooling-v3",
+		Status:              session.ToolInstallStatusVerified,
+		BaselineFingerprint: "sha256:baseline",
+		CurrentFingerprint:  "sha256:current",
+		InstalledAt:         installedAt,
+		AttestedAt:          auditedAt,
 	}); err != nil {
 		t.Fatalf("UpsertToolInstallRecord() err = %v", err)
 	}
@@ -866,6 +868,9 @@ func TestChatStatusSnapshotIncludesCanonicalToolLifecycleState(t *testing.T) {
 	}
 	if row.InstallRef != "workspace:tooling-v3" {
 		t.Fatalf("ToolLifecycle[0].InstallRef = %q, want workspace:tooling-v3", row.InstallRef)
+	}
+	if row.BaselineFingerprint != "sha256:baseline" || row.CurrentFingerprint != "sha256:current" {
+		t.Fatalf("ToolLifecycle[0] fingerprints = %q/%q, want persisted fingerprints", row.BaselineFingerprint, row.CurrentFingerprint)
 	}
 }
 

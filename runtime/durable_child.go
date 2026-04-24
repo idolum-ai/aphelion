@@ -193,6 +193,14 @@ func durableChildProviders(parent *config.Config, bootstrap core.NodeLLMBootstra
 		anthropic.MaxTokens = firstPositive(bootstrap.MaxTokens, anthropic.MaxTokens, defaults.Anthropic.MaxTokens)
 		anthropic.ContextWindow = firstPositive(anthropic.ContextWindow, defaults.Anthropic.ContextWindow)
 		providers.Anthropic = anthropic
+	case "openai":
+		openAI := providers.OpenAI
+		openAI.APIKey = firstNonEmpty(strings.TrimSpace(bootstrap.APIKey), strings.TrimSpace(openAI.APIKey))
+		openAI.BaseURL = firstNonEmpty(strings.TrimSpace(bootstrap.BaseURL), strings.TrimSpace(openAI.BaseURL), defaults.OpenAI.BaseURL)
+		openAI.Model = firstNonEmpty(strings.TrimSpace(bootstrap.Model), strings.TrimSpace(openAI.Model), defaults.OpenAI.Model)
+		openAI.MaxTokens = firstPositive(bootstrap.MaxTokens, openAI.MaxTokens, defaults.OpenAI.MaxTokens)
+		openAI.ContextWindow = firstPositive(openAI.ContextWindow, defaults.OpenAI.ContextWindow)
+		providers.OpenAI = openAI
 	case "openrouter":
 		openRouter := providers.OpenRouter
 		openRouter.APIKey = firstNonEmpty(strings.TrimSpace(bootstrap.APIKey), strings.TrimSpace(openRouter.APIKey))
@@ -258,6 +266,8 @@ func normalizeNativeProviderName(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "anthropic":
 		return "anthropic"
+	case "openai":
+		return "openai"
 	case "openrouter":
 		return "openrouter"
 	default:

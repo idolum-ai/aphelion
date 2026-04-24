@@ -273,31 +273,26 @@ This is closer to an immune-system model than a padlock model.
 
 ## Current Implementation Status
 
-The traceability substrate has been implemented: rationale plus typed artifact
-references now flow through pending decisions, lifecycle records, runtime
-authorship, and the `/status` projection.
+The first external-tool lane is implemented for process-style tools:
 
-Recent landed steps:
-
-- `a3336ad`: pending decisions now carry `rationale` + typed `artifact_refs`.
-- `6a714f1`: install/probe/audit lifecycle records now use the same
-  traceability shape.
-- `70c9729`: install/audit/probe runtime outcomes now author `rationale` +
-  typed `artifact_refs`, and individual show surfaces render them compactly for
-  both success and failure cases.
-- `52a2464`: lifecycle list surfaces now expose compact `why=` + `refs=`
-  traceability, and `/status` canonical tool lifecycle rows project the latest
-  lifecycle trace as `trace=<stage>:<summary> refs=<n>`.
-
-What still remains after this traceability pass:
-
-- define verification strictly against the current baseline
-- add drift fingerprints and automatic staleing reasons
-- deepen audit into real runtime resolution/load checks
-- enforce filesystem/network/runtime ceilings during execution
-- split container-mode lifecycle semantics from process-mode semantics
-- wire the full tenant-owned proposal -> install -> audit -> verify -> register
-  -> expose -> invoke flow
+- traceability (`rationale` plus typed `artifact_refs`) flows through pending
+  decisions, lifecycle records, runtime-authored install/audit/probe outcomes,
+  and the `/status` projection
+- verification is strict: `install_set status=verified` requires current
+  runtime-authored `audit_run` and `probe_run` records
+- audit/install records persist deterministic fingerprints for manifest
+  execution fields, IO schemas, constraints, install/probe commands, and local
+  process/subprocess entry file contents
+- `install_show`, `audit_show`, registration, exposure, principal manifest
+  listing, and invocation re-check the current fingerprint and mark drifted
+  tools stale with an operator-readable reason
+- stale external tools cannot be registered or invoked
+- process/subprocess invocation, install commands, and probe commands run
+  through the same sandbox runner boundary as normal tool execution
+- container and workspace-runner manifests are importable and diagnosable but
+  remain non-executable until dedicated runtimes exist
+- `external-tools/browse_page/` is the first pilot manifest, owned by
+  `idolum-email`, with a deterministic fixture implementation outside core
 
 ## Concrete Migration Plan
 

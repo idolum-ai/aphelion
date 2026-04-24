@@ -52,6 +52,7 @@ done
 if [[ -n "$workdir" ]]; then
   cd "$workdir"
 fi
+export APHELION_FAKE_BWRAP=1
 exec "$@"
 `
 	if err := os.WriteFile(fakeBwrapPath, []byte(script), 0o700); err != nil {

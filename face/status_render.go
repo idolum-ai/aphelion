@@ -367,6 +367,9 @@ func renderToolLifecycleCurrentStateBlock(rows []core.ToolLifecycleStatusSnapsho
 		if ref := strings.TrimSpace(row.InstallRef); ref != "" {
 			line += " install_ref=" + ref
 		}
+		if reason := strings.TrimSpace(row.StaleReason); reason != "" {
+			line += " stale_reason=" + reason
+		}
 		if summary := strings.TrimSpace(row.TraceSummary); summary != "" {
 			stage := firstNonEmpty(strings.TrimSpace(row.TraceStage), "-")
 			line += " trace=" + stage + ":" + summary

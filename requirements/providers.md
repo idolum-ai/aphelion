@@ -196,13 +196,13 @@ The native-provider failover chain should be explicit and ordered.
 Example:
 
 - governor backend: `codex`
-- native fallback chain: `anthropic -> openrouter`
+- native fallback chain: `anthropic -> openai -> openrouter`
 
 That means:
 
 1. retry Codex within its own backend logic where appropriate
 2. on bounded retry exhaustion or retryable runtime failure, fall back to the native provider chain
-3. retry Anthropic first
+3. retry Anthropic first, then OpenAI-compatible native providers in order
 4. on bounded retry exhaustion, fail over to OpenRouter
 5. on deterministic client/request errors, stop rather than cascading through every provider
 

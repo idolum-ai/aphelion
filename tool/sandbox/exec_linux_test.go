@@ -3,6 +3,7 @@
 package sandbox
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,6 +82,29 @@ func TestRunnerStageSelection(t *testing.T) {
 	}
 	if got := withoutBwrap.Stage(durableScope); got != StageUnavailable {
 		t.Fatalf("durable stage without bubblewrap = %q, want %q", got, StageUnavailable)
+	}
+}
+
+func TestRunnerRunPassesStdin(t *testing.T) {
+	t.Parallel()
+
+	scope := buildScope(t, principal.RoleAdmin)
+	if err := os.MkdirAll(scope.WorkingRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(working root) err = %v", err)
+	}
+	runner := NewRunner()
+
+	result, err := runner.Run(context.Background(), ExecRequest{
+		Scope:   scope,
+		Command: "cat",
+		Workdir: scope.WorkingRoot,
+		Stdin:   []byte("external input"),
+	})
+	if err != nil {
+		t.Fatalf("Run() err = %v", err)
+	}
+	if result.Stdout != "external input" {
+		t.Fatalf("stdout = %q, want stdin echoed", result.Stdout)
 	}
 }
 

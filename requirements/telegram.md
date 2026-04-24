@@ -286,6 +286,7 @@ The current durable-group adapter supports two child bootstrap shapes:
 
 - `native`
   - `anthropic`
+  - `openai`
   - `openrouter`
 - `codex`
 

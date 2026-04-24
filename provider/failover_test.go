@@ -134,6 +134,82 @@ func TestFailoverChainDoesNotCascadeClientErrors(t *testing.T) {
 	}
 }
 
+func TestFailoverChainFallsBackBetweenOpenAIModelsOnModelUnavailable(t *testing.T) {
+	primary := &stubChainProvider{err: stubStatusError{code: 404, msg: "model gpt-5.5 not found"}}
+	secondary := &stubChainProvider{reply: "fallback openai model"}
+	tertiary := &stubChainProvider{reply: "should not run"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: primary},
+		{Name: "openai:gpt-5.4", Provider: secondary},
+		{Name: "anthropic", Provider: tertiary},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "fallback openai model" {
+		t.Fatalf("content = %q, want fallback openai model", resp.Content)
+	}
+	if secondary.callCount == 0 {
+		t.Fatal("secondary OpenAI model was not called")
+	}
+	if tertiary.callCount != 0 {
+		t.Fatalf("tertiary.callCount = %d, want 0", tertiary.callCount)
+	}
+}
+
+func TestFailoverChainDoesNotCascadeOpenAIClientErrorToAnthropic(t *testing.T) {
+	primary := &stubChainProvider{err: stubStatusError{code: 400, msg: "bad request"}}
+	secondary := &stubChainProvider{reply: "should not run"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: primary},
+		{Name: "anthropic", Provider: secondary},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	_, err = chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err == nil {
+		t.Fatal("CompleteManaged() err = nil, want error")
+	}
+	if secondary.callCount != 0 {
+		t.Fatalf("secondary.callCount = %d, want 0", secondary.callCount)
+	}
+}
+
+func TestFailoverChainFallsBackToAnthropicAfterOpenAIModelsUnavailable(t *testing.T) {
+	primary := &stubChainProvider{err: stubStatusError{code: 404, msg: "model gpt-5.5 not found"}}
+	secondary := &stubChainProvider{err: stubStatusError{code: 404, msg: "model gpt-5.4 not found"}}
+	tertiary := &stubChainProvider{reply: "anthropic fallback"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: primary},
+		{Name: "openai:gpt-5.4", Provider: secondary},
+		{Name: "anthropic", Provider: tertiary},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "anthropic fallback" {
+		t.Fatalf("content = %q, want anthropic fallback", resp.Content)
+	}
+	if tertiary.callCount == 0 {
+		t.Fatal("anthropic fallback was not called")
+	}
+}
+
 func TestFailoverChainExhaustedErrorHasUserFacingFailure(t *testing.T) {
 	primary := &stubChainProvider{err: stubStatusError{code: 503, msg: "primary down"}}
 	secondary := &stubChainProvider{err: stubStatusError{code: 503, msg: "secondary down"}}

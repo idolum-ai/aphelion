@@ -1015,7 +1015,7 @@ func normalizeDurableAgentEmailAdapter(value string) string {
 
 func normalizeNodeNativeProviderName(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "anthropic", "openrouter":
+	case "anthropic", "openai", "openrouter":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""

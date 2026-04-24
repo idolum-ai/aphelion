@@ -74,7 +74,7 @@ review_target_chat_id = 123456789
 llm_backend = "native"          # "native" | "codex"
 
 # Native child bootstrap
-llm_provider = "openrouter"     # "anthropic" | "openrouter"
+llm_provider = "openrouter"     # "anthropic" | "openai" | "openrouter"
 llm_api_key = ""
 llm_base_url = "https://openrouter.ai/api/v1"
 llm_model = "anthropic/claude-sonnet-4-6"
@@ -88,8 +88,11 @@ llm_max_tokens = 64000
 
 # ─── Providers ───
 [providers]
-default = "anthropic"
-fallback_chain = ["openrouter"]
+selection = "auto"                         # "auto" | "manual"
+auto_order = ["openai", "anthropic", "openrouter"]
+default = ""                               # Optional manual primary.
+# fallback_chain is omitted in auto mode so configured providers after the primary become fallbacks.
+# For a manual chain, set selection = "manual", default, and fallback_chain explicitly.
 
 # Failover behavior
 [providers.failover]
@@ -146,7 +149,8 @@ context_window = 1048576         # 1M tokens
 
 [providers.openai]
 api_key = ""
-model = "gpt-5.4"                # gpt-5.4, gpt-5.4-mini, gpt-5.4-nano
+model = "gpt-5.5"
+fallback_models = ["gpt-5.4", "gpt-5.4-mini"]
 max_tokens = 16384
 context_window = 128000
 
@@ -215,7 +219,7 @@ model = "whisper-1"
 # ─── Governor / Face ───
 [governor]
 backend = "auto"              # "auto" | "codex" | "native"
-native_provider = "anthropic" # Used when backend resolves to native
+native_provider = ""          # Empty lets providers.selection choose from configured providers.
 
 # Runtime failover may still use the native provider chain when Codex fails mid-turn.
 
@@ -224,7 +228,7 @@ auth_source = "auto"          # "auto" | "codex_cli" | "aphelion"
 auth_path = ""                # Empty = ~/.aphelion/state/codex-auth.json
 codex_home = ""               # Empty = CODEX_HOME or ~/.codex
 base_url = "https://chatgpt.com/backend-api"
-model = "gpt-5.4"
+model = "gpt-5.5"
 max_continuations = 3
 transport_retries = 1
 
@@ -270,6 +274,12 @@ dynamic_files = [
 # Pattern: memory/YYYY-MM-DD.md in shared_memory_root or user_memory_root.
 daily_notes = true
 daily_notes_dir = "memory/daily"
+
+# ─── Tools ───
+[tools]
+# Directory containing external tool manifest JSON files.
+# Empty disables external manifest loading.
+external_manifest_dir = ""
 
 # ─── Sessions ───
 [sessions]
@@ -424,7 +434,7 @@ Implemented behavior:
 - `[[telegram.durable_groups]]` admits specific Telegram groups as durable children.
 - Each admitted group must define a child-local node LLM bootstrap.
 - The runtime currently supports:
-  - `llm_backend = "native"` with `llm_provider = "anthropic" | "openrouter"`
+- `llm_backend = "native"` with `llm_provider = "anthropic" | "openai" | "openrouter"`
   - `llm_backend = "codex"` with child-local Codex auth/home settings
 - A durable child must not inherit the parent governor/provider credentials.
 - If the child bootstrap is missing or invalid, the durable child should fail rather than silently execute on the parent's LLM credentials.
@@ -587,7 +597,7 @@ func Load(path string) (*Config, error) {
     // 4. Expand ~ in paths to $HOME
     // 5. Validate:
     //    - Required: telegram.bot_token, at least one provider with api_key
-    //    - providers.default must reference a configured provider
+    //    - providers.selection must be auto|manual, and the effective provider chain must reference configured providers
     //    - cache_ttl must be "5m" or "1h"
     //    - max_context_tokens < provider's context_window
     //    - logging.level must be debug|info|warn|error

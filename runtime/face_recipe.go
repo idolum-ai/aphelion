@@ -73,16 +73,13 @@ func buildFaceProviderChainForRecipe(cfg *config.Config, personaModel string) (a
 	}
 	httpClient := &http.Client{Timeout: 90 * time.Second}
 	names := orderedFaceProviderNames(cfg)
-	entries := make([]providerpkg.NamedProvider, 0, len(names))
+	entries := make([]providerpkg.NamedProvider, 0, len(names)+len(cfg.Providers.OpenAI.FallbackModels))
 	for _, name := range names {
-		p, err := buildNamedFaceProvider(name, cfg, personaModel, httpClient)
+		built, err := buildNamedFaceProviderEntries(name, cfg, personaModel, httpClient)
 		if err != nil {
 			return nil, err
 		}
-		if p == nil {
-			continue
-		}
-		entries = append(entries, providerpkg.NamedProvider{Name: name, Provider: p})
+		entries = append(entries, built...)
 	}
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("no face providers configured")
@@ -93,34 +90,63 @@ func buildFaceProviderChainForRecipe(cfg *config.Config, personaModel string) (a
 	return providerpkg.NewFailoverChain(entries)
 }
 
-func orderedFaceProviderNames(cfg *config.Config) []string {
+func buildNamedFaceProviderEntries(name string, cfg *config.Config, personaModel string, httpClient *http.Client) ([]providerpkg.NamedProvider, error) {
+	if strings.EqualFold(strings.TrimSpace(name), "openai") {
+		if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {
+			return nil, nil
+		}
+		model := faceModelForProvider("openai", personaModel)
+		if model == "" {
+			return nil, nil
+		}
+		models := openAIFaceModelChain(model, cfg.Providers.OpenAI.FallbackModels)
+		entries := make([]providerpkg.NamedProvider, 0, len(models))
+		for _, model := range models {
+			p, err := providerpkg.NewOpenAI(providerpkg.OpenAIOptions{
+				APIKey:     cfg.Providers.OpenAI.APIKey,
+				BaseURL:    cfg.Providers.OpenAI.BaseURL,
+				Model:      model,
+				MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
+				HTTPClient: httpClient,
+				UserAgent:  cfg.Identity.UserAgent,
+			})
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, providerpkg.NamedProvider{Name: "openai:" + model, Provider: p})
+		}
+		return entries, nil
+	}
+	p, err := buildNamedFaceProvider(name, cfg, personaModel, httpClient)
+	if err != nil || p == nil {
+		return nil, err
+	}
+	return []providerpkg.NamedProvider{{Name: strings.ToLower(strings.TrimSpace(name)), Provider: p}}, nil
+}
+
+func openAIFaceModelChain(primary string, fallbacks []string) []string {
 	seen := map[string]struct{}{}
-	out := make([]string, 0, 1+len(cfg.Providers.FallbackChain))
-	for _, raw := range append([]string{resolveFaceProviderName(cfg)}, cfg.Providers.FallbackChain...) {
-		name := strings.ToLower(strings.TrimSpace(raw))
-		if name == "" {
+	out := make([]string, 0, 1+len(fallbacks))
+	for _, raw := range append([]string{primary}, fallbacks...) {
+		model := strings.TrimSpace(raw)
+		if model == "" {
 			continue
 		}
-		if _, ok := seen[name]; ok {
+		if _, ok := seen[model]; ok {
 			continue
 		}
-		seen[name] = struct{}{}
-		out = append(out, name)
+		seen[model] = struct{}{}
+		out = append(out, model)
 	}
 	return out
 }
 
+func orderedFaceProviderNames(cfg *config.Config) []string {
+	return config.EffectiveProviderChain(cfg)
+}
+
 func resolveFaceProviderName(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	if name := strings.ToLower(strings.TrimSpace(cfg.Governor.NativeProvider)); name != "" {
-		return name
-	}
-	if name := strings.ToLower(strings.TrimSpace(cfg.Providers.Default)); name != "" {
-		return name
-	}
-	return "anthropic"
+	return config.EffectiveNativeProvider(cfg)
 }
 
 func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string, httpClient *http.Client) (agent.Provider, error) {
@@ -129,10 +155,30 @@ func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string
 		if strings.TrimSpace(cfg.Providers.Anthropic.APIKey) == "" {
 			return nil, nil
 		}
+		model := faceModelForProvider("anthropic", personaModel)
+		if model == "" {
+			return nil, nil
+		}
 		return providerpkg.NewAnthropic(providerpkg.AnthropicOptions{
 			APIKey:     cfg.Providers.Anthropic.APIKey,
-			Model:      faceModelForProvider("anthropic", personaModel),
+			Model:      model,
 			MaxTokens:  cfg.Providers.Anthropic.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+	case "openai":
+		if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {
+			return nil, nil
+		}
+		model := faceModelForProvider("openai", personaModel)
+		if model == "" {
+			return nil, nil
+		}
+		return providerpkg.NewOpenAI(providerpkg.OpenAIOptions{
+			APIKey:     cfg.Providers.OpenAI.APIKey,
+			BaseURL:    cfg.Providers.OpenAI.BaseURL,
+			Model:      model,
+			MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,
 		})
@@ -140,10 +186,14 @@ func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string
 		if strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) == "" {
 			return nil, nil
 		}
+		model := faceModelForProvider("openrouter", personaModel)
+		if model == "" {
+			return nil, nil
+		}
 		return providerpkg.NewOpenRouter(providerpkg.OpenRouterOptions{
 			APIKey:     cfg.Providers.OpenRouter.APIKey,
 			BaseURL:    cfg.Providers.OpenRouter.BaseURL,
-			Model:      faceModelForProvider("openrouter", personaModel),
+			Model:      model,
 			MaxTokens:  cfg.Providers.OpenRouter.MaxTokens,
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,
@@ -160,16 +210,30 @@ func faceModelForProvider(providerName, personaModel string) string {
 	if model == "" {
 		model = personaModelSonnet
 	}
-	if model == personaModelOpus46 || model == personaModelOpus47 {
-		if strings.EqualFold(strings.TrimSpace(providerName), "openrouter") {
-			return "anthropic/" + model
+	provider := strings.ToLower(strings.TrimSpace(providerName))
+	if model == personaModelGPT55 {
+		switch provider {
+		case "anthropic":
+			return personaModelSonnet
+		case "openai":
+			return model
+		case "openrouter":
+			return "openai/" + model
+		default:
+			return ""
 		}
-		return model
 	}
-	if strings.EqualFold(strings.TrimSpace(providerName), "openrouter") {
-		return "anthropic/" + personaModelSonnet
+	if model == personaModelSonnet || model == personaModelOpus46 || model == personaModelOpus47 {
+		switch provider {
+		case "anthropic":
+			return model
+		case "openrouter":
+			return "anthropic/" + model
+		default:
+			return ""
+		}
 	}
-	return personaModelSonnet
+	return ""
 }
 
 func (r *Runtime) faceModelName() string {
@@ -177,5 +241,8 @@ func (r *Runtime) faceModelName() string {
 		return r.governorModelName()
 	}
 	snapshot := r.currentRecipeSnapshot()
-	return faceModelForProvider(r.faceProviderName(), snapshot.PersonaModel)
+	if model := faceModelForProvider(r.faceProviderName(), snapshot.PersonaModel); model != "" {
+		return model
+	}
+	return snapshot.PersonaModel
 }

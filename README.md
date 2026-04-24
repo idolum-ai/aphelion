@@ -14,7 +14,7 @@ A minimal, focused agent runtime for personal AI assistants.
 ## Target Stack
 
 - **Channels:** Telegram
-- **Providers:** Anthropic (Claude), Google (Gemini), local models (Ollama), OpenAI (platform storage/embeddings/fallback)
+- **Providers:** Anthropic (Claude), OpenAI, OpenRouter, Google (Gemini), local models (Ollama)
 - **Tools:** exec, curated memory, session recall, optional OpenAI storage tools
 - **Voice:** ElevenLabs TTS
 - **Automation:** heartbeat, cron
@@ -142,7 +142,8 @@ Optional OpenAI platform storage:
 [providers.openai]
 api_key = "sk-..."
 base_url = "https://api.openai.com/v1"
-model = "gpt-5.4"
+model = "gpt-5.5"
+fallback_models = ["gpt-5.4", "gpt-5.4-mini"]
 max_tokens = 16384
 context_window = 128000
 
@@ -211,7 +212,7 @@ charter = "Help the group investigate topics and summarize findings without wide
 respond_on = "mentions"         # "mentions" | "all"
 review_target_chat_id = 123456789
 llm_backend = "native"          # "native" | "codex"
-llm_provider = "openrouter"     # required for native
+llm_provider = "openrouter"     # "anthropic" | "openai" | "openrouter"
 llm_api_key = "..."
 llm_model = "anthropic/claude-sonnet-4-6"
 ```

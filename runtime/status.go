@@ -1470,18 +1470,21 @@ func (r *Runtime) toolLifecycleStatusSnapshot(limit int) ([]core.ToolLifecycleSt
 		considerTrace("probe", probe.UpdatedAt, probe.Rationale, probe.ArtifactRefs)
 		considerTrace("audit", audit.UpdatedAt, audit.Rationale, audit.ArtifactRefs)
 		out = append(out, core.ToolLifecycleStatusSnapshot{
-			ToolName:           record.ToolName,
-			InstallStatus:      strings.TrimSpace(string(record.Status)),
-			ProbeStatus:        strings.TrimSpace(string(probe.Status)),
-			AuditStatus:        strings.TrimSpace(string(audit.Status)),
-			InstallRef:         strings.TrimSpace(record.InstallRef),
-			TraceStage:         traceStage,
-			TraceSummary:       traceSummary,
-			TraceArtifactCount: traceArtifactCount,
-			InstalledAt:        record.InstalledAt,
-			LastProbedAt:       probe.ProbedAt,
-			AuditedAt:          audit.AuditedAt,
-			AttestedAt:         record.AttestedAt,
+			ToolName:            record.ToolName,
+			InstallStatus:       strings.TrimSpace(string(record.Status)),
+			ProbeStatus:         strings.TrimSpace(string(probe.Status)),
+			AuditStatus:         strings.TrimSpace(string(audit.Status)),
+			InstallRef:          strings.TrimSpace(record.InstallRef),
+			BaselineFingerprint: strings.TrimSpace(record.BaselineFingerprint),
+			CurrentFingerprint:  strings.TrimSpace(record.CurrentFingerprint),
+			StaleReason:         strings.TrimSpace(record.StaleReason),
+			TraceStage:          traceStage,
+			TraceSummary:        traceSummary,
+			TraceArtifactCount:  traceArtifactCount,
+			InstalledAt:         record.InstalledAt,
+			LastProbedAt:        probe.ProbedAt,
+			AuditedAt:           audit.AuditedAt,
+			AttestedAt:          record.AttestedAt,
 		})
 	}
 	return out, nil

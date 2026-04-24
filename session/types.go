@@ -211,6 +211,9 @@ type ToolInstallRecord struct {
 	ProbeOutput         string            `json:"probe_output,omitempty"`
 	Rationale           string            `json:"rationale,omitempty"`
 	ArtifactRefs        []RecordReference `json:"artifact_refs,omitempty"`
+	BaselineFingerprint string            `json:"baseline_fingerprint,omitempty"`
+	CurrentFingerprint  string            `json:"current_fingerprint,omitempty"`
+	StaleReason         string            `json:"stale_reason,omitempty"`
 	ConsecutiveFailures int               `json:"consecutive_failures,omitempty"`
 	CreatedAt           time.Time         `json:"created_at,omitempty"`
 	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
@@ -226,6 +229,9 @@ type ToolAuditRecord struct {
 	AuditOutput         string            `json:"audit_output,omitempty"`
 	Rationale           string            `json:"rationale,omitempty"`
 	ArtifactRefs        []RecordReference `json:"artifact_refs,omitempty"`
+	BaselineFingerprint string            `json:"baseline_fingerprint,omitempty"`
+	CurrentFingerprint  string            `json:"current_fingerprint,omitempty"`
+	StaleReason         string            `json:"stale_reason,omitempty"`
 	ConsecutiveFailures int               `json:"consecutive_failures,omitempty"`
 	CreatedAt           time.Time         `json:"created_at,omitempty"`
 	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
@@ -839,6 +845,9 @@ func NormalizeToolInstallRecord(record ToolInstallRecord) ToolInstallRecord {
 	record.InstallRef = strings.TrimSpace(record.InstallRef)
 	record.ProbeOutput = strings.TrimSpace(record.ProbeOutput)
 	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.BaselineFingerprint = strings.TrimSpace(record.BaselineFingerprint)
+	record.CurrentFingerprint = strings.TrimSpace(record.CurrentFingerprint)
+	record.StaleReason = strings.TrimSpace(record.StaleReason)
 	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
 	record.Status = NormalizeToolInstallStatus(record.Status)
 	record.ProbeStatus = NormalizeToolProbeStatus(record.ProbeStatus)
@@ -856,6 +865,9 @@ func NormalizeToolAuditRecord(record ToolAuditRecord) ToolAuditRecord {
 	record.Status = NormalizeToolAuditStatus(record.Status)
 	record.AuditOutput = strings.TrimSpace(record.AuditOutput)
 	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.BaselineFingerprint = strings.TrimSpace(record.BaselineFingerprint)
+	record.CurrentFingerprint = strings.TrimSpace(record.CurrentFingerprint)
+	record.StaleReason = strings.TrimSpace(record.StaleReason)
 	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
 	if record.ConsecutiveFailures < 0 {
 		record.ConsecutiveFailures = 0

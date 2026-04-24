@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func TestDefinitionsForPrincipalFiltersExternalToolByExposure(t *testing.T) {
@@ -25,15 +26,17 @@ func TestDefinitionsForPrincipalFiltersExternalToolByExposure(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\necho '{\"summary\":\"ok\"}'\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
-	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+	manifest := ExternalToolManifest{
 		Name:      "browse_page",
 		Owner:     "idolum-email",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}}}`)},
-	}})
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest})
 	if err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
 	}
+	seedVerifiedExternalToolLifecycle(t, registry, store, manifest, sandbox.Scope{WorkingRoot: registry.workspace})
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
@@ -62,15 +65,17 @@ func TestExternalToolRequiresRegistrationAndExposureAtInvocation(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\necho '{\"summary\":\"ok\"}'\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
-	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+	manifest := ExternalToolManifest{
 		Name:      "browse_page",
 		Owner:     "idolum-email",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`)},
-	}})
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest})
 	if err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
 	}
+	seedVerifiedExternalToolLifecycle(t, registry, store, manifest, sandbox.Scope{WorkingRoot: registry.workspace})
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	key := adminSessionKey()
 

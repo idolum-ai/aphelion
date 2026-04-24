@@ -281,7 +281,7 @@ See `config.md`, but the intended ownership is:
 ```toml
 [governor]
 backend = "auto"              # "auto" | "codex" | "native"
-native_provider = "anthropic" # used when backend resolves to native
+native_provider = ""          # empty lets providers.selection choose from configured providers
 
 [governor.codex]
 auth_source = "auto"          # "auto" | "codex_cli" | "aphelion"

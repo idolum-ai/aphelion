@@ -555,6 +555,11 @@ func run() error {
 		return err
 	}
 	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
+	if manifestDir := strings.TrimSpace(cfg.Tools.ExternalManifestDir); manifestDir != "" {
+		if _, err := tools.WithExternalToolManifestDir(manifestDir); err != nil {
+			return fmt.Errorf("load external tool manifests: %w", err)
+		}
+	}
 	tools.WithDurableAgentBootstrapLLM(defaultDurableAgentBootstrapFromConfig(cfg))
 	tools.WithSemanticEngine(memory.NewSemanticEngine(memory.SemanticOptions{
 		Enabled:             cfg.Memory.Semantic.Enabled,
@@ -798,7 +803,7 @@ func buildNativeProviderChain(cfg *config.Config, httpClient *http.Client) (agen
 	}
 
 	names := orderedNativeProviderNames(cfg)
-	entries := make([]provider.NamedProvider, 0, len(names))
+	entries := make([]provider.NamedProvider, 0, len(names)+len(cfg.Providers.OpenAI.FallbackModels))
 	required := nativeProviderRequired(cfg)
 	for idx, name := range names {
 		if !isConfiguredProvider(name, cfg) {
@@ -807,14 +812,11 @@ func buildNativeProviderChain(cfg *config.Config, httpClient *http.Client) (agen
 			}
 			continue
 		}
-		p, err := buildNamedProvider(name, cfg, httpClient)
+		built, err := buildNamedProviderEntries(name, cfg, httpClient)
 		if err != nil {
 			return nil, err
 		}
-		if p == nil {
-			continue
-		}
-		entries = append(entries, provider.NamedProvider{Name: name, Provider: p})
+		entries = append(entries, built...)
 	}
 	if len(entries) == 0 {
 		return nil, nil
@@ -823,6 +825,50 @@ func buildNativeProviderChain(cfg *config.Config, httpClient *http.Client) (agen
 		return entries[0].Provider, nil
 	}
 	return provider.NewFailoverChain(entries)
+}
+
+func buildNamedProviderEntries(name string, cfg *config.Config, httpClient *http.Client) ([]provider.NamedProvider, error) {
+	if strings.EqualFold(strings.TrimSpace(name), "openai") {
+		models := openAIModelChain(cfg.Providers.OpenAI)
+		entries := make([]provider.NamedProvider, 0, len(models))
+		for _, model := range models {
+			p, err := provider.NewOpenAI(provider.OpenAIOptions{
+				APIKey:     cfg.Providers.OpenAI.APIKey,
+				BaseURL:    cfg.Providers.OpenAI.BaseURL,
+				Model:      model,
+				MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
+				HTTPClient: httpClient,
+				UserAgent:  cfg.Identity.UserAgent,
+			})
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, provider.NamedProvider{Name: "openai:" + model, Provider: p})
+		}
+		return entries, nil
+	}
+	p, err := buildNamedProvider(name, cfg, httpClient)
+	if err != nil || p == nil {
+		return nil, err
+	}
+	return []provider.NamedProvider{{Name: strings.ToLower(strings.TrimSpace(name)), Provider: p}}, nil
+}
+
+func openAIModelChain(cfg config.OpenAIProviderConfig) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 1+len(cfg.FallbackModels))
+	for _, raw := range append([]string{cfg.Model}, cfg.FallbackModels...) {
+		model := strings.TrimSpace(raw)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		out = append(out, model)
+	}
+	return out
 }
 
 func buildOpenAIPlatformServices(cfg *config.Config, httpClient *http.Client) (memory.FileStore, memory.RetrievalStore, error) {
@@ -877,6 +923,15 @@ func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,
 		})
+	case "openai":
+		return provider.NewOpenAI(provider.OpenAIOptions{
+			APIKey:     cfg.Providers.OpenAI.APIKey,
+			BaseURL:    cfg.Providers.OpenAI.BaseURL,
+			Model:      cfg.Providers.OpenAI.Model,
+			MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
 	case "openrouter":
 		return provider.NewOpenRouter(provider.OpenRouterOptions{
 			APIKey:     cfg.Providers.OpenRouter.APIKey,
@@ -894,37 +949,17 @@ func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client
 }
 
 func orderedNativeProviderNames(cfg *config.Config) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, 1+len(cfg.Providers.FallbackChain))
-	for _, raw := range append([]string{resolveNativeProviderName(cfg)}, cfg.Providers.FallbackChain...) {
-		name := strings.ToLower(strings.TrimSpace(raw))
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		out = append(out, name)
-	}
-	return out
+	return config.EffectiveProviderChain(cfg)
 }
 
 func resolveNativeProviderName(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	if name := strings.ToLower(strings.TrimSpace(cfg.Governor.NativeProvider)); name != "" {
-		return name
-	}
-	if name := strings.ToLower(strings.TrimSpace(cfg.Providers.Default)); name != "" {
-		return name
-	}
-	return "anthropic"
+	return config.EffectiveNativeProvider(cfg)
 }
 
 func activeNativeModel(cfg *config.Config) string {
 	switch resolveNativeProviderName(cfg) {
+	case "openai":
+		return cfg.Providers.OpenAI.Model
 	case "openrouter":
 		return cfg.Providers.OpenRouter.Model
 	default:
@@ -945,6 +980,8 @@ func isConfiguredProvider(name string, cfg *config.Config) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "anthropic":
 		return strings.TrimSpace(cfg.Providers.Anthropic.APIKey) != ""
+	case "openai":
+		return strings.TrimSpace(cfg.Providers.OpenAI.APIKey) != ""
 	case "openrouter":
 		return strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) != ""
 	default:
