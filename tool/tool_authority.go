@@ -334,6 +334,9 @@ func (r *Registry) toolAuthorityRegister(in toolAuthorityInput, actor principal.
 	if !ok {
 		return "", fmt.Errorf("tool_authority register tool_name %q is not a known runtime tool definition", toolName)
 	}
+	if !r.authorityManagedTool(trustedToolName) {
+		return "", fmt.Errorf("tool_authority register tool_name %q is not an authority-managed runtime tool", toolName)
+	}
 	toolName = trustedToolName
 	implementationRef := strings.TrimSpace(in.ImplementationRef)
 	if implementationRef == "" {
@@ -555,6 +558,9 @@ func (r *Registry) canonicalTrustedToolName(raw string) (string, bool) {
 		if strings.EqualFold(name, target) {
 			return name, true
 		}
+	}
+	if manifest, ok := r.externalManifestByName(target); ok {
+		return strings.TrimSpace(manifest.Name), true
 	}
 	return "", false
 }

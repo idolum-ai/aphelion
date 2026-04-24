@@ -389,6 +389,12 @@ func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
 }
 
 func (r *Registry) DefinitionsForPrincipal(p principal.Principal) []agent.ToolDef {
+	defs := r.nativeDefinitionsForPrincipal(p)
+	defs = append(defs, r.externalToolDefinitions(r.externalManifestsForPrincipal(p))...)
+	return defs
+}
+
+func (r *Registry) nativeDefinitionsForPrincipal(p principal.Principal) []agent.ToolDef {
 	defs := r.Definitions()
 	if len(defs) == 0 {
 		return defs
@@ -408,6 +414,42 @@ func (r *Registry) DefinitionsForPrincipal(p principal.Principal) []agent.ToolDe
 		filtered = append(filtered, def)
 	}
 	return filtered
+}
+
+func (r *Registry) externalManifestsForPrincipal(p principal.Principal) []ExternalToolManifest {
+	if len(r.externalManifests) == 0 {
+		return nil
+	}
+	filtered := make([]ExternalToolManifest, 0, len(r.externalManifests))
+	for _, manifest := range r.externalManifests {
+		name := strings.TrimSpace(manifest.Name)
+		if !r.authorityManagedTool(name) {
+			filtered = append(filtered, manifest)
+			continue
+		}
+		allowed, err := r.toolAuthorityAccessAllowed(name, p)
+		if err != nil || !allowed {
+			continue
+		}
+		filtered = append(filtered, manifest)
+	}
+	return filtered
+}
+
+func (r *Registry) externalToolDefinitions(manifests []ExternalToolManifest) []agent.ToolDef {
+	if len(manifests) == 0 {
+		return nil
+	}
+	defs := make([]agent.ToolDef, 0, len(manifests))
+	for _, manifest := range manifests {
+		manifest = NormalizeExternalToolManifest(manifest)
+		defs = append(defs, agent.ToolDef{
+			Name:        manifest.Name,
+			Description: fmt.Sprintf("External tool owned by %s.", firstNonEmpty(manifest.Owner, "unknown owner")),
+			Parameters:  manifest.IO.InputSchema,
+		})
+	}
+	return defs
 }
 
 func (r *Registry) Definitions() []agent.ToolDef {

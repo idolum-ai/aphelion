@@ -27,6 +27,10 @@ type principalAwareToolDefinitions interface {
 	DefinitionsForPrincipal(p principal.Principal) []agent.ToolDef
 }
 
+type principalAwareToolManifest interface {
+	ManifestForPrincipal(p principal.Principal) string
+}
+
 type principalScopedTools struct {
 	base      agent.ToolRegistry
 	executor  principalAwareToolExecutor
@@ -40,6 +44,19 @@ func (p *principalScopedTools) Definitions() []agent.ToolDef {
 		return defsByPrincipal.DefinitionsForPrincipal(p.principal)
 	}
 	return p.base.Definitions()
+}
+
+func (p *principalScopedTools) Manifest() string {
+	if manifestByPrincipal, ok := p.base.(principalAwareToolManifest); ok {
+		return manifestByPrincipal.ManifestForPrincipal(p.principal)
+	}
+	type manifestProvider interface {
+		Manifest() string
+	}
+	if provider, ok := p.base.(manifestProvider); ok {
+		return provider.Manifest()
+	}
+	return ""
 }
 
 func (p *principalScopedTools) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {

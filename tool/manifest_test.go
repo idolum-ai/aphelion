@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 func TestRenderManifestIncludesDefinitionsAndParameters(t *testing.T) {
@@ -35,7 +37,7 @@ func TestRenderManifestIncludesDefinitionsAndParameters(t *testing.T) {
 		},
 	}
 
-	manifest := RenderManifest(defs, nil)
+	manifest := RenderManifest(defs, nil, nil)
 	if !strings.Contains(manifest, "- alpha: first tool") {
 		t.Fatalf("manifest missing alpha definition:\n%s", manifest)
 	}
@@ -134,7 +136,7 @@ func TestRegistryManifestIncludesExternalManifestAsNonExecutable(t *testing.T) {
 func TestRegistryExecuteExternalManifestReturnsCleanNonExecutableError(t *testing.T) {
 	t.Parallel()
 
-	registry := NewRegistry(t.TempDir(), time.Second)
+	registry, store := newDurableAgentToolRegistry(t)
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
 		Owner:     "idolum-email",
@@ -143,8 +145,14 @@ func TestRegistryExecuteExternalManifestReturnsCleanNonExecutableError(t *testin
 	if err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
 	}
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:1001", Active: true}); err != nil {
+		t.Fatalf("UpsertToolExposure() err = %v", err)
+	}
 
-	_, err = registry.Execute(context.Background(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil {
 		t.Fatal("ExecuteForSessionPrincipal() err = nil, want non-executable error")
 	}

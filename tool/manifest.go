@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/principal"
 )
 
 type schemaEnvelope struct {
@@ -25,7 +26,25 @@ type schemaProperty struct {
 // execution constraints.
 func (r *Registry) Manifest() string {
 	defs := r.Definitions()
-	lines := []string{RenderManifest(defs, r.externalManifests), "", "exec constraints:"}
+	lines := []string{RenderManifest(defs, r.externalManifests, r.externalExecutor), "", "exec constraints:"}
+
+	execRoot := r.workspace
+	if abs, err := filepath.Abs(r.workspace); err == nil {
+		execRoot = abs
+	}
+
+	lines = append(lines,
+		fmt.Sprintf("- exec_root: %s", execRoot),
+		fmt.Sprintf("- default_timeout_sec: %d", int(defaultTimeout(r.timeout).Seconds())),
+		fmt.Sprintf("- max_output_bytes: %d", r.maxOutputBytes),
+	)
+	return strings.Join(lines, "\n")
+}
+
+func (r *Registry) ManifestForPrincipal(p principal.Principal) string {
+	defs := r.nativeDefinitionsForPrincipal(p)
+	external := r.externalManifestsForPrincipal(p)
+	lines := []string{RenderManifest(defs, external, r.externalExecutor), "", "exec constraints:"}
 
 	execRoot := r.workspace
 	if abs, err := filepath.Abs(r.workspace); err == nil {
@@ -41,7 +60,7 @@ func (r *Registry) Manifest() string {
 }
 
 // RenderManifest renders tool definitions as stable plain text.
-func RenderManifest(defs []agent.ToolDef, external []ExternalToolManifest) string {
+func RenderManifest(defs []agent.ToolDef, external []ExternalToolManifest, executor ExternalToolExecutor) string {
 	if len(defs) == 0 && len(external) == 0 {
 		return "tools:\n- (none)"
 	}
@@ -71,10 +90,11 @@ func RenderManifest(defs []agent.ToolDef, external []ExternalToolManifest) strin
 		} else {
 			lines = append(lines, "  params: "+strings.Join(params, ", "))
 		}
-		lines = append(lines,
-			"  executable: false",
-			"  reason: external manifest is visible but executor support is not wired yet",
-		)
+		executable := executor != nil && executor.Supports(manifest)
+		lines = append(lines, fmt.Sprintf("  executable: %t", executable))
+		if !executable {
+			lines = append(lines, "  reason: external manifest is visible but executor support is not wired yet")
+		}
 	}
 	return strings.Join(lines, "\n")
 }

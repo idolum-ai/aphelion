@@ -9,18 +9,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
 	t.Parallel()
 
-	workspace := t.TempDir()
-	script := filepath.Join(workspace, "run.sh")
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	script := filepath.Join(registry.workspace, "run.sh")
 	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\nread INPUT\necho '{\"summary\":\"ok\",\"seen\":true}'\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
-	registry := NewRegistry(workspace, time.Second)
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
 		Owner:     "idolum-email",
@@ -33,8 +37,14 @@ func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
 	}
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:1001", Active: true}); err != nil {
+		t.Fatalf("UpsertToolExposure() err = %v", err)
+	}
 
-	out, err := registry.Execute(context.Background(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("Execute() err = %v", err)
 	}
@@ -46,12 +56,14 @@ func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
 func TestExternalProcessExecutorRejectsInvalidInputAgainstSchema(t *testing.T) {
 	t.Parallel()
 
-	workspace := t.TempDir()
-	script := filepath.Join(workspace, "run.sh")
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	script := filepath.Join(registry.workspace, "run.sh")
 	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\necho '{\"summary\":\"ok\"}'\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
-	registry := NewRegistry(workspace, time.Second)
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
 		Owner:     "idolum-email",
@@ -61,8 +73,14 @@ func TestExternalProcessExecutorRejectsInvalidInputAgainstSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
 	}
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:1001", Active: true}); err != nil {
+		t.Fatalf("UpsertToolExposure() err = %v", err)
+	}
 
-	_, err = registry.Execute(context.Background(), "browse_page", json.RawMessage(`{"goal":"summarize"}`))
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"goal":"summarize"}`))
 	if err == nil {
 		t.Fatal("Execute() err = nil, want input-schema rejection")
 	}
@@ -74,12 +92,14 @@ func TestExternalProcessExecutorRejectsInvalidInputAgainstSchema(t *testing.T) {
 func TestExternalProcessExecutorRejectsInvalidOutputAgainstSchema(t *testing.T) {
 	t.Parallel()
 
-	workspace := t.TempDir()
-	script := filepath.Join(workspace, "run.sh")
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	script := filepath.Join(registry.workspace, "run.sh")
 	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\necho '{\"summary\":7}'\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
-	registry := NewRegistry(workspace, time.Second)
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
 		Owner:     "idolum-email",
@@ -89,8 +109,14 @@ func TestExternalProcessExecutorRejectsInvalidOutputAgainstSchema(t *testing.T) 
 	if err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
 	}
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:1001", Active: true}); err != nil {
+		t.Fatalf("UpsertToolExposure() err = %v", err)
+	}
 
-	_, err = registry.Execute(context.Background(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil {
 		t.Fatal("Execute() err = nil, want output-schema rejection")
 	}
