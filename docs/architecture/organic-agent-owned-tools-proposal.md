@@ -271,6 +271,34 @@ Examples of status output that this architecture should enable:
 
 This is closer to an immune-system model than a padlock model.
 
+## Current Implementation Status
+
+The traceability substrate has been implemented: rationale plus typed artifact
+references now flow through pending decisions, lifecycle records, runtime
+authorship, and the `/status` projection.
+
+Recent landed steps:
+
+- `a3336ad`: pending decisions now carry `rationale` + typed `artifact_refs`.
+- `6a714f1`: install/probe/audit lifecycle records now use the same
+  traceability shape.
+- `70c9729`: install/audit/probe runtime outcomes now author `rationale` +
+  typed `artifact_refs`, and individual show surfaces render them compactly for
+  both success and failure cases.
+- `52a2464`: lifecycle list surfaces now expose compact `why=` + `refs=`
+  traceability, and `/status` canonical tool lifecycle rows project the latest
+  lifecycle trace as `trace=<stage>:<summary> refs=<n>`.
+
+What still remains after this traceability pass:
+
+- define verification strictly against the current baseline
+- add drift fingerprints and automatic staleing reasons
+- deepen audit into real runtime resolution/load checks
+- enforce filesystem/network/runtime ceilings during execution
+- split container-mode lifecycle semantics from process-mode semantics
+- wire the full tenant-owned proposal -> install -> audit -> verify -> register
+  -> expose -> invoke flow
+
 ## Concrete Migration Plan
 
 ### Phase 1 — stabilize current authority substrate
