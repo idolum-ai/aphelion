@@ -893,7 +893,15 @@ func TestToolProbeRecordRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
-	record, err := store.UpsertToolProbeRecord(ToolProbeRecord{ToolName: "browse_page", Status: ToolProbeStatusPassed, ProbeOutput: "stdout: probe ok", ProbedAt: time.Now().UTC(), ConsecutiveFailures: 0})
+	record, err := store.UpsertToolProbeRecord(ToolProbeRecord{
+		ToolName:            "browse_page",
+		Status:              ToolProbeStatusPassed,
+		ProbeOutput:         "stdout: probe ok",
+		Rationale:           "Probe passed against the latest installed baseline.",
+		ArtifactRefs:        []RecordReference{{Kind: "execution_event", Ref: "tool.probe.updated:123", Label: "probe event"}},
+		ProbedAt:            time.Now().UTC(),
+		ConsecutiveFailures: 0,
+	})
 	if err != nil {
 		t.Fatalf("UpsertToolProbeRecord(insert) err = %v", err)
 	}
@@ -910,6 +918,9 @@ func TestToolProbeRecordRoundTrip(t *testing.T) {
 	if loaded.Status != ToolProbeStatusPassed {
 		t.Fatalf("loaded.Status = %q, want passed", loaded.Status)
 	}
+	if loaded.Rationale != record.Rationale || len(loaded.ArtifactRefs) != 1 || loaded.ArtifactRefs[0].Kind != "execution_event" {
+		t.Fatalf("loaded traceability = (%q, %#v), want rationale + execution_event ref", loaded.Rationale, loaded.ArtifactRefs)
+	}
 	list, err := store.ToolProbeRecords(ToolProbeStatusPassed, 10)
 	if err != nil {
 		t.Fatalf("ToolProbeRecords() err = %v", err)
@@ -917,13 +928,24 @@ func TestToolProbeRecordRoundTrip(t *testing.T) {
 	if len(list) != 1 || list[0].ToolName != "browse_page" {
 		t.Fatalf("ToolProbeRecords(passed) = %#v, want one browse_page record", list)
 	}
+	if list[0].Rationale != record.Rationale || len(list[0].ArtifactRefs) != 1 {
+		t.Fatalf("ToolProbeRecords traceability = (%q, %#v), want persisted rationale + refs", list[0].Rationale, list[0].ArtifactRefs)
+	}
 }
 
 func TestToolAuditRecordRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
-	record, err := store.UpsertToolAuditRecord(ToolAuditRecord{ToolName: "browse_page", Status: ToolAuditStatusPassed, AuditOutput: "entry_path: /tmp/run.sh", AuditedAt: time.Now().UTC(), ConsecutiveFailures: 0})
+	record, err := store.UpsertToolAuditRecord(ToolAuditRecord{
+		ToolName:            "browse_page",
+		Status:              ToolAuditStatusPassed,
+		AuditOutput:         "entry_path: /tmp/run.sh",
+		Rationale:           "Runtime resolution succeeded for the declared entrypoint.",
+		ArtifactRefs:        []RecordReference{{Kind: "file_path", Ref: "/tmp/run.sh", Label: "entry path"}},
+		AuditedAt:           time.Now().UTC(),
+		ConsecutiveFailures: 0,
+	})
 	if err != nil {
 		t.Fatalf("UpsertToolAuditRecord(insert) err = %v", err)
 	}
@@ -940,12 +962,18 @@ func TestToolAuditRecordRoundTrip(t *testing.T) {
 	if loaded.Status != ToolAuditStatusPassed {
 		t.Fatalf("loaded.Status = %q, want passed", loaded.Status)
 	}
+	if loaded.Rationale != record.Rationale || len(loaded.ArtifactRefs) != 1 || loaded.ArtifactRefs[0].Ref != "/tmp/run.sh" {
+		t.Fatalf("loaded traceability = (%q, %#v), want rationale + file ref", loaded.Rationale, loaded.ArtifactRefs)
+	}
 	list, err := store.ToolAuditRecords(ToolAuditStatusPassed, 10)
 	if err != nil {
 		t.Fatalf("ToolAuditRecords() err = %v", err)
 	}
 	if len(list) != 1 || list[0].ToolName != "browse_page" {
 		t.Fatalf("ToolAuditRecords(passed) = %#v, want one browse_page record", list)
+	}
+	if list[0].Rationale != record.Rationale || len(list[0].ArtifactRefs) != 1 {
+		t.Fatalf("ToolAuditRecords traceability = (%q, %#v), want persisted rationale + refs", list[0].Rationale, list[0].ArtifactRefs)
 	}
 }
 
@@ -954,12 +982,17 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 
 	store := newTestSQLiteStore(t)
 	record, err := store.UpsertToolInstallRecord(ToolInstallRecord{
-		ToolName:            "browse_page",
-		Installer:           "aphelion",
-		InstallRef:          "workspace:tooling-v1",
-		Status:              ToolInstallStatusVerified,
-		ProbeStatus:         ToolProbeStatusPassed,
-		ProbeOutput:         "self-check ok",
+		ToolName:    "browse_page",
+		Installer:   "aphelion",
+		InstallRef:  "workspace:tooling-v1",
+		Status:      ToolInstallStatusVerified,
+		ProbeStatus: ToolProbeStatusPassed,
+		ProbeOutput: "self-check ok",
+		Rationale:   "Install attested after successful bounded setup and probe.",
+		ArtifactRefs: []RecordReference{
+			{Kind: "git_commit", Ref: "a3336ad", Label: "traceability slice"},
+			{Kind: "telegram_message", Ref: "chat:7:message:1001", Label: "approval prompt"},
+		},
 		InstalledAt:         time.Now().UTC(),
 		LastProbedAt:        time.Now().UTC(),
 		AttestedAt:          time.Now().UTC(),
@@ -981,9 +1014,14 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 	if loaded.ProbeStatus != ToolProbeStatusPassed {
 		t.Fatalf("loaded.ProbeStatus = %q, want passed", loaded.ProbeStatus)
 	}
+	if loaded.Rationale != record.Rationale || len(loaded.ArtifactRefs) != 2 || loaded.ArtifactRefs[0].Kind != "git_commit" {
+		t.Fatalf("loaded traceability = (%q, %#v), want rationale + refs", loaded.Rationale, loaded.ArtifactRefs)
+	}
 	record.Status = ToolInstallStatusStale
 	record.ProbeStatus = ToolProbeStatusFailed
 	record.ProbeOutput = "missing shared libs"
+	record.Rationale = "Workspace drift invalidated the previous verification."
+	record.ArtifactRefs = []RecordReference{{Kind: "file_path", Ref: "tool-manifest.json", Label: "manifest"}}
 	if _, err := store.UpsertToolInstallRecord(record); err != nil {
 		t.Fatalf("UpsertToolInstallRecord(update) err = %v", err)
 	}
@@ -993,6 +1031,9 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].ToolName != "browse_page" {
 		t.Fatalf("ToolInstallRecords(stale) = %#v, want one browse_page record", list)
+	}
+	if list[0].Rationale != record.Rationale || len(list[0].ArtifactRefs) != 1 || list[0].ArtifactRefs[0].Ref != "tool-manifest.json" {
+		t.Fatalf("ToolInstallRecords traceability = (%q, %#v), want updated rationale + manifest ref", list[0].Rationale, list[0].ArtifactRefs)
 	}
 }
 

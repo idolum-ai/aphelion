@@ -209,6 +209,8 @@ type ToolInstallRecord struct {
 	Status              ToolInstallStatus `json:"status,omitempty"`
 	ProbeStatus         ToolProbeStatus   `json:"probe_status,omitempty"`
 	ProbeOutput         string            `json:"probe_output,omitempty"`
+	Rationale           string            `json:"rationale,omitempty"`
+	ArtifactRefs        []RecordReference `json:"artifact_refs,omitempty"`
 	ConsecutiveFailures int               `json:"consecutive_failures,omitempty"`
 	CreatedAt           time.Time         `json:"created_at,omitempty"`
 	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
@@ -219,25 +221,29 @@ type ToolInstallRecord struct {
 }
 
 type ToolAuditRecord struct {
-	ToolName            string          `json:"tool_name"`
-	Status              ToolAuditStatus `json:"status,omitempty"`
-	AuditOutput         string          `json:"audit_output,omitempty"`
-	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
-	CreatedAt           time.Time       `json:"created_at,omitempty"`
-	UpdatedAt           time.Time       `json:"updated_at,omitempty"`
-	AuditedAt           time.Time       `json:"audited_at,omitempty"`
-	LastFailureAt       time.Time       `json:"last_failure_at,omitempty"`
+	ToolName            string            `json:"tool_name"`
+	Status              ToolAuditStatus   `json:"status,omitempty"`
+	AuditOutput         string            `json:"audit_output,omitempty"`
+	Rationale           string            `json:"rationale,omitempty"`
+	ArtifactRefs        []RecordReference `json:"artifact_refs,omitempty"`
+	ConsecutiveFailures int               `json:"consecutive_failures,omitempty"`
+	CreatedAt           time.Time         `json:"created_at,omitempty"`
+	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
+	AuditedAt           time.Time         `json:"audited_at,omitempty"`
+	LastFailureAt       time.Time         `json:"last_failure_at,omitempty"`
 }
 
 type ToolProbeRecord struct {
-	ToolName            string          `json:"tool_name"`
-	Status              ToolProbeStatus `json:"status,omitempty"`
-	ProbeOutput         string          `json:"probe_output,omitempty"`
-	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
-	CreatedAt           time.Time       `json:"created_at,omitempty"`
-	UpdatedAt           time.Time       `json:"updated_at,omitempty"`
-	ProbedAt            time.Time       `json:"probed_at,omitempty"`
-	LastFailureAt       time.Time       `json:"last_failure_at,omitempty"`
+	ToolName            string            `json:"tool_name"`
+	Status              ToolProbeStatus   `json:"status,omitempty"`
+	ProbeOutput         string            `json:"probe_output,omitempty"`
+	Rationale           string            `json:"rationale,omitempty"`
+	ArtifactRefs        []RecordReference `json:"artifact_refs,omitempty"`
+	ConsecutiveFailures int               `json:"consecutive_failures,omitempty"`
+	CreatedAt           time.Time         `json:"created_at,omitempty"`
+	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
+	ProbedAt            time.Time         `json:"probed_at,omitempty"`
+	LastFailureAt       time.Time         `json:"last_failure_at,omitempty"`
 }
 
 type TurnAuthorizationKind string
@@ -832,6 +838,8 @@ func NormalizeToolInstallRecord(record ToolInstallRecord) ToolInstallRecord {
 	record.Installer = strings.TrimSpace(record.Installer)
 	record.InstallRef = strings.TrimSpace(record.InstallRef)
 	record.ProbeOutput = strings.TrimSpace(record.ProbeOutput)
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
 	record.Status = NormalizeToolInstallStatus(record.Status)
 	record.ProbeStatus = NormalizeToolProbeStatus(record.ProbeStatus)
 	if record.CreatedAt.IsZero() && record.ToolName != "" {
@@ -847,6 +855,8 @@ func NormalizeToolAuditRecord(record ToolAuditRecord) ToolAuditRecord {
 	record.ToolName = strings.TrimSpace(record.ToolName)
 	record.Status = NormalizeToolAuditStatus(record.Status)
 	record.AuditOutput = strings.TrimSpace(record.AuditOutput)
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
 	if record.ConsecutiveFailures < 0 {
 		record.ConsecutiveFailures = 0
 	}
@@ -863,6 +873,8 @@ func NormalizeToolProbeRecord(record ToolProbeRecord) ToolProbeRecord {
 	record.ToolName = strings.TrimSpace(record.ToolName)
 	record.Status = NormalizeToolProbeStatus(record.Status)
 	record.ProbeOutput = strings.TrimSpace(record.ProbeOutput)
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
 	if record.ConsecutiveFailures < 0 {
 		record.ConsecutiveFailures = 0
 	}
