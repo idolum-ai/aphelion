@@ -124,6 +124,9 @@ func TestToolAuthorityProbeRunUpdatesInstallRecordFromManifestProbe(t *testing.T
 	if !strings.Contains(probeOut, "probe_status: passed") {
 		t.Fatalf("probe_run output = %q, want passed probe status", probeOut)
 	}
+	if !strings.Contains(probeOut, "rationale: probe_run passed against the declared probe command") || !strings.Contains(probeOut, "artifact_ref: file_path ") || !strings.Contains(probeOut, "probe.sh") {
+		t.Fatalf("probe_run output = %q, want rendered rationale + probe script ref", probeOut)
+	}
 	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_show","tool_name":"browse_page"}`))
 	if err != nil {
 		t.Fatalf("install_show err = %v", err)
@@ -137,6 +140,9 @@ func TestToolAuthorityProbeRunUpdatesInstallRecordFromManifestProbe(t *testing.T
 	}
 	if !strings.Contains(probeShowOut, "status: passed") {
 		t.Fatalf("probe_show output = %q, want passed canonical probe record", probeShowOut)
+	}
+	if !strings.Contains(probeShowOut, "rationale: probe_run passed against the declared probe command") || !strings.Contains(probeShowOut, "artifact_ref: file_path ") {
+		t.Fatalf("probe_show output = %q, want rendered traceability", probeShowOut)
 	}
 	probeListOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"probe_list"}`))
 	if err != nil {
@@ -229,6 +235,9 @@ func TestToolAuthorityInstallExecuteRunsManifestInstallCommandAndMarksInstalled(
 	if !strings.Contains(out, "status: installed") || !strings.Contains(out, "installed_at:") {
 		t.Fatalf("install_execute output = %q, want installed status with timestamp", out)
 	}
+	if !strings.Contains(out, "rationale: install_execute ran the manifest install command") || !strings.Contains(out, "artifact_ref: file_path ") || !strings.Contains(out, "install.sh") {
+		t.Fatalf("install_execute output = %q, want rendered rationale + install script ref", out)
+	}
 }
 
 func TestToolAuthorityInstallExecuteMarksRecordFailedOnInstallError(t *testing.T) {
@@ -267,6 +276,9 @@ func TestToolAuthorityInstallExecuteMarksRecordFailedOnInstallError(t *testing.T
 	if !strings.Contains(showOut, "status: failed") || !strings.Contains(showOut, "consecutive_failures: 1") {
 		t.Fatalf("install_show output = %q, want failed status with failure count after install error", showOut)
 	}
+	if !strings.Contains(showOut, "rationale: install_execute failed while running the manifest install command") || !strings.Contains(showOut, "artifact_ref: file_path ") || !strings.Contains(showOut, "install.sh") {
+		t.Fatalf("install_show output = %q, want rendered rationale + install script ref", showOut)
+	}
 }
 
 func TestToolAuthorityAuditRunFailsWhenExecutionEntryIsMissing(t *testing.T) {
@@ -299,6 +311,9 @@ func TestToolAuthorityAuditRunFailsWhenExecutionEntryIsMissing(t *testing.T) {
 	}
 	if !strings.Contains(auditShowOut, "status: failed") || !strings.Contains(auditShowOut, "consecutive_failures: 1") {
 		t.Fatalf("audit_show output = %q, want failed audit with failure count", auditShowOut)
+	}
+	if !strings.Contains(auditShowOut, "rationale: audit_run could not resolve the declared execution entry") || !strings.Contains(auditShowOut, "artifact_ref: file_path ") || !strings.Contains(auditShowOut, "missing-run.sh") {
+		t.Fatalf("audit_show output = %q, want rendered rationale + missing entry ref", auditShowOut)
 	}
 }
 
@@ -358,5 +373,8 @@ func TestToolAuthorityRepeatedFailedProbeEscalatesStaleToFailed(t *testing.T) {
 	}
 	if !strings.Contains(probeShowOut, "consecutive_failures: 3") {
 		t.Fatalf("probe_show output = %q, want three consecutive failures", probeShowOut)
+	}
+	if !strings.Contains(probeShowOut, "rationale: probe_run failed against the declared probe command") || !strings.Contains(probeShowOut, "artifact_ref: file_path ") || !strings.Contains(probeShowOut, "probe.sh") {
+		t.Fatalf("probe_show output = %q, want rendered rationale + probe ref", probeShowOut)
 	}
 }

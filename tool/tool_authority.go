@@ -650,6 +650,49 @@ func (r *Registry) toolAuthorityInstallList(in toolAuthorityInput) (string, erro
 	return renderToolInstallRecordList(records), nil
 }
 
+func (r *Registry) manifestCommandArtifactRefs(manifest ExternalToolManifest, command []string, label string) []session.RecordReference {
+	manifest = NormalizeExternalToolManifest(manifest)
+	if len(command) == 0 {
+		return nil
+	}
+	first := strings.TrimSpace(command[0])
+	if first == "" {
+		return nil
+	}
+	if strings.HasPrefix(first, "./") || strings.HasPrefix(first, "../") || strings.HasPrefix(first, "/") {
+		workdir, err := resolveWorkdir(r.workspace, manifest.Execution.Workdir)
+		if err != nil {
+			return nil
+		}
+		resolved := first
+		if !strings.HasPrefix(first, "/") {
+			resolved = filepath.Join(workdir, first)
+		}
+		return []session.RecordReference{{Kind: "file_path", Ref: resolved, Label: strings.TrimSpace(label)}}
+	}
+	return []session.RecordReference{{Kind: "command", Ref: first, Label: strings.TrimSpace(label)}}
+}
+
+func auditOutputArtifactRefs(output string) []session.RecordReference {
+	trimmed := strings.TrimSpace(output)
+	switch {
+	case strings.HasPrefix(trimmed, "entry_path:"):
+		ref := strings.TrimSpace(strings.TrimPrefix(trimmed, "entry_path:"))
+		if ref == "" {
+			return nil
+		}
+		return []session.RecordReference{{Kind: "file_path", Ref: ref, Label: "execution entry"}}
+	case strings.HasPrefix(trimmed, "entry_command:"):
+		ref := strings.TrimSpace(strings.TrimPrefix(trimmed, "entry_command:"))
+		if ref == "" {
+			return nil
+		}
+		return []session.RecordReference{{Kind: "command", Ref: ref, Label: "execution entry"}}
+	default:
+		return nil
+	}
+}
+
 func (r *Registry) toolAuthorityInstallExecute(ctx context.Context, in toolAuthorityInput, actor principal.Principal, key session.SessionKey) (string, error) {
 	toolName := strings.TrimSpace(in.ToolName)
 	if toolName == "" {
@@ -672,10 +715,13 @@ func (r *Registry) toolAuthorityInstallExecute(ctx context.Context, in toolAutho
 	}
 	installOutput, err := r.runExternalManifestCommand(ctx, manifest, manifest.Install.Command)
 	now := time.Now().UTC()
+	commandRefs := r.manifestCommandArtifactRefs(manifest, manifest.Install.Command, "install command")
 	record.ProbeOutput = strings.TrimSpace(installOutput)
 	record.UpdatedAt = now
+	record.ArtifactRefs = commandRefs
 	if err != nil {
 		record.Status = session.ToolInstallStatusFailed
+		record.Rationale = "install_execute failed while running the manifest install command"
 		record.ConsecutiveFailures++
 		record.LastFailureAt = now
 		record.AttestedAt = time.Time{}
@@ -693,6 +739,7 @@ func (r *Registry) toolAuthorityInstallExecute(ctx context.Context, in toolAutho
 		return "", err
 	}
 	record.Status = session.ToolInstallStatusInstalled
+	record.Rationale = "install_execute ran the manifest install command"
 	record.ConsecutiveFailures = 0
 	record.LastFailureAt = time.Time{}
 	record.InstalledAt = now
@@ -733,12 +780,13 @@ func (r *Registry) toolAuthorityAuditRun(in toolAuthorityInput, actor principal.
 	}
 	output, err := r.runExternalManifestAudit(manifest)
 	now := time.Now().UTC()
-	record := session.ToolAuditRecord{ToolName: manifest.Name, AuditOutput: output, UpdatedAt: now, AuditedAt: now}
+	record := session.ToolAuditRecord{ToolName: manifest.Name, AuditOutput: output, UpdatedAt: now, AuditedAt: now, ArtifactRefs: auditOutputArtifactRefs(output)}
 	if prevAuditExists {
 		record.CreatedAt = prevAudit.CreatedAt
 	}
 	if err != nil {
 		record.Status = session.ToolAuditStatusFailed
+		record.Rationale = "audit_run could not resolve the declared execution entry"
 		record.ConsecutiveFailures = prevAudit.ConsecutiveFailures + 1
 		record.LastFailureAt = now
 		stored, saveErr := r.store.UpsertToolAuditRecord(record)
@@ -749,6 +797,7 @@ func (r *Registry) toolAuthorityAuditRun(in toolAuthorityInput, actor principal.
 		return "", err
 	}
 	record.Status = session.ToolAuditStatusPassed
+	record.Rationale = "audit_run resolved the declared execution entry"
 	record.ConsecutiveFailures = 0
 	record.LastFailureAt = time.Time{}
 	stored, err := r.store.UpsertToolAuditRecord(record)
@@ -845,12 +894,15 @@ func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityIn
 	}
 	probeOutput, err := r.runExternalManifestProbe(ctx, manifest)
 	now := time.Now().UTC()
+	probeRefs := r.manifestCommandArtifactRefs(manifest, manifest.Probe.Command, "probe command")
 	record.ProbeOutput = probeOutput
 	record.LastProbedAt = now
+	record.ArtifactRefs = probeRefs
 	if err != nil {
 		record.ProbeStatus = session.ToolProbeStatusFailed
+		record.Rationale = "probe_run failed against the declared probe command"
 		consecutiveFailures := prevProbe.ConsecutiveFailures + 1
-		if _, saveProbeErr := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusFailed, ProbeOutput: probeOutput, ProbedAt: now, ConsecutiveFailures: consecutiveFailures, LastFailureAt: now}); saveProbeErr != nil {
+		if _, saveProbeErr := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusFailed, ProbeOutput: probeOutput, Rationale: "probe_run failed against the declared probe command", ArtifactRefs: probeRefs, ProbedAt: now, ConsecutiveFailures: consecutiveFailures, LastFailureAt: now}); saveProbeErr != nil {
 			return "", saveProbeErr
 		}
 		if record.Status == session.ToolInstallStatusVerified {
@@ -881,7 +933,8 @@ func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityIn
 		return "", err
 	}
 	record.ProbeStatus = session.ToolProbeStatusPassed
-	if _, err := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusPassed, ProbeOutput: probeOutput, ProbedAt: now, ConsecutiveFailures: 0}); err != nil {
+	record.Rationale = "probe_run passed against the declared probe command"
+	if _, err := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusPassed, ProbeOutput: probeOutput, Rationale: "probe_run passed against the declared probe command", ArtifactRefs: probeRefs, ProbedAt: now, ConsecutiveFailures: 0}); err != nil {
 		return "", err
 	}
 	record.UpdatedAt = now
@@ -1175,6 +1228,20 @@ func renderToolExposure(header string, record session.ToolExposure) string {
 	return b.String()
 }
 
+func renderRecordTraceability(b *strings.Builder, rationale string, refs []session.RecordReference) {
+	rationale = strings.TrimSpace(rationale)
+	if rationale != "" {
+		fmt.Fprintf(b, "rationale: %s\n", rationale)
+	}
+	for _, ref := range session.NormalizeRecordReferences(refs) {
+		fmt.Fprintf(b, "artifact_ref: %s %s", ref.Kind, ref.Ref)
+		if strings.TrimSpace(ref.Label) != "" {
+			fmt.Fprintf(b, " label=%s", ref.Label)
+		}
+		b.WriteString("\n")
+	}
+}
+
 func renderToolProbeRecord(header string, record session.ToolProbeRecord) string {
 	record = session.NormalizeToolProbeRecord(record)
 	var b strings.Builder
@@ -1184,6 +1251,7 @@ func renderToolProbeRecord(header string, record session.ToolProbeRecord) string
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
 	fmt.Fprintf(&b, "probe_output: %s\n", firstNonEmpty(record.ProbeOutput, "-"))
 	fmt.Fprintf(&b, "consecutive_failures: %d\n", record.ConsecutiveFailures)
+	renderRecordTraceability(&b, record.Rationale, record.ArtifactRefs)
 	if !record.ProbedAt.IsZero() {
 		fmt.Fprintf(&b, "probed_at: %s\n", record.ProbedAt.UTC().Format(time.RFC3339))
 	}
@@ -1219,6 +1287,7 @@ func renderToolAuditRecord(header string, record session.ToolAuditRecord) string
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
 	fmt.Fprintf(&b, "audit_output: %s\n", firstNonEmpty(record.AuditOutput, "-"))
 	fmt.Fprintf(&b, "consecutive_failures: %d\n", record.ConsecutiveFailures)
+	renderRecordTraceability(&b, record.Rationale, record.ArtifactRefs)
 	if !record.AuditedAt.IsZero() {
 		fmt.Fprintf(&b, "audited_at: %s\n", record.AuditedAt.UTC().Format(time.RFC3339))
 	}
@@ -1257,6 +1326,7 @@ func renderToolInstallRecord(header string, record session.ToolInstallRecord) st
 	fmt.Fprintf(&b, "probe_status: %s\n", firstNonEmpty(string(record.ProbeStatus), "-"))
 	fmt.Fprintf(&b, "probe_output: %s\n", firstNonEmpty(record.ProbeOutput, "-"))
 	fmt.Fprintf(&b, "consecutive_failures: %d\n", record.ConsecutiveFailures)
+	renderRecordTraceability(&b, record.Rationale, record.ArtifactRefs)
 	if !record.InstalledAt.IsZero() {
 		fmt.Fprintf(&b, "installed_at: %s\n", record.InstalledAt.UTC().Format(time.RFC3339))
 	}
