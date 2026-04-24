@@ -5,6 +5,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,9 @@ api_key = "sk-ant-test"
 
 [agent]
 workspace = "./workspace"
+
+[tools]
+external_manifest_dir = "./external-tools"
 `
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -53,6 +57,9 @@ workspace = "./workspace"
 	}
 	if cfg.Governor.Backend != "auto" {
 		t.Fatalf("governor.backend = %q, want auto", cfg.Governor.Backend)
+	}
+	if cfg.Governor.NativeProvider != "anthropic" || cfg.Providers.Default != "anthropic" {
+		t.Fatalf("provider heuristic = governor:%q default:%q, want anthropic/anthropic", cfg.Governor.NativeProvider, cfg.Providers.Default)
 	}
 	if cfg.Providers.Anthropic.Model != "claude-sonnet-4-6" {
 		t.Fatalf("model = %q", cfg.Providers.Anthropic.Model)
@@ -95,6 +102,9 @@ workspace = "./workspace"
 	}
 	if !strings.HasSuffix(cfg.Agent.Workspace, "/workspace") {
 		t.Fatalf("workspace = %q, want expanded relative path", cfg.Agent.Workspace)
+	}
+	if !strings.HasSuffix(cfg.Tools.ExternalManifestDir, "/external-tools") {
+		t.Fatalf("tools.external_manifest_dir = %q, want expanded relative path", cfg.Tools.ExternalManifestDir)
 	}
 	if len(cfg.Agent.BootstrapFiles) == 0 || cfg.Agent.BootstrapFiles[0] != "SOUL.md" {
 		t.Fatalf("bootstrap files = %#v, want defaults", cfg.Agent.BootstrapFiles)
@@ -352,7 +362,7 @@ native_provider = "anthropic"
 	auth_path = "/var/lib/aphelion/codex-auth.json"
 	codex_home = "~/codex-home"
 	base_url = "https://chatgpt.com/backend-api"
-	model = "gpt-5.4-mini"
+	model = "gpt-5.5"
 	context_window = 180000
 	max_continuations = 5
 	transport_retries = 2
@@ -526,8 +536,8 @@ elevenlabs_voice_id = "voice-123"
 	if cfg.Governor.Codex.AuthPath != "/var/lib/aphelion/codex-auth.json" {
 		t.Fatalf("governor.codex.auth_path = %q, want /var/lib/aphelion/codex-auth.json", cfg.Governor.Codex.AuthPath)
 	}
-	if cfg.Governor.Codex.Model != "gpt-5.4-mini" {
-		t.Fatalf("governor.codex.model = %q, want gpt-5.4-mini", cfg.Governor.Codex.Model)
+	if cfg.Governor.Codex.Model != "gpt-5.5" {
+		t.Fatalf("governor.codex.model = %q, want gpt-5.5", cfg.Governor.Codex.Model)
 	}
 	if cfg.Governor.Codex.ContextWindow != 180000 {
 		t.Fatalf("governor.codex.context_window = %d, want 180000", cfg.Governor.Codex.ContextWindow)
@@ -808,6 +818,130 @@ level = "debug"
 	}
 	if cfg.Providers.Default != "anthropic" {
 		t.Fatalf("providers.default = %q, want anthropic", cfg.Providers.Default)
+	}
+}
+
+func TestLoadAcceptsOpenAINativeProvider(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[governor]
+backend = "native"
+native_provider = "openai"
+
+[providers.openai]
+api_key = "sk-openai-test"
+model = "gpt-5.5"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if cfg.Governor.NativeProvider != "openai" {
+		t.Fatalf("governor.native_provider = %q, want openai", cfg.Governor.NativeProvider)
+	}
+	if cfg.Providers.OpenAI.Model != "gpt-5.5" {
+		t.Fatalf("providers.openai.model = %q, want gpt-5.5", cfg.Providers.OpenAI.Model)
+	}
+}
+
+func TestLoadExampleStyleAutoSelectsOpenAIFirstWithConfiguredFallbacks(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers]
+selection = "auto"
+auto_order = ["openai", "anthropic", "openrouter"]
+default = ""
+# fallback_chain intentionally omitted, matching config.example.toml auto mode.
+
+[providers.openai]
+api_key = "sk-openai-test"
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[providers.openrouter]
+api_key = "sk-or-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if cfg.Governor.NativeProvider != "openai" || cfg.Providers.Default != "openai" {
+		t.Fatalf("provider heuristic = governor:%q default:%q, want openai/openai", cfg.Governor.NativeProvider, cfg.Providers.Default)
+	}
+	if !reflect.DeepEqual(cfg.Providers.FallbackChain, []string{"anthropic", "openrouter"}) {
+		t.Fatalf("providers.fallback_chain = %#v, want anthropic -> openrouter", cfg.Providers.FallbackChain)
+	}
+	if cfg.Providers.OpenAI.Model != "gpt-5.5" {
+		t.Fatalf("providers.openai.model = %q, want gpt-5.5", cfg.Providers.OpenAI.Model)
+	}
+	if !reflect.DeepEqual(cfg.Providers.OpenAI.FallbackModels, []string{"gpt-5.4", "gpt-5.4-mini"}) {
+		t.Fatalf("providers.openai.fallback_models = %#v, want gpt-5.4/gpt-5.4-mini", cfg.Providers.OpenAI.FallbackModels)
+	}
+}
+
+func TestLoadProviderManualSelectionPreservesConfiguredChain(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers]
+selection = "manual"
+default = "anthropic"
+fallback_chain = []
+
+[providers.openai]
+api_key = "sk-openai-test"
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if cfg.Governor.NativeProvider != "anthropic" || cfg.Providers.Default != "anthropic" {
+		t.Fatalf("provider selection = governor:%q default:%q, want anthropic/anthropic", cfg.Governor.NativeProvider, cfg.Providers.Default)
+	}
+	if len(cfg.Providers.FallbackChain) != 0 {
+		t.Fatalf("providers.fallback_chain = %#v, want explicit empty", cfg.Providers.FallbackChain)
 	}
 }
 

@@ -24,17 +24,21 @@ admin_user_ids = [123456789]
 
 [governor]
 backend = "auto"
-native_provider = "anthropic"
+native_provider = "" # Empty lets providers.selection choose from configured providers.
 
 [governor.codex]
 auth_source = "auto"
 codex_home = ""
 base_url = "https://chatgpt.com/backend-api"
+model = "gpt-5.5"
 context_window = 200000
 
 [providers]
-default = "anthropic"
-fallback_chain = []
+selection = "auto" # "auto" chooses the first configured provider from auto_order; "manual" uses default/fallback_chain exactly.
+auto_order = ["openai", "anthropic", "openrouter"]
+default = ""
+# fallback_chain is omitted in auto mode so configured providers after the primary become fallbacks.
+# For a manual chain, set selection = "manual", default, and fallback_chain explicitly.
 
 [providers.anthropic]
 api_key = "anthropic-api-key"
@@ -45,7 +49,8 @@ context_window = 200000
 [providers.openai]
 api_key = ""
 base_url = "https://api.openai.com/v1"
-model = "gpt-5.4"
+model = "gpt-5.5"
+fallback_models = ["gpt-5.4", "gpt-5.4-mini"]
 max_tokens = 16384
 context_window = 128000
 
@@ -99,6 +104,11 @@ bootstrap_max_chars = 20000
 bootstrap_total_max_chars = 150000
 daily_notes = true
 daily_notes_dir = "memory/daily"
+
+[tools]
+# Directory of external tool manifest JSON files. The bundled browse_page pilot
+# manifest lives at external-tools/browse_page/manifest.json relative to this repo.
+external_manifest_dir = ""
 
 [memory]
 session_search = false

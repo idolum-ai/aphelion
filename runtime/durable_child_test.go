@@ -150,6 +150,72 @@ func TestDurableAgentChildConfigInheritsParentFallbackForNativePrimary(t *testin
 	}
 }
 
+func TestDurableAgentChildConfigUsesOpenAINativeBootstrap(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parent := config.Default()
+	parent.Telegram.BotToken = "tg-parent"
+	parent.Sessions.DBPath = filepath.Join(root, "sessions.db")
+	parent.Governor.Backend = "native"
+	parent.Governor.NativeProvider = "openai"
+	parent.Face.Backend = "provider"
+	parent.Providers.Default = "openai"
+	parent.Providers.FallbackChain = []string{"anthropic"}
+	parent.Providers.OpenAI.APIKey = "sk-openai-parent"
+	parent.Providers.Anthropic.APIKey = "sk-ant-parent"
+	parent.Agent.PromptRoot = filepath.Join(root, "prompt")
+
+	scope, err := sandbox.DurableAgentScope(
+		"family-group",
+		parent.Agent.PromptRoot,
+		filepath.Join(root, "workspace"),
+		filepath.Join(root, "memory"),
+		"default",
+	)
+	if err != nil {
+		t.Fatalf("DurableAgentScope() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID: "family-group",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openai",
+			APIKey:         "sk-openai-child",
+			BaseURL:        "https://api.openai.test/v1",
+			Model:          "gpt-5.5",
+			MaxTokens:      777,
+		},
+	}
+
+	child := durableAgentChildConfig(&parent, agent, scope)
+	if child.Governor.NativeProvider != "openai" {
+		t.Fatalf("Governor.NativeProvider = %q, want openai", child.Governor.NativeProvider)
+	}
+	if child.Providers.Default != "openai" {
+		t.Fatalf("Providers.Default = %q, want openai", child.Providers.Default)
+	}
+	if !reflect.DeepEqual(child.Providers.FallbackChain, []string{"anthropic"}) {
+		t.Fatalf("Providers.FallbackChain = %#v, want []string{\"anthropic\"}", child.Providers.FallbackChain)
+	}
+	if child.Providers.OpenAI.APIKey != "sk-openai-child" {
+		t.Fatalf("Providers.OpenAI.APIKey = %q, want child key", child.Providers.OpenAI.APIKey)
+	}
+	if child.Providers.OpenAI.BaseURL != "https://api.openai.test/v1" {
+		t.Fatalf("Providers.OpenAI.BaseURL = %q, want child base url", child.Providers.OpenAI.BaseURL)
+	}
+	if child.Providers.OpenAI.Model != "gpt-5.5" {
+		t.Fatalf("Providers.OpenAI.Model = %q, want gpt-5.5", child.Providers.OpenAI.Model)
+	}
+	if child.Providers.OpenAI.MaxTokens != 777 {
+		t.Fatalf("Providers.OpenAI.MaxTokens = %d, want 777", child.Providers.OpenAI.MaxTokens)
+	}
+	if child.Providers.Anthropic.APIKey != "sk-ant-parent" {
+		t.Fatalf("Providers.Anthropic.APIKey = %q, want inherited parent fallback key", child.Providers.Anthropic.APIKey)
+	}
+}
+
 func TestDurableAgentChildConfigUsesCodexBootstrapWithoutParentCredentials(t *testing.T) {
 	t.Parallel()
 

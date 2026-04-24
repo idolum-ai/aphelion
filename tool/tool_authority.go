@@ -6,15 +6,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-func (r *Registry) toolAuthority(ctx context.Context, input json.RawMessage, p principal.Principal, key session.SessionKey) (string, error) {
+func (r *Registry) toolAuthority(ctx context.Context, input json.RawMessage, p principal.Principal, key session.SessionKey, scope sandbox.Scope) (string, error) {
 	if p.Role != principal.RoleAdmin {
 		return "", fmt.Errorf("tool_authority is admin-only")
 	}
@@ -46,17 +50,37 @@ func (r *Registry) toolAuthority(ctx context.Context, input json.RawMessage, p p
 	case "proposal_override":
 		return r.toolAuthorityProposalOverride(in, p, key)
 	case "register":
-		return r.toolAuthorityRegister(in, p, key)
+		return r.toolAuthorityRegister(in, p, key, scope)
 	case "registered_show":
 		return r.toolAuthorityRegisteredShow(in)
 	case "registered_list":
 		return r.toolAuthorityRegisteredList(in)
 	case "exposure_set":
-		return r.toolAuthorityExposureSet(in, p, key)
+		return r.toolAuthorityExposureSet(in, p, key, scope)
 	case "exposure_show":
 		return r.toolAuthorityExposureShow(in)
 	case "exposure_list":
 		return r.toolAuthorityExposureList(in)
+	case "install_set":
+		return r.toolAuthorityInstallSet(in, p, key, scope)
+	case "install_show":
+		return r.toolAuthorityInstallShow(in, scope)
+	case "install_list":
+		return r.toolAuthorityInstallList(in)
+	case "install_execute":
+		return r.toolAuthorityInstallExecute(ctx, in, p, key, scope)
+	case "audit_run":
+		return r.toolAuthorityAuditRun(in, p, key, scope)
+	case "audit_show":
+		return r.toolAuthorityAuditShow(in, scope)
+	case "audit_list":
+		return r.toolAuthorityAuditList(in)
+	case "probe_run":
+		return r.toolAuthorityProbeRun(ctx, in, p, key, scope)
+	case "probe_show":
+		return r.toolAuthorityProbeShow(in)
+	case "probe_list":
+		return r.toolAuthorityProbeList(in)
 	case "access_check":
 		return r.toolAuthorityAccessCheck(in)
 	default:
@@ -306,7 +330,7 @@ func (r *Registry) toolAuthorityProposalRatify(ctx context.Context, in toolAutho
 	return renderToolProposal("[TOOL_PROPOSAL_UPDATED]", record), nil
 }
 
-func (r *Registry) toolAuthorityRegister(in toolAuthorityInput, actor principal.Principal, key session.SessionKey) (string, error) {
+func (r *Registry) toolAuthorityRegister(in toolAuthorityInput, actor principal.Principal, key session.SessionKey, scope sandbox.Scope) (string, error) {
 	var proposal session.ToolProposal
 	if proposalID := strings.TrimSpace(in.ProposalID); proposalID != "" {
 		var ok bool
@@ -334,7 +358,29 @@ func (r *Registry) toolAuthorityRegister(in toolAuthorityInput, actor principal.
 	if !ok {
 		return "", fmt.Errorf("tool_authority register tool_name %q is not a known runtime tool definition", toolName)
 	}
+	if !r.authorityManagedTool(trustedToolName) {
+		return "", fmt.Errorf("tool_authority register tool_name %q is not an authority-managed runtime tool", toolName)
+	}
 	toolName = trustedToolName
+	if manifest, ok := r.externalManifestByName(toolName); ok {
+		record, exists, err := r.store.ToolInstallRecord(toolName)
+		if err != nil {
+			return "", err
+		}
+		if !exists || record.Status != session.ToolInstallStatusVerified {
+			return "", fmt.Errorf("external tool %q requires a verified install record before registration", manifest.Name)
+		}
+		audit, auditExists, err := r.store.ToolAuditRecord(toolName)
+		if err != nil {
+			return "", err
+		}
+		if !auditExists || audit.Status != session.ToolAuditStatusPassed {
+			return "", fmt.Errorf("external tool %q requires a passed import audit before registration", manifest.Name)
+		}
+		if err := r.ensureExternalToolFresh(manifest, scope); err != nil {
+			return "", err
+		}
+	}
 	implementationRef := strings.TrimSpace(in.ImplementationRef)
 	if implementationRef == "" {
 		return "", fmt.Errorf("tool_authority register requires implementation_ref")
@@ -404,7 +450,7 @@ func (r *Registry) toolAuthorityRegisteredList(in toolAuthorityInput) (string, e
 	return renderRegisteredToolList(records), nil
 }
 
-func (r *Registry) toolAuthorityExposureSet(in toolAuthorityInput, actor principal.Principal, key session.SessionKey) (string, error) {
+func (r *Registry) toolAuthorityExposureSet(in toolAuthorityInput, actor principal.Principal, key session.SessionKey, scope sandbox.Scope) (string, error) {
 	toolName := strings.TrimSpace(in.ToolName)
 	principalID := strings.TrimSpace(in.Principal)
 	if toolName == "" || principalID == "" {
@@ -416,6 +462,11 @@ func (r *Registry) toolAuthorityExposureSet(in toolAuthorityInput, actor princip
 	}
 	if !ok || !registered.Registered {
 		return "", fmt.Errorf("tool %q is not registered", toolName)
+	}
+	if manifest, ok := r.externalManifestByName(toolName); ok {
+		if err := r.ensureExternalToolFresh(manifest, scope); err != nil {
+			return "", err
+		}
 	}
 	active := true
 	if in.Active != nil {
@@ -472,6 +523,622 @@ func (r *Registry) toolAuthorityExposureList(in toolAuthorityInput) (string, err
 		return "", err
 	}
 	return renderToolExposureList(records), nil
+}
+
+func (r *Registry) toolAuthorityInstallSet(in toolAuthorityInput, actor principal.Principal, key session.SessionKey, scope sandbox.Scope) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority install_set requires tool_name")
+	}
+	manifest, ok := r.externalManifestByName(toolName)
+	if !ok {
+		return "", fmt.Errorf("tool_authority install_set requires an external tool manifest-backed tool_name")
+	}
+	status := session.NormalizeToolInstallStatus(session.ToolInstallStatus(in.Status))
+	if status == "" {
+		return "", fmt.Errorf("tool_authority install_set requires status pending, installed, verified, failed, or stale")
+	}
+	if strings.TrimSpace(in.ProbeStatus) != "" || strings.TrimSpace(in.ProbeOutput) != "" {
+		return "", fmt.Errorf("tool_authority install_set no longer accepts probe_status or probe_output; use probe_run to author runtime probe evidence")
+	}
+	now := time.Now().UTC()
+	record, exists, err := r.store.ToolInstallRecord(manifest.Name)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		record = session.ToolInstallRecord{ToolName: manifest.Name}
+	}
+	record.Installer = firstNonEmpty(strings.TrimSpace(in.Installer), record.Installer)
+	record.InstallRef = firstNonEmpty(strings.TrimSpace(in.InstallRef), record.InstallRef)
+	record.Status = status
+	switch status {
+	case session.ToolInstallStatusInstalled:
+		if record.InstalledAt.IsZero() {
+			record.InstalledAt = now
+		}
+		if record.AttestedAt.IsZero() == false && record.ProbeStatus == session.ToolProbeStatusFailed {
+			record.AttestedAt = time.Time{}
+		}
+	case session.ToolInstallStatusVerified:
+		if record.InstalledAt.IsZero() {
+			record.InstalledAt = now
+		}
+		probe, ok, err := r.store.ToolProbeRecord(manifest.Name)
+		if err != nil {
+			return "", err
+		}
+		if !ok || probe.Status != session.ToolProbeStatusPassed || probe.ProbedAt.IsZero() || (!record.InstalledAt.IsZero() && probe.ProbedAt.Before(record.InstalledAt)) || !runtimeAuthoredProbeRecord(probe) {
+			return "", fmt.Errorf("tool_authority install_set verified status requires a passed runtime-authored probe_run record")
+		}
+		audit, ok, err := r.store.ToolAuditRecord(manifest.Name)
+		if err != nil {
+			return "", err
+		}
+		if !ok || audit.Status != session.ToolAuditStatusPassed || audit.AuditedAt.IsZero() || (!record.InstalledAt.IsZero() && audit.AuditedAt.Before(record.InstalledAt)) || !runtimeAuthoredAuditRecord(audit) {
+			return "", fmt.Errorf("tool_authority install_set verified status requires a passed runtime-authored audit_run record")
+		}
+		fingerprint, err := externalToolFingerprint(manifest, scope.WorkingRoot)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(audit.BaselineFingerprint) != "" && audit.BaselineFingerprint != fingerprint {
+			return "", fmt.Errorf("tool_authority install_set verified status requires current fingerprint to match the passed audit baseline")
+		}
+		record.ProbeStatus = probe.Status
+		record.ProbeOutput = probe.ProbeOutput
+		record.LastProbedAt = probe.ProbedAt
+		record.BaselineFingerprint = fingerprint
+		record.CurrentFingerprint = fingerprint
+		record.StaleReason = ""
+		record.AttestedAt = now
+	case session.ToolInstallStatusPending:
+		record.AttestedAt = time.Time{}
+	case session.ToolInstallStatusFailed:
+		record.AttestedAt = time.Time{}
+	case session.ToolInstallStatusStale:
+		record.AttestedAt = time.Time{}
+	}
+	record.UpdatedAt = now
+	stored, err := r.store.UpsertToolInstallRecord(record)
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendToolAuthorityEvent(
+		key,
+		core.ExecutionEventToolInstallUpdated,
+		string(stored.Status),
+		map[string]any{
+			"tool_name":     toolName,
+			"status":        string(stored.Status),
+			"installer":     stored.Installer,
+			"install_ref":   stored.InstallRef,
+			"probe_status":  string(stored.ProbeStatus),
+			"actor_role":    strings.TrimSpace(string(actor.Role)),
+			"actor_user_id": actor.TelegramUserID,
+		},
+	); err != nil {
+		return "", err
+	}
+	return renderToolInstallRecord("[TOOL_INSTALL]", stored), nil
+}
+
+func (r *Registry) toolAuthorityInstallShow(in toolAuthorityInput, scope sandbox.Scope) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority install_show requires tool_name")
+	}
+	if manifest, ok := r.externalManifestByName(toolName); ok {
+		if _, _, err := r.refreshExternalToolDrift(manifest, scope); err != nil {
+			return "", err
+		}
+	}
+	record, ok, err := r.store.ToolInstallRecord(toolName)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("tool install record %q not found", toolName)
+	}
+	return renderToolInstallRecord("[TOOL_INSTALL]", record), nil
+}
+
+func (r *Registry) toolAuthorityInstallList(in toolAuthorityInput) (string, error) {
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	status := session.NormalizeToolInstallStatus(session.ToolInstallStatus(in.Status))
+	if strings.TrimSpace(in.Status) != "" && status == "" {
+		return "", fmt.Errorf("tool_authority install_list status must be pending, installed, verified, failed, or stale")
+	}
+	records, err := r.store.ToolInstallRecords(status, limit)
+	if err != nil {
+		return "", err
+	}
+	return renderToolInstallRecordList(records), nil
+}
+
+func (r *Registry) manifestCommandArtifactRefs(manifest ExternalToolManifest, command []string, label string) []session.RecordReference {
+	manifest = NormalizeExternalToolManifest(manifest)
+	if len(command) == 0 {
+		return nil
+	}
+	first := strings.TrimSpace(command[0])
+	if first == "" {
+		return nil
+	}
+	if strings.HasPrefix(first, "./") || strings.HasPrefix(first, "../") || strings.HasPrefix(first, "/") {
+		workdir, err := resolveWorkdir(r.workspace, manifest.Execution.Workdir)
+		if err != nil {
+			return nil
+		}
+		resolved := first
+		if !strings.HasPrefix(first, "/") {
+			resolved = filepath.Join(workdir, first)
+		}
+		return []session.RecordReference{{Kind: "file_path", Ref: resolved, Label: strings.TrimSpace(label)}}
+	}
+	return []session.RecordReference{{Kind: "command", Ref: first, Label: strings.TrimSpace(label)}}
+}
+
+func auditOutputArtifactRefs(output string) []session.RecordReference {
+	trimmed := strings.TrimSpace(output)
+	switch {
+	case strings.HasPrefix(trimmed, "entry_path:"):
+		ref := strings.TrimSpace(strings.TrimPrefix(trimmed, "entry_path:"))
+		if ref == "" {
+			return nil
+		}
+		return []session.RecordReference{{Kind: "file_path", Ref: ref, Label: "execution entry"}}
+	case strings.HasPrefix(trimmed, "entry_command:"):
+		ref := strings.TrimSpace(strings.TrimPrefix(trimmed, "entry_command:"))
+		if ref == "" {
+			return nil
+		}
+		return []session.RecordReference{{Kind: "command", Ref: ref, Label: "execution entry"}}
+	default:
+		return nil
+	}
+}
+
+func runtimeAuthoredProbeRecord(record session.ToolProbeRecord) bool {
+	return strings.HasPrefix(strings.TrimSpace(record.Rationale), "probe_run ")
+}
+
+func runtimeAuthoredAuditRecord(record session.ToolAuditRecord) bool {
+	return strings.HasPrefix(strings.TrimSpace(record.Rationale), "audit_run ")
+}
+
+func (r *Registry) ensureExternalToolFresh(manifest ExternalToolManifest, scope sandbox.Scope) error {
+	record, exists, err := r.refreshExternalToolDrift(manifest, scope)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("external tool %q requires an install record", manifest.Name)
+	}
+	if record.Status == session.ToolInstallStatusStale {
+		return fmt.Errorf("external tool %q is stale: %s", manifest.Name, firstNonEmpty(record.StaleReason, "verified baseline drift detected"))
+	}
+	if record.Status == session.ToolInstallStatusVerified && strings.TrimSpace(record.BaselineFingerprint) == "" {
+		return fmt.Errorf("external tool %q is stale: missing verified baseline fingerprint", manifest.Name)
+	}
+	return nil
+}
+
+func (r *Registry) refreshExternalToolDrift(manifest ExternalToolManifest, scope sandbox.Scope) (session.ToolInstallRecord, bool, error) {
+	manifest = NormalizeExternalToolManifest(manifest)
+	record, exists, err := r.store.ToolInstallRecord(manifest.Name)
+	if err != nil || !exists {
+		return record, exists, err
+	}
+	if record.Status != session.ToolInstallStatusVerified {
+		return record, true, nil
+	}
+	baseline := strings.TrimSpace(record.BaselineFingerprint)
+	if baseline == "" {
+		return r.markExternalToolStale(record, "", "missing verified baseline fingerprint")
+	}
+	current, err := externalToolFingerprint(manifest, scope.WorkingRoot)
+	if err != nil {
+		return r.markExternalToolStale(record, "", "fingerprint check failed: "+err.Error())
+	}
+	if current != baseline {
+		return r.markExternalToolStale(record, current, fmt.Sprintf("fingerprint drift: baseline=%s current=%s", baseline, current))
+	}
+	return record, true, nil
+}
+
+func (r *Registry) markExternalToolStale(record session.ToolInstallRecord, currentFingerprint string, reason string) (session.ToolInstallRecord, bool, error) {
+	now := time.Now().UTC()
+	reason = strings.TrimSpace(reason)
+	record.Status = session.ToolInstallStatusStale
+	record.CurrentFingerprint = strings.TrimSpace(currentFingerprint)
+	record.StaleReason = reason
+	record.AttestedAt = time.Time{}
+	record.UpdatedAt = now
+	stored, err := r.store.UpsertToolInstallRecord(record)
+	if err != nil {
+		return session.ToolInstallRecord{}, true, err
+	}
+	if audit, exists, err := r.store.ToolAuditRecord(record.ToolName); err == nil && exists {
+		audit.CurrentFingerprint = strings.TrimSpace(currentFingerprint)
+		audit.StaleReason = reason
+		audit.UpdatedAt = now
+		_, _ = r.store.UpsertToolAuditRecord(audit)
+	}
+	return stored, true, nil
+}
+
+func (r *Registry) toolAuthorityInstallExecute(ctx context.Context, in toolAuthorityInput, actor principal.Principal, key session.SessionKey, scope sandbox.Scope) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority install_execute requires tool_name")
+	}
+	manifest, ok := r.externalManifestByName(toolName)
+	if !ok {
+		return "", fmt.Errorf("tool_authority install_execute requires an external tool manifest-backed tool_name")
+	}
+	manifest = NormalizeExternalToolManifest(manifest)
+	if len(manifest.Install.Command) == 0 {
+		return "", fmt.Errorf("external tool %q does not declare an install command", manifest.Name)
+	}
+	record, exists, err := r.store.ToolInstallRecord(manifest.Name)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("external tool %q requires an install record before install_execute", manifest.Name)
+	}
+	installOutput, err := r.runExternalManifestCommand(ctx, manifest, manifest.Install.Command, scope)
+	now := time.Now().UTC()
+	commandRefs := r.manifestCommandArtifactRefs(manifest, manifest.Install.Command, "install command")
+	record.ProbeOutput = strings.TrimSpace(installOutput)
+	record.UpdatedAt = now
+	record.ArtifactRefs = commandRefs
+	if err != nil {
+		record.Status = session.ToolInstallStatusFailed
+		record.Rationale = "install_execute failed while running the manifest install command"
+		record.ConsecutiveFailures++
+		record.LastFailureAt = now
+		record.AttestedAt = time.Time{}
+		stored, saveErr := r.store.UpsertToolInstallRecord(record)
+		if saveErr != nil {
+			return "", saveErr
+		}
+		_ = r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
+			"tool_name":     stored.ToolName,
+			"status":        string(stored.Status),
+			"install_ref":   stored.InstallRef,
+			"actor_role":    strings.TrimSpace(string(actor.Role)),
+			"actor_user_id": actor.TelegramUserID,
+		})
+		return "", err
+	}
+	record.Status = session.ToolInstallStatusInstalled
+	record.Rationale = "install_execute ran the manifest install command"
+	record.ConsecutiveFailures = 0
+	record.LastFailureAt = time.Time{}
+	record.InstalledAt = now
+	record.AttestedAt = time.Time{}
+	stored, err := r.store.UpsertToolInstallRecord(record)
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
+		"tool_name":     stored.ToolName,
+		"status":        string(stored.Status),
+		"install_ref":   stored.InstallRef,
+		"actor_role":    strings.TrimSpace(string(actor.Role)),
+		"actor_user_id": actor.TelegramUserID,
+	}); err != nil {
+		return "", err
+	}
+	return renderToolInstallRecord("[TOOL_INSTALL]", stored), nil
+}
+
+func (r *Registry) toolAuthorityAuditRun(in toolAuthorityInput, actor principal.Principal, key session.SessionKey, scope sandbox.Scope) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority audit_run requires tool_name")
+	}
+	manifest, ok := r.externalManifestByName(toolName)
+	if !ok {
+		return "", fmt.Errorf("tool_authority audit_run requires an external tool manifest-backed tool_name")
+	}
+	if _, exists, err := r.store.ToolInstallRecord(manifest.Name); err != nil {
+		return "", err
+	} else if !exists {
+		return "", fmt.Errorf("external tool %q requires an install record before audit_run", manifest.Name)
+	}
+	prevAudit, prevAuditExists, err := r.store.ToolAuditRecord(manifest.Name)
+	if err != nil {
+		return "", err
+	}
+	output, fingerprint, err := r.runExternalManifestAudit(manifest, scope)
+	now := time.Now().UTC()
+	record := session.ToolAuditRecord{ToolName: manifest.Name, AuditOutput: output, UpdatedAt: now, AuditedAt: now, ArtifactRefs: auditOutputArtifactRefs(output), CurrentFingerprint: fingerprint}
+	if prevAuditExists {
+		record.CreatedAt = prevAudit.CreatedAt
+	}
+	if err != nil {
+		record.Status = session.ToolAuditStatusFailed
+		record.Rationale = "audit_run could not resolve the declared execution entry"
+		record.ConsecutiveFailures = prevAudit.ConsecutiveFailures + 1
+		record.LastFailureAt = now
+		stored, saveErr := r.store.UpsertToolAuditRecord(record)
+		if saveErr != nil {
+			return "", saveErr
+		}
+		_ = r.appendToolAuthorityEvent(key, core.ExecutionEventToolAuditUpdated, string(stored.Status), map[string]any{"tool_name": stored.ToolName, "status": string(stored.Status), "actor_role": strings.TrimSpace(string(actor.Role)), "actor_user_id": actor.TelegramUserID})
+		return "", err
+	}
+	record.Status = session.ToolAuditStatusPassed
+	record.Rationale = "audit_run resolved the declared execution entry"
+	record.BaselineFingerprint = fingerprint
+	record.CurrentFingerprint = fingerprint
+	record.StaleReason = ""
+	record.ConsecutiveFailures = 0
+	record.LastFailureAt = time.Time{}
+	stored, err := r.store.UpsertToolAuditRecord(record)
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendToolAuthorityEvent(key, core.ExecutionEventToolAuditUpdated, string(stored.Status), map[string]any{"tool_name": stored.ToolName, "status": string(stored.Status), "actor_role": strings.TrimSpace(string(actor.Role)), "actor_user_id": actor.TelegramUserID}); err != nil {
+		return "", err
+	}
+	return renderToolAuditRecord("[TOOL_AUDIT]", stored), nil
+}
+
+func (r *Registry) toolAuthorityAuditShow(in toolAuthorityInput, scope sandbox.Scope) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority audit_show requires tool_name")
+	}
+	if manifest, ok := r.externalManifestByName(toolName); ok {
+		if _, _, err := r.refreshExternalToolDrift(manifest, scope); err != nil {
+			return "", err
+		}
+	}
+	record, ok, err := r.store.ToolAuditRecord(toolName)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("tool audit record %q not found", toolName)
+	}
+	return renderToolAuditRecord("[TOOL_AUDIT]", record), nil
+}
+
+func (r *Registry) toolAuthorityAuditList(in toolAuthorityInput) (string, error) {
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	records, err := r.store.ToolAuditRecords("", limit)
+	if err != nil {
+		return "", err
+	}
+	return renderToolAuditRecordList(records), nil
+}
+
+func (r *Registry) runExternalManifestAudit(manifest ExternalToolManifest, scope sandbox.Scope) (string, string, error) {
+	manifest = NormalizeExternalToolManifest(manifest)
+	workdir, err := resolveWorkdir(scope.WorkingRoot, manifest.Execution.Workdir)
+	if err != nil {
+		return "", "", err
+	}
+	entry := strings.TrimSpace(manifest.Execution.Entry)
+	if entry == "" {
+		return "", "", fmt.Errorf("external tool %q execution entry is empty", manifest.Name)
+	}
+	firstToken := strings.Fields(entry)
+	if len(firstToken) == 0 {
+		return "", "", fmt.Errorf("external tool %q execution entry is empty", manifest.Name)
+	}
+	target := firstToken[0]
+	if strings.HasPrefix(target, "./") || strings.HasPrefix(target, "../") || strings.HasPrefix(target, "/") {
+		resolved := target
+		if !strings.HasPrefix(target, "/") {
+			resolved = filepath.Join(workdir, target)
+		}
+		if _, err := os.Stat(resolved); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Sprintf("entry_path: %s", resolved), "", fmt.Errorf("external tool %q import audit failed: entry path does not exist", manifest.Name)
+			}
+			return fmt.Sprintf("entry_path: %s", resolved), "", fmt.Errorf("external tool %q import audit stat failed: %w", manifest.Name, err)
+		}
+		fingerprint, err := externalToolFingerprint(manifest, scope.WorkingRoot)
+		if err != nil {
+			return fmt.Sprintf("entry_path: %s", resolved), "", err
+		}
+		return fmt.Sprintf("entry_path: %s", resolved), fingerprint, nil
+	}
+	fingerprint, err := externalToolFingerprint(manifest, scope.WorkingRoot)
+	if err != nil {
+		return fmt.Sprintf("entry_command: %s", target), "", err
+	}
+	return fmt.Sprintf("entry_command: %s", target), fingerprint, nil
+}
+
+func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityInput, actor principal.Principal, key session.SessionKey, scope sandbox.Scope) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority probe_run requires tool_name")
+	}
+	manifest, ok := r.externalManifestByName(toolName)
+	if !ok {
+		return "", fmt.Errorf("tool_authority probe_run requires an external tool manifest-backed tool_name")
+	}
+	manifest = NormalizeExternalToolManifest(manifest)
+	if len(manifest.Probe.Command) == 0 {
+		return "", fmt.Errorf("external tool %q does not declare a probe command", manifest.Name)
+	}
+	record, exists, err := r.store.ToolInstallRecord(manifest.Name)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("external tool %q requires an install record before probe_run", manifest.Name)
+	}
+	prevProbe, _, err := r.store.ToolProbeRecord(manifest.Name)
+	if err != nil {
+		return "", err
+	}
+	probeOutput, err := r.runExternalManifestProbe(ctx, manifest, scope)
+	now := time.Now().UTC()
+	probeRefs := r.manifestCommandArtifactRefs(manifest, manifest.Probe.Command, "probe command")
+	record.ProbeOutput = probeOutput
+	record.LastProbedAt = now
+	record.ArtifactRefs = probeRefs
+	if err != nil {
+		record.ProbeStatus = session.ToolProbeStatusFailed
+		record.Rationale = "probe_run failed against the declared probe command"
+		consecutiveFailures := prevProbe.ConsecutiveFailures + 1
+		if _, saveProbeErr := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusFailed, ProbeOutput: probeOutput, Rationale: "probe_run failed against the declared probe command", ArtifactRefs: probeRefs, ProbedAt: now, ConsecutiveFailures: consecutiveFailures, LastFailureAt: now}); saveProbeErr != nil {
+			return "", saveProbeErr
+		}
+		if record.Status == session.ToolInstallStatusVerified {
+			if consecutiveFailures >= 3 {
+				record.Status = session.ToolInstallStatusFailed
+			} else {
+				record.Status = session.ToolInstallStatusStale
+			}
+		} else if record.Status == session.ToolInstallStatusStale && consecutiveFailures >= 3 {
+			record.Status = session.ToolInstallStatusFailed
+		} else {
+			record.Status = session.ToolInstallStatusFailed
+		}
+		record.AttestedAt = time.Time{}
+		record.UpdatedAt = now
+		stored, saveErr := r.store.UpsertToolInstallRecord(record)
+		if saveErr != nil {
+			return "", saveErr
+		}
+		_ = r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
+			"tool_name":     stored.ToolName,
+			"status":        string(stored.Status),
+			"probe_status":  string(stored.ProbeStatus),
+			"install_ref":   stored.InstallRef,
+			"actor_role":    strings.TrimSpace(string(actor.Role)),
+			"actor_user_id": actor.TelegramUserID,
+		})
+		return "", err
+	}
+	record.ProbeStatus = session.ToolProbeStatusPassed
+	record.Rationale = "probe_run passed against the declared probe command"
+	if _, err := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusPassed, ProbeOutput: probeOutput, Rationale: "probe_run passed against the declared probe command", ArtifactRefs: probeRefs, ProbedAt: now, ConsecutiveFailures: 0}); err != nil {
+		return "", err
+	}
+	record.UpdatedAt = now
+	stored, err := r.store.UpsertToolInstallRecord(record)
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendToolAuthorityEvent(key, core.ExecutionEventToolInstallUpdated, string(stored.Status), map[string]any{
+		"tool_name":     stored.ToolName,
+		"status":        string(stored.Status),
+		"probe_status":  string(stored.ProbeStatus),
+		"install_ref":   stored.InstallRef,
+		"actor_role":    strings.TrimSpace(string(actor.Role)),
+		"actor_user_id": actor.TelegramUserID,
+	}); err != nil {
+		return "", err
+	}
+	return renderToolInstallRecord("[TOOL_INSTALL]", stored), nil
+}
+
+func (r *Registry) runExternalManifestCommand(ctx context.Context, manifest ExternalToolManifest, command []string, scope sandbox.Scope) (string, error) {
+	manifest = NormalizeExternalToolManifest(manifest)
+	if len(command) == 0 {
+		return "", fmt.Errorf("external tool %q does not declare a command", manifest.Name)
+	}
+	workdir, err := resolveWorkdir(scope.WorkingRoot, manifest.Execution.Workdir)
+	if err != nil {
+		return "", err
+	}
+	timeout := defaultTimeout(15 * time.Second)
+	if manifest.Execution.TimeoutSeconds > 0 {
+		timeout = time.Duration(manifest.Execution.TimeoutSeconds) * time.Second
+	}
+	if manifest.Constraints.MaxRuntimeSeconds > 0 {
+		constraintTimeout := time.Duration(manifest.Constraints.MaxRuntimeSeconds) * time.Second
+		if timeout <= 0 || constraintTimeout < timeout {
+			timeout = constraintTimeout
+		}
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	stdout, stderr, runErr := r.runCommand(runCtx, scope, shellQuoteCommand(command), workdir)
+	output := renderOutput(stdout, stderr, r.maxOutputBytes)
+	if runErr != nil {
+		return output, fmt.Errorf("external tool %q install execution failed: %s", manifest.Name, output)
+	}
+	return output, nil
+}
+
+func shellQuoteCommand(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuoteArg(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuoteArg(arg string) string {
+	if arg == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+}
+
+func (r *Registry) runExternalManifestProbe(ctx context.Context, manifest ExternalToolManifest, scope sandbox.Scope) (string, error) {
+	manifest = NormalizeExternalToolManifest(manifest)
+	if len(manifest.Probe.Command) == 0 {
+		return "", fmt.Errorf("external tool %q does not declare a probe command", manifest.Name)
+	}
+	output, runErr := r.runExternalManifestCommand(ctx, manifest, manifest.Probe.Command, scope)
+	if runErr != nil {
+		return output, fmt.Errorf("external tool %q probe execution failed: %s", manifest.Name, output)
+	}
+	if expected := strings.TrimSpace(manifest.Probe.ExpectedOutputContains); expected != "" {
+		if !strings.Contains(output, expected) {
+			return output, fmt.Errorf("external tool %q probe output did not contain expected text %q", manifest.Name, expected)
+		}
+	}
+	return output, nil
+}
+
+func (r *Registry) toolAuthorityProbeShow(in toolAuthorityInput) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority probe_show requires tool_name")
+	}
+	record, ok, err := r.store.ToolProbeRecord(toolName)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("tool probe record %q not found", toolName)
+	}
+	return renderToolProbeRecord("[TOOL_PROBE]", record), nil
+}
+
+func (r *Registry) toolAuthorityProbeList(in toolAuthorityInput) (string, error) {
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	status := session.NormalizeToolProbeStatus(session.ToolProbeStatus(in.ProbeStatus))
+	if strings.TrimSpace(in.ProbeStatus) != "" && status == "" {
+		return "", fmt.Errorf("tool_authority probe_list probe_status must be passed or failed")
+	}
+	records, err := r.store.ToolProbeRecords(status, limit)
+	if err != nil {
+		return "", err
+	}
+	return renderToolProbeRecordList(records), nil
 }
 
 func (r *Registry) toolAuthorityAccessCheck(in toolAuthorityInput) (string, error) {
@@ -556,6 +1223,9 @@ func (r *Registry) canonicalTrustedToolName(raw string) (string, bool) {
 			return name, true
 		}
 	}
+	if manifest, ok := r.externalManifestByName(target); ok {
+		return strings.TrimSpace(manifest.Name), true
+	}
 	return "", false
 }
 
@@ -566,6 +1236,7 @@ func renderToolAuthorityHelp() string {
 		"- proposal_submit | proposal_show | proposal_list | proposal_review | proposal_ratify | proposal_override",
 		"- register | registered_show | registered_list",
 		"- exposure_set | exposure_show | exposure_list",
+		"- install_set | install_show | install_list | install_execute | audit_run | audit_show | audit_list | probe_run | probe_show | probe_list",
 		"- access_check",
 	}, "\n")
 }
@@ -657,6 +1328,196 @@ func renderToolExposure(header string, record session.ToolExposure) string {
 	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
 	fmt.Fprintf(&b, "principal: %s\n", record.Principal)
 	fmt.Fprintf(&b, "active: %t\n", record.Active)
+	return b.String()
+}
+
+func renderRecordTraceability(b *strings.Builder, rationale string, refs []session.RecordReference) {
+	rationale = strings.TrimSpace(rationale)
+	if rationale != "" {
+		fmt.Fprintf(b, "rationale: %s\n", rationale)
+	}
+	for _, ref := range session.NormalizeRecordReferences(refs) {
+		fmt.Fprintf(b, "artifact_ref: %s %s", ref.Kind, ref.Ref)
+		if strings.TrimSpace(ref.Label) != "" {
+			fmt.Fprintf(b, " label=%s", ref.Label)
+		}
+		b.WriteString("\n")
+	}
+}
+
+func renderToolProbeRecord(header string, record session.ToolProbeRecord) string {
+	record = session.NormalizeToolProbeRecord(record)
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(header))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
+	fmt.Fprintf(&b, "probe_output: %s\n", firstNonEmpty(record.ProbeOutput, "-"))
+	fmt.Fprintf(&b, "consecutive_failures: %d\n", record.ConsecutiveFailures)
+	renderRecordTraceability(&b, record.Rationale, record.ArtifactRefs)
+	if !record.ProbedAt.IsZero() {
+		fmt.Fprintf(&b, "probed_at: %s\n", record.ProbedAt.UTC().Format(time.RFC3339))
+	}
+	if !record.LastFailureAt.IsZero() {
+		fmt.Fprintf(&b, "last_failure_at: %s\n", record.LastFailureAt.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "updated_at: %s\n", record.UpdatedAt.UTC().Format(time.RFC3339))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderToolProbeRecordList(records []session.ToolProbeRecord) string {
+	var b strings.Builder
+	b.WriteString("[TOOL_PROBES]")
+	if len(records) == 0 {
+		b.WriteString("\n- (none)")
+		return b.String()
+	}
+	for _, record := range records {
+		record = session.NormalizeToolProbeRecord(record)
+		b.WriteString("\n- ")
+		b.WriteString(record.ToolName)
+		b.WriteString(" status=")
+		b.WriteString(firstNonEmpty(string(record.Status), "-"))
+		if why := strings.TrimSpace(record.Rationale); why != "" {
+			b.WriteString(" why=")
+			b.WriteString(why)
+		}
+		if refs := len(session.NormalizeRecordReferences(record.ArtifactRefs)); refs > 0 {
+			b.WriteString(" refs=")
+			b.WriteString(strconv.Itoa(refs))
+		}
+	}
+	return b.String()
+}
+func renderToolAuditRecord(header string, record session.ToolAuditRecord) string {
+	record = session.NormalizeToolAuditRecord(record)
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(header))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
+	fmt.Fprintf(&b, "audit_output: %s\n", firstNonEmpty(record.AuditOutput, "-"))
+	fmt.Fprintf(&b, "consecutive_failures: %d\n", record.ConsecutiveFailures)
+	if fp := strings.TrimSpace(record.BaselineFingerprint); fp != "" {
+		fmt.Fprintf(&b, "baseline_fingerprint: %s\n", fp)
+	}
+	if fp := strings.TrimSpace(record.CurrentFingerprint); fp != "" {
+		fmt.Fprintf(&b, "current_fingerprint: %s\n", fp)
+	}
+	if reason := strings.TrimSpace(record.StaleReason); reason != "" {
+		fmt.Fprintf(&b, "stale_reason: %s\n", reason)
+	}
+	renderRecordTraceability(&b, record.Rationale, record.ArtifactRefs)
+	if !record.AuditedAt.IsZero() {
+		fmt.Fprintf(&b, "audited_at: %s\n", record.AuditedAt.UTC().Format(time.RFC3339))
+	}
+	if !record.LastFailureAt.IsZero() {
+		fmt.Fprintf(&b, "last_failure_at: %s\n", record.LastFailureAt.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "updated_at: %s\n", record.UpdatedAt.UTC().Format(time.RFC3339))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderToolAuditRecordList(records []session.ToolAuditRecord) string {
+	var b strings.Builder
+	b.WriteString("[TOOL_AUDITS]")
+	if len(records) == 0 {
+		b.WriteString("\n- (none)")
+		return b.String()
+	}
+	for _, record := range records {
+		record = session.NormalizeToolAuditRecord(record)
+		b.WriteString("\n- ")
+		b.WriteString(record.ToolName)
+		b.WriteString(" status=")
+		b.WriteString(firstNonEmpty(string(record.Status), "-"))
+		if why := strings.TrimSpace(record.Rationale); why != "" {
+			b.WriteString(" why=")
+			b.WriteString(why)
+		}
+		if reason := strings.TrimSpace(record.StaleReason); reason != "" {
+			b.WriteString(" stale_reason=")
+			b.WriteString(reason)
+		}
+		if refs := len(session.NormalizeRecordReferences(record.ArtifactRefs)); refs > 0 {
+			b.WriteString(" refs=")
+			b.WriteString(strconv.Itoa(refs))
+		}
+	}
+	return b.String()
+}
+func renderToolInstallRecord(header string, record session.ToolInstallRecord) string {
+	record = session.NormalizeToolInstallRecord(record)
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(header))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
+	fmt.Fprintf(&b, "installer: %s\n", firstNonEmpty(record.Installer, "-"))
+	fmt.Fprintf(&b, "install_ref: %s\n", firstNonEmpty(record.InstallRef, "-"))
+	fmt.Fprintf(&b, "probe_status: %s\n", firstNonEmpty(string(record.ProbeStatus), "-"))
+	fmt.Fprintf(&b, "probe_output: %s\n", firstNonEmpty(record.ProbeOutput, "-"))
+	fmt.Fprintf(&b, "consecutive_failures: %d\n", record.ConsecutiveFailures)
+	if fp := strings.TrimSpace(record.BaselineFingerprint); fp != "" {
+		fmt.Fprintf(&b, "baseline_fingerprint: %s\n", fp)
+	}
+	if fp := strings.TrimSpace(record.CurrentFingerprint); fp != "" {
+		fmt.Fprintf(&b, "current_fingerprint: %s\n", fp)
+	}
+	if reason := strings.TrimSpace(record.StaleReason); reason != "" {
+		fmt.Fprintf(&b, "stale_reason: %s\n", reason)
+	}
+	renderRecordTraceability(&b, record.Rationale, record.ArtifactRefs)
+	if !record.InstalledAt.IsZero() {
+		fmt.Fprintf(&b, "installed_at: %s\n", record.InstalledAt.UTC().Format(time.RFC3339))
+	}
+	if !record.LastProbedAt.IsZero() {
+		fmt.Fprintf(&b, "last_probed_at: %s\n", record.LastProbedAt.UTC().Format(time.RFC3339))
+	}
+	if !record.AttestedAt.IsZero() {
+		fmt.Fprintf(&b, "attested_at: %s\n", record.AttestedAt.UTC().Format(time.RFC3339))
+	}
+	if !record.LastFailureAt.IsZero() {
+		fmt.Fprintf(&b, "last_failure_at: %s\n", record.LastFailureAt.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "updated_at: %s\n", record.UpdatedAt.UTC().Format(time.RFC3339))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderToolInstallRecordList(records []session.ToolInstallRecord) string {
+	var b strings.Builder
+	b.WriteString("[TOOL_INSTALLS]")
+	if len(records) == 0 {
+		b.WriteString("\n- (none)")
+		return b.String()
+	}
+	for _, record := range records {
+		record = session.NormalizeToolInstallRecord(record)
+		b.WriteString("\n- ")
+		b.WriteString(record.ToolName)
+		b.WriteString(" status=")
+		b.WriteString(firstNonEmpty(string(record.Status), "-"))
+		if strings.TrimSpace(record.InstallRef) != "" {
+			b.WriteString(" install_ref=")
+			b.WriteString(record.InstallRef)
+		}
+		if strings.TrimSpace(string(record.ProbeStatus)) != "" {
+			b.WriteString(" probe_status=")
+			b.WriteString(string(record.ProbeStatus))
+		}
+		if reason := strings.TrimSpace(record.StaleReason); reason != "" {
+			b.WriteString(" stale_reason=")
+			b.WriteString(reason)
+		}
+		if why := strings.TrimSpace(record.Rationale); why != "" {
+			b.WriteString(" why=")
+			b.WriteString(why)
+		}
+		if refs := len(session.NormalizeRecordReferences(record.ArtifactRefs)); refs > 0 {
+			b.WriteString(" refs=")
+			b.WriteString(strconv.Itoa(refs))
+		}
+	}
 	return b.String()
 }
 

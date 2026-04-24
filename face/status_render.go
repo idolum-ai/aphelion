@@ -56,6 +56,7 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 		if detachedLine := renderDetachedWorkLine(snapshot); detachedLine != "" {
 			lines = append(lines, detachedLine)
 		}
+		lines = append(lines, renderToolLifecycleCurrentStateBlock(snapshot.ToolLifecycle, 5)...)
 		lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 3)...)
 		if snapshot.Continuation != nil {
 			cont := snapshot.Continuation
@@ -346,6 +347,39 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 	lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
 	lines = append(lines, fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)))
 	return strings.Join(lines, "\n")
+}
+
+func renderToolLifecycleCurrentStateBlock(rows []core.ToolLifecycleStatusSnapshot, maxRows int) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	if maxRows <= 0 {
+		maxRows = 5
+	}
+	lines := []string{"tool_lifecycle source=canonical:session.tool_install_records+tool_audit_records"}
+	limit := len(rows)
+	if limit > maxRows {
+		limit = maxRows
+	}
+	for i := 0; i < limit; i++ {
+		row := rows[i]
+		line := fmt.Sprintf("- tool_name=%s install=%s probe=%s audit=%s", row.ToolName, firstNonEmpty(strings.TrimSpace(row.InstallStatus), "-"), firstNonEmpty(strings.TrimSpace(row.ProbeStatus), "-"), firstNonEmpty(strings.TrimSpace(row.AuditStatus), "-"))
+		if ref := strings.TrimSpace(row.InstallRef); ref != "" {
+			line += " install_ref=" + ref
+		}
+		if reason := strings.TrimSpace(row.StaleReason); reason != "" {
+			line += " stale_reason=" + reason
+		}
+		if summary := strings.TrimSpace(row.TraceSummary); summary != "" {
+			stage := firstNonEmpty(strings.TrimSpace(row.TraceStage), "-")
+			line += " trace=" + stage + ":" + summary
+			if row.TraceArtifactCount > 0 {
+				line += " refs=" + strconv.Itoa(row.TraceArtifactCount)
+			}
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func renderToolAuthorityLifecycleBlock(events []core.ExecutionEventSummary, maxPerClass int) []string {

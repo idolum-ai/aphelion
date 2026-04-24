@@ -196,6 +196,7 @@ Buttons are generated from runtime options:
 - `Sonnet 4.6` (`claude-sonnet-4-6`)
 - `Opus 4.6` (`claude-opus-4-6`)
 - `Opus 4.7` (`claude-opus-4-7`)
+- `GPT-5.5` (`gpt-5.5`)
 
 The currently active option is prefixed with `•`.
 

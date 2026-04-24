@@ -172,14 +172,14 @@ See `config.md`, but the intended shape includes:
 ```toml
 [governor]
 backend = "auto"                # "auto" | "codex" | "native"
-native_provider = "anthropic"
+native_provider = ""            # Empty lets providers.selection choose from configured providers.
 
 [governor.codex]
 auth_source = "auto"            # "auto" | "codex_cli" | "aphelion"
 auth_path = ""                  # Empty = ~/.aphelion/state/codex-auth.json
 codex_home = ""                 # empty = CODEX_HOME or ~/.codex
 base_url = "https://chatgpt.com/backend-api"
-model = "gpt-5.4"
+model = "gpt-5.5"
 max_continuations = 3
 transport_retries = 1
 ```

@@ -785,6 +785,151 @@ func TestChatStatusSnapshotIncludesRecentExecutionTimeline(t *testing.T) {
 	}
 }
 
+func TestChatStatusSnapshotSummarizesToolInstallEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 90214, UserID: 0, Scope: telegramDMScopeRef(90214)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType:   core.ExecutionEventToolInstallUpdated,
+		Stage:       "tool_authority",
+		Status:      "verified",
+		PayloadJSON: `{"tool_name":"browse_page","status":"verified","probe_status":"passed","install_ref":"workspace:tooling-v1"}`,
+		CreatedAt:   now,
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents(tool install) err = %v", err)
+	}
+	snapshot, err := rt.ChatStatusSnapshot(90214, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.RecentExecution) == 0 {
+		t.Fatal("RecentExecution empty, want tool install event")
+	}
+	if snapshot.RecentExecution[0].Summary != "tool_name=browse_page status=verified probe_status=passed install_ref=workspace:tooling-v1" {
+		t.Fatalf("RecentExecution[0].Summary = %q, want tool install summary", snapshot.RecentExecution[0].Summary)
+	}
+}
+
+func TestChatStatusSnapshotIncludesCanonicalToolLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	installedAt := time.Now().UTC().Add(-2 * time.Minute)
+	lastProbedAt := time.Now().UTC().Add(-1 * time.Minute)
+	auditedAt := time.Now().UTC()
+	if _, err := store.UpsertToolInstallRecord(session.ToolInstallRecord{
+		ToolName:            "browse_page",
+		Installer:           "aphelion",
+		InstallRef:          "workspace:tooling-v3",
+		Status:              session.ToolInstallStatusVerified,
+		BaselineFingerprint: "sha256:baseline",
+		CurrentFingerprint:  "sha256:current",
+		InstalledAt:         installedAt,
+		AttestedAt:          auditedAt,
+	}); err != nil {
+		t.Fatalf("UpsertToolInstallRecord() err = %v", err)
+	}
+	if _, err := store.UpsertToolProbeRecord(session.ToolProbeRecord{
+		ToolName:    "browse_page",
+		Status:      session.ToolProbeStatusPassed,
+		ProbeOutput: "stdout: probe ok",
+		ProbedAt:    lastProbedAt,
+	}); err != nil {
+		t.Fatalf("UpsertToolProbeRecord() err = %v", err)
+	}
+	if _, err := store.UpsertToolAuditRecord(session.ToolAuditRecord{
+		ToolName:    "browse_page",
+		Status:      session.ToolAuditStatusPassed,
+		AuditOutput: "entry_path: /workspace/run.sh",
+		AuditedAt:   auditedAt,
+	}); err != nil {
+		t.Fatalf("UpsertToolAuditRecord() err = %v", err)
+	}
+	snapshot, err := rt.ChatStatusSnapshot(90216, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.ToolLifecycle) != 1 {
+		t.Fatalf("ToolLifecycle len = %d, want 1", len(snapshot.ToolLifecycle))
+	}
+	row := snapshot.ToolLifecycle[0]
+	if row.ToolName != "browse_page" || row.InstallStatus != "verified" || row.ProbeStatus != "passed" || row.AuditStatus != "passed" {
+		t.Fatalf("ToolLifecycle[0] = %#v, want browse_page verified/passed/passed", row)
+	}
+	if row.InstallRef != "workspace:tooling-v3" {
+		t.Fatalf("ToolLifecycle[0].InstallRef = %q, want workspace:tooling-v3", row.InstallRef)
+	}
+	if row.BaselineFingerprint != "sha256:baseline" || row.CurrentFingerprint != "sha256:current" {
+		t.Fatalf("ToolLifecycle[0] fingerprints = %q/%q, want persisted fingerprints", row.BaselineFingerprint, row.CurrentFingerprint)
+	}
+}
+
+func TestChatStatusSnapshotIncludesCanonicalToolLifecycleTraceability(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	base := time.Now().UTC()
+	if _, err := store.UpsertToolInstallRecord(session.ToolInstallRecord{
+		ToolName:     "browse_page",
+		Installer:    "aphelion",
+		InstallRef:   "workspace:tooling-v3",
+		Status:       session.ToolInstallStatusInstalled,
+		Rationale:    "install_execute ran the manifest install command",
+		ArtifactRefs: []session.RecordReference{{Kind: "file_path", Ref: "/workspace/install.sh"}},
+		UpdatedAt:    base.Add(-2 * time.Minute),
+		InstalledAt:  base.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertToolInstallRecord() err = %v", err)
+	}
+	if _, err := store.UpsertToolAuditRecord(session.ToolAuditRecord{
+		ToolName:     "browse_page",
+		Status:       session.ToolAuditStatusPassed,
+		AuditOutput:  "entry_path: /workspace/run.sh",
+		Rationale:    "audit_run resolved the declared execution entry",
+		ArtifactRefs: []session.RecordReference{{Kind: "file_path", Ref: "/workspace/run.sh"}},
+		UpdatedAt:    base.Add(-1 * time.Minute),
+		AuditedAt:    base.Add(-1 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertToolAuditRecord() err = %v", err)
+	}
+	if _, err := store.UpsertToolProbeRecord(session.ToolProbeRecord{
+		ToolName:     "browse_page",
+		Status:       session.ToolProbeStatusPassed,
+		ProbeOutput:  "stdout: probe ok",
+		Rationale:    "probe_run passed against the declared probe command",
+		ArtifactRefs: []session.RecordReference{{Kind: "file_path", Ref: "/workspace/probe.sh"}},
+		UpdatedAt:    base,
+		ProbedAt:     base,
+	}); err != nil {
+		t.Fatalf("UpsertToolProbeRecord() err = %v", err)
+	}
+	snapshot, err := rt.ChatStatusSnapshot(90217, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.ToolLifecycle) != 1 {
+		t.Fatalf("ToolLifecycle len = %d, want 1", len(snapshot.ToolLifecycle))
+	}
+	row := snapshot.ToolLifecycle[0]
+	if row.TraceStage != "probe" || row.TraceSummary != "probe_run passed against the declared probe command" || row.TraceArtifactCount != 1 {
+		t.Fatalf("ToolLifecycle[0] trace = %#v, want latest probe trace with one ref", row)
+	}
+}
+
 func TestChatStatusSnapshotSummarizesToolAuthorityLifecycleEvents(t *testing.T) {
 	t.Parallel()
 

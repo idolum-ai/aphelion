@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -249,11 +250,11 @@ func (r *Runtime) governorContextWindow() int {
 			return r.cfg.Governor.Codex.ContextWindow
 		}
 	default:
-		nativeProvider := strings.ToLower(strings.TrimSpace(r.cfg.Governor.NativeProvider))
-		if nativeProvider == "" {
-			nativeProvider = strings.ToLower(strings.TrimSpace(r.cfg.Providers.Default))
-		}
-		switch nativeProvider {
+		switch config.EffectiveNativeProvider(r.cfg) {
+		case "openai":
+			if r.cfg.Providers.OpenAI.ContextWindow > 0 {
+				return r.cfg.Providers.OpenAI.ContextWindow
+			}
 		case "openrouter":
 			if r.cfg.Providers.OpenRouter.ContextWindow > 0 {
 				return r.cfg.Providers.OpenRouter.ContextWindow

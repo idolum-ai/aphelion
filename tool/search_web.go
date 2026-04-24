@@ -177,7 +177,12 @@ func (r *Registry) WithSearchWeb(provider searchWebProvider) *Registry {
 }
 
 func (r *Registry) authorityManagedTool(name string) bool {
-	return strings.EqualFold(strings.TrimSpace(name), searchWebToolName)
+	name = strings.TrimSpace(name)
+	if strings.EqualFold(name, searchWebToolName) {
+		return true
+	}
+	_, ok := r.externalManifestByName(name)
+	return ok
 }
 
 func (r *Registry) toolAuthorityAccessAllowed(toolName string, p principal.Principal) (bool, error) {

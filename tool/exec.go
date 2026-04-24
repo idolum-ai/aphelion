@@ -45,6 +45,8 @@ type Registry struct {
 	durableAgentBootstrapLLM         core.NodeLLMBootstrap
 	searchWeb                        searchWebProvider
 	searchWebState                   *searchWebRuntimeState
+	externalManifests                []ExternalToolManifest
+	externalExecutor                 ExternalToolExecutor
 }
 
 type execInput struct {
@@ -132,6 +134,11 @@ type toolAuthorityInput struct {
 	Registered        *bool           `json:"registered,omitempty"`
 	Principal         string          `json:"principal,omitempty"`
 	Active            *bool           `json:"active,omitempty"`
+	Status            string          `json:"status,omitempty"`
+	Installer         string          `json:"installer,omitempty"`
+	InstallRef        string          `json:"install_ref,omitempty"`
+	ProbeStatus       string          `json:"probe_status,omitempty"`
+	ProbeOutput       string          `json:"probe_output,omitempty"`
 	Limit             int             `json:"limit,omitempty"`
 }
 
@@ -259,10 +266,11 @@ type durableAgentInput struct {
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
 	return &Registry{
-		workspace:      workspace,
-		timeout:        timeout,
-		maxOutputBytes: defaultMaxOutputBytes,
-		searchWebState: newSearchWebRuntimeState(),
+		workspace:        workspace,
+		timeout:          timeout,
+		maxOutputBytes:   defaultMaxOutputBytes,
+		searchWebState:   newSearchWebRuntimeState(),
+		externalExecutor: defaultExternalToolExecutor{},
 	}
 }
 
@@ -325,6 +333,51 @@ func (r *Registry) WithDurableAgentBootstrapLLM(bootstrap core.NodeLLMBootstrap)
 	return r
 }
 
+func (r *Registry) WithExternalToolExecutor(executor ExternalToolExecutor) *Registry {
+	r.externalExecutor = executor
+	return r
+}
+
+func (r *Registry) WithExternalToolManifestDir(dir string) (*Registry, error) {
+	manifests, err := LoadExternalToolManifestDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	return r.WithExternalToolManifests(manifests)
+}
+
+func (r *Registry) WithExternalToolManifests(manifests []ExternalToolManifest) (*Registry, error) {
+	if r == nil {
+		return nil, fmt.Errorf("registry is nil")
+	}
+	normalized := make([]ExternalToolManifest, 0, len(manifests))
+	seen := make(map[string]struct{}, len(manifests))
+	for _, manifest := range manifests {
+		manifest = NormalizeExternalToolManifest(manifest)
+		if err := validateExternalToolManifest(manifest); err != nil {
+			return nil, err
+		}
+		if _, exists := seen[manifest.Name]; exists {
+			return nil, fmt.Errorf("duplicate external tool manifest name %q", manifest.Name)
+		}
+		seen[manifest.Name] = struct{}{}
+		normalized = append(normalized, manifest)
+	}
+	for _, def := range r.Definitions() {
+		name := strings.TrimSpace(def.Name)
+		if name == "" {
+			continue
+		}
+		for _, manifest := range normalized {
+			if strings.EqualFold(name, manifest.Name) {
+				return nil, fmt.Errorf("external tool manifest name %q collides with native tool definition", manifest.Name)
+			}
+		}
+	}
+	r.externalManifests = append([]ExternalToolManifest(nil), normalized...)
+	return r, nil
+}
+
 func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
 	if r == nil || r.sandbox == nil {
 		return false
@@ -341,6 +394,12 @@ func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
 }
 
 func (r *Registry) DefinitionsForPrincipal(p principal.Principal) []agent.ToolDef {
+	defs := r.nativeDefinitionsForPrincipal(p)
+	defs = append(defs, r.externalToolDefinitions(r.externalManifestsForPrincipal(p))...)
+	return defs
+}
+
+func (r *Registry) nativeDefinitionsForPrincipal(p principal.Principal) []agent.ToolDef {
 	defs := r.Definitions()
 	if len(defs) == 0 {
 		return defs
@@ -360,6 +419,69 @@ func (r *Registry) DefinitionsForPrincipal(p principal.Principal) []agent.ToolDe
 		filtered = append(filtered, def)
 	}
 	return filtered
+}
+
+func (r *Registry) externalManifestsForPrincipal(p principal.Principal) []ExternalToolManifest {
+	if len(r.externalManifests) == 0 {
+		return nil
+	}
+	filtered := make([]ExternalToolManifest, 0, len(r.externalManifests))
+	for _, manifest := range r.externalManifests {
+		name := strings.TrimSpace(manifest.Name)
+		if !r.authorityManagedTool(name) {
+			filtered = append(filtered, manifest)
+			continue
+		}
+		allowed, err := r.toolAuthorityAccessAllowed(name, p)
+		if err != nil || !allowed {
+			continue
+		}
+		if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) && r.store != nil {
+			scope, err := r.externalToolFreshnessScope(p)
+			if err != nil {
+				continue
+			}
+			if err := r.ensureExternalToolFresh(manifest, scope); err != nil {
+				continue
+			}
+		}
+		filtered = append(filtered, manifest)
+	}
+	return filtered
+}
+
+func (r *Registry) externalToolFreshnessScope(p principal.Principal) (sandbox.Scope, error) {
+	if r.sandbox != nil {
+		scope, err := r.sandbox.Resolve(p)
+		if err == nil {
+			return scope, nil
+		}
+	}
+	root := strings.TrimSpace(r.workspace)
+	if root == "" {
+		return sandbox.Scope{}, fmt.Errorf("external tool freshness check requires workspace root")
+	}
+	return sandbox.Scope{
+		Principal:   p,
+		GlobalRoot:  root,
+		WorkingRoot: root,
+	}, nil
+}
+
+func (r *Registry) externalToolDefinitions(manifests []ExternalToolManifest) []agent.ToolDef {
+	if len(manifests) == 0 {
+		return nil
+	}
+	defs := make([]agent.ToolDef, 0, len(manifests))
+	for _, manifest := range manifests {
+		manifest = NormalizeExternalToolManifest(manifest)
+		defs = append(defs, agent.ToolDef{
+			Name:        manifest.Name,
+			Description: fmt.Sprintf("External tool owned by %s.", firstNonEmpty(manifest.Owner, "unknown owner")),
+			Parameters:  manifest.IO.InputSchema,
+		})
+	}
+	return defs
 }
 
 func (r *Registry) Definitions() []agent.ToolDef {
@@ -539,7 +661,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "proposal_override", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "access_check"], "description": "Tool-authority operation"},
+					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "proposal_override", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "install_set", "install_show", "install_list", "install_execute", "audit_run", "audit_show", "audit_list", "probe_run", "probe_show", "probe_list", "access_check"], "description": "Tool-authority operation"},
 					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show/proposal_review/proposal_ratify/proposal_override/register"},
 					"proposed_by": {"type": "string", "description": "Proposal author identity for proposal_submit"},
 					"tool_name": {"type": "string", "description": "Tool name for proposal_submit/register/exposure/access actions"},
@@ -552,6 +674,11 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"registered": {"type": "boolean", "description": "Optional explicit registered flag for register; defaults to true"},
 					"principal": {"type": "string", "description": "Principal id for exposure and access checks"},
 					"active": {"type": "boolean", "description": "Exposure active flag for exposure_set; defaults to true"},
+					"status": {"type": "string", "enum": ["pending", "installed", "verified", "failed", "stale"], "description": "Install/probe lifecycle status for install_set or install_list filtering"},
+					"installer": {"type": "string", "description": "Who installed or provisioned the external tool"},
+					"install_ref": {"type": "string", "description": "Reference to the install artifact, path, image, or package set"},
+					"probe_status": {"type": "string", "enum": ["passed", "failed"], "description": "Deprecated for install_set; use probe_run so probe evidence is runtime-authored"},
+					"probe_output": {"type": "string", "description": "Deprecated for install_set; use probe_run so probe evidence is runtime-authored"},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Optional list limit"}
 				},
 				"required": ["action"]
@@ -758,7 +885,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	case "update_plan":
 		return r.updatePlan(ctx, input, key)
 	case "tool_authority":
-		return r.toolAuthority(ctx, input, p, key)
+		return r.toolAuthority(ctx, input, p, key, scope)
 	case "search_web":
 		return r.searchWebTool(ctx, input, p, key)
 	case "semantic_search":
@@ -770,6 +897,15 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	case "durable_agent":
 		return r.durableAgent(ctx, input, p, key, scope)
 	default:
+		if manifest, ok := r.externalManifestByName(name); ok {
+			if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) {
+				if err := r.ensureExternalToolFresh(manifest, scope); err != nil {
+					return "", err
+				}
+				return r.externalExecutor.Execute(ctx, manifest, input, scope, r.runner, r.maxOutputBytes)
+			}
+			return "", fmt.Errorf("external tool %q is present in the manifest but not yet executable in core (owner=%s)", manifest.Name, manifest.Owner)
+		}
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
 }

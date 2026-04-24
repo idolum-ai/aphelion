@@ -25,6 +25,7 @@ type ExecRequest struct {
 	Scope              Scope
 	Command            string
 	Workdir            string
+	Stdin              []byte
 	ExtraWritablePaths []string
 	ExtraReadonlyPaths []string
 }
@@ -88,6 +89,9 @@ func (r *Runner) Run(ctx context.Context, req ExecRequest) (ExecResult, error) {
 	cmd := exec.CommandContext(ctx, plan.Binary, plan.Args...)
 	cmd.Dir = plan.Dir
 	cmd.Env = plan.Env
+	if len(req.Stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(req.Stdin)
+	}
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

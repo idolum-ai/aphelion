@@ -68,6 +68,8 @@ func personaModelButtonLabel(model string) string {
 		return "Opus 4.6"
 	case "claude-sonnet-4-6":
 		return "Sonnet 4.6"
+	case "gpt-5.5":
+		return "GPT-5.5"
 	default:
 		return trimmed
 	}

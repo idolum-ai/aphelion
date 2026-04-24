@@ -130,7 +130,7 @@ func TestCodexCompleteUsesConfiguredModel(t *testing.T) {
 		BaseURL:     "https://chatgpt.com/backend-api",
 		AccessToken: "secret-token",
 		AccountID:   "acct-123",
-		Model:       "gpt-5.4-mini",
+		Model:       "gpt-5.5",
 		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
 	})
 	if err != nil {
@@ -140,8 +140,8 @@ func TestCodexCompleteUsesConfiguredModel(t *testing.T) {
 	if _, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil); err != nil {
 		t.Fatalf("Complete() err = %v", err)
 	}
-	if seenModel != "gpt-5.4-mini" {
-		t.Fatalf("model = %#v, want gpt-5.4-mini", seenModel)
+	if seenModel != "gpt-5.5" {
+		t.Fatalf("model = %#v, want gpt-5.5", seenModel)
 	}
 }
 

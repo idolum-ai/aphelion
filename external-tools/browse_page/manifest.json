@@ -1,0 +1,66 @@
+{
+  "name": "browse_page",
+  "owner": "idolum-email",
+  "version": "pilot-fixture-v1",
+  "execution": {
+    "mode": "process",
+    "entry": "./external-tools/browse_page/bin/browse_page.sh",
+    "timeout_seconds": 10
+  },
+  "io": {
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "title",
+        "summary"
+      ]
+    }
+  },
+  "constraints": {
+    "network": "none",
+    "max_runtime_seconds": 10
+  },
+  "exposure": {
+    "principals": [
+      "idolum-email"
+    ],
+    "requires_ratification": true
+  },
+  "install": {
+    "command": [
+      "./external-tools/browse_page/bin/install.sh"
+    ]
+  },
+  "probe": {
+    "command": [
+      "./external-tools/browse_page/bin/probe.sh"
+    ],
+    "expected_output_contains": "browse_page fixture ready"
+  },
+  "provenance": {
+    "proposal_id": "pilot:browse-page"
+  }
+}

@@ -17,6 +17,7 @@ import (
 
 const (
 	statusReadableModelAnthropic  = "claude-haiku-4-5"
+	statusReadableModelOpenAI     = "gpt-5.4"
 	statusReadableModelOpenRouter = "anthropic/claude-haiku-4-5"
 	statusReadableInputMaxChars   = 2600
 	statusReadableOutputMaxChars  = 320
@@ -26,6 +27,9 @@ const (
 var (
 	newStatusReadableAnthropicProvider = func(opts providerpkg.AnthropicOptions) (agent.Provider, error) {
 		return providerpkg.NewAnthropic(opts)
+	}
+	newStatusReadableOpenAIProvider = func(opts providerpkg.OpenAIOptions) (agent.Provider, error) {
+		return providerpkg.NewOpenAI(opts)
 	}
 	newStatusReadableOpenRouterProvider = func(opts providerpkg.OpenRouterOptions) (agent.Provider, error) {
 		return providerpkg.NewOpenRouter(opts)
@@ -121,6 +125,22 @@ func buildNamedStatusReadableProvider(name string, cfg *config.Config, httpClien
 		return newStatusReadableAnthropicProvider(providerpkg.AnthropicOptions{
 			APIKey:     cfg.Providers.Anthropic.APIKey,
 			Model:      statusReadableModelAnthropic,
+			MaxTokens:  512,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+	case "openai":
+		if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {
+			return nil, nil
+		}
+		model := strings.TrimSpace(cfg.Providers.OpenAI.Model)
+		if model == "" {
+			model = statusReadableModelOpenAI
+		}
+		return newStatusReadableOpenAIProvider(providerpkg.OpenAIOptions{
+			APIKey:     cfg.Providers.OpenAI.APIKey,
+			BaseURL:    cfg.Providers.OpenAI.BaseURL,
+			Model:      model,
 			MaxTokens:  512,
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,

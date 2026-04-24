@@ -545,6 +545,32 @@ Aphelion should generally prefer specialized tools when they provide one of:
 - lower prompt ambiguity
 - less authority than shell access
 
+### Implemented External Tool Manifests
+
+When `[tools].external_manifest_dir` is configured, Aphelion loads external
+tool manifests from JSON files in that directory.
+
+External tools are authority-managed runtime tools:
+
+- proposal approval is separate from registration
+- install, audit, and probe records are durable session state
+- `install_set status=verified` requires current runtime-authored `audit_run`
+  and `probe_run` evidence
+- verified install and audit records store deterministic fingerprints covering
+  manifest execution fields, IO schemas, constraints, install/probe commands,
+  and local process/subprocess entry file contents
+- registration, exposure, listing, show, and invocation re-check the fingerprint
+  and mark stale tools with an operator-readable reason
+- stale external tools cannot be registered or invoked
+
+The generic executor supports `process` and `subprocess` manifests through the
+sandbox runner. `container` and `workspace_runner` manifests are importable and
+diagnosable but are not process-executable until dedicated runtimes exist.
+
+The bundled `browse_page` pilot lives under `external-tools/browse_page/`. It is
+owned by `idolum-email`, exposes only to that agent by policy, and uses a
+deterministic fixture implementation so browser behavior remains outside core.
+
 ## Audit and Persistence
 
 Every tool call should record:

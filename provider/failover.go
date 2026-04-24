@@ -148,7 +148,7 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 			return nil, err
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
-		if !shouldFailoverOnError(err) {
+		if !shouldFailoverOnError(err) && !shouldFallbackToNextEntry(err, entry.name, nextFailoverEntryName(c.entries, idx)) {
 			return nil, err
 		}
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
@@ -174,7 +174,7 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 			return nil, ctxErr
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
-		if !shouldFailoverOnError(err) {
+		if !shouldFailoverOnError(err) && !shouldFallbackToNextEntry(err, entry.name, nextFailoverEntryName(c.entries, idx)) {
 			return nil, err
 		}
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
@@ -322,6 +322,45 @@ func shouldFailoverOnError(err error) bool {
 		}
 	}
 	return isRetryableProviderError(err)
+}
+
+func shouldFallbackToNextEntry(err error, current string, next string) bool {
+	if providerFamilyName(current) != "openai" || strings.TrimSpace(next) == "" {
+		return false
+	}
+	return isOpenAIModelUnavailableError(err)
+}
+
+func isOpenAIModelUnavailableError(err error) bool {
+	var sc statusCoder
+	if errors.As(err, &sc) {
+		switch sc.StatusCode() {
+		case 404:
+			return true
+		case 400:
+			msg := strings.ToLower(err.Error())
+			return strings.Contains(msg, "model") && (strings.Contains(msg, "not found") || strings.Contains(msg, "does not exist") || strings.Contains(msg, "unavailable"))
+		default:
+			return false
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "model") && (strings.Contains(msg, "not found") || strings.Contains(msg, "does not exist") || strings.Contains(msg, "unavailable"))
+}
+
+func nextFailoverEntryName(entries []failoverEntry, idx int) string {
+	if idx+1 < 0 || idx+1 >= len(entries) {
+		return ""
+	}
+	return entries[idx+1].name
+}
+
+func providerFamilyName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if idx := strings.Index(name, ":"); idx >= 0 {
+		name = name[:idx]
+	}
+	return name
 }
 
 func isTransientStreamError(err error) bool {

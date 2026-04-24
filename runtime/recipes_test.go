@@ -157,7 +157,7 @@ func TestPersonaModelOptionsIncludeOpus47(t *testing.T) {
 	t.Parallel()
 	rt := &Runtime{}
 	got := rt.PersonaModelOptions()
-	want := []string{personaModelSonnet, personaModelOpus46, personaModelOpus47}
+	want := []string{personaModelSonnet, personaModelOpus46, personaModelOpus47, personaModelGPT55}
 	if len(got) != len(want) {
 		t.Fatalf("PersonaModelOptions len = %d, want %d (%#v)", len(got), len(want), got)
 	}
@@ -165,5 +165,34 @@ func TestPersonaModelOptionsIncludeOpus47(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("PersonaModelOptions[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestSetPersonaModelPersistsGPT55Selection(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Sessions.DBPath = filepath.Join(t.TempDir(), "state", "sessions.db")
+	path := recipeStatePath(&cfg)
+	rt := &Runtime{
+		recipePath: path,
+		recipeState: runtimeRecipeState{
+			PersonaModel:   personaModelSonnet,
+			GovernorEffort: governorEffortMedium,
+		},
+	}
+	got, err := rt.SetPersonaModel("openai/" + personaModelGPT55)
+	if err != nil {
+		t.Fatalf("SetPersonaModel() err = %v", err)
+	}
+	if got != personaModelGPT55 {
+		t.Fatalf("SetPersonaModel() = %q, want %q", got, personaModelGPT55)
+	}
+	reloaded, err := loadRuntimeRecipeState(path, &cfg)
+	if err != nil {
+		t.Fatalf("loadRuntimeRecipeState() err = %v", err)
+	}
+	if reloaded.PersonaModel != personaModelGPT55 {
+		t.Fatalf("PersonaModel = %q, want %q", reloaded.PersonaModel, personaModelGPT55)
 	}
 }

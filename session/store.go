@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 27
+	schemaVersion                       = 33
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -195,6 +195,53 @@ func (s *SQLiteStore) init() error {
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			PRIMARY KEY (tool_name, principal)
 		)`,
+		`CREATE TABLE IF NOT EXISTS tool_install_records (
+			tool_name TEXT PRIMARY KEY,
+			installer TEXT NOT NULL DEFAULT '',
+			install_ref TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '' CHECK(status IN ('', 'pending', 'installed', 'verified', 'failed', 'stale')),
+			probe_status TEXT NOT NULL DEFAULT '' CHECK(probe_status IN ('', 'passed', 'failed')),
+				probe_output TEXT NOT NULL DEFAULT '',
+				rationale TEXT NOT NULL DEFAULT '',
+				artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+				baseline_fingerprint TEXT NOT NULL DEFAULT '',
+				current_fingerprint TEXT NOT NULL DEFAULT '',
+				stale_reason TEXT NOT NULL DEFAULT '',
+				consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			installed_at TEXT,
+			last_probed_at TEXT,
+			last_failure_at TEXT,
+			attested_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS tool_probe_records (
+			tool_name TEXT PRIMARY KEY,
+			status TEXT NOT NULL DEFAULT '' CHECK(status IN ('', 'passed', 'failed')),
+			probe_output TEXT NOT NULL DEFAULT '',
+			rationale TEXT NOT NULL DEFAULT '',
+			artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+			consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			probed_at TEXT,
+			last_failure_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS tool_audit_records (
+			tool_name TEXT PRIMARY KEY,
+			status TEXT NOT NULL DEFAULT '' CHECK(status IN ('', 'passed', 'failed')),
+				audit_output TEXT NOT NULL DEFAULT '',
+				rationale TEXT NOT NULL DEFAULT '',
+				artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+				baseline_fingerprint TEXT NOT NULL DEFAULT '',
+				current_fingerprint TEXT NOT NULL DEFAULT '',
+				stale_reason TEXT NOT NULL DEFAULT '',
+				consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			audited_at TEXT,
+			last_failure_at TEXT
+		)`,
 		`CREATE TABLE IF NOT EXISTS turn_runs (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				session_id TEXT NOT NULL,
@@ -250,6 +297,8 @@ func (s *SQLiteStore) init() error {
 			message_id INTEGER NOT NULL DEFAULT 0,
 			prompt TEXT NOT NULL DEFAULT '',
 			details TEXT NOT NULL DEFAULT '',
+			rationale TEXT NOT NULL DEFAULT '',
+			artifact_refs_json TEXT NOT NULL DEFAULT '[]',
 			choices_json TEXT NOT NULL DEFAULT '[]',
 			default_choice TEXT NOT NULL DEFAULT '',
 			timeout_ns INTEGER NOT NULL DEFAULT 0,
@@ -1641,6 +1690,570 @@ func (s *SQLiteStore) ToolExposures(toolName string, principal string, limit int
 	return out, nil
 }
 
+func (s *SQLiteStore) UpsertToolInstallRecord(record ToolInstallRecord) (ToolInstallRecord, error) {
+	record = NormalizeToolInstallRecord(record)
+	if record.ToolName == "" {
+		return ToolInstallRecord{}, fmt.Errorf("tool install record tool_name is required")
+	}
+	now := time.Now().UTC()
+	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
+	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
+	if _, err := s.db.Exec(`
+		INSERT INTO tool_install_records(tool_name, installer, install_ref, status, probe_status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(tool_name) DO UPDATE SET
+			installer = excluded.installer,
+			install_ref = excluded.install_ref,
+			status = excluded.status,
+			probe_status = excluded.probe_status,
+				probe_output = excluded.probe_output,
+				rationale = excluded.rationale,
+				artifact_refs_json = excluded.artifact_refs_json,
+				baseline_fingerprint = excluded.baseline_fingerprint,
+				current_fingerprint = excluded.current_fingerprint,
+				stale_reason = excluded.stale_reason,
+				consecutive_failures = excluded.consecutive_failures,
+			updated_at = excluded.updated_at,
+			installed_at = excluded.installed_at,
+			last_probed_at = excluded.last_probed_at,
+			last_failure_at = excluded.last_failure_at,
+			attested_at = excluded.attested_at
+	`,
+		record.ToolName,
+		record.Installer,
+		record.InstallRef,
+		string(record.Status),
+		string(record.ProbeStatus),
+		record.ProbeOutput,
+		record.Rationale,
+		encodeRecordReferences(record.ArtifactRefs),
+		record.BaselineFingerprint,
+		record.CurrentFingerprint,
+		record.StaleReason,
+		record.ConsecutiveFailures,
+		createdAt.Format(time.RFC3339Nano),
+		updatedAt.Format(time.RFC3339Nano),
+		nullableTimeRFC3339(record.InstalledAt),
+		nullableTimeRFC3339(record.LastProbedAt),
+		nullableTimeRFC3339(record.LastFailureAt),
+		nullableTimeRFC3339(record.AttestedAt),
+	); err != nil {
+		return ToolInstallRecord{}, fmt.Errorf("upsert tool install record: %w", err)
+	}
+	stored, ok, err := s.ToolInstallRecord(record.ToolName)
+	if err != nil {
+		return ToolInstallRecord{}, err
+	}
+	if !ok {
+		return ToolInstallRecord{}, fmt.Errorf("tool install record %q not found after upsert", record.ToolName)
+	}
+	return stored, nil
+}
+func (s *SQLiteStore) ToolInstallRecord(toolName string) (ToolInstallRecord, bool, error) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return ToolInstallRecord{}, false, nil
+	}
+	var (
+		record                 ToolInstallRecord
+		statusRaw              string
+		probeStatusRaw         string
+		artifactRefsRaw        string
+		baselineFingerprintRaw string
+		currentFingerprintRaw  string
+		staleReasonRaw         string
+		consecutiveFailuresRaw int
+		createdAtRaw           string
+		updatedAtRaw           string
+		installedAtRaw         sql.NullString
+		lastProbedAtRaw        sql.NullString
+		lastFailureAtRaw       sql.NullString
+		attestedAtRaw          sql.NullString
+	)
+	err := s.db.QueryRow(`
+		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at
+		FROM tool_install_records
+		WHERE tool_name = ?
+	`, toolName).Scan(
+		&record.ToolName,
+		&record.Installer,
+		&record.InstallRef,
+		&statusRaw,
+		&probeStatusRaw,
+		&record.ProbeOutput,
+		&record.Rationale,
+		&artifactRefsRaw,
+		&baselineFingerprintRaw,
+		&currentFingerprintRaw,
+		&staleReasonRaw,
+		&consecutiveFailuresRaw,
+		&createdAtRaw,
+		&updatedAtRaw,
+		&installedAtRaw,
+		&lastProbedAtRaw,
+		&lastFailureAtRaw,
+		&attestedAtRaw,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ToolInstallRecord{}, false, nil
+	}
+	if err != nil {
+		return ToolInstallRecord{}, false, fmt.Errorf("load tool install record: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record updated_at: %w", err)
+	}
+	record.Status = NormalizeToolInstallStatus(ToolInstallStatus(statusRaw))
+	record.ProbeStatus = NormalizeToolProbeStatus(ToolProbeStatus(probeStatusRaw))
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
+	record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
+	record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+	record.StaleReason = strings.TrimSpace(staleReasonRaw)
+	record.ConsecutiveFailures = consecutiveFailuresRaw
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	if installedAtRaw.Valid {
+		record.InstalledAt, err = parseSQLiteTime(installedAtRaw.String)
+		if err != nil {
+			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record installed_at: %w", err)
+		}
+	}
+	if lastProbedAtRaw.Valid {
+		record.LastProbedAt, err = parseSQLiteTime(lastProbedAtRaw.String)
+		if err != nil {
+			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record last_probed_at: %w", err)
+		}
+	}
+	if lastFailureAtRaw.Valid {
+		record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+		if err != nil {
+			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record last_failure_at: %w", err)
+		}
+	}
+	if attestedAtRaw.Valid {
+		record.AttestedAt, err = parseSQLiteTime(attestedAtRaw.String)
+		if err != nil {
+			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record attested_at: %w", err)
+		}
+	}
+	return NormalizeToolInstallRecord(record), true, nil
+}
+func (s *SQLiteStore) ToolInstallRecords(status ToolInstallStatus, limit int) ([]ToolInstallRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	status = NormalizeToolInstallStatus(status)
+	query := `
+		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at
+		FROM tool_install_records
+	`
+	args := make([]any, 0, 2)
+	if status != "" {
+		query += " WHERE status = ?"
+		args = append(args, string(status))
+	}
+	query += " ORDER BY updated_at DESC, tool_name ASC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tool install records: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ToolInstallRecord, 0, limit)
+	for rows.Next() {
+		var (
+			record                 ToolInstallRecord
+			statusRaw              string
+			probeStatusRaw         string
+			artifactRefsRaw        string
+			baselineFingerprintRaw string
+			currentFingerprintRaw  string
+			staleReasonRaw         string
+			consecutiveFailuresRaw int
+			createdAtRaw           string
+			updatedAtRaw           string
+			installedAtRaw         sql.NullString
+			lastProbedAtRaw        sql.NullString
+			lastFailureAtRaw       sql.NullString
+			attestedAtRaw          sql.NullString
+		)
+		if err := rows.Scan(&record.ToolName, &record.Installer, &record.InstallRef, &statusRaw, &probeStatusRaw, &record.ProbeOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &staleReasonRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &installedAtRaw, &lastProbedAtRaw, &lastFailureAtRaw, &attestedAtRaw); err != nil {
+			return nil, fmt.Errorf("scan tool install record: %w", err)
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool install record created_at: %w", err)
+		}
+		updatedAt, err := parseSQLiteTime(updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool install record updated_at: %w", err)
+		}
+		record.Status = NormalizeToolInstallStatus(ToolInstallStatus(statusRaw))
+		record.ProbeStatus = NormalizeToolProbeStatus(ToolProbeStatus(probeStatusRaw))
+		record.Rationale = strings.TrimSpace(record.Rationale)
+		record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
+		record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
+		record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+		record.StaleReason = strings.TrimSpace(staleReasonRaw)
+		record.ConsecutiveFailures = consecutiveFailuresRaw
+		record.CreatedAt = createdAt
+		record.UpdatedAt = updatedAt
+		if installedAtRaw.Valid {
+			record.InstalledAt, err = parseSQLiteTime(installedAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool install record installed_at: %w", err)
+			}
+		}
+		if lastProbedAtRaw.Valid {
+			record.LastProbedAt, err = parseSQLiteTime(lastProbedAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool install record last_probed_at: %w", err)
+			}
+		}
+		if lastFailureAtRaw.Valid {
+			record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool install record last_failure_at: %w", err)
+			}
+		}
+		if attestedAtRaw.Valid {
+			record.AttestedAt, err = parseSQLiteTime(attestedAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool install record attested_at: %w", err)
+			}
+		}
+		out = append(out, NormalizeToolInstallRecord(record))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tool install records: %w", err)
+	}
+	return out, nil
+}
+
+func nullableTimeRFC3339(ts time.Time) any {
+	if ts.IsZero() {
+		return nil
+	}
+	return ts.UTC().Format(time.RFC3339Nano)
+}
+func (s *SQLiteStore) UpsertToolProbeRecord(record ToolProbeRecord) (ToolProbeRecord, error) {
+	record = NormalizeToolProbeRecord(record)
+	if record.ToolName == "" {
+		return ToolProbeRecord{}, fmt.Errorf("tool probe record tool_name is required")
+	}
+	now := time.Now().UTC()
+	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
+	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
+	if _, err := s.db.Exec(`
+			INSERT INTO tool_probe_records(tool_name, status, probe_output, rationale, artifact_refs_json, consecutive_failures, created_at, updated_at, probed_at, last_failure_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(tool_name) DO UPDATE SET
+			status = excluded.status,
+			probe_output = excluded.probe_output,
+			rationale = excluded.rationale,
+			artifact_refs_json = excluded.artifact_refs_json,
+			consecutive_failures = excluded.consecutive_failures,
+			updated_at = excluded.updated_at,
+			probed_at = excluded.probed_at,
+			last_failure_at = excluded.last_failure_at
+	`, record.ToolName, string(record.Status), record.ProbeOutput, record.Rationale, encodeRecordReferences(record.ArtifactRefs), record.ConsecutiveFailures, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), nullableTimeRFC3339(record.ProbedAt), nullableTimeRFC3339(record.LastFailureAt)); err != nil {
+		return ToolProbeRecord{}, fmt.Errorf("upsert tool probe record: %w", err)
+	}
+	stored, ok, err := s.ToolProbeRecord(record.ToolName)
+	if err != nil {
+		return ToolProbeRecord{}, err
+	}
+	if !ok {
+		return ToolProbeRecord{}, fmt.Errorf("tool probe record %q not found after upsert", record.ToolName)
+	}
+	return stored, nil
+}
+func (s *SQLiteStore) ToolProbeRecord(toolName string) (ToolProbeRecord, bool, error) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return ToolProbeRecord{}, false, nil
+	}
+	var (
+		record                 ToolProbeRecord
+		statusRaw              string
+		artifactRefsRaw        string
+		consecutiveFailuresRaw int
+		createdAtRaw           string
+		updatedAtRaw           string
+		probedAtRaw            sql.NullString
+		lastFailureAtRaw       sql.NullString
+	)
+	err := s.db.QueryRow(`SELECT tool_name, status, probe_output, rationale, artifact_refs_json, consecutive_failures, created_at, updated_at, probed_at, last_failure_at FROM tool_probe_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &record.Rationale, &artifactRefsRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &probedAtRaw, &lastFailureAtRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ToolProbeRecord{}, false, nil
+	}
+	if err != nil {
+		return ToolProbeRecord{}, false, fmt.Errorf("load tool probe record: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record updated_at: %w", err)
+	}
+	record.Status = NormalizeToolProbeStatus(ToolProbeStatus(statusRaw))
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
+	record.ConsecutiveFailures = consecutiveFailuresRaw
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	if probedAtRaw.Valid {
+		record.ProbedAt, err = parseSQLiteTime(probedAtRaw.String)
+		if err != nil {
+			return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record probed_at: %w", err)
+		}
+	}
+	if lastFailureAtRaw.Valid {
+		record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+		if err != nil {
+			return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record last_failure_at: %w", err)
+		}
+	}
+	return NormalizeToolProbeRecord(record), true, nil
+}
+func (s *SQLiteStore) ToolProbeRecords(status ToolProbeStatus, limit int) ([]ToolProbeRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	status = NormalizeToolProbeStatus(status)
+	query := `SELECT tool_name, status, probe_output, rationale, artifact_refs_json, consecutive_failures, created_at, updated_at, probed_at, last_failure_at FROM tool_probe_records`
+	args := make([]any, 0, 2)
+	if status != "" {
+		query += " WHERE status = ?"
+		args = append(args, string(status))
+	}
+	query += " ORDER BY updated_at DESC, tool_name ASC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tool probe records: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ToolProbeRecord, 0, limit)
+	for rows.Next() {
+		var (
+			record                 ToolProbeRecord
+			statusRaw              string
+			artifactRefsRaw        string
+			consecutiveFailuresRaw int
+			createdAtRaw           string
+			updatedAtRaw           string
+			probedAtRaw            sql.NullString
+			lastFailureAtRaw       sql.NullString
+		)
+		if err := rows.Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &record.Rationale, &artifactRefsRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &probedAtRaw, &lastFailureAtRaw); err != nil {
+			return nil, fmt.Errorf("scan tool probe record: %w", err)
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool probe record created_at: %w", err)
+		}
+		updatedAt, err := parseSQLiteTime(updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool probe record updated_at: %w", err)
+		}
+		record.Status = NormalizeToolProbeStatus(ToolProbeStatus(statusRaw))
+		record.Rationale = strings.TrimSpace(record.Rationale)
+		record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
+		record.ConsecutiveFailures = consecutiveFailuresRaw
+		record.CreatedAt = createdAt
+		record.UpdatedAt = updatedAt
+		if probedAtRaw.Valid {
+			record.ProbedAt, err = parseSQLiteTime(probedAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool probe record probed_at: %w", err)
+			}
+		}
+		if lastFailureAtRaw.Valid {
+			record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool probe record last_failure_at: %w", err)
+			}
+		}
+		out = append(out, NormalizeToolProbeRecord(record))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tool probe records: %w", err)
+	}
+	return out, nil
+}
+func (s *SQLiteStore) UpsertToolAuditRecord(record ToolAuditRecord) (ToolAuditRecord, error) {
+	record = NormalizeToolAuditRecord(record)
+	if record.ToolName == "" {
+		return ToolAuditRecord{}, fmt.Errorf("tool audit record tool_name is required")
+	}
+	now := time.Now().UTC()
+	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
+	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
+	if _, err := s.db.Exec(`
+			INSERT INTO tool_audit_records(tool_name, status, audit_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, audited_at, last_failure_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(tool_name) DO UPDATE SET
+				status = excluded.status,
+				audit_output = excluded.audit_output,
+				rationale = excluded.rationale,
+				artifact_refs_json = excluded.artifact_refs_json,
+				baseline_fingerprint = excluded.baseline_fingerprint,
+				current_fingerprint = excluded.current_fingerprint,
+				stale_reason = excluded.stale_reason,
+				consecutive_failures = excluded.consecutive_failures,
+				updated_at = excluded.updated_at,
+				audited_at = excluded.audited_at,
+				last_failure_at = excluded.last_failure_at
+		`, record.ToolName, string(record.Status), record.AuditOutput, record.Rationale, encodeRecordReferences(record.ArtifactRefs), record.BaselineFingerprint, record.CurrentFingerprint, record.StaleReason, record.ConsecutiveFailures, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), nullableTimeRFC3339(record.AuditedAt), nullableTimeRFC3339(record.LastFailureAt)); err != nil {
+		return ToolAuditRecord{}, fmt.Errorf("upsert tool audit record: %w", err)
+	}
+	stored, ok, err := s.ToolAuditRecord(record.ToolName)
+	if err != nil {
+		return ToolAuditRecord{}, err
+	}
+	if !ok {
+		return ToolAuditRecord{}, fmt.Errorf("tool audit record %q not found after upsert", record.ToolName)
+	}
+	return stored, nil
+}
+func (s *SQLiteStore) ToolAuditRecord(toolName string) (ToolAuditRecord, bool, error) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return ToolAuditRecord{}, false, nil
+	}
+	var (
+		record                 ToolAuditRecord
+		statusRaw              string
+		artifactRefsRaw        string
+		baselineFingerprintRaw string
+		currentFingerprintRaw  string
+		staleReasonRaw         string
+		consecutiveFailuresRaw int
+		createdAtRaw           string
+		updatedAtRaw           string
+		auditedAtRaw           sql.NullString
+		lastFailureAtRaw       sql.NullString
+	)
+	err := s.db.QueryRow(`SELECT tool_name, status, audit_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, audited_at, last_failure_at FROM tool_audit_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &staleReasonRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &auditedAtRaw, &lastFailureAtRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ToolAuditRecord{}, false, nil
+	}
+	if err != nil {
+		return ToolAuditRecord{}, false, fmt.Errorf("load tool audit record: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return ToolAuditRecord{}, false, fmt.Errorf("parse tool audit record created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return ToolAuditRecord{}, false, fmt.Errorf("parse tool audit record updated_at: %w", err)
+	}
+	record.Status = NormalizeToolAuditStatus(ToolAuditStatus(statusRaw))
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
+	record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
+	record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+	record.StaleReason = strings.TrimSpace(staleReasonRaw)
+	record.ConsecutiveFailures = consecutiveFailuresRaw
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	if auditedAtRaw.Valid {
+		record.AuditedAt, err = parseSQLiteTime(auditedAtRaw.String)
+		if err != nil {
+			return ToolAuditRecord{}, false, fmt.Errorf("parse tool audit record audited_at: %w", err)
+		}
+	}
+	if lastFailureAtRaw.Valid {
+		record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+		if err != nil {
+			return ToolAuditRecord{}, false, fmt.Errorf("parse tool audit record last_failure_at: %w", err)
+		}
+	}
+	return NormalizeToolAuditRecord(record), true, nil
+}
+func (s *SQLiteStore) ToolAuditRecords(status ToolAuditStatus, limit int) ([]ToolAuditRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	status = NormalizeToolAuditStatus(status)
+	query := `SELECT tool_name, status, audit_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, audited_at, last_failure_at FROM tool_audit_records`
+	args := make([]any, 0, 2)
+	if status != "" {
+		query += " WHERE status = ?"
+		args = append(args, string(status))
+	}
+	query += " ORDER BY updated_at DESC, tool_name ASC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tool audit records: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ToolAuditRecord, 0, limit)
+	for rows.Next() {
+		var (
+			record                 ToolAuditRecord
+			statusRaw              string
+			artifactRefsRaw        string
+			baselineFingerprintRaw string
+			currentFingerprintRaw  string
+			staleReasonRaw         string
+			consecutiveFailuresRaw int
+			createdAtRaw           string
+			updatedAtRaw           string
+			auditedAtRaw           sql.NullString
+			lastFailureAtRaw       sql.NullString
+		)
+		if err := rows.Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &staleReasonRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &auditedAtRaw, &lastFailureAtRaw); err != nil {
+			return nil, fmt.Errorf("scan tool audit record: %w", err)
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool audit record created_at: %w", err)
+		}
+		updatedAt, err := parseSQLiteTime(updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool audit record updated_at: %w", err)
+		}
+		record.Status = NormalizeToolAuditStatus(ToolAuditStatus(statusRaw))
+		record.Rationale = strings.TrimSpace(record.Rationale)
+		record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
+		record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
+		record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+		record.StaleReason = strings.TrimSpace(staleReasonRaw)
+		record.ConsecutiveFailures = consecutiveFailuresRaw
+		record.CreatedAt = createdAt
+		record.UpdatedAt = updatedAt
+		if auditedAtRaw.Valid {
+			record.AuditedAt, err = parseSQLiteTime(auditedAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool audit record audited_at: %w", err)
+			}
+		}
+		if lastFailureAtRaw.Valid {
+			record.LastFailureAt, err = parseSQLiteTime(lastFailureAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool audit record last_failure_at: %w", err)
+			}
+		}
+		out = append(out, NormalizeToolAuditRecord(record))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tool audit records: %w", err)
+	}
+	return out, nil
+}
+
 func (s *SQLiteStore) PlanEvents(key SessionKey, limit int) ([]PlanEvent, error) {
 	if limit <= 0 {
 		limit = 20
@@ -2548,6 +3161,30 @@ func (s *SQLiteStore) MarkReviewDelivered(ids []int64) error {
 	return nil
 }
 
+func encodeRecordReferences(refs []RecordReference) string {
+	normalized := NormalizeRecordReferences(refs)
+	if len(normalized) == 0 {
+		return "[]"
+	}
+	buf, err := json.Marshal(normalized)
+	if err != nil {
+		return "[]"
+	}
+	return string(buf)
+}
+
+func decodeRecordReferences(raw string) []RecordReference {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var refs []RecordReference
+	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
+		return nil
+	}
+	return NormalizeRecordReferences(refs)
+}
+
 func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error {
 	record.ID = strings.TrimSpace(record.ID)
 	if record.ID == "" {
@@ -2570,6 +3207,8 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 	record.Kind = strings.TrimSpace(record.Kind)
 	record.Prompt = strings.TrimSpace(record.Prompt)
 	record.Details = strings.TrimSpace(record.Details)
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
 	record.DefaultChoice = strings.TrimSpace(record.DefaultChoice)
 	choicesJSON := strings.TrimSpace(record.ChoicesJSON)
 	if choicesJSON == "" {
@@ -2579,9 +3218,9 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 	_, err := s.db.Exec(`
 		INSERT INTO pending_decisions(
 			decision_id, decision_seq, owner_key, kind, chat_id, sender_id, message_id,
-			prompt, details, choices_json, default_choice, timeout_ns, delivery_message_id,
+			prompt, details, rationale, artifact_refs_json, choices_json, default_choice, timeout_ns, delivery_message_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(decision_id) DO UPDATE SET
 			decision_seq = excluded.decision_seq,
 			owner_key = excluded.owner_key,
@@ -2591,6 +3230,8 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 			message_id = excluded.message_id,
 			prompt = excluded.prompt,
 			details = excluded.details,
+			rationale = excluded.rationale,
+			artifact_refs_json = excluded.artifact_refs_json,
 			choices_json = excluded.choices_json,
 			default_choice = excluded.default_choice,
 			timeout_ns = excluded.timeout_ns,
@@ -2606,6 +3247,8 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 		record.MessageID,
 		record.Prompt,
 		record.Details,
+		record.Rationale,
+		encodeRecordReferences(record.ArtifactRefs),
 		choicesJSON,
 		record.DefaultChoice,
 		record.TimeoutNanos,
@@ -2662,7 +3305,7 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			decision_id, decision_seq, owner_key, kind, chat_id, sender_id, message_id,
-			prompt, details, choices_json, default_choice, timeout_ns, delivery_message_id,
+			prompt, details, rationale, artifact_refs_json, choices_json, default_choice, timeout_ns, delivery_message_id,
 			created_at, updated_at
 		FROM pending_decisions
 		ORDER BY decision_seq ASC, decision_id ASC
@@ -2675,14 +3318,15 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 	records := make([]PendingDecisionRecord, 0)
 	for rows.Next() {
 		var (
-			record       PendingDecisionRecord
-			sequenceRaw  int64
-			createdAtRaw string
-			updatedAtRaw string
+			record          PendingDecisionRecord
+			sequenceRaw     int64
+			artifactRefsRaw string
+			createdAtRaw    string
+			updatedAtRaw    string
 		)
 		if err := rows.Scan(
 			&record.ID, &sequenceRaw, &record.OwnerKey, &record.Kind, &record.ChatID, &record.SenderID, &record.MessageID,
-			&record.Prompt, &record.Details, &record.ChoicesJSON, &record.DefaultChoice, &record.TimeoutNanos, &record.DeliveryMessageID,
+			&record.Prompt, &record.Details, &record.Rationale, &artifactRefsRaw, &record.ChoicesJSON, &record.DefaultChoice, &record.TimeoutNanos, &record.DeliveryMessageID,
 			&createdAtRaw, &updatedAtRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan pending decision: %w", err)
@@ -2694,6 +3338,8 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 		record.Details = strings.TrimSpace(record.Details)
 		record.OwnerKey = strings.TrimSpace(record.OwnerKey)
 		record.Kind = strings.TrimSpace(record.Kind)
+		record.Rationale = strings.TrimSpace(record.Rationale)
+		record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
 		record.DefaultChoice = strings.TrimSpace(record.DefaultChoice)
 		record.ChoicesJSON = strings.TrimSpace(record.ChoicesJSON)
 		if record.ChoicesJSON == "" {
@@ -4677,6 +5323,32 @@ func applyMigrations(tx *sql.Tx) error {
 			return err
 		}
 	}
+	for _, spec := range []struct{ table, name, typ string }{
+		{table: "tool_install_records", name: "consecutive_failures", typ: "INTEGER NOT NULL DEFAULT 0"},
+		{table: "tool_install_records", name: "last_failure_at", typ: "TEXT"},
+		{table: "tool_install_records", name: "rationale", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "artifact_refs_json", typ: "TEXT NOT NULL DEFAULT '[]'"},
+		{table: "tool_install_records", name: "baseline_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "current_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "stale_reason", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "consecutive_failures", typ: "INTEGER NOT NULL DEFAULT 0"},
+		{table: "tool_probe_records", name: "last_failure_at", typ: "TEXT"},
+		{table: "tool_probe_records", name: "rationale", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "artifact_refs_json", typ: "TEXT NOT NULL DEFAULT '[]'"},
+		{table: "tool_audit_records", name: "consecutive_failures", typ: "INTEGER NOT NULL DEFAULT 0"},
+		{table: "tool_audit_records", name: "last_failure_at", typ: "TEXT"},
+		{table: "tool_audit_records", name: "rationale", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "artifact_refs_json", typ: "TEXT NOT NULL DEFAULT '[]'"},
+		{table: "tool_audit_records", name: "baseline_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "current_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "stale_reason", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "pending_decisions", name: "rationale", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "pending_decisions", name: "artifact_refs_json", typ: "TEXT NOT NULL DEFAULT '[]'"},
+	} {
+		if err := ensureTableColumn(tx, spec.table, spec.name, spec.typ); err != nil {
+			return err
+		}
+	}
 	if currentVersion >= schemaVersion {
 		return nil
 	}
@@ -4702,6 +5374,9 @@ func ensureSessionIdentityIndexes(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_tool_proposals_status ON tool_proposals(review_status, updated_at, proposal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_registered_tools_state ON registered_tools(registered, updated_at, tool_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_exposures_principal ON tool_exposures(principal, active, tool_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_install_records_status ON tool_install_records(status, updated_at, tool_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_probe_records_status ON tool_probe_records(status, updated_at, tool_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_audit_records_status ON tool_audit_records(status, updated_at, tool_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_events_session_seq ON execution_events(session_id, seq)`,

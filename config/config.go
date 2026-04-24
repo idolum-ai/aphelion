@@ -24,6 +24,7 @@ type Config struct {
 	Search        SearchConfig        `toml:"search"`
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Agent         AgentConfig         `toml:"agent"`
+	Tools         ToolsConfig         `toml:"tools"`
 	Memory        MemoryConfig        `toml:"memory"`
 	Thinking      ThinkingConfig      `toml:"thinking"`
 	Face          FaceConfig          `toml:"face"`
@@ -103,6 +104,8 @@ type GovernorCodexConfig struct {
 }
 
 type ProvidersConfig struct {
+	Selection     string               `toml:"selection"`
+	AutoOrder     []string             `toml:"auto_order"`
 	Default       string               `toml:"default"`
 	FallbackChain []string             `toml:"fallback_chain"`
 	Anthropic     AnthropicConfig      `toml:"anthropic"`
@@ -126,11 +129,12 @@ type OpenRouterConfig struct {
 }
 
 type OpenAIProviderConfig struct {
-	APIKey        string `toml:"api_key"`
-	BaseURL       string `toml:"base_url"`
-	Model         string `toml:"model"`
-	MaxTokens     int    `toml:"max_tokens"`
-	ContextWindow int    `toml:"context_window"`
+	APIKey         string   `toml:"api_key"`
+	BaseURL        string   `toml:"base_url"`
+	Model          string   `toml:"model"`
+	FallbackModels []string `toml:"fallback_models"`
+	MaxTokens      int      `toml:"max_tokens"`
+	ContextWindow  int      `toml:"context_window"`
 }
 
 type OpenAIConfig struct {
@@ -189,6 +193,10 @@ type AgentConfig struct {
 	BootstrapTotalMaxChars int      `toml:"bootstrap_total_max_chars"`
 	DailyNotes             bool     `toml:"daily_notes"`
 	DailyNotesDir          string   `toml:"daily_notes_dir"`
+}
+
+type ToolsConfig struct {
+	ExternalManifestDir string `toml:"external_manifest_dir"`
 }
 
 type MemoryConfig struct {
@@ -345,18 +353,20 @@ func Default() Config {
 		},
 		Governor: GovernorConfig{
 			Backend:        "auto",
-			NativeProvider: "anthropic",
+			NativeProvider: "",
 			Codex: GovernorCodexConfig{
 				AuthSource:       "auto",
 				BaseURL:          "https://chatgpt.com/backend-api",
-				Model:            "gpt-5.4",
+				Model:            "gpt-5.5",
 				ContextWindow:    200000,
 				MaxContinuations: 3,
 				TransportRetries: 1,
 			},
 		},
 		Providers: ProvidersConfig{
-			Default:       "anthropic",
+			Selection:     "auto",
+			AutoOrder:     []string{"openai", "anthropic", "openrouter"},
+			Default:       "",
 			FallbackChain: []string{},
 			Anthropic: AnthropicConfig{
 				Model:         "claude-sonnet-4-6",
@@ -364,10 +374,11 @@ func Default() Config {
 				ContextWindow: 200000,
 			},
 			OpenAI: OpenAIProviderConfig{
-				BaseURL:       "https://api.openai.com/v1",
-				Model:         "gpt-5.4",
-				MaxTokens:     16384,
-				ContextWindow: 128000,
+				BaseURL:        "https://api.openai.com/v1",
+				Model:          "gpt-5.5",
+				FallbackModels: []string{"gpt-5.4", "gpt-5.4-mini"},
+				MaxTokens:      16384,
+				ContextWindow:  128000,
 			},
 			OpenRouter: OpenRouterConfig{
 				BaseURL:       "https://openrouter.ai/api/v1",
@@ -525,6 +536,13 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyLegacyAgentRoots(&cfg, md)
+	cfg.Providers.Selection = normalizeProviderSelection(cfg.Providers.Selection)
+	cfg.Providers.AutoOrder = normalizeProviderNameList(cfg.Providers.AutoOrder)
+	if len(cfg.Providers.AutoOrder) == 0 {
+		cfg.Providers.AutoOrder = []string{"openai", "anthropic", "openrouter"}
+	}
+	cfg.Providers.OpenAI.FallbackModels = normalizeOpenAIModelFallbacks(cfg.Providers.OpenAI.Model, cfg.Providers.OpenAI.FallbackModels)
+	applyProviderSelectionHeuristic(&cfg, md)
 
 	cfg.Sessions.DBPath, err = expandConfiguredPath(cfg.Sessions.DBPath, baseDir)
 	if err != nil {
@@ -558,6 +576,10 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("expand agent.user_memory_root: %w", err)
 	}
+	cfg.Tools.ExternalManifestDir, err = expandConfiguredPath(cfg.Tools.ExternalManifestDir, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand tools.external_manifest_dir: %w", err)
+	}
 	normalizeAgentRoots(&cfg)
 	cfg.Face.Backend = NormalizeFaceBackendValue(cfg.Face.Backend)
 	normalizeTelegramDurableGroups(&cfg)
@@ -566,6 +588,174 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func applyProviderSelectionHeuristic(cfg *Config, md toml.MetaData) {
+	if cfg == nil {
+		return
+	}
+	defaultDefined := md.IsDefined("providers", "default") && providerName(cfg.Providers.Default) != ""
+	nativeDefined := md.IsDefined("governor", "native_provider") && providerName(cfg.Governor.NativeProvider) != ""
+	fallbackDefined := md.IsDefined("providers", "fallback_chain")
+
+	if defaultDefined && !nativeDefined {
+		cfg.Governor.NativeProvider = providerName(cfg.Providers.Default)
+	}
+	if nativeDefined && !defaultDefined {
+		cfg.Providers.Default = providerName(cfg.Governor.NativeProvider)
+	}
+	if normalizeProviderSelection(cfg.Providers.Selection) != "auto" {
+		return
+	}
+	if !defaultDefined && !nativeDefined {
+		if primary := firstConfiguredProviderByOrder(cfg, cfg.Providers.AutoOrder); primary != "" {
+			cfg.Governor.NativeProvider = primary
+			cfg.Providers.Default = primary
+		}
+	}
+	if !fallbackDefined {
+		primary := providerName(firstNonEmpty(cfg.Governor.NativeProvider, cfg.Providers.Default))
+		cfg.Providers.FallbackChain = configuredProviderFallbacks(cfg, primary)
+	}
+}
+
+func configuredProviderFallbacks(cfg *Config, primary string) []string {
+	if cfg == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	if primary = providerName(primary); primary != "" {
+		seen[primary] = struct{}{}
+	}
+	out := make([]string, 0, len(cfg.Providers.AutoOrder))
+	for _, name := range cfg.Providers.AutoOrder {
+		name = providerName(name)
+		if name == "" || !providerConfigured(cfg, name) {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func firstConfiguredProviderByOrder(cfg *Config, order []string) string {
+	for _, name := range order {
+		name = providerName(name)
+		if providerConfigured(cfg, name) {
+			return name
+		}
+	}
+	return ""
+}
+
+func providerConfigured(cfg *Config, name string) bool {
+	if cfg == nil {
+		return false
+	}
+	switch providerName(name) {
+	case "anthropic":
+		return strings.TrimSpace(cfg.Providers.Anthropic.APIKey) != ""
+	case "openai":
+		return strings.TrimSpace(cfg.Providers.OpenAI.APIKey) != ""
+	case "openrouter":
+		return strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) != ""
+	default:
+		return false
+	}
+}
+
+func normalizeProviderSelection(selection string) string {
+	switch strings.ToLower(strings.TrimSpace(selection)) {
+	case "", "auto":
+		return "auto"
+	case "manual", "explicit":
+		return "manual"
+	default:
+		return strings.ToLower(strings.TrimSpace(selection))
+	}
+}
+
+func normalizeProviderNameList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		name := providerName(raw)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func normalizeOpenAIModelFallbacks(primary string, fallbacks []string) []string {
+	seen := map[string]struct{}{}
+	if primary = strings.TrimSpace(primary); primary != "" {
+		seen[primary] = struct{}{}
+	}
+	out := make([]string, 0, len(fallbacks))
+	for _, raw := range fallbacks {
+		model := strings.TrimSpace(raw)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		out = append(out, model)
+	}
+	return out
+}
+
+func EffectiveProviderChain(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 2+len(cfg.Providers.FallbackChain))
+	for _, raw := range append([]string{cfg.Governor.NativeProvider, cfg.Providers.Default}, cfg.Providers.FallbackChain...) {
+		name := providerName(raw)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	if len(out) > 0 {
+		return out
+	}
+	for _, name := range cfg.Providers.AutoOrder {
+		name = providerName(name)
+		if name == "" || !providerConfigured(cfg, name) {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func EffectiveNativeProvider(cfg *Config) string {
+	chain := EffectiveProviderChain(cfg)
+	if len(chain) == 0 {
+		return ""
+	}
+	return chain[0]
 }
 
 func validate(cfg *Config) error {
@@ -784,29 +974,44 @@ func validate(cfg *Config) error {
 	default:
 		return fmt.Errorf("face.backend must be one of provider|floor_fallback")
 	}
-	switch providerName(strings.TrimSpace(cfg.Providers.Default)) {
-	case "", "anthropic", "openrouter":
+	switch normalizeProviderSelection(cfg.Providers.Selection) {
+	case "auto", "manual":
 	default:
-		return fmt.Errorf("providers.default must be one of anthropic|openrouter")
+		return fmt.Errorf("providers.selection must be one of auto|manual")
+	}
+	if len(cfg.Providers.AutoOrder) == 0 {
+		return fmt.Errorf("providers.auto_order must contain at least one provider")
+	}
+	for i, name := range cfg.Providers.AutoOrder {
+		switch providerName(name) {
+		case "anthropic", "openai", "openrouter":
+		default:
+			return fmt.Errorf("providers.auto_order[%d] must be one of anthropic|openai|openrouter", i)
+		}
+	}
+	switch providerName(strings.TrimSpace(cfg.Providers.Default)) {
+	case "", "anthropic", "openai", "openrouter":
+	default:
+		return fmt.Errorf("providers.default must be one of anthropic|openai|openrouter")
 	}
 	for i, name := range cfg.Providers.FallbackChain {
 		switch providerName(name) {
-		case "", "anthropic", "openrouter":
+		case "", "anthropic", "openai", "openrouter":
 			if providerName(name) == "" {
 				return fmt.Errorf("providers.fallback_chain[%d] must not be empty", i)
 			}
 		default:
-			return fmt.Errorf("providers.fallback_chain[%d] must be one of anthropic|openrouter", i)
+			return fmt.Errorf("providers.fallback_chain[%d] must be one of anthropic|openai|openrouter", i)
 		}
 	}
 	nativePrimary := providerName(firstNonEmpty(strings.TrimSpace(cfg.Governor.NativeProvider), strings.TrimSpace(cfg.Providers.Default)))
-	if nativePrimary == "" {
-		nativePrimary = "anthropic"
-	}
 	switch nativePrimary {
-	case "anthropic", "openrouter":
+	case "", "anthropic", "openai", "openrouter":
+		if nativePrimary == "" && (governorBackend == "native" || faceBackend == "" || faceBackend == "provider") {
+			return fmt.Errorf("governor.native_provider or providers.default is required when native provider access is enabled")
+		}
 	default:
-		return fmt.Errorf("governor.native_provider must be one of anthropic|openrouter")
+		return fmt.Errorf("governor.native_provider must be one of anthropic|openai|openrouter")
 	}
 	needsNativeProvider := governorBackend == "native" || faceBackend == "" || faceBackend == "provider" || len(cfg.Providers.FallbackChain) > 0
 	if needsNativeProvider && nativePrimary == "" {
@@ -834,6 +1039,13 @@ func validate(cfg *Config) error {
 			case "anthropic":
 				if strings.TrimSpace(cfg.Providers.Anthropic.APIKey) == "" {
 					return fmt.Errorf("providers.anthropic.api_key is required when anthropic is in the native provider chain")
+				}
+			case "openai":
+				if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {
+					return fmt.Errorf("providers.openai.api_key is required when openai is in the native provider chain")
+				}
+				if strings.TrimSpace(cfg.Providers.OpenAI.Model) == "" {
+					return fmt.Errorf("providers.openai.model is required when openai is in the native provider chain")
 				}
 			case "openrouter":
 				if strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) == "" {
@@ -1139,9 +1351,9 @@ func validateTelegramDurableGroups(cfg *Config) error {
 		switch group.LLMBackend {
 		case "native":
 			switch group.LLMProvider {
-			case "anthropic", "openrouter":
+			case "anthropic", "openai", "openrouter":
 			default:
-				return fmt.Errorf("telegram.durable_groups[%d].llm_provider must be one of anthropic|openrouter for native backend", i)
+				return fmt.Errorf("telegram.durable_groups[%d].llm_provider must be one of anthropic|openai|openrouter for native backend", i)
 			}
 			if strings.TrimSpace(group.LLMAPIKey) == "" {
 				return fmt.Errorf("telegram.durable_groups[%d].llm_api_key is required for native backend", i)

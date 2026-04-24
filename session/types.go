@@ -178,6 +178,80 @@ type ToolExposure struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
+type ToolInstallStatus string
+
+const (
+	ToolInstallStatusPending   ToolInstallStatus = "pending"
+	ToolInstallStatusInstalled ToolInstallStatus = "installed"
+	ToolInstallStatusVerified  ToolInstallStatus = "verified"
+	ToolInstallStatusFailed    ToolInstallStatus = "failed"
+	ToolInstallStatusStale     ToolInstallStatus = "stale"
+)
+
+type ToolProbeStatus string
+
+const (
+	ToolProbeStatusPassed ToolProbeStatus = "passed"
+	ToolProbeStatusFailed ToolProbeStatus = "failed"
+)
+
+type ToolAuditStatus string
+
+const (
+	ToolAuditStatusPassed ToolAuditStatus = "passed"
+	ToolAuditStatusFailed ToolAuditStatus = "failed"
+)
+
+type ToolInstallRecord struct {
+	ToolName            string            `json:"tool_name"`
+	Installer           string            `json:"installer,omitempty"`
+	InstallRef          string            `json:"install_ref,omitempty"`
+	Status              ToolInstallStatus `json:"status,omitempty"`
+	ProbeStatus         ToolProbeStatus   `json:"probe_status,omitempty"`
+	ProbeOutput         string            `json:"probe_output,omitempty"`
+	Rationale           string            `json:"rationale,omitempty"`
+	ArtifactRefs        []RecordReference `json:"artifact_refs,omitempty"`
+	BaselineFingerprint string            `json:"baseline_fingerprint,omitempty"`
+	CurrentFingerprint  string            `json:"current_fingerprint,omitempty"`
+	StaleReason         string            `json:"stale_reason,omitempty"`
+	ConsecutiveFailures int               `json:"consecutive_failures,omitempty"`
+	CreatedAt           time.Time         `json:"created_at,omitempty"`
+	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
+	InstalledAt         time.Time         `json:"installed_at,omitempty"`
+	LastProbedAt        time.Time         `json:"last_probed_at,omitempty"`
+	LastFailureAt       time.Time         `json:"last_failure_at,omitempty"`
+	AttestedAt          time.Time         `json:"attested_at,omitempty"`
+}
+
+type ToolAuditRecord struct {
+	ToolName            string            `json:"tool_name"`
+	Status              ToolAuditStatus   `json:"status,omitempty"`
+	AuditOutput         string            `json:"audit_output,omitempty"`
+	Rationale           string            `json:"rationale,omitempty"`
+	ArtifactRefs        []RecordReference `json:"artifact_refs,omitempty"`
+	BaselineFingerprint string            `json:"baseline_fingerprint,omitempty"`
+	CurrentFingerprint  string            `json:"current_fingerprint,omitempty"`
+	StaleReason         string            `json:"stale_reason,omitempty"`
+	ConsecutiveFailures int               `json:"consecutive_failures,omitempty"`
+	CreatedAt           time.Time         `json:"created_at,omitempty"`
+	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
+	AuditedAt           time.Time         `json:"audited_at,omitempty"`
+	LastFailureAt       time.Time         `json:"last_failure_at,omitempty"`
+}
+
+type ToolProbeRecord struct {
+	ToolName            string            `json:"tool_name"`
+	Status              ToolProbeStatus   `json:"status,omitempty"`
+	ProbeOutput         string            `json:"probe_output,omitempty"`
+	Rationale           string            `json:"rationale,omitempty"`
+	ArtifactRefs        []RecordReference `json:"artifact_refs,omitempty"`
+	ConsecutiveFailures int               `json:"consecutive_failures,omitempty"`
+	CreatedAt           time.Time         `json:"created_at,omitempty"`
+	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
+	ProbedAt            time.Time         `json:"probed_at,omitempty"`
+	LastFailureAt       time.Time         `json:"last_failure_at,omitempty"`
+}
+
 type TurnAuthorizationKind string
 
 const (
@@ -410,6 +484,25 @@ type ExecutionEventInput struct {
 	CreatedAt   time.Time
 }
 
+type RecordReference struct {
+	Kind  string `json:"kind"`
+	Ref   string `json:"ref"`
+	Label string `json:"label,omitempty"`
+}
+
+func NormalizeRecordReferences(refs []RecordReference) []RecordReference {
+	out := make([]RecordReference, 0, len(refs))
+	for _, ref := range refs {
+		kind := strings.TrimSpace(ref.Kind)
+		value := strings.TrimSpace(ref.Ref)
+		if kind == "" || value == "" {
+			continue
+		}
+		out = append(out, RecordReference{Kind: kind, Ref: value, Label: strings.TrimSpace(ref.Label)})
+	}
+	return out
+}
+
 // PendingDecisionRecord persists broker decisions that are awaiting callback resolution.
 type PendingDecisionRecord struct {
 	ID                string
@@ -421,6 +514,8 @@ type PendingDecisionRecord struct {
 	MessageID         int64
 	Prompt            string
 	Details           string
+	Rationale         string
+	ArtifactRefs      []RecordReference
 	ChoicesJSON       string
 	DefaultChoice     string
 	TimeoutNanos      int64
@@ -703,6 +798,105 @@ func NormalizeToolExposure(exposure ToolExposure) ToolExposure {
 		exposure.UpdatedAt = time.Now().UTC()
 	}
 	return exposure
+}
+
+func NormalizeToolInstallStatus(status ToolInstallStatus) ToolInstallStatus {
+	switch ToolInstallStatus(strings.TrimSpace(string(status))) {
+	case ToolInstallStatusPending:
+		return ToolInstallStatusPending
+	case ToolInstallStatusInstalled:
+		return ToolInstallStatusInstalled
+	case ToolInstallStatusVerified:
+		return ToolInstallStatusVerified
+	case ToolInstallStatusFailed:
+		return ToolInstallStatusFailed
+	case ToolInstallStatusStale:
+		return ToolInstallStatusStale
+	default:
+		return ""
+	}
+}
+
+func NormalizeToolProbeStatus(status ToolProbeStatus) ToolProbeStatus {
+	switch ToolProbeStatus(strings.TrimSpace(string(status))) {
+	case ToolProbeStatusPassed:
+		return ToolProbeStatusPassed
+	case ToolProbeStatusFailed:
+		return ToolProbeStatusFailed
+	default:
+		return ""
+	}
+}
+
+func NormalizeToolAuditStatus(status ToolAuditStatus) ToolAuditStatus {
+	switch ToolAuditStatus(strings.TrimSpace(string(status))) {
+	case ToolAuditStatusPassed:
+		return ToolAuditStatusPassed
+	case ToolAuditStatusFailed:
+		return ToolAuditStatusFailed
+	default:
+		return ""
+	}
+}
+
+func NormalizeToolInstallRecord(record ToolInstallRecord) ToolInstallRecord {
+	record.ToolName = strings.TrimSpace(record.ToolName)
+	record.Installer = strings.TrimSpace(record.Installer)
+	record.InstallRef = strings.TrimSpace(record.InstallRef)
+	record.ProbeOutput = strings.TrimSpace(record.ProbeOutput)
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.BaselineFingerprint = strings.TrimSpace(record.BaselineFingerprint)
+	record.CurrentFingerprint = strings.TrimSpace(record.CurrentFingerprint)
+	record.StaleReason = strings.TrimSpace(record.StaleReason)
+	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
+	record.Status = NormalizeToolInstallStatus(record.Status)
+	record.ProbeStatus = NormalizeToolProbeStatus(record.ProbeStatus)
+	if record.CreatedAt.IsZero() && record.ToolName != "" {
+		record.CreatedAt = time.Now().UTC()
+	}
+	if record.UpdatedAt.IsZero() && record.ToolName != "" {
+		record.UpdatedAt = time.Now().UTC()
+	}
+	return record
+}
+
+func NormalizeToolAuditRecord(record ToolAuditRecord) ToolAuditRecord {
+	record.ToolName = strings.TrimSpace(record.ToolName)
+	record.Status = NormalizeToolAuditStatus(record.Status)
+	record.AuditOutput = strings.TrimSpace(record.AuditOutput)
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.BaselineFingerprint = strings.TrimSpace(record.BaselineFingerprint)
+	record.CurrentFingerprint = strings.TrimSpace(record.CurrentFingerprint)
+	record.StaleReason = strings.TrimSpace(record.StaleReason)
+	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
+	if record.ConsecutiveFailures < 0 {
+		record.ConsecutiveFailures = 0
+	}
+	if record.CreatedAt.IsZero() && record.ToolName != "" {
+		record.CreatedAt = time.Now().UTC()
+	}
+	if record.UpdatedAt.IsZero() && record.ToolName != "" {
+		record.UpdatedAt = time.Now().UTC()
+	}
+	return record
+}
+
+func NormalizeToolProbeRecord(record ToolProbeRecord) ToolProbeRecord {
+	record.ToolName = strings.TrimSpace(record.ToolName)
+	record.Status = NormalizeToolProbeStatus(record.Status)
+	record.ProbeOutput = strings.TrimSpace(record.ProbeOutput)
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
+	if record.ConsecutiveFailures < 0 {
+		record.ConsecutiveFailures = 0
+	}
+	if record.CreatedAt.IsZero() && record.ToolName != "" {
+		record.CreatedAt = time.Now().UTC()
+	}
+	if record.UpdatedAt.IsZero() && record.ToolName != "" {
+		record.UpdatedAt = time.Now().UTC()
+	}
+	return record
 }
 
 func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthorizationState {

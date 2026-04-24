@@ -25,7 +25,7 @@ import (
 const (
 	maxCodexResponseBytes        = 1 << 20 // 1 MiB
 	codexRefreshClientID         = "app_EMoamEEZ73f0CkXaXp7hrann"
-	defaultCodexModel            = "gpt-5.4"
+	defaultCodexModel            = "gpt-5.5"
 	defaultCodexPrompt           = "You are Codex, a coding agent. Help the user directly and use tools when needed."
 	maxCodexContinuations        = 3
 	defaultCodexTransportRetries = 1

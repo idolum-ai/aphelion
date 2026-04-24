@@ -31,6 +31,8 @@ const (
 	ExecutionEventToolProposalReviewed = "tool.proposal.reviewed"
 	ExecutionEventToolRegistered       = "tool.registered"
 	ExecutionEventToolExposureChanged  = "tool.exposure.changed"
+	ExecutionEventToolInstallUpdated   = "tool.install.updated"
+	ExecutionEventToolAuditUpdated     = "tool.audit.updated"
 
 	ExecutionEventDeliveryProgressSent   = "delivery.progress.sent"
 	ExecutionEventDeliveryProgressEdited = "delivery.progress.edited"

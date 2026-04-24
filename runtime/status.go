@@ -160,6 +160,13 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 			snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, stale)
 		}
 	}
+	if r != nil && r.store != nil {
+		if toolRows, err := r.toolLifecycleStatusSnapshot(20); err != nil {
+			return core.ChatStatusSnapshot{}, err
+		} else {
+			snapshot.ToolLifecycle = toolRows
+		}
+	}
 	return snapshot, nil
 }
 
@@ -1192,8 +1199,31 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 		}
 		parts = append(parts, "active="+strconv.FormatBool(active))
 		return strings.TrimSpace(strings.Join(parts, " "))
+	case core.ExecutionEventToolInstallUpdated:
+		parts := make([]string, 0, 5)
+		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
+			parts = append(parts, "tool_name="+toolName)
+		}
+		if status := firstNonEmpty(strings.TrimSpace(payloadString(payload, "status")), strings.TrimSpace(eventStatus)); status != "" {
+			parts = append(parts, "status="+status)
+		}
+		if probeStatus := strings.TrimSpace(payloadString(payload, "probe_status")); probeStatus != "" {
+			parts = append(parts, "probe_status="+probeStatus)
+		}
+		if installRef := strings.TrimSpace(payloadString(payload, "install_ref")); installRef != "" {
+			parts = append(parts, "install_ref="+installRef)
+		}
+		return strings.TrimSpace(strings.Join(parts, " "))
+	case core.ExecutionEventToolAuditUpdated:
+		parts := make([]string, 0, 3)
+		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
+			parts = append(parts, "tool_name="+toolName)
+		}
+		if status := firstNonEmpty(strings.TrimSpace(payloadString(payload, "status")), strings.TrimSpace(eventStatus)); status != "" {
+			parts = append(parts, "status="+status)
+		}
+		return strings.TrimSpace(strings.Join(parts, " "))
 	}
-
 	if len(payload) == 0 {
 		return ""
 	}
@@ -1400,6 +1430,64 @@ func renderContinuationSummary(state session.ContinuationState) string {
 		parts = append(parts, "blocked_reason="+reason)
 	}
 	return strings.Join(parts, " ")
+}
+
+func (r *Runtime) toolLifecycleStatusSnapshot(limit int) ([]core.ToolLifecycleStatusSnapshot, error) {
+	if r == nil || r.store == nil {
+		return nil, nil
+	}
+	records, err := r.store.ToolInstallRecords("", limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.ToolLifecycleStatusSnapshot, 0, len(records))
+	for _, record := range records {
+		probe, _, err := r.store.ToolProbeRecord(record.ToolName)
+		if err != nil {
+			return nil, err
+		}
+		audit, _, err := r.store.ToolAuditRecord(record.ToolName)
+		if err != nil {
+			return nil, err
+		}
+		traceStage := ""
+		traceSummary := ""
+		traceArtifactCount := 0
+		traceUpdatedAt := time.Time{}
+		considerTrace := func(stage string, updatedAt time.Time, rationale string, refs []session.RecordReference) {
+			rationale = strings.TrimSpace(rationale)
+			if updatedAt.IsZero() || rationale == "" {
+				return
+			}
+			if traceUpdatedAt.IsZero() || updatedAt.After(traceUpdatedAt) {
+				traceStage = strings.TrimSpace(stage)
+				traceSummary = rationale
+				traceArtifactCount = len(session.NormalizeRecordReferences(refs))
+				traceUpdatedAt = updatedAt
+			}
+		}
+		considerTrace("install", record.UpdatedAt, record.Rationale, record.ArtifactRefs)
+		considerTrace("probe", probe.UpdatedAt, probe.Rationale, probe.ArtifactRefs)
+		considerTrace("audit", audit.UpdatedAt, audit.Rationale, audit.ArtifactRefs)
+		out = append(out, core.ToolLifecycleStatusSnapshot{
+			ToolName:            record.ToolName,
+			InstallStatus:       strings.TrimSpace(string(record.Status)),
+			ProbeStatus:         strings.TrimSpace(string(probe.Status)),
+			AuditStatus:         strings.TrimSpace(string(audit.Status)),
+			InstallRef:          strings.TrimSpace(record.InstallRef),
+			BaselineFingerprint: strings.TrimSpace(record.BaselineFingerprint),
+			CurrentFingerprint:  strings.TrimSpace(record.CurrentFingerprint),
+			StaleReason:         strings.TrimSpace(record.StaleReason),
+			TraceStage:          traceStage,
+			TraceSummary:        traceSummary,
+			TraceArtifactCount:  traceArtifactCount,
+			InstalledAt:         record.InstalledAt,
+			LastProbedAt:        probe.ProbedAt,
+			AuditedAt:           audit.AuditedAt,
+			AttestedAt:          record.AttestedAt,
+		})
+	}
+	return out, nil
 }
 
 func statusAge(now time.Time, preferred time.Time, fallback time.Time) time.Duration {
