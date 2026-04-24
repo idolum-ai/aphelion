@@ -208,6 +208,39 @@ This should not be implicit inside tool registration.
 - `rollback_plan`
 - `status`
 
+### Traceability annotations
+
+Decision and lifecycle records should carry a compact traceability shape:
+
+- `rationale`: short human or machine explanation for why this transition happened
+- `artifact_refs`: typed references with `{kind, ref, label?}`
+
+This should be attached at least to:
+
+- pending/install decisions
+- install records
+- probe records
+- audit records
+
+Reference kinds should stay open-ended but start with durable things we already have,
+for example:
+
+- `file_path`
+- `git_commit`
+- `artifact_id`
+- `review_event`
+- `execution_event`
+- `telegram_message`
+- `session_message`
+
+Message references should only be stored when there is a durable identifier already
+available in canonical state. If the system only has ephemeral conversational context
+and no durable message/store handle, it should fall back to inline `rationale` text
+instead of pretending the message is traceable.
+
+This keeps decision provenance legible without forcing every stage record to become a
+full commentary blob.
+
 ### Why separate install from registration?
 
 Because these are different truths:

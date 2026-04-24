@@ -508,15 +508,20 @@ func TestPendingDecisionRoundTripAndReload(t *testing.T) {
 	}
 
 	record := PendingDecisionRecord{
-		ID:                "decision-abc123",
-		Sequence:          42,
-		OwnerKey:          "chat:7:sender:99",
-		Kind:              "proposal_approval",
-		ChatID:            7,
-		SenderID:          99,
-		MessageID:         1001,
-		Prompt:            "Approve this proposal?",
-		Details:           "Install one dependency.",
+		ID:        "decision-abc123",
+		Sequence:  42,
+		OwnerKey:  "chat:7:sender:99",
+		Kind:      "proposal_approval",
+		ChatID:    7,
+		SenderID:  99,
+		MessageID: 1001,
+		Prompt:    "Approve this proposal?",
+		Details:   "Install one dependency.",
+		Rationale: "Dependency install is needed before the tool can be audited and verified.",
+		ArtifactRefs: []RecordReference{
+			{Kind: "file_path", Ref: "docs/architecture/organic-agent-owned-tools-proposal.md", Label: "design doc"},
+			{Kind: "telegram_message", Ref: "chat:7:message:1001", Label: "operator request"},
+		},
 		ChoicesJSON:       `[{"id":"approve","label":"Approve"},{"id":"deny","label":"Deny"}]`,
 		DefaultChoice:     "deny",
 		TimeoutNanos:      int64((30 * time.Second).Nanoseconds()),
@@ -541,6 +546,12 @@ func TestPendingDecisionRoundTripAndReload(t *testing.T) {
 	if pending[0].DeliveryMessageID != 5002 {
 		t.Fatalf("DeliveryMessageID = %d, want 5002", pending[0].DeliveryMessageID)
 	}
+	if pending[0].Rationale != record.Rationale {
+		t.Fatalf("Rationale = %q, want %q", pending[0].Rationale, record.Rationale)
+	}
+	if len(pending[0].ArtifactRefs) != 2 || pending[0].ArtifactRefs[0].Kind != "file_path" || pending[0].ArtifactRefs[1].Ref != "chat:7:message:1001" {
+		t.Fatalf("ArtifactRefs = %#v, want file_path + telegram_message refs", pending[0].ArtifactRefs)
+	}
 
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close() err = %v", err)
@@ -557,6 +568,9 @@ func TestPendingDecisionRoundTripAndReload(t *testing.T) {
 	}
 	if len(pending) != 1 || pending[0].ID != "decision-abc123" {
 		t.Fatalf("pending after reload = %#v, want decision-abc123", pending)
+	}
+	if pending[0].Rationale != record.Rationale || len(pending[0].ArtifactRefs) != 2 {
+		t.Fatalf("pending after reload = %#v, want rationale + two artifact refs", pending[0])
 	}
 
 	if err := store.DeletePendingDecision("decision-abc123"); err != nil {

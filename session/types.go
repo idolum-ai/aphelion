@@ -472,6 +472,25 @@ type ExecutionEventInput struct {
 	CreatedAt   time.Time
 }
 
+type RecordReference struct {
+	Kind  string `json:"kind"`
+	Ref   string `json:"ref"`
+	Label string `json:"label,omitempty"`
+}
+
+func NormalizeRecordReferences(refs []RecordReference) []RecordReference {
+	out := make([]RecordReference, 0, len(refs))
+	for _, ref := range refs {
+		kind := strings.TrimSpace(ref.Kind)
+		value := strings.TrimSpace(ref.Ref)
+		if kind == "" || value == "" {
+			continue
+		}
+		out = append(out, RecordReference{Kind: kind, Ref: value, Label: strings.TrimSpace(ref.Label)})
+	}
+	return out
+}
+
 // PendingDecisionRecord persists broker decisions that are awaiting callback resolution.
 type PendingDecisionRecord struct {
 	ID                string
@@ -483,6 +502,8 @@ type PendingDecisionRecord struct {
 	MessageID         int64
 	Prompt            string
 	Details           string
+	Rationale         string
+	ArtifactRefs      []RecordReference
 	ChoicesJSON       string
 	DefaultChoice     string
 	TimeoutNanos      int64

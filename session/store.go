@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 31
+	schemaVersion                       = 32
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -285,6 +285,8 @@ func (s *SQLiteStore) init() error {
 			message_id INTEGER NOT NULL DEFAULT 0,
 			prompt TEXT NOT NULL DEFAULT '',
 			details TEXT NOT NULL DEFAULT '',
+			rationale TEXT NOT NULL DEFAULT '',
+			artifact_refs_json TEXT NOT NULL DEFAULT '[]',
 			choices_json TEXT NOT NULL DEFAULT '[]',
 			default_choice TEXT NOT NULL DEFAULT '',
 			timeout_ns INTEGER NOT NULL DEFAULT 0,
@@ -3083,6 +3085,30 @@ func (s *SQLiteStore) MarkReviewDelivered(ids []int64) error {
 	return nil
 }
 
+func encodeRecordReferences(refs []RecordReference) string {
+	normalized := NormalizeRecordReferences(refs)
+	if len(normalized) == 0 {
+		return "[]"
+	}
+	buf, err := json.Marshal(normalized)
+	if err != nil {
+		return "[]"
+	}
+	return string(buf)
+}
+
+func decodeRecordReferences(raw string) []RecordReference {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var refs []RecordReference
+	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
+		return nil
+	}
+	return NormalizeRecordReferences(refs)
+}
+
 func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error {
 	record.ID = strings.TrimSpace(record.ID)
 	if record.ID == "" {
@@ -3105,6 +3131,8 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 	record.Kind = strings.TrimSpace(record.Kind)
 	record.Prompt = strings.TrimSpace(record.Prompt)
 	record.Details = strings.TrimSpace(record.Details)
+	record.Rationale = strings.TrimSpace(record.Rationale)
+	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
 	record.DefaultChoice = strings.TrimSpace(record.DefaultChoice)
 	choicesJSON := strings.TrimSpace(record.ChoicesJSON)
 	if choicesJSON == "" {
@@ -3114,9 +3142,9 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 	_, err := s.db.Exec(`
 		INSERT INTO pending_decisions(
 			decision_id, decision_seq, owner_key, kind, chat_id, sender_id, message_id,
-			prompt, details, choices_json, default_choice, timeout_ns, delivery_message_id,
+			prompt, details, rationale, artifact_refs_json, choices_json, default_choice, timeout_ns, delivery_message_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(decision_id) DO UPDATE SET
 			decision_seq = excluded.decision_seq,
 			owner_key = excluded.owner_key,
@@ -3126,6 +3154,8 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 			message_id = excluded.message_id,
 			prompt = excluded.prompt,
 			details = excluded.details,
+			rationale = excluded.rationale,
+			artifact_refs_json = excluded.artifact_refs_json,
 			choices_json = excluded.choices_json,
 			default_choice = excluded.default_choice,
 			timeout_ns = excluded.timeout_ns,
@@ -3141,6 +3171,8 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 		record.MessageID,
 		record.Prompt,
 		record.Details,
+		record.Rationale,
+		encodeRecordReferences(record.ArtifactRefs),
 		choicesJSON,
 		record.DefaultChoice,
 		record.TimeoutNanos,
@@ -3197,7 +3229,7 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			decision_id, decision_seq, owner_key, kind, chat_id, sender_id, message_id,
-			prompt, details, choices_json, default_choice, timeout_ns, delivery_message_id,
+			prompt, details, rationale, artifact_refs_json, choices_json, default_choice, timeout_ns, delivery_message_id,
 			created_at, updated_at
 		FROM pending_decisions
 		ORDER BY decision_seq ASC, decision_id ASC
@@ -3210,14 +3242,15 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 	records := make([]PendingDecisionRecord, 0)
 	for rows.Next() {
 		var (
-			record       PendingDecisionRecord
-			sequenceRaw  int64
-			createdAtRaw string
-			updatedAtRaw string
+			record          PendingDecisionRecord
+			sequenceRaw     int64
+			artifactRefsRaw string
+			createdAtRaw    string
+			updatedAtRaw    string
 		)
 		if err := rows.Scan(
 			&record.ID, &sequenceRaw, &record.OwnerKey, &record.Kind, &record.ChatID, &record.SenderID, &record.MessageID,
-			&record.Prompt, &record.Details, &record.ChoicesJSON, &record.DefaultChoice, &record.TimeoutNanos, &record.DeliveryMessageID,
+			&record.Prompt, &record.Details, &record.Rationale, &artifactRefsRaw, &record.ChoicesJSON, &record.DefaultChoice, &record.TimeoutNanos, &record.DeliveryMessageID,
 			&createdAtRaw, &updatedAtRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan pending decision: %w", err)
@@ -3229,6 +3262,8 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 		record.Details = strings.TrimSpace(record.Details)
 		record.OwnerKey = strings.TrimSpace(record.OwnerKey)
 		record.Kind = strings.TrimSpace(record.Kind)
+		record.Rationale = strings.TrimSpace(record.Rationale)
+		record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
 		record.DefaultChoice = strings.TrimSpace(record.DefaultChoice)
 		record.ChoicesJSON = strings.TrimSpace(record.ChoicesJSON)
 		if record.ChoicesJSON == "" {
@@ -5219,6 +5254,8 @@ func applyMigrations(tx *sql.Tx) error {
 		{table: "tool_probe_records", name: "last_failure_at", typ: "TEXT"},
 		{table: "tool_audit_records", name: "consecutive_failures", typ: "INTEGER NOT NULL DEFAULT 0"},
 		{table: "tool_audit_records", name: "last_failure_at", typ: "TEXT"},
+		{table: "pending_decisions", name: "rationale", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "pending_decisions", name: "artifact_refs_json", typ: "TEXT NOT NULL DEFAULT '[]'"},
 	} {
 		if err := ensureTableColumn(tx, spec.table, spec.name, spec.typ); err != nil {
 			return err
