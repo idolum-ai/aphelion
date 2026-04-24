@@ -1,0 +1,200 @@
+//go:build linux
+
+package tool
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// ExternalToolManifest is the minimal core-readable record for an agent-owned
+// external tool. This slice only loads and validates manifests; execution
+// wiring comes later.
+type ExternalToolManifest struct {
+	Name        string                          `json:"name"`
+	Owner       string                          `json:"owner"`
+	Version     string                          `json:"version,omitempty"`
+	Execution   ExternalToolManifestExecution   `json:"execution"`
+	IO          ExternalToolManifestIO          `json:"io"`
+	Constraints ExternalToolManifestConstraints `json:"constraints,omitempty"`
+	Exposure    ExternalToolManifestExposure    `json:"exposure,omitempty"`
+	Probe       ExternalToolManifestProbe       `json:"probe,omitempty"`
+	Provenance  ExternalToolManifestProvenance  `json:"provenance,omitempty"`
+}
+
+type ExternalToolManifestExecution struct {
+	Mode           string `json:"mode"`
+	Entry          string `json:"entry"`
+	Workdir        string `json:"workdir,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+}
+
+type ExternalToolManifestIO struct {
+	InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
+}
+
+type ExternalToolManifestConstraints struct {
+	Network           string   `json:"network,omitempty"`
+	NetworkTargets    []string `json:"network_targets,omitempty"`
+	Filesystem        string   `json:"filesystem,omitempty"`
+	MaxMemoryMB       int      `json:"max_memory_mb,omitempty"`
+	MaxRuntimeSeconds int      `json:"max_runtime_seconds,omitempty"`
+}
+
+type ExternalToolManifestExposure struct {
+	Principals           []string `json:"principals,omitempty"`
+	RequiresRatification bool     `json:"requires_ratification,omitempty"`
+}
+
+type ExternalToolManifestProbe struct {
+	Command                []string `json:"command,omitempty"`
+	ExpectedOutputContains string   `json:"expected_output_contains,omitempty"`
+}
+
+type ExternalToolManifestProvenance struct {
+	ProposalID   string `json:"proposal_id,omitempty"`
+	RegisteredAt string `json:"registered_at,omitempty"`
+	RegisteredBy string `json:"registered_by,omitempty"`
+}
+
+func NormalizeExternalToolManifest(m ExternalToolManifest) ExternalToolManifest {
+	m.Name = strings.TrimSpace(m.Name)
+	m.Owner = strings.TrimSpace(m.Owner)
+	m.Version = strings.TrimSpace(m.Version)
+	m.Execution.Mode = strings.TrimSpace(strings.ToLower(m.Execution.Mode))
+	m.Execution.Entry = strings.TrimSpace(m.Execution.Entry)
+	m.Execution.Workdir = strings.TrimSpace(m.Execution.Workdir)
+	m.Constraints.Network = strings.TrimSpace(strings.ToLower(m.Constraints.Network))
+	m.Constraints.Filesystem = strings.TrimSpace(strings.ToLower(m.Constraints.Filesystem))
+	m.Provenance.ProposalID = strings.TrimSpace(m.Provenance.ProposalID)
+	m.Provenance.RegisteredAt = strings.TrimSpace(m.Provenance.RegisteredAt)
+	m.Provenance.RegisteredBy = strings.TrimSpace(m.Provenance.RegisteredBy)
+	m.Exposure.Principals = normalizeStringList(m.Exposure.Principals)
+	m.Constraints.NetworkTargets = normalizeStringList(m.Constraints.NetworkTargets)
+	if len(m.Probe.Command) > 0 {
+		m.Probe.Command = normalizeStringList(m.Probe.Command)
+	}
+	return m
+}
+
+func validateExternalToolManifest(m ExternalToolManifest) error {
+	if m.Name == "" {
+		return fmt.Errorf("external tool manifest name is required")
+	}
+	if m.Owner == "" {
+		return fmt.Errorf("external tool manifest owner is required")
+	}
+	switch m.Execution.Mode {
+	case "process", "subprocess", "container", "workspace_runner":
+		// ok
+	case "":
+		return fmt.Errorf("external tool manifest execution.mode is required")
+	default:
+		return fmt.Errorf("external tool manifest execution.mode %q is not supported", m.Execution.Mode)
+	}
+	if m.Execution.Entry == "" {
+		return fmt.Errorf("external tool manifest execution.entry is required")
+	}
+	if len(m.IO.InputSchema) > 0 && !json.Valid(m.IO.InputSchema) {
+		return fmt.Errorf("external tool manifest io.input_schema must be valid json")
+	}
+	if len(m.IO.OutputSchema) > 0 && !json.Valid(m.IO.OutputSchema) {
+		return fmt.Errorf("external tool manifest io.output_schema must be valid json")
+	}
+	switch m.Constraints.Network {
+	case "", "allowlist", "denylist", "none":
+	default:
+		return fmt.Errorf("external tool manifest constraints.network %q is not supported", m.Constraints.Network)
+	}
+	switch m.Constraints.Filesystem {
+	case "", "none", "scratch":
+	default:
+		return fmt.Errorf("external tool manifest constraints.filesystem %q is not supported", m.Constraints.Filesystem)
+	}
+	return nil
+}
+
+func LoadExternalToolManifest(path string) (ExternalToolManifest, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ExternalToolManifest{}, fmt.Errorf("external tool manifest path is required")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ExternalToolManifest{}, fmt.Errorf("read external tool manifest: %w", err)
+	}
+	var manifest ExternalToolManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return ExternalToolManifest{}, fmt.Errorf("decode external tool manifest: %w", err)
+	}
+	manifest = NormalizeExternalToolManifest(manifest)
+	if err := validateExternalToolManifest(manifest); err != nil {
+		return ExternalToolManifest{}, err
+	}
+	return manifest, nil
+}
+
+func LoadExternalToolManifestDir(dir string) ([]ExternalToolManifest, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return nil, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read external tool manifest dir: %w", err)
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if !strings.HasSuffix(strings.ToLower(name), ".json") {
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, name))
+	}
+	sort.Strings(paths)
+	out := make([]ExternalToolManifest, 0, len(paths))
+	seen := make(map[string]string, len(paths))
+	for _, path := range paths {
+		manifest, err := LoadExternalToolManifest(path)
+		if err != nil {
+			return nil, err
+		}
+		if prior, exists := seen[manifest.Name]; exists {
+			return nil, fmt.Errorf("duplicate external tool manifest name %q in %s and %s", manifest.Name, prior, path)
+		}
+		seen[manifest.Name] = path
+		out = append(out, manifest)
+	}
+	return out, nil
+}
+
+func normalizeStringList(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
