@@ -46,6 +46,7 @@ type Registry struct {
 	searchWeb                        searchWebProvider
 	searchWebState                   *searchWebRuntimeState
 	externalManifests                []ExternalToolManifest
+	externalExecutor                 ExternalToolExecutor
 }
 
 type execInput struct {
@@ -260,10 +261,11 @@ type durableAgentInput struct {
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
 	return &Registry{
-		workspace:      workspace,
-		timeout:        timeout,
-		maxOutputBytes: defaultMaxOutputBytes,
-		searchWebState: newSearchWebRuntimeState(),
+		workspace:        workspace,
+		timeout:          timeout,
+		maxOutputBytes:   defaultMaxOutputBytes,
+		searchWebState:   newSearchWebRuntimeState(),
+		externalExecutor: defaultExternalToolExecutor{},
 	}
 }
 
@@ -323,6 +325,11 @@ func (r *Registry) WithSemanticEngine(engine *memstore.SemanticEngine) *Registry
 
 func (r *Registry) WithDurableAgentBootstrapLLM(bootstrap core.NodeLLMBootstrap) *Registry {
 	r.durableAgentBootstrapLLM = core.NormalizeNodeLLMBootstrap(bootstrap)
+	return r
+}
+
+func (r *Registry) WithExternalToolExecutor(executor ExternalToolExecutor) *Registry {
+	r.externalExecutor = executor
 	return r
 }
 
@@ -812,6 +819,9 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.durableAgent(ctx, input, p, key, scope)
 	default:
 		if manifest, ok := r.externalManifestByName(name); ok {
+			if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) {
+				return r.externalExecutor.Execute(ctx, manifest, input, scope, r.maxOutputBytes)
+			}
 			return "", fmt.Errorf("external tool %q is present in the manifest but not yet executable in core (owner=%s)", manifest.Name, manifest.Owner)
 		}
 		return "", fmt.Errorf("unknown tool %q", name)

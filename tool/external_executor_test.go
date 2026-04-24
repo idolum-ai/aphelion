@@ -1,0 +1,100 @@
+//go:build linux
+
+package tool
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	script := filepath.Join(workspace, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\nread INPUT\necho '{\"summary\":\"ok\",\"seen\":true}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	registry := NewRegistry(workspace, time.Second)
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		IO: ExternalToolManifestIO{
+			InputSchema:  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
+			OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"},"seen":{"type":"boolean"}},"required":["summary"]}`),
+		},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+
+	out, err := registry.Execute(context.Background(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	if err != nil {
+		t.Fatalf("Execute() err = %v", err)
+	}
+	if out != `{"summary":"ok","seen":true}` {
+		t.Fatalf("out = %q, want structured json output", out)
+	}
+}
+
+func TestExternalProcessExecutorRejectsInvalidInputAgainstSchema(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	script := filepath.Join(workspace, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\necho '{\"summary\":\"ok\"}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	registry := NewRegistry(workspace, time.Second)
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`)},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+
+	_, err = registry.Execute(context.Background(), "browse_page", json.RawMessage(`{"goal":"summarize"}`))
+	if err == nil {
+		t.Fatal("Execute() err = nil, want input-schema rejection")
+	}
+	if !strings.Contains(err.Error(), `missing required field "url"`) {
+		t.Fatalf("err = %v, want input-schema rejection", err)
+	}
+}
+
+func TestExternalProcessExecutorRejectsInvalidOutputAgainstSchema(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	script := filepath.Join(workspace, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\necho '{\"summary\":7}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	registry := NewRegistry(workspace, time.Second)
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`)},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+
+	_, err = registry.Execute(context.Background(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	if err == nil {
+		t.Fatal("Execute() err = nil, want output-schema rejection")
+	}
+	if !strings.Contains(err.Error(), "output.summary must be a string") {
+		t.Fatalf("err = %v, want output-schema rejection", err)
+	}
+}
