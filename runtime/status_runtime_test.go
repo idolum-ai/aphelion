@@ -828,16 +828,22 @@ func TestChatStatusSnapshotIncludesCanonicalToolLifecycleState(t *testing.T) {
 	lastProbedAt := time.Now().UTC().Add(-1 * time.Minute)
 	auditedAt := time.Now().UTC()
 	if _, err := store.UpsertToolInstallRecord(session.ToolInstallRecord{
-		ToolName:     "browse_page",
-		Installer:    "aphelion",
-		InstallRef:   "workspace:tooling-v3",
-		Status:       session.ToolInstallStatusVerified,
-		ProbeStatus:  session.ToolProbeStatusPassed,
-		InstalledAt:  installedAt,
-		LastProbedAt: lastProbedAt,
-		AttestedAt:   auditedAt,
+		ToolName:    "browse_page",
+		Installer:   "aphelion",
+		InstallRef:  "workspace:tooling-v3",
+		Status:      session.ToolInstallStatusVerified,
+		InstalledAt: installedAt,
+		AttestedAt:  auditedAt,
 	}); err != nil {
 		t.Fatalf("UpsertToolInstallRecord() err = %v", err)
+	}
+	if _, err := store.UpsertToolProbeRecord(session.ToolProbeRecord{
+		ToolName:    "browse_page",
+		Status:      session.ToolProbeStatusPassed,
+		ProbeOutput: "stdout: probe ok",
+		ProbedAt:    lastProbedAt,
+	}); err != nil {
+		t.Fatalf("UpsertToolProbeRecord() err = %v", err)
 	}
 	if _, err := store.UpsertToolAuditRecord(session.ToolAuditRecord{
 		ToolName:    "browse_page",

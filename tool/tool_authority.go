@@ -77,6 +77,11 @@ func (r *Registry) toolAuthority(ctx context.Context, input json.RawMessage, p p
 		return r.toolAuthorityAuditList(in)
 	case "probe_run":
 		return r.toolAuthorityProbeRun(ctx, in, p, key)
+	case "probe_show":
+		return r.toolAuthorityProbeShow(in)
+	case "probe_list":
+		return r.toolAuthorityProbeList(in)
+		return r.toolAuthorityProbeRun(ctx, in, p, key)
 	case "access_check":
 		return r.toolAuthorityAccessCheck(in)
 	default:
@@ -547,6 +552,14 @@ func (r *Registry) toolAuthorityInstallSet(in toolAuthorityInput, actor principa
 	if probeStatus != "" {
 		record.ProbeStatus = probeStatus
 		record.LastProbedAt = now
+		if _, err := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{
+			ToolName:    manifest.Name,
+			Status:      probeStatus,
+			ProbeOutput: firstNonEmpty(strings.TrimSpace(in.ProbeOutput), record.ProbeOutput),
+			ProbedAt:    now,
+		}); err != nil {
+			return "", err
+		}
 	}
 	switch status {
 	case session.ToolInstallStatusInstalled:
@@ -560,14 +573,18 @@ func (r *Registry) toolAuthorityInstallSet(in toolAuthorityInput, actor principa
 		if record.InstalledAt.IsZero() {
 			record.InstalledAt = now
 		}
-		if record.ProbeStatus != session.ToolProbeStatusPassed || record.LastProbedAt.IsZero() {
+		probe, ok, err := r.store.ToolProbeRecord(manifest.Name)
+		if err != nil {
+			return "", err
+		}
+		if !ok || probe.Status != session.ToolProbeStatusPassed || probe.ProbedAt.IsZero() || (!record.InstalledAt.IsZero() && probe.ProbedAt.Before(record.InstalledAt)) {
 			return "", fmt.Errorf("tool_authority install_set verified status requires probe_status=passed and a current probe record")
 		}
 		audit, ok, err := r.store.ToolAuditRecord(manifest.Name)
 		if err != nil {
 			return "", err
 		}
-		if !ok || audit.Status != session.ToolAuditStatusPassed || audit.AuditedAt.IsZero() {
+		if !ok || audit.Status != session.ToolAuditStatusPassed || audit.AuditedAt.IsZero() || (!record.InstalledAt.IsZero() && audit.AuditedAt.Before(record.InstalledAt)) {
 			return "", fmt.Errorf("tool_authority install_set verified status requires a passed import audit")
 		}
 		record.AttestedAt = now
@@ -813,6 +830,9 @@ func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityIn
 	record.LastProbedAt = now
 	if err != nil {
 		record.ProbeStatus = session.ToolProbeStatusFailed
+		if _, saveProbeErr := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusFailed, ProbeOutput: probeOutput, ProbedAt: now}); saveProbeErr != nil {
+			return "", saveProbeErr
+		}
 		if record.Status == session.ToolInstallStatusVerified {
 			record.Status = session.ToolInstallStatusStale
 		} else {
@@ -835,6 +855,9 @@ func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityIn
 		return "", err
 	}
 	record.ProbeStatus = session.ToolProbeStatusPassed
+	if _, err := r.store.UpsertToolProbeRecord(session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusPassed, ProbeOutput: probeOutput, ProbedAt: now}); err != nil {
+		return "", err
+	}
 	record.UpdatedAt = now
 	stored, err := r.store.UpsertToolInstallRecord(record)
 	if err != nil {
@@ -903,6 +926,37 @@ func (r *Registry) runExternalManifestProbe(ctx context.Context, manifest Extern
 		}
 	}
 	return output, nil
+}
+
+func (r *Registry) toolAuthorityProbeShow(in toolAuthorityInput) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority probe_show requires tool_name")
+	}
+	record, ok, err := r.store.ToolProbeRecord(toolName)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("tool probe record %q not found", toolName)
+	}
+	return renderToolProbeRecord("[TOOL_PROBE]", record), nil
+}
+
+func (r *Registry) toolAuthorityProbeList(in toolAuthorityInput) (string, error) {
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	status := session.NormalizeToolProbeStatus(session.ToolProbeStatus(in.ProbeStatus))
+	if strings.TrimSpace(in.ProbeStatus) != "" && status == "" {
+		return "", fmt.Errorf("tool_authority probe_list probe_status must be passed or failed")
+	}
+	records, err := r.store.ToolProbeRecords(status, limit)
+	if err != nil {
+		return "", err
+	}
+	return renderToolProbeRecordList(records), nil
 }
 
 func (r *Registry) toolAuthorityAccessCheck(in toolAuthorityInput) (string, error) {
@@ -1000,7 +1054,7 @@ func renderToolAuthorityHelp() string {
 		"- proposal_submit | proposal_show | proposal_list | proposal_review | proposal_ratify | proposal_override",
 		"- register | registered_show | registered_list",
 		"- exposure_set | exposure_show | exposure_list",
-		"- install_set | install_show | install_list | install_execute | audit_run | audit_show | audit_list | probe_run",
+		"- install_set | install_show | install_list | install_execute | audit_run | audit_show | audit_list | probe_run | probe_show | probe_list",
 		"- access_check",
 	}, "\n")
 }
@@ -1095,6 +1149,37 @@ func renderToolExposure(header string, record session.ToolExposure) string {
 	return b.String()
 }
 
+func renderToolProbeRecord(header string, record session.ToolProbeRecord) string {
+	record = session.NormalizeToolProbeRecord(record)
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(header))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
+	fmt.Fprintf(&b, "probe_output: %s\n", firstNonEmpty(record.ProbeOutput, "-"))
+	if !record.ProbedAt.IsZero() {
+		fmt.Fprintf(&b, "probed_at: %s\n", record.ProbedAt.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "updated_at: %s\n", record.UpdatedAt.UTC().Format(time.RFC3339))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderToolProbeRecordList(records []session.ToolProbeRecord) string {
+	var b strings.Builder
+	b.WriteString("[TOOL_PROBES]")
+	if len(records) == 0 {
+		b.WriteString("\n- (none)")
+		return b.String()
+	}
+	for _, record := range records {
+		record = session.NormalizeToolProbeRecord(record)
+		b.WriteString("\n- ")
+		b.WriteString(record.ToolName)
+		b.WriteString(" status=")
+		b.WriteString(firstNonEmpty(string(record.Status), "-"))
+	}
+	return b.String()
+}
 func renderToolAuditRecord(header string, record session.ToolAuditRecord) string {
 	record = session.NormalizeToolAuditRecord(record)
 	var b strings.Builder

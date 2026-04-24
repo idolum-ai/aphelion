@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 29
+	schemaVersion                       = 30
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -207,6 +207,14 @@ func (s *SQLiteStore) init() error {
 			installed_at TEXT,
 			last_probed_at TEXT,
 			attested_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS tool_probe_records (
+			tool_name TEXT PRIMARY KEY,
+			status TEXT NOT NULL DEFAULT '' CHECK(status IN ('', 'passed', 'failed')),
+			probe_output TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			probed_at TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS tool_audit_records (
 			tool_name TEXT PRIMARY KEY,
@@ -1861,6 +1869,129 @@ func nullableTimeRFC3339(ts time.Time) any {
 		return nil
 	}
 	return ts.UTC().Format(time.RFC3339Nano)
+}
+func (s *SQLiteStore) UpsertToolProbeRecord(record ToolProbeRecord) (ToolProbeRecord, error) {
+	record = NormalizeToolProbeRecord(record)
+	if record.ToolName == "" {
+		return ToolProbeRecord{}, fmt.Errorf("tool probe record tool_name is required")
+	}
+	now := time.Now().UTC()
+	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
+	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
+	probedAt := nullableTimeRFC3339(record.ProbedAt)
+	if _, err := s.db.Exec(`
+		INSERT INTO tool_probe_records(tool_name, status, probe_output, created_at, updated_at, probed_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(tool_name) DO UPDATE SET
+			status = excluded.status,
+			probe_output = excluded.probe_output,
+			updated_at = excluded.updated_at,
+			probed_at = excluded.probed_at
+	`, record.ToolName, string(record.Status), record.ProbeOutput, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), probedAt); err != nil {
+		return ToolProbeRecord{}, fmt.Errorf("upsert tool probe record: %w", err)
+	}
+	stored, ok, err := s.ToolProbeRecord(record.ToolName)
+	if err != nil {
+		return ToolProbeRecord{}, err
+	}
+	if !ok {
+		return ToolProbeRecord{}, fmt.Errorf("tool probe record %q not found after upsert", record.ToolName)
+	}
+	return stored, nil
+}
+
+func (s *SQLiteStore) ToolProbeRecord(toolName string) (ToolProbeRecord, bool, error) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return ToolProbeRecord{}, false, nil
+	}
+	var (
+		record       ToolProbeRecord
+		statusRaw    string
+		createdAtRaw string
+		updatedAtRaw string
+		probedAtRaw  sql.NullString
+	)
+	err := s.db.QueryRow(`SELECT tool_name, status, probe_output, created_at, updated_at, probed_at FROM tool_probe_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &createdAtRaw, &updatedAtRaw, &probedAtRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ToolProbeRecord{}, false, nil
+	}
+	if err != nil {
+		return ToolProbeRecord{}, false, fmt.Errorf("load tool probe record: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record updated_at: %w", err)
+	}
+	record.Status = NormalizeToolProbeStatus(ToolProbeStatus(statusRaw))
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	if probedAtRaw.Valid {
+		record.ProbedAt, err = parseSQLiteTime(probedAtRaw.String)
+		if err != nil {
+			return ToolProbeRecord{}, false, fmt.Errorf("parse tool probe record probed_at: %w", err)
+		}
+	}
+	return NormalizeToolProbeRecord(record), true, nil
+}
+
+func (s *SQLiteStore) ToolProbeRecords(status ToolProbeStatus, limit int) ([]ToolProbeRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	status = NormalizeToolProbeStatus(status)
+	query := `SELECT tool_name, status, probe_output, created_at, updated_at, probed_at FROM tool_probe_records`
+	args := make([]any, 0, 2)
+	if status != "" {
+		query += " WHERE status = ?"
+		args = append(args, string(status))
+	}
+	query += " ORDER BY updated_at DESC, tool_name ASC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tool probe records: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ToolProbeRecord, 0, limit)
+	for rows.Next() {
+		var (
+			record       ToolProbeRecord
+			statusRaw    string
+			createdAtRaw string
+			updatedAtRaw string
+			probedAtRaw  sql.NullString
+		)
+		if err := rows.Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &createdAtRaw, &updatedAtRaw, &probedAtRaw); err != nil {
+			return nil, fmt.Errorf("scan tool probe record: %w", err)
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool probe record created_at: %w", err)
+		}
+		updatedAt, err := parseSQLiteTime(updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool probe record updated_at: %w", err)
+		}
+		record.Status = NormalizeToolProbeStatus(ToolProbeStatus(statusRaw))
+		record.CreatedAt = createdAt
+		record.UpdatedAt = updatedAt
+		if probedAtRaw.Valid {
+			record.ProbedAt, err = parseSQLiteTime(probedAtRaw.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse tool probe record probed_at: %w", err)
+			}
+		}
+		out = append(out, NormalizeToolProbeRecord(record))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tool probe records: %w", err)
+	}
+	return out, nil
 }
 
 func (s *SQLiteStore) UpsertToolAuditRecord(record ToolAuditRecord) (ToolAuditRecord, error) {
@@ -5049,6 +5180,7 @@ func ensureSessionIdentityIndexes(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_registered_tools_state ON registered_tools(registered, updated_at, tool_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_exposures_principal ON tool_exposures(principal, active, tool_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_install_records_status ON tool_install_records(status, updated_at, tool_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_probe_records_status ON tool_probe_records(status, updated_at, tool_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_audit_records_status ON tool_audit_records(status, updated_at, tool_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,

@@ -1442,6 +1442,10 @@ func (r *Runtime) toolLifecycleStatusSnapshot(limit int) ([]core.ToolLifecycleSt
 	}
 	out := make([]core.ToolLifecycleStatusSnapshot, 0, len(records))
 	for _, record := range records {
+		probe, _, err := r.store.ToolProbeRecord(record.ToolName)
+		if err != nil {
+			return nil, err
+		}
 		audit, _, err := r.store.ToolAuditRecord(record.ToolName)
 		if err != nil {
 			return nil, err
@@ -1449,11 +1453,11 @@ func (r *Runtime) toolLifecycleStatusSnapshot(limit int) ([]core.ToolLifecycleSt
 		out = append(out, core.ToolLifecycleStatusSnapshot{
 			ToolName:      record.ToolName,
 			InstallStatus: strings.TrimSpace(string(record.Status)),
-			ProbeStatus:   strings.TrimSpace(string(record.ProbeStatus)),
+			ProbeStatus:   strings.TrimSpace(string(probe.Status)),
 			AuditStatus:   strings.TrimSpace(string(audit.Status)),
 			InstallRef:    strings.TrimSpace(record.InstallRef),
 			InstalledAt:   record.InstalledAt,
-			LastProbedAt:  record.LastProbedAt,
+			LastProbedAt:  probe.ProbedAt,
 			AuditedAt:     audit.AuditedAt,
 			AttestedAt:    record.AttestedAt,
 		})

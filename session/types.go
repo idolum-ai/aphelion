@@ -225,6 +225,15 @@ type ToolAuditRecord struct {
 	AuditedAt   time.Time       `json:"audited_at,omitempty"`
 }
 
+type ToolProbeRecord struct {
+	ToolName    string          `json:"tool_name"`
+	Status      ToolProbeStatus `json:"status,omitempty"`
+	ProbeOutput string          `json:"probe_output,omitempty"`
+	CreatedAt   time.Time       `json:"created_at,omitempty"`
+	UpdatedAt   time.Time       `json:"updated_at,omitempty"`
+	ProbedAt    time.Time       `json:"probed_at,omitempty"`
+}
+
 type TurnAuthorizationKind string
 
 const (
@@ -811,6 +820,19 @@ func NormalizeToolAuditRecord(record ToolAuditRecord) ToolAuditRecord {
 	record.ToolName = strings.TrimSpace(record.ToolName)
 	record.Status = NormalizeToolAuditStatus(record.Status)
 	record.AuditOutput = strings.TrimSpace(record.AuditOutput)
+	if record.CreatedAt.IsZero() && record.ToolName != "" {
+		record.CreatedAt = time.Now().UTC()
+	}
+	if record.UpdatedAt.IsZero() && record.ToolName != "" {
+		record.UpdatedAt = time.Now().UTC()
+	}
+	return record
+}
+
+func NormalizeToolProbeRecord(record ToolProbeRecord) ToolProbeRecord {
+	record.ToolName = strings.TrimSpace(record.ToolName)
+	record.Status = NormalizeToolProbeStatus(record.Status)
+	record.ProbeOutput = strings.TrimSpace(record.ProbeOutput)
 	if record.CreatedAt.IsZero() && record.ToolName != "" {
 		record.CreatedAt = time.Now().UTC()
 	}

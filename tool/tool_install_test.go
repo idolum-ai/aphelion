@@ -131,6 +131,20 @@ func TestToolAuthorityProbeRunUpdatesInstallRecordFromManifestProbe(t *testing.T
 	if !strings.Contains(showOut, "last_probed_at:") || !strings.Contains(showOut, "probe_output: stdout:") {
 		t.Fatalf("install_show output = %q, want persisted probe evidence", showOut)
 	}
+	probeShowOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"probe_show","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("probe_show err = %v", err)
+	}
+	if !strings.Contains(probeShowOut, "status: passed") {
+		t.Fatalf("probe_show output = %q, want passed canonical probe record", probeShowOut)
+	}
+	probeListOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"probe_list"}`))
+	if err != nil {
+		t.Fatalf("probe_list err = %v", err)
+	}
+	if !strings.Contains(probeListOut, "browse_page status=passed") {
+		t.Fatalf("probe_list output = %q, want browse_page canonical probe row", probeListOut)
+	}
 }
 
 func TestToolAuthorityProbeRunMarksVerifiedExternalToolStaleOnFailure(t *testing.T) {
