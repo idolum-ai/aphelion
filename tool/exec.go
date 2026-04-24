@@ -45,6 +45,7 @@ type Registry struct {
 	durableAgentBootstrapLLM         core.NodeLLMBootstrap
 	searchWeb                        searchWebProvider
 	searchWebState                   *searchWebRuntimeState
+	externalManifests                []ExternalToolManifest
 }
 
 type execInput struct {
@@ -323,6 +324,46 @@ func (r *Registry) WithSemanticEngine(engine *memstore.SemanticEngine) *Registry
 func (r *Registry) WithDurableAgentBootstrapLLM(bootstrap core.NodeLLMBootstrap) *Registry {
 	r.durableAgentBootstrapLLM = core.NormalizeNodeLLMBootstrap(bootstrap)
 	return r
+}
+
+func (r *Registry) WithExternalToolManifestDir(dir string) (*Registry, error) {
+	manifests, err := LoadExternalToolManifestDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	return r.WithExternalToolManifests(manifests)
+}
+
+func (r *Registry) WithExternalToolManifests(manifests []ExternalToolManifest) (*Registry, error) {
+	if r == nil {
+		return nil, fmt.Errorf("registry is nil")
+	}
+	normalized := make([]ExternalToolManifest, 0, len(manifests))
+	seen := make(map[string]struct{}, len(manifests))
+	for _, manifest := range manifests {
+		manifest = NormalizeExternalToolManifest(manifest)
+		if err := validateExternalToolManifest(manifest); err != nil {
+			return nil, err
+		}
+		if _, exists := seen[manifest.Name]; exists {
+			return nil, fmt.Errorf("duplicate external tool manifest name %q", manifest.Name)
+		}
+		seen[manifest.Name] = struct{}{}
+		normalized = append(normalized, manifest)
+	}
+	for _, def := range r.Definitions() {
+		name := strings.TrimSpace(def.Name)
+		if name == "" {
+			continue
+		}
+		for _, manifest := range normalized {
+			if strings.EqualFold(name, manifest.Name) {
+				return nil, fmt.Errorf("external tool manifest name %q collides with native tool definition", manifest.Name)
+			}
+		}
+	}
+	r.externalManifests = append([]ExternalToolManifest(nil), normalized...)
+	return r, nil
 }
 
 func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
@@ -770,6 +811,9 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	case "durable_agent":
 		return r.durableAgent(ctx, input, p, key, scope)
 	default:
+		if manifest, ok := r.externalManifestByName(name); ok {
+			return "", fmt.Errorf("external tool %q is present in the manifest but not yet executable in core (owner=%s)", manifest.Name, manifest.Owner)
+		}
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
 }

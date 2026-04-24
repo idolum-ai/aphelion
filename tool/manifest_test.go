@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -34,7 +35,7 @@ func TestRenderManifestIncludesDefinitionsAndParameters(t *testing.T) {
 		},
 	}
 
-	manifest := RenderManifest(defs)
+	manifest := RenderManifest(defs, nil)
 	if !strings.Contains(manifest, "- alpha: first tool") {
 		t.Fatalf("manifest missing alpha definition:\n%s", manifest)
 	}
@@ -100,5 +101,71 @@ func TestRegistryManifestTracksCurrentState(t *testing.T) {
 	}
 	if !strings.Contains(after, "- max_output_bytes: 2048") {
 		t.Fatalf("updated manifest missing max output bytes:\n%s", after)
+	}
+}
+
+func TestRegistryManifestIncludesExternalManifestAsNonExecutable(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second)
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/email-browser-tool:pilot"},
+		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`)},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+
+	manifest := registry.Manifest()
+	for _, needle := range []string{
+		"- browse_page: external tool owned by idolum-email",
+		"url(string,required)",
+		"executable: false",
+		"reason: external manifest is visible but executor support is not wired yet",
+	} {
+		if !strings.Contains(manifest, needle) {
+			t.Fatalf("manifest = %q, want substring %q", manifest, needle)
+		}
+	}
+}
+
+func TestRegistryExecuteExternalManifestReturnsCleanNonExecutableError(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second)
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/email-browser-tool:pilot"},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+
+	_, err = registry.Execute(context.Background(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal() err = nil, want non-executable error")
+	}
+	if !strings.Contains(err.Error(), "present in the manifest but not yet executable") {
+		t.Fatalf("err = %v, want clean non-executable error", err)
+	}
+}
+
+func TestRegistryRejectsExternalManifestNameCollisionWithNativeTool(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second)
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "exec",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run"},
+	}})
+	if err == nil {
+		t.Fatal("WithExternalToolManifests() err = nil, want native collision rejection")
+	}
+	if !strings.Contains(err.Error(), "collides with native tool definition") {
+		t.Fatalf("err = %v, want collision rejection", err)
 	}
 }

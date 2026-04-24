@@ -198,3 +198,19 @@ func normalizeStringList(items []string) []string {
 	}
 	return out
 }
+
+func (r *Registry) externalManifestByName(name string) (ExternalToolManifest, bool) {
+	if r == nil {
+		return ExternalToolManifest{}, false
+	}
+	target := strings.TrimSpace(name)
+	if target == "" {
+		return ExternalToolManifest{}, false
+	}
+	for _, manifest := range r.externalManifests {
+		if strings.EqualFold(strings.TrimSpace(manifest.Name), target) {
+			return manifest, true
+		}
+	}
+	return ExternalToolManifest{}, false
+}

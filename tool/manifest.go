@@ -25,7 +25,7 @@ type schemaProperty struct {
 // execution constraints.
 func (r *Registry) Manifest() string {
 	defs := r.Definitions()
-	lines := []string{RenderManifest(defs), "", "exec constraints:"}
+	lines := []string{RenderManifest(defs, r.externalManifests), "", "exec constraints:"}
 
 	execRoot := r.workspace
 	if abs, err := filepath.Abs(r.workspace); err == nil {
@@ -41,8 +41,8 @@ func (r *Registry) Manifest() string {
 }
 
 // RenderManifest renders tool definitions as stable plain text.
-func RenderManifest(defs []agent.ToolDef) string {
-	if len(defs) == 0 {
+func RenderManifest(defs []agent.ToolDef, external []ExternalToolManifest) string {
+	if len(defs) == 0 && len(external) == 0 {
 		return "tools:\n- (none)"
 	}
 
@@ -60,6 +60,21 @@ func RenderManifest(defs []agent.ToolDef) string {
 			continue
 		}
 		lines = append(lines, "  params: "+strings.Join(params, ", "))
+	}
+	for _, manifest := range external {
+		manifest = NormalizeExternalToolManifest(manifest)
+		description := fmt.Sprintf("external tool owned by %s", firstNonEmpty(strings.TrimSpace(manifest.Owner), "(unknown owner)"))
+		lines = append(lines, fmt.Sprintf("- %s: %s", manifest.Name, description))
+		params := summarizeParameters(manifest.IO.InputSchema)
+		if len(params) == 0 {
+			lines = append(lines, "  params: (none)")
+		} else {
+			lines = append(lines, "  params: "+strings.Join(params, ", "))
+		}
+		lines = append(lines,
+			"  executable: false",
+			"  reason: external manifest is visible but executor support is not wired yet",
+		)
 	}
 	return strings.Join(lines, "\n")
 }
