@@ -134,6 +134,11 @@ type toolAuthorityInput struct {
 	Registered        *bool           `json:"registered,omitempty"`
 	Principal         string          `json:"principal,omitempty"`
 	Active            *bool           `json:"active,omitempty"`
+	Status            string          `json:"status,omitempty"`
+	Installer         string          `json:"installer,omitempty"`
+	InstallRef        string          `json:"install_ref,omitempty"`
+	ProbeStatus       string          `json:"probe_status,omitempty"`
+	ProbeOutput       string          `json:"probe_output,omitempty"`
 	Limit             int             `json:"limit,omitempty"`
 }
 
@@ -629,7 +634,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "proposal_override", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "access_check"], "description": "Tool-authority operation"},
+					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "proposal_override", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "install_set", "install_show", "install_list", "access_check"], "description": "Tool-authority operation"},
 					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show/proposal_review/proposal_ratify/proposal_override/register"},
 					"proposed_by": {"type": "string", "description": "Proposal author identity for proposal_submit"},
 					"tool_name": {"type": "string", "description": "Tool name for proposal_submit/register/exposure/access actions"},
@@ -642,6 +647,11 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"registered": {"type": "boolean", "description": "Optional explicit registered flag for register; defaults to true"},
 					"principal": {"type": "string", "description": "Principal id for exposure and access checks"},
 					"active": {"type": "boolean", "description": "Exposure active flag for exposure_set; defaults to true"},
+					"status": {"type": "string", "enum": ["pending", "installed", "verified", "failed", "stale"], "description": "Install/probe lifecycle status for install_set or install_list filtering"},
+					"installer": {"type": "string", "description": "Who installed or provisioned the external tool"},
+					"install_ref": {"type": "string", "description": "Reference to the install artifact, path, image, or package set"},
+					"probe_status": {"type": "string", "enum": ["passed", "failed"], "description": "Latest probe result for install_set"},
+					"probe_output": {"type": "string", "description": "Latest bounded probe output or diagnostic"},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Optional list limit"}
 				},
 				"required": ["action"]

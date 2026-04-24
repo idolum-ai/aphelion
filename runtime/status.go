@@ -1192,6 +1192,21 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 		}
 		parts = append(parts, "active="+strconv.FormatBool(active))
 		return strings.TrimSpace(strings.Join(parts, " "))
+	case core.ExecutionEventToolInstallUpdated:
+		parts := make([]string, 0, 5)
+		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
+			parts = append(parts, "tool_name="+toolName)
+		}
+		if status := firstNonEmpty(strings.TrimSpace(payloadString(payload, "status")), strings.TrimSpace(eventStatus)); status != "" {
+			parts = append(parts, "status="+status)
+		}
+		if probeStatus := strings.TrimSpace(payloadString(payload, "probe_status")); probeStatus != "" {
+			parts = append(parts, "probe_status="+probeStatus)
+		}
+		if installRef := strings.TrimSpace(payloadString(payload, "install_ref")); installRef != "" {
+			parts = append(parts, "install_ref="+installRef)
+		}
+		return strings.TrimSpace(strings.Join(parts, " "))
 	}
 
 	if len(payload) == 0 {

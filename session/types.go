@@ -178,6 +178,37 @@ type ToolExposure struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
+type ToolInstallStatus string
+
+const (
+	ToolInstallStatusPending   ToolInstallStatus = "pending"
+	ToolInstallStatusInstalled ToolInstallStatus = "installed"
+	ToolInstallStatusVerified  ToolInstallStatus = "verified"
+	ToolInstallStatusFailed    ToolInstallStatus = "failed"
+	ToolInstallStatusStale     ToolInstallStatus = "stale"
+)
+
+type ToolProbeStatus string
+
+const (
+	ToolProbeStatusPassed ToolProbeStatus = "passed"
+	ToolProbeStatusFailed ToolProbeStatus = "failed"
+)
+
+type ToolInstallRecord struct {
+	ToolName     string            `json:"tool_name"`
+	Installer    string            `json:"installer,omitempty"`
+	InstallRef   string            `json:"install_ref,omitempty"`
+	Status       ToolInstallStatus `json:"status,omitempty"`
+	ProbeStatus  ToolProbeStatus   `json:"probe_status,omitempty"`
+	ProbeOutput  string            `json:"probe_output,omitempty"`
+	CreatedAt    time.Time         `json:"created_at,omitempty"`
+	UpdatedAt    time.Time         `json:"updated_at,omitempty"`
+	InstalledAt  time.Time         `json:"installed_at,omitempty"`
+	LastProbedAt time.Time         `json:"last_probed_at,omitempty"`
+	AttestedAt   time.Time         `json:"attested_at,omitempty"`
+}
+
 type TurnAuthorizationKind string
 
 const (
@@ -703,6 +734,50 @@ func NormalizeToolExposure(exposure ToolExposure) ToolExposure {
 		exposure.UpdatedAt = time.Now().UTC()
 	}
 	return exposure
+}
+
+func NormalizeToolInstallStatus(status ToolInstallStatus) ToolInstallStatus {
+	switch ToolInstallStatus(strings.TrimSpace(string(status))) {
+	case ToolInstallStatusPending:
+		return ToolInstallStatusPending
+	case ToolInstallStatusInstalled:
+		return ToolInstallStatusInstalled
+	case ToolInstallStatusVerified:
+		return ToolInstallStatusVerified
+	case ToolInstallStatusFailed:
+		return ToolInstallStatusFailed
+	case ToolInstallStatusStale:
+		return ToolInstallStatusStale
+	default:
+		return ""
+	}
+}
+
+func NormalizeToolProbeStatus(status ToolProbeStatus) ToolProbeStatus {
+	switch ToolProbeStatus(strings.TrimSpace(string(status))) {
+	case ToolProbeStatusPassed:
+		return ToolProbeStatusPassed
+	case ToolProbeStatusFailed:
+		return ToolProbeStatusFailed
+	default:
+		return ""
+	}
+}
+
+func NormalizeToolInstallRecord(record ToolInstallRecord) ToolInstallRecord {
+	record.ToolName = strings.TrimSpace(record.ToolName)
+	record.Installer = strings.TrimSpace(record.Installer)
+	record.InstallRef = strings.TrimSpace(record.InstallRef)
+	record.ProbeOutput = strings.TrimSpace(record.ProbeOutput)
+	record.Status = NormalizeToolInstallStatus(record.Status)
+	record.ProbeStatus = NormalizeToolProbeStatus(record.ProbeStatus)
+	if record.CreatedAt.IsZero() && record.ToolName != "" {
+		record.CreatedAt = time.Now().UTC()
+	}
+	if record.UpdatedAt.IsZero() && record.ToolName != "" {
+		record.UpdatedAt = time.Now().UTC()
+	}
+	return record
 }
 
 func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthorizationState {

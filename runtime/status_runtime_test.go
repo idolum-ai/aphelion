@@ -785,6 +785,37 @@ func TestChatStatusSnapshotIncludesRecentExecutionTimeline(t *testing.T) {
 	}
 }
 
+func TestChatStatusSnapshotSummarizesToolInstallEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 90214, UserID: 0, Scope: telegramDMScopeRef(90214)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType:   core.ExecutionEventToolInstallUpdated,
+		Stage:       "tool_authority",
+		Status:      "verified",
+		PayloadJSON: `{"tool_name":"browse_page","status":"verified","probe_status":"passed","install_ref":"workspace:tooling-v1"}`,
+		CreatedAt:   now,
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents(tool install) err = %v", err)
+	}
+	snapshot, err := rt.ChatStatusSnapshot(90214, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.RecentExecution) == 0 {
+		t.Fatal("RecentExecution empty, want tool install event")
+	}
+	if snapshot.RecentExecution[0].Summary != "tool_name=browse_page status=verified probe_status=passed install_ref=workspace:tooling-v1" {
+		t.Fatalf("RecentExecution[0].Summary = %q, want tool install summary", snapshot.RecentExecution[0].Summary)
+	}
+}
+
 func TestChatStatusSnapshotSummarizesToolAuthorityLifecycleEvents(t *testing.T) {
 	t.Parallel()
 

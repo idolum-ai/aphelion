@@ -875,6 +875,52 @@ func TestToolAuthorityRecordsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestToolInstallRecordRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	record, err := store.UpsertToolInstallRecord(ToolInstallRecord{
+		ToolName:     "browse_page",
+		Installer:    "aphelion",
+		InstallRef:   "workspace:tooling-v1",
+		Status:       ToolInstallStatusVerified,
+		ProbeStatus:  ToolProbeStatusPassed,
+		ProbeOutput:  "self-check ok",
+		InstalledAt:  time.Now().UTC(),
+		LastProbedAt: time.Now().UTC(),
+		AttestedAt:   time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertToolInstallRecord(insert) err = %v", err)
+	}
+	if record.Status != ToolInstallStatusVerified {
+		t.Fatalf("record.Status = %q, want verified", record.Status)
+	}
+	loaded, ok, err := store.ToolInstallRecord("browse_page")
+	if err != nil {
+		t.Fatalf("ToolInstallRecord() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("ToolInstallRecord() ok = false, want true")
+	}
+	if loaded.ProbeStatus != ToolProbeStatusPassed {
+		t.Fatalf("loaded.ProbeStatus = %q, want passed", loaded.ProbeStatus)
+	}
+	record.Status = ToolInstallStatusStale
+	record.ProbeStatus = ToolProbeStatusFailed
+	record.ProbeOutput = "missing shared libs"
+	if _, err := store.UpsertToolInstallRecord(record); err != nil {
+		t.Fatalf("UpsertToolInstallRecord(update) err = %v", err)
+	}
+	list, err := store.ToolInstallRecords(ToolInstallStatusStale, 10)
+	if err != nil {
+		t.Fatalf("ToolInstallRecords() err = %v", err)
+	}
+	if len(list) != 1 || list[0].ToolName != "browse_page" {
+		t.Fatalf("ToolInstallRecords(stale) = %#v, want one browse_page record", list)
+	}
+}
+
 func TestPlanEventsRoundTripAndRehydrateFromLatestEvent(t *testing.T) {
 	t.Parallel()
 

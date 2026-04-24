@@ -57,6 +57,12 @@ func (r *Registry) toolAuthority(ctx context.Context, input json.RawMessage, p p
 		return r.toolAuthorityExposureShow(in)
 	case "exposure_list":
 		return r.toolAuthorityExposureList(in)
+	case "install_set":
+		return r.toolAuthorityInstallSet(in, p, key)
+	case "install_show":
+		return r.toolAuthorityInstallShow(in)
+	case "install_list":
+		return r.toolAuthorityInstallList(in)
 	case "access_check":
 		return r.toolAuthorityAccessCheck(in)
 	default:
@@ -338,6 +344,15 @@ func (r *Registry) toolAuthorityRegister(in toolAuthorityInput, actor principal.
 		return "", fmt.Errorf("tool_authority register tool_name %q is not an authority-managed runtime tool", toolName)
 	}
 	toolName = trustedToolName
+	if manifest, ok := r.externalManifestByName(toolName); ok {
+		record, exists, err := r.store.ToolInstallRecord(toolName)
+		if err != nil {
+			return "", err
+		}
+		if !exists || record.Status != session.ToolInstallStatusVerified {
+			return "", fmt.Errorf("external tool %q requires a verified install record before registration", manifest.Name)
+		}
+	}
 	implementationRef := strings.TrimSpace(in.ImplementationRef)
 	if implementationRef == "" {
 		return "", fmt.Errorf("tool_authority register requires implementation_ref")
@@ -477,6 +492,119 @@ func (r *Registry) toolAuthorityExposureList(in toolAuthorityInput) (string, err
 	return renderToolExposureList(records), nil
 }
 
+func (r *Registry) toolAuthorityInstallSet(in toolAuthorityInput, actor principal.Principal, key session.SessionKey) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority install_set requires tool_name")
+	}
+	manifest, ok := r.externalManifestByName(toolName)
+	if !ok {
+		return "", fmt.Errorf("tool_authority install_set requires an external tool manifest-backed tool_name")
+	}
+	status := session.NormalizeToolInstallStatus(session.ToolInstallStatus(in.Status))
+	if status == "" {
+		return "", fmt.Errorf("tool_authority install_set requires status pending, installed, verified, failed, or stale")
+	}
+	probeStatus := session.NormalizeToolProbeStatus(session.ToolProbeStatus(in.ProbeStatus))
+	if strings.TrimSpace(in.ProbeStatus) != "" && probeStatus == "" {
+		return "", fmt.Errorf("tool_authority probe_status must be passed or failed")
+	}
+	now := time.Now().UTC()
+	record, exists, err := r.store.ToolInstallRecord(manifest.Name)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		record = session.ToolInstallRecord{ToolName: manifest.Name}
+	}
+	record.Installer = firstNonEmpty(strings.TrimSpace(in.Installer), record.Installer)
+	record.InstallRef = firstNonEmpty(strings.TrimSpace(in.InstallRef), record.InstallRef)
+	record.Status = status
+	if strings.TrimSpace(in.ProbeOutput) != "" {
+		record.ProbeOutput = strings.TrimSpace(in.ProbeOutput)
+	}
+	if probeStatus != "" {
+		record.ProbeStatus = probeStatus
+		record.LastProbedAt = now
+	}
+	switch status {
+	case session.ToolInstallStatusInstalled:
+		if record.InstalledAt.IsZero() {
+			record.InstalledAt = now
+		}
+		if record.AttestedAt.IsZero() == false && record.ProbeStatus == session.ToolProbeStatusFailed {
+			record.AttestedAt = time.Time{}
+		}
+	case session.ToolInstallStatusVerified:
+		if record.InstalledAt.IsZero() {
+			record.InstalledAt = now
+		}
+		if record.ProbeStatus != session.ToolProbeStatusPassed || record.LastProbedAt.IsZero() {
+			return "", fmt.Errorf("tool_authority install_set verified status requires probe_status=passed and a current probe record")
+		}
+		record.AttestedAt = now
+	case session.ToolInstallStatusPending:
+		record.AttestedAt = time.Time{}
+	case session.ToolInstallStatusFailed:
+		record.AttestedAt = time.Time{}
+	case session.ToolInstallStatusStale:
+		record.AttestedAt = time.Time{}
+	}
+	record.UpdatedAt = now
+	stored, err := r.store.UpsertToolInstallRecord(record)
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendToolAuthorityEvent(
+		key,
+		core.ExecutionEventToolInstallUpdated,
+		string(stored.Status),
+		map[string]any{
+			"tool_name":     toolName,
+			"status":        string(stored.Status),
+			"installer":     stored.Installer,
+			"install_ref":   stored.InstallRef,
+			"probe_status":  string(stored.ProbeStatus),
+			"actor_role":    strings.TrimSpace(string(actor.Role)),
+			"actor_user_id": actor.TelegramUserID,
+		},
+	); err != nil {
+		return "", err
+	}
+	return renderToolInstallRecord("[TOOL_INSTALL]", stored), nil
+}
+
+func (r *Registry) toolAuthorityInstallShow(in toolAuthorityInput) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority install_show requires tool_name")
+	}
+	record, ok, err := r.store.ToolInstallRecord(toolName)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("tool install record %q not found", toolName)
+	}
+	return renderToolInstallRecord("[TOOL_INSTALL]", record), nil
+}
+
+func (r *Registry) toolAuthorityInstallList(in toolAuthorityInput) (string, error) {
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	status := session.NormalizeToolInstallStatus(session.ToolInstallStatus(in.Status))
+	if strings.TrimSpace(in.Status) != "" && status == "" {
+		return "", fmt.Errorf("tool_authority install_list status must be pending, installed, verified, failed, or stale")
+	}
+	records, err := r.store.ToolInstallRecords(status, limit)
+	if err != nil {
+		return "", err
+	}
+	return renderToolInstallRecordList(records), nil
+}
+
 func (r *Registry) toolAuthorityAccessCheck(in toolAuthorityInput) (string, error) {
 	toolName := strings.TrimSpace(in.ToolName)
 	principalID := strings.TrimSpace(in.Principal)
@@ -572,6 +700,7 @@ func renderToolAuthorityHelp() string {
 		"- proposal_submit | proposal_show | proposal_list | proposal_review | proposal_ratify | proposal_override",
 		"- register | registered_show | registered_list",
 		"- exposure_set | exposure_show | exposure_list",
+		"- install_set | install_show | install_list",
 		"- access_check",
 	}, "\n")
 }
@@ -663,6 +792,55 @@ func renderToolExposure(header string, record session.ToolExposure) string {
 	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
 	fmt.Fprintf(&b, "principal: %s\n", record.Principal)
 	fmt.Fprintf(&b, "active: %t\n", record.Active)
+	return b.String()
+}
+
+func renderToolInstallRecord(header string, record session.ToolInstallRecord) string {
+	record = session.NormalizeToolInstallRecord(record)
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(header))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
+	fmt.Fprintf(&b, "installer: %s\n", firstNonEmpty(record.Installer, "-"))
+	fmt.Fprintf(&b, "install_ref: %s\n", firstNonEmpty(record.InstallRef, "-"))
+	fmt.Fprintf(&b, "probe_status: %s\n", firstNonEmpty(string(record.ProbeStatus), "-"))
+	fmt.Fprintf(&b, "probe_output: %s\n", firstNonEmpty(record.ProbeOutput, "-"))
+	if !record.InstalledAt.IsZero() {
+		fmt.Fprintf(&b, "installed_at: %s\n", record.InstalledAt.UTC().Format(time.RFC3339))
+	}
+	if !record.LastProbedAt.IsZero() {
+		fmt.Fprintf(&b, "last_probed_at: %s\n", record.LastProbedAt.UTC().Format(time.RFC3339))
+	}
+	if !record.AttestedAt.IsZero() {
+		fmt.Fprintf(&b, "attested_at: %s\n", record.AttestedAt.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "updated_at: %s\n", record.UpdatedAt.UTC().Format(time.RFC3339))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderToolInstallRecordList(records []session.ToolInstallRecord) string {
+	var b strings.Builder
+	b.WriteString("[TOOL_INSTALLS]")
+	if len(records) == 0 {
+		b.WriteString("\n- (none)")
+		return b.String()
+	}
+	for _, record := range records {
+		record = session.NormalizeToolInstallRecord(record)
+		b.WriteString("\n- ")
+		b.WriteString(record.ToolName)
+		b.WriteString(" status=")
+		b.WriteString(firstNonEmpty(string(record.Status), "-"))
+		if strings.TrimSpace(record.InstallRef) != "" {
+			b.WriteString(" install_ref=")
+			b.WriteString(record.InstallRef)
+		}
+		if strings.TrimSpace(string(record.ProbeStatus)) != "" {
+			b.WriteString(" probe_status=")
+			b.WriteString(string(record.ProbeStatus))
+		}
+	}
 	return b.String()
 }
 

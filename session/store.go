@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 27
+	schemaVersion                       = 28
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -194,6 +194,19 @@ func (s *SQLiteStore) init() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			PRIMARY KEY (tool_name, principal)
+		)`,
+		`CREATE TABLE IF NOT EXISTS tool_install_records (
+			tool_name TEXT PRIMARY KEY,
+			installer TEXT NOT NULL DEFAULT '',
+			install_ref TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '' CHECK(status IN ('', 'pending', 'installed', 'verified', 'failed', 'stale')),
+			probe_status TEXT NOT NULL DEFAULT '' CHECK(probe_status IN ('', 'passed', 'failed')),
+			probe_output TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			installed_at TEXT,
+			last_probed_at TEXT,
+			attested_at TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS turn_runs (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1639,6 +1652,207 @@ func (s *SQLiteStore) ToolExposures(toolName string, principal string, limit int
 		return nil, fmt.Errorf("iterate tool exposures: %w", err)
 	}
 	return out, nil
+}
+
+func (s *SQLiteStore) UpsertToolInstallRecord(record ToolInstallRecord) (ToolInstallRecord, error) {
+	record = NormalizeToolInstallRecord(record)
+	if record.ToolName == "" {
+		return ToolInstallRecord{}, fmt.Errorf("tool install record tool_name is required")
+	}
+	now := time.Now().UTC()
+	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
+	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
+	installedAt := nullableTimeRFC3339(record.InstalledAt)
+	lastProbedAt := nullableTimeRFC3339(record.LastProbedAt)
+	attestedAt := nullableTimeRFC3339(record.AttestedAt)
+	if _, err := s.db.Exec(`
+		INSERT INTO tool_install_records(tool_name, installer, install_ref, status, probe_status, probe_output, created_at, updated_at, installed_at, last_probed_at, attested_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(tool_name) DO UPDATE SET
+			installer = excluded.installer,
+			install_ref = excluded.install_ref,
+			status = excluded.status,
+			probe_status = excluded.probe_status,
+			probe_output = excluded.probe_output,
+			updated_at = excluded.updated_at,
+			installed_at = excluded.installed_at,
+			last_probed_at = excluded.last_probed_at,
+			attested_at = excluded.attested_at
+	`,
+		record.ToolName,
+		record.Installer,
+		record.InstallRef,
+		string(record.Status),
+		string(record.ProbeStatus),
+		record.ProbeOutput,
+		createdAt.Format(time.RFC3339Nano),
+		updatedAt.Format(time.RFC3339Nano),
+		installedAt,
+		lastProbedAt,
+		attestedAt,
+	); err != nil {
+		return ToolInstallRecord{}, fmt.Errorf("upsert tool install record: %w", err)
+	}
+	stored, ok, err := s.ToolInstallRecord(record.ToolName)
+	if err != nil {
+		return ToolInstallRecord{}, err
+	}
+	if !ok {
+		return ToolInstallRecord{}, fmt.Errorf("tool install record %q not found after upsert", record.ToolName)
+	}
+	return stored, nil
+}
+
+func (s *SQLiteStore) ToolInstallRecord(toolName string) (ToolInstallRecord, bool, error) {
+	toolName = strings.TrimSpace(toolName)
+	if toolName == "" {
+		return ToolInstallRecord{}, false, nil
+	}
+	var (
+		record          ToolInstallRecord
+		statusRaw       string
+		probeStatusRaw  string
+		createdAtRaw    string
+		updatedAtRaw    string
+		installedAtRaw  sql.NullString
+		lastProbedAtRaw sql.NullString
+		attestedAtRaw   sql.NullString
+	)
+	err := s.db.QueryRow(`
+		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, created_at, updated_at, installed_at, last_probed_at, attested_at
+		FROM tool_install_records
+		WHERE tool_name = ?
+	`, toolName).Scan(
+		&record.ToolName,
+		&record.Installer,
+		&record.InstallRef,
+		&statusRaw,
+		&probeStatusRaw,
+		&record.ProbeOutput,
+		&createdAtRaw,
+		&updatedAtRaw,
+		&installedAtRaw,
+		&lastProbedAtRaw,
+		&attestedAtRaw,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ToolInstallRecord{}, false, nil
+	}
+	if err != nil {
+		return ToolInstallRecord{}, false, fmt.Errorf("load tool install record: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record updated_at: %w", err)
+	}
+	record.Status = NormalizeToolInstallStatus(ToolInstallStatus(statusRaw))
+	record.ProbeStatus = NormalizeToolProbeStatus(ToolProbeStatus(probeStatusRaw))
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	if installedAtRaw.Valid {
+		installedAt, err := parseSQLiteTime(installedAtRaw.String)
+		if err != nil {
+			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record installed_at: %w", err)
+		}
+		record.InstalledAt = installedAt
+	}
+	if lastProbedAtRaw.Valid {
+		lastProbedAt, err := parseSQLiteTime(lastProbedAtRaw.String)
+		if err != nil {
+			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record last_probed_at: %w", err)
+		}
+		record.LastProbedAt = lastProbedAt
+	}
+	if attestedAtRaw.Valid {
+		attestedAt, err := parseSQLiteTime(attestedAtRaw.String)
+		if err != nil {
+			return ToolInstallRecord{}, false, fmt.Errorf("parse tool install record attested_at: %w", err)
+		}
+		record.AttestedAt = attestedAt
+	}
+	return NormalizeToolInstallRecord(record), true, nil
+}
+
+func (s *SQLiteStore) ToolInstallRecords(status ToolInstallStatus, limit int) ([]ToolInstallRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	status = NormalizeToolInstallStatus(status)
+	query := `
+		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, created_at, updated_at, installed_at, last_probed_at, attested_at
+		FROM tool_install_records
+	`
+	args := make([]any, 0, 2)
+	if status != "" {
+		query += " WHERE status = ?"
+		args = append(args, string(status))
+	}
+	query += " ORDER BY updated_at DESC, tool_name ASC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tool install records: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ToolInstallRecord, 0, limit)
+	for rows.Next() {
+		var (
+			record          ToolInstallRecord
+			statusRaw       string
+			probeStatusRaw  string
+			createdAtRaw    string
+			updatedAtRaw    string
+			installedAtRaw  sql.NullString
+			lastProbedAtRaw sql.NullString
+			attestedAtRaw   sql.NullString
+		)
+		if err := rows.Scan(&record.ToolName, &record.Installer, &record.InstallRef, &statusRaw, &probeStatusRaw, &record.ProbeOutput, &createdAtRaw, &updatedAtRaw, &installedAtRaw, &lastProbedAtRaw, &attestedAtRaw); err != nil {
+			return nil, fmt.Errorf("scan tool install record: %w", err)
+		}
+		createdAt, err := parseSQLiteTime(createdAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool install record created_at: %w", err)
+		}
+		updatedAt, err := parseSQLiteTime(updatedAtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse tool install record updated_at: %w", err)
+		}
+		record.Status = NormalizeToolInstallStatus(ToolInstallStatus(statusRaw))
+		record.ProbeStatus = NormalizeToolProbeStatus(ToolProbeStatus(probeStatusRaw))
+		record.CreatedAt = createdAt
+		record.UpdatedAt = updatedAt
+		if installedAtRaw.Valid {
+			if record.InstalledAt, err = parseSQLiteTime(installedAtRaw.String); err != nil {
+				return nil, fmt.Errorf("parse tool install record installed_at: %w", err)
+			}
+		}
+		if lastProbedAtRaw.Valid {
+			if record.LastProbedAt, err = parseSQLiteTime(lastProbedAtRaw.String); err != nil {
+				return nil, fmt.Errorf("parse tool install record last_probed_at: %w", err)
+			}
+		}
+		if attestedAtRaw.Valid {
+			if record.AttestedAt, err = parseSQLiteTime(attestedAtRaw.String); err != nil {
+				return nil, fmt.Errorf("parse tool install record attested_at: %w", err)
+			}
+		}
+		out = append(out, NormalizeToolInstallRecord(record))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tool install records: %w", err)
+	}
+	return out, nil
+}
+
+func nullableTimeRFC3339(ts time.Time) any {
+	if ts.IsZero() {
+		return nil
+	}
+	return ts.UTC().Format(time.RFC3339Nano)
 }
 
 func (s *SQLiteStore) PlanEvents(key SessionKey, limit int) ([]PlanEvent, error) {
@@ -4702,6 +4916,7 @@ func ensureSessionIdentityIndexes(tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_tool_proposals_status ON tool_proposals(review_status, updated_at, proposal_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_registered_tools_state ON registered_tools(registered, updated_at, tool_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_exposures_principal ON tool_exposures(principal, active, tool_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_install_records_status ON tool_install_records(status, updated_at, tool_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_session ON turn_runs(session_id, started_at, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_turn_runs_recovery ON turn_runs(status, recovery_logged_at, started_at, id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_events_session_seq ON execution_events(session_id, seq)`,
