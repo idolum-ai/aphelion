@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -67,6 +69,12 @@ func (r *Registry) toolAuthority(ctx context.Context, input json.RawMessage, p p
 		return r.toolAuthorityInstallList(in)
 	case "install_execute":
 		return r.toolAuthorityInstallExecute(ctx, in, p, key)
+	case "audit_run":
+		return r.toolAuthorityAuditRun(in, p, key)
+	case "audit_show":
+		return r.toolAuthorityAuditShow(in)
+	case "audit_list":
+		return r.toolAuthorityAuditList(in)
 	case "probe_run":
 		return r.toolAuthorityProbeRun(ctx, in, p, key)
 	case "access_check":
@@ -358,6 +366,13 @@ func (r *Registry) toolAuthorityRegister(in toolAuthorityInput, actor principal.
 		if !exists || record.Status != session.ToolInstallStatusVerified {
 			return "", fmt.Errorf("external tool %q requires a verified install record before registration", manifest.Name)
 		}
+		audit, auditExists, err := r.store.ToolAuditRecord(toolName)
+		if err != nil {
+			return "", err
+		}
+		if !auditExists || audit.Status != session.ToolAuditStatusPassed {
+			return "", fmt.Errorf("external tool %q requires a passed import audit before registration", manifest.Name)
+		}
 	}
 	implementationRef := strings.TrimSpace(in.ImplementationRef)
 	if implementationRef == "" {
@@ -548,6 +563,13 @@ func (r *Registry) toolAuthorityInstallSet(in toolAuthorityInput, actor principa
 		if record.ProbeStatus != session.ToolProbeStatusPassed || record.LastProbedAt.IsZero() {
 			return "", fmt.Errorf("tool_authority install_set verified status requires probe_status=passed and a current probe record")
 		}
+		audit, ok, err := r.store.ToolAuditRecord(manifest.Name)
+		if err != nil {
+			return "", err
+		}
+		if !ok || audit.Status != session.ToolAuditStatusPassed || audit.AuditedAt.IsZero() {
+			return "", fmt.Errorf("tool_authority install_set verified status requires a passed import audit")
+		}
 		record.AttestedAt = now
 	case session.ToolInstallStatusPending:
 		record.AttestedAt = time.Time{}
@@ -668,6 +690,101 @@ func (r *Registry) toolAuthorityInstallExecute(ctx context.Context, in toolAutho
 		return "", err
 	}
 	return renderToolInstallRecord("[TOOL_INSTALL]", stored), nil
+}
+
+func (r *Registry) toolAuthorityAuditRun(in toolAuthorityInput, actor principal.Principal, key session.SessionKey) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority audit_run requires tool_name")
+	}
+	manifest, ok := r.externalManifestByName(toolName)
+	if !ok {
+		return "", fmt.Errorf("tool_authority audit_run requires an external tool manifest-backed tool_name")
+	}
+	if _, exists, err := r.store.ToolInstallRecord(manifest.Name); err != nil {
+		return "", err
+	} else if !exists {
+		return "", fmt.Errorf("external tool %q requires an install record before audit_run", manifest.Name)
+	}
+	output, err := r.runExternalManifestAudit(manifest)
+	now := time.Now().UTC()
+	record := session.ToolAuditRecord{ToolName: manifest.Name, AuditOutput: output, UpdatedAt: now, AuditedAt: now}
+	if err != nil {
+		record.Status = session.ToolAuditStatusFailed
+		stored, saveErr := r.store.UpsertToolAuditRecord(record)
+		if saveErr != nil {
+			return "", saveErr
+		}
+		_ = r.appendToolAuthorityEvent(key, core.ExecutionEventToolAuditUpdated, string(stored.Status), map[string]any{"tool_name": stored.ToolName, "status": string(stored.Status), "actor_role": strings.TrimSpace(string(actor.Role)), "actor_user_id": actor.TelegramUserID})
+		return "", err
+	}
+	record.Status = session.ToolAuditStatusPassed
+	stored, err := r.store.UpsertToolAuditRecord(record)
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendToolAuthorityEvent(key, core.ExecutionEventToolAuditUpdated, string(stored.Status), map[string]any{"tool_name": stored.ToolName, "status": string(stored.Status), "actor_role": strings.TrimSpace(string(actor.Role)), "actor_user_id": actor.TelegramUserID}); err != nil {
+		return "", err
+	}
+	return renderToolAuditRecord("[TOOL_AUDIT]", stored), nil
+}
+
+func (r *Registry) toolAuthorityAuditShow(in toolAuthorityInput) (string, error) {
+	toolName := strings.TrimSpace(in.ToolName)
+	if toolName == "" {
+		return "", fmt.Errorf("tool_authority audit_show requires tool_name")
+	}
+	record, ok, err := r.store.ToolAuditRecord(toolName)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("tool audit record %q not found", toolName)
+	}
+	return renderToolAuditRecord("[TOOL_AUDIT]", record), nil
+}
+
+func (r *Registry) toolAuthorityAuditList(in toolAuthorityInput) (string, error) {
+	limit := in.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	records, err := r.store.ToolAuditRecords("", limit)
+	if err != nil {
+		return "", err
+	}
+	return renderToolAuditRecordList(records), nil
+}
+
+func (r *Registry) runExternalManifestAudit(manifest ExternalToolManifest) (string, error) {
+	manifest = NormalizeExternalToolManifest(manifest)
+	workdir, err := resolveWorkdir(r.workspace, manifest.Execution.Workdir)
+	if err != nil {
+		return "", err
+	}
+	entry := strings.TrimSpace(manifest.Execution.Entry)
+	if entry == "" {
+		return "", fmt.Errorf("external tool %q execution entry is empty", manifest.Name)
+	}
+	firstToken := strings.Fields(entry)
+	if len(firstToken) == 0 {
+		return "", fmt.Errorf("external tool %q execution entry is empty", manifest.Name)
+	}
+	target := firstToken[0]
+	if strings.HasPrefix(target, "./") || strings.HasPrefix(target, "../") || strings.HasPrefix(target, "/") {
+		resolved := target
+		if !strings.HasPrefix(target, "/") {
+			resolved = filepath.Join(workdir, target)
+		}
+		if _, err := os.Stat(resolved); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Sprintf("entry_path: %s", resolved), fmt.Errorf("external tool %q import audit failed: entry path does not exist", manifest.Name)
+			}
+			return fmt.Sprintf("entry_path: %s", resolved), fmt.Errorf("external tool %q import audit stat failed: %w", manifest.Name, err)
+		}
+		return fmt.Sprintf("entry_path: %s", resolved), nil
+	}
+	return fmt.Sprintf("entry_command: %s", target), nil
 }
 
 func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityInput, actor principal.Principal, key session.SessionKey) (string, error) {
@@ -883,7 +1000,7 @@ func renderToolAuthorityHelp() string {
 		"- proposal_submit | proposal_show | proposal_list | proposal_review | proposal_ratify | proposal_override",
 		"- register | registered_show | registered_list",
 		"- exposure_set | exposure_show | exposure_list",
-		"- install_set | install_show | install_list | install_execute | probe_run",
+		"- install_set | install_show | install_list | install_execute | audit_run | audit_show | audit_list | probe_run",
 		"- access_check",
 	}, "\n")
 }
@@ -978,6 +1095,37 @@ func renderToolExposure(header string, record session.ToolExposure) string {
 	return b.String()
 }
 
+func renderToolAuditRecord(header string, record session.ToolAuditRecord) string {
+	record = session.NormalizeToolAuditRecord(record)
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(header))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "tool_name: %s\n", record.ToolName)
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(string(record.Status), "-"))
+	fmt.Fprintf(&b, "audit_output: %s\n", firstNonEmpty(record.AuditOutput, "-"))
+	if !record.AuditedAt.IsZero() {
+		fmt.Fprintf(&b, "audited_at: %s\n", record.AuditedAt.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintf(&b, "updated_at: %s\n", record.UpdatedAt.UTC().Format(time.RFC3339))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderToolAuditRecordList(records []session.ToolAuditRecord) string {
+	var b strings.Builder
+	b.WriteString("[TOOL_AUDITS]")
+	if len(records) == 0 {
+		b.WriteString("\n- (none)")
+		return b.String()
+	}
+	for _, record := range records {
+		record = session.NormalizeToolAuditRecord(record)
+		b.WriteString("\n- ")
+		b.WriteString(record.ToolName)
+		b.WriteString(" status=")
+		b.WriteString(firstNonEmpty(string(record.Status), "-"))
+	}
+	return b.String()
+}
 func renderToolInstallRecord(header string, record session.ToolInstallRecord) string {
 	record = session.NormalizeToolInstallRecord(record)
 	var b strings.Builder

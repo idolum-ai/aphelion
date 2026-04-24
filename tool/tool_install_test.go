@@ -18,6 +18,13 @@ func TestToolAuthorityInstallSetShowListAndRegisterGateForExternalTool(t *testin
 
 	registry, _ := newDurableAgentToolRegistry(t)
 	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	runScript := filepath.Join(registry.workspace, "run.sh")
+	if err := os.WriteFile(runScript, []byte("#!/usr/bin/env bash\necho '{}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
 		Owner:     "idolum-email",
@@ -37,9 +44,16 @@ func TestToolAuthorityInstallSetShowListAndRegisterGateForExternalTool(t *testin
 	if !strings.Contains(out, "status: installed") {
 		t.Fatalf("install_set(installed) output = %q, want installed status", out)
 	}
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1","probe_status":"failed","probe_output":"missing shared libs"}`))
-	if err == nil || !strings.Contains(err.Error(), "requires probe_status=passed") {
-		t.Fatalf("install_set(verified failed probe) err = %v, want passed probe requirement", err)
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1","probe_status":"passed","probe_output":"self-check ok"}`))
+	if err == nil || !strings.Contains(err.Error(), "requires a passed import audit") {
+		t.Fatalf("install_set(verified without audit) err = %v, want passed import audit requirement", err)
+	}
+	auditOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"audit_run","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("audit_run err = %v", err)
+	}
+	if !strings.Contains(auditOut, "status: passed") {
+		t.Fatalf("audit_run output = %q, want passed status", auditOut)
 	}
 	out, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1","probe_status":"passed","probe_output":"self-check ok"}`))
 	if err != nil {
@@ -54,6 +68,13 @@ func TestToolAuthorityInstallSetShowListAndRegisterGateForExternalTool(t *testin
 	}
 	if !strings.Contains(showOut, "attested_at:") {
 		t.Fatalf("install_show output = %q, want attested_at", showOut)
+	}
+	auditShowOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"audit_show","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("audit_show err = %v", err)
+	}
+	if !strings.Contains(auditShowOut, "status: passed") {
+		t.Fatalf("audit_show output = %q, want passed audit", auditShowOut)
 	}
 	listOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_list","status":"verified"}`))
 	if err != nil {
@@ -120,6 +141,10 @@ func TestToolAuthorityProbeRunMarksVerifiedExternalToolStaleOnFailure(t *testing
 	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspace) err = %v", err)
 	}
+	runScript := filepath.Join(registry.workspace, "run.sh")
+	if err := os.WriteFile(runScript, []byte("#!/usr/bin/env bash\necho '{}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
 	probeScript := filepath.Join(registry.workspace, "probe.sh")
 	if err := os.WriteFile(probeScript, []byte("#!/usr/bin/env bash\necho 'broken'\n"), 0o755); err != nil {
 		t.Fatalf("WriteFile(probe.sh) err = %v", err)
@@ -132,6 +157,14 @@ func TestToolAuthorityProbeRunMarksVerifiedExternalToolStaleOnFailure(t *testing
 	}})
 	if err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"installed","installer":"aphelion","install_ref":"workspace:tooling-v1"}`))
+	if err != nil {
+		t.Fatalf("install_set(installed) err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"audit_run","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("audit_run err = %v", err)
 	}
 	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1","probe_status":"passed","probe_output":"self-check ok"}`))
 	if err != nil {
@@ -219,5 +252,38 @@ func TestToolAuthorityInstallExecuteMarksRecordFailedOnInstallError(t *testing.T
 	}
 	if !strings.Contains(showOut, "status: failed") {
 		t.Fatalf("install_show output = %q, want failed status after install error", showOut)
+	}
+}
+
+func TestToolAuthorityAuditRunFailsWhenExecutionEntryIsMissing(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./missing-run.sh"},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"installed","installer":"aphelion","install_ref":"workspace:tooling-v1"}`))
+	if err != nil {
+		t.Fatalf("install_set(installed) err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"audit_run","tool_name":"browse_page"}`))
+	if err == nil || !strings.Contains(err.Error(), "entry path does not exist") {
+		t.Fatalf("audit_run missing entry err = %v, want missing entry path", err)
+	}
+	auditShowOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"audit_show","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("audit_show err = %v", err)
+	}
+	if !strings.Contains(auditShowOut, "status: failed") {
+		t.Fatalf("audit_show output = %q, want failed audit", auditShowOut)
 	}
 }

@@ -195,6 +195,13 @@ const (
 	ToolProbeStatusFailed ToolProbeStatus = "failed"
 )
 
+type ToolAuditStatus string
+
+const (
+	ToolAuditStatusPassed ToolAuditStatus = "passed"
+	ToolAuditStatusFailed ToolAuditStatus = "failed"
+)
+
 type ToolInstallRecord struct {
 	ToolName     string            `json:"tool_name"`
 	Installer    string            `json:"installer,omitempty"`
@@ -207,6 +214,15 @@ type ToolInstallRecord struct {
 	InstalledAt  time.Time         `json:"installed_at,omitempty"`
 	LastProbedAt time.Time         `json:"last_probed_at,omitempty"`
 	AttestedAt   time.Time         `json:"attested_at,omitempty"`
+}
+
+type ToolAuditRecord struct {
+	ToolName    string          `json:"tool_name"`
+	Status      ToolAuditStatus `json:"status,omitempty"`
+	AuditOutput string          `json:"audit_output,omitempty"`
+	CreatedAt   time.Time       `json:"created_at,omitempty"`
+	UpdatedAt   time.Time       `json:"updated_at,omitempty"`
+	AuditedAt   time.Time       `json:"audited_at,omitempty"`
 }
 
 type TurnAuthorizationKind string
@@ -764,6 +780,17 @@ func NormalizeToolProbeStatus(status ToolProbeStatus) ToolProbeStatus {
 	}
 }
 
+func NormalizeToolAuditStatus(status ToolAuditStatus) ToolAuditStatus {
+	switch ToolAuditStatus(strings.TrimSpace(string(status))) {
+	case ToolAuditStatusPassed:
+		return ToolAuditStatusPassed
+	case ToolAuditStatusFailed:
+		return ToolAuditStatusFailed
+	default:
+		return ""
+	}
+}
+
 func NormalizeToolInstallRecord(record ToolInstallRecord) ToolInstallRecord {
 	record.ToolName = strings.TrimSpace(record.ToolName)
 	record.Installer = strings.TrimSpace(record.Installer)
@@ -771,6 +798,19 @@ func NormalizeToolInstallRecord(record ToolInstallRecord) ToolInstallRecord {
 	record.ProbeOutput = strings.TrimSpace(record.ProbeOutput)
 	record.Status = NormalizeToolInstallStatus(record.Status)
 	record.ProbeStatus = NormalizeToolProbeStatus(record.ProbeStatus)
+	if record.CreatedAt.IsZero() && record.ToolName != "" {
+		record.CreatedAt = time.Now().UTC()
+	}
+	if record.UpdatedAt.IsZero() && record.ToolName != "" {
+		record.UpdatedAt = time.Now().UTC()
+	}
+	return record
+}
+
+func NormalizeToolAuditRecord(record ToolAuditRecord) ToolAuditRecord {
+	record.ToolName = strings.TrimSpace(record.ToolName)
+	record.Status = NormalizeToolAuditStatus(record.Status)
+	record.AuditOutput = strings.TrimSpace(record.AuditOutput)
 	if record.CreatedAt.IsZero() && record.ToolName != "" {
 		record.CreatedAt = time.Now().UTC()
 	}

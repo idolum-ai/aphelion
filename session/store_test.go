@@ -875,6 +875,36 @@ func TestToolAuthorityRecordsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestToolAuditRecordRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	record, err := store.UpsertToolAuditRecord(ToolAuditRecord{ToolName: "browse_page", Status: ToolAuditStatusPassed, AuditOutput: "entry_path: /tmp/run.sh", AuditedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("UpsertToolAuditRecord(insert) err = %v", err)
+	}
+	if record.Status != ToolAuditStatusPassed {
+		t.Fatalf("record.Status = %q, want passed", record.Status)
+	}
+	loaded, ok, err := store.ToolAuditRecord("browse_page")
+	if err != nil {
+		t.Fatalf("ToolAuditRecord() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("ToolAuditRecord() ok = false, want true")
+	}
+	if loaded.Status != ToolAuditStatusPassed {
+		t.Fatalf("loaded.Status = %q, want passed", loaded.Status)
+	}
+	list, err := store.ToolAuditRecords(ToolAuditStatusPassed, 10)
+	if err != nil {
+		t.Fatalf("ToolAuditRecords() err = %v", err)
+	}
+	if len(list) != 1 || list[0].ToolName != "browse_page" {
+		t.Fatalf("ToolAuditRecords(passed) = %#v, want one browse_page record", list)
+	}
+}
+
 func TestToolInstallRecordRoundTrip(t *testing.T) {
 	t.Parallel()
 

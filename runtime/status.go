@@ -1207,8 +1207,16 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 			parts = append(parts, "install_ref="+installRef)
 		}
 		return strings.TrimSpace(strings.Join(parts, " "))
+	case core.ExecutionEventToolAuditUpdated:
+		parts := make([]string, 0, 3)
+		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
+			parts = append(parts, "tool_name="+toolName)
+		}
+		if status := firstNonEmpty(strings.TrimSpace(payloadString(payload, "status")), strings.TrimSpace(eventStatus)); status != "" {
+			parts = append(parts, "status="+status)
+		}
+		return strings.TrimSpace(strings.Join(parts, " "))
 	}
-
 	if len(payload) == 0 {
 		return ""
 	}

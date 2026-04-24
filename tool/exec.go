@@ -634,7 +634,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "proposal_override", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "install_set", "install_show", "install_list", "install_execute", "probe_run", "access_check"], "description": "Tool-authority operation"},
+					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "proposal_override", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "install_set", "install_show", "install_list", "install_execute", "audit_run", "audit_show", "audit_list", "probe_run", "access_check"], "description": "Tool-authority operation"},
 					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show/proposal_review/proposal_ratify/proposal_override/register"},
 					"proposed_by": {"type": "string", "description": "Proposal author identity for proposal_submit"},
 					"tool_name": {"type": "string", "description": "Tool name for proposal_submit/register/exposure/access actions"},
