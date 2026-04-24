@@ -149,3 +149,75 @@ func TestToolAuthorityProbeRunMarksVerifiedExternalToolStaleOnFailure(t *testing
 		t.Fatalf("install_show output = %q, want stale + failed probe after reprobe failure", showOut)
 	}
 }
+
+func TestToolAuthorityInstallExecuteRunsManifestInstallCommandAndMarksInstalled(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	installScript := filepath.Join(registry.workspace, "install.sh")
+	if err := os.WriteFile(installScript, []byte("#!/usr/bin/env bash\necho 'install ok'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(install.sh) err = %v", err)
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		Install:   ExternalToolManifestInstall{Command: []string{"./install.sh"}},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"pending","installer":"aphelion","install_ref":"workspace:tooling-v2"}`))
+	if err != nil {
+		t.Fatalf("install_set(pending) err = %v", err)
+	}
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_execute","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("install_execute err = %v", err)
+	}
+	if !strings.Contains(out, "status: installed") || !strings.Contains(out, "installed_at:") {
+		t.Fatalf("install_execute output = %q, want installed status with timestamp", out)
+	}
+}
+
+func TestToolAuthorityInstallExecuteMarksRecordFailedOnInstallError(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	installScript := filepath.Join(registry.workspace, "install.sh")
+	if err := os.WriteFile(installScript, []byte("#!/usr/bin/env bash\necho 'nope' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(install.sh) err = %v", err)
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		Install:   ExternalToolManifestInstall{Command: []string{"./install.sh"}},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"pending","installer":"aphelion","install_ref":"workspace:tooling-v2"}`))
+	if err != nil {
+		t.Fatalf("install_set(pending) err = %v", err)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_execute","tool_name":"browse_page"}`))
+	if err == nil || !strings.Contains(err.Error(), "install execution failed") {
+		t.Fatalf("install_execute failure err = %v, want install execution failure", err)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin}, key, "tool_authority", json.RawMessage(`{"action":"install_show","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("install_show err = %v", err)
+	}
+	if !strings.Contains(showOut, "status: failed") {
+		t.Fatalf("install_show output = %q, want failed status after install error", showOut)
+	}
+}

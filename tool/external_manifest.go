@@ -22,6 +22,7 @@ type ExternalToolManifest struct {
 	IO          ExternalToolManifestIO          `json:"io"`
 	Constraints ExternalToolManifestConstraints `json:"constraints,omitempty"`
 	Exposure    ExternalToolManifestExposure    `json:"exposure,omitempty"`
+	Install     ExternalToolManifestInstall     `json:"install,omitempty"`
 	Probe       ExternalToolManifestProbe       `json:"probe,omitempty"`
 	Provenance  ExternalToolManifestProvenance  `json:"provenance,omitempty"`
 }
@@ -51,6 +52,10 @@ type ExternalToolManifestExposure struct {
 	RequiresRatification bool     `json:"requires_ratification,omitempty"`
 }
 
+type ExternalToolManifestInstall struct {
+	Command []string `json:"command,omitempty"`
+}
+
 type ExternalToolManifestProbe struct {
 	Command                []string `json:"command,omitempty"`
 	ExpectedOutputContains string   `json:"expected_output_contains,omitempty"`
@@ -76,6 +81,9 @@ func NormalizeExternalToolManifest(m ExternalToolManifest) ExternalToolManifest 
 	m.Provenance.RegisteredBy = strings.TrimSpace(m.Provenance.RegisteredBy)
 	m.Exposure.Principals = normalizeStringList(m.Exposure.Principals)
 	m.Constraints.NetworkTargets = normalizeStringList(m.Constraints.NetworkTargets)
+	if len(m.Install.Command) > 0 {
+		m.Install.Command = normalizeStringList(m.Install.Command)
+	}
 	if len(m.Probe.Command) > 0 {
 		m.Probe.Command = normalizeStringList(m.Probe.Command)
 	}
