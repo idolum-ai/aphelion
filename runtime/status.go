@@ -1152,8 +1152,14 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 		if reviewStatus != "" {
 			parts = append(parts, "review_status="+reviewStatus)
 		}
+		if proposedBy := strings.TrimSpace(payloadString(payload, "proposed_by")); proposedBy != "" {
+			parts = append(parts, "proposed_by="+proposedBy)
+		}
 		if registeredToolID := strings.TrimSpace(payloadString(payload, "registered_tool_id")); registeredToolID != "" {
 			parts = append(parts, "registered_tool_id="+registeredToolID)
+		}
+		if requestVia := strings.TrimSpace(payloadString(payload, "request_via")); requestVia != "" {
+			parts = append(parts, "request_via="+requestVia)
 		}
 		if ratifiedVia := strings.TrimSpace(payloadString(payload, "ratified_via")); ratifiedVia != "" {
 			parts = append(parts, "ratified_via="+ratifiedVia)
@@ -1469,22 +1475,38 @@ func (r *Runtime) toolLifecycleStatusSnapshot(limit int) ([]core.ToolLifecycleSt
 		considerTrace("install", record.UpdatedAt, record.Rationale, record.ArtifactRefs)
 		considerTrace("probe", probe.UpdatedAt, probe.Rationale, probe.ArtifactRefs)
 		considerTrace("audit", audit.UpdatedAt, audit.Rationale, audit.ArtifactRefs)
+		attestationStatus := "unattested"
+		switch {
+		case strings.TrimSpace(record.StaleReason) != "" || strings.TrimSpace(string(record.DriftSource)) != "" || record.Status == session.ToolInstallStatusStale:
+			attestationStatus = "stale"
+		case record.Status == session.ToolInstallStatusVerified && !record.AttestedAt.IsZero():
+			attestationStatus = "fresh"
+		case record.Status == session.ToolInstallStatusVerified:
+			attestationStatus = "verified_without_attestation_time"
+		}
 		out = append(out, core.ToolLifecycleStatusSnapshot{
-			ToolName:            record.ToolName,
-			InstallStatus:       strings.TrimSpace(string(record.Status)),
-			ProbeStatus:         strings.TrimSpace(string(probe.Status)),
-			AuditStatus:         strings.TrimSpace(string(audit.Status)),
-			InstallRef:          strings.TrimSpace(record.InstallRef),
-			BaselineFingerprint: strings.TrimSpace(record.BaselineFingerprint),
-			CurrentFingerprint:  strings.TrimSpace(record.CurrentFingerprint),
-			StaleReason:         strings.TrimSpace(record.StaleReason),
-			TraceStage:          traceStage,
-			TraceSummary:        traceSummary,
-			TraceArtifactCount:  traceArtifactCount,
-			InstalledAt:         record.InstalledAt,
-			LastProbedAt:        probe.ProbedAt,
-			AuditedAt:           audit.AuditedAt,
-			AttestedAt:          record.AttestedAt,
+			ToolName:             record.ToolName,
+			InstallStatus:        strings.TrimSpace(string(record.Status)),
+			ProbeStatus:          strings.TrimSpace(string(probe.Status)),
+			AuditStatus:          strings.TrimSpace(string(audit.Status)),
+			InstallRef:           strings.TrimSpace(record.InstallRef),
+			BaselineFingerprint:  strings.TrimSpace(record.BaselineFingerprint),
+			CurrentFingerprint:   strings.TrimSpace(record.CurrentFingerprint),
+			ManifestHash:         strings.TrimSpace(record.CurrentManifestHash),
+			WorkspaceFingerprint: strings.TrimSpace(record.CurrentWorkspaceFingerprint),
+			DriftSource:          strings.TrimSpace(string(record.DriftSource)),
+			StaleReason:          strings.TrimSpace(record.StaleReason),
+			AttestationStatus:    attestationStatus,
+			InstallFailures:      record.ConsecutiveFailures,
+			ProbeFailures:        probe.ConsecutiveFailures,
+			AuditFailures:        audit.ConsecutiveFailures,
+			TraceStage:           traceStage,
+			TraceSummary:         traceSummary,
+			TraceArtifactCount:   traceArtifactCount,
+			InstalledAt:          record.InstalledAt,
+			LastProbedAt:         probe.ProbedAt,
+			AuditedAt:            audit.AuditedAt,
+			AttestedAt:           record.AttestedAt,
 		})
 	}
 	return out, nil

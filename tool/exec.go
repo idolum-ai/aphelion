@@ -656,6 +656,22 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			}`),
 		})
 		defs = append(defs, agent.ToolDef{
+			Name:        "tool_request",
+			Description: "Request a governed tool capability proposal. Available to tenants and agents; only creates or reads proposal requests, while approval/install/register/expose stay with tool_authority.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list"], "description": "Tool request operation"},
+					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show or optional submit id"},
+					"tool_name": {"type": "string", "description": "Requested tool name"},
+					"why_now": {"type": "string", "description": "Why this capability is needed now"},
+					"contract": {"type": "object", "description": "Opaque proposed contract, constraints, inputs, outputs, owner, or implementation notes"},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Optional list limit"}
+				},
+				"required": ["action"]
+			}`),
+		})
+		defs = append(defs, agent.ToolDef{
 			Name:        "tool_authority",
 			Description: "Manage tool-authority lifecycle records (proposal/review/register/expose) for governor-controlled capability rollout. Admin only.",
 			Parameters: json.RawMessage(`{
@@ -886,6 +902,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.updatePlan(ctx, input, key)
 	case "tool_authority":
 		return r.toolAuthority(ctx, input, p, key, scope)
+	case "tool_request":
+		return r.toolRequest(ctx, input, p, key)
 	case "search_web":
 		return r.searchWebTool(ctx, input, p, key)
 	case "semantic_search":
@@ -903,6 +921,9 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 					return "", err
 				}
 				return r.externalExecutor.Execute(ctx, manifest, input, scope, r.runner, r.maxOutputBytes)
+			}
+			if err := validateExternalProcessPolicy(manifest); err != nil {
+				return "", err
 			}
 			return "", fmt.Errorf("external tool %q is present in the manifest but not yet executable in core (owner=%s)", manifest.Name, manifest.Owner)
 		}

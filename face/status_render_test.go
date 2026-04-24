@@ -127,21 +127,26 @@ func TestRenderTelegramStatusChatIncludesCanonicalToolLifecycleSnapshot(t *testi
 	out := RenderTelegramStatusChat(core.ChatStatusSnapshot{
 		ChatID: 45,
 		ToolLifecycle: []core.ToolLifecycleStatusSnapshot{{
-			ToolName:           "browse_page",
-			InstallStatus:      "verified",
-			ProbeStatus:        "passed",
-			AuditStatus:        "passed",
-			InstallRef:         "workspace:tooling-v3",
-			StaleReason:        "fingerprint drift: baseline=sha256:a current=sha256:b",
-			TraceStage:         "probe",
-			TraceSummary:       "probe_run passed against the declared probe command",
-			TraceArtifactCount: 1,
+			ToolName:             "browse_page",
+			InstallStatus:        "verified",
+			ProbeStatus:          "passed",
+			AuditStatus:          "passed",
+			InstallRef:           "workspace:tooling-v3",
+			DriftSource:          "workspace_drift",
+			StaleReason:          "workspace_drift: baseline=sha256:a current=sha256:b",
+			AttestationStatus:    "stale",
+			ManifestHash:         "sha256:abcdefghijklmnopqrstuvwxyz",
+			WorkspaceFingerprint: "sha256:zyxwvutsrqponmlkjihgfedcba",
+			ProbeFailures:        1,
+			TraceStage:           "probe",
+			TraceSummary:         "probe_run passed against the declared probe command",
+			TraceArtifactCount:   1,
 		}},
 	}, "medium", "high", false)
 
 	for _, needle := range []string{
 		"tool_lifecycle source=canonical:session.tool_install_records+tool_audit_records",
-		"- tool_name=browse_page install=verified probe=passed audit=passed install_ref=workspace:tooling-v3 stale_reason=fingerprint drift: baseline=sha256:a current=sha256:b trace=probe:probe_run passed against the declared probe command refs=1",
+		"- tool_name=browse_page install=verified probe=passed audit=passed install_ref=workspace:tooling-v3 attestation=stale drift_source=workspace_drift stale_reason=workspace_drift: baseline=sha256:a current=sha256:b failures=install:0,probe:1,audit:0 manifest_hash=sha256:abcdefghijkl workspace_fingerprint=sha256:zyxwvutsrqpo trace=probe:probe_run passed against the declared probe command refs=1",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramStatusChat() = %q, want substring %q", out, needle)

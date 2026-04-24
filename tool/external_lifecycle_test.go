@@ -117,6 +117,76 @@ func TestExternalToolAuthorityEndToEndLifecycleFlow(t *testing.T) {
 	}
 }
 
+func TestExternalToolTenantRequestLaneCarriesThroughToInvocation(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	registry.WithToolProposalRatificationApprover(&stubToolProposalRatificationApprover{approved: true})
+	installExternalLifecycleFixture(t, registry, "browse_page")
+	adminKey := adminSessionKey()
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	tenant := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 2002}
+	tenantKey := session.SessionKey{ChatID: 2002, UserID: 2002, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "2002"}}
+
+	requestOut, err := registry.ExecuteForSessionPrincipal(context.Background(), tenant, tenantKey, "tool_request", json.RawMessage(`{
+		"action":"proposal_submit",
+		"proposal_id":"tp-tenant-browse",
+		"tool_name":"browse_page",
+		"why_now":"Tenant needs a bounded page fetcher.",
+		"contract":{"constraints":["read_only","operator_governed_install"]}
+	}`))
+	if err != nil {
+		t.Fatalf("tool_request proposal_submit err = %v", err)
+	}
+	if !strings.Contains(requestOut, "review_status: proposed") || !strings.Contains(requestOut, "proposed_by: telegram:2002") {
+		t.Fatalf("tool_request output = %q, want tenant attribution", requestOut)
+	}
+
+	for _, input := range []string{
+		`{"action":"proposal_ratify","proposal_id":"tp-tenant-browse"}`,
+		`{"action":"install_set","tool_name":"browse_page","status":"pending","installer":"aphelion","install_ref":"workspace:browse-page-fixture"}`,
+		`{"action":"install_execute","tool_name":"browse_page"}`,
+		`{"action":"audit_run","tool_name":"browse_page"}`,
+		`{"action":"probe_run","tool_name":"browse_page"}`,
+		`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:browse-page-fixture"}`,
+		`{"action":"register","proposal_id":"tp-tenant-browse","implementation_ref":"external:browse_page"}`,
+		`{"action":"exposure_set","tool_name":"browse_page","principal":"telegram:2002","active":true}`,
+	} {
+		if _, err := executeToolAuthorityJSON(t, registry, admin, adminKey, input); err != nil {
+			t.Fatalf("tool_authority input %s err = %v", input, err)
+		}
+	}
+
+	tenantScope, err := registry.sandbox.Resolve(tenant)
+	if err != nil {
+		t.Fatalf("Resolve(tenant) err = %v", err)
+	}
+	if err := os.MkdirAll(tenantScope.WorkingRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(tenant working root) err = %v", err)
+	}
+	for _, name := range []string{"install.sh", "probe.sh", "run.sh", ".browse_page_installed"} {
+		raw, err := os.ReadFile(filepath.Join(registry.workspace, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) err = %v", name, err)
+		}
+		mode := os.FileMode(0o644)
+		if strings.HasSuffix(name, ".sh") {
+			mode = 0o755
+		}
+		if err := os.WriteFile(filepath.Join(tenantScope.WorkingRoot, name), raw, mode); err != nil {
+			t.Fatalf("WriteFile(tenant %s) err = %v", name, err)
+		}
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), tenant, tenantKey, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	if err != nil {
+		t.Fatalf("tenant browse_page invoke err = %v", err)
+	}
+	if out != `{"summary":"ok","installed":true}` {
+		t.Fatalf("tenant browse_page output = %q, want fixture output", out)
+	}
+}
+
 func TestExternalToolAuthorityLifecycleNegativeGates(t *testing.T) {
 	t.Parallel()
 

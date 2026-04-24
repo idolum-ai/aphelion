@@ -21,8 +21,10 @@ type ExternalToolManifest struct {
 	Execution   ExternalToolManifestExecution   `json:"execution"`
 	IO          ExternalToolManifestIO          `json:"io"`
 	Constraints ExternalToolManifestConstraints `json:"constraints,omitempty"`
+	Container   ExternalToolManifestContainer   `json:"container,omitempty"`
 	Exposure    ExternalToolManifestExposure    `json:"exposure,omitempty"`
 	Install     ExternalToolManifestInstall     `json:"install,omitempty"`
+	Audit       ExternalToolManifestAudit       `json:"audit,omitempty"`
 	Probe       ExternalToolManifestProbe       `json:"probe,omitempty"`
 	Provenance  ExternalToolManifestProvenance  `json:"provenance,omitempty"`
 }
@@ -56,7 +58,24 @@ type ExternalToolManifestInstall struct {
 	Command []string `json:"command,omitempty"`
 }
 
+type ExternalToolManifestAudit struct {
+	Command                []string `json:"command,omitempty"`
+	ExpectedOutputContains string   `json:"expected_output_contains,omitempty"`
+}
+
 type ExternalToolManifestProbe struct {
+	Command                []string `json:"command,omitempty"`
+	ExpectedOutputContains string   `json:"expected_output_contains,omitempty"`
+}
+
+type ExternalToolManifestContainer struct {
+	Image       string                              `json:"image,omitempty"`
+	Digest      string                              `json:"digest,omitempty"`
+	BuildRef    string                              `json:"build_ref,omitempty"`
+	Healthcheck ExternalToolManifestContainerHealth `json:"healthcheck,omitempty"`
+}
+
+type ExternalToolManifestContainerHealth struct {
 	Command                []string `json:"command,omitempty"`
 	ExpectedOutputContains string   `json:"expected_output_contains,omitempty"`
 }
@@ -76,6 +95,12 @@ func NormalizeExternalToolManifest(m ExternalToolManifest) ExternalToolManifest 
 	m.Execution.Workdir = strings.TrimSpace(m.Execution.Workdir)
 	m.Constraints.Network = strings.TrimSpace(strings.ToLower(m.Constraints.Network))
 	m.Constraints.Filesystem = strings.TrimSpace(strings.ToLower(m.Constraints.Filesystem))
+	m.Container.Image = strings.TrimSpace(m.Container.Image)
+	m.Container.Digest = strings.TrimSpace(m.Container.Digest)
+	m.Container.BuildRef = strings.TrimSpace(m.Container.BuildRef)
+	if m.Execution.Mode == "container" && m.Container.Image == "" {
+		m.Container.Image = m.Execution.Entry
+	}
 	m.Provenance.ProposalID = strings.TrimSpace(m.Provenance.ProposalID)
 	m.Provenance.RegisteredAt = strings.TrimSpace(m.Provenance.RegisteredAt)
 	m.Provenance.RegisteredBy = strings.TrimSpace(m.Provenance.RegisteredBy)
@@ -84,8 +109,14 @@ func NormalizeExternalToolManifest(m ExternalToolManifest) ExternalToolManifest 
 	if len(m.Install.Command) > 0 {
 		m.Install.Command = normalizeStringList(m.Install.Command)
 	}
+	if len(m.Audit.Command) > 0 {
+		m.Audit.Command = normalizeStringList(m.Audit.Command)
+	}
 	if len(m.Probe.Command) > 0 {
 		m.Probe.Command = normalizeStringList(m.Probe.Command)
+	}
+	if len(m.Container.Healthcheck.Command) > 0 {
+		m.Container.Healthcheck.Command = normalizeStringList(m.Container.Healthcheck.Command)
 	}
 	return m
 }
@@ -105,8 +136,16 @@ func validateExternalToolManifest(m ExternalToolManifest) error {
 	default:
 		return fmt.Errorf("external tool manifest execution.mode %q is not supported", m.Execution.Mode)
 	}
-	if m.Execution.Entry == "" {
+	if m.Execution.Entry == "" && strings.TrimSpace(m.Container.Image) == "" {
 		return fmt.Errorf("external tool manifest execution.entry is required")
+	}
+	if m.Execution.Mode == "container" {
+		if strings.TrimSpace(m.Container.Image) == "" {
+			m.Container.Image = strings.TrimSpace(m.Execution.Entry)
+		}
+		if strings.TrimSpace(m.Container.Image) == "" {
+			return fmt.Errorf("external tool manifest container.image is required for container execution")
+		}
 	}
 	if len(m.IO.InputSchema) > 0 && !json.Valid(m.IO.InputSchema) {
 		return fmt.Errorf("external tool manifest io.input_schema must be valid json")

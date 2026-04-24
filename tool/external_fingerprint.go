@@ -20,13 +20,27 @@ type externalToolFingerprintInput struct {
 	IO          externalToolFingerprintIO       `json:"io"`
 	Constraints ExternalToolManifestConstraints `json:"constraints,omitempty"`
 	Install     ExternalToolManifestInstall     `json:"install,omitempty"`
+	Audit       ExternalToolManifestAudit       `json:"audit,omitempty"`
 	Probe       ExternalToolManifestProbe       `json:"probe,omitempty"`
-	EntryFile   *externalToolFileFingerprint    `json:"entry_file,omitempty"`
 }
 
 type externalToolFingerprintIO struct {
 	InputSchema  string `json:"input_schema,omitempty"`
 	OutputSchema string `json:"output_schema,omitempty"`
+}
+
+type externalToolFingerprintSet struct {
+	Aggregate            string
+	InstallRef           string
+	ManifestHash         string
+	WorkspaceFingerprint string
+}
+
+type externalToolWorkspaceFingerprintInput struct {
+	Mode    string                         `json:"mode"`
+	Workdir string                         `json:"workdir,omitempty"`
+	Files   []externalToolFileFingerprint  `json:"files,omitempty"`
+	Image   *externalToolContainerIdentity `json:"image,omitempty"`
 }
 
 type externalToolFileFingerprint struct {
@@ -36,86 +50,189 @@ type externalToolFileFingerprint struct {
 	Mode   string `json:"mode"`
 }
 
+type externalToolContainerIdentity struct {
+	Image       string                              `json:"image,omitempty"`
+	Digest      string                              `json:"digest,omitempty"`
+	BuildRef    string                              `json:"build_ref,omitempty"`
+	Healthcheck ExternalToolManifestContainerHealth `json:"healthcheck,omitempty"`
+}
+
 func externalToolFingerprint(manifest ExternalToolManifest, workingRoot string) (string, error) {
+	fingerprint, err := externalToolFingerprints(manifest, workingRoot, "")
+	if err != nil {
+		return "", err
+	}
+	return fingerprint.Aggregate, nil
+}
+
+func externalToolFingerprints(manifest ExternalToolManifest, workingRoot string, installRef string) (externalToolFingerprintSet, error) {
 	manifest = NormalizeExternalToolManifest(manifest)
 	if err := validateExternalToolManifest(manifest); err != nil {
-		return "", err
+		return externalToolFingerprintSet{}, err
 	}
-	workdir, err := resolveWorkdir(workingRoot, manifest.Execution.Workdir)
+	manifestHash, err := externalToolManifestHash(manifest)
 	if err != nil {
-		return "", err
+		return externalToolFingerprintSet{}, err
 	}
-	entryFile, err := externalToolEntryFileFingerprint(manifest, workdir)
+	workspaceFingerprint, err := externalToolWorkspaceFingerprint(manifest, workingRoot)
 	if err != nil {
-		return "", err
+		return externalToolFingerprintSet{}, err
 	}
+	installRef = strings.TrimSpace(installRef)
+	aggregate, err := hashCanonicalJSON(struct {
+		InstallRef           string `json:"install_ref,omitempty"`
+		ManifestHash         string `json:"manifest_hash"`
+		WorkspaceFingerprint string `json:"workspace_fingerprint,omitempty"`
+	}{
+		InstallRef:           installRef,
+		ManifestHash:         manifestHash,
+		WorkspaceFingerprint: workspaceFingerprint,
+	})
+	if err != nil {
+		return externalToolFingerprintSet{}, fmt.Errorf("external tool %q fingerprint encode failed: %w", manifest.Name, err)
+	}
+	return externalToolFingerprintSet{
+		Aggregate:            aggregate,
+		InstallRef:           installRef,
+		ManifestHash:         manifestHash,
+		WorkspaceFingerprint: workspaceFingerprint,
+	}, nil
+}
+
+func externalToolManifestHash(manifest ExternalToolManifest) (string, error) {
+	manifest = NormalizeExternalToolManifest(manifest)
 	payload := externalToolFingerprintInput{
-		Name:    manifest.Name,
-		Owner:   manifest.Owner,
-		Version: manifest.Version,
-		Execution: ExternalToolManifestExecution{
-			Mode:           manifest.Execution.Mode,
-			Entry:          manifest.Execution.Entry,
-			Workdir:        manifest.Execution.Workdir,
-			TimeoutSeconds: manifest.Execution.TimeoutSeconds,
-		},
+		Name:      manifest.Name,
+		Owner:     manifest.Owner,
+		Version:   manifest.Version,
+		Execution: manifest.Execution,
 		IO: externalToolFingerprintIO{
 			InputSchema:  canonicalRawJSON(manifest.IO.InputSchema),
 			OutputSchema: canonicalRawJSON(manifest.IO.OutputSchema),
 		},
 		Constraints: manifest.Constraints,
 		Install:     manifest.Install,
+		Audit:       manifest.Audit,
 		Probe:       manifest.Probe,
-		EntryFile:   entryFile,
 	}
+	return hashCanonicalJSON(payload)
+}
+
+func externalToolWorkspaceFingerprint(manifest ExternalToolManifest, workingRoot string) (string, error) {
+	manifest = NormalizeExternalToolManifest(manifest)
+	workdir, err := resolveWorkdir(workingRoot, manifest.Execution.Workdir)
+	if err != nil {
+		return "", err
+	}
+	payload := externalToolWorkspaceFingerprintInput{
+		Mode:    manifest.Execution.Mode,
+		Workdir: strings.TrimSpace(manifest.Execution.Workdir),
+	}
+	switch manifest.Execution.Mode {
+	case "process", "subprocess":
+		files, err := externalToolLocalFileFingerprints(manifest, workdir)
+		if err != nil {
+			return "", err
+		}
+		payload.Files = files
+	case "container":
+		payload.Image = &externalToolContainerIdentity{
+			Image:       strings.TrimSpace(manifest.Container.Image),
+			Digest:      strings.TrimSpace(manifest.Container.Digest),
+			BuildRef:    strings.TrimSpace(manifest.Container.BuildRef),
+			Healthcheck: manifest.Container.Healthcheck,
+		}
+	default:
+		return "", nil
+	}
+	return hashCanonicalJSON(payload)
+}
+
+func hashCanonicalJSON(payload any) (string, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("external tool %q fingerprint encode failed: %w", manifest.Name, err)
+		return "", err
 	}
 	sum := sha256.Sum256(raw)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func externalToolEntryFileFingerprint(manifest ExternalToolManifest, workdir string) (*externalToolFileFingerprint, error) {
-	if manifest.Execution.Mode != "process" && manifest.Execution.Mode != "subprocess" {
-		return nil, nil
+func externalToolLocalFileFingerprints(manifest ExternalToolManifest, workdir string) ([]externalToolFileFingerprint, error) {
+	candidates := make([]string, 0, 4)
+	if first := firstCommandToken(manifest.Execution.Entry); first != "" {
+		candidates = append(candidates, first)
 	}
-	fields := strings.Fields(manifest.Execution.Entry)
+	for _, command := range [][]string{manifest.Install.Command, manifest.Audit.Command, manifest.Probe.Command} {
+		if len(command) > 0 {
+			candidates = append(candidates, command[0])
+		}
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	files := make([]externalToolFileFingerprint, 0, len(candidates))
+	for _, candidate := range candidates {
+		fp, ok, err := externalToolLocalFileFingerprint(manifest.Name, candidate, workdir)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		if _, exists := seen[fp.Path]; exists {
+			continue
+		}
+		seen[fp.Path] = struct{}{}
+		files = append(files, *fp)
+	}
+	return files, nil
+}
+
+func firstCommandToken(command string) string {
+	fields := strings.Fields(strings.TrimSpace(command))
 	if len(fields) == 0 {
-		return nil, fmt.Errorf("external tool %q execution entry is empty", manifest.Name)
+		return ""
 	}
-	target := fields[0]
+	return fields[0]
+}
+
+func externalToolLocalFileFingerprint(toolName string, target string, workdir string) (*externalToolFileFingerprint, bool, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil, false, nil
+	}
 	var resolved string
+	logicalPath := target
 	switch {
 	case strings.HasPrefix(target, "./") || strings.HasPrefix(target, "../"):
 		path, err := resolveWorkdir(workdir, target)
 		if err != nil {
-			return nil, err
+			return nil, true, err
 		}
 		resolved = path
+		logicalPath = filepath.Clean(target)
 	case strings.HasPrefix(target, "/"):
 		resolved = target
+		logicalPath = filepath.Clean(target)
 	default:
-		return nil, nil
+		return nil, false, nil
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return nil, fmt.Errorf("external tool %q fingerprint stat entry %q: %w", manifest.Name, resolved, err)
+		return nil, true, fmt.Errorf("external tool %q fingerprint stat entry %q: %w", toolName, resolved, err)
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("external tool %q fingerprint entry %q is a directory", manifest.Name, resolved)
+		return nil, true, fmt.Errorf("external tool %q fingerprint entry %q is a directory", toolName, resolved)
 	}
 	raw, err := os.ReadFile(resolved)
 	if err != nil {
-		return nil, fmt.Errorf("external tool %q fingerprint read entry %q: %w", manifest.Name, resolved, err)
+		return nil, true, fmt.Errorf("external tool %q fingerprint read entry %q: %w", toolName, resolved, err)
 	}
 	sum := sha256.Sum256(raw)
 	return &externalToolFileFingerprint{
-		Path:   filepath.Clean(resolved),
+		Path:   logicalPath,
 		SHA256: "sha256:" + hex.EncodeToString(sum[:]),
 		Size:   info.Size(),
 		Mode:   info.Mode().Perm().String(),
-	}, nil
+	}, true, nil
 }
 
 func canonicalRawJSON(raw json.RawMessage) string {

@@ -206,7 +206,14 @@ func (s *SQLiteStore) init() error {
 				artifact_refs_json TEXT NOT NULL DEFAULT '[]',
 				baseline_fingerprint TEXT NOT NULL DEFAULT '',
 				current_fingerprint TEXT NOT NULL DEFAULT '',
+				baseline_install_ref TEXT NOT NULL DEFAULT '',
+				current_install_ref TEXT NOT NULL DEFAULT '',
+				baseline_manifest_hash TEXT NOT NULL DEFAULT '',
+				current_manifest_hash TEXT NOT NULL DEFAULT '',
+				baseline_workspace_fingerprint TEXT NOT NULL DEFAULT '',
+				current_workspace_fingerprint TEXT NOT NULL DEFAULT '',
 				stale_reason TEXT NOT NULL DEFAULT '',
+				drift_source TEXT NOT NULL DEFAULT '',
 				consecutive_failures INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -221,6 +228,16 @@ func (s *SQLiteStore) init() error {
 			probe_output TEXT NOT NULL DEFAULT '',
 			rationale TEXT NOT NULL DEFAULT '',
 			artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+			baseline_fingerprint TEXT NOT NULL DEFAULT '',
+			current_fingerprint TEXT NOT NULL DEFAULT '',
+			baseline_install_ref TEXT NOT NULL DEFAULT '',
+			current_install_ref TEXT NOT NULL DEFAULT '',
+			baseline_manifest_hash TEXT NOT NULL DEFAULT '',
+			current_manifest_hash TEXT NOT NULL DEFAULT '',
+			baseline_workspace_fingerprint TEXT NOT NULL DEFAULT '',
+			current_workspace_fingerprint TEXT NOT NULL DEFAULT '',
+			stale_reason TEXT NOT NULL DEFAULT '',
+			drift_source TEXT NOT NULL DEFAULT '',
 			consecutive_failures INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -235,7 +252,14 @@ func (s *SQLiteStore) init() error {
 				artifact_refs_json TEXT NOT NULL DEFAULT '[]',
 				baseline_fingerprint TEXT NOT NULL DEFAULT '',
 				current_fingerprint TEXT NOT NULL DEFAULT '',
+				baseline_install_ref TEXT NOT NULL DEFAULT '',
+				current_install_ref TEXT NOT NULL DEFAULT '',
+				baseline_manifest_hash TEXT NOT NULL DEFAULT '',
+				current_manifest_hash TEXT NOT NULL DEFAULT '',
+				baseline_workspace_fingerprint TEXT NOT NULL DEFAULT '',
+				current_workspace_fingerprint TEXT NOT NULL DEFAULT '',
 				stale_reason TEXT NOT NULL DEFAULT '',
+				drift_source TEXT NOT NULL DEFAULT '',
 				consecutive_failures INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1699,8 +1723,8 @@ func (s *SQLiteStore) UpsertToolInstallRecord(record ToolInstallRecord) (ToolIns
 	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
 	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
 	if _, err := s.db.Exec(`
-		INSERT INTO tool_install_records(tool_name, installer, install_ref, status, probe_status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tool_install_records(tool_name, installer, install_ref, status, probe_status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, baseline_install_ref, current_install_ref, baseline_manifest_hash, current_manifest_hash, baseline_workspace_fingerprint, current_workspace_fingerprint, stale_reason, drift_source, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tool_name) DO UPDATE SET
 			installer = excluded.installer,
 			install_ref = excluded.install_ref,
@@ -1711,7 +1735,14 @@ func (s *SQLiteStore) UpsertToolInstallRecord(record ToolInstallRecord) (ToolIns
 				artifact_refs_json = excluded.artifact_refs_json,
 				baseline_fingerprint = excluded.baseline_fingerprint,
 				current_fingerprint = excluded.current_fingerprint,
+				baseline_install_ref = excluded.baseline_install_ref,
+				current_install_ref = excluded.current_install_ref,
+				baseline_manifest_hash = excluded.baseline_manifest_hash,
+				current_manifest_hash = excluded.current_manifest_hash,
+				baseline_workspace_fingerprint = excluded.baseline_workspace_fingerprint,
+				current_workspace_fingerprint = excluded.current_workspace_fingerprint,
 				stale_reason = excluded.stale_reason,
+				drift_source = excluded.drift_source,
 				consecutive_failures = excluded.consecutive_failures,
 			updated_at = excluded.updated_at,
 			installed_at = excluded.installed_at,
@@ -1729,7 +1760,14 @@ func (s *SQLiteStore) UpsertToolInstallRecord(record ToolInstallRecord) (ToolIns
 		encodeRecordReferences(record.ArtifactRefs),
 		record.BaselineFingerprint,
 		record.CurrentFingerprint,
+		record.BaselineInstallRef,
+		record.CurrentInstallRef,
+		record.BaselineManifestHash,
+		record.CurrentManifestHash,
+		record.BaselineWorkspaceFingerprint,
+		record.CurrentWorkspaceFingerprint,
 		record.StaleReason,
+		string(record.DriftSource),
 		record.ConsecutiveFailures,
 		createdAt.Format(time.RFC3339Nano),
 		updatedAt.Format(time.RFC3339Nano),
@@ -1761,7 +1799,14 @@ func (s *SQLiteStore) ToolInstallRecord(toolName string) (ToolInstallRecord, boo
 		artifactRefsRaw        string
 		baselineFingerprintRaw string
 		currentFingerprintRaw  string
+		baselineInstallRefRaw  string
+		currentInstallRefRaw   string
+		baselineManifestRaw    string
+		currentManifestRaw     string
+		baselineWorkspaceRaw   string
+		currentWorkspaceRaw    string
 		staleReasonRaw         string
+		driftSourceRaw         string
 		consecutiveFailuresRaw int
 		createdAtRaw           string
 		updatedAtRaw           string
@@ -1771,7 +1816,7 @@ func (s *SQLiteStore) ToolInstallRecord(toolName string) (ToolInstallRecord, boo
 		attestedAtRaw          sql.NullString
 	)
 	err := s.db.QueryRow(`
-		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at
+		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, baseline_install_ref, current_install_ref, baseline_manifest_hash, current_manifest_hash, baseline_workspace_fingerprint, current_workspace_fingerprint, stale_reason, drift_source, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at
 		FROM tool_install_records
 		WHERE tool_name = ?
 	`, toolName).Scan(
@@ -1785,7 +1830,14 @@ func (s *SQLiteStore) ToolInstallRecord(toolName string) (ToolInstallRecord, boo
 		&artifactRefsRaw,
 		&baselineFingerprintRaw,
 		&currentFingerprintRaw,
+		&baselineInstallRefRaw,
+		&currentInstallRefRaw,
+		&baselineManifestRaw,
+		&currentManifestRaw,
+		&baselineWorkspaceRaw,
+		&currentWorkspaceRaw,
 		&staleReasonRaw,
+		&driftSourceRaw,
 		&consecutiveFailuresRaw,
 		&createdAtRaw,
 		&updatedAtRaw,
@@ -1814,7 +1866,14 @@ func (s *SQLiteStore) ToolInstallRecord(toolName string) (ToolInstallRecord, boo
 	record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
 	record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
 	record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+	record.BaselineInstallRef = strings.TrimSpace(baselineInstallRefRaw)
+	record.CurrentInstallRef = strings.TrimSpace(currentInstallRefRaw)
+	record.BaselineManifestHash = strings.TrimSpace(baselineManifestRaw)
+	record.CurrentManifestHash = strings.TrimSpace(currentManifestRaw)
+	record.BaselineWorkspaceFingerprint = strings.TrimSpace(baselineWorkspaceRaw)
+	record.CurrentWorkspaceFingerprint = strings.TrimSpace(currentWorkspaceRaw)
 	record.StaleReason = strings.TrimSpace(staleReasonRaw)
+	record.DriftSource = ToolDriftSource(strings.TrimSpace(driftSourceRaw))
 	record.ConsecutiveFailures = consecutiveFailuresRaw
 	record.CreatedAt = createdAt
 	record.UpdatedAt = updatedAt
@@ -1850,7 +1909,7 @@ func (s *SQLiteStore) ToolInstallRecords(status ToolInstallStatus, limit int) ([
 	}
 	status = NormalizeToolInstallStatus(status)
 	query := `
-		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at
+		SELECT tool_name, installer, install_ref, status, probe_status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, baseline_install_ref, current_install_ref, baseline_manifest_hash, current_manifest_hash, baseline_workspace_fingerprint, current_workspace_fingerprint, stale_reason, drift_source, consecutive_failures, created_at, updated_at, installed_at, last_probed_at, last_failure_at, attested_at
 		FROM tool_install_records
 	`
 	args := make([]any, 0, 2)
@@ -1874,7 +1933,14 @@ func (s *SQLiteStore) ToolInstallRecords(status ToolInstallStatus, limit int) ([
 			artifactRefsRaw        string
 			baselineFingerprintRaw string
 			currentFingerprintRaw  string
+			baselineInstallRefRaw  string
+			currentInstallRefRaw   string
+			baselineManifestRaw    string
+			currentManifestRaw     string
+			baselineWorkspaceRaw   string
+			currentWorkspaceRaw    string
 			staleReasonRaw         string
+			driftSourceRaw         string
 			consecutiveFailuresRaw int
 			createdAtRaw           string
 			updatedAtRaw           string
@@ -1883,7 +1949,7 @@ func (s *SQLiteStore) ToolInstallRecords(status ToolInstallStatus, limit int) ([
 			lastFailureAtRaw       sql.NullString
 			attestedAtRaw          sql.NullString
 		)
-		if err := rows.Scan(&record.ToolName, &record.Installer, &record.InstallRef, &statusRaw, &probeStatusRaw, &record.ProbeOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &staleReasonRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &installedAtRaw, &lastProbedAtRaw, &lastFailureAtRaw, &attestedAtRaw); err != nil {
+		if err := rows.Scan(&record.ToolName, &record.Installer, &record.InstallRef, &statusRaw, &probeStatusRaw, &record.ProbeOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &baselineInstallRefRaw, &currentInstallRefRaw, &baselineManifestRaw, &currentManifestRaw, &baselineWorkspaceRaw, &currentWorkspaceRaw, &staleReasonRaw, &driftSourceRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &installedAtRaw, &lastProbedAtRaw, &lastFailureAtRaw, &attestedAtRaw); err != nil {
 			return nil, fmt.Errorf("scan tool install record: %w", err)
 		}
 		createdAt, err := parseSQLiteTime(createdAtRaw)
@@ -1900,7 +1966,14 @@ func (s *SQLiteStore) ToolInstallRecords(status ToolInstallStatus, limit int) ([
 		record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
 		record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
 		record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+		record.BaselineInstallRef = strings.TrimSpace(baselineInstallRefRaw)
+		record.CurrentInstallRef = strings.TrimSpace(currentInstallRefRaw)
+		record.BaselineManifestHash = strings.TrimSpace(baselineManifestRaw)
+		record.CurrentManifestHash = strings.TrimSpace(currentManifestRaw)
+		record.BaselineWorkspaceFingerprint = strings.TrimSpace(baselineWorkspaceRaw)
+		record.CurrentWorkspaceFingerprint = strings.TrimSpace(currentWorkspaceRaw)
 		record.StaleReason = strings.TrimSpace(staleReasonRaw)
+		record.DriftSource = ToolDriftSource(strings.TrimSpace(driftSourceRaw))
 		record.ConsecutiveFailures = consecutiveFailuresRaw
 		record.CreatedAt = createdAt
 		record.UpdatedAt = updatedAt
@@ -1951,18 +2024,28 @@ func (s *SQLiteStore) UpsertToolProbeRecord(record ToolProbeRecord) (ToolProbeRe
 	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
 	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
 	if _, err := s.db.Exec(`
-			INSERT INTO tool_probe_records(tool_name, status, probe_output, rationale, artifact_refs_json, consecutive_failures, created_at, updated_at, probed_at, last_failure_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO tool_probe_records(tool_name, status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, baseline_install_ref, current_install_ref, baseline_manifest_hash, current_manifest_hash, baseline_workspace_fingerprint, current_workspace_fingerprint, stale_reason, drift_source, consecutive_failures, created_at, updated_at, probed_at, last_failure_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(tool_name) DO UPDATE SET
 			status = excluded.status,
 			probe_output = excluded.probe_output,
 			rationale = excluded.rationale,
 			artifact_refs_json = excluded.artifact_refs_json,
+			baseline_fingerprint = excluded.baseline_fingerprint,
+			current_fingerprint = excluded.current_fingerprint,
+			baseline_install_ref = excluded.baseline_install_ref,
+			current_install_ref = excluded.current_install_ref,
+			baseline_manifest_hash = excluded.baseline_manifest_hash,
+			current_manifest_hash = excluded.current_manifest_hash,
+			baseline_workspace_fingerprint = excluded.baseline_workspace_fingerprint,
+			current_workspace_fingerprint = excluded.current_workspace_fingerprint,
+			stale_reason = excluded.stale_reason,
+			drift_source = excluded.drift_source,
 			consecutive_failures = excluded.consecutive_failures,
 			updated_at = excluded.updated_at,
 			probed_at = excluded.probed_at,
 			last_failure_at = excluded.last_failure_at
-	`, record.ToolName, string(record.Status), record.ProbeOutput, record.Rationale, encodeRecordReferences(record.ArtifactRefs), record.ConsecutiveFailures, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), nullableTimeRFC3339(record.ProbedAt), nullableTimeRFC3339(record.LastFailureAt)); err != nil {
+	`, record.ToolName, string(record.Status), record.ProbeOutput, record.Rationale, encodeRecordReferences(record.ArtifactRefs), record.BaselineFingerprint, record.CurrentFingerprint, record.BaselineInstallRef, record.CurrentInstallRef, record.BaselineManifestHash, record.CurrentManifestHash, record.BaselineWorkspaceFingerprint, record.CurrentWorkspaceFingerprint, record.StaleReason, string(record.DriftSource), record.ConsecutiveFailures, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), nullableTimeRFC3339(record.ProbedAt), nullableTimeRFC3339(record.LastFailureAt)); err != nil {
 		return ToolProbeRecord{}, fmt.Errorf("upsert tool probe record: %w", err)
 	}
 	stored, ok, err := s.ToolProbeRecord(record.ToolName)
@@ -1983,13 +2066,23 @@ func (s *SQLiteStore) ToolProbeRecord(toolName string) (ToolProbeRecord, bool, e
 		record                 ToolProbeRecord
 		statusRaw              string
 		artifactRefsRaw        string
+		baselineFingerprintRaw string
+		currentFingerprintRaw  string
+		baselineInstallRefRaw  string
+		currentInstallRefRaw   string
+		baselineManifestRaw    string
+		currentManifestRaw     string
+		baselineWorkspaceRaw   string
+		currentWorkspaceRaw    string
+		staleReasonRaw         string
+		driftSourceRaw         string
 		consecutiveFailuresRaw int
 		createdAtRaw           string
 		updatedAtRaw           string
 		probedAtRaw            sql.NullString
 		lastFailureAtRaw       sql.NullString
 	)
-	err := s.db.QueryRow(`SELECT tool_name, status, probe_output, rationale, artifact_refs_json, consecutive_failures, created_at, updated_at, probed_at, last_failure_at FROM tool_probe_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &record.Rationale, &artifactRefsRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &probedAtRaw, &lastFailureAtRaw)
+	err := s.db.QueryRow(`SELECT tool_name, status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, baseline_install_ref, current_install_ref, baseline_manifest_hash, current_manifest_hash, baseline_workspace_fingerprint, current_workspace_fingerprint, stale_reason, drift_source, consecutive_failures, created_at, updated_at, probed_at, last_failure_at FROM tool_probe_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &baselineInstallRefRaw, &currentInstallRefRaw, &baselineManifestRaw, &currentManifestRaw, &baselineWorkspaceRaw, &currentWorkspaceRaw, &staleReasonRaw, &driftSourceRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &probedAtRaw, &lastFailureAtRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ToolProbeRecord{}, false, nil
 	}
@@ -2007,6 +2100,16 @@ func (s *SQLiteStore) ToolProbeRecord(toolName string) (ToolProbeRecord, bool, e
 	record.Status = NormalizeToolProbeStatus(ToolProbeStatus(statusRaw))
 	record.Rationale = strings.TrimSpace(record.Rationale)
 	record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
+	record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
+	record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+	record.BaselineInstallRef = strings.TrimSpace(baselineInstallRefRaw)
+	record.CurrentInstallRef = strings.TrimSpace(currentInstallRefRaw)
+	record.BaselineManifestHash = strings.TrimSpace(baselineManifestRaw)
+	record.CurrentManifestHash = strings.TrimSpace(currentManifestRaw)
+	record.BaselineWorkspaceFingerprint = strings.TrimSpace(baselineWorkspaceRaw)
+	record.CurrentWorkspaceFingerprint = strings.TrimSpace(currentWorkspaceRaw)
+	record.StaleReason = strings.TrimSpace(staleReasonRaw)
+	record.DriftSource = ToolDriftSource(strings.TrimSpace(driftSourceRaw))
 	record.ConsecutiveFailures = consecutiveFailuresRaw
 	record.CreatedAt = createdAt
 	record.UpdatedAt = updatedAt
@@ -2029,7 +2132,7 @@ func (s *SQLiteStore) ToolProbeRecords(status ToolProbeStatus, limit int) ([]Too
 		limit = 50
 	}
 	status = NormalizeToolProbeStatus(status)
-	query := `SELECT tool_name, status, probe_output, rationale, artifact_refs_json, consecutive_failures, created_at, updated_at, probed_at, last_failure_at FROM tool_probe_records`
+	query := `SELECT tool_name, status, probe_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, baseline_install_ref, current_install_ref, baseline_manifest_hash, current_manifest_hash, baseline_workspace_fingerprint, current_workspace_fingerprint, stale_reason, drift_source, consecutive_failures, created_at, updated_at, probed_at, last_failure_at FROM tool_probe_records`
 	args := make([]any, 0, 2)
 	if status != "" {
 		query += " WHERE status = ?"
@@ -2048,13 +2151,23 @@ func (s *SQLiteStore) ToolProbeRecords(status ToolProbeStatus, limit int) ([]Too
 			record                 ToolProbeRecord
 			statusRaw              string
 			artifactRefsRaw        string
+			baselineFingerprintRaw string
+			currentFingerprintRaw  string
+			baselineInstallRefRaw  string
+			currentInstallRefRaw   string
+			baselineManifestRaw    string
+			currentManifestRaw     string
+			baselineWorkspaceRaw   string
+			currentWorkspaceRaw    string
+			staleReasonRaw         string
+			driftSourceRaw         string
 			consecutiveFailuresRaw int
 			createdAtRaw           string
 			updatedAtRaw           string
 			probedAtRaw            sql.NullString
 			lastFailureAtRaw       sql.NullString
 		)
-		if err := rows.Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &record.Rationale, &artifactRefsRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &probedAtRaw, &lastFailureAtRaw); err != nil {
+		if err := rows.Scan(&record.ToolName, &statusRaw, &record.ProbeOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &baselineInstallRefRaw, &currentInstallRefRaw, &baselineManifestRaw, &currentManifestRaw, &baselineWorkspaceRaw, &currentWorkspaceRaw, &staleReasonRaw, &driftSourceRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &probedAtRaw, &lastFailureAtRaw); err != nil {
 			return nil, fmt.Errorf("scan tool probe record: %w", err)
 		}
 		createdAt, err := parseSQLiteTime(createdAtRaw)
@@ -2068,6 +2181,16 @@ func (s *SQLiteStore) ToolProbeRecords(status ToolProbeStatus, limit int) ([]Too
 		record.Status = NormalizeToolProbeStatus(ToolProbeStatus(statusRaw))
 		record.Rationale = strings.TrimSpace(record.Rationale)
 		record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
+		record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
+		record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+		record.BaselineInstallRef = strings.TrimSpace(baselineInstallRefRaw)
+		record.CurrentInstallRef = strings.TrimSpace(currentInstallRefRaw)
+		record.BaselineManifestHash = strings.TrimSpace(baselineManifestRaw)
+		record.CurrentManifestHash = strings.TrimSpace(currentManifestRaw)
+		record.BaselineWorkspaceFingerprint = strings.TrimSpace(baselineWorkspaceRaw)
+		record.CurrentWorkspaceFingerprint = strings.TrimSpace(currentWorkspaceRaw)
+		record.StaleReason = strings.TrimSpace(staleReasonRaw)
+		record.DriftSource = ToolDriftSource(strings.TrimSpace(driftSourceRaw))
 		record.ConsecutiveFailures = consecutiveFailuresRaw
 		record.CreatedAt = createdAt
 		record.UpdatedAt = updatedAt
@@ -2099,8 +2222,8 @@ func (s *SQLiteStore) UpsertToolAuditRecord(record ToolAuditRecord) (ToolAuditRe
 	createdAt := nonZeroTimeOrNow(record.CreatedAt, now).UTC()
 	updatedAt := nonZeroTimeOrNow(record.UpdatedAt, now).UTC()
 	if _, err := s.db.Exec(`
-			INSERT INTO tool_audit_records(tool_name, status, audit_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, audited_at, last_failure_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO tool_audit_records(tool_name, status, audit_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, baseline_install_ref, current_install_ref, baseline_manifest_hash, current_manifest_hash, baseline_workspace_fingerprint, current_workspace_fingerprint, stale_reason, drift_source, consecutive_failures, created_at, updated_at, audited_at, last_failure_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(tool_name) DO UPDATE SET
 				status = excluded.status,
 				audit_output = excluded.audit_output,
@@ -2108,12 +2231,19 @@ func (s *SQLiteStore) UpsertToolAuditRecord(record ToolAuditRecord) (ToolAuditRe
 				artifact_refs_json = excluded.artifact_refs_json,
 				baseline_fingerprint = excluded.baseline_fingerprint,
 				current_fingerprint = excluded.current_fingerprint,
+				baseline_install_ref = excluded.baseline_install_ref,
+				current_install_ref = excluded.current_install_ref,
+				baseline_manifest_hash = excluded.baseline_manifest_hash,
+				current_manifest_hash = excluded.current_manifest_hash,
+				baseline_workspace_fingerprint = excluded.baseline_workspace_fingerprint,
+				current_workspace_fingerprint = excluded.current_workspace_fingerprint,
 				stale_reason = excluded.stale_reason,
+				drift_source = excluded.drift_source,
 				consecutive_failures = excluded.consecutive_failures,
 				updated_at = excluded.updated_at,
 				audited_at = excluded.audited_at,
 				last_failure_at = excluded.last_failure_at
-		`, record.ToolName, string(record.Status), record.AuditOutput, record.Rationale, encodeRecordReferences(record.ArtifactRefs), record.BaselineFingerprint, record.CurrentFingerprint, record.StaleReason, record.ConsecutiveFailures, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), nullableTimeRFC3339(record.AuditedAt), nullableTimeRFC3339(record.LastFailureAt)); err != nil {
+		`, record.ToolName, string(record.Status), record.AuditOutput, record.Rationale, encodeRecordReferences(record.ArtifactRefs), record.BaselineFingerprint, record.CurrentFingerprint, record.BaselineInstallRef, record.CurrentInstallRef, record.BaselineManifestHash, record.CurrentManifestHash, record.BaselineWorkspaceFingerprint, record.CurrentWorkspaceFingerprint, record.StaleReason, string(record.DriftSource), record.ConsecutiveFailures, createdAt.Format(time.RFC3339Nano), updatedAt.Format(time.RFC3339Nano), nullableTimeRFC3339(record.AuditedAt), nullableTimeRFC3339(record.LastFailureAt)); err != nil {
 		return ToolAuditRecord{}, fmt.Errorf("upsert tool audit record: %w", err)
 	}
 	stored, ok, err := s.ToolAuditRecord(record.ToolName)
@@ -2136,14 +2266,21 @@ func (s *SQLiteStore) ToolAuditRecord(toolName string) (ToolAuditRecord, bool, e
 		artifactRefsRaw        string
 		baselineFingerprintRaw string
 		currentFingerprintRaw  string
+		baselineInstallRefRaw  string
+		currentInstallRefRaw   string
+		baselineManifestRaw    string
+		currentManifestRaw     string
+		baselineWorkspaceRaw   string
+		currentWorkspaceRaw    string
 		staleReasonRaw         string
+		driftSourceRaw         string
 		consecutiveFailuresRaw int
 		createdAtRaw           string
 		updatedAtRaw           string
 		auditedAtRaw           sql.NullString
 		lastFailureAtRaw       sql.NullString
 	)
-	err := s.db.QueryRow(`SELECT tool_name, status, audit_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, audited_at, last_failure_at FROM tool_audit_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &staleReasonRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &auditedAtRaw, &lastFailureAtRaw)
+	err := s.db.QueryRow(`SELECT tool_name, status, audit_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, baseline_install_ref, current_install_ref, baseline_manifest_hash, current_manifest_hash, baseline_workspace_fingerprint, current_workspace_fingerprint, stale_reason, drift_source, consecutive_failures, created_at, updated_at, audited_at, last_failure_at FROM tool_audit_records WHERE tool_name = ?`, toolName).Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &baselineInstallRefRaw, &currentInstallRefRaw, &baselineManifestRaw, &currentManifestRaw, &baselineWorkspaceRaw, &currentWorkspaceRaw, &staleReasonRaw, &driftSourceRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &auditedAtRaw, &lastFailureAtRaw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ToolAuditRecord{}, false, nil
 	}
@@ -2163,7 +2300,14 @@ func (s *SQLiteStore) ToolAuditRecord(toolName string) (ToolAuditRecord, bool, e
 	record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
 	record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
 	record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+	record.BaselineInstallRef = strings.TrimSpace(baselineInstallRefRaw)
+	record.CurrentInstallRef = strings.TrimSpace(currentInstallRefRaw)
+	record.BaselineManifestHash = strings.TrimSpace(baselineManifestRaw)
+	record.CurrentManifestHash = strings.TrimSpace(currentManifestRaw)
+	record.BaselineWorkspaceFingerprint = strings.TrimSpace(baselineWorkspaceRaw)
+	record.CurrentWorkspaceFingerprint = strings.TrimSpace(currentWorkspaceRaw)
 	record.StaleReason = strings.TrimSpace(staleReasonRaw)
+	record.DriftSource = ToolDriftSource(strings.TrimSpace(driftSourceRaw))
 	record.ConsecutiveFailures = consecutiveFailuresRaw
 	record.CreatedAt = createdAt
 	record.UpdatedAt = updatedAt
@@ -2186,7 +2330,7 @@ func (s *SQLiteStore) ToolAuditRecords(status ToolAuditStatus, limit int) ([]Too
 		limit = 50
 	}
 	status = NormalizeToolAuditStatus(status)
-	query := `SELECT tool_name, status, audit_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, stale_reason, consecutive_failures, created_at, updated_at, audited_at, last_failure_at FROM tool_audit_records`
+	query := `SELECT tool_name, status, audit_output, rationale, artifact_refs_json, baseline_fingerprint, current_fingerprint, baseline_install_ref, current_install_ref, baseline_manifest_hash, current_manifest_hash, baseline_workspace_fingerprint, current_workspace_fingerprint, stale_reason, drift_source, consecutive_failures, created_at, updated_at, audited_at, last_failure_at FROM tool_audit_records`
 	args := make([]any, 0, 2)
 	if status != "" {
 		query += " WHERE status = ?"
@@ -2207,14 +2351,21 @@ func (s *SQLiteStore) ToolAuditRecords(status ToolAuditStatus, limit int) ([]Too
 			artifactRefsRaw        string
 			baselineFingerprintRaw string
 			currentFingerprintRaw  string
+			baselineInstallRefRaw  string
+			currentInstallRefRaw   string
+			baselineManifestRaw    string
+			currentManifestRaw     string
+			baselineWorkspaceRaw   string
+			currentWorkspaceRaw    string
 			staleReasonRaw         string
+			driftSourceRaw         string
 			consecutiveFailuresRaw int
 			createdAtRaw           string
 			updatedAtRaw           string
 			auditedAtRaw           sql.NullString
 			lastFailureAtRaw       sql.NullString
 		)
-		if err := rows.Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &staleReasonRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &auditedAtRaw, &lastFailureAtRaw); err != nil {
+		if err := rows.Scan(&record.ToolName, &statusRaw, &record.AuditOutput, &record.Rationale, &artifactRefsRaw, &baselineFingerprintRaw, &currentFingerprintRaw, &baselineInstallRefRaw, &currentInstallRefRaw, &baselineManifestRaw, &currentManifestRaw, &baselineWorkspaceRaw, &currentWorkspaceRaw, &staleReasonRaw, &driftSourceRaw, &consecutiveFailuresRaw, &createdAtRaw, &updatedAtRaw, &auditedAtRaw, &lastFailureAtRaw); err != nil {
 			return nil, fmt.Errorf("scan tool audit record: %w", err)
 		}
 		createdAt, err := parseSQLiteTime(createdAtRaw)
@@ -2230,7 +2381,14 @@ func (s *SQLiteStore) ToolAuditRecords(status ToolAuditStatus, limit int) ([]Too
 		record.ArtifactRefs = decodeRecordReferences(artifactRefsRaw)
 		record.BaselineFingerprint = strings.TrimSpace(baselineFingerprintRaw)
 		record.CurrentFingerprint = strings.TrimSpace(currentFingerprintRaw)
+		record.BaselineInstallRef = strings.TrimSpace(baselineInstallRefRaw)
+		record.CurrentInstallRef = strings.TrimSpace(currentInstallRefRaw)
+		record.BaselineManifestHash = strings.TrimSpace(baselineManifestRaw)
+		record.CurrentManifestHash = strings.TrimSpace(currentManifestRaw)
+		record.BaselineWorkspaceFingerprint = strings.TrimSpace(baselineWorkspaceRaw)
+		record.CurrentWorkspaceFingerprint = strings.TrimSpace(currentWorkspaceRaw)
 		record.StaleReason = strings.TrimSpace(staleReasonRaw)
+		record.DriftSource = ToolDriftSource(strings.TrimSpace(driftSourceRaw))
 		record.ConsecutiveFailures = consecutiveFailuresRaw
 		record.CreatedAt = createdAt
 		record.UpdatedAt = updatedAt
@@ -5330,18 +5488,42 @@ func applyMigrations(tx *sql.Tx) error {
 		{table: "tool_install_records", name: "artifact_refs_json", typ: "TEXT NOT NULL DEFAULT '[]'"},
 		{table: "tool_install_records", name: "baseline_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "tool_install_records", name: "current_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "baseline_install_ref", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "current_install_ref", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "baseline_manifest_hash", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "current_manifest_hash", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "baseline_workspace_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "current_workspace_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "tool_install_records", name: "stale_reason", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_install_records", name: "drift_source", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "tool_probe_records", name: "consecutive_failures", typ: "INTEGER NOT NULL DEFAULT 0"},
 		{table: "tool_probe_records", name: "last_failure_at", typ: "TEXT"},
 		{table: "tool_probe_records", name: "rationale", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "tool_probe_records", name: "artifact_refs_json", typ: "TEXT NOT NULL DEFAULT '[]'"},
+		{table: "tool_probe_records", name: "baseline_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "current_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "baseline_install_ref", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "current_install_ref", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "baseline_manifest_hash", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "current_manifest_hash", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "baseline_workspace_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "current_workspace_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "stale_reason", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_probe_records", name: "drift_source", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "tool_audit_records", name: "consecutive_failures", typ: "INTEGER NOT NULL DEFAULT 0"},
 		{table: "tool_audit_records", name: "last_failure_at", typ: "TEXT"},
 		{table: "tool_audit_records", name: "rationale", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "tool_audit_records", name: "artifact_refs_json", typ: "TEXT NOT NULL DEFAULT '[]'"},
 		{table: "tool_audit_records", name: "baseline_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "tool_audit_records", name: "current_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "baseline_install_ref", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "current_install_ref", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "baseline_manifest_hash", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "current_manifest_hash", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "baseline_workspace_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "current_workspace_fingerprint", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "tool_audit_records", name: "stale_reason", typ: "TEXT NOT NULL DEFAULT ''"},
+		{table: "tool_audit_records", name: "drift_source", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "pending_decisions", name: "rationale", typ: "TEXT NOT NULL DEFAULT ''"},
 		{table: "pending_decisions", name: "artifact_refs_json", typ: "TEXT NOT NULL DEFAULT '[]'"},
 	} {

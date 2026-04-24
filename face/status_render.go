@@ -367,8 +367,24 @@ func renderToolLifecycleCurrentStateBlock(rows []core.ToolLifecycleStatusSnapsho
 		if ref := strings.TrimSpace(row.InstallRef); ref != "" {
 			line += " install_ref=" + ref
 		}
+		if attest := strings.TrimSpace(row.AttestationStatus); attest != "" {
+			line += " attestation=" + attest
+		}
+		if source := strings.TrimSpace(row.DriftSource); source != "" {
+			line += " drift_source=" + source
+		}
 		if reason := strings.TrimSpace(row.StaleReason); reason != "" {
 			line += " stale_reason=" + reason
+		}
+		failures := row.InstallFailures + row.ProbeFailures + row.AuditFailures
+		if failures > 0 {
+			line += fmt.Sprintf(" failures=install:%d,probe:%d,audit:%d", row.InstallFailures, row.ProbeFailures, row.AuditFailures)
+		}
+		if hash := shortFingerprint(row.ManifestHash); hash != "" {
+			line += " manifest_hash=" + hash
+		}
+		if hash := shortFingerprint(row.WorkspaceFingerprint); hash != "" {
+			line += " workspace_fingerprint=" + hash
 		}
 		if summary := strings.TrimSpace(row.TraceSummary); summary != "" {
 			stage := firstNonEmpty(strings.TrimSpace(row.TraceStage), "-")
@@ -653,6 +669,20 @@ func formatStatusHash(raw string) string {
 	}
 	if len(raw) <= 12 {
 		return raw
+	}
+	return raw[:12]
+}
+
+func shortFingerprint(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if len(raw) <= 19 {
+		return raw
+	}
+	if strings.HasPrefix(raw, "sha256:") {
+		return raw[:19]
 	}
 	return raw[:12]
 }

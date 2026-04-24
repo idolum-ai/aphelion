@@ -280,17 +280,23 @@ The first external-tool lane is implemented for process-style tools:
   and the `/status` projection
 - verification is strict: `install_set status=verified` requires current
   runtime-authored `audit_run` and `probe_run` records
-- audit/install records persist deterministic fingerprints for manifest
-  execution fields, IO schemas, constraints, install/probe commands, and local
-  process/subprocess entry file contents
+- audit/install/probe records persist deterministic anchors for `install_ref`,
+  normalized manifest hash, and process workspace or container identity
+  fingerprints
 - `install_show`, `audit_show`, registration, exposure, principal manifest
-  listing, and invocation re-check the current fingerprint and mark drifted
-  tools stale with an operator-readable reason
+  listing, and invocation re-check the current anchors and mark drifted tools
+  stale with typed operator-readable reasons such as `manifest_drift`,
+  `workspace_drift`, `container_drift`, and `install_ref_changed`
 - stale external tools cannot be registered or invoked
 - process/subprocess invocation, install commands, and probe commands run
   through the same sandbox runner boundary as normal tool execution
-- container and workspace-runner manifests are importable and diagnosable but
-  remain non-executable until dedicated runtimes exist
+- process-mode network/filesystem/duration ceilings are enforced at runtime for
+  install, audit checks, probe, and invocation
+- container manifests have separate image/build/health audit and drift
+  semantics, but remain non-executable until a dedicated container executor
+  exists
+- tenants and agents create requests through `tool_request`; operators retain
+  authority over ratification, install, audit, verify, register, and expose
 - `external-tools/browse_page/` is the first pilot manifest, owned by
   `idolum-email`, with a deterministic fixture implementation outside core
 
