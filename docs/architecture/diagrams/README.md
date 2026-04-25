@@ -4,22 +4,18 @@ This directory is the canonical architecture diagram set.
 
 ## Canonical Set
 
-- `01-package-map.{svg,png}`
-- `02-interactive-turn-sequence.{svg,png}`
-- `03-constitutional-flow.{svg,png}`
-- `04-durable-topology.{svg,png}`
-- `05-state-surfaces.{svg,png}`
-- `06-delivery-polymorphism.{svg,png}`
-- `07-present-vs-intended.{svg,png}`
+- `01-package-map.svg`
+- `02-interactive-turn-sequence.svg`
+- `03-constitutional-flow.svg`
+- `04-durable-topology.svg`
+- `05-state-surfaces.svg`
+- `06-delivery-polymorphism.svg`
+- `07-present-vs-intended.svg`
 
-Use `svg` for docs embedding. Keep `png` as portable render fallback.
-
-## Archive
-
-Historical variants and pre-cutover diagram assets are in
-[`archive/`](archive).
+Use `svg` for docs embedding and canonical review. Regenerate raster exports
+only as temporary local artifacts when a downstream surface explicitly needs
+them.
 
 ## Sources
 
 Source policy and regeneration guidance are in [`src/`](src).
-

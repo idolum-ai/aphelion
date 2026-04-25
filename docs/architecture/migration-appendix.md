@@ -15,8 +15,6 @@ Practical reading:
 - `turn` owns stage order and commit semantics.
 - `pipeline` owns conversational transforms.
 
-Legacy render variants are kept in [`diagrams/archive/`](diagrams/archive).
-
 ## Canonical-State Migration Workloads
 
 This appendix tracks operator-facing migration workloads required to align live

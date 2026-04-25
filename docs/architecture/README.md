@@ -43,14 +43,12 @@ These invariants are normative for architecture and requirements alignment:
 - [external-tools-pilot.md](external-tools-pilot.md): current external-tool lifecycle, execution-mode semantics, and bundled `browse_page` pilot.
 - [capability-delegation-lane.md](capability-delegation-lane.md): general request/review/grant lane for tools, devices, accounts, purchases, public web, and emergent permissions.
 - [migration-appendix.md](migration-appendix.md): refactor closeout and present-vs-intended reference.
-- [diagrams/README.md](diagrams/README.md): canonical and archived diagram assets.
+- [diagrams/README.md](diagrams/README.md): canonical diagram assets.
 
 ## Draft Roadmaps (Non-Normative)
 
 - [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): draft convergence map for canonical truth surfaces and safer autonomy.
-- [agent-proposed-tools-governor-authority-implementation-plan.md](agent-proposed-tools-governor-authority-implementation-plan.md): implementation sequencing and sub-agent workstream plan for tool-proposal governance.
 - [organic-agent-owned-tools-proposal.md](organic-agent-owned-tools-proposal.md): draft proposal for moving from core-embedded domain tools toward agent-owned external tools with governed install and attestation.
-- [organic-agent-owned-tools-merge-readiness-plan.md](organic-agent-owned-tools-merge-readiness-plan.md): execution plan for making the organic external-tool branch merge-ready without narrowing the planned lifecycle.
 
 Treat this section as design-direction input. It is not a normative implementation
 contract until explicitly promoted into the normative map above.
