@@ -432,7 +432,7 @@ func TestHandleBusyTelegramMessageUsesStopForMessageWhenAvailable(t *testing.T) 
 	}
 }
 
-func TestTelegramExecApproverDeletesPromptOnApprove(t *testing.T) {
+func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 	t.Parallel()
 
 	sender := &decisionTestSender{}
@@ -467,8 +467,14 @@ func TestTelegramExecApproverDeletesPromptOnApprove(t *testing.T) {
 	if !decisionResult.Approved {
 		t.Fatal("Approved = false, want true")
 	}
-	if len(sender.deletes) != 1 {
-		t.Fatalf("deletes = %#v, want one prompt delete", sender.deletes)
+	if len(sender.deletes) != 0 {
+		t.Fatalf("deletes = %#v, want no prompt delete on approval", sender.deletes)
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits = %#v, want durable approval confirmation", sender.edits)
+	}
+	if !strings.Contains(sender.edits[0].text, "Proposal approved.") || !strings.Contains(sender.edits[0].text, "Decision:") || !strings.Contains(sender.edits[0].text, "Perform a destructive change") {
+		t.Fatalf("approval edit = %q, want proposal confirmation with decision id and summary", sender.edits[0].text)
 	}
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline = %#v, want one proposal prompt", sender.inline)
@@ -587,8 +593,14 @@ func TestTelegramDurableMemoryDelegationApproverPromptsWithButtons(t *testing.T)
 	if choiceRow[0].Text != "Deny" || choiceRow[1].Text != "Approve" {
 		t.Fatalf("choice order = %#v, want [Deny, Approve]", choiceRow)
 	}
-	if len(sender.deletes) != 1 {
-		t.Fatalf("deletes = %#v, want one prompt delete on approval", sender.deletes)
+	if len(sender.deletes) != 0 {
+		t.Fatalf("deletes = %#v, want no prompt delete on approval", sender.deletes)
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits = %#v, want durable approval confirmation", sender.edits)
+	}
+	if !strings.Contains(sender.edits[0].text, "Memory delegation approved.") || !strings.Contains(sender.edits[0].text, "Decision:") || !strings.Contains(sender.edits[0].text, "idolum-email") {
+		t.Fatalf("approval edit = %q, want memory delegation confirmation with decision id and agent", sender.edits[0].text)
 	}
 }
 
@@ -641,8 +653,14 @@ func TestTelegramDurableSnapshotRestoreApproverPromptsWithButtons(t *testing.T) 
 	if choiceRow[0].Text != "Deny" || choiceRow[1].Text != "Approve" {
 		t.Fatalf("choice order = %#v, want [Deny, Approve]", choiceRow)
 	}
-	if len(sender.deletes) != 1 {
-		t.Fatalf("deletes = %#v, want prompt delete on approval", sender.deletes)
+	if len(sender.deletes) != 0 {
+		t.Fatalf("deletes = %#v, want no prompt delete on approval", sender.deletes)
+	}
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits = %#v, want durable approval confirmation", sender.edits)
+	}
+	if !strings.Contains(sender.edits[0].text, "Snapshot restore approved.") || !strings.Contains(sender.edits[0].text, "Decision:") || !strings.Contains(sender.edits[0].text, "idolum-child") {
+		t.Fatalf("approval edit = %q, want snapshot confirmation with decision id and agent", sender.edits[0].text)
 	}
 }
 
@@ -1131,8 +1149,8 @@ func TestHandleReviewEventCallbackApprovesCapabilityRequest(t *testing.T) {
 	if updated.ReviewStatus != session.CapabilityReviewStatusApproved {
 		t.Fatalf("ReviewStatus = %q, want approved", updated.ReviewStatus)
 	}
-	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "approved") {
-		t.Fatalf("edits = %#v, want approved edit", sender.edits)
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "Capability request approved.") || !strings.Contains(sender.edits[0].text, "Request: cap-button-approve") || !strings.Contains(sender.edits[0].text, "Review event:") || !strings.Contains(sender.edits[0].text, "Capability request cap-button-approve") {
+		t.Fatalf("edits = %#v, want durable approved review-event copy", sender.edits)
 	}
 	if len(sender.answers) != 1 || sender.answers[0].text != "" {
 		t.Fatalf("answers = %#v, want empty ack", sender.answers)

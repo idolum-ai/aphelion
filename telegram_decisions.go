@@ -152,7 +152,7 @@ func (a *telegramExecApprover) ConfirmExec(ctx context.Context, req toolpkg.Exec
 
 	if result.Choice == "approve" {
 		if result.Delivery.MessageID != 0 {
-			_ = a.sender.DeleteMessage(ctx, req.SessionKey.ChatID, result.Delivery.MessageID)
+			_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, approvedDecisionConfirmationText("Proposal", result.DecisionID, decision.KindProposalApproval, formatExecProposalDetails(req)), "")
 		}
 		return toolpkg.ExecApprovalDecision{Approved: true}, nil
 	}
@@ -189,7 +189,7 @@ func (a *telegramDurableMemoryDelegationApprover) ConfirmDurableMemoryDelegation
 	}
 	if result.Choice == "approve" {
 		if result.Delivery.MessageID != 0 {
-			_ = a.sender.DeleteMessage(ctx, req.SessionKey.ChatID, result.Delivery.MessageID)
+			_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, approvedDecisionConfirmationText("Memory delegation", result.DecisionID, decision.KindMemoryDelegation, formatDurableMemoryDelegationDetails(req)), "")
 		}
 		return toolpkg.DurableMemoryDelegationApprovalDecision{Approved: true}, nil
 	}
@@ -225,7 +225,7 @@ func (a *telegramDurableSnapshotRestoreApprover) ConfirmDurableSnapshotRestore(c
 	}
 	if result.Choice == "approve" {
 		if result.Delivery.MessageID != 0 {
-			_ = a.sender.DeleteMessage(ctx, req.SessionKey.ChatID, result.Delivery.MessageID)
+			_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, approvedDecisionConfirmationText("Snapshot restore", result.DecisionID, decision.KindSnapshotRestore, formatDurableSnapshotRestoreDetails(req)), "")
 		}
 		return toolpkg.DurableSnapshotRestoreApprovalDecision{Approved: true}, nil
 	}
@@ -237,6 +237,24 @@ func (a *telegramDurableSnapshotRestoreApprover) ConfirmDurableSnapshotRestore(c
 		_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, text, "")
 	}
 	return toolpkg.DurableSnapshotRestoreApprovalDecision{Approved: false, TimedOut: result.TimedOut}, nil
+}
+
+func approvedDecisionConfirmationText(label string, decisionID string, kind decision.Kind, details string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = "Approval"
+	}
+	lines := []string{label + " approved."}
+	if id := strings.TrimSpace(decisionID); id != "" {
+		lines = append(lines, "Decision: "+id)
+	}
+	pending := decision.PendingDecision{Request: decision.Request{Kind: kind, Details: details}}
+	if summary := strings.TrimSpace(summarizePendingDecision(pending)); summary != "" {
+		lines = append(lines, "", "Approved content:", summary)
+	} else if compact := compactSentence(details); compact != "" {
+		lines = append(lines, "", "Approved content:", compact)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
@@ -743,8 +761,43 @@ func (h *telegramDecisionHandler) handleReviewEventCallback(ctx context.Context,
 	} else if review.Status == session.CapabilityReviewStatusRejected {
 		label = "rejected"
 	}
-	_ = h.editReviewEventCallbackMessage(ctx, cb, fmt.Sprintf("Capability request %s: %s", label, record.RequestID))
+	_ = h.editReviewEventCallbackMessage(ctx, cb, reviewEventConfirmationText(label, record, *event))
 	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func reviewEventConfirmationText(label string, record session.CapabilityRequest, event session.ReviewEvent) string {
+	record = session.NormalizeCapabilityRequest(record)
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = "reviewed"
+	}
+	lines := []string{"Capability request " + label + "."}
+	if record.RequestID != "" {
+		lines = append(lines, "Request: "+record.RequestID)
+	}
+	if event.ID > 0 {
+		lines = append(lines, fmt.Sprintf("Review event: %d", event.ID))
+	}
+	meta := make([]string, 0, 3)
+	if record.Kind != "" {
+		meta = append(meta, "Kind: "+string(record.Kind))
+	}
+	if target := strings.TrimSpace(record.TargetResource); target != "" {
+		meta = append(meta, "Target: "+target)
+	}
+	if risk := strings.TrimSpace(record.RiskClass); risk != "" {
+		meta = append(meta, "Risk: "+risk)
+	}
+	if len(meta) > 0 {
+		lines = append(lines, strings.Join(meta, " · "))
+	}
+	if purpose := strings.TrimSpace(record.Purpose); purpose != "" {
+		lines = append(lines, "Purpose: "+compactSentence(purpose))
+	}
+	if summary := strings.TrimSpace(event.Summary); summary != "" {
+		lines = append(lines, "", "Approved content:", summary)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func (h *telegramDecisionHandler) answerReviewEventCallback(ctx context.Context, cb telegram.CallbackQuery, text string) error {
