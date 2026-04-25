@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -11,6 +12,40 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
+
+func TestDurableChildSandboxAccessIncludesGogCLIForEmailChild(t *testing.T) {
+	t.Setenv("GOG_KEYRING_PASSWORD", "secret-for-test")
+	configHome := filepath.Join(t.TempDir(), "config")
+	if err := os.MkdirAll(filepath.Join(configHome, "gogcli"), 0o700); err != nil {
+		t.Fatalf("MkdirAll(gogcli) err = %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	access := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{
+		AgentID:     "idolum-email",
+		ChannelKind: "email",
+		ChannelConfig: core.DurableAgentChannelConfig{Email: &core.DurableAgentEmailChannelConfig{
+			Adapter: "gog_cli",
+		}},
+		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
+	})
+
+	if !containsString(access.readonlyPaths, "/srv/aphelion/bin/aphelion") || !containsString(access.readonlyPaths, "/srv/codex") || !containsString(access.readonlyPaths, filepath.Join(configHome, "gogcli")) {
+		t.Fatalf("readonlyPaths = %#v, want binary, codex home, and gogcli config", access.readonlyPaths)
+	}
+	if access.env["GOG_KEYRING_PASSWORD"] != "secret-for-test" || access.env["XDG_CONFIG_HOME"] != configHome {
+		t.Fatalf("env = %#v, want gog env", access.env)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 func TestDurableAgentChildConfigUsesNativeBootstrapWithoutParentCredentials(t *testing.T) {
 	t.Parallel()

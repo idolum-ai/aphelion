@@ -369,6 +369,77 @@ func TestPollDurableWakeAgentsKeepsParentConversationPendingOnInferenceFailure(t
 	sender.mu.Unlock()
 }
 
+func TestPollDurableWakeAgentsEmailAdapterIncludesReadOnlyGogPayload(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Summarized the email payload."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	origRun := runDurableEmailGogSearch
+	runDurableEmailGogSearch = func(_ context.Context, agent core.DurableAgent) (string, error) {
+		if agent.ChannelConfig.Email == nil || agent.ChannelConfig.Email.Account != "host@idolum.ai" {
+			t.Fatalf("agent email config = %#v, want host@idolum.ai", agent.ChannelConfig.Email)
+		}
+		return `[{"id":"thread-1","from":"LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>","subject":"Peloton Interactive - AI Enterprise Architect","labels":["INBOX"]}]`, nil
+	}
+	t.Cleanup(func() { runDurableEmailGogSearch = origRun })
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		ChannelConfig: core.DurableAgentChannelConfig{Email: &core.DurableAgentEmailChannelConfig{
+			Address:      "host@idolum.ai",
+			Account:      "host@idolum.ai",
+			Adapter:      "gog_cli",
+			Query:        "label:inbox",
+			PollInterval: "5m",
+			SurfaceRules: []string{"job opportunity"},
+			NeverRetain:  []string{"oauth_token", "password"},
+		}},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read host@idolum.ai and summarize job opportunities upward.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	rt.durableWakeChild = nil
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+
+	foundPayload := false
+	for _, msg := range provider.lastGovernorMsgs {
+		if msg.Role == "user" && strings.Contains(msg.Content, "Durable email wake.") && strings.Contains(msg.Content, "Peloton Interactive - AI Enterprise Architect") {
+			foundPayload = true
+			break
+		}
+	}
+	if !foundPayload {
+		t.Fatalf("governor messages = %#v, want durable email payload", provider.lastGovernorMsgs)
+	}
+
+	updatedState, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if updatedState == nil || updatedState.LastWakeAt.IsZero() {
+		t.Fatalf("updated state = %#v, want LastWakeAt recorded", updatedState)
+	}
+}
+
 func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Processed the parent guidance and compiled the requested summary."

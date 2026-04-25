@@ -288,12 +288,19 @@ func TestRunnerPlanIncludesExtraBindPaths(t *testing.T) {
 		return "/usr/bin/bwrap", nil
 	})
 
+	extraBindSource := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(extraBindSource, 0o755); err != nil {
+		t.Fatalf("MkdirAll(extraBindSource) err = %v", err)
+	}
+
 	plan, err := runner.Plan(ExecRequest{
 		Scope:              scope,
 		Command:            "pwd",
 		Workdir:            scope.WorkingRoot,
 		ExtraReadonlyPaths: []string{extraRO},
 		ExtraWritablePaths: []string{extraRW},
+		ExtraReadonlyBinds: []BindPath{{Source: extraBindSource, Target: "/usr/local/bin"}},
+		ExtraEnv:           map[string]string{"GOG_KEYRING_PASSWORD": "test-secret", "XDG_CONFIG_HOME": "/host-config"},
 	})
 	if err != nil {
 		t.Fatalf("Plan() err = %v", err)
@@ -305,5 +312,11 @@ func TestRunnerPlanIncludesExtraBindPaths(t *testing.T) {
 	}
 	if !strings.Contains(args, "--bind "+extraRW+" "+extraRW) {
 		t.Fatalf("args missing extra writable bind %q: %v", extraRW, plan.Args)
+	}
+	if !strings.Contains(args, "--ro-bind "+extraBindSource+" /usr/local/bin") {
+		t.Fatalf("args missing extra readonly mapped bind %q -> /usr/local/bin: %v", extraBindSource, plan.Args)
+	}
+	if !strings.Contains(args, "--setenv GOG_KEYRING_PASSWORD test-secret") || !strings.Contains(args, "--setenv XDG_CONFIG_HOME /host-config") {
+		t.Fatalf("args missing extra env: %v", plan.Args)
 	}
 }

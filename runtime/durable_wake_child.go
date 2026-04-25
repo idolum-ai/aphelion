@@ -96,19 +96,17 @@ func (e *sandboxDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox
 	defer os.Remove(bootstrapPath)
 
 	stateRoot := filepath.Dir(strings.TrimSpace(e.cfg.Sessions.DBPath))
-	extraReadonly := []string{e.binaryPath}
-	bootstrap := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
-	if bootstrap.Backend == "codex" && strings.TrimSpace(bootstrap.CodexHome) != "" {
-		extraReadonly = append(extraReadonly, strings.TrimSpace(bootstrap.CodexHome))
-	}
+	childAccess := durableChildSandboxAccessFor(e.binaryPath, agent)
 
 	command := durableAgentWakeChildCommand(e.binaryPath, bootstrapPath, agent.AgentID, now)
 	res, err := e.runner.Run(ctx, sandbox.ExecRequest{
 		Scope:              scope,
 		Command:            command,
 		Workdir:            scope.WorkingRoot,
-		ExtraReadonlyPaths: extraReadonly,
+		ExtraReadonlyPaths: childAccess.readonlyPaths,
+		ExtraReadonlyBinds: childAccess.readonlyBinds,
 		ExtraWritablePaths: []string{stateRoot},
+		ExtraEnv:           childAccess.env,
 	})
 	if err != nil {
 		if strings.TrimSpace(res.Stderr) != "" {
