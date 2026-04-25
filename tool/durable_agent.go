@@ -883,7 +883,23 @@ func (r *Registry) requestDurableAgentDelegation(in durableAgentInput, actor pri
 	if err != nil {
 		return "", err
 	}
-	return renderDurableAgentDelegationRequest(*agent, record, reviewEventID), nil
+	agreement, err := r.store.UpsertDurableChildAgreement(session.DurableChildAgreement{
+		AgreementID:         "agreement-" + record.RequestID,
+		AgentID:             agent.AgentID,
+		ParentPrincipal:     parentPrincipal,
+		ChildPrincipal:      requestedFor,
+		SourceSurface:       "durable_agent.delegation_request",
+		SourceRequestID:     record.RequestID,
+		SourceReviewEventID: reviewEventID,
+		Summary:             firstNonEmpty(strings.TrimSpace(payload.Summary), purpose),
+		BoundedEffect:       durableAgentDelegationAgreementBoundedEffect(record, *payload),
+		Status:              session.DurableChildAgreementStatusProposed,
+		ArtifactRefs:        durableAgentDelegationAgreementArtifactRefs(reviewEventID, payload.ArtifactRefs),
+	})
+	if err != nil {
+		return "", err
+	}
+	return renderDurableAgentDelegationRequest(*agent, record, reviewEventID, agreement), nil
 }
 
 func (r *Registry) reportDurableAgentDelegation(in durableAgentInput, key session.SessionKey) (string, error) {
@@ -2449,14 +2465,51 @@ func renderDurableAgentConversation(action string, agent core.DurableAgent, cont
 	return b.String()
 }
 
-func renderDurableAgentDelegationRequest(agent core.DurableAgent, record session.CapabilityRequest, reviewEventID int64) string {
+func durableAgentDelegationAgreementBoundedEffect(record session.CapabilityRequest, input durableAgentDelegationRequestInput) string {
+	parts := make([]string, 0, 4)
+	if strings.TrimSpace(input.UpdateReason) != "" {
+		parts = append(parts, "update_reason="+strings.TrimSpace(input.UpdateReason))
+	}
+	if strings.TrimSpace(record.TargetResource) != "" {
+		parts = append(parts, "target="+strings.TrimSpace(record.TargetResource))
+	}
+	if len(input.GrantActions) > 0 {
+		parts = append(parts, "grant_actions="+strings.Join(normalizePolicyCapabilities(input.GrantActions), ","))
+	}
+	if strings.TrimSpace(record.Purpose) != "" {
+		parts = append(parts, "purpose="+strings.TrimSpace(record.Purpose))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func durableAgentDelegationAgreementArtifactRefs(reviewEventID int64, refs []string) []session.RecordReference {
+	out := make([]session.RecordReference, 0, len(refs)+1)
+	if reviewEventID > 0 {
+		out = append(out, session.RecordReference{Kind: "review_event", Ref: fmt.Sprintf("%d", reviewEventID), Label: "delegation request"})
+	}
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		out = append(out, session.RecordReference{Kind: "artifact", Ref: ref})
+	}
+	return session.NormalizeRecordReferences(out)
+}
+
+func renderDurableAgentDelegationRequest(agent core.DurableAgent, record session.CapabilityRequest, reviewEventID int64, agreement session.DurableChildAgreement) string {
 	record = session.NormalizeCapabilityRequest(record)
 	var b strings.Builder
 	b.WriteString("action: durable-agent delegation request\n")
 	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
 	fmt.Fprintf(&b, "request_id: %s\n", record.RequestID)
 	fmt.Fprintf(&b, "review_event_id: %d\n", reviewEventID)
+	if strings.TrimSpace(agreement.AgreementID) != "" {
+		fmt.Fprintf(&b, "agreement_id: %s\n", agreement.AgreementID)
+		fmt.Fprintf(&b, "agreement_status: %s\n", agreement.Status)
+	}
 	b.WriteString("canonical_surface: capability_request\n")
+	b.WriteString("agreement_surface: durable_child_agreement\n")
 	fmt.Fprintf(&b, "kind: %s\n", record.Kind)
 	fmt.Fprintf(&b, "target_resource: %s\n", record.TargetResource)
 	fmt.Fprintf(&b, "review_status: %s\n", record.ReviewStatus)

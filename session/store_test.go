@@ -3377,3 +3377,58 @@ func TestMigrateDurableChildAuthorityCanonicalizesPrincipalsAndChildRuntime(t *t
 		t.Fatalf("grant contract = %s, want canonical child_runtime", grant.Contract)
 	}
 }
+
+func TestDurableChildAgreementTracksCapabilityReviewStatus(t *testing.T) {
+	store := newTestSQLiteStore(t)
+
+	_, err := store.UpsertDurableChildAgreement(DurableChildAgreement{
+		AgreementID:         "agree-1",
+		AgentID:             "child-alpha",
+		ParentPrincipal:     "telegram:1001",
+		ChildPrincipal:      "durable_agent:child-alpha",
+		SourceSurface:       "durable_agent.delegation_request",
+		SourceRequestID:     "cap-1",
+		SourceReviewEventID: 42,
+		Summary:             "Child requested a bounded system capability.",
+		BoundedEffect:       "Grant scoped runtime access after review.",
+		ArtifactRefs:        []RecordReference{{Kind: "review_event", Ref: "42", Label: "delegation request"}},
+	})
+	if err != nil {
+		t.Fatalf("UpsertDurableChildAgreement() err = %v", err)
+	}
+
+	if _, err := store.UpsertCapabilityRequest(CapabilityRequest{
+		RequestID:      "cap-1",
+		RequestedBy:    "durable_agent:child-alpha",
+		RequestedFor:   "durable_agent:child-alpha",
+		Kind:           CapabilityKindGenericDelegation,
+		TargetResource: "runtime-capability",
+		Purpose:        "Needs bounded child-local runtime support.",
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if _, err := store.AppendCapabilityReview(CapabilityReview{
+		ReviewID:     "review-1",
+		RequestID:    "cap-1",
+		Reviewer:     "telegram:1001",
+		ReviewerRole: "admin",
+		Status:       CapabilityReviewStatusApproved,
+		Rationale:    "Approved as a bounded parent-child system-change agreement.",
+	}); err != nil {
+		t.Fatalf("AppendCapabilityReview() err = %v", err)
+	}
+
+	agreement, ok, err := store.DurableChildAgreement("agree-1")
+	if err != nil {
+		t.Fatalf("DurableChildAgreement() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("DurableChildAgreement() ok = false, want true")
+	}
+	if agreement.Status != DurableChildAgreementStatusApproved {
+		t.Fatalf("agreement status = %q, want approved", agreement.Status)
+	}
+	if len(agreement.ArtifactRefs) != 1 || agreement.ArtifactRefs[0].Kind != "review_event" {
+		t.Fatalf("agreement artifact refs = %#v, want persisted review_event ref", agreement.ArtifactRefs)
+	}
+}

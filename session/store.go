@@ -196,6 +196,23 @@ func (s *SQLiteStore) init() error {
 		`CREATE INDEX IF NOT EXISTS idx_capability_requests_status ON capability_requests(review_status, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_capability_requests_kind ON capability_requests(kind, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_capability_requests_principals ON capability_requests(requested_by, requested_for, parent_principal, admin_principal)`,
+		`CREATE TABLE IF NOT EXISTS durable_child_agreements (
+			agreement_id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL DEFAULT '',
+			parent_principal TEXT NOT NULL DEFAULT '',
+			child_principal TEXT NOT NULL DEFAULT '',
+			source_surface TEXT NOT NULL DEFAULT '',
+			source_request_id TEXT NOT NULL DEFAULT '',
+			source_review_event_id INTEGER NOT NULL DEFAULT 0,
+			summary TEXT NOT NULL DEFAULT '',
+			bounded_effect TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'approved', 'rejected', 'superseded')),
+			artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_durable_child_agreements_agent ON durable_child_agreements(agent_id, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_durable_child_agreements_request ON durable_child_agreements(source_request_id)`,
 		`CREATE TABLE IF NOT EXISTS capability_reviews (
 			review_id TEXT PRIMARY KEY,
 			request_id TEXT NOT NULL,
@@ -5131,6 +5148,30 @@ func applyMigrations(tx *sql.Tx) error {
 	if err := ensureTableColumn(tx, "durable_agents", "allowed_telegram_user_ids_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
 		return fmt.Errorf("ensure durable_agents.allowed_telegram_user_ids_json: %w", err)
 	}
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS durable_child_agreements (
+		agreement_id TEXT PRIMARY KEY,
+		agent_id TEXT NOT NULL DEFAULT '',
+		parent_principal TEXT NOT NULL DEFAULT '',
+		child_principal TEXT NOT NULL DEFAULT '',
+		source_surface TEXT NOT NULL DEFAULT '',
+		source_request_id TEXT NOT NULL DEFAULT '',
+		source_review_event_id INTEGER NOT NULL DEFAULT 0,
+		summary TEXT NOT NULL DEFAULT '',
+		bounded_effect TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed', 'approved', 'rejected', 'superseded')),
+		artifact_refs_json TEXT NOT NULL DEFAULT '[]',
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		return fmt.Errorf("ensure durable_child_agreements table: %w", err)
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_durable_child_agreements_agent ON durable_child_agreements(agent_id, updated_at DESC)`); err != nil {
+		return fmt.Errorf("ensure durable_child_agreements agent index: %w", err)
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_durable_child_agreements_request ON durable_child_agreements(source_request_id)`); err != nil {
+		return fmt.Errorf("ensure durable_child_agreements request index: %w", err)
+	}
+
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS pending_artifact_retention (
 		owner_key TEXT PRIMARY KEY,
 		chat_id INTEGER NOT NULL DEFAULT 0,

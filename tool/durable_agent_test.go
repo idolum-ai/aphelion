@@ -241,9 +241,25 @@ func TestDurableAgentToolDelegationRequestAndReport(t *testing.T) {
 	}
 	if !strings.Contains(requestOut, "action: durable-agent delegation request") ||
 		!strings.Contains(requestOut, "canonical_surface: capability_request") ||
+		!strings.Contains(requestOut, "agreement_surface: durable_child_agreement") ||
+		!strings.Contains(requestOut, "agreement_id: agreement-cap-family-amazon") ||
 		!strings.Contains(requestOut, "request_id: cap-family-amazon") ||
 		!strings.Contains(requestOut, "review_status: proposed") {
-		t.Fatalf("delegation_request output = %q, want canonical capability request summary", requestOut)
+		t.Fatalf("delegation_request output = %q, want canonical capability request and agreement summary", requestOut)
+	}
+
+	agreement, ok, err := store.DurableChildAgreement("agreement-cap-family-amazon")
+	if err != nil {
+		t.Fatalf("DurableChildAgreement() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("DurableChildAgreement(agreement-cap-family-amazon) ok=false, want stored agreement")
+	}
+	if agreement.AgentID != "family-child" || agreement.SourceRequestID != "cap-family-amazon" || agreement.Status != session.DurableChildAgreementStatusProposed {
+		t.Fatalf("DurableChildAgreement = %#v, want proposed agreement for cap-family-amazon", agreement)
+	}
+	if len(agreement.ArtifactRefs) != 1 || agreement.ArtifactRefs[0].Kind != "review_event" {
+		t.Fatalf("DurableChildAgreement artifact refs = %#v, want review_event ref", agreement.ArtifactRefs)
 	}
 
 	request, ok, err := store.CapabilityRequest("cap-family-amazon")

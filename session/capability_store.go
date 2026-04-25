@@ -182,6 +182,11 @@ func (s *SQLiteStore) AppendCapabilityReview(review CapabilityReview) (Capabilit
 	if err := tx.Commit(); err != nil {
 		return CapabilityReview{}, fmt.Errorf("commit capability review tx: %w", err)
 	}
+	if agreementStatus := DurableChildAgreementStatusFromCapabilityReview(review.Status); agreementStatus != "" {
+		if err := s.UpdateDurableChildAgreementStatusForRequest(review.RequestID, agreementStatus); err != nil {
+			return CapabilityReview{}, err
+		}
+	}
 	return CapabilityReview(review), nil
 }
 

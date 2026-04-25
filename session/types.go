@@ -204,6 +204,31 @@ type CapabilityReview struct {
 	CreatedAt    time.Time              `json:"created_at,omitempty"`
 }
 
+type DurableChildAgreementStatus string
+
+const (
+	DurableChildAgreementStatusProposed   DurableChildAgreementStatus = "proposed"
+	DurableChildAgreementStatusApproved   DurableChildAgreementStatus = "approved"
+	DurableChildAgreementStatusRejected   DurableChildAgreementStatus = "rejected"
+	DurableChildAgreementStatusSuperseded DurableChildAgreementStatus = "superseded"
+)
+
+type DurableChildAgreement struct {
+	AgreementID         string                      `json:"agreement_id"`
+	AgentID             string                      `json:"agent_id,omitempty"`
+	ParentPrincipal     string                      `json:"parent_principal,omitempty"`
+	ChildPrincipal      string                      `json:"child_principal,omitempty"`
+	SourceSurface       string                      `json:"source_surface,omitempty"`
+	SourceRequestID     string                      `json:"source_request_id,omitempty"`
+	SourceReviewEventID int64                       `json:"source_review_event_id,omitempty"`
+	Summary             string                      `json:"summary,omitempty"`
+	BoundedEffect       string                      `json:"bounded_effect,omitempty"`
+	Status              DurableChildAgreementStatus `json:"status,omitempty"`
+	ArtifactRefs        []RecordReference           `json:"artifact_refs,omitempty"`
+	CreatedAt           time.Time                   `json:"created_at,omitempty"`
+	UpdatedAt           time.Time                   `json:"updated_at,omitempty"`
+}
+
 type CapabilityGrant struct {
 	GrantID            string                `json:"grant_id"`
 	RequestID          string                `json:"request_id,omitempty"`
@@ -919,6 +944,68 @@ func NormalizeCapabilityActions(actions []string) []string {
 		out = append(out, action)
 	}
 	return out
+}
+
+func NormalizeDurableChildAgreementStatus(status DurableChildAgreementStatus) DurableChildAgreementStatus {
+	switch DurableChildAgreementStatus(normalizeEnumValue(string(status))) {
+	case DurableChildAgreementStatusProposed,
+		DurableChildAgreementStatusApproved,
+		DurableChildAgreementStatusRejected,
+		DurableChildAgreementStatusSuperseded:
+		return DurableChildAgreementStatus(normalizeEnumValue(string(status)))
+	default:
+		return ""
+	}
+}
+
+func DurableChildAgreementStatusFromCapabilityReview(status CapabilityReviewStatus) DurableChildAgreementStatus {
+	switch NormalizeCapabilityReviewStatus(status) {
+	case CapabilityReviewStatusApproved:
+		return DurableChildAgreementStatusApproved
+	case CapabilityReviewStatusRejected:
+		return DurableChildAgreementStatusRejected
+	case CapabilityReviewStatusProposed, CapabilityReviewStatusParentApproved:
+		return DurableChildAgreementStatusProposed
+	default:
+		return ""
+	}
+}
+
+func NormalizeDurableChildAgreement(record DurableChildAgreement) DurableChildAgreement {
+	record.AgreementID = strings.TrimSpace(record.AgreementID)
+	record.AgentID = strings.TrimSpace(record.AgentID)
+	record.ParentPrincipal = strings.TrimSpace(record.ParentPrincipal)
+	record.ChildPrincipal = strings.TrimSpace(record.ChildPrincipal)
+	record.SourceSurface = strings.TrimSpace(record.SourceSurface)
+	record.SourceRequestID = strings.TrimSpace(record.SourceRequestID)
+	record.Summary = strings.TrimSpace(record.Summary)
+	record.BoundedEffect = strings.TrimSpace(record.BoundedEffect)
+	record.Status = NormalizeDurableChildAgreementStatus(record.Status)
+	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
+	if record.Status == "" && record.Active() {
+		record.Status = DurableChildAgreementStatusProposed
+	}
+	if record.CreatedAt.IsZero() && record.Active() {
+		record.CreatedAt = time.Now().UTC()
+	}
+	if record.UpdatedAt.IsZero() && record.Active() {
+		record.UpdatedAt = time.Now().UTC()
+	}
+	return record
+}
+
+func (r DurableChildAgreement) Active() bool {
+	return strings.TrimSpace(r.AgreementID) != "" ||
+		strings.TrimSpace(r.AgentID) != "" ||
+		strings.TrimSpace(r.ParentPrincipal) != "" ||
+		strings.TrimSpace(r.ChildPrincipal) != "" ||
+		strings.TrimSpace(r.SourceSurface) != "" ||
+		strings.TrimSpace(r.SourceRequestID) != "" ||
+		r.SourceReviewEventID != 0 ||
+		strings.TrimSpace(r.Summary) != "" ||
+		strings.TrimSpace(r.BoundedEffect) != "" ||
+		strings.TrimSpace(string(r.Status)) != "" ||
+		len(r.ArtifactRefs) > 0
 }
 
 func NormalizeCapabilityRequest(request CapabilityRequest) CapabilityRequest {
