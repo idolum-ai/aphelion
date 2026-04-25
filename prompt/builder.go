@@ -142,6 +142,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
 			parts = append(parts, agent.SystemBlock{Text: confirmation})
 		}
+		if mediaDelivery := renderGeneratedMediaDeliveryBlock(toolCaps); mediaDelivery != "" {
+			parts = append(parts, agent.SystemBlock{Text: mediaDelivery})
+		}
 	} else {
 		if planning := renderPlanningDisciplineBlock(toolCaps); planning != "" {
 			parts = append(parts, agent.SystemBlock{Text: planning})
@@ -151,6 +154,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		}
 		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
 			parts = append(parts, agent.SystemBlock{Text: confirmation})
+		}
+		if mediaDelivery := renderGeneratedMediaDeliveryBlock(toolCaps); mediaDelivery != "" {
+			parts = append(parts, agent.SystemBlock{Text: mediaDelivery})
 		}
 	}
 
@@ -650,6 +656,20 @@ func renderConfirmationDisciplineBlock(capabilities ToolCapabilities) string {
 		"Ask for confirmation when authority genuinely depends on it, when intent is materially ambiguous, or when a destructive or irreversible action is next.",
 		"Do not ask for confirmation as a politeness reflex when the next move is already obvious.",
 		"When runtime proposal gating blocks execution, treat that as a real operational boundary rather than a stylistic suggestion.",
+	}, "\n")
+}
+
+func renderGeneratedMediaDeliveryBlock(capabilities ToolCapabilities) string {
+	if !capabilities.Exec {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Generated Media Delivery",
+		"When tool execution creates local files that should be delivered to the user, keep the files inside the active working, shared-memory, or user-memory roots and include one directive line per deliverable artifact:",
+		"MEDIA: <path>",
+		"Relative paths resolve from the active working root; absolute paths are accepted only inside allowed runtime roots.",
+		"Pair delivered media with a concise narration or caption in the candidate reply so the face can present the result as one voice.",
+		"Do not claim inability to generate, render, attach, send, or provide media while attaching it.",
 	}, "\n")
 }
 

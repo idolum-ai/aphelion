@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 )
@@ -15,6 +16,7 @@ type brokerageTestState struct {
 	note         string
 	phase        string
 	ratification string
+	contract     string
 }
 
 func TestConvergeBrokerageReturnsEarlyWhenNotBrokerage(t *testing.T) {
@@ -186,5 +188,211 @@ func TestConvergeBrokerageMaxRoundsFallsBackWithoutExtraRevise(t *testing.T) {
 	}
 	if usage.OutputTokens != 7 {
 		t.Fatalf("usage.OutputTokens = %d, want 7", usage.OutputTokens)
+	}
+}
+
+func TestConvergeBrokerageStopsOnRepeatedStableContract(t *testing.T) {
+	t.Parallel()
+
+	ratifyCalls := 0
+	reviseCalls := 0
+	var stop BrokerageStop
+	state, _ := ConvergeBrokerage(context.Background(), BrokerageConvergeInput[brokerageTestState]{
+		Initial: brokerageTestState{
+			note:  "first",
+			phase: "brokerage",
+		},
+		Policy: BrokerageConvergencePolicy{
+			MinRounds:            1,
+			MaxRounds:            4,
+			AbsoluteMaxRounds:    6,
+			MaxElapsed:           time.Minute,
+			StableContractRounds: 2,
+			StopOnStableContract: true,
+		},
+		Note:                func(s brokerageTestState) string { return s.note },
+		Phase:               func(s brokerageTestState) string { return s.phase },
+		Ratification:        func(s brokerageTestState) string { return s.ratification },
+		ContractFingerprint: func(s brokerageTestState) string { return s.contract },
+		Ratify: func(_ context.Context, _ int, s brokerageTestState) (brokerageTestState, core.TokenUsage, error) {
+			ratifyCalls++
+			s.ratification = "adapt"
+			s.contract = "inspect=yes question=no answer=yes"
+			return s, core.TokenUsage{}, nil
+		},
+		Revise: func(_ context.Context, _ int, s brokerageTestState) (brokerageTestState, core.TokenUsage, error) {
+			reviseCalls++
+			s.note = "revised"
+			s.ratification = ""
+			return s, core.TokenUsage{}, nil
+		},
+		Fallback: func(_ context.Context, s brokerageTestState) (brokerageTestState, core.TokenUsage) {
+			s.phase = "proposal"
+			return s, core.TokenUsage{}
+		},
+		OnStop: func(got BrokerageStop) { stop = got },
+	})
+	if ratifyCalls != 2 {
+		t.Fatalf("ratifyCalls = %d, want 2", ratifyCalls)
+	}
+	if reviseCalls != 1 {
+		t.Fatalf("reviseCalls = %d, want 1", reviseCalls)
+	}
+	if stop.Reason != BrokerageStopStableContract || stop.Round != 2 || stop.Converged || !stop.Fallback {
+		t.Fatalf("stop = %#v, want stable contract fallback at round 2", stop)
+	}
+	if state.phase != "proposal" {
+		t.Fatalf("phase = %q, want proposal fallback", state.phase)
+	}
+}
+
+func TestConvergeBrokerageStopsOnRepeatedProposal(t *testing.T) {
+	t.Parallel()
+
+	reviseCalls := 0
+	var stop BrokerageStop
+	state, _ := ConvergeBrokerage(context.Background(), BrokerageConvergeInput[brokerageTestState]{
+		Initial: brokerageTestState{
+			note:  "same",
+			phase: "brokerage",
+		},
+		Policy: BrokerageConvergencePolicy{
+			MinRounds:              1,
+			MaxRounds:              4,
+			AbsoluteMaxRounds:      6,
+			MaxElapsed:             time.Minute,
+			StableContractRounds:   2,
+			StopOnRepeatedProposal: true,
+		},
+		Note:         func(s brokerageTestState) string { return s.note },
+		Phase:        func(s brokerageTestState) string { return s.phase },
+		Ratification: func(s brokerageTestState) string { return s.ratification },
+		Ratify: func(_ context.Context, _ int, s brokerageTestState) (brokerageTestState, core.TokenUsage, error) {
+			s.ratification = "adapt"
+			return s, core.TokenUsage{}, nil
+		},
+		Revise: func(_ context.Context, _ int, s brokerageTestState) (brokerageTestState, core.TokenUsage, error) {
+			reviseCalls++
+			s.note = "same"
+			s.ratification = ""
+			return s, core.TokenUsage{}, nil
+		},
+		Fallback: func(_ context.Context, s brokerageTestState) (brokerageTestState, core.TokenUsage) {
+			s.phase = "proposal"
+			return s, core.TokenUsage{}
+		},
+		OnStop: func(got BrokerageStop) { stop = got },
+	})
+	if reviseCalls != 1 {
+		t.Fatalf("reviseCalls = %d, want 1", reviseCalls)
+	}
+	if stop.Reason != BrokerageStopRepeatedProposal || stop.Round != 1 || stop.Converged || !stop.Fallback {
+		t.Fatalf("stop = %#v, want repeated proposal fallback at round 1", stop)
+	}
+	if state.phase != "proposal" {
+		t.Fatalf("phase = %q, want proposal fallback", state.phase)
+	}
+}
+
+func TestConvergeBrokerageStopsOnReject(t *testing.T) {
+	t.Parallel()
+
+	reviseCalls := 0
+	var stop BrokerageStop
+	state, _ := ConvergeBrokerage(context.Background(), BrokerageConvergeInput[brokerageTestState]{
+		Initial: brokerageTestState{
+			note:  "first",
+			phase: "brokerage",
+		},
+		Policy: BrokerageConvergencePolicy{
+			MinRounds:            1,
+			MaxRounds:            4,
+			AbsoluteMaxRounds:    6,
+			MaxElapsed:           time.Minute,
+			StableContractRounds: 2,
+			StopOnReject:         true,
+		},
+		Note:         func(s brokerageTestState) string { return s.note },
+		Phase:        func(s brokerageTestState) string { return s.phase },
+		Ratification: func(s brokerageTestState) string { return s.ratification },
+		Ratify: func(_ context.Context, _ int, s brokerageTestState) (brokerageTestState, core.TokenUsage, error) {
+			s.ratification = "reject"
+			return s, core.TokenUsage{}, nil
+		},
+		Revise: func(context.Context, int, brokerageTestState) (brokerageTestState, core.TokenUsage, error) {
+			reviseCalls++
+			return brokerageTestState{}, core.TokenUsage{}, nil
+		},
+		Fallback: func(_ context.Context, s brokerageTestState) (brokerageTestState, core.TokenUsage) {
+			s.phase = "proposal"
+			return s, core.TokenUsage{}
+		},
+		OnStop: func(got BrokerageStop) { stop = got },
+	})
+	if reviseCalls != 0 {
+		t.Fatalf("reviseCalls = %d, want 0", reviseCalls)
+	}
+	if stop.Reason != BrokerageStopRejected || stop.Round != 1 || stop.Converged || !stop.Fallback {
+		t.Fatalf("stop = %#v, want reject fallback at round 1", stop)
+	}
+	if state.phase != "proposal" {
+		t.Fatalf("phase = %q, want proposal fallback", state.phase)
+	}
+}
+
+func TestConvergeBrokerageStopsOnElapsedBudget(t *testing.T) {
+	t.Parallel()
+
+	base := time.Unix(100, 0)
+	nowCalls := 0
+	ratifyCalls := 0
+	var stop BrokerageStop
+	state, _ := ConvergeBrokerage(context.Background(), BrokerageConvergeInput[brokerageTestState]{
+		Initial: brokerageTestState{
+			note:  "first",
+			phase: "brokerage",
+		},
+		Policy: BrokerageConvergencePolicy{
+			MinRounds:              1,
+			MaxRounds:              4,
+			AbsoluteMaxRounds:      6,
+			MaxElapsed:             time.Second,
+			StableContractRounds:   2,
+			StopOnRepeatedProposal: true,
+		},
+		Note:         func(s brokerageTestState) string { return s.note },
+		Phase:        func(s brokerageTestState) string { return s.phase },
+		Ratification: func(s brokerageTestState) string { return s.ratification },
+		Ratify: func(_ context.Context, _ int, s brokerageTestState) (brokerageTestState, core.TokenUsage, error) {
+			ratifyCalls++
+			s.ratification = "adapt"
+			return s, core.TokenUsage{}, nil
+		},
+		Revise: func(_ context.Context, _ int, s brokerageTestState) (brokerageTestState, core.TokenUsage, error) {
+			s.note = "second"
+			s.ratification = ""
+			return s, core.TokenUsage{}, nil
+		},
+		Fallback: func(_ context.Context, s brokerageTestState) (brokerageTestState, core.TokenUsage) {
+			s.phase = "proposal"
+			return s, core.TokenUsage{}
+		},
+		OnStop: func(got BrokerageStop) { stop = got },
+		Now: func() time.Time {
+			nowCalls++
+			if nowCalls == 1 {
+				return base
+			}
+			return base.Add(2 * time.Second)
+		},
+	})
+	if ratifyCalls != 1 {
+		t.Fatalf("ratifyCalls = %d, want 1 before elapsed stop", ratifyCalls)
+	}
+	if stop.Reason != BrokerageStopMaxElapsed || stop.Round != 1 || stop.Converged || !stop.Fallback {
+		t.Fatalf("stop = %#v, want elapsed fallback after round 1", stop)
+	}
+	if state.phase != "proposal" {
+		t.Fatalf("phase = %q, want proposal fallback", state.phase)
 	}
 }

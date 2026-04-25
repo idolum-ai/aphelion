@@ -172,6 +172,48 @@ The runtime should parse and carry these fields explicitly:
 
 If the ratification output is missing required fields or yields no usable steps, the runtime should treat it as an invalid brokerage artifact and fall back through the normal proposal path rather than passing an ambiguous blob into the governor.
 
+## Convergence And Escalation
+
+Brokerage is bounded by convergence criteria, not by a magic round count alone.
+
+The runtime should stop early with a negotiated contract when:
+
+- Aphelion returns `RATIFICATION: accept`.
+
+The runtime should stop early and degrade to the ordinary proposal path when:
+
+- Aphelion returns `RATIFICATION: reject`.
+- Two consecutive ratification rounds produce the same effective contract and steps.
+- Idolum's revised proposal repeats a proposal already seen in the same brokerage.
+- The configured elapsed-time budget expires.
+- The configured round budget expires.
+- Ratification or revision fails to parse or execute.
+
+Aphelion should use `reject`, not endless `adapt`, when the next move crosses:
+
+- authority or capability boundaries
+- privacy or sensitive-environment boundaries
+- external-account access
+- purchases or irreversible side effects
+- public-web exposure
+- unresolved factual/evidence gaps that cannot be improved by another internal round
+
+Default policy:
+
+```toml
+[governor.brokerage]
+min_rounds = 1
+max_rounds = 4
+absolute_max_rounds = 6
+max_elapsed = "20s"
+stable_contract_rounds = 2
+stop_on_stable_contract = true
+stop_on_repeated_proposal = true
+stop_on_reject = true
+```
+
+These defaults make the usual path one or two rounds, allow one additional substantive revision beyond the earlier three-round cap, and still preserve a hard ceiling for latency, cost, and runaway self-negotiation.
+
 ## Main Turn Execution
 
 After ratification, the normal governor/tool turn should run as usual.
@@ -263,6 +305,8 @@ The system must not drop or stall a turn merely because brokerage failed.
 ## Decisions
 
 - **Brokerage is bounded.** The system may iterate through a small number of bounded revision rounds, then either converge or fail closed to the plain proposal path.
+- **Brokerage stops on stability.** Repeating the same effective contract is a diminishing-returns signal, not a reason to keep arguing.
+- **Escalation beats persuasion.** Capability, authority, privacy, purchase, external-account, and public-exposure boundaries should stop brokerage and move into the governed proposal/capability lane.
 - **Idolum proposes posture.** It does not authorize tools or system actions.
 - **Aphelion ratifies execution.** It remains the action and authority layer.
 - **Brokerage preserves both pressures.** The surviving artifact should keep Idolum's push and Aphelion's ratification together.
@@ -278,7 +322,6 @@ Still deferred after this tranche:
 - mid-turn re-ratification after reconnaissance
 - persistent plan-step tracking during execution
 - user-visible surfaced brokerage plans by default
-- multi-round brokerage loops
 - explicit brokerage constraints for the material-floor output schema
 
 ## Test Plan
@@ -291,3 +334,6 @@ Still deferred after this tranche:
 - **TestBrokerageRerunsPlainProposalAfterRatificationFailure**: failed ratification triggers a real proposal rerun
 - **TestBrokeragePreservesFramingWhenProposalRerunFails**: failed proposal rerun preserves brokerage framing instead of relabeling it
 - **TestBrokerageAwarenessVisibleToGovernorAndFace**: runtime awareness reflects brokerage phase and the ratified execution contract
+- **TestConvergeBrokerageStopsOnRepeatedStableContract**: repeated effective contracts stop early instead of spending all rounds
+- **TestConvergeBrokerageStopsOnRepeatedProposal**: proposal oscillation stops early and degrades honestly
+- **TestConvergeBrokerageStopsOnReject**: authority-boundary rejection stops brokerage without requesting another revision

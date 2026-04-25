@@ -46,6 +46,8 @@ type TurnAudit struct {
 	UserText               string                  `json:"user_text,omitempty"`
 	BrokerageRounds        []BrokerageRoundAudit   `json:"brokerage_rounds,omitempty"`
 	BrokerageConverged     bool                    `json:"brokerage_converged"`
+	BrokerageStopReason    string                  `json:"brokerage_stop_reason,omitempty"`
+	BrokerageStopRound     int                     `json:"brokerage_stop_round,omitempty"`
 	ToolCalls              []TurnToolAudit         `json:"tool_calls,omitempty"`
 	ProgressMessages       []string                `json:"progress_messages,omitempty"`
 	GovernorReplyText      string                  `json:"governor_reply_text,omitempty"`
@@ -150,6 +152,15 @@ func (r *turnAuditRecorder) MarkBrokerageConverged(converged bool) {
 	if r == nil {
 		return
 	}
+	r.audit.BrokerageConverged = converged
+}
+
+func (r *turnAuditRecorder) MarkBrokerageStopped(reason string, round int, converged bool) {
+	if r == nil {
+		return
+	}
+	r.audit.BrokerageStopReason = strings.TrimSpace(reason)
+	r.audit.BrokerageStopRound = round
 	r.audit.BrokerageConverged = converged
 }
 

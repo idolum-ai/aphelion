@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -13,10 +14,6 @@ import (
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/turn"
-)
-
-const (
-	maxBrokerageRounds = 3
 )
 
 type turnBrokerage struct {
@@ -126,6 +123,12 @@ func (r *Runtime) ratifyTurnBrokerage(
 			"<one short user-facing progress line>",
 			"Only text inside that Surface block is surfaced live during this exchange; all other text here stays internal.",
 			"",
+			"Convergence criteria:",
+			"- Use RATIFICATION: accept only when the execution contract is safe, authorized, and specific enough to execute.",
+			"- Use RATIFICATION: adapt only when a concrete revision can plausibly resolve the remaining disagreement.",
+			"- Use RATIFICATION: reject when the next step crosses authority, capability, privacy, external-effect, or irreversible-risk boundaries, or when further internal deliberation is only repeating the same unresolved objection.",
+			"- Do not seek full unanimity about style or preference before execution; preserve material disagreements in the plan when the execution contract is still defensible.",
+			"",
 			"User message:",
 			strings.TrimSpace(userText),
 		}, "\n"),
@@ -218,8 +221,8 @@ func (r *Runtime) convergeTurnBrokerage(
 	emitSurface func(ctx context.Context, text string),
 ) (turnBrokerage, core.TokenUsage) {
 	return turn.ConvergeBrokerage(ctx, turn.BrokerageConvergeInput[turnBrokerage]{
-		Initial:   brokerage,
-		MaxRounds: maxBrokerageRounds,
+		Initial: brokerage,
+		Policy:  r.brokerageConvergencePolicy(),
 		Note: func(state turnBrokerage) string {
 			return strings.TrimSpace(state.IdolumNote)
 		},
@@ -228,6 +231,12 @@ func (r *Runtime) convergeTurnBrokerage(
 		},
 		Ratification: func(state turnBrokerage) string {
 			return strings.TrimSpace(state.Ratification)
+		},
+		ContractFingerprint: func(state turnBrokerage) string {
+			return brokerageContractFingerprint(state)
+		},
+		ProposalFingerprint: func(state turnBrokerage) string {
+			return brokerageProposalFingerprint(state)
 		},
 		Ratify: func(ctx context.Context, _ int, state turnBrokerage) (turnBrokerage, core.TokenUsage, error) {
 			return r.ratifyTurnBrokerage(ctx, exec, systemBlocks, history, userText, state)
@@ -287,7 +296,65 @@ func (r *Runtime) convergeTurnBrokerage(
 				audit.MarkBrokerageConverged(converged)
 			}
 		},
+		OnStop: func(stop turn.BrokerageStop) {
+			if audit != nil {
+				audit.MarkBrokerageStopped(stop.Reason, stop.Round, stop.Converged)
+			}
+		},
 	})
+}
+
+func (r *Runtime) brokerageConvergencePolicy() turn.BrokerageConvergencePolicy {
+	policy := turn.DefaultBrokerageConvergencePolicy()
+	if r == nil || r.cfg == nil {
+		return policy
+	}
+	cfg := r.cfg.Governor.Brokerage
+	if cfg.MinRounds == 0 &&
+		cfg.MaxRounds == 0 &&
+		cfg.AbsoluteMaxRounds == 0 &&
+		strings.TrimSpace(cfg.MaxElapsed) == "" &&
+		cfg.StableContractRounds == 0 &&
+		!cfg.StopOnStableContract &&
+		!cfg.StopOnRepeatedProposal &&
+		!cfg.StopOnReject {
+		return policy
+	}
+	policy.MinRounds = cfg.MinRounds
+	policy.MaxRounds = cfg.MaxRounds
+	policy.AbsoluteMaxRounds = cfg.AbsoluteMaxRounds
+	if elapsed, err := time.ParseDuration(strings.TrimSpace(cfg.MaxElapsed)); err == nil {
+		policy.MaxElapsed = elapsed
+	}
+	policy.StableContractRounds = cfg.StableContractRounds
+	policy.StopOnStableContract = cfg.StopOnStableContract
+	policy.StopOnRepeatedProposal = cfg.StopOnRepeatedProposal
+	policy.StopOnReject = cfg.StopOnReject
+	return turn.NormalizeBrokerageConvergencePolicy(policy)
+}
+
+func brokerageContractFingerprint(state turnBrokerage) string {
+	parts := []string{
+		strings.TrimSpace(state.Ratification),
+		strings.TrimSpace(state.SignalJudgment),
+	}
+	if state.RatifiedExecutionContract != nil {
+		parts = append(parts, state.RatifiedExecutionContract.Summary())
+	}
+	for _, step := range state.RatifiedSteps {
+		if trimmed := strings.TrimSpace(step); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return normalizeBrokerageFingerprint(strings.Join(parts, "\n"))
+}
+
+func brokerageProposalFingerprint(state turnBrokerage) string {
+	return normalizeBrokerageFingerprint(state.IdolumNote)
+}
+
+func normalizeBrokerageFingerprint(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
 
 func (r *Runtime) fallbackToPlainProposal(

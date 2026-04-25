@@ -97,6 +97,24 @@ func TestBuildGovernorPromptAddsConfirmationDisciplineWhenExecIsAvailable(t *tes
 	}
 }
 
+func TestBuildGovernorPromptAddsGeneratedMediaDeliveryWhenExecIsAvailable(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolManifest: "tools:\n- exec: shell execution",
+	})
+
+	if !strings.Contains(got, "## Generated Media Delivery") {
+		t.Fatalf("prompt missing generated media delivery block: %q", got)
+	}
+	if !strings.Contains(got, "MEDIA: <path>") {
+		t.Fatalf("prompt missing outbound media directive contract: %q", got)
+	}
+	if !strings.Contains(got, "Do not claim inability to generate, render, attach, send, or provide media while attaching it.") {
+		t.Fatalf("prompt missing media contradiction guard: %q", got)
+	}
+}
+
 func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testing.T) {
 	t.Parallel()
 
@@ -116,6 +134,9 @@ func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testin
 	}
 	if !strings.Contains(got, "## Confirmation Discipline") {
 		t.Fatalf("prompt missing confirmation discipline from capability flags: %q", got)
+	}
+	if !strings.Contains(got, "## Generated Media Delivery") {
+		t.Fatalf("prompt missing generated media delivery from capability flags: %q", got)
 	}
 }
 

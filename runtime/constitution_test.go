@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/turn"
 )
 
 func TestHandleInboundRepairsVisibleGovernorLeakageBeforeDelivery(t *testing.T) {
@@ -108,6 +109,55 @@ func TestHandleInboundRepairsMediaOnlyReplyWithNarration(t *testing.T) {
 	}
 }
 
+func TestHandleInboundRepairsMediaContradictionBeforeDelivery(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	if err := os.WriteFile(filepath.Join(cfg.Agent.ExecRoot, "diagram.png"), []byte("png"), 0o600); err != nil {
+		t.Fatalf("write diagram: %v", err)
+	}
+	provider.replyText = "Here are the files.\nMEDIA: diagram.png"
+	provider.faceReplyText = "I can't generate diagrams, but here are the images."
+	provider.repairReplyText = "I mapped the codebase into the attached diagrams."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	var audit TurnAudit
+	rt.SetTurnAuditSink(func(got TurnAudit) {
+		audit = got
+	})
+
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     9005,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "show me diagrams",
+		MessageID:  1,
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].Text != "I mapped the codebase into the attached diagrams." {
+		t.Fatalf("final text = %q", sender.sent[0].Text)
+	}
+	if len(sender.sent[0].Media) != 1 {
+		t.Fatalf("media len = %d, want 1", len(sender.sent[0].Media))
+	}
+	if !audit.FaceRepairAttempted || !audit.FaceRepairApplied {
+		t.Fatalf("audit face repair = attempted:%t applied:%t, want true/true", audit.FaceRepairAttempted, audit.FaceRepairApplied)
+	}
+	if !containsViolationRule(audit.ConstitutionViolations, constitutionRuleMediaReplyContradiction) {
+		t.Fatalf("violations = %#v, want media contradiction rule", audit.ConstitutionViolations)
+	}
+}
+
 func TestHandleInboundBrokerageConvergesAfterAdaptation(t *testing.T) {
 	t.Parallel()
 
@@ -167,6 +217,11 @@ func TestHandleInboundBrokerageFallsBackToProposalAfterMaxRounds(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Governor.Brokerage.MinRounds = 1
+	cfg.Governor.Brokerage.MaxRounds = 4
+	cfg.Governor.Brokerage.AbsoluteMaxRounds = 6
+	cfg.Governor.Brokerage.MaxElapsed = "20s"
+	cfg.Governor.Brokerage.StableContractRounds = 2
 	provider.proposalReplies = []string{
 		"INSPECT: yes\nQUESTION: no\nANSWER: yes\nPUSH:\n- Inspect first.",
 		"Push for a grounded answer from what is already known.",
@@ -196,8 +251,11 @@ func TestHandleInboundBrokerageFallsBackToProposalAfterMaxRounds(t *testing.T) {
 	if audit.BrokerageConverged {
 		t.Fatal("brokerage should not have converged")
 	}
-	if len(audit.BrokerageRounds) != maxBrokerageRounds {
-		t.Fatalf("brokerage rounds = %d, want %d", len(audit.BrokerageRounds), maxBrokerageRounds)
+	if len(audit.BrokerageRounds) != cfg.Governor.Brokerage.MaxRounds {
+		t.Fatalf("brokerage rounds = %d, want %d", len(audit.BrokerageRounds), cfg.Governor.Brokerage.MaxRounds)
+	}
+	if audit.BrokerageStopReason != turn.BrokerageStopMaxRounds || audit.BrokerageStopRound != cfg.Governor.Brokerage.MaxRounds {
+		t.Fatalf("brokerage stop = reason:%q round:%d, want max_rounds at %d", audit.BrokerageStopReason, audit.BrokerageStopRound, cfg.Governor.Brokerage.MaxRounds)
 	}
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
@@ -209,6 +267,47 @@ func TestHandleInboundBrokerageFallsBackToProposalAfterMaxRounds(t *testing.T) {
 	}
 	if strings.Contains(provider.lastGovernorMsgs[1].Content, "## Execution Contract") {
 		t.Fatalf("governor input should not contain negotiated brokerage after max-round fallback: %q", provider.lastGovernorMsgs[1].Content)
+	}
+}
+
+func TestHandleInboundBrokerageFallsBackWhenContractStabilizes(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.proposalReplies = []string{
+		"INSPECT: yes\nQUESTION: no\nANSWER: yes\nPUSH:\n- Inspect first.",
+		"INSPECT: yes\nQUESTION: no\nANSWER: yes\nPUSH:\n- Inspect the repo before answering.",
+	}
+	provider.brokerageReplyText = "INSPECT: yes\nQUESTION: no\nANSWER: yes\nPUSH:\n- Inspect the repo before answering."
+	provider.planningReplyText = "INSPECT: yes\nQUESTION: no\nANSWER: yes\nRATIFICATION: adapt\nPLAN:\n- Inspect first."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	var audit TurnAudit
+	rt.SetTurnAuditSink(func(got TurnAudit) {
+		audit = got
+	})
+
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     9006,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "come up with some features for my codebase",
+		MessageID:  1,
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	if audit.BrokerageConverged {
+		t.Fatal("brokerage should not have converged")
+	}
+	if len(audit.BrokerageRounds) != 2 {
+		t.Fatalf("brokerage rounds = %d, want 2 after stable contract", len(audit.BrokerageRounds))
+	}
+	if audit.BrokerageStopReason != turn.BrokerageStopStableContract || audit.BrokerageStopRound != 2 {
+		t.Fatalf("brokerage stop = reason:%q round:%d, want stable_contract at 2", audit.BrokerageStopReason, audit.BrokerageStopRound)
 	}
 }
 

@@ -90,6 +90,7 @@ type GovernorConfig struct {
 	Backend        string              `toml:"backend"`
 	NativeProvider string              `toml:"native_provider"`
 	Codex          GovernorCodexConfig `toml:"codex"`
+	Brokerage      BrokerageConfig     `toml:"brokerage"`
 }
 
 type GovernorCodexConfig struct {
@@ -101,6 +102,17 @@ type GovernorCodexConfig struct {
 	ContextWindow    int    `toml:"context_window"`
 	MaxContinuations int    `toml:"max_continuations"`
 	TransportRetries int    `toml:"transport_retries"`
+}
+
+type BrokerageConfig struct {
+	MinRounds              int    `toml:"min_rounds"`
+	MaxRounds              int    `toml:"max_rounds"`
+	AbsoluteMaxRounds      int    `toml:"absolute_max_rounds"`
+	MaxElapsed             string `toml:"max_elapsed"`
+	StableContractRounds   int    `toml:"stable_contract_rounds"`
+	StopOnStableContract   bool   `toml:"stop_on_stable_contract"`
+	StopOnRepeatedProposal bool   `toml:"stop_on_repeated_proposal"`
+	StopOnReject           bool   `toml:"stop_on_reject"`
 }
 
 type ProvidersConfig struct {
@@ -361,6 +373,16 @@ func Default() Config {
 				ContextWindow:    200000,
 				MaxContinuations: 3,
 				TransportRetries: 1,
+			},
+			Brokerage: BrokerageConfig{
+				MinRounds:              1,
+				MaxRounds:              4,
+				AbsoluteMaxRounds:      6,
+				MaxElapsed:             "20s",
+				StableContractRounds:   2,
+				StopOnStableContract:   true,
+				StopOnRepeatedProposal: true,
+				StopOnReject:           true,
 			},
 		},
 		Providers: ProvidersConfig{
@@ -843,6 +865,29 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Governor.Codex.TransportRetries < 0 {
 		return fmt.Errorf("governor.codex.transport_retries must be >= 0")
+	}
+	if cfg.Governor.Brokerage.MinRounds <= 0 {
+		return fmt.Errorf("governor.brokerage.min_rounds must be > 0")
+	}
+	if cfg.Governor.Brokerage.MaxRounds <= 0 {
+		return fmt.Errorf("governor.brokerage.max_rounds must be > 0")
+	}
+	if cfg.Governor.Brokerage.AbsoluteMaxRounds <= 0 {
+		return fmt.Errorf("governor.brokerage.absolute_max_rounds must be > 0")
+	}
+	if cfg.Governor.Brokerage.MinRounds > cfg.Governor.Brokerage.MaxRounds {
+		return fmt.Errorf("governor.brokerage.min_rounds must be <= max_rounds")
+	}
+	if cfg.Governor.Brokerage.MaxRounds > cfg.Governor.Brokerage.AbsoluteMaxRounds {
+		return fmt.Errorf("governor.brokerage.max_rounds must be <= absolute_max_rounds")
+	}
+	if cfg.Governor.Brokerage.StableContractRounds < 2 {
+		return fmt.Errorf("governor.brokerage.stable_contract_rounds must be >= 2")
+	}
+	if elapsed, err := time.ParseDuration(strings.TrimSpace(cfg.Governor.Brokerage.MaxElapsed)); err != nil {
+		return fmt.Errorf("governor.brokerage.max_elapsed must be a valid duration: %w", err)
+	} else if elapsed <= 0 {
+		return fmt.Errorf("governor.brokerage.max_elapsed must be > 0")
 	}
 	if cfg.Agent.MaxIterations <= 0 {
 		return fmt.Errorf("agent.max_iterations must be > 0")
