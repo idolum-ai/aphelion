@@ -150,6 +150,7 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 
 func buildBwrapArgs(scope Scope, workdir, command string, extraWritablePaths []string, extraReadonlyPaths []string) ([]string, error) {
 	runtimeRO := existingRoots("/bin", "/usr", "/lib", "/lib64", "/etc")
+	runtimeRO = dedupePaths(append(runtimeRO, resolverReadonlyRoots()...))
 
 	writablePaths, err := resolveScopedPaths(scope.Profile.WritablePaths, scope)
 	if err != nil {
@@ -336,6 +337,25 @@ func resolveHostPaths(raw []string) ([]string, error) {
 		out = append(out, resolved)
 	}
 	return dedupePaths(out), nil
+}
+
+func resolverReadonlyRoots() []string {
+	target, err := filepath.EvalSymlinks("/etc/resolv.conf")
+	if err != nil {
+		return nil
+	}
+	target = filepath.Clean(target)
+	if !filepath.IsAbs(target) {
+		return nil
+	}
+	parent := filepath.Dir(target)
+	if parent == "/" || parent == "/etc" {
+		return nil
+	}
+	if _, err := os.Stat(parent); err != nil {
+		return nil
+	}
+	return []string{parent}
 }
 
 func existingRoots(paths ...string) []string {
