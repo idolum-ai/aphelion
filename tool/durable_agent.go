@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -121,22 +121,22 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 		return r.grantDurableAgentAccess(in)
 	case "access_revoke":
 		return r.revokeDurableAgentAccess(in)
-	case "capacity_show":
-		return r.showDurableAgentCapacity(in)
-	case "capacity_negotiate":
-		return r.negotiateDurableAgentCapacity(in)
-	case "capacity_probe":
-		return r.probeDurableAgentCapacity(in)
-	case "capacity_attest":
-		return r.attestDurableAgentCapacity(in)
 	case "conversation_show":
 		return r.showDurableAgentConversation(in)
 	case "conversation_send":
 		return r.sendDurableAgentConversation(in)
+	case "delegation_request":
+		return r.requestDurableAgentDelegation(in, p, key)
+	case "delegation_report":
+		return r.reportDurableAgentDelegation(in, key)
 	case "memory_review":
 		return r.reviewDurableAgentMemoryDelegation(in, scope)
 	case "memory_delegate":
 		return r.delegateDurableAgentMemory(ctx, in, p, key, scope)
+	case "profile_show":
+		return r.showDurableAgentProfile(in)
+	case "profile_apply":
+		return r.applyDurableAgentProfile(in)
 	case "snapshot_create":
 		return r.createDurableAgentSnapshot(in)
 	case "snapshot_list":
@@ -144,7 +144,7 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 	case "snapshot_restore":
 		return r.restoreDurableAgentSnapshot(ctx, in, p, key)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|bootstrap_show|policy_apply|bootstrap_update|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|capacity_show|capacity_negotiate|capacity_probe|capacity_attest|conversation_show|conversation_send|memory_review|memory_delegate|snapshot_create|snapshot_list|snapshot_restore")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|bootstrap_show|policy_apply|bootstrap_update|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|conversation_show|conversation_send|delegation_request|delegation_report|memory_review|memory_delegate|profile_show|profile_apply|snapshot_create|snapshot_list|snapshot_restore")
 	}
 }
 
@@ -181,7 +181,7 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 	if err != nil {
 		return "", err
 	}
-	if err := r.markDurableAgentCapacityStale(agent.AgentID); err != nil {
+	if _, err := syncDurableAgentProfileFiles(*updated, r.store); err != nil {
 		return "", err
 	}
 	return renderDurableAgentPolicyApply(*updated, update), nil
@@ -216,11 +216,6 @@ func (r *Registry) updateDurableAgentBootstrap(in durableAgentInput, p principal
 	updated, update, err := r.store.ApplyDurableAgentBootstrap(agent.AgentID, next, in.ReviewEventID, p.TelegramUserID, string(p.Role), updateKind, reason)
 	if err != nil {
 		return "", err
-	}
-	if update != nil {
-		if err := r.markDurableAgentCapacityStale(agent.AgentID); err != nil {
-			return "", err
-		}
 	}
 	_ = key
 	return renderDurableAgentBootstrapApply(*updated, update), nil
@@ -328,6 +323,9 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 	if err != nil {
 		return "", err
 	}
+	if _, err := syncDurableAgentProfileFiles(*updated, r.store); err != nil {
+		return "", err
+	}
 	return renderDurableAgentLifecycle("create", *updated), nil
 }
 
@@ -346,6 +344,9 @@ func (r *Registry) activateDurableAgent(in durableAgentInput) (string, error) {
 	r.inheritDurableAgentBootstrapIfMissing(agent)
 	agent.Status = "active"
 	if err := r.store.UpsertDurableAgent(*agent); err != nil {
+		return "", err
+	}
+	if _, err := syncDurableAgentProfileFiles(*agent, r.store); err != nil {
 		return "", err
 	}
 	return renderDurableAgentLifecycle("activate", *agent), nil
@@ -544,6 +545,9 @@ func (r *Registry) finalizeDurableAgentWizard(in durableAgentInput, key session.
 	if err := r.store.UpsertDurableAgent(updatedAgent); err != nil {
 		return "", err
 	}
+	if _, err := syncDurableAgentProfileFiles(updatedAgent, r.store); err != nil {
+		return "", err
+	}
 
 	continuity.SetupWizard = &wizard
 	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
@@ -609,6 +613,7 @@ func (r *Registry) saveDurableAgentContinuity(state *core.DurableAgentState, con
 }
 
 func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAgentInput) (string, error) {
+	_ = ctx
 	agentID := strings.TrimSpace(in.AgentID)
 	if agentID == "" {
 		return "", fmt.Errorf("durable_agent agent_id is required for connection_test")
@@ -622,17 +627,7 @@ func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAge
 		if agent.ChannelConfig.Email == nil {
 			return "", fmt.Errorf("durable agent %q has no email channel_config", agent.AgentID)
 		}
-		args := []string{"gog"}
-		if strings.TrimSpace(agent.ChannelConfig.Email.Account) != "" {
-			args = append(args, "--account", strings.TrimSpace(agent.ChannelConfig.Email.Account))
-		}
-		args = append(args, "gmail", "search", firstNonEmpty(strings.TrimSpace(agent.ChannelConfig.Email.Query), "label:inbox"), "--json", "--results-only", "--max", "1", "--no-input")
-		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return "", fmt.Errorf("durable agent connection_test failed: %w: %s", err, strings.TrimSpace(string(out)))
-		}
-		return fmt.Sprintf("action: durable-agent connection test\nagent_id: %s\nchannel_kind: %s\nstatus: ok\n", agent.AgentID, agent.ChannelKind), nil
+		return fmt.Sprintf("action: durable-agent connection test\nagent_id: %s\nchannel_kind: %s\nstatus: configuration_only\nnext: grant a concrete channel/tool capability before live adapter access can be tested\n", agent.AgentID, agent.ChannelKind), nil
 	default:
 		return "", fmt.Errorf("durable agent %q channel %q does not support connection_test yet", agent.AgentID, agent.ChannelKind)
 	}
@@ -757,145 +752,6 @@ func (r *Registry) revokeDurableAgentAccess(in durableAgentInput) (string, error
 	return renderDurableAgentAccess("revoke", *agent, requested, changed), nil
 }
 
-func (r *Registry) showDurableAgentCapacity(in durableAgentInput) (string, error) {
-	agentID := strings.TrimSpace(in.AgentID)
-	if agentID == "" {
-		return "", fmt.Errorf("durable_agent agent_id is required for capacity_show")
-	}
-	agent, err := r.resolveDurableAgent(agentID)
-	if err != nil {
-		return "", err
-	}
-	_, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
-	if err != nil {
-		return "", err
-	}
-	return renderDurableAgentCapacity("show", *agent, durableAgentCapacityContractFromContinuity(continuity)), nil
-}
-
-func (r *Registry) negotiateDurableAgentCapacity(in durableAgentInput) (string, error) {
-	agentID := strings.TrimSpace(in.AgentID)
-	if agentID == "" {
-		return "", fmt.Errorf("durable_agent agent_id is required for capacity_negotiate")
-	}
-	agent, err := r.resolveDurableAgent(agentID)
-	if err != nil {
-		return "", err
-	}
-	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
-	if err != nil {
-		return "", err
-	}
-	contract := durableAgentCapacityContractFromContinuity(continuity)
-	contract = mergeDurableAgentCapacityContract(contract, in.CapacityContract)
-	contract.LastNegotiatedAt = time.Now().UTC()
-	switch {
-	case durableAgentCapacityContractReadyForAttestation(contract):
-		contract.Status = "provisional"
-	default:
-		contract.Status = "unattested"
-	}
-	continuity.CapabilityContract = &contract
-	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
-		return "", err
-	}
-	return renderDurableAgentCapacity("negotiate", *agent, contract), nil
-}
-
-func (r *Registry) probeDurableAgentCapacity(in durableAgentInput) (string, error) {
-	agentID := strings.TrimSpace(in.AgentID)
-	if agentID == "" {
-		return "", fmt.Errorf("durable_agent agent_id is required for capacity_probe")
-	}
-	agent, err := r.resolveDurableAgent(agentID)
-	if err != nil {
-		return "", err
-	}
-	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
-	if err != nil {
-		return "", err
-	}
-	if continuity.CapabilityContract == nil {
-		return "", fmt.Errorf("durable agent %q has no capability contract; use capacity_negotiate first", agent.AgentID)
-	}
-	contract := mergeDurableAgentCapacityContract(*continuity.CapabilityContract, in.CapacityContract)
-	contract.LastProbedAt = time.Now().UTC()
-	if contract.Status == "" || contract.Status == "unattested" || contract.Status == "stale" {
-		if durableAgentCapacityContractReadyForAttestation(contract) {
-			contract.Status = "provisional"
-		} else {
-			contract.Status = "unattested"
-		}
-	}
-	continuity.CapabilityContract = &contract
-	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
-		return "", err
-	}
-	return renderDurableAgentCapacity("probe", *agent, contract), nil
-}
-
-func (r *Registry) attestDurableAgentCapacity(in durableAgentInput) (string, error) {
-	agentID := strings.TrimSpace(in.AgentID)
-	if agentID == "" {
-		return "", fmt.Errorf("durable_agent agent_id is required for capacity_attest")
-	}
-	agent, err := r.resolveDurableAgent(agentID)
-	if err != nil {
-		return "", err
-	}
-	state, continuity, err := r.loadDurableAgentContinuity(agent.AgentID)
-	if err != nil {
-		return "", err
-	}
-	if continuity.CapabilityContract == nil {
-		return "", fmt.Errorf("durable agent %q has no capability contract; use capacity_negotiate first", agent.AgentID)
-	}
-	contract := mergeDurableAgentCapacityContract(*continuity.CapabilityContract, in.CapacityContract)
-	if !durableAgentCapacityContractReadyForAttestation(contract) {
-		return "", fmt.Errorf("durable agent %q capability contract is incomplete; include child_self_assessment, success_criteria, and evidence_signals", agent.AgentID)
-	}
-	desiredState := "verified"
-	if in.CapacityContract != nil {
-		if value := normalizeDurableAgentCapacityContractState(in.CapacityContract.Status); value != "" {
-			desiredState = value
-		}
-	}
-	switch desiredState {
-	case "verified", "stale":
-	default:
-		return "", fmt.Errorf("capacity_attest status must be verified or stale")
-	}
-	if desiredState == "verified" {
-		if len(contract.ProbeResults) == 0 || contract.LastProbedAt.IsZero() {
-			return "", fmt.Errorf("durable agent %q capability contract requires probe_results and last_probed_at before verified attestation", agent.AgentID)
-		}
-	}
-	contract.Status = desiredState
-	contract.LastAttestedAt = time.Now().UTC()
-	continuity.CapabilityContract = &contract
-	if err := r.saveDurableAgentContinuity(state, continuity); err != nil {
-		return "", err
-	}
-	return renderDurableAgentCapacity("attest", *agent, contract), nil
-}
-
-func (r *Registry) markDurableAgentCapacityStale(agentID string) error {
-	state, continuity, err := r.loadDurableAgentContinuity(agentID)
-	if err != nil {
-		return err
-	}
-	if continuity.CapabilityContract == nil {
-		return nil
-	}
-	contract := *continuity.CapabilityContract
-	if strings.TrimSpace(contract.Status) != "verified" {
-		return nil
-	}
-	contract.Status = "stale"
-	continuity.CapabilityContract = &contract
-	return r.saveDurableAgentContinuity(state, continuity)
-}
-
 func (r *Registry) showDurableAgentConversation(in durableAgentInput) (string, error) {
 	agentID := strings.TrimSpace(in.AgentID)
 	if agentID == "" {
@@ -934,6 +790,157 @@ func (r *Registry) sendDurableAgentConversation(in durableAgentInput) (string, e
 		return "", err
 	}
 	return renderDurableAgentConversation("send", *agent, continuity, in.History), nil
+}
+
+func (r *Registry) requestDurableAgentDelegation(in durableAgentInput, actor principal.Principal, key session.SessionKey) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for delegation_request")
+	}
+	if in.DelegationRequest == nil {
+		return "", fmt.Errorf("durable_agent delegation_request requires delegation_request payload")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	payload := in.DelegationRequest
+	reviewTarget := durableAgentReviewTargetChatID(*agent, payload.ReviewTargetChatID, in.ReviewTargetChatID)
+	if reviewTarget == 0 {
+		return "", fmt.Errorf("durable_agent delegation_request requires review_target_chat_id on the agent or payload")
+	}
+	agent.ReviewTargetChatID = reviewTarget
+
+	requestID := strings.TrimSpace(payload.RequestID)
+	if requestID == "" {
+		requestID = generatedOperationID("cap")
+	}
+	kind := session.NormalizeCapabilityKind(session.CapabilityKind(payload.Kind))
+	if strings.TrimSpace(payload.Kind) != "" && kind == "" {
+		return "", fmt.Errorf("durable_agent delegation_request kind is not supported")
+	}
+	if kind == "" {
+		kind = session.CapabilityKindGenericDelegation
+	}
+	target := strings.TrimSpace(payload.TargetResource)
+	if target == "" {
+		return "", fmt.Errorf("durable_agent delegation_request requires target_resource")
+	}
+	purpose := strings.TrimSpace(payload.Purpose)
+	if purpose == "" {
+		return "", fmt.Errorf("durable_agent delegation_request requires purpose")
+	}
+	contract, err := normalizeCapabilityJSONBlob(payload.Contract, "contract")
+	if err != nil {
+		return "", err
+	}
+	contract, err = mergeCapabilityUpdatePlanIntoContract(contract, capabilityUpdatePlanFromDurableDelegation(agent.AgentID, *payload))
+	if err != nil {
+		return "", err
+	}
+	constraints, err := normalizeCapabilityJSONBlob(payload.Constraints, "constraints")
+	if err != nil {
+		return "", err
+	}
+	requestedBy := canonicalDurableAgentPrincipalIfKnown(r.store, firstNonEmpty(payload.RequestedBy, core.DurableAgentPrincipal(agent.AgentID)))
+	requestedFor := canonicalDurableAgentPrincipalIfKnown(r.store, firstNonEmpty(payload.RequestedFor, core.DurableAgentPrincipal(agent.AgentID)))
+	parentPrincipal := firstNonEmpty(payload.ParentPrincipal, durableAgentDefaultParentPrincipal(*agent))
+	adminPrincipal := firstNonEmpty(payload.AdminPrincipal, toolAuthorityPrincipalDisplay(actor))
+	record, err := r.store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:       requestID,
+		RequestedBy:     requestedBy,
+		RequestedFor:    requestedFor,
+		ParentPrincipal: parentPrincipal,
+		AdminPrincipal:  adminPrincipal,
+		Kind:            kind,
+		TargetResource:  target,
+		Purpose:         purpose,
+		RiskClass:       strings.TrimSpace(payload.RiskClass),
+		Contract:        contract,
+		Constraints:     constraints,
+		ReviewStatus:    session.CapabilityReviewStatusProposed,
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendCapabilityEvent(key, core.ExecutionEventCapabilityRequestCreated, string(record.ReviewStatus), map[string]any{
+		"request_id":        record.RequestID,
+		"kind":              string(record.Kind),
+		"target_resource":   record.TargetResource,
+		"review_status":     string(record.ReviewStatus),
+		"requested_by":      record.RequestedBy,
+		"requested_for":     record.RequestedFor,
+		"parent_principal":  record.ParentPrincipal,
+		"requester_role":    strings.TrimSpace(string(actor.Role)),
+		"requester_user_id": actor.TelegramUserID,
+		"request_via":       "durable_agent.delegation_request",
+		"agent_id":          agent.AgentID,
+		"channel_kind":      agent.ChannelKind,
+	}); err != nil {
+		return "", err
+	}
+	reviewEventID, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(*agent, durableAgentDelegationRequestArtifact(*agent, record, *payload))
+	if err != nil {
+		return "", err
+	}
+	return renderDurableAgentDelegationRequest(*agent, record, reviewEventID), nil
+}
+
+func (r *Registry) reportDurableAgentDelegation(in durableAgentInput, key session.SessionKey) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for delegation_report")
+	}
+	if in.DelegationReport == nil {
+		return "", fmt.Errorf("durable_agent delegation_report requires delegation_report payload")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	payload := in.DelegationReport
+	reviewTarget := durableAgentReviewTargetChatID(*agent, payload.ReviewTargetChatID, in.ReviewTargetChatID)
+	if reviewTarget == 0 {
+		return "", fmt.Errorf("durable_agent delegation_report requires review_target_chat_id on the agent or payload")
+	}
+	agent.ReviewTargetChatID = reviewTarget
+	if strings.TrimSpace(payload.Summary) == "" &&
+		strings.TrimSpace(payload.Outcome) == "" &&
+		len(payload.LocalActions) == 0 &&
+		len(payload.Questions) == 0 &&
+		len(payload.RiskFlags) == 0 {
+		return "", fmt.Errorf("durable_agent delegation_report requires summary, outcome, local_actions, questions, or risk_flags")
+	}
+	if requestID := strings.TrimSpace(payload.RequestID); requestID != "" {
+		if _, ok, err := r.store.CapabilityRequest(requestID); err != nil {
+			return "", err
+		} else if !ok {
+			return "", fmt.Errorf("capability request %q not found", requestID)
+		}
+	}
+	if grantID := strings.TrimSpace(payload.GrantID); grantID != "" {
+		if _, ok, err := r.store.CapabilityGrant(grantID); err != nil {
+			return "", err
+		} else if !ok {
+			return "", fmt.Errorf("capability grant %q not found", grantID)
+		}
+	}
+	reviewEventID, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(*agent, durableAgentDelegationReportArtifact(*agent, *payload))
+	if err != nil {
+		return "", err
+	}
+	if err := r.appendCapabilityEvent(key, "capability.reported", strings.TrimSpace(payload.Status), map[string]any{
+		"agent_id":        agent.AgentID,
+		"request_id":      strings.TrimSpace(payload.RequestID),
+		"grant_id":        strings.TrimSpace(payload.GrantID),
+		"status":          strings.TrimSpace(payload.Status),
+		"outcome":         strings.TrimSpace(payload.Outcome),
+		"review_event_id": reviewEventID,
+		"report_via":      "durable_agent.delegation_report",
+	}); err != nil {
+		return "", err
+	}
+	return renderDurableAgentDelegationReport(*agent, *payload, reviewEventID), nil
 }
 
 type durableMemoryCandidate struct {
@@ -1394,6 +1401,45 @@ func truncateCompact(raw string, limit int) string {
 	return clean[:limit-3] + "..."
 }
 
+func (r *Registry) showDurableAgentProfile(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for profile_show")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	memoryRoot, err := durableAgentMemoryRoot(*agent, r.store)
+	if err != nil {
+		return "", err
+	}
+	profileRoot := filepath.Join(memoryRoot, "profile")
+	manifest := loadDurableAgentProfileManifest(profileRoot)
+	return renderDurableAgentProfile("show", *agent, profileRoot, manifest, nil), nil
+}
+
+func (r *Registry) applyDurableAgentProfile(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for profile_apply")
+	}
+	if in.ProfileEdit == nil {
+		return "", fmt.Errorf("durable_agent profile_apply requires profile_edit")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	reason := firstNonEmpty(strings.TrimSpace(in.ProfileEdit.Reason), strings.TrimSpace(in.Reason))
+	sync, err := applyDurableAgentProfileEdit(*agent, r.store, in.ProfileEdit.TargetFile, in.ProfileEdit.Content, reason)
+	if err != nil {
+		return "", err
+	}
+	manifest := loadDurableAgentProfileManifest(sync.Root)
+	return renderDurableAgentProfile("apply", *agent, sync.Root, manifest, sync.Written), nil
+}
+
 func (r *Registry) createDurableAgentSnapshot(in durableAgentInput) (string, error) {
 	agentID := strings.TrimSpace(in.AgentID)
 	if agentID == "" {
@@ -1506,6 +1552,27 @@ func (r *Registry) restoreDurableAgentSnapshot(
 	return renderDurableAgentSnapshotRestore(*agent, *restoredManifest, approval, true), nil
 }
 
+func renderDurableAgentProfile(action string, agent core.DurableAgent, profileRoot string, manifest durableAgentProfileManifest, written []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "action: durable-agent profile %s\n", strings.TrimSpace(action))
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	fmt.Fprintf(&b, "profile_root: %s\n", strings.TrimSpace(profileRoot))
+	fmt.Fprintf(&b, "policy_hash: %s\n", strings.TrimSpace(manifest.PolicyHash))
+	fmt.Fprintf(&b, "manifest_updated_at: %s\n", strings.TrimSpace(manifest.UpdatedAt))
+	if len(written) > 0 {
+		fmt.Fprintf(&b, "written: %s\n", strings.Join(written, ","))
+	}
+	b.WriteString("files:\n")
+	if len(manifest.Files) == 0 {
+		b.WriteString("- none\n")
+		return b.String()
+	}
+	for _, entry := range manifest.Files {
+		fmt.Fprintf(&b, "- path=%s ownership=%s source=%s\n", entry.Path, entry.Ownership, entry.Source)
+	}
+	return b.String()
+}
+
 func renderDurableAgentSnapshotCreate(agent core.DurableAgent, manifest durableagent.SnapshotManifest) string {
 	var b strings.Builder
 	b.WriteString("action: durable-agent snapshot create\n")
@@ -1565,81 +1632,6 @@ func renderDurableAgentSnapshotRestore(agent core.DurableAgent, manifest durable
 	fmt.Fprintf(&b, "changed: %t\n", changed)
 	fmt.Fprintf(&b, "reason: %s\n", firstNonEmpty(strings.TrimSpace(manifest.Reason), "-"))
 	return b.String()
-}
-
-func durableAgentCapacityContractReadyForAttestation(contract core.DurableAgentCapabilityContract) bool {
-	return strings.TrimSpace(contract.ChildSelfAssessment) != "" &&
-		len(contract.SuccessCriteria) > 0 &&
-		len(contract.EvidenceSignals) > 0
-}
-
-func durableAgentCapacityContractFromContinuity(continuity core.DurableAgentContinuityState) core.DurableAgentCapabilityContract {
-	if continuity.CapabilityContract == nil {
-		return core.DurableAgentCapabilityContract{Status: "unattested"}
-	}
-	contract := *continuity.CapabilityContract
-	if strings.TrimSpace(contract.Status) == "" {
-		contract.Status = "unattested"
-	}
-	return contract
-}
-
-func mergeDurableAgentCapacityContract(current core.DurableAgentCapabilityContract, patch *durableAgentCapacityContractInput) core.DurableAgentCapabilityContract {
-	if patch == nil {
-		if strings.TrimSpace(current.Status) == "" {
-			current.Status = "unattested"
-		}
-		return current
-	}
-	if status := normalizeDurableAgentCapacityContractState(patch.Status); status != "" {
-		current.Status = status
-	}
-	if strings.TrimSpace(patch.ParentProposal) != "" {
-		current.ParentProposal = strings.TrimSpace(patch.ParentProposal)
-	}
-	if strings.TrimSpace(patch.ChildSelfAssessment) != "" {
-		current.ChildSelfAssessment = strings.TrimSpace(patch.ChildSelfAssessment)
-	}
-	if patch.Can != nil {
-		current.Can = normalizePolicyCapabilities(patch.Can)
-	}
-	if patch.Cannot != nil {
-		current.Cannot = normalizePolicyCapabilities(patch.Cannot)
-	}
-	if patch.Uncertain != nil {
-		current.Uncertain = normalizePolicyCapabilities(patch.Uncertain)
-	}
-	if patch.SuccessCriteria != nil {
-		current.SuccessCriteria = normalizePolicyCapabilities(patch.SuccessCriteria)
-	}
-	if patch.EvidenceSignals != nil {
-		current.EvidenceSignals = normalizePolicyCapabilities(patch.EvidenceSignals)
-	}
-	if patch.ProbeChecklist != nil {
-		current.ProbeChecklist = normalizePolicyCapabilities(patch.ProbeChecklist)
-	}
-	if patch.ProbeResults != nil {
-		current.ProbeResults = normalizePolicyCapabilities(patch.ProbeResults)
-	}
-	if strings.TrimSpace(current.Status) == "" {
-		current.Status = "unattested"
-	}
-	return current
-}
-
-func normalizeDurableAgentCapacityContractState(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "unattested":
-		return "unattested"
-	case "provisional":
-		return "provisional"
-	case "verified":
-		return "verified"
-	case "stale":
-		return "stale"
-	default:
-		return ""
-	}
 }
 
 func durableAgentAccessUserIDs(in durableAgentInput) ([]int64, error) {
@@ -1970,7 +1962,7 @@ func wizardQuestionForStep(step string, effectiveBootstrapBackend string) string
 	case "address":
 		return "What channel address should this child own?"
 	case "adapter":
-		return "Which channel adapter should be used (for example gog_cli for inbox/email)?"
+		return "Which channel adapter should be named for this channel profile?"
 	case "bootstrap_profile":
 		if strings.TrimSpace(effectiveBootstrapBackend) == "codex" {
 			return "This child uses a codex bootstrap backend; keep parent bootstrap defaults?"
@@ -2357,7 +2349,6 @@ func renderDurableAgentBootstrapApply(agent core.DurableAgent, update *session.D
 	if strings.TrimSpace(update.Reason) != "" {
 		fmt.Fprintf(&b, "reason: %s\n", update.Reason)
 	}
-	b.WriteString("capacity_contract_status: stale_if_verified\n")
 	b.WriteString("note: next durable child wake uses the updated bootstrap\n")
 	return b.String()
 }
@@ -2411,42 +2402,6 @@ func renderDurableAgentAccess(action string, agent core.DurableAgent, requested 
 	return b.String()
 }
 
-func renderDurableAgentCapacity(action string, agent core.DurableAgent, contract core.DurableAgentCapabilityContract) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "action: durable-agent capacity %s\n", strings.TrimSpace(action))
-	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
-	fmt.Fprintf(&b, "capacity_state: %s\n", firstNonEmpty(strings.TrimSpace(contract.Status), "unattested"))
-	fmt.Fprintf(&b, "parent_proposal: %s\n", strings.TrimSpace(contract.ParentProposal))
-	fmt.Fprintf(&b, "child_self_assessment: %s\n", strings.TrimSpace(contract.ChildSelfAssessment))
-	fmt.Fprintf(&b, "can: %s\n", firstNonEmpty(strings.Join(contract.Can, ","), "-"))
-	fmt.Fprintf(&b, "cannot: %s\n", firstNonEmpty(strings.Join(contract.Cannot, ","), "-"))
-	fmt.Fprintf(&b, "uncertain: %s\n", firstNonEmpty(strings.Join(contract.Uncertain, ","), "-"))
-	fmt.Fprintf(&b, "success_criteria: %s\n", firstNonEmpty(strings.Join(contract.SuccessCriteria, ","), "-"))
-	fmt.Fprintf(&b, "evidence_signals: %s\n", firstNonEmpty(strings.Join(contract.EvidenceSignals, ","), "-"))
-	fmt.Fprintf(&b, "probe_checklist: %s\n", firstNonEmpty(strings.Join(contract.ProbeChecklist, ","), "-"))
-	fmt.Fprintf(&b, "probe_results: %s\n", firstNonEmpty(strings.Join(contract.ProbeResults, ","), "-"))
-	if !contract.LastNegotiatedAt.IsZero() {
-		fmt.Fprintf(&b, "last_negotiated_at: %s\n", contract.LastNegotiatedAt.UTC().Format(time.RFC3339))
-	}
-	if !contract.LastProbedAt.IsZero() {
-		fmt.Fprintf(&b, "last_probed_at: %s\n", contract.LastProbedAt.UTC().Format(time.RFC3339))
-	}
-	if !contract.LastAttestedAt.IsZero() {
-		fmt.Fprintf(&b, "last_attested_at: %s\n", contract.LastAttestedAt.UTC().Format(time.RFC3339))
-	}
-	switch strings.TrimSpace(contract.Status) {
-	case "unattested":
-		b.WriteString("next: capacity_negotiate\n")
-	case "provisional":
-		b.WriteString("next: capacity_probe or capacity_attest\n")
-	case "verified":
-		b.WriteString("next: monitor and re-attest after policy drift\n")
-	case "stale":
-		b.WriteString("next: capacity_negotiate then capacity_attest\n")
-	}
-	return b.String()
-}
-
 func renderDurableAgentConversation(action string, agent core.DurableAgent, continuity core.DurableAgentContinuityState, history int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "action: durable-agent conversation %s\n", strings.TrimSpace(action))
@@ -2492,6 +2447,202 @@ func renderDurableAgentConversation(action string, agent core.DurableAgent, cont
 	}
 	b.WriteString("next: conversation_send\n")
 	return b.String()
+}
+
+func renderDurableAgentDelegationRequest(agent core.DurableAgent, record session.CapabilityRequest, reviewEventID int64) string {
+	record = session.NormalizeCapabilityRequest(record)
+	var b strings.Builder
+	b.WriteString("action: durable-agent delegation request\n")
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	fmt.Fprintf(&b, "request_id: %s\n", record.RequestID)
+	fmt.Fprintf(&b, "review_event_id: %d\n", reviewEventID)
+	b.WriteString("canonical_surface: capability_request\n")
+	fmt.Fprintf(&b, "kind: %s\n", record.Kind)
+	fmt.Fprintf(&b, "target_resource: %s\n", record.TargetResource)
+	fmt.Fprintf(&b, "review_status: %s\n", record.ReviewStatus)
+	fmt.Fprintf(&b, "requested_by: %s\n", firstNonEmpty(record.RequestedBy, "-"))
+	fmt.Fprintf(&b, "requested_for: %s\n", firstNonEmpty(record.RequestedFor, "-"))
+	if record.ParentPrincipal != "" {
+		fmt.Fprintf(&b, "parent_principal: %s\n", record.ParentPrincipal)
+	}
+	if record.AdminPrincipal != "" {
+		fmt.Fprintf(&b, "admin_principal: %s\n", record.AdminPrincipal)
+	}
+	if record.RiskClass != "" {
+		fmt.Fprintf(&b, "risk_class: %s\n", record.RiskClass)
+	}
+	if record.Purpose != "" {
+		fmt.Fprintf(&b, "purpose: %s\n", record.Purpose)
+	}
+	if plan, ok, err := capabilityUpdatePlanFromContract(record.Contract); err == nil && ok {
+		b.WriteString("capability_update_plan: present\n")
+		if plan.AgentID != "" {
+			fmt.Fprintf(&b, "policy_agent_id: %s\n", plan.AgentID)
+		}
+		if capabilityUpdatePlanHasDurablePolicyPatch(plan) {
+			b.WriteString("policy_update_on_grant: true\n")
+		}
+	}
+	b.WriteString("next: capability_authority request_review, then grant_set if approved\n")
+	return b.String()
+}
+
+func renderDurableAgentDelegationReport(agent core.DurableAgent, input durableAgentDelegationReportInput, reviewEventID int64) string {
+	var b strings.Builder
+	b.WriteString("action: durable-agent delegation report\n")
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	fmt.Fprintf(&b, "review_event_id: %d\n", reviewEventID)
+	if requestID := strings.TrimSpace(input.RequestID); requestID != "" {
+		fmt.Fprintf(&b, "request_id: %s\n", requestID)
+	}
+	if grantID := strings.TrimSpace(input.GrantID); grantID != "" {
+		fmt.Fprintf(&b, "grant_id: %s\n", grantID)
+	}
+	if status := strings.TrimSpace(input.Status); status != "" {
+		fmt.Fprintf(&b, "status: %s\n", status)
+	}
+	if outcome := strings.TrimSpace(input.Outcome); outcome != "" {
+		fmt.Fprintf(&b, "outcome: %s\n", outcome)
+	}
+	b.WriteString("next: review queued artifact and update capability grant/request if needed\n")
+	return b.String()
+}
+
+func durableAgentDelegationRequestArtifact(agent core.DurableAgent, record session.CapabilityRequest, input durableAgentDelegationRequestInput) core.DurableReviewArtifact {
+	record = session.NormalizeCapabilityRequest(record)
+	metadata := cloneDurableAgentDelegationMetadata(input.Metadata)
+	putDurableAgentDelegationMetadata(metadata, "delegation_surface", "durable_agent.delegation_request")
+	putDurableAgentDelegationMetadata(metadata, "capability_request_id", record.RequestID)
+	putDurableAgentDelegationMetadata(metadata, "capability_kind", string(record.Kind))
+	putDurableAgentDelegationMetadata(metadata, "target_resource", record.TargetResource)
+	putDurableAgentDelegationMetadata(metadata, "requested_by", record.RequestedBy)
+	putDurableAgentDelegationMetadata(metadata, "requested_for", record.RequestedFor)
+	putDurableAgentDelegationMetadata(metadata, "review_status", string(record.ReviewStatus))
+	putDurableAgentDelegationMetadata(metadata, "purpose", record.Purpose)
+	if plan, ok, err := capabilityUpdatePlanFromContract(record.Contract); err == nil && ok {
+		putDurableAgentDelegationMetadata(metadata, "capability_update_plan", "present")
+		if plan.AgentID != "" {
+			putDurableAgentDelegationMetadata(metadata, "policy_agent_id", plan.AgentID)
+		}
+		if capabilityUpdatePlanHasDurablePolicyPatch(plan) {
+			putDurableAgentDelegationMetadata(metadata, "policy_update_on_grant", "true")
+		}
+	}
+
+	summary := strings.TrimSpace(input.Summary)
+	if summary == "" {
+		summary = fmt.Sprintf("Delegation request %s: %s requests %s access to %s. Purpose: %s", record.RequestID, firstNonEmpty(record.RequestedFor, agent.AgentID), record.Kind, record.TargetResource, record.Purpose)
+	}
+	localActions := normalizeDurableAgentDelegationStrings(input.LocalActions)
+	localActions = appendDurableAgentDelegationString(localActions, fmt.Sprintf("created capability_request %s with review_status %s", record.RequestID, record.ReviewStatus))
+	questions := normalizeDurableAgentDelegationStrings(input.Questions)
+	if len(questions) == 0 {
+		questions = append(questions, fmt.Sprintf("Review capability_request %s and approve, reject, or grant allowed actions if acceptable.", record.RequestID))
+	}
+	riskFlags := normalizeDurableAgentDelegationStrings(input.RiskFlags)
+	if record.RiskClass != "" {
+		riskFlags = appendDurableAgentDelegationString(riskFlags, "risk_class:"+record.RiskClass)
+	}
+	return core.DurableReviewArtifact{
+		AgentID:      agent.AgentID,
+		Summary:      summary,
+		LocalActions: localActions,
+		Questions:    questions,
+		RiskFlags:    riskFlags,
+		ArtifactRefs: normalizeDurableAgentDelegationStrings(input.ArtifactRefs),
+		Metadata:     metadata,
+	}
+}
+
+func durableAgentDelegationReportArtifact(agent core.DurableAgent, input durableAgentDelegationReportInput) core.DurableReviewArtifact {
+	metadata := cloneDurableAgentDelegationMetadata(input.Metadata)
+	putDurableAgentDelegationMetadata(metadata, "delegation_surface", "durable_agent.delegation_report")
+	putDurableAgentDelegationMetadata(metadata, "capability_request_id", input.RequestID)
+	putDurableAgentDelegationMetadata(metadata, "capability_grant_id", input.GrantID)
+	putDurableAgentDelegationMetadata(metadata, "status", input.Status)
+	putDurableAgentDelegationMetadata(metadata, "outcome", input.Outcome)
+
+	summary := strings.TrimSpace(input.Summary)
+	if summary == "" {
+		summary = fmt.Sprintf("Delegation report from %s: %s", strings.TrimSpace(agent.AgentID), firstNonEmpty(input.Outcome, input.Status, "needs review"))
+	}
+	return core.DurableReviewArtifact{
+		AgentID:      agent.AgentID,
+		Summary:      summary,
+		LocalActions: normalizeDurableAgentDelegationStrings(input.LocalActions),
+		Questions:    normalizeDurableAgentDelegationStrings(input.Questions),
+		RiskFlags:    normalizeDurableAgentDelegationStrings(input.RiskFlags),
+		ArtifactRefs: normalizeDurableAgentDelegationStrings(input.ArtifactRefs),
+		Metadata:     metadata,
+	}
+}
+
+func durableAgentReviewTargetChatID(agent core.DurableAgent, overrides ...int64) int64 {
+	for _, value := range overrides {
+		if value > 0 {
+			return value
+		}
+	}
+	return agent.ReviewTargetChatID
+}
+
+func durableAgentDefaultParentPrincipal(agent core.DurableAgent) string {
+	kind := strings.TrimSpace(agent.ParentScopeKind)
+	id := strings.TrimSpace(agent.ParentScopeID)
+	if kind == "" || id == "" {
+		return ""
+	}
+	switch session.ScopeKind(kind) {
+	case session.ScopeKindTelegramDM:
+		return "telegram:" + id
+	case session.ScopeKindDurableAgent:
+		return id
+	default:
+		return kind + ":" + id
+	}
+}
+
+func cloneDurableAgentDelegationMetadata(input map[string]string) map[string]string {
+	out := make(map[string]string, len(input)+8)
+	for key, value := range input {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func putDurableAgentDelegationMetadata(metadata map[string]string, key string, value string) {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return
+	}
+	metadata[key] = value
+}
+
+func normalizeDurableAgentDelegationStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = appendDurableAgentDelegationString(out, value)
+	}
+	return out
+}
+
+func appendDurableAgentDelegationString(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func durableAgentConversationWindow(continuity core.DurableAgentContinuityState, history int) []core.DurableAgentConversationMessage {

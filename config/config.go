@@ -4,7 +4,6 @@ package config
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,7 +20,6 @@ type Config struct {
 	Governor      GovernorConfig      `toml:"governor"`
 	Providers     ProvidersConfig     `toml:"providers"`
 	OpenAI        OpenAIConfig        `toml:"openai"`
-	Search        SearchConfig        `toml:"search"`
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Agent         AgentConfig         `toml:"agent"`
 	Tools         ToolsConfig         `toml:"tools"`
@@ -90,6 +88,7 @@ type GovernorConfig struct {
 	Backend        string              `toml:"backend"`
 	NativeProvider string              `toml:"native_provider"`
 	Codex          GovernorCodexConfig `toml:"codex"`
+	Brokerage      BrokerageConfig     `toml:"brokerage"`
 }
 
 type GovernorCodexConfig struct {
@@ -101,6 +100,17 @@ type GovernorCodexConfig struct {
 	ContextWindow    int    `toml:"context_window"`
 	MaxContinuations int    `toml:"max_continuations"`
 	TransportRetries int    `toml:"transport_retries"`
+}
+
+type BrokerageConfig struct {
+	MinRounds              int    `toml:"min_rounds"`
+	MaxRounds              int    `toml:"max_rounds"`
+	AbsoluteMaxRounds      int    `toml:"absolute_max_rounds"`
+	MaxElapsed             string `toml:"max_elapsed"`
+	StableContractRounds   int    `toml:"stable_contract_rounds"`
+	StopOnStableContract   bool   `toml:"stop_on_stable_contract"`
+	StopOnRepeatedProposal bool   `toml:"stop_on_repeated_proposal"`
+	StopOnReject           bool   `toml:"stop_on_reject"`
 }
 
 type ProvidersConfig struct {
@@ -152,15 +162,6 @@ type OpenAIVectorStoresConfig struct {
 	DefaultStore string `toml:"default_store"`
 }
 
-type SearchConfig struct {
-	Brave SearchBraveConfig `toml:"brave"`
-}
-
-type SearchBraveConfig struct {
-	APIKey  string `toml:"api_key"`
-	BaseURL string `toml:"base_url"`
-}
-
 type SessionsConfig struct {
 	DBPath             string                     `toml:"db_path"`
 	IdleExpiry         string                     `toml:"idle_expiry"`
@@ -200,13 +201,14 @@ type ToolsConfig struct {
 }
 
 type MemoryConfig struct {
-	SessionSearch    bool                   `toml:"session_search"`
-	SemanticIndexing bool                   `toml:"semantic_indexing"`
-	Semantic         MemorySemanticConfig   `toml:"semantic"`
-	Aggressive       MemoryAggressiveConfig `toml:"aggressive"`
-	Reflection       MemoryReflectionConfig `toml:"reflection"`
-	Decay            MemoryDecayConfig      `toml:"decay"`
-	Identity         MemoryIdentityConfig   `toml:"identity"`
+	SessionSearch    bool                    `toml:"session_search"`
+	SemanticIndexing bool                    `toml:"semantic_indexing"`
+	Semantic         MemorySemanticConfig    `toml:"semantic"`
+	Aggressive       MemoryAggressiveConfig  `toml:"aggressive"`
+	Reflection       MemoryReflectionConfig  `toml:"reflection"`
+	Decay            MemoryDecayConfig       `toml:"decay"`
+	Identity         MemoryIdentityConfig    `toml:"identity"`
+	WritePolicy      MemoryWritePolicyConfig `toml:"write_policy"`
 }
 
 type MemorySemanticConfig struct {
@@ -244,6 +246,13 @@ type MemoryDecayConfig struct {
 
 type MemoryIdentityConfig struct {
 	Preserve []string `toml:"preserve"`
+}
+
+type MemoryWritePolicyConfig struct {
+	DirectUserWrites  string `toml:"direct_user_writes"`
+	ReflectionWrites  string `toml:"reflection_writes"`
+	AggressiveWrites  string `toml:"aggressive_writes"`
+	AutoAcceptLowRisk bool   `toml:"auto_accept_low_risk"`
 }
 
 type ThinkingConfig struct {
@@ -362,6 +371,16 @@ func Default() Config {
 				MaxContinuations: 3,
 				TransportRetries: 1,
 			},
+			Brokerage: BrokerageConfig{
+				MinRounds:              1,
+				MaxRounds:              4,
+				AbsoluteMaxRounds:      6,
+				MaxElapsed:             "20s",
+				StableContractRounds:   2,
+				StopOnStableContract:   true,
+				StopOnRepeatedProposal: true,
+				StopOnReject:           true,
+			},
 		},
 		Providers: ProvidersConfig{
 			Selection:     "auto",
@@ -394,11 +413,6 @@ func Default() Config {
 			},
 			VectorStores: OpenAIVectorStoresConfig{
 				Enabled: false,
-			},
-		},
-		Search: SearchConfig{
-			Brave: SearchBraveConfig{
-				BaseURL: "https://api.search.brave.com",
 			},
 		},
 		Sessions: SessionsConfig{
@@ -471,6 +485,12 @@ func Default() Config {
 			},
 			Identity: MemoryIdentityConfig{
 				Preserve: []string{"SOUL.md", "IDENTITY.md", "IDOLUM.md", "MEMORY.md"},
+			},
+			WritePolicy: MemoryWritePolicyConfig{
+				DirectUserWrites:  "apply",
+				ReflectionWrites:  "propose",
+				AggressiveWrites:  "propose",
+				AutoAcceptLowRisk: false,
 			},
 		},
 		Thinking: ThinkingConfig{
@@ -844,6 +864,29 @@ func validate(cfg *Config) error {
 	if cfg.Governor.Codex.TransportRetries < 0 {
 		return fmt.Errorf("governor.codex.transport_retries must be >= 0")
 	}
+	if cfg.Governor.Brokerage.MinRounds <= 0 {
+		return fmt.Errorf("governor.brokerage.min_rounds must be > 0")
+	}
+	if cfg.Governor.Brokerage.MaxRounds <= 0 {
+		return fmt.Errorf("governor.brokerage.max_rounds must be > 0")
+	}
+	if cfg.Governor.Brokerage.AbsoluteMaxRounds <= 0 {
+		return fmt.Errorf("governor.brokerage.absolute_max_rounds must be > 0")
+	}
+	if cfg.Governor.Brokerage.MinRounds > cfg.Governor.Brokerage.MaxRounds {
+		return fmt.Errorf("governor.brokerage.min_rounds must be <= max_rounds")
+	}
+	if cfg.Governor.Brokerage.MaxRounds > cfg.Governor.Brokerage.AbsoluteMaxRounds {
+		return fmt.Errorf("governor.brokerage.max_rounds must be <= absolute_max_rounds")
+	}
+	if cfg.Governor.Brokerage.StableContractRounds < 2 {
+		return fmt.Errorf("governor.brokerage.stable_contract_rounds must be >= 2")
+	}
+	if elapsed, err := time.ParseDuration(strings.TrimSpace(cfg.Governor.Brokerage.MaxElapsed)); err != nil {
+		return fmt.Errorf("governor.brokerage.max_elapsed must be a valid duration: %w", err)
+	} else if elapsed <= 0 {
+		return fmt.Errorf("governor.brokerage.max_elapsed must be > 0")
+	}
 	if cfg.Agent.MaxIterations <= 0 {
 		return fmt.Errorf("agent.max_iterations must be > 0")
 	}
@@ -942,6 +985,9 @@ func validate(cfg *Config) error {
 	}
 	if len(cfg.Memory.Identity.Preserve) == 0 {
 		return fmt.Errorf("memory.identity.preserve must not be empty")
+	}
+	if err := validateMemoryWritePolicy(cfg.Memory.WritePolicy); err != nil {
+		return err
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Memory.Semantic.Backend)) {
 	case "", "local":
@@ -1124,14 +1170,6 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("openai.files.purpose is required when openai.files.enabled = true")
 		}
 	}
-	if strings.TrimSpace(cfg.Search.Brave.APIKey) != "" {
-		if strings.TrimSpace(cfg.Search.Brave.BaseURL) == "" {
-			return fmt.Errorf("search.brave.base_url is required when search.brave.api_key is set")
-		}
-		if _, err := url.Parse(strings.TrimSpace(cfg.Search.Brave.BaseURL)); err != nil {
-			return fmt.Errorf("search.brave.base_url must be a valid URL: %w", err)
-		}
-	}
 	if len(cfg.Principals.Telegram.AdminUserIDs) == 0 {
 		return fmt.Errorf("principals.telegram.admin_user_ids must contain at least one user id; add [principals.telegram] admin_user_ids = [123456789]")
 	}
@@ -1160,6 +1198,21 @@ func validate(cfg *Config) error {
 	}
 	if len(cfg.Principals.Telegram.ApprovedUserIDs) > 0 {
 		return fmt.Errorf("principals.telegram.approved_user_ids is not supported; use durable-agent access grants instead")
+	}
+	return nil
+}
+
+func validateMemoryWritePolicy(policy MemoryWritePolicyConfig) error {
+	for name, value := range map[string]string{
+		"memory.write_policy.direct_user_writes": strings.TrimSpace(policy.DirectUserWrites),
+		"memory.write_policy.reflection_writes":  strings.TrimSpace(policy.ReflectionWrites),
+		"memory.write_policy.aggressive_writes":  strings.TrimSpace(policy.AggressiveWrites),
+	} {
+		switch strings.ToLower(value) {
+		case "apply", "propose":
+		default:
+			return fmt.Errorf("%s must be apply or propose", name)
+		}
 	}
 	return nil
 }

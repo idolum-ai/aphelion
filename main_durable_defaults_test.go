@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -10,6 +11,61 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
+
+func TestDefaultDurableAgentBootstrapFromConfigAutoPrefersCodexWhenAvailable(t *testing.T) {
+	t.Parallel()
+
+	codexHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(`{"tokens":{"access_token":"acc","refresh_token":"ref","account_id":"acct"}}`), 0o600); err != nil {
+		t.Fatalf("write codex auth: %v", err)
+	}
+	cfg := &config.Config{
+		Governor: config.GovernorConfig{
+			Backend: "auto",
+			Codex: config.GovernorCodexConfig{
+				AuthSource: "codex_cli",
+				CodexHome:  codexHome,
+				BaseURL:    "https://chatgpt.com/backend-api",
+				Model:      "gpt-5.5",
+			},
+		},
+		Providers: config.ProvidersConfig{
+			Anthropic: config.AnthropicConfig{APIKey: "sk-ant", Model: "claude-sonnet-4-6"},
+		},
+	}
+
+	bootstrap := defaultDurableAgentBootstrapFromConfig(cfg)
+	if bootstrap.Backend != "codex" || bootstrap.CodexHome != codexHome {
+		t.Fatalf("bootstrap = %#v, want codex using configured codex home", bootstrap)
+	}
+	if bootstrap.NativeProvider != "" || bootstrap.APIKey != "" {
+		t.Fatalf("bootstrap leaked native settings: %#v", bootstrap)
+	}
+}
+
+func TestDefaultDurableAgentBootstrapFromConfigAutoFallsBackNativeWithoutCodexCredentials(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Governor: config.GovernorConfig{
+			Backend:        "auto",
+			NativeProvider: "anthropic",
+			Codex: config.GovernorCodexConfig{
+				AuthSource: "codex_cli",
+				CodexHome:  t.TempDir(),
+				BaseURL:    "https://chatgpt.com/backend-api",
+			},
+		},
+		Providers: config.ProvidersConfig{
+			Anthropic: config.AnthropicConfig{APIKey: "sk-ant", Model: "claude-sonnet-4-6", MaxTokens: 4096},
+		},
+	}
+
+	bootstrap := defaultDurableAgentBootstrapFromConfig(cfg)
+	if bootstrap.Backend != "native" || bootstrap.NativeProvider != "anthropic" || bootstrap.APIKey != "sk-ant" {
+		t.Fatalf("bootstrap = %#v, want native anthropic fallback when codex credentials are absent", bootstrap)
+	}
+}
 
 func TestSyncDefaultDailyReviewDurableAgentCreatesDefaultAgent(t *testing.T) {
 	t.Parallel()
@@ -250,6 +306,7 @@ func TestSyncDurableAgentBootstrapInheritanceNoopWithoutParentBootstrap(t *testi
 
 	cfg := &config.Config{
 		Sessions: config.SessionsConfig{DBPath: dbPath},
+		Governor: config.GovernorConfig{Backend: "native"},
 	}
 	if err := syncDurableAgentBootstrapInheritance(cfg, store); err != nil {
 		t.Fatalf("syncDurableAgentBootstrapInheritance() err = %v", err)

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 func TestToolAuthorityInstallSetShowListAndRegisterGateForExternalTool(t *testing.T) {
@@ -111,7 +112,7 @@ func TestToolAuthorityInstallSetShowListAndRegisterGateForExternalTool(t *testin
 func TestToolAuthorityInstallShowMarksExternalToolStaleOnFingerprintDrift(t *testing.T) {
 	t.Parallel()
 
-	registry, _ := newDurableAgentToolRegistry(t)
+	registry, store := newDurableAgentToolRegistry(t)
 	key := adminSessionKey()
 	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspace) err = %v", err)
@@ -140,12 +141,12 @@ func TestToolAuthorityInstallShowMarksExternalToolStaleOnFingerprintDrift(t *tes
 		`{"action":"probe_run","tool_name":"browse_page"}`,
 		`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1"}`,
 		`{"action":"register","tool_name":"browse_page","implementation_ref":"external:browse_page"}`,
-		`{"action":"exposure_set","tool_name":"browse_page","principal":"telegram:1001","active":true}`,
 	} {
 		if _, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "tool_authority", json.RawMessage(input)); err != nil {
 			t.Fatalf("tool_authority input %s err = %v", input, err)
 		}
 	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 	beforeOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("browse_page before drift err = %v", err)
@@ -160,13 +161,13 @@ func TestToolAuthorityInstallShowMarksExternalToolStaleOnFingerprintDrift(t *tes
 	if err != nil {
 		t.Fatalf("install_show after drift err = %v", err)
 	}
-	for _, needle := range []string{"status: stale", "baseline_fingerprint: sha256:", "current_fingerprint: sha256:", "stale_reason: fingerprint drift:"} {
+	for _, needle := range []string{"status: stale", "baseline_fingerprint: sha256:", "current_fingerprint: sha256:", "drift_source: workspace_drift", "stale_reason: workspace_drift:"} {
 		if !strings.Contains(showOut, needle) {
 			t.Fatalf("install_show after drift output = %q, want %q", showOut, needle)
 		}
 	}
 	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
-	if err == nil || !strings.Contains(err.Error(), "external tool \"browse_page\" is stale: fingerprint drift:") {
+	if err == nil || !strings.Contains(err.Error(), "external tool \"browse_page\" is stale: workspace_drift:") {
 		t.Fatalf("browse_page after drift err = %v, want stale drift rejection", err)
 	}
 }
@@ -178,6 +179,10 @@ func TestToolAuthorityProbeRunUpdatesInstallRecordFromManifestProbe(t *testing.T
 	key := adminSessionKey()
 	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	runScript := filepath.Join(registry.workspace, "run.sh")
+	if err := os.WriteFile(runScript, []byte("#!/usr/bin/env bash\necho '{}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
 	probeScript := filepath.Join(registry.workspace, "probe.sh")
 	if err := os.WriteFile(probeScript, []byte("#!/usr/bin/env bash\necho 'probe ok'\n"), 0o755); err != nil {
@@ -374,6 +379,61 @@ func TestToolAuthorityInstallExecuteMarksRecordFailedOnInstallError(t *testing.T
 	}
 }
 
+func TestToolAuthorityProcessPolicyCeilingsBlockInstallProbeAndInvoke(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	for name, body := range map[string]string{
+		"install.sh": "#!/usr/bin/env bash\necho install ok\n",
+		"probe.sh":   "#!/usr/bin/env bash\necho probe ok\n",
+		"run.sh":     "#!/usr/bin/env bash\necho '{}'\n",
+	} {
+		if err := os.WriteFile(filepath.Join(registry.workspace, name), []byte(body), 0o755); err != nil {
+			t.Fatalf("WriteFile(%s) err = %v", name, err)
+		}
+	}
+	manifest := ExternalToolManifest{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		Install:   ExternalToolManifestInstall{Command: []string{"./install.sh"}},
+		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
+		Constraints: ExternalToolManifestConstraints{
+			Network: "allowlist",
+		},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"pending","installer":"aphelion","install_ref":"workspace:policy"}`)); err != nil {
+		t.Fatalf("install_set pending err = %v", err)
+	}
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(`{"action":"install_execute","tool_name":"browse_page"}`))
+	if err == nil || !strings.Contains(err.Error(), "policy_violation: process-mode network=\"allowlist\"") {
+		t.Fatalf("install_execute err = %v, want policy violation", err)
+	}
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(`{"action":"install_show","tool_name":"browse_page"}`))
+	if err != nil {
+		t.Fatalf("install_show err = %v", err)
+	}
+	if !strings.Contains(showOut, "status: failed") || !strings.Contains(showOut, "drift_source: policy_violation") {
+		t.Fatalf("install_show output = %q, want governed policy failure", showOut)
+	}
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	if err == nil || !strings.Contains(err.Error(), "policy_violation: process-mode network=\"allowlist\"") {
+		t.Fatalf("browse_page invoke err = %v, want governed policy violation", err)
+	}
+}
+
 func TestToolAuthorityAuditRunFailsWhenExecutionEntryIsMissing(t *testing.T) {
 	t.Parallel()
 
@@ -414,6 +474,35 @@ func TestToolAuthorityAuditRunFailsWhenExecutionEntryIsMissing(t *testing.T) {
 	}
 	if !strings.Contains(auditListOut, "browse_page status=failed") || !strings.Contains(auditListOut, "why=audit_run could not resolve the declared execution entry") || !strings.Contains(auditListOut, "refs=1") {
 		t.Fatalf("audit_list output = %q, want compact traceability", auditListOut)
+	}
+}
+
+func TestToolAuthorityAuditRunChecksRuntimeLoadability(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	runScript := filepath.Join(registry.workspace, "run.sh")
+	if err := os.WriteFile(runScript, []byte("#!/usr/bin/env bash\nif then\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+	}}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	actor := principal.Principal{Role: principal.RoleAdmin}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"installed","installer":"aphelion","install_ref":"workspace:syntax"}`)); err != nil {
+		t.Fatalf("install_set(installed) err = %v", err)
+	}
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(`{"action":"audit_run","tool_name":"browse_page"}`))
+	if err == nil || !strings.Contains(err.Error(), "loadability check failed") {
+		t.Fatalf("audit_run err = %v, want shell loadability failure", err)
 	}
 }
 

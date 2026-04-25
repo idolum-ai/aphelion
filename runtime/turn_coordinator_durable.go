@@ -192,10 +192,16 @@ func (c *durableGroupTurnCoordinator) governorContext() string {
 	if c == nil {
 		return ""
 	}
+	parts := make([]string, 0, 2)
 	if c.governorContextBuilder != nil {
-		return strings.TrimSpace(c.governorContextBuilder(c.registered, c.livePolicy, c.msg, c.pendingParentConversation))
+		parts = append(parts, strings.TrimSpace(c.governorContextBuilder(c.registered, c.livePolicy, c.msg, c.pendingParentConversation)))
+	} else {
+		parts = append(parts, durableTelegramGovernorContext(c.registered, c.livePolicy, c.msg, c.pendingParentConversation))
 	}
-	return durableTelegramGovernorContext(c.registered, c.livePolicy, c.msg, c.pendingParentConversation)
+	if profile := durableAgentProfileContext(c.scope, c.registered); profile != "" {
+		parts = append(parts, profile)
+	}
+	return strings.TrimSpace(strings.Join(compactNonEmptyStrings(parts), "\n\n"))
 }
 
 func (c *durableGroupTurnCoordinator) requestChannel() string {

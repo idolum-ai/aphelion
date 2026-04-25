@@ -240,6 +240,37 @@ func TestRunnerPlanApprovedFailsWithoutBubblewrap(t *testing.T) {
 	}
 }
 
+func TestRunnerPlanIncludesResolvedResolvConfSymlinkTarget(t *testing.T) {
+	t.Parallel()
+
+	target, err := filepath.EvalSymlinks("/etc/resolv.conf")
+	if err != nil {
+		t.Skipf("/etc/resolv.conf target unavailable: %v", err)
+	}
+	resolverRoot := filepath.Dir(filepath.Clean(target))
+	if resolverRoot == "/" || resolverRoot == "/etc" {
+		t.Skipf("/etc/resolv.conf does not require an extra resolver bind: %s", target)
+	}
+
+	scope := buildScope(t, principal.RoleDurableAgent)
+	runner := NewRunnerWithLookPath(func(string) (string, error) {
+		return "/usr/bin/bwrap", nil
+	})
+
+	plan, err := runner.Plan(ExecRequest{
+		Scope:   scope,
+		Command: "getent hosts chatgpt.com",
+		Workdir: scope.WorkingRoot,
+	})
+	if err != nil {
+		t.Fatalf("Plan() err = %v", err)
+	}
+	args := strings.Join(plan.Args, " ")
+	if !strings.Contains(args, "--ro-bind "+resolverRoot+" "+resolverRoot) {
+		t.Fatalf("args missing resolver root bind %q for /etc/resolv.conf target %q: %v", resolverRoot, target, plan.Args)
+	}
+}
+
 func TestRunnerPlanIncludesExtraBindPaths(t *testing.T) {
 	t.Parallel()
 
@@ -257,12 +288,19 @@ func TestRunnerPlanIncludesExtraBindPaths(t *testing.T) {
 		return "/usr/bin/bwrap", nil
 	})
 
+	extraBindSource := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(extraBindSource, 0o755); err != nil {
+		t.Fatalf("MkdirAll(extraBindSource) err = %v", err)
+	}
+
 	plan, err := runner.Plan(ExecRequest{
 		Scope:              scope,
 		Command:            "pwd",
 		Workdir:            scope.WorkingRoot,
 		ExtraReadonlyPaths: []string{extraRO},
 		ExtraWritablePaths: []string{extraRW},
+		ExtraReadonlyBinds: []BindPath{{Source: extraBindSource, Target: "/usr/local/bin"}},
+		ExtraEnv:           map[string]string{"GOG_KEYRING_PASSWORD": "test-secret", "XDG_CONFIG_HOME": "/host-config"},
 	})
 	if err != nil {
 		t.Fatalf("Plan() err = %v", err)
@@ -274,5 +312,11 @@ func TestRunnerPlanIncludesExtraBindPaths(t *testing.T) {
 	}
 	if !strings.Contains(args, "--bind "+extraRW+" "+extraRW) {
 		t.Fatalf("args missing extra writable bind %q: %v", extraRW, plan.Args)
+	}
+	if !strings.Contains(args, "--ro-bind "+extraBindSource+" /usr/local/bin") {
+		t.Fatalf("args missing extra readonly mapped bind %q -> /usr/local/bin: %v", extraBindSource, plan.Args)
+	}
+	if !strings.Contains(args, "--setenv GOG_KEYRING_PASSWORD test-secret") || !strings.Contains(args, "--setenv XDG_CONFIG_HOME /host-config") {
+		t.Fatalf("args missing extra env: %v", plan.Args)
 	}
 }

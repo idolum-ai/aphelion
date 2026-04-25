@@ -166,6 +166,12 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		} else {
 			snapshot.ToolLifecycle = toolRows
 		}
+		capabilityRequests, capabilityGrants, err := r.capabilityStatusSnapshot(20)
+		if err != nil {
+			return core.ChatStatusSnapshot{}, err
+		}
+		snapshot.CapabilityRequests = capabilityRequests
+		snapshot.CapabilityGrants = capabilityGrants
 	}
 	return snapshot, nil
 }
@@ -1137,37 +1143,6 @@ func summarizeExecutionEvents(events []session.ExecutionEvent, limit int) []core
 
 func summarizeExecutionEventPayload(eventType string, eventStatus string, payload map[string]any) string {
 	switch strings.TrimSpace(eventType) {
-	case core.ExecutionEventToolProposalCreated, core.ExecutionEventToolProposalReviewed:
-		reviewStatus := strings.TrimSpace(payloadString(payload, "review_status"))
-		if reviewStatus == "" {
-			reviewStatus = strings.TrimSpace(eventStatus)
-		}
-		parts := make([]string, 0, 8)
-		if proposalID := strings.TrimSpace(payloadString(payload, "proposal_id")); proposalID != "" {
-			parts = append(parts, "proposal_id="+proposalID)
-		}
-		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
-			parts = append(parts, "tool_name="+toolName)
-		}
-		if reviewStatus != "" {
-			parts = append(parts, "review_status="+reviewStatus)
-		}
-		if registeredToolID := strings.TrimSpace(payloadString(payload, "registered_tool_id")); registeredToolID != "" {
-			parts = append(parts, "registered_tool_id="+registeredToolID)
-		}
-		if ratifiedVia := strings.TrimSpace(payloadString(payload, "ratified_via")); ratifiedVia != "" {
-			parts = append(parts, "ratified_via="+ratifiedVia)
-		}
-		if reviewVia := strings.TrimSpace(payloadString(payload, "review_via")); reviewVia != "" {
-			parts = append(parts, "review_via="+reviewVia)
-		}
-		if reason := strings.TrimSpace(payloadString(payload, "transition_reason")); reason != "" {
-			parts = append(parts, "transition_reason="+reason)
-		}
-		if overrideReason := strings.TrimSpace(payloadString(payload, "override_reason")); overrideReason != "" {
-			parts = append(parts, "override_reason="+truncateStatusDiagnostic(overrideReason, 80))
-		}
-		return strings.TrimSpace(strings.Join(parts, " "))
 	case core.ExecutionEventToolRegistered:
 		registered := strings.TrimSpace(eventStatus) == "enabled"
 		if value, ok := payloadBool(payload, "registered"); ok {
@@ -1181,23 +1156,6 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 		if ref := strings.TrimSpace(payloadString(payload, "implementation_ref")); ref != "" {
 			parts = append(parts, "implementation_ref="+ref)
 		}
-		if proposalID := strings.TrimSpace(payloadString(payload, "proposal_id")); proposalID != "" {
-			parts = append(parts, "proposal_id="+proposalID)
-		}
-		return strings.TrimSpace(strings.Join(parts, " "))
-	case core.ExecutionEventToolExposureChanged:
-		active := strings.TrimSpace(eventStatus) == "enabled"
-		if value, ok := payloadBool(payload, "active"); ok {
-			active = value
-		}
-		parts := make([]string, 0, 4)
-		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
-			parts = append(parts, "tool_name="+toolName)
-		}
-		if principal := strings.TrimSpace(payloadString(payload, "principal")); principal != "" {
-			parts = append(parts, "principal="+principal)
-		}
-		parts = append(parts, "active="+strconv.FormatBool(active))
 		return strings.TrimSpace(strings.Join(parts, " "))
 	case core.ExecutionEventToolInstallUpdated:
 		parts := make([]string, 0, 5)
@@ -1469,25 +1427,98 @@ func (r *Runtime) toolLifecycleStatusSnapshot(limit int) ([]core.ToolLifecycleSt
 		considerTrace("install", record.UpdatedAt, record.Rationale, record.ArtifactRefs)
 		considerTrace("probe", probe.UpdatedAt, probe.Rationale, probe.ArtifactRefs)
 		considerTrace("audit", audit.UpdatedAt, audit.Rationale, audit.ArtifactRefs)
+		attestationStatus := "unattested"
+		switch {
+		case strings.TrimSpace(record.StaleReason) != "" || strings.TrimSpace(string(record.DriftSource)) != "" || record.Status == session.ToolInstallStatusStale:
+			attestationStatus = "stale"
+		case record.Status == session.ToolInstallStatusVerified && !record.AttestedAt.IsZero():
+			attestationStatus = "fresh"
+		case record.Status == session.ToolInstallStatusVerified:
+			attestationStatus = "verified_without_attestation_time"
+		}
 		out = append(out, core.ToolLifecycleStatusSnapshot{
-			ToolName:            record.ToolName,
-			InstallStatus:       strings.TrimSpace(string(record.Status)),
-			ProbeStatus:         strings.TrimSpace(string(probe.Status)),
-			AuditStatus:         strings.TrimSpace(string(audit.Status)),
-			InstallRef:          strings.TrimSpace(record.InstallRef),
-			BaselineFingerprint: strings.TrimSpace(record.BaselineFingerprint),
-			CurrentFingerprint:  strings.TrimSpace(record.CurrentFingerprint),
-			StaleReason:         strings.TrimSpace(record.StaleReason),
-			TraceStage:          traceStage,
-			TraceSummary:        traceSummary,
-			TraceArtifactCount:  traceArtifactCount,
-			InstalledAt:         record.InstalledAt,
-			LastProbedAt:        probe.ProbedAt,
-			AuditedAt:           audit.AuditedAt,
-			AttestedAt:          record.AttestedAt,
+			ToolName:             record.ToolName,
+			InstallStatus:        strings.TrimSpace(string(record.Status)),
+			ProbeStatus:          strings.TrimSpace(string(probe.Status)),
+			AuditStatus:          strings.TrimSpace(string(audit.Status)),
+			InstallRef:           strings.TrimSpace(record.InstallRef),
+			BaselineFingerprint:  strings.TrimSpace(record.BaselineFingerprint),
+			CurrentFingerprint:   strings.TrimSpace(record.CurrentFingerprint),
+			ManifestHash:         strings.TrimSpace(record.CurrentManifestHash),
+			WorkspaceFingerprint: strings.TrimSpace(record.CurrentWorkspaceFingerprint),
+			DriftSource:          strings.TrimSpace(string(record.DriftSource)),
+			StaleReason:          strings.TrimSpace(record.StaleReason),
+			AttestationStatus:    attestationStatus,
+			InstallFailures:      record.ConsecutiveFailures,
+			ProbeFailures:        probe.ConsecutiveFailures,
+			AuditFailures:        audit.ConsecutiveFailures,
+			TraceStage:           traceStage,
+			TraceSummary:         traceSummary,
+			TraceArtifactCount:   traceArtifactCount,
+			InstalledAt:          record.InstalledAt,
+			LastProbedAt:         probe.ProbedAt,
+			AuditedAt:            audit.AuditedAt,
+			AttestedAt:           record.AttestedAt,
 		})
 	}
 	return out, nil
+}
+
+func (r *Runtime) capabilityStatusSnapshot(limit int) ([]core.CapabilityRequestStatusSnapshot, []core.CapabilityGrantStatusSnapshot, error) {
+	if r == nil || r.store == nil {
+		return nil, nil, nil
+	}
+	requests, err := r.store.CapabilityRequests(limit, "", "", "")
+	if err != nil {
+		return nil, nil, err
+	}
+	grants, err := r.store.CapabilityGrants(limit, "", "", "")
+	if err != nil {
+		return nil, nil, err
+	}
+	requestRows := make([]core.CapabilityRequestStatusSnapshot, 0, len(requests))
+	for _, request := range requests {
+		request = session.NormalizeCapabilityRequest(request)
+		requestRows = append(requestRows, core.CapabilityRequestStatusSnapshot{
+			RequestID:       request.RequestID,
+			Kind:            strings.TrimSpace(string(request.Kind)),
+			TargetResource:  strings.TrimSpace(request.TargetResource),
+			ReviewStatus:    strings.TrimSpace(string(request.ReviewStatus)),
+			RequestedBy:     strings.TrimSpace(request.RequestedBy),
+			RequestedFor:    strings.TrimSpace(request.RequestedFor),
+			ParentPrincipal: strings.TrimSpace(request.ParentPrincipal),
+			AdminPrincipal:  strings.TrimSpace(request.AdminPrincipal),
+			RiskClass:       strings.TrimSpace(request.RiskClass),
+			Purpose:         strings.TrimSpace(request.Purpose),
+			GrantID:         strings.TrimSpace(request.GrantID),
+			CreatedAt:       request.CreatedAt,
+			UpdatedAt:       request.UpdatedAt,
+		})
+	}
+	grantRows := make([]core.CapabilityGrantStatusSnapshot, 0, len(grants))
+	for _, grant := range grants {
+		grant = session.NormalizeCapabilityGrant(grant)
+		grantRows = append(grantRows, core.CapabilityGrantStatusSnapshot{
+			GrantID:           grant.GrantID,
+			RequestID:         grant.RequestID,
+			Kind:              strings.TrimSpace(string(grant.Kind)),
+			TargetResource:    strings.TrimSpace(grant.TargetResource),
+			Status:            strings.TrimSpace(string(grant.Status)),
+			GrantedTo:         strings.TrimSpace(grant.GrantedTo),
+			GrantedBy:         strings.TrimSpace(grant.GrantedBy),
+			AllowedActions:    append([]string{}, grant.AllowedActions...),
+			AnchorFingerprint: strings.TrimSpace(grant.AnchorFingerprint),
+			DriftSource:       strings.TrimSpace(string(grant.DriftSource)),
+			StaleReason:       strings.TrimSpace(grant.StaleReason),
+			InvocationCount:   grant.InvocationCount,
+			FailureCount:      grant.FailureCount,
+			GrantedAt:         grant.GrantedAt,
+			ExpiresAt:         grant.ExpiresAt,
+			RevokedAt:         grant.RevokedAt,
+			LastInvokedAt:     grant.LastInvokedAt,
+		})
+	}
+	return requestRows, grantRows, nil
 }
 
 func statusAge(now time.Time, preferred time.Time, fallback time.Time) time.Duration {

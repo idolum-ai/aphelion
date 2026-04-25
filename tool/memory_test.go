@@ -176,6 +176,60 @@ func TestMemoryToolApprovedUserCannotWriteSharedMemory(t *testing.T) {
 	}
 }
 
+func TestMemoryToolApprovesProposal(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	sharedRoot := filepath.Join(tmp, "shared-memory")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			SharedMemoryRoot:  sharedRoot,
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	proposal, err := memstore.CreateProposal(memstore.ProposalRequest{
+		Root:       sharedRoot,
+		Scope:      "shared",
+		Store:      memstore.StoreDecisions,
+		SourceKind: "reflection",
+		Reason:     "test",
+		Content:    "- Keep proposal approval reviewable.",
+		Now:        time.Date(2026, 4, 25, 1, 2, 3, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal() err = %v", err)
+	}
+
+	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver)
+	setFakeBubblewrapRunner(t, registry)
+	out, err := registry.ExecuteForPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		"memory",
+		json.RawMessage(`{"action":"proposal_approve","scope":"shared","proposal_id":"`+proposal.ID+`"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForPrincipal(memory proposal_approve) err = %v", err)
+	}
+	if !strings.Contains(out, "memory_proposal_approved") {
+		t.Fatalf("output = %q, want approval confirmation", out)
+	}
+	raw, err := os.ReadFile(filepath.Join(sharedRoot, "memory", "decisions.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(decisions.md) err = %v", err)
+	}
+	if !strings.Contains(string(raw), "aphelion-memory-entry:v1") || !strings.Contains(string(raw), "proposal approval") {
+		t.Fatalf("decisions.md = %q, want instrumented approved proposal", string(raw))
+	}
+}
+
 func TestSessionSearchAdminCanSearchAllSessions(t *testing.T) {
 	t.Parallel()
 

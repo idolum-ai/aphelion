@@ -47,9 +47,7 @@ func TestExternalContainerAndWorkspaceRunnerModesAreNotProcessExecutable(t *test
 			if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: toolName, ImplementationRef: "external:" + toolName, Registered: true}); err != nil {
 				t.Fatalf("UpsertRegisteredTool() err = %v", err)
 			}
-			if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: toolName, Principal: "telegram:1001", Active: true}); err != nil {
-				t.Fatalf("UpsertToolExposure() err = %v", err)
-			}
+			grantToolInvoke(t, store, toolName, "telegram:1001")
 
 			_, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), toolName, json.RawMessage(`{"url":"https://example.com"}`))
 			if err == nil {
@@ -62,5 +60,71 @@ func TestExternalContainerAndWorkspaceRunnerModesAreNotProcessExecutable(t *test
 				t.Fatalf("process-looking %s manifest executed marker file; stat err = %v", mode, statErr)
 			}
 		})
+	}
+}
+
+func TestExternalContainerModeUsesContainerAuditAndDrift(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	healthScript := filepath.Join(registry.workspace, "health.sh")
+	if err := os.WriteFile(healthScript, []byte("#!/usr/bin/env bash\necho 'container healthy'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(health.sh) err = %v", err)
+	}
+	probeScript := filepath.Join(registry.workspace, "probe.sh")
+	if err := os.WriteFile(probeScript, []byte("#!/usr/bin/env bash\necho 'probe ok'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(probe.sh) err = %v", err)
+	}
+	manifest := ExternalToolManifest{
+		Name:      "container_tool",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "example/container-tool:1"},
+		Container: ExternalToolManifestContainer{
+			Image:    "example/container-tool:1",
+			Digest:   "sha256:111",
+			BuildRef: "oci:container-tool@sha256:111",
+			Healthcheck: ExternalToolManifestContainerHealth{
+				Command:                []string{"./health.sh"},
+				ExpectedOutputContains: "container healthy",
+			},
+		},
+		Probe: ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
+		Constraints: ExternalToolManifestConstraints{
+			Network: "none",
+		},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	for _, input := range []string{
+		`{"action":"install_set","tool_name":"container_tool","status":"installed","installer":"aphelion","install_ref":"oci:container-tool@sha256:111"}`,
+		`{"action":"audit_run","tool_name":"container_tool"}`,
+		`{"action":"probe_run","tool_name":"container_tool"}`,
+		`{"action":"install_set","tool_name":"container_tool","status":"verified","installer":"aphelion","install_ref":"oci:container-tool@sha256:111"}`,
+	} {
+		if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(input)); err != nil {
+			t.Fatalf("tool_authority input %s err = %v", input, err)
+		}
+	}
+	auditOut, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(`{"action":"audit_show","tool_name":"container_tool"}`))
+	if err != nil {
+		t.Fatalf("audit_show err = %v", err)
+	}
+	if !strings.Contains(auditOut, "container_image: example/container-tool:1") || !strings.Contains(auditOut, "rationale: audit_run resolved the declared container image and health check") {
+		t.Fatalf("audit_show output = %q, want container audit evidence", auditOut)
+	}
+
+	registry.externalManifests[0].Container.Digest = "sha256:222"
+	showOut, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "tool_authority", json.RawMessage(`{"action":"install_show","tool_name":"container_tool"}`))
+	if err != nil {
+		t.Fatalf("install_show err = %v", err)
+	}
+	if !strings.Contains(showOut, "status: stale") || !strings.Contains(showOut, "drift_source: container_drift") || !strings.Contains(showOut, "stale_reason: container_drift:") {
+		t.Fatalf("install_show output = %q, want typed container drift", showOut)
 	}
 }

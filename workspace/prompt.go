@@ -186,7 +186,7 @@ func loadOne(
 	if remaining != nil && (effectiveLimit <= 0 || *remaining < effectiveLimit) {
 		effectiveLimit = *remaining
 	}
-	content, truncated := selectPromptContent(displayPath, string(raw), effectiveLimit)
+	content, truncated := selectPromptContent(displayPath, memstore.StripInstrumentation(string(raw)), effectiveLimit)
 	if remaining != nil {
 		*remaining -= len(content)
 		if *remaining < 0 {

@@ -12,7 +12,7 @@ The first pilot is `browse_page`, owned by `idolum-email`:
 - manifest: `external-tools/browse_page/manifest.json`
 - deterministic fixture entry: `external-tools/browse_page/bin/browse_page.sh`
 - install probe: `external-tools/browse_page/bin/probe.sh`
-- default exposure intent: `idolum-email` only
+- first intended grant target: `idolum-email`
 
 The bundled implementation is intentionally a deterministic fixture. It proves
 the governed external-tool lifecycle in CI without adding browser dependencies
@@ -33,33 +33,71 @@ The directory loader reads `*.json` files directly under that directory. To load
 the bundled pilot, point `external_manifest_dir` at
 `/path/to/aphelion/external-tools/browse_page`.
 
-## Required Lifecycle
+## Canonical Lifecycle Contract
 
-An external process tool becomes invokable only after this sequence succeeds:
+The external-tool lifecycle has one canonical flow:
 
-1. `proposal_submit`
-2. `proposal_ratify` or an explicit approved override
-3. `install_set` to `pending`
-4. `install_execute`
-5. `audit_run`
-6. `probe_run`
-7. `install_set` to `verified`
-8. `register`
-9. `exposure_set`
-10. invocation by an exposed principal
+1. `capability_request` (`kind=tool`)
+2. install (`install_set pending` plus `install_execute`, or an operator-owned
+   equivalent that records `install_ref`)
+3. audit (`audit_run`)
+4. verify (`probe_run` plus `install_set verified`)
+5. register
+6. grant
+7. invoke
 
-Verification requires runtime-authored `audit_run` and `probe_run` evidence.
-Registration, exposure, manifest listing, `install_show`, `audit_show`, and
-invocation recompute the verified fingerprint. Any manifest or entry-file drift
-marks the install stale and blocks registration/execution until repaired and
-reverified.
+Each phase has a bounded claim:
+
+- proposal: a tenant, agent, or operator requested a tool capability through
+  `capability_request` and named the desired contract; it does not imply
+  safety, installability, or availability.
+- install: an operator provisioned or referenced an artifact with an
+  `install_ref`; it does not imply the runtime can load it.
+- audit: `audit_run` is the only import/load attestation surface. It proves the
+  runtime can resolve the declared entry, discover the interpreter or container
+  identity, and complete bounded loadability checks. It does not prove behavior.
+- probe: `probe_run` proves declared behavior against the current install
+  baseline. It does not replace audit.
+- verify: `install_set status=verified` is the only source of truth for
+  "verified." It requires fresh runtime-authored `audit_run` and `probe_run`
+  records whose anchors match the current install baseline.
+- register: the verified implementation becomes a named runtime capability. It
+  does not grant access.
+- grant: `capability_authority` gives a principal an active `kind=tool`
+  grant with the `invoke` action. It does not skip freshness checks.
+- invoke: the granted principal may call the tool only if the verified baseline
+  is still fresh and the runtime policy ceilings are enforceable.
+
+The canonical drift anchors are:
+
+- `install_ref`: the operator-owned install artifact, image, path, or package
+  reference.
+- manifest hash: the normalized functional manifest contract.
+- workspace fingerprint: process/subprocess local entry and command files, or
+  container image/build/health identity for container tools.
+
+Verified tools automatically become `stale` when any anchor moves. Drift reasons
+are typed as `install_ref_changed`, `manifest_drift`, `workspace_drift`,
+`container_drift`, `missing_baseline`, `fingerprint_error`,
+`policy_violation`, `audit_failure`, or `probe_failure`. Stale tools cannot be
+registered, listed as callable for a principal, or invoked until
+re-audited, re-probed, and re-verified.
+
+Tenants and agents use `capability_request` with `kind=tool` for proposal
+creation. Operators use `capability_authority` for parent/admin review and
+admin grants, and `tool_authority` for tool install, audit, verification, and
+registration. This keeps request attribution visible without handing lifecycle
+authority to the requester.
 
 ## Execution Modes
 
 - `process` and `subprocess`: executable through the sandbox runner when
-  constraints are supported.
-- `container` and `workspace_runner`: importable and diagnosable, but not
-  process-executable yet.
+  constraints are supported. Network must currently be empty/`none`; filesystem
+  must currently be empty/`none`; duration ceilings are enforced at execution
+  time for install, audit checks, probe, and invocation.
+- `container`: not process-executable, but has separate audit/drift semantics
+  based on image, digest/build ref, and optional health check.
+- `workspace_runner`: importable and diagnosable, but not executable yet.
 
 Unsupported modes must remain visible as non-executable manifest entries rather
 than being falsely verified as process tools.

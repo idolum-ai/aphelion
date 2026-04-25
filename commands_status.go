@@ -185,7 +185,7 @@ func renderStatusSourceAttribution(view statusView) string {
 			"- field=summary_state class=projection",
 			"- field=latest_turn class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
 			"- field=operation_plan_hidden_inputs class=projection preferred=canonical:execution_events.turn_sidecars fallback=operational_current_state_store:status_state_json",
-			"- field=tool_authority_lifecycle class=projection preferred=canonical:execution_events.tool_authority note=distinguishes_proposed_registered_exposed",
+			"- field=tool_authority_lifecycle class=projection preferred=canonical:execution_events.tool_authority note=distinguishes_install_audit_probe_register",
 			"- field=delivery class=projection preferred=canonical:execution_events.delivery fallback=operational_current_state_store:status_state_json note=transport_ledger_only",
 		)
 	case statusViewSystem, statusViewHotChats, statusViewFindChat:
@@ -196,7 +196,7 @@ func renderStatusSourceAttribution(view statusView) string {
 			"- field=pending_continuations class=projection preferred=operational_current_state_store:continuation_state_json fallback=canonical:execution_events.continuation",
 		)
 		if view == statusViewSystem {
-			lines = append(lines, "- field=tool_authority_lifecycle class=projection preferred=canonical:execution_events.tool_authority note=distinguishes_proposed_registered_exposed")
+			lines = append(lines, "- field=tool_authority_lifecycle class=projection preferred=canonical:execution_events.tool_authority note=distinguishes_install_audit_probe_register")
 		}
 	case statusViewDurables:
 		lines = append(lines,

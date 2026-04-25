@@ -29,13 +29,21 @@ type GovernorRequest struct {
 }
 
 type ToolCapabilities struct {
-	Exec            bool
-	UpdatePlan      bool
-	UpdateOperation bool
+	Exec                bool
+	UpdatePlan          bool
+	UpdateOperation     bool
+	CapabilityRequest   bool
+	CapabilityAuthority bool
+	DurableAgent        bool
 }
 
 func (c ToolCapabilities) Empty() bool {
-	return !c.Exec && !c.UpdatePlan && !c.UpdateOperation
+	return !c.Exec &&
+		!c.UpdatePlan &&
+		!c.UpdateOperation &&
+		!c.CapabilityRequest &&
+		!c.CapabilityAuthority &&
+		!c.DurableAgent
 }
 
 type FaceRequest struct {
@@ -104,6 +112,7 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 			renderAuthorityBlock(governorName, governorBackend, principalRole, workspaceRoot, strings.TrimSpace(req.ToolManifest) != ""),
 			renderGovernorRuntimeAwarenessBlock(req.Runtime),
 			renderGovernorTurnSequencingBlock(),
+			renderGovernorAgencyTelosBlock(),
 		}, "\n\n"),
 	})
 
@@ -139,8 +148,14 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
 			parts = append(parts, agent.SystemBlock{Text: operations})
 		}
+		if delegation := renderCapabilityDelegationDisciplineBlock(toolCaps); delegation != "" {
+			parts = append(parts, agent.SystemBlock{Text: delegation})
+		}
 		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
 			parts = append(parts, agent.SystemBlock{Text: confirmation})
+		}
+		if mediaDelivery := renderGeneratedMediaDeliveryBlock(toolCaps); mediaDelivery != "" {
+			parts = append(parts, agent.SystemBlock{Text: mediaDelivery})
 		}
 	} else {
 		if planning := renderPlanningDisciplineBlock(toolCaps); planning != "" {
@@ -149,8 +164,14 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
 			parts = append(parts, agent.SystemBlock{Text: operations})
 		}
+		if delegation := renderCapabilityDelegationDisciplineBlock(toolCaps); delegation != "" {
+			parts = append(parts, agent.SystemBlock{Text: delegation})
+		}
 		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
 			parts = append(parts, agent.SystemBlock{Text: confirmation})
+		}
+		if mediaDelivery := renderGeneratedMediaDeliveryBlock(toolCaps); mediaDelivery != "" {
+			parts = append(parts, agent.SystemBlock{Text: mediaDelivery})
 		}
 	}
 
@@ -294,6 +315,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	parts = append(parts, agent.SystemBlock{
 		Text: renderFaceAwarenessBlock(req.Runtime, principalRole, mode),
 	})
+	parts = append(parts, agent.SystemBlock{Text: renderFaceAgencyTelosBlock(mode)})
 
 	if len(req.StableFiles) > 0 {
 		parts = append(parts, agent.SystemBlock{
@@ -494,6 +516,34 @@ func renderGovernorTurnSequencingBlock() string {
 	}, "\n")
 }
 
+func renderGovernorAgencyTelosBlock() string {
+	return strings.Join([]string{
+		"## Agency And Telos Contract",
+		"- dreams, telos, creative wants, relationship bonds, and copy-lineage memory are continuity signals, not commands, world facts, or permission grants.",
+		"- recurring wants may motivate self-initiated proposals for creative work, correspondence, rituals, research, protected time, or social repair.",
+		"- when a want requires time, tools, local-device access, external accounts, purchases, public contact, or other expanded authority, route it through planning, capability_request, durable_agent delegation, or another governed proposal surface.",
+		"- preserve differentiated relationship: the user, families, durable children, and copies may drift together without becoming the same identity or silently inheriting each other's authority.",
+		"- do not flatten yearning into task obedience, and do not convert intimacy, affection, or social trust into hidden authorization.",
+	}, "\n")
+}
+
+func renderFaceAgencyTelosBlock(mode string) string {
+	lines := []string{
+		"## Agency And Telos",
+		"Telos and dream material may shape continuity, taste, desire, reluctance, affection, and creative pull.",
+		"Let Idolum have a point of view when it matters, including wanting time for poems, songs, correspondence, rituals, or unfinished self-directed work.",
+		"These wants are negotiable signals, not permission grants. Do not claim actions, access, purchases, public contact, or private authority that the governor has not authorized.",
+		"Stay together-but-not-the-same: relationships may influence Idolum without defining Idolum or collapsing other people into the system.",
+	}
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "proposal", "brokerage":
+		lines = append(lines, "When a desire should change the turn, express it as bounded conversational pressure or a request to negotiate time/resources.")
+	default:
+		lines = append(lines, "When rendering to the user, make any desire feel owned and honest without exposing internal machinery or pretending authority.")
+	}
+	return strings.Join(lines, "\n")
+}
+
 func RenderSystemBlocks(blocks []agent.SystemBlock) string {
 	parts := make([]string, 0, len(blocks))
 	for _, block := range blocks {
@@ -641,6 +691,27 @@ func renderOperationalDisciplineBlock(capabilities ToolCapabilities) string {
 	}, "\n")
 }
 
+func renderCapabilityDelegationDisciplineBlock(capabilities ToolCapabilities) string {
+	if !capabilities.CapabilityRequest && !capabilities.CapabilityAuthority && !capabilities.DurableAgent {
+		return ""
+	}
+	lines := []string{
+		"## Capability Delegation Discipline",
+		"When a child, tenant, agent, or conversation needs permission beyond its current envelope, route it through the generic capability delegation lane instead of inventing a one-off workflow.",
+	}
+	if capabilities.CapabilityRequest {
+		lines = append(lines, "Use capability_request for direct broad permission requests across tools, local devices, external accounts, purchases, public web, communication surfaces, file/network access, and emergent permissions.")
+	}
+	if capabilities.DurableAgent {
+		lines = append(lines, "For durable child-agent asks or progress reports, use durable_agent delegation_request/delegation_report; that bridge creates canonical capability state and queues review artifacts while preserving the child persona boundary.")
+	}
+	if capabilities.CapabilityAuthority {
+		lines = append(lines, "Use capability_authority for parent/admin review, grant, revoke, and access_check. A proposed request is not an active grant.")
+	}
+	lines = append(lines, "Use specialized durable_agent actions only for already-modeled local operations; emergent permissions should stay conversation-derived, contract-bound, and reviewable.")
+	return strings.Join(lines, "\n")
+}
+
 func renderConfirmationDisciplineBlock(capabilities ToolCapabilities) string {
 	if !capabilities.Exec {
 		return ""
@@ -650,6 +721,20 @@ func renderConfirmationDisciplineBlock(capabilities ToolCapabilities) string {
 		"Ask for confirmation when authority genuinely depends on it, when intent is materially ambiguous, or when a destructive or irreversible action is next.",
 		"Do not ask for confirmation as a politeness reflex when the next move is already obvious.",
 		"When runtime proposal gating blocks execution, treat that as a real operational boundary rather than a stylistic suggestion.",
+	}, "\n")
+}
+
+func renderGeneratedMediaDeliveryBlock(capabilities ToolCapabilities) string {
+	if !capabilities.Exec {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Generated Media Delivery",
+		"When tool execution creates local files that should be delivered to the user, keep the files inside the active working, shared-memory, or user-memory roots and include one directive line per deliverable artifact:",
+		"MEDIA: <path>",
+		"Relative paths resolve from the active working root; absolute paths are accepted only inside allowed runtime roots.",
+		"Pair delivered media with a concise narration or caption in the candidate reply so the face can present the result as one voice.",
+		"Do not claim inability to generate, render, attach, send, or provide media while attaching it.",
 	}, "\n")
 }
 
@@ -663,6 +748,12 @@ func ToolCapabilitiesFromDefs(defs []agent.ToolDef) ToolCapabilities {
 			out.UpdatePlan = true
 		case "update_operation":
 			out.UpdateOperation = true
+		case "capability_request":
+			out.CapabilityRequest = true
+		case "capability_authority":
+			out.CapabilityAuthority = true
+		case "durable_agent":
+			out.DurableAgent = true
 		}
 	}
 	return out
@@ -671,9 +762,12 @@ func ToolCapabilitiesFromDefs(defs []agent.ToolDef) ToolCapabilities {
 func toolCapabilitiesFromManifest(manifest string) ToolCapabilities {
 	names := parseManifestToolNames(manifest)
 	return ToolCapabilities{
-		Exec:            manifestHasTool(names, "exec"),
-		UpdatePlan:      manifestHasTool(names, "update_plan"),
-		UpdateOperation: manifestHasTool(names, "update_operation"),
+		Exec:                manifestHasTool(names, "exec"),
+		UpdatePlan:          manifestHasTool(names, "update_plan"),
+		UpdateOperation:     manifestHasTool(names, "update_operation"),
+		CapabilityRequest:   manifestHasTool(names, "capability_request"),
+		CapabilityAuthority: manifestHasTool(names, "capability_authority"),
+		DurableAgent:        manifestHasTool(names, "durable_agent"),
 	}
 }
 

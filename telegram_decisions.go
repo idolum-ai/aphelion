@@ -18,13 +18,17 @@ import (
 )
 
 const (
-	defaultInterruptTimeout                = 30 * time.Second
-	defaultStopWordTimeout                 = 15 * time.Second
-	defaultExecApprovalTimeout             = 30 * time.Second
-	defaultToolProposalRatificationTimeout = 30 * time.Second
-	defaultArtifactRetentionTimeout        = 45 * time.Second
-	defaultMemoryDelegationTimeout         = 45 * time.Second
-	defaultSnapshotRestoreTimeout          = 45 * time.Second
+	defaultInterruptTimeout = 30 * time.Second
+	defaultStopWordTimeout  = 15 * time.Second
+
+	// User approval prompts should survive normal operator latency on Telegram.
+	// Keep busy/interrupt routing short, but give approval-style decisions enough
+	// time to be reviewed without silently failing closed.
+	defaultUserApprovalTimeout      = 30 * time.Minute
+	defaultExecApprovalTimeout      = defaultUserApprovalTimeout
+	defaultArtifactRetentionTimeout = defaultUserApprovalTimeout
+	defaultMemoryDelegationTimeout  = defaultUserApprovalTimeout
+	defaultSnapshotRestoreTimeout   = defaultUserApprovalTimeout
 )
 
 type telegramDecisionSender interface {
@@ -64,12 +68,6 @@ type telegramExecApprover struct {
 	timeout time.Duration
 }
 
-type telegramToolProposalRatificationApprover struct {
-	sender  telegramDecisionSender
-	broker  *decision.Broker
-	timeout time.Duration
-}
-
 type telegramDurableMemoryDelegationApprover struct {
 	sender  telegramDecisionSender
 	broker  *decision.Broker
@@ -99,14 +97,6 @@ func newTelegramExecApprover(sender telegramDecisionSender, broker *decision.Bro
 		sender:  sender,
 		broker:  broker,
 		timeout: defaultExecApprovalTimeout,
-	}
-}
-
-func newTelegramToolProposalRatificationApprover(sender telegramDecisionSender, broker *decision.Broker) *telegramToolProposalRatificationApprover {
-	return &telegramToolProposalRatificationApprover{
-		sender:  sender,
-		broker:  broker,
-		timeout: defaultToolProposalRatificationTimeout,
 	}
 }
 
@@ -174,43 +164,6 @@ func (a *telegramExecApprover) ConfirmExec(ctx context.Context, req toolpkg.Exec
 		_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, text, "")
 	}
 	return toolpkg.ExecApprovalDecision{Approved: false}, nil
-}
-
-func (a *telegramToolProposalRatificationApprover) ConfirmToolProposalRatification(ctx context.Context, req toolpkg.ToolProposalRatificationApprovalRequest) (toolpkg.ToolProposalRatificationApprovalDecision, error) {
-	if a == nil || a.sender == nil || a.broker == nil {
-		return toolpkg.ToolProposalRatificationApprovalDecision{}, fmt.Errorf("telegram tool proposal ratification approver is not configured")
-	}
-	if req.SessionKey.ChatID == 0 {
-		return toolpkg.ToolProposalRatificationApprovalDecision{}, fmt.Errorf("tool proposal ratification requires explicit confirmation but no interactive chat is available")
-	}
-
-	result, err := a.broker.Request(ctx, decision.Request{
-		Kind:          decision.KindToolProposalRatification,
-		ChatID:        req.SessionKey.ChatID,
-		SenderID:      req.Principal.TelegramUserID,
-		Prompt:        "Ratify this tool proposal?",
-		Details:       formatToolProposalRatificationDetails(req),
-		Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
-		DefaultChoice: "deny",
-		Timeout:       a.timeout,
-	})
-	if err != nil {
-		return toolpkg.ToolProposalRatificationApprovalDecision{}, err
-	}
-	if result.Choice == "approve" {
-		if result.Delivery.MessageID != 0 {
-			_ = a.sender.DeleteMessage(ctx, req.SessionKey.ChatID, result.Delivery.MessageID)
-		}
-		return toolpkg.ToolProposalRatificationApprovalDecision{Approved: true}, nil
-	}
-	if result.Delivery.MessageID != 0 {
-		text := "Tool proposal denied."
-		if result.TimedOut {
-			text = "Tool proposal denied — ratification timed out."
-		}
-		_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, text, "")
-	}
-	return toolpkg.ToolProposalRatificationApprovalDecision{Approved: false, TimedOut: result.TimedOut}, nil
 }
 
 func (a *telegramDurableMemoryDelegationApprover) ConfirmDurableMemoryDelegation(ctx context.Context, req toolpkg.DurableMemoryDelegationApprovalRequest) (toolpkg.DurableMemoryDelegationApprovalDecision, error) {
@@ -304,31 +257,6 @@ func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
 	}
 	if command := strings.TrimSpace(req.Command); command != "" {
 		lines = append(lines, "", "Command:", command)
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
-}
-
-func formatToolProposalRatificationDetails(req toolpkg.ToolProposalRatificationApprovalRequest) string {
-	lines := make([]string, 0, 14)
-	proposal := session.NormalizeToolProposal(req.Proposal)
-	toolName := strings.TrimSpace(proposal.ToolName)
-	if toolName == "" {
-		toolName = "-"
-	}
-	lines = append(lines, fmt.Sprintf("Ratify tool proposal for %s.", toolName))
-	lines = append(lines, "Kind: tool_proposal_authority")
-	if whyNow := strings.TrimSpace(proposal.WhyNow); whyNow != "" {
-		lines = append(lines, "", "Why now:", whyNow)
-	}
-	lines = append(lines, "", "If approved:", "Proposal review_status becomes approved and register/exposure actions can proceed.")
-	if proposalID := strings.TrimSpace(proposal.ProposalID); proposalID != "" {
-		lines = append(lines, "", "Proposal ID:", proposalID)
-	}
-	if proposedBy := strings.TrimSpace(proposal.ProposedBy); proposedBy != "" {
-		lines = append(lines, "Proposed by:", proposedBy)
-	}
-	if contract := strings.TrimSpace(proposal.Contract); contract != "" {
-		lines = append(lines, "", "Contract:", contract)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
@@ -885,8 +813,6 @@ func summarizePendingDecision(pending decision.PendingDecision) string {
 	switch pending.Kind {
 	case decision.KindProposalApproval:
 		return summarizeProposalApprovalDetails(details)
-	case decision.KindToolProposalRatification:
-		return summarizeToolProposalRatificationDetails(details)
 	case decision.KindArtifactRetention:
 		return summarizeArtifactRetentionDetails(details)
 	case decision.KindMemoryDelegation:
@@ -930,10 +856,6 @@ func summarizeProposalApprovalDetails(details string) string {
 		lines = append(lines, "Command hidden by default. Use Expand details to inspect it.")
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
-}
-
-func summarizeToolProposalRatificationDetails(details string) string {
-	return summarizeProposalApprovalDetails(details)
 }
 
 func summarizeArtifactRetentionDetails(details string) string {

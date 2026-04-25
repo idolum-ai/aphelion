@@ -26,13 +26,7 @@ func (defaultExternalToolExecutor) Supports(manifest ExternalToolManifest) bool 
 	if manifest.Execution.Mode != "process" && manifest.Execution.Mode != "subprocess" {
 		return false
 	}
-	if manifest.Constraints.Network != "" && manifest.Constraints.Network != "none" {
-		return false
-	}
-	if manifest.Constraints.Filesystem != "" {
-		return false
-	}
-	return true
+	return validateExternalProcessPolicy(manifest) == nil
 }
 
 func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, runner *sandbox.Runner, maxOutputBytes int) (string, error) {
@@ -40,7 +34,10 @@ func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest Externa
 	if err := validateExternalToolManifest(manifest); err != nil {
 		return "", err
 	}
-	if !(defaultExternalToolExecutor{}).Supports(manifest) {
+	if err := validateExternalProcessPolicy(manifest); err != nil {
+		return "", err
+	}
+	if manifest.Execution.Mode != "process" && manifest.Execution.Mode != "subprocess" {
 		return "", fmt.Errorf("external tool %q execution constraints are not supported by the process executor", manifest.Name)
 	}
 	if err := validateExternalToolSchema(manifest.IO.InputSchema, input, "input"); err != nil {

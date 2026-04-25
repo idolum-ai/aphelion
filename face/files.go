@@ -13,7 +13,13 @@ import (
 
 var (
 	defaultStableFiles  = []string{"IDOLUM.md"}
-	defaultDynamicFiles = []string{"QUESTIONS-TO-IDOLUM.md"}
+	defaultDynamicFiles = []string{
+		"QUESTIONS-TO-IDOLUM.md",
+		"memory/dreams.md",
+		"memory/telos.md",
+		"memory/projects.md",
+		"memory/relationships.md",
+	}
 )
 
 func LoadIdolumPromptFiles(workspaceRoot string) ([]workspace.LoadedFile, []workspace.LoadedFile, error) {

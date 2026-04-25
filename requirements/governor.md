@@ -288,6 +288,16 @@ auth_source = "auto"          # "auto" | "codex_cli" | "aphelion"
 codex_home = ""
 base_url = "https://chatgpt.com/backend-api"
 
+[governor.brokerage]
+min_rounds = 1
+max_rounds = 4
+absolute_max_rounds = 6
+max_elapsed = "20s"
+stable_contract_rounds = 2
+stop_on_stable_contract = true
+stop_on_repeated_proposal = true
+stop_on_reject = true
+
 [face]
 backend = "provider"          # "provider" | "floor_fallback" (dedicated floor-to-user fallback serializer)
 provider = "anthropic"

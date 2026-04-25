@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -28,6 +29,13 @@ type ExecRequest struct {
 	Stdin              []byte
 	ExtraWritablePaths []string
 	ExtraReadonlyPaths []string
+	ExtraReadonlyBinds []BindPath
+	ExtraEnv           map[string]string
+}
+
+type BindPath struct {
+	Source string
+	Target string
 }
 
 type ExecResult struct {
@@ -132,7 +140,7 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 		if bwrapPath == "" {
 			return ExecutionPlan{}, fmt.Errorf("bubblewrap is required for isolated execution")
 		}
-		args, err := buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths)
+		args, err := buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths, req.ExtraReadonlyBinds, req.ExtraEnv)
 		if err != nil {
 			return ExecutionPlan{}, err
 		}
@@ -148,8 +156,9 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 	}
 }
 
-func buildBwrapArgs(scope Scope, workdir, command string, extraWritablePaths []string, extraReadonlyPaths []string) ([]string, error) {
+func buildBwrapArgs(scope Scope, workdir, command string, extraWritablePaths []string, extraReadonlyPaths []string, extraReadonlyBinds []BindPath, extraEnv map[string]string) ([]string, error) {
 	runtimeRO := existingRoots("/bin", "/usr", "/lib", "/lib64", "/etc")
+	runtimeRO = dedupePaths(append(runtimeRO, resolverReadonlyRoots()...))
 
 	writablePaths, err := resolveScopedPaths(scope.Profile.WritablePaths, scope)
 	if err != nil {
@@ -169,6 +178,10 @@ func buildBwrapArgs(scope Scope, workdir, command string, extraWritablePaths []s
 		return nil, err
 	}
 	readonlyPaths = append(readonlyPaths, resolvedExtraReadonly...)
+	resolvedExtraReadonlyBinds, err := resolveHostBinds(extraReadonlyBinds)
+	if err != nil {
+		return nil, err
+	}
 	hiddenPaths, err := resolveScopedPaths(scope.Profile.HiddenPaths, scope)
 	if err != nil {
 		return nil, err
@@ -194,11 +207,24 @@ func buildBwrapArgs(scope Scope, workdir, command string, extraWritablePaths []s
 		"--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
 		"--setenv", "TMPDIR", "/tmp",
 	}
+	if len(extraEnv) > 0 {
+		keys := make([]string, 0, len(extraEnv))
+		for key := range extraEnv {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			args = append(args, "--setenv", key, extraEnv[key])
+		}
+	}
 	if scope.Profile.Network == NetworkDeny {
 		args = append(args, "--unshare-net")
 	}
 
-	exposedRoots := make([]string, 0, len(runtimeRO)+len(writablePaths)+len(readonlyPaths))
+	exposedRoots := make([]string, 0, len(runtimeRO)+len(writablePaths)+len(readonlyPaths)+len(resolvedExtraReadonlyBinds))
 	for _, p := range runtimeRO {
 		args = append(args, "--ro-bind", p, p)
 		exposedRoots = append(exposedRoots, p)
@@ -209,6 +235,13 @@ func buildBwrapArgs(scope Scope, workdir, command string, extraWritablePaths []s
 		}
 		args = append(args, "--ro-bind", p, p)
 		exposedRoots = append(exposedRoots, p)
+	}
+	for _, bind := range resolvedExtraReadonlyBinds {
+		if bind.Source == "/tmp" || bind.Target == "/tmp" {
+			continue
+		}
+		args = append(args, "--ro-bind", bind.Source, bind.Target)
+		exposedRoots = append(exposedRoots, bind.Target)
 	}
 	for _, p := range writablePaths {
 		if p == "/tmp" {
@@ -263,6 +296,30 @@ func buildHiddenMaskArgs(hiddenPaths []string, exposedRoots []string) ([]string,
 		args = append(args, "--ro-bind", "/dev/null", hidden)
 	}
 	return args, nil
+}
+
+func resolveHostBinds(raw []BindPath) ([]BindPath, error) {
+	out := make([]BindPath, 0, len(raw))
+	for _, value := range raw {
+		source := strings.TrimSpace(value.Source)
+		target := strings.TrimSpace(value.Target)
+		if source == "" || target == "" {
+			continue
+		}
+		resolvedSource, err := resolveRootPath("sandbox_host_bind_source", source)
+		if err != nil {
+			return nil, err
+		}
+		resolvedTarget, err := filepath.Abs(target)
+		if err != nil {
+			return nil, fmt.Errorf("resolve sandbox bind target %q: %w", target, err)
+		}
+		if !filepath.IsAbs(resolvedTarget) {
+			return nil, fmt.Errorf("sandbox bind target %q resolved to non-absolute %q", target, resolvedTarget)
+		}
+		out = append(out, BindPath{Source: resolvedSource, Target: filepath.Clean(resolvedTarget)})
+	}
+	return out, nil
 }
 
 func resolveScopedPaths(raw []string, scope Scope) ([]string, error) {
@@ -336,6 +393,25 @@ func resolveHostPaths(raw []string) ([]string, error) {
 		out = append(out, resolved)
 	}
 	return dedupePaths(out), nil
+}
+
+func resolverReadonlyRoots() []string {
+	target, err := filepath.EvalSymlinks("/etc/resolv.conf")
+	if err != nil {
+		return nil
+	}
+	target = filepath.Clean(target)
+	if !filepath.IsAbs(target) {
+		return nil
+	}
+	parent := filepath.Dir(target)
+	if parent == "/" || parent == "/etc" {
+		return nil
+	}
+	if _, err := os.Stat(parent); err != nil {
+		return nil
+	}
+	return []string{parent}
 }
 
 func existingRoots(paths ...string) []string {

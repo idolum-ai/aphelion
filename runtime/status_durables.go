@@ -4,12 +4,17 @@ package runtime
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/durableagent"
+	"github.com/idolum-ai/aphelion/session"
 )
 
 func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapshot, error) {
@@ -36,6 +41,7 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 	for _, agent := range agents {
 		row := core.DurableAgentStatusSnapshot{
 			AgentID:                strings.TrimSpace(agent.AgentID),
+			CanonicalPrincipal:     core.DurableAgentPrincipal(agent.AgentID),
 			ChannelKind:            strings.TrimSpace(agent.ChannelKind),
 			Status:                 firstNonEmpty(strings.TrimSpace(agent.Status), "active"),
 			ReviewTargetChatID:     agent.ReviewTargetChatID,
@@ -49,7 +55,6 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 			PolicyDrift:            strings.TrimSpace(agent.LivePolicy.DriftPolicy),
 			CapabilityEnvelope:     append([]string(nil), agent.LivePolicy.CapabilityEnvelope...),
 			AllowedTelegramUserIDs: append([]int64(nil), agent.AllowedTelegramUserIDs...),
-			CapacityState:          "unattested",
 			IdentitySource:         "canonical:session.durable_agents",
 		}
 
@@ -66,22 +71,6 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 			row.DormantAt = runtimeState.DormantAt
 			row.LastApplyStatus = strings.TrimSpace(runtimeState.LastApplyStatus)
 			row.LastApplyError = strings.TrimSpace(runtimeState.LastApplyError)
-			continuity, parseErr := core.ParseDurableAgentContinuityState(runtimeState.StateJSON)
-			if parseErr != nil {
-				return core.DurableAgentsStatusSnapshot{}, parseErr
-			}
-			if continuity.CapabilityContract != nil {
-				contract := *continuity.CapabilityContract
-				row.CapacityState = firstNonEmpty(strings.TrimSpace(contract.Status), "unattested")
-				row.CapacityCanCount = len(contract.Can)
-				row.CapacityCannotCount = len(contract.Cannot)
-				row.CapacityUncertainCount = len(contract.Uncertain)
-				row.CapacitySuccessCriteriaCount = len(contract.SuccessCriteria)
-				row.CapacityEvidenceSignalCount = len(contract.EvidenceSignals)
-				row.CapacityLastNegotiatedAt = contract.LastNegotiatedAt
-				row.CapacityLastProbedAt = contract.LastProbedAt
-				row.CapacityLastAttestedAt = contract.LastAttestedAt
-			}
 		}
 		identityState, err := r.store.DurableAgentIdentityState(agent.AgentID)
 		if err != nil {
@@ -106,6 +95,10 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 			row.EnrollmentRevokedAt = enrollment.RevokedAt
 			row.EnrollmentParentControlURL = strings.TrimSpace(enrollment.ParentControlURL)
 		}
+
+		row.SubstrateLabels = durableChildSubstrateFor("", agent).Labels
+		row.ChildRuntimeGrantCount, row.ChildRuntimeBlockedReason, row.ChildRuntimeRepairHint = r.durableChildRuntimeGrantStatus(agent)
+		row.ProfileManifestStatus, row.ProfileManifestPolicyHash, row.ProfileManifestFileCount = durableAgentProfileManifestStatus(agent, r.cfg.Sessions.DBPath)
 
 		eventState := durableEvents[strings.TrimSpace(agent.AgentID)]
 		hasEventProjection := durableStatusEventProjectionPresent(eventState)
@@ -283,4 +276,57 @@ func durableAgentHealthFromStatusWithEvents(
 		return "dormant"
 	}
 	return health
+}
+
+type durableStatusProfileManifest struct {
+	PolicyHash string `json:"policy_hash,omitempty"`
+	Files      []struct {
+		Path string `json:"path,omitempty"`
+	} `json:"files,omitempty"`
+}
+
+func (r *Runtime) durableChildRuntimeGrantStatus(agent core.DurableAgent) (int, string, string) {
+	if r == nil || r.store == nil {
+		return 0, "", ""
+	}
+	principal := core.DurableAgentPrincipal(agent.AgentID)
+	grants, err := r.store.CapabilityGrants(100, session.CapabilityGrantStatusActive, "", principal)
+	if err != nil {
+		return 0, "grant_status_unavailable", "inspect capability grant store"
+	}
+	count := 0
+	for _, grant := range grants {
+		if _, ok, err := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints); err != nil {
+			return count, "invalid_child_runtime_contract", "repair or revoke invalid child_runtime grant " + strings.TrimSpace(grant.GrantID)
+		} else if !ok {
+			continue
+		}
+		if err := durableChildGrantFreshnessError(grant); err != nil {
+			return count, err.Error(), "repair, refresh, or revoke child_runtime grant " + strings.TrimSpace(grant.GrantID)
+		}
+		count++
+	}
+	return count, "", ""
+}
+
+func durableAgentProfileManifestStatus(agent core.DurableAgent, dbPath string) (string, string, int) {
+	_, memoryRoot := durableagent.LocalRoots(agent.AgentID, agent.LocalStorageRoots)
+	if memoryRoot == "" {
+		_, memoryRoot = durableagent.DefaultLocalRoots(dbPath, strings.TrimSpace(agent.AgentID))
+	}
+	path := filepath.Join(memoryRoot, "profile", "PROFILE.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "missing", "", 0
+	}
+	var manifest durableStatusProfileManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return "invalid", "", 0
+	}
+	policyHash := strings.TrimSpace(manifest.PolicyHash)
+	status := "present"
+	if policyHash != "" && strings.TrimSpace(agent.PolicyHash) != "" && policyHash != strings.TrimSpace(agent.PolicyHash) {
+		status = "policy_hash_mismatch"
+	}
+	return status, policyHash, len(manifest.Files)
 }

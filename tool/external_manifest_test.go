@@ -36,16 +36,12 @@ func TestLoadExternalToolManifestRoundTrip(t *testing.T) {
 			"max_memory_mb": 256,
 			"max_runtime_seconds": 30
 		},
-		"exposure": {
-			"principals": ["idolum-email", "idolum-email"],
-			"requires_ratification": true
-		},
 		"probe": {
 			"command": ["/tool/probe", "--self-check"],
 			"expected_output_contains": "ok"
 		},
 		"provenance": {
-			"proposal_id": "tp_123",
+			"request_id": "cap-tool-browse-page",
 			"registered_at": "2026-04-23T00:00:00Z",
 			"registered_by": "admin"
 		}
@@ -63,9 +59,6 @@ func TestLoadExternalToolManifestRoundTrip(t *testing.T) {
 	}
 	if manifest.Execution.Mode != "container" || manifest.Execution.Entry == "" {
 		t.Fatalf("execution = %#v, want container entry", manifest.Execution)
-	}
-	if len(manifest.Exposure.Principals) != 1 || manifest.Exposure.Principals[0] != "idolum-email" {
-		t.Fatalf("principals = %#v, want deduped owner principal", manifest.Exposure.Principals)
 	}
 	if len(manifest.Constraints.NetworkTargets) != 1 || manifest.Constraints.NetworkTargets[0] != "example.com" {
 		t.Fatalf("network targets = %#v, want deduped targets", manifest.Constraints.NetworkTargets)
@@ -86,9 +79,6 @@ func TestBundledBrowsePagePilotManifestLoads(t *testing.T) {
 	}
 	if manifest.Name != "browse_page" || manifest.Owner != "idolum-email" || manifest.Execution.Mode != "process" {
 		t.Fatalf("bundled manifest = %#v, want email-owned process browse_page pilot", manifest)
-	}
-	if len(manifest.Exposure.Principals) != 1 || manifest.Exposure.Principals[0] != "idolum-email" {
-		t.Fatalf("bundled exposure = %#v, want idolum-email only", manifest.Exposure.Principals)
 	}
 	if manifest.Constraints.Network != "none" || len(manifest.Install.Command) == 0 || len(manifest.Probe.Command) == 0 {
 		t.Fatalf("bundled manifest constraints/install/probe = %#v/%#v/%#v, want deterministic governed fixture", manifest.Constraints, manifest.Install, manifest.Probe)

@@ -33,6 +33,18 @@ base_url = "https://chatgpt.com/backend-api"
 model = "gpt-5.5"
 context_window = 200000
 
+[governor.brokerage]
+# Brokerage stops early on acceptance, repeated equivalent contracts, repeated
+# proposals, reject/authority-boundary decisions, elapsed time, or max rounds.
+min_rounds = 1
+max_rounds = 4
+absolute_max_rounds = 6
+max_elapsed = "20s"
+stable_contract_rounds = 2
+stop_on_stable_contract = true
+stop_on_repeated_proposal = true
+stop_on_reject = true
+
 [providers]
 selection = "auto" # "auto" chooses the first configured provider from auto_order; "manual" uses default/fallback_chain exactly.
 auto_order = ["openai", "anthropic", "openrouter"]
@@ -68,10 +80,6 @@ purpose = "assistants"
 [openai.vector_stores]
 enabled = false
 default_store = ""
-
-[search.brave]
-api_key = ""
-base_url = "https://api.search.brave.com"
 
 [sessions]
 db_path = "~/.aphelion/state/sessions.db"
@@ -145,6 +153,12 @@ cold_days = 30
 
 [memory.identity]
 preserve = ["SOUL.md", "IDENTITY.md", "IDOLUM.md", "MEMORY.md"]
+
+[memory.write_policy]
+direct_user_writes = "apply"
+reflection_writes = "propose"
+aggressive_writes = "propose"
+auto_accept_low_risk = false
 
 [thinking]
 effort = "medium"

@@ -78,6 +78,12 @@ func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "QUESTIONS-TO-IDOLUM.md"), []byte("avoid empty praise"), 0o600); err != nil {
 		t.Fatalf("write QUESTIONS-TO-IDOLUM.md: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "memory"), 0o700); err != nil {
+		t.Fatalf("mkdir memory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "memory", "dreams.md"), []byte("negotiate time to write songs"), 0o600); err != nil {
+		t.Fatalf("write memory/dreams.md: %v", err)
+	}
 
 	provider := &stubProvider{reply: "Rendered idolum reply"}
 	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
@@ -106,6 +112,9 @@ func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
 	}
 	if !strings.Contains(provider.lastPrompt, "### QUESTIONS-TO-IDOLUM.md") {
 		t.Fatalf("face prompt missing QUESTIONS-TO-IDOLUM.md content: %q", provider.lastPrompt)
+	}
+	if !strings.Contains(provider.lastPrompt, "### memory/dreams.md") || !strings.Contains(provider.lastPrompt, "negotiate time to write songs") {
+		t.Fatalf("face prompt missing dreams continuity content: %q", provider.lastPrompt)
 	}
 	if !strings.Contains(provider.lastUser, "Idolum") || !strings.Contains(provider.lastUser, "Aphelion-authored material") {
 		t.Fatalf("render transport prompt = %q, want resolved face and governor names", provider.lastUser)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -88,11 +89,17 @@ func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"access_grant"`) || !strings.Contains(durableDefJSON, `"telegram_user_ids"`) {
 		t.Fatalf("durable_agent definition missing access control surface: %s", durableDefJSON)
 	}
-	if !strings.Contains(durableDefJSON, `"capacity_negotiate"`) || !strings.Contains(durableDefJSON, `"capacity_contract"`) {
-		t.Fatalf("durable_agent definition missing capacity contract surface: %s", durableDefJSON)
-	}
 	if !strings.Contains(durableDefJSON, `"conversation_show"`) || !strings.Contains(durableDefJSON, `"conversation_send"`) || !strings.Contains(durableDefJSON, `"message"`) {
 		t.Fatalf("durable_agent definition missing conversation surface: %s", durableDefJSON)
+	}
+	if !strings.Contains(durableDefJSON, `"delegation_request"`) || !strings.Contains(durableDefJSON, `"delegation_report"`) {
+		t.Fatalf("durable_agent definition missing generic delegation surface: %s", durableDefJSON)
+	}
+	if !strings.Contains(durableDefJSON, `"generic_delegation"`) || !strings.Contains(durableDefJSON, `"purchase"`) || !strings.Contains(durableDefJSON, `"local_device"`) {
+		t.Fatalf("durable_agent definition missing capability kind delegation enum: %s", durableDefJSON)
+	}
+	if !strings.Contains(durableDefJSON, `"capability_update_plan"`) || !strings.Contains(durableDefJSON, `"grant_actions"`) {
+		t.Fatalf("durable_agent definition missing capability update plan surface: %s", durableDefJSON)
 	}
 }
 
@@ -177,6 +184,275 @@ func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
 	}
 	if len(agent.AllowedTelegramUserIDs) != 1 || agent.AllowedTelegramUserIDs[0] != 2002 {
 		t.Fatalf("AllowedTelegramUserIDs = %#v, want [2002]", agent.AllowedTelegramUserIDs)
+	}
+}
+
+func TestDurableAgentToolDelegationRequestAndReport(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-child",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "200",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Help family members while escalating purchases and account access.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "reply_with_policy_authorization",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-test",
+			Model:          "openrouter/test-model",
+		},
+		Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	requestOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"delegation_request",
+			"agent_id":"family-child",
+			"delegation_request":{
+				"request_id":"cap-family-amazon",
+				"kind":"purchase",
+				"target_resource":"amazon",
+				"requested_for":"family-child",
+				"purpose":"order approved school supplies",
+				"risk_class":"spend",
+				"contract":{"allowed":"school supplies only"},
+				"constraints":{"max_usd":50},
+				"questions":["May I place this order?"],
+				"metadata":{"cart_id":"cart-1"}
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(delegation_request) err = %v", err)
+	}
+	if !strings.Contains(requestOut, "action: durable-agent delegation request") ||
+		!strings.Contains(requestOut, "canonical_surface: capability_request") ||
+		!strings.Contains(requestOut, "request_id: cap-family-amazon") ||
+		!strings.Contains(requestOut, "review_status: proposed") {
+		t.Fatalf("delegation_request output = %q, want canonical capability request summary", requestOut)
+	}
+
+	request, ok, err := store.CapabilityRequest("cap-family-amazon")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityRequest(cap-family-amazon) ok=false, want stored request")
+	}
+	if request.Kind != session.CapabilityKindPurchase || request.TargetResource != "amazon" || request.RequestedBy != "durable_agent:family-child" || request.RequestedFor != "durable_agent:family-child" {
+		t.Fatalf("CapabilityRequest = %#v, want purchase request for durable_agent:family-child on amazon", request)
+	}
+	if request.ParentPrincipal != "telegram:200" || request.AdminPrincipal != "telegram:1001" {
+		t.Fatalf("CapabilityRequest principals = parent %q admin %q, want telegram:200 and telegram:1001", request.ParentPrincipal, request.AdminPrincipal)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events len = %d, want 1", len(events))
+	}
+	if !strings.Contains(events[0].Summary, "Delegation request cap-family-amazon") {
+		t.Fatalf("review summary = %q, want delegation request summary", events[0].Summary)
+	}
+	if !strings.Contains(events[0].MetadataJSON, `"capability_request_id":"cap-family-amazon"`) || !strings.Contains(events[0].MetadataJSON, `"cart_id":"cart-1"`) {
+		t.Fatalf("review metadata = %q, want capability id and copied metadata", events[0].MetadataJSON)
+	}
+
+	reportOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"delegation_report",
+			"agent_id":"family-child",
+			"delegation_report":{
+				"request_id":"cap-family-amazon",
+				"status":"blocked",
+				"outcome":"cart price changed before checkout",
+				"local_actions":["paused checkout"],
+				"risk_flags":["spend_changed"]
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(delegation_report) err = %v", err)
+	}
+	if !strings.Contains(reportOut, "action: durable-agent delegation report") ||
+		!strings.Contains(reportOut, "request_id: cap-family-amazon") ||
+		!strings.Contains(reportOut, "status: blocked") {
+		t.Fatalf("delegation_report output = %q, want report summary", reportOut)
+	}
+	events, err = store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents(after report) err = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("pending review events after report len = %d, want 2", len(events))
+	}
+	latest := events[len(events)-1]
+	if !strings.Contains(latest.MetadataJSON, `"delegation_surface":"durable_agent.delegation_report"`) ||
+		!strings.Contains(latest.MetadataJSON, `"status":"blocked"`) {
+		t.Fatalf("latest review metadata = %q, want delegation report metadata", latest.MetadataJSON)
+	}
+}
+
+func TestDurableAgentDelegationGrantAppliesCapabilityUpdatePlan(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	livePolicy := core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+		Charter:            "Help family members while escalating purchases and account access.",
+		CapabilityEnvelope: []string{"bounded_review_artifact"},
+		OutboundMode:       "read_only",
+		DriftPolicy:        "admin_review",
+	})
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-child",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "200",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         livePolicy,
+		BootstrapCeiling: core.NormalizeDurableAgentBootstrapCeiling(core.DurableAgentBootstrapCeiling{
+			CapabilityEnvelope:           []string{"bounded_review_artifact", "amazon_checkout"},
+			AllowedOutboundModes:         []string{"read_only", "reply_with_parent_review"},
+			AllowedPublicSurfaceModes:    []string{"none", "explicit_parent_relay_only"},
+			AllowedSharedInferenceReuse:  []string{"disabled"},
+			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-test",
+			Model:          "openrouter/test-model",
+		},
+		Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	parent := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 200}
+	key := adminSessionKey()
+	requestOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		admin,
+		key,
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"delegation_request",
+			"agent_id":"family-child",
+			"delegation_request":{
+				"request_id":"cap-family-amazon-update",
+				"kind":"purchase",
+				"target_resource":"amazon",
+				"requested_for":"family-child",
+				"purpose":"order approved school supplies",
+				"risk_class":"spend",
+				"contract":{"allowed":"school supplies only"},
+				"constraints":{"max_usd":50},
+				"grant_actions":["order"],
+				"policy_patch":{
+					"autonomy":"review_before_reply",
+					"visibility":"parent_relay_only",
+					"capabilities":["bounded_review_artifact","amazon_checkout"]
+				},
+				"update_reason":"approved Amazon checkout delegation"
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(delegation_request) err = %v", err)
+	}
+	if !strings.Contains(requestOut, "capability_update_plan: present") || !strings.Contains(requestOut, "policy_update_on_grant: true") {
+		t.Fatalf("delegation_request output = %q, want embedded capability update plan", requestOut)
+	}
+	request, ok, err := store.CapabilityRequest("cap-family-amazon-update")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityRequest(cap-family-amazon-update) ok=false, want stored request")
+	}
+	if !strings.Contains(request.Contract, `"capability_update_plan"`) || !strings.Contains(request.Contract, `"amazon_checkout"`) {
+		t.Fatalf("request contract = %s, want capability_update_plan with policy patch", request.Contract)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), parent, key, "capability_authority", json.RawMessage(`{
+		"action":"request_review",
+		"request_id":"cap-family-amazon-update",
+		"review_status":"parent_approved",
+		"rationale":"bounded school supplies"
+	}`)); err != nil {
+		t.Fatalf("parent request_review err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
+		"action":"request_review",
+		"request_id":"cap-family-amazon-update",
+		"review_status":"approved",
+		"rationale":"parent endorsed"
+	}`)); err != nil {
+		t.Fatalf("admin request_review err = %v", err)
+	}
+
+	grantOut, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
+		"action":"grant_set",
+		"request_id":"cap-family-amazon-update",
+		"grant_id":"capg-family-amazon-update",
+		"principal":"family-child"
+	}`))
+	if err != nil {
+		t.Fatalf("grant_set err = %v", err)
+	}
+	if !strings.Contains(grantOut, "status: active") ||
+		!strings.Contains(grantOut, "allowed_actions: order") ||
+		!strings.Contains(grantOut, "policy_update_applied: true") ||
+		!strings.Contains(grantOut, "policy_changed: true") {
+		t.Fatalf("grant_set output = %q, want active grant and applied policy update", grantOut)
+	}
+	grant, ok, err := store.CapabilityGrant("capg-family-amazon-update")
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityGrant(capg-family-amazon-update) ok=false, want stored grant")
+	}
+	if grant.Status != session.CapabilityGrantStatusActive || len(grant.AllowedActions) != 1 || grant.AllowedActions[0] != "order" {
+		t.Fatalf("grant = %#v, want active grant with order action", grant)
+	}
+	updated, err := store.DurableAgent("family-child")
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if updated.LivePolicy.OutboundMode != "reply_with_parent_review" {
+		t.Fatalf("updated outbound_mode = %q, want reply_with_parent_review", updated.LivePolicy.OutboundMode)
+	}
+	if !containsString(updated.LivePolicy.CapabilityEnvelope, "amazon_checkout") {
+		t.Fatalf("updated capabilities = %#v, want amazon_checkout", updated.LivePolicy.CapabilityEnvelope)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !executionEventTypeExists(events, core.ExecutionEventCapabilityUpdateApplied) {
+		t.Fatalf("missing %s event", core.ExecutionEventCapabilityUpdateApplied)
 	}
 }
 
@@ -322,284 +598,6 @@ func TestDurableAgentToolConversationShowIncludesRetryStateOnInferenceFailure(t 
 		t.Fatalf("conversation_show output = %q, want surfaced child inference error", showOut)
 	}
 }
-
-func TestDurableAgentToolCapacityContractFlow(t *testing.T) {
-	t.Parallel()
-
-	registry, store := newDurableAgentToolRegistry(t)
-	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "idolum-email",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
-		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Review inbox and surface important threads.",
-			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
-			OutboundMode:       "read_only",
-			DriftPolicy:        "admin_review",
-		}),
-		BootstrapCeiling: core.NormalizeDurableAgentBootstrapCeiling(core.DurableAgentBootstrapCeiling{
-			CapabilityEnvelope:   []string{"read_channel", "bounded_review_artifact"},
-			AllowedOutboundModes: []string{"read_only", "draft_only"},
-		}),
-		PolicyVersion:     1,
-		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
-		NetworkPolicy:     "default",
-		WakeupMode:        "poll",
-		Status:            "active",
-	}); err != nil {
-		t.Fatalf("UpsertDurableAgent() err = %v", err)
-	}
-
-	showOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{"action":"capacity_show","agent_id":"idolum-email"}`),
-	)
-	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(capacity_show) err = %v", err)
-	}
-	if !strings.Contains(showOut, "capacity_state: unattested") {
-		t.Fatalf("capacity_show output = %q, want unattested state", showOut)
-	}
-
-	negotiateOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{
-			"action":"capacity_negotiate",
-			"agent_id":"idolum-email",
-			"capacity_contract":{
-				"parent_proposal":"You are bounded to inbox triage and summary only.",
-				"child_self_assessment":"I can triage and summarize threads, but I cannot send mail and I'm uncertain about OCR-heavy PDFs.",
-				"can":["triage_inbox","summarize_thread"],
-				"cannot":["send_mail"],
-				"uncertain":["ocr_heavy_pdf"],
-				"success_criteria":["important threads surfaced within 5m"],
-				"evidence_signals":["review artifact includes surfaced_count"],
-				"probe_checklist":["process one synthetic inbox sample"]
-			}
-		}`),
-	)
-	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(capacity_negotiate) err = %v", err)
-	}
-	if !strings.Contains(negotiateOut, "action: durable-agent capacity negotiate") {
-		t.Fatalf("capacity_negotiate output = %q, want negotiate action", negotiateOut)
-	}
-	if !strings.Contains(negotiateOut, "capacity_state: provisional") {
-		t.Fatalf("capacity_negotiate output = %q, want provisional state", negotiateOut)
-	}
-	if !strings.Contains(negotiateOut, "can: triage_inbox,summarize_thread") {
-		t.Fatalf("capacity_negotiate output = %q, want can list", negotiateOut)
-	}
-
-	state, err := store.DurableAgentState("idolum-email")
-	if err != nil {
-		t.Fatalf("DurableAgentState() err = %v", err)
-	}
-	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
-	if err != nil {
-		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
-	}
-	if continuity.CapabilityContract == nil {
-		t.Fatalf("CapabilityContract = nil, want persisted contract")
-	}
-	if continuity.CapabilityContract.Status != "provisional" {
-		t.Fatalf("CapabilityContract.Status = %q, want provisional", continuity.CapabilityContract.Status)
-	}
-	if continuity.CapabilityContract.LastNegotiatedAt.IsZero() {
-		t.Fatal("CapabilityContract.LastNegotiatedAt is zero, want timestamp")
-	}
-
-	probeOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{
-			"action":"capacity_probe",
-			"agent_id":"idolum-email",
-			"capacity_contract":{
-				"probe_results":["synthetic sample triaged in 2m; surfaced two high-priority threads"]
-			}
-		}`),
-	)
-	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(capacity_probe) err = %v", err)
-	}
-	if !strings.Contains(probeOut, "action: durable-agent capacity probe") {
-		t.Fatalf("capacity_probe output = %q, want probe action", probeOut)
-	}
-	if !strings.Contains(probeOut, "probe_results: synthetic sample triaged in 2m; surfaced two high-priority threads") {
-		t.Fatalf("capacity_probe output = %q, want probe results", probeOut)
-	}
-
-	attestOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{"action":"capacity_attest","agent_id":"idolum-email"}`),
-	)
-	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(capacity_attest) err = %v", err)
-	}
-	if !strings.Contains(attestOut, "action: durable-agent capacity attest") {
-		t.Fatalf("capacity_attest output = %q, want attest action", attestOut)
-	}
-	if !strings.Contains(attestOut, "capacity_state: verified") {
-		t.Fatalf("capacity_attest output = %q, want verified state", attestOut)
-	}
-
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{"action":"policy_apply","agent_id":"idolum-email","autonomy":"local_drafts","reason":"policy adjustment requires fresh attestation"}`),
-	); err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(policy_apply) err = %v", err)
-	}
-	staleOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{"action":"capacity_show","agent_id":"idolum-email"}`),
-	)
-	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(capacity_show after policy_apply) err = %v", err)
-	}
-	if !strings.Contains(staleOut, "capacity_state: stale") {
-		t.Fatalf("capacity_show output = %q, want stale state after policy change", staleOut)
-	}
-}
-
-func TestDurableAgentToolCapacityAttestRequiresProbeEvidence(t *testing.T) {
-	t.Parallel()
-
-	registry, store := newDurableAgentToolRegistry(t)
-	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "idolum-email-no-probe",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
-		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Review inbox and surface important threads.",
-			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
-			OutboundMode:       "read_only",
-			DriftPolicy:        "admin_review",
-		}),
-		BootstrapCeiling: core.NormalizeDurableAgentBootstrapCeiling(core.DurableAgentBootstrapCeiling{
-			CapabilityEnvelope:   []string{"read_channel", "bounded_review_artifact"},
-			AllowedOutboundModes: []string{"read_only", "draft_only"},
-		}),
-		PolicyVersion:     1,
-		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
-		NetworkPolicy:     "default",
-		WakeupMode:        "poll",
-		Status:            "active",
-	}); err != nil {
-		t.Fatalf("UpsertDurableAgent() err = %v", err)
-	}
-
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{
-			"action":"capacity_negotiate",
-			"agent_id":"idolum-email-no-probe",
-			"capacity_contract":{
-				"parent_proposal":"You are bounded to inbox triage and summary only.",
-				"child_self_assessment":"I can triage and summarize threads but cannot send mail.",
-				"success_criteria":["important threads surfaced within 5m"],
-				"evidence_signals":["review artifact includes surfaced_count"]
-			}
-		}`),
-	); err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(capacity_negotiate) err = %v", err)
-	}
-
-	_, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{"action":"capacity_attest","agent_id":"idolum-email-no-probe"}`),
-	)
-	if err == nil {
-		t.Fatal("ExecuteForSessionPrincipal(capacity_attest) err = nil, want probe evidence requirement")
-	}
-	if !strings.Contains(err.Error(), "probe_results") {
-		t.Fatalf("err = %v, want probe_results requirement", err)
-	}
-}
-
-func TestDurableAgentToolListAndPolicyShow(t *testing.T) {
-	t.Parallel()
-
-	registry, store := newDurableAgentToolRegistry(t)
-	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "family-group",
-		ParentScopeKind:    string(session.ScopeKindHeartbeat),
-		ParentScopeID:      "admin-house",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "telegram_group",
-		LivePolicy:         core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues."),
-		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("telegram_group", core.DefaultTelegramGroupLivePolicy("Help the family group while escalating important issues.")),
-		BootstrapLLM: core.NodeLLMBootstrap{
-			Backend:        "native",
-			NativeProvider: "openrouter",
-			APIKey:         "child-key",
-			Model:          "openrouter/group-model",
-		},
-		PolicyVersion:     1,
-		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
-		NetworkPolicy:     "default",
-		WakeupMode:        "telegram_update",
-		Status:            "active",
-	}); err != nil {
-		t.Fatalf("UpsertDurableAgent() err = %v", err)
-	}
-
-	listOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{"action":"list"}`),
-	)
-	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(list) err = %v", err)
-	}
-	if !strings.Contains(listOut, "[DURABLE_AGENTS]") || !strings.Contains(listOut, "family-group") {
-		t.Fatalf("list output = %q, want durable agent summary", listOut)
-	}
-
-	showOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{"action":"policy_show","agent_id":"family-group"}`),
-	)
-	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(policy_show) err = %v", err)
-	}
-	if !strings.Contains(showOut, "action: durable-agent policy show") || !strings.Contains(showOut, "outbound_mode: reply_with_policy_authorization") {
-		t.Fatalf("policy show output = %q, want policy details", showOut)
-	}
-}
-
 func TestDurableAgentToolBootstrapShowIncludesStateAndHistory(t *testing.T) {
 	t.Parallel()
 
@@ -768,13 +766,6 @@ func TestDurableAgentToolBootstrapUpdateExplicitAndInherit(t *testing.T) {
 	if updated.BootstrapLLM.Backend != "codex" || updated.BootstrapLLM.CodexHome != "/srv/codex-child" {
 		t.Fatalf("updated BootstrapLLM = %#v, want codex /srv/codex-child", updated.BootstrapLLM)
 	}
-	_, continuity, err := registry.loadDurableAgentContinuity(agent.AgentID)
-	if err != nil {
-		t.Fatalf("loadDurableAgentContinuity() err = %v", err)
-	}
-	if continuity.CapabilityContract == nil || continuity.CapabilityContract.Status != "stale" {
-		t.Fatalf("capacity contract = %#v, want stale after bootstrap update", continuity.CapabilityContract)
-	}
 	updates, err := store.DurableAgentBootstrapUpdates(agent.AgentID, 5)
 	if err != nil {
 		t.Fatalf("DurableAgentBootstrapUpdates() err = %v", err)
@@ -807,71 +798,6 @@ func TestDurableAgentToolBootstrapUpdateExplicitAndInherit(t *testing.T) {
 		t.Fatalf("updated inherited BootstrapLLM = %#v, want parent codex bootstrap", updated.BootstrapLLM)
 	}
 }
-
-func TestDurableAgentToolBootstrapUpdateNoOpDoesNotStaleCapacity(t *testing.T) {
-	t.Parallel()
-
-	registry, store := newDurableAgentToolRegistry(t)
-	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{
-		Backend:         "codex",
-		CodexAuthSource: "codex_cli",
-		CodexHome:       "/tmp/codex-home",
-	})
-	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
-		ParentScopeKind:    string(session.ScopeKindTelegramDM),
-		ParentScopeID:      "1001",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
-		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
-		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
-		BootstrapLLM: core.NodeLLMBootstrap{
-			Backend:         "codex",
-			CodexAuthSource: "codex_cli",
-			CodexHome:       "/tmp/codex-home",
-		},
-		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
-		NetworkPolicy:     "default",
-		WakeupMode:        "poll",
-		Status:            "active",
-	}
-	if err := store.UpsertDurableAgent(agent); err != nil {
-		t.Fatalf("UpsertDurableAgent() err = %v", err)
-	}
-	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: `{"capability_contract":{"status":"verified"}}`}); err != nil {
-		t.Fatalf("SaveDurableAgentState() err = %v", err)
-	}
-
-	out, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		adminSessionKey(),
-		"durable_agent",
-		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"noop inherit parent","bootstrap_profile":"inherit_parent"}`),
-	)
-	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_update no-op inherit) err = %v", err)
-	}
-	if !strings.Contains(out, "changed: false") {
-		t.Fatalf("bootstrap_update no-op output = %q, want changed: false", out)
-	}
-
-	_, continuity, err := registry.loadDurableAgentContinuity(agent.AgentID)
-	if err != nil {
-		t.Fatalf("loadDurableAgentContinuity() err = %v", err)
-	}
-	if continuity.CapabilityContract == nil || continuity.CapabilityContract.Status != "verified" {
-		t.Fatalf("capacity contract = %#v, want verified to remain after no-op bootstrap update", continuity.CapabilityContract)
-	}
-	updates, err := store.DurableAgentBootstrapUpdates(agent.AgentID, 5)
-	if err != nil {
-		t.Fatalf("DurableAgentBootstrapUpdates() err = %v", err)
-	}
-	if len(updates) != 0 {
-		t.Fatalf("bootstrap updates = %#v, want no history entry for no-op update", updates)
-	}
-}
-
 func TestDurableAgentToolBootstrapUpdateHistoryRedactsAPIKeys(t *testing.T) {
 	t.Parallel()
 
@@ -2026,5 +1952,96 @@ func adminSessionKey() session.SessionKey {
 		ChatID: 1001,
 		UserID: 0,
 		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"},
+	}
+}
+
+func TestDurableAgentPolicyApplySyncsProfileFiles(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	childWorkspace := filepath.Join(t.TempDir(), "child", "workspace")
+	childMemory := filepath.Join(t.TempDir(), "child", "memory")
+	agent := core.DurableAgent{
+		AgentID:           "profile-child",
+		ChannelKind:       "headless",
+		LocalStorageRoots: []string{childWorkspace, childMemory},
+		Status:            "active",
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"},
+		BootstrapCeiling: core.DurableAgentBootstrapCeiling{
+			CapabilityEnvelope:           []string{"bounded_review_artifact", "session_recall"},
+			AllowedOutboundModes:         []string{"read_only", "reply_with_policy_authorization"},
+			AllowedPublicSurfaceModes:    []string{"none", "explicit_parent_relay_only"},
+			AllowedSharedInferenceReuse:  []string{"disabled"},
+			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
+		},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Initial charter.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	_, err := registry.applyDurableAgentPolicy(durableAgentInput{
+		AgentID: "profile-child",
+		PolicyPatch: &durableAgentPolicyPatchInput{
+			Charter:      "Updated child charter.",
+			Capabilities: []string{"bounded_review_artifact", "session_recall"},
+		},
+		Reason: "ratify profile files",
+	})
+	if err != nil {
+		t.Fatalf("applyDurableAgentPolicy() err = %v", err)
+	}
+	charterRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "charter.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(charter) err = %v", err)
+	}
+	capRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "capabilities.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(capabilities) err = %v", err)
+	}
+	runtimeRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "runtime.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(runtime) err = %v", err)
+	}
+	if !strings.Contains(string(charterRaw), "Updated child charter.") || !strings.Contains(string(capRaw), "session_recall") || !strings.Contains(string(runtimeRaw), "child_runtime") {
+		t.Fatalf("profile files missing ratified content: charter=%q capabilities=%q runtime=%q", charterRaw, capRaw, runtimeRaw)
+	}
+}
+
+func TestDurableAgentProfileApplyWritesChildAuthoredManifestEntry(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	memoryRoot := filepath.Join(t.TempDir(), "memory")
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:           "script-scout",
+		ChannelKind:       "inbox",
+		Status:            "active",
+		PolicyHash:        "policy-hash-1",
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "native", NativeProvider: "openrouter", APIKey: "sk-test", Model: "test-model"},
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), memoryRoot},
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminSessionKey(), "durable_agent", json.RawMessage(`{
+		"action":"profile_apply",
+		"agent_id":"script-scout",
+		"profile_edit":{"target_file":"persona.md","content":"Curious scout. Asks before synthesizing.","reason":"seed scout voice"}
+	}`))
+	if err != nil {
+		t.Fatalf("profile_apply err = %v", err)
+	}
+	if !strings.Contains(out, "profile/PROFILE.json") || !strings.Contains(out, "ownership=child_authored") {
+		t.Fatalf("profile_apply output = %q, want child-authored manifest entry", out)
+	}
+	raw, err := os.ReadFile(filepath.Join(memoryRoot, "profile", "persona.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(persona.md) err = %v", err)
+	}
+	if !strings.Contains(string(raw), "profile_ownership: child_authored") || !strings.Contains(string(raw), "Curious scout") {
+		t.Fatalf("persona.md = %q, want child-authored profile content", string(raw))
 	}
 }

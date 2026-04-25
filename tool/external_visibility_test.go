@@ -15,7 +15,7 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-func TestDefinitionsForPrincipalFiltersExternalToolByExposure(t *testing.T) {
+func TestDefinitionsForPrincipalFiltersExternalToolByGrant(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
@@ -40,21 +40,19 @@ func TestDefinitionsForPrincipalFiltersExternalToolByExposure(t *testing.T) {
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
-	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "idolum-email", Active: true}); err != nil {
-		t.Fatalf("UpsertToolExposure() err = %v", err)
-	}
+	grantToolInvoke(t, store, "browse_page", "idolum-email")
 
-	exposed := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-email"})
-	if !toolDefExists(exposed, "browse_page") {
-		t.Fatalf("DefinitionsForPrincipal(exposed) missing browse_page: %#v", exposed)
+	granted := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-email"})
+	if !toolDefExists(granted, "browse_page") {
+		t.Fatalf("DefinitionsForPrincipal(granted) missing browse_page: %#v", granted)
 	}
 	hidden := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "other-agent"})
 	if toolDefExists(hidden, "browse_page") {
-		t.Fatalf("DefinitionsForPrincipal(unexposed) included browse_page: %#v", hidden)
+		t.Fatalf("DefinitionsForPrincipal(ungranted) included browse_page: %#v", hidden)
 	}
 }
 
-func TestExternalToolRequiresRegistrationAndExposureAtInvocation(t *testing.T) {
+func TestExternalToolRequiresRegistrationAndGrantAtInvocation(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
@@ -87,22 +85,20 @@ func TestExternalToolRequiresRegistrationAndExposureAtInvocation(t *testing.T) {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
 	_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
-	if err == nil || !strings.Contains(err.Error(), "not exposed") {
-		t.Fatalf("unexposed browse_page err = %v, want not exposed", err)
+	if err == nil || !strings.Contains(err.Error(), "not granted") {
+		t.Fatalf("ungranted browse_page err = %v, want not granted", err)
 	}
-	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:1001", Active: true}); err != nil {
-		t.Fatalf("UpsertToolExposure() err = %v", err)
-	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
-		t.Fatalf("exposed browse_page err = %v", err)
+		t.Fatalf("granted browse_page err = %v", err)
 	}
 	if out != `{"summary":"ok"}` {
 		t.Fatalf("out = %q, want manifest-backed output", out)
 	}
 }
 
-func TestManifestForPrincipalIncludesOnlyExposedExternalTools(t *testing.T) {
+func TestManifestForPrincipalIncludesOnlyGrantedExternalTools(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
@@ -118,20 +114,18 @@ func TestManifestForPrincipalIncludesOnlyExposedExternalTools(t *testing.T) {
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
-	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "idolum-email", Active: true}); err != nil {
-		t.Fatalf("UpsertToolExposure() err = %v", err)
-	}
+	grantToolInvoke(t, store, "browse_page", "idolum-email")
 
 	visible := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-email"})
 	if !strings.Contains(visible, "- browse_page: external tool owned by idolum-email") {
-		t.Fatalf("visible manifest = %q, want exposed external tool", visible)
+		t.Fatalf("visible manifest = %q, want granted external tool", visible)
 	}
 	if !strings.Contains(visible, "executable: false") {
 		t.Fatalf("visible manifest = %q, want non-executable container notice", visible)
 	}
 	hidden := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "other-agent"})
 	if strings.Contains(hidden, "browse_page") {
-		t.Fatalf("hidden manifest = %q, do not want unexposed external tool", hidden)
+		t.Fatalf("hidden manifest = %q, do not want ungranted external tool", hidden)
 	}
 }
 

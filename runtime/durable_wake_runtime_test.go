@@ -369,6 +369,50 @@ func TestPollDurableWakeAgentsKeepsParentConversationPendingOnInferenceFailure(t
 	sender.mu.Unlock()
 }
 
+func TestPollDurableWakeAgentsDoesNotSpecialCaseEmailWithoutParentGuidance(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "This should not run."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		ChannelConfig: core.DurableAgentChannelConfig{Email: &core.DurableAgentEmailChannelConfig{
+			Address:      "host@idolum.ai",
+			Account:      "host@idolum.ai",
+			Adapter:      "gog_cli",
+			Query:        "label:inbox",
+			PollInterval: "5m",
+		}},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read host@idolum.ai and summarize job opportunities upward.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	rt.durableWakeChild = nil
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+	if len(provider.lastGovernorMsgs) != 0 {
+		t.Fatalf("governor messages = %#v, want no automatic email wake", provider.lastGovernorMsgs)
+	}
+}
+
 func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Processed the parent guidance and compiled the requested summary."

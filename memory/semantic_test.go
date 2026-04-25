@@ -53,6 +53,53 @@ func TestSemanticEngineSearchFindsCuratedMemory(t *testing.T) {
 	}
 }
 
+func TestSemanticEngineStripsMemoryInstrumentation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSemanticFile(t, filepath.Join(root, "memory", "knowledge.md"), strings.Join([]string{
+		"<!-- aphelion-memory-file:v1",
+		"scope: shared",
+		"store: knowledge",
+		"-->",
+		"",
+		"<!-- aphelion-memory-entry:v1",
+		"id: mem_test",
+		"scope: shared",
+		"store: knowledge",
+		"-->",
+		"",
+		"- Instrumentation should not appear in semantic excerpts; concise updates should.",
+	}, "\n"))
+	engine := NewSemanticEngine(SemanticOptions{
+		Enabled:             true,
+		DBPath:              filepath.Join(root, "semantic.db"),
+		Sources:             []string{"memory/knowledge.md"},
+		InteractiveTopK:     5,
+		HeartbeatTopK:       12,
+		InteractiveMaxChars: 4000,
+		HeartbeatMaxChars:   12000,
+		DailyNotesDir:       "memory/daily",
+	})
+
+	hits, err := engine.Search(context.Background(), SemanticSearchRequest{
+		Root:  root,
+		Scope: "shared",
+		Query: "concise updates",
+		Mode:  SemanticModeInteractive,
+		Now:   time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Search() err = %v", err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("Search() returned no hits")
+	}
+	if strings.Contains(hits[0].Excerpt, "aphelion-memory-entry") || !strings.Contains(hits[0].Excerpt, "concise updates") {
+		t.Fatalf("excerpt = %q, want stripped metadata and retained content", hits[0].Excerpt)
+	}
+}
+
 func TestSemanticEngineHeartbeatIncludesRecentDailyNotes(t *testing.T) {
 	t.Parallel()
 

@@ -72,6 +72,17 @@ func (r *Runtime) reflectCuratedMemory(
 	if len(sections) == 0 {
 		return "", nil
 	}
+	scopeName := dynamicScopeName(scopeRoot)
+	if r.memoryReflectionMode() == "propose" {
+		proposalIDs, err := proposeMemorySections(scopeRoot, scopeName, sections, "reflection", "heartbeat_reflection", now)
+		if err != nil {
+			return "", err
+		}
+		if len(proposalIDs) == 0 {
+			return "", nil
+		}
+		return fmt.Sprintf("Proposed curated memory updates for review: %s", strings.Join(proposalIDs, ", ")), nil
+	}
 
 	updatedStores := make([]string, 0, len(sections))
 	for _, store := range []string{
@@ -85,10 +96,13 @@ func (r *Runtime) reflectCuratedMemory(
 			continue
 		}
 		if _, err := memstore.ApplyWrite(memstore.WriteRequest{
-			Root:    scopeRoot,
-			Store:   store,
-			Action:  "add",
-			Content: content,
+			Root:      scopeRoot,
+			Store:     store,
+			Action:    "add",
+			Content:   content,
+			SourceTag: "reflection",
+			SourceRef: "heartbeat_reflection",
+			Scope:     scopeName,
 		}); err != nil {
 			return "", fmt.Errorf("write reflected %s memory: %w", store, err)
 		}
@@ -96,7 +110,7 @@ func (r *Runtime) reflectCuratedMemory(
 	}
 
 	if rhizomeContent := strings.TrimSpace(sections[memstore.StoreRhizome]); rhizomeContent != "" {
-		if err := r.updateRhizome(dynamicScopeName(scopeRoot), scopeRoot, rhizomeContent); err != nil {
+		if err := r.updateRhizome(scopeName, scopeRoot, rhizomeContent); err != nil {
 			return "", err
 		}
 		updatedStores = append(updatedStores, memstore.StoreRhizome)

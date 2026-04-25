@@ -754,69 +754,15 @@ func TestOperationStateRoundTripAndUpdate(t *testing.T) {
 	}
 }
 
-func TestToolAuthorityRecordsRoundTrip(t *testing.T) {
+func TestRegisteredToolRecordsRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
 	defer store.Close()
 
-	proposal, err := store.UpsertToolProposal(ToolProposal{
-		ProposalID: "tp-1",
-		ProposedBy: "idolum-email",
-		ToolName:   "search_web",
-		WhyNow:     "Inbox-only analysis cannot evaluate external postings.",
-		Contract: strings.TrimSpace(`{
-			"inputs":{"query":"string","limit":"int<=5"},
-			"outputs":[{"title":"string","url":"string","snippet":"string"}],
-			"constraints":["read_only","no_clickthrough","max_3_queries_per_task"]
-		}`),
-		ReviewStatus: ToolProposalReviewStatusProposed,
-	})
-	if err != nil {
-		t.Fatalf("UpsertToolProposal(insert) err = %v", err)
-	}
-	if proposal.ReviewStatus != ToolProposalReviewStatusProposed {
-		t.Fatalf("proposal review status = %q, want proposed", proposal.ReviewStatus)
-	}
-	if proposal.Contract == "" {
-		t.Fatal("proposal contract empty, want persisted contract blob")
-	}
-
-	loadedProposal, ok, err := store.ToolProposal("tp-1")
-	if err != nil {
-		t.Fatalf("ToolProposal() err = %v", err)
-	}
-	if !ok {
-		t.Fatal("ToolProposal() ok = false, want persisted proposal")
-	}
-	if loadedProposal.ToolName != "search_web" {
-		t.Fatalf("loaded proposal tool_name = %q, want search_web", loadedProposal.ToolName)
-	}
-
-	proposals, err := store.ToolProposals(10, ToolProposalReviewStatusProposed)
-	if err != nil {
-		t.Fatalf("ToolProposals(proposed) err = %v", err)
-	}
-	if len(proposals) != 1 {
-		t.Fatalf("ToolProposals(proposed) len = %d, want 1", len(proposals))
-	}
-
-	proposal.ReviewStatus = ToolProposalReviewStatusApproved
-	proposal.RegisteredToolID = "search_web"
-	proposal, err = store.UpsertToolProposal(proposal)
-	if err != nil {
-		t.Fatalf("UpsertToolProposal(update) err = %v", err)
-	}
-	if proposal.ReviewStatus != ToolProposalReviewStatusApproved {
-		t.Fatalf("updated proposal review status = %q, want approved", proposal.ReviewStatus)
-	}
-	if proposal.RegisteredToolID != "search_web" {
-		t.Fatalf("updated registered_tool_id = %q, want search_web", proposal.RegisteredToolID)
-	}
-
 	registered, err := store.UpsertRegisteredTool(RegisteredTool{
-		ToolName:          "search_web",
-		ImplementationRef: "tool/search_web.go",
+		ToolName:          "browse_page",
+		ImplementationRef: "external-tools/browse_page/manifest.json",
 		Registered:        true,
 	})
 	if err != nil {
@@ -826,15 +772,15 @@ func TestToolAuthorityRecordsRoundTrip(t *testing.T) {
 		t.Fatal("registered.Registered = false, want true")
 	}
 
-	loadedRegistered, ok, err := store.RegisteredTool("search_web")
+	loadedRegistered, ok, err := store.RegisteredTool("browse_page")
 	if err != nil {
 		t.Fatalf("RegisteredTool() err = %v", err)
 	}
 	if !ok {
 		t.Fatal("RegisteredTool() ok = false, want true")
 	}
-	if loadedRegistered.ImplementationRef != "tool/search_web.go" {
-		t.Fatalf("loaded registered implementation_ref = %q, want tool/search_web.go", loadedRegistered.ImplementationRef)
+	if loadedRegistered.ImplementationRef != "external-tools/browse_page/manifest.json" {
+		t.Fatalf("loaded registered implementation_ref = %q, want external manifest ref", loadedRegistered.ImplementationRef)
 	}
 
 	registeredList, err := store.RegisteredTools(10)
@@ -845,48 +791,6 @@ func TestToolAuthorityRecordsRoundTrip(t *testing.T) {
 		t.Fatalf("RegisteredTools len = %d, want 1", len(registeredList))
 	}
 
-	exposure, err := store.UpsertToolExposure(ToolExposure{
-		ToolName:  "search_web",
-		Principal: "idolum-email",
-		Active:    true,
-	})
-	if err != nil {
-		t.Fatalf("UpsertToolExposure(insert) err = %v", err)
-	}
-	if !exposure.Active {
-		t.Fatal("exposure.Active = false, want true")
-	}
-
-	loadedExposure, ok, err := store.ToolExposure("search_web", "idolum-email")
-	if err != nil {
-		t.Fatalf("ToolExposure() err = %v", err)
-	}
-	if !ok {
-		t.Fatal("ToolExposure() ok = false, want true")
-	}
-	if !loadedExposure.Active {
-		t.Fatal("loaded exposure active = false, want true")
-	}
-
-	exposure.Active = false
-	exposure, err = store.UpsertToolExposure(exposure)
-	if err != nil {
-		t.Fatalf("UpsertToolExposure(update) err = %v", err)
-	}
-	if exposure.Active {
-		t.Fatal("updated exposure active = true, want false")
-	}
-
-	exposures, err := store.ToolExposures("search_web", "", 10)
-	if err != nil {
-		t.Fatalf("ToolExposures() err = %v", err)
-	}
-	if len(exposures) != 1 {
-		t.Fatalf("ToolExposures len = %d, want 1", len(exposures))
-	}
-	if exposures[0].Active {
-		t.Fatal("ToolExposures[0].Active = true, want false after update")
-	}
 }
 
 func TestToolProbeRecordRoundTrip(t *testing.T) {
@@ -894,13 +798,23 @@ func TestToolProbeRecordRoundTrip(t *testing.T) {
 
 	store := newTestSQLiteStore(t)
 	record, err := store.UpsertToolProbeRecord(ToolProbeRecord{
-		ToolName:            "browse_page",
-		Status:              ToolProbeStatusPassed,
-		ProbeOutput:         "stdout: probe ok",
-		Rationale:           "Probe passed against the latest installed baseline.",
-		ArtifactRefs:        []RecordReference{{Kind: "execution_event", Ref: "tool.probe.updated:123", Label: "probe event"}},
-		ProbedAt:            time.Now().UTC(),
-		ConsecutiveFailures: 0,
+		ToolName:                     "browse_page",
+		Status:                       ToolProbeStatusPassed,
+		ProbeOutput:                  "stdout: probe ok",
+		Rationale:                    "Probe passed against the latest installed baseline.",
+		ArtifactRefs:                 []RecordReference{{Kind: "execution_event", Ref: "tool.probe.updated:123", Label: "probe event"}},
+		BaselineFingerprint:          "sha256:probe-baseline",
+		CurrentFingerprint:           "sha256:probe-current",
+		BaselineInstallRef:           "workspace:tooling-v1",
+		CurrentInstallRef:            "workspace:tooling-v2",
+		BaselineManifestHash:         "sha256:manifest-baseline",
+		CurrentManifestHash:          "sha256:manifest-current",
+		BaselineWorkspaceFingerprint: "sha256:workspace-baseline",
+		CurrentWorkspaceFingerprint:  "sha256:workspace-current",
+		StaleReason:                  "workspace_drift: baseline=sha256:workspace-baseline current=sha256:workspace-current",
+		DriftSource:                  ToolDriftSourceWorkspaceDrift,
+		ProbedAt:                     time.Now().UTC(),
+		ConsecutiveFailures:          0,
 	})
 	if err != nil {
 		t.Fatalf("UpsertToolProbeRecord(insert) err = %v", err)
@@ -921,6 +835,9 @@ func TestToolProbeRecordRoundTrip(t *testing.T) {
 	if loaded.Rationale != record.Rationale || len(loaded.ArtifactRefs) != 1 || loaded.ArtifactRefs[0].Kind != "execution_event" {
 		t.Fatalf("loaded traceability = (%q, %#v), want rationale + execution_event ref", loaded.Rationale, loaded.ArtifactRefs)
 	}
+	if loaded.BaselineManifestHash != "sha256:manifest-baseline" || loaded.CurrentWorkspaceFingerprint != "sha256:workspace-current" || loaded.DriftSource != ToolDriftSourceWorkspaceDrift {
+		t.Fatalf("loaded probe anchors = %#v, want persisted anchor diagnostics", loaded)
+	}
 	list, err := store.ToolProbeRecords(ToolProbeStatusPassed, 10)
 	if err != nil {
 		t.Fatalf("ToolProbeRecords() err = %v", err)
@@ -938,15 +855,23 @@ func TestToolAuditRecordRoundTrip(t *testing.T) {
 
 	store := newTestSQLiteStore(t)
 	record, err := store.UpsertToolAuditRecord(ToolAuditRecord{
-		ToolName:            "browse_page",
-		Status:              ToolAuditStatusPassed,
-		AuditOutput:         "entry_path: /tmp/run.sh",
-		Rationale:           "Runtime resolution succeeded for the declared entrypoint.",
-		ArtifactRefs:        []RecordReference{{Kind: "file_path", Ref: "/tmp/run.sh", Label: "entry path"}},
-		BaselineFingerprint: "sha256:audit-baseline",
-		CurrentFingerprint:  "sha256:audit-current",
-		AuditedAt:           time.Now().UTC(),
-		ConsecutiveFailures: 0,
+		ToolName:                     "browse_page",
+		Status:                       ToolAuditStatusPassed,
+		AuditOutput:                  "entry_path: /tmp/run.sh",
+		Rationale:                    "Runtime resolution succeeded for the declared entrypoint.",
+		ArtifactRefs:                 []RecordReference{{Kind: "file_path", Ref: "/tmp/run.sh", Label: "entry path"}},
+		BaselineFingerprint:          "sha256:audit-baseline",
+		CurrentFingerprint:           "sha256:audit-current",
+		BaselineInstallRef:           "workspace:tooling-v1",
+		CurrentInstallRef:            "workspace:tooling-v2",
+		BaselineManifestHash:         "sha256:audit-manifest-baseline",
+		CurrentManifestHash:          "sha256:audit-manifest-current",
+		BaselineWorkspaceFingerprint: "sha256:audit-workspace-baseline",
+		CurrentWorkspaceFingerprint:  "sha256:audit-workspace-current",
+		StaleReason:                  "manifest_drift: baseline=sha256:audit-manifest-baseline current=sha256:audit-manifest-current",
+		DriftSource:                  ToolDriftSourceManifestDrift,
+		AuditedAt:                    time.Now().UTC(),
+		ConsecutiveFailures:          0,
 	})
 	if err != nil {
 		t.Fatalf("UpsertToolAuditRecord(insert) err = %v", err)
@@ -969,6 +894,9 @@ func TestToolAuditRecordRoundTrip(t *testing.T) {
 	}
 	if loaded.BaselineFingerprint != "sha256:audit-baseline" || loaded.CurrentFingerprint != "sha256:audit-current" {
 		t.Fatalf("loaded fingerprints = %q/%q, want persisted audit fingerprints", loaded.BaselineFingerprint, loaded.CurrentFingerprint)
+	}
+	if loaded.BaselineInstallRef != "workspace:tooling-v1" || loaded.CurrentManifestHash != "sha256:audit-manifest-current" || loaded.DriftSource != ToolDriftSourceManifestDrift {
+		t.Fatalf("loaded audit anchors = %#v, want persisted anchor diagnostics", loaded)
 	}
 	list, err := store.ToolAuditRecords(ToolAuditStatusPassed, 10)
 	if err != nil {
@@ -998,12 +926,18 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 			{Kind: "git_commit", Ref: "a3336ad", Label: "traceability slice"},
 			{Kind: "telegram_message", Ref: "chat:7:message:1001", Label: "approval prompt"},
 		},
-		InstalledAt:         time.Now().UTC(),
-		LastProbedAt:        time.Now().UTC(),
-		AttestedAt:          time.Now().UTC(),
-		BaselineFingerprint: "sha256:install-baseline",
-		CurrentFingerprint:  "sha256:install-current",
-		ConsecutiveFailures: 0,
+		InstalledAt:                  time.Now().UTC(),
+		LastProbedAt:                 time.Now().UTC(),
+		AttestedAt:                   time.Now().UTC(),
+		BaselineFingerprint:          "sha256:install-baseline",
+		CurrentFingerprint:           "sha256:install-current",
+		BaselineInstallRef:           "workspace:tooling-v1",
+		CurrentInstallRef:            "workspace:tooling-v1",
+		BaselineManifestHash:         "sha256:install-manifest-baseline",
+		CurrentManifestHash:          "sha256:install-manifest-current",
+		BaselineWorkspaceFingerprint: "sha256:install-workspace-baseline",
+		CurrentWorkspaceFingerprint:  "sha256:install-workspace-current",
+		ConsecutiveFailures:          0,
 	})
 	if err != nil {
 		t.Fatalf("UpsertToolInstallRecord(insert) err = %v", err)
@@ -1027,6 +961,9 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 	if loaded.BaselineFingerprint != "sha256:install-baseline" || loaded.CurrentFingerprint != "sha256:install-current" {
 		t.Fatalf("loaded fingerprints = %q/%q, want persisted install fingerprints", loaded.BaselineFingerprint, loaded.CurrentFingerprint)
 	}
+	if loaded.BaselineManifestHash != "sha256:install-manifest-baseline" || loaded.CurrentWorkspaceFingerprint != "sha256:install-workspace-current" {
+		t.Fatalf("loaded install anchors = %#v, want persisted anchor diagnostics", loaded)
+	}
 	record.Status = ToolInstallStatusStale
 	record.ProbeStatus = ToolProbeStatusFailed
 	record.ProbeOutput = "missing shared libs"
@@ -1034,6 +971,7 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 	record.ArtifactRefs = []RecordReference{{Kind: "file_path", Ref: "tool-manifest.json", Label: "manifest"}}
 	record.StaleReason = "fingerprint drift: baseline=sha256:install-baseline current=sha256:install-current-2"
 	record.CurrentFingerprint = "sha256:install-current-2"
+	record.DriftSource = ToolDriftSourceWorkspaceDrift
 	if _, err := store.UpsertToolInstallRecord(record); err != nil {
 		t.Fatalf("UpsertToolInstallRecord(update) err = %v", err)
 	}
@@ -1047,8 +985,8 @@ func TestToolInstallRecordRoundTrip(t *testing.T) {
 	if list[0].Rationale != record.Rationale || len(list[0].ArtifactRefs) != 1 || list[0].ArtifactRefs[0].Ref != "tool-manifest.json" {
 		t.Fatalf("ToolInstallRecords traceability = (%q, %#v), want updated rationale + manifest ref", list[0].Rationale, list[0].ArtifactRefs)
 	}
-	if list[0].StaleReason != record.StaleReason || list[0].CurrentFingerprint != "sha256:install-current-2" {
-		t.Fatalf("ToolInstallRecords stale diagnostics = (%q, %q), want persisted stale reason + current fingerprint", list[0].StaleReason, list[0].CurrentFingerprint)
+	if list[0].StaleReason != record.StaleReason || list[0].CurrentFingerprint != "sha256:install-current-2" || list[0].DriftSource != ToolDriftSourceWorkspaceDrift {
+		t.Fatalf("ToolInstallRecords stale diagnostics = (%q, %q, %q), want persisted stale reason + current fingerprint + drift source", list[0].StaleReason, list[0].CurrentFingerprint, list[0].DriftSource)
 	}
 }
 
@@ -3283,5 +3221,159 @@ func TestExecutionEventsRecentReturnsNewestFirst(t *testing.T) {
 	}
 	if events[0].EventType != "turn.completed" || events[1].EventType != "tool.started" {
 		t.Fatalf("events order/types = (%q,%q), want turn.completed then tool.started", events[0].EventType, events[1].EventType)
+	}
+}
+
+func TestSQLiteStoreCapabilityRequestReviewGrantInvocationRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	request, err := store.UpsertCapabilityRequest(CapabilityRequest{
+		RequestID:       "cap-1",
+		RequestedBy:     "child-agent",
+		RequestedFor:    "child-agent",
+		ParentPrincipal: "telegram:200",
+		Kind:            CapabilityKindPurchase,
+		TargetResource:  "amazon",
+		Purpose:         "order approved school supplies",
+		RiskClass:       "spend",
+		Contract:        `{"max_items":3}`,
+		Constraints:     `{"max_usd":50}`,
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if request.ReviewStatus != CapabilityReviewStatusProposed {
+		t.Fatalf("ReviewStatus = %q, want proposed", request.ReviewStatus)
+	}
+
+	if _, err := store.AppendCapabilityReview(CapabilityReview{ReviewID: "capr-1", RequestID: "cap-1", Reviewer: "telegram:200", ReviewerRole: "parent", Status: CapabilityReviewStatusParentApproved, Rationale: "bounded spend"}); err != nil {
+		t.Fatalf("AppendCapabilityReview(parent) err = %v", err)
+	}
+	if _, err := store.AppendCapabilityReview(CapabilityReview{ReviewID: "capr-2", RequestID: "cap-1", Reviewer: "telegram:1001", ReviewerRole: "admin", Status: CapabilityReviewStatusApproved, Rationale: "parent endorsed"}); err != nil {
+		t.Fatalf("AppendCapabilityReview(admin) err = %v", err)
+	}
+	request, ok, err := store.CapabilityRequest("cap-1")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok || request.ReviewStatus != CapabilityReviewStatusApproved {
+		t.Fatalf("CapabilityRequest() = %#v ok=%t, want approved", request, ok)
+	}
+
+	grant, err := store.UpsertCapabilityGrant(CapabilityGrant{
+		GrantID:           "capg-1",
+		RequestID:         "cap-1",
+		GrantedBy:         "telegram:1001",
+		GrantedTo:         "child-agent",
+		Kind:              CapabilityKindPurchase,
+		TargetResource:    "amazon",
+		AllowedActions:    []string{"order", "summarize"},
+		Contract:          `{"max_items":3}`,
+		Constraints:       `{"max_usd":50}`,
+		Status:            CapabilityGrantStatusActive,
+		AnchorFingerprint: "sha256:test",
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	if grant.Status != CapabilityGrantStatusActive || len(grant.AllowedActions) != 2 {
+		t.Fatalf("CapabilityGrant = %#v, want active with actions", grant)
+	}
+	request, _, err = store.CapabilityRequest("cap-1")
+	if err != nil {
+		t.Fatalf("CapabilityRequest(after grant) err = %v", err)
+	}
+	if request.GrantID != "capg-1" {
+		t.Fatalf("GrantID = %q, want capg-1", request.GrantID)
+	}
+
+	active, ok, err := store.ActiveCapabilityGrant(CapabilityKindPurchase, "amazon", "child-agent", "order")
+	if err != nil {
+		t.Fatalf("ActiveCapabilityGrant() err = %v", err)
+	}
+	if !ok || active.GrantID != "capg-1" {
+		t.Fatalf("ActiveCapabilityGrant() = %#v ok=%t, want capg-1", active, ok)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(CapabilityKindPurchase, "amazon", "child-agent", "refund"); err != nil || ok {
+		t.Fatalf("ActiveCapabilityGrant(refund) ok=%t err=%v, want false nil", ok, err)
+	}
+
+	if _, err := store.RecordCapabilityInvocation(CapabilityInvocation{GrantID: "capg-1", Principal: "child-agent", Action: "order", Status: "failed", ErrorText: "declined"}); err != nil {
+		t.Fatalf("RecordCapabilityInvocation() err = %v", err)
+	}
+	grant, ok, err = store.CapabilityGrant("capg-1")
+	if err != nil {
+		t.Fatalf("CapabilityGrant(after invocation) err = %v", err)
+	}
+	if !ok || grant.InvocationCount != 1 || grant.FailureCount != 1 || grant.LastFailureAt.IsZero() {
+		t.Fatalf("CapabilityGrant counters = %#v ok=%t, want one failed invocation", grant, ok)
+	}
+}
+
+func TestMigrateDurableChildAuthorityCanonicalizesPrincipalsAndChildRuntime(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "canonicalize-durable-child.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed) err = %v", err)
+	}
+	if err := store.UpsertDurableAgent(core.DurableAgent{AgentID: "idolum-email", ChannelKind: "email", Status: "active"}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.db.Exec(`
+		INSERT INTO capability_requests(request_id, requested_by, requested_for, kind, target_resource, purpose, contract_json, constraints_json, review_status, created_at, updated_at)
+		VALUES ('cap-old', 'idolum-email', 'idolum-email', 'tool', 'mail-reader', 'legacy runtime shape', '{"runtime_materialization":{"readonly_paths":["/srv/mail"],"environment":["MAIL_TOKEN"]}}', '{}', 'approved', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert legacy request err = %v", err)
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO capability_grants(grant_id, request_id, granted_by, granted_to, kind, target_resource, allowed_actions_json, contract_json, constraints_json, status, created_at, updated_at, granted_at)
+		VALUES ('capg-old', 'cap-old', 'admin', 'idolum-email', 'tool', 'mail-reader', '["invoke"]', '{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}', '{}', 'active', ?, ?, ?)
+	`, now, now, now); err != nil {
+		t.Fatalf("insert legacy grant err = %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE schema_version SET version = 35`); err != nil {
+		t.Fatalf("downgrade schema version err = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close seed store err = %v", err)
+	}
+
+	migrated, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(migrated) err = %v", err)
+	}
+	defer migrated.Close()
+
+	request, ok, err := migrated.CapabilityRequest("cap-old")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityRequest(cap-old) ok=false")
+	}
+	if request.RequestedBy != core.DurableAgentPrincipal("idolum-email") || request.RequestedFor != core.DurableAgentPrincipal("idolum-email") {
+		t.Fatalf("request principals = %q/%q, want canonical durable agent principal", request.RequestedBy, request.RequestedFor)
+	}
+	if strings.Contains(request.Contract, "runtime_materialization") || !strings.Contains(request.Contract, "child_runtime") || strings.Contains(request.Contract, "environment") || !strings.Contains(request.Contract, "env_from_parent") {
+		t.Fatalf("request contract = %s, want canonical child_runtime without legacy aliases", request.Contract)
+	}
+	grant, ok, err := migrated.CapabilityGrant("capg-old")
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityGrant(capg-old) ok=false")
+	}
+	if grant.GrantedTo != core.DurableAgentPrincipal("idolum-email") {
+		t.Fatalf("grant granted_to = %q, want canonical durable agent principal", grant.GrantedTo)
+	}
+	if strings.Contains(grant.Contract, "runtime_materialization") || !strings.Contains(grant.Contract, "child_runtime") {
+		t.Fatalf("grant contract = %s, want canonical child_runtime", grant.Contract)
 	}
 }

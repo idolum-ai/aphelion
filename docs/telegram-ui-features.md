@@ -100,7 +100,7 @@ Durables status (`Durables` button, admin-only):
 - Per-agent health cards with:
   - identity and topology (`agent_id`, `channel`, `status`, `health`, `review_chat`)
   - policy posture (`policy_version`, `policy_hash`, `outbound`, `drift`, `capabilities`)
-  - capacity contract pulse (`capacity state`, `can/cannot/uncertain` counts, `success/evidence` counts, last negotiated/probed/attested timestamps)
+  - delegation posture (`capability_request` and `capability_grant` status when delegated permissions are active)
   - runtime pulse (`last_wake`, `last_review`, `dormant_at`, apply status/error)
   - remote enrollment pulse (`enrollment status`, `last_seen`, `last_seq`, revocation state)
 

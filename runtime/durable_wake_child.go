@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -24,10 +25,11 @@ type sandboxDurableWakeChildExecutor struct {
 	cfg        *config.Config
 	binaryPath string
 	runner     *sandbox.Runner
+	store      *session.SQLiteStore
 	supported  bool
 }
 
-func newSandboxDurableWakeChildExecutor(cfg *config.Config) durableWakeChildExecutor {
+func newSandboxDurableWakeChildExecutor(cfg *config.Config, store *session.SQLiteStore) durableWakeChildExecutor {
 	if cfg == nil {
 		return nil
 	}
@@ -43,6 +45,7 @@ func newSandboxDurableWakeChildExecutor(cfg *config.Config) durableWakeChildExec
 		cfg:        cfg,
 		binaryPath: binaryPath,
 		runner:     sandbox.NewRunner(),
+		store:      store,
 		supported:  true,
 	}
 }
@@ -96,10 +99,9 @@ func (e *sandboxDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox
 	defer os.Remove(bootstrapPath)
 
 	stateRoot := filepath.Dir(strings.TrimSpace(e.cfg.Sessions.DBPath))
-	extraReadonly := []string{e.binaryPath}
-	bootstrap := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
-	if bootstrap.Backend == "codex" && strings.TrimSpace(bootstrap.CodexHome) != "" {
-		extraReadonly = append(extraReadonly, strings.TrimSpace(bootstrap.CodexHome))
+	childAccess, err := durableChildSandboxAccessFor(e.binaryPath, agent, e.store)
+	if err != nil {
+		return err
 	}
 
 	command := durableAgentWakeChildCommand(e.binaryPath, bootstrapPath, agent.AgentID, now)
@@ -107,8 +109,10 @@ func (e *sandboxDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox
 		Scope:              scope,
 		Command:            command,
 		Workdir:            scope.WorkingRoot,
-		ExtraReadonlyPaths: extraReadonly,
+		ExtraReadonlyPaths: childAccess.readonlyPaths,
+		ExtraReadonlyBinds: childAccess.readonlyBinds,
 		ExtraWritablePaths: []string{stateRoot},
+		ExtraEnv:           childAccess.env,
 	})
 	if err != nil {
 		if strings.TrimSpace(res.Stderr) != "" {

@@ -79,6 +79,12 @@ external_manifest_dir = "./external-tools"
 	if cfg.Governor.Codex.ContextWindow != 200000 {
 		t.Fatalf("governor.codex.context_window = %d, want 200000", cfg.Governor.Codex.ContextWindow)
 	}
+	if cfg.Governor.Brokerage.MinRounds != 1 || cfg.Governor.Brokerage.MaxRounds != 4 || cfg.Governor.Brokerage.AbsoluteMaxRounds != 6 || cfg.Governor.Brokerage.MaxElapsed != "20s" || cfg.Governor.Brokerage.StableContractRounds != 2 {
+		t.Fatalf("governor.brokerage defaults = %#v, want 1/4/6/20s/stable=2", cfg.Governor.Brokerage)
+	}
+	if !cfg.Governor.Brokerage.StopOnStableContract || !cfg.Governor.Brokerage.StopOnRepeatedProposal || !cfg.Governor.Brokerage.StopOnReject {
+		t.Fatalf("governor.brokerage stop defaults = %#v, want all enabled", cfg.Governor.Brokerage)
+	}
 	if cfg.Providers.Anthropic.ContextWindow != 200000 {
 		t.Fatalf("providers.anthropic.context_window = %d, want 200000", cfg.Providers.Anthropic.ContextWindow)
 	}
@@ -96,9 +102,6 @@ external_manifest_dir = "./external-tools"
 	}
 	if cfg.OpenAI.VectorStores.Enabled || cfg.OpenAI.VectorStores.DefaultStore != "" {
 		t.Fatalf("openai.vector_stores defaults = %#v, want disabled/empty", cfg.OpenAI.VectorStores)
-	}
-	if cfg.Search.Brave.BaseURL != "https://api.search.brave.com" || cfg.Search.Brave.APIKey != "" {
-		t.Fatalf("search.brave defaults = %#v, want default base url + empty api key", cfg.Search.Brave)
 	}
 	if !strings.HasSuffix(cfg.Agent.Workspace, "/workspace") {
 		t.Fatalf("workspace = %q, want expanded relative path", cfg.Agent.Workspace)
@@ -129,6 +132,9 @@ external_manifest_dir = "./external-tools"
 	}
 	if len(cfg.Memory.Identity.Preserve) == 0 || cfg.Memory.Identity.Preserve[0] != "SOUL.md" {
 		t.Fatalf("memory.identity.preserve = %#v, want defaults", cfg.Memory.Identity.Preserve)
+	}
+	if cfg.Memory.WritePolicy.DirectUserWrites != "apply" || cfg.Memory.WritePolicy.ReflectionWrites != "propose" || cfg.Memory.WritePolicy.AggressiveWrites != "propose" || cfg.Memory.WritePolicy.AutoAcceptLowRisk {
+		t.Fatalf("memory.write_policy defaults = %#v, want apply/propose/propose/manual", cfg.Memory.WritePolicy)
 	}
 	if cfg.Thinking.Effort != "medium" || cfg.Thinking.Summary != "auto" {
 		t.Fatalf("thinking defaults = %#v, want medium/auto", cfg.Thinking)
@@ -367,6 +373,16 @@ native_provider = "anthropic"
 	max_continuations = 5
 	transport_retries = 2
 
+	[governor.brokerage]
+	min_rounds = 2
+	max_rounds = 5
+	absolute_max_rounds = 7
+	max_elapsed = "45s"
+	stable_contract_rounds = 3
+	stop_on_stable_contract = false
+	stop_on_repeated_proposal = true
+	stop_on_reject = false
+
 [providers.anthropic]
 api_key = "sk-ant-test"
 model = "claude-opus-4-6"
@@ -442,10 +458,16 @@ hot_days = 2
 warm_days = 7
 cold_days = 21
 
-[memory.identity]
-preserve = ["SOUL.md", "IDENTITY.md"]
+	[memory.identity]
+	preserve = ["SOUL.md", "IDENTITY.md"]
 
-[thinking]
+	[memory.write_policy]
+	direct_user_writes = "apply"
+	reflection_writes = "apply"
+	aggressive_writes = "propose"
+	auto_accept_low_risk = true
+
+	[thinking]
 effort = "high"
 summary = "compact"
 
@@ -548,6 +570,12 @@ elevenlabs_voice_id = "voice-123"
 	if cfg.Governor.Codex.TransportRetries != 2 {
 		t.Fatalf("governor.codex.transport_retries = %d, want 2", cfg.Governor.Codex.TransportRetries)
 	}
+	if cfg.Governor.Brokerage.MinRounds != 2 || cfg.Governor.Brokerage.MaxRounds != 5 || cfg.Governor.Brokerage.AbsoluteMaxRounds != 7 || cfg.Governor.Brokerage.MaxElapsed != "45s" || cfg.Governor.Brokerage.StableContractRounds != 3 {
+		t.Fatalf("governor.brokerage = %#v, want explicit convergence limits", cfg.Governor.Brokerage)
+	}
+	if cfg.Governor.Brokerage.StopOnStableContract || !cfg.Governor.Brokerage.StopOnRepeatedProposal || cfg.Governor.Brokerage.StopOnReject {
+		t.Fatalf("governor.brokerage stop flags = %#v, want false/true/false", cfg.Governor.Brokerage)
+	}
 	if cfg.Sessions.IdleExpiry != "36h" {
 		t.Fatalf("idle_expiry = %q, want 36h", cfg.Sessions.IdleExpiry)
 	}
@@ -583,6 +611,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if got, want := cfg.Memory.Identity.Preserve, []string{"SOUL.md", "IDENTITY.md"}; !equalStrings(got, want) {
 		t.Fatalf("memory.identity.preserve = %#v, want %#v", got, want)
+	}
+	if cfg.Memory.WritePolicy.DirectUserWrites != "apply" || cfg.Memory.WritePolicy.ReflectionWrites != "apply" || cfg.Memory.WritePolicy.AggressiveWrites != "propose" || !cfg.Memory.WritePolicy.AutoAcceptLowRisk {
+		t.Fatalf("memory.write_policy = %#v", cfg.Memory.WritePolicy)
 	}
 	if cfg.Thinking.Effort != "high" || cfg.Thinking.Summary != "compact" {
 		t.Fatalf("thinking = %#v, want high/compact", cfg.Thinking)
@@ -1242,6 +1273,38 @@ api_key = "sk-ant-test"
 	}
 }
 
+func TestLoadRejectsInvalidBrokerageConvergenceLimits(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[governor.brokerage]
+min_rounds = 3
+max_rounds = 2
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want brokerage convergence validation error")
+	}
+	if !strings.Contains(err.Error(), "governor.brokerage.min_rounds") {
+		t.Fatalf("error = %v, want governor.brokerage.min_rounds message", err)
+	}
+}
+
 func TestLoadAllowsCodexFloorFallbackWithoutAnthropicKey(t *testing.T) {
 	t.Parallel()
 
@@ -1401,38 +1464,6 @@ api_key = "sk-ant-test"
 	}
 	if !strings.Contains(err.Error(), "must contain exactly one user id") {
 		t.Fatalf("error = %v, want single-admin validation message", err)
-	}
-}
-
-func TestLoadRejectsSearchBraveBaseURLWhenAPIKeySet(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-	raw := `
-[telegram]
-bot_token = "tg-test"
-
-[principals.telegram]
-admin_user_ids = [123]
-
-[providers.anthropic]
-api_key = "sk-ant-test"
-
-[search.brave]
-api_key = "brv_test"
-base_url = "://bad-url"
-`
-	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	_, err := Load(configPath)
-	if err == nil {
-		t.Fatal("Load() err = nil, want search.brave.base_url validation error")
-	}
-	if !strings.Contains(err.Error(), "search.brave.base_url") {
-		t.Fatalf("err = %v, want search.brave.base_url validation", err)
 	}
 }
 

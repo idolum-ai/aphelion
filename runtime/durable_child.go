@@ -13,6 +13,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -37,10 +38,11 @@ type sandboxDurableGroupChildExecutor struct {
 	cfg        *config.Config
 	binaryPath string
 	runner     *sandbox.Runner
+	store      *session.SQLiteStore
 	supported  bool
 }
 
-func newSandboxDurableGroupChildExecutor(cfg *config.Config) durableGroupChildExecutor {
+func newSandboxDurableGroupChildExecutor(cfg *config.Config, store *session.SQLiteStore) durableGroupChildExecutor {
 	if cfg == nil {
 		return nil
 	}
@@ -56,6 +58,7 @@ func newSandboxDurableGroupChildExecutor(cfg *config.Config) durableGroupChildEx
 		cfg:        cfg,
 		binaryPath: binaryPath,
 		runner:     sandbox.NewRunner(),
+		store:      store,
 		supported:  true,
 	}
 }
@@ -94,18 +97,19 @@ func (e *sandboxDurableGroupChildExecutor) Run(ctx context.Context, scope sandbo
 	defer os.Remove(messagePath)
 
 	stateRoot := filepath.Dir(strings.TrimSpace(e.cfg.Sessions.DBPath))
-	extraReadonly := []string{e.binaryPath}
-	bootstrap := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
-	if bootstrap.Backend == "codex" && strings.TrimSpace(bootstrap.CodexHome) != "" {
-		extraReadonly = append(extraReadonly, strings.TrimSpace(bootstrap.CodexHome))
+	childAccess, err := durableChildSandboxAccessFor(e.binaryPath, agent, e.store)
+	if err != nil {
+		return nil, err
 	}
 	command := durableAgentChildCommand(e.binaryPath, bootstrapPath, messagePath)
 	res, err := e.runner.Run(ctx, sandbox.ExecRequest{
 		Scope:              scope,
 		Command:            command,
 		Workdir:            scope.WorkingRoot,
-		ExtraReadonlyPaths: extraReadonly,
+		ExtraReadonlyPaths: childAccess.readonlyPaths,
+		ExtraReadonlyBinds: childAccess.readonlyBinds,
 		ExtraWritablePaths: []string{stateRoot},
+		ExtraEnv:           childAccess.env,
 	})
 	if err != nil {
 		if strings.TrimSpace(res.Stderr) != "" {
@@ -142,9 +146,9 @@ func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, sco
 	copy.Agent.SharedMemoryRoot = scope.SharedMemoryRoot
 	copy.Agent.UserWorkspaceRoot = firstNonEmpty(strings.TrimSpace(scope.UserWorkspace), strings.TrimSpace(scope.WorkingRoot))
 	copy.Agent.UserMemoryRoot = firstNonEmpty(strings.TrimSpace(scope.UserMemory), strings.TrimSpace(scope.SharedMemoryRoot))
-	copy.Agent.PromptRoot = firstNonEmpty(strings.TrimSpace(parent.Agent.PromptRoot), strings.TrimSpace(scope.GlobalRoot))
-	if copy.Agent.PromptRoot == "" {
-		copy.Agent.PromptRoot = scope.GlobalRoot
+	copy.Agent.PromptRoot = filepath.Join(scope.SharedMemoryRoot, "agent")
+	if strings.TrimSpace(copy.Agent.PromptRoot) == "agent" {
+		copy.Agent.PromptRoot = firstNonEmpty(strings.TrimSpace(scope.GlobalRoot), strings.TrimSpace(parent.Agent.PromptRoot))
 	}
 	if strings.TrimSpace(copy.Agent.SharedMemoryRoot) == "" {
 		copy.Agent.SharedMemoryRoot = scope.SharedMemoryRoot

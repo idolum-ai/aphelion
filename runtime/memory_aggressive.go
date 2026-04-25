@@ -291,17 +291,30 @@ func (r *Runtime) applyAggressiveMemorySections(scopeRoot string, sections map[s
 	if strings.TrimSpace(scopeRoot) == "" || len(sections) == 0 {
 		return nil
 	}
+	scopeName := dynamicScopeName(scopeRoot)
+	if r.memoryAggressiveMode() == "propose" {
+		_, err := proposeMemorySections(scopeRoot, scopeName, sections, "aggressive_capture", "turn_or_session_capture", time.Now().UTC())
+		return err
+	}
 	for _, store := range []string{memstore.StoreMemory, memstore.StoreKnowledge, memstore.StoreDecisions, memstore.StoreQuestions} {
 		content := strings.TrimSpace(sections[store])
 		if content == "" {
 			continue
 		}
-		if _, err := memstore.ApplyWrite(memstore.WriteRequest{Root: scopeRoot, Store: store, Action: "add", Content: content}); err != nil {
+		if _, err := memstore.ApplyWrite(memstore.WriteRequest{
+			Root:      scopeRoot,
+			Store:     store,
+			Action:    "add",
+			Content:   content,
+			SourceTag: "aggressive_capture",
+			SourceRef: "turn_or_session_capture",
+			Scope:     scopeName,
+		}); err != nil {
 			return fmt.Errorf("write aggressive %s memory: %w", store, err)
 		}
 	}
 	if rhizome := strings.TrimSpace(sections[memstore.StoreRhizome]); rhizome != "" {
-		if err := r.updateRhizome(dynamicScopeName(scopeRoot), scopeRoot, rhizome); err != nil {
+		if err := r.updateRhizome(scopeName, scopeRoot, rhizome); err != nil {
 			return err
 		}
 	}

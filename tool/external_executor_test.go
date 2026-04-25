@@ -43,9 +43,7 @@ func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
-	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:1001", Active: true}); err != nil {
-		t.Fatalf("UpsertToolExposure() err = %v", err)
-	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
 	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
@@ -92,9 +90,7 @@ fi
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
-	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:42", Active: true}); err != nil {
-		t.Fatalf("UpsertToolExposure() err = %v", err)
-	}
+	grantToolInvoke(t, store, "browse_page", "telegram:42")
 
 	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
@@ -130,9 +126,7 @@ func TestExternalProcessExecutorRejectsInvalidInputAgainstSchema(t *testing.T) {
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
-	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:1001", Active: true}); err != nil {
-		t.Fatalf("UpsertToolExposure() err = %v", err)
-	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
 	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"goal":"summarize"}`))
 	if err == nil {
@@ -168,9 +162,7 @@ func TestExternalProcessExecutorRejectsInvalidOutputAgainstSchema(t *testing.T) 
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
-	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:1001", Active: true}); err != nil {
-		t.Fatalf("UpsertToolExposure() err = %v", err)
-	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
 	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil {

@@ -80,21 +80,64 @@ type RestartHealthSnapshot struct {
 }
 
 type ToolLifecycleStatusSnapshot struct {
-	ToolName            string
-	InstallStatus       string
-	ProbeStatus         string
-	AuditStatus         string
-	InstallRef          string
-	BaselineFingerprint string
-	CurrentFingerprint  string
-	StaleReason         string
-	TraceStage          string
-	TraceSummary        string
-	TraceArtifactCount  int
-	InstalledAt         time.Time
-	LastProbedAt        time.Time
-	AuditedAt           time.Time
-	AttestedAt          time.Time
+	ToolName             string
+	InstallStatus        string
+	ProbeStatus          string
+	AuditStatus          string
+	InstallRef           string
+	BaselineFingerprint  string
+	CurrentFingerprint   string
+	ManifestHash         string
+	WorkspaceFingerprint string
+	DriftSource          string
+	StaleReason          string
+	AttestationStatus    string
+	InstallFailures      int
+	ProbeFailures        int
+	AuditFailures        int
+	TraceStage           string
+	TraceSummary         string
+	TraceArtifactCount   int
+	InstalledAt          time.Time
+	LastProbedAt         time.Time
+	AuditedAt            time.Time
+	AttestedAt           time.Time
+}
+
+type CapabilityRequestStatusSnapshot struct {
+	RequestID       string
+	Kind            string
+	TargetResource  string
+	ReviewStatus    string
+	RequestedBy     string
+	RequestedFor    string
+	ParentPrincipal string
+	AdminPrincipal  string
+	RiskClass       string
+	Purpose         string
+	GrantID         string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type CapabilityGrantStatusSnapshot struct {
+	GrantID           string
+	RequestID         string
+	Kind              string
+	TargetResource    string
+	Status            string
+	GrantedTo         string
+	GrantedBy         string
+	AllowedActions    []string
+	AnchorFingerprint string
+	DriftSource       string
+	StaleReason       string
+	InvocationCount   int
+	FailureCount      int
+	GrantedAt         time.Time
+	ExpiresAt         time.Time
+	RevokedAt         time.Time
+	LastInvokedAt     time.Time
 }
 
 type ChatStatusSnapshot struct {
@@ -122,6 +165,8 @@ type ChatStatusSnapshot struct {
 	LatestTurnRun         *TurnRunStatusSnapshot
 	RecentExecution       []ExecutionEventSummary
 	ToolLifecycle         []ToolLifecycleStatusSnapshot
+	CapabilityRequests    []CapabilityRequestStatusSnapshot
+	CapabilityGrants      []CapabilityGrantStatusSnapshot
 	StaleRunningTurns     []TurnRunStatusSnapshot
 	RestartHealth         RestartHealthSnapshot
 }
@@ -151,44 +196,43 @@ type SystemStatusSnapshot struct {
 }
 
 type DurableAgentStatusSnapshot struct {
-	AgentID                      string
-	ChannelKind                  string
-	Status                       string
-	Health                       string
-	ReviewTargetChatID           int64
-	ParentScopeKind              string
-	ParentScopeID                string
-	WakeupMode                   string
-	NetworkPolicy                string
-	PolicyVersion                int64
-	PolicyHash                   string
-	PolicyOutboundMode           string
-	PolicyDrift                  string
-	CapabilityEnvelope           []string
-	AllowedTelegramUserIDs       []int64
-	CapacityState                string
-	CapacityCanCount             int
-	CapacityCannotCount          int
-	CapacityUncertainCount       int
-	CapacitySuccessCriteriaCount int
-	CapacityEvidenceSignalCount  int
-	CapacityLastNegotiatedAt     time.Time
-	CapacityLastProbedAt         time.Time
-	CapacityLastAttestedAt       time.Time
-	LastWakeAt                   time.Time
-	LastReviewAt                 time.Time
-	DormantAt                    time.Time
-	LastAppliedPolicyVersion     int64
-	LastAppliedPolicyAt          time.Time
-	LastApplyStatus              string
-	LastApplyError               string
-	EnrollmentStatus             string
-	EnrollmentLastSeenAt         time.Time
-	EnrollmentLastSequence       int64
-	EnrollmentRevokedAt          time.Time
-	EnrollmentParentControlURL   string
-	IdentitySource               string
-	RuntimePostureSource         string
+	AgentID                    string
+	ChannelKind                string
+	Status                     string
+	Health                     string
+	ReviewTargetChatID         int64
+	ParentScopeKind            string
+	ParentScopeID              string
+	WakeupMode                 string
+	NetworkPolicy              string
+	PolicyVersion              int64
+	PolicyHash                 string
+	PolicyOutboundMode         string
+	PolicyDrift                string
+	CapabilityEnvelope         []string
+	AllowedTelegramUserIDs     []int64
+	LastWakeAt                 time.Time
+	LastReviewAt               time.Time
+	DormantAt                  time.Time
+	LastAppliedPolicyVersion   int64
+	LastAppliedPolicyAt        time.Time
+	LastApplyStatus            string
+	LastApplyError             string
+	EnrollmentStatus           string
+	EnrollmentLastSeenAt       time.Time
+	EnrollmentLastSequence     int64
+	EnrollmentRevokedAt        time.Time
+	EnrollmentParentControlURL string
+	IdentitySource             string
+	RuntimePostureSource       string
+	CanonicalPrincipal         string
+	ChildRuntimeGrantCount     int
+	ChildRuntimeBlockedReason  string
+	ChildRuntimeRepairHint     string
+	SubstrateLabels            []string
+	ProfileManifestStatus      string
+	ProfileManifestPolicyHash  string
+	ProfileManifestFileCount   int
 }
 
 type DurableAgentsStatusSnapshot struct {

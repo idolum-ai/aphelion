@@ -526,102 +526,6 @@ func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	}
 }
 
-func TestTelegramToolProposalRatificationApproverDeletesPromptOnApprove(t *testing.T) {
-	t.Parallel()
-
-	sender := &decisionTestSender{}
-	seenKind := make(chan decision.Kind, 1)
-	var broker *decision.Broker
-	broker = decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
-		select {
-		case seenKind <- pending.Kind:
-		default:
-		}
-		text := renderPendingDecisionSummary(pending)
-		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, inlineButtonRows(pending), replyToMessageID(pending.MessageID))
-		if err != nil {
-			return decision.Delivery{}, err
-		}
-		go broker.Resolve(pending.ID, "approve")
-		return decision.Delivery{MessageID: msgID}, nil
-	})
-	approver := newTelegramToolProposalRatificationApprover(sender, broker)
-
-	decisionResult, err := approver.ConfirmToolProposalRatification(context.Background(), toolpkg.ToolProposalRatificationApprovalRequest{
-		Principal:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		SessionKey: session.SessionKey{ChatID: 7},
-		Proposal: session.ToolProposal{
-			ProposalID: "tp-1",
-			ToolName:   "search_web",
-			ProposedBy: "idolum-email",
-			WhyNow:     "Need bounded external discovery for inbox analysis.",
-			Contract:   `{"constraints":["read_only"]}`,
-		},
-	})
-	if err != nil {
-		t.Fatalf("ConfirmToolProposalRatification() err = %v", err)
-	}
-	if !decisionResult.Approved {
-		t.Fatal("Approved = false, want true")
-	}
-	if decisionResult.TimedOut {
-		t.Fatal("TimedOut = true, want false")
-	}
-	if len(sender.deletes) != 1 {
-		t.Fatalf("deletes = %#v, want one prompt delete", sender.deletes)
-	}
-	if len(sender.inline) != 1 {
-		t.Fatalf("inline = %#v, want one proposal prompt", sender.inline)
-	}
-	if !strings.Contains(sender.inline[0].text, "search_web") {
-		t.Fatalf("inline text = %q, want tool proposal summary", sender.inline[0].text)
-	}
-	select {
-	case kind := <-seenKind:
-		if kind != decision.KindToolProposalRatification {
-			t.Fatalf("pending kind = %q, want %q", kind, decision.KindToolProposalRatification)
-		}
-	default:
-		t.Fatal("did not observe pending decision kind")
-	}
-}
-
-func TestTelegramToolProposalRatificationApproverTimesOutToDeny(t *testing.T) {
-	t.Parallel()
-
-	sender := &decisionTestSender{}
-	broker := newTelegramDecisionBroker(sender)
-	approver := newTelegramToolProposalRatificationApprover(sender, broker)
-	approver.timeout = 10 * time.Millisecond
-
-	decisionResult, err := approver.ConfirmToolProposalRatification(context.Background(), toolpkg.ToolProposalRatificationApprovalRequest{
-		Principal:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		SessionKey: session.SessionKey{ChatID: 7},
-		Proposal: session.ToolProposal{
-			ProposalID: "tp-2",
-			ToolName:   "search_web",
-			ProposedBy: "idolum-email",
-			WhyNow:     "Need bounded external discovery for inbox analysis.",
-			Contract:   `{"constraints":["read_only"]}`,
-		},
-	})
-	if err != nil {
-		t.Fatalf("ConfirmToolProposalRatification() err = %v", err)
-	}
-	if decisionResult.Approved {
-		t.Fatal("Approved = true, want false")
-	}
-	if !decisionResult.TimedOut {
-		t.Fatal("TimedOut = false, want true")
-	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits = %#v, want one denied edit", sender.edits)
-	}
-	if !strings.Contains(sender.edits[0].text, "timed out") {
-		t.Fatalf("edit text = %q, want timeout wording", sender.edits[0].text)
-	}
-}
-
 func TestTelegramDurableMemoryDelegationApproverPromptsWithButtons(t *testing.T) {
 	t.Parallel()
 
@@ -1147,5 +1051,33 @@ func TestInlineButtonRowsPreservesStopQueueOrder(t *testing.T) {
 	}
 	if rows[0][0].Text != "Stop" || rows[0][1].Text != "Queue" {
 		t.Fatalf("choice order = %#v, want [Stop, Queue]", rows[0])
+	}
+}
+
+func TestTelegramUserApprovalTimeoutDefaultsToThirtyMinutes(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := decision.NewBroker(nil)
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker, nil)
+	execApprover := newTelegramExecApprover(sender, broker)
+	memoryApprover := newTelegramDurableMemoryDelegationApprover(sender, broker)
+	snapshotApprover := newTelegramDurableSnapshotRestoreApprover(sender, broker)
+
+	want := 30 * time.Minute
+	if defaultUserApprovalTimeout != want {
+		t.Fatalf("defaultUserApprovalTimeout = %s, want %s", defaultUserApprovalTimeout, want)
+	}
+	if execApprover.timeout != want {
+		t.Fatalf("exec approval timeout = %s, want %s", execApprover.timeout, want)
+	}
+	if handler.artifactRetentionTimeout != want {
+		t.Fatalf("artifact retention timeout = %s, want %s", handler.artifactRetentionTimeout, want)
+	}
+	if memoryApprover.timeout != want {
+		t.Fatalf("memory delegation timeout = %s, want %s", memoryApprover.timeout, want)
+	}
+	if snapshotApprover.timeout != want {
+		t.Fatalf("snapshot restore timeout = %s, want %s", snapshotApprover.timeout, want)
 	}
 }

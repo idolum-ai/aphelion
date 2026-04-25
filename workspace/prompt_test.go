@@ -163,6 +163,42 @@ func TestLoadPromptContextCompactsLargeMemoryAndStructuredFiles(t *testing.T) {
 	}
 }
 
+func TestLoadPromptContextStripsMemoryInstrumentation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "memory", "knowledge.md"), strings.Join([]string{
+		"<!-- aphelion-memory-file:v1",
+		"scope: shared",
+		"store: knowledge",
+		"-->",
+		"",
+		"<!-- aphelion-memory-entry:v1",
+		"id: mem_test",
+		"scope: shared",
+		"store: knowledge",
+		"-->",
+		"",
+		"- durable fact",
+	}, "\n"))
+
+	ctx, err := LoadPromptContext(config.AgentConfig{
+		Workspace:              root,
+		DynamicFiles:           []string{"memory/knowledge.md"},
+		BootstrapMaxChars:      1000,
+		BootstrapTotalMaxChars: 1000,
+		DailyNotes:             false,
+		DailyNotesDir:          "memory/daily",
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("LoadPromptContext() err = %v", err)
+	}
+	rendered := ctx.Render("")
+	if strings.Contains(rendered, "aphelion-memory-entry") || !strings.Contains(rendered, "- durable fact") {
+		t.Fatalf("prompt = %q, want stripped instrumentation and retained content", rendered)
+	}
+}
+
 func writeFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

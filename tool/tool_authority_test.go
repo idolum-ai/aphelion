@@ -5,6 +5,8 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,18 +14,8 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
-
-type stubToolProposalRatificationApprover struct {
-	approved bool
-	timedOut bool
-	request  ToolProposalRatificationApprovalRequest
-}
-
-func (s *stubToolProposalRatificationApprover) ConfirmToolProposalRatification(_ context.Context, req ToolProposalRatificationApprovalRequest) (ToolProposalRatificationApprovalDecision, error) {
-	s.request = req
-	return ToolProposalRatificationApprovalDecision{Approved: s.approved, TimedOut: s.timedOut}, nil
-}
 
 func TestDefinitionsIncludeToolAuthorityWhenStoreConfigured(t *testing.T) {
 	t.Parallel()
@@ -36,6 +28,9 @@ func TestDefinitionsIncludeToolAuthorityWhenStoreConfigured(t *testing.T) {
 	if containsString(names, "tool_authority") {
 		t.Fatalf("definitions without store = %#v, do not want tool_authority", names)
 	}
+	if containsString(names, "tool_request") || containsString(names, "search_web") {
+		t.Fatalf("definitions without store = %#v, do not want removed tool surfaces", names)
+	}
 
 	store := newToolTestStore(t)
 	registry = NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
@@ -46,61 +41,35 @@ func TestDefinitionsIncludeToolAuthorityWhenStoreConfigured(t *testing.T) {
 	if !containsString(names, "tool_authority") {
 		t.Fatalf("definitions with store = %#v, want tool_authority", names)
 	}
+	if containsString(names, "tool_request") || containsString(names, "search_web") {
+		t.Fatalf("definitions with store = %#v, do not want removed tool surfaces", names)
+	}
 }
 
-func TestToolAuthorityProposalRegisterExposeFlow(t *testing.T) {
+func TestToolAuthorityRegisterAndGrantAccessFlow(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
-	registry.WithSearchWeb(&stubSearchWebProvider{})
 	key := adminSessionKey()
 	if _, err := store.Load(key); err != nil {
 		t.Fatalf("Load() err = %v", err)
 	}
-
-	submitOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_submit",
-			"proposal_id":"tp-1",
-			"proposed_by":"idolum-email",
-			"tool_name":"search_web",
-			"why_now":"Inbox-only analysis cannot evaluate external postings.",
-			"contract":{
-				"inputs":{"query":"string","limit":"int<=5"},
-				"outputs":[{"title":"string","url":"string","snippet":"string"}],
-				"constraints":["read_only","no_clickthrough","max_3_queries_per_task"]
-			}
-		}`),
-	)
-	if err != nil {
-		t.Fatalf("proposal_submit err = %v", err)
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
 	}
-	if !strings.Contains(submitOut, "[TOOL_PROPOSAL]") || !strings.Contains(submitOut, "review_status: proposed") {
-		t.Fatalf("proposal_submit output = %q, want proposal summary", submitOut)
+	script := filepath.Join(registry.workspace, "run.sh")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env bash\necho '{}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
-
-	reviewOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_override",
-			"proposal_id":"tp-1",
-			"review_status":"approved",
-			"override_reason":"manual emergency approval"
-		}`),
-	)
-	if err != nil {
-		t.Fatalf("proposal_override err = %v", err)
+	manifest := ExternalToolManifest{
+		Name:      "browse_page",
+		Owner:     "idolum-email",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 	}
-	if !strings.Contains(reviewOut, "[TOOL_PROPOSAL_UPDATED]") || !strings.Contains(reviewOut, "review_status: approved") {
-		t.Fatalf("proposal_override output = %q, want approved status", reviewOut)
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
 	}
+	seedVerifiedExternalToolLifecycle(t, registry, store, manifest, sandbox.Scope{WorkingRoot: registry.workspace})
 
 	registerOut, err := registry.ExecuteForSessionPrincipal(
 		context.Background(),
@@ -109,8 +78,8 @@ func TestToolAuthorityProposalRegisterExposeFlow(t *testing.T) {
 		"tool_authority",
 		json.RawMessage(`{
 			"action":"register",
-			"proposal_id":"tp-1",
-			"implementation_ref":"tool/search_web.go"
+			"tool_name":"browse_page",
+			"implementation_ref":"external:browse_page"
 		}`),
 	)
 	if err != nil {
@@ -120,117 +89,41 @@ func TestToolAuthorityProposalRegisterExposeFlow(t *testing.T) {
 		t.Fatalf("register output = %q, want registered tool summary", registerOut)
 	}
 
-	exposeOut, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"exposure_set",
-			"tool_name":"search_web",
-			"principal":"idolum-email",
-			"active":true
-		}`),
-	)
-	if err != nil {
-		t.Fatalf("exposure_set(active=true) err = %v", err)
-	}
-	if !strings.Contains(exposeOut, "[TOOL_EXPOSURE]") || !strings.Contains(exposeOut, "active: true") {
-		t.Fatalf("exposure_set(active=true) output = %q, want active exposure", exposeOut)
-	}
-
 	accessOut, err := registry.ExecuteForSessionPrincipal(
 		context.Background(),
 		principal.Principal{Role: principal.RoleAdmin},
 		key,
 		"tool_authority",
-		json.RawMessage(`{
-			"action":"access_check",
-			"tool_name":"search_web",
-			"principal":"idolum-email"
-		}`),
+		json.RawMessage(`{"action":"access_check","tool_name":"browse_page","principal":"telegram:1001"}`),
 	)
 	if err != nil {
-		t.Fatalf("access_check(active) err = %v", err)
+		t.Fatalf("access_check(before grant) err = %v", err)
 	}
-	if !strings.Contains(accessOut, "allowed: true") {
-		t.Fatalf("access_check(active) output = %q, want allowed true", accessOut)
-	}
-
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"exposure_set",
-			"tool_name":"search_web",
-			"principal":"idolum-email",
-			"active":false
-		}`),
-	); err != nil {
-		t.Fatalf("exposure_set(active=false) err = %v", err)
+	if !strings.Contains(accessOut, "allowed: false") {
+		t.Fatalf("access_check(before grant) output = %q, want allowed false", accessOut)
 	}
 
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 	accessOut, err = registry.ExecuteForSessionPrincipal(
 		context.Background(),
 		principal.Principal{Role: principal.RoleAdmin},
 		key,
 		"tool_authority",
-		json.RawMessage(`{
-			"action":"access_check",
-			"tool_name":"search_web",
-			"principal":"idolum-email"
-		}`),
+		json.RawMessage(`{"action":"access_check","tool_name":"browse_page","principal":"telegram:1001"}`),
 	)
 	if err != nil {
-		t.Fatalf("access_check(inactive) err = %v", err)
+		t.Fatalf("access_check(after grant) err = %v", err)
 	}
-	if !strings.Contains(accessOut, "allowed: false") {
-		t.Fatalf("access_check(inactive) output = %q, want allowed false", accessOut)
+	if !strings.Contains(accessOut, "allowed: true") || !strings.Contains(accessOut, "capability_grant_active: true") {
+		t.Fatalf("access_check(after grant) output = %q, want grant-backed access", accessOut)
 	}
 
 	events, err := store.ExecutionEventsBySession(key, 0, 200)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
-	if !executionEventTypeExists(events, core.ExecutionEventToolProposalCreated) {
-		t.Fatalf("missing %s event", core.ExecutionEventToolProposalCreated)
-	}
-	if !executionEventTypeExists(events, core.ExecutionEventToolProposalReviewed) {
-		t.Fatalf("missing %s event", core.ExecutionEventToolProposalReviewed)
-	}
 	if !executionEventTypeExists(events, core.ExecutionEventToolRegistered) {
 		t.Fatalf("missing %s event", core.ExecutionEventToolRegistered)
-	}
-	if !executionEventTypeExists(events, core.ExecutionEventToolExposureChanged) {
-		t.Fatalf("missing %s event", core.ExecutionEventToolExposureChanged)
-	}
-}
-
-func TestToolAuthorityProposalSubmitRejectsNonProposedStatus(t *testing.T) {
-	t.Parallel()
-
-	registry, _ := newDurableAgentToolRegistry(t)
-	_, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_submit",
-			"proposal_id":"tp-submit-bad-status",
-			"tool_name":"search_web",
-			"why_now":"Need bounded external search for inbox analysis.",
-			"contract":{"constraints":["read_only"]},
-			"review_status":"approved"
-		}`),
-	)
-	if err == nil {
-		t.Fatal("proposal_submit err = nil, want non-proposed status rejection")
-	}
-	if !strings.Contains(err.Error(), "only accepts review_status=proposed") {
-		t.Fatalf("err = %v, want review_status=proposed requirement", err)
 	}
 }
 
@@ -257,357 +150,6 @@ func TestToolAuthorityRegisterRejectsUnknownRuntimeTool(t *testing.T) {
 	}
 }
 
-func TestToolAuthorityRegisterRequiresApprovedProposalStatus(t *testing.T) {
-	t.Parallel()
-
-	registry, _ := newDurableAgentToolRegistry(t)
-	registry.WithSearchWeb(&stubSearchWebProvider{})
-	key := adminSessionKey()
-	actor := principal.Principal{Role: principal.RoleAdmin}
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		actor,
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_submit",
-			"proposal_id":"tp-register-gate",
-			"tool_name":"search_web",
-			"why_now":"Need bounded external search for inbox analysis.",
-			"contract":{"constraints":["read_only"]}
-		}`),
-	); err != nil {
-		t.Fatalf("proposal_submit err = %v", err)
-	}
-
-	_, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		actor,
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"register",
-			"proposal_id":"tp-register-gate",
-			"implementation_ref":"tool/search_web.go"
-		}`),
-	)
-	if err == nil {
-		t.Fatal("register err = nil, want proposed-status rejection")
-	}
-	if !strings.Contains(err.Error(), "must be approved before registration") {
-		t.Fatalf("err = %v, want approved-before-registration error", err)
-	}
-
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		actor,
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_review",
-			"proposal_id":"tp-register-gate",
-			"review_status":"rejected"
-		}`),
-	); err != nil {
-		t.Fatalf("proposal_review(rejected) err = %v", err)
-	}
-
-	_, err = registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		actor,
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"register",
-			"proposal_id":"tp-register-gate",
-			"implementation_ref":"tool/search_web.go"
-		}`),
-	)
-	if err == nil {
-		t.Fatal("register err = nil, want rejected-status rejection")
-	}
-	if !strings.Contains(err.Error(), "must be approved before registration") {
-		t.Fatalf("err = %v, want approved-before-registration error for rejected proposal", err)
-	}
-}
-
-func TestToolAuthorityProposalReviewRejectsDirectApproval(t *testing.T) {
-	t.Parallel()
-
-	registry, _ := newDurableAgentToolRegistry(t)
-	key := adminSessionKey()
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_submit",
-			"proposal_id":"tp-review-no-approve",
-			"tool_name":"search_web",
-			"why_now":"Need bounded external search for inbox analysis.",
-			"contract":{"constraints":["read_only"]}
-		}`),
-	); err != nil {
-		t.Fatalf("proposal_submit err = %v", err)
-	}
-
-	_, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_review",
-			"proposal_id":"tp-review-no-approve",
-			"review_status":"approved"
-		}`),
-	)
-	if err == nil {
-		t.Fatal("proposal_review err = nil, want direct-approval rejection")
-	}
-	if !strings.Contains(err.Error(), "cannot set approved") {
-		t.Fatalf("err = %v, want cannot-set-approved guidance", err)
-	}
-}
-
-func TestToolAuthorityProposalOverrideRequiresReason(t *testing.T) {
-	t.Parallel()
-
-	registry, _ := newDurableAgentToolRegistry(t)
-	key := adminSessionKey()
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_submit",
-			"proposal_id":"tp-override-reason",
-			"tool_name":"search_web",
-			"why_now":"Need bounded external search for inbox analysis.",
-			"contract":{"constraints":["read_only"]}
-		}`),
-	); err != nil {
-		t.Fatalf("proposal_submit err = %v", err)
-	}
-
-	_, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_override",
-			"proposal_id":"tp-override-reason",
-			"review_status":"approved"
-		}`),
-	)
-	if err == nil {
-		t.Fatal("proposal_override err = nil, want override_reason requirement")
-	}
-	if !strings.Contains(err.Error(), "requires override_reason") {
-		t.Fatalf("err = %v, want override_reason requirement", err)
-	}
-}
-
-func TestToolAuthorityProposalRatifyApprovalPath(t *testing.T) {
-	t.Parallel()
-
-	registry, store := newDurableAgentToolRegistry(t)
-	approver := &stubToolProposalRatificationApprover{approved: true}
-	registry.WithToolProposalRatificationApprover(approver)
-	key := adminSessionKey()
-	if _, err := store.Load(key); err != nil {
-		t.Fatalf("Load() err = %v", err)
-	}
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_submit",
-			"proposal_id":"tp-ratify-approve",
-			"proposed_by":"idolum-email",
-			"tool_name":"search_web",
-			"why_now":"Need bounded external search for inbox analysis.",
-			"contract":{"constraints":["read_only"]}
-		}`),
-	); err != nil {
-		t.Fatalf("proposal_submit err = %v", err)
-	}
-
-	out, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_ratify",
-			"proposal_id":"tp-ratify-approve"
-		}`),
-	)
-	if err != nil {
-		t.Fatalf("proposal_ratify err = %v", err)
-	}
-	if !strings.Contains(out, "review_status: approved") {
-		t.Fatalf("proposal_ratify output = %q, want approved review_status", out)
-	}
-	if approver.request.Proposal.ProposalID != "tp-ratify-approve" {
-		t.Fatalf("approver proposal id = %q, want tp-ratify-approve", approver.request.Proposal.ProposalID)
-	}
-
-	record, ok, err := store.ToolProposal("tp-ratify-approve")
-	if err != nil {
-		t.Fatalf("ToolProposal() err = %v", err)
-	}
-	if !ok {
-		t.Fatal("ToolProposal() ok = false, want stored proposal")
-	}
-	if record.ReviewStatus != session.ToolProposalReviewStatusApproved {
-		t.Fatalf("review_status = %q, want approved", record.ReviewStatus)
-	}
-}
-
-func TestToolAuthorityProposalRatifyTimeoutMapsToRejected(t *testing.T) {
-	t.Parallel()
-
-	registry, store := newDurableAgentToolRegistry(t)
-	approver := &stubToolProposalRatificationApprover{approved: false, timedOut: true}
-	registry.WithToolProposalRatificationApprover(approver)
-	key := adminSessionKey()
-	if _, err := store.Load(key); err != nil {
-		t.Fatalf("Load() err = %v", err)
-	}
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_submit",
-			"proposal_id":"tp-ratify-timeout",
-			"proposed_by":"idolum-email",
-			"tool_name":"search_web",
-			"why_now":"Need bounded external search for inbox analysis.",
-			"contract":{"constraints":["read_only"]}
-		}`),
-	); err != nil {
-		t.Fatalf("proposal_submit err = %v", err)
-	}
-
-	out, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_ratify",
-			"proposal_id":"tp-ratify-timeout"
-		}`),
-	)
-	if err != nil {
-		t.Fatalf("proposal_ratify err = %v", err)
-	}
-	if !strings.Contains(out, "review_status: rejected") {
-		t.Fatalf("proposal_ratify output = %q, want rejected review_status", out)
-	}
-
-	record, ok, err := store.ToolProposal("tp-ratify-timeout")
-	if err != nil {
-		t.Fatalf("ToolProposal() err = %v", err)
-	}
-	if !ok {
-		t.Fatal("ToolProposal() ok = false, want stored proposal")
-	}
-	if record.ReviewStatus != session.ToolProposalReviewStatusRejected {
-		t.Fatalf("review_status = %q, want rejected", record.ReviewStatus)
-	}
-
-	events, err := store.ExecutionEventsBySession(key, 0, 200)
-	if err != nil {
-		t.Fatalf("ExecutionEventsBySession() err = %v", err)
-	}
-	foundTimedOut := false
-	for _, event := range events {
-		if strings.TrimSpace(event.EventType) != core.ExecutionEventToolProposalReviewed {
-			continue
-		}
-		payload := strings.TrimSpace(event.PayloadJSON)
-		if strings.Contains(payload, `"transition_reason":"timed_out"`) {
-			foundTimedOut = true
-			break
-		}
-	}
-	if !foundTimedOut {
-		t.Fatalf("events = %#v, want reviewed event with transition_reason=timed_out", events)
-	}
-}
-
-func TestToolAuthorityProposalRatifyRequiresApprover(t *testing.T) {
-	t.Parallel()
-
-	registry, _ := newDurableAgentToolRegistry(t)
-	key := adminSessionKey()
-	if _, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_submit",
-			"proposal_id":"tp-ratify-no-approver",
-			"tool_name":"search_web",
-			"why_now":"Need bounded external search for inbox analysis.",
-			"contract":{"constraints":["read_only"]}
-		}`),
-	); err != nil {
-		t.Fatalf("proposal_submit err = %v", err)
-	}
-
-	_, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
-		key,
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"proposal_ratify",
-			"proposal_id":"tp-ratify-no-approver"
-		}`),
-	)
-	if err == nil {
-		t.Fatal("proposal_ratify err = nil, want approver-required error")
-	}
-	if !strings.Contains(err.Error(), "requires ratification approver") {
-		t.Fatalf("err = %v, want ratification approver requirement", err)
-	}
-}
-
-func TestToolAuthorityRejectsExposureWhenToolNotRegistered(t *testing.T) {
-	t.Parallel()
-
-	registry, _ := newDurableAgentToolRegistry(t)
-	_, err := registry.ExecuteForSessionPrincipal(
-		context.Background(),
-		principal.Principal{Role: principal.RoleAdmin},
-		adminSessionKey(),
-		"tool_authority",
-		json.RawMessage(`{
-			"action":"exposure_set",
-			"tool_name":"search_web",
-			"principal":"idolum-email",
-			"active":true
-		}`),
-	)
-	if err == nil {
-		t.Fatal("exposure_set err = nil, want unregistered-tool error")
-	}
-	if !strings.Contains(err.Error(), "not registered") {
-		t.Fatalf("err = %v, want unregistered tool error", err)
-	}
-}
-
 func TestToolAuthorityIsAdminOnly(t *testing.T) {
 	t.Parallel()
 
@@ -617,7 +159,7 @@ func TestToolAuthorityIsAdminOnly(t *testing.T) {
 		principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 2002},
 		adminSessionKey(),
 		"tool_authority",
-		json.RawMessage(`{"action":"proposal_list"}`),
+		json.RawMessage(`{"action":"registered_list"}`),
 	)
 	if err == nil {
 		t.Fatal("tool_authority err = nil, want admin-only denial")

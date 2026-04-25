@@ -57,7 +57,10 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 			lines = append(lines, detachedLine)
 		}
 		lines = append(lines, renderToolLifecycleCurrentStateBlock(snapshot.ToolLifecycle, 5)...)
+		lines = append(lines, renderCapabilityRequestStateBlock(snapshot.CapabilityRequests, 5)...)
+		lines = append(lines, renderCapabilityGrantStateBlock(snapshot.CapabilityGrants, 5)...)
 		lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 3)...)
+		lines = append(lines, renderCapabilityLifecycleBlock(snapshot.RecentExecution, 3)...)
 		if snapshot.Continuation != nil {
 			cont := snapshot.Continuation
 			line := fmt.Sprintf("continuation status=%s remaining_turns=%d", cont.Status, cont.RemainingTurns)
@@ -343,6 +346,7 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 		}
 	}
 	lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 5)...)
+	lines = append(lines, renderCapabilityLifecycleBlock(snapshot.RecentExecution, 5)...)
 	lines = append(lines, renderPendingItemBlock(snapshot.PendingItems, 20)...)
 	lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
 	lines = append(lines, fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)))
@@ -367,8 +371,24 @@ func renderToolLifecycleCurrentStateBlock(rows []core.ToolLifecycleStatusSnapsho
 		if ref := strings.TrimSpace(row.InstallRef); ref != "" {
 			line += " install_ref=" + ref
 		}
+		if attest := strings.TrimSpace(row.AttestationStatus); attest != "" {
+			line += " attestation=" + attest
+		}
+		if source := strings.TrimSpace(row.DriftSource); source != "" {
+			line += " drift_source=" + source
+		}
 		if reason := strings.TrimSpace(row.StaleReason); reason != "" {
 			line += " stale_reason=" + reason
+		}
+		failures := row.InstallFailures + row.ProbeFailures + row.AuditFailures
+		if failures > 0 {
+			line += fmt.Sprintf(" failures=install:%d,probe:%d,audit:%d", row.InstallFailures, row.ProbeFailures, row.AuditFailures)
+		}
+		if hash := shortFingerprint(row.ManifestHash); hash != "" {
+			line += " manifest_hash=" + hash
+		}
+		if hash := shortFingerprint(row.WorkspaceFingerprint); hash != "" {
+			line += " workspace_fingerprint=" + hash
 		}
 		if summary := strings.TrimSpace(row.TraceSummary); summary != "" {
 			stage := firstNonEmpty(strings.TrimSpace(row.TraceStage), "-")
@@ -382,6 +402,76 @@ func renderToolLifecycleCurrentStateBlock(rows []core.ToolLifecycleStatusSnapsho
 	return lines
 }
 
+func renderCapabilityRequestStateBlock(rows []core.CapabilityRequestStatusSnapshot, maxRows int) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	if maxRows <= 0 {
+		maxRows = 5
+	}
+	lines := []string{"capability_requests source=canonical:session.capability_requests"}
+	limit := len(rows)
+	if limit > maxRows {
+		limit = maxRows
+	}
+	for i := 0; i < limit; i++ {
+		row := rows[i]
+		line := fmt.Sprintf("- request_id=%s kind=%s target_resource=%s status=%s requested_for=%s", row.RequestID, firstNonEmpty(row.Kind, "-"), firstNonEmpty(row.TargetResource, "-"), firstNonEmpty(row.ReviewStatus, "-"), firstNonEmpty(row.RequestedFor, "-"))
+		if parent := strings.TrimSpace(row.ParentPrincipal); parent != "" {
+			line += " parent_principal=" + parent
+		}
+		if risk := strings.TrimSpace(row.RiskClass); risk != "" {
+			line += " risk_class=" + risk
+		}
+		if grantID := strings.TrimSpace(row.GrantID); grantID != "" {
+			line += " grant_id=" + grantID
+		}
+		if purpose := strings.TrimSpace(row.Purpose); purpose != "" {
+			line += " purpose=" + quoteStatusField(truncateStatusField(purpose, 120))
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func renderCapabilityGrantStateBlock(rows []core.CapabilityGrantStatusSnapshot, maxRows int) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	if maxRows <= 0 {
+		maxRows = 5
+	}
+	lines := []string{"capability_grants source=canonical:session.capability_grants"}
+	limit := len(rows)
+	if limit > maxRows {
+		limit = maxRows
+	}
+	for i := 0; i < limit; i++ {
+		row := rows[i]
+		line := fmt.Sprintf("- grant_id=%s kind=%s target_resource=%s status=%s granted_to=%s actions=%s", row.GrantID, firstNonEmpty(row.Kind, "-"), firstNonEmpty(row.TargetResource, "-"), firstNonEmpty(row.Status, "-"), firstNonEmpty(row.GrantedTo, "-"), firstNonEmpty(strings.Join(row.AllowedActions, ","), "-"))
+		if requestID := strings.TrimSpace(row.RequestID); requestID != "" {
+			line += " request_id=" + requestID
+		}
+		if source := strings.TrimSpace(row.DriftSource); source != "" {
+			line += " drift_source=" + source
+		}
+		if reason := strings.TrimSpace(row.StaleReason); reason != "" {
+			line += " stale_reason=" + quoteStatusField(truncateStatusField(reason, 120))
+		}
+		if fingerprint := shortFingerprint(row.AnchorFingerprint); fingerprint != "" {
+			line += " anchor=" + fingerprint
+		}
+		if row.InvocationCount > 0 || row.FailureCount > 0 {
+			line += fmt.Sprintf(" counters=invocations:%d,failures:%d", row.InvocationCount, row.FailureCount)
+		}
+		if !row.ExpiresAt.IsZero() {
+			line += " expires_at=" + formatStatusTime(row.ExpiresAt)
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
 func renderToolAuthorityLifecycleBlock(events []core.ExecutionEventSummary, maxPerClass int) []string {
 	if len(events) == 0 {
 		return nil
@@ -389,45 +479,55 @@ func renderToolAuthorityLifecycleBlock(events []core.ExecutionEventSummary, maxP
 	if maxPerClass <= 0 {
 		maxPerClass = 3
 	}
-	proposals := make([]core.ExecutionEventSummary, 0, maxPerClass)
 	registrations := make([]core.ExecutionEventSummary, 0, maxPerClass)
-	exposures := make([]core.ExecutionEventSummary, 0, maxPerClass)
 	for _, event := range events {
 		switch strings.TrimSpace(event.EventType) {
-		case core.ExecutionEventToolProposalCreated, core.ExecutionEventToolProposalReviewed:
-			if len(proposals) < maxPerClass {
-				proposals = append(proposals, event)
-			}
 		case core.ExecutionEventToolRegistered:
 			if len(registrations) < maxPerClass {
 				registrations = append(registrations, event)
 			}
-		case core.ExecutionEventToolExposureChanged:
-			if len(exposures) < maxPerClass {
-				exposures = append(exposures, event)
-			}
 		}
-		if len(proposals) >= maxPerClass && len(registrations) >= maxPerClass && len(exposures) >= maxPerClass {
+		if len(registrations) >= maxPerClass {
 			break
 		}
 	}
-	if len(proposals) == 0 && len(registrations) == 0 && len(exposures) == 0 {
+	if len(registrations) == 0 {
 		return nil
 	}
 
 	lines := []string{"tool_authority_lifecycle source=canonical:execution_events.tool_authority"}
-	if len(proposals) > 0 {
-		lines = append(lines, "tool_proposals:")
-		lines = append(lines, renderToolAuthorityEntries(proposals)...)
-	}
 	if len(registrations) > 0 {
 		lines = append(lines, "tool_registrations:")
 		lines = append(lines, renderToolAuthorityEntries(registrations)...)
 	}
-	if len(exposures) > 0 {
-		lines = append(lines, "tool_exposures:")
-		lines = append(lines, renderToolAuthorityEntries(exposures)...)
+	return lines
+}
+
+func renderCapabilityLifecycleBlock(events []core.ExecutionEventSummary, maxRows int) []string {
+	if len(events) == 0 {
+		return nil
 	}
+	if maxRows <= 0 {
+		maxRows = 3
+	}
+	rows := make([]core.ExecutionEventSummary, 0, maxRows)
+	for _, event := range events {
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventCapabilityRequestCreated,
+			core.ExecutionEventCapabilityReviewed,
+			core.ExecutionEventCapabilityGrantChanged,
+			core.ExecutionEventCapabilityInvocation:
+			rows = append(rows, event)
+		}
+		if len(rows) >= maxRows {
+			break
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	lines := []string{"capability_lifecycle source=canonical:execution_events.capability_delegation"}
+	lines = append(lines, renderToolAuthorityEntries(rows)...)
 	return lines
 }
 
@@ -537,18 +637,6 @@ func RenderTelegramStatusDurables(snapshot core.DurableAgentsStatusSnapshot) str
 			formatStringList(agent.CapabilityEnvelope),
 		))
 		lines = append(lines, fmt.Sprintf(
-			"  capacity state=%s can=%d cannot=%d uncertain=%d success=%d evidence=%d negotiated_at=%s probed_at=%s attested_at=%s",
-			firstNonEmpty(strings.TrimSpace(agent.CapacityState), "unattested"),
-			agent.CapacityCanCount,
-			agent.CapacityCannotCount,
-			agent.CapacityUncertainCount,
-			agent.CapacitySuccessCriteriaCount,
-			agent.CapacityEvidenceSignalCount,
-			formatStatusTime(agent.CapacityLastNegotiatedAt),
-			formatStatusTime(agent.CapacityLastProbedAt),
-			formatStatusTime(agent.CapacityLastAttestedAt),
-		))
-		lines = append(lines, fmt.Sprintf(
 			"  runtime last_wake=%s last_review=%s dormant_at=%s apply_status=%s applied_version=%d applied_at=%s",
 			formatStatusTime(agent.LastWakeAt),
 			formatStatusTime(agent.LastReviewAt),
@@ -557,6 +645,22 @@ func RenderTelegramStatusDurables(snapshot core.DurableAgentsStatusSnapshot) str
 			agent.LastAppliedPolicyVersion,
 			formatStatusTime(agent.LastAppliedPolicyAt),
 		))
+		lines = append(lines, fmt.Sprintf(
+			"  authority principal=%s child_runtime_grants=%d profile_manifest=%s profile_policy_hash=%s profile_files=%d substrate=%s",
+			firstNonEmpty(strings.TrimSpace(agent.CanonicalPrincipal), "-"),
+			agent.ChildRuntimeGrantCount,
+			firstNonEmpty(strings.TrimSpace(agent.ProfileManifestStatus), "-"),
+			formatStatusHash(agent.ProfileManifestPolicyHash),
+			agent.ProfileManifestFileCount,
+			formatStringList(agent.SubstrateLabels),
+		))
+		if blocked := strings.TrimSpace(agent.ChildRuntimeBlockedReason); blocked != "" {
+			line := "  repair child_runtime_blocked=" + quoteStatusField(truncateStatusField(blocked, 120))
+			if hint := strings.TrimSpace(agent.ChildRuntimeRepairHint); hint != "" {
+				line += " hint=" + quoteStatusField(truncateStatusField(hint, 120))
+			}
+			lines = append(lines, line)
+		}
 		if applyErr := strings.TrimSpace(agent.LastApplyError); applyErr != "" {
 			lines = append(lines, "  runtime apply_error="+quoteStatusField(truncateStatusField(applyErr, 120)))
 		}
@@ -653,6 +757,20 @@ func formatStatusHash(raw string) string {
 	}
 	if len(raw) <= 12 {
 		return raw
+	}
+	return raw[:12]
+}
+
+func shortFingerprint(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if len(raw) <= 19 {
+		return raw
+	}
+	if strings.HasPrefix(raw, "sha256:") {
+		return raw[:19]
 	}
 	return raw[:12]
 }

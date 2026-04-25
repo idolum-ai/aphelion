@@ -36,17 +36,14 @@ diagram_bases=(
 )
 
 for base in "${diagram_bases[@]}"; do
-  for ext in svg png; do
-    path="docs/architecture/diagrams/${base}.${ext}"
-    if [[ ! -f "$path" ]]; then
-      echo "missing canonical architecture diagram: $path" >&2
-      exit 1
-    fi
-  done
+  path="docs/architecture/diagrams/${base}.svg"
+  if [[ ! -f "$path" ]]; then
+    echo "missing canonical architecture diagram: $path" >&2
+    exit 1
+  fi
 done
 
 if rg -n "tmp-diagrams/" \
-  --glob '!docs/architecture/diagrams/archive/**' \
   --glob '!*.png' \
   --glob '!*.svg' \
   README.md requirements runtime turn pipeline docs/architecture constitution_live_test.go .gitignore Makefile >/dev/null; then
