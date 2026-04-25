@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
@@ -638,6 +639,9 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 	if h == nil || h.sender == nil || h.broker == nil {
 		return nil
 	}
+	if eventID, action, ok := core.DecodeReviewEventCallbackData(cb.Data); ok {
+		return h.handleReviewEventCallback(ctx, cb, eventID, action)
+	}
 	id, choice, ok := decision.DecodeCallbackData(cb.Data)
 	if !ok {
 		if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
@@ -682,6 +686,176 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 		return err
 	}
 	return nil
+}
+
+func (h *telegramDecisionHandler) handleReviewEventCallback(ctx context.Context, cb telegram.CallbackQuery, eventID int64, action core.ReviewEventAction) error {
+	if h == nil || h.sender == nil || h.store == nil {
+		return nil
+	}
+	event, err := h.store.ReviewEventByID(eventID)
+	if err != nil {
+		return err
+	}
+	if event == nil {
+		return h.answerReviewEventCallback(ctx, cb, "This approval is no longer active. Use the newest prompt.")
+	}
+	if reviewEventCallbackExpired(*event, time.Now()) {
+		_ = h.editReviewEventCallbackMessage(ctx, cb, "Approval timed out — use a fresh prompt.")
+		return h.answerReviewEventCallback(ctx, cb, "Approval timed out. Use a fresh prompt.")
+	}
+	requestID := reviewEventCallbackCapabilityRequestID(*event)
+	if requestID == "" {
+		return h.answerReviewEventCallback(ctx, cb, "This review item is not actionable yet.")
+	}
+	record, ok, err := h.store.CapabilityRequest(requestID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return h.answerReviewEventCallback(ctx, cb, "Capability request not found.")
+	}
+	if !reviewEventRequestStillActionable(record, action) {
+		return h.answerReviewEventCallback(ctx, cb, "This approval is no longer active. Use the newest prompt.")
+	}
+	fromID := int64(0)
+	if cb.From != nil {
+		fromID = cb.From.ID
+	}
+	status, reviewerRole, err := reviewEventCapabilityStatusForAction(record, action, fromID, event.TargetAdminChatID)
+	if err != nil {
+		_ = h.answerReviewEventCallback(ctx, cb, err.Error())
+		return nil
+	}
+	review, err := h.store.AppendCapabilityReview(session.CapabilityReview{
+		ReviewID:     fmt.Sprintf("capr-review-event-%d-%d", event.ID, time.Now().UnixNano()),
+		RequestID:    record.RequestID,
+		Reviewer:     fmt.Sprintf("telegram:%d", fromID),
+		ReviewerRole: reviewerRole,
+		Status:       status,
+		Rationale:    fmt.Sprintf("telegram inline review event %d", event.ID),
+	})
+	if err != nil {
+		return err
+	}
+	label := "approved"
+	if review.Status == session.CapabilityReviewStatusParentApproved {
+		label = "parent-approved"
+	} else if review.Status == session.CapabilityReviewStatusRejected {
+		label = "rejected"
+	}
+	_ = h.editReviewEventCallbackMessage(ctx, cb, fmt.Sprintf("Capability request %s: %s", label, record.RequestID))
+	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func (h *telegramDecisionHandler) answerReviewEventCallback(ctx context.Context, cb telegram.CallbackQuery, text string) error {
+	if h == nil || h.sender == nil {
+		return nil
+	}
+	if err := h.sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), text); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+		return err
+	}
+	return nil
+}
+
+func (h *telegramDecisionHandler) editReviewEventCallbackMessage(ctx context.Context, cb telegram.CallbackQuery, text string) error {
+	if h == nil || h.sender == nil || cb.Message == nil || cb.Message.Chat == nil || cb.Message.MessageID == 0 {
+		return nil
+	}
+	return h.sender.EditMessageText(ctx, cb.Message.Chat.ID, cb.Message.MessageID, text, "")
+}
+
+func reviewEventCallbackExpired(event session.ReviewEvent, now time.Time) bool {
+	start := event.DeliveredAt
+	if start.IsZero() {
+		start = event.CreatedAt
+	}
+	if start.IsZero() {
+		return false
+	}
+	return now.After(start.Add(defaultUserApprovalTimeout))
+}
+
+func reviewEventCallbackCapabilityRequestID(event session.ReviewEvent) string {
+	if id := reviewEventCallbackMetadataString(event, "request_id"); id != "" {
+		return id
+	}
+	return reviewEventCallbackMetadataString(event, "capability_request_id")
+}
+
+func reviewEventCallbackMetadataString(event session.ReviewEvent, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" || strings.TrimSpace(event.MetadataJSON) == "" {
+		return ""
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(event.MetadataJSON), &metadata); err != nil {
+		return ""
+	}
+	if value, ok := metadata[key]; ok {
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+	return ""
+}
+
+func reviewEventRequestStillActionable(record session.CapabilityRequest, action core.ReviewEventAction) bool {
+	record = session.NormalizeCapabilityRequest(record)
+	switch action {
+	case core.ReviewEventActionParentApprove:
+		return record.ReviewStatus == session.CapabilityReviewStatusProposed
+	case core.ReviewEventActionApprove:
+		if strings.TrimSpace(record.ParentPrincipal) != "" {
+			return record.ReviewStatus == session.CapabilityReviewStatusParentApproved
+		}
+		return record.ReviewStatus == session.CapabilityReviewStatusProposed
+	case core.ReviewEventActionReject:
+		return record.ReviewStatus == session.CapabilityReviewStatusProposed || record.ReviewStatus == session.CapabilityReviewStatusParentApproved
+	default:
+		return false
+	}
+}
+
+func reviewEventCapabilityStatusForAction(record session.CapabilityRequest, action core.ReviewEventAction, fromID int64, targetChatID int64) (session.CapabilityReviewStatus, string, error) {
+	if fromID <= 0 {
+		return "", "", fmt.Errorf("Telegram reviewer is unknown.")
+	}
+	isAdmin := telegramPrincipalMatches(record.AdminPrincipal, fromID) || (strings.TrimSpace(record.AdminPrincipal) == "" && targetChatID == fromID)
+	isParent := telegramPrincipalMatches(record.ParentPrincipal, fromID)
+	switch action {
+	case core.ReviewEventActionParentApprove:
+		if strings.TrimSpace(record.ParentPrincipal) == "" {
+			return "", "", fmt.Errorf("This request has no parent approval step.")
+		}
+		if !isParent && !isAdmin {
+			return "", "", fmt.Errorf("Only the parent or admin can parent-approve this request.")
+		}
+		return session.CapabilityReviewStatusParentApproved, reviewerRoleForReview(isAdmin && !isParent), nil
+	case core.ReviewEventActionApprove:
+		if strings.TrimSpace(record.ParentPrincipal) != "" && record.ReviewStatus == session.CapabilityReviewStatusProposed {
+			return "", "", fmt.Errorf("Parent approval is required first.")
+		}
+		if !isAdmin {
+			return "", "", fmt.Errorf("Only the admin can approve this request.")
+		}
+		return session.CapabilityReviewStatusApproved, string(principal.RoleAdmin), nil
+	case core.ReviewEventActionReject:
+		if !isAdmin && !isParent {
+			return "", "", fmt.Errorf("Only the admin or parent can reject this request.")
+		}
+		return session.CapabilityReviewStatusRejected, reviewerRoleForReview(isAdmin), nil
+	default:
+		return "", "", fmt.Errorf("Unknown review action.")
+	}
+}
+
+func reviewerRoleForReview(admin bool) string {
+	if admin {
+		return string(principal.RoleAdmin)
+	}
+	return string(principal.RoleApprovedUser)
+}
+
+func telegramPrincipalMatches(target string, userID int64) bool {
+	return userID > 0 && strings.TrimSpace(target) == fmt.Sprintf("telegram:%d", userID)
 }
 
 func inlineButtonRows(pending decision.PendingDecision) [][]telegram.InlineButton {

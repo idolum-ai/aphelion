@@ -216,3 +216,55 @@ func TestShouldGenerateReviewEvent(t *testing.T) {
 		t.Fatal("admin subordinate session should generate review event")
 	}
 }
+
+func TestHandleInboundDeliversActionableCapabilityReviewEventWithButtons(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-button",
+		RequestedBy:    "telegram:1002",
+		RequestedFor:   "telegram:1002",
+		AdminPrincipal: "telegram:1001",
+		Kind:           session.CapabilityKindGenericDelegation,
+		TargetResource: "local-branch",
+		Purpose:        "test inline approval delivery",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if err := store.EnqueueReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 42,
+		Summary:           "Capability request cap-button",
+		MetadataJSON:      `{"request_id":"cap-button","review_status":"proposed"}`,
+	}); err != nil {
+		t.Fatalf("EnqueueReviewEvent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{ChatID: 42, SenderID: 1001, SenderName: "admin", Text: "status", MessageID: 99})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline len = %d, want actionable review delivered as inline keyboard", len(sender.inline))
+	}
+	if !strings.Contains(sender.inline[0].text, "Review digest.") || !strings.Contains(sender.inline[0].text, "Capability request cap-button") {
+		t.Fatalf("inline text = %q, want review digest", sender.inline[0].text)
+	}
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {
+		t.Fatalf("inline rows = %#v, want reject/approve row", sender.inline[0].rows)
+	}
+	if sender.inline[0].rows[0][0].Text != "Reject" || sender.inline[0].rows[0][1].Text != "Approve" {
+		t.Fatalf("inline row = %#v, want Reject/Approve", sender.inline[0].rows[0])
+	}
+}

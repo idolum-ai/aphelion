@@ -1081,3 +1081,73 @@ func TestTelegramUserApprovalTimeoutDefaultsToThirtyMinutes(t *testing.T) {
 		t.Fatalf("snapshot restore timeout = %s, want %s", snapshotApprover.timeout, want)
 	}
 }
+
+func TestHandleReviewEventCallbackApprovesCapabilityRequest(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-button-approve",
+		RequestedBy:    "telegram:1002",
+		RequestedFor:   "telegram:1002",
+		AdminPrincipal: "telegram:1001",
+		Kind:           session.CapabilityKindGenericDelegation,
+		TargetResource: "local-branch",
+		Purpose:        "approve from callback",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      7001,
+		SourceUserID:      1002,
+		SourceRole:        "capability_request",
+		TargetAdminChatID: 1001,
+		Summary:           "Capability request cap-button-approve",
+		MetadataJSON:      `{"request_id":"cap-button-approve","review_status":"proposed"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	sender := &decisionTestSender{}
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	err = handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-review-1",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionApprove),
+	})
+	if err != nil {
+		t.Fatalf("HandleCallbackQuery() err = %v", err)
+	}
+	updated, ok, err := store.CapabilityRequest("cap-button-approve")
+	if err != nil || !ok {
+		t.Fatalf("CapabilityRequest() ok=%t err=%v", ok, err)
+	}
+	if updated.ReviewStatus != session.CapabilityReviewStatusApproved {
+		t.Fatalf("ReviewStatus = %q, want approved", updated.ReviewStatus)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "approved") {
+		t.Fatalf("edits = %#v, want approved edit", sender.edits)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != "" {
+		t.Fatalf("answers = %#v, want empty ack", sender.answers)
+	}
+}
+
+func TestReviewEventCallbackTimeoutIsThirtyMinutes(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{CreatedAt: time.Now().Add(-29 * time.Minute)}
+	if reviewEventCallbackExpired(event, time.Now()) {
+		t.Fatal("reviewEventCallbackExpired() = true before 30 minutes")
+	}
+	event.CreatedAt = time.Now().Add(-31 * time.Minute)
+	if !reviewEventCallbackExpired(event, time.Now()) {
+		t.Fatal("reviewEventCallbackExpired() = false after 30 minutes")
+	}
+}

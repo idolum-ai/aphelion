@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,10 +15,15 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/telegram"
 	"github.com/idolum-ai/aphelion/turn"
 )
 
 const maxReviewEventsPerTurn = 10
+
+type reviewEventInlineSender interface {
+	SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
+}
 
 func (r *Runtime) HandleInbound(ctx context.Context, msg core.InboundMessage) (result *core.TurnResult, err error) {
 	return r.handleInteractiveInbound(ctx, msg, nil)
@@ -179,12 +185,27 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 	}
 	for _, event := range events {
 		text := formatReviewEventMessage(event)
-		msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
-			ChatID: key.ChatID,
-			Text:   text,
-		})
-		if err != nil {
-			return err
+		rows := reviewEventInlineRows(event)
+		msgID := int64(0)
+		if len(rows) > 0 {
+			inline, ok := r.outbound.(reviewEventInlineSender)
+			if !ok {
+				return fmt.Errorf("review event %d requires inline approval delivery but outbound sender does not support inline keyboards", event.ID)
+			}
+			var sendErr error
+			msgID, sendErr = inline.SendInlineKeyboard(ctx, key.ChatID, text, rows, nil)
+			if sendErr != nil {
+				return sendErr
+			}
+		} else {
+			var sendErr error
+			msgID, sendErr = r.outbound.SendMessage(ctx, core.OutboundMessage{
+				ChatID: key.ChatID,
+				Text:   text,
+			})
+			if sendErr != nil {
+				return sendErr
+			}
 		}
 		newMessages := appendAssistantTurn(sess, text, text, "")
 		if err := r.store.Save(sess, newMessages, core.TokenUsage{}); err != nil {
@@ -198,6 +219,44 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		}
 	}
 	return nil
+}
+
+func reviewEventInlineRows(event session.ReviewEvent) [][]telegram.InlineButton {
+	requestID := reviewEventCapabilityRequestID(event)
+	if requestID == "" {
+		return nil
+	}
+	rows := [][]telegram.InlineButton{}
+	if reviewEventMetadataString(event, "parent_principal") != "" && reviewEventMetadataString(event, "review_status") == string(session.CapabilityReviewStatusProposed) {
+		rows = append(rows, []telegram.InlineButton{{Text: "Parent approve", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionParentApprove)}})
+	}
+	rows = append(rows, []telegram.InlineButton{
+		{Text: "Reject", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionReject)},
+		{Text: "Approve", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionApprove)},
+	})
+	return rows
+}
+
+func reviewEventCapabilityRequestID(event session.ReviewEvent) string {
+	if id := reviewEventMetadataString(event, "request_id"); id != "" {
+		return id
+	}
+	return reviewEventMetadataString(event, "capability_request_id")
+}
+
+func reviewEventMetadataString(event session.ReviewEvent, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" || strings.TrimSpace(event.MetadataJSON) == "" {
+		return ""
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(event.MetadataJSON), &metadata); err != nil {
+		return ""
+	}
+	if value, ok := metadata[key]; ok {
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+	return ""
 }
 
 func uniquePositiveIDs(ids []int64) []int64 {
