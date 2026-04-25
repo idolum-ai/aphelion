@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
@@ -239,6 +240,99 @@ func TestHandleInboundUsesCodexGovernorBackend(t *testing.T) {
 	if strings.Contains(sess.SystemPrompt, accessToken) {
 		t.Fatalf("system prompt leaked token: %q", sess.SystemPrompt)
 	}
+}
+
+func TestHandleInboundProviderFailureRecordsFailureAndAlertsAdmin(t *testing.T) {
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &providerFailureDuringToolLoop{
+		err: stubRuntimeStatusError{code: 503, msg: "503 codex overloaded"},
+	}
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     404,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "trigger provider failure",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 404, UserID: 0, Scope: telegramDMScopeRef(404)}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventProviderAttemptFailed) {
+		t.Fatalf("events = %#v, want provider attempt failed", events)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventProviderAttemptSucceeded) {
+		t.Fatalf("events = %#v, provider failure should not be recorded as provider success", events)
+	}
+
+	foundAlert := false
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		sender.mu.Lock()
+		for _, msg := range sender.sent {
+			if msg.ChatID == 1001 && strings.Contains(msg.Text, "System warning") && strings.Contains(msg.Text, "component: provider") {
+				foundAlert = true
+				break
+			}
+		}
+		sender.mu.Unlock()
+		if foundAlert {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !foundAlert {
+		sender.mu.Lock()
+		defer sender.mu.Unlock()
+		t.Fatalf("sent messages = %#v, want provider operational alert to admin", sender.sent)
+	}
+}
+
+type providerFailureDuringToolLoop struct {
+	err error
+}
+
+func (p *providerFailureDuringToolLoop) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if len(messages) > 0 && messages[0].Role == "system" && strings.Contains(messages[0].Content, "the face of") {
+		return &agent.Response{Content: "ok"}, nil
+	}
+	if len(tools) > 0 {
+		return nil, p.err
+	}
+	for _, msg := range messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "Before the main turn executes, ratify how this turn should proceed.") {
+			return &agent.Response{Content: "INSPECT: no\nQUESTION: no\nANSWER: yes\nRATIFICATION: accept\nPLAN:\n- Answer directly."}, nil
+		}
+	}
+	for _, msg := range messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "trigger provider failure") {
+			return nil, p.err
+		}
+	}
+	return &agent.Response{Content: "ok"}, nil
+}
+
+func (p *providerFailureDuringToolLoop) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+	return p.Complete(ctx, messages, tools)
+}
+
+func hasExecutionEvent(events []session.ExecutionEvent, eventType string) bool {
+	for _, event := range events {
+		if event.EventType == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNewAutoFallsBackToNativeWhenCodexCredentialsMissing(t *testing.T) {

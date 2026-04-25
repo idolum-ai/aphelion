@@ -305,6 +305,9 @@ func TestProviderPersistentError(t *testing.T) {
 	if result.Text != providerFailureReply {
 		t.Fatalf("result.Text = %q, want %q", result.Text, providerFailureReply)
 	}
+	if result.ProviderFailure == "" {
+		t.Fatalf("ProviderFailure = empty, want provider failure detail")
+	}
 	if retries != maxProviderRetries+1 {
 		t.Fatalf("retries = %d, want %d", retries, maxProviderRetries+1)
 	}

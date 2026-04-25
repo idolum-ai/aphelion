@@ -311,14 +311,25 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 			"model":    strings.TrimSpace(input.Exec.ModelName),
 			"error":    trimError(runErr.Error()),
 		}, time.Now().UTC())
+		r.reportOperationalIssueAsync("provider", runErr)
 		monitorErr = fmt.Errorf("%s: %w", firstNonEmpty(strings.TrimSpace(input.RunErrPrefix), "run turn"), runErr)
 		return out, monitorErr
 	}
-	r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", map[string]any{
-		"backend":  strings.TrimSpace(input.Exec.Backend),
-		"provider": strings.TrimSpace(input.Exec.ProviderName),
-		"model":    strings.TrimSpace(input.Exec.ModelName),
-	}, time.Now().UTC())
+	if turnResult != nil && strings.TrimSpace(turnResult.ProviderFailure) != "" {
+		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{
+			"backend":  strings.TrimSpace(input.Exec.Backend),
+			"provider": strings.TrimSpace(input.Exec.ProviderName),
+			"model":    strings.TrimSpace(input.Exec.ModelName),
+			"error":    trimError(turnResult.ProviderFailure),
+		}, time.Now().UTC())
+		r.reportOperationalIssueAsync("provider", fmt.Errorf("%s", strings.TrimSpace(turnResult.ProviderFailure)))
+	} else {
+		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", map[string]any{
+			"backend":  strings.TrimSpace(input.Exec.Backend),
+			"provider": strings.TrimSpace(input.Exec.ProviderName),
+			"model":    strings.TrimSpace(input.Exec.ModelName),
+		}, time.Now().UTC())
+	}
 	if len(outHistory) < len(turnInput) {
 		monitorErr = fmt.Errorf("%s: history shrank from %d to %d", firstNonEmpty(strings.TrimSpace(input.InvalidOutputPrefix), "invalid turn output"), len(turnInput), len(outHistory))
 		return out, monitorErr

@@ -191,9 +191,10 @@ func RunTurn(
 				}
 			}
 			return &core.TurnResult{
-				Text:       reply,
-				ToolLog:    toolLog,
-				TokenUsage: core.TokenUsage{},
+				Text:            reply,
+				ToolLog:         toolLog,
+				TokenUsage:      core.TokenUsage{},
+				ProviderFailure: trimProviderFailure(err),
 			}, history, nil
 		}
 		retried, retryErr := maybeRetryPlanningOnly(ctx, provider, history, toolDefs, opts, resp)
@@ -289,6 +290,17 @@ func RunTurn(
 			})
 		}
 	}
+}
+
+func trimProviderFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.TrimSpace(err.Error())
+	if len(text) > 1000 {
+		text = text[:1000] + "..."
+	}
+	return text
 }
 
 func maybeRetryPlanningOnly(

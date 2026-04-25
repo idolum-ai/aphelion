@@ -161,6 +161,7 @@ func (c telegramCommandControl) maybeFlushMemory(chatID int64, reason string) {
 	}
 	if err := c.rt.FlushChatMemory(context.Background(), chatID, reason); err != nil {
 		log.Printf("WARN memory flush skipped chat_id=%d reason=%s err=%v", chatID, strings.TrimSpace(reason), err)
+		c.rt.ReportOperationalIssue(context.Background(), "memory_flush", fmt.Errorf("chat_id=%d reason=%s: %w", chatID, strings.TrimSpace(reason), err))
 	}
 }
 

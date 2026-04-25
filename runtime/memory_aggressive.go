@@ -189,6 +189,7 @@ func (r *Runtime) maybeCaptureTurnMemory(ctx context.Context, input turnCommitIn
 	}
 	if err := r.captureAggressiveMemory(ctx, req); err != nil {
 		log.Printf("WARN aggressive memory capture failed chat_id=%d err=%v", input.Key.ChatID, err)
+		r.reportOperationalIssueAsync("memory_capture", err)
 	}
 }
 

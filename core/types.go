@@ -27,6 +27,7 @@ type InboundMessage struct {
 	Artifacts []Artifact
 	ReplyTo   *int64
 	MessageID int64
+	Reaction  *InboundReaction
 	// IngressSeq is assigned by the router as a per-session, monotonic ingress order.
 	IngressSeq     int64
 	DurableAgentID string
@@ -34,6 +35,12 @@ type InboundMessage struct {
 	OriginDetail   string
 	Timestamp      time.Time
 	Raw            json.RawMessage
+}
+
+type InboundReaction struct {
+	MessageID int64
+	Old       []string
+	New       []string
 }
 
 type OutboundMessage struct {
@@ -78,10 +85,11 @@ type Artifact struct {
 
 // TurnResult is returned by the agent after one turn.
 type TurnResult struct {
-	Text       string
-	Media      []Media
-	ToolLog    []string
-	TokenUsage TokenUsage
+	Text            string
+	Media           []Media
+	ToolLog         []string
+	TokenUsage      TokenUsage
+	ProviderFailure string
 }
 
 type TokenUsage struct {

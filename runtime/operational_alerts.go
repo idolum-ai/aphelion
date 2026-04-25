@@ -18,6 +18,17 @@ type operationalAlertState struct {
 	Suppressed int
 }
 
+func (r *Runtime) ReportOperationalIssue(ctx context.Context, component string, err error) {
+	r.reportOperationalIssue(ctx, component, err)
+}
+
+func (r *Runtime) reportOperationalIssueAsync(component string, err error) {
+	if r == nil || err == nil {
+		return
+	}
+	go r.reportOperationalIssue(context.Background(), component, err)
+}
+
 func (r *Runtime) reportOperationalIssue(ctx context.Context, component string, err error) {
 	if r == nil || r.store == nil || r.outbound == nil || r.cfg == nil || err == nil {
 		return
