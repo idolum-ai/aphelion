@@ -15,13 +15,12 @@ import (
 type Kind string
 
 const (
-	KindInterrupt                Kind = "interrupt"
-	KindStopWord                 Kind = "stop_word"
-	KindProposalApproval         Kind = "proposal_approval"
-	KindToolProposalRatification Kind = "tool_proposal_ratification"
-	KindArtifactRetention        Kind = "artifact_retention"
-	KindMemoryDelegation         Kind = "memory_delegation"
-	KindSnapshotRestore          Kind = "snapshot_restore"
+	KindInterrupt         Kind = "interrupt"
+	KindStopWord          Kind = "stop_word"
+	KindProposalApproval  Kind = "proposal_approval"
+	KindArtifactRetention Kind = "artifact_retention"
+	KindMemoryDelegation  Kind = "memory_delegation"
+	KindSnapshotRestore   Kind = "snapshot_restore"
 )
 
 // WaitIndefinitely disables the broker timeout and waits until the decision is resolved or the request context is canceled.

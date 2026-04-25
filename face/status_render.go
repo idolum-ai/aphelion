@@ -479,44 +479,26 @@ func renderToolAuthorityLifecycleBlock(events []core.ExecutionEventSummary, maxP
 	if maxPerClass <= 0 {
 		maxPerClass = 3
 	}
-	proposals := make([]core.ExecutionEventSummary, 0, maxPerClass)
 	registrations := make([]core.ExecutionEventSummary, 0, maxPerClass)
-	exposures := make([]core.ExecutionEventSummary, 0, maxPerClass)
 	for _, event := range events {
 		switch strings.TrimSpace(event.EventType) {
-		case core.ExecutionEventToolProposalCreated, core.ExecutionEventToolProposalReviewed:
-			if len(proposals) < maxPerClass {
-				proposals = append(proposals, event)
-			}
 		case core.ExecutionEventToolRegistered:
 			if len(registrations) < maxPerClass {
 				registrations = append(registrations, event)
 			}
-		case core.ExecutionEventToolExposureChanged:
-			if len(exposures) < maxPerClass {
-				exposures = append(exposures, event)
-			}
 		}
-		if len(proposals) >= maxPerClass && len(registrations) >= maxPerClass && len(exposures) >= maxPerClass {
+		if len(registrations) >= maxPerClass {
 			break
 		}
 	}
-	if len(proposals) == 0 && len(registrations) == 0 && len(exposures) == 0 {
+	if len(registrations) == 0 {
 		return nil
 	}
 
 	lines := []string{"tool_authority_lifecycle source=canonical:execution_events.tool_authority"}
-	if len(proposals) > 0 {
-		lines = append(lines, "tool_proposals:")
-		lines = append(lines, renderToolAuthorityEntries(proposals)...)
-	}
 	if len(registrations) > 0 {
 		lines = append(lines, "tool_registrations:")
 		lines = append(lines, renderToolAuthorityEntries(registrations)...)
-	}
-	if len(exposures) > 0 {
-		lines = append(lines, "tool_exposures:")
-		lines = append(lines, renderToolAuthorityEntries(exposures)...)
 	}
 	return lines
 }
@@ -653,18 +635,6 @@ func RenderTelegramStatusDurables(snapshot core.DurableAgentsStatusSnapshot) str
 			firstNonEmpty(strings.TrimSpace(agent.PolicyOutboundMode), "-"),
 			firstNonEmpty(strings.TrimSpace(agent.PolicyDrift), "-"),
 			formatStringList(agent.CapabilityEnvelope),
-		))
-		lines = append(lines, fmt.Sprintf(
-			"  capacity state=%s can=%d cannot=%d uncertain=%d success=%d evidence=%d negotiated_at=%s probed_at=%s attested_at=%s",
-			firstNonEmpty(strings.TrimSpace(agent.CapacityState), "unattested"),
-			agent.CapacityCanCount,
-			agent.CapacityCannotCount,
-			agent.CapacityUncertainCount,
-			agent.CapacitySuccessCriteriaCount,
-			agent.CapacityEvidenceSignalCount,
-			formatStatusTime(agent.CapacityLastNegotiatedAt),
-			formatStatusTime(agent.CapacityLastProbedAt),
-			formatStatusTime(agent.CapacityLastAttestedAt),
 		))
 		lines = append(lines, fmt.Sprintf(
 			"  runtime last_wake=%s last_review=%s dormant_at=%s apply_status=%s applied_version=%d applied_at=%s",

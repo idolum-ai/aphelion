@@ -166,25 +166,27 @@ Tool capability rollout is a separate lifecycle from generic operation proposals
 
 The canonical chain is:
 
-1. `proposal` (tool should exist)
-2. `review/ratification` (governor decision)
-3. `registration` (known runtime tool definition)
-4. `exposure` (principal-level allow)
-5. `invocation` (checked against current principal + current policy)
+1. `capability_request` with `kind=tool` (tool should exist or be granted)
+2. `review` through `capability_authority` (parent/admin decision)
+3. `install`
+4. `audit_run`
+5. `probe_run` plus `install_set status=verified`
+6. `registration` (known runtime tool definition)
+7. `grant` (principal-level `invoke` allow)
+8. `invocation` (checked against current principal, grant, freshness, and policy)
 
 Normative requirements:
 
-- `proposal_submit` creates proposals in `proposed` state only.
-- ordinary approvals should go through broker-backed `proposal_ratify`.
-- `proposal_review` may update non-approved states but must not be the normal direct path to `approved`.
-- if direct approval is needed, it must use an explicit override path with a required operator reason.
+- `capability_request request_submit` creates capability requests in `proposed` state only.
+- parent/admin approval and rejection go through `capability_authority request_review`.
+- `capability_authority grant_set` is the only tool access grant writer.
 - `register` must bind to a known trusted runtime tool definition; free-form `tool_name` strings are not sufficient.
 - `implementation_ref` is metadata only and must not be treated as executable proof.
-- effective access is decided at invocation time from current principal state plus current exposure policy; stale records do not grant access.
+- effective access is decided at invocation time from current principal state plus active `capability_grants`; stale or expired grants do not allow access.
 
 Status/readability requirements:
 
-- status projections should distinguish tool proposal state (`proposed/approved/rejected`) from registration (`registered=true/false`) and exposure (`active=true/false`).
+- status projections should distinguish capability request state (`proposed/parent_approved/approved/rejected`) from registration (`registered=true/false`) and grant status (`active/stale/revoked/expired`).
 - tool authority status should be projected from canonical execution events with explicit source attribution.
 
 ## Durable-Agent Governance Tooling
@@ -552,14 +554,14 @@ tool manifests from JSON files in that directory.
 
 External tools are authority-managed runtime tools:
 
-- proposal approval is separate from registration
+- capability request approval and grants are separate from registration
 - install, audit, and probe records are durable session state
 - `install_set status=verified` requires current runtime-authored `audit_run`
   and `probe_run` evidence
 - verified install and audit records store deterministic fingerprints covering
   manifest execution fields, IO schemas, constraints, install/probe commands,
   and local process/subprocess entry file contents
-- registration, exposure, listing, show, and invocation re-check the fingerprint
+- registration, grant-gated listing, show, and invocation re-check the fingerprint
   and mark stale tools with an operator-readable reason
 - stale external tools cannot be registered or invoked
 
@@ -568,8 +570,9 @@ sandbox runner. `container` and `workspace_runner` manifests are importable and
 diagnosable but are not process-executable until dedicated runtimes exist.
 
 The bundled `browse_page` pilot lives under `external-tools/browse_page/`. It is
-owned by `idolum-email`, exposes only to that agent by policy, and uses a
-deterministic fixture implementation so browser behavior remains outside core.
+owned by `idolum-email`; invocation must be granted through
+`capability_authority`. It uses a deterministic fixture implementation so
+browser behavior remains outside core.
 
 ## Audit and Persistence
 

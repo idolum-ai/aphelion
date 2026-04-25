@@ -528,24 +528,27 @@ The conversation may ask one missing question at a time, for example:
 The answers belong to the charter formed by the admin and parent together.
 They do not come from external senders or from the child improvising its own standing role.
 
-## Bidirectional Capacity Contract
+## Capability Delegation Contract
 
-Authorization alone is not enough. Durable governance should include a child-legible capacity contract that is negotiated, probed, and attested.
+Authorization alone is not enough. Durable governance should include a
+child-legible delegation contract for permissions that exceed the child's
+current charter.
 
-Minimum contract loop:
+Minimum delegation loop:
 
-1. Parent proposes bounded charter intent and success/evidence expectations.
-2. Child answers in first-person operational terms:
-   - what it can do
-   - what it cannot do
-   - where it is uncertain
-   - what success looks like from child scope
-   - how completion can be evidenced
-3. Parent and child ratify a provisional contract.
-4. Probe results are recorded against that contract.
-5. Contract is attested (`verified`) or marked stale when policy drift occurs.
+1. Child or parent creates a `capability_request` with kind, target resource,
+   requested principal, purpose, and proposed constraints.
+2. Parent review is recorded when a parent principal is named.
+3. Admin review approves or rejects the request.
+4. Any required provisioning or attestation happens through the relevant
+   lifecycle surface, such as external-tool install/audit/probe/verify.
+5. Admin creates an active `capability_grant` with allowed actions, expiration,
+   policy fingerprint, and constraints.
+6. Runtime invocation checks the grant and records allowed or failed use.
 
-The registry/runtime should retain these contract facts as durable machine-readable state, and `/status` should expose the current capacity state (`unattested|provisional|verified|stale`) plus the latest negotiation/probe/attestation timestamps.
+The registry/runtime should retain these facts as durable machine-readable state,
+and `/status` should expose request/grant state, stale reason, policy anchor,
+invocation counters, and failure counters.
 
 ## Registry Shape
 

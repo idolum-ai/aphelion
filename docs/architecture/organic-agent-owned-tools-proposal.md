@@ -9,20 +9,23 @@ The immediate lesson from the current branch is that the lifecycle work is
 useful, but the implementation is still too core-centric. Aphelion now has a
 real authority chain for tools:
 
-1. proposal
-2. ratification / override
-3. registration
-4. exposure
-5. invocation-time authorization
+1. capability request
+2. parent/admin review
+3. install
+4. audit
+5. probe and verify
+6. registration
+7. capability grant
+8. invocation-time authorization
 
 That chain is worth keeping.
 
 What should change is **where tool implementation lives**.
 
 The goal is not to turn Aphelion into a growing library of domain tools.
-The goal is to let approved agents propose, provision, attest, register,
-expose, and use **their own tools** while Aphelion remains the governance,
-diagnostics, and continuity substrate.
+The goal is to let approved agents request, provision, attest, register, grant,
+and use **their own tools** while Aphelion remains the governance, diagnostics,
+and continuity substrate.
 
 ## Directional Thesis
 
@@ -38,7 +41,7 @@ capabilities and more like an organic system with:
 The system should preserve security, but security should come primarily from:
 
 - bounded execution environments
-- explicit authority and exposure state
+- explicit authority and grant state
 - attested install/probe records
 - invocation-time authorization
 - diagnosable drift
@@ -51,9 +54,9 @@ not from endlessly embedding special-purpose tools in core.
 
 Aphelion should continue to own:
 
-- proposal and ratification flow
+- capability request and review flow
 - registration records
-- exposure policy
+- capability grants
 - invocation-time authorization checks
 - canonical execution logging
 - status and drift projection
@@ -76,9 +79,9 @@ These should not require a new specialized core feature every time.
 
 ### 1. Core-embedded domain tools
 
-`tool/search_web.go` is useful as a proving example, but it is architecturally
-an exception. If future domain capabilities follow the same pattern, Aphelion
-will become a collection of bespoke tools instead of a general authority layer.
+Built-in domain tools are architecturally expensive. If future domain
+capabilities follow that pattern, Aphelion will become a collection of bespoke
+tools instead of a general authority layer.
 
 ### 2. Registration is still runtime-definition-centric
 
@@ -88,7 +91,7 @@ external tool packages / containers / manifests with attestation metadata.
 
 ### 3. Dependency installation is not yet first-class
 
-Right now dependency installation is mostly framed as an operational proposal.
+Right now dependency installation is mostly framed as an operational request.
 That is necessary, but incomplete. The system needs a durable record of:
 
 - what was requested
@@ -99,16 +102,17 @@ That is necessary, but incomplete. The system needs a durable record of:
 
 ### 4. Status is lifecycle-aware, but not fully drift-aware
 
-Status can now surface recent proposal / registration / exposure transitions.
+Status can now surface recent request, grant, registration, audit, and probe
+transitions.
 The next step is to compare declared state against executable reality.
 
 Examples of desired diagnostic states:
 
-- proposed-but-never-ratified
-- ratified-but-not-installed
+- requested-but-never-approved
+- approved-but-not-installed
 - installed-but-not-registered
-- registered-but-not-exposed
-- exposed-but-probe-failing
+- registered-but-not-granted
+- granted-but-probe-failing
 - contract-diverges-from-behavior
 
 ## Proposed External Tool Model
@@ -166,7 +170,7 @@ Minimal fields:
   },
   "rollback": {
     "kind": "container_remove",
-    "notes": "Remove image and revoke exposure if probe fails repeatedly."
+    "notes": "Remove image and revoke grants if probe fails repeatedly."
   },
   "attestation": {
     "installer": "aphelion",
@@ -189,15 +193,15 @@ This should not be implicit inside tool registration.
 ### Install lifecycle
 
 1. **capability need identified**
-2. **install proposal submitted**
-3. **ratified / denied / overridden**
+2. **install request submitted**
+3. **approved / denied / overridden**
 4. **install executed in bounded environment**
 5. **post-install probe run**
 6. **attestation recorded**
 7. **tool registration allowed**
-8. **exposure allowed**
+8. **grant allowed**
 
-### Install proposal fields
+### Install Request Fields
 
 - `requested_by`
 - `target_environment`
@@ -247,7 +251,7 @@ Because these are different truths:
 
 - install answers: *is the environment provisioned?*
 - registration answers: *is this tool recognized by authority state?*
-- exposure answers: *who may use it?*
+- grant answers: *who may use it?*
 - invocation answers: *does this call pass current authorization and runtime checks?*
 
 Keeping those separate makes drift repairable.
@@ -266,7 +270,7 @@ Instead of building thicker walls inside core, Aphelion should become better at:
 Examples of status output that this architecture should enable:
 
 - "email agent proposed `browse_page`; install approved; probe failing because Chromium shared libs are missing; tool remains unregistered"
-- "camera watcher tool is installed and registered, but exposure was revoked after repeated probe failures"
+- "camera watcher tool is installed and registered, but its grant was revoked after repeated probe failures"
 - "tool contract declares read-only behavior, but observed outputs indicate mutation attempts; quarantine recommended"
 
 This is closer to an immune-system model than a padlock model.
@@ -283,7 +287,7 @@ The first external-tool lane is implemented for process-style tools:
 - audit/install/probe records persist deterministic anchors for `install_ref`,
   normalized manifest hash, and process workspace or container identity
   fingerprints
-- `install_show`, `audit_show`, registration, exposure, principal manifest
+- `install_show`, `audit_show`, registration, grants, principal manifest
   listing, and invocation re-check the current anchors and mark drifted tools
   stale with typed operator-readable reasons such as `manifest_drift`,
   `workspace_drift`, `container_drift`, and `install_ref_changed`
@@ -295,8 +299,9 @@ The first external-tool lane is implemented for process-style tools:
 - container manifests have separate image/build/health audit and drift
   semantics, but remain non-executable until a dedicated container executor
   exists
-- tenants and agents create requests through `tool_request`; operators retain
-  authority over ratification, install, audit, verify, register, and expose
+- tenants and agents create requests through `capability_request`; operators
+  retain authority over parent/admin review, grants, install, audit, verify,
+  and register
 - `external-tools/browse_page/` is the first pilot manifest, owned by
   `idolum-email`, with a deterministic fixture implementation outside core
 
@@ -305,8 +310,8 @@ The first external-tool lane is implemented for process-style tools:
 ### Phase 1 — stabilize current authority substrate
 
 Keep the current `tool_authority` lifecycle and status projections.
-Treat the current `search_web` implementation as a proving example, not the
-future default pattern.
+Keep domain behavior outside core unless it is genuinely native system
+infrastructure.
 
 ### Phase 2 — add external-tool manifest registration
 
@@ -323,12 +328,12 @@ Core should validate:
 
 ### Phase 3 — add governed install + attestation records
 
-Introduce durable install records distinct from tool proposals and registered
+Introduce durable install records distinct from capability requests and registered
 tools.
 
 Minimum records:
 
-- install proposal
+- install request
 - install execution event(s)
 - probe result
 - attestation record
@@ -352,10 +357,10 @@ It should **not** be browser-aware, camera-aware, or domain-aware.
 Use the email agent as the first pilot:
 
 - propose `browse_page`
-- ratify install requirements
+- approve install requirements
 - provision dependencies with attestation
 - register external manifest
-- expose only to the email agent
+- grant invocation only to the email agent
 - validate one narrow workflow
 
 If this pilot requires special-casing browser behavior inside Aphelion core,
@@ -367,7 +372,7 @@ If implemented, the system becomes:
 
 - more dynamic: agents can grow tools without waiting for core specialization
 - more expressive: capabilities live where they belong, near the agent using them
-- more secure: authority, install, exposure, and invocation remain explicit
+- more secure: authority, install, grants, and invocation remain explicit
 - more diagnosable: state drift becomes legible
 - more repairable: failure states can lead to bounded recovery steps
 

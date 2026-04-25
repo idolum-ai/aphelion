@@ -43,12 +43,6 @@
     "network": "none",
     "max_runtime_seconds": 10
   },
-  "exposure": {
-    "principals": [
-      "idolum-email"
-    ],
-    "requires_ratification": true
-  },
   "install": {
     "command": [
       "./external-tools/browse_page/bin/install.sh"
@@ -61,6 +55,6 @@
     "expected_output_contains": "browse_page fixture ready"
   },
   "provenance": {
-    "proposal_id": "pilot:browse-page"
+    "request_id": "pilot:browse-page"
   }
 }

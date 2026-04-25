@@ -81,10 +81,6 @@ purpose = "assistants"
 enabled = false
 default_store = ""
 
-[search.brave]
-api_key = ""
-base_url = "https://api.search.brave.com"
-
 [sessions]
 db_path = "~/.aphelion/state/sessions.db"
 idle_expiry = "24h"

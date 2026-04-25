@@ -238,16 +238,16 @@ That lets the setup behave like guided operational work instead of a one-shot st
 
 ## Relationship To Tool Authority Lifecycle
 
-Operation proposals and tool-authority proposals are related but distinct.
+Operation proposals and tool capability requests are related but distinct.
 
 - operation proposals gate bounded work inside an operation (`pending/approved/denied/...`)
-- tool-authority proposals gate capability rollout (`proposed/approved/rejected`, then register/expose)
+- tool capability requests gate capability rollout (`proposed/parent_approved/approved/rejected`, then install/audit/verify/register/grant)
 
 Normative boundary:
 
-- operational proposal state must not be treated as proof that a tool is registered or exposed.
-- tool invocation authority must come from the tool-authority chain and current invocation-time checks.
-- status should keep these layers separate so "proposal approved" is not conflated with "tool registered/exposed."
+- operational proposal state must not be treated as proof that a tool is registered or granted.
+- tool invocation authority must come from `capability_grants`, verified tool lifecycle state, and current invocation-time checks.
+- status should keep these layers separate so "request approved" is not conflated with "tool registered/granted."
 
 ## Persona Rule
 

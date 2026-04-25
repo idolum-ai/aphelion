@@ -943,39 +943,15 @@ func TestChatStatusSnapshotSummarizesToolAuthorityLifecycleEvents(t *testing.T) 
 	now := time.Now().UTC()
 	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
 		{
-			EventType: core.ExecutionEventToolProposalReviewed,
-			Stage:     "tool_authority",
-			Status:    "approved",
-			PayloadJSON: `{
-				"proposal_id":"tp_123",
-				"tool_name":"search_web",
-				"review_status":"approved",
-				"ratified_via":"decision_broker",
-				"transition_reason":"approved"
-			}`,
-			CreatedAt: now.Add(-10 * time.Second),
-		},
-		{
 			EventType: core.ExecutionEventToolRegistered,
 			Stage:     "tool_authority",
 			Status:    "enabled",
 			PayloadJSON: `{
-				"tool_name":"search_web",
+				"tool_name":"browse_page",
 				"registered":true,
-				"implementation_ref":"tool/search_web.go"
+				"implementation_ref":"external:browse_page"
 			}`,
 			CreatedAt: now.Add(-5 * time.Second),
-		},
-		{
-			EventType: core.ExecutionEventToolExposureChanged,
-			Stage:     "tool_authority",
-			Status:    "enabled",
-			PayloadJSON: `{
-				"tool_name":"search_web",
-				"principal":"idolum-email",
-				"active":true
-			}`,
-			CreatedAt: now.Add(-2 * time.Second),
 		},
 	}); err != nil {
 		t.Fatalf("AppendExecutionEvents(tool authority) err = %v", err)
@@ -985,26 +961,14 @@ func TestChatStatusSnapshotSummarizesToolAuthorityLifecycleEvents(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ChatStatusSnapshot() err = %v", err)
 	}
-	if len(snapshot.RecentExecution) < 3 {
-		t.Fatalf("RecentExecution len = %d, want at least 3", len(snapshot.RecentExecution))
+	if len(snapshot.RecentExecution) < 1 {
+		t.Fatalf("RecentExecution len = %d, want at least 1", len(snapshot.RecentExecution))
 	}
-	if snapshot.RecentExecution[0].EventType != core.ExecutionEventToolExposureChanged {
-		t.Fatalf("RecentExecution[0].EventType = %q, want %q", snapshot.RecentExecution[0].EventType, core.ExecutionEventToolExposureChanged)
+	if snapshot.RecentExecution[0].EventType != core.ExecutionEventToolRegistered {
+		t.Fatalf("RecentExecution[0].EventType = %q, want %q", snapshot.RecentExecution[0].EventType, core.ExecutionEventToolRegistered)
 	}
-	if !strings.Contains(snapshot.RecentExecution[0].Summary, "active=true") {
-		t.Fatalf("RecentExecution[0].Summary = %q, want active=true", snapshot.RecentExecution[0].Summary)
-	}
-	if snapshot.RecentExecution[1].EventType != core.ExecutionEventToolRegistered {
-		t.Fatalf("RecentExecution[1].EventType = %q, want %q", snapshot.RecentExecution[1].EventType, core.ExecutionEventToolRegistered)
-	}
-	if !strings.Contains(snapshot.RecentExecution[1].Summary, "registered=true") {
-		t.Fatalf("RecentExecution[1].Summary = %q, want registered=true", snapshot.RecentExecution[1].Summary)
-	}
-	if snapshot.RecentExecution[2].EventType != core.ExecutionEventToolProposalReviewed {
-		t.Fatalf("RecentExecution[2].EventType = %q, want %q", snapshot.RecentExecution[2].EventType, core.ExecutionEventToolProposalReviewed)
-	}
-	if !strings.Contains(snapshot.RecentExecution[2].Summary, "review_status=approved") {
-		t.Fatalf("RecentExecution[2].Summary = %q, want review_status=approved", snapshot.RecentExecution[2].Summary)
+	if !strings.Contains(snapshot.RecentExecution[0].Summary, "registered=true") {
+		t.Fatalf("RecentExecution[0].Summary = %q, want registered=true", snapshot.RecentExecution[0].Summary)
 	}
 }
 
@@ -1599,83 +1563,6 @@ func TestDurableAgentsStatusSnapshotIncludesHealthSignals(t *testing.T) {
 		if source != "operational_current_state_store:session.durable_agent_state" {
 			t.Fatalf("runtime posture source for %s = %q, want operational_current_state_store:session.durable_agent_state", id, source)
 		}
-	}
-}
-
-func TestDurableAgentsStatusSnapshotIncludesCapacityContractSignals(t *testing.T) {
-	t.Parallel()
-
-	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	rt, err := New(cfg, store, provider, nil, sender)
-	if err != nil {
-		t.Fatalf("New() err = %v", err)
-	}
-
-	agent := core.DurableAgent{
-		AgentID:            "agent-capacity",
-		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
-		Status:             "active",
-		LivePolicy: core.DurableAgentLivePolicy{
-			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
-			OutboundMode:       "read_only",
-			DriftPolicy:        "admin_review",
-		},
-		PolicyVersion: 2,
-		PolicyHash:    "hash-capacity",
-		WakeupMode:    "poll",
-	}
-	if err := store.UpsertDurableAgent(agent); err != nil {
-		t.Fatalf("UpsertDurableAgent(agent-capacity) err = %v", err)
-	}
-
-	now := time.Now().UTC().Add(-5 * time.Minute)
-	continuity := core.DurableAgentContinuityState{
-		CapabilityContract: &core.DurableAgentCapabilityContract{
-			Status:           "verified",
-			Can:              []string{"triage_inbox", "summarize_thread"},
-			Cannot:           []string{"send_mail"},
-			Uncertain:        []string{"ocr_heavy_pdf"},
-			SuccessCriteria:  []string{"surface important threads within 5m"},
-			EvidenceSignals:  []string{"review artifact includes surfaced_count"},
-			LastNegotiatedAt: now.Add(-5 * time.Minute),
-			LastProbedAt:     now.Add(-3 * time.Minute),
-			LastAttestedAt:   now,
-		},
-	}
-	raw, err := continuity.Marshal()
-	if err != nil {
-		t.Fatalf("continuity.Marshal() err = %v", err)
-	}
-	if err := store.SaveDurableAgentState(core.DurableAgentState{
-		AgentID:   "agent-capacity",
-		StateJSON: raw,
-	}); err != nil {
-		t.Fatalf("SaveDurableAgentState(agent-capacity) err = %v", err)
-	}
-
-	snapshot, err := rt.DurableAgentsStatusSnapshot()
-	if err != nil {
-		t.Fatalf("DurableAgentsStatusSnapshot() err = %v", err)
-	}
-	if len(snapshot.Agents) != 1 {
-		t.Fatalf("Agents len = %d, want 1", len(snapshot.Agents))
-	}
-	row := snapshot.Agents[0]
-	if row.AgentID != "agent-capacity" {
-		t.Fatalf("AgentID = %q, want agent-capacity", row.AgentID)
-	}
-	if row.CapacityState != "verified" {
-		t.Fatalf("CapacityState = %q, want verified", row.CapacityState)
-	}
-	if row.CapacityCanCount != 2 || row.CapacityCannotCount != 1 || row.CapacityUncertainCount != 1 {
-		t.Fatalf("capacity counts = can:%d cannot:%d uncertain:%d, want 2/1/1", row.CapacityCanCount, row.CapacityCannotCount, row.CapacityUncertainCount)
-	}
-	if row.CapacitySuccessCriteriaCount != 1 || row.CapacityEvidenceSignalCount != 1 {
-		t.Fatalf("capacity criteria counts = success:%d evidence:%d, want 1/1", row.CapacitySuccessCriteriaCount, row.CapacityEvidenceSignalCount)
-	}
-	if row.CapacityLastAttestedAt.IsZero() {
-		t.Fatal("CapacityLastAttestedAt is zero, want attestation timestamp")
 	}
 }
 

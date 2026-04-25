@@ -277,30 +277,3 @@ func TestCapabilityGrantEnablesRegisteredToolWithoutLegacyExposure(t *testing.T)
 		t.Fatalf("CapabilityGrant invocation count = %#v ok=%t, want one runtime invocation", grant, ok)
 	}
 }
-
-func TestToolRequestCreatesCanonicalCapabilityRequest(t *testing.T) {
-	t.Parallel()
-
-	registry, store := newDurableAgentToolRegistry(t)
-	actor := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 300}
-	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, adminSessionKey(), "tool_request", json.RawMessage(`{
-		"action":"proposal_submit",
-		"proposal_id":"tp-compat",
-		"tool_name":"search_web",
-		"why_now":"summarize public job descriptions",
-		"contract":{"inputs":{"query":"string"}}
-	}`))
-	if err != nil {
-		t.Fatalf("tool_request proposal_submit err = %v", err)
-	}
-	request, ok, err := store.CapabilityRequest("cap-tp-compat")
-	if err != nil {
-		t.Fatalf("CapabilityRequest() err = %v", err)
-	}
-	if !ok {
-		t.Fatal("CapabilityRequest(cap-tp-compat) ok=false, want canonical request")
-	}
-	if request.Kind != session.CapabilityKindTool || request.TargetResource != "search_web" || request.RequestedBy != "telegram:300" {
-		t.Fatalf("CapabilityRequest = %#v, want tool/search_web attributed to telegram:300", request)
-	}
-}

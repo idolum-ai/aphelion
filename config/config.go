@@ -4,7 +4,6 @@ package config
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,7 +20,6 @@ type Config struct {
 	Governor      GovernorConfig      `toml:"governor"`
 	Providers     ProvidersConfig     `toml:"providers"`
 	OpenAI        OpenAIConfig        `toml:"openai"`
-	Search        SearchConfig        `toml:"search"`
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Agent         AgentConfig         `toml:"agent"`
 	Tools         ToolsConfig         `toml:"tools"`
@@ -162,15 +160,6 @@ type OpenAIFilesConfig struct {
 type OpenAIVectorStoresConfig struct {
 	Enabled      bool   `toml:"enabled"`
 	DefaultStore string `toml:"default_store"`
-}
-
-type SearchConfig struct {
-	Brave SearchBraveConfig `toml:"brave"`
-}
-
-type SearchBraveConfig struct {
-	APIKey  string `toml:"api_key"`
-	BaseURL string `toml:"base_url"`
 }
 
 type SessionsConfig struct {
@@ -416,11 +405,6 @@ func Default() Config {
 			},
 			VectorStores: OpenAIVectorStoresConfig{
 				Enabled: false,
-			},
-		},
-		Search: SearchConfig{
-			Brave: SearchBraveConfig{
-				BaseURL: "https://api.search.brave.com",
 			},
 		},
 		Sessions: SessionsConfig{
@@ -1167,14 +1151,6 @@ func validate(cfg *Config) error {
 		}
 		if cfg.OpenAI.Files.Enabled && strings.TrimSpace(cfg.OpenAI.Files.Purpose) == "" {
 			return fmt.Errorf("openai.files.purpose is required when openai.files.enabled = true")
-		}
-	}
-	if strings.TrimSpace(cfg.Search.Brave.APIKey) != "" {
-		if strings.TrimSpace(cfg.Search.Brave.BaseURL) == "" {
-			return fmt.Errorf("search.brave.base_url is required when search.brave.api_key is set")
-		}
-		if _, err := url.Parse(strings.TrimSpace(cfg.Search.Brave.BaseURL)); err != nil {
-			return fmt.Errorf("search.brave.base_url must be a valid URL: %w", err)
 		}
 	}
 	if len(cfg.Principals.Telegram.AdminUserIDs) == 0 {

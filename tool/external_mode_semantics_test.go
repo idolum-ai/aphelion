@@ -47,9 +47,7 @@ func TestExternalContainerAndWorkspaceRunnerModesAreNotProcessExecutable(t *test
 			if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: toolName, ImplementationRef: "external:" + toolName, Registered: true}); err != nil {
 				t.Fatalf("UpsertRegisteredTool() err = %v", err)
 			}
-			if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: toolName, Principal: "telegram:1001", Active: true}); err != nil {
-				t.Fatalf("UpsertToolExposure() err = %v", err)
-			}
+			grantToolInvoke(t, store, toolName, "telegram:1001")
 
 			_, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), toolName, json.RawMessage(`{"url":"https://example.com"}`))
 			if err == nil {

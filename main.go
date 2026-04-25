@@ -584,17 +584,6 @@ func run() error {
 	if retrievalStore != nil {
 		tools.WithRetrievalStore(retrievalStore, cfg.OpenAI.VectorStores.DefaultStore)
 	}
-	if strings.TrimSpace(cfg.Search.Brave.APIKey) != "" {
-		searchClient, err := tool.NewBraveSearchClient(tool.BraveSearchClientOptions{
-			APIKey:     cfg.Search.Brave.APIKey,
-			BaseURL:    cfg.Search.Brave.BaseURL,
-			HTTPClient: httpClient,
-		})
-		if err != nil {
-			return err
-		}
-		tools.WithSearchWeb(searchClient)
-	}
 	principalResolver := principal.NewResolver(
 		cfg.Principals.Telegram.AdminUserIDs,
 		cfg.Principals.Telegram.ApprovedUserIDs,
@@ -675,7 +664,6 @@ func run() error {
 	cancelDecisionLoad()
 	decisionHandler := newTelegramDecisionHandler(tgOutbound, router, decisionBroker, store)
 	tools.WithExecApprover(newTelegramExecApprover(tgOutbound, decisionBroker))
-	tools.WithToolProposalRatificationApprover(newTelegramToolProposalRatificationApprover(tgOutbound, decisionBroker))
 	tools.WithDurableMemoryDelegationApprover(newTelegramDurableMemoryDelegationApprover(tgOutbound, decisionBroker))
 	tools.WithDurableSnapshotRestoreApprover(newTelegramDurableSnapshotRestoreApprover(tgOutbound, decisionBroker))
 

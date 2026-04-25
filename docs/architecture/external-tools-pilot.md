@@ -12,7 +12,7 @@ The first pilot is `browse_page`, owned by `idolum-email`:
 - manifest: `external-tools/browse_page/manifest.json`
 - deterministic fixture entry: `external-tools/browse_page/bin/browse_page.sh`
 - install probe: `external-tools/browse_page/bin/probe.sh`
-- default exposure intent: `idolum-email` only
+- first intended grant target: `idolum-email`
 
 The bundled implementation is intentionally a deterministic fixture. It proves
 the governed external-tool lifecycle in CI without adding browser dependencies
@@ -37,19 +37,20 @@ the bundled pilot, point `external_manifest_dir` at
 
 The external-tool lifecycle has one canonical flow:
 
-1. `proposal_submit`
+1. `capability_request` (`kind=tool`)
 2. install (`install_set pending` plus `install_execute`, or an operator-owned
    equivalent that records `install_ref`)
 3. audit (`audit_run`)
 4. verify (`probe_run` plus `install_set verified`)
 5. register
-6. expose
+6. grant
 7. invoke
 
 Each phase has a bounded claim:
 
-- proposal: a tenant, agent, or operator requested a capability and named the
-  desired contract; it does not imply safety, installability, or availability.
+- proposal: a tenant, agent, or operator requested a tool capability through
+  `capability_request` and named the desired contract; it does not imply
+  safety, installability, or availability.
 - install: an operator provisioned or referenced an artifact with an
   `install_ref`; it does not imply the runtime can load it.
 - audit: `audit_run` is the only import/load attestation surface. It proves the
@@ -62,9 +63,9 @@ Each phase has a bounded claim:
   records whose anchors match the current install baseline.
 - register: the verified implementation becomes a named runtime capability. It
   does not grant access.
-- expose: a registered tool is made available to a principal. It does not skip
-  freshness checks.
-- invoke: the exposed principal may call the tool only if the verified baseline
+- grant: `capability_authority` gives a principal an active `kind=tool`
+  grant with the `invoke` action. It does not skip freshness checks.
+- invoke: the granted principal may call the tool only if the verified baseline
   is still fresh and the runtime policy ceilings are enforceable.
 
 The canonical drift anchors are:
@@ -79,16 +80,14 @@ Verified tools automatically become `stale` when any anchor moves. Drift reasons
 are typed as `install_ref_changed`, `manifest_drift`, `workspace_drift`,
 `container_drift`, `missing_baseline`, `fingerprint_error`,
 `policy_violation`, `audit_failure`, or `probe_failure`. Stale tools cannot be
-registered, exposed, listed as callable for a principal, or invoked until
+registered, listed as callable for a principal, or invoked until
 re-audited, re-probed, and re-verified.
 
-Tenants and agents may still use `tool_request` for compatibility proposal
-creation. That path now also writes a canonical `capability_request` with
-`kind=tool`. New broad permission requests should use `capability_request`
-directly; operators use `capability_authority` for parent/admin review and
-admin grants, and `tool_authority` for tool install, audit, verification,
-registration, and legacy exposure. This keeps request attribution visible
-without handing lifecycle authority to the requester.
+Tenants and agents use `capability_request` with `kind=tool` for proposal
+creation. Operators use `capability_authority` for parent/admin review and
+admin grants, and `tool_authority` for tool install, audit, verification, and
+registration. This keeps request attribution visible without handing lifecycle
+authority to the requester.
 
 ## Execution Modes
 

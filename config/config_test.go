@@ -103,9 +103,6 @@ external_manifest_dir = "./external-tools"
 	if cfg.OpenAI.VectorStores.Enabled || cfg.OpenAI.VectorStores.DefaultStore != "" {
 		t.Fatalf("openai.vector_stores defaults = %#v, want disabled/empty", cfg.OpenAI.VectorStores)
 	}
-	if cfg.Search.Brave.BaseURL != "https://api.search.brave.com" || cfg.Search.Brave.APIKey != "" {
-		t.Fatalf("search.brave defaults = %#v, want default base url + empty api key", cfg.Search.Brave)
-	}
 	if !strings.HasSuffix(cfg.Agent.Workspace, "/workspace") {
 		t.Fatalf("workspace = %q, want expanded relative path", cfg.Agent.Workspace)
 	}
@@ -1455,38 +1452,6 @@ api_key = "sk-ant-test"
 	}
 	if !strings.Contains(err.Error(), "must contain exactly one user id") {
 		t.Fatalf("error = %v, want single-admin validation message", err)
-	}
-}
-
-func TestLoadRejectsSearchBraveBaseURLWhenAPIKeySet(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-	raw := `
-[telegram]
-bot_token = "tg-test"
-
-[principals.telegram]
-admin_user_ids = [123]
-
-[providers.anthropic]
-api_key = "sk-ant-test"
-
-[search.brave]
-api_key = "brv_test"
-base_url = "://bad-url"
-`
-	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	_, err := Load(configPath)
-	if err == nil {
-		t.Fatal("Load() err = nil, want search.brave.base_url validation error")
-	}
-	if !strings.Contains(err.Error(), "search.brave.base_url") {
-		t.Fatalf("err = %v, want search.brave.base_url validation", err)
 	}
 }
 

@@ -22,7 +22,6 @@ type ExternalToolManifest struct {
 	IO          ExternalToolManifestIO          `json:"io"`
 	Constraints ExternalToolManifestConstraints `json:"constraints,omitempty"`
 	Container   ExternalToolManifestContainer   `json:"container,omitempty"`
-	Exposure    ExternalToolManifestExposure    `json:"exposure,omitempty"`
 	Install     ExternalToolManifestInstall     `json:"install,omitempty"`
 	Audit       ExternalToolManifestAudit       `json:"audit,omitempty"`
 	Probe       ExternalToolManifestProbe       `json:"probe,omitempty"`
@@ -47,11 +46,6 @@ type ExternalToolManifestConstraints struct {
 	Filesystem        string   `json:"filesystem,omitempty"`
 	MaxMemoryMB       int      `json:"max_memory_mb,omitempty"`
 	MaxRuntimeSeconds int      `json:"max_runtime_seconds,omitempty"`
-}
-
-type ExternalToolManifestExposure struct {
-	Principals           []string `json:"principals,omitempty"`
-	RequiresRatification bool     `json:"requires_ratification,omitempty"`
 }
 
 type ExternalToolManifestInstall struct {
@@ -81,7 +75,7 @@ type ExternalToolManifestContainerHealth struct {
 }
 
 type ExternalToolManifestProvenance struct {
-	ProposalID   string `json:"proposal_id,omitempty"`
+	RequestID    string `json:"request_id,omitempty"`
 	RegisteredAt string `json:"registered_at,omitempty"`
 	RegisteredBy string `json:"registered_by,omitempty"`
 }
@@ -101,10 +95,9 @@ func NormalizeExternalToolManifest(m ExternalToolManifest) ExternalToolManifest 
 	if m.Execution.Mode == "container" && m.Container.Image == "" {
 		m.Container.Image = m.Execution.Entry
 	}
-	m.Provenance.ProposalID = strings.TrimSpace(m.Provenance.ProposalID)
+	m.Provenance.RequestID = strings.TrimSpace(m.Provenance.RequestID)
 	m.Provenance.RegisteredAt = strings.TrimSpace(m.Provenance.RegisteredAt)
 	m.Provenance.RegisteredBy = strings.TrimSpace(m.Provenance.RegisteredBy)
-	m.Exposure.Principals = normalizeStringList(m.Exposure.Principals)
 	m.Constraints.NetworkTargets = normalizeStringList(m.Constraints.NetworkTargets)
 	if len(m.Install.Command) > 0 {
 		m.Install.Command = normalizeStringList(m.Install.Command)

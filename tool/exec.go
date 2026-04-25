@@ -27,26 +27,23 @@ import (
 const defaultMaxOutputBytes = 32 * 1024
 
 type Registry struct {
-	workspace                        string
-	timeout                          time.Duration
-	maxOutputBytes                   int
-	execApprover                     ExecApprover
-	toolProposalRatificationApprover ToolProposalRatificationApprover
-	durableMemoryDelegationApprover  DurableMemoryDelegationApprover
-	durableSnapshotRestoreApprover   DurableSnapshotRestoreApprover
-	sandbox                          *sandbox.Resolver
-	runner                           *sandbox.Runner
-	store                            *session.SQLiteStore
-	fileStore                        memstore.FileStore
-	filePurpose                      string
-	retrievalStore                   memstore.RetrievalStore
-	defaultStore                     string
-	semantic                         *memstore.SemanticEngine
-	durableAgentBootstrapLLM         core.NodeLLMBootstrap
-	searchWeb                        searchWebProvider
-	searchWebState                   *searchWebRuntimeState
-	externalManifests                []ExternalToolManifest
-	externalExecutor                 ExternalToolExecutor
+	workspace                       string
+	timeout                         time.Duration
+	maxOutputBytes                  int
+	execApprover                    ExecApprover
+	durableMemoryDelegationApprover DurableMemoryDelegationApprover
+	durableSnapshotRestoreApprover  DurableSnapshotRestoreApprover
+	sandbox                         *sandbox.Resolver
+	runner                          *sandbox.Runner
+	store                           *session.SQLiteStore
+	fileStore                       memstore.FileStore
+	filePurpose                     string
+	retrievalStore                  memstore.RetrievalStore
+	defaultStore                    string
+	semantic                        *memstore.SemanticEngine
+	durableAgentBootstrapLLM        core.NodeLLMBootstrap
+	externalManifests               []ExternalToolManifest
+	externalExecutor                ExternalToolExecutor
 }
 
 type execInput struct {
@@ -121,25 +118,17 @@ type updateOperationInput struct {
 }
 
 type toolAuthorityInput struct {
-	Action            string          `json:"action"`
-	ProposalID        string          `json:"proposal_id,omitempty"`
-	ProposedBy        string          `json:"proposed_by,omitempty"`
-	ToolName          string          `json:"tool_name,omitempty"`
-	WhyNow            string          `json:"why_now,omitempty"`
-	Contract          json.RawMessage `json:"contract,omitempty"`
-	ReviewStatus      string          `json:"review_status,omitempty"`
-	OverrideReason    string          `json:"override_reason,omitempty"`
-	RegisteredToolID  string          `json:"registered_tool_id,omitempty"`
-	ImplementationRef string          `json:"implementation_ref,omitempty"`
-	Registered        *bool           `json:"registered,omitempty"`
-	Principal         string          `json:"principal,omitempty"`
-	Active            *bool           `json:"active,omitempty"`
-	Status            string          `json:"status,omitempty"`
-	Installer         string          `json:"installer,omitempty"`
-	InstallRef        string          `json:"install_ref,omitempty"`
-	ProbeStatus       string          `json:"probe_status,omitempty"`
-	ProbeOutput       string          `json:"probe_output,omitempty"`
-	Limit             int             `json:"limit,omitempty"`
+	Action            string `json:"action"`
+	ToolName          string `json:"tool_name,omitempty"`
+	ImplementationRef string `json:"implementation_ref,omitempty"`
+	Registered        *bool  `json:"registered,omitempty"`
+	Principal         string `json:"principal,omitempty"`
+	Status            string `json:"status,omitempty"`
+	Installer         string `json:"installer,omitempty"`
+	InstallRef        string `json:"install_ref,omitempty"`
+	ProbeStatus       string `json:"probe_status,omitempty"`
+	ProbeOutput       string `json:"probe_output,omitempty"`
+	Limit             int    `json:"limit,omitempty"`
 }
 
 type capabilityInput struct {
@@ -216,19 +205,6 @@ type durableAgentWizardAnswersInput struct {
 	Capabilities     []string `json:"capabilities,omitempty"`
 	NeverRetain      []string `json:"never_retain,omitempty"`
 	DriftPolicy      string   `json:"drift_policy,omitempty"`
-}
-
-type durableAgentCapacityContractInput struct {
-	Status              string   `json:"status,omitempty"`
-	ParentProposal      string   `json:"parent_proposal,omitempty"`
-	ChildSelfAssessment string   `json:"child_self_assessment,omitempty"`
-	Can                 []string `json:"can,omitempty"`
-	Cannot              []string `json:"cannot,omitempty"`
-	Uncertain           []string `json:"uncertain,omitempty"`
-	SuccessCriteria     []string `json:"success_criteria,omitempty"`
-	EvidenceSignals     []string `json:"evidence_signals,omitempty"`
-	ProbeChecklist      []string `json:"probe_checklist,omitempty"`
-	ProbeResults        []string `json:"probe_results,omitempty"`
 }
 
 type durableAgentMemoryDelegationEntryInput struct {
@@ -313,7 +289,6 @@ type durableAgentInput struct {
 	SecretScopes              []string                            `json:"secret_scopes,omitempty"`
 	ChannelConfig             json.RawMessage                     `json:"channel_config,omitempty"`
 	WizardAnswers             *durableAgentWizardAnswersInput     `json:"wizard_answers,omitempty"`
-	CapacityContract          *durableAgentCapacityContractInput  `json:"capacity_contract,omitempty"`
 	MemoryDelegation          *durableAgentMemoryDelegationInput  `json:"memory_delegation,omitempty"`
 	Snapshot                  *durableAgentSnapshotInput          `json:"snapshot,omitempty"`
 	DelegationRequest         *durableAgentDelegationRequestInput `json:"delegation_request,omitempty"`
@@ -331,7 +306,6 @@ func NewRegistry(workspace string, timeout time.Duration) *Registry {
 		workspace:        workspace,
 		timeout:          timeout,
 		maxOutputBytes:   defaultMaxOutputBytes,
-		searchWebState:   newSearchWebRuntimeState(),
 		externalExecutor: defaultExternalToolExecutor{},
 	}
 }
@@ -355,11 +329,6 @@ func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
 
 func (r *Registry) WithExecApprover(approver ExecApprover) *Registry {
 	r.execApprover = approver
-	return r
-}
-
-func (r *Registry) WithToolProposalRatificationApprover(approver ToolProposalRatificationApprover) *Registry {
-	r.toolProposalRatificationApprover = approver
 	return r
 }
 
@@ -718,22 +687,6 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			}`),
 		})
 		defs = append(defs, agent.ToolDef{
-			Name:        "tool_request",
-			Description: "Compatibility surface for requesting a governed tool capability. Creates the legacy tool proposal and the canonical capability_request(kind=tool).",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list"], "description": "Tool request operation"},
-					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show or optional submit id"},
-					"tool_name": {"type": "string", "description": "Requested tool name"},
-					"why_now": {"type": "string", "description": "Why this capability is needed now"},
-					"contract": {"type": "object", "description": "Opaque proposed contract, constraints, inputs, outputs, owner, or implementation notes"},
-					"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Optional list limit"}
-				},
-				"required": ["action"]
-			}`),
-		})
-		defs = append(defs, agent.ToolDef{
 			Name:        "capability_request",
 			Description: "Request a governed capability or delegation. Covers tools, local devices, external accounts, purchases, public web, communication, file/network access, and emergent permissions under one reviewable contract.",
 			Parameters: json.RawMessage(`{
@@ -784,23 +737,15 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		})
 		defs = append(defs, agent.ToolDef{
 			Name:        "tool_authority",
-			Description: "Manage tool-authority lifecycle records (proposal/review/register/expose) for governor-controlled capability rollout. Admin only.",
+			Description: "Manage tool lifecycle records for governor-controlled install, audit, verification, and registration. Admin only. Use capability_request/capability_authority for proposals and access grants.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["proposal_submit", "proposal_show", "proposal_list", "proposal_review", "proposal_ratify", "proposal_override", "register", "registered_show", "registered_list", "exposure_set", "exposure_show", "exposure_list", "install_set", "install_show", "install_list", "install_execute", "audit_run", "audit_show", "audit_list", "probe_run", "probe_show", "probe_list", "access_check"], "description": "Tool-authority operation"},
-					"proposal_id": {"type": "string", "description": "Proposal id for proposal_show/proposal_review/proposal_ratify/proposal_override/register"},
-					"proposed_by": {"type": "string", "description": "Proposal author identity for proposal_submit"},
-					"tool_name": {"type": "string", "description": "Tool name for proposal_submit/register/exposure/access actions"},
-					"why_now": {"type": "string", "description": "Why this proposal is needed now"},
-					"contract": {"type": "object", "description": "Opaque contract blob for proposal_submit"},
-					"review_status": {"type": "string", "enum": ["proposed", "approved", "rejected"], "description": "Review status update for proposal_review/proposal_override"},
-					"override_reason": {"type": "string", "description": "Required operator rationale for proposal_override"},
-					"registered_tool_id": {"type": "string", "description": "Optional registered tool id link for proposal_review/proposal_override"},
+					"action": {"type": "string", "enum": ["register", "registered_show", "registered_list", "install_set", "install_show", "install_list", "install_execute", "audit_run", "audit_show", "audit_list", "probe_run", "probe_show", "probe_list", "access_check"], "description": "Tool-authority operation"},
+					"tool_name": {"type": "string", "description": "Tool name for register/install/audit/probe/access actions"},
 					"implementation_ref": {"type": "string", "description": "Implementation reference for register"},
 					"registered": {"type": "boolean", "description": "Optional explicit registered flag for register; defaults to true"},
-					"principal": {"type": "string", "description": "Principal id for exposure and access checks"},
-					"active": {"type": "boolean", "description": "Exposure active flag for exposure_set; defaults to true"},
+					"principal": {"type": "string", "description": "Principal id for access checks"},
 					"status": {"type": "string", "enum": ["pending", "installed", "verified", "failed", "stale"], "description": "Install/probe lifecycle status for install_set or install_list filtering"},
 					"installer": {"type": "string", "description": "Who installed or provisioned the external tool"},
 					"install_ref": {"type": "string", "description": "Reference to the install artifact, path, image, or package set"},
@@ -811,27 +756,13 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				"required": ["action"]
 			}`),
 		})
-		if r.searchWeb != nil {
-			defs = append(defs, agent.ToolDef{
-				Name:        "search_web",
-				Description: "Run bounded public web discovery and return normalized results only. Read-only and external. No click-through page fetch.",
-				Parameters: json.RawMessage(`{
-					"type": "object",
-					"properties": {
-						"query": {"type": "string", "description": "Search query text"},
-						"limit": {"type": "integer", "minimum": 1, "maximum": 5, "description": "Maximum number of normalized hits to return"}
-					},
-					"required": ["query"]
-				}`),
-			})
-		}
 		defs = append(defs, agent.ToolDef{
 			Name:        "durable_agent",
 			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. For policy_apply, prefer policy_patch (conversational policy intent) and use policy_overrides only when a low-level override is explicitly needed. For ordinary behavior/privacy/shared-context changes, use policy_apply directly; enrollment actions are only for remote control-plane lifecycle.",
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: inbox (currently mapped to email adapter profile)"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
@@ -895,22 +826,6 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"capabilities": {"type": "array", "items": {"type": "string"}},
 								"never_retain": {"type": "array", "items": {"type": "string"}},
 								"drift_policy": {"type": "string"}
-							}
-						},
-						"capacity_contract": {
-							"type": "object",
-							"description": "Bidirectional parent-child capacity contract details for capacity_negotiate/probe/attest actions.",
-							"properties": {
-								"status": {"type": "string", "enum": ["unattested", "provisional", "verified", "stale"]},
-								"parent_proposal": {"type": "string"},
-								"child_self_assessment": {"type": "string"},
-								"can": {"type": "array", "items": {"type": "string"}},
-								"cannot": {"type": "array", "items": {"type": "string"}},
-								"uncertain": {"type": "array", "items": {"type": "string"}},
-								"success_criteria": {"type": "array", "items": {"type": "string"}},
-								"evidence_signals": {"type": "array", "items": {"type": "string"}},
-								"probe_checklist": {"type": "array", "items": {"type": "string"}},
-								"probe_results": {"type": "array", "items": {"type": "string"}}
 							}
 						},
 						"memory_delegation": {
@@ -1054,14 +969,10 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.updatePlan(ctx, input, key)
 	case "tool_authority":
 		return r.toolAuthority(ctx, input, p, key, scope)
-	case "tool_request":
-		return r.toolRequest(ctx, input, p, key)
 	case "capability_request":
 		return r.capabilityRequest(ctx, input, p, key)
 	case "capability_authority":
 		return r.capabilityAuthority(ctx, input, p, key)
-	case "search_web":
-		return r.searchWebTool(ctx, input, p, key)
 	case "semantic_search":
 		return r.semanticSearch(ctx, input, scope)
 	case "openai_file":

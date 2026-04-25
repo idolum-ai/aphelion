@@ -19,7 +19,6 @@ func TestExternalToolAuthorityEndToEndLifecycleFlow(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
-	registry.WithToolProposalRatificationApprover(&stubToolProposalRatificationApprover{approved: true})
 	installExternalLifecycleFixture(t, registry, "browse_page")
 	key := adminSessionKey()
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
@@ -29,58 +28,12 @@ func TestExternalToolAuthorityEndToEndLifecycleFlow(t *testing.T) {
 		input   string
 		wantOut string
 	}{
-		{
-			name: "submit proposal",
-			input: `{
-				"action":"proposal_submit",
-				"proposal_id":"tp-external-browse",
-				"proposed_by":"idolum-email",
-				"tool_name":"browse_page",
-				"why_now":"Email agent needs a bounded read-only page fetcher.",
-				"contract":{"constraints":["read_only","external_manifest_owned_by_email_agent"]}
-			}`,
-			wantOut: "review_status: proposed",
-		},
-		{
-			name:    "ratify proposal",
-			input:   `{"action":"proposal_ratify","proposal_id":"tp-external-browse"}`,
-			wantOut: "review_status: approved",
-		},
-		{
-			name:    "create pending install",
-			input:   `{"action":"install_set","tool_name":"browse_page","status":"pending","installer":"aphelion","install_ref":"workspace:browse-page-fixture"}`,
-			wantOut: "status: pending",
-		},
-		{
-			name:    "run install",
-			input:   `{"action":"install_execute","tool_name":"browse_page"}`,
-			wantOut: "status: installed",
-		},
-		{
-			name:    "run audit",
-			input:   `{"action":"audit_run","tool_name":"browse_page"}`,
-			wantOut: "status: passed",
-		},
-		{
-			name:    "run probe",
-			input:   `{"action":"probe_run","tool_name":"browse_page"}`,
-			wantOut: "probe_status: passed",
-		},
-		{
-			name:    "verify install",
-			input:   `{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:browse-page-fixture"}`,
-			wantOut: "status: verified",
-		},
-		{
-			name:    "register approved proposal",
-			input:   `{"action":"register","proposal_id":"tp-external-browse","implementation_ref":"external:browse_page"}`,
-			wantOut: "registered: true",
-		},
-		{
-			name:    "expose to admin principal",
-			input:   `{"action":"exposure_set","tool_name":"browse_page","principal":"telegram:1001","active":true}`,
-			wantOut: "active: true",
-		},
+		{name: "create pending install", input: `{"action":"install_set","tool_name":"browse_page","status":"pending","installer":"aphelion","install_ref":"workspace:browse-page-fixture"}`, wantOut: "status: pending"},
+		{name: "run install", input: `{"action":"install_execute","tool_name":"browse_page"}`, wantOut: "status: installed"},
+		{name: "run audit", input: `{"action":"audit_run","tool_name":"browse_page"}`, wantOut: "status: passed"},
+		{name: "run probe", input: `{"action":"probe_run","tool_name":"browse_page"}`, wantOut: "probe_status: passed"},
+		{name: "verify install", input: `{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:browse-page-fixture"}`, wantOut: "status: verified"},
+		{name: "register tool", input: `{"action":"register","tool_name":"browse_page","implementation_ref":"external:browse_page"}`, wantOut: "registered: true"},
 	} {
 		out, err := executeToolAuthorityJSON(t, registry, actor, key, step.input)
 		if err != nil {
@@ -90,6 +43,7 @@ func TestExternalToolAuthorityEndToEndLifecycleFlow(t *testing.T) {
 			t.Fatalf("%s output = %q, want %q", step.name, out, step.wantOut)
 		}
 	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
 	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
@@ -104,12 +58,9 @@ func TestExternalToolAuthorityEndToEndLifecycleFlow(t *testing.T) {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
 	for _, eventType := range []string{
-		core.ExecutionEventToolProposalCreated,
-		core.ExecutionEventToolProposalReviewed,
 		core.ExecutionEventToolInstallUpdated,
 		core.ExecutionEventToolAuditUpdated,
 		core.ExecutionEventToolRegistered,
-		core.ExecutionEventToolExposureChanged,
 	} {
 		if !executionEventTypeExists(events, eventType) {
 			t.Fatalf("missing %s event in lifecycle flow", eventType)
@@ -117,44 +68,48 @@ func TestExternalToolAuthorityEndToEndLifecycleFlow(t *testing.T) {
 	}
 }
 
-func TestExternalToolTenantRequestLaneCarriesThroughToInvocation(t *testing.T) {
+func TestExternalToolTenantCapabilityRequestCarriesThroughToInvocation(t *testing.T) {
 	t.Parallel()
 
 	registry, _ := newDurableAgentToolRegistry(t)
-	registry.WithToolProposalRatificationApprover(&stubToolProposalRatificationApprover{approved: true})
 	installExternalLifecycleFixture(t, registry, "browse_page")
 	adminKey := adminSessionKey()
 	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	tenant := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 2002}
 	tenantKey := session.SessionKey{ChatID: 2002, UserID: 2002, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "2002"}}
 
-	requestOut, err := registry.ExecuteForSessionPrincipal(context.Background(), tenant, tenantKey, "tool_request", json.RawMessage(`{
-		"action":"proposal_submit",
-		"proposal_id":"tp-tenant-browse",
-		"tool_name":"browse_page",
-		"why_now":"Tenant needs a bounded page fetcher.",
+	requestOut, err := registry.ExecuteForSessionPrincipal(context.Background(), tenant, tenantKey, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-tenant-browse",
+		"kind":"tool",
+		"target_resource":"browse_page",
+		"purpose":"Tenant needs a bounded page fetcher.",
 		"contract":{"constraints":["read_only","operator_governed_install"]}
 	}`))
 	if err != nil {
-		t.Fatalf("tool_request proposal_submit err = %v", err)
+		t.Fatalf("capability_request request_submit err = %v", err)
 	}
-	if !strings.Contains(requestOut, "review_status: proposed") || !strings.Contains(requestOut, "proposed_by: telegram:2002") {
-		t.Fatalf("tool_request output = %q, want tenant attribution", requestOut)
+	if !strings.Contains(requestOut, "request_id: cap-tenant-browse") || !strings.Contains(requestOut, "requested_by: telegram:2002") {
+		t.Fatalf("capability_request output = %q, want tenant attribution", requestOut)
 	}
 
 	for _, input := range []string{
-		`{"action":"proposal_ratify","proposal_id":"tp-tenant-browse"}`,
 		`{"action":"install_set","tool_name":"browse_page","status":"pending","installer":"aphelion","install_ref":"workspace:browse-page-fixture"}`,
 		`{"action":"install_execute","tool_name":"browse_page"}`,
 		`{"action":"audit_run","tool_name":"browse_page"}`,
 		`{"action":"probe_run","tool_name":"browse_page"}`,
 		`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:browse-page-fixture"}`,
-		`{"action":"register","proposal_id":"tp-tenant-browse","implementation_ref":"external:browse_page"}`,
-		`{"action":"exposure_set","tool_name":"browse_page","principal":"telegram:2002","active":true}`,
+		`{"action":"register","tool_name":"browse_page","implementation_ref":"external:browse_page"}`,
 	} {
 		if _, err := executeToolAuthorityJSON(t, registry, admin, adminKey, input); err != nil {
 			t.Fatalf("tool_authority input %s err = %v", input, err)
 		}
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminKey, "capability_authority", json.RawMessage(`{"action":"request_review","request_id":"cap-tenant-browse","review_status":"approved","rationale":"bounded tool request"}`)); err != nil {
+		t.Fatalf("capability_authority request_review err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminKey, "capability_authority", json.RawMessage(`{"action":"grant_set","request_id":"cap-tenant-browse","grant_id":"capg-tenant-browse","allowed_actions":["invoke"],"grant_status":"active","principal":"telegram:2002"}`)); err != nil {
+		t.Fatalf("capability_authority grant_set err = %v", err)
 	}
 
 	tenantScope, err := registry.sandbox.Resolve(tenant)
@@ -189,37 +144,6 @@ func TestExternalToolTenantRequestLaneCarriesThroughToInvocation(t *testing.T) {
 
 func TestExternalToolAuthorityLifecycleNegativeGates(t *testing.T) {
 	t.Parallel()
-
-	t.Run("rejected proposal blocks registration", func(t *testing.T) {
-		t.Parallel()
-		registry, _ := newDurableAgentToolRegistry(t)
-		installExternalLifecycleFixture(t, registry, "browse_page")
-		key := adminSessionKey()
-		actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
-
-		if _, err := executeToolAuthorityJSON(t, registry, actor, key, `{
-			"action":"proposal_submit",
-			"proposal_id":"tp-rejected-browse",
-			"proposed_by":"idolum-email",
-			"tool_name":"browse_page",
-			"why_now":"Need bounded page reads.",
-			"contract":{"constraints":["read_only"]}
-		}`); err != nil {
-			t.Fatalf("proposal_submit err = %v", err)
-		}
-		if _, err := executeToolAuthorityJSON(t, registry, actor, key, `{
-			"action":"proposal_review",
-			"proposal_id":"tp-rejected-browse",
-			"review_status":"rejected",
-			"review_notes":"not bounded enough"
-		}`); err != nil {
-			t.Fatalf("proposal_review err = %v", err)
-		}
-		_, err := executeToolAuthorityJSON(t, registry, actor, key, `{"action":"register","proposal_id":"tp-rejected-browse","implementation_ref":"external:browse_page"}`)
-		if err == nil || !strings.Contains(err.Error(), "must be approved before registration") {
-			t.Fatalf("register rejected proposal err = %v, want proposal approval gate", err)
-		}
-	})
 
 	t.Run("installed but unaudited blocks verification", func(t *testing.T) {
 		t.Parallel()
@@ -263,9 +187,9 @@ func TestExternalToolAuthorityLifecycleNegativeGates(t *testing.T) {
 		}
 	})
 
-	t.Run("unregistered unexposed and revoked exposure block invocation", func(t *testing.T) {
+	t.Run("unregistered and ungranted block invocation", func(t *testing.T) {
 		t.Parallel()
-		registry, _ := newDurableAgentToolRegistry(t)
+		registry, store := newDurableAgentToolRegistry(t)
 		installExternalLifecycleFixture(t, registry, "browse_page")
 		key := adminSessionKey()
 		actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
@@ -279,21 +203,12 @@ func TestExternalToolAuthorityLifecycleNegativeGates(t *testing.T) {
 			t.Fatalf("register err = %v", err)
 		}
 		_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
-		if err == nil || !strings.Contains(err.Error(), "not exposed") {
-			t.Fatalf("unexposed invoke err = %v, want exposure gate", err)
+		if err == nil || !strings.Contains(err.Error(), "not granted") {
+			t.Fatalf("ungranted invoke err = %v, want grant gate", err)
 		}
-		if _, err := executeToolAuthorityJSON(t, registry, actor, key, `{"action":"exposure_set","tool_name":"browse_page","principal":"telegram:1001","active":true}`); err != nil {
-			t.Fatalf("exposure_set active err = %v", err)
-		}
+		grantToolInvoke(t, store, "browse_page", "telegram:1001")
 		if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`)); err != nil {
-			t.Fatalf("exposed invoke err = %v", err)
-		}
-		if _, err := executeToolAuthorityJSON(t, registry, actor, key, `{"action":"exposure_set","tool_name":"browse_page","principal":"telegram:1001","active":false}`); err != nil {
-			t.Fatalf("exposure_set inactive err = %v", err)
-		}
-		_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
-		if err == nil || !strings.Contains(err.Error(), "not exposed") {
-			t.Fatalf("revoked exposure invoke err = %v, want exposure gate", err)
+			t.Fatalf("granted invoke err = %v", err)
 		}
 	})
 }

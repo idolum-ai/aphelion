@@ -112,7 +112,7 @@ func TestToolAuthorityInstallSetShowListAndRegisterGateForExternalTool(t *testin
 func TestToolAuthorityInstallShowMarksExternalToolStaleOnFingerprintDrift(t *testing.T) {
 	t.Parallel()
 
-	registry, _ := newDurableAgentToolRegistry(t)
+	registry, store := newDurableAgentToolRegistry(t)
 	key := adminSessionKey()
 	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
 		t.Fatalf("MkdirAll(workspace) err = %v", err)
@@ -141,12 +141,12 @@ func TestToolAuthorityInstallShowMarksExternalToolStaleOnFingerprintDrift(t *tes
 		`{"action":"probe_run","tool_name":"browse_page"}`,
 		`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1"}`,
 		`{"action":"register","tool_name":"browse_page","implementation_ref":"external:browse_page"}`,
-		`{"action":"exposure_set","tool_name":"browse_page","principal":"telegram:1001","active":true}`,
 	} {
 		if _, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "tool_authority", json.RawMessage(input)); err != nil {
 			t.Fatalf("tool_authority input %s err = %v", input, err)
 		}
 	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 	beforeOut, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("browse_page before drift err = %v", err)
@@ -427,9 +427,7 @@ func TestToolAuthorityProcessPolicyCeilingsBlockInstallProbeAndInvoke(t *testing
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
-	if _, err := store.UpsertToolExposure(session.ToolExposure{ToolName: "browse_page", Principal: "telegram:1001", Active: true}); err != nil {
-		t.Fatalf("UpsertToolExposure() err = %v", err)
-	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 	_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil || !strings.Contains(err.Error(), "policy_violation: process-mode network=\"allowlist\"") {
 		t.Fatalf("browse_page invoke err = %v, want governed policy violation", err)

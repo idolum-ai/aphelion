@@ -1143,43 +1143,6 @@ func summarizeExecutionEvents(events []session.ExecutionEvent, limit int) []core
 
 func summarizeExecutionEventPayload(eventType string, eventStatus string, payload map[string]any) string {
 	switch strings.TrimSpace(eventType) {
-	case core.ExecutionEventToolProposalCreated, core.ExecutionEventToolProposalReviewed:
-		reviewStatus := strings.TrimSpace(payloadString(payload, "review_status"))
-		if reviewStatus == "" {
-			reviewStatus = strings.TrimSpace(eventStatus)
-		}
-		parts := make([]string, 0, 8)
-		if proposalID := strings.TrimSpace(payloadString(payload, "proposal_id")); proposalID != "" {
-			parts = append(parts, "proposal_id="+proposalID)
-		}
-		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
-			parts = append(parts, "tool_name="+toolName)
-		}
-		if reviewStatus != "" {
-			parts = append(parts, "review_status="+reviewStatus)
-		}
-		if proposedBy := strings.TrimSpace(payloadString(payload, "proposed_by")); proposedBy != "" {
-			parts = append(parts, "proposed_by="+proposedBy)
-		}
-		if registeredToolID := strings.TrimSpace(payloadString(payload, "registered_tool_id")); registeredToolID != "" {
-			parts = append(parts, "registered_tool_id="+registeredToolID)
-		}
-		if requestVia := strings.TrimSpace(payloadString(payload, "request_via")); requestVia != "" {
-			parts = append(parts, "request_via="+requestVia)
-		}
-		if ratifiedVia := strings.TrimSpace(payloadString(payload, "ratified_via")); ratifiedVia != "" {
-			parts = append(parts, "ratified_via="+ratifiedVia)
-		}
-		if reviewVia := strings.TrimSpace(payloadString(payload, "review_via")); reviewVia != "" {
-			parts = append(parts, "review_via="+reviewVia)
-		}
-		if reason := strings.TrimSpace(payloadString(payload, "transition_reason")); reason != "" {
-			parts = append(parts, "transition_reason="+reason)
-		}
-		if overrideReason := strings.TrimSpace(payloadString(payload, "override_reason")); overrideReason != "" {
-			parts = append(parts, "override_reason="+truncateStatusDiagnostic(overrideReason, 80))
-		}
-		return strings.TrimSpace(strings.Join(parts, " "))
 	case core.ExecutionEventToolRegistered:
 		registered := strings.TrimSpace(eventStatus) == "enabled"
 		if value, ok := payloadBool(payload, "registered"); ok {
@@ -1193,23 +1156,6 @@ func summarizeExecutionEventPayload(eventType string, eventStatus string, payloa
 		if ref := strings.TrimSpace(payloadString(payload, "implementation_ref")); ref != "" {
 			parts = append(parts, "implementation_ref="+ref)
 		}
-		if proposalID := strings.TrimSpace(payloadString(payload, "proposal_id")); proposalID != "" {
-			parts = append(parts, "proposal_id="+proposalID)
-		}
-		return strings.TrimSpace(strings.Join(parts, " "))
-	case core.ExecutionEventToolExposureChanged:
-		active := strings.TrimSpace(eventStatus) == "enabled"
-		if value, ok := payloadBool(payload, "active"); ok {
-			active = value
-		}
-		parts := make([]string, 0, 4)
-		if toolName := strings.TrimSpace(payloadString(payload, "tool_name")); toolName != "" {
-			parts = append(parts, "tool_name="+toolName)
-		}
-		if principal := strings.TrimSpace(payloadString(payload, "principal")); principal != "" {
-			parts = append(parts, "principal="+principal)
-		}
-		parts = append(parts, "active="+strconv.FormatBool(active))
 		return strings.TrimSpace(strings.Join(parts, " "))
 	case core.ExecutionEventToolInstallUpdated:
 		parts := make([]string, 0, 5)

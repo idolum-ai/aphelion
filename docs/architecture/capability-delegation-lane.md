@@ -34,8 +34,9 @@ The canonical flow is:
   principal, allowed actions, contract, constraints, status, policy fingerprint,
   expiration, and stale/revocation state.
 - `expose/invoke`: runtime access checks require an active unexpired grant for
-  the requested action. For `kind=tool`, an active grant with `invoke` can
-  authorize a registered tool even without a legacy `tool_exposure`.
+  the requested action. For `kind=tool`, an active grant with `invoke`
+  authorizes a registered tool; there is no separate tool-exposure authority
+  surface.
 - `observe`: invocations and checks can update invocation/failure counters and
   last-used timestamps.
 - `renew/revoke`: admins may revoke grants, expire them, or replace them with a
@@ -52,10 +53,6 @@ The source of truth is SQLite session state:
   actions, contract, constraints, policy hash/fingerprint, status, stale reason,
   and counters.
 - `capability_invocations`: invocation-level audit trail for grant use.
-
-`tool_request` is now compatibility input for `kind=tool`: it still creates the
-legacy `tool_proposals` row, and also writes the canonical `capability_requests`
-row. New broad permissions should use `capability_request` directly.
 
 `durable_agent delegation_request` is the compatibility bridge for durable
 children. It creates the same canonical `capability_requests` row, attributes the

@@ -3,9 +3,11 @@
 package tool
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
@@ -87,5 +89,35 @@ func seedVerifiedExternalToolLifecycle(t *testing.T, registry *Registry, store *
 		AttestedAt:                   now,
 	}); err != nil {
 		t.Fatalf("UpsertToolInstallRecord(%s) err = %v", manifest.Name, err)
+	}
+}
+
+func toolDefExists(defs []agent.ToolDef, name string) bool {
+	for _, def := range defs {
+		if def.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func grantToolInvoke(t *testing.T, store *session.SQLiteStore, toolName string, principal string) {
+	t.Helper()
+
+	toolName = strings.TrimSpace(toolName)
+	principal = strings.TrimSpace(principal)
+	if toolName == "" || principal == "" {
+		t.Fatalf("grantToolInvoke requires toolName and principal")
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant:" + toolName + ":" + principal,
+		GrantedBy:      "test",
+		GrantedTo:      principal,
+		Kind:           session.CapabilityKindTool,
+		TargetResource: toolName,
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(%s/%s) err = %v", toolName, principal, err)
 	}
 }
