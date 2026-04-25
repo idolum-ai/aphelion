@@ -253,8 +253,8 @@ func TestDurableAgentToolDelegationRequestAndReport(t *testing.T) {
 	if !ok {
 		t.Fatal("CapabilityRequest(cap-family-amazon) ok=false, want stored request")
 	}
-	if request.Kind != session.CapabilityKindPurchase || request.TargetResource != "amazon" || request.RequestedBy != "family-child" || request.RequestedFor != "family-child" {
-		t.Fatalf("CapabilityRequest = %#v, want purchase request for family-child on amazon", request)
+	if request.Kind != session.CapabilityKindPurchase || request.TargetResource != "amazon" || request.RequestedBy != "durable_agent:family-child" || request.RequestedFor != "durable_agent:family-child" {
+		t.Fatalf("CapabilityRequest = %#v, want purchase request for durable_agent:family-child on amazon", request)
 	}
 	if request.ParentPrincipal != "telegram:200" || request.AdminPrincipal != "telegram:1001" {
 		t.Fatalf("CapabilityRequest principals = parent %q admin %q, want telegram:200 and telegram:1001", request.ParentPrincipal, request.AdminPrincipal)
@@ -2007,5 +2007,41 @@ func TestDurableAgentPolicyApplySyncsProfileFiles(t *testing.T) {
 	}
 	if !strings.Contains(string(charterRaw), "Updated child charter.") || !strings.Contains(string(capRaw), "session_recall") || !strings.Contains(string(runtimeRaw), "child_runtime") {
 		t.Fatalf("profile files missing ratified content: charter=%q capabilities=%q runtime=%q", charterRaw, capRaw, runtimeRaw)
+	}
+}
+
+func TestDurableAgentProfileApplyWritesChildAuthoredManifestEntry(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	memoryRoot := filepath.Join(t.TempDir(), "memory")
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:           "script-scout",
+		ChannelKind:       "inbox",
+		Status:            "active",
+		PolicyHash:        "policy-hash-1",
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "native", NativeProvider: "openrouter", APIKey: "sk-test", Model: "test-model"},
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), memoryRoot},
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminSessionKey(), "durable_agent", json.RawMessage(`{
+		"action":"profile_apply",
+		"agent_id":"script-scout",
+		"profile_edit":{"target_file":"persona.md","content":"Curious scout. Asks before synthesizing.","reason":"seed scout voice"}
+	}`))
+	if err != nil {
+		t.Fatalf("profile_apply err = %v", err)
+	}
+	if !strings.Contains(out, "profile/PROFILE.json") || !strings.Contains(out, "ownership=child_authored") {
+		t.Fatalf("profile_apply output = %q, want child-authored manifest entry", out)
+	}
+	raw, err := os.ReadFile(filepath.Join(memoryRoot, "profile", "persona.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(persona.md) err = %v", err)
+	}
+	if !strings.Contains(string(raw), "profile_ownership: child_authored") || !strings.Contains(string(raw), "Curious scout") {
+		t.Fatalf("persona.md = %q, want child-authored profile content", string(raw))
 	}
 }

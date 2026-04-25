@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -21,13 +22,10 @@ type durableChildSandboxAccess struct {
 }
 
 func durableChildSandboxAccessFor(binaryPath string, agent core.DurableAgent, store *session.SQLiteStore) (durableChildSandboxAccess, error) {
-	access := durableChildSandboxAccess{readonlyPaths: []string{strings.TrimSpace(binaryPath)}}
+	substrate := durableChildSubstrateFor(binaryPath, agent)
+	access := durableChildSandboxAccess{readonlyPaths: append([]string(nil), substrate.ReadonlyPaths...)}
 	access.readonlyPaths = compactNonEmptyStrings(access.readonlyPaths)
 
-	bootstrap := core.NormalizeNodeLLMBootstrap(agent.BootstrapLLM)
-	if bootstrap.Backend == "codex" && strings.TrimSpace(bootstrap.CodexHome) != "" {
-		access.readonlyPaths = append(access.readonlyPaths, strings.TrimSpace(bootstrap.CodexHome))
-	}
 	if err := access.addGrantedCapabilities(agent, store); err != nil {
 		return durableChildSandboxAccess{}, err
 	}
@@ -64,27 +62,63 @@ func durableChildActiveCapabilityGrants(store *session.SQLiteStore, agentID stri
 	if store == nil || agentID == "" {
 		return nil, nil
 	}
-	principalIDs := []string{agentID, "durable_agent:" + agentID}
-	seen := map[string]struct{}{}
-	out := make([]session.CapabilityGrant, 0)
-	for _, principalID := range principalIDs {
-		grants, err := store.CapabilityGrants(100, session.CapabilityGrantStatusActive, "", principalID)
-		if err != nil {
-			return nil, fmt.Errorf("load durable child capability grants principal=%s: %w", principalID, err)
+	principalID := core.DurableAgentPrincipal(agentID)
+	grants, err := store.CapabilityGrants(100, session.CapabilityGrantStatusActive, "", principalID)
+	if err != nil {
+		return nil, fmt.Errorf("load durable child capability grants principal=%s: %w", principalID, err)
+	}
+	out := make([]session.CapabilityGrant, 0, len(grants))
+	for _, grant := range grants {
+		grant = session.NormalizeCapabilityGrant(grant)
+		if strings.TrimSpace(grant.GrantID) == "" {
+			continue
 		}
-		for _, grant := range grants {
-			grant = session.NormalizeCapabilityGrant(grant)
-			if strings.TrimSpace(grant.GrantID) == "" {
-				continue
-			}
-			if _, ok := seen[grant.GrantID]; ok {
-				continue
-			}
-			seen[grant.GrantID] = struct{}{}
-			out = append(out, grant)
+		if err := durableChildGrantFreshnessError(grant); err != nil {
+			return nil, err
 		}
+		out = append(out, grant)
 	}
 	return out, nil
+}
+
+func durableChildGrantFreshnessError(grant session.CapabilityGrant) error {
+	grant = session.NormalizeCapabilityGrant(grant)
+	switch grant.Status {
+	case session.CapabilityGrantStatusActive:
+	default:
+		return fmt.Errorf("child_runtime_blocked: grant_%s grant_id=%s", strings.TrimSpace(string(grant.Status)), strings.TrimSpace(grant.GrantID))
+	}
+	if !grant.RevokedAt.IsZero() {
+		return fmt.Errorf("child_runtime_blocked: grant_revoked grant_id=%s", strings.TrimSpace(grant.GrantID))
+	}
+	if !grant.ExpiresAt.IsZero() && !grant.ExpiresAt.After(time.Now().UTC()) {
+		return fmt.Errorf("child_runtime_blocked: grant_expired grant_id=%s", strings.TrimSpace(grant.GrantID))
+	}
+	if strings.TrimSpace(grant.StaleReason) != "" {
+		return fmt.Errorf("child_runtime_blocked: grant_stale_%s grant_id=%s", normalizeBlockReason(grant.StaleReason), strings.TrimSpace(grant.GrantID))
+	}
+	if grant.BaselinePolicyHash != "" && grant.CurrentPolicyHash != "" && grant.BaselinePolicyHash != grant.CurrentPolicyHash {
+		return fmt.Errorf("child_runtime_blocked: grant_policy_hash_mismatch grant_id=%s", strings.TrimSpace(grant.GrantID))
+	}
+	return nil
+}
+
+func normalizeBlockReason(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 func durableChildGrantMaterializationFrom(grant session.CapabilityGrant) (core.ChildRuntimeContract, bool, error) {

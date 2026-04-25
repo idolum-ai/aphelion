@@ -31,3 +31,13 @@ func TestExtractChildRuntimeContractRejectsRelativeReadonlyPath(t *testing.T) {
 		t.Fatal("ExtractChildRuntimeContract() err = nil, want validation error")
 	}
 }
+
+func TestExtractChildRuntimeContractIgnoresLegacyRuntimeMaterialization(t *testing.T) {
+	contract, ok, err := ExtractChildRuntimeContract(`{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}`, `{}`)
+	if err != nil {
+		t.Fatalf("ExtractChildRuntimeContract() err = %v", err)
+	}
+	if ok || contract.Active() {
+		t.Fatalf("ExtractChildRuntimeContract() = %#v, %t; want legacy key ignored after migration", contract, ok)
+	}
+}

@@ -106,23 +106,20 @@ func ExtractChildRuntimeContract(contractJSON string, constraintsJSON string) (C
 			continue
 		}
 		var wrapper struct {
-			ChildRuntime           *ChildRuntimeContract `json:"child_runtime,omitempty"`
-			RuntimeMaterialization *ChildRuntimeContract `json:"runtime_materialization,omitempty"`
+			ChildRuntime *ChildRuntimeContract `json:"child_runtime,omitempty"`
 		}
 		if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
 			return ChildRuntimeContract{}, false, fmt.Errorf("decode child_runtime contract: %w", err)
 		}
-		for _, candidate := range []*ChildRuntimeContract{wrapper.ChildRuntime, wrapper.RuntimeMaterialization} {
-			if candidate == nil || !candidate.Active() {
-				continue
-			}
-			merged := MergeChildRuntimeContract(out, *candidate)
-			if err := ValidateChildRuntimeContract(merged); err != nil {
-				return ChildRuntimeContract{}, false, err
-			}
-			out = merged
-			found = true
+		if wrapper.ChildRuntime == nil || !wrapper.ChildRuntime.Active() {
+			continue
 		}
+		merged := MergeChildRuntimeContract(out, *wrapper.ChildRuntime)
+		if err := ValidateChildRuntimeContract(merged); err != nil {
+			return ChildRuntimeContract{}, false, err
+		}
+		out = merged
+		found = true
 	}
 	return NormalizeChildRuntimeContract(out), found, nil
 }

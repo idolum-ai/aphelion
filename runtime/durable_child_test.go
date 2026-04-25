@@ -64,7 +64,7 @@ func TestDurableChildSandboxAccessMaterializesGrantedRuntimeCapability(t *testin
 	defer store.Close()
 	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
 		GrantID:        "capg-mail-reader",
-		GrantedTo:      "idolum-email",
+		GrantedTo:      core.DurableAgentPrincipal("idolum-email"),
 		Kind:           session.CapabilityKindTool,
 		TargetResource: "mail-reader",
 		AllowedActions: []string{"invoke"},
@@ -402,5 +402,30 @@ func TestDurableAgentChildConfigUsesCodexBootstrapWithoutParentCredentials(t *te
 	}
 	if child.Providers.Anthropic.APIKey != "" || child.Providers.OpenRouter.APIKey != "" || child.Providers.OpenAI.APIKey != "" {
 		t.Fatalf("Providers = %#v, want cleared parent/native credentials", child.Providers)
+	}
+}
+
+func TestDurableChildSandboxAccessBlocksStaleRuntimeGrant(t *testing.T) {
+	root := t.TempDir()
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-stale-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("idolum-email"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		StaleReason:    "manifest_drift",
+		Contract:       `{"child_runtime":{"readonly_paths":["/srv/mail"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	_, err = durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{AgentID: "idolum-email"}, store)
+	if err == nil || !strings.Contains(err.Error(), "child_runtime_blocked: grant_stale_manifest_drift") {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v, want stale child_runtime block", err)
 	}
 }

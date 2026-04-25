@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 35
+	schemaVersion                       = 36
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -5277,6 +5277,11 @@ func applyMigrations(tx *sql.Tx) error {
 			return err
 		}
 	}
+	if currentVersion < 36 {
+		if err := migrateDurableChildAuthorityCanonicalization(tx); err != nil {
+			return err
+		}
+	}
 	if currentVersion >= schemaVersion {
 		return nil
 	}
@@ -5406,6 +5411,184 @@ func backfillDurableAgentIdentityState(tx *sql.Tx) error {
 		return fmt.Errorf("backfill durable agent identity state: %w", err)
 	}
 	return nil
+}
+
+func migrateDurableChildAuthorityCanonicalization(tx *sql.Tx) error {
+	ids, err := durableAgentIDsForMigration(tx)
+	if err != nil {
+		return err
+	}
+	if len(ids) > 0 {
+		for _, spec := range []struct{ table, column, idColumn string }{
+			{table: "capability_requests", column: "requested_by", idColumn: "request_id"},
+			{table: "capability_requests", column: "requested_for", idColumn: "request_id"},
+			{table: "capability_grants", column: "granted_by", idColumn: "grant_id"},
+			{table: "capability_grants", column: "granted_to", idColumn: "grant_id"},
+		} {
+			if err := canonicalizeDurableAgentPrincipalColumn(tx, spec.table, spec.column, spec.idColumn, ids); err != nil {
+				return err
+			}
+		}
+	}
+	for _, spec := range []struct{ table, idColumn string }{
+		{table: "capability_requests", idColumn: "request_id"},
+		{table: "capability_grants", idColumn: "grant_id"},
+	} {
+		if err := canonicalizeChildRuntimeJSONColumns(tx, spec.table, spec.idColumn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func durableAgentIDsForMigration(tx *sql.Tx) (map[string]struct{}, error) {
+	rows, err := tx.Query(`SELECT agent_id FROM durable_agents`)
+	if err != nil {
+		return nil, fmt.Errorf("query durable agent ids for migration: %w", err)
+	}
+	defer rows.Close()
+	ids := map[string]struct{}{}
+	for rows.Next() {
+		var agentID string
+		if err := rows.Scan(&agentID); err != nil {
+			return nil, fmt.Errorf("scan durable agent id for migration: %w", err)
+		}
+		agentID = strings.TrimSpace(agentID)
+		if agentID != "" {
+			ids[agentID] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate durable agent ids for migration: %w", err)
+	}
+	return ids, nil
+}
+
+func canonicalizeDurableAgentPrincipalColumn(tx *sql.Tx, table string, column string, idColumn string, ids map[string]struct{}) error {
+	rows, err := tx.Query(fmt.Sprintf(`SELECT %s, %s FROM %s`, idColumn, column, table))
+	if err != nil {
+		return fmt.Errorf("query %s.%s for durable principal migration: %w", table, column, err)
+	}
+	defer rows.Close()
+	type update struct{ id, value string }
+	updates := []update{}
+	for rows.Next() {
+		var id, value string
+		if err := rows.Scan(&id, &value); err != nil {
+			return fmt.Errorf("scan %s.%s for durable principal migration: %w", table, column, err)
+		}
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(value, core.DurableAgentPrincipalPrefix) {
+			canonical := core.DurableAgentPrincipal(value)
+			if canonical != "" && canonical != value {
+				updates = append(updates, update{id: id, value: canonical})
+			}
+			continue
+		}
+		if _, ok := ids[value]; ok {
+			updates = append(updates, update{id: id, value: core.DurableAgentPrincipal(value)})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate %s.%s for durable principal migration: %w", table, column, err)
+	}
+	for _, update := range updates {
+		if _, err := tx.Exec(fmt.Sprintf(`UPDATE %s SET %s = ?, updated_at = datetime('now') WHERE %s = ?`, table, column, idColumn), update.value, update.id); err != nil {
+			return fmt.Errorf("update %s.%s for durable principal migration: %w", table, column, err)
+		}
+	}
+	return nil
+}
+
+func canonicalizeChildRuntimeJSONColumns(tx *sql.Tx, table string, idColumn string) error {
+	rows, err := tx.Query(fmt.Sprintf(`SELECT %s, contract_json, constraints_json FROM %s`, idColumn, table))
+	if err != nil {
+		return fmt.Errorf("query %s child_runtime json for migration: %w", table, err)
+	}
+	defer rows.Close()
+	type update struct{ id, contract, constraints string }
+	updates := []update{}
+	for rows.Next() {
+		var id, contract, constraints string
+		if err := rows.Scan(&id, &contract, &constraints); err != nil {
+			return fmt.Errorf("scan %s child_runtime json for migration: %w", table, err)
+		}
+		nextContract, changedContract, err := canonicalizeChildRuntimeJSONBlob(contract)
+		if err != nil {
+			return fmt.Errorf("canonicalize %s.%s contract_json: %w", table, id, err)
+		}
+		nextConstraints, changedConstraints, err := canonicalizeChildRuntimeJSONBlob(constraints)
+		if err != nil {
+			return fmt.Errorf("canonicalize %s.%s constraints_json: %w", table, id, err)
+		}
+		if changedContract || changedConstraints {
+			updates = append(updates, update{id: id, contract: nextContract, constraints: nextConstraints})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate %s child_runtime json for migration: %w", table, err)
+	}
+	for _, update := range updates {
+		if _, err := tx.Exec(fmt.Sprintf(`UPDATE %s SET contract_json = ?, constraints_json = ?, updated_at = datetime('now') WHERE %s = ?`, table, idColumn), update.contract, update.constraints, update.id); err != nil {
+			return fmt.Errorf("update %s child_runtime json migration: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func canonicalizeChildRuntimeJSONBlob(raw string) (string, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "{}", true, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return "", false, err
+	}
+	if obj == nil {
+		obj = map[string]json.RawMessage{}
+	}
+	changed := false
+	var runtime core.ChildRuntimeContract
+	found := false
+	if rawChild, ok := obj["child_runtime"]; ok && len(rawChild) > 0 && string(rawChild) != "null" {
+		if err := json.Unmarshal(rawChild, &runtime); err != nil {
+			return "", false, err
+		}
+		found = true
+	}
+	if rawLegacy, ok := obj["runtime_materialization"]; ok && len(rawLegacy) > 0 && string(rawLegacy) != "null" {
+		var legacy core.ChildRuntimeContract
+		if err := json.Unmarshal(rawLegacy, &legacy); err != nil {
+			return "", false, err
+		}
+		runtime = core.MergeChildRuntimeContract(runtime, legacy)
+		found = true
+		delete(obj, "runtime_materialization")
+		changed = true
+	}
+	if found {
+		runtime = core.NormalizeChildRuntimeContract(runtime)
+		if err := core.ValidateChildRuntimeContract(runtime); err != nil {
+			return "", false, err
+		}
+		encoded, err := json.Marshal(runtime)
+		if err != nil {
+			return "", false, err
+		}
+		if string(obj["child_runtime"]) != string(encoded) {
+			obj["child_runtime"] = encoded
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, false, nil
+	}
+	encoded, err := json.Marshal(obj)
+	if err != nil {
+		return "", false, err
+	}
+	return string(encoded), true, nil
 }
 
 func migrateLegacyToolAuthorityTables(tx *sql.Tx) error {

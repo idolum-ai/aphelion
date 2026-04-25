@@ -3312,3 +3312,68 @@ func TestSQLiteStoreCapabilityRequestReviewGrantInvocationRoundTrip(t *testing.T
 		t.Fatalf("CapabilityGrant counters = %#v ok=%t, want one failed invocation", grant, ok)
 	}
 }
+
+func TestMigrateDurableChildAuthorityCanonicalizesPrincipalsAndChildRuntime(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "canonicalize-durable-child.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed) err = %v", err)
+	}
+	if err := store.UpsertDurableAgent(core.DurableAgent{AgentID: "idolum-email", ChannelKind: "email", Status: "active"}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.db.Exec(`
+		INSERT INTO capability_requests(request_id, requested_by, requested_for, kind, target_resource, purpose, contract_json, constraints_json, review_status, created_at, updated_at)
+		VALUES ('cap-old', 'idolum-email', 'idolum-email', 'tool', 'mail-reader', 'legacy runtime shape', '{"runtime_materialization":{"readonly_paths":["/srv/mail"],"environment":["MAIL_TOKEN"]}}', '{}', 'approved', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert legacy request err = %v", err)
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO capability_grants(grant_id, request_id, granted_by, granted_to, kind, target_resource, allowed_actions_json, contract_json, constraints_json, status, created_at, updated_at, granted_at)
+		VALUES ('capg-old', 'cap-old', 'admin', 'idolum-email', 'tool', 'mail-reader', '["invoke"]', '{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}', '{}', 'active', ?, ?, ?)
+	`, now, now, now); err != nil {
+		t.Fatalf("insert legacy grant err = %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE schema_version SET version = 35`); err != nil {
+		t.Fatalf("downgrade schema version err = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close seed store err = %v", err)
+	}
+
+	migrated, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(migrated) err = %v", err)
+	}
+	defer migrated.Close()
+
+	request, ok, err := migrated.CapabilityRequest("cap-old")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityRequest(cap-old) ok=false")
+	}
+	if request.RequestedBy != core.DurableAgentPrincipal("idolum-email") || request.RequestedFor != core.DurableAgentPrincipal("idolum-email") {
+		t.Fatalf("request principals = %q/%q, want canonical durable agent principal", request.RequestedBy, request.RequestedFor)
+	}
+	if strings.Contains(request.Contract, "runtime_materialization") || !strings.Contains(request.Contract, "child_runtime") || strings.Contains(request.Contract, "environment") || !strings.Contains(request.Contract, "env_from_parent") {
+		t.Fatalf("request contract = %s, want canonical child_runtime without legacy aliases", request.Contract)
+	}
+	grant, ok, err := migrated.CapabilityGrant("capg-old")
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityGrant(capg-old) ok=false")
+	}
+	if grant.GrantedTo != core.DurableAgentPrincipal("idolum-email") {
+		t.Fatalf("grant granted_to = %q, want canonical durable agent principal", grant.GrantedTo)
+	}
+	if strings.Contains(grant.Contract, "runtime_materialization") || !strings.Contains(grant.Contract, "child_runtime") {
+		t.Fatalf("grant contract = %s, want canonical child_runtime", grant.Contract)
+	}
+}

@@ -225,6 +225,14 @@ type DurableAgentStatusSnapshot struct {
 	EnrollmentParentControlURL string
 	IdentitySource             string
 	RuntimePostureSource       string
+	CanonicalPrincipal         string
+	ChildRuntimeGrantCount     int
+	ChildRuntimeBlockedReason  string
+	ChildRuntimeRepairHint     string
+	SubstrateLabels            []string
+	ProfileManifestStatus      string
+	ProfileManifestPolicyHash  string
+	ProfileManifestFileCount   int
 }
 
 type DurableAgentsStatusSnapshot struct {

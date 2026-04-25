@@ -3,6 +3,8 @@
 package runtime
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1918,5 +1920,66 @@ func TestChatStatusSnapshotIncludesCapabilityDelegationState(t *testing.T) {
 	}
 	if got := snapshot.CapabilityGrants[0]; got.GrantID != "capg-status" || got.Status != "active" || got.AllowedActions[0] != "order" {
 		t.Fatalf("CapabilityGrants[0] = %#v, want active order grant", got)
+	}
+}
+
+func TestDurableAgentsStatusSnapshotProjectsChildRuntimeAndProfileRepairState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	root := t.TempDir()
+	memoryRoot := filepath.Join(root, "memory")
+	agent := core.DurableAgent{
+		AgentID:           "idolum-email",
+		ChannelKind:       "email",
+		Status:            "active",
+		PolicyHash:        "policy-hash-current",
+		LocalStorageRoots: []string{filepath.Join(root, "workspace"), memoryRoot},
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "codex", CodexHome: filepath.Join(root, "codex")},
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(memoryRoot, "profile"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(profile) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryRoot, "profile", "PROFILE.json"), []byte(`{"policy_hash":"old-policy-hash","files":[{"path":"profile/persona.md"}]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(PROFILE.json) err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-child-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("idolum-email"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       `{"child_runtime":{"readonly_paths":["/srv/mail"]}}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	snapshot, err := rt.DurableAgentsStatusSnapshot()
+	if err != nil {
+		t.Fatalf("DurableAgentsStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.Agents) != 1 {
+		t.Fatalf("agents len = %d, want 1", len(snapshot.Agents))
+	}
+	row := snapshot.Agents[0]
+	if row.CanonicalPrincipal != core.DurableAgentPrincipal("idolum-email") {
+		t.Fatalf("CanonicalPrincipal = %q, want durable agent principal", row.CanonicalPrincipal)
+	}
+	if row.ChildRuntimeGrantCount != 1 || row.ChildRuntimeBlockedReason != "" {
+		t.Fatalf("child runtime status = count %d blocked %q, want one fresh grant", row.ChildRuntimeGrantCount, row.ChildRuntimeBlockedReason)
+	}
+	if row.ProfileManifestStatus != "policy_hash_mismatch" || row.ProfileManifestFileCount != 1 {
+		t.Fatalf("profile manifest status = %q files=%d, want policy_hash_mismatch files=1", row.ProfileManifestStatus, row.ProfileManifestFileCount)
+	}
+	if !containsString(row.SubstrateLabels, "codex_home") {
+		t.Fatalf("SubstrateLabels = %#v, want codex_home", row.SubstrateLabels)
 	}
 }

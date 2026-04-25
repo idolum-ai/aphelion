@@ -113,7 +113,7 @@ func (r *Registry) capabilityRequestSubmit(in capabilityInput, actor principal.P
 		return "", err
 	}
 	requester := toolAuthorityPrincipalDisplay(actor)
-	requestedFor := firstNonEmpty(strings.TrimSpace(in.RequestedFor), requester)
+	requestedFor := canonicalDurableAgentPrincipalIfKnown(r.store, firstNonEmpty(strings.TrimSpace(in.RequestedFor), requester))
 	record, err := r.store.UpsertCapabilityRequest(session.CapabilityRequest{
 		RequestID:       requestID,
 		RequestedBy:     requester,
@@ -344,7 +344,7 @@ func (r *Registry) capabilityAuthorityGrantSet(in capabilityInput, actor princip
 	if target == "" {
 		return "", fmt.Errorf("capability_authority grant_set requires target_resource")
 	}
-	grantedTo := firstNonEmpty(in.Principal, request.RequestedFor, request.RequestedBy)
+	grantedTo := canonicalDurableAgentPrincipalIfKnown(r.store, firstNonEmpty(in.Principal, request.RequestedFor, request.RequestedBy))
 	if grantedTo == "" {
 		return "", fmt.Errorf("capability_authority grant_set requires principal")
 	}
@@ -575,7 +575,7 @@ func (r *Registry) capabilityAuthorityAccessCheck(in capabilityInput) (string, e
 	if target == "" {
 		return "", fmt.Errorf("capability_authority access_check requires target_resource")
 	}
-	principalID := strings.TrimSpace(in.Principal)
+	principalID := canonicalDurableAgentPrincipalIfKnown(r.store, strings.TrimSpace(in.Principal))
 	if principalID == "" {
 		return "", fmt.Errorf("capability_authority access_check requires principal")
 	}
@@ -728,8 +728,8 @@ func (r *Registry) resolveCapabilityUpdatePlanAgentID(plan capabilityUpdatePlanI
 	candidates := []string{
 		strings.TrimPrefix(strings.TrimSpace(request.TargetResource), "durable_agent:"),
 		strings.TrimPrefix(strings.TrimSpace(grant.TargetResource), "durable_agent:"),
-		request.RequestedFor,
-		grant.GrantedTo,
+		durableAgentIDFromCapabilityPrincipal(request.RequestedFor),
+		durableAgentIDFromCapabilityPrincipal(grant.GrantedTo),
 	}
 	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)

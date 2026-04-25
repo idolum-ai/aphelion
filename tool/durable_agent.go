@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -132,6 +133,10 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 		return r.reviewDurableAgentMemoryDelegation(in, scope)
 	case "memory_delegate":
 		return r.delegateDurableAgentMemory(ctx, in, p, key, scope)
+	case "profile_show":
+		return r.showDurableAgentProfile(in)
+	case "profile_apply":
+		return r.applyDurableAgentProfile(in)
 	case "snapshot_create":
 		return r.createDurableAgentSnapshot(in)
 	case "snapshot_list":
@@ -139,7 +144,7 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 	case "snapshot_restore":
 		return r.restoreDurableAgentSnapshot(ctx, in, p, key)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|bootstrap_show|policy_apply|bootstrap_update|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|conversation_show|conversation_send|delegation_request|delegation_report|memory_review|memory_delegate|snapshot_create|snapshot_list|snapshot_restore")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|bootstrap_show|policy_apply|bootstrap_update|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|conversation_show|conversation_send|delegation_request|delegation_report|memory_review|memory_delegate|profile_show|profile_apply|snapshot_create|snapshot_list|snapshot_restore")
 	}
 }
 
@@ -837,8 +842,8 @@ func (r *Registry) requestDurableAgentDelegation(in durableAgentInput, actor pri
 	if err != nil {
 		return "", err
 	}
-	requestedBy := firstNonEmpty(payload.RequestedBy, agent.AgentID)
-	requestedFor := firstNonEmpty(payload.RequestedFor, agent.AgentID)
+	requestedBy := canonicalDurableAgentPrincipalIfKnown(r.store, firstNonEmpty(payload.RequestedBy, core.DurableAgentPrincipal(agent.AgentID)))
+	requestedFor := canonicalDurableAgentPrincipalIfKnown(r.store, firstNonEmpty(payload.RequestedFor, core.DurableAgentPrincipal(agent.AgentID)))
 	parentPrincipal := firstNonEmpty(payload.ParentPrincipal, durableAgentDefaultParentPrincipal(*agent))
 	adminPrincipal := firstNonEmpty(payload.AdminPrincipal, toolAuthorityPrincipalDisplay(actor))
 	record, err := r.store.UpsertCapabilityRequest(session.CapabilityRequest{
@@ -1396,6 +1401,45 @@ func truncateCompact(raw string, limit int) string {
 	return clean[:limit-3] + "..."
 }
 
+func (r *Registry) showDurableAgentProfile(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for profile_show")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	memoryRoot, err := durableAgentMemoryRoot(*agent, r.store)
+	if err != nil {
+		return "", err
+	}
+	profileRoot := filepath.Join(memoryRoot, "profile")
+	manifest := loadDurableAgentProfileManifest(profileRoot)
+	return renderDurableAgentProfile("show", *agent, profileRoot, manifest, nil), nil
+}
+
+func (r *Registry) applyDurableAgentProfile(in durableAgentInput) (string, error) {
+	agentID := strings.TrimSpace(in.AgentID)
+	if agentID == "" {
+		return "", fmt.Errorf("durable_agent agent_id is required for profile_apply")
+	}
+	if in.ProfileEdit == nil {
+		return "", fmt.Errorf("durable_agent profile_apply requires profile_edit")
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return "", err
+	}
+	reason := firstNonEmpty(strings.TrimSpace(in.ProfileEdit.Reason), strings.TrimSpace(in.Reason))
+	sync, err := applyDurableAgentProfileEdit(*agent, r.store, in.ProfileEdit.TargetFile, in.ProfileEdit.Content, reason)
+	if err != nil {
+		return "", err
+	}
+	manifest := loadDurableAgentProfileManifest(sync.Root)
+	return renderDurableAgentProfile("apply", *agent, sync.Root, manifest, sync.Written), nil
+}
+
 func (r *Registry) createDurableAgentSnapshot(in durableAgentInput) (string, error) {
 	agentID := strings.TrimSpace(in.AgentID)
 	if agentID == "" {
@@ -1506,6 +1550,27 @@ func (r *Registry) restoreDurableAgentSnapshot(
 		}
 	}
 	return renderDurableAgentSnapshotRestore(*agent, *restoredManifest, approval, true), nil
+}
+
+func renderDurableAgentProfile(action string, agent core.DurableAgent, profileRoot string, manifest durableAgentProfileManifest, written []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "action: durable-agent profile %s\n", strings.TrimSpace(action))
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	fmt.Fprintf(&b, "profile_root: %s\n", strings.TrimSpace(profileRoot))
+	fmt.Fprintf(&b, "policy_hash: %s\n", strings.TrimSpace(manifest.PolicyHash))
+	fmt.Fprintf(&b, "manifest_updated_at: %s\n", strings.TrimSpace(manifest.UpdatedAt))
+	if len(written) > 0 {
+		fmt.Fprintf(&b, "written: %s\n", strings.Join(written, ","))
+	}
+	b.WriteString("files:\n")
+	if len(manifest.Files) == 0 {
+		b.WriteString("- none\n")
+		return b.String()
+	}
+	for _, entry := range manifest.Files {
+		fmt.Fprintf(&b, "- path=%s ownership=%s source=%s\n", entry.Path, entry.Ownership, entry.Source)
+	}
+	return b.String()
 }
 
 func renderDurableAgentSnapshotCreate(agent core.DurableAgent, manifest durableagent.SnapshotManifest) string {

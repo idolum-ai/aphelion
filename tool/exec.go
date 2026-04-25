@@ -226,6 +226,11 @@ type durableAgentMemoryDelegationInput struct {
 	Reason       string                                   `json:"reason,omitempty"`
 }
 
+type durableAgentProfileEditInput struct {
+	TargetFile string `json:"target_file,omitempty"`
+	Content    string `json:"content,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
 type durableAgentSnapshotInput struct {
 	SnapshotID string `json:"snapshot_id,omitempty"`
 	Reason     string `json:"reason,omitempty"`
@@ -302,6 +307,7 @@ type durableAgentInput struct {
 	WizardAnswers             *durableAgentWizardAnswersInput     `json:"wizard_answers,omitempty"`
 	MemoryDelegation          *durableAgentMemoryDelegationInput  `json:"memory_delegation,omitempty"`
 	Snapshot                  *durableAgentSnapshotInput          `json:"snapshot,omitempty"`
+	ProfileEdit               *durableAgentProfileEditInput       `json:"profile_edit,omitempty"`
 	DelegationRequest         *durableAgentDelegationRequestInput `json:"delegation_request,omitempty"`
 	DelegationReport          *durableAgentDelegationReportInput  `json:"delegation_report,omitempty"`
 	Operation                 string                              `json:"operation,omitempty"`
