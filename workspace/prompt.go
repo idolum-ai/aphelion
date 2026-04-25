@@ -20,8 +20,12 @@ const (
 )
 
 var autoStructuredDynamicFiles = []string{
+	"SKILLS.md",
 	"memory/knowledge.md",
 	"memory/decisions.md",
+	"memory/questions.md",
+	"memory/rhizome.md",
+	"memory/dreams.md",
 }
 
 type LoadedFile struct {
@@ -55,6 +59,11 @@ func LoadPromptContext(cfg config.AgentConfig, now time.Time) (*PromptContext, e
 		return nil, err
 	}
 	dynamic = append(dynamic, autoDynamic...)
+	practices, err := loadPracticeFilesFromSkills(cfg.Workspace, dynamic, cfg.BootstrapMaxChars, &remaining, seen)
+	if err != nil {
+		return nil, err
+	}
+	dynamic = append(dynamic, practices...)
 
 	if cfg.DailyNotes {
 		notes, err := loadDailyNotes(cfg.Workspace, cfg.DailyNotesDir, now, cfg.BootstrapMaxChars, &remaining, seen)
@@ -217,12 +226,70 @@ func selectPromptContent(displayPath string, raw string, limit int) (string, boo
 	switch normalizePromptPath(displayPath) {
 	case "memory.md":
 		return compactMemoryForPrompt(content, limit)
-	case "memory/knowledge.md", "memory/decisions.md", "memory/questions.md", "memory/rhizome.md":
+	case "memory/knowledge.md", "memory/decisions.md", "memory/questions.md", "memory/rhizome.md", "memory/dreams.md":
 		compacted := CompactStructuredMemoryForPrompt(displayPath, content, limit)
 		return compacted, len(compacted) < len(content)
 	default:
 		return truncateString(content, limit)
 	}
+}
+
+func loadPracticeFilesFromSkills(
+	workspaceRoot string,
+	loaded []LoadedFile,
+	perFileLimit int,
+	remaining *int,
+	seen map[string]struct{},
+) ([]LoadedFile, error) {
+	paths := skillPracticeLinks(loaded)
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	return loadConfiguredFiles(workspaceRoot, paths, true, perFileLimit, remaining, seen)
+}
+
+func skillPracticeLinks(loaded []LoadedFile) []string {
+	var paths []string
+	for _, file := range loaded {
+		if normalizePromptPath(file.Path) != "skills.md" {
+			continue
+		}
+		paths = append(paths, markdownLinksUnder(file.Content, "practices/")...)
+	}
+	return uniqueOrderedStrings(paths)
+}
+
+func markdownLinksUnder(content string, prefix string) []string {
+	prefix = filepath.ToSlash(strings.TrimSpace(prefix))
+	if prefix == "" {
+		return nil
+	}
+	var out []string
+	rest := content
+	for {
+		open := strings.Index(rest, "](")
+		if open < 0 {
+			break
+		}
+		rest = rest[open+2:]
+		close := strings.Index(rest, ")")
+		if close < 0 {
+			break
+		}
+		target := strings.TrimSpace(rest[:close])
+		rest = rest[close+1:]
+		if hash := strings.Index(target, "#"); hash >= 0 {
+			target = target[:hash]
+		}
+		if query := strings.Index(target, "?"); query >= 0 {
+			target = target[:query]
+		}
+		target = filepath.ToSlash(strings.TrimSpace(target))
+		if strings.HasPrefix(target, prefix) && strings.HasSuffix(strings.ToLower(target), ".md") {
+			out = append(out, target)
+		}
+	}
+	return out
 }
 
 func CompactStructuredMemoryForPrompt(displayPath string, raw string, limit int) string {

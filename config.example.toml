@@ -31,7 +31,8 @@ auth_source = "auto"
 codex_home = ""
 base_url = "https://chatgpt.com/backend-api"
 model = "gpt-5.5"
-context_window = 200000
+context_window = 250000
+transport_retries = 3
 
 [governor.brokerage]
 # Brokerage stops early on acceptance, repeated equivalent contracts, repeated
@@ -84,8 +85,8 @@ default_store = ""
 [sessions]
 db_path = "~/.aphelion/state/sessions.db"
 idle_expiry = "24h"
-max_context_ratio = 0.75
-compaction_ratio = 0.55
+max_context_ratio = 0.90
+compaction_ratio = 0.70
 compaction_strategy = "summarize"
 
 [agent]
@@ -107,9 +108,9 @@ bootstrap_files = [
   "TOOLS.md",
   "BOOTSTRAP.md",
 ]
-dynamic_files = ["MEMORY.md", "HEARTBEAT.md"]
+dynamic_files = ["MEMORY.md", "HEARTBEAT.md", "SKILLS.md", "memory/knowledge.md", "memory/decisions.md", "memory/questions.md", "memory/rhizome.md", "memory/dreams.md"]
 bootstrap_max_chars = 20000
-bootstrap_total_max_chars = 150000
+bootstrap_total_max_chars = 950000
 daily_notes = true
 daily_notes_dir = "memory/daily"
 

@@ -67,8 +67,8 @@ external_manifest_dir = "./external-tools"
 	if cfg.Sessions.IdleExpiry != "24h" {
 		t.Fatalf("idle_expiry = %q, want 24h", cfg.Sessions.IdleExpiry)
 	}
-	if cfg.Sessions.MaxContextRatio != 0.75 || cfg.Sessions.CompactionRatio != 0.55 || cfg.Sessions.CompactionStrategy != "summarize" {
-		t.Fatalf("session compaction defaults = %#v, want 0.75/0.55/summarize", cfg.Sessions)
+	if cfg.Sessions.MaxContextRatio != 0.9 || cfg.Sessions.CompactionRatio != 0.7 || cfg.Sessions.CompactionStrategy != "summarize" {
+		t.Fatalf("session compaction defaults = %#v, want 0.9/0.7/summarize", cfg.Sessions)
 	}
 	if cfg.Sessions.TESRetention.Enabled || cfg.Sessions.TESRetention.MaxAge != "720h" || cfg.Sessions.TESRetention.MinRetainedRows != 5000 || cfg.Sessions.TESRetention.MaxDeletePerGC != 1000 {
 		t.Fatalf("session tes retention defaults = %#v, want disabled/720h/5000/1000", cfg.Sessions.TESRetention)
@@ -76,8 +76,8 @@ external_manifest_dir = "./external-tools"
 	if !strings.HasSuffix(cfg.Sessions.TESRetention.ExportDir, "/.aphelion/state/tes-exports") {
 		t.Fatalf("session tes retention export_dir = %q, want ~/.aphelion/state/tes-exports expansion", cfg.Sessions.TESRetention.ExportDir)
 	}
-	if cfg.Governor.Codex.ContextWindow != 200000 {
-		t.Fatalf("governor.codex.context_window = %d, want 200000", cfg.Governor.Codex.ContextWindow)
+	if cfg.Governor.Codex.ContextWindow != 250000 {
+		t.Fatalf("governor.codex.context_window = %d, want 250000", cfg.Governor.Codex.ContextWindow)
 	}
 	if cfg.Governor.Brokerage.MinRounds != 1 || cfg.Governor.Brokerage.MaxRounds != 4 || cfg.Governor.Brokerage.AbsoluteMaxRounds != 6 || cfg.Governor.Brokerage.MaxElapsed != "20s" || cfg.Governor.Brokerage.StableContractRounds != 2 {
 		t.Fatalf("governor.brokerage defaults = %#v, want 1/4/6/20s/stable=2", cfg.Governor.Brokerage)
@@ -111,6 +111,12 @@ external_manifest_dir = "./external-tools"
 	}
 	if len(cfg.Agent.BootstrapFiles) == 0 || cfg.Agent.BootstrapFiles[0] != "SOUL.md" {
 		t.Fatalf("bootstrap files = %#v, want defaults", cfg.Agent.BootstrapFiles)
+	}
+	if !containsString(cfg.Agent.DynamicFiles, "SKILLS.md") || !containsString(cfg.Agent.DynamicFiles, "memory/questions.md") || !containsString(cfg.Agent.DynamicFiles, "memory/rhizome.md") || !containsString(cfg.Agent.DynamicFiles, "memory/dreams.md") {
+		t.Fatalf("dynamic files = %#v, want skills and all structured memory stores", cfg.Agent.DynamicFiles)
+	}
+	if cfg.Agent.BootstrapTotalMaxChars < 900000 {
+		t.Fatalf("bootstrap_total_max_chars = %d, want enough character budget for ~250k-token model context", cfg.Agent.BootstrapTotalMaxChars)
 	}
 	if !cfg.Agent.DailyNotes {
 		t.Fatal("daily notes should default to enabled")
@@ -1558,4 +1564,13 @@ workspace = "./workspace"
 	if cfg.Agent.Workspace != wantWorkspace {
 		t.Fatalf("workspace = %q, want legacy root preserved", cfg.Agent.Workspace)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

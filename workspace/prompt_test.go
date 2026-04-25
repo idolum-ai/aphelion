@@ -199,6 +199,40 @@ func TestLoadPromptContextStripsMemoryInstrumentation(t *testing.T) {
 	}
 }
 
+func TestLoadPromptContextAutoLoadsSkillsAndIndexedPractices(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "SKILLS.md"), strings.Join([]string{
+		"# Skills",
+		"",
+		"- [Commit Archaeology](practices/commit-archeology.md) - reconstruct commit intent.",
+	}, "\n"))
+	writeFile(t, filepath.Join(root, "practices", "commit-archeology.md"), "# Commit Archaeology\n\nUse Typst and evidence-first pages.")
+
+	ctx, err := LoadPromptContext(config.AgentConfig{
+		Workspace:              root,
+		BootstrapMaxChars:      1000,
+		BootstrapTotalMaxChars: 3000,
+		DailyNotes:             false,
+		DailyNotesDir:          "memory/daily",
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("LoadPromptContext() err = %v", err)
+	}
+
+	rendered := ctx.Render("")
+	if !strings.Contains(rendered, "### SKILLS.md") {
+		t.Fatalf("prompt = %q, want auto-loaded skills index", rendered)
+	}
+	if !strings.Contains(rendered, "### practices/commit-archeology.md") {
+		t.Fatalf("prompt = %q, want practice referenced from SKILLS.md", rendered)
+	}
+	if !strings.Contains(rendered, "Use Typst and evidence-first pages.") {
+		t.Fatalf("prompt = %q, want indexed practice content", rendered)
+	}
+}
+
 func writeFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
