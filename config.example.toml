@@ -154,6 +154,12 @@ cold_days = 30
 [memory.identity]
 preserve = ["SOUL.md", "IDENTITY.md", "IDOLUM.md", "MEMORY.md"]
 
+[memory.write_policy]
+direct_user_writes = "apply"
+reflection_writes = "propose"
+aggressive_writes = "propose"
+auto_accept_low_risk = false
+
 [thinking]
 effort = "medium"
 summary = "auto"

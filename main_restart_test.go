@@ -233,6 +233,11 @@ func TestTelegramCommandControlStopFlushesMemoryOnBoundaryWhenConfigured(t *test
 			Reflection: config.MemoryReflectionConfig{Enabled: true, Every: "6h"},
 			Decay:      config.MemoryDecayConfig{Enabled: true, HotDays: 3, WarmDays: 14, ColdDays: 30},
 			Identity:   config.MemoryIdentityConfig{Preserve: []string{"SOUL.md", "IDENTITY.md", "MEMORY.md"}},
+			WritePolicy: config.MemoryWritePolicyConfig{
+				DirectUserWrites: "apply",
+				ReflectionWrites: "propose",
+				AggressiveWrites: "apply",
+			},
 		},
 	}
 

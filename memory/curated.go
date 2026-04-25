@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -16,6 +17,7 @@ const (
 	StoreDecisions = "decisions"
 	StoreQuestions = "questions"
 	StoreRhizome   = "rhizome"
+	StoreDreams    = "dreams"
 )
 
 type WriteRequest struct {
@@ -25,6 +27,8 @@ type WriteRequest struct {
 	Content    string
 	Match      string
 	SourceTag  string
+	SourceRef  string
+	Scope      string
 	Confidence *float64
 }
 
@@ -51,6 +55,8 @@ func ResolveStorePath(root string, store string) (string, string, error) {
 		return filepath.Join(root, "memory", "questions.md"), StoreQuestions, nil
 	case StoreRhizome:
 		return filepath.Join(root, "memory", "rhizome.md"), StoreRhizome, nil
+	case StoreDreams:
+		return filepath.Join(root, "memory", "dreams.md"), StoreDreams, nil
 	default:
 		return "", "", fmt.Errorf("unsupported memory store %q", store)
 	}
@@ -82,6 +88,7 @@ func ApplyWrite(req WriteRequest) (*WriteResult, error) {
 		if entry == "" {
 			return nil, fmt.Errorf("memory content is required for add")
 		}
+		entry = instrumentWriteEntry(req.Root, path, store, req, entry)
 		current = appendEntry(current, entry)
 	case "replace":
 		if strings.TrimSpace(req.Match) == "" {
@@ -91,6 +98,7 @@ func ApplyWrite(req WriteRequest) (*WriteResult, error) {
 		if replacement == "" {
 			return nil, fmt.Errorf("memory content is required for replace")
 		}
+		replacement = instrumentWriteEntry(req.Root, path, store, req, replacement)
 		next, ok := replaceOnce(current, req.Match, replacement)
 		if !ok {
 			return nil, fmt.Errorf("memory match not found")
@@ -112,6 +120,19 @@ func ApplyWrite(req WriteRequest) (*WriteResult, error) {
 	if err := os.WriteFile(path, []byte(strings.TrimSpace(current)+"\n"), 0o600); err != nil {
 		return nil, fmt.Errorf("write memory store %s: %w", path, err)
 	}
+	_ = AppendEvent(req.Root, MemoryEvent{
+		Type:          "memory.write.applied",
+		Scope:         firstNonEmpty(req.Scope, "shared"),
+		Store:         store,
+		Path:          path,
+		Action:        action,
+		Status:        "applied",
+		ContentSHA256: checksumText(req.Content),
+		Metadata: map[string]string{
+			"source_kind": strings.TrimSpace(req.SourceTag),
+			"source_ref":  strings.TrimSpace(req.SourceRef),
+		},
+	})
 
 	return &WriteResult{
 		Path:   path,
@@ -132,9 +153,38 @@ func normalizeStore(store string) string {
 		return StoreQuestions
 	case "rhizome":
 		return StoreRhizome
+	case "dreams", "dream":
+		return StoreDreams
 	default:
 		return strings.ToLower(strings.TrimSpace(store))
 	}
+}
+
+func instrumentWriteEntry(root string, path string, store string, req WriteRequest, content string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		rel = path
+	}
+	sourceTag := strings.TrimSpace(req.SourceTag)
+	if sourceTag == "" {
+		sourceTag = "direct"
+	}
+	confidence := "0.80"
+	if req.Confidence != nil {
+		confidence = strconv.FormatFloat(clampConfidence(*req.Confidence), 'f', 2, 64)
+	}
+	entry := NewMemoryEntry(firstNonEmpty(req.Scope, "shared"), store, filepath.ToSlash(rel), 1, content, sourceTag, strings.TrimSpace(req.SourceRef), confidence, time.Now().UTC())
+	return RenderEntry(entry)
+}
+
+func clampConfidence(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 func formatEntry(store string, content string, sourceTag string, confidence *float64) string {

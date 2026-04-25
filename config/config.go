@@ -201,13 +201,14 @@ type ToolsConfig struct {
 }
 
 type MemoryConfig struct {
-	SessionSearch    bool                   `toml:"session_search"`
-	SemanticIndexing bool                   `toml:"semantic_indexing"`
-	Semantic         MemorySemanticConfig   `toml:"semantic"`
-	Aggressive       MemoryAggressiveConfig `toml:"aggressive"`
-	Reflection       MemoryReflectionConfig `toml:"reflection"`
-	Decay            MemoryDecayConfig      `toml:"decay"`
-	Identity         MemoryIdentityConfig   `toml:"identity"`
+	SessionSearch    bool                    `toml:"session_search"`
+	SemanticIndexing bool                    `toml:"semantic_indexing"`
+	Semantic         MemorySemanticConfig    `toml:"semantic"`
+	Aggressive       MemoryAggressiveConfig  `toml:"aggressive"`
+	Reflection       MemoryReflectionConfig  `toml:"reflection"`
+	Decay            MemoryDecayConfig       `toml:"decay"`
+	Identity         MemoryIdentityConfig    `toml:"identity"`
+	WritePolicy      MemoryWritePolicyConfig `toml:"write_policy"`
 }
 
 type MemorySemanticConfig struct {
@@ -245,6 +246,13 @@ type MemoryDecayConfig struct {
 
 type MemoryIdentityConfig struct {
 	Preserve []string `toml:"preserve"`
+}
+
+type MemoryWritePolicyConfig struct {
+	DirectUserWrites  string `toml:"direct_user_writes"`
+	ReflectionWrites  string `toml:"reflection_writes"`
+	AggressiveWrites  string `toml:"aggressive_writes"`
+	AutoAcceptLowRisk bool   `toml:"auto_accept_low_risk"`
 }
 
 type ThinkingConfig struct {
@@ -477,6 +485,12 @@ func Default() Config {
 			},
 			Identity: MemoryIdentityConfig{
 				Preserve: []string{"SOUL.md", "IDENTITY.md", "IDOLUM.md", "MEMORY.md"},
+			},
+			WritePolicy: MemoryWritePolicyConfig{
+				DirectUserWrites:  "apply",
+				ReflectionWrites:  "propose",
+				AggressiveWrites:  "propose",
+				AutoAcceptLowRisk: false,
 			},
 		},
 		Thinking: ThinkingConfig{
@@ -972,6 +986,9 @@ func validate(cfg *Config) error {
 	if len(cfg.Memory.Identity.Preserve) == 0 {
 		return fmt.Errorf("memory.identity.preserve must not be empty")
 	}
+	if err := validateMemoryWritePolicy(cfg.Memory.WritePolicy); err != nil {
+		return err
+	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Memory.Semantic.Backend)) {
 	case "", "local":
 	default:
@@ -1181,6 +1198,21 @@ func validate(cfg *Config) error {
 	}
 	if len(cfg.Principals.Telegram.ApprovedUserIDs) > 0 {
 		return fmt.Errorf("principals.telegram.approved_user_ids is not supported; use durable-agent access grants instead")
+	}
+	return nil
+}
+
+func validateMemoryWritePolicy(policy MemoryWritePolicyConfig) error {
+	for name, value := range map[string]string{
+		"memory.write_policy.direct_user_writes": strings.TrimSpace(policy.DirectUserWrites),
+		"memory.write_policy.reflection_writes":  strings.TrimSpace(policy.ReflectionWrites),
+		"memory.write_policy.aggressive_writes":  strings.TrimSpace(policy.AggressiveWrites),
+	} {
+		switch strings.ToLower(value) {
+		case "apply", "propose":
+		default:
+			return fmt.Errorf("%s must be apply or propose", name)
+		}
 	}
 	return nil
 }

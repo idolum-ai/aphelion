@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
+	memstore "github.com/idolum-ai/aphelion/memory"
 )
 
 func TestHandleInboundAggressivePrefetchInjectsSemanticMemory(t *testing.T) {
@@ -68,7 +69,7 @@ func TestHandleInboundAggressivePrefetchInjectsSemanticMemory(t *testing.T) {
 	}
 }
 
-func TestHandleInboundAggressiveCaptureWritesCuratedMemory(t *testing.T) {
+func TestHandleInboundAggressiveCaptureProposesCuratedMemory(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -92,16 +93,19 @@ func TestHandleInboundAggressiveCaptureWritesCuratedMemory(t *testing.T) {
 		t.Fatalf("HandleInbound() err = %v", err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(cfg.Agent.PromptRoot, "MEMORY.md"))
+	proposals, err := memstore.ListProposals(memstore.ProposalListOptions{Root: cfg.Agent.PromptRoot})
 	if err != nil {
-		t.Fatalf("ReadFile(MEMORY.md) err = %v", err)
+		t.Fatalf("ListProposals() err = %v", err)
 	}
-	if !strings.Contains(string(raw), "Prefers concise status updates") {
-		t.Fatalf("MEMORY.md missing captured line: %q", string(raw))
+	if len(proposals) != 1 || proposals[0].Store != memstore.StoreMemory {
+		t.Fatalf("proposals = %#v, want one memory proposal", proposals)
+	}
+	if !strings.Contains(proposals[0].Content, "Prefers concise status updates") {
+		t.Fatalf("proposal content = %q, want captured line", proposals[0].Content)
 	}
 }
 
-func TestFlushChatMemoryWritesCuratedMemoryFromSessionBoundary(t *testing.T) {
+func TestFlushChatMemoryProposesCuratedMemoryFromSessionBoundary(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -130,11 +134,18 @@ func TestFlushChatMemoryWritesCuratedMemoryFromSessionBoundary(t *testing.T) {
 		t.Fatalf("FlushChatMemory() err = %v", err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(cfg.Agent.PromptRoot, "memory", "decisions.md"))
+	proposals, err := memstore.ListProposals(memstore.ProposalListOptions{Root: cfg.Agent.PromptRoot})
 	if err != nil {
-		t.Fatalf("ReadFile(decisions.md) err = %v", err)
+		t.Fatalf("ListProposals() err = %v", err)
 	}
-	if !strings.Contains(string(raw), "session resets explicit") {
-		t.Fatalf("decisions.md missing flush memory line: %q", string(raw))
+	found := false
+	for _, proposal := range proposals {
+		if proposal.Store == memstore.StoreDecisions && strings.Contains(proposal.Content, "session resets explicit") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("proposals = %#v, want decision proposal", proposals)
 	}
 }

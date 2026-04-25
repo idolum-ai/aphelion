@@ -962,12 +962,13 @@ func (e *SemanticEngine) collectNativeSources(root string, now time.Time) ([]sem
 			}
 			return nil, fmt.Errorf("read semantic source %s: %w", path, err)
 		}
+		content := StripInstrumentation(string(raw))
 		out = append(out, semanticSource{
 			path:        filepath.ToSlash(rel),
 			kind:        detectSemanticKind(rel),
 			class:       classifySemanticSource(rel, detectSemanticKind(rel)),
-			content:     string(raw),
-			checksum:    checksumBytes(raw),
+			content:     content,
+			checksum:    checksumText(content),
 			mtime:       info.ModTime().UTC(),
 			provenance:  "native",
 			importState: SemanticImportStateApproved,
@@ -991,12 +992,13 @@ func (e *SemanticEngine) collectNativeSources(root string, now time.Time) ([]sem
 				if err != nil {
 					return nil, fmt.Errorf("relative daily note path: %w", err)
 				}
+				content := StripInstrumentation(string(entry.Raw))
 				out = append(out, semanticSource{
 					path:        filepath.ToSlash(rel),
 					kind:        "daily_note",
 					class:       "daily_note",
-					content:     string(entry.Raw),
-					checksum:    checksumBytes(entry.Raw),
+					content:     content,
+					checksum:    checksumText(content),
 					mtime:       entry.ModTime.UTC(),
 					provenance:  "native",
 					importState: SemanticImportStateApproved,
@@ -1532,7 +1534,7 @@ func classifySemanticSource(source string, kind string) string {
 	switch kind {
 	case "daily_note":
 		return "daily_note"
-	case "memory", "knowledge", "decision", "question", "rhizome":
+	case "memory", "knowledge", "decision", "question", "rhizome", "dream":
 		return "curated"
 	default:
 		if strings.Contains(filepath.ToSlash(source), "archive/") {
@@ -1559,6 +1561,8 @@ func detectImportedSemanticKind(sourcePath string, source string) string {
 		return "question"
 	case strings.Contains(cleanPath, "/memory/rhizome.md"), strings.HasSuffix(cleanPath, "rhizome.md"):
 		return "rhizome"
+	case strings.Contains(cleanPath, "/memory/dreams.md"), strings.HasSuffix(cleanPath, "dreams.md"):
+		return "dream"
 	case strings.Contains(cleanPath, "/daily/"):
 		return "daily_note"
 	case strings.TrimSpace(source) != "" && strings.ToLower(strings.TrimSpace(source)) != "memory":
@@ -1667,6 +1671,8 @@ func detectSemanticKind(source string) string {
 		return "question"
 	case "memory/rhizome.md":
 		return "rhizome"
+	case "memory/dreams.md":
+		return "dream"
 	default:
 		if strings.Contains(source, "daily/") || strings.Contains(source, "daily\\") {
 			return "daily_note"

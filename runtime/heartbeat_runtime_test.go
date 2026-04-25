@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -360,7 +361,7 @@ func TestHeartbeatStaysSilentWithoutConvergingSignals(t *testing.T) {
 	}
 }
 
-func TestHeartbeatReflectionWritesCuratedMemoryFromDailyNotes(t *testing.T) {
+func TestHeartbeatReflectionProposesCuratedMemoryFromDailyNotes(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -402,34 +403,28 @@ func TestHeartbeatReflectionWritesCuratedMemoryFromDailyNotes(t *testing.T) {
 		t.Fatalf("runHeartbeatOnce() err = %v", err)
 	}
 
-	for _, check := range []struct {
-		path string
-		want string
-	}{
-		{filepath.Join(cfg.Agent.SharedMemoryRoot, "MEMORY.md"), "Keep concise progress updates near the top of long tasks."},
-		{filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "knowledge.md"), "Prefers concise progress updates"},
-		{filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "decisions.md"), "Use heartbeat reflection"},
-		{filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "questions.md"), "Should session search"},
-		{filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "rhizome.md"), "heartbeat <-> memory distillation"},
-	} {
-		raw, err := os.ReadFile(check.path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) err = %v", check.path, err)
-		}
-		if !strings.Contains(string(raw), check.want) {
-			t.Fatalf("%s = %q, want substring %q", check.path, string(raw), check.want)
-		}
-	}
-	rhizomeRaw, err := os.ReadFile(filepath.Join(cfg.Agent.SharedMemoryRoot, "memory", "rhizome.md"))
+	proposals, err := memstore.ListProposals(memstore.ProposalListOptions{Root: cfg.Agent.SharedMemoryRoot})
 	if err != nil {
-		t.Fatalf("ReadFile(rhizome.md) err = %v", err)
+		t.Fatalf("ListProposals() err = %v", err)
 	}
-	rhizomeText := string(rhizomeRaw)
-	if !strings.Contains(rhizomeText, "memory distillation") {
-		t.Fatalf("rhizome.md = %q, want projected association text", rhizomeText)
+	wants := map[string]string{
+		memstore.StoreMemory:    "Keep concise progress updates near the top of long tasks.",
+		memstore.StoreKnowledge: "Prefers concise progress updates",
+		memstore.StoreDecisions: "Use heartbeat reflection",
+		memstore.StoreQuestions: "Should session search",
+		memstore.StoreRhizome:   "heartbeat <-> memory distillation",
 	}
-	if !strings.Contains(rhizomeText, "strength:") {
-		t.Fatalf("rhizome.md = %q, want graph projection metadata", rhizomeText)
+	for store, want := range wants {
+		found := false
+		for _, proposal := range proposals {
+			if proposal.Store == store && strings.Contains(proposal.Content, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("proposals = %#v, want store %s content %q", proposals, store, want)
+		}
 	}
 
 	sender.mu.Lock()
@@ -448,8 +443,8 @@ func TestHeartbeatReflectionWritesCuratedMemoryFromDailyNotes(t *testing.T) {
 	if maintenance.Messages[0].Content != "[heartbeat reflection]" {
 		t.Fatalf("maintenance user content = %q, want reflection marker", maintenance.Messages[0].Content)
 	}
-	if !strings.Contains(maintenance.Messages[1].Content, "Reflected curated memory updates for:") {
-		t.Fatalf("maintenance reply = %q, want reflection summary", maintenance.Messages[1].Content)
+	if !strings.Contains(maintenance.Messages[1].Content, "Proposed curated memory updates for review:") {
+		t.Fatalf("maintenance reply = %q, want proposal summary", maintenance.Messages[1].Content)
 	}
 }
 

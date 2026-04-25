@@ -67,6 +67,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runImportAuditCommand(args[1:])
 	case "import-semantic":
 		return true, runImportSemanticCommand(args[1:])
+	case "migrate-memory":
+		return true, runMigrateMemoryCommand(args[1:])
 	case "verify-deploy":
 		return true, runVerifyDeployCommand(args[1:])
 	case "durable-agent":
@@ -131,6 +133,79 @@ func runPathsCommand(args []string) error {
 	printPathGroup("loaded_idolum_stable_files", idolumStable)
 	printPathGroup("loaded_idolum_dynamic_files", idolumDynamic)
 	return nil
+}
+
+func runMigrateMemoryCommand(args []string) error {
+	fs := flag.NewFlagSet("migrate-memory", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	rootFlag := fs.String("root", "", "memory root to migrate; defaults to agent.shared_memory_root")
+	scopeFlag := fs.String("scope", "shared", "memory scope label")
+	storesFlag := fs.String("stores", "", "comma-separated stores to migrate; defaults to all known stores")
+	migrationIDFlag := fs.String("migration-id", "", "stable migration id; defaults to timestamp")
+	applyFlag := fs.Bool("apply", false, "rewrite files; without this the command is a dry run")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, _, err := loadConfigForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	root := strings.TrimSpace(*rootFlag)
+	if root == "" {
+		root = strings.TrimSpace(cfg.Agent.SharedMemoryRoot)
+	}
+	if root == "" {
+		return fmt.Errorf("migrate-memory requires --root or agent.shared_memory_root")
+	}
+	stores := splitCSV(*storesFlag)
+	result, err := memstore.MigrateRoot(memstore.MigrationOptions{
+		Root:        root,
+		Scope:       strings.TrimSpace(*scopeFlag),
+		MigrationID: strings.TrimSpace(*migrationIDFlag),
+		Stores:      stores,
+		Apply:       *applyFlag,
+		Now:         time.Now().UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	mode := "dry_run"
+	if *applyFlag {
+		mode = "applied"
+	}
+	fmt.Fprintf(os.Stdout, "mode: %s\n", mode)
+	fmt.Fprintf(os.Stdout, "root: %s\n", result.Root)
+	fmt.Fprintf(os.Stdout, "scope: %s\n", result.Scope)
+	fmt.Fprintf(os.Stdout, "migration_id: %s\n", result.MigrationID)
+	fmt.Fprintf(os.Stdout, "files: %d\n", len(result.Files))
+	for _, file := range result.Files {
+		changed := "unchanged"
+		if file.Changed {
+			changed = "changed"
+		}
+		fmt.Fprintf(os.Stdout, "  - store=%s entries=%d %s path=%s\n", file.Store, file.Entries, changed, file.Path)
+	}
+	if !*applyFlag {
+		fmt.Fprintln(os.Stdout, "dry_run: pass --apply to rewrite canonical memory files")
+	}
+	return nil
+}
+
+func splitCSV(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func seedAgentPromptFiles(cfg *config.Config) ([]string, error) {

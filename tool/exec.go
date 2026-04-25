@@ -60,6 +60,9 @@ type memoryInput struct {
 	Match      string   `json:"match,omitempty"`
 	SourceTag  string   `json:"source_tag,omitempty"`
 	Confidence *float64 `json:"confidence,omitempty"`
+	ProposalID string   `json:"proposal_id,omitempty"`
+	Status     string   `json:"status,omitempty"`
+	Limit      int      `json:"limit,omitempty"`
 }
 
 type sessionSearchInput struct {
@@ -536,16 +539,19 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["add", "replace", "remove"], "description": "Memory write operation"},
-					"scope": {"type": "string", "enum": ["shared", "principal"], "description": "Shared memory for admin, or principal-local memory for isolated users"},
-					"store": {"type": "string", "enum": ["memory", "knowledge", "decisions", "questions", "rhizome"], "description": "Curated memory store to edit"},
-					"content": {"type": "string", "description": "Content to add or replacement content"},
-					"match": {"type": "string", "description": "Exact existing text to replace or remove"},
-					"source_tag": {"type": "string", "enum": ["direct", "observed", "inferred", "hypothesized", "shared"], "description": "Optional provenance tag for added or replaced entries"},
-					"confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional confidence for added or replaced entries"}
-				},
-				"required": ["action", "store"]
-			}`),
+						"action": {"type": "string", "enum": ["add", "replace", "remove", "proposal_list", "proposal_show", "proposal_approve", "proposal_reject"], "description": "Memory write or proposal operation"},
+						"scope": {"type": "string", "enum": ["shared", "principal"], "description": "Shared memory for admin, or principal-local memory for isolated users"},
+						"store": {"type": "string", "enum": ["memory", "knowledge", "decisions", "questions", "rhizome", "dreams"], "description": "Curated memory store to edit"},
+						"content": {"type": "string", "description": "Content to add or replacement content"},
+						"match": {"type": "string", "description": "Exact existing text to replace or remove"},
+						"source_tag": {"type": "string", "enum": ["direct", "observed", "inferred", "hypothesized", "shared"], "description": "Optional provenance tag for added or replaced entries"},
+						"confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Optional confidence for added, replaced, or approved entries"},
+						"proposal_id": {"type": "string", "description": "Memory proposal id for proposal_show/proposal_approve/proposal_reject"},
+						"status": {"type": "string", "enum": ["proposed", "approved", "rejected"], "description": "Proposal status filter for proposal_list"},
+						"limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum proposal list items"}
+					},
+					"required": ["action"]
+				}`),
 		},
 		{
 			Name:        "session_search",
@@ -1081,14 +1087,54 @@ func (r *Registry) memory(_ context.Context, input json.RawMessage, scope sandbo
 	if err != nil {
 		return "", err
 	}
+	action := strings.ToLower(strings.TrimSpace(in.Action))
+	switch action {
+	case "proposal_list":
+		proposals, err := memstore.ListProposals(memstore.ProposalListOptions{Root: root, Status: in.Status, Limit: in.Limit})
+		if err != nil {
+			return "", err
+		}
+		return renderMemoryProposalList(effectiveScope, proposals), nil
+	case "proposal_show":
+		if strings.TrimSpace(in.ProposalID) == "" {
+			return "", fmt.Errorf("memory proposal_show requires proposal_id")
+		}
+		proposal, err := memstore.LoadProposal(root, in.ProposalID)
+		if err != nil {
+			return "", err
+		}
+		return renderMemoryProposal(*proposal), nil
+	case "proposal_approve":
+		if strings.TrimSpace(in.ProposalID) == "" {
+			return "", fmt.Errorf("memory proposal_approve requires proposal_id")
+		}
+		result, err := memstore.ApproveProposal(root, in.ProposalID, in.SourceTag, in.Confidence)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("memory_proposal_approved scope=%s proposal_id=%s store=%s path=%s", effectiveScope, strings.TrimSpace(in.ProposalID), result.Store, result.Path), nil
+	case "proposal_reject":
+		if strings.TrimSpace(in.ProposalID) == "" {
+			return "", fmt.Errorf("memory proposal_reject requires proposal_id")
+		}
+		proposal, err := memstore.RejectProposal(root, in.ProposalID)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("memory_proposal_rejected scope=%s proposal_id=%s store=%s", effectiveScope, proposal.ID, proposal.Store), nil
+	case "add", "replace", "remove", "":
+	default:
+		return "", fmt.Errorf("unsupported memory action %q", in.Action)
+	}
 
 	result, err := memstore.ApplyWrite(memstore.WriteRequest{
 		Root:       root,
 		Store:      in.Store,
-		Action:     in.Action,
+		Action:     action,
 		Content:    in.Content,
 		Match:      in.Match,
 		SourceTag:  in.SourceTag,
+		Scope:      effectiveScope,
 		Confidence: in.Confidence,
 	})
 	if err != nil {
@@ -1096,6 +1142,42 @@ func (r *Registry) memory(_ context.Context, input json.RawMessage, scope sandbo
 	}
 
 	return fmt.Sprintf("memory_%s_ok scope=%s store=%s path=%s", result.Action, effectiveScope, result.Store, result.Path), nil
+}
+
+func renderMemoryProposalList(scope string, proposals []memstore.MemoryProposal) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "scope: %s\n", firstNonEmpty(strings.TrimSpace(scope), "-"))
+	if len(proposals) == 0 {
+		b.WriteString("proposals: none")
+		return b.String()
+	}
+	b.WriteString("proposals:\n")
+	for _, proposal := range proposals {
+		fmt.Fprintf(&b, "- id=%s status=%s store=%s source=%s created_at=%s sha=%s\n",
+			proposal.ID,
+			firstNonEmpty(proposal.Status, "-"),
+			firstNonEmpty(proposal.Store, "-"),
+			firstNonEmpty(proposal.SourceKind, "-"),
+			proposal.CreatedAt.UTC().Format(time.RFC3339),
+			firstNonEmpty(proposal.ContentSHA256, "-"),
+		)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func renderMemoryProposal(proposal memstore.MemoryProposal) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "proposal_id: %s\n", proposal.ID)
+	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(proposal.Status, "-"))
+	fmt.Fprintf(&b, "scope: %s\n", firstNonEmpty(proposal.Scope, "-"))
+	fmt.Fprintf(&b, "store: %s\n", firstNonEmpty(proposal.Store, "-"))
+	fmt.Fprintf(&b, "source_kind: %s\n", firstNonEmpty(proposal.SourceKind, "-"))
+	fmt.Fprintf(&b, "source_ref: %s\n", firstNonEmpty(proposal.SourceRef, "-"))
+	fmt.Fprintf(&b, "reason: %s\n", firstNonEmpty(proposal.Reason, "-"))
+	fmt.Fprintf(&b, "content_sha256: %s\n", firstNonEmpty(proposal.ContentSHA256, "-"))
+	b.WriteString("content:\n")
+	b.WriteString(strings.TrimSpace(proposal.Content))
+	return b.String()
 }
 
 func (r *Registry) runCommand(ctx context.Context, scope sandbox.Scope, command string, workdir string) (string, string, error) {

@@ -133,6 +133,9 @@ external_manifest_dir = "./external-tools"
 	if len(cfg.Memory.Identity.Preserve) == 0 || cfg.Memory.Identity.Preserve[0] != "SOUL.md" {
 		t.Fatalf("memory.identity.preserve = %#v, want defaults", cfg.Memory.Identity.Preserve)
 	}
+	if cfg.Memory.WritePolicy.DirectUserWrites != "apply" || cfg.Memory.WritePolicy.ReflectionWrites != "propose" || cfg.Memory.WritePolicy.AggressiveWrites != "propose" || cfg.Memory.WritePolicy.AutoAcceptLowRisk {
+		t.Fatalf("memory.write_policy defaults = %#v, want apply/propose/propose/manual", cfg.Memory.WritePolicy)
+	}
 	if cfg.Thinking.Effort != "medium" || cfg.Thinking.Summary != "auto" {
 		t.Fatalf("thinking defaults = %#v, want medium/auto", cfg.Thinking)
 	}
@@ -455,10 +458,16 @@ hot_days = 2
 warm_days = 7
 cold_days = 21
 
-[memory.identity]
-preserve = ["SOUL.md", "IDENTITY.md"]
+	[memory.identity]
+	preserve = ["SOUL.md", "IDENTITY.md"]
 
-[thinking]
+	[memory.write_policy]
+	direct_user_writes = "apply"
+	reflection_writes = "apply"
+	aggressive_writes = "propose"
+	auto_accept_low_risk = true
+
+	[thinking]
 effort = "high"
 summary = "compact"
 
@@ -602,6 +611,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if got, want := cfg.Memory.Identity.Preserve, []string{"SOUL.md", "IDENTITY.md"}; !equalStrings(got, want) {
 		t.Fatalf("memory.identity.preserve = %#v, want %#v", got, want)
+	}
+	if cfg.Memory.WritePolicy.DirectUserWrites != "apply" || cfg.Memory.WritePolicy.ReflectionWrites != "apply" || cfg.Memory.WritePolicy.AggressiveWrites != "propose" || !cfg.Memory.WritePolicy.AutoAcceptLowRisk {
+		t.Fatalf("memory.write_policy = %#v", cfg.Memory.WritePolicy)
 	}
 	if cfg.Thinking.Effort != "high" || cfg.Thinking.Summary != "compact" {
 		t.Fatalf("thinking = %#v, want high/compact", cfg.Thinking)
