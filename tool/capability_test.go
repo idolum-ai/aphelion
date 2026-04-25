@@ -277,3 +277,52 @@ func TestCapabilityGrantEnablesRegisteredToolWithoutLegacyExposure(t *testing.T)
 		t.Fatalf("CapabilityGrant invocation count = %#v ok=%t, want one runtime invocation", grant, ok)
 	}
 }
+
+func TestCapabilityGrantRendersFirstClassChildRuntimeContract(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	request, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-child-runtime",
+		RequestedBy:    "parent",
+		RequestedFor:   "profile-child",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		Purpose:        "read mailbox through negotiated child runtime",
+		ReviewStatus:   session.CapabilityReviewStatusApproved,
+		Contract:       `{"child_runtime":{"executable":"mail-reader","readonly_paths":["/srv/mail/config"],"env_from_parent":["MAIL_TOKEN"]}}`,
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	out, err := registry.capabilityAuthorityGrantSet(capabilityInput{RequestID: request.RequestID, Principal: "profile-child"}, actor, key)
+	if err != nil {
+		t.Fatalf("capabilityAuthorityGrantSet() err = %v", err)
+	}
+	if !strings.Contains(out, "child_runtime: present") || !strings.Contains(out, "child_runtime_executable: mail-reader") || !strings.Contains(out, "child_runtime_env_from_parent: MAIL_TOKEN") {
+		t.Fatalf("grant output = %q, want child_runtime contract rendered", out)
+	}
+}
+
+func TestCapabilityGrantRejectsInvalidChildRuntimeContract(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	request, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-child-runtime-bad",
+		RequestedBy:    "parent",
+		RequestedFor:   "profile-child",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		Purpose:        "read mailbox through negotiated child runtime",
+		ReviewStatus:   session.CapabilityReviewStatusApproved,
+		Contract:       `{"child_runtime":{"readonly_paths":["relative"]}}`,
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	_, err = registry.capabilityAuthorityGrantSet(capabilityInput{RequestID: request.RequestID, Principal: "profile-child"}, actor, key)
+	if err == nil {
+		t.Fatal("capabilityAuthorityGrantSet() err = nil, want child_runtime validation error")
+	}
+}

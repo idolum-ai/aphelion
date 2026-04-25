@@ -176,6 +176,9 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 	if err != nil {
 		return "", err
 	}
+	if _, err := syncDurableAgentProfileFiles(*updated, r.store); err != nil {
+		return "", err
+	}
 	return renderDurableAgentPolicyApply(*updated, update), nil
 }
 
@@ -315,6 +318,9 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 	if err != nil {
 		return "", err
 	}
+	if _, err := syncDurableAgentProfileFiles(*updated, r.store); err != nil {
+		return "", err
+	}
 	return renderDurableAgentLifecycle("create", *updated), nil
 }
 
@@ -333,6 +339,9 @@ func (r *Registry) activateDurableAgent(in durableAgentInput) (string, error) {
 	r.inheritDurableAgentBootstrapIfMissing(agent)
 	agent.Status = "active"
 	if err := r.store.UpsertDurableAgent(*agent); err != nil {
+		return "", err
+	}
+	if _, err := syncDurableAgentProfileFiles(*agent, r.store); err != nil {
 		return "", err
 	}
 	return renderDurableAgentLifecycle("activate", *agent), nil
@@ -529,6 +538,9 @@ func (r *Registry) finalizeDurableAgentWizard(in durableAgentInput, key session.
 	}
 	r.inheritDurableAgentBootstrapIfMissing(&updatedAgent)
 	if err := r.store.UpsertDurableAgent(updatedAgent); err != nil {
+		return "", err
+	}
+	if _, err := syncDurableAgentProfileFiles(updatedAgent, r.store); err != nil {
 		return "", err
 	}
 

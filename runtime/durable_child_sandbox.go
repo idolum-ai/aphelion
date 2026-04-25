@@ -3,12 +3,10 @@
 package runtime
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -21,17 +19,6 @@ type durableChildSandboxAccess struct {
 	readonlyBinds []sandbox.BindPath
 	env           map[string]string
 }
-
-type durableChildGrantMaterialization struct {
-	Executable     string             `json:"executable,omitempty"`
-	ReadonlyPaths  []string           `json:"readonly_paths,omitempty"`
-	ReadonlyBinds  []sandbox.BindPath `json:"readonly_binds,omitempty"`
-	EnvFromParent  []string           `json:"env_from_parent,omitempty"`
-	Environment    []string           `json:"environment,omitempty"`
-	CapabilityNote string             `json:"capability_note,omitempty"`
-}
-
-var durableChildEnvNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func durableChildSandboxAccessFor(binaryPath string, agent core.DurableAgent, store *session.SQLiteStore) (durableChildSandboxAccess, error) {
 	access := durableChildSandboxAccess{readonlyPaths: []string{strings.TrimSpace(binaryPath)}}
@@ -100,50 +87,15 @@ func durableChildActiveCapabilityGrants(store *session.SQLiteStore, agentID stri
 	return out, nil
 }
 
-func durableChildGrantMaterializationFrom(grant session.CapabilityGrant) (durableChildGrantMaterialization, bool, error) {
-	var material durableChildGrantMaterialization
-	found := false
-	for _, raw := range []string{grant.Contract, grant.Constraints} {
-		raw = strings.TrimSpace(raw)
-		if raw == "" || raw == "{}" {
-			continue
-		}
-		var wrapper struct {
-			ChildRuntime           *durableChildGrantMaterialization `json:"child_runtime,omitempty"`
-			RuntimeMaterialization *durableChildGrantMaterialization `json:"runtime_materialization,omitempty"`
-		}
-		if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
-			return durableChildGrantMaterialization{}, false, fmt.Errorf("parse capability grant %s materialization: %w", strings.TrimSpace(grant.GrantID), err)
-		}
-		for _, candidate := range []*durableChildGrantMaterialization{wrapper.ChildRuntime, wrapper.RuntimeMaterialization} {
-			if candidate == nil || !candidate.active() {
-				continue
-			}
-			material.merge(*candidate)
-			found = true
-		}
+func durableChildGrantMaterializationFrom(grant session.CapabilityGrant) (core.ChildRuntimeContract, bool, error) {
+	material, ok, err := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints)
+	if err != nil {
+		return core.ChildRuntimeContract{}, false, fmt.Errorf("parse capability grant %s child_runtime: %w", strings.TrimSpace(grant.GrantID), err)
 	}
-	return material, found, nil
+	return material, ok, nil
 }
 
-func (m durableChildGrantMaterialization) active() bool {
-	return strings.TrimSpace(m.Executable) != "" || len(m.ReadonlyPaths) > 0 || len(m.ReadonlyBinds) > 0 || len(m.EnvFromParent) > 0 || len(m.Environment) > 0
-}
-
-func (m *durableChildGrantMaterialization) merge(other durableChildGrantMaterialization) {
-	if m == nil {
-		return
-	}
-	if strings.TrimSpace(other.Executable) != "" {
-		m.Executable = strings.TrimSpace(other.Executable)
-	}
-	m.ReadonlyPaths = append(m.ReadonlyPaths, other.ReadonlyPaths...)
-	m.ReadonlyBinds = append(m.ReadonlyBinds, other.ReadonlyBinds...)
-	m.EnvFromParent = append(m.EnvFromParent, other.EnvFromParent...)
-	m.Environment = append(m.Environment, other.Environment...)
-}
-
-func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.CapabilityGrant, material durableChildGrantMaterialization) error {
+func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.CapabilityGrant, material core.ChildRuntimeContract) error {
 	if a == nil {
 		return nil
 	}
@@ -165,17 +117,9 @@ func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.Capa
 		a.readonlyPaths = append(a.readonlyPaths, path)
 	}
 	for _, bind := range material.ReadonlyBinds {
-		bind.Source = strings.TrimSpace(bind.Source)
-		bind.Target = strings.TrimSpace(bind.Target)
-		if bind.Source == "" || bind.Target == "" {
-			continue
-		}
-		if !filepath.IsAbs(bind.Source) || !filepath.IsAbs(bind.Target) {
-			return fmt.Errorf("materialize capability grant %s readonly bind source and target must be absolute", strings.TrimSpace(grant.GrantID))
-		}
-		a.readonlyBinds = append(a.readonlyBinds, bind)
+		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
 	}
-	for _, name := range append(material.EnvFromParent, material.Environment...) {
+	for _, name := range material.EnvFromParent {
 		if err := a.inheritEnv(strings.TrimSpace(name)); err != nil {
 			return fmt.Errorf("materialize capability grant %s environment: %w", strings.TrimSpace(grant.GrantID), err)
 		}
@@ -211,8 +155,8 @@ func (a *durableChildSandboxAccess) inheritEnv(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return nil
 	}
-	if !durableChildEnvNamePattern.MatchString(name) {
-		return fmt.Errorf("invalid env var name %q", name)
+	if err := core.ValidateChildRuntimeContract(core.ChildRuntimeContract{EnvFromParent: []string{name}}); err != nil {
+		return err
 	}
 	if value, ok := os.LookupEnv(name); ok {
 		a.ensureEnv()[name] = value

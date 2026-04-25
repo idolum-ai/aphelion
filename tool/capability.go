@@ -109,6 +109,9 @@ func (r *Registry) capabilityRequestSubmit(in capabilityInput, actor principal.P
 	if err != nil {
 		return "", err
 	}
+	if err := validateCapabilityChildRuntimeContract(contract, constraints); err != nil {
+		return "", err
+	}
 	requester := toolAuthorityPrincipalDisplay(actor)
 	requestedFor := firstNonEmpty(strings.TrimSpace(in.RequestedFor), requester)
 	record, err := r.store.UpsertCapabilityRequest(session.CapabilityRequest{
@@ -371,6 +374,9 @@ func (r *Registry) capabilityAuthorityGrantSet(in capabilityInput, actor princip
 	}
 	constraints, err := normalizeCapabilityJSONBlobWithDefault(in.Constraints, "constraints", request.Constraints)
 	if err != nil {
+		return "", err
+	}
+	if err := validateCapabilityChildRuntimeContract(contract, constraints); err != nil {
 		return "", err
 	}
 	status := session.NormalizeCapabilityGrantStatus(session.CapabilityGrantStatus(in.GrantStatus))
@@ -828,6 +834,34 @@ func boundedLimit(raw int, max int) int {
 	return raw
 }
 
+func validateCapabilityChildRuntimeContract(contract string, constraints string) error {
+	_, _, err := core.ExtractChildRuntimeContract(contract, constraints)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func renderCapabilityChildRuntime(b *strings.Builder, contract string, constraints string) {
+	material, ok, err := core.ExtractChildRuntimeContract(contract, constraints)
+	if err != nil || !ok {
+		return
+	}
+	b.WriteString("child_runtime: present\n")
+	if material.Executable != "" {
+		fmt.Fprintf(b, "child_runtime_executable: %s\n", material.Executable)
+	}
+	if len(material.ReadonlyPaths) > 0 {
+		fmt.Fprintf(b, "child_runtime_readonly_paths: %d\n", len(material.ReadonlyPaths))
+	}
+	if len(material.ReadonlyBinds) > 0 {
+		fmt.Fprintf(b, "child_runtime_readonly_binds: %d\n", len(material.ReadonlyBinds))
+	}
+	if len(material.EnvFromParent) > 0 {
+		fmt.Fprintf(b, "child_runtime_env_from_parent: %s\n", strings.Join(material.EnvFromParent, ","))
+	}
+}
+
 func renderCapabilityRequestHelp() string {
 	return strings.Join([]string{
 		"[CAPABILITY_REQUEST]",
@@ -935,6 +969,7 @@ func renderCapabilityGrantWithUpdate(header string, grant session.CapabilityGran
 	if grant.InvocationCount > 0 || grant.FailureCount > 0 {
 		fmt.Fprintf(&b, "counters: invocations=%d failures=%d\n", grant.InvocationCount, grant.FailureCount)
 	}
+	renderCapabilityChildRuntime(&b, grant.Contract, grant.Constraints)
 	if update != nil {
 		b.WriteString("capability_update_plan: present\n")
 		fmt.Fprintf(&b, "policy_update_applied: %t\n", update.PolicyUpdateApplied)

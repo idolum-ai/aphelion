@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1951,5 +1952,60 @@ func adminSessionKey() session.SessionKey {
 		ChatID: 1001,
 		UserID: 0,
 		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"},
+	}
+}
+
+func TestDurableAgentPolicyApplySyncsProfileFiles(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	childWorkspace := filepath.Join(t.TempDir(), "child", "workspace")
+	childMemory := filepath.Join(t.TempDir(), "child", "memory")
+	agent := core.DurableAgent{
+		AgentID:           "profile-child",
+		ChannelKind:       "headless",
+		LocalStorageRoots: []string{childWorkspace, childMemory},
+		Status:            "active",
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"},
+		BootstrapCeiling: core.DurableAgentBootstrapCeiling{
+			CapabilityEnvelope:           []string{"bounded_review_artifact", "session_recall"},
+			AllowedOutboundModes:         []string{"read_only", "reply_with_policy_authorization"},
+			AllowedPublicSurfaceModes:    []string{"none", "explicit_parent_relay_only"},
+			AllowedSharedInferenceReuse:  []string{"disabled"},
+			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
+		},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Initial charter.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	_, err := registry.applyDurableAgentPolicy(durableAgentInput{
+		AgentID: "profile-child",
+		PolicyPatch: &durableAgentPolicyPatchInput{
+			Charter:      "Updated child charter.",
+			Capabilities: []string{"bounded_review_artifact", "session_recall"},
+		},
+		Reason: "ratify profile files",
+	})
+	if err != nil {
+		t.Fatalf("applyDurableAgentPolicy() err = %v", err)
+	}
+	charterRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "charter.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(charter) err = %v", err)
+	}
+	capRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "capabilities.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(capabilities) err = %v", err)
+	}
+	runtimeRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "runtime.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(runtime) err = %v", err)
+	}
+	if !strings.Contains(string(charterRaw), "Updated child charter.") || !strings.Contains(string(capRaw), "session_recall") || !strings.Contains(string(runtimeRaw), "child_runtime") {
+		t.Fatalf("profile files missing ratified content: charter=%q capabilities=%q runtime=%q", charterRaw, capRaw, runtimeRaw)
 	}
 }
