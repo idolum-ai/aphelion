@@ -143,26 +143,28 @@ type toolAuthorityInput struct {
 }
 
 type capabilityInput struct {
-	Action           string          `json:"action"`
-	RequestID        string          `json:"request_id,omitempty"`
-	GrantID          string          `json:"grant_id,omitempty"`
-	Kind             string          `json:"kind,omitempty"`
-	TargetResource   string          `json:"target_resource,omitempty"`
-	CapabilityAction string          `json:"capability_action,omitempty"`
-	RequestedFor     string          `json:"requested_for,omitempty"`
-	ParentPrincipal  string          `json:"parent_principal,omitempty"`
-	AdminPrincipal   string          `json:"admin_principal,omitempty"`
-	Purpose          string          `json:"purpose,omitempty"`
-	RiskClass        string          `json:"risk_class,omitempty"`
-	Contract         json.RawMessage `json:"contract,omitempty"`
-	Constraints      json.RawMessage `json:"constraints,omitempty"`
-	ReviewStatus     string          `json:"review_status,omitempty"`
-	GrantStatus      string          `json:"grant_status,omitempty"`
-	Principal        string          `json:"principal,omitempty"`
-	AllowedActions   []string        `json:"allowed_actions,omitempty"`
-	Rationale        string          `json:"rationale,omitempty"`
-	ExpiresInSeconds int             `json:"expires_in_seconds,omitempty"`
-	Limit            int             `json:"limit,omitempty"`
+	Action             string          `json:"action"`
+	RequestID          string          `json:"request_id,omitempty"`
+	GrantID            string          `json:"grant_id,omitempty"`
+	Kind               string          `json:"kind,omitempty"`
+	TargetResource     string          `json:"target_resource,omitempty"`
+	CapabilityAction   string          `json:"capability_action,omitempty"`
+	RequestedFor       string          `json:"requested_for,omitempty"`
+	ParentPrincipal    string          `json:"parent_principal,omitempty"`
+	AdminPrincipal     string          `json:"admin_principal,omitempty"`
+	Purpose            string          `json:"purpose,omitempty"`
+	RiskClass          string          `json:"risk_class,omitempty"`
+	Contract           json.RawMessage `json:"contract,omitempty"`
+	Constraints        json.RawMessage `json:"constraints,omitempty"`
+	ReviewTargetChatID int64           `json:"review_target_chat_id,omitempty"`
+	ReviewSummary      string          `json:"review_summary,omitempty"`
+	ReviewStatus       string          `json:"review_status,omitempty"`
+	GrantStatus        string          `json:"grant_status,omitempty"`
+	Principal          string          `json:"principal,omitempty"`
+	AllowedActions     []string        `json:"allowed_actions,omitempty"`
+	Rationale          string          `json:"rationale,omitempty"`
+	ExpiresInSeconds   int             `json:"expires_in_seconds,omitempty"`
+	Limit              int             `json:"limit,omitempty"`
 }
 
 type openAIFileInput struct {
@@ -748,6 +750,8 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"risk_class": {"type": "string", "description": "Operator-facing risk label such as low, medium, high, sensitive, spend, or public"},
 					"contract": {"type": "object", "description": "Proposed behavior contract, escalation rules, attribution, or success criteria"},
 					"constraints": {"type": "object", "description": "Proposed boundaries such as max spend, paths, domains, accounts, retention, model/message limits, or review cadence"},
+					"review_target_chat_id": {"type": "integer", "description": "Optional Telegram chat id to queue a pending review event for this request"},
+					"review_summary": {"type": "string", "description": "Optional concise summary for the queued review event"},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Optional list limit"}
 				},
 				"required": ["action"]

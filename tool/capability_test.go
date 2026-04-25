@@ -165,6 +165,61 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	}
 }
 
+func TestCapabilityRequestCanQueueReviewEvent(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	child := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 300}
+	childKey := session.SessionKey{
+		ChatID: 300,
+		UserID: 300,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "300"},
+	}
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), child, childKey, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-public-web",
+		"kind":"public_web",
+		"target_resource":"public-chat",
+		"requested_for":"public-web-agent",
+		"admin_principal":"telegram:1001",
+		"purpose":"answer public visitors without affecting the core system",
+		"risk_class":"public_surface",
+		"contract":{"mode":"read incoming messages and draft bounded replies"},
+		"constraints":{"max_messages":20},
+		"review_target_chat_id":1001,
+		"review_summary":"Public web agent requests bounded public interaction"
+	}`))
+	if err != nil {
+		t.Fatalf("capability_request request_submit with review target err = %v", err)
+	}
+	if !strings.Contains(out, "request_id: cap-public-web") || !strings.Contains(out, "review_event_id:") {
+		t.Fatalf("request_submit output = %q, want request and review event id", out)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events len = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.SourceRole != "capability_request" {
+		t.Fatalf("SourceRole = %q, want capability_request", event.SourceRole)
+	}
+	if event.SourceScope.Kind != session.ScopeKindTelegramDM || event.SourceScope.ID != "300" {
+		t.Fatalf("SourceScope = %#v, want telegram_dm 300", event.SourceScope)
+	}
+	if !strings.Contains(event.Summary, "Public web agent requests bounded public interaction") {
+		t.Fatalf("Summary = %q, want explicit review summary", event.Summary)
+	}
+	if !strings.Contains(event.MetadataJSON, `"request_id":"cap-public-web"`) ||
+		!strings.Contains(event.MetadataJSON, `"kind":"public_web"`) ||
+		!strings.Contains(event.MetadataJSON, `"requested_for":"public-web-agent"`) {
+		t.Fatalf("MetadataJSON = %q, want capability request metadata", event.MetadataJSON)
+	}
+}
+
 func TestCapabilityGrantEnablesRegisteredToolWithoutLegacyExposure(t *testing.T) {
 	t.Parallel()
 

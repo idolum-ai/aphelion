@@ -138,7 +138,14 @@ func (r *Registry) capabilityRequestSubmit(in capabilityInput, actor principal.P
 	}); err != nil {
 		return "", err
 	}
-	return renderCapabilityRequest("[CAPABILITY_REQUEST]", record), nil
+	reviewEventID := int64(0)
+	if in.ReviewTargetChatID > 0 {
+		reviewEventID, err = r.queueCapabilityRequestReviewEvent(record, in, actor, key)
+		if err != nil {
+			return "", err
+		}
+	}
+	return renderCapabilityRequestWithReviewEvent("[CAPABILITY_REQUEST]", record, reviewEventID), nil
 }
 
 func (r *Registry) capabilityRequestShow(in capabilityInput, actor principal.Principal) (string, error) {
@@ -585,6 +592,87 @@ func (r *Registry) appendCapabilityEvent(key session.SessionKey, eventType strin
 	return r.appendToolLifecycleEvent(key, "capability_delegation", eventType, status, payload)
 }
 
+func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRequest, in capabilityInput, actor principal.Principal, key session.SessionKey) (int64, error) {
+	if r == nil || r.store == nil {
+		return 0, fmt.Errorf("capability_request review notification requires transcript store")
+	}
+	record = session.NormalizeCapabilityRequest(record)
+	if in.ReviewTargetChatID <= 0 {
+		return 0, nil
+	}
+	metadata := map[string]any{
+		"request_id":       record.RequestID,
+		"kind":             string(record.Kind),
+		"target_resource":  record.TargetResource,
+		"review_status":    string(record.ReviewStatus),
+		"requested_by":     record.RequestedBy,
+		"requested_for":    record.RequestedFor,
+		"parent_principal": record.ParentPrincipal,
+		"admin_principal":  record.AdminPrincipal,
+		"risk_class":       record.RiskClass,
+		"purpose":          record.Purpose,
+		"request_via":      "capability_request",
+	}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return 0, fmt.Errorf("marshal capability request review metadata: %w", err)
+	}
+	sourceScope := key.Scope
+	if sourceScope.IsZero() {
+		sourceScope = capabilityRequestActorScope(actor)
+	}
+	summary := strings.TrimSpace(in.ReviewSummary)
+	if summary == "" {
+		summary = capabilityRequestReviewSummary(record)
+	}
+	return r.store.InsertReviewEvent(session.ReviewEvent{
+		SourceChatID:      key.ChatID,
+		SourceUserID:      actor.TelegramUserID,
+		SourceRole:        "capability_request",
+		SourceScope:       sourceScope,
+		TargetAdminChatID: in.ReviewTargetChatID,
+		TargetScope: session.ScopeRef{
+			Kind: session.ScopeKindTelegramDM,
+			ID:   fmt.Sprintf("%d", in.ReviewTargetChatID),
+		},
+		Summary:      summary,
+		MetadataJSON: string(raw),
+	})
+}
+
+func capabilityRequestActorScope(actor principal.Principal) session.ScopeRef {
+	switch actor.Role {
+	case principal.RoleDurableAgent:
+		if id := strings.TrimSpace(actor.DurableAgentID); id != "" {
+			return session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: id, DurableAgentID: id}
+		}
+	case principal.RoleAdmin, principal.RoleApprovedUser:
+		if actor.TelegramUserID > 0 {
+			id := fmt.Sprintf("%d", actor.TelegramUserID)
+			return session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: id}
+		}
+	}
+	return session.ScopeRef{}
+}
+
+func capabilityRequestReviewSummary(record session.CapabilityRequest) string {
+	record = session.NormalizeCapabilityRequest(record)
+	parts := []string{
+		fmt.Sprintf("capability_request=%s", record.RequestID),
+		fmt.Sprintf("kind=%s", record.Kind),
+		fmt.Sprintf("target=%s", firstNonEmpty(record.TargetResource, "-")),
+		fmt.Sprintf("requested_for=%s", firstNonEmpty(record.RequestedFor, "-")),
+	}
+	lines := []string{strings.Join(parts, " ")}
+	if record.Purpose != "" {
+		lines = append(lines, "purpose: "+record.Purpose)
+	}
+	if record.RiskClass != "" {
+		lines = append(lines, "risk: "+record.RiskClass)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func boundedLimit(raw int, max int) int {
 	if max <= 0 {
 		max = 50
@@ -615,6 +703,10 @@ func renderCapabilityAuthorityHelp() string {
 }
 
 func renderCapabilityRequest(header string, record session.CapabilityRequest) string {
+	return renderCapabilityRequestWithReviewEvent(header, record, 0)
+}
+
+func renderCapabilityRequestWithReviewEvent(header string, record session.CapabilityRequest, reviewEventID int64) string {
 	record = session.NormalizeCapabilityRequest(record)
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(header))
@@ -645,6 +737,9 @@ func renderCapabilityRequest(header string, record session.CapabilityRequest) st
 	}
 	if record.Constraints != "" {
 		fmt.Fprintf(&b, "constraints: %s\n", record.Constraints)
+	}
+	if reviewEventID > 0 {
+		fmt.Fprintf(&b, "review_event_id: %d\n", reviewEventID)
 	}
 	return b.String()
 }

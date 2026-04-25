@@ -16,6 +16,9 @@ The canonical flow is:
 - `request`: an authenticated principal submits a `capability_request` with
   requester attribution, target principal, capability kind, target resource,
   purpose, risk class, proposed contract, and constraints.
+  When immediate operator visibility is needed, the request may include a
+  `review_target_chat_id` and optional `review_summary`; this queues a pending
+  review event without changing approval or grant semantics.
 - `classify`: the request is normalized into one capability kind:
   `tool`, `local_device`, `external_account`, `purchase`, `public_web`,
   `communication`, `file_access`, `network_access`, or `generic_delegation`.
@@ -71,6 +74,9 @@ reports; it does not itself approve, grant, revoke, or invoke capability.
 
 - Any authenticated child, tenant, approved user, durable agent, or admin may
   submit and inspect visible requests through `capability_request`.
+- Direct `capability_request` review notifications are only notifications: they
+  do not skip parent review, admin approval, provisioning, attestation, grant,
+  or access checks.
 - Admins may submit `durable_agent delegation_request` on behalf of a durable
   child when the request emerged through that child conversation. The resulting
   row is still reviewed and granted through `capability_authority`.
