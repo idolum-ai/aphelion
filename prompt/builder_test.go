@@ -115,6 +115,32 @@ func TestBuildGovernorPromptAddsGeneratedMediaDeliveryWhenExecIsAvailable(t *tes
 	}
 }
 
+func TestBuildGovernorPromptAddsCapabilityDelegationWhenToolsAvailable(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolManifest: strings.Join([]string{
+			"tools:",
+			"- capability_request: request broad governed capabilities",
+			"- capability_authority: review and grant broad capabilities",
+			"- durable_agent: durable child governance",
+		}, "\n"),
+	})
+
+	if !strings.Contains(got, "## Capability Delegation Discipline") {
+		t.Fatalf("prompt missing capability delegation discipline block: %q", got)
+	}
+	if !strings.Contains(got, "Use capability_request for direct broad permission requests") {
+		t.Fatalf("prompt missing direct capability_request guidance: %q", got)
+	}
+	if !strings.Contains(got, "use durable_agent delegation_request/delegation_report") {
+		t.Fatalf("prompt missing durable_agent delegation bridge guidance: %q", got)
+	}
+	if !strings.Contains(got, "A proposed request is not an active grant.") {
+		t.Fatalf("prompt missing request-vs-grant boundary: %q", got)
+	}
+}
+
 func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testing.T) {
 	t.Parallel()
 
@@ -152,6 +178,9 @@ func TestBuildGovernorPromptDoesNotInferDisciplineFromManifestDescriptions(t *te
 	}
 	if strings.Contains(got, "## Operational Discipline") {
 		t.Fatalf("prompt unexpectedly inferred operational discipline from description text: %q", got)
+	}
+	if strings.Contains(got, "## Capability Delegation Discipline") {
+		t.Fatalf("prompt unexpectedly inferred capability delegation discipline from description text: %q", got)
 	}
 	if strings.Contains(got, "## Confirmation Discipline") {
 		t.Fatalf("prompt unexpectedly inferred confirmation discipline from description text: %q", got)

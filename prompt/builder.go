@@ -29,13 +29,21 @@ type GovernorRequest struct {
 }
 
 type ToolCapabilities struct {
-	Exec            bool
-	UpdatePlan      bool
-	UpdateOperation bool
+	Exec                bool
+	UpdatePlan          bool
+	UpdateOperation     bool
+	CapabilityRequest   bool
+	CapabilityAuthority bool
+	DurableAgent        bool
 }
 
 func (c ToolCapabilities) Empty() bool {
-	return !c.Exec && !c.UpdatePlan && !c.UpdateOperation
+	return !c.Exec &&
+		!c.UpdatePlan &&
+		!c.UpdateOperation &&
+		!c.CapabilityRequest &&
+		!c.CapabilityAuthority &&
+		!c.DurableAgent
 }
 
 type FaceRequest struct {
@@ -139,6 +147,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
 			parts = append(parts, agent.SystemBlock{Text: operations})
 		}
+		if delegation := renderCapabilityDelegationDisciplineBlock(toolCaps); delegation != "" {
+			parts = append(parts, agent.SystemBlock{Text: delegation})
+		}
 		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
 			parts = append(parts, agent.SystemBlock{Text: confirmation})
 		}
@@ -151,6 +162,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		}
 		if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
 			parts = append(parts, agent.SystemBlock{Text: operations})
+		}
+		if delegation := renderCapabilityDelegationDisciplineBlock(toolCaps); delegation != "" {
+			parts = append(parts, agent.SystemBlock{Text: delegation})
 		}
 		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
 			parts = append(parts, agent.SystemBlock{Text: confirmation})
@@ -647,6 +661,27 @@ func renderOperationalDisciplineBlock(capabilities ToolCapabilities) string {
 	}, "\n")
 }
 
+func renderCapabilityDelegationDisciplineBlock(capabilities ToolCapabilities) string {
+	if !capabilities.CapabilityRequest && !capabilities.CapabilityAuthority && !capabilities.DurableAgent {
+		return ""
+	}
+	lines := []string{
+		"## Capability Delegation Discipline",
+		"When a child, tenant, agent, or conversation needs permission beyond its current envelope, route it through the generic capability delegation lane instead of inventing a one-off workflow.",
+	}
+	if capabilities.CapabilityRequest {
+		lines = append(lines, "Use capability_request for direct broad permission requests across tools, local devices, external accounts, purchases, public web, communication surfaces, file/network access, and emergent permissions.")
+	}
+	if capabilities.DurableAgent {
+		lines = append(lines, "For durable child-agent asks or progress reports, use durable_agent delegation_request/delegation_report; that bridge creates canonical capability state and queues review artifacts while preserving the child persona boundary.")
+	}
+	if capabilities.CapabilityAuthority {
+		lines = append(lines, "Use capability_authority for parent/admin review, grant, revoke, and access_check. A proposed request is not an active grant.")
+	}
+	lines = append(lines, "Use specialized durable_agent actions only for already-modeled local operations; emergent permissions should stay conversation-derived, contract-bound, and reviewable.")
+	return strings.Join(lines, "\n")
+}
+
 func renderConfirmationDisciplineBlock(capabilities ToolCapabilities) string {
 	if !capabilities.Exec {
 		return ""
@@ -683,6 +718,12 @@ func ToolCapabilitiesFromDefs(defs []agent.ToolDef) ToolCapabilities {
 			out.UpdatePlan = true
 		case "update_operation":
 			out.UpdateOperation = true
+		case "capability_request":
+			out.CapabilityRequest = true
+		case "capability_authority":
+			out.CapabilityAuthority = true
+		case "durable_agent":
+			out.DurableAgent = true
 		}
 	}
 	return out
@@ -691,9 +732,12 @@ func ToolCapabilitiesFromDefs(defs []agent.ToolDef) ToolCapabilities {
 func toolCapabilitiesFromManifest(manifest string) ToolCapabilities {
 	names := parseManifestToolNames(manifest)
 	return ToolCapabilities{
-		Exec:            manifestHasTool(names, "exec"),
-		UpdatePlan:      manifestHasTool(names, "update_plan"),
-		UpdateOperation: manifestHasTool(names, "update_operation"),
+		Exec:                manifestHasTool(names, "exec"),
+		UpdatePlan:          manifestHasTool(names, "update_plan"),
+		UpdateOperation:     manifestHasTool(names, "update_operation"),
+		CapabilityRequest:   manifestHasTool(names, "capability_request"),
+		CapabilityAuthority: manifestHasTool(names, "capability_authority"),
+		DurableAgent:        manifestHasTool(names, "durable_agent"),
 	}
 }
 

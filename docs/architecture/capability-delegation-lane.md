@@ -54,10 +54,26 @@ The source of truth is SQLite session state:
 legacy `tool_proposals` row, and also writes the canonical `capability_requests`
 row. New broad permissions should use `capability_request` directly.
 
+`durable_agent delegation_request` is the compatibility bridge for durable
+children. It creates the same canonical `capability_requests` row, attributes the
+request to the child by default, derives parent/admin principals when possible,
+and queues a durable review artifact for the operator. This is the preferred
+path when a child-agent conversation discovers an emergent need such as local
+device access, external account access, a purchase, public web exposure, file or
+network expansion, or another permission that should not become a new bespoke
+durable action.
+
+`durable_agent delegation_report` queues a durable review artifact tied to an
+existing request or grant. It is for progress, blocked-state, outcome, and risk
+reports; it does not itself approve, grant, revoke, or invoke capability.
+
 ## Authority Rules
 
 - Any authenticated child, tenant, approved user, durable agent, or admin may
   submit and inspect visible requests through `capability_request`.
+- Admins may submit `durable_agent delegation_request` on behalf of a durable
+  child when the request emerged through that child conversation. The resulting
+  row is still reviewed and granted through `capability_authority`.
 - A principal can see a request when it is the requester, requested target,
   named parent, named admin, or an admin actor.
 - `capability_authority request_review parent_approved` is allowed to the named
