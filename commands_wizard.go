@@ -282,7 +282,7 @@ func durableWizardAnswerRows(step string, card durableWizardCard) [][]telegram.I
 func durableWizardChoicesForStep(step string, card durableWizardCard) []durableWizardChoice {
 	switch strings.ToLower(strings.TrimSpace(step)) {
 	case "adapter":
-		return []durableWizardChoice{{Key: "gog_cli", Label: "gog_cli"}}
+		return nil
 	case "bootstrap_profile":
 		if strings.TrimSpace(card.BootstrapBackend) == "codex" {
 			return []durableWizardChoice{
@@ -359,9 +359,7 @@ func durableWizardAnswersForChoice(step string, option string, card durableWizar
 	option = strings.ToLower(strings.TrimSpace(option))
 	switch step {
 	case "adapter":
-		if option == "gog_cli" {
-			return map[string]any{"adapter": "gog_cli"}, true
-		}
+		return nil, false
 	case "bootstrap_profile":
 		switch option {
 		case "inherit_parent":

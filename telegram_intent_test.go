@@ -39,7 +39,7 @@ func TestRewriteDurableWizardIntentDoesNotRewriteNonAdmin(t *testing.T) {
 	msg := core.InboundMessage{
 		ChatID:   7,
 		SenderID: 1002,
-		Text:     "create a durable email agent for me",
+		Text:     "create a durable child agent for me",
 	}
 
 	got := rewriteDurableWizardIntent(msg, router)

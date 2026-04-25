@@ -344,7 +344,7 @@ func (s *stubCommandRouter) RunDurableWizard(ctx context.Context, chatID int64, 
 	if strings.TrimSpace(s.durableWizardResult) != "" {
 		return s.durableWizardResult, nil
 	}
-	return "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: adapter\nmissing: adapter,autonomy\nnext_question: Which inbox adapter should be used (for example gog_cli)?\naddress: idolum@example.com\nadapter: \nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n", nil
+	return "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: in_progress\ncurrent_step: adapter\nmissing: adapter,autonomy\nnext_question: Which channel adapter should be named for this channel profile?\naddress: child-endpoint\nadapter: \nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n", nil
 }
 
 func (s *stubCommandRouter) DurableAgentsList(senderID int64) ([]core.DurableAgentStatusSnapshot, error) {
@@ -1980,7 +1980,7 @@ func TestHandleTelegramCommandCallbackContinuationRejectsStaleDecisionID(t *test
 func TestDurableWizardInlineRowsFromTextInProgress(t *testing.T) {
 	t.Parallel()
 
-	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: autonomy\nmissing: autonomy,surface_rules\nnext_question: Should the child be observe_only, local_drafts, review_before_reply, or reply_within_charter?\naddress: idolum@example.com\nadapter: gog_cli\nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n"
+	text := "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: in_progress\ncurrent_step: autonomy\nmissing: autonomy,surface_rules\nnext_question: Should the child be observe_only, local_drafts, review_before_reply, or reply_within_charter?\naddress: child-endpoint\nadapter: child_adapter\nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n"
 	rows := durableWizardInlineRowsFromText(text)
 	if len(rows) < 2 {
 		t.Fatalf("rows len = %d, want at least option row and controls", len(rows))
@@ -2005,7 +2005,7 @@ func TestDurableWizardInlineRowsFromTextInProgress(t *testing.T) {
 func TestDurableWizardInlineRowsFromTextBootstrapProfile(t *testing.T) {
 	t.Parallel()
 
-	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_profile\nmissing: bootstrap_profile,autonomy\nnext_question: Should this child inherit the parent bootstrap defaults or pin a child-custom bootstrap profile?\naddress: idolum@example.com\nadapter: gog_cli\nbootstrap_profile: \nbootstrap_backend: native\nbootstrap_native_provider: anthropic\nbootstrap_model: claude-parent\n"
+	text := "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: in_progress\ncurrent_step: bootstrap_profile\nmissing: bootstrap_profile,autonomy\nnext_question: Should this child inherit the parent bootstrap defaults or pin a child-custom bootstrap profile?\naddress: child-endpoint\nadapter: child_adapter\nbootstrap_profile: \nbootstrap_backend: native\nbootstrap_native_provider: anthropic\nbootstrap_model: claude-parent\n"
 	rows := durableWizardInlineRowsFromText(text)
 	if len(rows) < 2 {
 		t.Fatalf("rows len = %d, want at least option row and controls", len(rows))
@@ -2030,7 +2030,7 @@ func TestDurableWizardInlineRowsFromTextBootstrapProfile(t *testing.T) {
 func TestDurableWizardInlineRowsFromTextBootstrapProfileCodex(t *testing.T) {
 	t.Parallel()
 
-	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_profile\nmissing: bootstrap_profile,autonomy\nnext_question: This child uses a codex bootstrap backend; keep parent bootstrap defaults?\naddress: idolum@example.com\nadapter: gog_cli\nbootstrap_profile: \nbootstrap_backend: codex\nbootstrap_model: \n"
+	text := "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: in_progress\ncurrent_step: bootstrap_profile\nmissing: bootstrap_profile,autonomy\nnext_question: This child uses a codex bootstrap backend; keep parent bootstrap defaults?\naddress: child-endpoint\nadapter: child_adapter\nbootstrap_profile: \nbootstrap_backend: codex\nbootstrap_model: \n"
 	rows := durableWizardInlineRowsFromText(text)
 	if len(rows) < 2 {
 		t.Fatalf("rows len = %d, want at least option row and controls", len(rows))
@@ -2044,7 +2044,7 @@ func TestDurableWizardInlineRowsFromTextBootstrapProfileCodex(t *testing.T) {
 func TestDurableWizardInlineRowsFromTextBootstrapModel(t *testing.T) {
 	t.Parallel()
 
-	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_model\nmissing: bootstrap_model\nnext_question: Which model should this child pin for child-custom bootstrap?\naddress: idolum@example.com\nadapter: gog_cli\nbootstrap_profile: child_custom\nbootstrap_backend: native\nbootstrap_native_provider: anthropic\nbootstrap_model: claude-parent\n"
+	text := "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: in_progress\ncurrent_step: bootstrap_model\nmissing: bootstrap_model\nnext_question: Which model should this child pin for child-custom bootstrap?\naddress: child-endpoint\nadapter: child_adapter\nbootstrap_profile: child_custom\nbootstrap_backend: native\nbootstrap_native_provider: anthropic\nbootstrap_model: claude-parent\n"
 	rows := durableWizardInlineRowsFromText(text)
 	if len(rows) < 2 {
 		t.Fatalf("rows len = %d, want option rows plus controls", len(rows))
@@ -2069,7 +2069,7 @@ func TestDurableWizardInlineRowsFromTextBootstrapModel(t *testing.T) {
 func TestDurableWizardInlineRowsFromTextReady(t *testing.T) {
 	t.Parallel()
 
-	text := "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: ready\ncurrent_step: -\nmissing: -\naddress: idolum@example.com\nadapter: gog_cli\nautonomy: observe_only\nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter: Read-only child.\n"
+	text := "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: ready\ncurrent_step: -\nmissing: -\naddress: child-endpoint\nadapter: child_adapter\nautonomy: observe_only\nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter: Read-only child.\n"
 	rows := durableWizardInlineRowsFromText(text)
 	if len(rows) != 1 {
 		t.Fatalf("rows len = %d, want 1 finalize control row", len(rows))
@@ -2085,7 +2085,7 @@ func TestHandleTelegramCommandCallbackDurableWizardAnswer(t *testing.T) {
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
 		canRestart:          true,
-		durableWizardResult: "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: ready\ncurrent_step: -\nmissing: -\naddress: idolum@example.com\nadapter: gog_cli\nautonomy: observe_only\nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter: Read-only child.\n",
+		durableWizardResult: "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: ready\ncurrent_step: -\nmissing: -\naddress: child-endpoint\nadapter: child_adapter\nautonomy: observe_only\nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter: Read-only child.\n",
 	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:   "cb-durable-answer",
@@ -2094,7 +2094,7 @@ func TestHandleTelegramCommandCallbackDurableWizardAnswer(t *testing.T) {
 		Message: &telegram.Message{
 			MessageID: 210,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
-			Text:      "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: autonomy\nmissing: autonomy,surface_rules\naddress: idolum@example.com\nadapter: gog_cli\nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n",
+			Text:      "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: in_progress\ncurrent_step: autonomy\nmissing: autonomy,surface_rules\naddress: child-endpoint\nadapter: child_adapter\nautonomy: \nwakeup_mode: poll\npoll_interval: 5m\nsynthesis_cadence: 4h\ncharter:\n",
 		},
 	})
 	if err != nil {
@@ -2109,8 +2109,8 @@ func TestHandleTelegramCommandCallbackDurableWizardAnswer(t *testing.T) {
 	if router.durableWizardAction != "wizard_answer" {
 		t.Fatalf("durableWizardAction = %q, want wizard_answer", router.durableWizardAction)
 	}
-	if router.durableWizardAgentID != "idolum-email" {
-		t.Fatalf("durableWizardAgentID = %q, want idolum-email", router.durableWizardAgentID)
+	if router.durableWizardAgentID != "child-alpha" {
+		t.Fatalf("durableWizardAgentID = %q, want child-alpha", router.durableWizardAgentID)
 	}
 	if got := router.durableWizardAnswers["autonomy"]; got != "observe_only" {
 		t.Fatalf("durableWizardAnswers[autonomy] = %#v, want observe_only", got)
@@ -2135,7 +2135,7 @@ func TestHandleTelegramCommandCallbackDurableWizardBootstrapModelKeepParent(t *t
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
 		canRestart:          true,
-		durableWizardResult: "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: ready\ncurrent_step: -\nmissing: -\nbootstrap_profile: child_custom\nbootstrap_model: claude-parent\n",
+		durableWizardResult: "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: ready\ncurrent_step: -\nmissing: -\nbootstrap_profile: child_custom\nbootstrap_model: claude-parent\n",
 	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:   "cb-durable-bootstrap-model",
@@ -2144,7 +2144,7 @@ func TestHandleTelegramCommandCallbackDurableWizardBootstrapModelKeepParent(t *t
 		Message: &telegram.Message{
 			MessageID: 212,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
-			Text:      "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_model\nmissing: bootstrap_model\nbootstrap_profile: child_custom\nbootstrap_model: claude-parent\n",
+			Text:      "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: in_progress\ncurrent_step: bootstrap_model\nmissing: bootstrap_model\nbootstrap_profile: child_custom\nbootstrap_model: claude-parent\n",
 		},
 	})
 	if err != nil {
@@ -2173,7 +2173,7 @@ func TestHandleTelegramCommandCallbackDurableWizardRejectsCodexChildCustom(t *te
 		Message: &telegram.Message{
 			MessageID: 213,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
-			Text:      "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: bootstrap_profile\nmissing: bootstrap_profile,autonomy\nbootstrap_backend: codex\nbootstrap_model: \n",
+			Text:      "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: in_progress\ncurrent_step: bootstrap_profile\nmissing: bootstrap_profile,autonomy\nbootstrap_backend: codex\nbootstrap_model: \n",
 		},
 	})
 	if err != nil {
@@ -2202,7 +2202,7 @@ func TestHandleTelegramCommandCallbackDurableWizardRejectsStaleStep(t *testing.T
 		Message: &telegram.Message{
 			MessageID: 211,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
-			Text:      "action: durable-agent wizard show\nagent_id: idolum-email\nchannel_kind: email\nwizard_status: in_progress\ncurrent_step: adapter\nmissing: adapter,autonomy\naddress: idolum@example.com\nadapter: \nautonomy: \n",
+			Text:      "action: durable-agent wizard show\nagent_id: child-alpha\nchannel_kind: external_channel\nwizard_status: in_progress\ncurrent_step: adapter\nmissing: adapter,autonomy\naddress: child-endpoint\nadapter: \nautonomy: \n",
 		},
 	})
 	if err != nil {
