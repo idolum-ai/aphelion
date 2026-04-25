@@ -101,6 +101,10 @@ func (r *Registry) capabilityRequestSubmit(in capabilityInput, actor principal.P
 	if err != nil {
 		return "", err
 	}
+	contract, err = mergeCapabilityUpdatePlanIntoContract(contract, capabilityUpdatePlanFromCapabilityInput(in))
+	if err != nil {
+		return "", err
+	}
 	constraints, err := normalizeCapabilityJSONBlob(in.Constraints, "constraints")
 	if err != nil {
 		return "", err
@@ -347,12 +351,23 @@ func (r *Registry) capabilityAuthorityGrantSet(in capabilityInput, actor princip
 			actions = session.NormalizeCapabilityActions([]string{action})
 		}
 	}
-	if len(actions) == 0 {
-		actions = []string{"invoke"}
-	}
 	contract, err := normalizeCapabilityJSONBlobWithDefault(in.Contract, "contract", request.Contract)
 	if err != nil {
 		return "", err
+	}
+	contract, err = mergeCapabilityUpdatePlanIntoContract(contract, capabilityUpdatePlanFromCapabilityInput(in))
+	if err != nil {
+		return "", err
+	}
+	plan, hasPlan, err := capabilityUpdatePlanFromContract(contract)
+	if err != nil {
+		return "", err
+	}
+	if len(actions) == 0 && hasPlan && len(plan.GrantActions) > 0 {
+		actions = session.NormalizeCapabilityActions(plan.GrantActions)
+	}
+	if len(actions) == 0 {
+		actions = []string{"invoke"}
 	}
 	constraints, err := normalizeCapabilityJSONBlobWithDefault(in.Constraints, "constraints", request.Constraints)
 	if err != nil {
@@ -371,7 +386,7 @@ func (r *Registry) capabilityAuthorityGrantSet(in capabilityInput, actor princip
 		expiresAt = now.Add(time.Duration(in.ExpiresInSeconds) * time.Second)
 	}
 	policyHash := capabilityGrantPolicyHash(kind, target, grantedTo, actions, contract, constraints)
-	grant, err := r.store.UpsertCapabilityGrant(session.CapabilityGrant{
+	grantRecord := session.CapabilityGrant{
 		GrantID:            grantID,
 		RequestID:          request.RequestID,
 		GrantedBy:          toolAuthorityPrincipalDisplay(actor),
@@ -389,9 +404,48 @@ func (r *Registry) capabilityAuthorityGrantSet(in capabilityInput, actor princip
 		ExpiresAt:          expiresAt,
 		CreatedAt:          now,
 		UpdatedAt:          now,
-	})
+	}
+	requiresPolicyApply := status == session.CapabilityGrantStatusActive && hasPlan && capabilityUpdatePlanHasDurablePolicyPatch(plan)
+	if requiresPolicyApply {
+		grantRecord.Status = session.CapabilityGrantStatusPending
+		grantRecord.GrantedAt = time.Time{}
+	}
+	grant, err := r.store.UpsertCapabilityGrant(grantRecord)
 	if err != nil {
 		return "", err
+	}
+	var updateResult *capabilityUpdatePlanApplyResult
+	if requiresPolicyApply {
+		updateResult, err = r.applyCapabilityUpdatePlanForGrant(request, grantRecord)
+		if err != nil {
+			failed := grant
+			failed.Status = session.CapabilityGrantStatusFailed
+			failed.FailureCount++
+			failed.LastFailureAt = time.Now().UTC()
+			failed.StaleReason = "capability_update_plan_apply_failed: " + err.Error()
+			failed.UpdatedAt = failed.LastFailureAt
+			if stored, storeErr := r.store.UpsertCapabilityGrant(failed); storeErr == nil {
+				grant = stored
+			}
+			_ = r.appendCapabilityEvent(key, core.ExecutionEventCapabilityGrantChanged, string(session.CapabilityGrantStatusFailed), map[string]any{
+				"grant_id":        grant.GrantID,
+				"request_id":      grant.RequestID,
+				"kind":            string(grant.Kind),
+				"target_resource": grant.TargetResource,
+				"granted_to":      grant.GrantedTo,
+				"status":          string(session.CapabilityGrantStatusFailed),
+				"failure_reason":  failed.StaleReason,
+			})
+			return renderCapabilityGrant("[CAPABILITY_GRANT_FAILED]", grant), err
+		}
+		grantRecord.Status = session.CapabilityGrantStatusActive
+		grantRecord.GrantedAt = time.Now().UTC()
+		grantRecord.CreatedAt = grant.CreatedAt
+		grantRecord.UpdatedAt = grantRecord.GrantedAt
+		grant, err = r.store.UpsertCapabilityGrant(grantRecord)
+		if err != nil {
+			return "", err
+		}
 	}
 	if err := r.appendCapabilityEvent(key, core.ExecutionEventCapabilityGrantChanged, string(grant.Status), map[string]any{
 		"grant_id":        grant.GrantID,
@@ -405,7 +459,21 @@ func (r *Registry) capabilityAuthorityGrantSet(in capabilityInput, actor princip
 	}); err != nil {
 		return "", err
 	}
-	return renderCapabilityGrant("[CAPABILITY_GRANT]", grant), nil
+	if updateResult != nil {
+		if err := r.appendCapabilityEvent(key, core.ExecutionEventCapabilityUpdateApplied, string(grant.Status), map[string]any{
+			"grant_id":              grant.GrantID,
+			"request_id":            grant.RequestID,
+			"agent_id":              updateResult.AgentID,
+			"policy_update_applied": updateResult.PolicyUpdateApplied,
+			"policy_changed":        updateResult.PolicyChanged,
+			"policy_update_id":      updateResult.PolicyUpdateID,
+			"policy_version":        updateResult.PolicyVersion,
+			"policy_hash":           updateResult.PolicyHash,
+		}); err != nil {
+			return "", err
+		}
+	}
+	return renderCapabilityGrantWithUpdate("[CAPABILITY_GRANT]", grant, updateResult), nil
 }
 
 func (r *Registry) capabilityAuthorityGrantShow(in capabilityInput, actor principal.Principal) (string, error) {
@@ -592,6 +660,83 @@ func (r *Registry) appendCapabilityEvent(key session.SessionKey, eventType strin
 	return r.appendToolLifecycleEvent(key, "capability_delegation", eventType, status, payload)
 }
 
+type capabilityUpdatePlanApplyResult struct {
+	PolicyUpdateApplied bool
+	PolicyChanged       bool
+	AgentID             string
+	PolicyVersion       int64
+	PolicyHash          string
+	PolicyUpdateID      int64
+}
+
+func (r *Registry) applyCapabilityUpdatePlanForGrant(request session.CapabilityRequest, grant session.CapabilityGrant) (*capabilityUpdatePlanApplyResult, error) {
+	plan, hasPlan, err := capabilityUpdatePlanFromContract(grant.Contract)
+	if err != nil {
+		return nil, err
+	}
+	if !hasPlan || !capabilityUpdatePlanHasDurablePolicyPatch(plan) {
+		return nil, nil
+	}
+	agentID, err := r.resolveCapabilityUpdatePlanAgentID(plan, request, grant)
+	if err != nil {
+		return nil, err
+	}
+	agent, err := r.resolveDurableAgent(agentID)
+	if err != nil {
+		return nil, err
+	}
+	patch := effectiveDurableAgentPolicyPatchFromInput(durableAgentInput{
+		PolicyPatch:     plan.PolicyPatch,
+		PolicyOverrides: plan.PolicyOverrides,
+	})
+	policy := agent.LivePolicy
+	if err := applyDurableAgentPolicyPatch(&policy, patch); err != nil {
+		return nil, err
+	}
+	reason := strings.TrimSpace(plan.Reason)
+	if reason == "" {
+		reason = fmt.Sprintf("applied capability_update_plan from grant %s for request %s", grant.GrantID, request.RequestID)
+	}
+	updated, update, err := r.store.ApplyDurableAgentLivePolicy(agent.AgentID, policy, 0, reason)
+	if err != nil {
+		return nil, err
+	}
+	result := &capabilityUpdatePlanApplyResult{
+		PolicyUpdateApplied: true,
+		AgentID:             updated.AgentID,
+		PolicyVersion:       updated.PolicyVersion,
+		PolicyHash:          updated.PolicyHash,
+	}
+	if update != nil {
+		result.PolicyChanged = true
+		result.PolicyUpdateID = update.ID
+	}
+	return result, nil
+}
+
+func (r *Registry) resolveCapabilityUpdatePlanAgentID(plan capabilityUpdatePlanInput, request session.CapabilityRequest, grant session.CapabilityGrant) (string, error) {
+	plan = normalizeCapabilityUpdatePlan(plan)
+	if plan.AgentID != "" {
+		return plan.AgentID, nil
+	}
+	candidates := []string{
+		strings.TrimPrefix(strings.TrimSpace(request.TargetResource), "durable_agent:"),
+		strings.TrimPrefix(strings.TrimSpace(grant.TargetResource), "durable_agent:"),
+		request.RequestedFor,
+		grant.GrantedTo,
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, err := r.store.DurableAgent(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("capability_update_plan with policy_patch requires agent_id")
+}
+
 func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRequest, in capabilityInput, actor principal.Principal, key session.SessionKey) (int64, error) {
 	if r == nil || r.store == nil {
 		return 0, fmt.Errorf("capability_request review notification requires transcript store")
@@ -760,6 +905,10 @@ func renderCapabilityRequestList(records []session.CapabilityRequest) string {
 }
 
 func renderCapabilityGrant(header string, grant session.CapabilityGrant) string {
+	return renderCapabilityGrantWithUpdate(header, grant, nil)
+}
+
+func renderCapabilityGrantWithUpdate(header string, grant session.CapabilityGrant, update *capabilityUpdatePlanApplyResult) string {
 	grant = session.NormalizeCapabilityGrant(grant)
 	var b strings.Builder
 	b.WriteString(strings.TrimSpace(header))
@@ -785,6 +934,17 @@ func renderCapabilityGrant(header string, grant session.CapabilityGrant) string 
 	}
 	if grant.InvocationCount > 0 || grant.FailureCount > 0 {
 		fmt.Fprintf(&b, "counters: invocations=%d failures=%d\n", grant.InvocationCount, grant.FailureCount)
+	}
+	if update != nil {
+		b.WriteString("capability_update_plan: present\n")
+		fmt.Fprintf(&b, "policy_update_applied: %t\n", update.PolicyUpdateApplied)
+		fmt.Fprintf(&b, "policy_changed: %t\n", update.PolicyChanged)
+		fmt.Fprintf(&b, "policy_agent_id: %s\n", update.AgentID)
+		fmt.Fprintf(&b, "policy_version: %d\n", update.PolicyVersion)
+		fmt.Fprintf(&b, "policy_hash: %s\n", update.PolicyHash)
+		if update.PolicyUpdateID > 0 {
+			fmt.Fprintf(&b, "policy_update_id: %d\n", update.PolicyUpdateID)
+		}
 	}
 	return b.String()
 }

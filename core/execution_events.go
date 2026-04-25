@@ -33,6 +33,7 @@ const (
 	ExecutionEventCapabilityRequestCreated = "capability.request.created"
 	ExecutionEventCapabilityReviewed       = "capability.reviewed"
 	ExecutionEventCapabilityGrantChanged   = "capability.grant.changed"
+	ExecutionEventCapabilityUpdateApplied  = "capability.update_plan.applied"
 	ExecutionEventCapabilityInvocation     = "capability.invocation"
 
 	ExecutionEventDeliveryProgressSent   = "delivery.progress.sent"

@@ -18,7 +18,9 @@ The canonical flow is:
   purpose, risk class, proposed contract, and constraints.
   When immediate operator visibility is needed, the request may include a
   `review_target_chat_id` and optional `review_summary`; this queues a pending
-  review event without changing approval or grant semantics.
+  review event without changing approval or grant semantics. Requests may also
+  embed a `capability_update_plan` in the contract when approval should result
+  in a concrete downstream change such as a durable child policy patch.
 - `classify`: the request is normalized into one capability kind:
   `tool`, `local_device`, `external_account`, `purchase`, `public_web`,
   `communication`, `file_access`, `network_access`, or `generic_delegation`.
@@ -32,7 +34,10 @@ The canonical flow is:
   Other capabilities use the grant contract and policy hash as their baseline.
 - `grant`: an admin creates or updates a `capability_grant` with granted
   principal, allowed actions, contract, constraints, status, policy fingerprint,
-  expiration, and stale/revocation state.
+  expiration, and stale/revocation state. If an active grant carries a durable
+  child `capability_update_plan`, the grant is staged as pending, the live
+  policy patch is applied under the child bootstrap ceiling, and the grant only
+  becomes active after that policy update succeeds.
 - `expose/invoke`: runtime access checks require an active unexpired grant for
   the requested action. For `kind=tool`, an active grant with `invoke`
   authorizes a registered tool; there is no separate tool-exposure authority
@@ -54,10 +59,23 @@ The source of truth is SQLite session state:
   and counters.
 - `capability_invocations`: invocation-level audit trail for grant use.
 
+`capability_update_plan` is not a separate authority surface. It is an optional
+contract field on a request or grant. Current durable-child plans support:
+
+- `agent_id`: durable child receiving the policy update.
+- `policy_patch`: high-level child policy changes such as autonomy, visibility,
+  shared context, capabilities, charter, and drift policy.
+- `policy_overrides`: explicit low-level live-policy axes when needed.
+- `provisioning` and `attestation`: operator-visible setup and evidence steps.
+- `grant_actions`: suggested grant actions; used as the grant default when the
+  admin does not provide `allowed_actions`.
+- `reason` and `notes`: provenance and operator context.
+
 `durable_agent delegation_request` is the compatibility bridge for durable
 children. It creates the same canonical `capability_requests` row, attributes the
 request to the child by default, derives parent/admin principals when possible,
-and queues a durable review artifact for the operator. This is the preferred
+queues a durable review artifact for the operator, and can embed a
+`capability_update_plan` produced by the same conversation. This is the preferred
 path when a child-agent conversation discovers an emergent need such as local
 device access, external account access, a purchase, public web exposure, file or
 network expansion, or another permission that should not become a new bespoke
@@ -84,6 +102,9 @@ reports; it does not itself approve, grant, revoke, or invoke capability.
 - `capability_authority request_review approved` is admin-only and requires
   `parent_approved` first when a parent principal is named.
 - `capability_authority grant_set` and `grant_revoke` are admin-only.
+- `capability_authority grant_set` applies durable-child
+  `capability_update_plan` policy patches only for active grants. Bootstrap
+  ceiling violations fail the grant instead of silently widening a child.
 - Grant visibility follows granted-to, granted-by, related request visibility,
   or admin role.
 

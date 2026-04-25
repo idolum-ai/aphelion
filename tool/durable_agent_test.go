@@ -97,6 +97,9 @@ func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"generic_delegation"`) || !strings.Contains(durableDefJSON, `"purchase"`) || !strings.Contains(durableDefJSON, `"local_device"`) {
 		t.Fatalf("durable_agent definition missing capability kind delegation enum: %s", durableDefJSON)
 	}
+	if !strings.Contains(durableDefJSON, `"capability_update_plan"`) || !strings.Contains(durableDefJSON, `"grant_actions"`) {
+		t.Fatalf("durable_agent definition missing capability update plan surface: %s", durableDefJSON)
+	}
 }
 
 func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
@@ -306,6 +309,149 @@ func TestDurableAgentToolDelegationRequestAndReport(t *testing.T) {
 	if !strings.Contains(latest.MetadataJSON, `"delegation_surface":"durable_agent.delegation_report"`) ||
 		!strings.Contains(latest.MetadataJSON, `"status":"blocked"`) {
 		t.Fatalf("latest review metadata = %q, want delegation report metadata", latest.MetadataJSON)
+	}
+}
+
+func TestDurableAgentDelegationGrantAppliesCapabilityUpdatePlan(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	livePolicy := core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+		Charter:            "Help family members while escalating purchases and account access.",
+		CapabilityEnvelope: []string{"bounded_review_artifact"},
+		OutboundMode:       "read_only",
+		DriftPolicy:        "admin_review",
+	})
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-child",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "200",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy:         livePolicy,
+		BootstrapCeiling: core.NormalizeDurableAgentBootstrapCeiling(core.DurableAgentBootstrapCeiling{
+			CapabilityEnvelope:           []string{"bounded_review_artifact", "amazon_checkout"},
+			AllowedOutboundModes:         []string{"read_only", "reply_with_parent_review"},
+			AllowedPublicSurfaceModes:    []string{"none", "explicit_parent_relay_only"},
+			AllowedSharedInferenceReuse:  []string{"disabled"},
+			AllowedSharedInferenceScopes: []string{"public_prefix_only"},
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-test",
+			Model:          "openrouter/test-model",
+		},
+		Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	parent := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 200}
+	key := adminSessionKey()
+	requestOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		admin,
+		key,
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"delegation_request",
+			"agent_id":"family-child",
+			"delegation_request":{
+				"request_id":"cap-family-amazon-update",
+				"kind":"purchase",
+				"target_resource":"amazon",
+				"requested_for":"family-child",
+				"purpose":"order approved school supplies",
+				"risk_class":"spend",
+				"contract":{"allowed":"school supplies only"},
+				"constraints":{"max_usd":50},
+				"grant_actions":["order"],
+				"policy_patch":{
+					"autonomy":"review_before_reply",
+					"visibility":"parent_relay_only",
+					"capabilities":["bounded_review_artifact","amazon_checkout"]
+				},
+				"update_reason":"approved Amazon checkout delegation"
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(delegation_request) err = %v", err)
+	}
+	if !strings.Contains(requestOut, "capability_update_plan: present") || !strings.Contains(requestOut, "policy_update_on_grant: true") {
+		t.Fatalf("delegation_request output = %q, want embedded capability update plan", requestOut)
+	}
+	request, ok, err := store.CapabilityRequest("cap-family-amazon-update")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityRequest(cap-family-amazon-update) ok=false, want stored request")
+	}
+	if !strings.Contains(request.Contract, `"capability_update_plan"`) || !strings.Contains(request.Contract, `"amazon_checkout"`) {
+		t.Fatalf("request contract = %s, want capability_update_plan with policy patch", request.Contract)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), parent, key, "capability_authority", json.RawMessage(`{
+		"action":"request_review",
+		"request_id":"cap-family-amazon-update",
+		"review_status":"parent_approved",
+		"rationale":"bounded school supplies"
+	}`)); err != nil {
+		t.Fatalf("parent request_review err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
+		"action":"request_review",
+		"request_id":"cap-family-amazon-update",
+		"review_status":"approved",
+		"rationale":"parent endorsed"
+	}`)); err != nil {
+		t.Fatalf("admin request_review err = %v", err)
+	}
+
+	grantOut, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
+		"action":"grant_set",
+		"request_id":"cap-family-amazon-update",
+		"grant_id":"capg-family-amazon-update",
+		"principal":"family-child"
+	}`))
+	if err != nil {
+		t.Fatalf("grant_set err = %v", err)
+	}
+	if !strings.Contains(grantOut, "status: active") ||
+		!strings.Contains(grantOut, "allowed_actions: order") ||
+		!strings.Contains(grantOut, "policy_update_applied: true") ||
+		!strings.Contains(grantOut, "policy_changed: true") {
+		t.Fatalf("grant_set output = %q, want active grant and applied policy update", grantOut)
+	}
+	grant, ok, err := store.CapabilityGrant("capg-family-amazon-update")
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityGrant(capg-family-amazon-update) ok=false, want stored grant")
+	}
+	if grant.Status != session.CapabilityGrantStatusActive || len(grant.AllowedActions) != 1 || grant.AllowedActions[0] != "order" {
+		t.Fatalf("grant = %#v, want active grant with order action", grant)
+	}
+	updated, err := store.DurableAgent("family-child")
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if updated.LivePolicy.OutboundMode != "reply_with_parent_review" {
+		t.Fatalf("updated outbound_mode = %q, want reply_with_parent_review", updated.LivePolicy.OutboundMode)
+	}
+	if !containsString(updated.LivePolicy.CapabilityEnvelope, "amazon_checkout") {
+		t.Fatalf("updated capabilities = %#v, want amazon_checkout", updated.LivePolicy.CapabilityEnvelope)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !executionEventTypeExists(events, core.ExecutionEventCapabilityUpdateApplied) {
+		t.Fatalf("missing %s event", core.ExecutionEventCapabilityUpdateApplied)
 	}
 }
 

@@ -135,28 +135,29 @@ type toolAuthorityInput struct {
 }
 
 type capabilityInput struct {
-	Action             string          `json:"action"`
-	RequestID          string          `json:"request_id,omitempty"`
-	GrantID            string          `json:"grant_id,omitempty"`
-	Kind               string          `json:"kind,omitempty"`
-	TargetResource     string          `json:"target_resource,omitempty"`
-	CapabilityAction   string          `json:"capability_action,omitempty"`
-	RequestedFor       string          `json:"requested_for,omitempty"`
-	ParentPrincipal    string          `json:"parent_principal,omitempty"`
-	AdminPrincipal     string          `json:"admin_principal,omitempty"`
-	Purpose            string          `json:"purpose,omitempty"`
-	RiskClass          string          `json:"risk_class,omitempty"`
-	Contract           json.RawMessage `json:"contract,omitempty"`
-	Constraints        json.RawMessage `json:"constraints,omitempty"`
-	ReviewTargetChatID int64           `json:"review_target_chat_id,omitempty"`
-	ReviewSummary      string          `json:"review_summary,omitempty"`
-	ReviewStatus       string          `json:"review_status,omitempty"`
-	GrantStatus        string          `json:"grant_status,omitempty"`
-	Principal          string          `json:"principal,omitempty"`
-	AllowedActions     []string        `json:"allowed_actions,omitempty"`
-	Rationale          string          `json:"rationale,omitempty"`
-	ExpiresInSeconds   int             `json:"expires_in_seconds,omitempty"`
-	Limit              int             `json:"limit,omitempty"`
+	Action               string                     `json:"action"`
+	RequestID            string                     `json:"request_id,omitempty"`
+	GrantID              string                     `json:"grant_id,omitempty"`
+	Kind                 string                     `json:"kind,omitempty"`
+	TargetResource       string                     `json:"target_resource,omitempty"`
+	CapabilityAction     string                     `json:"capability_action,omitempty"`
+	RequestedFor         string                     `json:"requested_for,omitempty"`
+	ParentPrincipal      string                     `json:"parent_principal,omitempty"`
+	AdminPrincipal       string                     `json:"admin_principal,omitempty"`
+	Purpose              string                     `json:"purpose,omitempty"`
+	RiskClass            string                     `json:"risk_class,omitempty"`
+	Contract             json.RawMessage            `json:"contract,omitempty"`
+	Constraints          json.RawMessage            `json:"constraints,omitempty"`
+	CapabilityUpdatePlan *capabilityUpdatePlanInput `json:"capability_update_plan,omitempty"`
+	ReviewTargetChatID   int64                      `json:"review_target_chat_id,omitempty"`
+	ReviewSummary        string                     `json:"review_summary,omitempty"`
+	ReviewStatus         string                     `json:"review_status,omitempty"`
+	GrantStatus          string                     `json:"grant_status,omitempty"`
+	Principal            string                     `json:"principal,omitempty"`
+	AllowedActions       []string                   `json:"allowed_actions,omitempty"`
+	Rationale            string                     `json:"rationale,omitempty"`
+	ExpiresInSeconds     int                        `json:"expires_in_seconds,omitempty"`
+	Limit                int                        `json:"limit,omitempty"`
 }
 
 type openAIFileInput struct {
@@ -232,24 +233,31 @@ type durableAgentSnapshotInput struct {
 }
 
 type durableAgentDelegationRequestInput struct {
-	RequestID          string            `json:"request_id,omitempty"`
-	Kind               string            `json:"kind,omitempty"`
-	TargetResource     string            `json:"target_resource,omitempty"`
-	RequestedFor       string            `json:"requested_for,omitempty"`
-	RequestedBy        string            `json:"requested_by,omitempty"`
-	ParentPrincipal    string            `json:"parent_principal,omitempty"`
-	AdminPrincipal     string            `json:"admin_principal,omitempty"`
-	Purpose            string            `json:"purpose,omitempty"`
-	RiskClass          string            `json:"risk_class,omitempty"`
-	Contract           json.RawMessage   `json:"contract,omitempty"`
-	Constraints        json.RawMessage   `json:"constraints,omitempty"`
-	Summary            string            `json:"summary,omitempty"`
-	LocalActions       []string          `json:"local_actions,omitempty"`
-	Questions          []string          `json:"questions,omitempty"`
-	RiskFlags          []string          `json:"risk_flags,omitempty"`
-	ArtifactRefs       []string          `json:"artifact_refs,omitempty"`
-	Metadata           map[string]string `json:"metadata,omitempty"`
-	ReviewTargetChatID int64             `json:"review_target_chat_id,omitempty"`
+	RequestID            string                            `json:"request_id,omitempty"`
+	Kind                 string                            `json:"kind,omitempty"`
+	TargetResource       string                            `json:"target_resource,omitempty"`
+	RequestedFor         string                            `json:"requested_for,omitempty"`
+	RequestedBy          string                            `json:"requested_by,omitempty"`
+	ParentPrincipal      string                            `json:"parent_principal,omitempty"`
+	AdminPrincipal       string                            `json:"admin_principal,omitempty"`
+	Purpose              string                            `json:"purpose,omitempty"`
+	RiskClass            string                            `json:"risk_class,omitempty"`
+	Contract             json.RawMessage                   `json:"contract,omitempty"`
+	Constraints          json.RawMessage                   `json:"constraints,omitempty"`
+	CapabilityUpdatePlan *capabilityUpdatePlanInput        `json:"capability_update_plan,omitempty"`
+	PolicyPatch          *durableAgentPolicyPatchInput     `json:"policy_patch,omitempty"`
+	PolicyOverrides      *durableAgentPolicyOverridesInput `json:"policy_overrides,omitempty"`
+	Provisioning         []string                          `json:"provisioning,omitempty"`
+	Attestation          []string                          `json:"attestation,omitempty"`
+	GrantActions         []string                          `json:"grant_actions,omitempty"`
+	UpdateReason         string                            `json:"update_reason,omitempty"`
+	Summary              string                            `json:"summary,omitempty"`
+	LocalActions         []string                          `json:"local_actions,omitempty"`
+	Questions            []string                          `json:"questions,omitempty"`
+	RiskFlags            []string                          `json:"risk_flags,omitempty"`
+	ArtifactRefs         []string                          `json:"artifact_refs,omitempty"`
+	Metadata             map[string]string                 `json:"metadata,omitempty"`
+	ReviewTargetChatID   int64                             `json:"review_target_chat_id,omitempty"`
 }
 
 type durableAgentDelegationReportInput struct {
@@ -706,12 +714,13 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"parent_principal": {"type": "string", "description": "Optional parent/guardian principal that may endorse before admin approval"},
 					"admin_principal": {"type": "string", "description": "Optional admin principal expected to make the final approval"},
 					"purpose": {"type": "string", "description": "Why this capability is needed and what bounded work it enables"},
-					"risk_class": {"type": "string", "description": "Operator-facing risk label such as low, medium, high, sensitive, spend, or public"},
-					"contract": {"type": "object", "description": "Proposed behavior contract, escalation rules, attribution, or success criteria"},
-					"constraints": {"type": "object", "description": "Proposed boundaries such as max spend, paths, domains, accounts, retention, model/message limits, or review cadence"},
-					"review_target_chat_id": {"type": "integer", "description": "Optional Telegram chat id to queue a pending review event for this request"},
-					"review_summary": {"type": "string", "description": "Optional concise summary for the queued review event"},
-					"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Optional list limit"}
+						"risk_class": {"type": "string", "description": "Operator-facing risk label such as low, medium, high, sensitive, spend, or public"},
+						"contract": {"type": "object", "description": "Proposed behavior contract, escalation rules, attribution, or success criteria"},
+						"constraints": {"type": "object", "description": "Proposed boundaries such as max spend, paths, domains, accounts, retention, model/message limits, or review cadence"},
+						"capability_update_plan": {"type": "object", "description": "Optional concrete update plan to embed in the reviewable contract. For durable children this can include agent_id, policy_patch, policy_overrides, provisioning, attestation, grant_actions, reason, and notes."},
+						"review_target_chat_id": {"type": "integer", "description": "Optional Telegram chat id to queue a pending review event for this request"},
+						"review_summary": {"type": "string", "description": "Optional concise summary for the queued review event"},
+						"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Optional list limit"}
 				},
 				"required": ["action"]
 			}`),
@@ -731,12 +740,13 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"principal": {"type": "string", "description": "Principal receiving a grant or being checked"},
 					"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed actions for grant_set; supports invoke and *"},
 					"review_status": {"type": "string", "enum": ["parent_approved", "approved", "rejected"], "description": "Review status for request_review"},
-					"grant_status": {"type": "string", "enum": ["pending", "active", "stale", "revoked", "expired", "failed"], "description": "Grant status for grant_set/list filtering"},
-					"contract": {"type": "object", "description": "Grant contract override; defaults from request"},
-					"constraints": {"type": "object", "description": "Grant constraints override; defaults from request"},
-					"rationale": {"type": "string", "description": "Review, grant, or revocation rationale"},
-					"expires_in_seconds": {"type": "integer", "minimum": 1, "description": "Optional relative expiration for grant_set"},
-					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Optional list limit"}
+						"grant_status": {"type": "string", "enum": ["pending", "active", "stale", "revoked", "expired", "failed"], "description": "Grant status for grant_set/list filtering"},
+						"contract": {"type": "object", "description": "Grant contract override; defaults from request"},
+						"constraints": {"type": "object", "description": "Grant constraints override; defaults from request"},
+						"capability_update_plan": {"type": "object", "description": "Optional contract-embedded update plan override for grant_set. Active durable-agent policy patches are applied before the grant becomes active."},
+						"rationale": {"type": "string", "description": "Review, grant, or revocation rationale"},
+						"expires_in_seconds": {"type": "integer", "minimum": 1, "description": "Optional relative expiration for grant_set"},
+						"limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Optional list limit"}
 				},
 				"required": ["action"]
 			}`),
@@ -878,12 +888,19 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"parent_principal": {"type": "string", "description": "Optional parent approver principal such as telegram:123"},
 								"admin_principal": {"type": "string", "description": "Optional admin approver principal; defaults to the current admin principal"},
 								"purpose": {"type": "string", "description": "Why the capability is needed"},
-								"risk_class": {"type": "string", "description": "Operator-visible risk class such as spend, secrets, local_device, public_surface, or account_access"},
-								"contract": {"type": "object", "description": "Reviewable behavioral contract for the requested permission"},
-								"constraints": {"type": "object", "description": "Reviewable constraints, ceilings, budgets, time bounds, or allowed actions"},
-								"summary": {"type": "string", "description": "Optional review artifact summary"},
-								"local_actions": {"type": "array", "items": {"type": "string"}, "description": "Actions already taken locally before escalation"},
-								"questions": {"type": "array", "items": {"type": "string"}, "description": "Questions for parent/admin review"},
+									"risk_class": {"type": "string", "description": "Operator-visible risk class such as spend, secrets, local_device, public_surface, or account_access"},
+									"contract": {"type": "object", "description": "Reviewable behavioral contract for the requested permission"},
+									"constraints": {"type": "object", "description": "Reviewable constraints, ceilings, budgets, time bounds, or allowed actions"},
+									"capability_update_plan": {"type": "object", "description": "Optional explicit update plan embedded into the capability request contract"},
+									"policy_patch": {"type": "object", "description": "Optional durable-agent policy patch to apply after approval and active grant", "properties": {"charter": {"type": "string"}, "autonomy": {"type": "string"}, "visibility": {"type": "string"}, "shared_context": {"type": "string"}, "capabilities": {"type": "array", "items": {"type": "string"}}, "drift_policy": {"type": "string"}}},
+									"policy_overrides": {"type": "object", "description": "Optional low-level durable-agent policy overrides to apply after approval and active grant", "properties": {"outbound_mode": {"type": "string"}, "public_surface_mode": {"type": "string"}, "shared_inference_reuse": {"type": "string"}, "shared_inference_reuse_scope": {"type": "string"}}},
+									"provisioning": {"type": "array", "items": {"type": "string"}, "description": "Provisioning steps the operator should perform or verify before grant"},
+									"attestation": {"type": "array", "items": {"type": "string"}, "description": "Evidence required before grant"},
+									"grant_actions": {"type": "array", "items": {"type": "string"}, "description": "Suggested allowed actions for the resulting capability grant"},
+									"update_reason": {"type": "string", "description": "Reason recorded if a durable-agent policy update is applied from this request"},
+									"summary": {"type": "string", "description": "Optional review artifact summary"},
+									"local_actions": {"type": "array", "items": {"type": "string"}, "description": "Actions already taken locally before escalation"},
+									"questions": {"type": "array", "items": {"type": "string"}, "description": "Questions for parent/admin review"},
 								"risk_flags": {"type": "array", "items": {"type": "string"}, "description": "Operator-visible risks"},
 								"artifact_refs": {"type": "array", "items": {"type": "string"}, "description": "References to supporting artifacts"},
 								"metadata": {"type": "object", "additionalProperties": {"type": "string"}, "description": "String metadata copied into the review artifact"},

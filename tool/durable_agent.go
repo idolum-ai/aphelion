@@ -827,6 +827,10 @@ func (r *Registry) requestDurableAgentDelegation(in durableAgentInput, actor pri
 	if err != nil {
 		return "", err
 	}
+	contract, err = mergeCapabilityUpdatePlanIntoContract(contract, capabilityUpdatePlanFromDurableDelegation(agent.AgentID, *payload))
+	if err != nil {
+		return "", err
+	}
 	constraints, err := normalizeCapabilityJSONBlob(payload.Constraints, "constraints")
 	if err != nil {
 		return "", err
@@ -2403,6 +2407,15 @@ func renderDurableAgentDelegationRequest(agent core.DurableAgent, record session
 	if record.Purpose != "" {
 		fmt.Fprintf(&b, "purpose: %s\n", record.Purpose)
 	}
+	if plan, ok, err := capabilityUpdatePlanFromContract(record.Contract); err == nil && ok {
+		b.WriteString("capability_update_plan: present\n")
+		if plan.AgentID != "" {
+			fmt.Fprintf(&b, "policy_agent_id: %s\n", plan.AgentID)
+		}
+		if capabilityUpdatePlanHasDurablePolicyPatch(plan) {
+			b.WriteString("policy_update_on_grant: true\n")
+		}
+	}
 	b.WriteString("next: capability_authority request_review, then grant_set if approved\n")
 	return b.String()
 }
@@ -2439,6 +2452,15 @@ func durableAgentDelegationRequestArtifact(agent core.DurableAgent, record sessi
 	putDurableAgentDelegationMetadata(metadata, "requested_for", record.RequestedFor)
 	putDurableAgentDelegationMetadata(metadata, "review_status", string(record.ReviewStatus))
 	putDurableAgentDelegationMetadata(metadata, "purpose", record.Purpose)
+	if plan, ok, err := capabilityUpdatePlanFromContract(record.Contract); err == nil && ok {
+		putDurableAgentDelegationMetadata(metadata, "capability_update_plan", "present")
+		if plan.AgentID != "" {
+			putDurableAgentDelegationMetadata(metadata, "policy_agent_id", plan.AgentID)
+		}
+		if capabilityUpdatePlanHasDurablePolicyPatch(plan) {
+			putDurableAgentDelegationMetadata(metadata, "policy_update_on_grant", "true")
+		}
+	}
 
 	summary := strings.TrimSpace(input.Summary)
 	if summary == "" {
