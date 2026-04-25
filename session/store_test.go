@@ -3319,3 +3319,92 @@ func TestExecutionEventsRecentReturnsNewestFirst(t *testing.T) {
 		t.Fatalf("events order/types = (%q,%q), want turn.completed then tool.started", events[0].EventType, events[1].EventType)
 	}
 }
+
+func TestSQLiteStoreCapabilityRequestReviewGrantInvocationRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	request, err := store.UpsertCapabilityRequest(CapabilityRequest{
+		RequestID:       "cap-1",
+		RequestedBy:     "child-agent",
+		RequestedFor:    "child-agent",
+		ParentPrincipal: "telegram:200",
+		Kind:            CapabilityKindPurchase,
+		TargetResource:  "amazon",
+		Purpose:         "order approved school supplies",
+		RiskClass:       "spend",
+		Contract:        `{"max_items":3}`,
+		Constraints:     `{"max_usd":50}`,
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if request.ReviewStatus != CapabilityReviewStatusProposed {
+		t.Fatalf("ReviewStatus = %q, want proposed", request.ReviewStatus)
+	}
+
+	if _, err := store.AppendCapabilityReview(CapabilityReview{ReviewID: "capr-1", RequestID: "cap-1", Reviewer: "telegram:200", ReviewerRole: "parent", Status: CapabilityReviewStatusParentApproved, Rationale: "bounded spend"}); err != nil {
+		t.Fatalf("AppendCapabilityReview(parent) err = %v", err)
+	}
+	if _, err := store.AppendCapabilityReview(CapabilityReview{ReviewID: "capr-2", RequestID: "cap-1", Reviewer: "telegram:1001", ReviewerRole: "admin", Status: CapabilityReviewStatusApproved, Rationale: "parent endorsed"}); err != nil {
+		t.Fatalf("AppendCapabilityReview(admin) err = %v", err)
+	}
+	request, ok, err := store.CapabilityRequest("cap-1")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok || request.ReviewStatus != CapabilityReviewStatusApproved {
+		t.Fatalf("CapabilityRequest() = %#v ok=%t, want approved", request, ok)
+	}
+
+	grant, err := store.UpsertCapabilityGrant(CapabilityGrant{
+		GrantID:           "capg-1",
+		RequestID:         "cap-1",
+		GrantedBy:         "telegram:1001",
+		GrantedTo:         "child-agent",
+		Kind:              CapabilityKindPurchase,
+		TargetResource:    "amazon",
+		AllowedActions:    []string{"order", "summarize"},
+		Contract:          `{"max_items":3}`,
+		Constraints:       `{"max_usd":50}`,
+		Status:            CapabilityGrantStatusActive,
+		AnchorFingerprint: "sha256:test",
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	if grant.Status != CapabilityGrantStatusActive || len(grant.AllowedActions) != 2 {
+		t.Fatalf("CapabilityGrant = %#v, want active with actions", grant)
+	}
+	request, _, err = store.CapabilityRequest("cap-1")
+	if err != nil {
+		t.Fatalf("CapabilityRequest(after grant) err = %v", err)
+	}
+	if request.GrantID != "capg-1" {
+		t.Fatalf("GrantID = %q, want capg-1", request.GrantID)
+	}
+
+	active, ok, err := store.ActiveCapabilityGrant(CapabilityKindPurchase, "amazon", "child-agent", "order")
+	if err != nil {
+		t.Fatalf("ActiveCapabilityGrant() err = %v", err)
+	}
+	if !ok || active.GrantID != "capg-1" {
+		t.Fatalf("ActiveCapabilityGrant() = %#v ok=%t, want capg-1", active, ok)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(CapabilityKindPurchase, "amazon", "child-agent", "refund"); err != nil || ok {
+		t.Fatalf("ActiveCapabilityGrant(refund) ok=%t err=%v, want false nil", ok, err)
+	}
+
+	if _, err := store.RecordCapabilityInvocation(CapabilityInvocation{GrantID: "capg-1", Principal: "child-agent", Action: "order", Status: "failed", ErrorText: "declined"}); err != nil {
+		t.Fatalf("RecordCapabilityInvocation() err = %v", err)
+	}
+	grant, ok, err = store.CapabilityGrant("capg-1")
+	if err != nil {
+		t.Fatalf("CapabilityGrant(after invocation) err = %v", err)
+	}
+	if !ok || grant.InvocationCount != 1 || grant.FailureCount != 1 || grant.LastFailureAt.IsZero() {
+		t.Fatalf("CapabilityGrant counters = %#v ok=%t, want one failed invocation", grant, ok)
+	}
+}

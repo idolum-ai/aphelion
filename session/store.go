@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 33
+	schemaVersion                       = 34
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -195,6 +195,74 @@ func (s *SQLiteStore) init() error {
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			PRIMARY KEY (tool_name, principal)
 		)`,
+		`CREATE TABLE IF NOT EXISTS capability_requests (
+			request_id TEXT PRIMARY KEY,
+			requested_by TEXT NOT NULL DEFAULT '',
+			requested_for TEXT NOT NULL DEFAULT '',
+			parent_principal TEXT NOT NULL DEFAULT '',
+			admin_principal TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation')),
+			target_resource TEXT NOT NULL DEFAULT '',
+			purpose TEXT NOT NULL DEFAULT '',
+			risk_class TEXT NOT NULL DEFAULT '',
+			contract_json TEXT NOT NULL DEFAULT '{}',
+			constraints_json TEXT NOT NULL DEFAULT '{}',
+			review_status TEXT NOT NULL DEFAULT 'proposed' CHECK(review_status IN ('proposed', 'parent_approved', 'approved', 'rejected')),
+			grant_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_requests_status ON capability_requests(review_status, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_requests_kind ON capability_requests(kind, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_requests_principals ON capability_requests(requested_by, requested_for, parent_principal, admin_principal)`,
+		`CREATE TABLE IF NOT EXISTS capability_reviews (
+			review_id TEXT PRIMARY KEY,
+			request_id TEXT NOT NULL,
+			reviewer TEXT NOT NULL DEFAULT '',
+			reviewer_role TEXT NOT NULL DEFAULT '',
+			review_status TEXT NOT NULL CHECK(review_status IN ('proposed', 'parent_approved', 'approved', 'rejected')),
+			rationale TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_reviews_request ON capability_reviews(request_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS capability_grants (
+			grant_id TEXT PRIMARY KEY,
+			request_id TEXT NOT NULL DEFAULT '',
+			granted_by TEXT NOT NULL DEFAULT '',
+			granted_to TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation')),
+			target_resource TEXT NOT NULL DEFAULT '',
+			allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			contract_json TEXT NOT NULL DEFAULT '{}',
+			constraints_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'active', 'stale', 'revoked', 'expired', 'failed')),
+			baseline_policy_hash TEXT NOT NULL DEFAULT '',
+			current_policy_hash TEXT NOT NULL DEFAULT '',
+			anchor_fingerprint TEXT NOT NULL DEFAULT '',
+			drift_source TEXT NOT NULL DEFAULT '',
+			stale_reason TEXT NOT NULL DEFAULT '',
+			invocation_count INTEGER NOT NULL DEFAULT 0,
+			failure_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			granted_at TEXT,
+			expires_at TEXT,
+			revoked_at TEXT,
+			last_invoked_at TEXT,
+			last_failure_at TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_grants_lookup ON capability_grants(kind, target_resource, granted_to, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_grants_status ON capability_grants(status, updated_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS capability_invocations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			grant_id TEXT NOT NULL,
+			principal TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_grant ON capability_invocations(grant_id, created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS tool_install_records (
 			tool_name TEXT PRIMARY KEY,
 			installer TEXT NOT NULL DEFAULT '',

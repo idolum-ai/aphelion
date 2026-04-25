@@ -166,6 +166,12 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		} else {
 			snapshot.ToolLifecycle = toolRows
 		}
+		capabilityRequests, capabilityGrants, err := r.capabilityStatusSnapshot(20)
+		if err != nil {
+			return core.ChatStatusSnapshot{}, err
+		}
+		snapshot.CapabilityRequests = capabilityRequests
+		snapshot.CapabilityGrants = capabilityGrants
 	}
 	return snapshot, nil
 }
@@ -1510,6 +1516,62 @@ func (r *Runtime) toolLifecycleStatusSnapshot(limit int) ([]core.ToolLifecycleSt
 		})
 	}
 	return out, nil
+}
+
+func (r *Runtime) capabilityStatusSnapshot(limit int) ([]core.CapabilityRequestStatusSnapshot, []core.CapabilityGrantStatusSnapshot, error) {
+	if r == nil || r.store == nil {
+		return nil, nil, nil
+	}
+	requests, err := r.store.CapabilityRequests(limit, "", "", "")
+	if err != nil {
+		return nil, nil, err
+	}
+	grants, err := r.store.CapabilityGrants(limit, "", "", "")
+	if err != nil {
+		return nil, nil, err
+	}
+	requestRows := make([]core.CapabilityRequestStatusSnapshot, 0, len(requests))
+	for _, request := range requests {
+		request = session.NormalizeCapabilityRequest(request)
+		requestRows = append(requestRows, core.CapabilityRequestStatusSnapshot{
+			RequestID:       request.RequestID,
+			Kind:            strings.TrimSpace(string(request.Kind)),
+			TargetResource:  strings.TrimSpace(request.TargetResource),
+			ReviewStatus:    strings.TrimSpace(string(request.ReviewStatus)),
+			RequestedBy:     strings.TrimSpace(request.RequestedBy),
+			RequestedFor:    strings.TrimSpace(request.RequestedFor),
+			ParentPrincipal: strings.TrimSpace(request.ParentPrincipal),
+			RiskClass:       strings.TrimSpace(request.RiskClass),
+			Purpose:         strings.TrimSpace(request.Purpose),
+			GrantID:         strings.TrimSpace(request.GrantID),
+			CreatedAt:       request.CreatedAt,
+			UpdatedAt:       request.UpdatedAt,
+		})
+	}
+	grantRows := make([]core.CapabilityGrantStatusSnapshot, 0, len(grants))
+	for _, grant := range grants {
+		grant = session.NormalizeCapabilityGrant(grant)
+		grantRows = append(grantRows, core.CapabilityGrantStatusSnapshot{
+			GrantID:           grant.GrantID,
+			RequestID:         grant.RequestID,
+			Kind:              strings.TrimSpace(string(grant.Kind)),
+			TargetResource:    strings.TrimSpace(grant.TargetResource),
+			Status:            strings.TrimSpace(string(grant.Status)),
+			GrantedTo:         strings.TrimSpace(grant.GrantedTo),
+			GrantedBy:         strings.TrimSpace(grant.GrantedBy),
+			AllowedActions:    append([]string{}, grant.AllowedActions...),
+			AnchorFingerprint: strings.TrimSpace(grant.AnchorFingerprint),
+			DriftSource:       strings.TrimSpace(string(grant.DriftSource)),
+			StaleReason:       strings.TrimSpace(grant.StaleReason),
+			InvocationCount:   grant.InvocationCount,
+			FailureCount:      grant.FailureCount,
+			GrantedAt:         grant.GrantedAt,
+			ExpiresAt:         grant.ExpiresAt,
+			RevokedAt:         grant.RevokedAt,
+			LastInvokedAt:     grant.LastInvokedAt,
+		})
+	}
+	return requestRows, grantRows, nil
 }
 
 func statusAge(now time.Time, preferred time.Time, fallback time.Time) time.Duration {

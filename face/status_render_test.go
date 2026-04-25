@@ -330,3 +330,54 @@ func TestRenderTelegramStatusChatIncludesSourceMarkers(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderTelegramStatusChatIncludesCapabilityDelegationState(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	out := RenderTelegramStatusChat(core.ChatStatusSnapshot{
+		ChatID: 46,
+		CapabilityRequests: []core.CapabilityRequestStatusSnapshot{{
+			RequestID:       "cap-status",
+			Kind:            "purchase",
+			TargetResource:  "amazon",
+			ReviewStatus:    "approved",
+			RequestedFor:    "family-child",
+			ParentPrincipal: "telegram:200",
+			RiskClass:       "spend",
+			Purpose:         "order approved supplies",
+			GrantID:         "capg-status",
+		}},
+		CapabilityGrants: []core.CapabilityGrantStatusSnapshot{{
+			GrantID:           "capg-status",
+			RequestID:         "cap-status",
+			Kind:              "purchase",
+			TargetResource:    "amazon",
+			Status:            "active",
+			GrantedTo:         "family-child",
+			AllowedActions:    []string{"order"},
+			AnchorFingerprint: "sha256:abcdefghijklmnopqrstuvwxyz",
+			InvocationCount:   2,
+			FailureCount:      1,
+		}},
+		RecentExecution: []core.ExecutionEventSummary{{
+			EventType: core.ExecutionEventCapabilityGrantChanged,
+			Status:    "active",
+			Summary:   "grant_id=capg-status kind=purchase target_resource=amazon",
+			CreatedAt: now,
+		}},
+	}, "medium", "high", false)
+
+	for _, needle := range []string{
+		"capability_requests source=canonical:session.capability_requests",
+		"request_id=cap-status kind=purchase target_resource=amazon status=approved requested_for=family-child parent_principal=telegram:200 risk_class=spend grant_id=capg-status",
+		"capability_grants source=canonical:session.capability_grants",
+		"grant_id=capg-status kind=purchase target_resource=amazon status=active granted_to=family-child actions=order request_id=cap-status anchor=sha256:abcdefghijkl counters=invocations:2,failures:1",
+		"capability_lifecycle source=canonical:execution_events.capability_delegation",
+		"event=capability.grant.changed status=active",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusChat() = %q, want substring %q", out, needle)
+		}
+	}
+}

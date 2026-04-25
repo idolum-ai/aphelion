@@ -57,7 +57,10 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 			lines = append(lines, detachedLine)
 		}
 		lines = append(lines, renderToolLifecycleCurrentStateBlock(snapshot.ToolLifecycle, 5)...)
+		lines = append(lines, renderCapabilityRequestStateBlock(snapshot.CapabilityRequests, 5)...)
+		lines = append(lines, renderCapabilityGrantStateBlock(snapshot.CapabilityGrants, 5)...)
 		lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 3)...)
+		lines = append(lines, renderCapabilityLifecycleBlock(snapshot.RecentExecution, 3)...)
 		if snapshot.Continuation != nil {
 			cont := snapshot.Continuation
 			line := fmt.Sprintf("continuation status=%s remaining_turns=%d", cont.Status, cont.RemainingTurns)
@@ -343,6 +346,7 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 		}
 	}
 	lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 5)...)
+	lines = append(lines, renderCapabilityLifecycleBlock(snapshot.RecentExecution, 5)...)
 	lines = append(lines, renderPendingItemBlock(snapshot.PendingItems, 20)...)
 	lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
 	lines = append(lines, fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)))
@@ -398,6 +402,76 @@ func renderToolLifecycleCurrentStateBlock(rows []core.ToolLifecycleStatusSnapsho
 	return lines
 }
 
+func renderCapabilityRequestStateBlock(rows []core.CapabilityRequestStatusSnapshot, maxRows int) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	if maxRows <= 0 {
+		maxRows = 5
+	}
+	lines := []string{"capability_requests source=canonical:session.capability_requests"}
+	limit := len(rows)
+	if limit > maxRows {
+		limit = maxRows
+	}
+	for i := 0; i < limit; i++ {
+		row := rows[i]
+		line := fmt.Sprintf("- request_id=%s kind=%s target_resource=%s status=%s requested_for=%s", row.RequestID, firstNonEmpty(row.Kind, "-"), firstNonEmpty(row.TargetResource, "-"), firstNonEmpty(row.ReviewStatus, "-"), firstNonEmpty(row.RequestedFor, "-"))
+		if parent := strings.TrimSpace(row.ParentPrincipal); parent != "" {
+			line += " parent_principal=" + parent
+		}
+		if risk := strings.TrimSpace(row.RiskClass); risk != "" {
+			line += " risk_class=" + risk
+		}
+		if grantID := strings.TrimSpace(row.GrantID); grantID != "" {
+			line += " grant_id=" + grantID
+		}
+		if purpose := strings.TrimSpace(row.Purpose); purpose != "" {
+			line += " purpose=" + quoteStatusField(truncateStatusField(purpose, 120))
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func renderCapabilityGrantStateBlock(rows []core.CapabilityGrantStatusSnapshot, maxRows int) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	if maxRows <= 0 {
+		maxRows = 5
+	}
+	lines := []string{"capability_grants source=canonical:session.capability_grants"}
+	limit := len(rows)
+	if limit > maxRows {
+		limit = maxRows
+	}
+	for i := 0; i < limit; i++ {
+		row := rows[i]
+		line := fmt.Sprintf("- grant_id=%s kind=%s target_resource=%s status=%s granted_to=%s actions=%s", row.GrantID, firstNonEmpty(row.Kind, "-"), firstNonEmpty(row.TargetResource, "-"), firstNonEmpty(row.Status, "-"), firstNonEmpty(row.GrantedTo, "-"), firstNonEmpty(strings.Join(row.AllowedActions, ","), "-"))
+		if requestID := strings.TrimSpace(row.RequestID); requestID != "" {
+			line += " request_id=" + requestID
+		}
+		if source := strings.TrimSpace(row.DriftSource); source != "" {
+			line += " drift_source=" + source
+		}
+		if reason := strings.TrimSpace(row.StaleReason); reason != "" {
+			line += " stale_reason=" + quoteStatusField(truncateStatusField(reason, 120))
+		}
+		if fingerprint := shortFingerprint(row.AnchorFingerprint); fingerprint != "" {
+			line += " anchor=" + fingerprint
+		}
+		if row.InvocationCount > 0 || row.FailureCount > 0 {
+			line += fmt.Sprintf(" counters=invocations:%d,failures:%d", row.InvocationCount, row.FailureCount)
+		}
+		if !row.ExpiresAt.IsZero() {
+			line += " expires_at=" + formatStatusTime(row.ExpiresAt)
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
 func renderToolAuthorityLifecycleBlock(events []core.ExecutionEventSummary, maxPerClass int) []string {
 	if len(events) == 0 {
 		return nil
@@ -444,6 +518,34 @@ func renderToolAuthorityLifecycleBlock(events []core.ExecutionEventSummary, maxP
 		lines = append(lines, "tool_exposures:")
 		lines = append(lines, renderToolAuthorityEntries(exposures)...)
 	}
+	return lines
+}
+
+func renderCapabilityLifecycleBlock(events []core.ExecutionEventSummary, maxRows int) []string {
+	if len(events) == 0 {
+		return nil
+	}
+	if maxRows <= 0 {
+		maxRows = 3
+	}
+	rows := make([]core.ExecutionEventSummary, 0, maxRows)
+	for _, event := range events {
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventCapabilityRequestCreated,
+			core.ExecutionEventCapabilityReviewed,
+			core.ExecutionEventCapabilityGrantChanged,
+			core.ExecutionEventCapabilityInvocation:
+			rows = append(rows, event)
+		}
+		if len(rows) >= maxRows {
+			break
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	lines := []string{"capability_lifecycle source=canonical:execution_events.capability_delegation"}
+	lines = append(lines, renderToolAuthorityEntries(rows)...)
 	return lines
 }
 

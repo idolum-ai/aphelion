@@ -140,6 +140,20 @@ func (r *Registry) toolRequestProposalSubmit(in toolAuthorityInput, actor princi
 	if err != nil {
 		return "", err
 	}
+	capabilityID := "cap-" + record.ProposalID
+	if _, err := r.store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      capabilityID,
+		RequestedBy:    requester,
+		RequestedFor:   requester,
+		Kind:           session.CapabilityKindTool,
+		TargetResource: record.ToolName,
+		Purpose:        firstNonEmpty(record.WhyNow, "tool capability request for "+record.ToolName),
+		Contract:       record.Contract,
+		Constraints:    "{}",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		return "", err
+	}
 	if err := r.appendToolRequestEvent(
 		key,
 		core.ExecutionEventToolProposalCreated,
@@ -153,6 +167,22 @@ func (r *Registry) toolRequestProposalSubmit(in toolAuthorityInput, actor princi
 			"requester_user_id":  actor.TelegramUserID,
 			"requester_agent_id": strings.TrimSpace(actor.DurableAgentID),
 			"request_via":        "tool_request",
+		},
+	); err != nil {
+		return "", err
+	}
+	if err := r.appendCapabilityEvent(
+		key,
+		core.ExecutionEventCapabilityRequestCreated,
+		string(session.CapabilityReviewStatusProposed),
+		map[string]any{
+			"request_id":      capabilityID,
+			"proposal_id":     record.ProposalID,
+			"kind":            string(session.CapabilityKindTool),
+			"target_resource": record.ToolName,
+			"requested_by":    requester,
+			"requested_for":   requester,
+			"request_via":     "tool_request",
 		},
 	); err != nil {
 		return "", err
@@ -1620,13 +1650,21 @@ func (r *Registry) toolAuthorityAccessCheck(in toolAuthorityInput) (string, erro
 	if err != nil {
 		return "", err
 	}
-	allowed := registeredOK && registered.Registered && exposureOK && exposure.Active
+	grant, grantOK, err := r.store.ActiveCapabilityGrant(session.CapabilityKindTool, toolName, principalID, "invoke")
+	if err != nil {
+		return "", err
+	}
+	allowed := registeredOK && registered.Registered && ((exposureOK && exposure.Active) || grantOK)
 	var b strings.Builder
 	b.WriteString("[TOOL_ACCESS]\n")
 	fmt.Fprintf(&b, "tool_name: %s\n", toolName)
 	fmt.Fprintf(&b, "principal: %s\n", principalID)
 	fmt.Fprintf(&b, "registered: %t\n", registeredOK && registered.Registered)
 	fmt.Fprintf(&b, "exposed_active: %t\n", exposureOK && exposure.Active)
+	fmt.Fprintf(&b, "capability_grant_active: %t\n", grantOK)
+	if grantOK {
+		fmt.Fprintf(&b, "capability_grant_id: %s\n", grant.GrantID)
+	}
 	fmt.Fprintf(&b, "allowed: %t\n", allowed)
 	return b.String(), nil
 }

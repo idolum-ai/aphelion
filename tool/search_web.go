@@ -213,6 +213,13 @@ func (r *Registry) toolAuthorityAccessAllowed(toolName string, p principal.Princ
 			return true, nil
 		}
 	}
+	_, allowedByGrant, err := r.capabilityGrantAllowsAuthorityToolAccess(toolName, p)
+	if err != nil {
+		return false, err
+	}
+	if allowedByGrant {
+		return true, nil
+	}
 	return false, nil
 }
 
@@ -245,7 +252,49 @@ func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal
 			return nil
 		}
 	}
-	return fmt.Errorf("tool %q is not exposed to principal %q", name, principalID)
+	grant, allowedByGrant, err := r.capabilityGrantAllowsAuthorityToolAccess(name, p)
+	if err != nil {
+		return err
+	}
+	if allowedByGrant {
+		if _, err := r.store.RecordCapabilityInvocation(session.CapabilityInvocation{
+			GrantID:   grant.GrantID,
+			Principal: toolAuthorityPrincipalDisplay(p),
+			Action:    "invoke",
+			Status:    "allowed",
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("tool %q is not exposed or granted to principal %q", name, principalID)
+}
+
+func (r *Registry) capabilityGrantAllowsAuthorityToolAccess(toolName string, p principal.Principal) (session.CapabilityGrant, bool, error) {
+	if r == nil || r.store == nil {
+		return session.CapabilityGrant{}, false, nil
+	}
+	candidates := append([]string{}, toolAuthorityPrincipalKeys(p)...)
+	candidates = append(candidates, toolAuthorityPrincipalDisplay(p))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		grant, ok, err := r.store.ActiveCapabilityGrant(session.CapabilityKindTool, toolName, candidate, "invoke")
+		if err != nil {
+			return session.CapabilityGrant{}, false, err
+		}
+		if ok {
+			return grant, true, nil
+		}
+	}
+	return session.CapabilityGrant{}, false, nil
 }
 
 func toolAuthorityPrincipalKeys(p principal.Principal) []string {

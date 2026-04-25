@@ -82,10 +82,13 @@ are typed as `install_ref_changed`, `manifest_drift`, `workspace_drift`,
 registered, exposed, listed as callable for a principal, or invoked until
 re-audited, re-probed, and re-verified.
 
-Tenants and agents use `tool_request` for proposal creation. Operators use
-`tool_authority` for ratification, install, audit, verification, registration,
-and exposure. This keeps request attribution visible without handing lifecycle
-authority to the requester.
+Tenants and agents may still use `tool_request` for compatibility proposal
+creation. That path now also writes a canonical `capability_request` with
+`kind=tool`. New broad permission requests should use `capability_request`
+directly; operators use `capability_authority` for parent/admin review and
+admin grants, and `tool_authority` for tool install, audit, verification,
+registration, and legacy exposure. This keeps request attribution visible
+without handing lifecycle authority to the requester.
 
 ## Execution Modes
 

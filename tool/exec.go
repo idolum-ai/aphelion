@@ -142,6 +142,29 @@ type toolAuthorityInput struct {
 	Limit             int             `json:"limit,omitempty"`
 }
 
+type capabilityInput struct {
+	Action           string          `json:"action"`
+	RequestID        string          `json:"request_id,omitempty"`
+	GrantID          string          `json:"grant_id,omitempty"`
+	Kind             string          `json:"kind,omitempty"`
+	TargetResource   string          `json:"target_resource,omitempty"`
+	CapabilityAction string          `json:"capability_action,omitempty"`
+	RequestedFor     string          `json:"requested_for,omitempty"`
+	ParentPrincipal  string          `json:"parent_principal,omitempty"`
+	AdminPrincipal   string          `json:"admin_principal,omitempty"`
+	Purpose          string          `json:"purpose,omitempty"`
+	RiskClass        string          `json:"risk_class,omitempty"`
+	Contract         json.RawMessage `json:"contract,omitempty"`
+	Constraints      json.RawMessage `json:"constraints,omitempty"`
+	ReviewStatus     string          `json:"review_status,omitempty"`
+	GrantStatus      string          `json:"grant_status,omitempty"`
+	Principal        string          `json:"principal,omitempty"`
+	AllowedActions   []string        `json:"allowed_actions,omitempty"`
+	Rationale        string          `json:"rationale,omitempty"`
+	ExpiresInSeconds int             `json:"expires_in_seconds,omitempty"`
+	Limit            int             `json:"limit,omitempty"`
+}
+
 type openAIFileInput struct {
 	Action  string `json:"action"`
 	Path    string `json:"path,omitempty"`
@@ -657,7 +680,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		})
 		defs = append(defs, agent.ToolDef{
 			Name:        "tool_request",
-			Description: "Request a governed tool capability proposal. Available to tenants and agents; only creates or reads proposal requests, while approval/install/register/expose stay with tool_authority.",
+			Description: "Compatibility surface for requesting a governed tool capability. Creates the legacy tool proposal and the canonical capability_request(kind=tool).",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -667,6 +690,53 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"why_now": {"type": "string", "description": "Why this capability is needed now"},
 					"contract": {"type": "object", "description": "Opaque proposed contract, constraints, inputs, outputs, owner, or implementation notes"},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Optional list limit"}
+				},
+				"required": ["action"]
+			}`),
+		})
+		defs = append(defs, agent.ToolDef{
+			Name:        "capability_request",
+			Description: "Request a governed capability or delegation. Covers tools, local devices, external accounts, purchases, public web, communication, file/network access, and emergent permissions under one reviewable contract.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["request_submit", "request_show", "request_list"], "description": "Capability request operation"},
+					"request_id": {"type": "string", "description": "Request id for request_show or optional submit id"},
+					"kind": {"type": "string", "enum": ["tool", "local_device", "external_account", "purchase", "public_web", "communication", "file_access", "network_access", "generic_delegation"], "description": "Capability class"},
+					"target_resource": {"type": "string", "description": "Tool name, device/app, account, vendor, web surface, path, network target, or emergent resource"},
+					"requested_for": {"type": "string", "description": "Optional target principal; defaults to the requester"},
+					"parent_principal": {"type": "string", "description": "Optional parent/guardian principal that may endorse before admin approval"},
+					"admin_principal": {"type": "string", "description": "Optional admin principal expected to make the final approval"},
+					"purpose": {"type": "string", "description": "Why this capability is needed and what bounded work it enables"},
+					"risk_class": {"type": "string", "description": "Operator-facing risk label such as low, medium, high, sensitive, spend, or public"},
+					"contract": {"type": "object", "description": "Proposed behavior contract, escalation rules, attribution, or success criteria"},
+					"constraints": {"type": "object", "description": "Proposed boundaries such as max spend, paths, domains, accounts, retention, model/message limits, or review cadence"},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Optional list limit"}
+				},
+				"required": ["action"]
+			}`),
+		})
+		defs = append(defs, agent.ToolDef{
+			Name:        "capability_authority",
+			Description: "Review and grant governed capability/delegation requests. Parent principals may endorse/reject matching requests; admin principals approve, grant, revoke, and inspect all.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["request_show", "request_list", "request_review", "grant_set", "grant_show", "grant_list", "grant_revoke", "access_check"], "description": "Capability authority operation"},
+					"request_id": {"type": "string", "description": "Request id for review or grant creation"},
+					"grant_id": {"type": "string", "description": "Grant id for grant_show/grant_revoke or optional grant_set id"},
+					"kind": {"type": "string", "enum": ["tool", "local_device", "external_account", "purchase", "public_web", "communication", "file_access", "network_access", "generic_delegation"], "description": "Capability class"},
+					"target_resource": {"type": "string", "description": "Capability target for grants or access checks"},
+					"capability_action": {"type": "string", "description": "Action being granted or checked; use invoke for tool runtime access"},
+					"principal": {"type": "string", "description": "Principal receiving a grant or being checked"},
+					"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed actions for grant_set; supports invoke and *"},
+					"review_status": {"type": "string", "enum": ["parent_approved", "approved", "rejected"], "description": "Review status for request_review"},
+					"grant_status": {"type": "string", "enum": ["pending", "active", "stale", "revoked", "expired", "failed"], "description": "Grant status for grant_set/list filtering"},
+					"contract": {"type": "object", "description": "Grant contract override; defaults from request"},
+					"constraints": {"type": "object", "description": "Grant constraints override; defaults from request"},
+					"rationale": {"type": "string", "description": "Review, grant, or revocation rationale"},
+					"expires_in_seconds": {"type": "integer", "minimum": 1, "description": "Optional relative expiration for grant_set"},
+					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Optional list limit"}
 				},
 				"required": ["action"]
 			}`),
@@ -904,6 +974,10 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.toolAuthority(ctx, input, p, key, scope)
 	case "tool_request":
 		return r.toolRequest(ctx, input, p, key)
+	case "capability_request":
+		return r.capabilityRequest(ctx, input, p, key)
+	case "capability_authority":
+		return r.capabilityAuthority(ctx, input, p, key)
 	case "search_web":
 		return r.searchWebTool(ctx, input, p, key)
 	case "semantic_search":

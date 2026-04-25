@@ -1975,3 +1975,57 @@ func pendingRecoveryByID(items []core.PendingItem, id string) bool {
 	}
 	return false
 }
+
+func TestChatStatusSnapshotIncludesCapabilityDelegationState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:       "cap-status",
+		RequestedBy:     "family-child",
+		RequestedFor:    "family-child",
+		ParentPrincipal: "telegram:200",
+		Kind:            session.CapabilityKindPurchase,
+		TargetResource:  "amazon",
+		Purpose:         "order approved supplies",
+		RiskClass:       "spend",
+		ReviewStatus:    session.CapabilityReviewStatusApproved,
+		GrantID:         "capg-status",
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:           "capg-status",
+		RequestID:         "cap-status",
+		GrantedBy:         "telegram:1001",
+		GrantedTo:         "family-child",
+		Kind:              session.CapabilityKindPurchase,
+		TargetResource:    "amazon",
+		AllowedActions:    []string{"order"},
+		Status:            session.CapabilityGrantStatusActive,
+		AnchorFingerprint: "sha256:capability",
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(90218, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.CapabilityRequests) != 1 {
+		t.Fatalf("CapabilityRequests len = %d, want 1", len(snapshot.CapabilityRequests))
+	}
+	if got := snapshot.CapabilityRequests[0]; got.RequestID != "cap-status" || got.Kind != "purchase" || got.ReviewStatus != "approved" || got.GrantID != "capg-status" {
+		t.Fatalf("CapabilityRequests[0] = %#v, want approved cap-status", got)
+	}
+	if len(snapshot.CapabilityGrants) != 1 {
+		t.Fatalf("CapabilityGrants len = %d, want 1", len(snapshot.CapabilityGrants))
+	}
+	if got := snapshot.CapabilityGrants[0]; got.GrantID != "capg-status" || got.Status != "active" || got.AllowedActions[0] != "order" {
+		t.Fatalf("CapabilityGrants[0] = %#v, want active order grant", got)
+	}
+}

@@ -104,6 +104,41 @@ type ToolLifecycleStatusSnapshot struct {
 	AttestedAt           time.Time
 }
 
+type CapabilityRequestStatusSnapshot struct {
+	RequestID       string
+	Kind            string
+	TargetResource  string
+	ReviewStatus    string
+	RequestedBy     string
+	RequestedFor    string
+	ParentPrincipal string
+	RiskClass       string
+	Purpose         string
+	GrantID         string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+type CapabilityGrantStatusSnapshot struct {
+	GrantID           string
+	RequestID         string
+	Kind              string
+	TargetResource    string
+	Status            string
+	GrantedTo         string
+	GrantedBy         string
+	AllowedActions    []string
+	AnchorFingerprint string
+	DriftSource       string
+	StaleReason       string
+	InvocationCount   int
+	FailureCount      int
+	GrantedAt         time.Time
+	ExpiresAt         time.Time
+	RevokedAt         time.Time
+	LastInvokedAt     time.Time
+}
+
 type ChatStatusSnapshot struct {
 	GeneratedAt           time.Time
 	ChatID                int64
@@ -129,6 +164,8 @@ type ChatStatusSnapshot struct {
 	LatestTurnRun         *TurnRunStatusSnapshot
 	RecentExecution       []ExecutionEventSummary
 	ToolLifecycle         []ToolLifecycleStatusSnapshot
+	CapabilityRequests    []CapabilityRequestStatusSnapshot
+	CapabilityGrants      []CapabilityGrantStatusSnapshot
 	StaleRunningTurns     []TurnRunStatusSnapshot
 	RestartHealth         RestartHealthSnapshot
 }
