@@ -22,8 +22,8 @@ func (stubPrincipalManifestRegistry) ManifestForPrincipal(p principal.Principal)
 }
 
 func TestPrincipalScopedToolsManifestUsesPrincipalAwareManifest(t *testing.T) {
-	registry := &principalScopedTools{base: stubPrincipalManifestRegistry{}, principal: principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-email"}}
-	if got := registry.Manifest(); got != "principal=idolum-email" {
+	registry := &principalScopedTools{base: stubPrincipalManifestRegistry{}, principal: principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}}
+	if got := registry.Manifest(); got != "principal=child-alpha" {
 		t.Fatalf("Manifest() = %q, want principal-aware manifest", got)
 	}
 }

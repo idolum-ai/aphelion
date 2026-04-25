@@ -112,8 +112,8 @@ func TestRegistryManifestIncludesExternalManifestAsNonExecutable(t *testing.T) {
 	registry := NewRegistry(t.TempDir(), time.Second)
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
-		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/email-browser-tool:pilot"},
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/child-browser-tool:pilot"},
 		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`)},
 	}})
 	if err != nil {
@@ -122,7 +122,7 @@ func TestRegistryManifestIncludesExternalManifestAsNonExecutable(t *testing.T) {
 
 	manifest := registry.Manifest()
 	for _, needle := range []string{
-		"- browse_page: external tool owned by idolum-email",
+		"- browse_page: external tool owned by child-alpha",
 		"url(string,required)",
 		"executable: false",
 		"reason: external manifest is visible but executor support is not wired yet",
@@ -139,8 +139,8 @@ func TestRegistryExecuteExternalManifestReturnsCleanNonExecutableError(t *testin
 	registry, store := newDurableAgentToolRegistry(t)
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
-		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/email-browser-tool:pilot"},
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/child-browser-tool:pilot"},
 	}})
 	if err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
@@ -165,7 +165,7 @@ func TestRegistryRejectsExternalManifestNameCollisionWithNativeTool(t *testing.T
 	registry := NewRegistry(t.TempDir(), time.Second)
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "exec",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run"},
 	}})
 	if err == nil {

@@ -63,7 +63,7 @@ func TestToolAuthorityRegisterAndGrantAccessFlow(t *testing.T) {
 	}
 	manifest := ExternalToolManifest{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 	}
 	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {

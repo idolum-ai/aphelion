@@ -36,7 +36,7 @@ Code anchors:
 - Durable child runtime reuses `turn` orchestration where lifecycle aligns.
 - Child bootstraps must not carry parent Telegram polling credentials or parent principal IDs.
 - Parent-child coordination uses bounded runtime channels (local bootstrap/stdout and remote control-plane HTTP), not child Telegram polling.
-- Parent Aphelion must not accumulate child feature workarounds such as inbox-, browser-, or site-specific readiness logic. Channel-specific probes and repairs belong in the child runtime environment or in pluggable adapters proposed through governance.
+- Parent Aphelion must not accumulate child feature workarounds such as channel-, browser-, or site-specific readiness logic. Channel-specific probes and repairs belong in the child runtime environment or in pluggable adapters proposed through governance.
 - Durable children ask upward through parent conversation, review artifacts, and capability/delegation proposals when they need system changes. The parent can grant or materialize generic capabilities, but should not become specialized application code for one child.
 
 Related requirements:

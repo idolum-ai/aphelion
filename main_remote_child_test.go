@@ -14,7 +14,7 @@ func TestRemoteDurableAgentChildConfigClearsTelegramAndPrincipals(t *testing.T) 
 
 	root := t.TempDir()
 	bootstrap := core.DurableAgentRemoteBootstrap{
-		AgentID: "email-child",
+		AgentID: "external-child",
 		BootstrapLLM: core.NodeLLMBootstrap{
 			Backend:        "native",
 			NativeProvider: "anthropic",
@@ -25,7 +25,7 @@ func TestRemoteDurableAgentChildConfigClearsTelegramAndPrincipals(t *testing.T) 
 			filepath.Join(root, "memory"),
 		},
 	}
-	agent := core.DurableAgent{AgentID: "email-child"}
+	agent := core.DurableAgent{AgentID: "external-child"}
 
 	cfg := remoteDurableAgentChildConfig(filepath.Join(root, "sessions.db"), bootstrap, agent)
 	if cfg.Telegram.BotToken != "" {

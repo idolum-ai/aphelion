@@ -32,7 +32,7 @@ func TestExternalContainerAndWorkspaceRunnerModesAreNotProcessExecutable(t *test
 			toolName := mode + "_tool"
 			manifest := ExternalToolManifest{
 				Name:      toolName,
-				Owner:     "idolum-email",
+				Owner:     "child-alpha",
 				Execution: ExternalToolManifestExecution{Mode: mode, Entry: "./run.sh"},
 				Constraints: ExternalToolManifestConstraints{
 					Network: "none",
@@ -81,7 +81,7 @@ func TestExternalContainerModeUsesContainerAuditAndDrift(t *testing.T) {
 	}
 	manifest := ExternalToolManifest{
 		Name:      "container_tool",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "example/container-tool:1"},
 		Container: ExternalToolManifestContainer{
 			Image:    "example/container-tool:1",

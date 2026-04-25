@@ -24,8 +24,8 @@ func TestDurableChildSandboxAccessDoesNotSpecialCaseChannelAdapter(t *testing.T)
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 
 	access, err := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{
-		AgentID:     "idolum-email",
-		ChannelKind: "email",
+		AgentID:     "child-alpha",
+		ChannelKind: "external_channel",
 		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
 			Adapter: "child_adapter",
 		}},
@@ -64,7 +64,7 @@ func TestDurableChildSandboxAccessMaterializesGrantedRuntimeCapability(t *testin
 	defer store.Close()
 	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
 		GrantID:        "capg-mail-reader",
-		GrantedTo:      core.DurableAgentPrincipal("idolum-email"),
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
 		Kind:           session.CapabilityKindTool,
 		TargetResource: "mail-reader",
 		AllowedActions: []string{"invoke"},
@@ -81,7 +81,7 @@ func TestDurableChildSandboxAccessMaterializesGrantedRuntimeCapability(t *testin
 	}
 
 	access, err := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{
-		AgentID:      "idolum-email",
+		AgentID:      "child-alpha",
 		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
 	}, store)
 	if err != nil {
@@ -125,14 +125,14 @@ func TestDurableAgentProfileContextLoadsExternalProfileFiles(t *testing.T) {
 	if err := os.MkdirAll(profileRoot, 0o700); err != nil {
 		t.Fatalf("MkdirAll(profileRoot) err = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(profileRoot, "persona.md"), []byte("Speak as a careful inbox child."), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(profileRoot, "persona.md"), []byte("Speak as a careful external child."), 0o600); err != nil {
 		t.Fatalf("WriteFile(persona) err = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(profileRoot, "policy.md"), []byte("Ask parent before new tool access."), 0o600); err != nil {
 		t.Fatalf("WriteFile(policy) err = %v", err)
 	}
 
-	ctx := durableAgentProfileContext(sandbox.Scope{SharedMemoryRoot: filepath.Join(root, "memory")}, core.DurableAgent{AgentID: "idolum-email"})
+	ctx := durableAgentProfileContext(sandbox.Scope{SharedMemoryRoot: filepath.Join(root, "memory")}, core.DurableAgent{AgentID: "child-alpha"})
 	if !strings.Contains(ctx, "External durable child profile files") || !strings.Contains(ctx, "profile/persona.md") || !strings.Contains(ctx, "Ask parent before new tool access") {
 		t.Fatalf("profile context = %q, want external profile file content", ctx)
 	}
@@ -414,7 +414,7 @@ func TestDurableChildSandboxAccessBlocksStaleRuntimeGrant(t *testing.T) {
 	defer store.Close()
 	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
 		GrantID:        "capg-stale-runtime",
-		GrantedTo:      core.DurableAgentPrincipal("idolum-email"),
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
 		Kind:           session.CapabilityKindTool,
 		TargetResource: "mail-reader",
 		AllowedActions: []string{"invoke"},
@@ -424,7 +424,7 @@ func TestDurableChildSandboxAccessBlocksStaleRuntimeGrant(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
 	}
-	_, err = durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{AgentID: "idolum-email"}, store)
+	_, err = durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{AgentID: "child-alpha"}, store)
 	if err == nil || !strings.Contains(err.Error(), "child_runtime_blocked: grant_stale_manifest_drift") {
 		t.Fatalf("durableChildSandboxAccessFor() err = %v, want stale child_runtime block", err)
 	}

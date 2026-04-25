@@ -477,13 +477,13 @@ func TestDurableAgentToolConversationSendAndShow(t *testing.T) {
 
 	registry, store := newDurableAgentToolRegistry(t)
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Review inbox and surface important threads.",
+			Charter:            "Review an external child channel and surface important threads.",
 			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
 			OutboundMode:       "read_only",
 			DriftPolicy:        "admin_review",
@@ -498,7 +498,7 @@ func TestDurableAgentToolConversationSendAndShow(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"conversation_send","agent_id":"idolum-email","message":"Please flag recruiter threads aggressively and keep digest concise."}`),
+		json.RawMessage(`{"action":"conversation_send","agent_id":"child-alpha","message":"Please flag recruiter threads aggressively and keep digest concise."}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(conversation_send) err = %v", err)
@@ -521,7 +521,7 @@ func TestDurableAgentToolConversationSendAndShow(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"conversation_show","agent_id":"idolum-email","history":5}`),
+		json.RawMessage(`{"action":"conversation_show","agent_id":"child-alpha","history":5}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(conversation_show) err = %v", err)
@@ -536,7 +536,7 @@ func TestDurableAgentToolConversationSendAndShow(t *testing.T) {
 		t.Fatalf("conversation_show output = %q, want explicit thread state", showOut)
 	}
 
-	state, err := store.DurableAgentState("idolum-email")
+	state, err := store.DurableAgentState("child-alpha")
 	if err != nil {
 		t.Fatalf("DurableAgentState() err = %v", err)
 	}
@@ -560,7 +560,7 @@ func TestDurableAgentToolConversationShowIncludesRetryStateOnInferenceFailure(t 
 
 	registry, store := newDurableAgentToolRegistry(t)
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 1001,
@@ -591,7 +591,7 @@ func TestDurableAgentToolConversationShowIncludesRetryStateOnInferenceFailure(t 
 		t.Fatalf("continuity.Marshal() err = %v", err)
 	}
 	if err := store.SaveDurableAgentState(core.DurableAgentState{
-		AgentID:   "idolum-email",
+		AgentID:   "child-alpha",
 		StateJSON: raw,
 	}); err != nil {
 		t.Fatalf("SaveDurableAgentState() err = %v", err)
@@ -602,7 +602,7 @@ func TestDurableAgentToolConversationShowIncludesRetryStateOnInferenceFailure(t 
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"conversation_show","agent_id":"idolum-email","history":6}`),
+		json.RawMessage(`{"action":"conversation_show","agent_id":"child-alpha","history":6}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(conversation_show) err = %v", err)
@@ -620,13 +620,13 @@ func TestDurableAgentToolBootstrapShowIncludesStateAndHistory(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"})
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    string(session.ScopeKindTelegramDM),
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
-		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
-		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
+		ChannelKind:        "external_channel",
+		LivePolicy:         defaultDurableAgentLivePolicy("external_channel", "Read-only external child."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("external_channel", defaultDurableAgentLivePolicy("external_channel", "Read-only external child.")),
 		BootstrapLLM:       core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"},
 		LocalStorageRoots:  []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
 		NetworkPolicy:      "default",
@@ -639,7 +639,7 @@ func TestDurableAgentToolBootstrapShowIncludesStateAndHistory(t *testing.T) {
 	if _, _, err := store.ApplyDurableAgentBootstrap(agent.AgentID, core.NodeLLMBootstrap{Backend: "native", NativeProvider: "anthropic", APIKey: "sk-child", Model: "claude-child"}, 0, 1001, string(principal.RoleAdmin), "explicit", "switch away from parent"); err != nil {
 		t.Fatalf("ApplyDurableAgentBootstrap() err = %v", err)
 	}
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "durable_agent", json.RawMessage(`{"action":"bootstrap_show","agent_id":"idolum-email","history":5}`))
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "durable_agent", json.RawMessage(`{"action":"bootstrap_show","agent_id":"child-alpha","history":5}`))
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_show) err = %v", err)
 	}
@@ -737,13 +737,13 @@ func TestDurableAgentToolBootstrapUpdateExplicitAndInherit(t *testing.T) {
 		CodexHome:       "/tmp/codex-home",
 	})
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    string(session.ScopeKindTelegramDM),
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
-		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
-		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
+		ChannelKind:        "external_channel",
+		LivePolicy:         defaultDurableAgentLivePolicy("external_channel", "Read-only external child."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("external_channel", defaultDurableAgentLivePolicy("external_channel", "Read-only external child.")),
 		BootstrapLLM: core.NodeLLMBootstrap{
 			Backend:        "native",
 			NativeProvider: "anthropic",
@@ -767,7 +767,7 @@ func TestDurableAgentToolBootstrapUpdateExplicitAndInherit(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"switch to codex","bootstrap_llm":{"backend":"codex","codex_auth_source":"codex_cli","codex_home":"/srv/codex-child"}}`),
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"child-alpha","reason":"switch to codex","bootstrap_llm":{"backend":"codex","codex_auth_source":"codex_cli","codex_home":"/srv/codex-child"}}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_update explicit) err = %v", err)
@@ -798,7 +798,7 @@ func TestDurableAgentToolBootstrapUpdateExplicitAndInherit(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"inherit parent codex","bootstrap_profile":"inherit_parent"}`),
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"child-alpha","reason":"inherit parent codex","bootstrap_profile":"inherit_parent"}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_update inherit) err = %v", err)
@@ -819,13 +819,13 @@ func TestDurableAgentToolBootstrapUpdateHistoryRedactsAPIKeys(t *testing.T) {
 
 	registry, store := newDurableAgentToolRegistry(t)
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    string(session.ScopeKindTelegramDM),
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
-		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
-		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
+		ChannelKind:        "external_channel",
+		LivePolicy:         defaultDurableAgentLivePolicy("external_channel", "Read-only external child."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("external_channel", defaultDurableAgentLivePolicy("external_channel", "Read-only external child.")),
 		BootstrapLLM: core.NodeLLMBootstrap{
 			Backend:        "native",
 			NativeProvider: "anthropic",
@@ -846,7 +846,7 @@ func TestDurableAgentToolBootstrapUpdateHistoryRedactsAPIKeys(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"rotate native model+key","bootstrap_llm":{"backend":"native","native_provider":"anthropic","api_key":"sk-new","model":"claude-new"}}`),
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"child-alpha","reason":"rotate native model+key","bootstrap_llm":{"backend":"native","native_provider":"anthropic","api_key":"sk-new","model":"claude-new"}}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(bootstrap_update explicit native) err = %v", err)
@@ -873,13 +873,13 @@ func TestDurableAgentToolBootstrapUpdateRequiresReasonAndOneSource(t *testing.T)
 	registry, store := newDurableAgentToolRegistry(t)
 	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"})
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    string(session.ScopeKindTelegramDM),
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
-		LivePolicy:         defaultDurableAgentLivePolicy("email", "Read-only inbox child."),
-		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("email", defaultDurableAgentLivePolicy("email", "Read-only inbox child.")),
+		ChannelKind:        "external_channel",
+		LivePolicy:         defaultDurableAgentLivePolicy("external_channel", "Read-only external child."),
+		BootstrapCeiling:   core.DefaultDurableAgentBootstrapCeiling("external_channel", defaultDurableAgentLivePolicy("external_channel", "Read-only external child.")),
 		BootstrapLLM:       core.NodeLLMBootstrap{Backend: "native", NativeProvider: "anthropic", APIKey: "sk-old", Model: "claude-old"},
 		LocalStorageRoots:  []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
 		NetworkPolicy:      "default",
@@ -893,7 +893,7 @@ func TestDurableAgentToolBootstrapUpdateRequiresReasonAndOneSource(t *testing.T)
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","bootstrap_profile":"inherit_parent"}`),
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"child-alpha","bootstrap_profile":"inherit_parent"}`),
 	)
 	if err == nil || !strings.Contains(err.Error(), "reason is required") {
 		t.Fatalf("bootstrap_update missing reason err = %v, want reason required", err)
@@ -903,7 +903,7 @@ func TestDurableAgentToolBootstrapUpdateRequiresReasonAndOneSource(t *testing.T)
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"bootstrap_update","agent_id":"idolum-email","reason":"bad","bootstrap_profile":"inherit_parent","bootstrap_llm":{"backend":"codex","codex_auth_source":"codex_cli","codex_home":"/srv/codex-child"}}`),
+		json.RawMessage(`{"action":"bootstrap_update","agent_id":"child-alpha","reason":"bad","bootstrap_profile":"inherit_parent","bootstrap_llm":{"backend":"codex","codex_auth_source":"codex_cli","codex_home":"/srv/codex-child"}}`),
 	)
 	if err == nil || !strings.Contains(err.Error(), "either bootstrap_profile or bootstrap_llm") {
 		t.Fatalf("bootstrap_update dual source err = %v, want exclusivity error", err)
@@ -1277,7 +1277,7 @@ func TestDurableAgentToolEnrollmentShowMissingIsExplicit(t *testing.T) {
 	}
 }
 
-func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
+func TestDurableAgentToolCreateAndActivateExternalChannelDraft(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
@@ -1289,15 +1289,15 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{
 			"action":"create",
-			"agent_id":"idolum-email",
-			"channel_kind":"email",
-			"charter":"Review the inbox, surface important threads, summarize PDFs, and never send mail.",
+			"agent_id":"child-alpha",
+			"channel_kind":"external_channel",
+			"charter":"Review the external channel, surface important threads, summarize PDFs, and never send outbound messages.",
 			"autonomy":"observe_only",
 			"capabilities":["read_channel","bounded_review_artifact","summarize_pdf"],
 			"wakeup_mode":"poll",
 			"secret_scopes":["child_adapter"],
 			"channel_config":{
-				"email":{
+				"external":{
 					"address":"idolum@example.com",
 					"account":"idolum@example.com",
 					"adapter":"child_adapter",
@@ -1312,19 +1312,19 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 		}`),
 	)
 	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(create email draft) err = %v", err)
+		t.Fatalf("ExecuteForSessionPrincipal(create external-channel draft) err = %v", err)
 	}
 	if !strings.Contains(createOut, "action: durable-agent create") || !strings.Contains(createOut, "status: draft") {
 		t.Fatalf("create output = %q, want durable-agent create draft summary", createOut)
 	}
-	if !strings.Contains(createOut, "channel_kind: email") || !strings.Contains(createOut, "channel_profile: inbox") {
-		t.Fatalf("create output = %q, want internal channel kind with inbox profile alias", createOut)
+	if !strings.Contains(createOut, "channel_kind: external_channel") || !strings.Contains(createOut, "channel_profile: external") {
+		t.Fatalf("create output = %q, want external channel kind/profile", createOut)
 	}
 	if !strings.Contains(createOut, "channel_address: idolum@example.com") {
 		t.Fatalf("create output = %q, want channel address summary alias", createOut)
 	}
 
-	draft, err := store.DurableAgent("idolum-email")
+	draft, err := store.DurableAgent("child-alpha")
 	if err != nil {
 		t.Fatalf("DurableAgent(draft) err = %v", err)
 	}
@@ -1349,16 +1349,16 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"activate","agent_id":"idolum-email"}`),
+		json.RawMessage(`{"action":"activate","agent_id":"child-alpha"}`),
 	)
 	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(activate email draft) err = %v", err)
+		t.Fatalf("ExecuteForSessionPrincipal(activate external-channel draft) err = %v", err)
 	}
 	if !strings.Contains(activateOut, "action: durable-agent activate") || !strings.Contains(activateOut, "status: active") {
 		t.Fatalf("activate output = %q, want activation summary", activateOut)
 	}
 
-	activated, err := store.DurableAgent("idolum-email")
+	activated, err := store.DurableAgent("child-alpha")
 	if err != nil {
 		t.Fatalf("DurableAgent(activated) err = %v", err)
 	}
@@ -1462,7 +1462,7 @@ func TestDurableAgentToolActivateBackfillsBootstrapFromParentDefault(t *testing.
 	}
 }
 
-func TestDurableAgentToolCreateSupportsInboxAliasChannelKindAndConfig(t *testing.T) {
+func TestDurableAgentToolCreateSupportsExternalChannelConfig(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
@@ -1474,11 +1474,11 @@ func TestDurableAgentToolCreateSupportsInboxAliasChannelKindAndConfig(t *testing
 		"durable_agent",
 		json.RawMessage(`{
 			"action":"create",
-			"agent_id":"idolum-inbox-alias",
-			"channel_kind":"inbox",
+			"agent_id":"child-legacy-alias",
+			"channel_kind":"external_channel",
 			"wakeup_mode":"poll",
 			"channel_config":{
-				"inbox":{
+				"external":{
 					"address":"idolum@example.com",
 					"adapter":"child_adapter"
 				}
@@ -1486,18 +1486,18 @@ func TestDurableAgentToolCreateSupportsInboxAliasChannelKindAndConfig(t *testing
 		}`),
 	)
 	if err != nil {
-		t.Fatalf("ExecuteForSessionPrincipal(create inbox alias) err = %v", err)
+		t.Fatalf("ExecuteForSessionPrincipal(create external channel) err = %v", err)
 	}
-	if !strings.Contains(createOut, "channel_kind: email") || !strings.Contains(createOut, "channel_profile: inbox") {
-		t.Fatalf("create output = %q, want canonical channel kind with inbox alias profile", createOut)
+	if !strings.Contains(createOut, "channel_kind: external_channel") || !strings.Contains(createOut, "channel_profile: external") {
+		t.Fatalf("create output = %q, want canonical external channel kind/profile", createOut)
 	}
 
-	agent, err := store.DurableAgent("idolum-inbox-alias")
+	agent, err := store.DurableAgent("child-legacy-alias")
 	if err != nil {
-		t.Fatalf("DurableAgent(idolum-inbox-alias) err = %v", err)
+		t.Fatalf("DurableAgent(child-legacy-alias) err = %v", err)
 	}
-	if agent.ChannelKind != "email" {
-		t.Fatalf("ChannelKind = %q, want canonical email", agent.ChannelKind)
+	if agent.ChannelKind != "external_channel" {
+		t.Fatalf("ChannelKind = %q, want canonical external_channel", agent.ChannelKind)
 	}
 	external := agent.ChannelConfig.ExternalConfig()
 	if external == nil {
@@ -1511,7 +1511,7 @@ func TestDurableAgentToolCreateSupportsInboxAliasChannelKindAndConfig(t *testing
 	}
 }
 
-func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
+func TestDurableAgentToolExternalChannelWizardHappyPath(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
@@ -1527,7 +1527,7 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+		json.RawMessage(`{"action":"wizard_start","agent_id":"child-alpha","channel_kind":"external_channel"}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
@@ -1546,7 +1546,7 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{
 			"action":"wizard_answer",
-			"agent_id":"idolum-email",
+			"agent_id":"child-alpha",
 			"wizard_answers":{
 				"address":"idolum@example.com",
 				"account":"idolum@example.com",
@@ -1554,7 +1554,7 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 				"bootstrap_profile":"child_custom",
 				"bootstrap_model":"claude-sonnet-4-6",
 				"query":"topic:important newer_than:7d",
-				"charter":"Review the inbox, surface important threads, summarize PDFs, and never send mail.",
+				"charter":"Review the external channel, surface important threads, summarize PDFs, and never send outbound messages.",
 				"autonomy":"observe_only",
 				"wakeup_mode":"poll_or_push",
 				"poll_interval":"5m",
@@ -1585,7 +1585,7 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"child-alpha"}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_finalize) err = %v", err)
@@ -1597,9 +1597,9 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 		t.Fatalf("wizard_finalize output = %q, want draft status", finalizeOut)
 	}
 
-	agent, err := store.DurableAgent("idolum-email")
+	agent, err := store.DurableAgent("child-alpha")
 	if err != nil {
-		t.Fatalf("DurableAgent(idolum-email) err = %v", err)
+		t.Fatalf("DurableAgent(child-alpha) err = %v", err)
 	}
 	if agent.Status != "draft" {
 		t.Fatalf("agent status = %q, want draft", agent.Status)
@@ -1640,7 +1640,7 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 	}
 }
 
-func TestDurableAgentToolEmailWizardFinalizeRequiresCompleteAnswers(t *testing.T) {
+func TestDurableAgentToolExternalChannelWizardFinalizeRequiresCompleteAnswers(t *testing.T) {
 	t.Parallel()
 
 	registry, _ := newDurableAgentToolRegistry(t)
@@ -1650,7 +1650,7 @@ func TestDurableAgentToolEmailWizardFinalizeRequiresCompleteAnswers(t *testing.T
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+		json.RawMessage(`{"action":"wizard_start","agent_id":"child-alpha","channel_kind":"external_channel"}`),
 	); err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
 	}
@@ -1659,7 +1659,7 @@ func TestDurableAgentToolEmailWizardFinalizeRequiresCompleteAnswers(t *testing.T
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_answer","agent_id":"idolum-email","wizard_answers":{"address":"idolum@example.com","adapter":"child_adapter"}}`),
+		json.RawMessage(`{"action":"wizard_answer","agent_id":"child-alpha","wizard_answers":{"address":"idolum@example.com","adapter":"child_adapter"}}`),
 	); err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_answer partial) err = %v", err)
 	}
@@ -1669,7 +1669,7 @@ func TestDurableAgentToolEmailWizardFinalizeRequiresCompleteAnswers(t *testing.T
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"child-alpha"}`),
 	)
 	if err == nil {
 		t.Fatal("ExecuteForSessionPrincipal(wizard_finalize partial) err = nil, want missing-answer error")
@@ -1679,7 +1679,7 @@ func TestDurableAgentToolEmailWizardFinalizeRequiresCompleteAnswers(t *testing.T
 	}
 }
 
-func TestDurableAgentToolEmailWizardChildCustomRequiresBootstrapModel(t *testing.T) {
+func TestDurableAgentToolExternalChannelWizardChildCustomRequiresBootstrapModel(t *testing.T) {
 	t.Parallel()
 
 	registry, _ := newDurableAgentToolRegistry(t)
@@ -1695,7 +1695,7 @@ func TestDurableAgentToolEmailWizardChildCustomRequiresBootstrapModel(t *testing
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+		json.RawMessage(`{"action":"wizard_start","agent_id":"child-alpha","channel_kind":"external_channel"}`),
 	); err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
 	}
@@ -1707,12 +1707,12 @@ func TestDurableAgentToolEmailWizardChildCustomRequiresBootstrapModel(t *testing
 		"durable_agent",
 		json.RawMessage(`{
 			"action":"wizard_answer",
-			"agent_id":"idolum-email",
+			"agent_id":"child-alpha",
 			"wizard_answers":{
 				"address":"idolum@example.com",
 				"adapter":"child_adapter",
 				"bootstrap_profile":"child_custom",
-				"charter":"Read-only inbox child.",
+				"charter":"Read-only external child.",
 				"autonomy":"observe_only",
 				"wakeup_mode":"poll",
 				"poll_interval":"5m",
@@ -1737,7 +1737,7 @@ func TestDurableAgentToolEmailWizardChildCustomRequiresBootstrapModel(t *testing
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"child-alpha"}`),
 	)
 	if err == nil {
 		t.Fatal("ExecuteForSessionPrincipal(wizard_finalize without bootstrap_model) err = nil, want missing-answer error")
@@ -1747,7 +1747,7 @@ func TestDurableAgentToolEmailWizardChildCustomRequiresBootstrapModel(t *testing
 	}
 }
 
-func TestDurableAgentToolEmailWizardBootstrapInheritanceAndCustomModel(t *testing.T) {
+func TestDurableAgentToolExternalChannelWizardBootstrapInheritanceAndCustomModel(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
@@ -1763,7 +1763,7 @@ func TestDurableAgentToolEmailWizardBootstrapInheritanceAndCustomModel(t *testin
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+		json.RawMessage(`{"action":"wizard_start","agent_id":"child-alpha","channel_kind":"external_channel"}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
@@ -1782,13 +1782,13 @@ func TestDurableAgentToolEmailWizardBootstrapInheritanceAndCustomModel(t *testin
 		"durable_agent",
 		json.RawMessage(`{
 			"action":"wizard_answer",
-			"agent_id":"idolum-email",
+			"agent_id":"child-alpha",
 			"wizard_answers":{
 				"address":"idolum@example.com",
 				"adapter":"child_adapter",
 				"bootstrap_profile":"child_custom",
 				"bootstrap_model":"claude-custom-child",
-				"charter":"Read-only inbox child.",
+				"charter":"Read-only external child.",
 				"autonomy":"observe_only",
 				"wakeup_mode":"poll",
 				"poll_interval":"5m",
@@ -1809,14 +1809,14 @@ func TestDurableAgentToolEmailWizardBootstrapInheritanceAndCustomModel(t *testin
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"child-alpha"}`),
 	); err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_finalize custom bootstrap) err = %v", err)
 	}
 
-	agent, err := store.DurableAgent("idolum-email")
+	agent, err := store.DurableAgent("child-alpha")
 	if err != nil {
-		t.Fatalf("DurableAgent(idolum-email) err = %v", err)
+		t.Fatalf("DurableAgent(child-alpha) err = %v", err)
 	}
 	if agent.BootstrapLLM.Model != "claude-custom-child" {
 		t.Fatalf("agent bootstrap model = %q, want claude-custom-child", agent.BootstrapLLM.Model)
@@ -1829,7 +1829,7 @@ func TestDurableAgentToolEmailWizardBootstrapInheritanceAndCustomModel(t *testin
 	}
 }
 
-func TestDurableAgentToolEmailWizardCodexChildCustomDoesNotRequireBootstrapModel(t *testing.T) {
+func TestDurableAgentToolExternalChannelWizardCodexChildCustomDoesNotRequireBootstrapModel(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
@@ -1844,7 +1844,7 @@ func TestDurableAgentToolEmailWizardCodexChildCustomDoesNotRequireBootstrapModel
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_start","agent_id":"idolum-email","channel_kind":"email"}`),
+		json.RawMessage(`{"action":"wizard_start","agent_id":"child-alpha","channel_kind":"external_channel"}`),
 	); err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_start) err = %v", err)
 	}
@@ -1856,12 +1856,12 @@ func TestDurableAgentToolEmailWizardCodexChildCustomDoesNotRequireBootstrapModel
 		"durable_agent",
 		json.RawMessage(`{
 			"action":"wizard_answer",
-			"agent_id":"idolum-email",
+			"agent_id":"child-alpha",
 			"wizard_answers":{
 				"address":"idolum@example.com",
 				"adapter":"child_adapter",
 				"bootstrap_profile":"child_custom",
-				"charter":"Read-only inbox child.",
+				"charter":"Read-only external child.",
 				"autonomy":"observe_only",
 				"wakeup_mode":"poll",
 				"poll_interval":"5m",
@@ -1889,14 +1889,14 @@ func TestDurableAgentToolEmailWizardCodexChildCustomDoesNotRequireBootstrapModel
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_finalize","agent_id":"idolum-email"}`),
+		json.RawMessage(`{"action":"wizard_finalize","agent_id":"child-alpha"}`),
 	); err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_finalize codex child_custom) err = %v", err)
 	}
 
-	agent, err := store.DurableAgent("idolum-email")
+	agent, err := store.DurableAgent("child-alpha")
 	if err != nil {
-		t.Fatalf("DurableAgent(idolum-email) err = %v", err)
+		t.Fatalf("DurableAgent(child-alpha) err = %v", err)
 	}
 	if agent.BootstrapLLM.Backend != "codex" {
 		t.Fatalf("agent bootstrap backend = %q, want codex", agent.BootstrapLLM.Backend)
@@ -1939,16 +1939,16 @@ func newToolTestStore(t *testing.T) *session.SQLiteStore {
 	return store
 }
 
-func TestDurableAgentConnectionTestDoesNotPromoteEmailAdapterGrantsToLiveProbe(t *testing.T) {
+func TestDurableAgentConnectionTestDoesNotPromoteAdapterGrantsToLiveProbe(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    string(session.ScopeKindTelegramDM),
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
 			Address: "host@idolum.ai",
 			Account: "host@idolum.ai",
@@ -1956,7 +1956,7 @@ func TestDurableAgentConnectionTestDoesNotPromoteEmailAdapterGrantsToLiveProbe(t
 			Query:   "topic:important",
 		}},
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Read inbox metadata and surface bounded review artifacts.",
+			Charter:            "Read channel metadata and surface bounded review artifacts.",
 			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
 			OutboundMode:       "read_only",
 		}),
@@ -1966,10 +1966,10 @@ func TestDurableAgentConnectionTestDoesNotPromoteEmailAdapterGrantsToLiveProbe(t
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
-	principalID := core.DurableAgentPrincipal("idolum-email")
+	principalID := core.DurableAgentPrincipal("child-alpha")
 	for _, grant := range []session.CapabilityGrant{
 		{
-			GrantID:        "grant-email-account",
+			GrantID:        "grant-channel-account",
 			GrantedBy:      "telegram:1001",
 			GrantedTo:      principalID,
 			Kind:           session.CapabilityKindExternalAccount,
@@ -1997,7 +1997,7 @@ func TestDurableAgentConnectionTestDoesNotPromoteEmailAdapterGrantsToLiveProbe(t
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"connection_test","agent_id":"idolum-email"}`),
+		json.RawMessage(`{"action":"connection_test","agent_id":"child-alpha"}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(connection_test) err = %v", err)
@@ -2007,7 +2007,7 @@ func TestDurableAgentConnectionTestDoesNotPromoteEmailAdapterGrantsToLiveProbe(t
 	}
 	for _, forbidden := range []string{
 		"status: ok",
-		"external_account_grant: grant-email-account",
+		"external_account_grant: grant-channel-account",
 		"tool_grant: grant-channel-tool",
 		"live_probe:",
 	} {
@@ -2110,7 +2110,7 @@ func TestDurableAgentProfileApplyWritesChildAuthoredManifestEntry(t *testing.T) 
 	memoryRoot := filepath.Join(t.TempDir(), "memory")
 	if err := store.UpsertDurableAgent(core.DurableAgent{
 		AgentID:           "script-scout",
-		ChannelKind:       "inbox",
+		ChannelKind:       "external_channel",
 		Status:            "active",
 		PolicyHash:        "policy-hash-1",
 		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "native", NativeProvider: "openrouter", APIKey: "sk-test", Model: "test-model"},

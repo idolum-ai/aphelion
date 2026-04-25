@@ -28,7 +28,7 @@ func TestDefinitionsForPrincipalFiltersExternalToolByGrant(t *testing.T) {
 	}
 	manifest := ExternalToolManifest{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}}}`)},
 	}
@@ -40,9 +40,9 @@ func TestDefinitionsForPrincipalFiltersExternalToolByGrant(t *testing.T) {
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
-	grantToolInvoke(t, store, "browse_page", "idolum-email")
+	grantToolInvoke(t, store, "browse_page", "child-alpha")
 
-	granted := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-email"})
+	granted := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
 	if !toolDefExists(granted, "browse_page") {
 		t.Fatalf("DefinitionsForPrincipal(granted) missing browse_page: %#v", granted)
 	}
@@ -65,7 +65,7 @@ func TestExternalToolRequiresRegistrationAndGrantAtInvocation(t *testing.T) {
 	}
 	manifest := ExternalToolManifest{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`)},
 	}
@@ -104,8 +104,8 @@ func TestManifestForPrincipalIncludesOnlyGrantedExternalTools(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
-		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/email-browser-tool:pilot"},
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/child-browser-tool:pilot"},
 		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`)},
 	}})
 	if err != nil {
@@ -114,10 +114,10 @@ func TestManifestForPrincipalIncludesOnlyGrantedExternalTools(t *testing.T) {
 	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: "browse_page", ImplementationRef: "external:browse_page", Registered: true}); err != nil {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
-	grantToolInvoke(t, store, "browse_page", "idolum-email")
+	grantToolInvoke(t, store, "browse_page", "child-alpha")
 
-	visible := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-email"})
-	if !strings.Contains(visible, "- browse_page: external tool owned by idolum-email") {
+	visible := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
+	if !strings.Contains(visible, "- browse_page: external tool owned by child-alpha") {
 		t.Fatalf("visible manifest = %q, want granted external tool", visible)
 	}
 	if !strings.Contains(visible, "executable: false") {

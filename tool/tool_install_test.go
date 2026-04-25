@@ -32,7 +32,7 @@ func TestToolAuthorityInstallSetShowListAndRegisterGateForExternalTool(t *testin
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
 	}})
@@ -127,7 +127,7 @@ func TestToolAuthorityInstallShowMarksExternalToolStaleOnFingerprintDrift(t *tes
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`)},
 		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
@@ -190,7 +190,7 @@ func TestToolAuthorityProbeRunUpdatesInstallRecordFromManifestProbe(t *testing.T
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
 	}})
@@ -255,7 +255,7 @@ func TestToolAuthorityProbeRunMarksVerifiedExternalToolStaleOnFailure(t *testing
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
 	}})
@@ -308,7 +308,7 @@ func TestToolAuthorityInstallExecuteRunsManifestInstallCommandAndMarksInstalled(
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		Install:   ExternalToolManifestInstall{Command: []string{"./install.sh"}},
 	}})
@@ -352,7 +352,7 @@ func TestToolAuthorityInstallExecuteMarksRecordFailedOnInstallError(t *testing.T
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		Install:   ExternalToolManifestInstall{Command: []string{"./install.sh"}},
 	}})
@@ -398,7 +398,7 @@ func TestToolAuthorityProcessPolicyCeilingsBlockInstallProbeAndInvoke(t *testing
 	}
 	manifest := ExternalToolManifest{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		Install:   ExternalToolManifestInstall{Command: []string{"./install.sh"}},
 		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
@@ -444,7 +444,7 @@ func TestToolAuthorityAuditRunFailsWhenExecutionEntryIsMissing(t *testing.T) {
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./missing-run.sh"},
 	}})
 	if err != nil {
@@ -491,7 +491,7 @@ func TestToolAuthorityAuditRunChecksRuntimeLoadability(t *testing.T) {
 	}
 	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 	}}); err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
@@ -524,7 +524,7 @@ func TestToolAuthorityRepeatedFailedProbeEscalatesStaleToFailed(t *testing.T) {
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
 	}})

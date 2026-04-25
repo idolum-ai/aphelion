@@ -4148,7 +4148,7 @@ func upsertDurableAgentExec(exec sqlExecer, agent core.DurableAgent) (core.Durab
 	if err := validateDurableAgentChannelConfig(agent.ChannelKind, agent.ChannelConfig); err != nil {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent channel_config: %w", err)
 	}
-	requiresBootstrap := strings.TrimSpace(agent.Status) != "draft" && strings.TrimSpace(agent.ChannelKind) != "email"
+	requiresBootstrap := strings.TrimSpace(agent.Status) != "draft" && !isLegacyExternalDurableAgentChannelKind(agent.ChannelKind)
 	if requiresBootstrap {
 		if err := core.ValidateNodeLLMBootstrap(agent.BootstrapLLM); err != nil {
 			return core.DurableAgent{}, fmt.Errorf("upsert durable agent bootstrap_llm: %w", err)
@@ -6338,10 +6338,19 @@ func scanDurableAgent(scanner interface{ Scan(dest ...any) error }) (core.Durabl
 	return agent, nil
 }
 
+func isLegacyExternalDurableAgentChannelKind(channelKind string) bool {
+	switch strings.TrimSpace(channelKind) {
+	case "external_channel", "email", "inbox":
+		return true
+	default:
+		return false
+	}
+}
+
 func validateDurableAgentChannelConfig(channelKind string, cfg core.DurableAgentChannelConfig) error {
 	cfg = core.NormalizeDurableAgentChannelConfig(cfg)
 	switch strings.TrimSpace(channelKind) {
-	case "email":
+	case "external_channel", "email", "inbox":
 		external := cfg.ExternalConfig()
 		if external == nil {
 			return nil

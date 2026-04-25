@@ -395,9 +395,9 @@ Admin callers should additionally receive:
 - `Debug System:` details (pending-kind counters + latest turn rollups by chat)
 - full durables status block
 
-### Natural language durable-email bootstrap
+### Natural language durable external-channel bootstrap
 
-Admin DM inputs that clearly request creating an email durable child should be normalized into a safe wizard-driving instruction before ordinary turn routing.
+Admin DM inputs that clearly request creating an external-channel durable child should be normalized into a safe wizard-driving instruction before ordinary turn routing.
 
 Normalization goals:
 
@@ -405,11 +405,11 @@ Normalization goals:
 - force the workflow onto `durable_agent` wizard actions (`wizard_start`, `wizard_answer`, `wizard_show`, `wizard_finalize`, `connection_test`, `activate`)
 - explicitly prohibit `exec`/`go run` routes for this workflow
 - require one-question-at-a-time collection for missing wizard fields
-- carry forward a detected email address when present in user text
+- carry forward a detected external channel address when present in user text
 
 ### Durable wizard inline controls
 
-When outbound text includes an email wizard machine block (`action: durable-agent wizard show`), Telegram delivery should attach inline controls to that message.
+When outbound text includes an durable-child wizard machine block (`action: durable-agent wizard show`), Telegram delivery should attach inline controls to that message.
 
 Requirements:
 

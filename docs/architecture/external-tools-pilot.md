@@ -7,12 +7,12 @@ domain behavior outside core.
 
 ## Bundled Pilot
 
-The first pilot is `browse_page`, owned by `idolum-email`:
+The first pilot is `browse_page`, owned by `child-alpha`:
 
 - manifest: `external-tools/browse_page/manifest.json`
 - deterministic fixture entry: `external-tools/browse_page/bin/browse_page.sh`
 - install probe: `external-tools/browse_page/bin/probe.sh`
-- first intended grant target: `idolum-email`
+- first intended grant target: `child-alpha`
 
 The bundled implementation is intentionally a deterministic fixture. It proves
 the governed external-tool lifecycle in CI without adding browser dependencies

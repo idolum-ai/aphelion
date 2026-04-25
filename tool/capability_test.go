@@ -233,7 +233,7 @@ func TestCapabilityGrantEnablesRegisteredToolWithoutLegacyExposure(t *testing.T)
 	}
 	manifest := ExternalToolManifest{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`)},
 	}

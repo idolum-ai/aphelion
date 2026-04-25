@@ -552,19 +552,19 @@ func TestTelegramDurableMemoryDelegationApproverPromptsWithButtons(t *testing.T)
 		Principal:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		SessionKey: session.SessionKey{ChatID: 7},
 		Agent: core.DurableAgent{
-			AgentID:     "idolum-email",
-			ChannelKind: "email",
+			AgentID:     "child-alpha",
+			ChannelKind: "external_channel",
 			LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-				Charter: "Review inbox and surface important threads.",
+				Charter: "Review an external child channel and surface important threads.",
 			}),
 		},
-		Reason: "Seed child memory with stable inbox preferences.",
+		Reason: "Seed child memory with stable channel preferences.",
 		Entries: []toolpkg.DurableMemoryDelegationEntry{
 			{
 				SourceStore: "knowledge",
 				CandidateID: "knowledge:1",
 				TargetStore: "knowledge",
-				Content:     "Keep inbox summaries concise and pragmatic.",
+				Content:     "Keep channel summaries concise and pragmatic.",
 			},
 		},
 	})
@@ -580,7 +580,7 @@ func TestTelegramDurableMemoryDelegationApproverPromptsWithButtons(t *testing.T)
 	if !strings.Contains(strings.ToLower(sender.inline[0].text), "memory delegation") {
 		t.Fatalf("inline text = %q, want memory delegation wording", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.inline[0].text, "idolum-email") {
+	if !strings.Contains(sender.inline[0].text, "child-alpha") {
 		t.Fatalf("inline text = %q, want agent id", sender.inline[0].text)
 	}
 	if len(sender.inline[0].rows) == 0 {
@@ -599,7 +599,7 @@ func TestTelegramDurableMemoryDelegationApproverPromptsWithButtons(t *testing.T)
 	if len(sender.edits) != 1 {
 		t.Fatalf("edits = %#v, want durable approval confirmation", sender.edits)
 	}
-	if !strings.Contains(sender.edits[0].text, "Memory delegation approved.") || !strings.Contains(sender.edits[0].text, "Decision:") || !strings.Contains(sender.edits[0].text, "idolum-email") {
+	if !strings.Contains(sender.edits[0].text, "Memory delegation approved.") || !strings.Contains(sender.edits[0].text, "Decision:") || !strings.Contains(sender.edits[0].text, "child-alpha") {
 		t.Fatalf("approval edit = %q, want memory delegation confirmation with decision id and agent", sender.edits[0].text)
 	}
 }

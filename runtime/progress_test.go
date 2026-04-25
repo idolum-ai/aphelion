@@ -277,7 +277,7 @@ func TestNewToolProgressReporterRoutesInternalDurableProgressToAdminChat(t *test
 	}
 
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "headless",
 		BootstrapLLM:       durableGroupTestBootstrapLLM(),
@@ -291,14 +291,14 @@ func TestNewToolProgressReporterRoutesInternalDurableProgressToAdminChat(t *test
 		UserID: 0,
 		Scope: session.ScopeRef{
 			Kind:           session.ScopeKindDurableAgent,
-			ID:             "idolum-email",
-			DurableAgentID: "idolum-email",
+			ID:             "child-alpha",
+			DurableAgentID: "child-alpha",
 		},
 	}, core.InboundMessage{
 		ChatID:         1921139064,
 		ChatType:       "durable_parent_conversation",
 		MessageID:      55,
-		DurableAgentID: "idolum-email",
+		DurableAgentID: "child-alpha",
 		Text:           "internal durable wake",
 	}, session.PlanState{}, nil)
 	if reporter == nil {

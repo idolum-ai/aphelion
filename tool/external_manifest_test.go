@@ -17,11 +17,11 @@ func TestLoadExternalToolManifestRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "browse_page.json")
 	raw := `{
 		"name": "browse_page",
-		"owner": "idolum-email",
+		"owner": "child-alpha",
 		"version": "0.1.0",
 		"execution": {
 			"mode": "container",
-			"entry": "ghcr.io/idolum/email-browser-tool:pilot",
+			"entry": "ghcr.io/idolum/child-browser-tool:pilot",
 			"workdir": "/tool",
 			"timeout_seconds": 30
 		},
@@ -54,7 +54,7 @@ func TestLoadExternalToolManifestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadExternalToolManifest() err = %v", err)
 	}
-	if manifest.Name != "browse_page" || manifest.Owner != "idolum-email" {
+	if manifest.Name != "browse_page" || manifest.Owner != "child-alpha" {
 		t.Fatalf("manifest = %#v, want normalized name/owner", manifest)
 	}
 	if manifest.Execution.Mode != "container" || manifest.Execution.Entry == "" {
@@ -77,8 +77,8 @@ func TestBundledBrowsePagePilotManifestLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadExternalToolManifest(bundled browse_page) err = %v", err)
 	}
-	if manifest.Name != "browse_page" || manifest.Owner != "idolum-email" || manifest.Execution.Mode != "process" {
-		t.Fatalf("bundled manifest = %#v, want email-owned process browse_page pilot", manifest)
+	if manifest.Name != "browse_page" || manifest.Owner != "child-alpha" || manifest.Execution.Mode != "process" {
+		t.Fatalf("bundled manifest = %#v, want child-owned process browse_page pilot", manifest)
 	}
 	if manifest.Constraints.Network != "none" || len(manifest.Install.Command) == 0 || len(manifest.Probe.Command) == 0 {
 		t.Fatalf("bundled manifest constraints/install/probe = %#v/%#v/%#v, want deterministic governed fixture", manifest.Constraints, manifest.Install, manifest.Probe)
@@ -90,7 +90,7 @@ func TestLoadExternalToolManifestRejectsMissingRequiredFields(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "invalid.json")
-	if err := os.WriteFile(path, []byte(`{"owner":"idolum-email","execution":{"mode":"container","entry":"tool"}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"owner":"child-alpha","execution":{"mode":"container","entry":"tool"}}`), 0o600); err != nil {
 		t.Fatalf("WriteFile() err = %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestLoadExternalToolManifestDirLoadsSortedAndRejectsDuplicates(t *testing.T
 	dir := t.TempDir()
 	write := func(name, toolName string) {
 		t.Helper()
-		raw := `{"name":"` + toolName + `","owner":"idolum-email","execution":{"mode":"process","entry":"./run"}}`
+		raw := `{"name":"` + toolName + `","owner":"child-alpha","execution":{"mode":"process","entry":"./run"}}`
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(raw), 0o600); err != nil {
 			t.Fatalf("WriteFile(%s) err = %v", name, err)
 		}

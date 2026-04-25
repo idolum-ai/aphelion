@@ -623,7 +623,7 @@ func TestRunDurableAgentListShowsRegisteredAgents(t *testing.T) {
 		{
 			AgentID:            "mail-digest",
 			ReviewTargetChatID: 1001,
-			ChannelKind:        "email",
+			ChannelKind:        "external_channel",
 			Status:             "draft",
 			BootstrapLLM: core.NodeLLMBootstrap{
 				Backend:        "native",

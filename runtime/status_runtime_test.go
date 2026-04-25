@@ -1492,7 +1492,7 @@ func TestDurableAgentsStatusSnapshotIncludesHealthSignals(t *testing.T) {
 	agentInactive := core.DurableAgent{
 		AgentID:            "agent-inactive",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		Status:             "draft",
 		BootstrapLLM: core.NodeLLMBootstrap{
 			Backend:        "native",
@@ -1934,8 +1934,8 @@ func TestDurableAgentsStatusSnapshotProjectsChildRuntimeAndProfileRepairState(t 
 	root := t.TempDir()
 	memoryRoot := filepath.Join(root, "memory")
 	agent := core.DurableAgent{
-		AgentID:           "idolum-email",
-		ChannelKind:       "email",
+		AgentID:           "child-alpha",
+		ChannelKind:       "external_channel",
 		Status:            "active",
 		PolicyHash:        "policy-hash-current",
 		LocalStorageRoots: []string{filepath.Join(root, "workspace"), memoryRoot},
@@ -1952,7 +1952,7 @@ func TestDurableAgentsStatusSnapshotProjectsChildRuntimeAndProfileRepairState(t 
 	}
 	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
 		GrantID:        "capg-child-runtime",
-		GrantedTo:      core.DurableAgentPrincipal("idolum-email"),
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
 		Kind:           session.CapabilityKindTool,
 		TargetResource: "mail-reader",
 		AllowedActions: []string{"invoke"},
@@ -1970,7 +1970,7 @@ func TestDurableAgentsStatusSnapshotProjectsChildRuntimeAndProfileRepairState(t 
 		t.Fatalf("agents len = %d, want 1", len(snapshot.Agents))
 	}
 	row := snapshot.Agents[0]
-	if row.CanonicalPrincipal != core.DurableAgentPrincipal("idolum-email") {
+	if row.CanonicalPrincipal != core.DurableAgentPrincipal("child-alpha") {
 		t.Fatalf("CanonicalPrincipal = %q, want durable agent principal", row.CanonicalPrincipal)
 	}
 	if row.ChildRuntimeGrantCount != 1 || row.ChildRuntimeBlockedReason != "" {

@@ -1530,7 +1530,7 @@ func TestDurableAgentExternalChannelConfigRoundTrip(t *testing.T) {
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 			Charter:            "Review an external child channel and surface important items.",
 			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact", "summarize_pdf"},
@@ -3322,19 +3322,19 @@ func TestMigrateDurableChildAuthorityCanonicalizesPrincipalsAndChildRuntime(t *t
 	if err != nil {
 		t.Fatalf("NewSQLiteStore(seed) err = %v", err)
 	}
-	if err := store.UpsertDurableAgent(core.DurableAgent{AgentID: "idolum-email", ChannelKind: "email", Status: "active"}); err != nil {
+	if err := store.UpsertDurableAgent(core.DurableAgent{AgentID: "child-alpha", ChannelKind: "external_channel", Status: "active"}); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := store.db.Exec(`
 		INSERT INTO capability_requests(request_id, requested_by, requested_for, kind, target_resource, purpose, contract_json, constraints_json, review_status, created_at, updated_at)
-		VALUES ('cap-old', 'idolum-email', 'idolum-email', 'tool', 'mail-reader', 'legacy runtime shape', '{"runtime_materialization":{"readonly_paths":["/srv/mail"],"environment":["MAIL_TOKEN"]}}', '{}', 'approved', ?, ?)
+		VALUES ('cap-old', 'child-alpha', 'child-alpha', 'tool', 'mail-reader', 'legacy runtime shape', '{"runtime_materialization":{"readonly_paths":["/srv/mail"],"environment":["MAIL_TOKEN"]}}', '{}', 'approved', ?, ?)
 	`, now, now); err != nil {
 		t.Fatalf("insert legacy request err = %v", err)
 	}
 	if _, err := store.db.Exec(`
 		INSERT INTO capability_grants(grant_id, request_id, granted_by, granted_to, kind, target_resource, allowed_actions_json, contract_json, constraints_json, status, created_at, updated_at, granted_at)
-		VALUES ('capg-old', 'cap-old', 'admin', 'idolum-email', 'tool', 'mail-reader', '["invoke"]', '{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}', '{}', 'active', ?, ?, ?)
+		VALUES ('capg-old', 'cap-old', 'admin', 'child-alpha', 'tool', 'mail-reader', '["invoke"]', '{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}', '{}', 'active', ?, ?, ?)
 	`, now, now, now); err != nil {
 		t.Fatalf("insert legacy grant err = %v", err)
 	}
@@ -3358,7 +3358,7 @@ func TestMigrateDurableChildAuthorityCanonicalizesPrincipalsAndChildRuntime(t *t
 	if !ok {
 		t.Fatal("CapabilityRequest(cap-old) ok=false")
 	}
-	if request.RequestedBy != core.DurableAgentPrincipal("idolum-email") || request.RequestedFor != core.DurableAgentPrincipal("idolum-email") {
+	if request.RequestedBy != core.DurableAgentPrincipal("child-alpha") || request.RequestedFor != core.DurableAgentPrincipal("child-alpha") {
 		t.Fatalf("request principals = %q/%q, want canonical durable agent principal", request.RequestedBy, request.RequestedFor)
 	}
 	if strings.Contains(request.Contract, "runtime_materialization") || !strings.Contains(request.Contract, "child_runtime") || strings.Contains(request.Contract, "environment") || !strings.Contains(request.Contract, "env_from_parent") {
@@ -3371,7 +3371,7 @@ func TestMigrateDurableChildAuthorityCanonicalizesPrincipalsAndChildRuntime(t *t
 	if !ok {
 		t.Fatal("CapabilityGrant(capg-old) ok=false")
 	}
-	if grant.GrantedTo != core.DurableAgentPrincipal("idolum-email") {
+	if grant.GrantedTo != core.DurableAgentPrincipal("child-alpha") {
 		t.Fatalf("grant granted_to = %q, want canonical durable agent principal", grant.GrantedTo)
 	}
 	if strings.Contains(grant.Contract, "runtime_materialization") || !strings.Contains(grant.Contract, "child_runtime") {

@@ -68,9 +68,9 @@ Domain implementation should move to agent-owned tools.
 
 Examples:
 
-- browser automation for the email agent
+- browser automation for the external child agent
 - camera/monitoring tools for a home agent
-- inbox-specific extractors
+- channel-specific extractors
 - small environment-specific watchers
 
 These should not require a new specialized core feature every time.
@@ -137,9 +137,9 @@ Minimal fields:
 ```json
 {
   "tool_name": "browse_page",
-  "owner_agent": "idolum-email",
+  "owner_agent": "child-alpha",
   "execution_mode": "container",
-  "entry_ref": "ghcr.io/idolum/email-browser-tool:pilot",
+  "entry_ref": "ghcr.io/idolum/child-browser-tool:pilot",
   "contract": {
     "inputs": {
       "url": "string",
@@ -269,7 +269,7 @@ Instead of building thicker walls inside core, Aphelion should become better at:
 
 Examples of status output that this architecture should enable:
 
-- "email agent proposed `browse_page`; install approved; probe failing because Chromium shared libs are missing; tool remains unregistered"
+- "external child agent proposed `browse_page`; install approved; probe failing because Chromium shared libs are missing; tool remains unregistered"
 - "camera watcher tool is installed and registered, but its grant was revoked after repeated probe failures"
 - "tool contract declares read-only behavior, but observed outputs indicate mutation attempts; quarantine recommended"
 
@@ -303,7 +303,7 @@ The first external-tool lane is implemented for process-style tools:
   retain authority over parent/admin review, grants, install, audit, verify,
   and register
 - `external-tools/browse_page/` is the first pilot manifest, owned by
-  `idolum-email`, with a deterministic fixture implementation outside core
+  `child-alpha`, with a deterministic fixture implementation outside core
 
 ## Concrete Migration Plan
 
@@ -354,13 +354,13 @@ It should **not** be browser-aware, camera-aware, or domain-aware.
 
 ### Phase 5 — first external-tool pilot
 
-Use the email agent as the first pilot:
+Use the external child agent as the first pilot:
 
 - propose `browse_page`
 - approve install requirements
 - provision dependencies with attestation
 - register external manifest
-- grant invocation only to the email agent
+- grant invocation only to the external child agent
 - validate one narrow workflow
 
 If this pilot requires special-casing browser behavior inside Aphelion core,

@@ -70,7 +70,7 @@ func TestDurableAgentToolMemoryReviewAndDelegateWithApproval(t *testing.T) {
 	parentKnowledge := strings.Join([]string{
 		"# knowledge.md",
 		"",
-		"- Idolum should keep inbox digests concise and pragmatic.",
+		"- Idolum should keep channel digests concise and pragmatic.",
 		"- Escalate messages with explicit job opportunities quickly.",
 	}, "\n")
 	if err := os.WriteFile(parentKnowledgePath, []byte(parentKnowledge), 0o600); err != nil {
@@ -80,13 +80,13 @@ func TestDurableAgentToolMemoryReviewAndDelegateWithApproval(t *testing.T) {
 	childWorkspace := filepath.Join(t.TempDir(), "child", "workspace")
 	childMemory := filepath.Join(t.TempDir(), "child", "memory")
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Review inbox and surface important threads.",
+			Charter:            "Review an external child channel and surface important threads.",
 			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
 			OutboundMode:       "read_only",
 			DriftPolicy:        "admin_review",
@@ -104,7 +104,7 @@ func TestDurableAgentToolMemoryReviewAndDelegateWithApproval(t *testing.T) {
 		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"memory_review","agent_id":"idolum-email","memory_delegation":{"limit":5}}`),
+		json.RawMessage(`{"action":"memory_review","agent_id":"child-alpha","memory_delegation":{"limit":5}}`),
 	)
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(memory_review) err = %v", err)
@@ -121,10 +121,10 @@ func TestDurableAgentToolMemoryReviewAndDelegateWithApproval(t *testing.T) {
 	registry.WithDurableMemoryDelegationApprover(approver)
 	delegateInput := fmt.Sprintf(`{
 		"action":"memory_delegate",
-		"agent_id":"idolum-email",
+		"agent_id":"child-alpha",
 		"memory_delegation":{
 			"candidate_ids":["%s"],
-			"reason":"Seed durable child context for inbox triage."
+			"reason":"Seed durable child context for channel triage."
 		}
 	}`, candidateID)
 	delegateOut, err := registry.ExecuteForSessionPrincipal(
@@ -146,8 +146,8 @@ func TestDurableAgentToolMemoryReviewAndDelegateWithApproval(t *testing.T) {
 	if len(approver.requests) != 1 {
 		t.Fatalf("approver requests = %#v, want one request", approver.requests)
 	}
-	if approver.requests[0].Agent.AgentID != "idolum-email" {
-		t.Fatalf("approver agent_id = %q, want idolum-email", approver.requests[0].Agent.AgentID)
+	if approver.requests[0].Agent.AgentID != "child-alpha" {
+		t.Fatalf("approver agent_id = %q, want child-alpha", approver.requests[0].Agent.AgentID)
 	}
 	if len(approver.requests[0].Entries) == 0 {
 		t.Fatalf("approver entries = %#v, want delegated entries", approver.requests[0].Entries)
@@ -177,13 +177,13 @@ func TestDurableAgentToolMemoryDelegateDeniedDoesNotWrite(t *testing.T) {
 	childWorkspace := filepath.Join(t.TempDir(), "child", "workspace")
 	childMemory := filepath.Join(t.TempDir(), "child", "memory")
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Review inbox and surface important threads.",
+			Charter:            "Review an external child channel and surface important threads.",
 			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
 			OutboundMode:       "read_only",
 			DriftPolicy:        "admin_review",
@@ -205,7 +205,7 @@ func TestDurableAgentToolMemoryDelegateDeniedDoesNotWrite(t *testing.T) {
 		"durable_agent",
 		json.RawMessage(`{
 			"action":"memory_delegate",
-			"agent_id":"idolum-email",
+			"agent_id":"child-alpha",
 			"memory_delegation":{
 				"entries":[{"content":"Keep summaries concise.","target_store":"knowledge"}],
 				"reason":"Attempted memory delegation."

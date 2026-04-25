@@ -280,7 +280,7 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 	}
 	if strings.TrimSpace(in.WakeupMode) != "" {
 		agent.WakeupMode = strings.TrimSpace(in.WakeupMode)
-	} else if strings.TrimSpace(agent.WakeupMode) == "" && agent.ChannelKind == "email" {
+	} else if strings.TrimSpace(agent.WakeupMode) == "" && agent.ChannelKind == "external_channel" {
 		agent.WakeupMode = "poll"
 	}
 	if strings.TrimSpace(in.NetworkPolicy) != "" {
@@ -359,11 +359,11 @@ func (r *Registry) startDurableAgentWizard(in durableAgentInput, key session.Ses
 	}
 	channelKind := strings.TrimSpace(in.ChannelKind)
 	if channelKind == "" {
-		channelKind = "inbox"
+		channelKind = "external_channel"
 	}
 	channelKind = normalizeDurableAgentChannelKind(channelKind)
-	if channelKind != "email" {
-		return "", fmt.Errorf("durable_agent wizard_start currently supports channel_kind=inbox (alias: email)")
+	if channelKind != "external_channel" {
+		return "", fmt.Errorf("durable_agent wizard_start currently supports channel_kind=external_channel")
 	}
 
 	createIn := in
@@ -440,7 +440,7 @@ func (r *Registry) answerDurableAgentWizard(in durableAgentInput) (string, error
 	wizard.ChannelKind = firstNonEmpty(
 		strings.TrimSpace(wizard.ChannelKind),
 		normalizeDurableAgentChannelKind(strings.TrimSpace(agent.ChannelKind)),
-		"email",
+		"external_channel",
 	)
 	wizard.Answers = mergeDurableAgentWizardAnswers(wizard.Answers, *in.WizardAnswers)
 	wizard.UpdatedAt = time.Now().UTC()
@@ -623,7 +623,7 @@ func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAge
 		return "", err
 	}
 	switch normalizeDurableAgentChannelKind(agent.ChannelKind) {
-	case "email":
+	case "external_channel":
 		if agent.ChannelConfig.ExternalConfig() == nil {
 			return "", fmt.Errorf("durable agent %q has no external channel_config", agent.AgentID)
 		}
@@ -1796,10 +1796,10 @@ func mergeDurableAgentWizardAnswers(current core.DurableAgentSetupWizardAnswers,
 
 func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.DurableAgentSetupWizardAnswers, inheritedBootstrap core.NodeLLMBootstrap) (core.DurableAgent, error) {
 	answers = core.NormalizeDurableAgentSetupWizardAnswers(answers)
-	agent.ChannelKind = normalizeDurableAgentChannelKind("inbox")
-	wakeupMode := normalizeDurableEmailWakeupMode(answers.WakeupMode)
+	agent.ChannelKind = normalizeDurableAgentChannelKind("external_channel")
+	wakeupMode := normalizeDurableChannelWakeupMode(answers.WakeupMode)
 	if wakeupMode == "" && strings.TrimSpace(agent.WakeupMode) != "" {
-		wakeupMode = normalizeDurableEmailWakeupMode(agent.WakeupMode)
+		wakeupMode = normalizeDurableChannelWakeupMode(agent.WakeupMode)
 	}
 	if wakeupMode == "" {
 		wakeupMode = "poll"
@@ -1823,7 +1823,7 @@ func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.Dura
 		strings.TrimSpace(policy.PublicSurfaceMode) == "" &&
 		strings.TrimSpace(policy.SharedInferenceReuse) == "" &&
 		strings.TrimSpace(policy.SharedInferenceReuseScope) == "" {
-		policy = defaultDurableAgentLivePolicy("email", patch.Charter)
+		policy = defaultDurableAgentLivePolicy("external_channel", patch.Charter)
 	}
 	if err := applyDurableAgentPolicyPatch(&policy, patch); err != nil {
 		return core.DurableAgent{}, err
@@ -1912,10 +1912,10 @@ func durableAgentWizardMissingAnswers(agent core.DurableAgent, wizard core.Durab
 	if strings.TrimSpace(answers.SynthesisCadence) == "" {
 		missing = append(missing, "synthesis_cadence")
 	}
-	mode := normalizeDurableEmailWakeupMode(answers.WakeupMode)
+	mode := normalizeDurableChannelWakeupMode(answers.WakeupMode)
 	if mode == "" {
 		missing = append(missing, "wakeup_mode")
-	} else if durableEmailWakeupModeIncludesPoll(mode) && strings.TrimSpace(answers.PollInterval) == "" {
+	} else if durableChannelWakeupModeIncludesPoll(mode) && strings.TrimSpace(answers.PollInterval) == "" {
 		missing = append(missing, "poll_interval")
 	}
 	if len(answers.Capabilities) == 0 {
@@ -2087,7 +2087,7 @@ func durableAgentWizardBootstrapFallbackSummary(bootstrap core.NodeLLMBootstrap)
 	}
 }
 
-func normalizeDurableEmailWakeupMode(value string) string {
+func normalizeDurableChannelWakeupMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "poll":
 		return "poll"
@@ -2100,8 +2100,8 @@ func normalizeDurableEmailWakeupMode(value string) string {
 	}
 }
 
-func durableEmailWakeupModeIncludesPoll(mode string) bool {
-	mode = normalizeDurableEmailWakeupMode(mode)
+func durableChannelWakeupModeIncludesPoll(mode string) bool {
+	mode = normalizeDurableChannelWakeupMode(mode)
 	return mode == "poll" || mode == "poll_or_push"
 }
 
@@ -2109,8 +2109,8 @@ func normalizeDurableAgentChannelKind(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return ""
-	case "inbox", "email":
-		return "email"
+	case "external", "external_channel", "channel", "inbox", "email":
+		return "external_channel"
 	default:
 		return strings.TrimSpace(value)
 	}
@@ -2118,8 +2118,8 @@ func normalizeDurableAgentChannelKind(value string) string {
 
 func durableAgentWizardDisplayChannelKind(value string) string {
 	switch normalizeDurableAgentChannelKind(value) {
-	case "email":
-		return "inbox"
+	case "external_channel":
+		return "external"
 	default:
 		return strings.TrimSpace(value)
 	}
@@ -2127,7 +2127,7 @@ func durableAgentWizardDisplayChannelKind(value string) string {
 
 func renderDurableAgentWizardShow(agent core.DurableAgent, wizard core.DurableAgentSetupWizardState, inheritedBootstrap core.NodeLLMBootstrap) string {
 	var b strings.Builder
-	channelKind := normalizeDurableAgentChannelKind(firstNonEmpty(strings.TrimSpace(wizard.ChannelKind), strings.TrimSpace(agent.ChannelKind), "email"))
+	channelKind := normalizeDurableAgentChannelKind(firstNonEmpty(strings.TrimSpace(wizard.ChannelKind), strings.TrimSpace(agent.ChannelKind), "external_channel"))
 	effectiveBootstrap, _ := durableAgentBootstrapFromWizardAnswers(agent.BootstrapLLM, wizard.Answers, inheritedBootstrap)
 	profile := strings.TrimSpace(core.NormalizeDurableAgentSetupWizardAnswers(wizard.Answers).BootstrapProfile)
 	if profile == "" {
@@ -3067,7 +3067,7 @@ func durableAgentSharedContextToReuse(value string) (string, string, error) {
 
 func defaultDurableAgentLivePolicy(channelKind string, charter string) core.DurableAgentLivePolicy {
 	switch normalizeDurableAgentChannelKind(channelKind) {
-	case "email":
+	case "external_channel":
 		return core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 			Charter:                   strings.TrimSpace(charter),
 			CapabilityEnvelope:        []string{"read_channel", "bounded_review_artifact", "summarize_pdf"},
@@ -3163,7 +3163,7 @@ func mergeDurableAgentExternalChannelConfig(dst *core.DurableAgentExternalChanne
 
 func validateDurableAgentActivation(agent core.DurableAgent) error {
 	switch normalizeDurableAgentChannelKind(agent.ChannelKind) {
-	case "email":
+	case "external_channel":
 		external := agent.ChannelConfig.ExternalConfig()
 		if external == nil {
 			return fmt.Errorf("durable agent %q cannot activate without external channel_config", agent.AgentID)

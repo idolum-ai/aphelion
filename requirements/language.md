@@ -42,7 +42,7 @@ It should remain recognizable whether the turn is:
 - a Telegram reply
 - a voice note script
 - a summary
-- an email draft
+- an authored draft
 - a recovery message
 
 ## Core Principle
@@ -65,7 +65,7 @@ If the governor sounds like a different institution than the face, the system ha
 - explicit guidance on sentence and paragraph structure
 - explicit guidance on titles, lists, quotations, and special markings
 - explicit handling for code snippets, file paths, commands, and structured artifacts
-- medium-specific guidance for Telegram, voice, summaries, and email drafts
+- medium-specific guidance for Telegram, voice, summaries, and authored drafts
 - role matrix for `Aphelion` and `Idolum`
 - etiquette and decision-language rules: confirmation, pressure, warmth, refusal, and when etiquette should break
 
@@ -358,7 +358,7 @@ A summary should not become sterile just because it is compressed.
 
 Email drafts may tolerate more structure and etiquette than Telegram, but they should still preserve the same house language.
 
-This section governs authored email drafts, not a first-class email transport/channel.
+This section governs authored authored drafts, not a first-class first-class external transport/channel.
 
 Prefer:
 

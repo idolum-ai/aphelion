@@ -10,7 +10,7 @@ It does not retroactively widen the existing `v0` admission or security claims.
 These agents are not ordinary task subagents.
 They are persistent subordinate organs attached to the house through an external ingress surface such as:
 
-- email
+- external_channel
 - Telegram groups
 - website chat
 - remote host agents
@@ -125,7 +125,7 @@ Each durable agent should have:
 
 - `agent_id`
 - `parent_agent_id` or parent house identity
-- `channel_kind` (`email`, `telegram_group`, `telegram_dm`, `web_chat`, `remote_host`, etc.)
+- `channel_kind` (`external_channel`, `telegram_group`, `telegram_dm`, `web_chat`, `remote_host`, etc.)
 - `charter`
 - `capability_envelope`
 - `local_storage_roots`
@@ -142,7 +142,7 @@ The charter defines what the durable agent is for.
 
 Examples:
 
-- digest inbound email and escalate important items
+- digest inbound external-channel event and escalate important items
 - act as a bounded family helper inside a Telegram group
 - observe laptop resource pressure and take pre-approved remediations
 - act as a public website greeter with no power to mutate the parent house
@@ -156,7 +156,7 @@ The people or systems encountered through a durable agent's channel are not hous
 Examples:
 
 - members of a Telegram group
-- people sending mail to a durable inbox
+- people sending external-channel events to a durable external channel
 - visitors to a public website chat
 - remote-host observations such as processes, files, sensors, or local machine state
 
@@ -203,11 +203,11 @@ A durable agent must receive only the secrets required for its own charter.
 
 Examples:
 
-- an email child may receive inbox credentials for that inbox
+- an external-channel child may receive external-channel credentials for that external channel
 - a remote-host child may receive host-local credentials required for its charter
 - a public website child should generally receive no parent-house secrets beyond what its own runtime minimally requires
 
-A durable email agent should not be able to leak unrelated parent credentials if those credentials are outside its scoped secret surface.
+A durable external-channel agent should not be able to leak unrelated parent credentials if those credentials are outside its scoped secret surface.
 
 ### No inherited parent secret surface
 
@@ -254,7 +254,7 @@ Durable agents may accommodate local conversation within their current envelope.
 Examples:
 
 - a family group agent may answer in a warmer tone inside the group
-- an email agent may summarize a PDF for the current review cycle
+- an external-channel child may summarize a PDF for the current review cycle
 - a website greeter may adapt to the visitor's question within its public sales/support charter
 
 But local accommodation is not durable drift.
@@ -482,7 +482,7 @@ The default shape is:
 
 Durable agents should wake through source-appropriate mechanisms:
 
-- inbound email poll or push notification
+- inbound external-channel event poll or push notification
 - group message / mention event
 - website request
 - remote host sensor or scheduled local watcher
@@ -564,9 +564,9 @@ The split is:
 - `live_policy`: behavioral authority and constitutional posture
 - `channel_config`: source-specific wiring and bounded child charter details
 
-For an email child, the top-level durable-agent fields should continue to hold:
+For an external-channel child, the top-level durable-agent fields should continue to hold:
 
-- `channel_kind=email`
+- `channel_kind=external_channel`
 - `wakeup_mode`
 - `secret_scopes`
 - `local_storage_roots`
@@ -574,10 +574,10 @@ For an email child, the top-level durable-agent fields should continue to hold:
 - `live_policy.outbound_mode`
 - `live_policy.capability_envelope`
 
-The email-specific `channel_config` should hold the rest of the operational shape, such as:
+The channel-specific `channel_config` should hold the rest of the operational shape, such as:
 
-- owned address or inbox identity
-- adapter kind such as `gog_cli`
+- owned address or external-channel identity
+- adapter kind such as `child_adapter`
 - poll interval
 - importance / escalation criteria
 - attachment handling rules
@@ -595,7 +595,7 @@ Default rule:
 Examples:
 
 - if the bot is added to an arbitrary group without prior durable-agent setup, it should be unable to affect the parent system
-- if a public inbox receives mail before an email durable agent is configured, that mail should not enter ordinary heartbeat or prompt flow
+- if a public external channel receives external-channel events before an external-channel durable agent is configured, that mail should not enter ordinary heartbeat or prompt flow
 - if a website route is exposed without a durable-agent charter, it should not write into the parent system
 
 Admission into a durable-agent channel should require explicit setup/ritual at the admin layer.
@@ -622,8 +622,8 @@ These are not just thematic sketches. They are intended execution shapes for the
 
 ## Email durable agent
 
-A user gives Aphelion an email address.
-The system proposes creating a durable email agent.
+A user gives Aphelion an external channel address.
+The system proposes creating a durable external-channel agent.
 The admin and parent define:
 
 - whether the agent only reads or may ever send
@@ -632,7 +632,7 @@ The admin and parent define:
 - what files are surfaced
 - what is retained locally vs promoted upward
 
-The email agent then polls or receives events, digests locally, and reports upward through review artifacts.
+The external-channel child then polls or receives events, digests locally, and reports upward through review artifacts.
 If the admin decides the summaries should change, that drift is approved in the parent conversation and then pushed downward.
 
 ### Conversational setup
@@ -642,7 +642,7 @@ The preferred creation path is a guided parent-admin conversation, not a startup
 Typical flow:
 
 1. Proposal:
-   `Idolum` proposes creating an email durable child and asks for approval before capability or connection work begins.
+   `Idolum` proposes creating an external-channel durable child and asks for approval before capability or connection work begins.
 2. Setup questions:
    The parent asks only the missing questions needed to form a bounded charter.
    The setup surface should be an explicit wizard state machine with durable fields such as:
@@ -663,11 +663,11 @@ The public surface should remain one coherent `Idolum` conversation, even when t
 ### Typical flow
 
 1. Admin setup:
-   The parent house defines the email child's charter, retention ceiling, outbound mode, and escalation rules.
+   The parent house defines the external-channel child's charter, retention ceiling, outbound mode, and escalation rules.
 2. Registration:
-   The durable-agent registry stores the child identity, scoped inbox credentials, wakeup mode, and local working roots.
+   The durable-agent registry stores the child identity, scoped external-channel credentials, wakeup mode, and local working roots.
 3. Email ingress:
-   The email adapter receives or polls a new message and normalizes body text, metadata, and attachments into child-local artifacts.
+   The channel adapter receives or polls a new message and normalizes body text, metadata, and attachments into child-local artifacts.
 4. Child-local processing:
    The child classifies urgency, extracts allowed document content, enforces `never_retain` scrubbing rules, and decides whether the message is routine, escalatory, or drift-seeking.
    `never_retain` enforcement should be explicit in review metadata (for example with redaction counters or risk flags).
@@ -675,29 +675,29 @@ The public surface should remain one coherent `Idolum` conversation, even when t
    If policy allows it, the child may prepare a draft reply or take another bounded local action.
 6. Upward synthesis:
    The child emits a bounded review artifact summarizing what happened, what it did locally, what files matter, and any drift candidates or suspicious requests.
-   If `synthesis_cadence` is configured, review emission is cadence-gated and intermediate inbox observations are buffered in durable child state until the cadence window opens.
+   If `synthesis_cadence` is configured, review emission is cadence-gated and intermediate external-channel observations are buffered in durable child state until the cadence window opens.
 7. Parent review:
-   The parent house sees the bounded artifact first, not the raw inbox transcript.
+   The parent house sees the bounded artifact first, not the raw external-channel transcript.
 8. Admin ratification:
    Any durable change to summary policy, outbound autonomy, or promoted memory must be approved in the admin conversation.
 9. Downward update:
    Approved policy or charter changes are pushed back to the child with provenance.
 10. Dormancy:
-   The child returns to idle until the next inbox event or bounded poll cycle.
+   The child returns to idle until the next external-channel event or bounded poll cycle.
 
 ### First live slice
 
 The first concrete slice should be intentionally narrow:
 
-- read-only email child
+- read-only external-channel child
 - wakeups through polling, push, or both (`poll_or_push`)
 - no outbound mail
-- scoped inbox credentials for the child only
+- scoped external-channel credentials for the child only
 - bounded upward digests through review artifacts
 
 This slice is already enough to make the architecture real:
 
-- the inbox has continuity
+- the external channel has continuity
 - the child owns the local work
 - the parent remains protected
 - widening autonomy later still goes through admin-ratified drift
@@ -1147,7 +1147,7 @@ Durable agents must not acquire lasting changes silently.
 - **TestDurableAgentCannotMutateParentPromptFromExternalInteraction**: child-local external events cannot directly rewrite parent prompt files
 - **TestDurableAgentCannotMutateParentMemoryWithoutRatification**: upward promotion requires review and admin ratification
 - **TestDurableAgentReportsUpwardThroughReviewArtifact**: parent sees bounded synthesis before raw transcript
-- **TestExternalChannelActorsDoNotBecomeHousePrincipals**: group members, inbox senders, website visitors, and remote observations remain child-local actors unless explicitly admitted through the principal model
+- **TestExternalChannelActorsDoNotBecomeHousePrincipals**: group members, external-channel senders, website visitors, and remote observations remain child-local actors unless explicitly admitted through the principal model
 - **TestDurableAgentUpwardSynthesisUsesExistingReviewConduit**: upward child synthesis enters the parent through the existing review/artifact/quarantine path rather than a parallel review subsystem
 - **TestDurableAgentSecretsAreCharterScoped**: a child receives only the credentials required for its own charter, not unrelated parent or sibling secrets
 - **TestChildCannotExfiltrateUnavailableParentSecret**: a socially compromised child cannot leak a secret that is outside its scoped secret surface
@@ -1157,7 +1157,7 @@ Durable agents must not acquire lasting changes silently.
 - **TestOneHeartbeatForHouse**: durable agents do not own independent heartbeats by default
 - **TestDurableAgentWakeIsEventOrPollDriven**: channel-appropriate wakeup paths function without child heartbeat loops
 - **TestUnconfiguredGroupIngressIsInert**: adding the bot to a group without durable-agent setup has no effect on the parent house
-- **TestEmailIngressDoesNotEnterHeartbeatDirectly**: unreviewed inbox content cannot reach ordinary parent heartbeat flow
+- **TestExternalChannelIngressDoesNotEnterHeartbeatDirectly**: unreviewed external-channel content cannot reach ordinary parent heartbeat flow
 - **TestAttemptedRoleDriftSurfacesForAdminReview**: social pressure from a group cannot durably redefine the child without ratification
 - **TestOutboundAutonomyRequiresExplicitPolicy**: child reply autonomy is not implied by repeated use
 - **TestRemoteDurableAgentReportsWithBoundedIdentityAndPolicy**: remote child reports under its registered charter and capability envelope

@@ -131,8 +131,8 @@ For admin users, natural language requests to create a durable child are auto-no
 Examples that should trigger:
 
 - “Create a durable child agent”
-- “Create a durable email agent”
-- “I want to give you your own email address”
+- “Create a durable external-channel agent”
+- “I want to give you your own external channel address”
 
 Behavior:
 
@@ -140,7 +140,7 @@ Behavior:
 - explicitly blocks `exec`/`go run` style paths for this workflow
 - tells the assistant to ask one concise question at a time for missing wizard fields
 - preserves the original user sentence in the rewritten instruction
-- if an email address is present in the user text, it is passed as known context for the inbox adapter profile
+- if an external channel address is present in the user text, it is passed as known context for the external channel adapter profile
 
 ### Durable wizard inline controls
 

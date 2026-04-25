@@ -263,7 +263,7 @@ echo '{"summary":"ok","installed":true}'
 	}
 	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      toolName,
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO: ExternalToolManifestIO{
 			InputSchema:  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),

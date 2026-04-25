@@ -28,7 +28,7 @@ func TestExternalProcessExecutorRunsManifestBackedTool(t *testing.T) {
 	}
 	manifest := ExternalToolManifest{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO: ExternalToolManifestIO{
 			InputSchema:  json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`),
@@ -78,7 +78,7 @@ fi
 	}
 	manifest := ExternalToolManifest{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`)},
 	}
@@ -114,7 +114,7 @@ func TestExternalProcessExecutorRejectsInvalidInputAgainstSchema(t *testing.T) {
 	}
 	manifest := ExternalToolManifest{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`)},
 	}
@@ -150,7 +150,7 @@ func TestExternalProcessExecutorRejectsInvalidOutputAgainstSchema(t *testing.T) 
 	}
 	manifest := ExternalToolManifest{
 		Name:      "browse_page",
-		Owner:     "idolum-email",
+		Owner:     "child-alpha",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
 		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`)},
 	}

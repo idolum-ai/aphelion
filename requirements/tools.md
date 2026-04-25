@@ -153,7 +153,7 @@ The same proposal discipline should apply to durable-child creation.
 
 Examples:
 
-- proposing the use of a channel adapter such as `gog`
+- proposing the use of a channel adapter such as `child_adapter`
 - proposing child-scoped credential binding
 - proposing activation of a newly chartered durable child
 
@@ -570,7 +570,7 @@ sandbox runner. `container` and `workspace_runner` manifests are importable and
 diagnosable but are not process-executable until dedicated runtimes exist.
 
 The bundled `browse_page` pilot lives under `external-tools/browse_page/`. It is
-owned by `idolum-email`; invocation must be granted through
+owned by `child-alpha`; invocation must be granted through
 `capability_authority`. It uses a deterministic fixture implementation so
 browser behavior remains outside core.
 

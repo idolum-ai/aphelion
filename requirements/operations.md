@@ -228,9 +228,9 @@ This keeps proposal semantics durable and session-native while keeping the inter
 
 The same pattern should be reused for child setup work.
 
-Creating a durable email child is an operation:
+Creating a durable external-channel child is an operation:
 
-- objective: set up a bounded inbox child
+- objective: set up a bounded external-channel child
 - stage: proposal, configuration, connection, activation
 - proposal: adapter choice, capability acquisition, credential binding, or activation threshold
 

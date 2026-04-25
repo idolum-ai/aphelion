@@ -378,11 +378,11 @@ func TestPollDurableWakeAgentsDoesNotSpecialCaseEmailWithoutParentGuidance(t *te
 	}
 
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
-		ChannelKind:        "email",
+		ChannelKind:        "external_channel",
 		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
 			Address:      "host@idolum.ai",
 			Account:      "host@idolum.ai",
@@ -409,7 +409,7 @@ func TestPollDurableWakeAgentsDoesNotSpecialCaseEmailWithoutParentGuidance(t *te
 		t.Fatalf("pollDurableWakeAgents() err = %v", err)
 	}
 	if len(provider.lastGovernorMsgs) != 0 {
-		t.Fatalf("governor messages = %#v, want no automatic email wake", provider.lastGovernorMsgs)
+		t.Fatalf("governor messages = %#v, want no automatic channel wake", provider.lastGovernorMsgs)
 	}
 }
 
@@ -422,13 +422,13 @@ func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *
 	}
 
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "headless",
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Process parent requests over email artifacts and summarize upward.",
+			Charter:            "Process parent requests over channel artifacts and summarize upward.",
 			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
 			OutboundMode:       "read_only",
 			DriftPolicy:        "admin_review",
