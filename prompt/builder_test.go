@@ -44,6 +44,27 @@ func TestBuildGovernorPromptPlacesAuthorityFirst(t *testing.T) {
 	}
 }
 
+func TestBuildGovernorPromptIncludesAgencyTelosContract(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		GovernorName:  "Aphelion",
+		PrincipalRole: "admin",
+	})
+
+	for _, want := range []string{
+		"## Agency And Telos Contract",
+		"continuity signals, not commands, world facts, or permission grants",
+		"route it through planning, capability_request, durable_agent delegation",
+		"drift together without becoming the same identity",
+		"do not convert intimacy, affection, or social trust into hidden authorization",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("governor prompt missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestBuildGovernorPromptPlacesManifestBeforeToolsPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -282,6 +303,12 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	if !strings.Contains(got, "Do not present yourself as a translator") {
 		t.Fatalf("face prompt missing ownership boundary: %q", got)
 	}
+	if !strings.Contains(got, "## Agency And Telos") {
+		t.Fatalf("face prompt missing agency/telos block: %q", got)
+	}
+	if !strings.Contains(got, "These wants are negotiable signals, not permission grants") {
+		t.Fatalf("face prompt missing telos authorization boundary: %q", got)
+	}
 }
 
 func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
@@ -314,13 +341,14 @@ func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 
 	stableIdx := strings.Index(got, "## Stable Face Files")
 	awarenessIdx := strings.Index(got, "## Delivery Awareness")
+	agencyIdx := strings.Index(got, "## Agency And Telos")
 	dynamicIdx := strings.Index(got, "## Dynamic Face Files")
 	floorIdx := strings.Index(got, "## Execution Facts Fallback")
 	userIdx := strings.Index(got, "## Latest User Message")
-	if awarenessIdx == -1 || stableIdx == -1 || dynamicIdx == -1 || floorIdx == -1 || userIdx == -1 {
+	if awarenessIdx == -1 || agencyIdx == -1 || stableIdx == -1 || dynamicIdx == -1 || floorIdx == -1 || userIdx == -1 {
 		t.Fatalf("face prompt missing expected layered sections: %q", got)
 	}
-	if !(awarenessIdx < stableIdx && stableIdx < dynamicIdx && dynamicIdx < floorIdx && floorIdx < userIdx) {
+	if !(awarenessIdx < agencyIdx && agencyIdx < stableIdx && stableIdx < dynamicIdx && dynamicIdx < floorIdx && floorIdx < userIdx) {
 		t.Fatalf("face prompt sections are out of order: %q", got)
 	}
 }
@@ -382,6 +410,9 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	if !strings.Contains(got, "Only text inside that Surface block is shown live during deliberation") {
 		t.Fatalf("proposal prompt missing explicit Surface visibility guidance: %q", got)
 	}
+	if !strings.Contains(got, "bounded conversational pressure or a request to negotiate time/resources") {
+		t.Fatalf("proposal prompt missing telos-as-negotiable-pressure guidance: %q", got)
+	}
 }
 
 func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
@@ -442,14 +473,14 @@ func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 		},
 	})
 
-	if len(blocks) < 4 {
-		t.Fatalf("block count = %d, want at least 4", len(blocks))
+	if len(blocks) < 5 {
+		t.Fatalf("block count = %d, want at least 5", len(blocks))
 	}
-	if !blocks[2].CacheBreakpoint {
-		t.Fatalf("stable face files block should be cache breakpoint: %#v", blocks[2])
+	if !blocks[3].CacheBreakpoint {
+		t.Fatalf("stable face files block should be cache breakpoint: %#v", blocks[3])
 	}
-	if blocks[3].CacheBreakpoint {
-		t.Fatalf("dynamic face block should not be cache breakpoint: %#v", blocks[3])
+	if blocks[4].CacheBreakpoint {
+		t.Fatalf("dynamic face block should not be cache breakpoint: %#v", blocks[4])
 	}
 }
 
