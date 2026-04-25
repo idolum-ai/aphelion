@@ -1053,3 +1053,31 @@ func TestInlineButtonRowsPreservesStopQueueOrder(t *testing.T) {
 		t.Fatalf("choice order = %#v, want [Stop, Queue]", rows[0])
 	}
 }
+
+func TestTelegramUserApprovalTimeoutDefaultsToThirtyMinutes(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := decision.NewBroker(nil)
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker, nil)
+	execApprover := newTelegramExecApprover(sender, broker)
+	memoryApprover := newTelegramDurableMemoryDelegationApprover(sender, broker)
+	snapshotApprover := newTelegramDurableSnapshotRestoreApprover(sender, broker)
+
+	want := 30 * time.Minute
+	if defaultUserApprovalTimeout != want {
+		t.Fatalf("defaultUserApprovalTimeout = %s, want %s", defaultUserApprovalTimeout, want)
+	}
+	if execApprover.timeout != want {
+		t.Fatalf("exec approval timeout = %s, want %s", execApprover.timeout, want)
+	}
+	if handler.artifactRetentionTimeout != want {
+		t.Fatalf("artifact retention timeout = %s, want %s", handler.artifactRetentionTimeout, want)
+	}
+	if memoryApprover.timeout != want {
+		t.Fatalf("memory delegation timeout = %s, want %s", memoryApprover.timeout, want)
+	}
+	if snapshotApprover.timeout != want {
+		t.Fatalf("snapshot restore timeout = %s, want %s", snapshotApprover.timeout, want)
+	}
+}

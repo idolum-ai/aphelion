@@ -18,12 +18,17 @@ import (
 )
 
 const (
-	defaultInterruptTimeout         = 30 * time.Second
-	defaultStopWordTimeout          = 15 * time.Second
-	defaultExecApprovalTimeout      = 30 * time.Second
-	defaultArtifactRetentionTimeout = 45 * time.Second
-	defaultMemoryDelegationTimeout  = 45 * time.Second
-	defaultSnapshotRestoreTimeout   = 45 * time.Second
+	defaultInterruptTimeout = 30 * time.Second
+	defaultStopWordTimeout  = 15 * time.Second
+
+	// User approval prompts should survive normal operator latency on Telegram.
+	// Keep busy/interrupt routing short, but give approval-style decisions enough
+	// time to be reviewed without silently failing closed.
+	defaultUserApprovalTimeout      = 30 * time.Minute
+	defaultExecApprovalTimeout      = defaultUserApprovalTimeout
+	defaultArtifactRetentionTimeout = defaultUserApprovalTimeout
+	defaultMemoryDelegationTimeout  = defaultUserApprovalTimeout
+	defaultSnapshotRestoreTimeout   = defaultUserApprovalTimeout
 )
 
 type telegramDecisionSender interface {
