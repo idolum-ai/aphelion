@@ -5,6 +5,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,6 +107,28 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 
 		for _, upd := range updates {
+			if upd.MessageReaction != nil {
+				if p.resolver != nil && shouldResolveReactionPrincipal(upd.MessageReaction) {
+					if _, ok := p.resolver.ResolveTelegramUser(senderID(upd.MessageReaction.User)); !ok {
+						if next := upd.UpdateID + 1; next > offset {
+							offset = next
+						}
+						continue
+					}
+				}
+				if inbound := NormalizeMessageReaction(upd.MessageReaction); inbound != nil {
+					if err := p.handler(ctx, *inbound); err != nil {
+						if errors.Is(err, context.Canceled) {
+							return nil
+						}
+						return err
+					}
+				}
+				if next := upd.UpdateID + 1; next > offset {
+					offset = next
+				}
+				continue
+			}
 			if upd.CallbackQuery != nil {
 				if p.resolver != nil && shouldResolveCallbackPrincipal(upd.CallbackQuery) {
 					if _, ok := p.resolver.ResolveTelegramUser(senderID(upd.CallbackQuery.From)); !ok {
@@ -219,6 +242,60 @@ func NormalizeMessage(msg *Message) *core.InboundMessage {
 	}
 }
 
+func NormalizeMessageReaction(reaction *MessageReactionUpdated) *core.InboundMessage {
+	if reaction == nil || reaction.Chat == nil {
+		return nil
+	}
+	oldReactions := normalizeReactionTypes(reaction.OldReaction)
+	newReactions := normalizeReactionTypes(reaction.NewReaction)
+	text := "reaction_update"
+	if len(newReactions) == 0 {
+		text = "reaction_removed"
+	}
+	text += " message_id=" + strconv.FormatInt(reaction.MessageID, 10)
+	if len(oldReactions) > 0 {
+		text += " old=" + strings.Join(oldReactions, ",")
+	}
+	if len(newReactions) > 0 {
+		text += " new=" + strings.Join(newReactions, ",")
+	}
+	return &core.InboundMessage{
+		ChatID:     reaction.Chat.ID,
+		ChatType:   reaction.Chat.Type,
+		ChatTitle:  strings.TrimSpace(reaction.Chat.Title),
+		SenderID:   senderID(reaction.User),
+		SenderName: buildSenderName(reaction.User),
+		Text:       text,
+		MessageID:  reaction.MessageID,
+		Timestamp:  time.Unix(reaction.Date, 0),
+		Reaction: &core.InboundReaction{
+			MessageID: reaction.MessageID,
+			Old:       oldReactions,
+			New:       newReactions,
+		},
+		Raw: reaction.Raw,
+	}
+}
+
+func normalizeReactionTypes(values []ReactionType) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		switch strings.TrimSpace(value.Type) {
+		case "emoji":
+			if emoji := strings.TrimSpace(value.Emoji); emoji != "" {
+				out = append(out, emoji)
+			}
+		case "custom_emoji":
+			if id := strings.TrimSpace(value.CustomEmojiID); id != "" {
+				out = append(out, "custom_emoji:"+id)
+			}
+		case "paid":
+			out = append(out, "paid")
+		}
+	}
+	return out
+}
+
 func senderID(user *User) int64 {
 	if user == nil {
 		return 0
@@ -232,4 +309,8 @@ func shouldResolvePrincipal(msg *Message) bool {
 
 func shouldResolveCallbackPrincipal(cb *CallbackQuery) bool {
 	return cb != nil && cb.Message != nil && cb.Message.Chat != nil && cb.Message.Chat.Type == "private"
+}
+
+func shouldResolveReactionPrincipal(reaction *MessageReactionUpdated) bool {
+	return reaction != nil && reaction.Chat != nil && reaction.Chat.Type == "private"
 }

@@ -56,9 +56,10 @@ type getFileResponse struct {
 }
 
 type Update struct {
-	UpdateID      int64          `json:"update_id"`
-	Message       *Message       `json:"message"`
-	CallbackQuery *CallbackQuery `json:"callback_query"`
+	UpdateID        int64                   `json:"update_id"`
+	Message         *Message                `json:"message"`
+	CallbackQuery   *CallbackQuery          `json:"callback_query"`
+	MessageReaction *MessageReactionUpdated `json:"message_reaction"`
 }
 
 type CallbackQuery struct {
@@ -90,6 +91,23 @@ type Message struct {
 	Entities       []MessageEntity `json:"entities"`
 	ReplyToMessage *Message        `json:"reply_to_message"`
 	Raw            json.RawMessage `json:"-"`
+}
+
+type MessageReactionUpdated struct {
+	Chat        *Chat           `json:"chat"`
+	MessageID   int64           `json:"message_id"`
+	User        *User           `json:"user"`
+	ActorChat   *Chat           `json:"actor_chat"`
+	Date        int64           `json:"date"`
+	OldReaction []ReactionType  `json:"old_reaction"`
+	NewReaction []ReactionType  `json:"new_reaction"`
+	Raw         json.RawMessage `json:"-"`
+}
+
+type ReactionType struct {
+	Type          string `json:"type"`
+	Emoji         string `json:"emoji,omitempty"`
+	CustomEmojiID string `json:"custom_emoji_id,omitempty"`
 }
 
 type Chat struct {

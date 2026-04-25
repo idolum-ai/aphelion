@@ -84,6 +84,60 @@ func TestNormalizeMessagePrivate(t *testing.T) {
 	}
 }
 
+func TestNormalizeMessageReactionPrivate(t *testing.T) {
+	now := time.Now().Unix()
+	update := &MessageReactionUpdated{
+		Chat:      &Chat{ID: 7, Type: "private"},
+		User:      &User{ID: 3, Username: "alice"},
+		MessageID: 42,
+		Date:      now,
+		OldReaction: []ReactionType{
+			{Type: "emoji", Emoji: "👍"},
+		},
+		NewReaction: []ReactionType{
+			{Type: "emoji", Emoji: "🔥"},
+		},
+	}
+
+	got := NormalizeMessageReaction(update)
+	if got == nil {
+		t.Fatal("expected reaction update to be normalized")
+	}
+	if got.ChatID != 7 || got.SenderID != 3 || got.MessageID != 42 {
+		t.Fatalf("inbound = %#v, want chat 7 sender 3 reacted message 42", got)
+	}
+	if got.Reaction == nil {
+		t.Fatalf("Reaction = nil, want reaction payload")
+	}
+	if got.Reaction.MessageID != 42 || len(got.Reaction.Old) != 1 || got.Reaction.Old[0] != "👍" || len(got.Reaction.New) != 1 || got.Reaction.New[0] != "🔥" {
+		t.Fatalf("Reaction = %#v, want old thumbs up/new fire", got.Reaction)
+	}
+	if !strings.Contains(got.Text, "reaction_update") || !strings.Contains(got.Text, "message_id=42") || !strings.Contains(got.Text, "new=🔥") {
+		t.Fatalf("Text = %q, want synthesized reaction text", got.Text)
+	}
+}
+
+func TestNormalizeMessageReactionRemoval(t *testing.T) {
+	update := &MessageReactionUpdated{
+		Chat:      &Chat{ID: 7, Type: "private"},
+		User:      &User{ID: 3, Username: "alice"},
+		MessageID: 42,
+		Date:      time.Now().Unix(),
+		OldReaction: []ReactionType{
+			{Type: "emoji", Emoji: "👍"},
+		},
+		NewReaction: nil,
+	}
+
+	got := NormalizeMessageReaction(update)
+	if got == nil || got.Reaction == nil {
+		t.Fatalf("NormalizeMessageReaction() = %#v, want reaction removal", got)
+	}
+	if !strings.Contains(got.Text, "reaction_removed") {
+		t.Fatalf("Text = %q, want reaction_removed", got.Text)
+	}
+}
+
 func TestNormalizeMessageSkipsNonPrivate(t *testing.T) {
 	msg := &Message{
 		Chat: &Chat{ID: 1, Type: "group"},
@@ -639,6 +693,7 @@ func TestGetUpdatesRequestsCallbackQueries(t *testing.T) {
 	}
 	foundMessage := false
 	foundCallback := false
+	foundReaction := false
 	for _, raw := range allowed {
 		if raw == "message" {
 			foundMessage = true
@@ -646,9 +701,12 @@ func TestGetUpdatesRequestsCallbackQueries(t *testing.T) {
 		if raw == "callback_query" {
 			foundCallback = true
 		}
+		if raw == "message_reaction" {
+			foundReaction = true
+		}
 	}
-	if !foundMessage || !foundCallback {
-		t.Fatalf("allowed_updates = %#v, want message and callback_query", allowed)
+	if !foundMessage || !foundCallback || !foundReaction {
+		t.Fatalf("allowed_updates = %#v, want message, callback_query, and message_reaction", allowed)
 	}
 }
 
@@ -766,6 +824,89 @@ func TestSendChatActionPayload(t *testing.T) {
 	}
 	if requestBody["action"] != "typing" {
 		t.Fatalf("action = %v, want typing", requestBody["action"])
+	}
+}
+
+func TestSetMessageReactionPayload(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/setMessageReaction" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, telegramOKResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	if err := client.SetMessageReaction(context.Background(), 5, 42, "👍"); err != nil {
+		t.Fatalf("SetMessageReaction() err = %v", err)
+	}
+	if requestBody["chat_id"] != float64(5) {
+		t.Fatalf("chat_id = %v, want 5", requestBody["chat_id"])
+	}
+	if requestBody["message_id"] != float64(42) {
+		t.Fatalf("message_id = %v, want 42", requestBody["message_id"])
+	}
+	reactions, ok := requestBody["reaction"].([]interface{})
+	if !ok || len(reactions) != 1 {
+		t.Fatalf("reaction = %#v, want one reaction", requestBody["reaction"])
+	}
+	reaction, ok := reactions[0].(map[string]interface{})
+	if !ok || reaction["type"] != "emoji" || reaction["emoji"] != "👍" {
+		t.Fatalf("reaction[0] = %#v, want emoji thumbs up", reactions[0])
+	}
+}
+
+func TestSendMessageReactionOnlyUsesReplyTarget(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/setMessageReaction" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, telegramOKResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	replyTo := int64(42)
+	got, err := client.SendMessage(context.Background(), core.OutboundMessage{
+		ChatID:    5,
+		ReplyTo:   &replyTo,
+		Reactions: []string{"🔥"},
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() err = %v", err)
+	}
+	if got != 42 {
+		t.Fatalf("message id = %d, want reacted message id 42", got)
+	}
+	reactions, ok := requestBody["reaction"].([]interface{})
+	if !ok || len(reactions) != 1 {
+		t.Fatalf("reaction = %#v, want one reaction", requestBody["reaction"])
 	}
 }
 

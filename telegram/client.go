@@ -87,7 +87,7 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSeconds in
 	payload := map[string]interface{}{
 		"offset":          offset,
 		"timeout":         timeoutSeconds,
-		"allowed_updates": []string{"message", "callback_query"},
+		"allowed_updates": []string{"message", "callback_query", "message_reaction"},
 	}
 	var resp getUpdatesResponse
 	if err := c.post(ctx, "getUpdates", payload, &resp); err != nil {
@@ -114,6 +114,17 @@ func (c *Client) GetMe(ctx context.Context) (*User, error) {
 func (c *Client) SendMessage(ctx context.Context, msg core.OutboundMessage) (int64, error) {
 	if msg.ChatID == 0 {
 		return 0, errors.New("chat_id is required")
+	}
+	if len(msg.Reactions) > 0 {
+		if msg.ReplyTo == nil || *msg.ReplyTo == 0 {
+			return 0, errors.New("reply_to message id is required for reactions")
+		}
+		if err := c.SetMessageReactions(ctx, msg.ChatID, *msg.ReplyTo, msg.Reactions); err != nil {
+			return 0, err
+		}
+		if strings.TrimSpace(msg.Text) == "" && len(msg.Media) == 0 {
+			return *msg.ReplyTo, nil
+		}
 	}
 	if len(msg.Media) > 0 {
 		return c.sendMediaMessage(ctx, msg)
@@ -207,6 +218,40 @@ func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string
 	}
 	if !resp.Ok {
 		return fmt.Errorf("telegram sendChatAction failed: %s", resp.Description)
+	}
+	return nil
+}
+
+func (c *Client) SetMessageReaction(ctx context.Context, chatID int64, messageID int64, emoji string) error {
+	return c.SetMessageReactions(ctx, chatID, messageID, []string{emoji})
+}
+
+func (c *Client) SetMessageReactions(ctx context.Context, chatID int64, messageID int64, emojis []string) error {
+	if chatID == 0 {
+		return errors.New("chat_id is required")
+	}
+	if messageID == 0 {
+		return errors.New("message_id is required")
+	}
+	reactions := make([]map[string]string, 0, len(emojis))
+	for _, emoji := range emojis {
+		emoji = strings.TrimSpace(emoji)
+		if emoji == "" {
+			continue
+		}
+		reactions = append(reactions, map[string]string{"type": "emoji", "emoji": emoji})
+	}
+	body := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"reaction":   reactions,
+	}
+	var resp telegramOKResponse
+	if err := c.post(ctx, "setMessageReaction", body, &resp); err != nil {
+		return err
+	}
+	if !resp.Ok {
+		return fmt.Errorf("telegram setMessageReaction failed: %s", resp.Description)
 	}
 	return nil
 }
