@@ -94,6 +94,12 @@ func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"conversation_show"`) || !strings.Contains(durableDefJSON, `"conversation_send"`) || !strings.Contains(durableDefJSON, `"message"`) {
 		t.Fatalf("durable_agent definition missing conversation surface: %s", durableDefJSON)
 	}
+	if !strings.Contains(durableDefJSON, `"delegation_request"`) || !strings.Contains(durableDefJSON, `"delegation_report"`) {
+		t.Fatalf("durable_agent definition missing generic delegation surface: %s", durableDefJSON)
+	}
+	if !strings.Contains(durableDefJSON, `"generic_delegation"`) || !strings.Contains(durableDefJSON, `"purchase"`) || !strings.Contains(durableDefJSON, `"local_device"`) {
+		t.Fatalf("durable_agent definition missing capability kind delegation enum: %s", durableDefJSON)
+	}
 }
 
 func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
@@ -177,6 +183,132 @@ func TestDurableAgentToolAccessGrantRevoke(t *testing.T) {
 	}
 	if len(agent.AllowedTelegramUserIDs) != 1 || agent.AllowedTelegramUserIDs[0] != 2002 {
 		t.Fatalf("AllowedTelegramUserIDs = %#v, want [2002]", agent.AllowedTelegramUserIDs)
+	}
+}
+
+func TestDurableAgentToolDelegationRequestAndReport(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "family-child",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "200",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "telegram_group",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Help family members while escalating purchases and account access.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "reply_with_policy_authorization",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:        "native",
+			NativeProvider: "openrouter",
+			APIKey:         "sk-test",
+			Model:          "openrouter/test-model",
+		},
+		Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	requestOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"delegation_request",
+			"agent_id":"family-child",
+			"delegation_request":{
+				"request_id":"cap-family-amazon",
+				"kind":"purchase",
+				"target_resource":"amazon",
+				"requested_for":"family-child",
+				"purpose":"order approved school supplies",
+				"risk_class":"spend",
+				"contract":{"allowed":"school supplies only"},
+				"constraints":{"max_usd":50},
+				"questions":["May I place this order?"],
+				"metadata":{"cart_id":"cart-1"}
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(delegation_request) err = %v", err)
+	}
+	if !strings.Contains(requestOut, "action: durable-agent delegation request") ||
+		!strings.Contains(requestOut, "canonical_surface: capability_request") ||
+		!strings.Contains(requestOut, "request_id: cap-family-amazon") ||
+		!strings.Contains(requestOut, "review_status: proposed") {
+		t.Fatalf("delegation_request output = %q, want canonical capability request summary", requestOut)
+	}
+
+	request, ok, err := store.CapabilityRequest("cap-family-amazon")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityRequest(cap-family-amazon) ok=false, want stored request")
+	}
+	if request.Kind != session.CapabilityKindPurchase || request.TargetResource != "amazon" || request.RequestedBy != "family-child" || request.RequestedFor != "family-child" {
+		t.Fatalf("CapabilityRequest = %#v, want purchase request for family-child on amazon", request)
+	}
+	if request.ParentPrincipal != "telegram:200" || request.AdminPrincipal != "telegram:1001" {
+		t.Fatalf("CapabilityRequest principals = parent %q admin %q, want telegram:200 and telegram:1001", request.ParentPrincipal, request.AdminPrincipal)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events len = %d, want 1", len(events))
+	}
+	if !strings.Contains(events[0].Summary, "Delegation request cap-family-amazon") {
+		t.Fatalf("review summary = %q, want delegation request summary", events[0].Summary)
+	}
+	if !strings.Contains(events[0].MetadataJSON, `"capability_request_id":"cap-family-amazon"`) || !strings.Contains(events[0].MetadataJSON, `"cart_id":"cart-1"`) {
+		t.Fatalf("review metadata = %q, want capability id and copied metadata", events[0].MetadataJSON)
+	}
+
+	reportOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"delegation_report",
+			"agent_id":"family-child",
+			"delegation_report":{
+				"request_id":"cap-family-amazon",
+				"status":"blocked",
+				"outcome":"cart price changed before checkout",
+				"local_actions":["paused checkout"],
+				"risk_flags":["spend_changed"]
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(delegation_report) err = %v", err)
+	}
+	if !strings.Contains(reportOut, "action: durable-agent delegation report") ||
+		!strings.Contains(reportOut, "request_id: cap-family-amazon") ||
+		!strings.Contains(reportOut, "status: blocked") {
+		t.Fatalf("delegation_report output = %q, want report summary", reportOut)
+	}
+	events, err = store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents(after report) err = %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("pending review events after report len = %d, want 2", len(events))
+	}
+	latest := events[len(events)-1]
+	if !strings.Contains(latest.MetadataJSON, `"delegation_surface":"durable_agent.delegation_report"`) ||
+		!strings.Contains(latest.MetadataJSON, `"status":"blocked"`) {
+		t.Fatalf("latest review metadata = %q, want delegation report metadata", latest.MetadataJSON)
 	}
 }
 

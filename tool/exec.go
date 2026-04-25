@@ -250,41 +250,78 @@ type durableAgentSnapshotInput struct {
 	Limit      int    `json:"limit,omitempty"`
 }
 
+type durableAgentDelegationRequestInput struct {
+	RequestID          string            `json:"request_id,omitempty"`
+	Kind               string            `json:"kind,omitempty"`
+	TargetResource     string            `json:"target_resource,omitempty"`
+	RequestedFor       string            `json:"requested_for,omitempty"`
+	RequestedBy        string            `json:"requested_by,omitempty"`
+	ParentPrincipal    string            `json:"parent_principal,omitempty"`
+	AdminPrincipal     string            `json:"admin_principal,omitempty"`
+	Purpose            string            `json:"purpose,omitempty"`
+	RiskClass          string            `json:"risk_class,omitempty"`
+	Contract           json.RawMessage   `json:"contract,omitempty"`
+	Constraints        json.RawMessage   `json:"constraints,omitempty"`
+	Summary            string            `json:"summary,omitempty"`
+	LocalActions       []string          `json:"local_actions,omitempty"`
+	Questions          []string          `json:"questions,omitempty"`
+	RiskFlags          []string          `json:"risk_flags,omitempty"`
+	ArtifactRefs       []string          `json:"artifact_refs,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
+	ReviewTargetChatID int64             `json:"review_target_chat_id,omitempty"`
+}
+
+type durableAgentDelegationReportInput struct {
+	RequestID          string            `json:"request_id,omitempty"`
+	GrantID            string            `json:"grant_id,omitempty"`
+	Status             string            `json:"status,omitempty"`
+	Outcome            string            `json:"outcome,omitempty"`
+	Summary            string            `json:"summary,omitempty"`
+	LocalActions       []string          `json:"local_actions,omitempty"`
+	Questions          []string          `json:"questions,omitempty"`
+	RiskFlags          []string          `json:"risk_flags,omitempty"`
+	ArtifactRefs       []string          `json:"artifact_refs,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
+	ReviewTargetChatID int64             `json:"review_target_chat_id,omitempty"`
+}
+
 type durableAgentInput struct {
-	Action                    string                             `json:"action"`
-	AgentID                   string                             `json:"agent_id,omitempty"`
-	ChannelKind               string                             `json:"channel_kind,omitempty"`
-	ReviewEventID             int64                              `json:"review_event_id,omitempty"`
-	ReviewTargetChatID        int64                              `json:"review_target_chat_id,omitempty"`
-	Reason                    string                             `json:"reason,omitempty"`
-	BootstrapProfile          string                             `json:"bootstrap_profile,omitempty"`
-	BootstrapLLM              *core.NodeLLMBootstrap             `json:"bootstrap_llm,omitempty"`
-	PolicyPatch               *durableAgentPolicyPatchInput      `json:"policy_patch,omitempty"`
-	PolicyOverrides           *durableAgentPolicyOverridesInput  `json:"policy_overrides,omitempty"`
-	Charter                   string                             `json:"charter,omitempty"`
-	Autonomy                  string                             `json:"autonomy,omitempty"`
-	Visibility                string                             `json:"visibility,omitempty"`
-	SharedContext             string                             `json:"shared_context,omitempty"`
-	Capabilities              []string                           `json:"capabilities,omitempty"`
-	OutboundMode              string                             `json:"outbound_mode,omitempty"`
-	DriftPolicy               string                             `json:"drift_policy,omitempty"`
-	PublicSurfaceMode         string                             `json:"public_surface_mode,omitempty"`
-	SharedInferenceReuse      string                             `json:"shared_inference_reuse,omitempty"`
-	SharedInferenceReuseScope string                             `json:"shared_inference_reuse_scope,omitempty"`
-	WakeupMode                string                             `json:"wakeup_mode,omitempty"`
-	NetworkPolicy             string                             `json:"network_policy,omitempty"`
-	SecretScopes              []string                           `json:"secret_scopes,omitempty"`
-	ChannelConfig             json.RawMessage                    `json:"channel_config,omitempty"`
-	WizardAnswers             *durableAgentWizardAnswersInput    `json:"wizard_answers,omitempty"`
-	CapacityContract          *durableAgentCapacityContractInput `json:"capacity_contract,omitempty"`
-	MemoryDelegation          *durableAgentMemoryDelegationInput `json:"memory_delegation,omitempty"`
-	Snapshot                  *durableAgentSnapshotInput         `json:"snapshot,omitempty"`
-	Operation                 string                             `json:"operation,omitempty"`
-	Secret                    string                             `json:"secret,omitempty"`
-	Message                   string                             `json:"message,omitempty"`
-	History                   int                                `json:"history,omitempty"`
-	TelegramUserID            int64                              `json:"telegram_user_id,omitempty"`
-	TelegramUserIDs           []int64                            `json:"telegram_user_ids,omitempty"`
+	Action                    string                              `json:"action"`
+	AgentID                   string                              `json:"agent_id,omitempty"`
+	ChannelKind               string                              `json:"channel_kind,omitempty"`
+	ReviewEventID             int64                               `json:"review_event_id,omitempty"`
+	ReviewTargetChatID        int64                               `json:"review_target_chat_id,omitempty"`
+	Reason                    string                              `json:"reason,omitempty"`
+	BootstrapProfile          string                              `json:"bootstrap_profile,omitempty"`
+	BootstrapLLM              *core.NodeLLMBootstrap              `json:"bootstrap_llm,omitempty"`
+	PolicyPatch               *durableAgentPolicyPatchInput       `json:"policy_patch,omitempty"`
+	PolicyOverrides           *durableAgentPolicyOverridesInput   `json:"policy_overrides,omitempty"`
+	Charter                   string                              `json:"charter,omitempty"`
+	Autonomy                  string                              `json:"autonomy,omitempty"`
+	Visibility                string                              `json:"visibility,omitempty"`
+	SharedContext             string                              `json:"shared_context,omitempty"`
+	Capabilities              []string                            `json:"capabilities,omitempty"`
+	OutboundMode              string                              `json:"outbound_mode,omitempty"`
+	DriftPolicy               string                              `json:"drift_policy,omitempty"`
+	PublicSurfaceMode         string                              `json:"public_surface_mode,omitempty"`
+	SharedInferenceReuse      string                              `json:"shared_inference_reuse,omitempty"`
+	SharedInferenceReuseScope string                              `json:"shared_inference_reuse_scope,omitempty"`
+	WakeupMode                string                              `json:"wakeup_mode,omitempty"`
+	NetworkPolicy             string                              `json:"network_policy,omitempty"`
+	SecretScopes              []string                            `json:"secret_scopes,omitempty"`
+	ChannelConfig             json.RawMessage                     `json:"channel_config,omitempty"`
+	WizardAnswers             *durableAgentWizardAnswersInput     `json:"wizard_answers,omitempty"`
+	CapacityContract          *durableAgentCapacityContractInput  `json:"capacity_contract,omitempty"`
+	MemoryDelegation          *durableAgentMemoryDelegationInput  `json:"memory_delegation,omitempty"`
+	Snapshot                  *durableAgentSnapshotInput          `json:"snapshot,omitempty"`
+	DelegationRequest         *durableAgentDelegationRequestInput `json:"delegation_request,omitempty"`
+	DelegationReport          *durableAgentDelegationReportInput  `json:"delegation_report,omitempty"`
+	Operation                 string                              `json:"operation,omitempty"`
+	Secret                    string                              `json:"secret,omitempty"`
+	Message                   string                              `json:"message,omitempty"`
+	History                   int                                 `json:"history,omitempty"`
+	TelegramUserID            int64                               `json:"telegram_user_id,omitempty"`
+	TelegramUserIDs           []int64                             `json:"telegram_user_ids,omitempty"`
 }
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
@@ -790,7 +827,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send", "memory_review", "memory_delegate", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "capacity_show", "capacity_negotiate", "capacity_probe", "capacity_attest", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: inbox (currently mapped to email adapter profile)"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
@@ -902,6 +939,47 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"snapshot_id": {"type": "string", "description": "Snapshot id for snapshot_restore"},
 								"reason": {"type": "string", "description": "Snapshot creation or restore rationale"},
 								"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Snapshot list limit"}
+							}
+						},
+						"delegation_request": {
+							"type": "object",
+							"description": "Generic governed delegation request for durable agents. Creates a canonical capability_request and queues a durable review artifact for operator review.",
+							"properties": {
+								"request_id": {"type": "string", "description": "Optional idempotency key; generated when omitted"},
+								"kind": {"type": "string", "enum": ["tool", "local_device", "external_account", "purchase", "public_web", "communication", "file_access", "network_access", "generic_delegation"], "description": "Capability kind; defaults to generic_delegation"},
+								"target_resource": {"type": "string", "description": "Resource, account, device, surface, purchase domain, or other permission target"},
+								"requested_by": {"type": "string", "description": "Optional requesting principal; defaults to the durable agent id"},
+								"requested_for": {"type": "string", "description": "Optional principal receiving the grant; defaults to the durable agent id"},
+								"parent_principal": {"type": "string", "description": "Optional parent approver principal such as telegram:123"},
+								"admin_principal": {"type": "string", "description": "Optional admin approver principal; defaults to the current admin principal"},
+								"purpose": {"type": "string", "description": "Why the capability is needed"},
+								"risk_class": {"type": "string", "description": "Operator-visible risk class such as spend, secrets, local_device, public_surface, or account_access"},
+								"contract": {"type": "object", "description": "Reviewable behavioral contract for the requested permission"},
+								"constraints": {"type": "object", "description": "Reviewable constraints, ceilings, budgets, time bounds, or allowed actions"},
+								"summary": {"type": "string", "description": "Optional review artifact summary"},
+								"local_actions": {"type": "array", "items": {"type": "string"}, "description": "Actions already taken locally before escalation"},
+								"questions": {"type": "array", "items": {"type": "string"}, "description": "Questions for parent/admin review"},
+								"risk_flags": {"type": "array", "items": {"type": "string"}, "description": "Operator-visible risks"},
+								"artifact_refs": {"type": "array", "items": {"type": "string"}, "description": "References to supporting artifacts"},
+								"metadata": {"type": "object", "additionalProperties": {"type": "string"}, "description": "String metadata copied into the review artifact"},
+								"review_target_chat_id": {"type": "integer", "description": "Optional admin review target chat override"}
+							}
+						},
+						"delegation_report": {
+							"type": "object",
+							"description": "Generic durable-agent report for delegation progress, outcomes, or risks. Queues a durable review artifact without creating a new request.",
+							"properties": {
+								"request_id": {"type": "string", "description": "Optional capability request id this report concerns"},
+								"grant_id": {"type": "string", "description": "Optional capability grant id this report concerns"},
+								"status": {"type": "string", "description": "Report status such as pending, blocked, completed, failed, or needs_review"},
+								"outcome": {"type": "string", "description": "Short outcome description"},
+								"summary": {"type": "string", "description": "Review artifact summary"},
+								"local_actions": {"type": "array", "items": {"type": "string"}, "description": "Actions taken locally"},
+								"questions": {"type": "array", "items": {"type": "string"}, "description": "Questions for parent/admin review"},
+								"risk_flags": {"type": "array", "items": {"type": "string"}, "description": "Operator-visible risks"},
+								"artifact_refs": {"type": "array", "items": {"type": "string"}, "description": "References to supporting artifacts"},
+								"metadata": {"type": "object", "additionalProperties": {"type": "string"}, "description": "String metadata copied into the review artifact"},
+								"review_target_chat_id": {"type": "integer", "description": "Optional admin review target chat override"}
 							}
 						},
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},
