@@ -653,10 +653,10 @@ Typical flow:
 3. Draft persistence:
    The registry persists the child in a `draft` or other non-active state while the charter is still being formed.
    Wizard state must survive process restart so setup can resume without re-asking completed steps.
-4. Connection test:
-   The chosen ingress adapter and scoped credentials are tested.
+4. Connection/readiness check:
+   The parent verifies generic prerequisites it owns: the child identity, bounded charter, scoped grants, and runtime materialization envelope. Adapter-specific live probes are not hard-coded into Aphelion for each child feature; when a child needs adapter repair or a new probe, it requests that through parent conversation and a governed proposal.
 5. Activation:
-   The child becomes `active` only once the charter and channel connection are both ready.
+   The child becomes `active` only once the charter and the generic readiness contract are ready. Channel-specific work then happens in the child environment and reports upward through review artifacts.
 
 The public surface should remain one coherent `Idolum` conversation, even when the underlying runtime is drafting structured child policy behind the scenes.
 
