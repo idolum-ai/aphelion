@@ -624,13 +624,101 @@ func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAge
 	}
 	switch normalizeDurableAgentChannelKind(agent.ChannelKind) {
 	case "email":
-		if agent.ChannelConfig.Email == nil {
-			return "", fmt.Errorf("durable agent %q has no email channel_config", agent.AgentID)
-		}
-		return fmt.Sprintf("action: durable-agent connection test\nagent_id: %s\nchannel_kind: %s\nstatus: configuration_only\nnext: grant a concrete channel/tool capability before live adapter access can be tested\n", agent.AgentID, agent.ChannelKind), nil
+		return r.testDurableEmailConnection(*agent)
 	default:
 		return "", fmt.Errorf("durable agent %q channel %q does not support connection_test yet", agent.AgentID, agent.ChannelKind)
 	}
+}
+
+func (r *Registry) testDurableEmailConnection(agent core.DurableAgent) (string, error) {
+	email := agent.ChannelConfig.Email
+	if email == nil {
+		return "", fmt.Errorf("durable agent %q has no email channel_config", agent.AgentID)
+	}
+	adapter := core.NormalizeDurableAgentEmailChannelConfig(*email).Adapter
+	address := strings.TrimSpace(email.Address)
+	account := firstNonEmpty(strings.TrimSpace(email.Account), address)
+	if adapter == "" || address == "" {
+		return "", fmt.Errorf("durable agent %q has incomplete email channel_config", agent.AgentID)
+	}
+	principalID := core.DurableAgentPrincipal(agent.AgentID)
+	accountTarget := durableEmailExternalAccountTarget(adapter, account)
+	tested := []string{"configuration"}
+	accountGrant, accountOK, err := r.activeCapabilityGrantAnyAction(session.CapabilityKindExternalAccount, accountTarget, principalID, []string{"connection_test", "read", "search", "metadata"})
+	if err != nil {
+		return "", err
+	}
+	toolGrant, toolOK, err := r.activeCapabilityGrantAnyAction(session.CapabilityKindTool, adapter, principalID, []string{"connection_test", "invoke", "read", "search", "metadata"})
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	b.WriteString("action: durable-agent connection test\n")
+	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
+	fmt.Fprintf(&b, "channel_kind: %s\n", strings.TrimSpace(agent.ChannelKind))
+	fmt.Fprintf(&b, "channel_profile: inbox\n")
+	fmt.Fprintf(&b, "adapter: %s\n", adapter)
+	fmt.Fprintf(&b, "account: %s\n", account)
+	fmt.Fprintf(&b, "address: %s\n", address)
+	if query := strings.TrimSpace(email.Query); query != "" {
+		fmt.Fprintf(&b, "query: %s\n", query)
+	}
+	fmt.Fprintf(&b, "external_account_target: %s\n", accountTarget)
+	if accountOK {
+		tested = append(tested, "external_account_grant")
+		fmt.Fprintf(&b, "external_account_grant: %s\n", strings.TrimSpace(accountGrant.GrantID))
+	} else {
+		fmt.Fprintf(&b, "external_account_grant: missing\n")
+	}
+	if toolOK {
+		tested = append(tested, "tool_grant")
+		fmt.Fprintf(&b, "tool_grant: %s\n", strings.TrimSpace(toolGrant.GrantID))
+	} else {
+		fmt.Fprintf(&b, "tool_grant: missing\n")
+	}
+	if accountOK && toolOK {
+		fmt.Fprintf(&b, "status: ok\n")
+		fmt.Fprintf(&b, "checked: %s\n", strings.Join(tested, ","))
+		fmt.Fprintf(&b, "live_probe: not_run_metadata_only\n")
+		fmt.Fprintf(&b, "next: activate may proceed; first wake remains read-only and bounded by child policy\n")
+		return b.String(), nil
+	}
+	fmt.Fprintf(&b, "status: configuration_only\n")
+	fmt.Fprintf(&b, "checked: %s\n", strings.Join(tested, ","))
+	if !accountOK && !toolOK {
+		fmt.Fprintf(&b, "next: grant a concrete external_account %s and tool %s capability before live adapter access can be tested\n", accountTarget, adapter)
+	} else if !accountOK {
+		fmt.Fprintf(&b, "next: grant external_account %s with read/search/metadata/connection_test access\n", accountTarget)
+	} else {
+		fmt.Fprintf(&b, "next: grant tool %s with invoke/read/search/metadata/connection_test access\n", adapter)
+	}
+	return b.String(), nil
+}
+
+func durableEmailExternalAccountTarget(adapter string, account string) string {
+	adapter = strings.TrimSpace(adapter)
+	account = strings.TrimSpace(account)
+	if adapter == "" || account == "" {
+		return strings.TrimSpace(adapter + ":" + account)
+	}
+	return adapter + ":" + account
+}
+
+func (r *Registry) activeCapabilityGrantAnyAction(kind session.CapabilityKind, target string, principalID string, actions []string) (session.CapabilityGrant, bool, error) {
+	if r == nil || r.store == nil {
+		return session.CapabilityGrant{}, false, nil
+	}
+	for _, action := range actions {
+		grant, ok, err := r.store.ActiveCapabilityGrant(kind, target, principalID, action)
+		if err != nil {
+			return session.CapabilityGrant{}, false, err
+		}
+		if ok {
+			return grant, true, nil
+		}
+	}
+	return session.CapabilityGrant{}, false, nil
 }
 
 func (r *Registry) updateDurableAgentEnrollment(in durableAgentInput) (string, error) {

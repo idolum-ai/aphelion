@@ -1924,6 +1924,124 @@ func newToolTestStore(t *testing.T) *session.SQLiteStore {
 	return store
 }
 
+func TestDurableAgentConnectionTestEmailRequiresConcreteGrants(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		ChannelConfig: core.DurableAgentChannelConfig{Email: &core.DurableAgentEmailChannelConfig{
+			Address: "host@idolum.ai",
+			Account: "host@idolum.ai",
+			Adapter: "gog_cli",
+			Query:   "label:inbox",
+		}},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read inbox metadata and surface bounded review artifacts.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+		}),
+		WakeupMode: "poll",
+		Status:     "draft",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"connection_test","agent_id":"idolum-email"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(connection_test) err = %v", err)
+	}
+	if !strings.Contains(out, "status: configuration_only") {
+		t.Fatalf("connection_test output = %q, want configuration_only before grants", out)
+	}
+	if !strings.Contains(out, "external_account_grant: missing") || !strings.Contains(out, "tool_grant: missing") {
+		t.Fatalf("connection_test output = %q, want missing grant markers", out)
+	}
+}
+
+func TestDurableAgentConnectionTestEmailOkWithConcreteGrants(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		ChannelConfig: core.DurableAgentChannelConfig{Email: &core.DurableAgentEmailChannelConfig{
+			Address: "host@idolum.ai",
+			Account: "host@idolum.ai",
+			Adapter: "gog_cli",
+			Query:   "label:inbox",
+		}},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Read inbox metadata and surface bounded review artifacts.",
+			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
+			OutboundMode:       "read_only",
+		}),
+		WakeupMode: "poll",
+		Status:     "draft",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	principalID := core.DurableAgentPrincipal("idolum-email")
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-email-account",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      principalID,
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "gog_cli:host@idolum.ai",
+		AllowedActions: []string{"read", "search", "metadata", "connection_test"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(account) err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-gog-tool",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      principalID,
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		AllowedActions: []string{"invoke", "read", "search", "metadata", "connection_test"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(tool) err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"connection_test","agent_id":"idolum-email"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(connection_test) err = %v", err)
+	}
+	for _, want := range []string{
+		"status: ok",
+		"external_account_grant: grant-email-account",
+		"tool_grant: grant-gog-tool",
+		"checked: configuration,external_account_grant,tool_grant",
+		"live_probe: not_run_metadata_only",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("connection_test output = %q, want %q", out, want)
+		}
+	}
+}
+
 func newDurableAgentToolRegistry(t *testing.T) (*Registry, *session.SQLiteStore) {
 	t.Helper()
 
