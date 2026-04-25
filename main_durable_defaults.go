@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/durableagent"
+	"github.com/idolum-ai/aphelion/governorauth"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
@@ -117,6 +119,49 @@ func syncDurableAgentBootstrapInheritance(cfg *config.Config, store *session.SQL
 	return nil
 }
 
+func shouldUseCodexDurableAgentBootstrap(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Governor.Backend)) {
+	case "codex":
+		return true
+	case "auto", "":
+		bundle, err := governorauth.ResolveFromConfig(cfg.Governor)
+		return err == nil && strings.EqualFold(strings.TrimSpace(bundle.Backend), governorauth.BackendCodex)
+	default:
+		return false
+	}
+}
+
+func durableAgentCodexBootstrapFromConfig(cfg *config.Config) core.NodeLLMBootstrap {
+	if cfg == nil {
+		return core.NodeLLMBootstrap{}
+	}
+	return core.NormalizeNodeLLMBootstrap(core.NodeLLMBootstrap{
+		Backend:         "codex",
+		CodexAuthSource: cfg.Governor.Codex.AuthSource,
+		CodexHome:       durableAgentCodexHomeFromConfig(cfg),
+		CodexBaseURL:    cfg.Governor.Codex.BaseURL,
+	})
+}
+
+func durableAgentCodexHomeFromConfig(cfg *config.Config) string {
+	if cfg != nil {
+		if home := strings.TrimSpace(cfg.Governor.Codex.CodexHome); home != "" {
+			return home
+		}
+	}
+	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
+		return home
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(userHome) == "" {
+		return ""
+	}
+	return filepath.Join(userHome, ".codex")
+}
+
 func defaultDailyReviewLivePolicy() core.DurableAgentLivePolicy {
 	return core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 		Charter: "Run one scheduled daily review of yesterday's transcript and open a plain parent-child check-in with concise action items for tomorrow.",
@@ -134,13 +179,8 @@ func defaultDurableAgentBootstrapFromConfig(cfg *config.Config) core.NodeLLMBoot
 	if cfg == nil {
 		return core.NodeLLMBootstrap{}
 	}
-	if strings.EqualFold(strings.TrimSpace(cfg.Governor.Backend), "codex") {
-		codex := core.NormalizeNodeLLMBootstrap(core.NodeLLMBootstrap{
-			Backend:         "codex",
-			CodexAuthSource: cfg.Governor.Codex.AuthSource,
-			CodexHome:       cfg.Governor.Codex.CodexHome,
-			CodexBaseURL:    cfg.Governor.Codex.BaseURL,
-		})
+	if shouldUseCodexDurableAgentBootstrap(cfg) {
+		codex := durableAgentCodexBootstrapFromConfig(cfg)
 		if codex.Configured() {
 			return codex
 		}
