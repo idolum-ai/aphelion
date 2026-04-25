@@ -3314,6 +3314,100 @@ func TestSQLiteStoreCapabilityRequestReviewGrantInvocationRoundTrip(t *testing.T
 	}
 }
 
+func TestMigrateCapabilityKindSystemChangeConstraint(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "capability-kind-system-change.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open seed db err = %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`INSERT INTO schema_version(version) VALUES (36)`,
+		`CREATE TABLE capability_requests (
+			request_id TEXT PRIMARY KEY,
+			requested_by TEXT NOT NULL DEFAULT '',
+			requested_for TEXT NOT NULL DEFAULT '',
+			parent_principal TEXT NOT NULL DEFAULT '',
+			admin_principal TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation')),
+			target_resource TEXT NOT NULL DEFAULT '',
+			purpose TEXT NOT NULL DEFAULT '',
+			risk_class TEXT NOT NULL DEFAULT '',
+			contract_json TEXT NOT NULL DEFAULT '{}',
+			constraints_json TEXT NOT NULL DEFAULT '{}',
+			review_status TEXT NOT NULL DEFAULT 'proposed' CHECK(review_status IN ('proposed', 'parent_approved', 'approved', 'rejected')),
+			grant_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE capability_grants (
+			grant_id TEXT PRIMARY KEY,
+			request_id TEXT NOT NULL DEFAULT '',
+			granted_by TEXT NOT NULL DEFAULT '',
+			granted_to TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation')),
+			target_resource TEXT NOT NULL DEFAULT '',
+			allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			contract_json TEXT NOT NULL DEFAULT '{}',
+			constraints_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'active', 'stale', 'revoked', 'expired', 'failed')),
+			baseline_policy_hash TEXT NOT NULL DEFAULT '',
+			current_policy_hash TEXT NOT NULL DEFAULT '',
+			anchor_fingerprint TEXT NOT NULL DEFAULT '',
+			drift_source TEXT NOT NULL DEFAULT '',
+			stale_reason TEXT NOT NULL DEFAULT '',
+			invocation_count INTEGER NOT NULL DEFAULT 0,
+			failure_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			granted_at TEXT,
+			expires_at TEXT,
+			revoked_at TEXT,
+			last_invoked_at TEXT,
+			last_failure_at TEXT
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			_ = db.Close()
+			t.Fatalf("seed db stmt err = %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close seed db err = %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(migrated) err = %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.UpsertCapabilityRequest(CapabilityRequest{
+		RequestID:      "cap-system-change",
+		RequestedBy:    "durable_agent:child-alpha",
+		RequestedFor:   "durable_agent:child-alpha",
+		Kind:           CapabilityKindSystemChange,
+		TargetResource: "child-runtime-contract",
+		Purpose:        "Request bounded system contract update.",
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest(system_change) err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(CapabilityGrant{
+		GrantID:        "capg-system-change",
+		RequestID:      "cap-system-change",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "durable_agent:child-alpha",
+		Kind:           CapabilityKindSystemChange,
+		TargetResource: "child-runtime-contract",
+		AllowedActions: []string{"propose"},
+		Status:         CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(system_change) err = %v", err)
+	}
+}
+
 func TestMigrateDurableChildAuthorityCanonicalizesPrincipalsAndChildRuntime(t *testing.T) {
 	t.Parallel()
 

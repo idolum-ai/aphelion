@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 36
+	schemaVersion                       = 37
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -182,7 +182,7 @@ func (s *SQLiteStore) init() error {
 			requested_for TEXT NOT NULL DEFAULT '',
 			parent_principal TEXT NOT NULL DEFAULT '',
 			admin_principal TEXT NOT NULL DEFAULT '',
-			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation')),
+			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation', 'system_change')),
 			target_resource TEXT NOT NULL DEFAULT '',
 			purpose TEXT NOT NULL DEFAULT '',
 			risk_class TEXT NOT NULL DEFAULT '',
@@ -228,7 +228,7 @@ func (s *SQLiteStore) init() error {
 			request_id TEXT NOT NULL DEFAULT '',
 			granted_by TEXT NOT NULL DEFAULT '',
 			granted_to TEXT NOT NULL DEFAULT '',
-			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation')),
+			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation', 'system_change')),
 			target_resource TEXT NOT NULL DEFAULT '',
 			allowed_actions_json TEXT NOT NULL DEFAULT '[]',
 			contract_json TEXT NOT NULL DEFAULT '{}',
@@ -5323,6 +5323,11 @@ func applyMigrations(tx *sql.Tx) error {
 			return err
 		}
 	}
+	if currentVersion < 37 {
+		if err := migrateCapabilityKindSystemChange(tx); err != nil {
+			return err
+		}
+	}
 	if currentVersion >= schemaVersion {
 		return nil
 	}
@@ -5480,6 +5485,139 @@ func migrateDurableChildAuthorityCanonicalization(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+func migrateCapabilityKindSystemChange(tx *sql.Tx) error {
+	if err := migrateCapabilityKindTable(tx, capabilityKindTableMigration{
+		table: "capability_requests",
+		createSQL: `CREATE TABLE capability_requests (
+			request_id TEXT PRIMARY KEY,
+			requested_by TEXT NOT NULL DEFAULT '',
+			requested_for TEXT NOT NULL DEFAULT '',
+			parent_principal TEXT NOT NULL DEFAULT '',
+			admin_principal TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation', 'system_change')),
+			target_resource TEXT NOT NULL DEFAULT '',
+			purpose TEXT NOT NULL DEFAULT '',
+			risk_class TEXT NOT NULL DEFAULT '',
+			contract_json TEXT NOT NULL DEFAULT '{}',
+			constraints_json TEXT NOT NULL DEFAULT '{}',
+			review_status TEXT NOT NULL DEFAULT 'proposed' CHECK(review_status IN ('proposed', 'parent_approved', 'approved', 'rejected')),
+			grant_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		columns: []string{
+			"request_id", "requested_by", "requested_for", "parent_principal", "admin_principal",
+			"kind", "target_resource", "purpose", "risk_class", "contract_json", "constraints_json",
+			"review_status", "grant_id", "created_at", "updated_at",
+		},
+		indexes: []string{
+			`CREATE INDEX IF NOT EXISTS idx_capability_requests_status ON capability_requests(review_status, updated_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_capability_requests_kind ON capability_requests(kind, updated_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_capability_requests_principals ON capability_requests(requested_by, requested_for, parent_principal, admin_principal)`,
+		},
+	}); err != nil {
+		return err
+	}
+	if err := migrateCapabilityKindTable(tx, capabilityKindTableMigration{
+		table: "capability_grants",
+		createSQL: `CREATE TABLE capability_grants (
+			grant_id TEXT PRIMARY KEY,
+			request_id TEXT NOT NULL DEFAULT '',
+			granted_by TEXT NOT NULL DEFAULT '',
+			granted_to TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT 'generic_delegation' CHECK(kind IN ('tool', 'local_device', 'external_account', 'purchase', 'public_web', 'communication', 'file_access', 'network_access', 'generic_delegation', 'system_change')),
+			target_resource TEXT NOT NULL DEFAULT '',
+			allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			contract_json TEXT NOT NULL DEFAULT '{}',
+			constraints_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'active', 'stale', 'revoked', 'expired', 'failed')),
+			baseline_policy_hash TEXT NOT NULL DEFAULT '',
+			current_policy_hash TEXT NOT NULL DEFAULT '',
+			anchor_fingerprint TEXT NOT NULL DEFAULT '',
+			drift_source TEXT NOT NULL DEFAULT '',
+			stale_reason TEXT NOT NULL DEFAULT '',
+			invocation_count INTEGER NOT NULL DEFAULT 0,
+			failure_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			granted_at TEXT,
+			expires_at TEXT,
+			revoked_at TEXT,
+			last_invoked_at TEXT,
+			last_failure_at TEXT
+		)`,
+		columns: []string{
+			"grant_id", "request_id", "granted_by", "granted_to", "kind", "target_resource",
+			"allowed_actions_json", "contract_json", "constraints_json", "status", "baseline_policy_hash",
+			"current_policy_hash", "anchor_fingerprint", "drift_source", "stale_reason", "invocation_count",
+			"failure_count", "created_at", "updated_at", "granted_at", "expires_at", "revoked_at",
+			"last_invoked_at", "last_failure_at",
+		},
+		indexes: []string{
+			`CREATE INDEX IF NOT EXISTS idx_capability_grants_lookup ON capability_grants(kind, target_resource, granted_to, status)`,
+			`CREATE INDEX IF NOT EXISTS idx_capability_grants_status ON capability_grants(status, updated_at DESC)`,
+		},
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+type capabilityKindTableMigration struct {
+	table     string
+	createSQL string
+	columns   []string
+	indexes   []string
+}
+
+func migrateCapabilityKindTable(tx *sql.Tx, spec capabilityKindTableMigration) error {
+	needs, err := capabilityKindConstraintNeedsSystemChange(tx, spec.table)
+	if err != nil {
+		return err
+	}
+	if !needs {
+		return nil
+	}
+	oldTable := spec.table + "_v37_old"
+	if _, err := tx.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s`, oldTable)); err != nil {
+		return fmt.Errorf("drop prior %s migration table: %w", spec.table, err)
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`ALTER TABLE %s RENAME TO %s`, spec.table, oldTable)); err != nil {
+		return fmt.Errorf("rename %s for capability kind migration: %w", spec.table, err)
+	}
+	if _, err := tx.Exec(spec.createSQL); err != nil {
+		return fmt.Errorf("recreate %s with system_change capability kind: %w", spec.table, err)
+	}
+	columns := strings.Join(spec.columns, ", ")
+	if _, err := tx.Exec(fmt.Sprintf(`INSERT INTO %s(%s) SELECT %s FROM %s`, spec.table, columns, columns, oldTable)); err != nil {
+		return fmt.Errorf("copy %s capability kind migration rows: %w", spec.table, err)
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`DROP TABLE %s`, oldTable)); err != nil {
+		return fmt.Errorf("drop old %s after capability kind migration: %w", spec.table, err)
+	}
+	for _, stmt := range spec.indexes {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("recreate %s capability kind migration index: %w", spec.table, err)
+		}
+	}
+	return nil
+}
+
+func capabilityKindConstraintNeedsSystemChange(tx *sql.Tx, table string) (bool, error) {
+	var createSQL sql.NullString
+	if err := tx.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&createSQL); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("query %s create sql for capability kind migration: %w", table, err)
+	}
+	text := strings.ToLower(createSQL.String)
+	if strings.Contains(text, "system_change") {
+		return false, nil
+	}
+	return strings.Contains(text, "kind") && strings.Contains(text, "check"), nil
 }
 
 func durableAgentIDsForMigration(tx *sql.Tx) (map[string]struct{}, error) {

@@ -714,7 +714,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				"properties": {
 					"action": {"type": "string", "enum": ["request_submit", "request_show", "request_list"], "description": "Capability request operation"},
 					"request_id": {"type": "string", "description": "Request id for request_show or optional submit id"},
-					"kind": {"type": "string", "enum": ["tool", "local_device", "external_account", "purchase", "public_web", "communication", "file_access", "network_access", "generic_delegation"], "description": "Capability class"},
+					"kind": {"type": "string", "enum": ["tool", "local_device", "external_account", "purchase", "public_web", "communication", "file_access", "network_access", "generic_delegation", "system_change"], "description": "Capability class"},
 					"target_resource": {"type": "string", "description": "Tool name, device/app, account, vendor, web surface, path, network target, or emergent resource"},
 					"requested_for": {"type": "string", "description": "Optional target principal; defaults to the requester"},
 					"parent_principal": {"type": "string", "description": "Optional parent/guardian principal that may endorse before admin approval"},
@@ -740,7 +740,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"action": {"type": "string", "enum": ["request_show", "request_list", "request_review", "grant_set", "grant_show", "grant_list", "grant_revoke", "access_check"], "description": "Capability authority operation"},
 					"request_id": {"type": "string", "description": "Request id for review or grant creation"},
 					"grant_id": {"type": "string", "description": "Grant id for grant_show/grant_revoke or optional grant_set id"},
-					"kind": {"type": "string", "enum": ["tool", "local_device", "external_account", "purchase", "public_web", "communication", "file_access", "network_access", "generic_delegation"], "description": "Capability class"},
+					"kind": {"type": "string", "enum": ["tool", "local_device", "external_account", "purchase", "public_web", "communication", "file_access", "network_access", "generic_delegation", "system_change"], "description": "Capability class"},
 					"target_resource": {"type": "string", "description": "Capability target for grants or access checks"},
 					"capability_action": {"type": "string", "description": "Action being granted or checked; use invoke for tool runtime access"},
 					"principal": {"type": "string", "description": "Principal receiving a grant or being checked"},
@@ -887,7 +887,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 							"description": "Generic governed delegation request for durable agents. Creates a canonical capability_request and queues a durable review artifact for operator review.",
 							"properties": {
 								"request_id": {"type": "string", "description": "Optional idempotency key; generated when omitted"},
-								"kind": {"type": "string", "enum": ["tool", "local_device", "external_account", "purchase", "public_web", "communication", "file_access", "network_access", "generic_delegation"], "description": "Capability kind; defaults to generic_delegation"},
+								"kind": {"type": "string", "enum": ["tool", "local_device", "external_account", "purchase", "public_web", "communication", "file_access", "network_access", "generic_delegation", "system_change"], "description": "Capability kind; defaults to generic_delegation"},
 								"target_resource": {"type": "string", "description": "Resource, account, device, surface, purchase domain, or other permission target"},
 								"requested_by": {"type": "string", "description": "Optional requesting principal; defaults to the durable agent id"},
 								"requested_for": {"type": "string", "description": "Optional principal receiving the grant; defaults to the durable agent id"},
@@ -1036,9 +1036,50 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 		return "", fmt.Errorf("exec command is required")
 	}
 
-	workdir, err := resolveWorkdir(scope.WorkingRoot, in.Workdir)
+	workdir, escaped, err := resolveWorkdirForExec(scope.WorkingRoot, in.Workdir)
 	if err != nil {
 		return "", err
+	}
+	if escaped {
+		if p.Role != principal.RoleAdmin {
+			return "", fmt.Errorf("workdir %q escapes workspace %q", in.Workdir, filepath.Clean(scope.WorkingRoot))
+		}
+		proposal := session.OperationProposal{
+			Kind:          "workspace_escape",
+			Summary:       "Run command outside the configured workspace",
+			WhyNow:        "The requested command needs an explicit admin-approved working directory outside the current sandbox root.",
+			BoundedEffect: fmt.Sprintf("The command will run in %s for this execution only.", workdir),
+		}
+		if r.execApprover == nil {
+			return "", fmt.Errorf("command requires an approved proposal: workspace escape")
+		}
+		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusPending); err != nil {
+			return "", err
+		}
+		decision, err := r.execApprover.ConfirmExec(ctx, ExecApprovalRequest{
+			Principal:  p,
+			SessionKey: key,
+			Scope:      scope,
+			Command:    in.Command,
+			Workdir:    workdir,
+			Reason:     "workspace escape",
+			Proposal:   proposal,
+		})
+		if err != nil {
+			if persistErr := r.persistExecProposalState(key, proposal, session.ProposalStatusExpired); persistErr != nil {
+				return "", persistErr
+			}
+			return "", err
+		}
+		if !decision.Approved {
+			if err := r.persistExecProposalState(key, proposal, session.ProposalStatusDenied); err != nil {
+				return "", err
+			}
+			return "", fmt.Errorf("proposal denied: workspace escape")
+		}
+		if err := r.persistExecProposalState(key, proposal, session.ProposalStatusApproved); err != nil {
+			return "", err
+		}
 	}
 	if proposal, reason := proposalForCommand(in.Command); reason != "" {
 		if r.execApprover == nil {
@@ -1245,9 +1286,14 @@ func ensureScopeReady(scope sandbox.Scope) error {
 }
 
 func resolveWorkdir(root, raw string) (string, error) {
+	workdir, _, err := resolveWorkdirForExec(root, raw)
+	return workdir, err
+}
+
+func resolveWorkdirForExec(root, raw string) (string, bool, error) {
 	base, err := filepath.Abs(root)
 	if err != nil {
-		return "", fmt.Errorf("resolve workspace root: %w", err)
+		return "", false, fmt.Errorf("resolve workspace root: %w", err)
 	}
 
 	target := base
@@ -1261,18 +1307,18 @@ func resolveWorkdir(root, raw string) (string, error) {
 
 	target, err = filepath.Abs(target)
 	if err != nil {
-		return "", fmt.Errorf("resolve workdir: %w", err)
+		return "", false, fmt.Errorf("resolve workdir: %w", err)
 	}
 
 	rel, err := filepath.Rel(base, target)
 	if err != nil {
-		return "", fmt.Errorf("check workdir: %w", err)
+		return "", false, fmt.Errorf("check workdir: %w", err)
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("workdir %q escapes workspace %q", raw, base)
+		return target, true, nil
 	}
 
-	return target, nil
+	return target, false, nil
 }
 
 func renderOutput(stdout, stderr string, limit int) string {

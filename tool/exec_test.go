@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -267,6 +268,86 @@ func TestExecuteForPrincipalRejectsEscapedWorkdir(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "escapes workspace") {
 		t.Fatalf("err = %v, want workspace escape error", err)
+	}
+}
+
+func TestExecuteForAdminAllowsEscapedWorkdirWithApproval(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	outsideRoot := filepath.Join(tmp, "outside")
+	if err := os.MkdirAll(outsideRoot, 0o755); err != nil {
+		t.Fatalf("mkdir outside root: %v", err)
+	}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			SharedMemoryRoot:  filepath.Join(tmp, "shared-memory"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+
+	approver := &stubExecApprover{approved: true}
+	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver).WithExecApprover(approver)
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 7},
+		"exec",
+		json.RawMessage(`{"command":"pwd","workdir":`+strconv.Quote(outsideRoot)+`}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal() err = %v", err)
+	}
+	if !strings.Contains(out, outsideRoot) {
+		t.Fatalf("output = %q, want pwd under approved outside root %q", out, outsideRoot)
+	}
+	if approver.called != 1 {
+		t.Fatalf("approver called = %d, want 1", approver.called)
+	}
+	if approver.request.Proposal.Kind != "workspace_escape" {
+		t.Fatalf("proposal kind = %q, want workspace_escape", approver.request.Proposal.Kind)
+	}
+}
+
+func TestExecuteForAdminRejectsEscapedWorkdirWithoutApproval(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	outsideRoot := filepath.Join(tmp, "outside")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			SharedMemoryRoot:  filepath.Join(tmp, "shared-memory"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users-workspace"),
+			UserMemoryRoot:    filepath.Join(tmp, "users-memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+
+	registry := NewRegistryWithSandbox(globalRoot, 2*time.Second, resolver)
+	_, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 7},
+		"exec",
+		json.RawMessage(`{"command":"pwd","workdir":`+strconv.Quote(outsideRoot)+`}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal() err = nil, want approval requirement")
+	}
+	if !strings.Contains(err.Error(), "approved proposal") {
+		t.Fatalf("err = %v, want approval requirement", err)
 	}
 }
 

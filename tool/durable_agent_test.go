@@ -95,7 +95,7 @@ func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"delegation_request"`) || !strings.Contains(durableDefJSON, `"delegation_report"`) {
 		t.Fatalf("durable_agent definition missing generic delegation surface: %s", durableDefJSON)
 	}
-	if !strings.Contains(durableDefJSON, `"generic_delegation"`) || !strings.Contains(durableDefJSON, `"purchase"`) || !strings.Contains(durableDefJSON, `"local_device"`) {
+	if !strings.Contains(durableDefJSON, `"generic_delegation"`) || !strings.Contains(durableDefJSON, `"system_change"`) || !strings.Contains(durableDefJSON, `"purchase"`) || !strings.Contains(durableDefJSON, `"local_device"`) {
 		t.Fatalf("durable_agent definition missing capability kind delegation enum: %s", durableDefJSON)
 	}
 	if !strings.Contains(durableDefJSON, `"capability_update_plan"`) || !strings.Contains(durableDefJSON, `"grant_actions"`) {
@@ -326,6 +326,69 @@ func TestDurableAgentToolDelegationRequestAndReport(t *testing.T) {
 	if !strings.Contains(latest.MetadataJSON, `"delegation_surface":"durable_agent.delegation_report"`) ||
 		!strings.Contains(latest.MetadataJSON, `"status":"blocked"`) {
 		t.Fatalf("latest review metadata = %q, want delegation report metadata", latest.MetadataJSON)
+	}
+}
+
+func TestDurableAgentDelegationRequestSupportsSystemChangeKind(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:            "tool-learning-child",
+		ParentScopeKind:    string(session.ScopeKindTelegramDM),
+		ParentScopeID:      "200",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Learn tools through parent-approved negotiation.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Address: "child-endpoint",
+			Adapter: "child_adapter",
+		}},
+		Status: "active",
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"delegation_request",
+			"agent_id":"tool-learning-child",
+			"delegation_request":{
+				"request_id":"sys-change-learn-tool",
+				"kind":"system_change",
+				"target_resource":"child-tool-learning-protocol",
+				"purpose":"child needs parent-approved runtime support to learn a newly authorized local tool",
+				"risk_class":"system_change",
+				"contract":{"child_must_explain_need":true,"parent_must_approve_before_runtime_change":true},
+				"constraints":{"feature_specific_parent_code":false},
+				"questions":["Approve a generic protocol change rather than hard-coding this adapter?"]
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(delegation_request) err = %v", err)
+	}
+	if !strings.Contains(out, "kind: system_change") || !strings.Contains(out, "agreement_id: agreement-sys-change-learn-tool") {
+		t.Fatalf("delegation_request output = %q, want system_change agreement", out)
+	}
+	request, ok, err := store.CapabilityRequest("sys-change-learn-tool")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityRequest(sys-change-learn-tool) ok=false, want stored request")
+	}
+	if request.Kind != session.CapabilityKindSystemChange {
+		t.Fatalf("CapabilityRequest.Kind = %q, want system_change", request.Kind)
 	}
 }
 

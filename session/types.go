@@ -154,6 +154,7 @@ const (
 	CapabilityKindFileAccess        CapabilityKind = "file_access"
 	CapabilityKindNetworkAccess     CapabilityKind = "network_access"
 	CapabilityKindGenericDelegation CapabilityKind = "generic_delegation"
+	CapabilityKindSystemChange      CapabilityKind = "system_change"
 )
 
 type CapabilityReviewStatus string
@@ -894,7 +895,8 @@ func NormalizeCapabilityKind(kind CapabilityKind) CapabilityKind {
 		CapabilityKindCommunication,
 		CapabilityKindFileAccess,
 		CapabilityKindNetworkAccess,
-		CapabilityKindGenericDelegation:
+		CapabilityKindGenericDelegation,
+		CapabilityKindSystemChange:
 		return CapabilityKind(value)
 	default:
 		return ""
