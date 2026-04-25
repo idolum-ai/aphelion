@@ -15,19 +15,19 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-func TestDurableChildSandboxAccessDoesNotSpecialCaseEmailAdapter(t *testing.T) {
-	t.Setenv("GOG_KEYRING_PASSWORD", "secret-for-test")
+func TestDurableChildSandboxAccessDoesNotSpecialCaseChannelAdapter(t *testing.T) {
+	t.Setenv("CHILD_ADAPTER_TOKEN", "secret-for-test")
 	configHome := filepath.Join(t.TempDir(), "config")
-	if err := os.MkdirAll(filepath.Join(configHome, "gogcli"), 0o700); err != nil {
-		t.Fatalf("MkdirAll(gogcli) err = %v", err)
+	if err := os.MkdirAll(filepath.Join(configHome, "child-adapter"), 0o700); err != nil {
+		t.Fatalf("MkdirAll(child-adapter) err = %v", err)
 	}
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 
 	access, err := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{
 		AgentID:     "idolum-email",
 		ChannelKind: "email",
-		ChannelConfig: core.DurableAgentChannelConfig{Email: &core.DurableAgentEmailChannelConfig{
-			Adapter: "gog_cli",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter: "child_adapter",
 		}},
 		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
 	}, nil)
@@ -38,11 +38,11 @@ func TestDurableChildSandboxAccessDoesNotSpecialCaseEmailAdapter(t *testing.T) {
 	if !containsString(access.readonlyPaths, "/srv/aphelion/bin/aphelion") || !containsString(access.readonlyPaths, "/srv/codex") {
 		t.Fatalf("readonlyPaths = %#v, want binary and codex home", access.readonlyPaths)
 	}
-	if containsString(access.readonlyPaths, filepath.Join(configHome, "gogcli")) {
-		t.Fatalf("readonlyPaths = %#v, did not expect implicit gogcli config", access.readonlyPaths)
+	if containsString(access.readonlyPaths, filepath.Join(configHome, "child-adapter")) {
+		t.Fatalf("readonlyPaths = %#v, did not expect implicit child-adapter config", access.readonlyPaths)
 	}
 	if len(access.env) != 0 {
-		t.Fatalf("env = %#v, want no implicit gog env", access.env)
+		t.Fatalf("env = %#v, want no implicit child adapter env", access.env)
 	}
 }
 

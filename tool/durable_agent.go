@@ -624,8 +624,8 @@ func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAge
 	}
 	switch normalizeDurableAgentChannelKind(agent.ChannelKind) {
 	case "email":
-		if agent.ChannelConfig.Email == nil {
-			return "", fmt.Errorf("durable agent %q has no email channel_config", agent.AgentID)
+		if agent.ChannelConfig.ExternalConfig() == nil {
+			return "", fmt.Errorf("durable agent %q has no external channel_config", agent.AgentID)
 		}
 		return fmt.Sprintf("action: durable-agent connection test\nagent_id: %s\nchannel_kind: %s\nstatus: configuration_only\nnext: grant a concrete channel/tool capability before live adapter access can be tested\n", agent.AgentID, agent.ChannelKind), nil
 	default:
@@ -1714,18 +1714,17 @@ func seedDurableAgentWizardFromAgent(agent core.DurableAgent, inheritedBootstrap
 			DriftPolicy:      strings.TrimSpace(agent.LivePolicy.DriftPolicy),
 		},
 	}
-	if agent.ChannelConfig.Email != nil {
-		email := agent.ChannelConfig.Email
-		wizard.Answers.Address = strings.TrimSpace(email.Address)
-		wizard.Answers.Account = strings.TrimSpace(email.Account)
-		wizard.Answers.Adapter = strings.TrimSpace(email.Adapter)
-		wizard.Answers.Query = strings.TrimSpace(email.Query)
-		wizard.Answers.PollInterval = strings.TrimSpace(email.PollInterval)
-		wizard.Answers.SurfaceRules = append([]string(nil), email.SurfaceRules...)
-		value := email.SummarizePDFs
+	if external := agent.ChannelConfig.ExternalConfig(); external != nil {
+		wizard.Answers.Address = strings.TrimSpace(external.Address)
+		wizard.Answers.Account = strings.TrimSpace(external.Account)
+		wizard.Answers.Adapter = strings.TrimSpace(external.Adapter)
+		wizard.Answers.Query = strings.TrimSpace(external.Query)
+		wizard.Answers.PollInterval = strings.TrimSpace(external.PollInterval)
+		wizard.Answers.SurfaceRules = append([]string(nil), external.SurfaceRules...)
+		value := external.SummarizePDFs
 		wizard.Answers.SummarizePDFs = &value
-		wizard.Answers.SynthesisCadence = strings.TrimSpace(email.SynthesisCadence)
-		wizard.Answers.NeverRetain = append([]string(nil), email.NeverRetain...)
+		wizard.Answers.SynthesisCadence = strings.TrimSpace(external.SynthesisCadence)
+		wizard.Answers.NeverRetain = append([]string(nil), external.NeverRetain...)
 	}
 	return wizard
 }
@@ -1832,42 +1831,44 @@ func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.Dura
 	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(policy)
 
 	channelConfig := core.NormalizeDurableAgentChannelConfig(agent.ChannelConfig)
-	if channelConfig.Email == nil {
-		channelConfig.Email = &core.DurableAgentEmailChannelConfig{}
+	external := channelConfig.ExternalConfig()
+	if external == nil {
+		external = &core.DurableAgentExternalChannelConfig{}
+	} else {
+		copied := *external
+		external = &copied
 	}
-	email := channelConfig.Email
 	if answers.Address != "" {
-		email.Address = answers.Address
+		external.Address = answers.Address
 	}
 	if answers.Account != "" {
-		email.Account = answers.Account
-	} else if strings.TrimSpace(email.Account) == "" && strings.TrimSpace(email.Address) != "" {
-		email.Account = strings.TrimSpace(email.Address)
+		external.Account = answers.Account
+	} else if strings.TrimSpace(external.Account) == "" && strings.TrimSpace(external.Address) != "" {
+		external.Account = strings.TrimSpace(external.Address)
 	}
 	if answers.Adapter != "" {
-		email.Adapter = answers.Adapter
+		external.Adapter = answers.Adapter
 	}
 	if answers.Query != "" {
-		email.Query = answers.Query
-	} else if strings.TrimSpace(email.Query) == "" {
-		email.Query = "label:inbox"
+		external.Query = answers.Query
 	}
 	if answers.PollInterval != "" {
-		email.PollInterval = answers.PollInterval
+		external.PollInterval = answers.PollInterval
 	}
 	if answers.SurfaceRules != nil {
-		email.SurfaceRules = append([]string(nil), answers.SurfaceRules...)
+		external.SurfaceRules = append([]string(nil), answers.SurfaceRules...)
 	}
 	if answers.SummarizePDFs != nil {
-		email.SummarizePDFs = *answers.SummarizePDFs
+		external.SummarizePDFs = *answers.SummarizePDFs
 	}
 	if answers.SynthesisCadence != "" {
-		email.SynthesisCadence = answers.SynthesisCadence
+		external.SynthesisCadence = answers.SynthesisCadence
 	}
 	if answers.NeverRetain != nil {
-		email.NeverRetain = append([]string(nil), answers.NeverRetain...)
+		external.NeverRetain = append([]string(nil), answers.NeverRetain...)
 	}
-	channelConfig.Email = email
+	channelConfig.External = external
+	channelConfig.Email = nil
 	agent.ChannelConfig = core.NormalizeDurableAgentChannelConfig(channelConfig)
 
 	bootstrap, err := durableAgentBootstrapFromWizardAnswers(agent.BootstrapLLM, answers, inheritedBootstrap)
@@ -2775,28 +2776,22 @@ func formatDurableAgentTelegramUserIDs(values []int64) string {
 }
 
 func renderDurableAgentChannelConfig(b *strings.Builder, agent core.DurableAgent) {
-	if b == nil || agent.ChannelConfig.Email == nil {
+	if b == nil {
 		return
 	}
-	email := agent.ChannelConfig.Email
-	fmt.Fprintf(b, "channel_address: %s\n", strings.TrimSpace(email.Address))
-	fmt.Fprintf(b, "channel_account: %s\n", strings.TrimSpace(email.Account))
-	fmt.Fprintf(b, "channel_adapter: %s\n", strings.TrimSpace(email.Adapter))
-	fmt.Fprintf(b, "channel_query: %s\n", strings.TrimSpace(email.Query))
-	fmt.Fprintf(b, "channel_poll_interval: %s\n", strings.TrimSpace(email.PollInterval))
-	fmt.Fprintf(b, "channel_summarize_pdfs: %t\n", email.SummarizePDFs)
-	fmt.Fprintf(b, "channel_synthesis_cadence: %s\n", strings.TrimSpace(email.SynthesisCadence))
-	fmt.Fprintf(b, "channel_surface_rules: %s\n", strings.Join(email.SurfaceRules, ","))
-	fmt.Fprintf(b, "channel_never_retain: %s\n", strings.Join(email.NeverRetain, ","))
-	fmt.Fprintf(b, "email_address: %s\n", strings.TrimSpace(email.Address))
-	fmt.Fprintf(b, "email_account: %s\n", strings.TrimSpace(email.Account))
-	fmt.Fprintf(b, "email_adapter: %s\n", strings.TrimSpace(email.Adapter))
-	fmt.Fprintf(b, "email_query: %s\n", strings.TrimSpace(email.Query))
-	fmt.Fprintf(b, "email_poll_interval: %s\n", strings.TrimSpace(email.PollInterval))
-	fmt.Fprintf(b, "email_summarize_pdfs: %t\n", email.SummarizePDFs)
-	fmt.Fprintf(b, "email_synthesis_cadence: %s\n", strings.TrimSpace(email.SynthesisCadence))
-	fmt.Fprintf(b, "email_surface_rules: %s\n", strings.Join(email.SurfaceRules, ","))
-	fmt.Fprintf(b, "email_never_retain: %s\n", strings.Join(email.NeverRetain, ","))
+	external := agent.ChannelConfig.ExternalConfig()
+	if external == nil {
+		return
+	}
+	fmt.Fprintf(b, "channel_address: %s\n", strings.TrimSpace(external.Address))
+	fmt.Fprintf(b, "channel_account: %s\n", strings.TrimSpace(external.Account))
+	fmt.Fprintf(b, "channel_adapter: %s\n", strings.TrimSpace(external.Adapter))
+	fmt.Fprintf(b, "channel_query: %s\n", strings.TrimSpace(external.Query))
+	fmt.Fprintf(b, "channel_poll_interval: %s\n", strings.TrimSpace(external.PollInterval))
+	fmt.Fprintf(b, "channel_summarize_pdfs: %t\n", external.SummarizePDFs)
+	fmt.Fprintf(b, "channel_synthesis_cadence: %s\n", strings.TrimSpace(external.SynthesisCadence))
+	fmt.Fprintf(b, "channel_surface_rules: %s\n", strings.Join(external.SurfaceRules, ","))
+	fmt.Fprintf(b, "channel_never_retain: %s\n", strings.Join(external.NeverRetain, ","))
 }
 
 func durableAgentReviewTargetsAgent(agentID string, scope session.ScopeRef) bool {
@@ -3093,8 +3088,10 @@ func mergeDurableAgentChannelConfig(existing core.DurableAgentChannelConfig, raw
 		return existing, nil
 	}
 	type channelConfigInput struct {
-		Email *core.DurableAgentEmailChannelConfig `json:"email,omitempty"`
-		Inbox *core.DurableAgentEmailChannelConfig `json:"inbox,omitempty"`
+		External *core.DurableAgentExternalChannelConfig `json:"external,omitempty"`
+		Channel  *core.DurableAgentExternalChannelConfig `json:"channel,omitempty"`
+		Email    *core.DurableAgentEmailChannelConfig    `json:"email,omitempty"`
+		Inbox    *core.DurableAgentEmailChannelConfig    `json:"inbox,omitempty"`
 	}
 	var updateRaw channelConfigInput
 	if err := json.Unmarshal(raw, &updateRaw); err != nil {
@@ -3102,26 +3099,36 @@ func mergeDurableAgentChannelConfig(existing core.DurableAgentChannelConfig, raw
 	}
 	update := core.DurableAgentChannelConfig{}
 	switch {
+	case updateRaw.External != nil:
+		cfg := *updateRaw.External
+		update.External = &cfg
+	case updateRaw.Channel != nil:
+		cfg := *updateRaw.Channel
+		update.External = &cfg
 	case updateRaw.Email != nil:
 		cfg := *updateRaw.Email
-		update.Email = &cfg
+		update.External = &cfg
 	case updateRaw.Inbox != nil:
 		cfg := *updateRaw.Inbox
-		update.Email = &cfg
+		update.External = &cfg
 	}
 	update = core.NormalizeDurableAgentChannelConfig(update)
-	if update.Email != nil {
-		if existing.Email == nil {
-			cfg := *update.Email
-			existing.Email = &cfg
+	if external := update.ExternalConfig(); external != nil {
+		if existingExternal := existing.ExternalConfig(); existingExternal == nil {
+			cfg := *external
+			existing.External = &cfg
+			existing.Email = nil
 		} else {
-			mergeDurableAgentEmailChannelConfig(existing.Email, *update.Email)
+			cfg := *existingExternal
+			mergeDurableAgentExternalChannelConfig(&cfg, *external)
+			existing.External = &cfg
+			existing.Email = nil
 		}
 	}
 	return core.NormalizeDurableAgentChannelConfig(existing), nil
 }
 
-func mergeDurableAgentEmailChannelConfig(dst *core.DurableAgentEmailChannelConfig, src core.DurableAgentEmailChannelConfig) {
+func mergeDurableAgentExternalChannelConfig(dst *core.DurableAgentExternalChannelConfig, src core.DurableAgentExternalChannelConfig) {
 	if dst == nil {
 		return
 	}
@@ -3157,14 +3164,14 @@ func mergeDurableAgentEmailChannelConfig(dst *core.DurableAgentEmailChannelConfi
 func validateDurableAgentActivation(agent core.DurableAgent) error {
 	switch normalizeDurableAgentChannelKind(agent.ChannelKind) {
 	case "email":
-		email := agent.ChannelConfig.Email
-		if email == nil {
-			return fmt.Errorf("durable agent %q cannot activate without inbox/email channel_config", agent.AgentID)
+		external := agent.ChannelConfig.ExternalConfig()
+		if external == nil {
+			return fmt.Errorf("durable agent %q cannot activate without external channel_config", agent.AgentID)
 		}
-		if strings.TrimSpace(email.Address) == "" {
+		if strings.TrimSpace(external.Address) == "" {
 			return fmt.Errorf("durable agent %q cannot activate without a channel address", agent.AgentID)
 		}
-		if strings.TrimSpace(email.Adapter) == "" {
+		if strings.TrimSpace(external.Adapter) == "" {
 			return fmt.Errorf("durable agent %q cannot activate without a channel adapter", agent.AgentID)
 		}
 		if strings.TrimSpace(agent.WakeupMode) == "" {

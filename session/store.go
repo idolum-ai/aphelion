@@ -6342,12 +6342,13 @@ func validateDurableAgentChannelConfig(channelKind string, cfg core.DurableAgent
 	cfg = core.NormalizeDurableAgentChannelConfig(cfg)
 	switch strings.TrimSpace(channelKind) {
 	case "email":
-		if cfg.Email == nil {
+		external := cfg.ExternalConfig()
+		if external == nil {
 			return nil
 		}
-		if strings.TrimSpace(cfg.Email.PollInterval) != "" {
-			if _, err := time.ParseDuration(strings.TrimSpace(cfg.Email.PollInterval)); err != nil {
-				return fmt.Errorf("invalid email poll_interval %q: %w", cfg.Email.PollInterval, err)
+		if strings.TrimSpace(external.PollInterval) != "" {
+			if _, err := time.ParseDuration(strings.TrimSpace(external.PollInterval)); err != nil {
+				return fmt.Errorf("invalid channel poll_interval %q: %w", external.PollInterval, err)
 			}
 		}
 	}

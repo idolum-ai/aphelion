@@ -383,11 +383,11 @@ func TestPollDurableWakeAgentsDoesNotSpecialCaseEmailWithoutParentGuidance(t *te
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "email",
-		ChannelConfig: core.DurableAgentChannelConfig{Email: &core.DurableAgentEmailChannelConfig{
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
 			Address:      "host@idolum.ai",
 			Account:      "host@idolum.ai",
-			Adapter:      "gog_cli",
-			Query:        "label:inbox",
+			Adapter:      "child_adapter",
+			Query:        "topic:important",
 			PollInterval: "5m",
 		}},
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{

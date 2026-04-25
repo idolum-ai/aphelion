@@ -1295,13 +1295,13 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 			"autonomy":"observe_only",
 			"capabilities":["read_channel","bounded_review_artifact","summarize_pdf"],
 			"wakeup_mode":"poll",
-			"secret_scopes":["gogcli"],
+			"secret_scopes":["child_adapter"],
 			"channel_config":{
 				"email":{
 					"address":"idolum@example.com",
 					"account":"idolum@example.com",
-					"adapter":"gog_cli",
-					"query":"label:inbox newer_than:7d",
+					"adapter":"child_adapter",
+					"query":"topic:important newer_than:7d",
 					"poll_interval":"5m",
 					"summarize_pdfs":true,
 					"synthesis_cadence":"4h",
@@ -1320,9 +1320,6 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 	if !strings.Contains(createOut, "channel_kind: email") || !strings.Contains(createOut, "channel_profile: inbox") {
 		t.Fatalf("create output = %q, want internal channel kind with inbox profile alias", createOut)
 	}
-	if !strings.Contains(createOut, "email_address: idolum@example.com") {
-		t.Fatalf("create output = %q, want email address summary", createOut)
-	}
 	if !strings.Contains(createOut, "channel_address: idolum@example.com") {
 		t.Fatalf("create output = %q, want channel address summary alias", createOut)
 	}
@@ -1340,8 +1337,8 @@ func TestDurableAgentToolCreateAndActivateEmailDraft(t *testing.T) {
 	if draft.ParentScopeKind != string(session.ScopeKindTelegramDM) || draft.ParentScopeID != "1001" {
 		t.Fatalf("parent scope = kind:%q id:%q, want telegram_dm/1001", draft.ParentScopeKind, draft.ParentScopeID)
 	}
-	if draft.ChannelConfig.Email == nil || draft.ChannelConfig.Email.Adapter != "gog_cli" {
-		t.Fatalf("ChannelConfig.Email = %#v, want gog_cli email config", draft.ChannelConfig.Email)
+	if external := draft.ChannelConfig.ExternalConfig(); external == nil || external.Adapter != "child_adapter" {
+		t.Fatalf("ChannelConfig.ExternalConfig() = %#v, want child_adapter channel config", external)
 	}
 	if draft.LivePolicy.OutboundMode != "read_only" {
 		t.Fatalf("LivePolicy.OutboundMode = %q, want read_only", draft.LivePolicy.OutboundMode)
@@ -1483,7 +1480,7 @@ func TestDurableAgentToolCreateSupportsInboxAliasChannelKindAndConfig(t *testing
 			"channel_config":{
 				"inbox":{
 					"address":"idolum@example.com",
-					"adapter":"gog_cli"
+					"adapter":"child_adapter"
 				}
 			}
 		}`),
@@ -1502,14 +1499,15 @@ func TestDurableAgentToolCreateSupportsInboxAliasChannelKindAndConfig(t *testing
 	if agent.ChannelKind != "email" {
 		t.Fatalf("ChannelKind = %q, want canonical email", agent.ChannelKind)
 	}
-	if agent.ChannelConfig.Email == nil {
-		t.Fatal("ChannelConfig.Email = nil, want normalized inbox/email config")
+	external := agent.ChannelConfig.ExternalConfig()
+	if external == nil {
+		t.Fatal("ChannelConfig.ExternalConfig() = nil, want normalized external channel config")
 	}
-	if agent.ChannelConfig.Email.Address != "idolum@example.com" {
-		t.Fatalf("ChannelConfig.Email.Address = %q, want idolum@example.com", agent.ChannelConfig.Email.Address)
+	if external.Address != "idolum@example.com" {
+		t.Fatalf("ChannelConfig.ExternalConfig().Address = %q, want idolum@example.com", external.Address)
 	}
-	if agent.ChannelConfig.Email.Adapter != "gog_cli" {
-		t.Fatalf("ChannelConfig.Email.Adapter = %q, want gog_cli", agent.ChannelConfig.Email.Adapter)
+	if external.Adapter != "child_adapter" {
+		t.Fatalf("ChannelConfig.ExternalConfig().Adapter = %q, want child_adapter", external.Adapter)
 	}
 }
 
@@ -1552,10 +1550,10 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 			"wizard_answers":{
 				"address":"idolum@example.com",
 				"account":"idolum@example.com",
-				"adapter":"gog_cli",
+				"adapter":"child_adapter",
 				"bootstrap_profile":"child_custom",
 				"bootstrap_model":"claude-sonnet-4-6",
-				"query":"label:inbox newer_than:7d",
+				"query":"topic:important newer_than:7d",
 				"charter":"Review the inbox, surface important threads, summarize PDFs, and never send mail.",
 				"autonomy":"observe_only",
 				"wakeup_mode":"poll_or_push",
@@ -1615,14 +1613,15 @@ func TestDurableAgentToolEmailWizardHappyPath(t *testing.T) {
 	if agent.BootstrapLLM.Model != "claude-sonnet-4-6" {
 		t.Fatalf("agent bootstrap model = %q, want claude-sonnet-4-6", agent.BootstrapLLM.Model)
 	}
-	if agent.ChannelConfig.Email == nil {
-		t.Fatal("agent channel_config.email = nil, want configured email child")
+	external := agent.ChannelConfig.ExternalConfig()
+	if external == nil {
+		t.Fatal("agent external channel_config = nil, want configured child channel")
 	}
-	if agent.ChannelConfig.Email.SynthesisCadence != "4h" {
-		t.Fatalf("email synthesis_cadence = %q, want 4h", agent.ChannelConfig.Email.SynthesisCadence)
+	if external.SynthesisCadence != "4h" {
+		t.Fatalf("channel synthesis_cadence = %q, want 4h", external.SynthesisCadence)
 	}
-	if len(agent.ChannelConfig.Email.NeverRetain) != 2 || agent.ChannelConfig.Email.NeverRetain[0] != "oauth_token" {
-		t.Fatalf("email never_retain = %#v, want oauth_token/password", agent.ChannelConfig.Email.NeverRetain)
+	if len(external.NeverRetain) != 2 || external.NeverRetain[0] != "oauth_token" {
+		t.Fatalf("channel never_retain = %#v, want oauth_token/password", external.NeverRetain)
 	}
 
 	state, err := store.DurableAgentState(agent.AgentID)
@@ -1660,7 +1659,7 @@ func TestDurableAgentToolEmailWizardFinalizeRequiresCompleteAnswers(t *testing.T
 		principal.Principal{Role: principal.RoleAdmin},
 		adminSessionKey(),
 		"durable_agent",
-		json.RawMessage(`{"action":"wizard_answer","agent_id":"idolum-email","wizard_answers":{"address":"idolum@example.com","adapter":"gog_cli"}}`),
+		json.RawMessage(`{"action":"wizard_answer","agent_id":"idolum-email","wizard_answers":{"address":"idolum@example.com","adapter":"child_adapter"}}`),
 	); err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(wizard_answer partial) err = %v", err)
 	}
@@ -1711,7 +1710,7 @@ func TestDurableAgentToolEmailWizardChildCustomRequiresBootstrapModel(t *testing
 			"agent_id":"idolum-email",
 			"wizard_answers":{
 				"address":"idolum@example.com",
-				"adapter":"gog_cli",
+				"adapter":"child_adapter",
 				"bootstrap_profile":"child_custom",
 				"charter":"Read-only inbox child.",
 				"autonomy":"observe_only",
@@ -1786,7 +1785,7 @@ func TestDurableAgentToolEmailWizardBootstrapInheritanceAndCustomModel(t *testin
 			"agent_id":"idolum-email",
 			"wizard_answers":{
 				"address":"idolum@example.com",
-				"adapter":"gog_cli",
+				"adapter":"child_adapter",
 				"bootstrap_profile":"child_custom",
 				"bootstrap_model":"claude-custom-child",
 				"charter":"Read-only inbox child.",
@@ -1860,7 +1859,7 @@ func TestDurableAgentToolEmailWizardCodexChildCustomDoesNotRequireBootstrapModel
 			"agent_id":"idolum-email",
 			"wizard_answers":{
 				"address":"idolum@example.com",
-				"adapter":"gog_cli",
+				"adapter":"child_adapter",
 				"bootstrap_profile":"child_custom",
 				"charter":"Read-only inbox child.",
 				"autonomy":"observe_only",
@@ -1950,11 +1949,11 @@ func TestDurableAgentConnectionTestDoesNotPromoteEmailAdapterGrantsToLiveProbe(t
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "email",
-		ChannelConfig: core.DurableAgentChannelConfig{Email: &core.DurableAgentEmailChannelConfig{
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
 			Address: "host@idolum.ai",
 			Account: "host@idolum.ai",
-			Adapter: "gog_cli",
-			Query:   "label:inbox",
+			Adapter: "child_adapter",
+			Query:   "topic:important",
 		}},
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
 			Charter:            "Read inbox metadata and surface bounded review artifacts.",
@@ -1974,16 +1973,16 @@ func TestDurableAgentConnectionTestDoesNotPromoteEmailAdapterGrantsToLiveProbe(t
 			GrantedBy:      "telegram:1001",
 			GrantedTo:      principalID,
 			Kind:           session.CapabilityKindExternalAccount,
-			TargetResource: "gog_cli:host@idolum.ai",
+			TargetResource: "child_adapter:host@idolum.ai",
 			AllowedActions: []string{"read", "search", "metadata", "connection_test"},
 			Status:         session.CapabilityGrantStatusActive,
 		},
 		{
-			GrantID:        "grant-gog-tool",
+			GrantID:        "grant-channel-tool",
 			GrantedBy:      "telegram:1001",
 			GrantedTo:      principalID,
 			Kind:           session.CapabilityKindTool,
-			TargetResource: "gog_cli",
+			TargetResource: "child_adapter",
 			AllowedActions: []string{"invoke", "read", "search", "metadata", "connection_test"},
 			Status:         session.CapabilityGrantStatusActive,
 		},
@@ -2009,7 +2008,7 @@ func TestDurableAgentConnectionTestDoesNotPromoteEmailAdapterGrantsToLiveProbe(t
 	for _, forbidden := range []string{
 		"status: ok",
 		"external_account_grant: grant-email-account",
-		"tool_grant: grant-gog-tool",
+		"tool_grant: grant-channel-tool",
 		"live_probe:",
 	} {
 		if strings.Contains(out, forbidden) {

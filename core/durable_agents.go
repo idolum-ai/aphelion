@@ -23,10 +23,11 @@ type DurableAgentLivePolicy struct {
 }
 
 type DurableAgentChannelConfig struct {
-	Email *DurableAgentEmailChannelConfig `json:"email,omitempty"`
+	External *DurableAgentExternalChannelConfig `json:"external,omitempty"`
+	Email    *DurableAgentEmailChannelConfig    `json:"email,omitempty"`
 }
 
-type DurableAgentEmailChannelConfig struct {
+type DurableAgentExternalChannelConfig struct {
 	Address          string   `json:"address,omitempty"`
 	Account          string   `json:"account,omitempty"`
 	Adapter          string   `json:"adapter,omitempty"`
@@ -37,6 +38,11 @@ type DurableAgentEmailChannelConfig struct {
 	SynthesisCadence string   `json:"synthesis_cadence,omitempty"`
 	NeverRetain      []string `json:"never_retain,omitempty"`
 }
+
+// DurableAgentEmailChannelConfig is retained as a legacy JSON/type alias while
+// Aphelion migrates parent-owned channel configuration to generic external
+// channel records. New parent code should use DurableAgentExternalChannelConfig.
+type DurableAgentEmailChannelConfig = DurableAgentExternalChannelConfig
 
 type NodeLLMBootstrap struct {
 	Backend         string `json:"backend,omitempty"`
@@ -468,21 +474,51 @@ func NormalizeDurableAgentLivePolicy(policy DurableAgentLivePolicy) DurableAgent
 }
 
 func NormalizeDurableAgentChannelConfig(cfg DurableAgentChannelConfig) DurableAgentChannelConfig {
+	if cfg.External != nil {
+		normalized := NormalizeDurableAgentExternalChannelConfig(*cfg.External)
+		cfg.External = &normalized
+	}
 	if cfg.Email != nil {
-		normalized := NormalizeDurableAgentEmailChannelConfig(*cfg.Email)
+		normalized := NormalizeDurableAgentExternalChannelConfig(*cfg.Email)
 		cfg.Email = &normalized
+		if cfg.External == nil {
+			legacy := normalized
+			cfg.External = &legacy
+		}
+	}
+	if cfg.External != nil && cfg.Email == nil {
+		legacy := *cfg.External
+		cfg.Email = &legacy
 	}
 	return cfg
+}
+
+func (cfg DurableAgentChannelConfig) MarshalJSON() ([]byte, error) {
+	cfg = NormalizeDurableAgentChannelConfig(cfg)
+	type channelConfigJSON struct {
+		External *DurableAgentExternalChannelConfig `json:"external,omitempty"`
+		Email    *DurableAgentEmailChannelConfig    `json:"email,omitempty"`
+	}
+	out := channelConfigJSON{External: cfg.External}
+	if cfg.External == nil && cfg.Email != nil {
+		out.Email = cfg.Email
+	}
+	return json.Marshal(out)
+}
+
+func (cfg DurableAgentChannelConfig) ExternalConfig() *DurableAgentExternalChannelConfig {
+	cfg = NormalizeDurableAgentChannelConfig(cfg)
+	return cfg.External
 }
 
 func NormalizeDurableAgentSetupWizardAnswers(answers DurableAgentSetupWizardAnswers) DurableAgentSetupWizardAnswers {
 	return normalizeDurableAgentSetupWizardAnswers(answers)
 }
 
-func NormalizeDurableAgentEmailChannelConfig(cfg DurableAgentEmailChannelConfig) DurableAgentEmailChannelConfig {
+func NormalizeDurableAgentExternalChannelConfig(cfg DurableAgentExternalChannelConfig) DurableAgentExternalChannelConfig {
 	cfg.Address = strings.TrimSpace(cfg.Address)
 	cfg.Account = strings.TrimSpace(cfg.Account)
-	cfg.Adapter = normalizeDurableAgentEmailAdapter(cfg.Adapter)
+	cfg.Adapter = normalizeDurableAgentChannelAdapter(cfg.Adapter)
 	cfg.Query = strings.TrimSpace(cfg.Query)
 	cfg.PollInterval = strings.TrimSpace(cfg.PollInterval)
 	cfg.SurfaceRules = normalizeDurableAgentStringSet(cfg.SurfaceRules)
@@ -516,7 +552,7 @@ func NormalizeDurableAgentAllowedTelegramUserIDs(values []int64) []int64 {
 
 func (cfg DurableAgentChannelConfig) IsZero() bool {
 	cfg = NormalizeDurableAgentChannelConfig(cfg)
-	return cfg.Email == nil
+	return cfg.External == nil
 }
 
 func NormalizeDurableAgentBootstrapCeiling(ceiling DurableAgentBootstrapCeiling) DurableAgentBootstrapCeiling {
@@ -985,13 +1021,8 @@ func normalizeDurableAgentSharedInferenceReuseScope(value string) string {
 	}
 }
 
-func normalizeDurableAgentEmailAdapter(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "gog", "gog_cli":
-		return "gog_cli"
-	default:
-		return strings.ToLower(strings.TrimSpace(value))
-	}
+func normalizeDurableAgentChannelAdapter(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func normalizeNodeNativeProviderName(value string) string {
@@ -1322,7 +1353,7 @@ func normalizeDurableAgentSetupWizardStatus(value string) string {
 func normalizeDurableAgentSetupWizardAnswers(answers DurableAgentSetupWizardAnswers) DurableAgentSetupWizardAnswers {
 	answers.Address = strings.TrimSpace(answers.Address)
 	answers.Account = strings.TrimSpace(answers.Account)
-	answers.Adapter = normalizeDurableAgentEmailAdapter(answers.Adapter)
+	answers.Adapter = normalizeDurableAgentChannelAdapter(answers.Adapter)
 	answers.Query = strings.TrimSpace(answers.Query)
 	answers.BootstrapProfile = normalizeDurableAgentBootstrapProfile(answers.BootstrapProfile)
 	answers.BootstrapModel = strings.TrimSpace(answers.BootstrapModel)

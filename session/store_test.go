@@ -1519,30 +1519,30 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDurableAgentEmailChannelConfigRoundTrip(t *testing.T) {
+func TestDurableAgentExternalChannelConfigRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
 	defer store.Close()
 
 	agent := core.DurableAgent{
-		AgentID:            "idolum-email",
+		AgentID:            "child-alpha",
 		ParentScopeKind:    "telegram_dm",
 		ParentScopeID:      "1001",
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "email",
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Review the inbox and surface important threads without sending mail.",
+			Charter:            "Review an external child channel and surface important items.",
 			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact", "summarize_pdf"},
 			OutboundMode:       "read_only",
 			DriftPolicy:        "admin_review",
 		}),
 		ChannelConfig: core.DurableAgentChannelConfig{
-			Email: &core.DurableAgentEmailChannelConfig{
+			External: &core.DurableAgentExternalChannelConfig{
 				Address:          "idolum@example.com",
 				Account:          "idolum@example.com",
-				Adapter:          "gog_cli",
-				Query:            "label:inbox newer_than:7d",
+				Adapter:          "child_adapter",
+				Query:            "topic:important newer_than:7d",
 				PollInterval:     "5m",
 				SurfaceRules:     []string{"job opportunity", "external inquiry"},
 				SummarizePDFs:    true,
@@ -1561,26 +1561,27 @@ func TestDurableAgentEmailChannelConfigRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DurableAgent() err = %v", err)
 	}
-	if got.ChannelConfig.Email == nil {
-		t.Fatal("ChannelConfig.Email = nil, want persisted email channel config")
+	external := got.ChannelConfig.ExternalConfig()
+	if external == nil {
+		t.Fatal("ChannelConfig.ExternalConfig() = nil, want persisted external channel config")
 	}
-	if got.ChannelConfig.Email.Address != "idolum@example.com" {
-		t.Fatalf("ChannelConfig.Email.Address = %q, want idolum@example.com", got.ChannelConfig.Email.Address)
+	if external.Address != "idolum@example.com" {
+		t.Fatalf("ChannelConfig.ExternalConfig().Address = %q, want idolum@example.com", external.Address)
 	}
-	if got.ChannelConfig.Email.Adapter != "gog_cli" {
-		t.Fatalf("ChannelConfig.Email.Adapter = %q, want gog_cli", got.ChannelConfig.Email.Adapter)
+	if external.Adapter != "child_adapter" {
+		t.Fatalf("ChannelConfig.ExternalConfig().Adapter = %q, want child_adapter", external.Adapter)
 	}
-	if got.ChannelConfig.Email.PollInterval != "5m" {
-		t.Fatalf("ChannelConfig.Email.PollInterval = %q, want 5m", got.ChannelConfig.Email.PollInterval)
+	if external.PollInterval != "5m" {
+		t.Fatalf("ChannelConfig.ExternalConfig().PollInterval = %q, want 5m", external.PollInterval)
 	}
-	if !got.ChannelConfig.Email.SummarizePDFs {
-		t.Fatal("ChannelConfig.Email.SummarizePDFs = false, want true")
+	if !external.SummarizePDFs {
+		t.Fatal("ChannelConfig.ExternalConfig().SummarizePDFs = false, want true")
 	}
-	if len(got.ChannelConfig.Email.SurfaceRules) != 2 || got.ChannelConfig.Email.SurfaceRules[0] != "job opportunity" {
-		t.Fatalf("ChannelConfig.Email.SurfaceRules = %#v, want persisted surface rules", got.ChannelConfig.Email.SurfaceRules)
+	if len(external.SurfaceRules) != 2 || external.SurfaceRules[0] != "job opportunity" {
+		t.Fatalf("ChannelConfig.ExternalConfig().SurfaceRules = %#v, want persisted surface rules", external.SurfaceRules)
 	}
-	if len(got.ChannelConfig.Email.NeverRetain) != 2 || got.ChannelConfig.Email.NeverRetain[1] != "password" {
-		t.Fatalf("ChannelConfig.Email.NeverRetain = %#v, want persisted never-retain classes", got.ChannelConfig.Email.NeverRetain)
+	if len(external.NeverRetain) != 2 || external.NeverRetain[1] != "password" {
+		t.Fatalf("ChannelConfig.ExternalConfig().NeverRetain = %#v, want persisted never-retain classes", external.NeverRetain)
 	}
 }
 
