@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -597,6 +596,7 @@ func (r *Registry) saveDurableAgentContinuity(state *core.DurableAgentState, con
 }
 
 func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAgentInput) (string, error) {
+	_ = ctx
 	agentID := strings.TrimSpace(in.AgentID)
 	if agentID == "" {
 		return "", fmt.Errorf("durable_agent agent_id is required for connection_test")
@@ -610,17 +610,7 @@ func (r *Registry) testDurableAgentConnection(ctx context.Context, in durableAge
 		if agent.ChannelConfig.Email == nil {
 			return "", fmt.Errorf("durable agent %q has no email channel_config", agent.AgentID)
 		}
-		args := []string{"gog"}
-		if strings.TrimSpace(agent.ChannelConfig.Email.Account) != "" {
-			args = append(args, "--account", strings.TrimSpace(agent.ChannelConfig.Email.Account))
-		}
-		args = append(args, "gmail", "search", firstNonEmpty(strings.TrimSpace(agent.ChannelConfig.Email.Query), "label:inbox"), "--json", "--results-only", "--max", "1", "--no-input")
-		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return "", fmt.Errorf("durable agent connection_test failed: %w: %s", err, strings.TrimSpace(string(out)))
-		}
-		return fmt.Sprintf("action: durable-agent connection test\nagent_id: %s\nchannel_kind: %s\nstatus: ok\n", agent.AgentID, agent.ChannelKind), nil
+		return fmt.Sprintf("action: durable-agent connection test\nagent_id: %s\nchannel_kind: %s\nstatus: configuration_only\nnext: grant a concrete channel/tool capability before live adapter access can be tested\n", agent.AgentID, agent.ChannelKind), nil
 	default:
 		return "", fmt.Errorf("durable agent %q channel %q does not support connection_test yet", agent.AgentID, agent.ChannelKind)
 	}
@@ -1895,7 +1885,7 @@ func wizardQuestionForStep(step string, effectiveBootstrapBackend string) string
 	case "address":
 		return "What channel address should this child own?"
 	case "adapter":
-		return "Which channel adapter should be used (for example gog_cli for inbox/email)?"
+		return "Which channel adapter should be named for this channel profile?"
 	case "bootstrap_profile":
 		if strings.TrimSpace(effectiveBootstrapBackend) == "codex" {
 			return "This child uses a codex bootstrap backend; keep parent bootstrap defaults?"

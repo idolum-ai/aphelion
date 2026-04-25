@@ -6,14 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-func TestDurableChildSandboxAccessIncludesGogCLIForEmailChild(t *testing.T) {
+func TestDurableChildSandboxAccessDoesNotSpecialCaseEmailAdapter(t *testing.T) {
 	t.Setenv("GOG_KEYRING_PASSWORD", "secret-for-test")
 	configHome := filepath.Join(t.TempDir(), "config")
 	if err := os.MkdirAll(filepath.Join(configHome, "gogcli"), 0o700); err != nil {
@@ -21,20 +23,79 @@ func TestDurableChildSandboxAccessIncludesGogCLIForEmailChild(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 
-	access := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{
+	access, err := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{
 		AgentID:     "idolum-email",
 		ChannelKind: "email",
 		ChannelConfig: core.DurableAgentChannelConfig{Email: &core.DurableAgentEmailChannelConfig{
 			Adapter: "gog_cli",
 		}},
 		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
-	})
-
-	if !containsString(access.readonlyPaths, "/srv/aphelion/bin/aphelion") || !containsString(access.readonlyPaths, "/srv/codex") || !containsString(access.readonlyPaths, filepath.Join(configHome, "gogcli")) {
-		t.Fatalf("readonlyPaths = %#v, want binary, codex home, and gogcli config", access.readonlyPaths)
+	}, nil)
+	if err != nil {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v", err)
 	}
-	if access.env["GOG_KEYRING_PASSWORD"] != "secret-for-test" || access.env["XDG_CONFIG_HOME"] != configHome {
-		t.Fatalf("env = %#v, want gog env", access.env)
+
+	if !containsString(access.readonlyPaths, "/srv/aphelion/bin/aphelion") || !containsString(access.readonlyPaths, "/srv/codex") {
+		t.Fatalf("readonlyPaths = %#v, want binary and codex home", access.readonlyPaths)
+	}
+	if containsString(access.readonlyPaths, filepath.Join(configHome, "gogcli")) {
+		t.Fatalf("readonlyPaths = %#v, did not expect implicit gogcli config", access.readonlyPaths)
+	}
+	if len(access.env) != 0 {
+		t.Fatalf("env = %#v, want no implicit gog env", access.env)
+	}
+}
+
+func TestDurableChildSandboxAccessMaterializesGrantedRuntimeCapability(t *testing.T) {
+	t.Setenv("MAIL_TOOL_TOKEN", "secret-for-test")
+	root := t.TempDir()
+	exe := filepath.Join(root, "mail-reader")
+	if err := os.WriteFile(exe, []byte("#!/usr/bin/env bash\necho ok\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(exe) err = %v", err)
+	}
+	configDir := filepath.Join(root, "mail-config")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(configDir) err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-mail-reader",
+		GrantedTo:      "idolum-email",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail-reader",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract: `{
+			"child_runtime": {
+				"executable": "` + exe + `",
+				"readonly_paths": ["` + configDir + `"],
+				"env_from_parent": ["MAIL_TOOL_TOKEN"]
+			}
+		}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	access, err := durableChildSandboxAccessFor("/srv/aphelion/bin/aphelion", core.DurableAgent{
+		AgentID:      "idolum-email",
+		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
+	}, store)
+	if err != nil {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v", err)
+	}
+
+	if !containsString(access.readonlyPaths, configDir) {
+		t.Fatalf("readonlyPaths = %#v, want granted config dir", access.readonlyPaths)
+	}
+	if access.env["MAIL_TOOL_TOKEN"] != "secret-for-test" {
+		t.Fatalf("env = %#v, want granted env inherited", access.env)
+	}
+	if !containsBind(access.readonlyBinds, exe, "/usr/local/bin/mail-reader") {
+		t.Fatalf("readonlyBinds = %#v, want executable bind", access.readonlyBinds)
 	}
 }
 
@@ -45,6 +106,36 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func containsBind(values []sandbox.BindPath, source string, target string) bool {
+	for _, value := range values {
+		if value.Source == source && value.Target == target {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDurableAgentProfileContextLoadsExternalProfileFiles(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	profileRoot := filepath.Join(root, "memory", "profile")
+	if err := os.MkdirAll(profileRoot, 0o700); err != nil {
+		t.Fatalf("MkdirAll(profileRoot) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileRoot, "persona.md"), []byte("Speak as a careful inbox child."), 0o600); err != nil {
+		t.Fatalf("WriteFile(persona) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileRoot, "policy.md"), []byte("Ask parent before new tool access."), 0o600); err != nil {
+		t.Fatalf("WriteFile(policy) err = %v", err)
+	}
+
+	ctx := durableAgentProfileContext(sandbox.Scope{SharedMemoryRoot: filepath.Join(root, "memory")}, core.DurableAgent{AgentID: "idolum-email"})
+	if !strings.Contains(ctx, "External durable child profile files") || !strings.Contains(ctx, "profile/persona.md") || !strings.Contains(ctx, "Ask parent before new tool access") {
+		t.Fatalf("profile context = %q, want external profile file content", ctx)
+	}
 }
 
 func TestDurableAgentChildConfigUsesNativeBootstrapWithoutParentCredentials(t *testing.T) {
