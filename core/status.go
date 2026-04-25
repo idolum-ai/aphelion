@@ -112,6 +112,7 @@ type CapabilityRequestStatusSnapshot struct {
 	RequestedBy     string
 	RequestedFor    string
 	ParentPrincipal string
+	AdminPrincipal  string
 	RiskClass       string
 	Purpose         string
 	GrantID         string

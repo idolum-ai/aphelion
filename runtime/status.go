@@ -1541,6 +1541,7 @@ func (r *Runtime) capabilityStatusSnapshot(limit int) ([]core.CapabilityRequestS
 			RequestedBy:     strings.TrimSpace(request.RequestedBy),
 			RequestedFor:    strings.TrimSpace(request.RequestedFor),
 			ParentPrincipal: strings.TrimSpace(request.ParentPrincipal),
+			AdminPrincipal:  strings.TrimSpace(request.AdminPrincipal),
 			RiskClass:       strings.TrimSpace(request.RiskClass),
 			Purpose:         strings.TrimSpace(request.Purpose),
 			GrantID:         strings.TrimSpace(request.GrantID),

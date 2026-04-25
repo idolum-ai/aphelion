@@ -1989,6 +1989,7 @@ func TestChatStatusSnapshotIncludesCapabilityDelegationState(t *testing.T) {
 		RequestedBy:     "family-child",
 		RequestedFor:    "family-child",
 		ParentPrincipal: "telegram:200",
+		AdminPrincipal:  "telegram:1001",
 		Kind:            session.CapabilityKindPurchase,
 		TargetResource:  "amazon",
 		Purpose:         "order approved supplies",
@@ -2021,6 +2022,9 @@ func TestChatStatusSnapshotIncludesCapabilityDelegationState(t *testing.T) {
 	}
 	if got := snapshot.CapabilityRequests[0]; got.RequestID != "cap-status" || got.Kind != "purchase" || got.ReviewStatus != "approved" || got.GrantID != "capg-status" {
 		t.Fatalf("CapabilityRequests[0] = %#v, want approved cap-status", got)
+	}
+	if got := snapshot.CapabilityRequests[0]; got.ParentPrincipal != "telegram:200" || got.AdminPrincipal != "telegram:1001" {
+		t.Fatalf("CapabilityRequests[0] principals = parent %q admin %q, want telegram:200 and telegram:1001", got.ParentPrincipal, got.AdminPrincipal)
 	}
 	if len(snapshot.CapabilityGrants) != 1 {
 		t.Fatalf("CapabilityGrants len = %d, want 1", len(snapshot.CapabilityGrants))
