@@ -835,11 +835,29 @@ func boundedLimit(raw int, max int) int {
 }
 
 func validateCapabilityChildRuntimeContract(contract string, constraints string) error {
+	for _, raw := range []string{contract, constraints} {
+		if capabilityJSONBlobHasKey(raw, "runtime_materialization") {
+			return fmt.Errorf("capability contract must use child_runtime; runtime_materialization is migration-only")
+		}
+	}
 	_, _, err := core.ExtractChildRuntimeContract(contract, constraints)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func capabilityJSONBlobHasKey(raw string, key string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return false
+	}
+	_, ok := obj[key]
+	return ok
 }
 
 func renderCapabilityChildRuntime(b *strings.Builder, contract string, constraints string) {

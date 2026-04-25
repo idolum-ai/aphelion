@@ -645,6 +645,22 @@ func RenderTelegramStatusDurables(snapshot core.DurableAgentsStatusSnapshot) str
 			agent.LastAppliedPolicyVersion,
 			formatStatusTime(agent.LastAppliedPolicyAt),
 		))
+		lines = append(lines, fmt.Sprintf(
+			"  authority principal=%s child_runtime_grants=%d profile_manifest=%s profile_policy_hash=%s profile_files=%d substrate=%s",
+			firstNonEmpty(strings.TrimSpace(agent.CanonicalPrincipal), "-"),
+			agent.ChildRuntimeGrantCount,
+			firstNonEmpty(strings.TrimSpace(agent.ProfileManifestStatus), "-"),
+			formatStatusHash(agent.ProfileManifestPolicyHash),
+			agent.ProfileManifestFileCount,
+			formatStringList(agent.SubstrateLabels),
+		))
+		if blocked := strings.TrimSpace(agent.ChildRuntimeBlockedReason); blocked != "" {
+			line := "  repair child_runtime_blocked=" + quoteStatusField(truncateStatusField(blocked, 120))
+			if hint := strings.TrimSpace(agent.ChildRuntimeRepairHint); hint != "" {
+				line += " hint=" + quoteStatusField(truncateStatusField(hint, 120))
+			}
+			lines = append(lines, line)
+		}
 		if applyErr := strings.TrimSpace(agent.LastApplyError); applyErr != "" {
 			lines = append(lines, "  runtime apply_error="+quoteStatusField(truncateStatusField(applyErr, 120)))
 		}

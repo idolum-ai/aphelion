@@ -326,3 +326,21 @@ func TestCapabilityGrantRejectsInvalidChildRuntimeContract(t *testing.T) {
 		t.Fatal("capabilityAuthorityGrantSet() err = nil, want child_runtime validation error")
 	}
 }
+
+func TestCapabilityRejectsLegacyRuntimeMaterializationInput(t *testing.T) {
+	t.Parallel()
+
+	registry, _ := newDurableAgentToolRegistry(t)
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminSessionKey(), "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-legacy-runtime",
+		"kind":"tool",
+		"target_resource":"mail-reader",
+		"purpose":"legacy runtime key should be rejected",
+		"contract":{"runtime_materialization":{"readonly_paths":["/srv/mail"]}}
+	}`))
+	if err == nil || !strings.Contains(err.Error(), "child_runtime") || !strings.Contains(err.Error(), "migration-only") {
+		t.Fatalf("request_submit err = %v, want child_runtime-only rejection", err)
+	}
+}
