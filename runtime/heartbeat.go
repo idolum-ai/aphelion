@@ -13,6 +13,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
@@ -112,6 +113,12 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		if reflectionErr != nil {
 			log.Printf("WARN heartbeat reflection failed: %v", reflectionErr)
 		}
+		promotionSummary, promotionErr := r.promoteApprovedSemanticImports(ctx, dynamicPromptRoot(scope), semanticScope, semanticPrincipalID, now)
+		if promotionErr != nil {
+			log.Printf("WARN semantic import promotion failed: %v", promotionErr)
+			r.reportOperationalIssueAsync("semantic_promotion", promotionErr)
+		}
+		reflectionSummary = joinNonEmptyLines(reflectionSummary, promotionSummary)
 	}
 	eligibleForOutreach := deliver && hiddenInputs.ReflectiveOutreachEligible()
 	if len(events) == 0 && !eligibleForOutreach {
@@ -245,6 +252,42 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	}
 
 	return nil
+}
+
+func (r *Runtime) promoteApprovedSemanticImports(ctx context.Context, scopeRoot string, semanticScope string, semanticPrincipalID string, now time.Time) (string, error) {
+	if r == nil || r.semantic == nil || !r.semantic.Enabled() {
+		return "", nil
+	}
+	candidates, err := r.semantic.ProposeApprovedImports(ctx, memstore.SemanticPromotionRequest{
+		Root:        scopeRoot,
+		Scope:       semanticScope,
+		PrincipalID: semanticPrincipalID,
+		Limit:       8,
+		MaxChars:    900,
+		Now:         now,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(candidates) == 0 {
+		return "", nil
+	}
+	ids := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.Proposal.ID)
+	}
+	return fmt.Sprintf("Proposed semantic import memory updates for review: %s", strings.Join(ids, ", ")), nil
+}
+
+func joinNonEmptyLines(parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func (r *Runtime) resolveHeartbeatTarget(now time.Time) (int64, bool) {

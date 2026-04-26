@@ -448,6 +448,60 @@ func TestHeartbeatReflectionProposesCuratedMemoryFromDailyNotes(t *testing.T) {
 	}
 }
 
+func TestHeartbeatPromotesApprovedSemanticImports(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Heartbeat.Enabled = true
+	cfg.Heartbeat.Target = "none"
+	cfg.Memory.Semantic.Enabled = true
+	provider.reflectionReplyText = "[MEMORY]\n[/MEMORY]\n[KNOWLEDGE]\n[/KNOWLEDGE]\n[DECISIONS]\n[/DECISIONS]\n[QUESTIONS]\n[/QUESTIONS]\n[RHIZOME]\n[/RHIZOME]"
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.semantic.ImportDocument(context.Background(), memstore.SemanticImportRequest{
+		Scope:            "shared",
+		SourcePath:       "codex/session-approved.jsonl",
+		SourceKind:       "codex_session",
+		SourceClass:      "imported_archive",
+		ProvenanceSource: "codex_session_import",
+		ImportState:      memstore.SemanticImportStateApproved,
+		Content:          "Excellent PDF generation guidelines should be retained as durable operator knowledge.",
+		MTime:            time.Date(2026, time.April, 25, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("ImportDocument() err = %v", err)
+	}
+
+	if err := rt.runHeartbeatOnce(context.Background(), time.Date(2026, time.April, 26, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runHeartbeatOnce() err = %v", err)
+	}
+
+	proposals, err := memstore.ListProposals(memstore.ProposalListOptions{Root: cfg.Agent.SharedMemoryRoot})
+	if err != nil {
+		t.Fatalf("ListProposals() err = %v", err)
+	}
+	found := false
+	for _, proposal := range proposals {
+		if proposal.Store == memstore.StoreKnowledge && proposal.SourceKind == "semantic_import" && strings.Contains(proposal.Content, "PDF generation guidelines") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("proposals = %#v, want semantic import promotion proposal", proposals)
+	}
+
+	maintenance, err := store.Load(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()})
+	if err != nil {
+		t.Fatalf("Load(heartbeat session) err = %v", err)
+	}
+	if !strings.Contains(maintenance.LastFloorText, "semantic import") {
+		t.Fatalf("maintenance floor = %q, want semantic promotion summary", maintenance.LastFloorText)
+	}
+}
+
 func TestHeartbeatReflectionAddsSemanticContext(t *testing.T) {
 	t.Parallel()
 
