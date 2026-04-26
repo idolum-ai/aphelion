@@ -71,14 +71,37 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		t.Fatalf("runDoctorOnce() err = %v", err)
 	}
 
-	if len(sender.sent) != 1 {
-		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	sender.mu.Lock()
+	sent := append([]core.OutboundMessage(nil), sender.sent...)
+	edits := append([]messageEdit(nil), sender.edits...)
+	inlineCount := len(sender.inline)
+	editInlineCount := len(sender.editInline)
+	sender.mu.Unlock()
+
+	if len(sent) != 2 {
+		t.Fatalf("sent len = %d, want progress message and final report", len(sent))
 	}
-	if sender.sent[0].ChatID != 1001 || !strings.Contains(sender.sent[0].Text, "State of Things") {
-		t.Fatalf("sent = %#v, want doctor report to admin", sender.sent[0])
+	if sent[0].ChatID != 1001 || !strings.Contains(sent[0].Text, "Thinking") || !strings.Contains(sent[0].Text, "Loading prompt and memory context") {
+		t.Fatalf("progress message = %#v, want live doctor progress", sent[0])
 	}
-	if sender.sent[0].ReplyTo == nil || *sender.sent[0].ReplyTo != 17 {
-		t.Fatalf("reply_to = %#v, want 17", sender.sent[0].ReplyTo)
+	if sent[0].ReplyTo == nil || *sent[0].ReplyTo != 17 {
+		t.Fatalf("progress reply_to = %#v, want 17", sent[0].ReplyTo)
+	}
+	if sent[1].ChatID != 1001 || !strings.Contains(sent[1].Text, "State of Things") {
+		t.Fatalf("report message = %#v, want doctor report to admin", sent[1])
+	}
+	if sent[1].ReplyTo == nil || *sent[1].ReplyTo != 17 {
+		t.Fatalf("report reply_to = %#v, want 17", sent[1].ReplyTo)
+	}
+	if inlineCount != 0 || editInlineCount != 0 {
+		t.Fatalf("inline progress = sent:%d edited:%d, want plain progress without controls", inlineCount, editInlineCount)
+	}
+	if len(edits) == 0 {
+		t.Fatal("progress edits = 0, want live progress updates")
+	}
+	lastEdit := edits[len(edits)-1]
+	if lastEdit.ChatID != 1001 || lastEdit.MessageID != 1 || !strings.HasPrefix(lastEdit.Text, "Done.") || !strings.Contains(lastEdit.Text, "Sending the doctor report to Telegram") {
+		t.Fatalf("final progress edit = %#v, want completed doctor progress", lastEdit)
 	}
 
 	sess, err := store.Load(key)
@@ -114,6 +137,9 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		"provider.attempt.failed",
 		"semantic_enabled",
 		"Recent Service Log Tail",
+		"Known Issue Status Checks",
+		"issue=dynamic_skills_prompt_loading status=likely_fixed",
+		"allowed_statuses: active, likely_fixed, historical_resolved, residual_risk, unknown",
 	} {
 		if !strings.Contains(userPrompt, want) {
 			t.Fatalf("doctor prompt missing %q:\n%s", want, userPrompt)

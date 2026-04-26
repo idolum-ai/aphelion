@@ -98,15 +98,28 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		sess.UserName = strings.TrimSpace(msg.SenderName)
 	}
 
+	progress := r.newDoctorProgressReporter(key, msg, sess)
+	monitor := r.startTurnMonitor(key, session.TurnRunKindDoctor, "/doctor", progress, nil)
+	var monitorErr error
+	defer func() {
+		if monitorErr != nil {
+			surfaceDoctorProgress(ctx, progress, "Doctor diagnostics failed: "+trimError(monitorErr.Error()))
+		}
+		monitor.Finish(ctx, monitorErr)
+	}()
+
+	surfaceDoctorProgress(ctx, progress, "Loading prompt and memory context")
 	promptContext, err := r.promptContextForScope(scope, now)
 	if err != nil {
-		return fmt.Errorf("load doctor prompt context: %w", err)
+		monitorErr = fmt.Errorf("load doctor prompt context: %w", err)
+		return monitorErr
 	}
 	prepared := pipeline.TurnPrepareContract{
 		UserText:   "/doctor",
 		LedgerText: "/doctor",
 	}
 	exec := r.executionForTurn(prepared)
+	surfaceDoctorProgress(ctx, progress, "Collecting session, memory, log, and runtime evidence")
 	packet := r.buildDoctorDiagnosticPacket(ctx, doctorDiagnosticInput{
 		Message:       msg,
 		Actor:         actor,
@@ -130,12 +143,6 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 	sess.SystemPrompt = systemPrompt
 
-	monitor := r.startTurnMonitor(key, session.TurnRunKindDoctor, "/doctor", nil, nil)
-	var monitorErr error
-	defer func() {
-		monitor.Finish(ctx, monitorErr)
-	}()
-
 	input := []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "system", Content: doctorReadOnlySystemNote()},
@@ -149,6 +156,7 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		"run_kind":      string(session.TurnRunKindDoctor),
 	}, time.Now().UTC())
 
+	surfaceDoctorProgress(ctx, progress, "Asking the model to write the read-only diagnosis")
 	turnResult, _, runErr := agent.RunTurn(ctx, exec.Provider, nil, &agent.Budget{
 		Max:     r.cfg.Agent.MaxIterations,
 		Caution: 0.7,
@@ -192,11 +200,13 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		report = doctorReportFallbackText
 	}
 	report = redactDoctorText(report)
+	surfaceDoctorProgress(ctx, progress, "Saving the doctor report into chat history")
 	newMessages := appendSyntheticTurn(sess, "/doctor", report, report, "")
 	if err := r.store.Save(sess, newMessages, turnResult.TokenUsage); err != nil {
 		monitorErr = fmt.Errorf("save doctor report: %w", err)
 		return monitorErr
 	}
+	surfaceDoctorProgress(ctx, progress, "Sending the doctor report to Telegram")
 	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
 		ChatID:  msg.ChatID,
 		Text:    report,
@@ -227,11 +237,39 @@ func (r *Runtime) resolveDoctorAdmin(msg core.InboundMessage) (principal.Princip
 	return actor, nil
 }
 
+func (r *Runtime) newDoctorProgressReporter(key session.SessionKey, msg core.InboundMessage, sess *session.Session) *toolProgressReporter {
+	if r == nil {
+		return nil
+	}
+	var plan session.PlanState
+	if sess != nil {
+		plan = sess.PlanState
+	}
+	progress := r.newToolProgressReporter(key, msg, plan, nil)
+	if progress == nil {
+		return nil
+	}
+	progress.suppressControls = true
+	progress.controls = nil
+	progress.taskSummary = "doctor diagnostics"
+	progress.currentPlanStep = ""
+	return progress
+}
+
+func surfaceDoctorProgress(ctx context.Context, progress *toolProgressReporter, text string) {
+	if progress == nil {
+		return
+	}
+	progress.Surface(ctx, text)
+}
+
 func doctorReadOnlySystemNote() string {
 	return strings.Join([]string{
 		"You are running the /doctor command.",
 		"This is a read-only diagnostic pass. Do not claim to have edited files, run commands, restarted services, changed memory, or committed code.",
 		"Use the diagnostic packet and the loaded prompt/memory context to produce an operator-facing report.",
+		"For every issue you report, classify it as active, likely_fixed, historical_resolved, residual_risk, or unknown by comparing old failure evidence with current-state checks.",
+		"Do not present an old failure as active when the current-state checks indicate it is likely fixed; instead call out remaining verification gaps.",
 		"Include concrete code recommendations when the evidence points to code changes, but frame them as recommendations only.",
 		"Required sections: State of Things, Recent Failures or Risks, Memory and Prompt Health, Runtime and Session Health, Recommendations, Code Recommendations, Confidence and Unknowns.",
 	}, "\n")
@@ -263,6 +301,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Memory Footprint")
 	r.writeDoctorMemoryFootprint(&b, input.Scope, now)
 
+	writeDoctorSection(&b, "Known Issue Status Checks")
+	r.writeDoctorIssueStatusChecks(&b, input)
+
 	writeDoctorSection(&b, "Execution Events")
 	r.writeDoctorExecutionEvents(ctx, &b, input.Key, now)
 
@@ -276,7 +317,7 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	r.writeDoctorLogTail(&b)
 
 	writeDoctorSection(&b, "Doctor Instructions")
-	writeDoctorLine(&b, "Analyze the evidence above and the loaded prompt/memory context. Identify likely causes, residual risks, and specific follow-up work. Do not perform actions.")
+	writeDoctorLine(&b, "Analyze the evidence above and the loaded prompt/memory context. Identify likely causes, residual risks, and specific follow-up work. Do not perform actions. Before reporting a failure as current, check whether the Known Issue Status Checks or newer runtime evidence indicate it has already been fixed.")
 
 	packet := redactDoctorText(b.String())
 	if len(packet) > doctorPacketMaxChars {
@@ -406,6 +447,90 @@ func (r *Runtime) writeDoctorMemoryFootprint(b *strings.Builder, scope sandbox.S
 		writeDoctorFileStat(b, root, today)
 		writeDoctorFileStat(b, root, yesterday)
 	}
+}
+
+func (r *Runtime) writeDoctorIssueStatusChecks(b *strings.Builder, input doctorDiagnosticInput) {
+	writeDoctorLine(b, "classification_contract: before reporting an issue as current, compare historical failure evidence with current runtime, prompt, memory, and source-state evidence.")
+	writeDoctorLine(b, "allowed_statuses: active, likely_fixed, historical_resolved, residual_risk, unknown")
+	writeDoctorLine(b, "reporting_rule: if evidence is old and the current-state check passes, report it as historical/resolved or residual risk, not as an active failure.")
+
+	workingRoot := strings.TrimSpace(input.Scope.WorkingRoot)
+	retrySourceOK := doctorSourceContainsAll(workingRoot, "agent/turn.go", []string{"completeWithRetry", "isRetryableProviderError", "maxProviderRetries"})
+	transportRetries := 0
+	if r != nil && r.cfg != nil {
+		transportRetries = r.cfg.Governor.Codex.TransportRetries
+	}
+	switch {
+	case retrySourceOK && transportRetries > 0:
+		writeDoctorIssueCheck(b, "codex_timeout_retries", "likely_fixed", fmt.Sprintf("codex_transport_retries=%d and provider retry loop is present in agent/turn.go", transportRetries))
+	case retrySourceOK:
+		writeDoctorIssueCheck(b, "codex_timeout_retries", "residual_risk", fmt.Sprintf("agent provider retry loop is present, but codex_transport_retries=%d", transportRetries))
+	default:
+		writeDoctorIssueCheck(b, "codex_timeout_retries", "unknown", "could not confirm retry-loop source evidence from working_root")
+	}
+
+	skillsConfigured := r != nil && r.cfg != nil && doctorPathListContains(r.cfg.Agent.DynamicFiles, "SKILLS.md")
+	skillsLoaded := doctorPromptContextHasFile(input.PromptContext, "SKILLS.md")
+	if skillsConfigured && skillsLoaded {
+		writeDoctorIssueCheck(b, "dynamic_skills_prompt_loading", "likely_fixed", "SKILLS.md is configured as a dynamic file and is present in loaded prompt context")
+	} else if skillsConfigured {
+		writeDoctorIssueCheck(b, "dynamic_skills_prompt_loading", "active", "SKILLS.md is configured but was not present in loaded prompt context")
+	} else if skillsLoaded {
+		writeDoctorIssueCheck(b, "dynamic_skills_prompt_loading", "residual_risk", "SKILLS.md loaded, but it is not explicitly listed in configured dynamic files")
+	} else {
+		writeDoctorIssueCheck(b, "dynamic_skills_prompt_loading", "active", "SKILLS.md is not configured or loaded as dynamic context")
+	}
+
+	memoryConfigured := r != nil && r.cfg != nil &&
+		doctorPathListContains(r.cfg.Agent.DynamicFiles, "memory/knowledge.md") &&
+		doctorPathListContains(r.cfg.Agent.DynamicFiles, "memory/decisions.md")
+	memoryLoaded := doctorPromptContextHasFile(input.PromptContext, "memory/knowledge.md") ||
+		doctorPromptContextHasFile(input.PromptContext, "memory/decisions.md")
+	recoverySourceOK := doctorSourceContainsAll(workingRoot, "main.go", []string{"StartStartupRecovery"}) &&
+		doctorSourceContainsAll(workingRoot, "runtime/recovery.go", []string{"StartStartupRecovery", "PendingRecoveryTurnRuns"})
+	switch {
+	case memoryConfigured && memoryLoaded && recoverySourceOK:
+		writeDoctorIssueCheck(b, "memory_survives_restart_and_dynamic_files_load", "likely_fixed", "structured memory files load dynamically and startup recovery source evidence is present")
+	case memoryConfigured && memoryLoaded:
+		writeDoctorIssueCheck(b, "memory_survives_restart_and_dynamic_files_load", "residual_risk", "structured memory files load dynamically, but startup recovery source evidence was not confirmed")
+	case memoryConfigured:
+		writeDoctorIssueCheck(b, "memory_survives_restart_and_dynamic_files_load", "active", "structured memory files are configured but were not present in loaded prompt context")
+	default:
+		writeDoctorIssueCheck(b, "memory_survives_restart_and_dynamic_files_load", "active", "structured memory files are not fully configured as dynamic context")
+	}
+
+	productionEmailMatches := doctorSourceMatches(workingRoot, []string{"runtime", "tool", "core", "session"}, []string{"email", "e-mail"}, false, 8)
+	if len(productionEmailMatches) == 0 {
+		writeDoctorIssueCheck(b, "feature_specific_email_subagent_code", "likely_fixed", "no production source matches for email-specific terms under runtime/tool/core/session")
+	} else {
+		writeDoctorIssueCheck(b, "feature_specific_email_subagent_code", "residual_risk", "production source still contains email-specific matches: "+strings.Join(productionEmailMatches, ", "))
+	}
+
+	operationalAlertSourceOK := doctorSourceContainsAll(workingRoot, "runtime/operational_alerts.go", []string{"reportOperationalIssueAsync", "sendOperationalNoticeToAdmin", "system_warning"}) &&
+		doctorSourceContainsAll(workingRoot, "runtime/turn_coordinator_common.go", []string{"reportOperationalIssueAsync", "provider"})
+	adminConfigured := r != nil && r.cfg != nil && len(uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)) > 0
+	if operationalAlertSourceOK && adminConfigured {
+		writeDoctorIssueCheck(b, "runtime_failures_surface_to_telegram", "likely_fixed", "operational alert delivery source is present and at least one admin Telegram ID is configured")
+	} else if operationalAlertSourceOK {
+		writeDoctorIssueCheck(b, "runtime_failures_surface_to_telegram", "residual_risk", "operational alert delivery source is present, but no admin Telegram ID is configured")
+	} else {
+		writeDoctorIssueCheck(b, "runtime_failures_surface_to_telegram", "unknown", "could not confirm operational alert delivery source evidence from working_root")
+	}
+
+	workspaceEscapeGateOK := doctorSourceContainsAll(workingRoot, "tool/exec.go", []string{"workspace_escape", "ConfirmExec", "ProposalStatusApproved"})
+	if workspaceEscapeGateOK {
+		writeDoctorIssueCheck(b, "admin_workspace_escape_requires_approval", "likely_fixed", "exec workspace escape path is gated by capability/proposal source evidence")
+	} else {
+		writeDoctorIssueCheck(b, "admin_workspace_escape_requires_approval", "unknown", "could not confirm workspace escape approval gate source evidence from working_root")
+	}
+}
+
+func writeDoctorIssueCheck(b *strings.Builder, issue string, status string, evidence string) {
+	writeDoctorLine(b, fmt.Sprintf("- issue=%s status=%s evidence=%q",
+		strings.TrimSpace(issue),
+		strings.TrimSpace(status),
+		truncatePreview(evidence, 600),
+	))
 }
 
 func writeDoctorFileStat(b *strings.Builder, root string, rel string) {
@@ -647,6 +772,123 @@ func readDoctorTail(path string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	return io.ReadAll(file)
+}
+
+func doctorPathListContains(paths []string, want string) bool {
+	want = filepath.ToSlash(strings.TrimSpace(want))
+	if want == "" {
+		return false
+	}
+	for _, path := range paths {
+		if filepath.ToSlash(strings.TrimSpace(path)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func doctorPromptContextHasFile(ctx *workspace.PromptContext, want string) bool {
+	if ctx == nil {
+		return false
+	}
+	want = filepath.ToSlash(strings.TrimSpace(want))
+	if want == "" {
+		return false
+	}
+	for _, file := range append(append([]workspace.LoadedFile{}, ctx.Stable...), ctx.Dynamic...) {
+		path := filepath.ToSlash(strings.TrimSpace(file.Path))
+		if path == want || strings.HasSuffix(path, "/"+want) {
+			return true
+		}
+	}
+	return false
+}
+
+func doctorSourceContainsAll(root string, rel string, needles []string) bool {
+	root = strings.TrimSpace(root)
+	rel = filepath.Clean(filepath.FromSlash(strings.TrimSpace(rel)))
+	if root == "" || rel == "" || rel == "." || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		return false
+	}
+	text := string(data)
+	for _, needle := range needles {
+		if !strings.Contains(text, needle) {
+			return false
+		}
+	}
+	return true
+}
+
+func doctorSourceMatches(root string, dirs []string, needles []string, includeTests bool, limit int) []string {
+	root = strings.TrimSpace(root)
+	if root == "" || limit == 0 {
+		return nil
+	}
+	if limit < 0 {
+		limit = 8
+	}
+	lowerNeedles := make([]string, 0, len(needles))
+	for _, needle := range needles {
+		needle = strings.ToLower(strings.TrimSpace(needle))
+		if needle != "" {
+			lowerNeedles = append(lowerNeedles, needle)
+		}
+	}
+	if len(lowerNeedles) == 0 {
+		return nil
+	}
+
+	var matches []string
+	for _, dir := range dirs {
+		if len(matches) >= limit {
+			break
+		}
+		relDir := filepath.Clean(filepath.FromSlash(strings.TrimSpace(dir)))
+		if relDir == "" || relDir == "." || strings.HasPrefix(relDir, "..") {
+			continue
+		}
+		base := filepath.Join(root, relDir)
+		if err := filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
+			if err != nil || len(matches) >= limit {
+				return nil
+			}
+			if entry.IsDir() {
+				name := entry.Name()
+				if name == ".git" || name == "vendor" || name == "node_modules" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".go") || (!includeTests && strings.HasSuffix(name, "_test.go")) {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			text := strings.ToLower(string(data))
+			for _, needle := range lowerNeedles {
+				if strings.Contains(text, needle) {
+					if rel, relErr := filepath.Rel(root, path); relErr == nil {
+						matches = append(matches, filepath.ToSlash(rel))
+					} else {
+						matches = append(matches, filepath.ToSlash(path))
+					}
+					break
+				}
+			}
+			return nil
+		}); err != nil {
+			continue
+		}
+	}
+	sort.Strings(matches)
+	return matches
 }
 
 func uniqueDoctorPaths(paths []string) []string {

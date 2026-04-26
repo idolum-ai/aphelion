@@ -392,12 +392,15 @@ func (r *Runtime) reportToolProgressIssue(ctx context.Context, err error) {
 }
 
 func (p *toolProgressReporter) BindTurnRun(runID int64) {
-	if p == nil || runID <= 0 || p.suppressControls {
+	if p == nil || runID <= 0 {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.runID = runID
+	if p.suppressControls {
+		return
+	}
 	p.controls = deliberationControlRows(runID)
 }
 
