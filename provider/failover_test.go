@@ -259,11 +259,56 @@ func TestFailoverChainFallsBackOnInterruptedStreamError(t *testing.T) {
 	}
 }
 
+func TestFailoverChainFallsBackOnCodexContinuationFailureWithoutRetryingPrimary(t *testing.T) {
+	for _, errText := range []string{
+		"codex: incomplete response without stored-response continuation",
+		"codex: incomplete response missing response id",
+		"codex: response remained incomplete after 3 continuation attempts",
+	} {
+		t.Run(errText, func(t *testing.T) {
+			primary := &stubChainProvider{err: errors.New(errText)}
+			secondary := &stubChainProvider{reply: "fallback after codex continuation failure"}
+
+			chain, err := NewFailoverChain([]NamedProvider{
+				{Name: "codex", Provider: primary},
+				{Name: "native", Provider: secondary},
+			})
+			if err != nil {
+				t.Fatalf("NewFailoverChain() err = %v", err)
+			}
+
+			resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+			if err != nil {
+				t.Fatalf("CompleteManaged() err = %v", err)
+			}
+			if resp.Content != "fallback after codex continuation failure" {
+				t.Fatalf("content = %q, want fallback after codex continuation failure", resp.Content)
+			}
+			if primary.callCount != 1 {
+				t.Fatalf("primary.callCount = %d, want 1 deterministic continuation failure attempt", primary.callCount)
+			}
+			if secondary.callCount == 0 {
+				t.Fatal("secondary provider was not called after codex continuation failure")
+			}
+		})
+	}
+}
+
 func TestIsRetryableProviderErrorTreatsInterruptedStreamsAsRetryable(t *testing.T) {
 	if !isRetryableProviderError(errors.New("codex: stream closed before response.completed")) {
 		t.Fatal("interrupted stream error not treated as retryable")
 	}
 	if !shouldFailoverOnError(errors.New("unexpected EOF while reading event stream")) {
 		t.Fatal("unexpected EOF stream error not treated as failover-eligible")
+	}
+}
+
+func TestShouldFailoverOnCodexContinuationFailureButNotRetrySameProvider(t *testing.T) {
+	err := errors.New("codex: incomplete response without stored-response continuation")
+	if isRetryableProviderError(err) {
+		t.Fatal("codex continuation failure should not retry the same provider")
+	}
+	if !shouldFailoverOnError(err) {
+		t.Fatal("codex continuation failure should fall over to the next provider")
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/governorauth"
+	"github.com/idolum-ai/aphelion/pipeline"
 	providerpkg "github.com/idolum-ai/aphelion/provider"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -296,6 +297,47 @@ func TestHandleInboundProviderFailureRecordsFailureAndAlertsAdmin(t *testing.T) 
 		defer sender.mu.Unlock()
 		t.Fatalf("sent messages = %#v, want provider operational alert to admin", sender.sent)
 	}
+}
+
+func TestRenderTurnReplyBypassesFaceRenderForProviderFailure(t *testing.T) {
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &fakeProvider{}
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendProvider
+	renderer := &countingFaceRenderer{text: "I haven't actually seen the repo work yet."}
+
+	const failureText = "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
+	result, err := rt.renderTurnReply(turnRenderInput{
+		Ctx:              context.Background(),
+		Result:           &core.TurnResult{Text: failureText, ProviderFailure: "codex: incomplete response without stored-response continuation"},
+		FacePolicy:       pipeline.FacePolicy{Render: true},
+		ReplyText:        failureText,
+		FloorText:        failureText,
+		PromptInput:      "check the work in the repo",
+		CurrentFaceModel: renderer,
+	})
+	if err != nil {
+		t.Fatalf("renderTurnReply() err = %v", err)
+	}
+	if result.ReplyText != failureText {
+		t.Fatalf("ReplyText = %q, want deterministic provider failure reply", result.ReplyText)
+	}
+	if renderer.calls != 0 {
+		t.Fatalf("face render calls = %d, want 0 for provider failure recovery", renderer.calls)
+	}
+}
+
+type countingFaceRenderer struct {
+	text  string
+	calls int
+}
+
+func (r *countingFaceRenderer) Render(context.Context, face.RenderRequest) (string, error) {
+	r.calls++
+	return r.text, nil
 }
 
 type providerFailureDuringToolLoop struct {

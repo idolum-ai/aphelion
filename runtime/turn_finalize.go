@@ -86,7 +86,7 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 		GeneratedMessages: generatedMessages,
 		InitialReply:      output.ReplyText,
 		FallbackOptions:   input.FallbackOpts,
-		SkipRender:        input.MediaOnlyReply || r.faceBackend == face.BackendFloorFallback || input.CurrentFaceModel == nil,
+		SkipRender:        input.MediaOnlyReply || strings.TrimSpace(input.Result.ProviderFailure) != "" || r.faceBackend == face.BackendFloorFallback || input.CurrentFaceModel == nil,
 	}, turn.RenderStageCallbacks{
 		Stream: func(ctx context.Context, req turn.FaceRenderRequest) (turn.FaceRenderResult, bool, error) {
 			streamer, ok := input.CurrentFaceModel.(face.StreamRenderer)
@@ -208,13 +208,13 @@ type turnCommitInput struct {
 	// ReplyText is the visible assistant scene text that gets delivered/persisted
 	// as transcript content for this turn.
 	ReplyText      string
-	StreamedReply   bool
-	OutboundID      int64
-	OutboundType    string
-	RecordOutbound  bool
-	Audit           *turnAuditRecorder
-	Hooks           turnCommitHooks
-	ErrCtx          turnCommitErrorContext
+	StreamedReply  bool
+	OutboundID     int64
+	OutboundType   string
+	RecordOutbound bool
+	Audit          *turnAuditRecorder
+	Hooks          turnCommitHooks
+	ErrCtx         turnCommitErrorContext
 }
 
 type turnCommitHooks struct {

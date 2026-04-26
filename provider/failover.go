@@ -321,6 +321,9 @@ func shouldFailoverOnError(err error) bool {
 			return false
 		}
 	}
+	if isCodexContinuationFailure(err) {
+		return true
+	}
 	return isRetryableProviderError(err)
 }
 
@@ -379,6 +382,27 @@ func isTransientStreamError(err error) bool {
 		"stream terminated",
 		"incomplete event stream",
 		"stream closed",
+	}
+	for _, marker := range markers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCodexContinuationFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	markers := []string{
+		"codex: incomplete response without stored-response continuation",
+		"codex: incomplete response missing response id",
+		"codex: response remained incomplete after",
 	}
 	for _, marker := range markers {
 		if strings.Contains(msg, marker) {
