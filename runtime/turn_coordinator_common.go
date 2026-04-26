@@ -193,7 +193,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		runKind = session.TurnRunKindInteractive
 	}
 
-	progress := r.newToolProgressReporter(input.Key, input.Msg, input.Sess.PlanState, input.Audit)
+	progress := r.newToolProgressReporter(input.Key, input.Msg, input.Audit)
 	monitor := r.startTurnMonitor(input.Key, runKind, input.Prepared.LedgerText, progress, input.Audit)
 	defer monitor.Finish(ctx, monitorErr)
 

@@ -264,7 +264,7 @@ type toolProgressEntry struct {
 	Count int
 }
 
-func (r *Runtime) newToolProgressReporter(key session.SessionKey, msg core.InboundMessage, planState session.PlanState, audit *turnAuditRecorder) *toolProgressReporter {
+func (r *Runtime) newToolProgressReporter(key session.SessionKey, msg core.InboundMessage, audit *turnAuditRecorder) *toolProgressReporter {
 	mode := strings.ToLower(strings.TrimSpace(r.toolProgressMode))
 	if mode == "" {
 		mode = "all"
@@ -292,7 +292,6 @@ func (r *Runtime) newToolProgressReporter(key session.SessionKey, msg core.Inbou
 		seenKeys:         make(map[string]struct{}),
 		audit:            audit,
 		taskSummary:      summarizeProgressTask(msg.Text),
-		currentPlanStep:  currentProgressPlanStep(planState),
 	}
 	if target.SuppressControls {
 		reporter.reportIssue = r.reportToolProgressIssue
@@ -416,6 +415,7 @@ func (p *toolProgressReporter) ToolStarted(ctx context.Context, name string, inp
 	if p.startedAt.IsZero() {
 		p.startedAt = time.Now().UTC()
 	}
+	p.observePlanToolInput(name, input)
 	entry := p.makeEntry(name, input)
 
 	update := false
@@ -816,6 +816,17 @@ func (p *toolProgressReporter) makeEntry(name string, input json.RawMessage) too
 	return semanticToolProgressEntry(name, input, p.currentPlanStep, p.taskSummary)
 }
 
+func (p *toolProgressReporter) observePlanToolInput(name string, input json.RawMessage) {
+	if p == nil || strings.TrimSpace(name) != "update_plan" {
+		return
+	}
+	step, ok := currentProgressPlanStepFromUpdatePlanInput(input)
+	if !ok {
+		return
+	}
+	p.currentPlanStep = step
+}
+
 func rawToolProgressEntry(name string, input json.RawMessage) toolProgressEntry {
 	text := name
 	if preview := toolInputPreview(input); preview != "" {
@@ -864,6 +875,22 @@ func currentProgressPlanStep(planState session.PlanState) string {
 		}
 	}
 	return ""
+}
+
+func currentProgressPlanStepFromUpdatePlanInput(input json.RawMessage) (string, bool) {
+	if len(input) == 0 {
+		return "", false
+	}
+	var payload struct {
+		Plan []session.PlanStep `json:"plan"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return "", false
+	}
+	if payload.Plan == nil {
+		return "", false
+	}
+	return currentProgressPlanStep(session.PlanState{Steps: payload.Plan}), true
 }
 
 func summarizeProgressTask(text string) string {

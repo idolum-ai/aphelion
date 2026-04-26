@@ -102,7 +102,7 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		sess.UserName = strings.TrimSpace(msg.SenderName)
 	}
 
-	progress := r.newDoctorProgressReporter(key, msg, sess)
+	progress := r.newDoctorProgressReporter(key, msg)
 	monitor := r.startTurnMonitor(key, session.TurnRunKindDoctor, "/doctor", progress, nil)
 	var monitorErr error
 	defer func() {
@@ -242,15 +242,11 @@ func (r *Runtime) resolveDoctorAdmin(msg core.InboundMessage) (principal.Princip
 	return actor, nil
 }
 
-func (r *Runtime) newDoctorProgressReporter(key session.SessionKey, msg core.InboundMessage, sess *session.Session) *toolProgressReporter {
+func (r *Runtime) newDoctorProgressReporter(key session.SessionKey, msg core.InboundMessage) *toolProgressReporter {
 	if r == nil {
 		return nil
 	}
-	var plan session.PlanState
-	if sess != nil {
-		plan = sess.PlanState
-	}
-	progress := r.newToolProgressReporter(key, msg, plan, nil)
+	progress := r.newToolProgressReporter(key, msg, nil)
 	if progress == nil {
 		return nil
 	}

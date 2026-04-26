@@ -78,6 +78,87 @@ func TestSemanticToolProgressLabel(t *testing.T) {
 	}
 }
 
+func TestNewToolProgressReporterDoesNotUsePersistedPlanForInitialLabel(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 6119, UserID: 0, Scope: telegramDMScopeRef(6119)}
+	if err := store.UpdatePlanState(key, session.PlanState{
+		Steps: []session.PlanStep{{
+			Step:   "Restart aphelion.service through a durable logged runner and run verify-deploy",
+			Status: session.PlanStatusInProgress,
+		}},
+	}); err != nil {
+		t.Fatalf("UpdatePlanState() err = %v", err)
+	}
+
+	reporter := rt.newToolProgressReporter(key, core.InboundMessage{
+		ChatID:    6119,
+		ChatType:  "private",
+		MessageID: 19,
+		Text:      "Investigate progress rendering labels.",
+	}, nil)
+	if reporter == nil {
+		t.Fatal("newToolProgressReporter() = nil, want reporter")
+	}
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"rg progress"}`))
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	got := sender.sent[0].Text
+	if strings.Contains(got, "Restart aphelion.service") {
+		t.Fatalf("progress = %q, should not use persisted stale plan step", got)
+	}
+	if !strings.Contains(got, "Working on Investigate progress rendering labels") {
+		t.Fatalf("progress = %q, want current request summary label", got)
+	}
+}
+
+func TestToolProgressReporterAdoptsCurrentTurnPlanStepFromUpdatePlan(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	reporter := &toolProgressReporter{
+		sender:      sender,
+		editor:      sender,
+		chatID:      42,
+		mode:        "all",
+		style:       "semantic",
+		window:      4,
+		seenKeys:    make(map[string]struct{}),
+		taskSummary: "investigate progress rendering",
+	}
+
+	reporter.ToolStarted(context.Background(), "update_plan", json.RawMessage(`{
+		"plan":[
+			{"step":"Inspect progress rendering path","status":"in_progress"},
+			{"step":"Patch reporter label source","status":"pending"}
+		]
+	}`))
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"rg newToolProgressReporter"}`))
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits len = %d, want 1 progress edit", len(sender.edits))
+	}
+	got := sender.edits[0].Text
+	if !strings.Contains(got, "Refining the plan for Inspect progress rendering path") {
+		t.Fatalf("progress = %q, want update_plan to use current turn plan step", got)
+	}
+	if !strings.Contains(got, "Working on Inspect progress rendering path") {
+		t.Fatalf("progress = %q, want later tool to use current turn plan step", got)
+	}
+}
+
 func TestToolProgressReporterDeliberationControlsLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -300,7 +381,7 @@ func TestNewToolProgressReporterRoutesInternalDurableProgressToAdminChat(t *test
 		MessageID:      55,
 		DurableAgentID: "child-alpha",
 		Text:           "internal durable wake",
-	}, session.PlanState{}, nil)
+	}, nil)
 	if reporter == nil {
 		t.Fatal("newToolProgressReporter() = nil, want reporter")
 	}
@@ -342,7 +423,7 @@ func TestNewToolProgressReporterKeepsTelegramChatTarget(t *testing.T) {
 		ChatType:  "private",
 		MessageID: 77,
 		Text:      "normal telegram chat",
-	}, session.PlanState{}, nil)
+	}, nil)
 	if reporter == nil {
 		t.Fatal("newToolProgressReporter() = nil, want reporter")
 	}
