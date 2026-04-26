@@ -79,6 +79,9 @@ external_manifest_dir = "./external-tools"
 	if cfg.Governor.Codex.ContextWindow != 250000 {
 		t.Fatalf("governor.codex.context_window = %d, want 250000", cfg.Governor.Codex.ContextWindow)
 	}
+	if !cfg.Governor.Codex.StoreResponses {
+		t.Fatalf("governor.codex.store_responses = false, want true by default")
+	}
 	if cfg.Governor.Brokerage.MinRounds != 1 || cfg.Governor.Brokerage.MaxRounds != 4 || cfg.Governor.Brokerage.AbsoluteMaxRounds != 6 || cfg.Governor.Brokerage.MaxElapsed != "20s" || cfg.Governor.Brokerage.StableContractRounds != 2 {
 		t.Fatalf("governor.brokerage defaults = %#v, want 1/4/6/20s/stable=2", cfg.Governor.Brokerage)
 	}
@@ -382,6 +385,7 @@ native_provider = "anthropic"
 	base_url = "https://chatgpt.com/backend-api"
 	model = "gpt-5.5"
 	context_window = 180000
+	store_responses = false
 	max_continuations = 5
 	transport_retries = 2
 
@@ -575,6 +579,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Governor.Codex.ContextWindow != 180000 {
 		t.Fatalf("governor.codex.context_window = %d, want 180000", cfg.Governor.Codex.ContextWindow)
+	}
+	if cfg.Governor.Codex.StoreResponses {
+		t.Fatalf("governor.codex.store_responses = true, want explicit false")
 	}
 	if cfg.Governor.Codex.MaxContinuations != 5 {
 		t.Fatalf("governor.codex.max_continuations = %d, want 5", cfg.Governor.Codex.MaxContinuations)

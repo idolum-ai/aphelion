@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -172,6 +173,52 @@ func TestNewRejectsCodexBackendWithoutCredentials(t *testing.T) {
 	if err == nil {
 		t.Fatal("New() err = nil, want codex credential failure")
 	}
+}
+
+func TestNewCodexProviderUsesStoreResponsesConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.Governor.Codex.StoreResponses = true
+
+	provider, err := newCodexProvider(governorauth.Bundle{
+		BaseURL:      "https://chatgpt.com/backend-api",
+		AccessToken:  "codex-access",
+		RefreshToken: "codex-refresh",
+		AccountID:    "acct",
+	}, &cfg)
+	if err != nil {
+		t.Fatalf("newCodexProvider(default store responses) err = %v", err)
+	}
+	if !codexStoreResponsesForTest(t, provider) {
+		t.Fatalf("codex storeResponses = false, want true from config")
+	}
+
+	cfg.Governor.Codex.StoreResponses = false
+	provider, err = newCodexProvider(governorauth.Bundle{
+		BaseURL:      "https://chatgpt.com/backend-api",
+		AccessToken:  "codex-access",
+		RefreshToken: "codex-refresh",
+		AccountID:    "acct",
+	}, &cfg)
+	if err != nil {
+		t.Fatalf("newCodexProvider(disabled store responses) err = %v", err)
+	}
+	if codexStoreResponsesForTest(t, provider) {
+		t.Fatalf("codex storeResponses = true, want false from config")
+	}
+}
+
+func codexStoreResponsesForTest(t *testing.T, provider agent.Provider) bool {
+	t.Helper()
+
+	value := reflect.ValueOf(provider)
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	field := value.FieldByName("storeResponses")
+	if !field.IsValid() || field.Kind() != reflect.Bool {
+		t.Fatalf("provider %T has no bool storeResponses field", provider)
+	}
+	return field.Bool()
 }
 
 func TestHandleInboundUsesCodexGovernorBackend(t *testing.T) {

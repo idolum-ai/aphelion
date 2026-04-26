@@ -690,9 +690,10 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 			Backend:        "native",
 			NativeProvider: "anthropic",
 			Codex: config.GovernorCodexConfig{
-				AuthSource:    "auto",
-				BaseURL:       "https://chatgpt.com/backend-api",
-				ContextWindow: 200000,
+				AuthSource:     "auto",
+				BaseURL:        "https://chatgpt.com/backend-api",
+				ContextWindow:  200000,
+				StoreResponses: true,
 			},
 		},
 		Sessions: config.SessionsConfig{

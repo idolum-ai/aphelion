@@ -98,6 +98,7 @@ type GovernorCodexConfig struct {
 	BaseURL          string `toml:"base_url"`
 	Model            string `toml:"model"`
 	ContextWindow    int    `toml:"context_window"`
+	StoreResponses   bool   `toml:"store_responses"`
 	MaxContinuations int    `toml:"max_continuations"`
 	TransportRetries int    `toml:"transport_retries"`
 }
@@ -368,6 +369,7 @@ func Default() Config {
 				BaseURL:          "https://chatgpt.com/backend-api",
 				Model:            "gpt-5.5",
 				ContextWindow:    250000,
+				StoreResponses:   true,
 				MaxContinuations: 3,
 				TransportRetries: 3,
 			},

@@ -310,6 +310,7 @@ var newCodexProvider = func(bundle governorauth.Bundle, cfg *config.Config) (age
 		AccountID:        bundle.AccountID,
 		RefreshURL:       bundle.RefreshURL,
 		Model:            cfg.Governor.Codex.Model,
+		StoreResponses:   cfg.Governor.Codex.StoreResponses,
 		MaxContinuations: cfg.Governor.Codex.MaxContinuations,
 		TransportRetries: cfg.Governor.Codex.TransportRetries,
 		HTTPClient:       newCodexHTTPClient(),

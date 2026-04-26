@@ -287,6 +287,7 @@ native_provider = ""          # empty lets providers.selection choose from confi
 auth_source = "auto"          # "auto" | "codex_cli" | "aphelion"
 codex_home = ""
 base_url = "https://chatgpt.com/backend-api"
+store_responses = true
 
 [governor.brokerage]
 min_rounds = 1
