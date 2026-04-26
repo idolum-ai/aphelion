@@ -66,6 +66,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
 		"pending_count": len(runs),
 	}, time.Now().UTC())
+	r.flushRecoveryRunMemory(ctx, runs, "startup_recovery")
 
 	scope, err := r.scopeForPrincipal(principal.Principal{Role: principal.RoleAdmin})
 	if err != nil {
@@ -216,6 +217,26 @@ func renderStartupRecoveryRequest(runs []session.TurnRun) string {
 
 	lines = append(lines, "Log a concise recovery note into the maintenance ledger. Do not send a user-facing message unless explicitly requested elsewhere.")
 	return strings.Join(lines, "\n")
+}
+
+func (r *Runtime) flushRecoveryRunMemory(ctx context.Context, runs []session.TurnRun, reason string) {
+	if r == nil || len(runs) == 0 || !r.aggressiveFlushEnabled() {
+		return
+	}
+	seen := make(map[int64]struct{}, len(runs))
+	for _, run := range runs {
+		if run.ChatID == 0 {
+			continue
+		}
+		if _, ok := seen[run.ChatID]; ok {
+			continue
+		}
+		seen[run.ChatID] = struct{}{}
+		if err := r.FlushChatMemory(ctx, run.ChatID, reason); err != nil {
+			log.Printf("WARN recovery memory flush skipped chat_id=%d reason=%s err=%v", run.ChatID, strings.TrimSpace(reason), err)
+			r.reportOperationalIssueAsync("memory_recovery_flush", fmt.Errorf("chat_id=%d reason=%s: %w", run.ChatID, strings.TrimSpace(reason), err))
+		}
+	}
 }
 
 func fallbackRecoverySummary(runs []session.TurnRun) string {

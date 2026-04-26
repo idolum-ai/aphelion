@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
+	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -114,5 +116,53 @@ func TestStartupRecoveryLogsMaintenanceAnalysis(t *testing.T) {
 	}
 	if storedRun.RecoverySummary != provider.replyText {
 		t.Fatalf("recovery summary = %q, want %q", storedRun.RecoverySummary, provider.replyText)
+	}
+}
+
+func TestStartupRecoveryFlushesInterruptedChatMemory(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Memory.Aggressive.Enabled = true
+	cfg.Memory.Aggressive.FlushOnSessionBoundary = true
+	provider.replyText = "Recovered: restart recovery complete."
+	provider.memoryFlushReplyText = "[MEMORY]\n[/MEMORY]\n[KNOWLEDGE]\n- Interrupted restart work should be preserved in durable memory.\n[/KNOWLEDGE]\n[DECISIONS]\n[/DECISIONS]\n[QUESTIONS]\n[/QUESTIONS]\n[RHIZOME]\n[/RHIZOME]"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	chatID := int64(1501)
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     chatID,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "remember that interrupted restarts must preserve memory",
+		MessageID:  1,
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	if _, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "resume interrupted restart work"); err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+
+	if err := rt.runStartupRecoveryOnce(context.Background(), time.Date(2026, time.April, 10, 13, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
+	}
+
+	proposals, err := memstore.ListProposals(memstore.ProposalListOptions{Root: cfg.Agent.PromptRoot})
+	if err != nil {
+		t.Fatalf("ListProposals() err = %v", err)
+	}
+	found := false
+	for _, proposal := range proposals {
+		if proposal.Store == memstore.StoreKnowledge && strings.Contains(proposal.Content, "Interrupted restart work") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("proposals = %#v, want startup recovery memory proposal", proposals)
 	}
 }
