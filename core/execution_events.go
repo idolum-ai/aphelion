@@ -60,6 +60,7 @@ const (
 	ExecutionEventRecoveryFailed    = "recovery.failed"
 
 	ExecutionEventDurableWakeStarted       = "durable.wake.started"
+	ExecutionEventDurableWakeSkipped       = "durable.wake.skipped"
 	ExecutionEventDurableWakeCompleted     = "durable.wake.completed"
 	ExecutionEventDurableWakeFailed        = "durable.wake.failed"
 	ExecutionEventDurableStateAwake        = "durable.state.awake"

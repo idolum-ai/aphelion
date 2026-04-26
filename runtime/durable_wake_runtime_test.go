@@ -503,6 +503,131 @@ func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *
 	sender.mu.Unlock()
 }
 
+func TestRunDurableAgentChildWakeSkipsWhenAgentAlreadyAwake(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "This should not run while another wake owns the agent."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "child-awake",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "headless",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process parent requests over channel artifacts and summarize upward.",
+			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Handle exactly once.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID:    agent.AgentID,
+		Status:     "awake",
+		StateJSON:  raw,
+		LastWakeAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	rt.durableWakeChild = nil
+	if err := rt.RunDurableAgentChildWake(context.Background(), agent.AgentID, time.Now().UTC()); err != nil {
+		t.Fatalf("RunDurableAgentChildWake() err = %v", err)
+	}
+	if len(provider.seenGovernorSystem) != 0 {
+		t.Fatalf("governor prompts = %#v, want no child turn while agent is already awake", provider.seenGovernorSystem)
+	}
+	updatedState, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	updatedContinuity, err := core.ParseDurableAgentContinuityState(updatedState.StateJSON)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if pending := updatedContinuity.PendingParentConversationMessages(10); len(pending) != 1 {
+		t.Fatalf("pending parent messages = %d, want still pending after skipped wake", len(pending))
+	}
+	events, err := store.ExecutionEventsBySession(rt.durableAgentExecutionKey(agent.AgentID), 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !containsExecutionEventType(events, core.ExecutionEventDurableWakeSkipped) {
+		t.Fatalf("execution events = %#v, want durable wake skipped event", events)
+	}
+}
+
+func TestParentConversationAckSuppressedWhenChildQueuesConcreteReview(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Concrete child report from the wake."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "child-reporting",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "test_adapter",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Process parent requests and report concrete findings.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Inspect runtime grants.", time.Now().UTC().Add(-time.Minute))
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{&testDurableWakeAdapter{channelKind: "test_adapter", queueReview: true}}
+	rt.durableWakeChild = nil
+	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if got := len(sender.sent); got != 1 {
+		t.Fatalf("sent len = %d, want only concrete child review", got)
+	}
+	if !strings.Contains(sender.sent[0].Text, "Concrete child report from the wake.") {
+		t.Fatalf("sent text = %q, want concrete child report", sender.sent[0].Text)
+	}
+	if strings.Contains(sender.sent[0].Text, "Processed pending parent guidance") {
+		t.Fatalf("sent text = %q, want parent ack wrapper suppressed", sender.sent[0].Text)
+	}
+}
+
 func TestRunDurableAgentChildWakeSkipsWithoutPendingParentConversation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Unsupported channel should not run"

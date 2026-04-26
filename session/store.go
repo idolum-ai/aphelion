@@ -4711,6 +4711,67 @@ func (s *SQLiteStore) SaveDurableAgentRuntimeState(state core.DurableAgentRuntim
 	return saveDurableAgentRuntimeStateExec(s.db, state)
 }
 
+func (s *SQLiteStore) TryMarkDurableAgentAwake(agentID string, cursor string, now time.Time, staleAfter time.Duration) (bool, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return false, fmt.Errorf("mark durable agent awake: agent_id is required")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	if staleAfter <= 0 {
+		staleAfter = 30 * time.Minute
+	}
+	cutoff := now.Add(-staleAfter).UTC().Format(time.RFC3339Nano)
+	nowRaw := now.Format(time.RFC3339Nano)
+
+	result, err := s.db.Exec(`
+		UPDATE durable_agent_state
+		SET cursor = ?, status = 'awake', last_wake_at = ?, dormant_at = NULL, updated_at = ?
+		WHERE agent_id = ?
+		  AND (
+			COALESCE(status, '') <> 'awake'
+			OR COALESCE(last_wake_at, updated_at, '') = ''
+			OR COALESCE(last_wake_at, updated_at) <= ?
+		  )
+	`, nullableString(cursor), nowRaw, nowRaw, agentID, cutoff)
+	if err != nil {
+		return false, fmt.Errorf("mark durable agent awake: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows > 0 {
+		return true, nil
+	}
+
+	result, err = s.db.Exec(`
+		INSERT INTO durable_agent_state(agent_id, cursor, status, state_json, last_wake_at, dormant_at, updated_at)
+		VALUES (?, ?, 'awake', '', ?, NULL, ?)
+		ON CONFLICT(agent_id) DO NOTHING
+	`, agentID, nullableString(cursor), nowRaw, nowRaw)
+	if err != nil {
+		return false, fmt.Errorf("mark durable agent awake: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	return rows > 0, nil
+}
+
+func (s *SQLiteStore) DurableAgentReviewEventCountSince(agentID string, since time.Time) (int, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" || since.IsZero() {
+		return 0, nil
+	}
+	var count int
+	if err := s.db.QueryRow(`
+		SELECT COUNT(1)
+		FROM review_events
+		WHERE source_durable_agent_id = ?
+		  AND created_at >= ?
+	`, agentID, since.UTC().Format(time.RFC3339Nano)).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count durable agent review events: %w", err)
+	}
+	return count, nil
+}
+
 func saveDurableAgentRuntimeStateExec(exec sqlExecer, state core.DurableAgentRuntimeState) error {
 	state.AgentID = strings.TrimSpace(state.AgentID)
 	if state.AgentID == "" {

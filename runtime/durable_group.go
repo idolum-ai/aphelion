@@ -1051,6 +1051,25 @@ func (r *Runtime) markDurableAgentAwake(agentID string, cursorMessageID int64) e
 	return nil
 }
 
+func (r *Runtime) tryMarkDurableAgentWakeAwake(agentID string, cursorMessageID int64) (bool, error) {
+	now := time.Now().UTC()
+	acquired, err := r.store.TryMarkDurableAgentAwake(
+		strings.TrimSpace(agentID),
+		strconv.FormatInt(cursorMessageID, 10),
+		now,
+		durableWakeAwakeLockStaleAfter,
+	)
+	if err != nil || !acquired {
+		return acquired, err
+	}
+	key := r.durableAgentExecutionKey(strings.TrimSpace(agentID))
+	r.recordExecutionEvent(key, core.ExecutionEventDurableStateAwake, "durable", "awake", map[string]any{
+		"agent_id":          strings.TrimSpace(agentID),
+		"cursor_message_id": cursorMessageID,
+	}, now)
+	return true, nil
+}
+
 func (r *Runtime) markDurableAgentDormant(agentID string) error {
 	state, err := r.store.DurableAgentState(agentID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {

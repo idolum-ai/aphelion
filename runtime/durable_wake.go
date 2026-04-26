@@ -17,6 +17,7 @@ import (
 )
 
 const durableWakeInferenceUnavailableSignal = "Inference backends are unavailable after retries and fallback."
+const durableWakeAwakeLockStaleAfter = 30 * time.Minute
 
 type durableWakeGovernorContextBuilder func(
 	agent core.DurableAgent,
@@ -180,8 +181,16 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	defer unlock()
 	defer r.clearChatTurnPhase(key.ChatID)
 
-	if err := r.markDurableAgentAwake(agent.AgentID, plan.Inbound.MessageID); err != nil {
+	acquired, err := r.tryMarkDurableAgentWakeAwake(agent.AgentID, plan.Inbound.MessageID)
+	if err != nil {
 		return fmt.Errorf("mark durable wake agent awake: %w", err)
+	}
+	if !acquired {
+		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeSkipped, "durable", "skipped", map[string]any{
+			"agent_id": strings.TrimSpace(agent.AgentID),
+			"reason":   "already_awake",
+		}, time.Now().UTC())
+		return nil
 	}
 	if err := r.ensureDurableAgentPolicyOffered(agent); err != nil {
 		return fmt.Errorf("record durable wake offered policy: %w", err)
@@ -238,7 +247,9 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	}
 	if len(pendingParentConversation) > 0 {
 		if ackErr := r.acknowledgeDurableAgentParentConversation(agent.AgentID, now); ackErr == nil {
-			_ = r.queueDurableAgentParentConversationAck(agent, pendingParentConversation, turnSummary, now)
+			if count, countErr := r.store.DurableAgentReviewEventCountSince(agent.AgentID, now); countErr != nil || count == 0 {
+				_ = r.queueDurableAgentParentConversationAck(agent, pendingParentConversation, turnSummary, now)
+			}
 		}
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventDurableWakeCompleted, "durable", "completed", map[string]any{
