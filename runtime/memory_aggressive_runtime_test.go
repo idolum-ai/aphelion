@@ -11,7 +11,35 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	memstore "github.com/idolum-ai/aphelion/memory"
+	"github.com/idolum-ai/aphelion/session"
 )
+
+func TestAggressiveRecallPlanAdaptsToInputComplexity(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Memory.Semantic.InteractiveTopK = 5
+	cfg.Memory.Semantic.InteractiveMaxChars = 4000
+	cfg.Governor.Codex.ContextWindow = 250000
+	cfg.Sessions.MaxContextRatio = 0.90
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	lean := rt.aggressiveRecallPlan(session.TurnRunKindInteractive, "howdy")
+	if lean.Mode != memstore.RecallModeLean || lean.TopK != 1 {
+		t.Fatalf("lean plan = %#v, want lean single-hit recall", lean)
+	}
+
+	deep := rt.aggressiveRecallPlan(session.TurnRunKindInteractive, "review recent live session logs, diagnose timeout retry failures, semantic memory prompt gaps, config problems, and code recommendations with tests")
+	if deep.Mode != memstore.RecallModeDeep {
+		t.Fatalf("deep plan = %#v, want deep recall", deep)
+	}
+	if deep.TopK <= lean.TopK || deep.MaxChars <= lean.MaxChars {
+		t.Fatalf("lean = %#v deep = %#v, want expanded recall for complex input", lean, deep)
+	}
+}
 
 func TestHandleInboundAggressivePrefetchInjectsSemanticMemory(t *testing.T) {
 	t.Parallel()

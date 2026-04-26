@@ -78,8 +78,7 @@ func (r *Runtime) maybeAggressivePrefetchSystemMessage(ctx context.Context, scop
 	}
 	mode := aggressiveSemanticModeForRun(runKind)
 	semanticScope, principalID := splitSemanticScope(semanticScopeForPrincipal(scope.Principal))
-	maxLen := aggressiveSemanticMaxLen(r.cfg, mode)
-	limit := aggressiveSemanticLimit(r.cfg, mode)
+	plan := r.aggressiveRecallPlan(runKind, query)
 
 	hits, err := r.semantic.Search(ctx, memstore.SemanticSearchRequest{
 		Root:        dynamicPromptRoot(scope),
@@ -87,14 +86,14 @@ func (r *Runtime) maybeAggressivePrefetchSystemMessage(ctx context.Context, scop
 		PrincipalID: principalID,
 		Query:       query,
 		Mode:        mode,
-		Limit:       limit,
-		MaxLen:      maxLen,
+		Limit:       plan.TopK,
+		MaxLen:      plan.MaxChars,
 		Now:         now,
 	})
 	if err != nil || len(hits) == 0 {
 		return ""
 	}
-	return renderAggressiveRecallBlock(hits)
+	return renderAggressiveRecallBlock(hits, plan)
 }
 
 func aggressiveSemanticModeForRun(runKind session.TurnRunKind) memstore.SemanticMode {
@@ -139,14 +138,36 @@ func aggressiveSemanticLimit(cfg *config.Config, mode memstore.SemanticMode) int
 	return defaultLimit
 }
 
-func renderAggressiveRecallBlock(hits []memstore.SemanticHit) string {
+func (r *Runtime) aggressiveRecallPlan(runKind session.TurnRunKind, query string) memstore.AdaptiveRecallPlan {
+	mode := aggressiveSemanticModeForRun(runKind)
+	purpose := memstore.RecallPurposeInteractive
+	if mode == memstore.SemanticModeHeartbeat {
+		purpose = memstore.RecallPurposeHeartbeat
+	}
+	if runKind == session.TurnRunKindRecovery {
+		purpose = memstore.RecallPurposeRecovery
+	}
+	return memstore.PlanAdaptiveRecall(memstore.AdaptiveRecallRequest{
+		Query:            query,
+		Purpose:          purpose,
+		ContextWindow:    r.governorContextWindow(),
+		MaxContextRatio:  r.cfg.Sessions.MaxContextRatio,
+		BaselineTopK:     aggressiveSemanticLimit(r.cfg, mode),
+		BaselineMaxChars: aggressiveSemanticMaxLen(r.cfg, mode),
+	})
+}
+
+func renderAggressiveRecallBlock(hits []memstore.SemanticHit, plan memstore.AdaptiveRecallPlan) string {
 	if len(hits) == 0 {
 		return ""
 	}
-	maxHits := minInt(len(hits), 5)
+	maxHits := aggressiveRecallRenderLimit(len(hits), plan)
 	var b strings.Builder
 	b.WriteString("AUTO_RECALL_MEMORY\n")
 	b.WriteString("Use the following recalled context only when it materially improves this turn.\n")
+	if plan.Mode != "" {
+		fmt.Fprintf(&b, "recall_mode=%s recall_budget_chars=%d\n", plan.Mode, plan.MaxChars)
+	}
 	for i := 0; i < maxHits; i++ {
 		hit := hits[i]
 		source := strings.TrimSpace(hit.Source)
@@ -165,6 +186,25 @@ func renderAggressiveRecallBlock(hits []memstore.SemanticHit) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func aggressiveRecallRenderLimit(hitCount int, plan memstore.AdaptiveRecallPlan) int {
+	if hitCount <= 0 {
+		return 0
+	}
+	limit := 5
+	switch plan.Mode {
+	case memstore.RecallModeLean:
+		limit = 1
+	case memstore.RecallModeDeep:
+		limit = 8
+	case memstore.RecallModeDoctor:
+		limit = 10
+	}
+	if plan.TopK > 0 {
+		limit = minInt(limit, plan.TopK)
+	}
+	return minInt(hitCount, limit)
 }
 
 func (r *Runtime) maybeCaptureTurnMemory(ctx context.Context, input turnCommitInput) {
