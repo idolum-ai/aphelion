@@ -137,6 +137,8 @@ type stubCommandRouter struct {
 	restartInput                int64
 	restartCalls                int
 	queuedReinstallMsg          *core.InboundMessage
+	queuedDoctorMsg             *core.InboundMessage
+	queueDoctorErr              error
 	durableWizardChatID         int64
 	durableWizardSenderID       int64
 	durableWizardAction         string
@@ -270,6 +272,13 @@ func (s *stubCommandRouter) QueueReinstall(ctx context.Context, msg core.Inbound
 	s.queuedReinstallMsg = &copied
 	_ = ctx
 	return nil
+}
+
+func (s *stubCommandRouter) QueueDoctor(ctx context.Context, msg core.InboundMessage) error {
+	copied := msg
+	s.queuedDoctorMsg = &copied
+	_ = ctx
+	return s.queueDoctorErr
 }
 
 func (s *stubCommandRouter) Restart(chatID int64) error {
@@ -434,6 +443,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/restart", want: "restart", ok: true},
 		{text: "/reinstall", want: "reinstall", ok: true},
 		{text: "/debug", want: "debug", ok: true},
+		{text: "/doctor", want: "doctor", ok: true},
 		{text: "/agents", want: "agents", ok: true},
 		{text: "/memory", want: "memory", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
@@ -494,6 +504,21 @@ func TestDefaultTelegramCommandsIncludeDebug(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("defaultTelegramCommands = %#v, want /debug command entry", defaultTelegramCommands)
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeDoctor(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "doctor" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /doctor command entry", defaultTelegramCommands)
 	}
 }
 
@@ -1135,6 +1160,95 @@ func TestHandleTelegramCommandDebugForAdminIncludesSystemAndDurables(t *testing.
 	}
 	if got := sender.inline[0].rows[0][0].CallbackData; got != "debug:more" {
 		t.Fatalf("callback = %q, want debug:more", got)
+	}
+}
+
+func TestHandleTelegramCommandDoctorQueuesAdminDiagnosis(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:    1001,
+		SenderID:  1001,
+		MessageID: 44,
+		Text:      "/doctor",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.queuedDoctorMsg == nil {
+		t.Fatal("queuedDoctorMsg = nil, want doctor request")
+	}
+	if router.queuedDoctorMsg.ChatID != 1001 || router.queuedDoctorMsg.SenderID != 1001 {
+		t.Fatalf("queued doctor msg = %#v, want original admin routing identity", router.queuedDoctorMsg)
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "Doctor diagnostics started") {
+		t.Fatalf("doctor ack = %q, want started acknowledgement", got)
+	}
+	if sender.msgs[0].ReplyTo == nil || *sender.msgs[0].ReplyTo != 44 {
+		t.Fatalf("reply_to = %#v, want 44", sender.msgs[0].ReplyTo)
+	}
+}
+
+func TestHandleTelegramCommandDoctorDeniesNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1002,
+		Text:     "/doctor",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.queuedDoctorMsg != nil {
+		t.Fatalf("queuedDoctorMsg = %#v, want nil for non-admin", router.queuedDoctorMsg)
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "admin only") {
+		t.Fatalf("doctor denial = %q, want admin-only denial", got)
+	}
+}
+
+func TestHandleTelegramCommandDoctorRequiresPrivateAdminChat(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   -1007,
+		SenderID: 1001,
+		ChatType: "group",
+		Text:     "/doctor",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.queuedDoctorMsg != nil {
+		t.Fatalf("queuedDoctorMsg = %#v, want nil for group chat", router.queuedDoctorMsg)
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if got := sender.msgs[0].Text; !strings.Contains(got, "private chat") {
+		t.Fatalf("doctor denial = %q, want private-chat denial", got)
 	}
 }
 

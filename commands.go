@@ -42,6 +42,7 @@ type commandRouter interface {
 	StopContinuation(chatID int64) (core.StopResult, error)
 	TriggerContinuation(ctx context.Context, chatID int64) error
 	QueueReinstall(ctx context.Context, msg core.InboundMessage) error
+	QueueDoctor(ctx context.Context, msg core.InboundMessage) error
 	CurrentEfforts() (persona string, governor string)
 	CurrentPersonaModel() string
 	PersonaModelOptions() []string
@@ -62,6 +63,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "help", Description: "Show available commands"},
 	{Command: "status", Description: "Show live status and controls"},
 	{Command: "debug", Description: "Show a detailed debug snapshot"},
+	{Command: "doctor", Description: "Run an admin runtime diagnosis"},
 	{Command: "agents", Description: "List durable agents and controls"},
 	{Command: "memory", Description: "Review memory and set focus"},
 	{Command: "stop", Description: "Stop current work in this chat"},
@@ -134,6 +136,19 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		return true, nil
+	case "doctor":
+		if !isAdmin {
+			text = "Doctor diagnostics are admin only."
+			break
+		}
+		if chatType := strings.TrimSpace(msg.ChatType); chatType != "" && chatType != "private" && chatType != "dm" {
+			text = "Doctor diagnostics must be run from an admin private chat."
+			break
+		}
+		if err := router.QueueDoctor(ctx, msg); err != nil {
+			return true, err
+		}
+		text = "Doctor diagnostics started. I will post the report here when the read-only model analysis finishes."
 	case "agents":
 		if !router.CanRestart(msg.SenderID) {
 			text = "Durable-agent controls are admin only."

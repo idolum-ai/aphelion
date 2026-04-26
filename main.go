@@ -299,6 +299,13 @@ func (c telegramCommandControl) QueueReinstall(ctx context.Context, msg core.Inb
 	return nil
 }
 
+func (c telegramCommandControl) QueueDoctor(ctx context.Context, msg core.InboundMessage) error {
+	if c.rt == nil {
+		return fmt.Errorf("runtime is not configured")
+	}
+	return c.rt.StartDoctor(ctx, msg)
+}
+
 func (c telegramCommandControl) CurrentEfforts() (string, string) {
 	return c.rt.CurrentEfforts()
 }

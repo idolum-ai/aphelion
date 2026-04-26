@@ -53,6 +53,7 @@ type fakeProvider struct {
 	seenBrokerageSystem    []string
 	seenPlanningSystem     []string
 	lastGovernorMsgs       []agent.Message
+	lastGovernorTools      []agent.ToolDef
 	responseUsage          core.TokenUsage
 	lastReasoning          agent.ReasoningConfig
 	reasoningBySystem      map[string]agent.ReasoningConfig
@@ -84,7 +85,7 @@ func (p planningErrorProvider) CompleteWithOptions(ctx context.Context, messages
 	return p.Provider.Complete(ctx, messages, tools)
 }
 
-func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
+func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.callCount++
@@ -127,6 +128,7 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, _ [
 		return nil, f.err
 	}
 	f.lastGovernorMsgs = append([]agent.Message(nil), messages...)
+	f.lastGovernorTools = append([]agent.ToolDef(nil), tools...)
 
 	var systemParts []string
 	var userParts []string

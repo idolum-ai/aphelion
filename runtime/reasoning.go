@@ -21,7 +21,7 @@ func reasoningOptionsForRun(cfg *config.Config, kind session.TurnRunKind) *agent
 		effort = firstNonEmptyThinking(cfg.Thinking.Defaults.Heartbeat, effort)
 	case session.TurnRunKindCron:
 		effort = firstNonEmptyThinking(cfg.Thinking.Defaults.Cron, effort)
-	case session.TurnRunKindRecovery:
+	case session.TurnRunKindRecovery, session.TurnRunKindDoctor:
 		effort = firstNonEmptyThinking(cfg.Thinking.Defaults.Recovery, effort)
 	default:
 		effort = firstNonEmptyThinking(cfg.Thinking.Defaults.Default, effort)
@@ -49,7 +49,7 @@ func (r *Runtime) reasoningOptionsForRun(kind session.TurnRunKind) *agent.Comple
 		return nil
 	}
 	snapshot := r.currentRecipeSnapshot()
-	if kind == session.TurnRunKindInteractive || kind == session.TurnRunKindRecovery {
+	if kind == session.TurnRunKindInteractive || kind == session.TurnRunKindRecovery || kind == session.TurnRunKindDoctor {
 		if effort := normalizeGovernorEffort(snapshot.GovernorEffort); effort != "" {
 			opts.Reasoning.Effort = agent.ReasoningEffort(effort)
 		}

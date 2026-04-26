@@ -80,7 +80,7 @@ func (r *Runtime) governorRuntimeAwareness(scope sandbox.Scope, kind session.Tur
 
 func sessionKindForRun(kind session.TurnRunKind) string {
 	switch kind {
-	case session.TurnRunKindHeartbeat, session.TurnRunKindCron, session.TurnRunKindRecovery:
+	case session.TurnRunKindHeartbeat, session.TurnRunKindCron, session.TurnRunKindRecovery, session.TurnRunKindDoctor:
 		return "system"
 	default:
 		return "interactive"

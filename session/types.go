@@ -16,6 +16,7 @@ const (
 	TurnRunKindHeartbeat   TurnRunKind = "heartbeat"
 	TurnRunKindCron        TurnRunKind = "cron"
 	TurnRunKindRecovery    TurnRunKind = "recovery"
+	TurnRunKindDoctor      TurnRunKind = "doctor"
 )
 
 type TurnRunStatus string
