@@ -42,6 +42,7 @@ type fakeProvider struct {
 	faceReplyText          string
 	repairReplyText        string
 	repairReplies          []string
+	doctorSummaryReplyText string
 	streamFaceText         string
 	faceErr                error
 	proposalErr            error
@@ -54,6 +55,8 @@ type fakeProvider struct {
 	seenPlanningSystem     []string
 	lastGovernorMsgs       []agent.Message
 	lastGovernorTools      []agent.ToolDef
+	lastDoctorSummaryMsgs  []agent.Message
+	lastDoctorSummaryTools []agent.ToolDef
 	responseUsage          core.TokenUsage
 	lastReasoning          agent.ReasoningConfig
 	reasoningBySystem      map[string]agent.ReasoningConfig
@@ -126,6 +129,15 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, too
 	}
 	if f.err != nil {
 		return nil, f.err
+	}
+	if fakeMessagesContain(messages, doctorSummaryMarker) {
+		f.lastDoctorSummaryMsgs = append([]agent.Message(nil), messages...)
+		f.lastDoctorSummaryTools = append([]agent.ToolDef(nil), tools...)
+		reply := strings.TrimSpace(f.doctorSummaryReplyText)
+		if reply == "" {
+			reply = "State of Things\nMost important fix: review the full doctor report in session history.\n\nRecommendations\nStart with the highest-risk active item."
+		}
+		return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 	}
 	f.lastGovernorMsgs = append([]agent.Message(nil), messages...)
 	f.lastGovernorTools = append([]agent.ToolDef(nil), tools...)
@@ -239,6 +251,19 @@ func nextFakeReply(queue *[]string, fallback string) string {
 	reply := (*queue)[0]
 	*queue = append((*queue)[:0], (*queue)[1:]...)
 	return reply
+}
+
+func fakeMessagesContain(messages []agent.Message, needle string) bool {
+	needle = strings.TrimSpace(needle)
+	if needle == "" {
+		return false
+	}
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeSender struct {

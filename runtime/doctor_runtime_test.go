@@ -152,6 +152,90 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 	}
 }
 
+func TestRunDoctorOnceCondensesOversizedTelegramReport(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	fullReport := "State of Things\n" + strings.Repeat("Active failure: prioritize fixing provider retry visibility before lower-risk cleanup. Evidence points to alert fatigue and oversized doctor output. ", 90)
+	summary := strings.Join([]string{
+		"State of Things",
+		"Top fix: keep provider retry and timeout failures visible in Telegram without flooding the chat.",
+		"",
+		"Most Important Fix",
+		"1. active: tighten the alert/progress path so failures are visible once, deduplicated, and actionable.",
+		"",
+		"Residual Risk",
+		"- residual_risk: full details stay in session history; Telegram gets this prioritized summary.",
+	}, "\n")
+	provider.replyText = fullReport
+	provider.doctorSummaryReplyText = summary
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	err = rt.runDoctorOnce(context.Background(), core.InboundMessage{
+		ChatID:     1001,
+		SenderID:   1001,
+		SenderName: "admin",
+		ChatType:   "private",
+		Text:       "/doctor",
+		MessageID:  31,
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("runDoctorOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	sent := append([]core.OutboundMessage(nil), sender.sent...)
+	edits := append([]messageEdit(nil), sender.edits...)
+	sender.mu.Unlock()
+	if len(sent) != 2 {
+		t.Fatalf("sent len = %d, want progress and condensed report", len(sent))
+	}
+	if got := doctorCharCount(sent[1].Text); got > doctorTelegramMaxChars {
+		t.Fatalf("telegram report chars = %d, want <= %d", got, doctorTelegramMaxChars)
+	}
+	if sent[1].Text != summary {
+		t.Fatalf("telegram report = %q, want condensed summary", sent[1].Text)
+	}
+	if !doctorEditsContain(edits, "Condensing the doctor report for one Telegram message") {
+		t.Fatalf("progress edits = %#v, want condensation progress", edits)
+	}
+
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if len(sess.Messages) < 2 {
+		t.Fatalf("messages len = %d, want synthetic /doctor turn", len(sess.Messages))
+	}
+	assistantMsg := sess.Messages[len(sess.Messages)-1]
+	if assistantMsg.Content != strings.TrimSpace(fullReport) {
+		t.Fatalf("assistant content chars = %d, want full report preserved", len(assistantMsg.Content))
+	}
+	if assistantMsg.FloorContent != summary {
+		t.Fatalf("assistant floor = %q, want telegram summary", assistantMsg.FloorContent)
+	}
+	if !strings.Contains(assistantMsg.FloorMetadata, "doctor_full_report_chars=") || !strings.Contains(assistantMsg.FloorMetadata, "doctor_telegram_limit_chars=") {
+		t.Fatalf("floor metadata = %q, want doctor report sizing metadata", assistantMsg.FloorMetadata)
+	}
+
+	provider.mu.Lock()
+	if len(provider.lastDoctorSummaryTools) != 0 {
+		t.Fatalf("doctor summary tools = %#v, want none", provider.lastDoctorSummaryTools)
+	}
+	var summaryPrompt string
+	for _, msg := range provider.lastDoctorSummaryMsgs {
+		if msg.Role == "user" {
+			summaryPrompt += "\n" + msg.Content
+		}
+	}
+	provider.mu.Unlock()
+	if !strings.Contains(summaryPrompt, doctorSummaryMarker) || !strings.Contains(summaryPrompt, "service_single_message_limit_chars=") || !strings.Contains(summaryPrompt, "Full report to condense:") {
+		t.Fatalf("summary prompt = %q, want telegram condensation instructions", summaryPrompt)
+	}
+}
+
 func TestStartDoctorRejectsNonAdmin(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -168,4 +252,13 @@ func TestStartDoctorRejectsNonAdmin(t *testing.T) {
 	if !errors.Is(err, ErrPrincipalDenied) {
 		t.Fatalf("StartDoctor() err = %v, want ErrPrincipalDenied", err)
 	}
+}
+
+func doctorEditsContain(edits []messageEdit, want string) bool {
+	for _, edit := range edits {
+		if strings.Contains(edit.Text, want) {
+			return true
+		}
+	}
+	return false
 }
