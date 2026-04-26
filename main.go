@@ -45,7 +45,7 @@ const (
 
 var processExit = os.Exit
 
-const reinstallTemplateMessage = "Rebuild, reinstall, restart, and verify the aphelion user service on this host using the current checked-out branch state. Use the normal local deploy path for a source install: build the binary, run --check-config, run init, restart the systemd user service, and run verify-deploy. Treat this as an operational change: inspect the current service/install state first, then execute the bounded redeploy steps, and report what happened truthfully."
+const reinstallTemplateMessage = "Rebuild, reinstall, restart, and verify the aphelion user service on this host using the current checked-out branch state. Use the normal local deploy path for a source install: build the binary, run --check-config, run init including Codex session import, restart the systemd user service, and run verify-deploy. Treat this as an operational change: inspect the current service/install state first, then execute the bounded redeploy steps, and report what happened truthfully."
 
 type configStartupError struct {
 	Path string

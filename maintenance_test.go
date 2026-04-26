@@ -397,6 +397,75 @@ user_memory_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated"
 	}
 }
 
+func TestRunImportCodexSessionsCommandImportsAndDedupes(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	codexHome := filepath.Join(root, "codex")
+	cfgPath := writeMaintenanceConfigWithCodexHome(t, root, codexHome)
+	writeCodexSessionMaintenanceFixture(t, codexHome, time.Now().UTC().Add(-time.Hour), "command import should enter quarantine")
+
+	out, err := captureStdout(t, func() error {
+		return runImportCodexSessionsCommand([]string{
+			"--config", cfgPath,
+			"--lookback", "48h",
+			"--active-grace", "1m",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runImportCodexSessionsCommand() err = %v", err)
+	}
+	for _, needle := range []string{
+		"action: import-codex-sessions",
+		"state: quarantine",
+		"imported: 1",
+		"skipped_already_imported: 0",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("import output = %q, want substring %q", out, needle)
+		}
+	}
+
+	again, err := captureStdout(t, func() error {
+		return runImportCodexSessionsCommand([]string{
+			"--config", cfgPath,
+			"--lookback", "48h",
+			"--active-grace", "1m",
+		})
+	})
+	if err != nil {
+		t.Fatalf("runImportCodexSessionsCommand(second) err = %v", err)
+	}
+	if !strings.Contains(again, "imported: 0") || !strings.Contains(again, "skipped_already_imported: 1") {
+		t.Fatalf("second import output = %q, want dedupe skip", again)
+	}
+}
+
+func TestRunInitCommandImportsCodexSessions(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	codexHome := filepath.Join(root, "codex")
+	cfgPath := writeMaintenanceConfigWithCodexHome(t, root, codexHome)
+	writeCodexSessionMaintenanceFixture(t, codexHome, time.Now().UTC().Add(-time.Hour), "init import should run during reinstall")
+
+	out, err := captureStdout(t, func() error {
+		return runInitCommand([]string{"--config", cfgPath})
+	})
+	if err != nil {
+		t.Fatalf("runInitCommand() err = %v", err)
+	}
+	for _, needle := range []string{
+		"prompt_root:",
+		"action: import-codex-sessions",
+		"imported: 1",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("init output = %q, want substring %q", out, needle)
+		}
+	}
+}
+
 func TestRunDurableAgentPolicyShowAndApply(t *testing.T) {
 	t.Parallel()
 
@@ -1783,6 +1852,68 @@ user_memory_root = "` + filepath.ToSlash(filepath.Join(root, "state", "isolated"
 		t.Fatalf("WriteFile(config) err = %v", err)
 	}
 	return cfgPath
+}
+
+func writeMaintenanceConfigWithCodexHome(t *testing.T, root string, codexHome string) string {
+	t.Helper()
+	cfgPath := writeMaintenanceConfig(t, root)
+	f, err := os.OpenFile(cfgPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile(config append) err = %v", err)
+	}
+	defer f.Close()
+	if _, err := fmt.Fprintf(f, "\n[governor.codex]\ncodex_home = %q\n", filepath.ToSlash(codexHome)); err != nil {
+		t.Fatalf("append codex_home config err = %v", err)
+	}
+	return cfgPath
+}
+
+func writeCodexSessionMaintenanceFixture(t *testing.T, codexHome string, modTime time.Time, userText string) string {
+	t.Helper()
+	dir := filepath.Join(codexHome, "sessions", "2026", "04", "25")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(codex sessions) err = %v", err)
+	}
+	path := filepath.Join(dir, "rollout-"+modTime.UTC().Format("20060102T150405.000000000")+".jsonl")
+	events := []map[string]any{
+		{
+			"type":      "session_meta",
+			"timestamp": modTime.Add(-time.Minute).UTC().Format(time.RFC3339Nano),
+			"payload": map[string]any{
+				"id":             "maintenance-session",
+				"source":         "codex_cli",
+				"model_provider": "openai",
+				"cwd":            "/workspace/aphelion",
+			},
+		},
+		{
+			"type":      "response_item",
+			"timestamp": modTime.UTC().Format(time.RFC3339Nano),
+			"payload": map[string]any{
+				"type": "message",
+				"role": "user",
+				"content": []map[string]string{{
+					"type": "input_text",
+					"text": userText,
+				}},
+			},
+		},
+	}
+	lines := make([]string, 0, len(events))
+	for _, event := range events {
+		raw, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("Marshal(codex event) err = %v", err)
+		}
+		lines = append(lines, string(raw))
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(codex session) err = %v", err)
+	}
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatalf("Chtimes(codex session) err = %v", err)
+	}
+	return path
 }
 
 func createOpenClawImportFixture(t *testing.T, path string) {

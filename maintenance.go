@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -67,6 +68,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runImportAuditCommand(args[1:])
 	case "import-semantic":
 		return true, runImportSemanticCommand(args[1:])
+	case "import-codex-sessions":
+		return true, runImportCodexSessionsCommand(args[1:])
 	case "migrate-memory":
 		return true, runMigrateMemoryCommand(args[1:])
 	case "verify-deploy":
@@ -101,6 +104,12 @@ func runInitCommand(args []string) error {
 	for _, path := range created {
 		fmt.Fprintf(os.Stdout, "  - %s\n", path)
 	}
+
+	importResult, err := importCodexSessionsForConfig(context.Background(), cfg, defaultCodexSessionImportCommandOptions(cfg))
+	if err != nil {
+		return err
+	}
+	printCodexSessionImportResult(os.Stdout, importResult, memstore.SemanticImportStateQuarantine)
 	return nil
 }
 
@@ -680,6 +689,119 @@ func runImportSemanticCommand(args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("import-semantic source must be one of openclaw|host")
+	}
+}
+
+type codexSessionImportCommandOptions struct {
+	CodexHome   string
+	Lookback    time.Duration
+	ActiveGrace time.Duration
+	MaxSessions int
+	Scope       string
+	PrincipalID string
+	ImportState memstore.SemanticImportState
+}
+
+func defaultCodexSessionImportCommandOptions(cfg *config.Config) codexSessionImportCommandOptions {
+	opts := codexSessionImportCommandOptions{
+		Lookback:    14 * 24 * time.Hour,
+		ActiveGrace: 5 * time.Minute,
+		MaxSessions: 50,
+		Scope:       "shared",
+		ImportState: memstore.SemanticImportStateQuarantine,
+	}
+	if cfg != nil {
+		opts.CodexHome = strings.TrimSpace(cfg.Governor.Codex.CodexHome)
+	}
+	return opts
+}
+
+func runImportCodexSessionsCommand(args []string) error {
+	fs := flag.NewFlagSet("import-codex-sessions", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	codexHome := fs.String("codex-home", "", "Codex home directory; defaults to governor.codex.codex_home, CODEX_HOME, or ~/.codex")
+	lookback := fs.Duration("lookback", 14*24*time.Hour, "session mtime lookback window")
+	activeGrace := fs.Duration("active-grace", 5*time.Minute, "skip sessions modified more recently than this")
+	maxSessions := fs.Int("max", 50, "max newest sessions to import")
+	scope := fs.String("scope", "shared", "target scope: shared|principal")
+	principalID := fs.String("principal", "", "target principal key when scope=principal")
+	state := fs.String("state", string(memstore.SemanticImportStateQuarantine), "initial import state: quarantine|approved|rejected")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, _, err := loadConfigForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	opts := defaultCodexSessionImportCommandOptions(cfg)
+	if strings.TrimSpace(*codexHome) != "" {
+		opts.CodexHome = strings.TrimSpace(*codexHome)
+	}
+	opts.Lookback = *lookback
+	opts.ActiveGrace = *activeGrace
+	opts.MaxSessions = *maxSessions
+	opts.Scope = *scope
+	opts.PrincipalID = *principalID
+	opts.ImportState = memstore.SemanticImportState(strings.ToLower(strings.TrimSpace(*state)))
+	if err := validateCodexSessionImportState(opts.ImportState); err != nil {
+		return err
+	}
+
+	result, err := importCodexSessionsForConfig(context.Background(), cfg, opts)
+	if err != nil {
+		return err
+	}
+	printCodexSessionImportResult(os.Stdout, result, opts.ImportState)
+	return nil
+}
+
+func validateCodexSessionImportState(state memstore.SemanticImportState) error {
+	switch state {
+	case memstore.SemanticImportStateQuarantine, memstore.SemanticImportStateApproved, memstore.SemanticImportStateRejected:
+		return nil
+	default:
+		return fmt.Errorf("state must be one of quarantine|approved|rejected")
+	}
+}
+
+func importCodexSessionsForConfig(ctx context.Context, cfg *config.Config, opts codexSessionImportCommandOptions) (*memstore.CodexSessionImportResult, error) {
+	engine, err := newSemanticEngineForConfig(cfg, true)
+	if err != nil {
+		return nil, err
+	}
+	defer engine.Close()
+	return engine.ImportCodexSessions(ctx, memstore.CodexSessionImportOptions{
+		CodexHome:   opts.CodexHome,
+		Lookback:    opts.Lookback,
+		ActiveGrace: opts.ActiveGrace,
+		MaxSessions: opts.MaxSessions,
+		Scope:       opts.Scope,
+		PrincipalID: opts.PrincipalID,
+		ImportState: opts.ImportState,
+	})
+}
+
+func printCodexSessionImportResult(w io.Writer, result *memstore.CodexSessionImportResult, state memstore.SemanticImportState) {
+	if result == nil {
+		return
+	}
+	fmt.Fprintf(w, "action: import-codex-sessions\n")
+	fmt.Fprintf(w, "codex_home: %s\n", result.CodexHome)
+	if strings.TrimSpace(result.SessionsDir) != "" {
+		fmt.Fprintf(w, "sessions_dir: %s\n", result.SessionsDir)
+	}
+	fmt.Fprintf(w, "state: %s\n", state)
+	fmt.Fprintf(w, "scanned: %d\n", result.Scanned)
+	fmt.Fprintf(w, "eligible: %d\n", result.Eligible)
+	fmt.Fprintf(w, "imported: %d\n", result.Imported)
+	fmt.Fprintf(w, "skipped_already_imported: %d\n", result.SkippedAlreadyImported)
+	fmt.Fprintf(w, "skipped_old: %d\n", result.SkippedOld)
+	fmt.Fprintf(w, "skipped_active: %d\n", result.SkippedActive)
+	fmt.Fprintf(w, "skipped_empty: %d\n", result.SkippedEmpty)
+	fmt.Fprintf(w, "failed: %d\n", result.Failed)
+	for _, failure := range result.Failures {
+		fmt.Fprintf(w, "  - path=%s error=%s\n", failure.Path, failure.Error)
 	}
 }
 
