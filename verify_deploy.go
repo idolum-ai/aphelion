@@ -26,6 +26,10 @@ const (
 	verifyDeployDefaultTimeout = 2 * time.Minute
 	verifyDeployBlessingPrefix = "DEPLOYMENT VERIFIED:"
 	verifyDeployProbePrompt    = "This is a deployment verification probe. If the system is functioning, reply in one short sentence that starts exactly with \"DEPLOYMENT VERIFIED:\" and confirms you are ready. Do not mention internal layers or hidden mechanics unless something is broken."
+
+	verifyDeployDurableChildrenRequired = "required"
+	verifyDeployDurableChildrenWarn     = "warn"
+	verifyDeployDurableChildrenOff      = "off"
 )
 
 type deployProbeStatus string
@@ -58,6 +62,7 @@ type deployVerificationOptions struct {
 	ProbeSenderID     int64
 	KeepSession       bool
 	KeepFailedSession bool
+	DurableChildren   string
 }
 
 type deployTurnRunner interface {
@@ -81,10 +86,11 @@ func (s *deployVerificationSender) Last() (core.OutboundMessage, bool) {
 }
 
 type builtDeployVerificationRuntime struct {
-	Runner  deployTurnRunner
-	Sender  *deployVerificationSender
-	Probe   func(context.Context, session.SessionKey, principal.Principal) (string, error)
-	Cleanup func()
+	Runner           deployTurnRunner
+	Sender           *deployVerificationSender
+	Probe            func(context.Context, session.SessionKey, principal.Principal) (string, error)
+	DurableChildWake func(context.Context, string, time.Time) error
+	Cleanup          func()
 }
 
 var deployVerificationRuntimeBuilder = defaultDeployVerificationRuntimeBuilder
@@ -98,6 +104,7 @@ func runVerifyDeployCommand(args []string) error {
 	probeSenderID := fs.Int64("probe-sender", 0, "principal id to use for deployment verification (defaults to first admin)")
 	keepSession := fs.Bool("keep-session", false, "retain the synthetic verification session even on success")
 	keepFailedSession := fs.Bool("keep-failed-session", true, "retain the synthetic verification session on failure")
+	durableChildren := fs.String("durable-children", verifyDeployDurableChildrenRequired, "durable child wake probe mode: required, warn, or off")
 	jsonOut := fs.Bool("json", false, "emit a JSON report")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -115,6 +122,7 @@ func runVerifyDeployCommand(args []string) error {
 		ProbeSenderID:     *probeSenderID,
 		KeepSession:       *keepSession,
 		KeepFailedSession: *keepFailedSession,
+		DurableChildren:   *durableChildren,
 	})
 	if renderErr := renderDeployVerificationReport(os.Stdout, report, *jsonOut); renderErr != nil {
 		return renderErr
@@ -130,6 +138,15 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 	if cfg == nil {
 		report.Diagnosis = "verification failed before startup: config is nil"
 		return report, fmt.Errorf("config is nil")
+	}
+	durableChildrenMode, err := normalizeVerifyDeployDurableChildrenMode(opts.DurableChildren)
+	if err != nil {
+		report.Diagnosis = "verification failed before startup: " + err.Error()
+		return report, err
+	}
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = verifyDeployDefaultTimeout
 	}
 
 	senderID := opts.ProbeSenderID
@@ -234,7 +251,7 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 
 	var blessedReply string
 	if err := runProbe("golden_path", func() (string, error) {
-		probeCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+		probeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
 		result, err := built.Runner.HandleInbound(probeCtx, core.InboundMessage{
@@ -308,6 +325,20 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 		return fmt.Sprintf("persisted turn=%d floor=%d chars", sess.TurnCount, len(sess.LastFloorText)), nil
 	}); err != nil {
 		return report, err
+	}
+
+	if durableChildrenMode != verifyDeployDurableChildrenOff {
+		if err := runProbe("durable_children", func() (string, error) {
+			probeCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			detail, err := verifyDeployDurableChildren(probeCtx, store, built.DurableChildWake)
+			if err != nil && durableChildrenMode == verifyDeployDurableChildrenWarn {
+				return "warning: " + err.Error(), nil
+			}
+			return detail, err
+		}); err != nil {
+			return report, err
+		}
 	}
 
 	report.Status = "passed"
@@ -400,12 +431,63 @@ func defaultDeployVerificationRuntimeBuilder(cfg *config.Config, store *session.
 			}
 			return "update_plan executed and persisted session state", nil
 		},
+		DurableChildWake: rt.RunDurableAgentChildWake,
 		Cleanup: func() {
 			if semanticEngine != nil {
 				semanticEngine.Close()
 			}
 		},
 	}, nil
+}
+
+func normalizeVerifyDeployDurableChildrenMode(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", verifyDeployDurableChildrenRequired:
+		return verifyDeployDurableChildrenRequired, nil
+	case verifyDeployDurableChildrenWarn:
+		return verifyDeployDurableChildrenWarn, nil
+	case verifyDeployDurableChildrenOff:
+		return verifyDeployDurableChildrenOff, nil
+	default:
+		return "", fmt.Errorf("durable-children must be one of required|warn|off")
+	}
+}
+
+func verifyDeployDurableChildren(ctx context.Context, store *session.SQLiteStore, wake func(context.Context, string, time.Time) error) (string, error) {
+	if store == nil {
+		return "", fmt.Errorf("durable child probe has no session store")
+	}
+	agents, err := store.ListDurableAgents()
+	if err != nil {
+		return "", err
+	}
+	active := make([]core.DurableAgent, 0, len(agents))
+	for _, agent := range agents {
+		if strings.EqualFold(firstNonEmpty(strings.TrimSpace(agent.Status), "active"), "active") {
+			active = append(active, agent)
+		}
+	}
+	if len(active) == 0 {
+		return "active durable children: 0", nil
+	}
+	if wake == nil {
+		return "", fmt.Errorf("durable child wake probe unavailable for %d active child(ren)", len(active))
+	}
+
+	failures := make([]string, 0)
+	now := time.Now().UTC()
+	for _, agent := range active {
+		if err := wake(ctx, strings.TrimSpace(agent.AgentID), now); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", strings.TrimSpace(agent.AgentID), err))
+			if len(failures) >= 3 {
+				break
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return "", fmt.Errorf("durable child wake failed for %d/%d active child(ren): %s", len(failures), len(active), strings.Join(failures, "; "))
+	}
+	return fmt.Sprintf("active durable children: %d; wake probe ok", len(active)), nil
 }
 
 func renderDeployVerificationReport(w io.Writer, report deployVerificationReport, asJSON bool) error {

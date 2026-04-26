@@ -22,7 +22,11 @@ var durableAgentProfileFiles = []string{
 	"runtime.md",
 	"surface-rules.md",
 	"capabilities.md",
+	"capability-ledger.md",
+	"growth.md",
+	"scorecard.md",
 	"skills.md",
+	"notes.md",
 }
 
 func durableAgentProfileContext(scope sandbox.Scope, agent core.DurableAgent) string {

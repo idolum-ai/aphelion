@@ -784,7 +784,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "profile_show", "profile_apply", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: external_channel or telegram_group"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
@@ -880,6 +880,15 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"snapshot_id": {"type": "string", "description": "Snapshot id for snapshot_restore"},
 								"reason": {"type": "string", "description": "Snapshot creation or restore rationale"},
 								"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Snapshot list limit"}
+							}
+						},
+						"profile_edit": {
+							"type": "object",
+							"description": "Admin-approved child-authored profile edit for profile_apply.",
+							"properties": {
+								"target_file": {"type": "string", "enum": ["persona.md", "skills.md", "notes.md"]},
+								"content": {"type": "string"},
+								"reason": {"type": "string"}
 							}
 						},
 						"delegation_request": {

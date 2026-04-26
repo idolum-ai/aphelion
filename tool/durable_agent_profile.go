@@ -20,6 +20,11 @@ type durableAgentProfileSync struct {
 	Written []string
 }
 
+type DurableAgentProfileSync struct {
+	Root    string
+	Written []string
+}
+
 type durableAgentProfileManifest struct {
 	AgentID    string                             `json:"agent_id"`
 	PolicyHash string                             `json:"policy_hash,omitempty"`
@@ -42,7 +47,7 @@ func syncDurableAgentProfileFiles(agent core.DurableAgent, store *session.SQLite
 	if err := os.MkdirAll(profileRoot, 0o755); err != nil {
 		return durableAgentProfileSync{}, fmt.Errorf("create durable agent profile root: %w", err)
 	}
-	files := durableAgentManagedProfileFiles(agent)
+	files := durableAgentManagedProfileFiles(agent, store)
 	written := make([]string, 0, len(files))
 	names := make([]string, 0, len(files))
 	for name := range files {
@@ -76,7 +81,18 @@ func syncDurableAgentProfileFiles(agent core.DurableAgent, store *session.SQLite
 	return durableAgentProfileSync{Root: profileRoot, Written: written}, nil
 }
 
-func durableAgentManagedProfileFiles(agent core.DurableAgent) map[string]string {
+func SyncDurableAgentProfileFiles(agent core.DurableAgent, store *session.SQLiteStore) (DurableAgentProfileSync, error) {
+	sync, err := syncDurableAgentProfileFiles(agent, store)
+	if err != nil {
+		return DurableAgentProfileSync{}, err
+	}
+	return DurableAgentProfileSync{
+		Root:    sync.Root,
+		Written: append([]string(nil), sync.Written...),
+	}, nil
+}
+
+func durableAgentManagedProfileFiles(agent core.DurableAgent, store *session.SQLiteStore) map[string]string {
 	policy := core.NormalizeDurableAgentLivePolicy(agent.LivePolicy)
 	files := map[string]string{
 		"charter.md": firstNonEmpty(strings.TrimSpace(policy.Charter), "No child charter has been ratified yet."),
@@ -89,7 +105,9 @@ func durableAgentManagedProfileFiles(agent core.DurableAgent) map[string]string 
 			"- shared_inference_reuse: " + strings.TrimSpace(policy.SharedInferenceReuse),
 			"- shared_inference_reuse_scope: " + strings.TrimSpace(policy.SharedInferenceReuseScope),
 		}, "\n"),
-		"capabilities.md": durableAgentCapabilitiesProfile(policy.CapabilityEnvelope),
+		"capabilities.md":      durableAgentCapabilitiesProfile(policy.CapabilityEnvelope),
+		"capability-ledger.md": durableAgentCapabilityLedgerProfile(agent, store),
+		"growth.md":            durableAgentGrowthProfile(agent),
 		"runtime.md": strings.Join([]string{
 			"# Runtime profile",
 			"",
@@ -99,6 +117,7 @@ func durableAgentManagedProfileFiles(agent core.DurableAgent) map[string]string 
 			"- network_policy: " + strings.TrimSpace(agent.NetworkPolicy),
 			"- runtime_materialization: active capability grants with child_runtime contracts only",
 		}, "\n"),
+		"scorecard.md": durableAgentScorecardProfile(agent),
 	}
 	if surface := durableAgentSurfaceProfile(agent); strings.TrimSpace(surface) != "" {
 		files["surface-rules.md"] = surface
@@ -120,19 +139,20 @@ func durableAgentCapabilitiesProfile(capabilities []string) string {
 
 func durableAgentSurfaceProfile(agent core.DurableAgent) string {
 	cfg := core.NormalizeDurableAgentChannelConfig(agent.ChannelConfig)
-	if cfg.Email == nil {
+	external := cfg.ExternalConfig()
+	if external == nil {
 		return ""
 	}
 	lines := []string{"# Channel surface rules", ""}
-	if len(cfg.Email.SurfaceRules) > 0 {
+	if len(external.SurfaceRules) > 0 {
 		lines = append(lines, "Surface upward:")
-		for _, rule := range cfg.Email.SurfaceRules {
+		for _, rule := range external.SurfaceRules {
 			lines = append(lines, "- "+strings.TrimSpace(rule))
 		}
 	}
-	if len(cfg.Email.NeverRetain) > 0 {
+	if len(external.NeverRetain) > 0 {
 		lines = append(lines, "", "Never retain:")
-		for _, rule := range cfg.Email.NeverRetain {
+		for _, rule := range external.NeverRetain {
 			lines = append(lines, "- "+strings.TrimSpace(rule))
 		}
 	}
@@ -140,6 +160,116 @@ func durableAgentSurfaceProfile(agent core.DurableAgent) string {
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+func durableAgentGrowthProfile(agent core.DurableAgent) string {
+	return strings.Join([]string{
+		"# Growth protocol",
+		"",
+		"On wake or reinstall recovery:",
+		"- Verify your actual profile files, grants, and runtime materialization before claiming you can act.",
+		"- Prefer local read-only diagnosis and draft artifacts before asking for new surface area.",
+		"- If blocked, submit one minimal delegation_request or delegation_report with evidence, the smallest useful capability, a success metric, and a rollback or trial boundary.",
+		"- Ask upward only for reusable capability surfaces, not one-off feature-specific code paths.",
+		"- Never self-grant, bypass parent/admin approval, or perform write/external effects without an active grant that materializes in this runtime.",
+		"",
+		"Useful request shape:",
+		"- current_blocker: what you tried and what failed",
+		"- evidence: file, grant, log, or transcript reference",
+		"- minimal_capability: exact target_resource and allowed action",
+		"- success_metric: how the parent can tell the request worked",
+		"- trial_boundary: duration, path, account, or rate limit that keeps the test reversible",
+	}, "\n")
+}
+
+func durableAgentScorecardProfile(agent core.DurableAgent) string {
+	return strings.Join([]string{
+		"# Child scorecard",
+		"",
+		"Parent/admin should reward:",
+		"- Accurate statements about actual grants and runtime limits.",
+		"- Small, evidence-backed capability requests that preserve rollback paths.",
+		"- Clear uncertainty, concise status reports, and follow-through after approval.",
+		"- Suppressing stale or fixed issues instead of re-reporting them as live blockers.",
+		"",
+		"Parent/admin should reject or downgrade:",
+		"- Overclaiming capability, looping on near-success, or hiding missing materialization.",
+		"- Broad requests when a narrower trial would prove the same thing.",
+		"- Feature-specific harness changes that should emerge from governed conversation and grants.",
+		"- Treating transient service errors as durable memory without verification.",
+	}, "\n")
+}
+
+func durableAgentCapabilityLedgerProfile(agent core.DurableAgent, store *session.SQLiteStore) string {
+	lines := []string{
+		"# Capability ledger",
+		"",
+		"This ledger is parent-managed runtime evidence. Treat it as a snapshot and verify live behavior before relying on it.",
+		"",
+	}
+	if store == nil {
+		return strings.Join(append(lines, "No session store was available while rendering this ledger."), "\n")
+	}
+
+	principalID := core.DurableAgentPrincipal(agent.AgentID)
+	grants, err := store.CapabilityGrants(100, session.CapabilityGrantStatusActive, "", principalID)
+	if err != nil {
+		return strings.Join(append(lines, "Could not load active capability grants: "+err.Error()), "\n")
+	}
+	lines = append(lines, "Active grants:")
+	if len(grants) == 0 {
+		lines = append(lines, "- none")
+	}
+	for _, grant := range grants {
+		materialization := "child_runtime=missing"
+		if strings.TrimSpace(grant.Contract) != "" || strings.TrimSpace(grant.Constraints) != "" {
+			if _, found, err := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints); err != nil {
+				materialization = "child_runtime=invalid"
+			} else if found {
+				materialization = "child_runtime=present"
+			} else {
+				materialization = "child_runtime=missing"
+			}
+		}
+		lines = append(lines, fmt.Sprintf(
+			"- grant_id=%s kind=%s target=%s actions=%s %s",
+			strings.TrimSpace(grant.GrantID),
+			strings.TrimSpace(string(grant.Kind)),
+			strings.TrimSpace(grant.TargetResource),
+			strings.Join(grant.AllowedActions, ","),
+			materialization,
+		))
+	}
+
+	agreements, err := store.DurableChildAgreementsForAgent(agent.AgentID, 20)
+	if err != nil {
+		lines = append(lines, "", "Agreements:", "- could not load agreements: "+err.Error())
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines, "", "Recent agreements:")
+	if len(agreements) == 0 {
+		lines = append(lines, "- none")
+	}
+	for _, agreement := range agreements {
+		lines = append(lines, fmt.Sprintf(
+			"- agreement_id=%s status=%s summary=%s",
+			strings.TrimSpace(agreement.AgreementID),
+			strings.TrimSpace(string(agreement.Status)),
+			compactDurableAgentProfileText(agreement.Summary, 180),
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func compactDurableAgentProfileText(raw string, limit int) string {
+	clean := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	if limit <= 0 || len(clean) <= limit {
+		return clean
+	}
+	if limit <= 3 {
+		return clean[:limit]
+	}
+	return clean[:limit-3] + "..."
 }
 
 func durableAgentManagedProfileHeader(agent core.DurableAgent, name string) string {

@@ -2161,7 +2161,24 @@ func TestDurableAgentPolicyApplySyncsProfileFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(runtime) err = %v", err)
 	}
-	if !strings.Contains(string(charterRaw), "Updated child charter.") || !strings.Contains(string(capRaw), "session_recall") || !strings.Contains(string(runtimeRaw), "child_runtime") {
+	growthRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "growth.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(growth) err = %v", err)
+	}
+	ledgerRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "capability-ledger.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(capability-ledger) err = %v", err)
+	}
+	scorecardRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "scorecard.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(scorecard) err = %v", err)
+	}
+	if !strings.Contains(string(charterRaw), "Updated child charter.") ||
+		!strings.Contains(string(capRaw), "session_recall") ||
+		!strings.Contains(string(runtimeRaw), "child_runtime") ||
+		!strings.Contains(string(growthRaw), "delegation_request") ||
+		!strings.Contains(string(ledgerRaw), "Active grants:") ||
+		!strings.Contains(string(scorecardRaw), "Accurate statements") {
 		t.Fatalf("profile files missing ratified content: charter=%q capabilities=%q runtime=%q", charterRaw, capRaw, runtimeRaw)
 	}
 }

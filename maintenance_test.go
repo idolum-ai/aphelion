@@ -466,6 +466,108 @@ func TestRunInitCommandImportsCodexSessions(t *testing.T) {
 	}
 }
 
+func TestDurableAgentReconcileRepairsActiveChildAndQueuesGrowthPrompt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:     "paper-scout",
+		ChannelKind: "external_channel",
+		Status:      "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review incoming reports and negotiate useful surfaces.",
+			CapabilityEnvelope: []string{"bounded_review_artifact"},
+			OutboundMode:       "read_only",
+		}),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-gog",
+		GrantedTo:      core.DurableAgentPrincipal(agent.AgentID),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{
+		AgentID: agent.AgentID,
+		Status:  "awake",
+	}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+
+	result, err := reconcileDurableAgentsForConfig(cfg, durableAgentReconcileOptions{
+		QueueGrowthPrompt: true,
+		Now:               time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("reconcileDurableAgentsForConfig() err = %v", err)
+	}
+	if result.Count != 1 || result.Active != 1 || result.RootsRepaired != 1 || result.BootstrapRepaired != 1 || result.ProfilesSynced != 1 || result.GrowthPromptsQueued != 1 || result.StatesReset != 1 || result.GrantIssues != 1 {
+		t.Fatalf("reconcile result = %#v, want repaired active child with one growth prompt and one grant issue", result)
+	}
+
+	reopened, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer reopened.Close()
+	repaired, err := reopened.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	_, memoryRoot := durableagent.LocalRoots(repaired.AgentID, repaired.LocalStorageRoots)
+	for _, name := range []string{"growth.md", "capability-ledger.md", "scorecard.md"} {
+		if _, err := os.Stat(filepath.Join(memoryRoot, "profile", name)); err != nil {
+			t.Fatalf("Stat(profile/%s) err = %v", name, err)
+		}
+	}
+	if !core.NormalizeNodeLLMBootstrap(repaired.BootstrapLLM).Configured() {
+		t.Fatalf("repaired bootstrap = %#v, want configured", repaired.BootstrapLLM)
+	}
+	state, err := reopened.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if state.Status != "dormant" || !strings.Contains(state.StateJSON, durableAgentReconcileGrowthMarker) {
+		t.Fatalf("state after reconcile = %#v, want dormant with growth marker", state)
+	}
+
+	second, err := reconcileDurableAgentsForConfig(cfg, durableAgentReconcileOptions{
+		QueueGrowthPrompt: true,
+		Now:               time.Date(2026, 4, 26, 13, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("reconcileDurableAgentsForConfig(second) err = %v", err)
+	}
+	if second.GrowthPromptsQueued != 0 || second.RootsRepaired != 0 || second.BootstrapRepaired != 0 {
+		t.Fatalf("second reconcile = %#v, want idempotent repairs and no duplicate growth prompt", second)
+	}
+	state, err = reopened.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState(second) err = %v", err)
+	}
+	if strings.Count(state.StateJSON, durableAgentReconcileGrowthMarker) != 1 {
+		t.Fatalf("state.StateJSON = %q, want one growth marker", state.StateJSON)
+	}
+}
+
 func TestRunDurableAgentPolicyShowAndApply(t *testing.T) {
 	t.Parallel()
 
@@ -1397,6 +1499,84 @@ func (f deployTurnRunnerFunc) HandleInbound(ctx context.Context, msg core.Inboun
 	return f(ctx, msg)
 }
 
+func installSuccessfulDeployVerificationBuilder(t *testing.T, reply string, setup func(*session.SQLiteStore) error, wake func(context.Context, string, time.Time) error) {
+	t.Helper()
+	origBuilder := deployVerificationRuntimeBuilder
+	t.Cleanup(func() { deployVerificationRuntimeBuilder = origBuilder })
+
+	deployVerificationRuntimeBuilder = func(cfg *config.Config, store *session.SQLiteStore) (builtDeployVerificationRuntime, error) {
+		if setup != nil {
+			if err := setup(store); err != nil {
+				return builtDeployVerificationRuntime{}, err
+			}
+		}
+		sender := &deployVerificationSender{}
+		runner := deployTurnRunnerFunc(func(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
+			key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
+			sess, err := store.Load(key)
+			if err != nil {
+				return nil, err
+			}
+			sess.ChatType = "dm"
+			sess.UserName = msg.SenderName
+			sess.TurnCount++
+			sess.LastFloorText = "Verification floor."
+			newMessages := []session.Message{
+				{
+					Role:         "user",
+					Content:      msg.Text,
+					ContentChars: len(msg.Text),
+					TurnIndex:    sess.TurnCount,
+				},
+				{
+					Role:         "assistant",
+					Content:      reply,
+					ContentChars: len(reply),
+					TurnIndex:    sess.TurnCount,
+				},
+			}
+			if err := store.Save(sess, newMessages, core.TokenUsage{}); err != nil {
+				return nil, err
+			}
+			if _, err := sender.SendMessage(ctx, core.OutboundMessage{ChatID: msg.ChatID, Text: reply}); err != nil {
+				return nil, err
+			}
+			return &core.TurnResult{Text: "Verification floor."}, nil
+		})
+		return builtDeployVerificationRuntime{
+			Runner: runner,
+			Sender: sender,
+			Probe: func(ctx context.Context, key session.SessionKey, p principal.Principal) (string, error) {
+				return "tool probe persisted plan state", nil
+			},
+			DurableChildWake: wake,
+		}, nil
+	}
+}
+
+func newVerifyDeployTestConfig(t *testing.T) *config.Config {
+	t.Helper()
+	root := t.TempDir()
+	return &config.Config{
+		Principals: config.PrincipalsConfig{
+			Telegram: config.TelegramPrincipalsConfig{
+				AdminUserIDs: []int64{42},
+			},
+		},
+		Sessions: config.SessionsConfig{
+			DBPath: filepath.Join(root, "state", "sessions.db"),
+		},
+		Agent: config.AgentConfig{
+			PromptRoot:        filepath.Join(root, "agent"),
+			ExecRoot:          filepath.Join(root, "workspace"),
+			SharedMemoryRoot:  filepath.Join(root, "agent"),
+			UserWorkspaceRoot: filepath.Join(root, "state", "isolated", "workspaces"),
+			UserMemoryRoot:    filepath.Join(root, "state", "isolated", "memory"),
+			ToolTimeout:       30,
+		},
+	}
+}
+
 func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T) {
 	root := t.TempDir()
 	cfg := &config.Config{
@@ -1493,8 +1673,8 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 	if !report.Blessed {
 		t.Fatal("report.Blessed = false, want true")
 	}
-	if len(report.Probes) != 4 {
-		t.Fatalf("probe len = %d, want 4", len(report.Probes))
+	if len(report.Probes) != 5 {
+		t.Fatalf("probe len = %d, want 5", len(report.Probes))
 	}
 	bootProbe := report.Probes[0]
 	if bootProbe.Name != "boot" {
@@ -1516,6 +1696,77 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 	}
 	if remaining != 0 {
 		t.Fatalf("probe session rows = %d, want 0 after successful cleanup", remaining)
+	}
+}
+
+func TestVerifyDeploymentFailsRequiredDurableChildWake(t *testing.T) {
+	cfg := newVerifyDeployTestConfig(t)
+	installSuccessfulDeployVerificationBuilder(t,
+		"DEPLOYMENT VERIFIED: Idolum is here and ready.",
+		func(store *session.SQLiteStore) error {
+			return store.UpsertDurableAgent(core.DurableAgent{
+				AgentID:     "paper-scout",
+				ChannelKind: "external_channel",
+				Status:      "active",
+				LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+					Charter:      "Review reports.",
+					OutboundMode: "read_only",
+				}),
+			})
+		},
+		func(context.Context, string, time.Time) error {
+			return fmt.Errorf("child wake unavailable")
+		},
+	)
+
+	report, err := verifyDeployment(context.Background(), cfg, deployVerificationOptions{
+		ConfigPath: "/tmp/aphelion.toml",
+	})
+	if err == nil {
+		t.Fatal("verifyDeployment() err = nil, want durable child failure")
+	}
+	if !strings.Contains(err.Error(), "durable child wake failed") {
+		t.Fatalf("verifyDeployment() err = %v, want durable child wake failure", err)
+	}
+	last := report.Probes[len(report.Probes)-1]
+	if last.Name != "durable_children" || last.Status != deployProbeStatusFail {
+		t.Fatalf("last probe = %#v, want failed durable_children", last)
+	}
+}
+
+func TestVerifyDeploymentWarnsDurableChildWake(t *testing.T) {
+	cfg := newVerifyDeployTestConfig(t)
+	installSuccessfulDeployVerificationBuilder(t,
+		"DEPLOYMENT VERIFIED: Idolum is here and ready.",
+		func(store *session.SQLiteStore) error {
+			return store.UpsertDurableAgent(core.DurableAgent{
+				AgentID:     "paper-scout",
+				ChannelKind: "external_channel",
+				Status:      "active",
+				LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+					Charter:      "Review reports.",
+					OutboundMode: "read_only",
+				}),
+			})
+		},
+		func(context.Context, string, time.Time) error {
+			return fmt.Errorf("child wake unavailable")
+		},
+	)
+
+	report, err := verifyDeployment(context.Background(), cfg, deployVerificationOptions{
+		ConfigPath:      "/tmp/aphelion.toml",
+		DurableChildren: "warn",
+	})
+	if err != nil {
+		t.Fatalf("verifyDeployment() err = %v, want warning-only pass", err)
+	}
+	if report.Status != "passed" {
+		t.Fatalf("report.Status = %q, want passed", report.Status)
+	}
+	last := report.Probes[len(report.Probes)-1]
+	if last.Name != "durable_children" || last.Status != deployProbeStatusPass || !strings.Contains(last.Detail, "warning:") {
+		t.Fatalf("last probe = %#v, want warning durable_children pass", last)
 	}
 }
 
