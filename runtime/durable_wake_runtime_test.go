@@ -140,7 +140,7 @@ func TestPollDurableWakeAgentsUsesPluggableIngressAdapter(t *testing.T) {
 	if sender.sent[0].ChatID != 1001 {
 		t.Fatalf("sent chat_id = %d, want 1001", sender.sent[0].ChatID)
 	}
-	if !strings.Contains(sender.sent[0].Text, "Review digest.") {
+	if !strings.Contains(sender.sent[0].Text, "**Review: idolum-test-adapter**") {
 		t.Fatalf("sent text = %q, want review digest relay", sender.sent[0].Text)
 	}
 	sender.mu.Unlock()
@@ -280,7 +280,7 @@ func TestPollDurableWakeAgentsDeliversReviewEventsAfterChildExecutorWake(t *test
 	if sender.sent[0].ChatID != 1001 {
 		t.Fatalf("sent chat_id = %d, want 1001", sender.sent[0].ChatID)
 	}
-	if !strings.Contains(sender.sent[0].Text, "Review digest.") {
+	if !strings.Contains(sender.sent[0].Text, "**Review: idolum-child-relay**") {
 		t.Fatalf("sent text = %q, want review digest relay", sender.sent[0].Text)
 	}
 	sender.mu.Unlock()
@@ -494,7 +494,7 @@ func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *
 	if got := len(sender.sent); got != 1 {
 		t.Fatalf("sent len = %d, want 1 immediate parent-conversation review relay", got)
 	}
-	if !strings.Contains(sender.sent[0].Text, "Processed pending parent guidance") {
+	if !strings.Contains(sender.sent[0].Text, "**Review: child-alpha**") || !strings.Contains(sender.sent[0].Text, "Processed pending parent guidance") {
 		t.Fatalf("sent text = %q, want parent conversation ack summary", sender.sent[0].Text)
 	}
 	if !strings.Contains(sender.sent[0].Text, "channel=headless") {

@@ -56,10 +56,10 @@ func TestHandleInboundDeliversPendingReviewEventsForAdmin(t *testing.T) {
 	if finalText != "ok" {
 		t.Fatalf("first message = %q, want model reply", finalText)
 	}
-	if !strings.Contains(sender.sent[1].Text, "Review digest.") {
+	if !strings.Contains(sender.sent[1].Text, "**Review: approved user**") {
 		t.Fatalf("second message missing digest label: %q", sender.sent[1].Text)
 	}
-	if !strings.Contains(sender.sent[1].Text, "Source Chat: 7001") {
+	if !strings.Contains(sender.sent[1].Text, "chat=7001") {
 		t.Fatalf("second message missing source chat: %q", sender.sent[1].Text)
 	}
 
@@ -78,7 +78,7 @@ func TestHandleInboundDeliversPendingReviewEventsForAdmin(t *testing.T) {
 	if len(adminSession.Messages) != 3 {
 		t.Fatalf("admin session messages len = %d, want 3", len(adminSession.Messages))
 	}
-	if !strings.Contains(adminSession.Messages[2].Content, "Review digest.") {
+	if !strings.Contains(adminSession.Messages[2].Content, "**Review: approved user**") {
 		t.Fatalf("admin digest content = %q, want persisted review digest", adminSession.Messages[2].Content)
 	}
 }
@@ -258,7 +258,7 @@ func TestHandleInboundDeliversActionableCapabilityReviewEventWithButtons(t *test
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline len = %d, want actionable review delivered as inline keyboard", len(sender.inline))
 	}
-	if !strings.Contains(sender.inline[0].text, "Review digest.") || !strings.Contains(sender.inline[0].text, "Capability request cap-button") {
+	if !strings.Contains(sender.inline[0].text, "**Review: capability request**") || !strings.Contains(sender.inline[0].text, "Capability request cap-button") {
 		t.Fatalf("inline text = %q, want review digest", sender.inline[0].text)
 	}
 	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {

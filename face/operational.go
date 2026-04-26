@@ -248,28 +248,211 @@ func RenderTelegramSetGovernorEffort(effort string) string {
 }
 
 func RenderReviewDigest(notice ReviewDigestNotice) string {
-	lines := []string{"Review digest."}
-	lines = append(lines,
-		fmt.Sprintf("Source Chat: %d", notice.SourceChatID),
-		fmt.Sprintf("Source User: %d", notice.SourceUserID),
-		"Source Role: "+firstNonEmpty(strings.TrimSpace(notice.SourceRole), "-"),
-	)
-	if scope := strings.TrimSpace(notice.SourceScope); scope != "" {
-		lines = append(lines, "Source Scope: "+scope)
+	sections := parseReviewDigestSummary(notice.Summary)
+	lines := []string{"**" + reviewDigestTitle(notice) + "**"}
+
+	context := reviewDigestContextLine(notice, sections.Context)
+	if context != "" {
+		lines = append(lines, context)
 	}
-	if agent := strings.TrimSpace(notice.SourceAgent); agent != "" {
-		lines = append(lines, "Source Agent: "+agent)
+	if summary := strings.TrimSpace(sections.Summary); summary != "" {
+		lines = append(lines, "", "**Summary**", truncateReviewDigestText(summary, 900))
 	}
-	if parent := strings.TrimSpace(notice.ParentScope); parent != "" {
-		lines = append(lines, "Parent Scope: "+parent)
+	if len(sections.Local) > 0 {
+		lines = append(lines, "", "**Checked**")
+		lines = append(lines, reviewDigestBullets(sections.Local, 6)...)
 	}
-	if turns := strings.TrimSpace(notice.TurnRange); turns != "" {
-		lines = append(lines, "Turns: "+turns)
+	if len(sections.Questions) > 0 {
+		lines = append(lines, "", "**Needs attention**")
+		lines = append(lines, reviewDigestBullets(sections.Questions, 4)...)
 	}
-	if summary := strings.TrimSpace(notice.Summary); summary != "" {
-		lines = append(lines, "", "Summary:", summary)
+	if len(sections.Risks) > 0 {
+		lines = append(lines, "", "**Risks**")
+		lines = append(lines, reviewDigestBullets(sections.Risks, 4)...)
+	}
+	if strings.TrimSpace(sections.Summary) == "" && len(sections.Local) == 0 && len(sections.Questions) == 0 && len(sections.Risks) == 0 {
+		if raw := strings.TrimSpace(notice.Summary); raw != "" {
+			lines = append(lines, "", truncateReviewDigestText(raw, 1200))
+		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+type reviewDigestSections struct {
+	Context   []string
+	Summary   string
+	Local     []string
+	Questions []string
+	Risks     []string
+}
+
+func reviewDigestTitle(notice ReviewDigestNotice) string {
+	if agent := strings.TrimSpace(notice.SourceAgent); agent != "" {
+		return "Review: " + agent
+	}
+	switch strings.TrimSpace(notice.SourceRole) {
+	case "capability_request":
+		return "Review: capability request"
+	case "":
+		return "Review"
+	default:
+		return "Review: " + strings.ReplaceAll(strings.TrimSpace(notice.SourceRole), "_", " ")
+	}
+}
+
+func reviewDigestContextLine(notice ReviewDigestNotice, summaryContext []string) string {
+	parts := make([]string, 0, 6)
+	for _, context := range summaryContext {
+		context = strings.TrimSpace(context)
+		if context != "" {
+			parts = append(parts, context)
+		}
+	}
+	if agent := strings.TrimSpace(notice.SourceAgent); agent != "" && !reviewDigestContextContains(parts, "agent=") && !reviewDigestContextContains(parts, "durable_agent=") {
+		parts = append(parts, "agent="+agent)
+	}
+	if scope := strings.TrimSpace(notice.SourceScope); scope != "" && strings.TrimSpace(notice.SourceAgent) == "" && !reviewDigestContextContains(parts, "scope=") {
+		parts = append(parts, "scope="+scope)
+	}
+	if parent := strings.TrimSpace(notice.ParentScope); parent != "" && !reviewDigestContextContains(parts, "parent=") {
+		parts = append(parts, "parent="+parent)
+	}
+	if turns := strings.TrimSpace(notice.TurnRange); turns != "" && turns != "n/a" {
+		parts = append(parts, "turns="+turns)
+	}
+	if notice.SourceChatID != 0 && !reviewDigestContextContains(parts, "chat=") && !reviewDigestContextContains(parts, "source_chat=") {
+		parts = append(parts, fmt.Sprintf("chat=%d", notice.SourceChatID))
+	}
+	if notice.SourceUserID != 0 && !reviewDigestContextContains(parts, "user=") && !reviewDigestContextContains(parts, "source_user=") {
+		parts = append(parts, fmt.Sprintf("user=%d", notice.SourceUserID))
+	}
+	if role := strings.TrimSpace(notice.SourceRole); role != "" && role != "durable_agent" && !reviewDigestContextContains(parts, "role=") {
+		parts = append(parts, "role="+role)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "`" + strings.Join(parts, " ") + "`"
+}
+
+func reviewDigestContextContains(parts []string, prefix string) bool {
+	for _, part := range parts {
+		for _, field := range strings.Fields(strings.TrimSpace(part)) {
+			if strings.HasPrefix(field, prefix) {
+				return true
+			}
+		}
+		if strings.HasPrefix(strings.TrimSpace(part), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseReviewDigestSummary(raw string) reviewDigestSections {
+	var out reviewDigestSections
+	current := ""
+	appendSection := func(key string, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		switch key {
+		case "summary":
+			if out.Summary == "" {
+				out.Summary = value
+			} else {
+				out.Summary += "\n" + value
+			}
+		case "local":
+			out.Local = append(out.Local, splitReviewDigestItems(value)...)
+		case "questions":
+			out.Questions = append(out.Questions, splitReviewDigestItems(value)...)
+		case "risks":
+			out.Risks = append(out.Risks, splitReviewDigestItems(value)...)
+		case "context":
+			out.Context = append(out.Context, value)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if key, value, ok := splitReviewDigestSection(line); ok {
+			current = key
+			appendSection(key, value)
+			continue
+		}
+		if current != "" {
+			appendSection(current, line)
+			continue
+		}
+		if strings.Contains(line, "=") && !strings.Contains(line, ": ") {
+			appendSection("context", line)
+			continue
+		}
+		appendSection("summary", line)
+	}
+	return out
+}
+
+func splitReviewDigestSection(line string) (string, string, bool) {
+	idx := strings.Index(line, ":")
+	if idx <= 0 {
+		return "", "", false
+	}
+	key := strings.ToLower(strings.TrimSpace(line[:idx]))
+	switch key {
+	case "summary", "local", "questions", "risks":
+		return key, strings.TrimSpace(line[idx+1:]), true
+	default:
+		return "", "", false
+	}
+}
+
+func splitReviewDigestItems(raw string) []string {
+	chunks := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ';' || r == '\n'
+	})
+	out := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		chunk = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(chunk), "-"))
+		if chunk != "" {
+			out = append(out, chunk)
+		}
+	}
+	return out
+}
+
+func reviewDigestBullets(items []string, limit int) []string {
+	if limit <= 0 || len(items) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, limit+1)
+	for i, item := range items {
+		if i >= limit {
+			lines = append(lines, fmt.Sprintf("- %d more", len(items)-limit))
+			break
+		}
+		lines = append(lines, "- "+truncateReviewDigestText(item, 260))
+	}
+	return lines
+}
+
+func truncateReviewDigestText(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
 }
 
 func RenderStartupRecovery(notice StartupRecoveryNotice) string {
