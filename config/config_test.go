@@ -130,6 +130,12 @@ external_manifest_dir = "./external-tools"
 	if cfg.Memory.Semantic.Enabled || cfg.Memory.Semantic.Backend != "local" || cfg.Memory.Semantic.Refresh != "manual" {
 		t.Fatalf("memory.semantic defaults = %#v, want disabled/local/manual", cfg.Memory.Semantic)
 	}
+	if got, want := cfg.Memory.Semantic.Sources, []string{"MEMORY.md", "SKILLS.md", "memory/knowledge.md", "memory/decisions.md", "memory/questions.md", "memory/rhizome.md", "memory/dreams.md"}; !equalStrings(got, want) {
+		t.Fatalf("memory.semantic.sources defaults = %#v, want %#v", got, want)
+	}
+	if !cfg.Memory.Semantic.IncludeDailyNotes || !cfg.Memory.Semantic.IncludeQuestions || !cfg.Memory.Semantic.IncludeRhizome {
+		t.Fatalf("memory.semantic include defaults = %#v, want daily/questions/rhizome enabled", cfg.Memory.Semantic)
+	}
 	if cfg.Memory.Aggressive.Enabled || cfg.Memory.Aggressive.CaptureEveryTurn || cfg.Memory.Aggressive.PrefetchEveryTurn || cfg.Memory.Aggressive.FlushOnSessionBoundary {
 		t.Fatalf("memory.aggressive defaults = %#v, want all disabled", cfg.Memory.Aggressive)
 	}
