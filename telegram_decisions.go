@@ -43,6 +43,10 @@ type telegramDecisionKeyboardEditor interface {
 	EditMessageTextWithInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]telegram.InlineButton) error
 }
 
+type telegramDecisionKeyboardClearer interface {
+	EditMessageTextWithoutInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
+}
+
 type telegramDecisionRouter interface {
 	Status(chatID int64) core.SessionStatus
 	Stop(chatID int64) core.StopResult
@@ -55,6 +59,13 @@ type telegramDecisionMessageStatusRouter interface {
 
 type telegramDecisionMessageStopRouter interface {
 	StopForMessage(msg core.InboundMessage) core.StopResult
+}
+
+func editDecisionMessageClearingInlineKeyboard(ctx context.Context, sender telegramDecisionSender, chatID int64, messageID int64, text string) error {
+	if clearer, ok := sender.(telegramDecisionKeyboardClearer); ok {
+		return clearer.EditMessageTextWithoutInlineKeyboard(ctx, chatID, messageID, text, "")
+	}
+	return sender.EditMessageText(ctx, chatID, messageID, text, "")
 }
 
 type telegramDecisionHandler struct {
@@ -166,7 +177,7 @@ func (a *telegramExecApprover) ConfirmExec(ctx context.Context, req toolpkg.Exec
 		if result.TimedOut {
 			text = "Proposal denied — approval timed out."
 		}
-		_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, text, "")
+		_ = editDecisionMessageClearingInlineKeyboard(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, text)
 	}
 	return toolpkg.ExecApprovalDecision{Approved: false}, nil
 }
@@ -202,7 +213,7 @@ func (a *telegramDurableMemoryDelegationApprover) ConfirmDurableMemoryDelegation
 		if result.TimedOut {
 			text = "Memory delegation denied — approval timed out."
 		}
-		_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, text, "")
+		_ = editDecisionMessageClearingInlineKeyboard(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, text)
 	}
 	return toolpkg.DurableMemoryDelegationApprovalDecision{Approved: false, TimedOut: result.TimedOut}, nil
 }
@@ -238,7 +249,7 @@ func (a *telegramDurableSnapshotRestoreApprover) ConfirmDurableSnapshotRestore(c
 		if result.TimedOut {
 			text = "Snapshot restore denied — approval timed out."
 		}
-		_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, text, "")
+		_ = editDecisionMessageClearingInlineKeyboard(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, text)
 	}
 	return toolpkg.DurableSnapshotRestoreApprovalDecision{Approved: false, TimedOut: result.TimedOut}, nil
 }
@@ -286,7 +297,7 @@ func editApprovedDecisionConfirmation(ctx context.Context, sender telegramDecisi
 			}
 		}
 	}
-	_ = sender.EditMessageText(ctx, chatID, messageID, text, "")
+	_ = editDecisionMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text)
 }
 
 func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
@@ -398,7 +409,7 @@ func (h *telegramDecisionHandler) HandleArtifactRetentionMessage(ctx context.Con
 		}
 		updated := applyArtifactRetentionChoice(msg, result.Choice)
 		if result.Delivery.MessageID != 0 {
-			_ = h.sender.EditMessageText(ctx, msg.ChatID, result.Delivery.MessageID, artifactRetentionResolutionText(result), "")
+			_ = editDecisionMessageClearingInlineKeyboard(ctx, h.sender, msg.ChatID, result.Delivery.MessageID, artifactRetentionResolutionText(result))
 		}
 		h.router.Route(ctx, updated)
 		return true, nil
@@ -466,7 +477,7 @@ func (h *telegramDecisionHandler) resumePendingArtifactRetention(ctx context.Con
 	}
 	updated := applyArtifactRetentionChoice(msg, result.Choice)
 	if result.Delivery.MessageID != 0 && h.sender != nil {
-		_ = h.sender.EditMessageText(ctx, msg.ChatID, result.Delivery.MessageID, artifactRetentionResolutionText(result), "")
+		_ = editDecisionMessageClearingInlineKeyboard(ctx, h.sender, msg.ChatID, result.Delivery.MessageID, artifactRetentionResolutionText(result))
 	}
 	h.router.Route(ctx, updated)
 	return nil
@@ -679,7 +690,7 @@ func (h *telegramDecisionHandler) applyBusyDecisionResult(ctx context.Context, m
 			if result.TimedOut {
 				text = "Queued your message — processing after current task."
 			}
-			_ = h.sender.EditMessageText(ctx, msg.ChatID, result.Delivery.MessageID, text, "")
+			_ = editDecisionMessageClearingInlineKeyboard(ctx, h.sender, msg.ChatID, result.Delivery.MessageID, text)
 		}
 		h.router.Route(ctx, msg)
 	}
@@ -733,7 +744,7 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 				if err := editor.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err != nil {
 					return err
 				}
-			} else if err := h.sender.EditMessageText(ctx, chatID, messageID, text, ""); err != nil {
+			} else if err := editDecisionMessageClearingInlineKeyboard(ctx, h.sender, chatID, messageID, text); err != nil {
 				return err
 			}
 		}
@@ -860,7 +871,7 @@ func (h *telegramDecisionHandler) editReviewEventCallbackMessage(ctx context.Con
 	if h == nil || h.sender == nil || cb.Message == nil || cb.Message.Chat == nil || cb.Message.MessageID == 0 {
 		return nil
 	}
-	return h.sender.EditMessageText(ctx, cb.Message.Chat.ID, cb.Message.MessageID, text, "")
+	return editDecisionMessageClearingInlineKeyboard(ctx, h.sender, cb.Message.Chat.ID, cb.Message.MessageID, text)
 }
 
 func reviewEventCallbackExpired(event session.ReviewEvent, now time.Time) bool {

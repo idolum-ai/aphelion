@@ -46,6 +46,15 @@ func handleDeliberationControlCallback(ctx context.Context, sender commandCallba
 				return true, err
 			}
 		}
+		if messageID != 0 {
+			text := staleDeliberationCallbackText
+			if cb.Message != nil && strings.TrimSpace(cb.Message.Text) != "" {
+				text = cb.Message.Text
+			}
+			if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+				return true, err
+			}
+		}
 		return true, nil
 	}
 
@@ -69,7 +78,7 @@ func handleDeliberationControlCallback(ctx context.Context, sender commandCallba
 		return true, nil
 	}
 	if messageID != 0 {
-		if err := sender.EditMessageText(ctx, chatID, messageID, text, ""); err != nil {
+		if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
 			return true, err
 		}
 	}

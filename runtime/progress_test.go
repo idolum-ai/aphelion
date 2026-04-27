@@ -263,11 +263,14 @@ func TestToolProgressReporterDeliberationControlsLifecycle(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline len = %d, want 1 in-progress update retaining controls", len(sender.editInline))
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits len = %d, want 1 completion edit without controls", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits len = %d, want 0 plain completion edits", len(sender.edits))
 	}
-	if !strings.HasPrefix(sender.edits[0].Text, "Done.") {
-		t.Fatalf("completion text = %q, want Done heading", sender.edits[0].Text)
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear len = %d, want 1 completion edit clearing controls", len(sender.editClear))
+	}
+	if !strings.HasPrefix(sender.editClear[0].Text, "Done.") {
+		t.Fatalf("completion text = %q, want Done heading", sender.editClear[0].Text)
 	}
 }
 

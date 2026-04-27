@@ -26,6 +26,10 @@ type commandCallbackSender interface {
 	EditMessageTextWithInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]telegram.InlineButton) error
 }
 
+type commandInlineKeyboardClearer interface {
+	EditMessageTextWithoutInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
+}
+
 type commandRouter interface {
 	Stop(chatID int64) core.StopResult
 	New(chatID int64, senderID int64) (core.NewSessionResult, error)
@@ -56,6 +60,13 @@ type commandRouter interface {
 	MemoryFocus(chatID int64) (core.MemoryFocus, bool)
 	SetMemoryFocus(chatID int64, focus core.MemoryFocus)
 	ClearMemoryFocus(chatID int64) bool
+}
+
+func editCallbackMessageClearingInlineKeyboard(ctx context.Context, sender commandCallbackSender, chatID int64, messageID int64, text string) error {
+	if clearer, ok := sender.(commandInlineKeyboardClearer); ok {
+		return clearer.EditMessageTextWithoutInlineKeyboard(ctx, chatID, messageID, text, "")
+	}
+	return sender.EditMessageText(ctx, chatID, messageID, text, "")
 }
 
 var defaultTelegramCommands = []telegram.BotCommand{
@@ -384,7 +395,7 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			}
 			text = renderContinuationDecision(state, true)
 			if messageID != 0 {
-				if err := sender.EditMessageText(ctx, chatID, messageID, text, ""); err != nil {
+				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
 					log.Printf("WARN continuation approve message update failed chat_id=%d message_id=%d err=%v", chatID, messageID, err)
 				}
 			}
@@ -396,7 +407,7 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			}
 			text = face.RenderTelegramStop(stopped)
 			if messageID != 0 {
-				if err := sender.EditMessageText(ctx, chatID, messageID, text, ""); err != nil {
+				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
 					return true, err
 				}
 			}
@@ -448,7 +459,7 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		return true, err
 	}
 	if cb.Message != nil && cb.Message.Chat != nil && cb.Message.MessageID != 0 {
-		if editErr := sender.EditMessageText(ctx, cb.Message.Chat.ID, cb.Message.MessageID, text, ""); editErr != nil {
+		if editErr := editCallbackMessageClearingInlineKeyboard(ctx, sender, cb.Message.Chat.ID, cb.Message.MessageID, text); editErr != nil {
 			return true, editErr
 		}
 	}
@@ -659,7 +670,7 @@ func deliverDebugCallbackView(ctx context.Context, sender commandCallbackSender,
 	}
 	first := chunks[0]
 	if messageID != 0 {
-		if err := sender.EditMessageText(ctx, chatID, messageID, first, ""); err != nil {
+		if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, first); err != nil {
 			return err
 		}
 	} else {

@@ -276,6 +276,7 @@ type fakeSender struct {
 	voice        []voiceSend
 	actions      []chatAction
 	edits        []messageEdit
+	editClear    []messageEdit
 	editInline   []messageEditInline
 	editCount    int
 	deletes      []messageDelete
@@ -424,6 +425,17 @@ func (f *fakeSender) EditMessageText(_ context.Context, chatID int64, messageID 
 		return f.editErr
 	}
 	f.edits = append(f.edits, messageEdit{ChatID: chatID, MessageID: messageID, Text: text})
+	return nil
+}
+
+func (f *fakeSender) EditMessageTextWithoutInlineKeyboard(_ context.Context, chatID int64, messageID int64, text string, parseMode string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.editCount++
+	if f.editErr != nil {
+		return f.editErr
+	}
+	f.editClear = append(f.editClear, messageEdit{ChatID: chatID, MessageID: messageID, Text: text})
 	return nil
 }
 

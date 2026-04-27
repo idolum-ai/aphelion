@@ -246,11 +246,14 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if !strings.Contains(sender.editInline[0].Text, "Working on inspect (2x)") {
 		t.Fatalf("edit text = %q, want aggregated task-derived tool progress", sender.editInline[0].Text)
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("final edit count = %d, want 1 completion edit without controls", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("final edit count = %d, want 0 plain completion edits", len(sender.edits))
 	}
-	if !strings.HasPrefix(sender.edits[0].Text, "Done.") {
-		t.Fatalf("completion text = %q, want Done heading", sender.edits[0].Text)
+	if len(sender.editClear) != 1 {
+		t.Fatalf("final clear edit count = %d, want 1 completion edit clearing controls", len(sender.editClear))
+	}
+	if !strings.HasPrefix(sender.editClear[0].Text, "Done.") {
+		t.Fatalf("completion text = %q, want Done heading", sender.editClear[0].Text)
 	}
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent len = %d, want final reply only", len(sender.sent))

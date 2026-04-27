@@ -177,7 +177,7 @@ func handleDurableWizardCallback(ctx context.Context, sender commandCallbackSend
 		}
 		return true, nil
 	}
-	if err := sender.EditMessageText(ctx, chatID, messageID, output, ""); err != nil {
+	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, output); err != nil {
 		return true, err
 	}
 	return true, nil

@@ -1034,6 +1034,42 @@ func TestEditMessageTextWithInlineKeyboardPayload(t *testing.T) {
 	}
 }
 
+func TestEditMessageTextWithoutInlineKeyboardPayload(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/editMessageText" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			return encodeJSONResponse(t, editMessageResponse{Ok: true}), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	if err := client.EditMessageTextWithoutInlineKeyboard(context.Background(), 5, 42, "Done.", ""); err != nil {
+		t.Fatalf("EditMessageTextWithoutInlineKeyboard() err = %v", err)
+	}
+	replyMarkup, ok := requestBody["reply_markup"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("reply_markup = %#v, want object", requestBody["reply_markup"])
+	}
+	rows, ok := replyMarkup["inline_keyboard"].([]interface{})
+	if !ok || len(rows) != 0 {
+		t.Fatalf("inline_keyboard = %#v, want empty rows", replyMarkup["inline_keyboard"])
+	}
+}
+
 func TestEditMessageTextTruncatesOversizedText(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{

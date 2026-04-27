@@ -30,6 +30,10 @@ type messageKeyboardEditor interface {
 	EditMessageTextWithInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]telegram.InlineButton) error
 }
 
+type messageKeyboardClearer interface {
+	EditMessageTextWithoutInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error
+}
+
 type messageDeleter interface {
 	DeleteMessage(ctx context.Context, chatID int64, messageID int64) error
 }
@@ -561,6 +565,34 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 				"transport_status": "acknowledged",
 			})
 			return
+		}
+	}
+	if !withControls && len(p.controls) > 0 {
+		if clearer, ok := p.sender.(messageKeyboardClearer); ok {
+			if err := clearer.EditMessageTextWithoutInlineKeyboard(ctx, p.chatID, p.messageID, text, ""); err != nil {
+				log.Printf("WARN edit tool progress clear keyboard chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+				p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
+					"method":         "edit_clear_keyboard",
+					"message_id":     p.messageID,
+					"error":          trimError(err.Error()),
+					"source_class":   "canonical",
+					"source_surface": "outbound_transport_ledger",
+					"visibility":     "human_render_unknown",
+				})
+				if p.reportIssue != nil {
+					p.reportIssue(ctx, fmt.Errorf("edit tool progress clear keyboard chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
+				}
+			} else {
+				p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
+					"method":           "edit_clear_keyboard",
+					"message_id":       p.messageID,
+					"source_class":     "canonical",
+					"source_surface":   "outbound_transport_ledger",
+					"visibility":       "human_render_unknown",
+					"transport_status": "acknowledged",
+				})
+				return
+			}
 		}
 	}
 	if p.editor == nil {

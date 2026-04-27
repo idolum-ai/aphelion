@@ -289,6 +289,42 @@ func (c *Client) EditMessageText(ctx context.Context, chatID int64, messageID in
 	return nil
 }
 
+func (c *Client) EditMessageTextWithoutInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string) error {
+	if chatID == 0 {
+		return errors.New("chat_id is required")
+	}
+	if messageID == 0 {
+		return errors.New("message_id is required")
+	}
+	text = truncateTelegramText(text, telegramTextChunkLimit)
+	formatted := prepareFormattedText(text, parseMode)
+	body := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       formatted.Text,
+		"reply_markup": inlineKeyboardMarkup{
+			InlineKeyboard: [][]InlineButton{},
+		},
+	}
+	if formatted.ParseMode != "" {
+		body["parse_mode"] = formatted.ParseMode
+	}
+	resp, err := c.editMessageTextRequest(ctx, body)
+	if err != nil {
+		return err
+	}
+	if !resp.Ok {
+		if isTelegramMessageNotModified(resp.Description) {
+			return nil
+		}
+		if formatted.ParseMode != "" && isTelegramParseError(resp.Description) {
+			return c.editMessageTextFallbackWithReplyMarkup(ctx, chatID, messageID, formatted.PlainText, [][]InlineButton{})
+		}
+		return fmt.Errorf("telegram editMessageText failed: %s", resp.Description)
+	}
+	return nil
+}
+
 func (c *Client) EditMessageTextWithInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]InlineButton) error {
 	if chatID == 0 {
 		return errors.New("chat_id is required")
@@ -834,6 +870,25 @@ func (c *Client) editMessageTextFallback(ctx context.Context, chatID int64, mess
 		body["reply_markup"] = inlineKeyboardMarkup{
 			InlineKeyboard: rows,
 		}
+	}
+	resp, err := c.editMessageTextRequest(ctx, body)
+	if err != nil {
+		return err
+	}
+	if !resp.Ok && !isTelegramMessageNotModified(resp.Description) {
+		return fmt.Errorf("telegram editMessageText failed: %s", resp.Description)
+	}
+	return nil
+}
+
+func (c *Client) editMessageTextFallbackWithReplyMarkup(ctx context.Context, chatID int64, messageID int64, text string, rows [][]InlineButton) error {
+	body := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       text,
+		"reply_markup": inlineKeyboardMarkup{
+			InlineKeyboard: rows,
+		},
 	}
 	resp, err := c.editMessageTextRequest(ctx, body)
 	if err != nil {

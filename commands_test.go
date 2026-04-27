@@ -17,6 +17,7 @@ type stubCommandSender struct {
 	msgs       []core.OutboundMessage
 	inline     []stubInlineCall
 	edits      []stubEditCall
+	editClear  []stubEditCall
 	editInline []stubEditInlineCall
 	editErr    error
 	answers    []stubAnswerCall
@@ -67,6 +68,16 @@ func (s *stubCommandSender) SendInlineKeyboard(_ context.Context, chatID int64, 
 
 func (s *stubCommandSender) EditMessageText(_ context.Context, chatID int64, messageID int64, text string, parseMode string) error {
 	s.edits = append(s.edits, stubEditCall{
+		chatID:    chatID,
+		messageID: messageID,
+		text:      text,
+		parseMode: parseMode,
+	})
+	return s.editErr
+}
+
+func (s *stubCommandSender) EditMessageTextWithoutInlineKeyboard(_ context.Context, chatID int64, messageID int64, text string, parseMode string) error {
+	s.editClear = append(s.editClear, stubEditCall{
 		chatID:    chatID,
 		messageID: messageID,
 		text:      text,
@@ -1333,10 +1344,13 @@ func TestHandleTelegramCommandCallbackDebugReadMoreExpandsFullSnapshot(t *testin
 	if len(sender.answers) != 1 {
 		t.Fatalf("answers count = %d, want 1", len(sender.answers))
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 plain edits", len(sender.edits))
 	}
-	full := sender.edits[0].text
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
+	}
+	full := sender.editClear[0].text
 	for _, msg := range sender.msgs {
 		full += "\n" + msg.Text
 	}
@@ -1748,10 +1762,13 @@ func TestHandleTelegramCommandCallbackDeliberationStop(t *testing.T) {
 	if len(sender.answers) != 1 {
 		t.Fatalf("answers count = %d, want 1", len(sender.answers))
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 plain edits", len(sender.edits))
 	}
-	if got := sender.edits[0].text; !strings.Contains(got, "Stopped the current turn and cleared queued work for this chat.") {
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
+	}
+	if got := sender.editClear[0].text; !strings.Contains(got, "Stopped the current turn and cleared queued work for this chat.") {
 		t.Fatalf("edited text = %q, want stop summary", got)
 	}
 }
@@ -1797,10 +1814,13 @@ func TestHandleTelegramCommandCallbackDeliberationDetach(t *testing.T) {
 	if len(sender.answers) != 1 {
 		t.Fatalf("answers count = %d, want 1", len(sender.answers))
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 plain edits", len(sender.edits))
 	}
-	if got := sender.edits[0].text; !strings.Contains(got, "Detached this chat from pending work") {
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
+	}
+	if got := sender.editClear[0].text; !strings.Contains(got, "Detached this chat from pending work") {
 		t.Fatalf("edited text = %q, want detach summary", got)
 	}
 }
@@ -1826,6 +1846,7 @@ func TestHandleTelegramCommandCallbackDeliberationRejectsStaleRun(t *testing.T) 
 		Message: &telegram.Message{
 			MessageID: 242,
 			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+			Text:      "Done.\n- Finished earlier.",
 		},
 	})
 	if err != nil {
@@ -1848,6 +1869,12 @@ func TestHandleTelegramCommandCallbackDeliberationRejectsStaleRun(t *testing.T) 
 	}
 	if len(sender.edits) != 0 {
 		t.Fatalf("edits count = %d, want 0 for stale callback", len(sender.edits))
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1 stale cleanup edit", len(sender.editClear))
+	}
+	if sender.editClear[0].text != "Done.\n- Finished earlier." {
+		t.Fatalf("stale cleanup text = %q, want existing message text", sender.editClear[0].text)
 	}
 }
 
@@ -1878,8 +1905,11 @@ func TestHandleTelegramCommandCallbackPersonaModel(t *testing.T) {
 	if len(sender.answers) != 1 {
 		t.Fatalf("answers count = %d, want 1", len(sender.answers))
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 plain edits", len(sender.edits))
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
 	}
 }
 
@@ -1910,8 +1940,11 @@ func TestHandleTelegramCommandCallbackGovernorEffort(t *testing.T) {
 	if len(sender.answers) != 1 {
 		t.Fatalf("answers count = %d, want 1", len(sender.answers))
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 plain edits", len(sender.edits))
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
 	}
 }
 
@@ -1949,8 +1982,11 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	if router.continuationStateInput != 7 {
 		t.Fatalf("continuationStateInput = %d, want 7", router.continuationStateInput)
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 plain edits", len(sender.edits))
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
 	}
 }
 
@@ -1979,8 +2015,11 @@ func TestHandleTelegramCommandCallbackContinuationApproveContinuesWhenEditFails(
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 plain edits", len(sender.edits))
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
 	}
 }
 
@@ -2016,11 +2055,14 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersCombinedStopResult(
 	if router.stopContinuationInput != 7 {
 		t.Fatalf("stopContinuationInput = %d, want 7", router.stopContinuationInput)
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 plain edits", len(sender.edits))
 	}
-	if sender.edits[0].text != "Revoked continuation approval for this chat." {
-		t.Fatalf("edit text = %q, want continuation revoke text", sender.edits[0].text)
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
+	}
+	if sender.editClear[0].text != "Revoked continuation approval for this chat." {
+		t.Fatalf("edit text = %q, want continuation revoke text", sender.editClear[0].text)
 	}
 }
 
@@ -2043,11 +2085,14 @@ func TestHandleTelegramCommandCallbackContinuationStopRendersNoOpStopResult(t *t
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.edits) != 1 {
-		t.Fatalf("edits count = %d, want 1", len(sender.edits))
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want 0 plain edits", len(sender.edits))
 	}
-	if sender.edits[0].text != "Continuation approval was already inactive for this chat." {
-		t.Fatalf("edit text = %q, want inactive continuation text", sender.edits[0].text)
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
+	}
+	if sender.editClear[0].text != "Continuation approval was already inactive for this chat." {
+		t.Fatalf("edit text = %q, want inactive continuation text", sender.editClear[0].text)
 	}
 }
 
