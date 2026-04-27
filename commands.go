@@ -439,6 +439,9 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 	if action, source, index, ok := decodeMemoryReviewCallbackData(cb.Data); ok {
 		return handleMemoryReviewCallback(ctx, sender, router, cb, action, source, index)
 	}
+	if action, slot, value, ok := decodeModelCallbackData(cb.Data); ok {
+		return handleModelCallback(ctx, sender, router, cb, action, slot, value)
+	}
 	kind, value, ok := decodeRecipeCallbackData(cb.Data)
 	if !ok {
 		return false, nil

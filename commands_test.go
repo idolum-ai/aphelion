@@ -1660,14 +1660,17 @@ func TestHandleTelegramCommandModelStatus(t *testing.T) {
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
-	if len(sender.msgs) != 1 {
-		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if !strings.Contains(sender.msgs[0].Text, "Governor: openai/gpt-5.5 effort=high") {
-		t.Fatalf("model status text = %q", sender.msgs[0].Text)
+	if !strings.Contains(sender.inline[0].text, "Governor: openai/gpt-5.5 effort=high") {
+		t.Fatalf("model status text = %q", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.msgs[0].Text, "Transport: responses") {
-		t.Fatalf("model status text = %q, want resolved transport", sender.msgs[0].Text)
+	if !strings.Contains(sender.inline[0].text, "Transport: responses") {
+		t.Fatalf("model status text = %q, want resolved transport", sender.inline[0].text)
+	}
+	if len(sender.inline[0].rows) == 0 || sender.inline[0].rows[0][0].CallbackData != "model:slot:p" {
+		t.Fatalf("rows = %#v, want model slot buttons", sender.inline[0].rows)
 	}
 }
 
@@ -1762,6 +1765,137 @@ func TestHandleTelegramCommandModelDeniedForNonAdmin(t *testing.T) {
 	}
 	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "admin only") {
 		t.Fatalf("message = %#v, want admin denial", sender.msgs)
+	}
+}
+
+func TestHandleTelegramCommandCallbackModelSlotDetail(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		modelStatuses: []core.ModelSlotStatus{{
+			Slot: core.ModelSlotGovernor,
+			Effective: core.ModelSlotConfig{
+				Slot:      core.ModelSlotGovernor,
+				Provider:  core.ModelProviderAnthropic,
+				Model:     "claude-sonnet-4-6",
+				Effort:    "medium",
+				Transport: core.ModelTransportAuto,
+			},
+			Default: core.ModelSlotConfig{
+				Slot:      core.ModelSlotGovernor,
+				Provider:  core.ModelProviderAnthropic,
+				Model:     "claude-sonnet-4-6",
+				Effort:    "medium",
+				Transport: core.ModelTransportAuto,
+			},
+			Source: "default",
+			Validation: core.ModelValidation{
+				Valid:             true,
+				ResolvedTransport: core.ModelTransportAnthropicMessages,
+			},
+		}},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "model-slot",
+		Data: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotGovernor, ""),
+		From: &telegram.User{ID: 1001},
+		Message: &telegram.Message{
+			MessageID: 31,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if !strings.Contains(sender.editInline[0].text, "Governor") {
+		t.Fatalf("edit text = %q, want Governor detail", sender.editInline[0].text)
+	}
+	if len(sender.editInline[0].rows) < 3 {
+		t.Fatalf("rows = %#v, want slot controls", sender.editInline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandCallbackModelEffortSetsSlot(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		modelStatuses: []core.ModelSlotStatus{{
+			Slot: core.ModelSlotGovernor,
+			Effective: core.ModelSlotConfig{
+				Slot:      core.ModelSlotGovernor,
+				Provider:  core.ModelProviderAnthropic,
+				Model:     "claude-sonnet-4-6",
+				Effort:    "medium",
+				Transport: core.ModelTransportAuto,
+			},
+			Source: "default",
+			Validation: core.ModelValidation{
+				Valid:             true,
+				ResolvedTransport: core.ModelTransportAnthropicMessages,
+			},
+		}},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "model-effort",
+		Data: encodeModelCallbackData(modelCallbackEffort, core.ModelSlotGovernor, "xhigh"),
+		From: &telegram.User{ID: 1001},
+		Message: &telegram.Message{
+			MessageID: 32,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.setModelSlotInput.Effort != "xhigh" {
+		t.Fatalf("set effort = %q, want xhigh", router.setModelSlotInput.Effort)
+	}
+	if router.setModelSlotActor != "telegram:1001" {
+		t.Fatalf("actor = %q, want telegram:1001", router.setModelSlotActor)
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+}
+
+func TestHandleTelegramCommandCallbackModelDeniedForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "model-denied",
+		Data: encodeModelCallbackData(modelCallbackStatus, "", ""),
+		From: &telegram.User{ID: 1002},
+		Message: &telegram.Message{
+			MessageID: 33,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 || !strings.Contains(sender.answers[0].text, "admin only") {
+		t.Fatalf("answers = %#v, want admin denial", sender.answers)
+	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline count = %d, want 0", len(sender.editInline))
 	}
 }
 

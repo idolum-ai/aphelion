@@ -11,6 +11,24 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/telegram"
+)
+
+const (
+	modelCallbackPrefix    = "model:"
+	staleModelCallbackText = "This model action is no longer active. Run /model again."
+)
+
+type modelCallbackAction string
+
+const (
+	modelCallbackStatus   modelCallbackAction = "status"
+	modelCallbackSlot     modelCallbackAction = "slot"
+	modelCallbackHistory  modelCallbackAction = "history"
+	modelCallbackClear    modelCallbackAction = "clear"
+	modelCallbackRollback modelCallbackAction = "rollback"
+	modelCallbackEffort   modelCallbackAction = "effort"
+	modelCallbackPreset   modelCallbackAction = "preset"
 )
 
 func handleTelegramModelCommand(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
@@ -30,7 +48,14 @@ func handleTelegramModelCommand(ctx context.Context, sender commandSender, route
 	case "status", "show":
 		var statuses []core.ModelSlotStatus
 		statuses, err = router.ModelSlotStatuses()
-		text = renderModelSlotStatuses(statuses)
+		text, rows := renderModelSlotStatusPanel(statuses)
+		if err == nil {
+			_, sendErr := sender.SendInlineKeyboard(ctx, msg.ChatID, clampTelegramModelText(text), rows, replyToMessageID(msg.MessageID))
+			if sendErr != nil {
+				return true, sendErr
+			}
+			return true, nil
+		}
 	case "validate":
 		var cfg core.ModelSlotConfig
 		cfg, _, err = parseModelSlotMutation(rest)
@@ -47,6 +72,12 @@ func handleTelegramModelCommand(ctx context.Context, sender commandSender, route
 				err = setErr
 			} else {
 				text = renderModelSlotChange("Updated", status)
+				rows := renderModelSlotRows(status)
+				_, sendErr := sender.SendInlineKeyboard(ctx, msg.ChatID, clampTelegramModelText(text), rows, replyToMessageID(msg.MessageID))
+				if sendErr != nil {
+					return true, sendErr
+				}
+				return true, nil
 			}
 		}
 	case "rollback":
@@ -55,6 +86,12 @@ func handleTelegramModelCommand(ctx context.Context, sender commandSender, route
 		status, err = router.RollbackModelSlot(slot, actor, reason)
 		if err == nil {
 			text = renderModelSlotChange("Rolled back", status)
+			rows := renderModelSlotRows(status)
+			_, sendErr := sender.SendInlineKeyboard(ctx, msg.ChatID, clampTelegramModelText(text), rows, replyToMessageID(msg.MessageID))
+			if sendErr != nil {
+				return true, sendErr
+			}
+			return true, nil
 		}
 	case "clear":
 		slot, reason := parseModelSlotActionTarget(rest)
@@ -62,6 +99,12 @@ func handleTelegramModelCommand(ctx context.Context, sender commandSender, route
 		status, err = router.ClearModelSlot(slot, actor, reason)
 		if err == nil {
 			text = renderModelSlotChange("Cleared", status)
+			rows := renderModelSlotRows(status)
+			_, sendErr := sender.SendInlineKeyboard(ctx, msg.ChatID, clampTelegramModelText(text), rows, replyToMessageID(msg.MessageID))
+			if sendErr != nil {
+				return true, sendErr
+			}
+			return true, nil
 		}
 	case "history":
 		slot, limit := parseModelSlotHistoryArgs(rest)
@@ -69,6 +112,12 @@ func handleTelegramModelCommand(ctx context.Context, sender commandSender, route
 		records, err = router.ModelSlotHistory(slot, limit)
 		if err == nil {
 			text = renderModelSlotHistory(records)
+			rows := renderModelHistoryRows(slot)
+			_, sendErr := sender.SendInlineKeyboard(ctx, msg.ChatID, clampTelegramModelText(text), rows, replyToMessageID(msg.MessageID))
+			if sendErr != nil {
+				return true, sendErr
+			}
+			return true, nil
 		}
 	default:
 		text = renderModelCommandHelp()
@@ -88,6 +137,179 @@ func handleTelegramModelCommand(ctx context.Context, sender commandSender, route
 		return true, sendErr
 	}
 	return true, nil
+}
+
+func handleModelCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, action modelCallbackAction, slot string, value string) (bool, error) {
+	chatID := int64(0)
+	messageID := int64(0)
+	senderID := int64(0)
+	if cb.Message != nil {
+		messageID = cb.Message.MessageID
+		if cb.Message.Chat != nil {
+			chatID = cb.Message.Chat.ID
+		}
+	}
+	if cb.From != nil {
+		senderID = cb.From.ID
+	}
+	if chatID == 0 || messageID == 0 {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleModelCallbackText); err != nil {
+			if !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+		}
+		return true, nil
+	}
+	if !router.CanRestart(senderID) {
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Model controls are admin only."); err != nil {
+			if !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+		}
+		return true, nil
+	}
+	if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil {
+		if !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+	}
+
+	actor := fmt.Sprintf("telegram:%d", senderID)
+	switch action {
+	case modelCallbackStatus:
+		statuses, err := router.ModelSlotStatuses()
+		if err != nil {
+			return true, err
+		}
+		text, rows := renderModelSlotStatusPanel(statuses)
+		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
+	case modelCallbackSlot:
+		status, err := modelSlotStatus(router, slot)
+		if err != nil {
+			return true, err
+		}
+		text := renderModelSlotDetail(status)
+		rows := renderModelSlotRows(status)
+		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
+	case modelCallbackHistory:
+		records, err := router.ModelSlotHistory(slot, 8)
+		if err != nil {
+			return true, err
+		}
+		text := renderModelSlotHistory(records)
+		rows := renderModelHistoryRows(slot)
+		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
+	case modelCallbackClear:
+		status, err := router.ClearModelSlot(slot, actor, "telegram button: clear")
+		if err != nil {
+			return true, err
+		}
+		text := renderModelSlotChange("Cleared", status)
+		rows := renderModelSlotRows(status)
+		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
+	case modelCallbackRollback:
+		status, err := router.RollbackModelSlot(slot, actor, "telegram button: rollback")
+		if err != nil {
+			return true, err
+		}
+		text := renderModelSlotChange("Rolled back", status)
+		rows := renderModelSlotRows(status)
+		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
+	case modelCallbackEffort:
+		status, err := setModelSlotEffortFromCallback(router, slot, value, actor)
+		if err != nil {
+			return true, err
+		}
+		text := renderModelSlotChange("Updated", status)
+		rows := renderModelSlotRows(status)
+		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
+	case modelCallbackPreset:
+		status, err := setModelSlotPresetFromCallback(router, slot, value, actor)
+		if err != nil {
+			return true, err
+		}
+		text := renderModelSlotChange("Updated", status)
+		rows := renderModelSlotRows(status)
+		return true, sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, clampTelegramModelText(text), "", rows)
+	default:
+		return true, nil
+	}
+}
+
+func setModelSlotEffortFromCallback(router commandRouter, slot string, effort string, actor string) (core.ModelSlotStatus, error) {
+	status, err := modelSlotStatus(router, slot)
+	if err != nil {
+		return core.ModelSlotStatus{}, err
+	}
+	cfg := status.Effective
+	cfg.Slot = core.NormalizeModelSlot(slot)
+	cfg.Effort = core.NormalizeModelEffort(effort)
+	if cfg.Effort == "" {
+		return core.ModelSlotStatus{}, fmt.Errorf("unknown effort %q", effort)
+	}
+	return router.SetModelSlotConfig(cfg, actor, "telegram button: effort "+cfg.Effort, 0)
+}
+
+func setModelSlotPresetFromCallback(router commandRouter, slot string, preset string, actor string) (core.ModelSlotStatus, error) {
+	status, err := modelSlotStatus(router, slot)
+	if err != nil {
+		return core.ModelSlotStatus{}, err
+	}
+	cfg, err := modelPresetConfig(status, preset)
+	if err != nil {
+		return core.ModelSlotStatus{}, err
+	}
+	return router.SetModelSlotConfig(cfg, actor, "telegram button: preset "+strings.TrimSpace(preset), 0)
+}
+
+func modelSlotStatus(router commandRouter, slot string) (core.ModelSlotStatus, error) {
+	slot = core.NormalizeModelSlot(slot)
+	if slot == "" {
+		return core.ModelSlotStatus{}, fmt.Errorf("model slot is required")
+	}
+	statuses, err := router.ModelSlotStatuses()
+	if err != nil {
+		return core.ModelSlotStatus{}, err
+	}
+	for _, status := range statuses {
+		if core.NormalizeModelSlot(status.Slot) == slot {
+			return status, nil
+		}
+	}
+	return core.ModelSlotStatus{}, fmt.Errorf("model slot %s was not found", slot)
+}
+
+func modelPresetConfig(status core.ModelSlotStatus, preset string) (core.ModelSlotConfig, error) {
+	slot := core.NormalizeModelSlot(status.Slot)
+	cfg := status.Effective
+	cfg.Slot = slot
+	cfg.Fallbacks = nil
+	effort := core.NormalizeModelEffort(cfg.Effort)
+	switch strings.ToLower(strings.TrimSpace(preset)) {
+	case "sonnet":
+		cfg.Provider = core.ModelProviderAnthropic
+		cfg.Model = "claude-sonnet-4-6"
+		if effort == "" {
+			effort = "medium"
+		}
+	case "opus47":
+		cfg.Provider = core.ModelProviderAnthropic
+		cfg.Model = "claude-opus-4.7"
+		if effort == "" {
+			effort = "xhigh"
+		}
+	case "gpt55":
+		cfg.Provider = core.ModelProviderOpenAI
+		cfg.Model = "gpt-5.5"
+		if effort == "" {
+			effort = "high"
+		}
+	default:
+		return core.ModelSlotConfig{}, fmt.Errorf("unknown model preset %q", preset)
+	}
+	cfg.Effort = effort
+	cfg.Transport = core.ModelTransportAuto
+	return core.NormalizeModelSlotConfig(cfg), nil
 }
 
 type modelSlotMutation struct {
@@ -256,6 +478,105 @@ func renderModelSlotStatuses(statuses []core.ModelSlotStatus) string {
 	return b.String()
 }
 
+func renderModelSlotStatusPanel(statuses []core.ModelSlotStatus) (string, [][]telegram.InlineButton) {
+	return renderModelSlotStatuses(statuses), renderModelStatusRows()
+}
+
+func renderModelStatusRows() [][]telegram.InlineButton {
+	return [][]telegram.InlineButton{
+		{
+			{Text: "Persona", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotPersona, "")},
+			{Text: "Governor", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotGovernor, "")},
+		},
+		{
+			{Text: "Doctor", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotDoctor, "")},
+			{Text: "Children", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotChildDefault, "")},
+		},
+		{
+			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
+		},
+	}
+}
+
+func renderModelSlotDetail(status core.ModelSlotStatus) string {
+	var b strings.Builder
+	b.WriteString(modelSlotTitle(status.Slot))
+	b.WriteString("\nCurrent: ")
+	b.WriteString(renderModelSlotConfig(status.Effective))
+	b.WriteString("\nSource: ")
+	b.WriteString(firstNonEmptyModelUI(status.Source, "default"))
+	if !status.ExpiresAt.IsZero() {
+		b.WriteString("\nExpires: ")
+		b.WriteString(status.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
+	}
+	if status.Reason != "" {
+		b.WriteString("\nReason: ")
+		b.WriteString(status.Reason)
+	}
+	b.WriteString("\nDefault: ")
+	b.WriteString(renderModelSlotConfig(status.Default))
+	if status.Validation.Valid {
+		if status.Validation.ResolvedTransport != "" {
+			b.WriteString("\nTransport: ")
+			b.WriteString(status.Validation.ResolvedTransport)
+		}
+	} else {
+		b.WriteString("\nInvalid: ")
+		b.WriteString(status.Validation.Error)
+	}
+	if len(status.Validation.Warnings) > 0 {
+		b.WriteString("\nWarning: ")
+		b.WriteString(strings.Join(status.Validation.Warnings, "; "))
+	}
+	return b.String()
+}
+
+func renderModelSlotRows(status core.ModelSlotStatus) [][]telegram.InlineButton {
+	slot := core.NormalizeModelSlot(status.Slot)
+	rows := [][]telegram.InlineButton{
+		{
+			{Text: "Sonnet", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "sonnet")},
+			{Text: "Opus 4.7", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "opus47")},
+			{Text: "GPT-5.5", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "gpt55")},
+		},
+		{
+			{Text: "Low", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "low")},
+			{Text: "Medium", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "medium")},
+			{Text: "High", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "high")},
+			{Text: "Max", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "xhigh")},
+		},
+		{
+			{Text: "History", CallbackData: encodeModelCallbackData(modelCallbackHistory, slot, "")},
+			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackSlot, slot, "")},
+			{Text: "All Slots", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
+		},
+	}
+	if strings.EqualFold(strings.TrimSpace(status.Source), "override") {
+		rows = append(rows, []telegram.InlineButton{
+			{Text: "Rollback", CallbackData: encodeModelCallbackData(modelCallbackRollback, slot, "")},
+			{Text: "Clear", CallbackData: encodeModelCallbackData(modelCallbackClear, slot, "")},
+		})
+	}
+	return rows
+}
+
+func renderModelHistoryRows(slot string) [][]telegram.InlineButton {
+	slot = core.NormalizeModelSlot(slot)
+	if slot == "" {
+		return [][]telegram.InlineButton{{
+			{Text: "All Slots", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
+			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackHistory, "", "")},
+		}}
+	}
+	return [][]telegram.InlineButton{
+		{
+			{Text: modelSlotTitle(slot), CallbackData: encodeModelCallbackData(modelCallbackSlot, slot, "")},
+			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackHistory, slot, "")},
+			{Text: "All Slots", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
+		},
+	}
+}
+
 func renderModelSlotValidation(validation core.ModelValidation) string {
 	var b strings.Builder
 	if validation.Valid {
@@ -383,4 +704,145 @@ func clampTelegramModelText(text string) string {
 		return text
 	}
 	return strings.TrimSpace(text[:limit-32]) + "\n[truncated]"
+}
+
+func encodeModelCallbackData(action modelCallbackAction, slot string, value string) string {
+	actionToken := modelCallbackActionToken(action)
+	if actionToken == "" {
+		return ""
+	}
+	slotToken := modelSlotToken(slot)
+	value = strings.TrimSpace(value)
+	switch action {
+	case modelCallbackStatus:
+		return modelCallbackPrefix + actionToken
+	case modelCallbackSlot, modelCallbackHistory, modelCallbackClear, modelCallbackRollback:
+		return modelCallbackPrefix + actionToken + ":" + slotToken
+	case modelCallbackEffort, modelCallbackPreset:
+		return modelCallbackPrefix + actionToken + ":" + slotToken + ":" + value
+	default:
+		return ""
+	}
+}
+
+func decodeModelCallbackData(data string) (modelCallbackAction, string, string, bool) {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, modelCallbackPrefix) {
+		return "", "", "", false
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, modelCallbackPrefix))
+	if payload == "" {
+		return "", "", "", false
+	}
+	parts := strings.Split(payload, ":")
+	action, ok := decodeModelCallbackActionToken(parts[0])
+	if !ok {
+		return "", "", "", false
+	}
+	switch action {
+	case modelCallbackStatus:
+		return action, "", "", len(parts) == 1
+	case modelCallbackSlot, modelCallbackHistory, modelCallbackClear, modelCallbackRollback:
+		if len(parts) != 2 {
+			return "", "", "", false
+		}
+		slot := decodeModelSlotToken(parts[1])
+		if slot == "" && action != modelCallbackHistory {
+			return "", "", "", false
+		}
+		return action, slot, "", true
+	case modelCallbackEffort, modelCallbackPreset:
+		if len(parts) != 3 {
+			return "", "", "", false
+		}
+		slot := decodeModelSlotToken(parts[1])
+		value := strings.TrimSpace(parts[2])
+		if slot == "" || value == "" {
+			return "", "", "", false
+		}
+		return action, slot, value, true
+	default:
+		return "", "", "", false
+	}
+}
+
+func modelCallbackActionToken(action modelCallbackAction) string {
+	switch action {
+	case modelCallbackStatus:
+		return "status"
+	case modelCallbackSlot:
+		return "slot"
+	case modelCallbackHistory:
+		return "hist"
+	case modelCallbackClear:
+		return "clear"
+	case modelCallbackRollback:
+		return "rb"
+	case modelCallbackEffort:
+		return "eff"
+	case modelCallbackPreset:
+		return "preset"
+	default:
+		return ""
+	}
+}
+
+func decodeModelCallbackActionToken(token string) (modelCallbackAction, bool) {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "status":
+		return modelCallbackStatus, true
+	case "slot":
+		return modelCallbackSlot, true
+	case "hist":
+		return modelCallbackHistory, true
+	case "clear":
+		return modelCallbackClear, true
+	case "rb":
+		return modelCallbackRollback, true
+	case "eff":
+		return modelCallbackEffort, true
+	case "preset":
+		return modelCallbackPreset, true
+	default:
+		return "", false
+	}
+}
+
+func modelSlotToken(slot string) string {
+	switch core.NormalizeModelSlot(slot) {
+	case core.ModelSlotPersona:
+		return "p"
+	case core.ModelSlotGovernor:
+		return "g"
+	case core.ModelSlotDoctor:
+		return "d"
+	case core.ModelSlotChildDefault:
+		return "c"
+	default:
+		return ""
+	}
+}
+
+func decodeModelSlotToken(token string) string {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "p":
+		return core.ModelSlotPersona
+	case "g":
+		return core.ModelSlotGovernor
+	case "d":
+		return core.ModelSlotDoctor
+	case "c":
+		return core.ModelSlotChildDefault
+	default:
+		return ""
+	}
+}
+
+func firstNonEmptyModelUI(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
