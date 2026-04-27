@@ -51,23 +51,22 @@ func TestExtractDeliberationSurfaceMarkdownSurfaceLabel(t *testing.T) {
 	}
 }
 
-func TestExtractDeliberationSurfaceMarkdownImplicitLeadingProseFallback(t *testing.T) {
+func TestExtractDeliberationSurfaceMarkdownDoesNotImplicitlySurfaceInternalProse(t *testing.T) {
 	t.Parallel()
 
 	raw := strings.Join([]string{
-		"Alright, all three in that order.",
-		"Starting with the commit scan now.",
+		"Center the next turn on curiosity without overbuilding.",
+		"Answer the user directly.",
 		"",
 		"INSPECT: yes",
 		"QUESTION: no",
 		"ANSWER: yes",
 	}, "\n")
 	surface, cleaned := extractDeliberationSurfaceMarkdown(raw)
-	want := "Alright, all three in that order. Starting with the commit scan now."
-	if surface != want {
-		t.Fatalf("surface = %q, want implicit leading prose fallback", surface)
+	if surface != "" {
+		t.Fatalf("surface = %q, want no implicit live surface", surface)
 	}
-	if !strings.Contains(cleaned, "Alright, all three in that order.") {
+	if !strings.Contains(cleaned, "Center the next turn on curiosity") {
 		t.Fatalf("cleaned = %q, want original prose preserved", cleaned)
 	}
 }

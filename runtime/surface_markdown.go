@@ -78,11 +78,6 @@ func extractDeliberationSurfaceMarkdown(raw string) (surface string, cleaned str
 		i++
 	}
 	cleaned = strings.TrimSpace(strings.Join(kept, "\n"))
-	if len(surfaces) == 0 {
-		if implicit := extractImplicitDeliberationSurface(cleaned); implicit != "" {
-			surfaces = append(surfaces, implicit)
-		}
-	}
 	return strings.TrimSpace(strings.Join(surfaces, "\n\n")), cleaned
 }
 
@@ -160,37 +155,4 @@ func parseSurfaceLabelLine(line string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(trimmed[colon+1:]), true
-}
-
-func extractImplicitDeliberationSurface(cleaned string) string {
-	if strings.TrimSpace(cleaned) == "" {
-		return ""
-	}
-	lines := strings.Split(cleaned, "\n")
-	candidate := make([]string, 0, 3)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			if len(candidate) > 0 {
-				break
-			}
-			continue
-		}
-		if isGenericMarkdownHeading(trimmed) || isStructuredDirectiveLine(trimmed) || isSurfaceLabelLine(trimmed) {
-			break
-		}
-		candidate = append(candidate, trimmed)
-		if len(candidate) >= 3 {
-			break
-		}
-	}
-	if len(candidate) == 0 {
-		return ""
-	}
-	surface := strings.TrimSpace(strings.Join(candidate, " "))
-	const maxSurfaceChars = 220
-	if len(surface) <= maxSurfaceChars {
-		return surface
-	}
-	return strings.TrimSpace(surface[:maxSurfaceChars])
 }

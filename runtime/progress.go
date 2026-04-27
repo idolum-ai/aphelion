@@ -774,7 +774,7 @@ func addProjectedProgressEntry(entries *[]toolProgressEntry, entry toolProgressE
 	n := len(*entries)
 	if n > 0 {
 		last := &(*entries)[n-1]
-		if last.Key == entry.Key && last.Text == entry.Text {
+		if last.Text == entry.Text {
 			last.Count++
 			return
 		}
@@ -797,7 +797,7 @@ func (p *toolProgressReporter) addEntry(entry toolProgressEntry) bool {
 		entry.Text = "Using tool"
 	}
 	entry.Count = 1
-	if n := len(p.entries); n > 0 && p.entries[n-1].Key == entry.Key && p.entries[n-1].Text == entry.Text {
+	if n := len(p.entries); n > 0 && p.entries[n-1].Text == entry.Text {
 		p.entries[n-1].Count++
 		return true
 	}
@@ -900,8 +900,11 @@ func summarizeProgressTask(text string) string {
 	}
 	trimmed = strings.ReplaceAll(trimmed, "\r\n", " ")
 	trimmed = strings.ReplaceAll(trimmed, "\n", " ")
-	fields := strings.Fields(trimmed)
+	fields := progressTaskFields(trimmed)
 	if len(fields) == 0 {
+		return ""
+	}
+	if isLowSignalProgressTask(fields) {
 		return ""
 	}
 	if len(fields) > 10 {
@@ -912,6 +915,50 @@ func summarizeProgressTask(text string) string {
 		summary = strings.TrimSpace(summary[:80])
 	}
 	return strings.TrimRight(summary, ".,:;!?")
+}
+
+func progressTaskFields(text string) []string {
+	raw := strings.Fields(text)
+	fields := make([]string, 0, len(raw))
+	for _, field := range raw {
+		field = strings.Trim(field, " \t\r\n\"'`.,:;!?()[]{}<>")
+		if !hasASCIIAlnum(field) {
+			continue
+		}
+		fields = append(fields, field)
+	}
+	return fields
+}
+
+func hasASCIIAlnum(text string) bool {
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			return true
+		}
+	}
+	return false
+}
+
+func isLowSignalProgressTask(fields []string) bool {
+	if len(fields) == 0 || len(fields) > 5 {
+		return false
+	}
+	lower := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.ToLower(strings.Trim(field, " \t\r\n\"'`.,:;!?()[]{}<>"))
+		if field != "" {
+			lower = append(lower, field)
+		}
+	}
+	phrase := strings.Join(lower, " ")
+	switch phrase {
+	case "hi", "hello", "hey", "howdy", "thanks", "thank you", "ok", "okay", "lol", "lmao",
+		"go on", "continue", "keep going", "tell me more", "what next", "now what",
+		"what happened", "what happened next", "then what", "then what happened", "and then":
+		return true
+	}
+	return strings.HasPrefix(phrase, "then what ") || strings.HasPrefix(phrase, "and then ")
 }
 
 func normalizeProgressSurfaceText(raw string) string {
@@ -928,7 +975,38 @@ func normalizeProgressSurfaceText(raw string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return truncatePreview(strings.Join(parts, " "), 220)
+	text := truncatePreview(strings.Join(parts, " "), 220)
+	if isInternalDeliberationSurface(text) {
+		return ""
+	}
+	return text
+}
+
+func isInternalDeliberationSurface(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	if strings.HasPrefix(lower, "continuation_") ||
+		strings.HasPrefix(lower, "inspect:") ||
+		strings.HasPrefix(lower, "question:") ||
+		strings.HasPrefix(lower, "answer:") ||
+		strings.HasPrefix(lower, "ratification:") {
+		return true
+	}
+	if strings.HasPrefix(lower, "center the next turn") {
+		return true
+	}
+	if strings.Contains(lower, "internal deliberation") ||
+		strings.Contains(lower, "hidden input") ||
+		strings.Contains(lower, "execution contract") ||
+		strings.Contains(lower, "governor ratification") {
+		return true
+	}
+	if strings.Contains(lower, "next turn") && (strings.Contains(lower, "answer ") || strings.Contains(lower, "overbuild") || strings.Contains(lower, "dramatic timing")) {
+		return true
+	}
+	return false
 }
 
 func toolInputPreview(input json.RawMessage) string {

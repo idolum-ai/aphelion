@@ -78,6 +78,77 @@ func TestSemanticToolProgressLabel(t *testing.T) {
 	}
 }
 
+func TestSummarizeProgressTaskDropsConversationalContinuation(t *testing.T) {
+	t.Parallel()
+
+	if got := summarizeProgressTask("then what happened?"); got != "" {
+		t.Fatalf("summarizeProgressTask() = %q, want empty conversational continuation", got)
+	}
+	if got := summarizeProgressTask("inspect"); got != "inspect" {
+		t.Fatalf("summarizeProgressTask(inspect) = %q, want inspect", got)
+	}
+}
+
+func TestToolProgressReporterUsesGenericLabelForConversationalContinuation(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	reporter := &toolProgressReporter{
+		sender:      sender,
+		editor:      sender,
+		chatID:      42,
+		mode:        "all",
+		style:       "semantic",
+		window:      4,
+		seenKeys:    make(map[string]struct{}),
+		taskSummary: summarizeProgressTask("then what happened?"),
+	}
+
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"rg first"}`))
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	got := sender.sent[0].Text
+	if strings.Contains(got, "then what happened") {
+		t.Fatalf("progress = %q, want no conversational prompt echo", got)
+	}
+	if !strings.Contains(got, "Working through the request") {
+		t.Fatalf("progress = %q, want generic progress label", got)
+	}
+}
+
+func TestToolProgressReporterAggregatesSameSemanticTextAcrossTools(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	reporter := &toolProgressReporter{
+		sender:      sender,
+		editor:      sender,
+		chatID:      42,
+		mode:        "all",
+		style:       "semantic",
+		window:      4,
+		seenKeys:    make(map[string]struct{}),
+		taskSummary: summarizeProgressTask("then what happened?"),
+	}
+
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"rg first"}`))
+	reporter.ToolStarted(context.Background(), "semantic_search", json.RawMessage(`{"query":"first"}`))
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.edits) != 1 {
+		t.Fatalf("edits len = %d, want 1", len(sender.edits))
+	}
+	got := sender.edits[0].Text
+	if strings.Count(got, "Working through the request") != 1 || !strings.Contains(got, "Working through the request (2x)") {
+		t.Fatalf("progress = %q, want one aggregated generic line", got)
+	}
+}
+
 func TestNewToolProgressReporterDoesNotUsePersistedPlanForInitialLabel(t *testing.T) {
 	t.Parallel()
 
@@ -249,6 +320,29 @@ func TestToolProgressReporterSurfaceStartsThinkingCard(t *testing.T) {
 	}
 	if !strings.Contains(sender.inline[0].text, "Starting the commit scan now.") {
 		t.Fatalf("inline text = %q, want surfaced prose", sender.inline[0].text)
+	}
+}
+
+func TestToolProgressReporterDropsInternalDeliberationSurface(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	reporter := &toolProgressReporter{
+		sender:       sender,
+		inlineSender: sender,
+		chatID:       42,
+		mode:         "all",
+		style:        "semantic",
+		window:       4,
+		seenKeys:     make(map[string]struct{}),
+	}
+	reporter.BindTurnRun(205)
+	reporter.Surface(context.Background(), "Center the next turn on curiosity without overbuilding: answer the user directly.")
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 0 {
+		t.Fatalf("inline len = %d, want no progress card for internal deliberation surface", len(sender.inline))
 	}
 }
 
