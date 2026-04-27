@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
@@ -137,6 +138,30 @@ type stubCommandRouter struct {
 	setGovernorEffortReturn     string
 	setPersonaModelErr          error
 	setGovernorEffortErr        error
+	modelStatuses               []core.ModelSlotStatus
+	modelStatusesErr            error
+	validateModelSlotInput      core.ModelSlotConfig
+	validateModelSlotReturn     core.ModelValidation
+	setModelSlotInput           core.ModelSlotConfig
+	setModelSlotActor           string
+	setModelSlotReason          string
+	setModelSlotTTL             time.Duration
+	setModelSlotReturn          core.ModelSlotStatus
+	setModelSlotErr             error
+	rollbackModelSlotInput      string
+	rollbackModelSlotActor      string
+	rollbackModelSlotReason     string
+	rollbackModelSlotReturn     core.ModelSlotStatus
+	rollbackModelSlotErr        error
+	clearModelSlotInput         string
+	clearModelSlotActor         string
+	clearModelSlotReason        string
+	clearModelSlotReturn        core.ModelSlotStatus
+	clearModelSlotErr           error
+	modelSlotHistoryInput       string
+	modelSlotHistoryLimit       int
+	modelSlotHistoryReturn      []session.ModelSlotOverrideRecord
+	modelSlotHistoryErr         error
 	continuationState           session.ContinuationState
 	continuationStateInput      int64
 	continuationStateErr        error
@@ -343,6 +368,74 @@ func (s *stubCommandRouter) SetGovernorEffort(effort string) (string, error) {
 	return effort, nil
 }
 
+func (s *stubCommandRouter) ModelSlotStatuses() ([]core.ModelSlotStatus, error) {
+	if s.modelStatusesErr != nil {
+		return nil, s.modelStatusesErr
+	}
+	return append([]core.ModelSlotStatus(nil), s.modelStatuses...), nil
+}
+
+func (s *stubCommandRouter) ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelValidation {
+	s.validateModelSlotInput = cfg
+	if s.validateModelSlotReturn.Config.Slot != "" || s.validateModelSlotReturn.Error != "" || s.validateModelSlotReturn.Valid {
+		return s.validateModelSlotReturn
+	}
+	return core.ModelValidation{Valid: true, Config: core.NormalizeModelSlotConfig(cfg), ResolvedTransport: core.ModelTransportAnthropicMessages}
+}
+
+func (s *stubCommandRouter) SetModelSlotConfig(cfg core.ModelSlotConfig, actor string, reason string, ttl time.Duration) (core.ModelSlotStatus, error) {
+	s.setModelSlotInput = cfg
+	s.setModelSlotActor = actor
+	s.setModelSlotReason = reason
+	s.setModelSlotTTL = ttl
+	if s.setModelSlotErr != nil {
+		return core.ModelSlotStatus{}, s.setModelSlotErr
+	}
+	if s.setModelSlotReturn.Slot != "" {
+		return s.setModelSlotReturn, nil
+	}
+	normalized := core.NormalizeModelSlotConfig(cfg)
+	return core.ModelSlotStatus{
+		Slot:      normalized.Slot,
+		Effective: normalized,
+		Source:    "override",
+		Validation: core.ModelValidation{
+			Valid:             true,
+			Config:            normalized,
+			ResolvedTransport: core.ResolveModelTransport(normalized, core.ModelSlotUsesTools(normalized.Slot)),
+		},
+	}, nil
+}
+
+func (s *stubCommandRouter) RollbackModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error) {
+	s.rollbackModelSlotInput = slot
+	s.rollbackModelSlotActor = actor
+	s.rollbackModelSlotReason = reason
+	if s.rollbackModelSlotErr != nil {
+		return core.ModelSlotStatus{}, s.rollbackModelSlotErr
+	}
+	return s.rollbackModelSlotReturn, nil
+}
+
+func (s *stubCommandRouter) ClearModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error) {
+	s.clearModelSlotInput = slot
+	s.clearModelSlotActor = actor
+	s.clearModelSlotReason = reason
+	if s.clearModelSlotErr != nil {
+		return core.ModelSlotStatus{}, s.clearModelSlotErr
+	}
+	return s.clearModelSlotReturn, nil
+}
+
+func (s *stubCommandRouter) ModelSlotHistory(slot string, limit int) ([]session.ModelSlotOverrideRecord, error) {
+	s.modelSlotHistoryInput = slot
+	s.modelSlotHistoryLimit = limit
+	if s.modelSlotHistoryErr != nil {
+		return nil, s.modelSlotHistoryErr
+	}
+	return append([]session.ModelSlotOverrideRecord(nil), s.modelSlotHistoryReturn...), nil
+}
+
 func (s *stubCommandRouter) RunDurableWizard(ctx context.Context, chatID int64, senderID int64, action string, agentID string, wizardAnswers map[string]any) (string, error) {
 	_ = ctx
 	s.durableWizardChatID = chatID
@@ -457,6 +550,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/doctor", want: "doctor", ok: true},
 		{text: "/agents", want: "agents", ok: true},
 		{text: "/memory", want: "memory", ok: true},
+		{text: "/model status", want: "model", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
 		{text: "/set_governor_effort", want: "set_governor_effort", ok: true},
 		{text: "/stop\n\nReply context:\nidolum: Please confirm.", want: "stop", ok: true},
@@ -485,6 +579,21 @@ func TestDefaultTelegramCommandsIncludeMemory(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("defaultTelegramCommands = %#v, want /memory command entry", defaultTelegramCommands)
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeModel(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "model" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /model command entry", defaultTelegramCommands)
 	}
 }
 
@@ -1514,6 +1623,145 @@ func TestHandleTelegramCommandSetGovernorEffort(t *testing.T) {
 	}
 	if len(sender.inline[0].rows) == 0 {
 		t.Fatalf("rows = %#v, want non-empty", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandModelStatus(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		modelStatuses: []core.ModelSlotStatus{{
+			Slot: core.ModelSlotGovernor,
+			Effective: core.ModelSlotConfig{
+				Slot:      core.ModelSlotGovernor,
+				Provider:  core.ModelProviderOpenAI,
+				Model:     "gpt-5.5",
+				Effort:    "high",
+				Transport: core.ModelTransportAuto,
+			},
+			Source: "override",
+			Validation: core.ModelValidation{
+				Valid:             true,
+				ResolvedTransport: core.ModelTransportOpenAIResponses,
+			},
+		}},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 21,
+		Text:      "/model status",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if !strings.Contains(sender.msgs[0].Text, "Governor: openai/gpt-5.5 effort=high") {
+		t.Fatalf("model status text = %q", sender.msgs[0].Text)
+	}
+	if !strings.Contains(sender.msgs[0].Text, "Transport: responses") {
+		t.Fatalf("model status text = %q, want resolved transport", sender.msgs[0].Text)
+	}
+}
+
+func TestHandleTelegramCommandModelSetParsesSlotConfig(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 22,
+		Text:      "/model set governor anthropic/claude-opus-4.7 effort=max ttl=2h reason=debug swap",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.setModelSlotInput.Slot != core.ModelSlotGovernor {
+		t.Fatalf("slot = %q, want governor", router.setModelSlotInput.Slot)
+	}
+	if router.setModelSlotInput.Provider != core.ModelProviderAnthropic || router.setModelSlotInput.Model != "claude-opus-4.7" {
+		t.Fatalf("provider/model = %s/%s", router.setModelSlotInput.Provider, router.setModelSlotInput.Model)
+	}
+	if router.setModelSlotInput.Effort != "xhigh" {
+		t.Fatalf("effort = %q, want xhigh", router.setModelSlotInput.Effort)
+	}
+	if router.setModelSlotTTL != 2*time.Hour {
+		t.Fatalf("ttl = %s, want 2h", router.setModelSlotTTL)
+	}
+	if router.setModelSlotReason != "debug swap" {
+		t.Fatalf("reason = %q, want debug swap", router.setModelSlotReason)
+	}
+}
+
+func TestHandleTelegramCommandModelValidateRejectsBadTransport(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		validateModelSlotReturn: core.ModelValidation{
+			Valid: false,
+			Config: core.ModelSlotConfig{
+				Slot:      core.ModelSlotGovernor,
+				Provider:  core.ModelProviderOpenAI,
+				Model:     "gpt-5.5",
+				Effort:    "high",
+				Transport: core.ModelTransportOpenAIChat,
+			},
+			Error: "openai gpt-5.5 with tools and effort requires responses transport",
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 23,
+		Text:      "/model validate governor openai/gpt-5.5 effort=high transport=chat_completions",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("message count = %d, want 1", len(sender.msgs))
+	}
+	if !strings.Contains(sender.msgs[0].Text, "requires responses transport") {
+		t.Fatalf("validation text = %q", sender.msgs[0].Text)
+	}
+}
+
+func TestHandleTelegramCommandModelDeniedForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1002,
+		MessageID: 24,
+		Text:      "/model status",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "admin only") {
+		t.Fatalf("message = %#v, want admin denial", sender.msgs)
 	}
 }
 

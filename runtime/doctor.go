@@ -123,6 +123,7 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		LedgerText: "/doctor",
 	}
 	exec := r.executionForTurn(prepared)
+	r.applyModelSlotExecution(&exec, core.ModelSlotDoctor)
 	surfaceDoctorProgress(ctx, progress, "Collecting session, memory, log, and runtime evidence")
 	packet := r.buildDoctorDiagnosticPacket(ctx, doctorDiagnosticInput{
 		Message:       msg,

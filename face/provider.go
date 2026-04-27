@@ -22,6 +22,7 @@ type ProviderRendererConfig struct {
 	Channel       string
 	Style         string
 	WorkspaceRoot string
+	Reasoning     agent.ReasoningConfig
 }
 
 type ProviderRenderer struct {
@@ -69,7 +70,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
-	resp, err := r.provider.Complete(ctx, []agent.Message{
+	resp, err := r.complete(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the %s-authored material below. Return only the reply text.", faceName, governorName)},
 	}, nil)
@@ -175,7 +176,7 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
-	resp, err := r.provider.Complete(ctx, []agent.Message{
+	resp, err := r.complete(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "user", Content: fmt.Sprintf("Speak to %s in one short bounded note about how this turn should move next. Return only that note, or nothing if you have no useful push.", governorName)},
 	}, nil)
@@ -202,6 +203,18 @@ func (r *ProviderRenderer) recordUsage(usage core.TokenUsage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastUsage = usage
+}
+
+func (r *ProviderRenderer) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if r == nil || r.provider == nil {
+		return nil, fmt.Errorf("provider is nil")
+	}
+	if withOptions, ok := r.provider.(agent.ProviderWithOptions); ok && r.cfg.Reasoning.Effort != "" {
+		return withOptions.CompleteWithOptions(ctx, messages, tools, agent.CompleteOptions{
+			Reasoning: r.cfg.Reasoning,
+		})
+	}
+	return r.provider.Complete(ctx, messages, tools)
 }
 
 func firstNonEmpty(values ...string) string {

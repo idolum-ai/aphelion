@@ -98,6 +98,8 @@ type Runtime struct {
 	statusReadableMu       sync.Mutex
 	statusReadableProvider agent.Provider
 	statusReadableReady    bool
+	modelProviderMu        sync.Mutex
+	modelProviderCache     map[string]agent.Provider
 	faceModelsMu           sync.Mutex
 	recipeMu               sync.Mutex
 	recipeFileMu           sync.Mutex
@@ -492,6 +494,7 @@ func New(
 		staleTurnLimit:           defaultStaleTurnLimit,
 		staleTurnSweep:           store.StaleRunningTurnRuns,
 		interruptRunningTurnRuns: store.InterruptRunningTurnRuns,
+		modelProviderCache:       make(map[string]agent.Provider),
 		recipePath:               recipePath,
 		recipeState:              recipeState,
 		memoryFocusByChat:        make(map[int64]core.MemoryFocus),

@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/core"
 )
 
 const (
@@ -163,10 +164,27 @@ func (r *Runtime) currentRecipeSnapshot() recipeSnapshot {
 
 func (r *Runtime) CurrentEfforts() (persona string, governor string) {
 	snapshot := r.currentRecipeSnapshot()
-	return snapshot.PersonaEffort, snapshot.GovernorEffort
+	persona = snapshot.PersonaEffort
+	governor = snapshot.GovernorEffort
+	if status, err := r.EffectiveModelSlot(core.ModelSlotPersona); err == nil && status.Source == "override" {
+		if effort := core.NormalizeModelEffort(status.Effective.Effort); effort != "" {
+			persona = effort
+		} else if status.Effective.Provider != "" {
+			persona = status.Effective.Provider
+		}
+	}
+	if status, err := r.EffectiveModelSlot(core.ModelSlotGovernor); err == nil && status.Source == "override" {
+		if effort := core.NormalizeModelEffort(status.Effective.Effort); effort != "" {
+			governor = effort
+		}
+	}
+	return persona, governor
 }
 
 func (r *Runtime) CurrentPersonaModel() string {
+	if status, err := r.EffectiveModelSlot(core.ModelSlotPersona); err == nil && status.Source == "override" && strings.TrimSpace(status.Effective.Model) != "" {
+		return status.Effective.Model
+	}
 	return r.currentRecipeSnapshot().PersonaModel
 }
 

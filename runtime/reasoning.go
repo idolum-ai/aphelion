@@ -7,6 +7,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -52,6 +53,15 @@ func (r *Runtime) reasoningOptionsForRun(kind session.TurnRunKind) *agent.Comple
 	if kind == session.TurnRunKindInteractive || kind == session.TurnRunKindRecovery || kind == session.TurnRunKindDoctor {
 		if effort := normalizeGovernorEffort(snapshot.GovernorEffort); effort != "" {
 			opts.Reasoning.Effort = agent.ReasoningEffort(effort)
+		}
+		slot := core.ModelSlotGovernor
+		if kind == session.TurnRunKindDoctor {
+			slot = core.ModelSlotDoctor
+		}
+		if status, err := r.EffectiveModelSlot(slot); err == nil && status.Validation.Valid {
+			if effort := core.NormalizeModelEffort(status.Effective.Effort); effort != "" {
+				opts.Reasoning.Effort = agent.ReasoningEffort(effort)
+			}
 		}
 	}
 	return opts

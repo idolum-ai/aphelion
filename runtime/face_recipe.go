@@ -10,6 +10,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/prompt"
 	providerpkg "github.com/idolum-ai/aphelion/provider"
@@ -21,6 +22,28 @@ func (r *Runtime) currentFaceRenderer() face.Renderer {
 	}
 	if r.faceBackend == face.BackendFloorFallback {
 		return r.faceModel
+	}
+	if status, err := r.EffectiveModelSlot(core.ModelSlotPersona); err == nil && status.Source == "override" && status.Validation.Valid {
+		key := "slot:" + modelSlotProviderCacheKey(status.Effective)
+		r.faceModelsMu.Lock()
+		renderer, ok := r.faceModels[key]
+		r.faceModelsMu.Unlock()
+		if ok && renderer != nil {
+			return renderer
+		}
+		provider, err := r.cachedProviderForModelSlot(status.Effective)
+		if err == nil {
+			renderer, err = r.newFaceRendererForProvider(provider, status.Effective)
+		}
+		if err == nil && renderer != nil {
+			r.faceModelsMu.Lock()
+			if r.faceModels == nil {
+				r.faceModels = make(map[string]face.Renderer)
+			}
+			r.faceModels[key] = renderer
+			r.faceModelsMu.Unlock()
+			return renderer
+		}
 	}
 	snapshot := r.currentRecipeSnapshot()
 	key := snapshot.PersonaModel
@@ -59,11 +82,21 @@ func (r *Runtime) buildFaceRendererForRecipe(recipe string) (face.Renderer, erro
 	if err != nil {
 		return nil, err
 	}
+	return r.newFaceRendererForProvider(provider, core.ModelSlotConfig{})
+}
+
+func (r *Runtime) newFaceRendererForProvider(provider agent.Provider, slot core.ModelSlotConfig) (face.Renderer, error) {
+	reasoning := agent.ReasoningConfig{}
+	if effort := core.NormalizeModelEffort(slot.Effort); effort != "" {
+		reasoning.Effort = agent.ReasoningEffort(effort)
+		reasoning.Summary = agent.ReasoningSummaryAuto
+	}
 	return newFaceRenderer(provider, face.ProviderRendererConfig{
 		GovernorName:  prompt.DefaultGovernorName,
 		FaceName:      face.DefaultFaceName,
 		Channel:       "telegram",
 		WorkspaceRoot: r.cfg.Agent.PromptRoot,
+		Reasoning:     reasoning,
 	})
 }
 

@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 37
+	schemaVersion                       = 38
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -176,6 +176,19 @@ func (s *SQLiteStore) init() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
+		`CREATE TABLE IF NOT EXISTS model_slot_overrides (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			slot TEXT NOT NULL,
+			config_json TEXT NOT NULL DEFAULT '{}',
+			previous_config_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'superseded', 'rolled_back', 'cleared', 'expired')),
+			created_by TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			expires_at TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_model_slot_overrides_slot_status ON model_slot_overrides(slot, status, id DESC)`,
 		`CREATE TABLE IF NOT EXISTS capability_requests (
 			request_id TEXT PRIMARY KEY,
 			requested_by TEXT NOT NULL DEFAULT '',
@@ -5424,6 +5437,11 @@ func applyMigrations(tx *sql.Tx) error {
 			return err
 		}
 	}
+	if currentVersion < 38 {
+		if err := ensureModelSlotOverridesTable(tx); err != nil {
+			return err
+		}
+	}
 	if currentVersion >= schemaVersion {
 		return nil
 	}
@@ -5431,6 +5449,29 @@ func applyMigrations(tx *sql.Tx) error {
 	for version := currentVersion + 1; version <= schemaVersion; version++ {
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, version); err != nil {
 			return fmt.Errorf("insert schema version %d: %w", version, err)
+		}
+	}
+	return nil
+}
+
+func ensureModelSlotOverridesTable(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS model_slot_overrides (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			slot TEXT NOT NULL,
+			config_json TEXT NOT NULL DEFAULT '{}',
+			previous_config_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','superseded','rolled_back','cleared','expired')),
+			created_by TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			expires_at TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_model_slot_overrides_slot_status ON model_slot_overrides(slot, status, id DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure model slot override table: %w", err)
 		}
 	}
 	return nil

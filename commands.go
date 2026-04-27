@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
@@ -53,6 +54,12 @@ type commandRouter interface {
 	SetPersonaModel(model string) (string, error)
 	GovernorEffortOptions() []string
 	SetGovernorEffort(effort string) (string, error)
+	ModelSlotStatuses() ([]core.ModelSlotStatus, error)
+	ValidateModelSlotConfig(cfg core.ModelSlotConfig) core.ModelValidation
+	SetModelSlotConfig(cfg core.ModelSlotConfig, actor string, reason string, ttl time.Duration) (core.ModelSlotStatus, error)
+	RollbackModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error)
+	ClearModelSlot(slot string, actor string, reason string) (core.ModelSlotStatus, error)
+	ModelSlotHistory(slot string, limit int) ([]session.ModelSlotOverrideRecord, error)
 	RunDurableWizard(ctx context.Context, chatID int64, senderID int64, action string, agentID string, wizardAnswers map[string]any) (string, error)
 	DurableAgentsList(senderID int64) ([]core.DurableAgentStatusSnapshot, error)
 	StartDurableAgentConversation(ctx context.Context, chatID int64, senderID int64, agentID string) (string, error)
@@ -77,6 +84,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "doctor", Description: "Run an admin runtime diagnosis"},
 	{Command: "agents", Description: "List durable agents and controls"},
 	{Command: "memory", Description: "Review memory and set focus"},
+	{Command: "model", Description: "Show and change model slots"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "new", Description: "Start a fresh chat session context"},
 	{Command: "detach", Description: "Detach from pending work in this chat"},
@@ -185,6 +193,12 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		return true, nil
+	case "model":
+		if !isAdmin {
+			text = "Model controls are admin only."
+			break
+		}
+		return handleTelegramModelCommand(ctx, sender, router, msg)
 	case "stop":
 		text = face.RenderTelegramStop(router.Stop(msg.ChatID))
 	case "new":

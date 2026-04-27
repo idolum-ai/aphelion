@@ -312,6 +312,7 @@ func (r *Runtime) executionForTurn(prepared pipeline.TurnPrepareContract) pipeli
 		MediaAttached: prepared.MediaAttached,
 		MediaMode:     prepared.MediaMode,
 	}
+	r.applyModelSlotExecution(&exec, core.ModelSlotGovernor)
 	if prepared.MediaMode == "vision" && r.native != nil {
 		exec.Provider = r.native
 		exec.Backend = "native"
