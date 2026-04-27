@@ -39,6 +39,10 @@ type telegramDecisionSender interface {
 	AnswerCallbackQuery(ctx context.Context, id string, text string) error
 }
 
+type telegramDecisionKeyboardEditor interface {
+	EditMessageTextWithInlineKeyboard(ctx context.Context, chatID int64, messageID int64, text string, parseMode string, rows [][]telegram.InlineButton) error
+}
+
 type telegramDecisionRouter interface {
 	Status(chatID int64) core.SessionStatus
 	Stop(chatID int64) core.StopResult
@@ -152,7 +156,7 @@ func (a *telegramExecApprover) ConfirmExec(ctx context.Context, req toolpkg.Exec
 
 	if result.Choice == "approve" {
 		if result.Delivery.MessageID != 0 {
-			_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, approvedDecisionConfirmationText("Proposal", result.DecisionID, decision.KindProposalApproval, formatExecProposalDetails(req)), "")
+			editApprovedDecisionConfirmation(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, "Proposal", result.DecisionID, decision.KindProposalApproval, formatExecProposalDetails(req))
 		}
 		return toolpkg.ExecApprovalDecision{Approved: true}, nil
 	}
@@ -189,7 +193,7 @@ func (a *telegramDurableMemoryDelegationApprover) ConfirmDurableMemoryDelegation
 	}
 	if result.Choice == "approve" {
 		if result.Delivery.MessageID != 0 {
-			_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, approvedDecisionConfirmationText("Memory delegation", result.DecisionID, decision.KindMemoryDelegation, formatDurableMemoryDelegationDetails(req)), "")
+			editApprovedDecisionConfirmation(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, "Memory delegation", result.DecisionID, decision.KindMemoryDelegation, formatDurableMemoryDelegationDetails(req))
 		}
 		return toolpkg.DurableMemoryDelegationApprovalDecision{Approved: true}, nil
 	}
@@ -225,7 +229,7 @@ func (a *telegramDurableSnapshotRestoreApprover) ConfirmDurableSnapshotRestore(c
 	}
 	if result.Choice == "approve" {
 		if result.Delivery.MessageID != 0 {
-			_ = a.sender.EditMessageText(ctx, req.SessionKey.ChatID, result.Delivery.MessageID, approvedDecisionConfirmationText("Snapshot restore", result.DecisionID, decision.KindSnapshotRestore, formatDurableSnapshotRestoreDetails(req)), "")
+			editApprovedDecisionConfirmation(ctx, a.sender, req.SessionKey.ChatID, result.Delivery.MessageID, "Snapshot restore", result.DecisionID, decision.KindSnapshotRestore, formatDurableSnapshotRestoreDetails(req))
 		}
 		return toolpkg.DurableSnapshotRestoreApprovalDecision{Approved: true}, nil
 	}
@@ -255,6 +259,34 @@ func approvedDecisionConfirmationText(label string, decisionID string, kind deci
 		lines = append(lines, "", "Approved content:", compact)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func approvedDecisionConfirmationRows(decisionID string, details string) [][]telegram.InlineButton {
+	decisionID = strings.TrimSpace(decisionID)
+	if decisionID == "" || strings.TrimSpace(details) == "" {
+		return nil
+	}
+	return [][]telegram.InlineButton{{
+		{
+			Text:         "Expand details",
+			CallbackData: decision.EncodeCallbackData(decisionID, "expand"),
+		},
+	}}
+}
+
+func editApprovedDecisionConfirmation(ctx context.Context, sender telegramDecisionSender, chatID int64, messageID int64, label string, decisionID string, kind decision.Kind, details string) {
+	if sender == nil || chatID == 0 || messageID == 0 {
+		return
+	}
+	text := approvedDecisionConfirmationText(label, decisionID, kind, details)
+	if rows := approvedDecisionConfirmationRows(decisionID, details); len(rows) > 0 {
+		if editor, ok := sender.(telegramDecisionKeyboardEditor); ok {
+			if err := editor.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err == nil {
+				return
+			}
+		}
+	}
+	_ = sender.EditMessageText(ctx, chatID, messageID, text, "")
 }
 
 func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
@@ -669,6 +701,9 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 	}
 	if choice == "expand" {
 		pending, found := h.broker.Peek(id)
+		if !found {
+			pending, found = h.broker.PeekResolved(id)
+		}
 		if !found {
 			if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, "This approval is no longer active. Use the newest prompt."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 				return err

@@ -23,6 +23,8 @@ const (
 	KindSnapshotRestore   Kind = "snapshot_restore"
 )
 
+const resolvedDecisionArchiveLimit = 128
+
 // WaitIndefinitely disables the broker timeout and waits until the decision is resolved or the request context is canceled.
 const WaitIndefinitely time.Duration = -1
 
@@ -77,14 +79,16 @@ type DurableStore interface {
 }
 
 type Broker struct {
-	mu       sync.Mutex
-	nextID   uint64
-	notifier Notifier
-	pending  map[string]*pendingDecision
-	byOwner  map[string]string
-	durable  DurableStore
-	observer Observer
-	loaded   bool
+	mu            sync.Mutex
+	nextID        uint64
+	notifier      Notifier
+	pending       map[string]*pendingDecision
+	byOwner       map[string]string
+	resolved      map[string]PendingDecision
+	resolvedOrder []string
+	durable       DurableStore
+	observer      Observer
+	loaded        bool
 }
 
 type pendingDecision struct {
@@ -136,6 +140,7 @@ func NewBroker(notifier Notifier, opts ...BrokerOption) *Broker {
 		notifier: notifier,
 		pending:  make(map[string]*pendingDecision),
 		byOwner:  make(map[string]string),
+		resolved: make(map[string]PendingDecision),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -374,12 +379,16 @@ func (b *Broker) Resolve(id string, choice string) bool {
 	if !containsChoice(pending.request.Choices, choice) {
 		return false
 	}
+	b.mu.Lock()
 	select {
 	case pending.resultCh <- choice:
+		b.archiveResolvedDecisionLocked(pending.request)
+		b.mu.Unlock()
 		_ = b.clearWithContext(context.Background(), id)
 		b.emitEvent(context.Background(), pending, EventTypeResolved, choice, false, "callback")
 		return true
 	default:
+		b.mu.Unlock()
 		return false
 	}
 }
@@ -402,6 +411,39 @@ func (b *Broker) Peek(id string) (PendingDecision, bool) {
 		return PendingDecision{}, false
 	}
 	return pending.request, true
+}
+
+func (b *Broker) PeekResolved(id string) (PendingDecision, bool) {
+	if b == nil {
+		return PendingDecision{}, false
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return PendingDecision{}, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	pending, ok := b.resolved[id]
+	return pending, ok
+}
+
+func (b *Broker) archiveResolvedDecisionLocked(pending PendingDecision) {
+	id := strings.TrimSpace(pending.ID)
+	if id == "" {
+		return
+	}
+	if b.resolved == nil {
+		b.resolved = make(map[string]PendingDecision)
+	}
+	if _, exists := b.resolved[id]; !exists {
+		b.resolvedOrder = append(b.resolvedOrder, id)
+	}
+	b.resolved[id] = pending
+	for len(b.resolvedOrder) > resolvedDecisionArchiveLimit {
+		oldest := b.resolvedOrder[0]
+		b.resolvedOrder = b.resolvedOrder[1:]
+		delete(b.resolved, oldest)
+	}
 }
 
 func (b *Broker) DetachByOwner(ctx context.Context, ownerKey string) (int, error) {

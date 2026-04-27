@@ -40,6 +40,7 @@ type decisionEditCall struct {
 	chatID    int64
 	messageID int64
 	text      string
+	rows      [][]telegram.InlineButton
 	at        time.Time
 }
 
@@ -61,6 +62,11 @@ func (s *decisionTestSender) SendInlineKeyboard(_ context.Context, chatID int64,
 
 func (s *decisionTestSender) EditMessageText(_ context.Context, chatID int64, messageID int64, text string, _ string) error {
 	s.edits = append(s.edits, decisionEditCall{chatID: chatID, messageID: messageID, text: text, at: time.Now().UTC()})
+	return nil
+}
+
+func (s *decisionTestSender) EditMessageTextWithInlineKeyboard(_ context.Context, chatID int64, messageID int64, text string, _ string, rows [][]telegram.InlineButton) error {
+	s.edits = append(s.edits, decisionEditCall{chatID: chatID, messageID: messageID, text: text, rows: rows, at: time.Now().UTC()})
 	return nil
 }
 
@@ -476,6 +482,9 @@ func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 	if !strings.Contains(sender.edits[0].text, "Proposal approved.") || !strings.Contains(sender.edits[0].text, "Decision:") || !strings.Contains(sender.edits[0].text, "Perform a destructive change") {
 		t.Fatalf("approval edit = %q, want proposal confirmation with decision id and summary", sender.edits[0].text)
 	}
+	if !hasInlineButton(sender.edits[0].rows, "Expand details") {
+		t.Fatalf("approval rows = %#v, want retained expand details button", sender.edits[0].rows)
+	}
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline = %#v, want one proposal prompt", sender.inline)
 	}
@@ -491,6 +500,86 @@ func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 	}
 	if choiceRow[0].Text != "Deny" || choiceRow[1].Text != "Approve" {
 		t.Fatalf("choice order = %#v, want [Deny, Approve]", choiceRow)
+	}
+}
+
+func TestTelegramExecApprovalConfirmationExpandShowsCommandAfterApproval(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker, nil)
+	approver := newTelegramExecApprover(sender, broker)
+	approver.timeout = time.Second
+
+	resultCh := make(chan toolpkg.ExecApprovalDecision, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		decisionResult, err := approver.ConfirmExec(context.Background(), toolpkg.ExecApprovalRequest{
+			Principal:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 42},
+			SessionKey: session.SessionKey{ChatID: 7},
+			Command:    "rm -rf /tmp/aphelion-runtime-bin",
+			Reason:     "recursive delete",
+			Proposal: session.OperationProposal{
+				Kind:          "destructive_mutation",
+				Summary:       "Perform a destructive change",
+				WhyNow:        "The requested command deletes existing local state.",
+				BoundedEffect: "Remove the targeted files and continue the operation.",
+				Status:        session.ProposalStatusPending,
+			},
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- decisionResult
+	}()
+
+	prompt := waitForDecisionInline(t, sender)
+	approveData := callbackDataForButton(t, prompt.rows, "Approve")
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-approve",
+		Data: approveData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: 1,
+			Chat:      &telegram.Chat{ID: 7},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery(approve) err = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("ConfirmExec() err = %v", err)
+	case decisionResult := <-resultCh:
+		if !decisionResult.Approved {
+			t.Fatal("Approved = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConfirmExec() did not resolve after approve callback")
+	}
+
+	approvalEdit := waitForDecisionEdit(t, sender, 1)
+	expandData := callbackDataForButton(t, approvalEdit.rows, "Expand details")
+	if expandData == "" {
+		t.Fatalf("approval rows = %#v, want expand details callback", approvalEdit.rows)
+	}
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-expand-approved",
+		Data: expandData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: approvalEdit.messageID,
+			Chat:      &telegram.Chat{ID: approvalEdit.chatID},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery(expand after approval) err = %v", err)
+	}
+
+	expanded := waitForDecisionEdit(t, sender, 2)
+	if !strings.Contains(expanded.text, "Command:") || !strings.Contains(expanded.text, "rm -rf /tmp/aphelion-runtime-bin") {
+		t.Fatalf("expanded text = %q, want full approved command", expanded.text)
 	}
 }
 
@@ -530,6 +619,56 @@ func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	if !strings.Contains(sender.inline[0].text, "Acquire browser automation") {
 		t.Fatalf("inline text = %q, want capability proposal summary", sender.inline[0].text)
 	}
+}
+
+func waitForDecisionInline(t *testing.T, sender *decisionTestSender) decisionInlineCall {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(sender.inline) > 0 {
+			return sender.inline[0]
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("inline = %#v, want at least one prompt", sender.inline)
+	return decisionInlineCall{}
+}
+
+func waitForDecisionEdit(t *testing.T, sender *decisionTestSender, count int) decisionEditCall {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(sender.edits) >= count {
+			return sender.edits[count-1]
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("edits = %#v, want at least %d edits", sender.edits, count)
+	return decisionEditCall{}
+}
+
+func callbackDataForButton(t *testing.T, rows [][]telegram.InlineButton, label string) string {
+	t.Helper()
+	for _, row := range rows {
+		for _, button := range row {
+			if button.Text == label {
+				return button.CallbackData
+			}
+		}
+	}
+	t.Fatalf("rows = %#v, want button %q", rows, label)
+	return ""
+}
+
+func hasInlineButton(rows [][]telegram.InlineButton, label string) bool {
+	for _, row := range rows {
+		for _, button := range row {
+			if button.Text == label {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestTelegramDurableMemoryDelegationApproverPromptsWithButtons(t *testing.T) {
