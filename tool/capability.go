@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -270,7 +271,11 @@ func (r *Registry) capabilityAuthorityRequestReview(in capabilityInput, actor pr
 			return "", fmt.Errorf("capability_authority request_review approved is admin-only")
 		}
 		if strings.TrimSpace(record.ParentPrincipal) != "" && record.ReviewStatus == session.CapabilityReviewStatusProposed {
-			return "", fmt.Errorf("capability_authority request_review approved requires parent_approved first for parent_principal %q", record.ParentPrincipal)
+			err := fmt.Errorf("capability_authority request_review approved requires parent_approved first for parent_principal %q", record.ParentPrincipal)
+			return renderCapabilityBlocked("parent_approval_required", err.Error(), []string{
+				fmt.Sprintf("Ask %s to run capability_authority request_review with review_status=parent_approved.", record.ParentPrincipal),
+				"After parent_approved is recorded, retry admin approval with review_status=approved.",
+			}), err
 		}
 	case session.CapabilityReviewStatusParentApproved:
 		if actor.Role != principal.RoleAdmin && !capabilityPrincipalMatches(actor, record.ParentPrincipal) {
@@ -442,7 +447,7 @@ func (r *Registry) capabilityAuthorityGrantSet(in capabilityInput, actor princip
 				"status":          string(session.CapabilityGrantStatusFailed),
 				"failure_reason":  failed.StaleReason,
 			})
-			return renderCapabilityGrant("[CAPABILITY_GRANT_FAILED]", grant), err
+			return renderCapabilityGrantFailure(grant, err), err
 		}
 		grantRecord.Status = session.CapabilityGrantStatusActive
 		grantRecord.GrantedAt = time.Now().UTC()
@@ -956,8 +961,65 @@ func renderCapabilityRequestList(records []session.CapabilityRequest) string {
 	return b.String()
 }
 
+func renderCapabilityBlocked(reason string, detail string, nextActions []string) string {
+	var b strings.Builder
+	b.WriteString("[CAPABILITY_BLOCKED]\n")
+	fmt.Fprintf(&b, "status: blocked\n")
+	if reason = strings.TrimSpace(reason); reason != "" {
+		fmt.Fprintf(&b, "reason: %s\n", reason)
+	}
+	if detail = strings.TrimSpace(detail); detail != "" {
+		fmt.Fprintf(&b, "detail: %s\n", detail)
+	}
+	if len(nextActions) > 0 {
+		b.WriteString("next_action:\n")
+		for _, action := range nextActions {
+			action = strings.TrimSpace(action)
+			if action == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "- %s\n", action)
+		}
+	}
+	return b.String()
+}
+
 func renderCapabilityGrant(header string, grant session.CapabilityGrant) string {
 	return renderCapabilityGrantWithUpdate(header, grant, nil)
+}
+
+func renderCapabilityGrantFailure(grant session.CapabilityGrant, cause error) string {
+	base := strings.TrimSpace(renderCapabilityGrant("[CAPABILITY_GRANT_FAILED]", grant))
+	next := capabilityGrantFailureNextActions(cause)
+	if len(next) == 0 {
+		return base + "\n"
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteString("\nnext_action:\n")
+	for _, action := range next {
+		fmt.Fprintf(&b, "- %s\n", action)
+	}
+	return b.String()
+}
+
+func capabilityGrantFailureNextActions(cause error) []string {
+	var ceiling *core.DurableAgentPolicyCeilingError
+	if errors.As(cause, &ceiling) && ceiling != nil {
+		field := strings.TrimSpace(ceiling.Field)
+		if field == "" {
+			field = "live_policy"
+		}
+		return []string{
+			fmt.Sprintf("The requested durable-agent policy exceeds the bootstrap ceiling for %s.", field),
+			fmt.Sprintf("Requested: %s. Allowed: %s.", strings.Join(ceiling.Requested, ","), strings.Join(ceiling.Allowed, ",")),
+			"Create an admin-reviewed request to widen the bootstrap ceiling, or retry grant_set with a policy inside the current ceiling.",
+		}
+	}
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		return []string{"Inspect stale_reason, adjust the grant contract or durable policy patch, then retry grant_set."}
+	}
+	return nil
 }
 
 func renderCapabilityGrantWithUpdate(header string, grant session.CapabilityGrant, update *capabilityUpdatePlanApplyResult) string {

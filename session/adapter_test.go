@@ -70,8 +70,14 @@ func TestNewMessagesForTurn(t *testing.T) {
 	if rows[1].ToolCalls == "" {
 		t.Fatalf("assistant tool calls missing: %#v", rows[1])
 	}
+	if rows[1].Content != "" || rows[1].ContentChars != 0 {
+		t.Fatalf("assistant tool-call scratch content = (%q, %d), want hidden", rows[1].Content, rows[1].ContentChars)
+	}
 	if rows[2].Role != "tool" || rows[2].ToolName != "exec" || rows[2].ToolID != "call-1" {
 		t.Fatalf("tool row = %#v", rows[2])
+	}
+	if rows[3].Role != "assistant" || rows[3].Content != "done" {
+		t.Fatalf("final assistant row = %#v, want visible final response", rows[3])
 	}
 }
 

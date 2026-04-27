@@ -389,6 +389,68 @@ func TestGroundFinalReplyWithExecutionEvidenceKeepsGroundedSuccessClaim(t *testi
 	}
 }
 
+func TestGroundFinalReplyWithExecutionEvidenceDoesNotRewriteRunningTurnCompletion(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9305, UserID: 0, Scope: telegramDMScopeRef(9305)}
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{EventType: core.ExecutionEventTurnStarted, Stage: "turn", Status: "running", PayloadJSON: `{}`},
+		{EventType: core.ExecutionEventToolSucceeded, Stage: "tool", Status: "succeeded", PayloadJSON: `{"tool":"exec","result_preview":"ok"}`},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	reply := "Done. I updated the files."
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, reply)
+	if note != "" {
+		t.Fatalf("note = %q, want empty note for still-running final render path", note)
+	}
+	if rewritten != reply {
+		t.Fatalf("rewritten = %q, want unchanged reply", rewritten)
+	}
+}
+
+func TestGroundFinalReplyWithExecutionEvidenceUsesLatestEventWindow(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9306, UserID: 0, Scope: telegramDMScopeRef(9306)}
+	old := make([]session.ExecutionEventInput, 0, 310)
+	for i := 0; i < 310; i++ {
+		old = append(old, session.ExecutionEventInput{EventType: core.ExecutionEventToolFailed, Stage: "tool", Status: "failed", PayloadJSON: `{}`})
+	}
+	if _, err := store.AppendExecutionEvents(key, old); err != nil {
+		t.Fatalf("AppendExecutionEvents(old) err = %v", err)
+	}
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{EventType: core.ExecutionEventTurnStarted, Stage: "turn", Status: "running", PayloadJSON: `{}`},
+		{EventType: core.ExecutionEventToolSucceeded, Stage: "tool", Status: "succeeded", PayloadJSON: `{"tool":"exec","preview":"{\"command\":\"go test ./...\"}","result_preview":"ok"}`},
+		{EventType: core.ExecutionEventTurnCompleted, Stage: "turn", Status: "completed", PayloadJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(latest) err = %v", err)
+	}
+
+	reply := "Done. I ran go test and tests passed."
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, reply)
+	if note != "" {
+		t.Fatalf("note = %q, want empty note from latest event window", note)
+	}
+	if rewritten != reply {
+		t.Fatalf("rewritten = %q, want unchanged reply", rewritten)
+	}
+}
+
 func TestGroundFinalReplyWithExecutionEvidenceRewritesUngroundedToolClaim(t *testing.T) {
 	t.Parallel()
 

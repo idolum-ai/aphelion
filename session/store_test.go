@@ -5,6 +5,7 @@ package session
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -3119,6 +3120,33 @@ func TestExecutionEventsQueriesBySessionAndChat(t *testing.T) {
 	}
 	if chatEvents[0].Seq != 3 {
 		t.Fatalf("chatEvents first seq = %d, want latest seq 3", chatEvents[0].Seq)
+	}
+}
+
+func TestLatestExecutionEventsBySessionReturnsNewestWindowInAscendingOrder(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 4103, UserID: 0}
+	inputs := make([]ExecutionEventInput, 0, 5)
+	for i := 0; i < 5; i++ {
+		inputs = append(inputs, ExecutionEventInput{EventType: fmt.Sprintf("event.%d", i+1), Stage: "test", Status: "ok", PayloadJSON: `{}`})
+	}
+	if _, err := store.AppendExecutionEvents(key, inputs); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	events, err := store.LatestExecutionEventsBySession(key, 3)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("events len = %d, want 3", len(events))
+	}
+	if events[0].Seq != 3 || events[1].Seq != 4 || events[2].Seq != 5 {
+		t.Fatalf("event seqs = (%d,%d,%d), want latest window in ascending order", events[0].Seq, events[1].Seq, events[2].Seq)
 	}
 }
 

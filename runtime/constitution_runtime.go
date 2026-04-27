@@ -107,7 +107,7 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 	if !claims.any() {
 		return reply, ""
 	}
-	events, err := r.store.ExecutionEventsBySession(key, 0, 300)
+	events, err := r.store.LatestExecutionEventsBySession(key, 300)
 	if err != nil || len(events) == 0 {
 		return reply, ""
 	}
@@ -181,7 +181,7 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 	}
 
 	reasons := make([]string, 0, 4)
-	if claims.Completion && latestTerminal != core.ExecutionEventTurnCompleted {
+	if claims.Completion && latestTerminal != "" && latestTerminal != core.ExecutionEventTurnCompleted {
 		reasons = append(reasons, fmt.Sprintf("completion claim is not grounded (turn=%s)", status))
 	}
 	if claims.Tool && !hasToolEvidence {

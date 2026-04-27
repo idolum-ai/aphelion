@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 )
 
 const (
@@ -132,13 +133,15 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 		return nil, fmt.Errorf("provider failover chain is nil")
 	}
 	var attempts []FailoverAttempt
+	var events []core.ProviderEvent
 	for idx, entry := range c.entries {
-		resp, started, err := c.streamWithRetry(ctx, entry, messages, tools, cb)
+		resp, started, err := c.streamWithRetry(ctx, entry, messages, tools, cb, &events)
 		if err == nil {
 			c.recordSuccess(idx)
 			if idx > 0 {
 				log.Printf("WARN provider failover engaged from=%s to=%s", c.entries[0].name, entry.name)
 			}
+			resp.ProviderEvents = append(events, resp.ProviderEvents...)
 			return resp, nil
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -148,10 +151,12 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 			return nil, err
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
+		recordProviderFailedEvent(&events, entry.name, err)
 		if !shouldFailoverOnError(err) && !shouldFallbackToNextEntry(err, entry.name, nextFailoverEntryName(c.entries, idx)) {
 			return nil, err
 		}
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
+		recordProviderFailoverEvent(&events, entry.name, nextFailoverEntryName(c.entries, idx), err)
 	}
 	return nil, ExhaustedError{Attempts: attempts}
 }
@@ -161,23 +166,27 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 		return nil, fmt.Errorf("provider failover chain is nil")
 	}
 	var attempts []FailoverAttempt
+	var events []core.ProviderEvent
 	for idx, entry := range c.entries {
-		resp, err := c.completeWithRetry(ctx, entry, messages, tools, opts)
+		resp, err := c.completeWithRetry(ctx, entry, messages, tools, opts, &events)
 		if err == nil {
 			c.recordSuccess(idx)
 			if idx > 0 {
 				log.Printf("WARN provider failover engaged from=%s to=%s", c.entries[0].name, entry.name)
 			}
+			resp.ProviderEvents = append(events, resp.ProviderEvents...)
 			return resp, nil
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
+		recordProviderFailedEvent(&events, entry.name, err)
 		if !shouldFailoverOnError(err) && !shouldFallbackToNextEntry(err, entry.name, nextFailoverEntryName(c.entries, idx)) {
 			return nil, err
 		}
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
+		recordProviderFailoverEvent(&events, entry.name, nextFailoverEntryName(c.entries, idx), err)
 	}
 	return nil, ExhaustedError{Attempts: attempts}
 }
@@ -195,7 +204,7 @@ func (c *FailoverChain) recordSuccess(idx int) {
 	c.state.FallbackActive = idx > 0
 }
 
-func (c *FailoverChain) completeWithRetry(ctx context.Context, entry failoverEntry, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
+func (c *FailoverChain) completeWithRetry(ctx context.Context, entry failoverEntry, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, events *[]core.ProviderEvent) (*agent.Response, error) {
 	backoff := failoverInitialBackoff
 	attempt := 0
 	for {
@@ -211,6 +220,7 @@ func (c *FailoverChain) completeWithRetry(ctx context.Context, entry failoverEnt
 		}
 		attempt++
 		log.Printf("WARN provider call failed; retrying provider=%s attempt=%d max_retries=%d err=%v", entry.name, attempt, failoverMaxRetries, err)
+		recordProviderRetryEvent(events, entry.name, attempt, err)
 		if err := sleepWithContext(ctx, backoff); err != nil {
 			return nil, err
 		}
@@ -221,7 +231,7 @@ func (c *FailoverChain) completeWithRetry(ctx context.Context, entry failoverEnt
 	}
 }
 
-func (c *FailoverChain) streamWithRetry(ctx context.Context, entry failoverEntry, messages []agent.Message, tools []agent.ToolDef, cb agent.StreamCallback) (*agent.Response, bool, error) {
+func (c *FailoverChain) streamWithRetry(ctx context.Context, entry failoverEntry, messages []agent.Message, tools []agent.ToolDef, cb agent.StreamCallback, events *[]core.ProviderEvent) (*agent.Response, bool, error) {
 	backoff := failoverInitialBackoff
 	attempt := 0
 	for {
@@ -246,6 +256,7 @@ func (c *FailoverChain) streamWithRetry(ctx context.Context, entry failoverEntry
 		}
 		attempt++
 		log.Printf("WARN provider stream failed; retrying provider=%s attempt=%d max_retries=%d err=%v", entry.name, attempt, failoverMaxRetries, err)
+		recordProviderRetryEvent(events, entry.name, attempt, err)
 		if err := sleepWithContext(ctx, backoff); err != nil {
 			return nil, false, err
 		}
@@ -288,6 +299,53 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func recordProviderRetryEvent(events *[]core.ProviderEvent, provider string, attempt int, err error) {
+	if events == nil {
+		return
+	}
+	*events = append(*events, core.ProviderEvent{
+		EventType:  core.ExecutionEventProviderAttemptRetried,
+		Provider:   strings.TrimSpace(provider),
+		Attempt:    attempt,
+		MaxRetries: failoverMaxRetries,
+		Error:      trimProviderEventError(err),
+	})
+}
+
+func recordProviderFailedEvent(events *[]core.ProviderEvent, provider string, err error) {
+	if events == nil {
+		return
+	}
+	*events = append(*events, core.ProviderEvent{
+		EventType: core.ExecutionEventProviderAttemptFailed,
+		Provider:  strings.TrimSpace(provider),
+		Error:     trimProviderEventError(err),
+	})
+}
+
+func recordProviderFailoverEvent(events *[]core.ProviderEvent, from string, to string, err error) {
+	if events == nil || strings.TrimSpace(to) == "" {
+		return
+	}
+	*events = append(*events, core.ProviderEvent{
+		EventType:    core.ExecutionEventProviderFailoverEngaged,
+		FromProvider: strings.TrimSpace(from),
+		ToProvider:   strings.TrimSpace(to),
+		Error:        trimProviderEventError(err),
+	})
+}
+
+func trimProviderEventError(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.TrimSpace(err.Error())
+	if len(text) > 500 {
+		return text[:500] + "..."
+	}
+	return text
 }
 
 type statusCoder interface {

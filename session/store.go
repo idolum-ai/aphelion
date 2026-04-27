@@ -3463,6 +3463,41 @@ func (s *SQLiteStore) ExecutionEventsBySession(key SessionKey, afterSeq int64, l
 	return events, nil
 }
 
+func (s *SQLiteStore) LatestExecutionEventsBySession(key SessionKey, limit int) ([]ExecutionEvent, error) {
+	sessionID := SessionIDForKey(key)
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`
+		SELECT
+			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, seq, event_type, stage, status, caused_by_seq, payload_json, created_at
+		FROM execution_events
+		WHERE session_id = ?
+		ORDER BY seq DESC, id DESC
+		LIMIT ?
+	`, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query latest execution events by session: %w", err)
+	}
+	defer rows.Close()
+
+	events := make([]ExecutionEvent, 0, limit)
+	for rows.Next() {
+		event, err := scanExecutionEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate latest execution events by session: %w", err)
+	}
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+	return events, nil
+}
+
 func (s *SQLiteStore) ExecutionEventsByChat(chatID int64, since time.Time, limit int) ([]ExecutionEvent, error) {
 	if chatID == 0 {
 		return nil, nil

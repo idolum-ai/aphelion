@@ -90,6 +90,17 @@ type TurnResult struct {
 	ToolLog         []string
 	TokenUsage      TokenUsage
 	ProviderFailure string
+	ProviderEvents  []ProviderEvent
+}
+
+type ProviderEvent struct {
+	EventType    string
+	Provider     string
+	FromProvider string
+	ToProvider   string
+	Attempt      int
+	MaxRetries   int
+	Error        string
 }
 
 type TokenUsage struct {

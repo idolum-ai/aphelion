@@ -80,6 +80,41 @@ func (c *Client) endpoint(method string) string {
 	return fmt.Sprintf("%s%s", c.baseURL, method)
 }
 
+type redactedTelegramError struct {
+	err  error
+	text string
+}
+
+func (e redactedTelegramError) Error() string {
+	return e.text
+}
+
+func (e redactedTelegramError) Unwrap() error {
+	return e.err
+}
+
+func (c *Client) redactError(err error) error {
+	if err == nil {
+		return nil
+	}
+	text := redactTelegramToken(err.Error(), c.token)
+	if text == err.Error() {
+		return err
+	}
+	return redactedTelegramError{err: err, text: text}
+}
+
+func redactTelegramToken(text string, token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" || text == "" {
+		return text
+	}
+	redacted := strings.ReplaceAll(text, "/file/bot"+token+"/", "/file/bot[REDACTED]/")
+	redacted = strings.ReplaceAll(redacted, "/bot"+token+"/", "/bot[REDACTED]/")
+	redacted = strings.ReplaceAll(redacted, "bot"+token, "bot[REDACTED]")
+	return redacted
+}
+
 func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSeconds int) ([]Update, error) {
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = c.pollTimeout
@@ -579,7 +614,7 @@ func (c *Client) sendMultipartMediaMessage(ctx context.Context, method string, f
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("%s request failed: %w", method, err)
+		return 0, fmt.Errorf("%s request failed: %w", method, c.redactError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -634,7 +669,7 @@ func (c *Client) DownloadFileChecked(ctx context.Context, fileID string, maxByte
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("download file failed: %w", err)
+		return nil, fmt.Errorf("download file failed: %w", c.redactError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -662,7 +697,7 @@ func (c *Client) post(ctx context.Context, method string, body interface{}, out 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s request failed: %w", method, err)
+		return fmt.Errorf("%s request failed: %w", method, c.redactError(err))
 	}
 	defer resp.Body.Close()
 	bodyBytes, err := io.ReadAll(resp.Body)

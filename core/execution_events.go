@@ -23,6 +23,7 @@ const (
 	ExecutionEventProviderAttemptRetried   = "provider.attempt.retried"
 	ExecutionEventProviderAttemptFailed    = "provider.attempt.failed"
 	ExecutionEventProviderAttemptSucceeded = "provider.attempt.succeeded"
+	ExecutionEventProviderFailoverEngaged  = "provider.failover.engaged"
 
 	ExecutionEventToolStarted              = "tool.started"
 	ExecutionEventToolSucceeded            = "tool.succeeded"

@@ -9,6 +9,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -49,6 +50,34 @@ func TestRouterAndRuntimeEmitExecutionEvents(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventProviderAttemptStarted)
 	assertHasEventType(t, events, core.ExecutionEventProviderAttemptSucceeded)
 	assertHasEventType(t, events, core.ExecutionEventTurnStageChanged)
+}
+
+func TestRuntimeRecordsProviderRetryAndFailoverEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 99103, UserID: 0, Scope: telegramDMScopeRef(99103)}
+	rt.recordProviderAttemptEvents(key, pipeline.TurnExecutionContract{
+		Backend:      "native",
+		ProviderName: "failover",
+		ModelName:    "test-model",
+		ProviderPath: []string{"codex", "native"},
+	}, &core.TurnResult{ProviderEvents: []core.ProviderEvent{
+		{EventType: core.ExecutionEventProviderAttemptRetried, Provider: "codex", Attempt: 1, MaxRetries: 3, Error: "503"},
+		{EventType: core.ExecutionEventProviderFailoverEngaged, FromProvider: "codex", ToProvider: "native", Error: "codex incomplete"},
+	}})
+
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	assertHasEventType(t, events, core.ExecutionEventProviderAttemptRetried)
+	assertHasEventType(t, events, core.ExecutionEventProviderFailoverEngaged)
 }
 
 func TestChatStatusSnapshotUsesExecutionEventPhase(t *testing.T) {

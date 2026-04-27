@@ -75,12 +75,13 @@ type ThinkingBlock struct {
 }
 
 type Response struct {
-	Content       string
-	Thinking      string
-	ThinkingMeta  []ThinkingBlock
-	ProviderState json.RawMessage
-	ToolCalls     []ToolCall
-	Usage         core.TokenUsage
+	Content        string
+	Thinking       string
+	ThinkingMeta   []ThinkingBlock
+	ProviderState  json.RawMessage
+	ToolCalls      []ToolCall
+	Usage          core.TokenUsage
+	ProviderEvents []core.ProviderEvent
 }
 
 type StreamChunk struct {
@@ -142,13 +143,14 @@ func RunTurn(
 	}
 
 	var (
-		history       = append([]Message(nil), messages...)
-		toolDefs      []ToolDef
-		toolLog       []string
-		pendingBudget string
-		toolIDs       = newToolIDGenerator(history)
-		toolRepair    = newToolRepairState(toolDefs)
-		toolLoopGuard toolLoopGuardState
+		history        = append([]Message(nil), messages...)
+		toolDefs       []ToolDef
+		toolLog        []string
+		providerEvents []core.ProviderEvent
+		pendingBudget  string
+		toolIDs        = newToolIDGenerator(history)
+		toolRepair     = newToolRepairState(toolDefs)
+		toolLoopGuard  toolLoopGuardState
 	)
 
 	if tools != nil {
@@ -166,9 +168,10 @@ func RunTurn(
 			if exhausted {
 				log.Printf("WARN turn budget exhausted used=%d max=%d", budget.Used, budget.Max)
 				return &core.TurnResult{
-					Text:       budgetExhaustedReply,
-					ToolLog:    toolLog,
-					TokenUsage: core.TokenUsage{},
+					Text:           budgetExhaustedReply,
+					ToolLog:        toolLog,
+					TokenUsage:     core.TokenUsage{},
+					ProviderEvents: append([]core.ProviderEvent(nil), providerEvents...),
 				}, history, nil
 			}
 			if warning != "" {
@@ -195,12 +198,15 @@ func RunTurn(
 				ToolLog:         toolLog,
 				TokenUsage:      core.TokenUsage{},
 				ProviderFailure: trimProviderFailure(err),
+				ProviderEvents:  append([]core.ProviderEvent(nil), providerEvents...),
 			}, history, nil
 		}
+		providerEvents = append(providerEvents, resp.ProviderEvents...)
 		retried, retryErr := maybeRetryPlanningOnly(ctx, provider, history, toolDefs, opts, resp)
 		if retryErr != nil {
 			log.Printf("WARN planning-only correction failed err=%v", retryErr)
 		} else if retried != nil {
+			providerEvents = append(providerEvents, retried.ProviderEvents...)
 			resp = retried
 		}
 
@@ -222,9 +228,10 @@ func RunTurn(
 		if len(resp.ToolCalls) == 0 {
 			log.Printf("INFO turn completed tool_calls=%d", len(toolLog))
 			return &core.TurnResult{
-				Text:       resp.Content,
-				ToolLog:    toolLog,
-				TokenUsage: resp.Usage,
+				Text:           resp.Content,
+				ToolLog:        toolLog,
+				TokenUsage:     resp.Usage,
+				ProviderEvents: append([]core.ProviderEvent(nil), providerEvents...),
 			}, history, nil
 		}
 

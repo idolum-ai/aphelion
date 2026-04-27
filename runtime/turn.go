@@ -64,6 +64,9 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 	if err != nil {
 		return nil, fmt.Errorf("resolve principal scope: %w", err)
 	}
+	if handled, result, err := r.maybeHandleOperationArtifactRequest(ctx, key, scope, msg); handled {
+		return result, err
+	}
 	eventAwareness := turn.EventAwareness{Origin: inboundOriginLabel(msg)}
 	if msg.Origin == core.InboundOriginTurnAuthorization {
 		eventAwareness.TurnAuthorizationKind = inboundOriginDetailLabel(msg)

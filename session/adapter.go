@@ -65,6 +65,8 @@ func NewMessagesForTurnWithContext(userText string, generated []agent.Message, t
 		}
 
 		if len(msg.ToolCalls) > 0 {
+			entry.Content = ""
+			entry.ContentChars = 0
 			raw, err := json.Marshal(msg.ToolCalls)
 			if err != nil {
 				return nil, fmt.Errorf("encode tool calls: %w", err)

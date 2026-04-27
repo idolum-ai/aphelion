@@ -513,6 +513,10 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 			})
 		}
 		if err != nil {
+			if p.shouldSuppressDeliveryError(err) {
+				log.Printf("INFO suppressing expected tool progress delivery failure chat_id=%d err=%v", p.chatID, err)
+				return
+			}
 			log.Printf("WARN send tool progress chat_id=%d err=%v", p.chatID, err)
 			p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
 				"method":         "send",
@@ -543,6 +547,10 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 
 	if withControls && len(p.controls) > 0 && p.keyboardEditor != nil {
 		if err := p.keyboardEditor.EditMessageTextWithInlineKeyboard(ctx, p.chatID, p.messageID, text, "", p.controls); err != nil {
+			if p.shouldSuppressDeliveryError(err) {
+				log.Printf("INFO suppressing expected tool progress inline edit failure chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+				return
+			}
 			log.Printf("WARN edit tool progress inline chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 			p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
 				"method":         "edit_inline",
@@ -570,6 +578,10 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 	if !withControls && len(p.controls) > 0 {
 		if clearer, ok := p.sender.(messageKeyboardClearer); ok {
 			if err := clearer.EditMessageTextWithoutInlineKeyboard(ctx, p.chatID, p.messageID, text, ""); err != nil {
+				if p.shouldSuppressDeliveryError(err) {
+					log.Printf("INFO suppressing expected tool progress keyboard clear failure chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+					return
+				}
 				log.Printf("WARN edit tool progress clear keyboard chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 				p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
 					"method":         "edit_clear_keyboard",
@@ -599,6 +611,10 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		return
 	}
 	if err := p.editor.EditMessageText(ctx, p.chatID, p.messageID, text, ""); err != nil {
+		if p.shouldSuppressDeliveryError(err) {
+			log.Printf("INFO suppressing expected tool progress edit failure chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+			return
+		}
 		log.Printf("WARN edit tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 		p.recordProgressEvent(core.ExecutionEventDeliveryProgressFailed, "failed", map[string]any{
 			"method":         "edit_text",
@@ -621,6 +637,17 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		"visibility":       "human_render_unknown",
 		"transport_status": "acknowledged",
 	})
+}
+
+func (p *toolProgressReporter) shouldSuppressDeliveryError(err error) bool {
+	return isExpectedDurableChildOutboundUnavailable(err)
+}
+
+func isExpectedDurableChildOutboundUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "outbound delivery is unavailable in durable child mode")
 }
 
 func (p *toolProgressReporter) ToolFinished(_ context.Context, _ string, _ error) {

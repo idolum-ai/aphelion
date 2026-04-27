@@ -45,7 +45,7 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 		t.Fatalf("request_submit output = %q, want proposed capability request", out)
 	}
 
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
+	out, err = registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
 		"action":"request_review",
 		"request_id":"cap-family-amazon",
 		"review_status":"approved",
@@ -53,6 +53,9 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	}`))
 	if err == nil || !strings.Contains(err.Error(), "requires parent_approved first") {
 		t.Fatalf("admin approve before parent err = %v, want parent_approved-first denial", err)
+	}
+	if !strings.Contains(out, "[CAPABILITY_BLOCKED]") || !strings.Contains(out, "next_action") {
+		t.Fatalf("admin approve before parent output = %q, want actionable block", out)
 	}
 
 	_, err = registry.ExecuteForSessionPrincipal(context.Background(), otherParent, key, "capability_authority", json.RawMessage(`{
@@ -162,6 +165,29 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 		if !executionEventTypeExists(events, eventType) {
 			t.Fatalf("missing %s event", eventType)
 		}
+	}
+}
+
+func TestCapabilityGrantFailureNextActionsDescribeBootstrapCeiling(t *testing.T) {
+	t.Parallel()
+
+	out := renderCapabilityGrantFailure(session.CapabilityGrant{
+		GrantID:        "capg-test",
+		Kind:           session.CapabilityKindPublicWeb,
+		TargetResource: "public-web",
+		Status:         session.CapabilityGrantStatusFailed,
+		GrantedTo:      "durable_agent:child",
+	}, &core.DurableAgentPolicyCeilingError{
+		Field:     "capability_envelope",
+		Requested: []string{"public_web"},
+		Allowed:   []string{"conversation"},
+	})
+
+	if !strings.Contains(out, "next_action") {
+		t.Fatalf("grant failure output = %q, want next_action", out)
+	}
+	if !strings.Contains(out, "capability_envelope") || !strings.Contains(out, "public_web") || !strings.Contains(out, "conversation") {
+		t.Fatalf("grant failure output = %q, want ceiling details", out)
 	}
 }
 

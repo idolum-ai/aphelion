@@ -557,6 +557,44 @@ func TestToolProgressReporterReportsSendErrors(t *testing.T) {
 	}
 }
 
+func TestToolProgressReporterSuppressesDurableChildNoopOutboundErrors(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 7722, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "child"}}
+	noOpSender := &fakeSender{sendErr: errors.New("outbound delivery is unavailable in durable child mode")}
+	var reported []string
+	reporter := &toolProgressReporter{
+		runtime:      rt,
+		executionKey: key,
+		sender:       noOpSender,
+		reportIssue: func(_ context.Context, err error) {
+			reported = append(reported, err.Error())
+		},
+		chatID:   42,
+		mode:     "all",
+		style:    "semantic",
+		window:   4,
+		seenKeys: make(map[string]struct{}),
+	}
+
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"echo child"}`))
+
+	if len(reported) != 0 {
+		t.Fatalf("reported = %#v, want suppressed expected durable child outbound error", reported)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventDeliveryProgressFailed) {
+		t.Fatalf("events = %#v, want no delivery.progress.failed for expected durable child outbound", events)
+	}
+}
+
 func TestToolProgressReporterRecordsTransportLedgerSemantics(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

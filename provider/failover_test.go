@@ -76,6 +76,42 @@ func TestFailoverChainFallsBackToSecondary(t *testing.T) {
 	if primary.callCount == 0 || secondary.callCount == 0 {
 		t.Fatalf("call counts primary=%d secondary=%d, want both called", primary.callCount, secondary.callCount)
 	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderAttemptFailed) {
+		t.Fatalf("provider events = %#v, want primary failure event", resp.ProviderEvents)
+	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
+		t.Fatalf("provider events = %#v, want failover event", resp.ProviderEvents)
+	}
+}
+
+func TestFailoverChainRecordsRetryEvents(t *testing.T) {
+	primary := &stubChainProvider{err: stubStatusError{code: 503, msg: "upstream unavailable"}}
+	secondary := &stubChainProvider{reply: "fallback reply"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "primary", Provider: primary},
+		{Name: "secondary", Provider: secondary},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderAttemptRetried) {
+		t.Fatalf("provider events = %#v, want retry event", resp.ProviderEvents)
+	}
+}
+
+func providerEventsContain(events []core.ProviderEvent, eventType string) bool {
+	for _, event := range events {
+		if event.EventType == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func TestFailoverChainFallsBackOnForbidden(t *testing.T) {
