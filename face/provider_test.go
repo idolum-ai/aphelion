@@ -68,6 +68,26 @@ func (s *stubProvider) Stream(_ context.Context, messages []agent.Message, _ []a
 	return &agent.Response{Content: streamText, Usage: core.TokenUsage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}}, nil
 }
 
+type streamOptionsProvider struct {
+	stubProvider
+	seenOptions agent.CompleteOptions
+}
+
+func (s *streamOptionsProvider) StreamWithOptions(_ context.Context, messages []agent.Message, _ []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback) (*agent.Response, error) {
+	s.lastCalls++
+	s.seenOptions = opts
+	if len(messages) > 0 && messages[0].Role == "system" {
+		s.lastPrompt = messages[0].Content
+	}
+	if len(messages) > 1 {
+		s.lastUser = messages[1].Content
+	}
+	if err := cb(agent.StreamChunk{Type: "text", Text: "option streamed"}); err != nil {
+		return nil, err
+	}
+	return &agent.Response{Content: "option streamed", Usage: core.TokenUsage{InputTokens: 2, OutputTokens: 3, TotalTokens: 5}}, nil
+}
+
 func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
 	t.Parallel()
 
@@ -287,5 +307,40 @@ func TestProviderRendererRenderStream(t *testing.T) {
 	}
 	if usage := renderer.ConsumeLastUsage(); usage.TotalTokens != 3 {
 		t.Fatalf("usage = %+v, want total 3", usage)
+	}
+}
+
+func TestProviderRendererRenderStreamUsesOptionsProvider(t *testing.T) {
+	t.Parallel()
+
+	provider := &streamOptionsProvider{}
+	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
+		Reasoning: agent.ReasoningConfig{
+			Effort:  agent.ReasoningEffortXHigh,
+			Summary: agent.ReasoningSummaryAuto,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewProviderRenderer() err = %v", err)
+	}
+
+	var chunks []string
+	got, err := renderer.RenderStream(context.Background(), RenderRequest{
+		FloorText: "Canonical text",
+	}, func(text string) error {
+		chunks = append(chunks, text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RenderStream() err = %v", err)
+	}
+	if got != "option streamed" || strings.Join(chunks, "") != "option streamed" {
+		t.Fatalf("render/chunks = %q/%#v, want option streamed", got, chunks)
+	}
+	if provider.seenOptions.Reasoning.Effort != agent.ReasoningEffortXHigh || provider.seenOptions.Reasoning.Summary != agent.ReasoningSummaryAuto {
+		t.Fatalf("stream options = %+v, want xhigh/auto", provider.seenOptions)
+	}
+	if usage := renderer.ConsumeLastUsage(); usage.TotalTokens != 5 {
+		t.Fatalf("usage = %+v, want total 5", usage)
 	}
 }

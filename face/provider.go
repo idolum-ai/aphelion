@@ -87,8 +87,9 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 }
 
 func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, onChunk func(string) error) (string, error) {
-	streamingProvider, ok := r.provider.(agent.StreamingProvider)
-	if !ok {
+	streamingProvider, hasStream := r.provider.(agent.StreamingProvider)
+	_, hasStreamOptions := r.provider.(agent.StreamingProviderWithOptions)
+	if !hasStream && !hasStreamOptions {
 		return r.Render(ctx, req)
 	}
 
@@ -120,10 +121,11 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
 
 	var rendered strings.Builder
-	resp, err := streamingProvider.Stream(ctx, []agent.Message{
+	messages := []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the %s-authored material below. Return only the reply text.", faceName, governorName)},
-	}, nil, func(chunk agent.StreamChunk) error {
+	}
+	onStreamChunk := func(chunk agent.StreamChunk) error {
 		if chunk.Text == "" {
 			return nil
 		}
@@ -132,7 +134,15 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 			return onChunk(chunk.Text)
 		}
 		return nil
-	})
+	}
+	var resp *agent.Response
+	if withOptions, ok := r.provider.(agent.StreamingProviderWithOptions); ok {
+		resp, err = withOptions.StreamWithOptions(ctx, messages, nil, agent.CompleteOptions{
+			Reasoning: r.cfg.Reasoning,
+		}, onStreamChunk)
+	} else {
+		resp, err = streamingProvider.Stream(ctx, messages, nil, onStreamChunk)
+	}
 	if err != nil {
 		return "", err
 	}

@@ -5,10 +5,13 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func TestOpenAICompleteTextUsageAndReasoning(t *testing.T) {
@@ -206,6 +209,132 @@ func TestOpenAICompleteWithToolsAndReasoningUsesResponsesAPI(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 13 || resp.Usage.OutputTokens != 8 || resp.Usage.TotalTokens != 21 {
 		t.Fatalf("usage = %+v, want responses usage", resp.Usage)
+	}
+}
+
+func TestOpenAIStreamWithOptionsUsesResponsesAPI(t *testing.T) {
+	var (
+		seenPath string
+		seen     openAIResponsesRequest
+	)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			"event: response.output_text.delta",
+			`data: {"type":"response.output_text.delta","delta":"hel"}`,
+			"",
+			"event: response.output_text.delta",
+			`data: {"type":"response.output_text.delta","delta":"lo"}`,
+			"",
+			"event: response.completed",
+			`data: {"type":"response.completed","response":{"output_text":"hello","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5,"input_tokens_details":{"cached_tokens":1,"cache_write_tokens":2}}}}`,
+			"",
+		}, "\n"))
+	})
+
+	client, err := NewOpenAI(OpenAIOptions{
+		APIKey:     "test-key",
+		Model:      "gpt-5.5",
+		MaxTokens:  256,
+		Transport:  core.ModelTransportOpenAIResponses,
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAI() err = %v", err)
+	}
+
+	var chunks []string
+	resp, err := client.StreamWithOptions(context.Background(), []agent.Message{
+		{Role: "system", Content: "system instructions"},
+		{Role: "user", Content: "hi"},
+	}, nil, agent.CompleteOptions{
+		Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortHigh, Summary: agent.ReasoningSummaryAuto},
+	}, func(chunk agent.StreamChunk) error {
+		chunks = append(chunks, chunk.Text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamWithOptions() err = %v", err)
+	}
+	if seenPath != "/v1/responses" {
+		t.Fatalf("path = %q, want /v1/responses", seenPath)
+	}
+	if !seen.Stream {
+		t.Fatalf("stream flag = false, want true")
+	}
+	if seen.Store == nil || *seen.Store {
+		t.Fatalf("store = %#v, want false", seen.Store)
+	}
+	if seen.Reasoning["effort"] != "high" || seen.Reasoning["summary"] != "auto" {
+		t.Fatalf("reasoning = %#v, want high/auto", seen.Reasoning)
+	}
+	if strings.Join(chunks, "") != "hello" || resp.Content != "hello" {
+		t.Fatalf("chunks/content = %#v/%q, want hello", chunks, resp.Content)
+	}
+	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 2 || resp.Usage.TotalTokens != 5 {
+		t.Fatalf("usage = %+v, want 3/2/5", resp.Usage)
+	}
+	if resp.Usage.CacheReadTokens != 1 || resp.Usage.CacheWriteTokens != 2 {
+		t.Fatalf("cache usage = %+v, want read=1 write=2", resp.Usage)
+	}
+}
+
+func TestOpenAIStreamUsesChatCompletionsTransport(t *testing.T) {
+	var (
+		seenPath string
+		seen     openAIRequest
+	)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"he"}}]}`,
+			"",
+			`data: {"choices":[{"delta":{"content":"llo"}}]}`,
+			"",
+			`data: {"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6,"prompt_tokens_details":{"cached_tokens":1}}}`,
+			"",
+			"data: [DONE]",
+			"",
+		}, "\n"))
+	})
+
+	client, err := NewOpenAI(OpenAIOptions{
+		APIKey:     "test-key",
+		Model:      "gpt-5.4",
+		Transport:  core.ModelTransportOpenAIChat,
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAI() err = %v", err)
+	}
+
+	var chunks []string
+	resp, err := client.Stream(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, func(chunk agent.StreamChunk) error {
+		chunks = append(chunks, chunk.Text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream() err = %v", err)
+	}
+	if seenPath != "/v1/chat/completions" {
+		t.Fatalf("path = %q, want /v1/chat/completions", seenPath)
+	}
+	if !seen.Stream || seen.StreamOptions == nil || !seen.StreamOptions.IncludeUsage {
+		t.Fatalf("stream options = stream:%v options:%#v, want stream with usage", seen.Stream, seen.StreamOptions)
+	}
+	if strings.Join(chunks, "") != "hello" || resp.Content != "hello" {
+		t.Fatalf("chunks/content = %#v/%q, want hello", chunks, resp.Content)
+	}
+	if resp.Usage.InputTokens != 4 || resp.Usage.OutputTokens != 2 || resp.Usage.TotalTokens != 6 {
+		t.Fatalf("usage = %+v, want 4/2/6", resp.Usage)
 	}
 }
 

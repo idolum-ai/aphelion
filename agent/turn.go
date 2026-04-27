@@ -24,6 +24,10 @@ type StreamingProvider interface {
 	Stream(ctx context.Context, messages []Message, tools []ToolDef, cb StreamCallback) (*Response, error)
 }
 
+type StreamingProviderWithOptions interface {
+	StreamWithOptions(ctx context.Context, messages []Message, tools []ToolDef, opts CompleteOptions, cb StreamCallback) (*Response, error)
+}
+
 type ProviderWithOptions interface {
 	CompleteWithOptions(ctx context.Context, messages []Message, tools []ToolDef, opts CompleteOptions) (*Response, error)
 }

@@ -390,7 +390,10 @@ func buildProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConfig) (a
 		if providerName == "" || model == "" {
 			continue
 		}
-		provider, err := buildSingleProviderForModelSlot(cfg, providerName, model, httpClient)
+		candidateSlot := slot
+		candidateSlot.Provider = providerName
+		candidateSlot.Model = model
+		provider, err := buildSingleProviderForModelSlot(cfg, candidateSlot, httpClient)
 		if err != nil {
 			return nil, err
 		}
@@ -408,10 +411,14 @@ func buildProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConfig) (a
 	return providerpkg.NewFailoverChain(entries)
 }
 
-func buildSingleProviderForModelSlot(cfg *config.Config, providerName string, model string, httpClient *http.Client) (agent.Provider, error) {
+func buildSingleProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConfig, httpClient *http.Client) (agent.Provider, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
+	slot = core.NormalizeModelSlotConfig(slot)
+	providerName := slot.Provider
+	model := strings.TrimSpace(slot.Model)
+	resolvedTransport := core.ResolveModelTransport(slot, core.ModelSlotUsesTools(slot.Slot))
 	switch core.NormalizeModelProvider(providerName) {
 	case core.ModelProviderOpenAI:
 		return providerpkg.NewOpenAI(providerpkg.OpenAIOptions{
@@ -419,6 +426,7 @@ func buildSingleProviderForModelSlot(cfg *config.Config, providerName string, mo
 			BaseURL:    cfg.Providers.OpenAI.BaseURL,
 			Model:      model,
 			MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
+			Transport:  resolvedTransport,
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,
 		})
