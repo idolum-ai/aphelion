@@ -250,13 +250,20 @@ func RenderTelegramSetGovernorEffort(effort string) string {
 func RenderReviewDigest(notice ReviewDigestNotice) string {
 	sections := parseReviewDigestSummary(notice.Summary)
 	lines := []string{"**" + reviewDigestTitle(notice) + "**"}
+	summary, inlineHighlights := reviewDigestSummaryAndHighlights(sections.Summary)
+	highlights := append([]string(nil), inlineHighlights...)
+	highlights = append(highlights, sections.Highlights...)
 
 	context := reviewDigestContextLine(notice, sections.Context)
 	if context != "" {
 		lines = append(lines, context)
 	}
-	if summary := strings.TrimSpace(sections.Summary); summary != "" {
+	if summary := strings.TrimSpace(summary); summary != "" {
 		lines = append(lines, "", "**Summary**", truncateReviewDigestText(summary, 900))
+	}
+	if len(highlights) > 0 {
+		lines = append(lines, "", "**Highlights**")
+		lines = append(lines, reviewDigestBullets(highlights, 6)...)
 	}
 	if len(sections.Local) > 0 {
 		lines = append(lines, "", "**Checked**")
@@ -270,7 +277,7 @@ func RenderReviewDigest(notice ReviewDigestNotice) string {
 		lines = append(lines, "", "**Risks**")
 		lines = append(lines, reviewDigestBullets(sections.Risks, 4)...)
 	}
-	if strings.TrimSpace(sections.Summary) == "" && len(sections.Local) == 0 && len(sections.Questions) == 0 && len(sections.Risks) == 0 {
+	if strings.TrimSpace(summary) == "" && len(highlights) == 0 && len(sections.Local) == 0 && len(sections.Questions) == 0 && len(sections.Risks) == 0 {
 		if raw := strings.TrimSpace(notice.Summary); raw != "" {
 			lines = append(lines, "", truncateReviewDigestText(raw, 1200))
 		}
@@ -279,11 +286,12 @@ func RenderReviewDigest(notice ReviewDigestNotice) string {
 }
 
 type reviewDigestSections struct {
-	Context   []string
-	Summary   string
-	Local     []string
-	Questions []string
-	Risks     []string
+	Context    []string
+	Summary    string
+	Highlights []string
+	Local      []string
+	Questions  []string
+	Risks      []string
 }
 
 func reviewDigestTitle(notice ReviewDigestNotice) string {
@@ -359,11 +367,15 @@ func parseReviewDigestSummary(raw string) reviewDigestSections {
 		}
 		switch key {
 		case "summary":
-			if out.Summary == "" {
+			if strings.HasPrefix(value, "-") {
+				out.Highlights = append(out.Highlights, splitReviewDigestItems(value)...)
+			} else if out.Summary == "" {
 				out.Summary = value
 			} else {
 				out.Summary += "\n" + value
 			}
+		case "highlights":
+			out.Highlights = append(out.Highlights, splitReviewDigestItems(value)...)
 		case "local":
 			out.Local = append(out.Local, splitReviewDigestItems(value)...)
 		case "questions":
@@ -404,7 +416,10 @@ func splitReviewDigestSection(line string) (string, string, bool) {
 	}
 	key := strings.ToLower(strings.TrimSpace(line[:idx]))
 	switch key {
-	case "summary", "local", "questions", "risks":
+	case "summary", "highlights", "highlight", "local", "questions", "risks":
+		if key == "highlight" {
+			key = "highlights"
+		}
 		return key, strings.TrimSpace(line[idx+1:]), true
 	default:
 		return "", "", false
@@ -423,6 +438,117 @@ func splitReviewDigestItems(raw string) []string {
 		}
 	}
 	return out
+}
+
+func reviewDigestSummaryAndHighlights(raw string) (string, []string) {
+	summary := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	if summary == "" {
+		return "", nil
+	}
+	const marker = " - "
+	idx := strings.Index(summary, marker)
+	if idx < 0 {
+		return summary, nil
+	}
+	lead := trimReviewDigestInlineBulletLead(summary[:idx])
+	items := reviewDigestInlineBulletItems(strings.Split(summary[idx+len(marker):], marker))
+	if len(items) == 0 {
+		return summary, nil
+	}
+	return lead, items
+}
+
+func trimReviewDigestInlineBulletLead(raw string) string {
+	lead := strings.TrimSpace(raw)
+	lower := strings.ToLower(lead)
+	for _, label := range []string{"what matters:", "highlights:", "key points:"} {
+		if strings.HasSuffix(lower, label) {
+			return strings.TrimSpace(lead[:len(lead)-len(label)])
+		}
+	}
+	return lead
+}
+
+func reviewDigestInlineBulletItems(parts []string) []string {
+	raw := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := cleanReviewDigestBulletItem(part)
+		if item != "" {
+			raw = append(raw, item)
+		}
+	}
+
+	out := make([]string, 0, len(raw))
+	seen := map[string]struct{}{}
+	for i := 0; i < len(raw); i++ {
+		item := raw[i]
+		if reviewDigestLowSignalBullet(item) {
+			continue
+		}
+		if reviewDigestHeadingFragment(item) {
+			heading := strings.TrimSpace(strings.TrimSuffix(item, ":"))
+			if strings.Contains(strings.ToLower(heading), "profile") {
+				appendReviewDigestBullet(&out, seen, heading)
+				for i+1 < len(raw) && reviewDigestLowSignalBullet(raw[i+1]) {
+					i++
+				}
+				continue
+			}
+			j := i + 1
+			for j < len(raw) && reviewDigestLowSignalBullet(raw[j]) {
+				j++
+			}
+			if j < len(raw) && !reviewDigestHeadingFragment(raw[j]) {
+				appendReviewDigestBullet(&out, seen, heading+": "+raw[j])
+				i = j
+				continue
+			}
+			appendReviewDigestBullet(&out, seen, heading)
+			continue
+		}
+		appendReviewDigestBullet(&out, seen, item)
+	}
+	return out
+}
+
+func cleanReviewDigestBulletItem(raw string) string {
+	item := strings.TrimSpace(raw)
+	item = strings.TrimSpace(strings.TrimPrefix(item, "-"))
+	return strings.Join(strings.Fields(item), " ")
+}
+
+func reviewDigestHeadingFragment(item string) bool {
+	item = strings.TrimSpace(item)
+	return strings.HasSuffix(item, ":") && len([]rune(item)) <= 120
+}
+
+func reviewDigestLowSignalBullet(item string) bool {
+	item = strings.TrimSpace(item)
+	if item == "" {
+		return true
+	}
+	fields := strings.Fields(item)
+	if len(fields) != 1 {
+		return false
+	}
+	lower := strings.ToLower(item)
+	return strings.HasPrefix(lower, "profile/") ||
+		strings.HasSuffix(lower, ".md") ||
+		strings.HasSuffix(lower, ".json") ||
+		strings.Contains(lower, "/")
+}
+
+func appendReviewDigestBullet(out *[]string, seen map[string]struct{}, item string) {
+	item = strings.TrimSpace(item)
+	if item == "" {
+		return
+	}
+	key := strings.ToLower(item)
+	if _, ok := seen[key]; ok {
+		return
+	}
+	seen[key] = struct{}{}
+	*out = append(*out, item)
 }
 
 func reviewDigestBullets(items []string, limit int) []string {
