@@ -133,6 +133,49 @@ func TestRunDeliveryStageSendPathOrdersSendThenRecordThenPost(t *testing.T) {
 	}
 }
 
+func TestRunDeliveryStageSendsWhenStreamHandledWithoutMessageID(t *testing.T) {
+	t.Parallel()
+
+	var order []string
+	got, err := RunDeliveryStage(context.Background(), DeliveryStageInput{
+		Request: DeliveryRequest{
+			Message: core.OutboundMessage{Text: "reply after stream fallback"},
+			Result: &Result{
+				RenderedStream: true,
+				RenderedID:     0,
+				RenderedType:   "",
+			},
+		},
+		Deliver:        true,
+		RecordOutbound: true,
+	}, DeliveryStageCallbacks{
+		Send: func(context.Context, core.OutboundMessage, bool) (int64, string, error) {
+			order = append(order, "send")
+			return 88, "text", nil
+		},
+		RecordFinal: func(string, []core.Media, string) {
+			order = append(order, "final")
+		},
+		RecordOutbound: func(context.Context, int64, string) error {
+			order = append(order, "record")
+			return nil
+		},
+		PostCommit: func(context.Context) error {
+			order = append(order, "post")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunDeliveryStage() err = %v", err)
+	}
+	if got == nil || got.MessageID != 88 || got.Kind != "text" {
+		t.Fatalf("delivery result = %#v, want sent text id", got)
+	}
+	if want := []string{"send", "final", "record", "post"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("order = %#v, want %#v", order, want)
+	}
+}
+
 func TestRunDeliveryStageReturnsSendError(t *testing.T) {
 	t.Parallel()
 

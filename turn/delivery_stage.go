@@ -31,7 +31,7 @@ func RunDeliveryStage(ctx context.Context, input DeliveryStageInput, callbacks D
 
 	outboundID := input.Request.Result.RenderedID
 	outboundType := input.Request.Result.RenderedType
-	if !input.Deliver || input.Request.Result.RenderedStream {
+	if !input.Deliver || (input.Request.Result.RenderedStream && outboundID != 0) {
 		if callbacks.RecordFinal != nil {
 			callbacks.RecordFinal(input.Request.Message.Text, input.Request.Message.Media, outboundType)
 		}
