@@ -583,6 +583,85 @@ func TestTelegramExecApprovalConfirmationExpandShowsCommandAfterApproval(t *test
 	}
 }
 
+func TestTelegramExecApprovalExpandKeepsPendingDecisionButtons(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	handler := newTelegramDecisionHandler(sender, &decisionTestRouter{}, broker, nil)
+	approver := newTelegramExecApprover(sender, broker)
+	approver.timeout = time.Second
+
+	resultCh := make(chan toolpkg.ExecApprovalDecision, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		decisionResult, err := approver.ConfirmExec(context.Background(), toolpkg.ExecApprovalRequest{
+			Principal:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 42},
+			SessionKey: session.SessionKey{ChatID: 7},
+			Command:    "rm -rf /tmp/aphelion-runtime-bin",
+			Reason:     "recursive delete",
+			Proposal: session.OperationProposal{
+				Kind:          "destructive_mutation",
+				Summary:       "Perform a destructive change",
+				WhyNow:        "The requested command deletes existing local state.",
+				BoundedEffect: "Remove the targeted files and continue the operation.",
+				Status:        session.ProposalStatusPending,
+			},
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- decisionResult
+	}()
+
+	prompt := waitForDecisionInline(t, sender)
+	expandData := callbackDataForButton(t, prompt.rows, "Expand details")
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-expand-pending",
+		Data: expandData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: 1,
+			Chat:      &telegram.Chat{ID: 7},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery(expand pending) err = %v", err)
+	}
+
+	expanded := waitForDecisionEdit(t, sender, 1)
+	if !strings.Contains(expanded.text, "Command:") || !strings.Contains(expanded.text, "rm -rf /tmp/aphelion-runtime-bin") {
+		t.Fatalf("expanded text = %q, want full pending command", expanded.text)
+	}
+	if !hasInlineButton(expanded.rows, "Deny") || !hasInlineButton(expanded.rows, "Approve") {
+		t.Fatalf("expanded rows = %#v, want pending decision buttons", expanded.rows)
+	}
+
+	approveData := callbackDataForButton(t, expanded.rows, "Approve")
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-approve-expanded",
+		Data: approveData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: expanded.messageID,
+			Chat:      &telegram.Chat{ID: expanded.chatID},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery(approve expanded) err = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("ConfirmExec() err = %v", err)
+	case decisionResult := <-resultCh:
+		if !decisionResult.Approved {
+			t.Fatal("Approved = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConfirmExec() did not resolve after expanded approve callback")
+	}
+}
+
 func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	t.Parallel()
 

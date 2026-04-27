@@ -701,8 +701,10 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 	}
 	if choice == "expand" {
 		pending, found := h.broker.Peek(id)
+		resolved := false
 		if !found {
 			pending, found = h.broker.PeekResolved(id)
+			resolved = found
 		}
 		if !found {
 			if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, "This approval is no longer active. Use the newest prompt."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
@@ -722,7 +724,16 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 			chatID = pending.ChatID
 		}
 		if messageID != 0 {
-			if err := h.sender.EditMessageText(ctx, chatID, messageID, renderPendingDecisionExpanded(pending), ""); err != nil {
+			text := renderPendingDecisionExpanded(pending)
+			rows := inlineButtonRows(pending)
+			if resolved {
+				rows = approvedDecisionConfirmationRows(pending.ID, pending.Details)
+			}
+			if editor, ok := h.sender.(telegramDecisionKeyboardEditor); ok && len(rows) > 0 {
+				if err := editor.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err != nil {
+					return err
+				}
+			} else if err := h.sender.EditMessageText(ctx, chatID, messageID, text, ""); err != nil {
 				return err
 			}
 		}
