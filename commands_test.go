@@ -118,6 +118,10 @@ type stubCommandRouter struct {
 	stop                        core.StopResult
 	stopInput                   int64
 	stopCalls                   int
+	streamControls              map[string]int64
+	streamStopID                string
+	streamStopChatID            int64
+	streamStopCalls             int
 	newResult                   core.NewSessionResult
 	newErr                      error
 	newChatID                   int64
@@ -204,6 +208,16 @@ func (s *stubCommandRouter) Stop(chatID int64) core.StopResult {
 	s.stopInput = chatID
 	s.stopCalls++
 	return s.stop
+}
+
+func (s *stubCommandRouter) MarkStreamControlStopping(streamID string, chatID int64) bool {
+	s.streamStopID = streamID
+	s.streamStopChatID = chatID
+	s.streamStopCalls++
+	if s.streamControls == nil {
+		return false
+	}
+	return s.streamControls[streamID] == chatID
 }
 
 func (s *stubCommandRouter) New(chatID int64, senderID int64) (core.NewSessionResult, error) {
@@ -2152,6 +2166,78 @@ func TestHandleTelegramCommandCallbackDeliberationStop(t *testing.T) {
 	}
 	if got := sender.editClear[0].text; !strings.Contains(got, "Stopped the current turn and cleared queued work for this chat.") {
 		t.Fatalf("edited text = %q, want stop summary", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackStreamStop(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		stop:           core.StopResult{ActiveCanceled: true},
+		streamControls: map[string]int64{"stream-abc": 7},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-stream-stop",
+		From: &telegram.User{ID: 1002, Username: "approved"},
+		Data: core.EncodeStreamControlCallbackData("stream-abc", core.StreamControlActionStop),
+		Message: &telegram.Message{
+			MessageID: 241,
+			Text:      "partial streamed reply...",
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.streamStopCalls != 1 || router.streamStopID != "stream-abc" || router.streamStopChatID != 7 {
+		t.Fatalf("stream stop = calls:%d id:%q chat:%d, want stream-abc/7", router.streamStopCalls, router.streamStopID, router.streamStopChatID)
+	}
+	if router.stopCalls != 1 || router.stopInput != 7 {
+		t.Fatalf("stop calls/input = (%d,%d), want (1,7)", router.stopCalls, router.stopInput)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != "Stopping stream." {
+		t.Fatalf("answers = %#v, want stopping answer", sender.answers)
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
+	}
+	if got := sender.editClear[0].text; !strings.Contains(got, "partial streamed reply") || !strings.Contains(got, "Stopping.") {
+		t.Fatalf("edited text = %q, want partial reply with stopping marker", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackStreamStopRejectsStale(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-stream-stale",
+		Data: core.EncodeStreamControlCallbackData("stream-missing", core.StreamControlActionStop),
+		Message: &telegram.Message{
+			MessageID: 242,
+			Text:      "already done",
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.stopCalls != 0 {
+		t.Fatalf("stop calls = %d, want 0", router.stopCalls)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != staleStreamCallbackText {
+		t.Fatalf("answers = %#v, want stale stream answer", sender.answers)
+	}
+	if len(sender.editClear) != 1 || sender.editClear[0].text != "already done" {
+		t.Fatalf("editClear = %#v, want keyboard clear with original text", sender.editClear)
 	}
 }
 

@@ -144,7 +144,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 		resp, err = streamingProvider.Stream(ctx, messages, nil, onStreamChunk)
 	}
 	if err != nil {
-		return "", err
+		return strings.TrimSpace(rendered.String()), err
 	}
 	if resp != nil {
 		r.recordUsage(resp.Usage)

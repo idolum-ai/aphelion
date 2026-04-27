@@ -100,6 +100,9 @@ type Runtime struct {
 	statusReadableReady    bool
 	modelProviderMu        sync.Mutex
 	modelProviderCache     map[string]agent.Provider
+	streamControlMu        sync.Mutex
+	streamControls         map[string]activeStreamControl
+	streamControlSeq       atomic.Uint64
 	faceModelsMu           sync.Mutex
 	recipeMu               sync.Mutex
 	recipeFileMu           sync.Mutex

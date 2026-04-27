@@ -267,21 +267,22 @@ func fakeMessagesContain(messages []agent.Message, needle string) bool {
 }
 
 type fakeSender struct {
-	mu           sync.Mutex
-	sent         []core.OutboundMessage
-	inline       []inlineCall
-	sendCount    int
-	sendErr      error
-	sendErrAfter int
-	voice        []voiceSend
-	actions      []chatAction
-	edits        []messageEdit
-	editClear    []messageEdit
-	editInline   []messageEditInline
-	editCount    int
-	deletes      []messageDelete
-	editErr      error
-	actionCh     chan chatAction
+	mu              sync.Mutex
+	sent            []core.OutboundMessage
+	inline          []inlineCall
+	sendCount       int
+	sendErr         error
+	sendErrAfter    int
+	voice           []voiceSend
+	actions         []chatAction
+	edits           []messageEdit
+	editClear       []messageEdit
+	editInline      []messageEditInline
+	editCount       int
+	deletes         []messageDelete
+	editErr         error
+	actionCh        chan chatAction
+	mutableMessages map[int64]struct{}
 }
 
 type fakeInboundFetcher struct {
@@ -424,6 +425,7 @@ func (f *fakeSender) EditMessageText(_ context.Context, chatID int64, messageID 
 	if f.editErr != nil {
 		return f.editErr
 	}
+	f.updateStoredMessageText(messageID, text)
 	f.edits = append(f.edits, messageEdit{ChatID: chatID, MessageID: messageID, Text: text})
 	return nil
 }
@@ -435,6 +437,7 @@ func (f *fakeSender) EditMessageTextWithoutInlineKeyboard(_ context.Context, cha
 	if f.editErr != nil {
 		return f.editErr
 	}
+	f.updateStoredMessageText(messageID, text)
 	f.editClear = append(f.editClear, messageEdit{ChatID: chatID, MessageID: messageID, Text: text})
 	return nil
 }
@@ -446,8 +449,34 @@ func (f *fakeSender) EditMessageTextWithInlineKeyboard(_ context.Context, chatID
 	if f.editErr != nil {
 		return f.editErr
 	}
+	f.updateStoredMessageText(messageID, text)
 	f.editInline = append(f.editInline, messageEditInline{ChatID: chatID, MessageID: messageID, Text: text, Rows: rows})
 	return nil
+}
+
+func (f *fakeSender) MarkMessageMutable(messageID int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mutableMessages == nil {
+		f.mutableMessages = make(map[int64]struct{})
+	}
+	f.mutableMessages[messageID] = struct{}{}
+}
+
+func (f *fakeSender) updateStoredMessageText(messageID int64, text string) {
+	if f == nil || messageID <= 0 {
+		return
+	}
+	if _, ok := f.mutableMessages[messageID]; !ok {
+		return
+	}
+	idx := int(messageID - 1)
+	if idx >= 0 && idx < len(f.sent) {
+		f.sent[idx].Text = text
+	}
+	if idx >= 0 && idx < len(f.inline) {
+		f.inline[idx].text = text
+	}
 }
 
 func (f *fakeSender) DeleteMessage(_ context.Context, chatID int64, messageID int64) error {

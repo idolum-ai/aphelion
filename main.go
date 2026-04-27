@@ -93,6 +93,13 @@ func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
 	return result
 }
 
+func (c telegramCommandControl) MarkStreamControlStopping(streamID string, chatID int64) bool {
+	if c.rt == nil {
+		return false
+	}
+	return c.rt.MarkStreamControlStopping(streamID, chatID)
+}
+
 func (c telegramCommandControl) New(chatID int64, senderID int64) (core.NewSessionResult, error) {
 	stopped := c.Stop(chatID)
 	result := core.NewSessionResult{

@@ -69,6 +69,10 @@ type commandRouter interface {
 	ClearMemoryFocus(chatID int64) bool
 }
 
+type commandStreamControlRouter interface {
+	MarkStreamControlStopping(streamID string, chatID int64) bool
+}
+
 func editCallbackMessageClearingInlineKeyboard(ctx context.Context, sender commandCallbackSender, chatID int64, messageID int64, text string) error {
 	if clearer, ok := sender.(commandInlineKeyboardClearer); ok {
 		return clearer.EditMessageTextWithoutInlineKeyboard(ctx, chatID, messageID, text, "")
@@ -282,6 +286,9 @@ func sendGovernorEffortSelector(ctx context.Context, sender commandSender, route
 func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery) (bool, error) {
 	if sender == nil || router == nil {
 		return false, nil
+	}
+	if streamID, action, ok := core.DecodeStreamControlCallbackData(cb.Data); ok {
+		return handleStreamControlCallback(ctx, sender, router, cb, streamID, action)
 	}
 	if runID, action, ok := core.DecodeDeliberationControlCallbackData(cb.Data); ok {
 		return handleDeliberationControlCallback(ctx, sender, router, cb, runID, action)

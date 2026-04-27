@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -97,6 +98,15 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 			if editor == nil {
 				return turn.FaceRenderResult{}, false, nil
 			}
+			streamID := ""
+			if editor.keyboardEditor != nil {
+				streamID = r.beginStreamControl(input.Msg.ChatID)
+				editor.controlRows = streamStopControlRows(streamID)
+				editor.onMessageID = func(messageID int64) {
+					r.attachStreamControlMessage(streamID, messageID)
+				}
+				defer r.finishStreamControl(streamID)
+			}
 			faceReq := face.RenderRequest{
 				GovernorName:    req.GovernorName,
 				FaceName:        req.FaceName,
@@ -113,6 +123,29 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 				return editor.OnChunk(ctx, chunk)
 			})
 			if streamErr != nil {
+				if errors.Is(streamErr, context.Canceled) {
+					cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					outboundID, finishErr := editor.FinishStopped(cleanupCtx)
+					if finishErr != nil {
+						log.Printf("WARN finish stopped streamed reply backend=%s err=%v", r.faceBackend, finishErr)
+					}
+					renderedText := strings.TrimSpace(renderedReply)
+					if renderedText == "" {
+						renderedText = "Stopped."
+					}
+					renderedType := ""
+					if outboundID != 0 {
+						renderedType = "streaming"
+					}
+					return turn.FaceRenderResult{
+						Text:         renderedText,
+						Usage:        consumeFaceUsage(input.CurrentFaceModel),
+						Streamed:     true,
+						RenderedID:   outboundID,
+						RenderedType: renderedType,
+					}, true, nil
+				}
 				editor.Abort(ctx)
 				log.Printf("WARN face stream render failed backend=%s err=%v; falling back to non-stream render", r.faceBackend, streamErr)
 				return turn.FaceRenderResult{}, false, nil

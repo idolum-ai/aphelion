@@ -224,11 +224,21 @@ func TestHandleInboundStreamsFaceReply(t *testing.T) {
 	if sender.sent[len(sender.sent)-1].Text == "ok" {
 		t.Fatalf("final streamed send = %q, want streamed reply path", sender.sent[len(sender.sent)-1].Text)
 	}
-	if len(sender.edits) == 0 {
+	finalEdit := ""
+	if len(sender.edits) > 0 {
+		finalEdit = sender.edits[len(sender.edits)-1].Text
+	}
+	if len(sender.editInline) > 0 {
+		finalEdit = sender.editInline[len(sender.editInline)-1].Text
+	}
+	if len(sender.editClear) > 0 {
+		finalEdit = sender.editClear[len(sender.editClear)-1].Text
+	}
+	if finalEdit == "" {
 		t.Fatal("expected editMessageText calls during streaming")
 	}
-	if sender.edits[len(sender.edits)-1].Text != "streamed idolum reply" {
-		t.Fatalf("final edited text = %q, want streamed idolum reply", sender.edits[len(sender.edits)-1].Text)
+	if finalEdit != "streamed idolum reply" {
+		t.Fatalf("final edited text = %q, want streamed idolum reply", finalEdit)
 	}
 
 	sess, err := store.Load(session.SessionKey{ChatID: 52, UserID: 0})

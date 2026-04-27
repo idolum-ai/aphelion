@@ -9,19 +9,28 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/telegram"
 )
 
 type streamEditor struct {
-	sender    OutboundSender
-	editor    messageEditor
-	deleter   messageDeleter
-	chatID    int64
-	replyTo   *int64
-	interval  time.Duration
-	cursor    string
-	messageID int64
-	buffer    strings.Builder
-	lastEdit  time.Time
+	sender          OutboundSender
+	editor          messageEditor
+	keyboardEditor  messageKeyboardEditor
+	keyboardClearer messageKeyboardClearer
+	deleter         messageDeleter
+	chatID          int64
+	replyTo         *int64
+	interval        time.Duration
+	cursor          string
+	controlRows     [][]telegram.InlineButton
+	onMessageID     func(int64)
+	messageID       int64
+	buffer          strings.Builder
+	lastEdit        time.Time
+}
+
+type mutableMessageMarker interface {
+	MarkMessageMutable(messageID int64)
 }
 
 func (r *Runtime) newStreamEditor(msg core.InboundMessage) *streamEditor {
@@ -40,6 +49,12 @@ func (r *Runtime) newStreamEditor(msg core.InboundMessage) *streamEditor {
 		replyTo:  replyToMessageID(msg.MessageID),
 		interval: r.streamEditInterval,
 		cursor:   r.streamCursor,
+	}
+	if keyboardEditor, ok := r.outbound.(messageKeyboardEditor); ok {
+		stream.keyboardEditor = keyboardEditor
+	}
+	if keyboardClearer, ok := r.outbound.(messageKeyboardClearer); ok {
+		stream.keyboardClearer = keyboardClearer
 	}
 	if deleter, ok := r.outbound.(messageDeleter); ok {
 		stream.deleter = deleter
@@ -71,6 +86,25 @@ func (s *streamEditor) Finish(ctx context.Context) (int64, error) {
 	return s.messageID, nil
 }
 
+func (s *streamEditor) FinishStopped(ctx context.Context) (int64, error) {
+	if s == nil {
+		return 0, nil
+	}
+	text := strings.TrimSpace(s.buffer.String())
+	if text == "" {
+		return 0, nil
+	}
+	if !strings.HasSuffix(text, "Stopped.") {
+		s.buffer.Reset()
+		s.buffer.WriteString(text)
+		s.buffer.WriteString("\n\nStopped.")
+	}
+	if err := s.flush(ctx, true); err != nil {
+		return 0, err
+	}
+	return s.messageID, nil
+}
+
 func (s *streamEditor) Abort(ctx context.Context) {
 	if s == nil || s.messageID == 0 || s.deleter == nil {
 		return
@@ -92,26 +126,25 @@ func (s *streamEditor) flush(ctx context.Context, done bool) error {
 	if !done {
 		text += s.cursor
 	}
+	rows := s.activeControlRows(done)
 	if s.messageID == 0 {
-		msgID, err := s.sender.SendMessage(ctx, core.OutboundMessage{
-			ChatID:  s.chatID,
-			Text:    text,
-			ReplyTo: s.replyTo,
-		})
+		msgID, err := s.sendInitial(ctx, text)
 		if err != nil {
 			return err
 		}
 		s.messageID = msgID
+		if marker, ok := s.sender.(mutableMessageMarker); ok {
+			marker.MarkMessageMutable(msgID)
+		}
+		if s.onMessageID != nil {
+			s.onMessageID(msgID)
+		}
 		s.lastEdit = time.Now()
 		return nil
 	}
 
-	if err := s.editor.EditMessageText(ctx, s.chatID, s.messageID, text, ""); err != nil {
-		msgID, sendErr := s.sender.SendMessage(ctx, core.OutboundMessage{
-			ChatID:  s.chatID,
-			Text:    text,
-			ReplyTo: s.replyTo,
-		})
+	if err := s.editExisting(ctx, text, rows, done); err != nil {
+		msgID, sendErr := s.sendInitial(ctx, text)
 		if sendErr != nil {
 			return err
 		}
@@ -121,10 +154,57 @@ func (s *streamEditor) flush(ctx context.Context, done bool) error {
 			}
 		}
 		s.messageID = msgID
+		if marker, ok := s.sender.(mutableMessageMarker); ok {
+			marker.MarkMessageMutable(msgID)
+		}
+		if s.onMessageID != nil {
+			s.onMessageID(msgID)
+		}
 		s.lastEdit = time.Now()
 		return nil
 	}
 
 	s.lastEdit = time.Now()
 	return nil
+}
+
+func (s *streamEditor) activeControlRows(done bool) [][]telegram.InlineButton {
+	if s == nil || done || len(s.controlRows) == 0 {
+		return nil
+	}
+	return s.controlRows
+}
+
+func (s *streamEditor) sendInitial(ctx context.Context, text string) (int64, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.sender.SendMessage(ctx, core.OutboundMessage{
+		ChatID:  s.chatID,
+		Text:    text,
+		ReplyTo: s.replyTo,
+	})
+}
+
+func (s *streamEditor) editExisting(ctx context.Context, text string, rows [][]telegram.InlineButton, done bool) error {
+	if s == nil {
+		return nil
+	}
+	if len(rows) > 0 && s.keyboardEditor != nil {
+		return s.keyboardEditor.EditMessageTextWithInlineKeyboard(ctx, s.chatID, s.messageID, text, "", rows)
+	}
+	if done && s.keyboardClearer != nil {
+		return s.keyboardClearer.EditMessageTextWithoutInlineKeyboard(ctx, s.chatID, s.messageID, text, "")
+	}
+	return s.editor.EditMessageText(ctx, s.chatID, s.messageID, text, "")
+}
+
+func streamStopControlRows(streamID string) [][]telegram.InlineButton {
+	data := core.EncodeStreamControlCallbackData(streamID, core.StreamControlActionStop)
+	if data == "" {
+		return nil
+	}
+	return [][]telegram.InlineButton{{
+		{Text: "Stop", CallbackData: data},
+	}}
 }
