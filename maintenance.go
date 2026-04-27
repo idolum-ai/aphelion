@@ -806,6 +806,7 @@ func printCodexSessionImportResult(w io.Writer, result *memstore.CodexSessionImp
 	fmt.Fprintf(w, "scanned: %d\n", result.Scanned)
 	fmt.Fprintf(w, "eligible: %d\n", result.Eligible)
 	fmt.Fprintf(w, "imported: %d\n", result.Imported)
+	fmt.Fprintf(w, "updated: %d\n", result.Updated)
 	fmt.Fprintf(w, "skipped_already_imported: %d\n", result.SkippedAlreadyImported)
 	fmt.Fprintf(w, "skipped_old: %d\n", result.SkippedOld)
 	fmt.Fprintf(w, "skipped_active: %d\n", result.SkippedActive)

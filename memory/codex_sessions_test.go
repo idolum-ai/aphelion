@@ -146,6 +146,102 @@ func TestSemanticEngineImportCodexSessionsQuarantinesAndDedupes(t *testing.T) {
 	}
 }
 
+func TestSemanticEngineImportCodexSessionsUpdatesChangedExistingSession(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	codexHome := filepath.Join(root, "codex")
+	now := time.Date(2026, time.April, 26, 12, 0, 0, 0, time.UTC)
+	sessionPath := writeCodexSessionTestFixture(t, codexHome, now.Add(-3*time.Hour), []map[string]any{
+		codexSessionTestEvent("response_item", now.Add(-3*time.Hour), map[string]any{
+			"type":    "message",
+			"role":    "user",
+			"content": []map[string]string{{"type": "input_text", "text": "initial imported codex session"}},
+		}),
+	})
+
+	engine := NewSemanticEngine(SemanticOptions{
+		Enabled: true,
+		DBPath:  filepath.Join(root, "semantic.db"),
+	})
+	defer engine.Close()
+
+	result, err := engine.ImportCodexSessions(context.Background(), CodexSessionImportOptions{
+		CodexHome:   codexHome,
+		Lookback:    48 * time.Hour,
+		ActiveGrace: time.Minute,
+		MaxSessions: 10,
+		Scope:       "shared",
+		Now:         now,
+	})
+	if err != nil {
+		t.Fatalf("ImportCodexSessions() err = %v", err)
+	}
+	if result.Imported != 1 || result.Updated != 0 || result.SkippedAlreadyImported != 0 {
+		t.Fatalf("ImportCodexSessions() = %#v, want one new import", result)
+	}
+
+	appendCodexSessionTestFixture(t, sessionPath, now.Add(-90*time.Minute), []map[string]any{
+		codexSessionTestEvent("response_item", now.Add(-90*time.Minute), map[string]any{
+			"type": "message",
+			"role": "assistant",
+			"content": []map[string]string{{
+				"type": "output_text",
+				"text": "appended codex session update should refresh the semantic import",
+			}},
+		}),
+	})
+
+	updated, err := engine.ImportCodexSessions(context.Background(), CodexSessionImportOptions{
+		CodexHome:   codexHome,
+		Lookback:    48 * time.Hour,
+		ActiveGrace: time.Minute,
+		MaxSessions: 10,
+		Scope:       "shared",
+		Now:         now,
+	})
+	if err != nil {
+		t.Fatalf("ImportCodexSessions(updated) err = %v", err)
+	}
+	if updated.Imported != 0 || updated.Updated != 1 || updated.SkippedAlreadyImported != 0 {
+		t.Fatalf("ImportCodexSessions(updated) = %#v, want one refreshed import", updated)
+	}
+
+	docs, err := engine.ListImportAudit(context.Background(), SemanticAuditFilter{
+		State: SemanticImportStateQuarantine,
+		Scope: "shared",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListImportAudit() err = %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("ListImportAudit() len = %d, want 1 refreshed document", len(docs))
+	}
+	review, err := engine.ReviewImportDocument(context.Background(), docs[0].ID, 8, 4000)
+	if err != nil {
+		t.Fatalf("ReviewImportDocument() err = %v", err)
+	}
+	if joined := strings.Join(review.Excerpts, "\n"); !strings.Contains(joined, "appended codex session update should refresh the semantic import") {
+		t.Fatalf("review excerpts = %q, want appended session update", joined)
+	}
+
+	again, err := engine.ImportCodexSessions(context.Background(), CodexSessionImportOptions{
+		CodexHome:   codexHome,
+		Lookback:    48 * time.Hour,
+		ActiveGrace: time.Minute,
+		MaxSessions: 10,
+		Scope:       "shared",
+		Now:         now,
+	})
+	if err != nil {
+		t.Fatalf("ImportCodexSessions(third) err = %v", err)
+	}
+	if again.Imported != 0 || again.Updated != 0 || again.SkippedAlreadyImported != 1 {
+		t.Fatalf("ImportCodexSessions(third) = %#v, want unchanged import skip", again)
+	}
+}
+
 func TestSemanticEngineImportCodexSessionsSkipsOldAndActive(t *testing.T) {
 	t.Parallel()
 
@@ -211,6 +307,27 @@ func writeCodexSessionTestFixture(t *testing.T, codexHome string, modTime time.T
 		t.Fatalf("Chtimes(codex session) err = %v", err)
 	}
 	return path
+}
+
+func appendCodexSessionTestFixture(t *testing.T, path string, modTime time.Time, events []map[string]any) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile(codex session append) err = %v", err)
+	}
+	defer file.Close()
+	for _, event := range events {
+		raw, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("Marshal(codex appended event) err = %v", err)
+		}
+		if _, err := file.Write(append(raw, '\n')); err != nil {
+			t.Fatalf("Write(codex appended event) err = %v", err)
+		}
+	}
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatalf("Chtimes(codex session append) err = %v", err)
+	}
 }
 
 func codexSessionTestEvent(kind string, ts time.Time, payload map[string]any) map[string]any {

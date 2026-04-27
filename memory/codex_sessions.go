@@ -43,6 +43,7 @@ type CodexSessionImportResult struct {
 	Scanned                int
 	Eligible               int
 	Imported               int
+	Updated                int
 	SkippedAlreadyImported int
 	SkippedOld             int
 	SkippedActive          int
@@ -140,11 +141,11 @@ func (e *SemanticEngine) ImportCodexSessions(ctx context.Context, opts CodexSess
 		return nil, err
 	}
 	for _, candidate := range candidates {
-		exists, err := semanticDocumentExists(ctx, db, scope, principalID, candidate.sourcePath, CodexSessionImportProvenance)
+		record, err := loadCodexSessionImportRecord(ctx, db, scope, principalID, candidate.sourcePath)
 		if err != nil {
 			return nil, err
 		}
-		if exists {
+		if codexSessionCandidateAlreadyImported(record, candidate) {
 			result.SkippedAlreadyImported++
 			continue
 		}
@@ -183,7 +184,11 @@ func (e *SemanticEngine) ImportCodexSessions(ctx context.Context, opts CodexSess
 			result.Failures = append(result.Failures, CodexSessionImportFailure{Path: candidate.sourcePath, Error: err.Error()})
 			continue
 		}
-		result.Imported++
+		if record.Exists {
+			result.Updated++
+		} else {
+			result.Imported++
+		}
 	}
 	return result, nil
 }
@@ -262,16 +267,87 @@ func discoverCodexSessionCandidates(sessionsDir string, now time.Time, lookback 
 	return candidates, nil
 }
 
-func semanticDocumentExists(ctx context.Context, db *sql.DB, scope string, principalID string, sourcePath string, provenance string) (bool, error) {
-	var count int
+type codexSessionImportRecord struct {
+	Exists       bool
+	MTime        time.Time
+	MetadataJSON string
+}
+
+type codexSessionImportMetadata struct {
+	SourceSize  *int64 `json:"source_size"`
+	SourceMTime string `json:"source_mtime"`
+}
+
+func loadCodexSessionImportRecord(ctx context.Context, db *sql.DB, scope string, principalID string, sourcePath string) (codexSessionImportRecord, error) {
+	var (
+		mtimeRaw     string
+		metadataJSON string
+	)
 	if err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*)
+		SELECT mtime, metadata_json
 		FROM semantic_documents
 		WHERE scope = ? AND principal_id = ? AND source_path = ? AND provenance_source = ?
-	`, scope, principalID, filepath.ToSlash(strings.TrimSpace(sourcePath)), strings.TrimSpace(provenance)).Scan(&count); err != nil {
-		return false, fmt.Errorf("query semantic document import ledger: %w", err)
+	`, scope, principalID, filepath.ToSlash(strings.TrimSpace(sourcePath)), CodexSessionImportProvenance).Scan(&mtimeRaw, &metadataJSON); err != nil {
+		if err == sql.ErrNoRows {
+			return codexSessionImportRecord{}, nil
+		}
+		return codexSessionImportRecord{}, fmt.Errorf("query semantic document import ledger: %w", err)
 	}
-	return count > 0, nil
+	mtime, err := parseOptionalTime(mtimeRaw)
+	if err != nil {
+		return codexSessionImportRecord{}, fmt.Errorf("parse codex session import mtime: %w", err)
+	}
+	return codexSessionImportRecord{
+		Exists:       true,
+		MTime:        mtime,
+		MetadataJSON: metadataJSON,
+	}, nil
+}
+
+func codexSessionCandidateAlreadyImported(record codexSessionImportRecord, candidate codexSessionCandidate) bool {
+	if !record.Exists {
+		return false
+	}
+	metadata, _ := parseCodexSessionImportMetadata(record.MetadataJSON)
+	if metadata.SourceSize != nil && *metadata.SourceSize != candidate.size {
+		return false
+	}
+	if codexSessionImportTimesEqual(record.MTime, candidate.modTime) {
+		return true
+	}
+	if metadata.SourceMTime != "" {
+		storedMTime, err := parseOptionalTime(metadata.SourceMTime)
+		if err == nil && codexSessionImportTimesEqual(storedMTime, candidate.modTime) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseCodexSessionImportMetadata(raw string) (codexSessionImportMetadata, error) {
+	var metadata codexSessionImportMetadata
+	if strings.TrimSpace(raw) == "" {
+		return metadata, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+		return metadata, err
+	}
+	return metadata, nil
+}
+
+func codexSessionImportTimesEqual(stored time.Time, current time.Time) bool {
+	if stored.IsZero() || current.IsZero() {
+		return false
+	}
+	stored = stored.UTC()
+	current = current.UTC()
+	if stored.Equal(current) {
+		return true
+	}
+	if stored.Nanosecond() == 0 || current.Nanosecond() == 0 {
+		return stored.Truncate(time.Second).Equal(current.Truncate(time.Second))
+	}
+	return false
 }
 
 func parseCodexSessionFile(path string) (codexSessionDraft, error) {
@@ -437,7 +513,7 @@ func renderCodexSessionSummary(draft codexSessionDraft, candidate codexSessionCa
 	if !draft.startedAt.IsZero() {
 		writeCodexImportKV(&b, "started_at", draft.startedAt.Format(time.RFC3339))
 	}
-	writeCodexImportKV(&b, "updated_at", candidate.modTime.Format(time.RFC3339))
+	writeCodexImportKV(&b, "updated_at", utcTimestamp(candidate.modTime))
 	if draft.source != "" {
 		writeCodexImportKV(&b, "source", draft.source)
 	}
@@ -515,7 +591,7 @@ func codexSessionMetadataJSON(draft codexSessionDraft, candidate codexSessionCan
 		"session_id":      draft.sessionID,
 		"source_path":     candidate.sourcePath,
 		"source_size":     candidate.size,
-		"source_mtime":    candidate.modTime.Format(time.RFC3339),
+		"source_mtime":    utcTimestamp(candidate.modTime),
 		"jsonl_events":    draft.lineCount,
 		"redacted":        true,
 	}
