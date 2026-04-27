@@ -1082,6 +1082,80 @@ func TestCodexCompleteErrorsOnIncompleteWithoutStoredResponses(t *testing.T) {
 	}
 }
 
+func TestCodexCompleteFallsBackWhenStoredResponsesUnsupported(t *testing.T) {
+	t.Parallel()
+
+	var stores []bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		store, _ := payload["store"].(bool)
+		stores = append(stores, store)
+		if len(stores) == 1 {
+			if !store {
+				t.Fatalf("first request store = false, want true")
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"detail":"Store must be set to false"}`))
+			return
+		}
+		if store {
+			t.Fatalf("retry request store = true, want false after unsupported-store fallback")
+		}
+		if _, ok := payload["previous_response_id"]; ok {
+			t.Fatalf("retry previous_response_id = %#v, want omitted", payload["previous_response_id"])
+		}
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "stateless fallback",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type":     "response.completed",
+				"response": map[string]any{"id": "resp-stateless"},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:        "https://chatgpt.com/backend-api",
+		AccessToken:    "secret-token",
+		AccountID:      "acct-123",
+		StoreResponses: true,
+		HTTPClient:     &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "stateless fallback" {
+		t.Fatalf("content = %q, want stateless fallback", resp.Content)
+	}
+	if len(stores) != 2 {
+		t.Fatalf("request count = %d, want 2", len(stores))
+	}
+
+	resp, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "again"}}, nil)
+	if err != nil {
+		t.Fatalf("second Complete() err = %v", err)
+	}
+	if resp.Content != "stateless fallback" {
+		t.Fatalf("second content = %q, want stateless fallback", resp.Content)
+	}
+	if len(stores) != 3 {
+		t.Fatalf("request count after second Complete = %d, want 3", len(stores))
+	}
+	if stores[2] {
+		t.Fatalf("second Complete store = true, want remembered stateless fallback")
+	}
+}
+
 type testTransport struct {
 	handler http.Handler
 }

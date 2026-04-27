@@ -229,7 +229,7 @@ auth_path = ""                # Empty = ~/.aphelion/state/codex-auth.json
 codex_home = ""               # Empty = CODEX_HOME or ~/.codex
 base_url = "https://chatgpt.com/backend-api"
 model = "gpt-5.5"
-store_responses = true          # Use Codex previous_response_id continuation; local replay remains fallback.
+store_responses = true          # Try Codex previous_response_id continuation; auto-fall back to local replay if unsupported.
 max_continuations = 3
 transport_retries = 1
 

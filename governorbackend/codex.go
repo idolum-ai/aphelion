@@ -68,10 +68,11 @@ type Codex struct {
 	saveTokens       func(governorauth.CodexTokens, time.Time) error
 	now              func() time.Time
 
-	mu           sync.Mutex
-	accessToken  string
-	refreshToken string
-	accountID    string
+	mu               sync.Mutex
+	accessToken      string
+	refreshToken     string
+	accountID        string
+	storeUnsupported bool
 }
 
 var _ agent.Provider = (*Codex)(nil)
@@ -147,18 +148,28 @@ func (c *Codex) Stream(ctx context.Context, messages []agent.Message, tools []ag
 
 func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*agent.Response, error) {
 	aggregate := newCodexResponseAccumulator()
-	plan := planFullCodexRequest(messages, c.storeResponses)
-	if c.storeResponses {
+	storeResponses := c.effectiveStoreResponses()
+	plan := planFullCodexRequest(messages, storeResponses)
+	if storeResponses {
 		plan = planCodexRequest(messages)
 	}
 	continuations := 0
 	usedPreviousResponseFallback := false
 
 	for {
-		result, err := c.completeRequest(ctx, plan, tools, opts, cb, allowRetry)
+		result, err := c.completeRequest(ctx, plan, tools, opts, cb, allowRetry, storeResponses)
 		if err != nil {
-			if c.storeResponses && plan.mode == codexTurnModeIncrementalToolResults && !usedPreviousResponseFallback && isPreviousResponseRejected(err) {
-				plan = planFullCodexRequest(messages, c.storeResponses)
+			if storeResponses && isStoreResponsesRejected(err) {
+				c.disableStoreResponses()
+				storeResponses = false
+				aggregate = newCodexResponseAccumulator()
+				plan = planFullCodexRequest(messages, false)
+				continuations = 0
+				usedPreviousResponseFallback = false
+				continue
+			}
+			if storeResponses && plan.mode == codexTurnModeIncrementalToolResults && !usedPreviousResponseFallback && isPreviousResponseRejected(err) {
+				plan = planFullCodexRequest(messages, storeResponses)
 				usedPreviousResponseFallback = true
 				continue
 			}
@@ -169,7 +180,7 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 		if result.Complete {
 			return aggregate.response(), nil
 		}
-		if !c.storeResponses {
+		if !storeResponses {
 			return nil, fmt.Errorf("codex: incomplete response without stored-response continuation")
 		}
 		if strings.TrimSpace(result.ResponseID) == "" {
@@ -183,9 +194,9 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 	}
 }
 
-func (c *Codex) completeRequest(ctx context.Context, plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*codexCompletionResult, error) {
+func (c *Codex) completeRequest(ctx context.Context, plan codexRequestPlan, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool, storeResponses bool) (*codexCompletionResult, error) {
 	for attempt := 0; attempt <= c.transportRetries; attempt++ {
-		reqBody := buildCodexRequest(plan, tools, opts, true, c.model, c.storeResponses)
+		reqBody := buildCodexRequest(plan, tools, opts, true, c.model, storeResponses)
 
 		var body bytes.Buffer
 		if err := json.NewEncoder(&body).Encode(reqBody); err != nil {
@@ -200,7 +211,7 @@ func (c *Codex) completeRequest(ctx context.Context, plan codexRequestPlan, tool
 			if allowRetry && errors.As(err, &apiErr) && apiErr.statusCode == http.StatusUnauthorized {
 				reauthorized, reauthErr := c.reauthorize(ctx, accessToken)
 				if reauthorized {
-					return c.completeRequest(ctx, plan, tools, opts, cb, false)
+					return c.completeRequest(ctx, plan, tools, opts, cb, false, storeResponses)
 				}
 				if reauthErr != nil {
 					return nil, fmt.Errorf("%w: reauthorization failed: %v", err, reauthErr)
@@ -225,6 +236,24 @@ func (c *Codex) completeRequest(ctx context.Context, plan codexRequestPlan, tool
 		return result, nil
 	}
 	return nil, fmt.Errorf("codex: transport retries exhausted")
+}
+
+func (c *Codex) effectiveStoreResponses() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.storeResponses && !c.storeUnsupported
+}
+
+func (c *Codex) disableStoreResponses() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.storeUnsupported = true
 }
 
 func (c *Codex) syncCredentialsFromStore() {
@@ -1243,4 +1272,19 @@ func isPreviousResponseRejected(err error) bool {
 		return false
 	}
 	return strings.Contains(msg, "previous_response_id") || strings.Contains(msg, "previous response")
+}
+
+func isStoreResponsesRejected(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr codexAPIError
+	if errors.As(err, &apiErr) && apiErr.statusCode != http.StatusBadRequest {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, "store must be set to false")
 }

@@ -180,7 +180,7 @@ auth_path = ""                  # Empty = ~/.aphelion/state/codex-auth.json
 codex_home = ""                 # empty = CODEX_HOME or ~/.codex
 base_url = "https://chatgpt.com/backend-api"
 model = "gpt-5.5"
-store_responses = true
+store_responses = true            # Auto-falls back to store=false when the Codex endpoint rejects stored responses.
 max_continuations = 3
 transport_retries = 1
 ```
