@@ -877,6 +877,391 @@ First useful screens:
 - Decisions needing approval
 - Doctor report
 
+## Incremental Delivery Plan
+
+This is the practical implementation order. The critical spine is:
+
+> read-only awareness -> parent `tsnet` node -> private UI -> surface registry
+> -> child `tsnet` node -> private RPC -> grant bindings -> policy/drift/mutations
+
+Each step should be shippable, testable, and useful on its own.
+
+### 1. Tailnet Config And Backend Interface
+
+Deliverable: Aphelion can be built and tested with Tailscale support disabled,
+enabled, or mocked.
+
+Build:
+
+- `[tailscale]` config structs and validation.
+- `tailnet.Backend` interface.
+- fake backend for unit tests.
+- runtime feature flag defaults that keep the system unchanged when disabled.
+
+Tests:
+
+- config parse/validation tests.
+- fake backend contract tests.
+- runtime starts cleanly when Tailscale is disabled.
+
+### 2. Read-only Tailnet Awareness
+
+Deliverable: `/status` and `/doctor` can say whether the host is tailnet-ready.
+
+Build:
+
+- CLI backend for `tailscale version`, `status --json`, `ip`, `netcheck`,
+  `whois`, and `ping` where available.
+- normalized diagnostic model.
+- basic tailnet section in `/status`.
+- `/doctor` evidence block for daemon state, node identity, IPs, DNS, and tags.
+
+Tests:
+
+- parser golden tests for Tailscale CLI JSON.
+- missing CLI/daemon tests.
+- doctor issue classification for missing or mismatched tailnet state.
+
+### 3. Telegram `/tailnet` Read-only Command
+
+Deliverable: the admin can ask what Aphelion knows about its tailnet body.
+
+Build:
+
+- `/tailnet` command.
+- compact rendering of node identity, online state, tailnet name, IPs, tags,
+  MagicDNS hints, and obvious drift.
+- inline controls for refresh and focused doctor run.
+
+Tests:
+
+- command routing tests.
+- Telegram rendering tests under healthy, disabled, and degraded states.
+
+### 4. Parent `tsnet` Node MVP
+
+Deliverable: parent Aphelion has a private MagicDNS identity.
+
+Build:
+
+- embedded parent `tsnet` server wrapper.
+- persistent state under `~/.aphelion/state/tailnet/parent`.
+- parent hostname and auth-key config.
+- lifecycle events in TES.
+- startup recovery check for expected identity.
+
+Tests:
+
+- lifecycle tests with fake `tsnet` implementation.
+- state directory reuse test.
+- mismatch and missing auth-key tests.
+
+### 5. Tailnet-only Health Endpoint
+
+Deliverable: first proof that Aphelion is reachable as a private tailnet
+service.
+
+Build:
+
+- minimal HTTP mux on the parent `tsnet` listener.
+- `GET /healthz`.
+- `GET /status`.
+- `GET /tailnet`.
+- Telegram `/tailnet` link to the MagicDNS URL when available.
+
+Tests:
+
+- HTTP handler tests without real Tailscale.
+- authorization defaults: health can be shallow, status requires admin identity
+  or local configured allowance.
+
+### 6. Tailnet Surface Registry
+
+Deliverable: Aphelion can track which private network surfaces it owns.
+
+Build:
+
+- `tailnet_surfaces` table.
+- parent private UI surface record.
+- lifecycle events for declared, active, degraded, revoked.
+- `/tailnet surfaces`.
+- revoke/disable path for owned surfaces.
+
+Tests:
+
+- create/update/revoke store tests.
+- status projection tests.
+- revoke idempotency tests.
+
+### 7. Private Admin UI MVP
+
+Deliverable: Telegram stays concise while rich inspection moves to the private
+UI.
+
+Build:
+
+- minimal HTML UI over parent `tsnet`.
+- pages for overview, status, doctor latest, active turns, pending decisions,
+  and tailnet surfaces.
+- action buttons that call existing decision/control paths.
+- no public exposure.
+
+Tests:
+
+- handler tests.
+- authorization tests.
+- decision button tests.
+- UI smoke tests using the fake backend.
+
+### 8. Durable Child Tailnet Declarations
+
+Deliverable: a child can declare that it should have a tailnet identity without
+starting one yet.
+
+Build:
+
+- durable-agent policy fields:
+  - `tailnet_mode`
+  - `tailnet_hostname`
+  - `tailnet_tags`
+  - `tailnet_surface_policy`
+- profile sync for tailnet rules.
+- `/agents` and `/tailnet` projections for declared child tailnet state.
+
+Tests:
+
+- durable-agent profile sync tests.
+- policy ceiling tests.
+- child cannot declare public surfaces without parent/admin policy.
+
+### 9. Child Tailnet Reconcile
+
+Deliverable: children stop claiming network capability unless it is actually
+materialized.
+
+Build:
+
+- startup/reinstall reconciliation for child tailnet declarations.
+- child profile guidance to verify tailnet identity before claiming network
+  capability.
+- doctor issue when declared child node is missing or unhealthy.
+
+Tests:
+
+- reinstall recovery test.
+- missing child node test.
+- stale child profile test.
+
+### 10. Child `tsnet` Node MVP
+
+Deliverable: first proof of "agent as private network participant."
+
+Build:
+
+- start one durable child as an embedded `tsnet` node.
+- child-local state directory.
+- child private `/status` endpoint.
+- parent projection of child node health.
+- no child Serve/Funnel/route mutations.
+
+Tests:
+
+- fake child `tsnet` lifecycle test.
+- child state isolation test.
+- child endpoint authorization test.
+
+### 11. Parent-to-Child Private RPC
+
+Deliverable: parent-child coordination can use private endpoints instead of
+only local process calls or Telegram-style review.
+
+Build:
+
+- minimal RPC client/server contract.
+- calls for status, wake, report, and capability check.
+- caller identity evidence and correlation IDs.
+- TES events for request, authorization, and result.
+
+Tests:
+
+- authorized parent call succeeds.
+- unauthorized caller is rejected.
+- RPC failure is surfaced as child health degradation.
+
+### 12. Private Artifact Browser
+
+Deliverable: large outputs stop fighting Telegram format and size limits.
+
+Build:
+
+- artifact index page.
+- generated reports/PDF/logs links.
+- retention and authority checks.
+- Telegram summaries can link to tailnet artifact URLs.
+
+Tests:
+
+- path confinement tests.
+- retention policy tests.
+- private URL rendering tests.
+
+### 13. Live Work Stream
+
+Deliverable: long-running work is inspectable without spamming chat.
+
+Build:
+
+- server-sent-events or websocket feed from TES/progress events.
+- active turn page.
+- tool event, progress, final result, and artifact updates.
+- Telegram sends milestone summaries and keeps stop/reassess controls.
+
+Tests:
+
+- stream event serialization tests.
+- active turn projection tests.
+- no secret-bearing hidden prompt leakage.
+
+### 14. Tailnet-aware Principal Evidence
+
+Deliverable: Aphelion can say that a private UI request came from a known
+tailnet user/device while still enforcing Aphelion admission.
+
+Build:
+
+- identity evidence model for tailnet requests.
+- mapping to Aphelion principals.
+- unknown caller handling.
+- status/doctor identity diagnostics.
+
+Tests:
+
+- admitted admin succeeds.
+- known tailnet user without Aphelion admission cannot act.
+- unknown tailnet caller is logged but not trusted.
+
+### 15. Trusted Device Approval Policy
+
+Deliverable: high-risk approvals can require both Aphelion admin identity and a
+trusted tailnet device.
+
+Build:
+
+- approval policy extension.
+- decision record includes tailnet identity evidence.
+- UI/Telegram copy for "requires trusted device."
+- downgrade/escalation behavior when the trusted device signal is absent.
+
+Tests:
+
+- destructive action requires trusted device when configured.
+- ordinary action does not.
+- approval evidence is persisted.
+
+### 16. Grant Binding Model
+
+Deliverable: Aphelion can represent "this child may reach this private service"
+before mutating Tailscale policy.
+
+Build:
+
+- `tailnet_grant_bindings` table.
+- binding from Aphelion capability grant to desired source/destination/ports.
+- status projection: proposed, applied, drifted, revoked.
+- doctor checks for missing or unmanaged bindings.
+
+Tests:
+
+- binding normalization tests.
+- status projection tests.
+- drift state tests with fake backend.
+
+### 17. Policy Diff Generator
+
+Deliverable: admins can review exact network implications before any tailnet
+policy is applied.
+
+Build:
+
+- Tailscale policy read parser.
+- desired-policy projection from grant bindings.
+- human-readable diff.
+- Telegram/private UI review surface.
+
+Tests:
+
+- golden diff tests.
+- no broad wildcard grants without high-risk classification.
+- unchanged policy produces no-op diff.
+
+### 18. Drift Detection
+
+Deliverable: `/doctor` can flag unmanaged or missing network surfaces.
+
+Build:
+
+- periodic or on-demand comparison of Aphelion declarations to Tailscale state.
+- checks for nodes, tags, Serve, Funnel, SSH, routes, and grants.
+- Telegram alerts for high-risk drift.
+
+Tests:
+
+- unmanaged Funnel is high severity.
+- missing declared child node is active issue.
+- acknowledged external state is not repeatedly noisy.
+
+### 19. Approval-gated Policy Apply
+
+Deliverable: Aphelion can materialize network grants safely.
+
+Build:
+
+- typed mutation tool for policy apply.
+- approval prompt with diff, risk, TTL, and rollback.
+- policy hash recording.
+- post-apply verification.
+
+Tests:
+
+- apply requires approval.
+- apply writes TES events.
+- failed verification marks grant binding drifted.
+
+### 20. Governed Tailscale SSH
+
+Deliverable: remote repair becomes possible but audited.
+
+Build:
+
+- `tailnet_ssh_exec` typed tool.
+- target host/user/command risk classifier.
+- read-only, mutation, destructive, and privilege-sensitive approval modes.
+- output preview and artifact capture.
+
+Tests:
+
+- read-only command can follow configured policy.
+- destructive command requires explicit approval.
+- target outside grant is denied.
+
+### 21. Serve, Funnel, Routes, And App Connectors Last
+
+Deliverable: public exposure and broad network changes are powerful but
+controlled.
+
+Build:
+
+- Serve enable/disable.
+- Funnel enable/disable with TTL and public-exposure warning.
+- route/app connector observation first, mutation second.
+- rollback monitors and Telegram alerts.
+
+Tests:
+
+- Funnel always requires high-risk approval.
+- route advertisement requires explicit target and rollback.
+- expired public exposure alerts and tears down.
+
 ## Fastest Route To Feature Complete
 
 "Feature complete" here means: the parent can run as a private tailnet service,
