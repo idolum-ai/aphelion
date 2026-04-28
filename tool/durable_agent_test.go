@@ -2177,6 +2177,7 @@ func TestDurableAgentPolicyApplySyncsProfileFiles(t *testing.T) {
 		!strings.Contains(string(capRaw), "session_recall") ||
 		!strings.Contains(string(runtimeRaw), "child_runtime") ||
 		!strings.Contains(string(growthRaw), "delegation_request") ||
+		!strings.Contains(string(growthRaw), "json.loads") ||
 		!strings.Contains(string(ledgerRaw), "Active grants:") ||
 		!strings.Contains(string(scorecardRaw), "Accurate statements") {
 		t.Fatalf("profile files missing ratified content: charter=%q capabilities=%q runtime=%q", charterRaw, capRaw, runtimeRaw)

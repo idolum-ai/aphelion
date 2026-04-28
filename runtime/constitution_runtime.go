@@ -257,11 +257,12 @@ func detectExecutionClaims(reply string) executionClaimSet {
 		claims.Tool = true
 	}
 	if containsPositiveClaimMarker(lower,
-		"durable agent",
-		"durable child",
-		"parent-child",
-		"review artifact",
-		"wake loop",
+		"woke durable agent",
+		"woke durable child",
+		"durable wake completed",
+		"durable child completed",
+		"child processed parent guidance",
+		"processed pending parent guidance",
 	) {
 		claims.Durable = true
 	}
@@ -294,6 +295,13 @@ func containsPositiveClaimMarker(text string, needles ...string) bool {
 				break
 			}
 			idx += searchFrom
+			if !claimMarkerHasBoundaries(text, idx, needle) {
+				searchFrom = idx + len(needle)
+				if searchFrom >= len(text) {
+					break
+				}
+				continue
+			}
 			start := idx - 32
 			if start < 0 {
 				start = 0
@@ -323,6 +331,31 @@ func containsPositiveClaimMarker(text string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func claimMarkerHasBoundaries(text string, idx int, marker string) bool {
+	if idx < 0 || marker == "" {
+		return false
+	}
+	end := idx + len(marker)
+	if end > len(text) {
+		return false
+	}
+	if markerBoundaryRequired(marker[0]) && idx > 0 && isClaimWordByte(text[idx-1]) {
+		return false
+	}
+	if markerBoundaryRequired(marker[len(marker)-1]) && end < len(text) && isClaimWordByte(text[end]) {
+		return false
+	}
+	return true
+}
+
+func markerBoundaryRequired(ch byte) bool {
+	return isClaimWordByte(ch)
+}
+
+func isClaimWordByte(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_'
 }
 
 func (r *Runtime) repairTurnReply(

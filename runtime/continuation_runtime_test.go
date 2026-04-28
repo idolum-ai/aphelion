@@ -678,6 +678,24 @@ func TestHandleInboundDoesNotSendContinuationBlockedNoticeWithoutPriorActiveCont
 	if len(sender.sent) != 1 {
 		t.Fatalf("sent count = %d, want only main reply when no prior continuation was active", len(sender.sent))
 	}
+	events, err := store.ExecutionEventsBySession(session.SessionKey{ChatID: 8115, UserID: 0, Scope: telegramDMScopeRef(8115)}, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var blocked session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationBlocked {
+			blocked = event
+		}
+	}
+	if blocked.ID == 0 {
+		t.Fatalf("events = %#v, want blocked event for internal telemetry", events)
+	}
+	payload := executionEventPayload(blocked.PayloadJSON)
+	got, ok := payload["user_visible"].(bool)
+	if !ok || got {
+		t.Fatalf("blocked payload user_visible = %v (ok=%v), want false", got, ok)
+	}
 }
 
 func TestApproveContinuationPersistsApproverIdentity(t *testing.T) {

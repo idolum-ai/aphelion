@@ -62,6 +62,57 @@ func TestStartupRecoverySendsAdminCatchupMessage(t *testing.T) {
 	}
 }
 
+func TestStartupRecoverySuppressesNoToolsLedgerDisclaimer(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = strings.Join([]string{
+		"Cannot write the maintenance ledger from this recovery context because no tools are available.",
+		"",
+		"Concise note to record: run 91 completed all recorded tool calls and scheduled a finalizer.",
+	}, "\n")
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 1502, UserID: 0}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "reinstall the service")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.NoteTurnRunToolStart(run.ID, "exec", `{"command":"systemctl --user restart aphelion"}`); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+
+	if err := rt.runStartupRecoveryOnce(context.Background(), time.Date(2026, time.April, 10, 13, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) == 0 {
+		t.Fatal("no startup recovery catch-up message was sent")
+	}
+	got := sender.sent[len(sender.sent)-1].Text
+	if strings.Contains(got, "Cannot write the maintenance ledger") {
+		t.Fatalf("catch-up text = %q, want ledger disclaimer suppressed", got)
+	}
+	if !strings.Contains(got, "Concise note to record") {
+		t.Fatalf("catch-up text = %q, want retained recovery note", got)
+	}
+	storedRun, err := store.TurnRun(run.ID)
+	if err != nil {
+		t.Fatalf("TurnRun() err = %v", err)
+	}
+	if strings.Contains(storedRun.RecoverySummary, "Cannot write the maintenance ledger") {
+		t.Fatalf("stored recovery summary = %q, want ledger disclaimer suppressed", storedRun.RecoverySummary)
+	}
+}
+
 func TestStartupRecoveryLogsMaintenanceAnalysis(t *testing.T) {
 	t.Parallel()
 

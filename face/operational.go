@@ -284,7 +284,7 @@ func RenderReviewDigest(notice ReviewDigestNotice) string {
 			lines = append(lines, "", truncateReviewDigestText(raw, 1200))
 		}
 	}
-	return strings.Join(lines, "\n")
+	return truncateReviewDigestBlock(strings.Join(lines, "\n"), 3900)
 }
 
 type reviewDigestSections struct {
@@ -298,6 +298,12 @@ type reviewDigestSections struct {
 
 func reviewDigestTitle(notice ReviewDigestNotice) string {
 	if agent := strings.TrimSpace(notice.SourceAgent); agent != "" {
+		switch strings.ToLower(agent) {
+		case "idolum-email":
+			return "Email child review"
+		case "idolum-daily-review":
+			return "Daily review"
+		}
 		return "Review: " + agent
 	}
 	switch strings.TrimSpace(notice.SourceRole) {
@@ -311,6 +317,9 @@ func reviewDigestTitle(notice ReviewDigestNotice) string {
 }
 
 func reviewDigestContextLine(notice ReviewDigestNotice, summaryContext []string) string {
+	if reviewDigestIsDurable(notice) {
+		return reviewDigestDurableContextLine(notice, summaryContext)
+	}
 	parts := make([]string, 0, 6)
 	for _, context := range summaryContext {
 		context = strings.TrimSpace(context)
@@ -345,6 +354,70 @@ func reviewDigestContextLine(notice ReviewDigestNotice, summaryContext []string)
 	return "`" + strings.Join(parts, " ") + "`"
 }
 
+func reviewDigestIsDurable(notice ReviewDigestNotice) bool {
+	return strings.TrimSpace(notice.SourceAgent) != "" || strings.TrimSpace(notice.SourceRole) == "durable_agent"
+}
+
+func reviewDigestDurableContextLine(notice ReviewDigestNotice, summaryContext []string) string {
+	meta := reviewDigestContextMetadata(summaryContext)
+	parts := make([]string, 0, 3)
+	if channel := strings.TrimSpace(meta["channel"]); channel != "" {
+		parts = append(parts, reviewDigestHumanChannel(channel))
+	}
+	if interval := strings.TrimSpace(meta["interval"]); interval != "" {
+		parts = append(parts, interval)
+	}
+	if len(parts) == 0 {
+		if scope := strings.TrimSpace(notice.SourceScope); scope != "" {
+			parts = append(parts, reviewDigestHumanScope(scope))
+		}
+	}
+	return strings.Join(parts, " • ")
+}
+
+func reviewDigestContextMetadata(lines []string) map[string]string {
+	meta := make(map[string]string)
+	for _, line := range lines {
+		for _, field := range strings.Fields(strings.TrimSpace(line)) {
+			key, value, ok := strings.Cut(field, "=")
+			if !ok {
+				continue
+			}
+			key = strings.ToLower(strings.TrimSpace(key))
+			value = strings.TrimSpace(value)
+			if key != "" && value != "" {
+				meta[key] = value
+			}
+		}
+	}
+	return meta
+}
+
+func reviewDigestHumanChannel(channel string) string {
+	switch strings.TrimSpace(strings.ToLower(channel)) {
+	case "email":
+		return "Email"
+	case "daily_review":
+		return "Daily review"
+	default:
+		return strings.ReplaceAll(strings.TrimSpace(channel), "_", " ")
+	}
+}
+
+func reviewDigestHumanScope(scope string) string {
+	scope = strings.TrimSpace(scope)
+	switch {
+	case strings.HasPrefix(scope, "durable_agent:"):
+		return strings.TrimPrefix(scope, "durable_agent:")
+	case strings.HasPrefix(scope, "telegram_dm:"):
+		return "Telegram DM"
+	case strings.HasPrefix(scope, "heartbeat:"):
+		return "Heartbeat"
+	default:
+		return scope
+	}
+}
+
 func reviewDigestContextContains(parts []string, prefix string) bool {
 	for _, part := range parts {
 		for _, field := range strings.Fields(strings.TrimSpace(part)) {
@@ -369,6 +442,10 @@ func parseReviewDigestSummary(raw string) reviewDigestSections {
 		}
 		switch key {
 		case "summary":
+			value = cleanReviewDigestSummary(value)
+			if value == "" {
+				return
+			}
 			if strings.HasPrefix(value, "-") {
 				out.Highlights = append(out.Highlights, splitReviewDigestItems(value)...)
 			} else if out.Summary == "" {
@@ -426,6 +503,21 @@ func splitReviewDigestSection(line string) (string, string, bool) {
 	default:
 		return "", "", false
 	}
+}
+
+func cleanReviewDigestSummary(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if idx := strings.Index(value, "Local response:"); idx >= 0 {
+		response := strings.TrimSpace(value[idx+len("Local response:"):])
+		if response != "" {
+			return response
+		}
+		return "Parent guidance processed."
+	}
+	return value
 }
 
 func splitReviewDigestItems(raw string) []string {
@@ -581,6 +673,21 @@ func truncateReviewDigestText(value string, limit int) string {
 		return string(runes[:limit])
 	}
 	return string(runes[:limit-3]) + "..."
+}
+
+func truncateReviewDigestBlock(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return strings.TrimSpace(string(runes[:limit-3])) + "..."
 }
 
 func RenderStartupRecovery(notice StartupRecoveryNotice) string {

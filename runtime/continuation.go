@@ -73,8 +73,11 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	if !consensus.eligible() {
 		payload := continuationExecutionPayload(state)
 		payload["reason"] = strings.TrimSpace(consensus.BlockedReason)
+		notify := shouldNotifyContinuationBlocked(priorState, priorExists, consensus)
+		payload["user_visible"] = notify
+		payload["prior_active"] = priorExists && session.NormalizeContinuationState(priorState).Active()
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", payload, time.Now().UTC())
-		if shouldNotifyContinuationBlocked(priorState, priorExists, consensus) {
+		if notify {
 			if err := r.sendContinuationBlockedNotice(ctx, key, msg, state); err != nil {
 				return err
 			}

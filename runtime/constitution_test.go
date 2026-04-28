@@ -490,6 +490,46 @@ func TestGroundFinalReplyWithExecutionEvidenceRewritesUngroundedToolClaim(t *tes
 	}
 }
 
+func TestGroundFinalReplyWithExecutionEvidenceKeepsConceptualFeatureDiscussion(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9307, UserID: 0, Scope: telegramDMScopeRef(9307)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"summary":"answered conceptually"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	reply := "Yes. I would frame document ingestion as a quarantine layer for the durable email agent, not as the bot blindly reading attachments."
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, reply)
+	if note != "" {
+		t.Fatalf("note = %q, want no grounding note for conceptual discussion", note)
+	}
+	if rewritten != reply {
+		t.Fatalf("rewritten = %q, want unchanged reply", rewritten)
+	}
+}
+
 func TestGroundFinalReplyWithExecutionEvidenceKeepsGroundedTestClaim(t *testing.T) {
 	t.Parallel()
 

@@ -23,8 +23,8 @@ func TestRenderReviewDigestFormatsDurableSections(t *testing.T) {
 	})
 
 	for _, needle := range []string{
-		"**Review: idolum-email**",
-		"`durable_agent=idolum-email channel=email parent=telegram_dm:6313146 interval=2026-04-26T22:33:00Z`",
+		"**Email child review**",
+		"Email • 2026-04-26T22:33:00Z",
 		"**Summary**",
 		"cannot verify live inbox access",
 		"**Checked**",
@@ -39,7 +39,7 @@ func TestRenderReviewDigestFormatsDurableSections(t *testing.T) {
 			t.Fatalf("RenderReviewDigest() = %q, want substring %q", out, needle)
 		}
 	}
-	for _, unwanted := range []string{"Source Chat:", "Source User:", "Source Role:"} {
+	for _, unwanted := range []string{"Source Chat:", "Source User:", "Source Role:", "durable_agent=", "parent=telegram_dm:"} {
 		if strings.Contains(out, unwanted) {
 			t.Fatalf("RenderReviewDigest() = %q, should not contain raw label %q", out, unwanted)
 		}
@@ -62,7 +62,8 @@ func TestRenderReviewDigestExtractsInlineSummaryHighlights(t *testing.T) {
 	})
 
 	for _, needle := range []string{
-		"**Review: idolum-daily-review**",
+		"**Daily review**",
+		"Daily review • 2026-04-26",
 		"**Summary**",
 		"Scheduled check-in from child for 2026-04-26.",
 		"**Highlights**",
@@ -77,6 +78,8 @@ func TestRenderReviewDigestExtractsInlineSummaryHighlights(t *testing.T) {
 		}
 	}
 	for _, unwanted := range []string{
+		"durable_agent=",
+		"parent=heartbeat:",
 		"What matters: -",
 		"- profile/growth.md",
 		"- profile/capability-ledger.md",

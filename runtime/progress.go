@@ -260,6 +260,8 @@ type toolProgressReporter struct {
 	controls         [][]telegram.InlineButton
 	startedAt        time.Time
 	finished         bool
+	lastRendered     string
+	lastWithControls bool
 }
 
 type toolProgressEntry struct {
@@ -500,6 +502,9 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 	if p.audit != nil {
 		p.audit.RecordProgress(text)
 	}
+	if p.messageID != 0 && text == p.lastRendered && withControls == p.lastWithControls && !done {
+		return
+	}
 	if p.messageID == 0 {
 		msgID := int64(0)
 		var err error
@@ -531,6 +536,8 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 			return
 		}
 		p.messageID = msgID
+		p.lastRendered = text
+		p.lastWithControls = withControls
 		p.recordProgressEvent(core.ExecutionEventDeliveryProgressSent, "sent", map[string]any{
 			"message_id":       msgID,
 			"with_controls":    withControls && len(p.controls) > 0,
@@ -564,6 +571,8 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 				p.reportIssue(ctx, fmt.Errorf("edit tool progress inline chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
 			}
 		} else {
+			p.lastRendered = text
+			p.lastWithControls = true
 			p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
 				"method":           "edit_inline",
 				"message_id":       p.messageID,
@@ -595,6 +604,8 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 					p.reportIssue(ctx, fmt.Errorf("edit tool progress clear keyboard chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))
 				}
 			} else {
+				p.lastRendered = text
+				p.lastWithControls = false
 				p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
 					"method":           "edit_clear_keyboard",
 					"message_id":       p.messageID,
@@ -629,6 +640,8 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 		}
 		return
 	}
+	p.lastRendered = text
+	p.lastWithControls = withControls
 	p.recordProgressEvent(core.ExecutionEventDeliveryProgressEdited, "edited", map[string]any{
 		"method":           "edit_text",
 		"message_id":       p.messageID,

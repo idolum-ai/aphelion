@@ -153,15 +153,16 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		return nil
 	}
 	floorText := strings.TrimSpace(turnResult.FloorText)
+	recoverySummary := startupRecoverySummaryForPersistence(runs, floorText)
 
 	ids := make([]int64, 0, len(runs))
 	for _, run := range runs {
 		ids = append(ids, run.ID)
 	}
-	if err := r.store.MarkTurnRunsRecovered(ids, floorText); err != nil {
+	if err := r.store.MarkTurnRunsRecovered(ids, recoverySummary); err != nil {
 		return fmt.Errorf("mark turn runs recovered: %w", err)
 	}
-	if err := r.deliverStartupRecoveryCatchup(ctx, maintenanceSession.SystemPrompt, runs, floorText); err != nil {
+	if err := r.deliverStartupRecoveryCatchup(ctx, maintenanceSession.SystemPrompt, runs, recoverySummary); err != nil {
 		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
 	}
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryCompleted, "recovery", "completed", map[string]any{
@@ -215,7 +216,7 @@ func renderStartupRecoveryRequest(runs []session.TurnRun) string {
 		lines = append(lines, "")
 	}
 
-	lines = append(lines, "Log a concise recovery note into the maintenance ledger. Do not send a user-facing message unless explicitly requested elsewhere.")
+	lines = append(lines, "Return a concise recovery note. The runtime will persist it into the maintenance ledger and recovered turn rows.")
 	return strings.Join(lines, "\n")
 }
 
@@ -318,6 +319,7 @@ func sanitizeStartupRecoveryCatchupSummary(raw string) string {
 		return ""
 	}
 	summary = strings.TrimSpace(strings.TrimPrefix(summary, "Cannot write the maintenance ledger from this session. Append:"))
+	summary = stripStartupRecoveryLedgerDisclaimer(summary)
 	summary = strings.ReplaceAll(summary, "```text", "")
 	summary = strings.ReplaceAll(summary, "```", "")
 	summary = strings.ReplaceAll(summary, "[MEMORY]", "")
@@ -340,6 +342,33 @@ func sanitizeStartupRecoveryCatchupSummary(raw string) string {
 	}
 	summary = strings.Join(strings.Fields(summary), " ")
 	return strings.TrimSpace(summary)
+}
+
+func startupRecoverySummaryForPersistence(runs []session.TurnRun, raw string) string {
+	summary := sanitizeStartupRecoveryCatchupSummary(raw)
+	if summary == "" || startupRecoverySummaryIsLedgerDisclaimer(summary) {
+		return fallbackRecoverySummary(runs)
+	}
+	return summary
+}
+
+func stripStartupRecoveryLedgerDisclaimer(summary string) string {
+	summary = strings.TrimSpace(summary)
+	if !startupRecoverySummaryIsLedgerDisclaimer(summary) {
+		return summary
+	}
+	if idx := strings.Index(summary, "\n\n"); idx >= 0 {
+		return strings.TrimSpace(summary[idx+2:])
+	}
+	if idx := strings.Index(summary, "."); idx >= 0 && idx+1 < len(summary) {
+		return strings.TrimSpace(summary[idx+1:])
+	}
+	return ""
+}
+
+func startupRecoverySummaryIsLedgerDisclaimer(summary string) bool {
+	lower := strings.ToLower(strings.TrimSpace(summary))
+	return strings.HasPrefix(lower, "cannot write the maintenance ledger")
 }
 
 func sentenceAwareSummary(text string, max int) string {

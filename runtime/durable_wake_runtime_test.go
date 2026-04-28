@@ -497,8 +497,8 @@ func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *
 	if !strings.Contains(sender.sent[0].Text, "**Review: child-alpha**") || !strings.Contains(sender.sent[0].Text, "Processed pending parent guidance") {
 		t.Fatalf("sent text = %q, want parent conversation ack summary", sender.sent[0].Text)
 	}
-	if !strings.Contains(sender.sent[0].Text, "channel=headless") {
-		t.Fatalf("sent text = %q, want channel=headless marker", sender.sent[0].Text)
+	if !strings.Contains(sender.sent[0].Text, "headless") || strings.Contains(sender.sent[0].Text, "channel=headless") {
+		t.Fatalf("sent text = %q, want human channel context without raw metadata", sender.sent[0].Text)
 	}
 	sender.mu.Unlock()
 }

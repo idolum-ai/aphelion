@@ -120,6 +120,34 @@ func TestToolProgressReporterUsesGenericLabelForConversationalContinuation(t *te
 	}
 }
 
+func TestToolProgressReporterSkipsDuplicateHeartbeatEdit(t *testing.T) {
+	t.Parallel()
+
+	sender := &fakeSender{}
+	reporter := &toolProgressReporter{
+		sender:      sender,
+		editor:      sender,
+		chatID:      42,
+		mode:        "all",
+		style:       "semantic",
+		window:      4,
+		seenKeys:    make(map[string]struct{}),
+		taskSummary: "inspect deploy logs",
+	}
+
+	reporter.ToolStarted(context.Background(), "exec", json.RawMessage(`{"command":"journalctl --user -u aphelion"}`))
+	reporter.Heartbeat(context.Background())
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want initial progress send", len(sender.sent))
+	}
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits len = %d, want duplicate heartbeat suppressed", len(sender.edits))
+	}
+}
+
 func TestToolProgressReporterAggregatesSameSemanticTextAcrossTools(t *testing.T) {
 	t.Parallel()
 

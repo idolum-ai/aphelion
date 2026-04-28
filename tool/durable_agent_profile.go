@@ -172,6 +172,7 @@ func durableAgentGrowthProfile(agent core.DurableAgent) string {
 		"- If blocked, submit one minimal delegation_request or delegation_report with evidence, the smallest useful capability, a success metric, and a rollback or trial boundary.",
 		"- Ask upward only for reusable capability surfaces, not one-off feature-specific code paths.",
 		"- Never self-grant, bypass parent/admin approval, or perform write/external effects without an active grant that materializes in this runtime.",
+		"- When scripting around JSON, read JSON from a file/stdin and parse it with json.loads; never paste raw JSON literals with null/true/false directly into Python code.",
 		"",
 		"Useful request shape:",
 		"- current_blocker: what you tried and what failed",
