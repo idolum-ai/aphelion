@@ -96,6 +96,10 @@ If the inbound message was a voice or audio-originated message, reply with voice
 
 If the inbound message was text-only, reply with text by default.
 
+If the user asks for transcription or another text-extraction task, that turn replies in text even when the inbound artifact is audio.
+
+If a text turn asks Aphelion to transcribe the next audio, the system records a one-shot pending media intent and consumes it on the next audio turn.
+
 This should be the default messaging-gateway voice mode.
 
 ### `all`
@@ -109,6 +113,7 @@ The intended default is:
 - when voice mode is enabled
 - and the user sends voice or audio
 - Aphelion replies in voice unless explicitly configured otherwise
+- transcription/extraction intent overrides the default and answers in text
 
 This is the right "natural" rule for messaging platforms.
 

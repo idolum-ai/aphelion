@@ -28,6 +28,7 @@ type TurnPrepareContract struct {
 	InboundWasVoice        bool
 	MediaAttached          bool
 	MediaMode              string
+	PreferredReplyModality string
 	ArtifactDecisionInputs []core.HiddenInput
 }
 

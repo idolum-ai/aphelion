@@ -105,6 +105,160 @@ func TestHandleInboundVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
 	}
 }
 
+func TestHandleInboundStoresPendingAudioTranscriptionIntent(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.faceReplyText = "ready"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "unused"}, fakeSynth{
+		media: core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+	})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1205,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  82,
+		Text:       "please transcribe the next audio",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	if len(sender.voice) != 0 {
+		t.Fatalf("voice sends = %d, want 0 for text-only transcription intent", len(sender.voice))
+	}
+	sender.mu.Unlock()
+
+	sess, err := store.Load(session.SessionKey{ChatID: 1205, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, `"category":"pending_media_intent"`) {
+		t.Fatalf("LastFloorMetadata = %q, want pending media intent", sess.LastFloorMetadata)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, "next audio should be transcribed and answered in text") {
+		t.Fatalf("LastFloorMetadata = %q, want next-audio transcription summary", sess.LastFloorMetadata)
+	}
+}
+
+func TestHandleInboundPendingAudioTranscriptionIntentForcesTextReply(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.faceReplyText = "ready"
+	var synthesized string
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "transcribed hello"}, fakeSynth{
+		media:    core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+		lastText: &synthesized,
+	})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1206,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  83,
+		Text:       "please transcribe the next audio",
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() text err = %v", err)
+	}
+
+	provider.faceReplyText = "transcript reply"
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1206,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  84,
+		Artifacts:  []core.Artifact{{ID: "voice-4", Channel: "telegram", SourceType: "voice", Kind: "audio", Subtype: "voice_note", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() voice err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.voice) != 0 {
+		t.Fatalf("voice sends = %d, want 0 when pending transcription intent requests text", len(sender.voice))
+	}
+	if synthesized != "" {
+		t.Fatalf("synthesized text = %q, want empty", synthesized)
+	}
+	if len(sender.sent) == 0 {
+		t.Fatal("text sends = 0, want a text reply")
+	}
+	finalText := sender.sent[len(sender.sent)-1].Text
+	if len(sender.edits) > 0 {
+		finalText = sender.edits[len(sender.edits)-1].Text
+	}
+	if finalText != "transcript reply" {
+		t.Fatalf("final text = %q, want transcript reply", finalText)
+	}
+
+	sess, err := store.Load(session.SessionKey{ChatID: 1206, UserID: 0})
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, `"category":"consumed_pending_media_intent"`) {
+		t.Fatalf("LastFloorMetadata = %q, want consumed pending media intent", sess.LastFloorMetadata)
+	}
+	if strings.Contains(sess.LastFloorMetadata, `"category":"pending_media_intent"`) {
+		t.Fatalf("LastFloorMetadata = %q, pending media intent should be consumed", sess.LastFloorMetadata)
+	}
+	if len(sess.Messages) < 4 || !strings.Contains(sess.Messages[2].Content, "transcribed hello") {
+		t.Fatalf("session messages = %#v, want transcript in second user turn", sess.Messages)
+	}
+}
+
+func TestHandleInboundSameTurnAudioTranscriptionIntentForcesTextReply(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.faceReplyText = "same turn transcript"
+	var synthesized string
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "spoken words"}, fakeSynth{
+		media:    core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+		lastText: &synthesized,
+	})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1207,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  85,
+		Text:       "please transcribe this audio",
+		Artifacts:  []core.Artifact{{ID: "voice-5", Channel: "telegram", SourceType: "voice", Kind: "audio", Subtype: "voice_note", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.voice) != 0 {
+		t.Fatalf("voice sends = %d, want 0 for same-turn transcription request", len(sender.voice))
+	}
+	if synthesized != "" {
+		t.Fatalf("synthesized text = %q, want empty", synthesized)
+	}
+	if len(sender.sent) == 0 {
+		t.Fatal("text sends = 0, want text reply")
+	}
+}
+
 func TestHandleInboundSendsTelegramMediaReply(t *testing.T) {
 	t.Parallel()
 

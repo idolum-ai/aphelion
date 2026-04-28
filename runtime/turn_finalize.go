@@ -357,8 +357,8 @@ func (p *turnDeliveryPort) Deliver(ctx context.Context, req turn.DeliveryRequest
 		Deliver:        p.deliver,
 		RecordOutbound: p.recordOutbound,
 	}, turn.DeliveryStageCallbacks{
-		Send: func(ctx context.Context, msg core.OutboundMessage, inboundWasVoice bool) (int64, string, error) {
-			outboundID, outboundType, err := p.runtime.sendReply(ctx, p.msg, msg.Text, msg.Media, inboundWasVoice)
+		Send: func(ctx context.Context, msg core.OutboundMessage, replyWithVoice bool) (int64, string, error) {
+			outboundID, outboundType, err := p.runtime.sendReply(ctx, p.msg, msg.Text, msg.Media, replyWithVoice)
 			if err != nil {
 				p.runtime.recordExecutionEvent(p.key, core.ExecutionEventDeliveryFinalFailed, "delivery", "failed", map[string]any{
 					"error": trimError(err.Error()),

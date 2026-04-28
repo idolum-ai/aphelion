@@ -92,6 +92,7 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 		delivered, err := m.Delivery.Deliver(ctx, DeliveryRequest{
 			Message:         buildOutboundMessage(req, result),
 			InboundWasVoice: req.InboundWasVoice,
+			ReplyWithVoice:  req.ReplyWithVoice,
 			Result:          result,
 		})
 		if err != nil {

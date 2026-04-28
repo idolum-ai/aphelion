@@ -36,8 +36,11 @@ type Request struct {
 	// that face stages should see when raw inbound text has already been shaped.
 	PreparedUserText string
 	// InboundWasVoice preserves whether the inbound turn started from a voice
-	// artifact so delivery can preserve configured voice continuation policy.
+	// artifact so downstream policy can reason about the original modality.
 	InboundWasVoice bool
+	// ReplyWithVoice is the resolved delivery modality after runtime defaults
+	// and per-turn media intent overrides have been applied.
+	ReplyWithVoice bool
 }
 
 // Result is the house-level outcome of one turn.

@@ -114,6 +114,7 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 
 	prepared.UserText = strings.TrimSpace(prepared.UserText)
 	prepared.LedgerText = summarizeInboundForLedger(prepared.LedgerText, msg.Artifacts)
+	applyMediaIntentPolicy("", msg, &prepared)
 	return prepared, nil
 }
 

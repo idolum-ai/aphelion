@@ -17,7 +17,7 @@ type DeliveryStageInput struct {
 
 // DeliveryStageCallbacks provide side-effectful delivery operations.
 type DeliveryStageCallbacks struct {
-	Send           func(ctx context.Context, msg core.OutboundMessage, inboundWasVoice bool) (int64, string, error)
+	Send           func(ctx context.Context, msg core.OutboundMessage, replyWithVoice bool) (int64, string, error)
 	RecordFinal    func(text string, media []core.Media, kind string)
 	RecordOutbound func(ctx context.Context, messageID int64, kind string) error
 	PostCommit     func(ctx context.Context) error
@@ -54,7 +54,7 @@ func RunDeliveryStage(ctx context.Context, input DeliveryStageInput, callbacks D
 	if callbacks.Send == nil {
 		return nil, nil
 	}
-	deliveredID, deliveredType, err := callbacks.Send(ctx, input.Request.Message, input.Request.InboundWasVoice)
+	deliveredID, deliveredType, err := callbacks.Send(ctx, input.Request.Message, input.Request.ReplyWithVoice)
 	if err != nil {
 		return nil, err
 	}

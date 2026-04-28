@@ -86,6 +86,7 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 	if err != nil {
 		return out, err
 	}
+	applyMediaIntentPolicy(sess.LastFloorMetadata, prepareInbound, &prepared)
 	facePolicy := pipeline.DecideInteractiveFacePolicy(prepared.LedgerText)
 	useMaterialFloor := pipeline.ShouldUseMaterialFloorContract(facePolicy)
 	exec := r.executionForTurn(prepared)

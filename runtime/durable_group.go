@@ -99,7 +99,7 @@ func (r *Runtime) handleDurableTelegramGroupInbound(ctx context.Context, msg cor
 		return nil, fmt.Errorf("record durable agent applied policy: %w", err)
 	}
 	if childResult.AllowLocalReply {
-		outboundID, outboundType, sendErr := r.sendReply(ctx, msg, childResult.ReplyText, childResult.TurnResult.Media, childResult.InboundWasVoice)
+		outboundID, outboundType, sendErr := r.sendReply(ctx, msg, childResult.ReplyText, childResult.TurnResult.Media, r.shouldReplyWithVoice(childResult.InboundWasVoice))
 		if sendErr != nil {
 			return &childResult.TurnResult, fmt.Errorf("send durable telegram reply: %w", sendErr)
 		}
@@ -286,6 +286,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 		SessionKey:       key,
 		Inbound:          msg,
 		InboundWasVoice:  prepared.InboundWasVoice,
+		ReplyWithVoice:   r.preparedReplyWithVoice(prepared),
 		Session:          sess,
 		Now:              now,
 		PreparedUserText: prepared.LedgerText,

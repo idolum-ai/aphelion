@@ -11,6 +11,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/media"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -70,7 +71,18 @@ func (r *Runtime) shouldReplyWithVoice(inboundWasVoice bool) bool {
 	}
 }
 
-func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text string, media []core.Media, inboundWasVoice bool) (int64, string, error) {
+func (r *Runtime) preparedReplyWithVoice(prepared pipeline.TurnPrepareContract) bool {
+	switch strings.ToLower(strings.TrimSpace(prepared.PreferredReplyModality)) {
+	case replyModalityText:
+		return false
+	case "voice":
+		return true
+	default:
+		return r.shouldReplyWithVoice(prepared.InboundWasVoice)
+	}
+}
+
+func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text string, media []core.Media, replyWithVoice bool) (int64, string, error) {
 	if len(media) > 0 {
 		msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{
 			ChatID:  msg.ChatID,
@@ -84,7 +96,7 @@ func (r *Runtime) sendReply(ctx context.Context, msg core.InboundMessage, text s
 		return msgID, "media", nil
 	}
 
-	if r.shouldReplyWithVoice(inboundWasVoice) && r.synth != nil {
+	if replyWithVoice && r.synth != nil {
 		if sender, ok := r.outbound.(voiceSender); ok {
 			audio, err := r.synth.Synthesize(ctx, text)
 			if err == nil {

@@ -178,6 +178,7 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 		Inbound:          msg,
 		Session:          sess,
 		InboundWasVoice:  prepared.InboundWasVoice,
+		ReplyWithVoice:   r.preparedReplyWithVoice(prepared),
 		Now:              now,
 		PreparedUserText: prepared.LedgerText,
 	})

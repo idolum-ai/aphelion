@@ -129,6 +129,7 @@ type DeliveryPort interface {
 type DeliveryRequest struct {
 	Message         core.OutboundMessage
 	InboundWasVoice bool
+	ReplyWithVoice  bool
 	Result          *Result
 }
 

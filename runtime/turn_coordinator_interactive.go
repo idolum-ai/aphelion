@@ -180,7 +180,7 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 	if err != nil {
 		return nil, err
 	}
-	c.state.applyExecution(output, c.runtime.shouldReplyWithVoice(c.prepared.InboundWasVoice))
+	c.state.applyExecution(output, c.runtime.preparedReplyWithVoice(c.prepared))
 	return output.GovernorResult, nil
 }
 

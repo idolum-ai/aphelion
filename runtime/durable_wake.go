@@ -369,6 +369,7 @@ func (r *Runtime) runDurableWakeConversation(
 		SessionKey:       key,
 		Inbound:          plan.Inbound,
 		InboundWasVoice:  prepared.InboundWasVoice,
+		ReplyWithVoice:   r.preparedReplyWithVoice(prepared),
 		Session:          sess,
 		Now:              now,
 		PreparedUserText: prepared.LedgerText,
