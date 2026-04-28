@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +69,13 @@ func TestTailnetStatusSnapshotRegistersParentSurface(t *testing.T) {
 	if stored.URL != surface.URL || stored.TailnetName != "example.ts.net" {
 		t.Fatalf("stored = %#v, want URL and tailnet projected", stored)
 	}
+	events, err := store.ExecutionEventsBySession(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(tailnet audit) err = %v", err)
+	}
+	if !containsExecutionEventType(events, core.ExecutionEventTailnetSurfaceChanged) {
+		t.Fatalf("events = %#v, want tailnet surface audit event", events)
+	}
 }
 
 func TestTailnetStatusSnapshotMarksParentSurfaceDegraded(t *testing.T) {
@@ -112,6 +120,155 @@ func TestTailnetStatusSnapshotMarksParentSurfaceDegraded(t *testing.T) {
 	if len(snapshot.Surfaces) != 1 || snapshot.Surfaces[0].Status != session.TailnetSurfaceStatusDegraded || snapshot.Surfaces[0].LastError == "" {
 		t.Fatalf("surfaces = %#v, want degraded parent surface", snapshot.Surfaces)
 	}
+}
+
+func TestTailnetStatusSnapshotFlagsRevokedButObservedParentSurface(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertTailnetSurface(session.TailnetSurfaceRecord{
+		SurfaceID:   "parent:tsnet_http:status",
+		OwnerKind:   "parent",
+		OwnerID:     "aphelion",
+		SurfaceKind: "tsnet_http",
+		Name:        "status",
+		Status:      session.TailnetSurfaceStatusRevoked,
+		LastError:   "revoked by admin",
+		RevokedAt:   time.Date(2026, 4, 28, 20, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("UpsertTailnetSurface(revoked) err = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.Tailscale.Enabled = true
+	rt := &Runtime{
+		cfg:   &cfg,
+		store: store,
+		tailnetBackend: fakeTailnetBackend{
+			snapshot: core.TailnetStatusSnapshot{
+				GeneratedAt: time.Date(2026, 4, 28, 20, 0, 0, 0, time.UTC),
+				Enabled:     true,
+				Backend:     "cli",
+				Status:      "healthy",
+			},
+		},
+	}
+	rt.SetTailnetParentStatusProvider(func() core.TailnetParentStatus {
+		return core.TailnetParentStatus{
+			Enabled:     true,
+			Running:     true,
+			Hostname:    "aphelion",
+			ListenAddr:  ":8765",
+			MagicDNSURL: "http://aphelion.example.ts.net:8765",
+		}
+	})
+
+	snapshot, err := rt.TailnetStatusSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("TailnetStatusSnapshot() err = %v", err)
+	}
+	if !tailnetIssuesContain(snapshot.Issues, "surface_revoked_but_observed") {
+		t.Fatalf("issues = %#v, want revoked-but-observed issue", snapshot.Issues)
+	}
+	stored, ok, err := store.TailnetSurface("parent:tsnet_http:status")
+	if err != nil || !ok {
+		t.Fatalf("TailnetSurface() = %#v, %t, %v; want stored", stored, ok, err)
+	}
+	if stored.Status != session.TailnetSurfaceStatusRevoked {
+		t.Fatalf("stored status = %q, want revoked not reactivated", stored.Status)
+	}
+}
+
+func TestTailnetStatusSnapshotFlagsDeclaredUnobservedSurface(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertTailnetSurface(session.TailnetSurfaceRecord{
+		SurfaceID:   "child:tsnet_http:status:email",
+		OwnerKind:   "durable_agent",
+		OwnerID:     "email",
+		SurfaceKind: "tsnet_http",
+		Name:        "status",
+		Status:      session.TailnetSurfaceStatusDeclared,
+	}); err != nil {
+		t.Fatalf("UpsertTailnetSurface(declared) err = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.Tailscale.Enabled = true
+	rt := &Runtime{
+		cfg:   &cfg,
+		store: store,
+		tailnetBackend: fakeTailnetBackend{
+			snapshot: core.TailnetStatusSnapshot{
+				GeneratedAt: time.Date(2026, 4, 28, 20, 0, 0, 0, time.UTC),
+				Enabled:     true,
+				Backend:     "cli",
+				Status:      "healthy",
+			},
+		},
+	}
+
+	snapshot, err := rt.TailnetStatusSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("TailnetStatusSnapshot() err = %v", err)
+	}
+	if !tailnetIssuesContain(snapshot.Issues, "surface_declared_not_observed") {
+		t.Fatalf("issues = %#v, want declared-not-observed issue", snapshot.Issues)
+	}
+}
+
+func TestRevokeTailnetSurfaceRecordsAuditEvent(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertTailnetSurface(session.TailnetSurfaceRecord{
+		SurfaceID:   "parent:tsnet_http:status",
+		OwnerKind:   "parent",
+		OwnerID:     "aphelion",
+		SurfaceKind: "tsnet_http",
+		Name:        "status",
+		Status:      session.TailnetSurfaceStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertTailnetSurface(active) err = %v", err)
+	}
+	rt := &Runtime{store: store}
+
+	revoked, ok, err := rt.RevokeTailnetSurface(context.Background(), "parent:tsnet_http:status", "telegram admin revoke")
+	if err != nil || !ok {
+		t.Fatalf("RevokeTailnetSurface() = %#v, %t, %v; want revoked", revoked, ok, err)
+	}
+	if revoked.Status != session.TailnetSurfaceStatusRevoked || !strings.Contains(revoked.LastError, "telegram admin revoke") {
+		t.Fatalf("revoked = %#v, want revoked status and reason", revoked)
+	}
+	events, err := store.ExecutionEventsBySession(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(tailnet audit) err = %v", err)
+	}
+	if !containsExecutionEventType(events, core.ExecutionEventTailnetSurfaceChanged) {
+		t.Fatalf("events = %#v, want revoke audit event", events)
+	}
+}
+
+func tailnetIssuesContain(issues []core.TailnetIssue, code string) bool {
+	for _, issue := range issues {
+		if issue.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeTailnetBackend struct {

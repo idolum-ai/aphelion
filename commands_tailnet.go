@@ -14,6 +14,10 @@ const tailnetCallbackPrefix = "tailnet:"
 const tailnetCallbackRefresh = "refresh"
 const tailnetCallbackSurfaces = "surfaces"
 const tailnetCommandSurfaces = "surfaces"
+const tailnetCommandRevoke = "revoke"
+const tailnetRevokeCallbackPrefix = "tailnet_revoke:"
+const tailnetRevokeCallbackConfirm = "confirm"
+const tailnetRevokeCallbackCancel = "cancel"
 
 func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]telegram.InlineButton) {
 	lines := []string{"Tailnet"}
@@ -146,6 +150,74 @@ func renderTailnetSurfacesCommand(surfaces []core.TailnetSurfaceStatus) (string,
 		{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
 	}}
 	return strings.Join(compactStatusDisplayLines(lines), "\n"), rows
+}
+
+func renderTailnetRevokeConfirmation(surfaceID string) (string, [][]telegram.InlineButton) {
+	surfaceID = strings.TrimSpace(surfaceID)
+	lines := []string{
+		"Revoke tailnet surface?",
+		"Surface: " + surfaceID,
+		"",
+		"This marks the owned surface revoked in Aphelion's registry and writes an audit event. If a live listener still observes it, /status and /doctor will report that drift.",
+	}
+	rows := [][]telegram.InlineButton{{
+		{Text: "Cancel", CallbackData: encodeTailnetRevokeCallbackData(tailnetRevokeCallbackCancel, surfaceID)},
+		{Text: "Revoke", CallbackData: encodeTailnetRevokeCallbackData(tailnetRevokeCallbackConfirm, surfaceID)},
+	}}
+	return strings.Join(compactStatusDisplayLines(lines), "\n"), rows
+}
+
+func renderTailnetRevokeCanceled(surfaceID string) string {
+	surfaceID = strings.TrimSpace(surfaceID)
+	if surfaceID == "" {
+		return "Tailnet surface revoke canceled."
+	}
+	return "Tailnet surface revoke canceled.\nSurface: " + surfaceID
+}
+
+func renderTailnetRevokeResult(requestedID string, surface core.TailnetSurfaceStatus, found bool) string {
+	surfaceID := firstTailnetNonEmpty(surface.SurfaceID, requestedID)
+	if !found {
+		return "Tailnet surface was not found.\nSurface: " + strings.TrimSpace(surfaceID)
+	}
+	lines := []string{
+		"Tailnet surface revoked.",
+		"Surface: " + strings.TrimSpace(surfaceID),
+	}
+	if status := strings.TrimSpace(surface.Status); status != "" {
+		lines = append(lines, "Status: "+status)
+	}
+	if errText := strings.TrimSpace(surface.LastError); errText != "" {
+		lines = append(lines, "Reason: "+truncateTailnetLine(errText, 180))
+	}
+	return strings.Join(compactStatusDisplayLines(lines), "\n")
+}
+
+func encodeTailnetRevokeCallbackData(action string, surfaceID string) string {
+	return tailnetRevokeCallbackPrefix + strings.TrimSpace(action) + ":" + strings.TrimSpace(surfaceID)
+}
+
+func decodeTailnetRevokeCallbackData(data string) (string, string, bool) {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, tailnetRevokeCallbackPrefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(trimmed, tailnetRevokeCallbackPrefix)
+	idx := strings.Index(rest, ":")
+	if idx <= 0 {
+		return "", "", false
+	}
+	action := strings.TrimSpace(rest[:idx])
+	surfaceID := strings.TrimSpace(rest[idx+1:])
+	if surfaceID == "" {
+		return "", "", false
+	}
+	switch action {
+	case tailnetRevokeCallbackConfirm, tailnetRevokeCallbackCancel:
+		return action, surfaceID, true
+	default:
+		return "", "", false
+	}
 }
 
 func nextTailnetToken(raw string) (string, string) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -104,6 +105,61 @@ func tailnetPrivateHTTPHandler(router commandRouter, adminID int64) http.Handler
 			return
 		}
 		writeTailnetPrivateJSON(w, snapshot)
+	})
+	mux.HandleFunc("/tailnet/surfaces", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if router == nil || adminID == 0 {
+			http.Error(w, "tailnet router unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		surfaces, err := router.TailnetSurfaces(adminID)
+		if err != nil {
+			http.Error(w, "tailnet surfaces unavailable", http.StatusInternalServerError)
+			return
+		}
+		writeTailnetPrivateJSON(w, map[string]any{
+			"surfaces": surfaces,
+		})
+	})
+	mux.HandleFunc("/tailnet/surfaces/", func(w http.ResponseWriter, r *http.Request) {
+		if router == nil || adminID == 0 {
+			http.Error(w, "tailnet router unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		suffix := strings.TrimPrefix(r.URL.Path, "/tailnet/surfaces/")
+		if !strings.HasSuffix(suffix, "/revoke") {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if strings.ToLower(strings.TrimSpace(r.Header.Get("X-Aphelion-Confirm"))) != "revoke" {
+			http.Error(w, "explicit revoke confirmation required", http.StatusPreconditionRequired)
+			return
+		}
+		surfaceID, err := url.PathUnescape(strings.TrimSuffix(suffix, "/revoke"))
+		if err != nil || strings.TrimSpace(surfaceID) == "" {
+			http.Error(w, "invalid tailnet surface id", http.StatusBadRequest)
+			return
+		}
+		surface, found, err := router.RevokeTailnetSurface(r.Context(), adminID, surfaceID, "private tailnet API revoke")
+		if err != nil {
+			http.Error(w, "tailnet surface revoke failed", http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, "tailnet surface not found", http.StatusNotFound)
+			return
+		}
+		writeTailnetPrivateJSON(w, map[string]any{
+			"surface": surface,
+			"revoked": true,
+		})
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		if router == nil || adminID == 0 {

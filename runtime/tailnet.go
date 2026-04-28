@@ -102,6 +102,27 @@ func (r *Runtime) TailnetSurfacesSnapshot() ([]core.TailnetSurfaceStatus, error)
 	return tailnetSurfaceStatusesFromRecords(surfaces), nil
 }
 
+func (r *Runtime) RevokeTailnetSurface(ctx context.Context, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error) {
+	_ = ctx
+	if r == nil || r.store == nil {
+		return core.TailnetSurfaceStatus{}, false, fmt.Errorf("runtime store unavailable")
+	}
+	surfaceID = strings.TrimSpace(surfaceID)
+	if surfaceID == "" {
+		return core.TailnetSurfaceStatus{}, false, fmt.Errorf("tailnet surface id is required")
+	}
+	previous, previousOK, err := r.store.TailnetSurface(surfaceID)
+	if err != nil {
+		return core.TailnetSurfaceStatus{}, false, err
+	}
+	revoked, ok, err := r.store.RevokeTailnetSurface(surfaceID, reason, time.Now().UTC())
+	if err != nil || !ok {
+		return core.TailnetSurfaceStatus{}, ok, err
+	}
+	r.recordTailnetSurfaceAudit("revoke", revoked, previous, previousOK, strings.TrimSpace(reason))
+	return tailnetSurfaceStatusesFromRecords([]session.TailnetSurfaceRecord{revoked})[0], true, nil
+}
+
 func (r *Runtime) attachTailnetSurfaces(snapshot *core.TailnetStatusSnapshot) {
 	if r == nil || snapshot == nil || r.store == nil {
 		return
@@ -109,12 +130,27 @@ func (r *Runtime) attachTailnetSurfaces(snapshot *core.TailnetStatusSnapshot) {
 	if snapshot.Parent != nil && snapshot.Parent.Enabled {
 		record := tailnetSurfaceRecordFromParent(*snapshot.Parent, *snapshot)
 		if record.SurfaceID != "" {
-			if _, err := r.store.UpsertTailnetSurface(record); err != nil {
+			previous, previousOK, err := r.store.TailnetSurface(record.SurfaceID)
+			if err != nil {
+				snapshot.Issues = append(snapshot.Issues, core.TailnetIssue{
+					Code:     "surface_registry_read_failed",
+					Severity: "warning",
+					Summary:  "Tailnet surface registry could not be read before update: " + err.Error(),
+				})
+			} else if previousOK && previous.Status == session.TailnetSurfaceStatusRevoked {
+				snapshot.Issues = append(snapshot.Issues, core.TailnetIssue{
+					Code:     "surface_revoked_but_observed",
+					Severity: "warning",
+					Summary:  fmt.Sprintf("Tailnet surface %s is revoked in the registry but still observed from the parent tsnet listener.", record.SurfaceID),
+				})
+			} else if stored, err := r.store.UpsertTailnetSurface(record); err != nil {
 				snapshot.Issues = append(snapshot.Issues, core.TailnetIssue{
 					Code:     "surface_registry_update_failed",
 					Severity: "warning",
 					Summary:  "Tailnet surface registry could not be updated: " + err.Error(),
 				})
+			} else if tailnetSurfaceAuditNeeded(previous, previousOK, stored) {
+				r.recordTailnetSurfaceAudit("upsert", stored, previous, previousOK, "parent_projection")
 			}
 		}
 	}
@@ -128,6 +164,7 @@ func (r *Runtime) attachTailnetSurfaces(snapshot *core.TailnetStatusSnapshot) {
 		return
 	}
 	snapshot.Surfaces = surfaces
+	appendTailnetSurfaceRegistryIssues(snapshot)
 }
 
 func tailnetSurfaceRecordFromParent(parent core.TailnetParentStatus, snapshot core.TailnetStatusSnapshot) session.TailnetSurfaceRecord {
@@ -187,6 +224,69 @@ func tailnetSurfaceStatusesFromRecords(records []session.TailnetSurfaceRecord) [
 		})
 	}
 	return out
+}
+
+func appendTailnetSurfaceRegistryIssues(snapshot *core.TailnetStatusSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	for _, surface := range snapshot.Surfaces {
+		switch strings.TrimSpace(surface.Status) {
+		case session.TailnetSurfaceStatusDeclared:
+			if surface.LastObservedAt.IsZero() {
+				snapshot.Issues = append(snapshot.Issues, core.TailnetIssue{
+					Code:     "surface_declared_not_observed",
+					Severity: "warning",
+					Summary:  fmt.Sprintf("Tailnet surface %s is declared but has not been observed active yet.", strings.TrimSpace(surface.SurfaceID)),
+				})
+			}
+		}
+	}
+}
+
+func tailnetSurfaceAuditNeeded(previous session.TailnetSurfaceRecord, previousOK bool, next session.TailnetSurfaceRecord) bool {
+	if !previousOK {
+		return true
+	}
+	return strings.TrimSpace(previous.Status) != strings.TrimSpace(next.Status) ||
+		strings.TrimSpace(previous.URL) != strings.TrimSpace(next.URL) ||
+		strings.TrimSpace(previous.ListenAddr) != strings.TrimSpace(next.ListenAddr) ||
+		strings.TrimSpace(previous.Hostname) != strings.TrimSpace(next.Hostname) ||
+		strings.TrimSpace(previous.TailnetName) != strings.TrimSpace(next.TailnetName) ||
+		strings.TrimSpace(previous.LastError) != strings.TrimSpace(next.LastError) ||
+		strings.Join(session.NormalizeTailnetSurfaceRecord(previous).Tags, ",") != strings.Join(session.NormalizeTailnetSurfaceRecord(next).Tags, ",")
+}
+
+func (r *Runtime) recordTailnetSurfaceAudit(action string, next session.TailnetSurfaceRecord, previous session.TailnetSurfaceRecord, previousOK bool, reason string) {
+	if r == nil {
+		return
+	}
+	payload := map[string]any{
+		"action":       strings.TrimSpace(action),
+		"surface_id":   strings.TrimSpace(next.SurfaceID),
+		"owner_kind":   strings.TrimSpace(next.OwnerKind),
+		"owner_id":     strings.TrimSpace(next.OwnerID),
+		"surface_kind": strings.TrimSpace(next.SurfaceKind),
+		"name":         strings.TrimSpace(next.Name),
+		"status":       strings.TrimSpace(next.Status),
+		"url":          strings.TrimSpace(next.URL),
+		"reason":       strings.TrimSpace(reason),
+	}
+	if previousOK {
+		payload["previous_status"] = strings.TrimSpace(previous.Status)
+		payload["previous_url"] = strings.TrimSpace(previous.URL)
+	}
+	if errText := strings.TrimSpace(next.LastError); errText != "" {
+		payload["last_error"] = errText
+	}
+	r.recordExecutionEvent(
+		session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()},
+		core.ExecutionEventTailnetSurfaceChanged,
+		"tailnet",
+		strings.TrimSpace(next.Status),
+		payload,
+		time.Now().UTC(),
+	)
 }
 
 func firstTailnetSurfaceNonEmpty(values ...string) string {

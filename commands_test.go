@@ -107,108 +107,114 @@ func (s *stubCommandSender) AnswerCallbackQuery(_ context.Context, id string, te
 }
 
 type stubCommandRouter struct {
-	status                      core.SessionStatus
-	statusChat                  core.ChatStatusSnapshot
-	statusSystem                core.SystemStatusSnapshot
-	statusDurables              core.DurableAgentsStatusSnapshot
-	statusReadableSummary       string
-	statusMiniAppURL            string
-	tailnetStatus               core.TailnetStatusSnapshot
-	tailnetStatusErr            error
-	tailnetStatusSenderID       int64
-	tailnetSurfaces             []core.TailnetSurfaceStatus
-	tailnetSurfacesErr          error
-	tailnetSurfacesSenderID     int64
-	statusChatErr               error
-	statusSystemErr             error
-	statusDurablesErr           error
-	stop                        core.StopResult
-	stopInput                   int64
-	stopCalls                   int
-	streamControls              map[string]int64
-	streamStopID                string
-	streamStopChatID            int64
-	streamStopCalls             int
-	newResult                   core.NewSessionResult
-	newErr                      error
-	newChatID                   int64
-	newSenderID                 int64
-	detach                      core.DetachResult
-	detachErr                   error
-	detachChatID                int64
-	detachSenderID              int64
-	personaEffort               string
-	governorEffort              string
-	canRestart                  bool
-	personaModel                string
-	personaModelOptions         []string
-	governorEffortOptions       []string
-	setPersonaModelInput        string
-	setGovernorEffortInput      string
-	setPersonaModelReturn       string
-	setGovernorEffortReturn     string
-	setPersonaModelErr          error
-	setGovernorEffortErr        error
-	modelStatuses               []core.ModelSlotStatus
-	modelStatusesErr            error
-	validateModelSlotInput      core.ModelSlotConfig
-	validateModelSlotReturn     core.ModelValidation
-	setModelSlotInput           core.ModelSlotConfig
-	setModelSlotActor           string
-	setModelSlotReason          string
-	setModelSlotTTL             time.Duration
-	setModelSlotReturn          core.ModelSlotStatus
-	setModelSlotErr             error
-	rollbackModelSlotInput      string
-	rollbackModelSlotActor      string
-	rollbackModelSlotReason     string
-	rollbackModelSlotReturn     core.ModelSlotStatus
-	rollbackModelSlotErr        error
-	clearModelSlotInput         string
-	clearModelSlotActor         string
-	clearModelSlotReason        string
-	clearModelSlotReturn        core.ModelSlotStatus
-	clearModelSlotErr           error
-	modelSlotHistoryInput       string
-	modelSlotHistoryLimit       int
-	modelSlotHistoryReturn      []session.ModelSlotOverrideRecord
-	modelSlotHistoryErr         error
-	continuationState           session.ContinuationState
-	continuationStateInput      int64
-	continuationStateErr        error
-	approveContinuationInput    int64
-	approveContinuationApprover int64
-	stopContinuationInput       int64
-	stopContinuationResult      core.StopResult
-	triggerContinuationInput    int64
-	restartInput                int64
-	restartCalls                int
-	queuedReinstallMsg          *core.InboundMessage
-	queuedDoctorMsg             *core.InboundMessage
-	queueDoctorErr              error
-	durableWizardChatID         int64
-	durableWizardSenderID       int64
-	durableWizardAction         string
-	durableWizardAgentID        string
-	durableWizardAnswers        map[string]any
-	durableWizardResult         string
-	durableWizardErr            error
-	durableAgentsList           []core.DurableAgentStatusSnapshot
-	durableAgentsListErr        error
-	durableAgentsListSenderID   int64
-	startDurableChatID          int64
-	startDurableSenderID        int64
-	startDurableAgentID         string
-	startDurableResult          string
-	startDurableErr             error
-	memoryReviewBySource        map[memoryReviewSource]memoryReviewSnapshot
-	memoryReviewErr             error
-	memoryReviewChatID          int64
-	memoryReviewSenderID        int64
-	memoryReviewSource          memoryReviewSource
-	memoryFocusByChat           map[int64]core.MemoryFocus
-	clearMemoryFocusChatID      int64
-	clearMemoryFocusResult      bool
+	status                       core.SessionStatus
+	statusChat                   core.ChatStatusSnapshot
+	statusSystem                 core.SystemStatusSnapshot
+	statusDurables               core.DurableAgentsStatusSnapshot
+	statusReadableSummary        string
+	statusMiniAppURL             string
+	tailnetStatus                core.TailnetStatusSnapshot
+	tailnetStatusErr             error
+	tailnetStatusSenderID        int64
+	tailnetSurfaces              []core.TailnetSurfaceStatus
+	tailnetSurfacesErr           error
+	tailnetSurfacesSenderID      int64
+	revokeTailnetSurfaceSenderID int64
+	revokeTailnetSurfaceID       string
+	revokeTailnetSurfaceReason   string
+	revokeTailnetSurfaceReturn   core.TailnetSurfaceStatus
+	revokeTailnetSurfaceOK       bool
+	revokeTailnetSurfaceErr      error
+	statusChatErr                error
+	statusSystemErr              error
+	statusDurablesErr            error
+	stop                         core.StopResult
+	stopInput                    int64
+	stopCalls                    int
+	streamControls               map[string]int64
+	streamStopID                 string
+	streamStopChatID             int64
+	streamStopCalls              int
+	newResult                    core.NewSessionResult
+	newErr                       error
+	newChatID                    int64
+	newSenderID                  int64
+	detach                       core.DetachResult
+	detachErr                    error
+	detachChatID                 int64
+	detachSenderID               int64
+	personaEffort                string
+	governorEffort               string
+	canRestart                   bool
+	personaModel                 string
+	personaModelOptions          []string
+	governorEffortOptions        []string
+	setPersonaModelInput         string
+	setGovernorEffortInput       string
+	setPersonaModelReturn        string
+	setGovernorEffortReturn      string
+	setPersonaModelErr           error
+	setGovernorEffortErr         error
+	modelStatuses                []core.ModelSlotStatus
+	modelStatusesErr             error
+	validateModelSlotInput       core.ModelSlotConfig
+	validateModelSlotReturn      core.ModelValidation
+	setModelSlotInput            core.ModelSlotConfig
+	setModelSlotActor            string
+	setModelSlotReason           string
+	setModelSlotTTL              time.Duration
+	setModelSlotReturn           core.ModelSlotStatus
+	setModelSlotErr              error
+	rollbackModelSlotInput       string
+	rollbackModelSlotActor       string
+	rollbackModelSlotReason      string
+	rollbackModelSlotReturn      core.ModelSlotStatus
+	rollbackModelSlotErr         error
+	clearModelSlotInput          string
+	clearModelSlotActor          string
+	clearModelSlotReason         string
+	clearModelSlotReturn         core.ModelSlotStatus
+	clearModelSlotErr            error
+	modelSlotHistoryInput        string
+	modelSlotHistoryLimit        int
+	modelSlotHistoryReturn       []session.ModelSlotOverrideRecord
+	modelSlotHistoryErr          error
+	continuationState            session.ContinuationState
+	continuationStateInput       int64
+	continuationStateErr         error
+	approveContinuationInput     int64
+	approveContinuationApprover  int64
+	stopContinuationInput        int64
+	stopContinuationResult       core.StopResult
+	triggerContinuationInput     int64
+	restartInput                 int64
+	restartCalls                 int
+	queuedReinstallMsg           *core.InboundMessage
+	queuedDoctorMsg              *core.InboundMessage
+	queueDoctorErr               error
+	durableWizardChatID          int64
+	durableWizardSenderID        int64
+	durableWizardAction          string
+	durableWizardAgentID         string
+	durableWizardAnswers         map[string]any
+	durableWizardResult          string
+	durableWizardErr             error
+	durableAgentsList            []core.DurableAgentStatusSnapshot
+	durableAgentsListErr         error
+	durableAgentsListSenderID    int64
+	startDurableChatID           int64
+	startDurableSenderID         int64
+	startDurableAgentID          string
+	startDurableResult           string
+	startDurableErr              error
+	memoryReviewBySource         map[memoryReviewSource]memoryReviewSnapshot
+	memoryReviewErr              error
+	memoryReviewChatID           int64
+	memoryReviewSenderID         int64
+	memoryReviewSource           memoryReviewSource
+	memoryFocusByChat            map[int64]core.MemoryFocus
+	clearMemoryFocusChatID       int64
+	clearMemoryFocusResult       bool
 }
 
 func (s *stubCommandRouter) Stop(chatID int64) core.StopResult {
@@ -312,6 +318,20 @@ func (s *stubCommandRouter) TailnetSurfaces(senderID int64) ([]core.TailnetSurfa
 		return nil, s.tailnetSurfacesErr
 	}
 	return append([]core.TailnetSurfaceStatus(nil), s.tailnetSurfaces...), nil
+}
+
+func (s *stubCommandRouter) RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error) {
+	_ = ctx
+	s.revokeTailnetSurfaceSenderID = senderID
+	s.revokeTailnetSurfaceID = surfaceID
+	s.revokeTailnetSurfaceReason = reason
+	if s.revokeTailnetSurfaceErr != nil {
+		return core.TailnetSurfaceStatus{}, false, s.revokeTailnetSurfaceErr
+	}
+	if strings.TrimSpace(s.revokeTailnetSurfaceReturn.SurfaceID) != "" || s.revokeTailnetSurfaceOK {
+		return s.revokeTailnetSurfaceReturn, s.revokeTailnetSurfaceOK, nil
+	}
+	return core.TailnetSurfaceStatus{SurfaceID: surfaceID, Status: "revoked"}, true, nil
 }
 
 func (s stubCommandRouter) CurrentEfforts() (string, string) {
@@ -1638,6 +1658,37 @@ func TestHandleTelegramCommandTailnetSurfacesShowsRegistry(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandTailnetRevokeShowsConfirmation(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		Text:      "/tailnet revoke parent:tsnet_http:status",
+		MessageID: 55,
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "Revoke tailnet surface?") || !strings.Contains(got, "parent:tsnet_http:status") {
+		t.Fatalf("revoke prompt = %q, want explicit surface confirmation", got)
+	}
+	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].Text != "Cancel" || sender.inline[0].rows[0][1].Text != "Revoke" {
+		t.Fatalf("revoke rows = %#v, want cancel/revoke", sender.inline[0].rows)
+	}
+	if router.revokeTailnetSurfaceID != "" {
+		t.Fatalf("revokeTailnetSurfaceID = %q, want no revoke before confirmation", router.revokeTailnetSurfaceID)
+	}
+}
+
 func TestHandleTelegramCommandTailnetDeniesNonAdmin(t *testing.T) {
 	t.Parallel()
 
@@ -2276,6 +2327,75 @@ func TestHandleTelegramCommandCallbackTailnetSurfacesForAdmin(t *testing.T) {
 	}
 	if router.tailnetSurfacesSenderID != 1001 || router.tailnetStatusSenderID != 0 {
 		t.Fatalf("tailnet calls surfaces=%d status=%d, want surfaces only", router.tailnetSurfacesSenderID, router.tailnetStatusSenderID)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetRevokeForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		revokeTailnetSurfaceReturn: core.TailnetSurfaceStatus{
+			SurfaceID: "parent:tsnet_http:status",
+			Status:    "revoked",
+		},
+		revokeTailnetSurfaceOK: true,
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-revoke",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "tailnet_revoke:confirm:parent:tsnet_http:status",
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.revokeTailnetSurfaceSenderID != 1001 || router.revokeTailnetSurfaceID != "parent:tsnet_http:status" {
+		t.Fatalf("revoke call sender=%d surface=%q, want admin surface revoke", router.revokeTailnetSurfaceSenderID, router.revokeTailnetSurfaceID)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want confirmation edit", len(sender.editClear))
+	}
+	if got := sender.editClear[0].text; !strings.Contains(got, "Tailnet surface revoked") || !strings.Contains(got, "parent:tsnet_http:status") {
+		t.Fatalf("revoke edit = %q, want revoked confirmation", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetRevokeDeniedForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-revoke-denied",
+		From: &telegram.User{ID: 1002},
+		Data: "tailnet_revoke:confirm:parent:tsnet_http:status",
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 || !strings.Contains(sender.answers[0].text, "admin") {
+		t.Fatalf("answers = %#v, want admin denial", sender.answers)
+	}
+	if router.revokeTailnetSurfaceID != "" {
+		t.Fatalf("revokeTailnetSurfaceID = %q, want no revoke", router.revokeTailnetSurfaceID)
 	}
 }
 

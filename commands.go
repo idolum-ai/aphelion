@@ -45,6 +45,7 @@ type commandRouter interface {
 	StatusMiniAppURL(chatID int64, senderID int64) string
 	TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error)
 	TailnetSurfaces(senderID int64) ([]core.TailnetSurfaceStatus, error)
+	RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error)
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
@@ -89,7 +90,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "status", Description: "Show live status and controls"},
 	{Command: "debug", Description: "Show a detailed debug snapshot"},
 	{Command: "doctor", Description: "Run an admin runtime diagnosis"},
-	{Command: "tailnet", Description: "Show read-only tailnet status"},
+	{Command: "tailnet", Description: "Show tailnet status and controls"},
 	{Command: "agents", Description: "List durable agents and controls"},
 	{Command: "memory", Description: "Review memory and set focus"},
 	{Command: "model", Description: "Show and change model slots"},
@@ -181,12 +182,25 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			text = "Tailnet diagnostics are admin only."
 			break
 		}
-		if action, _ := nextTailnetToken(telegramCommandArgs(msg.Text)); action == tailnetCommandSurfaces {
+		action, rest := nextTailnetToken(telegramCommandArgs(msg.Text))
+		if action == tailnetCommandSurfaces {
 			surfaces, err := router.TailnetSurfaces(msg.SenderID)
 			if err != nil {
 				return true, err
 			}
 			rendered, rows := renderTailnetSurfacesCommand(surfaces)
+			if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
+				return true, err
+			}
+			return true, nil
+		}
+		if action == tailnetCommandRevoke {
+			surfaceID, _ := nextTailnetToken(rest)
+			if surfaceID == "" {
+				text = "Usage: /tailnet revoke <surface_id>"
+				break
+			}
+			rendered, rows := renderTailnetRevokeConfirmation(surfaceID)
 			if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
 				return true, err
 			}
@@ -354,6 +368,52 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			return true, err
 		}
 		if err := deliverDebugCallbackView(ctx, sender, chatID, messageID, fullText); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+	if action, surfaceID, ok := decodeTailnetRevokeCallbackData(cb.Data); ok {
+		chatID := int64(0)
+		messageID := int64(0)
+		senderID := int64(0)
+		if cb.Message != nil {
+			messageID = cb.Message.MessageID
+			if cb.Message.Chat != nil {
+				chatID = cb.Message.Chat.ID
+			}
+		}
+		if cb.From != nil {
+			senderID = cb.From.ID
+		}
+		if chatID == 0 || messageID == 0 {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleStatusCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		if !router.CanRestart(senderID) {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Tailnet controls are admin only."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		if action == tailnetRevokeCallbackCancel {
+			if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, renderTailnetRevokeCanceled(surfaceID)); err != nil {
+				return true, err
+			}
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		surface, found, err := router.RevokeTailnetSurface(ctx, senderID, surfaceID, "telegram tailnet revoke confirmation")
+		if err != nil {
+			return true, err
+		}
+		if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, renderTailnetRevokeResult(surfaceID, surface, found)); err != nil {
+			return true, err
+		}
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
 		return true, nil

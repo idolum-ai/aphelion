@@ -45,6 +45,10 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 			Backend: "cli",
 			Status:  "healthy",
 		},
+		tailnetSurfaces: []core.TailnetSurfaceStatus{{
+			SurfaceID: "parent:tsnet_http:status",
+			Status:    "active",
+		}},
 		statusSystem: core.SystemStatusSnapshot{
 			ActiveTurnCount: 1,
 		},
@@ -53,7 +57,7 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	}
 	handler := tailnetPrivateHTTPHandler(router, 1001)
 
-	for _, path := range []string{"/healthz", "/tailnet", "/status", "/doctor/latest"} {
+	for _, path := range []string{"/healthz", "/tailnet", "/tailnet/surfaces", "/status", "/doctor/latest"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -66,6 +70,47 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	}
 	if router.tailnetStatusSenderID != 1001 {
 		t.Fatalf("tailnet sender = %d, want admin id", router.tailnetStatusSenderID)
+	}
+	if router.tailnetSurfacesSenderID != 1001 {
+		t.Fatalf("tailnet surfaces sender = %d, want admin id", router.tailnetSurfacesSenderID)
+	}
+}
+
+func TestTailnetPrivateHTTPHandlerRevokeRequiresConfirmationHeader(t *testing.T) {
+	t.Parallel()
+
+	router := &stubCommandRouter{
+		canRestart: true,
+		revokeTailnetSurfaceReturn: core.TailnetSurfaceStatus{
+			SurfaceID: "parent:tsnet_http:status",
+			Status:    "revoked",
+		},
+		revokeTailnetSurfaceOK: true,
+	}
+	handler := tailnetPrivateHTTPHandler(router, 1001)
+
+	req := httptest.NewRequest(http.MethodPost, "/tailnet/surfaces/parent:tsnet_http:status/revoke", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("unconfirmed revoke status = %d body=%q, want 428", rec.Code, rec.Body.String())
+	}
+	if router.revokeTailnetSurfaceID != "" {
+		t.Fatalf("revokeTailnetSurfaceID = %q, want no revoke without confirmation", router.revokeTailnetSurfaceID)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/tailnet/surfaces/parent:tsnet_http:status/revoke", nil)
+	req.Header.Set("X-Aphelion-Confirm", "revoke")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("confirmed revoke status = %d body=%q, want 200", rec.Code, rec.Body.String())
+	}
+	if router.revokeTailnetSurfaceSenderID != 1001 || router.revokeTailnetSurfaceID != "parent:tsnet_http:status" {
+		t.Fatalf("revoke call sender=%d surface=%q, want admin surface revoke", router.revokeTailnetSurfaceSenderID, router.revokeTailnetSurfaceID)
+	}
+	if !strings.Contains(rec.Body.String(), `"revoked"`) {
+		t.Fatalf("confirmed revoke body = %q, want revoked payload", rec.Body.String())
 	}
 }
 
