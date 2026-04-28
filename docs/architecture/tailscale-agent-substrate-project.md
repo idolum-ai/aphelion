@@ -281,6 +281,87 @@ How it works:
 This enables a child to live near the hardware, files, service, or network it
 needs without making it independent of the parent.
 
+#### Supported remote child forms
+
+Remote children should not all be forced into the same runtime shape. Aphelion
+should support three forms, in increasing order of local autonomy.
+
+##### 1. Parent-orchestrated remote child
+
+This is the lightest remote form. The child host has Tailscale, Codex, a
+workspace, and Aphelion-managed memory/profile files. The parent reaches the
+host over the tailnet, starts a Codex run with the child's profile and policy,
+collects artifacts/status, and records the result in the parent session.
+
+What runs on the child host:
+
+- Tailscale daemon or Tailscale SSH.
+- Codex CLI/runtime.
+- Child workspace and memory/profile files.
+- Optional local tools already present on the host.
+
+What does not run on the child host:
+
+- no long-lived Aphelion child process.
+- no child private HTTP control plane.
+- no autonomous local scheduler unless separately configured.
+
+Use this when the main need is "do work near this host, filesystem, device, or
+private service" and the parent can remain the scheduler/governor.
+
+##### 2. Semi-living remote child
+
+This form adds a tiny local launcher but still avoids a full Aphelion child
+binary. The host has a systemd timer, cron job, launch agent, or signed wrapper
+that checks a parent-managed inbox, runs Codex with the child's profile, writes
+status/artifacts, and exits.
+
+What runs on the child host:
+
+- everything from parent-orchestrated mode.
+- a small launcher or scheduled wrapper.
+- local inbox/outbox paths or a private tailnet endpoint for work packets.
+
+What this enables:
+
+- periodic reports even if the parent does not actively SSH in.
+- bounded local autonomy.
+- simpler deployment than a full child control plane.
+
+Use this when the child should wake itself occasionally but does not need rich
+local queues, live RPC, or independent long-running services.
+
+##### 3. Fully living governed child
+
+This form runs `aphelion` in child mode, an `aphelion-child` binary, or an
+equivalent supervised service. It has its own local control loop, private
+tailnet status/control surface, policy/profile sync, health reporting, and
+reconnect/update behavior.
+
+What runs on the child host:
+
+- child-mode Aphelion runtime.
+- local state, memory, workspace, and profile roots.
+- child `tsnet` node or tagged Tailscale identity.
+- private `/status` and optional parent-child RPC surface.
+- signed updater or supervised service manager.
+
+What this enables:
+
+- durable local lifecycle.
+- richer status and doctor evidence.
+- local queueing and reconnect.
+- governed upward negotiation even while remote.
+- safer long-lived delegation of host-adjacent work.
+
+Use this when the child is a stable private network participant with continuing
+responsibilities and enough value to justify installation and update machinery.
+
+The first implementation after declarations should prefer form 1 unless the
+target use case specifically requires form 2 or 3. Form 1 proves the highest
+value assumption with the smallest remote footprint: Aphelion can safely animate
+Codex on a tailnet-reachable host while keeping governance in the parent.
+
 #### Child host access model
 
 The parent agent should access a child host through explicit, typed lanes rather
@@ -302,10 +383,10 @@ is evidence that the request came from the expected private node; Aphelion still
 checks durable child policy, capability grants, parent/admin admission, and
 decision records.
 
-#### Child host installation model
+#### Full child host installation model
 
-A child host should receive the smallest runtime needed to materialize the
-declared child:
+A fully living child host should receive the smallest runtime needed to
+materialize the declared child:
 
 - `aphelion-child` or the main `aphelion` binary in child mode.
 - a child-specific config file containing:
