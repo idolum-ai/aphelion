@@ -49,6 +49,7 @@ These invariants are normative for architecture and requirements alignment:
 
 - [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): draft convergence map for canonical truth surfaces and safer autonomy.
 - [organic-agent-owned-tools-proposal.md](organic-agent-owned-tools-proposal.md): draft proposal for moving from core-embedded domain tools toward agent-owned external tools with governed install and attestation.
+- [tailscale-agent-substrate-project.md](tailscale-agent-substrate-project.md): draft project plan for making Tailscale/tsnet a first-class private network substrate for Aphelion and durable children.
 
 Treat this section as design-direction input. It is not a normative implementation
 contract until explicitly promoted into the normative map above.
