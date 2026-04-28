@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -195,6 +196,20 @@ func TestParentServiceCanRestartAfterClose(t *testing.T) {
 	}()
 	if node.startCount != 2 || node.listenCount != 2 {
 		t.Fatalf("node start/listen = %d/%d, want restart 2/2", node.startCount, node.listenCount)
+	}
+}
+
+func TestRealParentNodeAdvertisesConfiguredTags(t *testing.T) {
+	t.Parallel()
+
+	node := newRealParentNode(ParentOptions{
+		Hostname: "aphelion-test",
+		StateDir: t.TempDir(),
+		AuthKey:  "tskey-auth-test",
+		Tags:     []string{"tag:admin", "tag:aphelion", "tag:admin"},
+	})
+	if got, want := node.server.AdvertiseTags, []string{"tag:admin", "tag:aphelion"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("AdvertiseTags = %#v, want %#v", got, want)
 	}
 }
 

@@ -192,9 +192,10 @@ type realParentNode struct {
 
 func newRealParentNode(opts ParentOptions) *realParentNode {
 	server := &tsnet.Server{
-		Dir:      strings.TrimSpace(opts.StateDir),
-		Hostname: strings.TrimSpace(opts.Hostname),
-		AuthKey:  strings.TrimSpace(opts.AuthKey),
+		Dir:           strings.TrimSpace(opts.StateDir),
+		Hostname:      strings.TrimSpace(opts.Hostname),
+		AuthKey:       strings.TrimSpace(opts.AuthKey),
+		AdvertiseTags: normalizeList(opts.Tags),
 	}
 	if opts.Logf != nil {
 		server.Logf = opts.Logf

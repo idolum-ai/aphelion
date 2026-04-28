@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -99,7 +100,7 @@ func (r *Runtime) pollDurableWakeAgents(ctx context.Context, now time.Time) erro
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "; "))
+		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
 }

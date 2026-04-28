@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -142,7 +143,7 @@ func (c *HTTPClient) postJSON(ctx context.Context, path string, body any, out an
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var decoded map[string]string
 		if err := json.NewDecoder(resp.Body).Decode(&decoded); err == nil && strings.TrimSpace(decoded["error"]) != "" {
-			return fmt.Errorf(decoded["error"])
+			return errors.New(decoded["error"])
 		}
 		return fmt.Errorf("durable agent http request failed: status=%d", resp.StatusCode)
 	}
