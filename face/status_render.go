@@ -393,6 +393,27 @@ func renderTailnetStatusBlock(snapshot *core.TailnetStatusSnapshot) []string {
 		}
 		lines = append(lines, parentLine)
 	}
+	if len(snapshot.Surfaces) > 0 {
+		lines = append(lines, fmt.Sprintf("  surfaces count=%d", len(snapshot.Surfaces)))
+		limit := len(snapshot.Surfaces)
+		if limit > 4 {
+			limit = 4
+		}
+		for i := 0; i < limit; i++ {
+			surface := snapshot.Surfaces[i]
+			surfaceLine := fmt.Sprintf("  surface id=%s status=%s kind=%s name=%s", strings.TrimSpace(surface.SurfaceID), strings.TrimSpace(surface.Status), strings.TrimSpace(surface.SurfaceKind), strings.TrimSpace(surface.Name))
+			if url := strings.TrimSpace(surface.URL); url != "" {
+				surfaceLine += " url=" + url
+			}
+			if errText := strings.TrimSpace(surface.LastError); errText != "" {
+				surfaceLine += " error=" + quoteStatusField(truncateStatusField(errText, 120))
+			}
+			lines = append(lines, surfaceLine)
+		}
+		if len(snapshot.Surfaces) > limit {
+			lines = append(lines, fmt.Sprintf("  surfaces_omitted=%d", len(snapshot.Surfaces)-limit))
+		}
+	}
 	limit := len(snapshot.Issues)
 	if limit > 4 {
 		limit = 4

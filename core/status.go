@@ -219,6 +219,7 @@ type TailnetStatusSnapshot struct {
 	ExpectedHostname  string
 	ExpectedTags      []string
 	Parent            *TailnetParentStatus
+	Surfaces          []TailnetSurfaceStatus
 	Issues            []TailnetIssue
 	RawStatusError    string
 	RawIPError        string
@@ -241,6 +242,26 @@ type TailnetParentStatus struct {
 	AuthKeySource string
 	Tags          []string
 	LastError     string
+}
+
+type TailnetSurfaceStatus struct {
+	SurfaceID      string
+	OwnerKind      string
+	OwnerID        string
+	SurfaceKind    string
+	Name           string
+	Hostname       string
+	TailnetName    string
+	ListenAddr     string
+	URL            string
+	Tags           []string
+	Status         string
+	LastError      string
+	DeclaredAt     time.Time
+	ActivatedAt    time.Time
+	LastObservedAt time.Time
+	RevokedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type DurableAgentStatusSnapshot struct {

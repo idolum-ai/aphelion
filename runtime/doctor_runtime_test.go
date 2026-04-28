@@ -139,6 +139,7 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		"Recent Service Log Tail",
 		"Known Issue Status Checks",
 		"issue=dynamic_skills_prompt_loading status=likely_fixed",
+		"tailnet_surfaces: none",
 		"allowed_statuses: active, likely_fixed, historical_resolved, residual_risk, unknown",
 	} {
 		if !strings.Contains(userPrompt, want) {

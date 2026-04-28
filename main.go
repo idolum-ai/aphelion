@@ -266,6 +266,16 @@ func (c telegramCommandControl) TailnetStatus(ctx context.Context, senderID int6
 	return c.rt.TailnetStatusSnapshot(ctx)
 }
 
+func (c telegramCommandControl) TailnetSurfaces(senderID int64) ([]core.TailnetSurfaceStatus, error) {
+	if !c.CanRestart(senderID) {
+		return nil, fmt.Errorf("tailnet surfaces denied")
+	}
+	if c.rt == nil {
+		return nil, nil
+	}
+	return c.rt.TailnetSurfacesSnapshot()
+}
+
 func (c telegramCommandControl) ContinuationState(chatID int64) (session.ContinuationState, error) {
 	if c.rt == nil {
 		return session.ContinuationState{}, nil

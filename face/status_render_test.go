@@ -278,6 +278,13 @@ func TestRenderTelegramStatusSystemIncludesTailnetSummary(t *testing.T) {
 				ListenAddr:  ":8765",
 				MagicDNSURL: "http://aphelion.example.ts.net:8765",
 			},
+			Surfaces: []core.TailnetSurfaceStatus{{
+				SurfaceID:   "parent:tsnet_http:status",
+				SurfaceKind: "tsnet_http",
+				Name:        "status",
+				URL:         "http://aphelion.example.ts.net:8765/status",
+				Status:      "active",
+			}},
 			Issues: []core.TailnetIssue{{
 				Code:     "magicdns_missing",
 				Severity: "warning",
@@ -292,6 +299,8 @@ func TestRenderTelegramStatusSystemIncludesTailnetSummary(t *testing.T) {
 		"tailnet=example.ts.net",
 		"parent_tsnet enabled=true running=true",
 		"magic_url=http://aphelion.example.ts.net:8765",
+		"surfaces count=1",
+		"surface id=parent:tsnet_http:status status=active",
 		"issue code=magicdns_missing",
 	} {
 		if !strings.Contains(out, needle) {

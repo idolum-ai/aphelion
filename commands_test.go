@@ -116,6 +116,9 @@ type stubCommandRouter struct {
 	tailnetStatus               core.TailnetStatusSnapshot
 	tailnetStatusErr            error
 	tailnetStatusSenderID       int64
+	tailnetSurfaces             []core.TailnetSurfaceStatus
+	tailnetSurfacesErr          error
+	tailnetSurfacesSenderID     int64
 	statusChatErr               error
 	statusSystemErr             error
 	statusDurablesErr           error
@@ -301,6 +304,14 @@ func (s *stubCommandRouter) TailnetStatus(ctx context.Context, senderID int64) (
 		Status:  "disabled",
 		Summary: "Tailscale integration is disabled.",
 	}, nil
+}
+
+func (s *stubCommandRouter) TailnetSurfaces(senderID int64) ([]core.TailnetSurfaceStatus, error) {
+	s.tailnetSurfacesSenderID = senderID
+	if s.tailnetSurfacesErr != nil {
+		return nil, s.tailnetSurfacesErr
+	}
+	return append([]core.TailnetSurfaceStatus(nil), s.tailnetSurfaces...), nil
 }
 
 func (s stubCommandRouter) CurrentEfforts() (string, string) {
@@ -1579,8 +1590,51 @@ func TestHandleTelegramCommandTailnetShowsReadOnlyStatus(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet") || !strings.Contains(got, "Status: healthy") || !strings.Contains(got, "aphelion.example.ts.net") || !strings.Contains(got, "Parent tsnet") || !strings.Contains(got, "http://aphelion.example.ts.net:8765") {
 		t.Fatalf("tailnet text = %q, want compact status", got)
 	}
-	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].URL != "http://aphelion.example.ts.net:8765/status" {
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 3 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" || sender.inline[0].rows[0][2].URL != "http://aphelion.example.ts.net:8765/status" {
 		t.Fatalf("tailnet rows = %#v, want refresh", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandTailnetSurfacesShowsRegistry(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetSurfaces: []core.TailnetSurfaceStatus{{
+			SurfaceID:   "parent:tsnet_http:status",
+			OwnerKind:   "parent",
+			OwnerID:     "aphelion",
+			SurfaceKind: "tsnet_http",
+			Name:        "status",
+			Hostname:    "aphelion",
+			TailnetName: "example.ts.net",
+			URL:         "http://aphelion.example.ts.net:8765/status",
+			Status:      "active",
+		}},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1001,
+		Text:     "/tailnet surfaces",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.tailnetSurfacesSenderID != 1001 || router.tailnetStatusSenderID != 0 {
+		t.Fatalf("tailnet calls surfaces=%d status=%d, want surfaces only", router.tailnetSurfacesSenderID, router.tailnetStatusSenderID)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet Surfaces") || !strings.Contains(got, "active status") || !strings.Contains(got, "http://aphelion.example.ts.net:8765/status") {
+		t.Fatalf("tailnet surfaces text = %q, want registry surface", got)
+	}
+	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].CallbackData != "tailnet:surfaces" {
+		t.Fatalf("tailnet surfaces rows = %#v, want status/refresh", sender.inline[0].rows)
 	}
 }
 
@@ -2177,6 +2231,51 @@ func TestHandleTelegramCommandCallbackTailnetRefreshForAdmin(t *testing.T) {
 	}
 	if got := sender.editInline[0].text; !strings.Contains(got, "Status: degraded") || !strings.Contains(got, "magicdns_missing") {
 		t.Fatalf("tailnet callback text = %q, want refreshed tailnet status", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetSurfacesForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetSurfaces: []core.TailnetSurfaceStatus{{
+			SurfaceID:   "parent:tsnet_http:status",
+			OwnerKind:   "parent",
+			OwnerID:     "aphelion",
+			SurfaceKind: "tsnet_http",
+			Name:        "status",
+			URL:         "http://aphelion.example.ts.net:8765/status",
+			Status:      "active",
+		}},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-surfaces",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "tailnet:surfaces",
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "Tailnet Surfaces") || !strings.Contains(got, "active status") {
+		t.Fatalf("tailnet surfaces callback text = %q, want refreshed surfaces", got)
+	}
+	if router.tailnetSurfacesSenderID != 1001 || router.tailnetStatusSenderID != 0 {
+		t.Fatalf("tailnet calls surfaces=%d status=%d, want surfaces only", router.tailnetSurfacesSenderID, router.tailnetStatusSenderID)
 	}
 }
 

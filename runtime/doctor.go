@@ -911,6 +911,14 @@ func (r *Runtime) writeDoctorTailnetDiagnostics(ctx context.Context, b *strings.
 		writeDoctorKV(b, "tailnet_parent_auth_key_source", parent.AuthKeySource)
 		writeDoctorKV(b, "tailnet_parent_last_error", parent.LastError)
 	}
+	if len(snapshot.Surfaces) == 0 {
+		writeDoctorLine(b, "tailnet_surfaces: none")
+	} else {
+		writeDoctorLine(b, "tailnet_surfaces:")
+		for _, surface := range snapshot.Surfaces {
+			writeDoctorLine(b, fmt.Sprintf("- id=%s status=%s kind=%s name=%s url=%q error=%q", strings.TrimSpace(surface.SurfaceID), strings.TrimSpace(surface.Status), strings.TrimSpace(surface.SurfaceKind), strings.TrimSpace(surface.Name), truncatePreview(surface.URL, 220), truncatePreview(surface.LastError, 220)))
+		}
+	}
 	if len(snapshot.Issues) == 0 {
 		writeDoctorLine(b, "tailnet_issues: none")
 		return

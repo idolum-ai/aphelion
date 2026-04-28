@@ -44,6 +44,7 @@ type commandRouter interface {
 	StatusReadableSummary(ctx context.Context, view string, statusText string) string
 	StatusMiniAppURL(chatID int64, senderID int64) string
 	TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error)
+	TailnetSurfaces(senderID int64) ([]core.TailnetSurfaceStatus, error)
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
@@ -179,6 +180,17 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		if !isAdmin {
 			text = "Tailnet diagnostics are admin only."
 			break
+		}
+		if action, _ := nextTailnetToken(telegramCommandArgs(msg.Text)); action == tailnetCommandSurfaces {
+			surfaces, err := router.TailnetSurfaces(msg.SenderID)
+			if err != nil {
+				return true, err
+			}
+			rendered, rows := renderTailnetSurfacesCommand(surfaces)
+			if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
+				return true, err
+			}
+			return true, nil
 		}
 		snapshot, err := router.TailnetStatus(ctx, msg.SenderID)
 		if err != nil {
@@ -359,7 +371,7 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		if cb.From != nil {
 			senderID = cb.From.ID
 		}
-		if action != tailnetCallbackRefresh || chatID == 0 || messageID == 0 {
+		if (action != tailnetCallbackRefresh && action != tailnetCallbackSurfaces) || chatID == 0 || messageID == 0 {
 			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleStatusCallbackText); err != nil {
 				if !telegram.IsStaleCallbackQueryError(err) {
 					return true, err
@@ -380,11 +392,21 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 				return true, err
 			}
 		}
-		snapshot, err := router.TailnetStatus(ctx, senderID)
-		if err != nil {
-			return true, err
+		var rendered string
+		var rows [][]telegram.InlineButton
+		if action == tailnetCallbackSurfaces {
+			surfaces, err := router.TailnetSurfaces(senderID)
+			if err != nil {
+				return true, err
+			}
+			rendered, rows = renderTailnetSurfacesCommand(surfaces)
+		} else {
+			snapshot, err := router.TailnetStatus(ctx, senderID)
+			if err != nil {
+				return true, err
+			}
+			rendered, rows = renderTailnetCommand(snapshot)
 		}
-		rendered, rows := renderTailnetCommand(snapshot)
 		if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, rendered, "", rows); err != nil {
 			return true, err
 		}

@@ -12,6 +12,8 @@ import (
 
 const tailnetCallbackPrefix = "tailnet:"
 const tailnetCallbackRefresh = "refresh"
+const tailnetCallbackSurfaces = "surfaces"
+const tailnetCommandSurfaces = "surfaces"
 
 func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]telegram.InlineButton) {
 	lines := []string{"Tailnet"}
@@ -33,6 +35,9 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 	}
 	if snapshot.NetcheckAvailable && strings.TrimSpace(snapshot.NetcheckSummary) != "" {
 		lines = append(lines, "Netcheck: "+truncateTailnetLine(snapshot.NetcheckSummary, 180))
+	}
+	if len(snapshot.Surfaces) > 0 {
+		lines = append(lines, fmt.Sprintf("Surfaces: %d registered", len(snapshot.Surfaces)))
 	}
 	privateStatusURL := ""
 	if snapshot.Parent != nil {
@@ -73,6 +78,7 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 		}
 	}
 	row := []telegram.InlineButton{{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)}}
+	row = append(row, telegram.InlineButton{Text: "Surfaces", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)})
 	if privateStatusURL != "" {
 		row = append(row, telegram.InlineButton{Text: "Open Status", URL: privateStatusURL})
 	}
@@ -93,9 +99,64 @@ func decodeTailnetCallbackData(data string) (string, bool) {
 	switch action {
 	case tailnetCallbackRefresh:
 		return action, true
+	case tailnetCallbackSurfaces:
+		return action, true
 	default:
 		return "", false
 	}
+}
+
+func renderTailnetSurfacesCommand(surfaces []core.TailnetSurfaceStatus) (string, [][]telegram.InlineButton) {
+	lines := []string{"Tailnet Surfaces"}
+	if len(surfaces) == 0 {
+		lines = append(lines, "- none registered")
+	} else {
+		limit := len(surfaces)
+		if limit > 10 {
+			limit = 10
+		}
+		for i := 0; i < limit; i++ {
+			surface := surfaces[i]
+			label := firstTailnetNonEmpty(surface.Name, surface.SurfaceID, "surface")
+			owner := strings.Trim(strings.TrimSpace(surface.OwnerKind)+"/"+strings.TrimSpace(surface.OwnerID), "/")
+			line := fmt.Sprintf("- %s %s", firstTailnetNonEmpty(surface.Status, "unknown"), label)
+			if kind := strings.TrimSpace(surface.SurfaceKind); kind != "" {
+				line += " kind=" + kind
+			}
+			if owner != "" {
+				line += " owner=" + owner
+			}
+			lines = append(lines, truncateTailnetLine(line, 220))
+			if url := strings.TrimSpace(surface.URL); url != "" {
+				lines = append(lines, "  url: "+truncateTailnetLine(url, 220))
+			}
+			if host := firstTailnetNonEmpty(surface.Hostname, surface.TailnetName); host != "" {
+				lines = append(lines, "  host: "+truncateTailnetLine(host, 160))
+			}
+			if errText := strings.TrimSpace(surface.LastError); errText != "" {
+				lines = append(lines, "  error: "+truncateTailnetLine(errText, 180))
+			}
+		}
+		if len(surfaces) > limit {
+			lines = append(lines, fmt.Sprintf("- %d more surface(s) omitted", len(surfaces)-limit))
+		}
+	}
+	rows := [][]telegram.InlineButton{{
+		{Text: "Status", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)},
+		{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackSurfaces)},
+	}}
+	return strings.Join(compactStatusDisplayLines(lines), "\n"), rows
+}
+
+func nextTailnetToken(raw string) (string, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", ""
+	}
+	if idx := strings.IndexAny(raw, " \n\t"); idx >= 0 {
+		return strings.ToLower(strings.TrimSpace(raw[:idx])), strings.TrimSpace(raw[idx+1:])
+	}
+	return strings.ToLower(raw), ""
 }
 
 func firstTailnetNonEmpty(values ...string) string {
