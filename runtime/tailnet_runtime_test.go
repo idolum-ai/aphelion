@@ -226,6 +226,102 @@ func TestTailnetStatusSnapshotFlagsDeclaredUnobservedSurface(t *testing.T) {
 	}
 }
 
+func TestTailnetSurfacesSnapshotProjectsDurableAgentDeclaration(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:     "email-child",
+		ChannelKind: "external_channel",
+		Status:      "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			TailnetMode:          "tsnet",
+			TailnetHostname:      "mail-helper",
+			TailnetTags:          []string{"tag:aphelion-child", "tag:mail"},
+			TailnetSurfacePolicy: "private_status",
+		}),
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	rt := &Runtime{store: store}
+
+	surfaces, err := rt.TailnetSurfacesSnapshot()
+	if err != nil {
+		t.Fatalf("TailnetSurfacesSnapshot() err = %v", err)
+	}
+	if len(surfaces) != 1 {
+		t.Fatalf("surfaces = %#v, want one durable child declaration", surfaces)
+	}
+	surface := surfaces[0]
+	if surface.SurfaceID != "durable_agent:email-child:tsnet_http:status" ||
+		surface.OwnerKind != "durable_agent" ||
+		surface.OwnerID != "email-child" ||
+		surface.Hostname != "mail-helper" ||
+		surface.Status != session.TailnetSurfaceStatusDeclared ||
+		!surface.LastObservedAt.IsZero() {
+		t.Fatalf("surface = %#v, want declared unobserved durable child status surface", surface)
+	}
+	events, err := store.ExecutionEventsBySession(session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(tailnet audit) err = %v", err)
+	}
+	if !containsExecutionEventType(events, core.ExecutionEventTailnetSurfaceChanged) {
+		t.Fatalf("events = %#v, want child declaration audit event", events)
+	}
+}
+
+func TestTailnetSurfacesSnapshotPreservesMaterializedDurableAgentSurface(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:     "email-child",
+		ChannelKind: "external_channel",
+		Status:      "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			TailnetMode:          "tsnet",
+			TailnetHostname:      "mail-helper",
+			TailnetTags:          []string{"tag:aphelion-child", "tag:mail"},
+			TailnetSurfacePolicy: "private_status",
+		}),
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if _, err := store.UpsertTailnetSurface(session.TailnetSurfaceRecord{
+		SurfaceID:      "durable_agent:email-child:tsnet_http:status",
+		OwnerKind:      "durable_agent",
+		OwnerID:        "email-child",
+		SurfaceKind:    "tsnet_http",
+		Name:           "status",
+		Hostname:       "mail-helper",
+		URL:            "http://mail-helper.example.ts.net/status",
+		Status:         session.TailnetSurfaceStatusActive,
+		LastObservedAt: time.Date(2026, 4, 28, 21, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("UpsertTailnetSurface(active) err = %v", err)
+	}
+	rt := &Runtime{store: store}
+
+	surfaces, err := rt.TailnetSurfacesSnapshot()
+	if err != nil {
+		t.Fatalf("TailnetSurfacesSnapshot() err = %v", err)
+	}
+	if len(surfaces) != 1 {
+		t.Fatalf("surfaces = %#v, want one surface", surfaces)
+	}
+	if surfaces[0].Status != session.TailnetSurfaceStatusActive || surfaces[0].URL != "http://mail-helper.example.ts.net/status" || surfaces[0].LastObservedAt.IsZero() {
+		t.Fatalf("surface = %#v, want active materialized surface preserved", surfaces[0])
+	}
+}
+
 func TestRevokeTailnetSurfaceRecordsAuditEvent(t *testing.T) {
 	t.Parallel()
 

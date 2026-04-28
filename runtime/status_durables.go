@@ -39,6 +39,7 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 	})
 
 	for _, agent := range agents {
+		livePolicy := core.NormalizeDurableAgentLivePolicy(agent.LivePolicy)
 		row := core.DurableAgentStatusSnapshot{
 			AgentID:                strings.TrimSpace(agent.AgentID),
 			CanonicalPrincipal:     core.DurableAgentPrincipal(agent.AgentID),
@@ -51,11 +52,18 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 			NetworkPolicy:          strings.TrimSpace(agent.NetworkPolicy),
 			PolicyVersion:          agent.PolicyVersion,
 			PolicyHash:             strings.TrimSpace(agent.PolicyHash),
-			PolicyOutboundMode:     strings.TrimSpace(agent.LivePolicy.OutboundMode),
-			PolicyDrift:            strings.TrimSpace(agent.LivePolicy.DriftPolicy),
-			CapabilityEnvelope:     append([]string(nil), agent.LivePolicy.CapabilityEnvelope...),
+			PolicyOutboundMode:     strings.TrimSpace(livePolicy.OutboundMode),
+			PolicyDrift:            strings.TrimSpace(livePolicy.DriftPolicy),
+			CapabilityEnvelope:     append([]string(nil), livePolicy.CapabilityEnvelope...),
 			AllowedTelegramUserIDs: append([]int64(nil), agent.AllowedTelegramUserIDs...),
 			IdentitySource:         "canonical:session.durable_agents",
+			TailnetMode:            strings.TrimSpace(livePolicy.TailnetMode),
+			TailnetHostname:        durableAgentTailnetHostname(agent.AgentID, livePolicy.TailnetHostname),
+			TailnetTags:            append([]string(nil), livePolicy.TailnetTags...),
+			TailnetSurfacePolicy:   strings.TrimSpace(livePolicy.TailnetSurfacePolicy),
+		}
+		if row.TailnetMode != "" {
+			row.TailnetSurfaceID = durableAgentTailnetSurfaceID(row.AgentID)
 		}
 
 		hasRuntimeState := false
@@ -97,6 +105,9 @@ func (r *Runtime) DurableAgentsStatusSnapshot() (core.DurableAgentsStatusSnapsho
 		}
 
 		row.SubstrateLabels = durableChildSubstrateFor("", agent).Labels
+		if row.TailnetMode != "" {
+			row.SubstrateLabels = append(row.SubstrateLabels, "tailnet:"+row.TailnetMode)
+		}
 		row.ChildRuntimeGrantCount, row.ChildRuntimeBlockedReason, row.ChildRuntimeRepairHint = r.durableChildRuntimeGrantStatus(agent)
 		row.ProfileManifestStatus, row.ProfileManifestPolicyHash, row.ProfileManifestFileCount = durableAgentProfileManifestStatus(agent, r.cfg.Sessions.DBPath)
 

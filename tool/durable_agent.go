@@ -2278,6 +2278,12 @@ func renderDurableAgentPolicy(agent core.DurableAgent, updates []session.Durable
 	fmt.Fprintf(&b, "public_surface_mode: %s\n", agent.LivePolicy.PublicSurfaceMode)
 	fmt.Fprintf(&b, "shared_inference_reuse: %s\n", agent.LivePolicy.SharedInferenceReuse)
 	fmt.Fprintf(&b, "shared_inference_reuse_scope: %s\n", agent.LivePolicy.SharedInferenceReuseScope)
+	if strings.TrimSpace(agent.LivePolicy.TailnetMode) != "" {
+		fmt.Fprintf(&b, "tailnet_mode: %s\n", strings.TrimSpace(agent.LivePolicy.TailnetMode))
+		fmt.Fprintf(&b, "tailnet_hostname: %s\n", strings.TrimSpace(agent.LivePolicy.TailnetHostname))
+		fmt.Fprintf(&b, "tailnet_tags: %s\n", strings.Join(agent.LivePolicy.TailnetTags, ","))
+		fmt.Fprintf(&b, "tailnet_surface_policy: %s\n", strings.TrimSpace(agent.LivePolicy.TailnetSurfacePolicy))
+	}
 	fmt.Fprintf(&b, "allowed_telegram_user_ids: %s\n", formatDurableAgentTelegramUserIDs(agent.AllowedTelegramUserIDs))
 	fmt.Fprintf(&b, "bootstrap_capabilities: %s\n", strings.Join(agent.BootstrapCeiling.CapabilityEnvelope, ","))
 	fmt.Fprintf(&b, "bootstrap_allowed_outbound_modes: %s\n", strings.Join(agent.BootstrapCeiling.AllowedOutboundModes, ","))
@@ -2321,6 +2327,11 @@ func renderDurableAgentPolicyApply(agent core.DurableAgent, update *session.Dura
 	fmt.Fprintf(&b, "autonomy: %s\n", durableAgentAutonomyFromPolicy(agent.LivePolicy))
 	fmt.Fprintf(&b, "visibility: %s\n", durableAgentVisibilityFromPolicy(agent.LivePolicy))
 	fmt.Fprintf(&b, "shared_context: %s\n", durableAgentSharedContextFromPolicy(agent.LivePolicy))
+	if strings.TrimSpace(agent.LivePolicy.TailnetMode) != "" {
+		fmt.Fprintf(&b, "tailnet_mode: %s\n", strings.TrimSpace(agent.LivePolicy.TailnetMode))
+		fmt.Fprintf(&b, "tailnet_hostname: %s\n", strings.TrimSpace(agent.LivePolicy.TailnetHostname))
+		fmt.Fprintf(&b, "tailnet_surface_policy: %s\n", strings.TrimSpace(agent.LivePolicy.TailnetSurfacePolicy))
+	}
 	if update.SourceReviewEventID > 0 {
 		fmt.Fprintf(&b, "source_review_event_id: %d\n", update.SourceReviewEventID)
 	}
@@ -2888,6 +2899,11 @@ type effectiveDurableAgentPolicyPatch struct {
 	PublicSurfaceMode         string
 	SharedInferenceReuse      string
 	SharedInferenceReuseScope string
+	TailnetMode               string
+	TailnetHostname           string
+	TailnetTags               []string
+	TailnetTagsSet            bool
+	TailnetSurfacePolicy      string
 }
 
 func effectiveDurableAgentPolicyPatchFromInput(in durableAgentInput) effectiveDurableAgentPolicyPatch {
@@ -2929,6 +2945,13 @@ func effectiveDurableAgentPolicyPatchFromInput(in durableAgentInput) effectiveDu
 		patch.PublicSurfaceMode = strings.TrimSpace(in.PolicyOverrides.PublicSurfaceMode)
 		patch.SharedInferenceReuse = strings.TrimSpace(in.PolicyOverrides.SharedInferenceReuse)
 		patch.SharedInferenceReuseScope = strings.TrimSpace(in.PolicyOverrides.SharedInferenceReuseScope)
+		patch.TailnetMode = strings.TrimSpace(in.PolicyOverrides.TailnetMode)
+		patch.TailnetHostname = strings.TrimSpace(in.PolicyOverrides.TailnetHostname)
+		if in.PolicyOverrides.TailnetTags != nil {
+			patch.TailnetTags = normalizePolicyCapabilities(in.PolicyOverrides.TailnetTags)
+			patch.TailnetTagsSet = true
+		}
+		patch.TailnetSurfacePolicy = strings.TrimSpace(in.PolicyOverrides.TailnetSurfacePolicy)
 	}
 	if patch.OutboundMode == "" {
 		patch.OutboundMode = strings.TrimSpace(in.OutboundMode)
@@ -2991,6 +3014,18 @@ func applyDurableAgentPolicyPatch(policy *core.DurableAgentLivePolicy, patch eff
 	}
 	if patch.SharedInferenceReuseScope != "" {
 		policy.SharedInferenceReuseScope = patch.SharedInferenceReuseScope
+	}
+	if patch.TailnetMode != "" {
+		policy.TailnetMode = patch.TailnetMode
+	}
+	if patch.TailnetHostname != "" {
+		policy.TailnetHostname = patch.TailnetHostname
+	}
+	if patch.TailnetTagsSet {
+		policy.TailnetTags = append([]string(nil), patch.TailnetTags...)
+	}
+	if patch.TailnetSurfacePolicy != "" {
+		policy.TailnetSurfacePolicy = patch.TailnetSurfacePolicy
 	}
 	return nil
 }

@@ -186,10 +186,14 @@ type durableAgentPolicyPatchInput struct {
 }
 
 type durableAgentPolicyOverridesInput struct {
-	OutboundMode              string `json:"outbound_mode,omitempty"`
-	PublicSurfaceMode         string `json:"public_surface_mode,omitempty"`
-	SharedInferenceReuse      string `json:"shared_inference_reuse,omitempty"`
-	SharedInferenceReuseScope string `json:"shared_inference_reuse_scope,omitempty"`
+	OutboundMode              string   `json:"outbound_mode,omitempty"`
+	PublicSurfaceMode         string   `json:"public_surface_mode,omitempty"`
+	SharedInferenceReuse      string   `json:"shared_inference_reuse,omitempty"`
+	SharedInferenceReuseScope string   `json:"shared_inference_reuse_scope,omitempty"`
+	TailnetMode               string   `json:"tailnet_mode,omitempty"`
+	TailnetHostname           string   `json:"tailnet_hostname,omitempty"`
+	TailnetTags               []string `json:"tailnet_tags,omitempty"`
+	TailnetSurfacePolicy      string   `json:"tailnet_surface_policy,omitempty"`
 }
 
 type durableAgentWizardAnswersInput struct {
@@ -811,7 +815,11 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"outbound_mode": {"type": "string", "description": "Low-level outbound mode override"},
 								"public_surface_mode": {"type": "string", "description": "Low-level public surface mode override"},
 								"shared_inference_reuse": {"type": "string", "description": "Low-level shared inference reuse override"},
-								"shared_inference_reuse_scope": {"type": "string", "description": "Low-level shared inference reuse scope override"}
+								"shared_inference_reuse_scope": {"type": "string", "description": "Low-level shared inference reuse scope override"},
+								"tailnet_mode": {"type": "string", "description": "Declare a child tailnet identity without starting a live node. Supported: tsnet, tagged_node, disabled"},
+								"tailnet_hostname": {"type": "string", "description": "Declared MagicDNS hostname for the child tailnet identity"},
+								"tailnet_tags": {"type": "array", "items": {"type": "string"}, "description": "Declared Tailscale tags for the child identity"},
+								"tailnet_surface_policy": {"type": "string", "description": "Declared private tailnet surface policy. Supported: private_status, private_services, none"}
 							}
 						},
 						"charter": {"type": "string", "description": "Legacy top-level charter override (prefer policy_patch.charter)"},
@@ -908,7 +916,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 									"constraints": {"type": "object", "description": "Reviewable constraints, ceilings, budgets, time bounds, or allowed actions"},
 									"capability_update_plan": {"type": "object", "description": "Optional explicit update plan embedded into the capability request contract"},
 									"policy_patch": {"type": "object", "description": "Optional durable-agent policy patch to apply after approval and active grant", "properties": {"charter": {"type": "string"}, "autonomy": {"type": "string"}, "visibility": {"type": "string"}, "shared_context": {"type": "string"}, "capabilities": {"type": "array", "items": {"type": "string"}}, "drift_policy": {"type": "string"}}},
-									"policy_overrides": {"type": "object", "description": "Optional low-level durable-agent policy overrides to apply after approval and active grant", "properties": {"outbound_mode": {"type": "string"}, "public_surface_mode": {"type": "string"}, "shared_inference_reuse": {"type": "string"}, "shared_inference_reuse_scope": {"type": "string"}}},
+									"policy_overrides": {"type": "object", "description": "Optional low-level durable-agent policy overrides to apply after approval and active grant", "properties": {"outbound_mode": {"type": "string"}, "public_surface_mode": {"type": "string"}, "shared_inference_reuse": {"type": "string"}, "shared_inference_reuse_scope": {"type": "string"}, "tailnet_mode": {"type": "string"}, "tailnet_hostname": {"type": "string"}, "tailnet_tags": {"type": "array", "items": {"type": "string"}}, "tailnet_surface_policy": {"type": "string"}}},
 									"provisioning": {"type": "array", "items": {"type": "string"}, "description": "Provisioning steps the operator should perform or verify before grant"},
 									"attestation": {"type": "array", "items": {"type": "string"}, "description": "Evidence required before grant"},
 									"grant_actions": {"type": "array", "items": {"type": "string"}, "description": "Suggested allowed actions for the resulting capability grant"},

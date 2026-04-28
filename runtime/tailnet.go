@@ -95,11 +95,54 @@ func (r *Runtime) TailnetSurfacesSnapshot() ([]core.TailnetSurfaceStatus, error)
 	if r == nil || r.store == nil {
 		return nil, nil
 	}
+	if err := r.syncDeclaredChildTailnetSurfaces(); err != nil {
+		return nil, err
+	}
 	surfaces, err := r.store.TailnetSurfaces(session.TailnetSurfaceFilter{Limit: 100})
 	if err != nil {
 		return nil, err
 	}
 	return tailnetSurfaceStatusesFromRecords(surfaces), nil
+}
+
+func (r *Runtime) syncDeclaredChildTailnetSurfaces() error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	agents, err := r.store.ListDurableAgents()
+	if err != nil {
+		return err
+	}
+	for _, agent := range agents {
+		record, ok := tailnetSurfaceRecordFromDurableAgent(agent)
+		if !ok {
+			continue
+		}
+		if r.cfg != nil {
+			record.TailnetName = strings.TrimSpace(r.cfg.Tailscale.ExpectedTailnet)
+		}
+		previous, previousOK, err := r.store.TailnetSurface(record.SurfaceID)
+		if err != nil {
+			return err
+		}
+		if previousOK {
+			switch strings.TrimSpace(previous.Status) {
+			case session.TailnetSurfaceStatusActive, session.TailnetSurfaceStatusDegraded, session.TailnetSurfaceStatusRevoked:
+				continue
+			}
+			if !tailnetSurfaceAuditNeeded(previous, true, record) {
+				continue
+			}
+		}
+		stored, err := r.store.UpsertTailnetSurface(record)
+		if err != nil {
+			return err
+		}
+		if tailnetSurfaceAuditNeeded(previous, previousOK, stored) {
+			r.recordTailnetSurfaceAudit("declare", stored, previous, previousOK, "durable_agent_tailnet_policy")
+		}
+	}
+	return nil
 }
 
 func (r *Runtime) RevokeTailnetSurface(ctx context.Context, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error) {
@@ -195,6 +238,45 @@ func tailnetSurfaceRecordFromParent(parent core.TailnetParentStatus, snapshot co
 		LastObservedAt: now,
 		UpdatedAt:      now,
 	}
+}
+
+func tailnetSurfaceRecordFromDurableAgent(agent core.DurableAgent) (session.TailnetSurfaceRecord, bool) {
+	agentID := strings.TrimSpace(agent.AgentID)
+	if agentID == "" {
+		return session.TailnetSurfaceRecord{}, false
+	}
+	policy := core.NormalizeDurableAgentLivePolicy(agent.LivePolicy)
+	if strings.TrimSpace(policy.TailnetMode) == "" {
+		return session.TailnetSurfaceRecord{}, false
+	}
+	now := time.Now().UTC()
+	return session.TailnetSurfaceRecord{
+		SurfaceID:   durableAgentTailnetSurfaceID(agentID),
+		OwnerKind:   "durable_agent",
+		OwnerID:     agentID,
+		SurfaceKind: "tsnet_http",
+		Name:        "status",
+		Hostname:    durableAgentTailnetHostname(agentID, policy.TailnetHostname),
+		Tags:        append([]string(nil), policy.TailnetTags...),
+		Status:      session.TailnetSurfaceStatusDeclared,
+		DeclaredAt:  now,
+		UpdatedAt:   now,
+	}, true
+}
+
+func durableAgentTailnetSurfaceID(agentID string) string {
+	return "durable_agent:" + strings.TrimSpace(agentID) + ":tsnet_http:status"
+}
+
+func durableAgentTailnetHostname(agentID string, configured string) string {
+	if hostname := strings.ToLower(strings.TrimSpace(configured)); hostname != "" {
+		return hostname
+	}
+	hostname := strings.ToLower(strings.TrimSpace(agentID))
+	hostname = strings.ReplaceAll(hostname, "_", "-")
+	hostname = strings.ReplaceAll(hostname, ":", "-")
+	hostname = strings.ReplaceAll(hostname, " ", "-")
+	return hostname
 }
 
 func tailnetSurfaceStatusesFromRecords(records []session.TailnetSurfaceRecord) []core.TailnetSurfaceStatus {

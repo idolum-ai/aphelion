@@ -739,6 +739,16 @@ func RenderTelegramStatusDurables(snapshot core.DurableAgentsStatusSnapshot) str
 		if applyErr := strings.TrimSpace(agent.LastApplyError); applyErr != "" {
 			lines = append(lines, "  runtime apply_error="+quoteStatusField(truncateStatusField(applyErr, 120)))
 		}
+		if strings.TrimSpace(agent.TailnetMode) != "" {
+			lines = append(lines, fmt.Sprintf(
+				"  tailnet mode=%s hostname=%s surface_policy=%s surface_id=%s tags=%s",
+				strings.TrimSpace(agent.TailnetMode),
+				firstNonEmpty(strings.TrimSpace(agent.TailnetHostname), "-"),
+				firstNonEmpty(strings.TrimSpace(agent.TailnetSurfacePolicy), "-"),
+				firstNonEmpty(strings.TrimSpace(agent.TailnetSurfaceID), "-"),
+				formatStringList(agent.TailnetTags),
+			))
+		}
 		lines = append(lines, fmt.Sprintf(
 			"  enrollment status=%s last_seen=%s last_seq=%d revoked_at=%s",
 			firstNonEmpty(strings.TrimSpace(agent.EnrollmentStatus), "none"),

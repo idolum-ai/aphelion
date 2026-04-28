@@ -72,7 +72,11 @@ func renderDurableAgentsCommand(agents []core.DurableAgentStatusSnapshot) (strin
 		channel := firstNonEmpty(strings.TrimSpace(agent.ChannelKind), "-")
 		status := firstNonEmpty(strings.TrimSpace(agent.Status), "-")
 		health := firstNonEmpty(strings.TrimSpace(agent.Health), "-")
-		lines = append(lines, fmt.Sprintf("- %s (%s | %s | %s)", agentID, channel, status, health))
+		parts := []string{channel, status, health}
+		if mode := strings.TrimSpace(agent.TailnetMode); mode != "" {
+			parts = append(parts, "tailnet:"+mode)
+		}
+		lines = append(lines, fmt.Sprintf("- %s (%s)", agentID, strings.Join(parts, " | ")))
 		rows = append(rows, []telegram.InlineButton{
 			{Text: "Start Chat: " + agentID, CallbackData: encodeDurableAgentsStartCallbackData(agentID)},
 		})

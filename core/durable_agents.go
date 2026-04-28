@@ -20,6 +20,10 @@ type DurableAgentLivePolicy struct {
 	PublicSurfaceMode         string   `json:"public_surface_mode,omitempty"`
 	SharedInferenceReuse      string   `json:"shared_inference_reuse,omitempty"`
 	SharedInferenceReuseScope string   `json:"shared_inference_reuse_scope,omitempty"`
+	TailnetMode               string   `json:"tailnet_mode,omitempty"`
+	TailnetHostname           string   `json:"tailnet_hostname,omitempty"`
+	TailnetTags               []string `json:"tailnet_tags,omitempty"`
+	TailnetSurfacePolicy      string   `json:"tailnet_surface_policy,omitempty"`
 }
 
 type DurableAgentChannelConfig struct {
@@ -470,6 +474,17 @@ func NormalizeDurableAgentLivePolicy(policy DurableAgentLivePolicy) DurableAgent
 	policy.SharedInferenceReuse = normalizeDurableAgentSharedInferenceReuse(policy.SharedInferenceReuse)
 	policy.SharedInferenceReuseScope = normalizeDurableAgentSharedInferenceReuseScope(policy.SharedInferenceReuseScope)
 	policy.CapabilityEnvelope = normalizeDurableAgentStringSet(policy.CapabilityEnvelope)
+	policy.TailnetMode = normalizeDurableAgentTailnetMode(policy.TailnetMode)
+	policy.TailnetHostname = strings.ToLower(strings.TrimSpace(policy.TailnetHostname))
+	policy.TailnetTags = normalizeDurableAgentStringSet(policy.TailnetTags)
+	policy.TailnetSurfacePolicy = normalizeDurableAgentTailnetSurfacePolicy(policy.TailnetSurfacePolicy)
+	if policy.TailnetMode == "" {
+		policy.TailnetHostname = ""
+		policy.TailnetTags = nil
+		policy.TailnetSurfacePolicy = ""
+	} else if policy.TailnetSurfacePolicy == "" {
+		policy.TailnetSurfacePolicy = "private_status"
+	}
 	return policy
 }
 
@@ -1018,6 +1033,32 @@ func normalizeDurableAgentSharedInferenceReuseScope(value string) string {
 		return value
 	default:
 		return "public_prefix_only"
+	}
+}
+
+func normalizeDurableAgentTailnetMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "none", "off", "disabled":
+		return ""
+	case "tsnet", "embedded_tsnet", "embedded-tsnet":
+		return "tsnet"
+	case "tagged_node", "tagged-node":
+		return "tagged_node"
+	default:
+		return ""
+	}
+}
+
+func normalizeDurableAgentTailnetSurfacePolicy(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "none", "off", "disabled":
+		return ""
+	case "status", "private_status", "private-status", "private_status_only":
+		return "private_status"
+	case "private_services", "private-services", "private":
+		return "private_services"
+	default:
+		return ""
 	}
 }
 

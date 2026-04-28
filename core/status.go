@@ -299,6 +299,11 @@ type DurableAgentStatusSnapshot struct {
 	ChildRuntimeBlockedReason  string
 	ChildRuntimeRepairHint     string
 	SubstrateLabels            []string
+	TailnetMode                string
+	TailnetHostname            string
+	TailnetTags                []string
+	TailnetSurfacePolicy       string
+	TailnetSurfaceID           string
 	ProfileManifestStatus      string
 	ProfileManifestPolicyHash  string
 	ProfileManifestFileCount   int

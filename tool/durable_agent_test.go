@@ -1081,7 +1081,11 @@ func TestDurableAgentToolPolicyApplyAcceptsStructuredPolicyPatch(t *testing.T) {
 				"drift_policy":"admin_review"
 			},
 			"policy_overrides":{
-				"outbound_mode":"read_only"
+				"outbound_mode":"read_only",
+				"tailnet_mode":"tsnet",
+				"tailnet_hostname":"family-helper",
+				"tailnet_tags":["tag:aphelion-child","tag:family"],
+				"tailnet_surface_policy":"private_status"
 			}
 		}`),
 	)
@@ -1096,6 +1100,9 @@ func TestDurableAgentToolPolicyApplyAcceptsStructuredPolicyPatch(t *testing.T) {
 	}
 	if !strings.Contains(out, "shared_context: public_only") {
 		t.Fatalf("policy apply output = %q, want structured shared-context summary", out)
+	}
+	if !strings.Contains(out, "tailnet_mode: tsnet") {
+		t.Fatalf("policy apply output = %q, want tailnet declaration summary", out)
 	}
 
 	updated, err := store.DurableAgent(agent.AgentID)
@@ -1119,6 +1126,9 @@ func TestDurableAgentToolPolicyApplyAcceptsStructuredPolicyPatch(t *testing.T) {
 	}
 	if updated.LivePolicy.SharedInferenceReuseScope != "public_prefix_only" {
 		t.Fatalf("updated shared_inference_reuse_scope = %q, want public_prefix_only", updated.LivePolicy.SharedInferenceReuseScope)
+	}
+	if updated.LivePolicy.TailnetMode != "tsnet" || updated.LivePolicy.TailnetHostname != "family-helper" || updated.LivePolicy.TailnetSurfacePolicy != "private_status" {
+		t.Fatalf("updated tailnet declaration = %#v, want family helper declaration", updated.LivePolicy)
 	}
 }
 
@@ -2181,6 +2191,56 @@ func TestDurableAgentPolicyApplySyncsProfileFiles(t *testing.T) {
 		!strings.Contains(string(ledgerRaw), "Active grants:") ||
 		!strings.Contains(string(scorecardRaw), "Accurate statements") {
 		t.Fatalf("profile files missing ratified content: charter=%q capabilities=%q runtime=%q", charterRaw, capRaw, runtimeRaw)
+	}
+}
+
+func TestDurableAgentProfileSyncIncludesTailnetDeclaration(t *testing.T) {
+	t.Parallel()
+
+	_, store := newDurableAgentToolRegistry(t)
+	childMemory := filepath.Join(t.TempDir(), "child", "memory")
+	agent := core.DurableAgent{
+		AgentID:           "tailnet-child",
+		ChannelKind:       "headless",
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "child", "workspace"), childMemory},
+		Status:            "active",
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:              "Tailnet-aware helper.",
+			OutboundMode:         "read_only",
+			DriftPolicy:          "admin_review",
+			TailnetMode:          "tsnet",
+			TailnetHostname:      "tailnet-helper",
+			TailnetTags:          []string{"tag:aphelion-child"},
+			TailnetSurfacePolicy: "private_status",
+		}),
+	}
+
+	if _, err := syncDurableAgentProfileFiles(agent, store); err != nil {
+		t.Fatalf("syncDurableAgentProfileFiles() err = %v", err)
+	}
+	policyRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "policy.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(policy) err = %v", err)
+	}
+	runtimeRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "runtime.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(runtime) err = %v", err)
+	}
+	surfaceRaw, err := os.ReadFile(filepath.Join(childMemory, "profile", "surface-rules.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(surface-rules) err = %v", err)
+	}
+	for name, raw := range map[string]string{
+		"policy.md":        string(policyRaw),
+		"runtime.md":       string(runtimeRaw),
+		"surface-rules.md": string(surfaceRaw),
+	} {
+		if !strings.Contains(raw, "tailnet_mode: tsnet") || !strings.Contains(raw, "tailnet_hostname: tailnet-helper") {
+			t.Fatalf("%s = %q, want child tailnet declaration", name, raw)
+		}
+	}
+	if !strings.Contains(string(surfaceRaw), "declared only") || !strings.Contains(string(surfaceRaw), "verify actual materialization") {
+		t.Fatalf("surface-rules.md = %q, want declared-only materialization warning", string(surfaceRaw))
 	}
 }
 

@@ -1940,6 +1940,12 @@ func TestDurableAgentsStatusSnapshotProjectsChildRuntimeAndProfileRepairState(t 
 		PolicyHash:        "policy-hash-current",
 		LocalStorageRoots: []string{filepath.Join(root, "workspace"), memoryRoot},
 		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "codex", CodexHome: filepath.Join(root, "codex")},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			TailnetMode:          "tsnet",
+			TailnetHostname:      "child-alpha",
+			TailnetTags:          []string{"tag:aphelion-child", "tag:alpha"},
+			TailnetSurfacePolicy: "private_status",
+		}),
 	}
 	if err := store.UpsertDurableAgent(agent); err != nil {
 		t.Fatalf("UpsertDurableAgent() err = %v", err)
@@ -1981,5 +1987,11 @@ func TestDurableAgentsStatusSnapshotProjectsChildRuntimeAndProfileRepairState(t 
 	}
 	if !containsString(row.SubstrateLabels, "codex_home") {
 		t.Fatalf("SubstrateLabels = %#v, want codex_home", row.SubstrateLabels)
+	}
+	if row.TailnetMode != "tsnet" || row.TailnetHostname != "child-alpha" || row.TailnetSurfacePolicy != "private_status" {
+		t.Fatalf("tailnet status = %#v, want declared child tailnet identity", row)
+	}
+	if !containsString(row.SubstrateLabels, "tailnet:tsnet") {
+		t.Fatalf("SubstrateLabels = %#v, want tailnet substrate label", row.SubstrateLabels)
 	}
 }

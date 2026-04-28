@@ -53,6 +53,15 @@ func normalizeCapabilityUpdatePlan(plan capabilityUpdatePlanInput) capabilityUpd
 		overrides.PublicSurfaceMode = strings.TrimSpace(overrides.PublicSurfaceMode)
 		overrides.SharedInferenceReuse = strings.TrimSpace(overrides.SharedInferenceReuse)
 		overrides.SharedInferenceReuseScope = strings.TrimSpace(overrides.SharedInferenceReuseScope)
+		overrides.TailnetMode = strings.TrimSpace(overrides.TailnetMode)
+		overrides.TailnetHostname = strings.TrimSpace(overrides.TailnetHostname)
+		if overrides.TailnetTags != nil {
+			overrides.TailnetTags = normalizePolicyCapabilities(overrides.TailnetTags)
+			if overrides.TailnetTags == nil {
+				overrides.TailnetTags = []string{}
+			}
+		}
+		overrides.TailnetSurfacePolicy = strings.TrimSpace(overrides.TailnetSurfacePolicy)
 		if durableAgentPolicyOverridesInputIsZero(overrides) {
 			plan.PolicyOverrides = nil
 		} else {
@@ -103,7 +112,11 @@ func durableAgentPolicyOverridesInputIsZero(overrides durableAgentPolicyOverride
 	return strings.TrimSpace(overrides.OutboundMode) == "" &&
 		strings.TrimSpace(overrides.PublicSurfaceMode) == "" &&
 		strings.TrimSpace(overrides.SharedInferenceReuse) == "" &&
-		strings.TrimSpace(overrides.SharedInferenceReuseScope) == ""
+		strings.TrimSpace(overrides.SharedInferenceReuseScope) == "" &&
+		strings.TrimSpace(overrides.TailnetMode) == "" &&
+		strings.TrimSpace(overrides.TailnetHostname) == "" &&
+		overrides.TailnetTags == nil &&
+		strings.TrimSpace(overrides.TailnetSurfacePolicy) == ""
 }
 
 func mergeCapabilityUpdatePlan(existing capabilityUpdatePlanInput, next capabilityUpdatePlanInput) capabilityUpdatePlanInput {
@@ -153,6 +166,18 @@ func mergeCapabilityUpdatePlan(existing capabilityUpdatePlanInput, next capabili
 		}
 		if next.PolicyOverrides.SharedInferenceReuseScope != "" {
 			overrides.SharedInferenceReuseScope = next.PolicyOverrides.SharedInferenceReuseScope
+		}
+		if next.PolicyOverrides.TailnetMode != "" {
+			overrides.TailnetMode = next.PolicyOverrides.TailnetMode
+		}
+		if next.PolicyOverrides.TailnetHostname != "" {
+			overrides.TailnetHostname = next.PolicyOverrides.TailnetHostname
+		}
+		if next.PolicyOverrides.TailnetTags != nil {
+			overrides.TailnetTags = append([]string(nil), next.PolicyOverrides.TailnetTags...)
+		}
+		if next.PolicyOverrides.TailnetSurfacePolicy != "" {
+			overrides.TailnetSurfacePolicy = next.PolicyOverrides.TailnetSurfacePolicy
 		}
 		existing.PolicyOverrides = &overrides
 	}

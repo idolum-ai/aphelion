@@ -94,30 +94,49 @@ func SyncDurableAgentProfileFiles(agent core.DurableAgent, store *session.SQLite
 
 func durableAgentManagedProfileFiles(agent core.DurableAgent, store *session.SQLiteStore) map[string]string {
 	policy := core.NormalizeDurableAgentLivePolicy(agent.LivePolicy)
+	tailnetHostname := durableAgentProfileTailnetHostname(agent, policy)
+	policyLines := []string{
+		"# Ratified live policy",
+		"",
+		"- outbound_mode: " + strings.TrimSpace(policy.OutboundMode),
+		"- drift_policy: " + strings.TrimSpace(policy.DriftPolicy),
+		"- public_surface_mode: " + strings.TrimSpace(policy.PublicSurfaceMode),
+		"- shared_inference_reuse: " + strings.TrimSpace(policy.SharedInferenceReuse),
+		"- shared_inference_reuse_scope: " + strings.TrimSpace(policy.SharedInferenceReuseScope),
+	}
+	if strings.TrimSpace(policy.TailnetMode) != "" {
+		policyLines = append(policyLines,
+			"- tailnet_mode: "+strings.TrimSpace(policy.TailnetMode),
+			"- tailnet_hostname: "+tailnetHostname,
+			"- tailnet_tags: "+strings.Join(policy.TailnetTags, ","),
+			"- tailnet_surface_policy: "+strings.TrimSpace(policy.TailnetSurfacePolicy),
+		)
+	}
+	runtimeLines := []string{
+		"# Runtime profile",
+		"",
+		"- agent_id: " + strings.TrimSpace(agent.AgentID),
+		"- channel_kind: " + strings.TrimSpace(agent.ChannelKind),
+		"- wakeup_mode: " + strings.TrimSpace(agent.WakeupMode),
+		"- network_policy: " + strings.TrimSpace(agent.NetworkPolicy),
+		"- runtime_materialization: active capability grants with child_runtime contracts only",
+	}
+	if strings.TrimSpace(policy.TailnetMode) != "" {
+		runtimeLines = append(runtimeLines,
+			"- tailnet_mode: "+strings.TrimSpace(policy.TailnetMode),
+			"- tailnet_hostname: "+tailnetHostname,
+			"- tailnet_surface_policy: "+strings.TrimSpace(policy.TailnetSurfacePolicy),
+			"- tailnet_materialization: declared only until an observed tailnet surface appears in the parent registry",
+		)
+	}
 	files := map[string]string{
-		"charter.md": firstNonEmpty(strings.TrimSpace(policy.Charter), "No child charter has been ratified yet."),
-		"policy.md": strings.Join([]string{
-			"# Ratified live policy",
-			"",
-			"- outbound_mode: " + strings.TrimSpace(policy.OutboundMode),
-			"- drift_policy: " + strings.TrimSpace(policy.DriftPolicy),
-			"- public_surface_mode: " + strings.TrimSpace(policy.PublicSurfaceMode),
-			"- shared_inference_reuse: " + strings.TrimSpace(policy.SharedInferenceReuse),
-			"- shared_inference_reuse_scope: " + strings.TrimSpace(policy.SharedInferenceReuseScope),
-		}, "\n"),
+		"charter.md":           firstNonEmpty(strings.TrimSpace(policy.Charter), "No child charter has been ratified yet."),
+		"policy.md":            strings.Join(policyLines, "\n"),
 		"capabilities.md":      durableAgentCapabilitiesProfile(policy.CapabilityEnvelope),
 		"capability-ledger.md": durableAgentCapabilityLedgerProfile(agent, store),
 		"growth.md":            durableAgentGrowthProfile(agent),
-		"runtime.md": strings.Join([]string{
-			"# Runtime profile",
-			"",
-			"- agent_id: " + strings.TrimSpace(agent.AgentID),
-			"- channel_kind: " + strings.TrimSpace(agent.ChannelKind),
-			"- wakeup_mode: " + strings.TrimSpace(agent.WakeupMode),
-			"- network_policy: " + strings.TrimSpace(agent.NetworkPolicy),
-			"- runtime_materialization: active capability grants with child_runtime contracts only",
-		}, "\n"),
-		"scorecard.md": durableAgentScorecardProfile(agent),
+		"runtime.md":           strings.Join(runtimeLines, "\n"),
+		"scorecard.md":         durableAgentScorecardProfile(agent),
 	}
 	if surface := durableAgentSurfaceProfile(agent); strings.TrimSpace(surface) != "" {
 		files["surface-rules.md"] = surface
@@ -140,26 +159,46 @@ func durableAgentCapabilitiesProfile(capabilities []string) string {
 func durableAgentSurfaceProfile(agent core.DurableAgent) string {
 	cfg := core.NormalizeDurableAgentChannelConfig(agent.ChannelConfig)
 	external := cfg.ExternalConfig()
-	if external == nil {
-		return ""
-	}
+	policy := core.NormalizeDurableAgentLivePolicy(agent.LivePolicy)
+	tailnetHostname := durableAgentProfileTailnetHostname(agent, policy)
 	lines := []string{"# Channel surface rules", ""}
-	if len(external.SurfaceRules) > 0 {
+	if external != nil && len(external.SurfaceRules) > 0 {
 		lines = append(lines, "Surface upward:")
 		for _, rule := range external.SurfaceRules {
 			lines = append(lines, "- "+strings.TrimSpace(rule))
 		}
 	}
-	if len(external.NeverRetain) > 0 {
+	if external != nil && len(external.NeverRetain) > 0 {
 		lines = append(lines, "", "Never retain:")
 		for _, rule := range external.NeverRetain {
 			lines = append(lines, "- "+strings.TrimSpace(rule))
 		}
 	}
+	if strings.TrimSpace(policy.TailnetMode) != "" {
+		lines = append(lines, "", "Tailnet declaration:")
+		lines = append(lines,
+			"- tailnet_mode: "+strings.TrimSpace(policy.TailnetMode),
+			"- tailnet_hostname: "+tailnetHostname,
+			"- tailnet_tags: "+strings.Join(policy.TailnetTags, ","),
+			"- tailnet_surface_policy: "+strings.TrimSpace(policy.TailnetSurfacePolicy),
+			"- Treat this as declared only; verify actual materialization in the parent tailnet registry before claiming reachability.",
+		)
+	}
 	if len(lines) <= 2 {
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+func durableAgentProfileTailnetHostname(agent core.DurableAgent, policy core.DurableAgentLivePolicy) string {
+	if hostname := strings.ToLower(strings.TrimSpace(policy.TailnetHostname)); hostname != "" {
+		return hostname
+	}
+	hostname := strings.ToLower(strings.TrimSpace(agent.AgentID))
+	hostname = strings.ReplaceAll(hostname, "_", "-")
+	hostname = strings.ReplaceAll(hostname, ":", "-")
+	hostname = strings.ReplaceAll(hostname, " ", "-")
+	return hostname
 }
 
 func durableAgentGrowthProfile(agent core.DurableAgent) string {

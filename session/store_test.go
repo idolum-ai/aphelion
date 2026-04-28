@@ -1376,11 +1376,15 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "telegram_group",
 		LivePolicy: core.DurableAgentLivePolicy{
-			Charter:            "help the family group without mutating the house",
-			CapabilityEnvelope: []string{"read_channel", "draft_reply", "synthesize_review"},
-			OutboundMode:       "draft_only",
-			DriftPolicy:        "admin_ratified",
-			PublicSurfaceMode:  "explicit_parent_relay_only",
+			Charter:              "help the family group without mutating the house",
+			CapabilityEnvelope:   []string{"read_channel", "draft_reply", "synthesize_review"},
+			OutboundMode:         "draft_only",
+			DriftPolicy:          "admin_ratified",
+			PublicSurfaceMode:    "explicit_parent_relay_only",
+			TailnetMode:          "tsnet",
+			TailnetHostname:      "family-child",
+			TailnetTags:          []string{"tag:aphelion-child", "tag:family"},
+			TailnetSurfacePolicy: "private_status",
 		},
 		BootstrapCeiling: core.DurableAgentBootstrapCeiling{
 			CapabilityEnvelope:           []string{"read_channel", "draft_reply", "synthesize_review", "bounded_review_artifact"},
@@ -1430,6 +1434,12 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 	if got.LivePolicy.OutboundMode != "draft_only" {
 		t.Fatalf("OutboundMode = %q, want draft_only", got.LivePolicy.OutboundMode)
+	}
+	if got.LivePolicy.TailnetMode != "tsnet" || got.LivePolicy.TailnetHostname != "family-child" || got.LivePolicy.TailnetSurfacePolicy != "private_status" {
+		t.Fatalf("tailnet declaration = %#v, want tsnet family-child private_status", got.LivePolicy)
+	}
+	if len(got.LivePolicy.TailnetTags) != 2 || got.LivePolicy.TailnetTags[0] != "tag:aphelion-child" || got.LivePolicy.TailnetTags[1] != "tag:family" {
+		t.Fatalf("TailnetTags = %#v, want persisted tags", got.LivePolicy.TailnetTags)
 	}
 	if got.BootstrapLLM.Backend != "native" {
 		t.Fatalf("BootstrapLLM.Backend = %q, want native", got.BootstrapLLM.Backend)

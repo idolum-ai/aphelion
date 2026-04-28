@@ -914,10 +914,13 @@ func TestHandleTelegramCommandAgentsShowsButtons(t *testing.T) {
 				Health:      "ok",
 			},
 			{
-				AgentID:     "ops-child",
-				ChannelKind: "telegram_dm",
-				Status:      "active",
-				Health:      "dormant",
+				AgentID:          "ops-child",
+				ChannelKind:      "telegram_dm",
+				Status:           "active",
+				Health:           "dormant",
+				TailnetMode:      "tsnet",
+				TailnetHostname:  "ops-child",
+				TailnetSurfaceID: "durable_agent:ops-child:tsnet_http:status",
 			},
 		},
 	}
@@ -941,6 +944,9 @@ func TestHandleTelegramCommandAgentsShowsButtons(t *testing.T) {
 	}
 	if got := sender.inline[0].text; !strings.Contains(got, "Durable Agents") {
 		t.Fatalf("agents text = %q, want Durable Agents heading", got)
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "ops-child (telegram_dm | active | dormant | tailnet:tsnet)") {
+		t.Fatalf("agents text = %q, want tailnet declaration marker", got)
 	}
 	foundStart := false
 	foundRefresh := false
