@@ -34,6 +34,7 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 	if snapshot.NetcheckAvailable && strings.TrimSpace(snapshot.NetcheckSummary) != "" {
 		lines = append(lines, "Netcheck: "+truncateTailnetLine(snapshot.NetcheckSummary, 180))
 	}
+	privateStatusURL := ""
 	if snapshot.Parent != nil {
 		parent := snapshot.Parent
 		lines = append(lines, "", "Parent tsnet:")
@@ -46,6 +47,7 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 		}
 		if magic := strings.TrimSpace(parent.MagicDNSURL); magic != "" {
 			lines = append(lines, "- private URL: "+magic)
+			privateStatusURL = strings.TrimRight(magic, "/") + "/status"
 		}
 		if errText := strings.TrimSpace(parent.LastError); errText != "" {
 			lines = append(lines, "- error: "+truncateTailnetLine(errText, 220))
@@ -70,9 +72,11 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 			lines = append(lines, fmt.Sprintf("- %d more issue(s) omitted", len(snapshot.Issues)-limit))
 		}
 	}
-	rows := [][]telegram.InlineButton{{
-		{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)},
-	}}
+	row := []telegram.InlineButton{{Text: "Refresh", CallbackData: encodeTailnetCallbackData(tailnetCallbackRefresh)}}
+	if privateStatusURL != "" {
+		row = append(row, telegram.InlineButton{Text: "Open Status", URL: privateStatusURL})
+	}
+	rows := [][]telegram.InlineButton{row}
 	return strings.Join(compactStatusDisplayLines(lines), "\n"), rows
 }
 

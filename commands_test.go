@@ -1579,7 +1579,7 @@ func TestHandleTelegramCommandTailnetShowsReadOnlyStatus(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet") || !strings.Contains(got, "Status: healthy") || !strings.Contains(got, "aphelion.example.ts.net") || !strings.Contains(got, "Parent tsnet") || !strings.Contains(got, "http://aphelion.example.ts.net:8765") {
 		t.Fatalf("tailnet text = %q, want compact status", got)
 	}
-	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" {
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" || sender.inline[0].rows[0][1].URL != "http://aphelion.example.ts.net:8765/status" {
 		t.Fatalf("tailnet rows = %#v, want refresh", sender.inline[0].rows)
 	}
 }
