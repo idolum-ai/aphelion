@@ -120,7 +120,7 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 	summary := statusReadableSummaryText(ctx, router, view, text)
 	text = renderReadableStatusView(view, text, summary)
 	text = humanizeTelegramTelemetryText(text)
-	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded)
+	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded, router.StatusMiniAppURL(targetChatID, senderID))
 	return text, rows, nil
 }
 
@@ -651,7 +651,7 @@ func statusViewSupportsReadableSummary(view statusView) bool {
 	}
 }
 
-func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64, isAdmin bool, system core.SystemStatusSnapshot, systemLoaded bool) [][]telegram.InlineButton {
+func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64, isAdmin bool, system core.SystemStatusSnapshot, systemLoaded bool, miniAppURL string) [][]telegram.InlineButton {
 	if targetChatID == 0 {
 		targetChatID = currentChatID
 	}
@@ -659,6 +659,7 @@ func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64
 	if activeView == "" {
 		activeView = statusViewChat
 	}
+	miniAppURL = strings.TrimSpace(miniAppURL)
 
 	rows := [][]telegram.InlineButton{
 		{
@@ -666,6 +667,11 @@ func statusKeyboardRows(view statusView, currentChatID int64, targetChatID int64
 			{Text: "Pending Only", CallbackData: encodeStatusCallbackData(statusViewPending, currentChatID)},
 			{Text: "Refresh", CallbackData: encodeStatusCallbackData(activeView, targetChatID)},
 		},
+	}
+	if miniAppURL != "" {
+		rows = append(rows, []telegram.InlineButton{
+			{Text: "Open Console", WebApp: &telegram.WebAppInfo{URL: miniAppURL}},
+		})
 	}
 	if isAdmin {
 		rows = append(rows, []telegram.InlineButton{

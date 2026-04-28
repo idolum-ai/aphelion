@@ -60,6 +60,8 @@ type telegramCommandControl struct {
 	decisionDetacher       pendingDecisionDetacher
 	detachPendingOnRestart bool
 	durableTools           durableWizardToolExecutor
+	statusMiniAppPublicURL string
+	statusMiniAppBotToken  string
 }
 
 type pendingDecisionDetacher interface {
@@ -242,6 +244,10 @@ func (c telegramCommandControl) StatusReadableSummary(ctx context.Context, view 
 		return ""
 	}
 	return c.rt.StatusReadableSummary(ctx, view, statusText)
+}
+
+func (c telegramCommandControl) StatusMiniAppURL(chatID int64, senderID int64) string {
+	return buildTelegramStatusMiniAppURL(c.statusMiniAppPublicURL, c.statusMiniAppBotToken, chatID, senderID, time.Now().UTC())
 }
 
 func (c telegramCommandControl) ContinuationState(chatID int64) (session.ContinuationState, error) {
@@ -715,6 +721,8 @@ func run() error {
 		decisionDetacher:       decisionBroker,
 		detachPendingOnRestart: cfg.Telegram.DetachPendingOnRestart,
 		durableTools:           tools,
+		statusMiniAppPublicURL: telegramMiniAppPublicURL(cfg),
+		statusMiniAppBotToken:  cfg.Telegram.BotToken,
 	}
 	loadDecisionCtx, cancelDecisionLoad := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := decisionBroker.Load(loadDecisionCtx); err != nil {
@@ -736,6 +744,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := startDurableAgentControlPlane(ctx, durableAgentControlPlaneServer(cfg, store)); err != nil {
+		return err
+	}
+	if err := startTelegramMiniApp(ctx, telegramMiniAppServer(cfg, commandControl)); err != nil {
 		return err
 	}
 	rt.StartStartupRecovery(ctx, log.Printf)

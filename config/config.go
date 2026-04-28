@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -46,8 +47,16 @@ type TelegramConfig struct {
 	ToolProgressStyle      string                       `toml:"tool_progress_style"`
 	ToolProgressWindow     int                          `toml:"tool_progress_window"`
 	ToolProgressCleanup    bool                         `toml:"tool_progress_cleanup"`
+	MiniApp                TelegramMiniAppConfig        `toml:"mini_app"`
 	Media                  TelegramMediaConfig          `toml:"media"`
 	DurableGroups          []TelegramDurableGroupConfig `toml:"durable_groups"`
+}
+
+type TelegramMiniAppConfig struct {
+	Enabled    bool   `toml:"enabled"`
+	ListenAddr string `toml:"listen_addr"`
+	PublicURL  string `toml:"public_url"`
+	AuthMaxAge string `toml:"auth_max_age"`
 }
 
 type TelegramDurableGroupConfig struct {
@@ -353,6 +362,11 @@ func Default() Config {
 			ToolProgressStyle:      "semantic",
 			ToolProgressWindow:     4,
 			ToolProgressCleanup:    false,
+			MiniApp: TelegramMiniAppConfig{
+				Enabled:    false,
+				ListenAddr: "127.0.0.1:8765",
+				AuthMaxAge: "24h",
+			},
 			Media: TelegramMediaConfig{
 				DownloadMaxSize:  "20MB",
 				AutoVisionPhotos: true,
@@ -808,6 +822,29 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Telegram.ToolProgressWindow <= 0 {
 		return fmt.Errorf("telegram.tool_progress_window must be > 0")
+	}
+	if cfg.Telegram.MiniApp.Enabled && strings.TrimSpace(cfg.Telegram.MiniApp.ListenAddr) == "" {
+		return fmt.Errorf("telegram.mini_app.listen_addr is required when enabled")
+	}
+	if raw := strings.TrimSpace(cfg.Telegram.MiniApp.PublicURL); raw != "" {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("telegram.mini_app.public_url must be an absolute http or https URL")
+		}
+		switch strings.ToLower(parsed.Scheme) {
+		case "http", "https":
+		default:
+			return fmt.Errorf("telegram.mini_app.public_url must be an absolute http or https URL")
+		}
+	}
+	if raw := strings.TrimSpace(cfg.Telegram.MiniApp.AuthMaxAge); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("telegram.mini_app.auth_max_age must be a valid duration: %w", err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("telegram.mini_app.auth_max_age must be > 0")
+		}
 	}
 	if _, err := ParseByteSize(strings.TrimSpace(cfg.Telegram.Media.DownloadMaxSize)); err != nil {
 		return fmt.Errorf("telegram.media.download_max_size must be a valid positive size: %w", err)

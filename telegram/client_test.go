@@ -496,6 +496,64 @@ func TestSendInlineKeyboardPayload(t *testing.T) {
 	}
 }
 
+func TestSendInlineKeyboardPayloadSupportsWebAppButton(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/sendMessage" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = 223
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	_, err := client.SendInlineKeyboard(context.Background(), 5, "Status", [][]InlineButton{
+		{
+			{Text: "Open Console", WebApp: &WebAppInfo{URL: "https://status.example.test/telegram/status-app"}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendInlineKeyboard() err = %v", err)
+	}
+	replyMarkup, ok := requestBody["reply_markup"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("reply_markup = %#v, want object", requestBody["reply_markup"])
+	}
+	rows, ok := replyMarkup["inline_keyboard"].([]interface{})
+	if !ok || len(rows) != 1 {
+		t.Fatalf("inline_keyboard = %#v, want 1 row", replyMarkup["inline_keyboard"])
+	}
+	row, ok := rows[0].([]interface{})
+	if !ok || len(row) != 1 {
+		t.Fatalf("inline_keyboard[0] = %#v, want 1 button", rows[0])
+	}
+	button, ok := row[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("button = %#v, want object", row[0])
+	}
+	webApp, ok := button["web_app"].(map[string]interface{})
+	if !ok || webApp["url"] != "https://status.example.test/telegram/status-app" {
+		t.Fatalf("web_app = %#v, want URL", button["web_app"])
+	}
+	if _, ok := button["callback_data"]; ok {
+		t.Fatalf("callback_data = %#v, want omitted for web app button", button["callback_data"])
+	}
+}
+
 func TestSendInlineKeyboardSplitsLongTextIntoFollowUpMessages(t *testing.T) {
 	var bodies []map[string]interface{}
 	transport := testTransport{

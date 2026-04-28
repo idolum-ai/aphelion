@@ -42,6 +42,7 @@ type commandRouter interface {
 	StatusSystem(senderID int64) (core.SystemStatusSnapshot, error)
 	StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error)
 	StatusReadableSummary(ctx context.Context, view string, statusText string) string
+	StatusMiniAppURL(chatID int64, senderID int64) string
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
