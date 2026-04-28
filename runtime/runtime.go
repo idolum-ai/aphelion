@@ -27,6 +27,7 @@ import (
 	"github.com/idolum-ai/aphelion/prompt"
 	providerpkg "github.com/idolum-ai/aphelion/provider"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tailnet"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/voice"
 )
@@ -98,6 +99,7 @@ type Runtime struct {
 	statusReadableMu       sync.Mutex
 	statusReadableProvider agent.Provider
 	statusReadableReady    bool
+	tailnetBackend         tailnet.Backend
 	modelProviderMu        sync.Mutex
 	modelProviderCache     map[string]agent.Provider
 	streamControlMu        sync.Mutex
@@ -407,6 +409,10 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("init sandbox scope resolver: %w", err)
 	}
+	tailnetBackend, err := buildTailnetBackend(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	idleExpiry := 24 * time.Hour
 	if raw := strings.TrimSpace(cfg.Sessions.IdleExpiry); raw != "" {
@@ -497,6 +503,7 @@ func New(
 		staleTurnLimit:           defaultStaleTurnLimit,
 		staleTurnSweep:           store.StaleRunningTurnRuns,
 		interruptRunningTurnRuns: store.InterruptRunningTurnRuns,
+		tailnetBackend:           tailnetBackend,
 		modelProviderCache:       make(map[string]agent.Provider),
 		recipePath:               recipePath,
 		recipeState:              recipeState,

@@ -25,6 +25,15 @@ auto_vision_documents = true
 extract_pdf_text = true
 max_pdf_bytes = "8MB"
 
+[tailscale]
+enabled = false
+backend = "cli"
+cli_path = "tailscale"
+command_timeout = "5s"
+expected_tailnet = ""
+expected_hostname = ""
+expected_tags = []
+
 [principals.telegram]
 admin_user_ids = [123456789]
 

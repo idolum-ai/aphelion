@@ -193,6 +193,41 @@ type SystemStatusSnapshot struct {
 	StaleRunningTurns    []TurnRunStatusSnapshot
 	HotChats             []ChatStatusRollup
 	RestartHealth        RestartHealthSnapshot
+	Tailnet              *TailnetStatusSnapshot
+}
+
+type TailnetStatusSnapshot struct {
+	GeneratedAt       time.Time
+	Enabled           bool
+	Backend           string
+	Status            string
+	Summary           string
+	TailscaleVersion  string
+	BackendState      string
+	HostName          string
+	DNSName           string
+	TailnetName       string
+	User              string
+	Online            bool
+	Authenticated     bool
+	TailscaleIPs      []string
+	Tags              []string
+	MagicDNSEnabled   bool
+	NetcheckAvailable bool
+	NetcheckSummary   string
+	ExpectedTailnet   string
+	ExpectedHostname  string
+	ExpectedTags      []string
+	Issues            []TailnetIssue
+	RawStatusError    string
+	RawIPError        string
+	RawNetcheckError  string
+}
+
+type TailnetIssue struct {
+	Code     string
+	Severity string
+	Summary  string
 }
 
 type DurableAgentStatusSnapshot struct {

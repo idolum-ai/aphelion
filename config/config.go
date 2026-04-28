@@ -31,6 +31,7 @@ type Config struct {
 	Cron          CronConfig          `toml:"cron"`
 	Voice         VoiceConfig         `toml:"voice"`
 	DurableAgents DurableAgentsConfig `toml:"durable_agents"`
+	Tailscale     TailscaleConfig     `toml:"tailscale"`
 }
 
 type IdentityConfig struct {
@@ -82,6 +83,16 @@ type TelegramMediaConfig struct {
 	AutoVisionDocs   bool   `toml:"auto_vision_documents"`
 	ExtractPDFText   bool   `toml:"extract_pdf_text"`
 	MaxPDFBytes      string `toml:"max_pdf_bytes"`
+}
+
+type TailscaleConfig struct {
+	Enabled          bool     `toml:"enabled"`
+	Backend          string   `toml:"backend"`
+	CLIPath          string   `toml:"cli_path"`
+	CommandTimeout   string   `toml:"command_timeout"`
+	ExpectedTailnet  string   `toml:"expected_tailnet"`
+	ExpectedHostname string   `toml:"expected_hostname"`
+	ExpectedTags     []string `toml:"expected_tags"`
 }
 
 type PrincipalsConfig struct {
@@ -536,6 +547,12 @@ func Default() Config {
 			ElevenLabsModelID: "eleven_multilingual_v2",
 		},
 		DurableAgents: DurableAgentsConfig{},
+		Tailscale: TailscaleConfig{
+			Enabled:        false,
+			Backend:        "cli",
+			CLIPath:        "tailscale",
+			CommandTimeout: "5s",
+		},
 	}
 }
 
@@ -853,6 +870,9 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("telegram.media.max_pdf_bytes must be a valid positive size: %w", err)
 	}
 	if err := validateTelegramDurableGroups(cfg); err != nil {
+		return err
+	}
+	if err := validateTailscaleConfig(cfg); err != nil {
 		return err
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Thinking.Effort)) {
@@ -1467,6 +1487,57 @@ func validateTelegramDurableGroups(cfg *Config) error {
 		seenAgents[agentID] = group.ChatID
 	}
 	return nil
+}
+
+func validateTailscaleConfig(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	backend := strings.ToLower(strings.TrimSpace(cfg.Tailscale.Backend))
+	if backend == "" {
+		backend = "cli"
+		cfg.Tailscale.Backend = backend
+	}
+	switch backend {
+	case "cli":
+	default:
+		return fmt.Errorf("tailscale.backend must be cli")
+	}
+	if strings.TrimSpace(cfg.Tailscale.CLIPath) == "" {
+		cfg.Tailscale.CLIPath = "tailscale"
+	}
+	if raw := strings.TrimSpace(cfg.Tailscale.CommandTimeout); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("tailscale.command_timeout must be a valid duration: %w", err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("tailscale.command_timeout must be > 0")
+		}
+	} else {
+		cfg.Tailscale.CommandTimeout = "5s"
+	}
+	cfg.Tailscale.ExpectedTailnet = strings.TrimSpace(cfg.Tailscale.ExpectedTailnet)
+	cfg.Tailscale.ExpectedHostname = strings.TrimSpace(cfg.Tailscale.ExpectedHostname)
+	cfg.Tailscale.ExpectedTags = normalizeStringList(cfg.Tailscale.ExpectedTags)
+	return nil
+}
+
+func normalizeStringList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func normalizeTelegramDurableGroupRespondOn(raw string) string {

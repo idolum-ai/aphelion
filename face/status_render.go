@@ -348,9 +348,46 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 	lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 5)...)
 	lines = append(lines, renderCapabilityLifecycleBlock(snapshot.RecentExecution, 5)...)
 	lines = append(lines, renderPendingItemBlock(snapshot.PendingItems, 20)...)
+	lines = append(lines, renderTailnetStatusBlock(snapshot.Tailnet)...)
 	lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
 	lines = append(lines, fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)))
 	return strings.Join(lines, "\n")
+}
+
+func renderTailnetStatusBlock(snapshot *core.TailnetStatusSnapshot) []string {
+	if snapshot == nil {
+		return nil
+	}
+	lines := []string{"tailnet:"}
+	line := fmt.Sprintf("- status=%s enabled=%t backend=%s", firstNonEmpty(strings.TrimSpace(snapshot.Status), "unknown"), snapshot.Enabled, firstNonEmpty(strings.TrimSpace(snapshot.Backend), "-"))
+	if host := firstNonEmpty(strings.TrimSpace(snapshot.DNSName), strings.TrimSpace(snapshot.HostName)); host != "" {
+		line += " node=" + host
+	}
+	if tailnetName := strings.TrimSpace(snapshot.TailnetName); tailnetName != "" {
+		line += " tailnet=" + tailnetName
+	}
+	if len(snapshot.TailscaleIPs) > 0 {
+		line += " ips=" + formatStringList(snapshot.TailscaleIPs)
+	}
+	if len(snapshot.Tags) > 0 {
+		line += " tags=" + formatStringList(snapshot.Tags)
+	}
+	lines = append(lines, line)
+	if summary := strings.TrimSpace(snapshot.Summary); summary != "" {
+		lines = append(lines, "  summary="+quoteStatusField(truncateStatusField(summary, 140)))
+	}
+	limit := len(snapshot.Issues)
+	if limit > 4 {
+		limit = 4
+	}
+	for i := 0; i < limit; i++ {
+		issue := snapshot.Issues[i]
+		lines = append(lines, fmt.Sprintf("  issue code=%s severity=%s summary=%s", strings.TrimSpace(issue.Code), strings.TrimSpace(issue.Severity), quoteStatusField(truncateStatusField(issue.Summary, 120))))
+	}
+	if len(snapshot.Issues) > limit {
+		lines = append(lines, fmt.Sprintf("  issues_omitted=%d", len(snapshot.Issues)-limit))
+	}
+	return lines
 }
 
 func renderToolLifecycleCurrentStateBlock(rows []core.ToolLifecycleStatusSnapshot, maxRows int) []string {

@@ -113,6 +113,9 @@ type stubCommandRouter struct {
 	statusDurables              core.DurableAgentsStatusSnapshot
 	statusReadableSummary       string
 	statusMiniAppURL            string
+	tailnetStatus               core.TailnetStatusSnapshot
+	tailnetStatusErr            error
+	tailnetStatusSenderID       int64
 	statusChatErr               error
 	statusSystemErr             error
 	statusDurablesErr           error
@@ -281,6 +284,23 @@ func (s stubCommandRouter) StatusMiniAppURL(chatID int64, senderID int64) string
 	_ = chatID
 	_ = senderID
 	return s.statusMiniAppURL
+}
+
+func (s *stubCommandRouter) TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error) {
+	_ = ctx
+	s.tailnetStatusSenderID = senderID
+	if s.tailnetStatusErr != nil {
+		return core.TailnetStatusSnapshot{}, s.tailnetStatusErr
+	}
+	if strings.TrimSpace(s.tailnetStatus.Status) != "" || s.tailnetStatus.GeneratedAt.IsZero() == false {
+		return s.tailnetStatus, nil
+	}
+	return core.TailnetStatusSnapshot{
+		Enabled: false,
+		Backend: "disabled",
+		Status:  "disabled",
+		Summary: "Tailscale integration is disabled.",
+	}, nil
 }
 
 func (s stubCommandRouter) CurrentEfforts() (string, string) {
@@ -569,6 +589,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/reinstall", want: "reinstall", ok: true},
 		{text: "/debug", want: "debug", ok: true},
 		{text: "/doctor", want: "doctor", ok: true},
+		{text: "/tailnet", want: "tailnet", ok: true},
 		{text: "/agents", want: "agents", ok: true},
 		{text: "/memory", want: "memory", ok: true},
 		{text: "/model status", want: "model", ok: true},
@@ -675,6 +696,21 @@ func TestDefaultTelegramCommandsIncludeNew(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("defaultTelegramCommands = %#v, want /new command entry", defaultTelegramCommands)
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeTailnet(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "tailnet" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /tailnet command entry", defaultTelegramCommands)
 	}
 }
 
@@ -1496,6 +1532,75 @@ func TestHandleTelegramCommandDoctorRequiresPrivateAdminChat(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandTailnetShowsReadOnlyStatus(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetStatus: core.TailnetStatusSnapshot{
+			Enabled:           true,
+			Backend:           "cli",
+			Status:            "healthy",
+			HostName:          "aphelion",
+			DNSName:           "aphelion.example.ts.net",
+			TailnetName:       "example.ts.net",
+			TailscaleIPs:      []string{"100.64.0.10"},
+			Tags:              []string{"tag:admin"},
+			NetcheckAvailable: true,
+			NetcheckSummary:   "UDP: true",
+			Summary:           "aphelion is healthy.",
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1001,
+		Text:     "/tailnet",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.tailnetStatusSenderID != 1001 {
+		t.Fatalf("tailnet sender = %d, want 1001", router.tailnetStatusSenderID)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet") || !strings.Contains(got, "Status: healthy") || !strings.Contains(got, "aphelion.example.ts.net") {
+		t.Fatalf("tailnet text = %q, want compact status", got)
+	}
+	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" {
+		t.Fatalf("tailnet rows = %#v, want refresh", sender.inline[0].rows)
+	}
+}
+
+func TestHandleTelegramCommandTailnetDeniesNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1002,
+		Text:     "/tailnet",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.tailnetStatusSenderID != 0 {
+		t.Fatalf("tailnet sender = %d, want no status lookup", router.tailnetStatusSenderID)
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "admin only") {
+		t.Fatalf("tailnet denial messages = %#v, want admin-only denial", sender.msgs)
+	}
+}
+
 func TestHandleTelegramCommandDebugRewritesInconsistentQuickSummary(t *testing.T) {
 	t.Parallel()
 
@@ -2016,6 +2121,79 @@ func TestHandleTelegramCommandCallbackModelDeniedForNonAdmin(t *testing.T) {
 		t.Fatal("handled = false, want true")
 	}
 	if len(sender.answers) != 1 || !strings.Contains(sender.answers[0].text, "admin only") {
+		t.Fatalf("answers = %#v, want admin denial", sender.answers)
+	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline count = %d, want 0", len(sender.editInline))
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetRefreshForAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		tailnetStatus: core.TailnetStatusSnapshot{
+			Enabled:     true,
+			Backend:     "cli",
+			Status:      "degraded",
+			HostName:    "aphelion",
+			TailnetName: "example.ts.net",
+			Issues: []core.TailnetIssue{{
+				Code:     "magicdns_missing",
+				Severity: "warning",
+				Summary:  "no MagicDNS name was observed.",
+			}},
+		},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-refresh",
+		From: &telegram.User{ID: 1001, Username: "admin"},
+		Data: "tailnet:refresh",
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+	if got := sender.editInline[0].text; !strings.Contains(got, "Status: degraded") || !strings.Contains(got, "magicdns_missing") {
+		t.Fatalf("tailnet callback text = %q, want refreshed tailnet status", got)
+	}
+}
+
+func TestHandleTelegramCommandCallbackTailnetDeniedForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "cb-tailnet-denied",
+		From: &telegram.User{ID: 1002},
+		Data: "tailnet:refresh",
+		Message: &telegram.Message{
+			MessageID: 97,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.answers) != 1 || !strings.Contains(sender.answers[0].text, "admin") {
 		t.Fatalf("answers = %#v, want admin denial", sender.answers)
 	}
 	if len(sender.editInline) != 0 {

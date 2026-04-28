@@ -250,6 +250,22 @@ func (c telegramCommandControl) StatusMiniAppURL(chatID int64, senderID int64) s
 	return buildTelegramStatusMiniAppURL(c.statusMiniAppPublicURL, c.statusMiniAppBotToken, chatID, senderID, time.Now().UTC())
 }
 
+func (c telegramCommandControl) TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error) {
+	if !c.CanRestart(senderID) {
+		return core.TailnetStatusSnapshot{}, fmt.Errorf("tailnet status denied")
+	}
+	if c.rt == nil {
+		return core.TailnetStatusSnapshot{
+			GeneratedAt: time.Now().UTC(),
+			Enabled:     false,
+			Backend:     "disabled",
+			Status:      "disabled",
+			Summary:     "Tailscale integration is disabled.",
+		}, nil
+	}
+	return c.rt.TailnetStatusSnapshot(ctx)
+}
+
 func (c telegramCommandControl) ContinuationState(chatID int64) (session.ContinuationState, error) {
 	if c.rt == nil {
 		return session.ContinuationState{}, nil

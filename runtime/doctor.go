@@ -460,6 +460,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Semantic Store")
 	r.writeDoctorSemanticStats(&b)
 
+	writeDoctorSection(&b, "Tailnet")
+	r.writeDoctorTailnetDiagnostics(ctx, &b)
+
 	writeDoctorSection(&b, "Recent Service Log Tail")
 	r.writeDoctorLogTail(&b)
 
@@ -871,6 +874,39 @@ func (r *Runtime) writeDoctorSemanticStats(b *strings.Builder) {
 			return
 		}
 		writeDoctorLine(b, fmt.Sprintf("- import_state=%s documents=%d", state, count))
+	}
+}
+
+func (r *Runtime) writeDoctorTailnetDiagnostics(ctx context.Context, b *strings.Builder) {
+	if r == nil || r.cfg == nil {
+		writeDoctorLine(b, "tailnet: runtime unavailable")
+		return
+	}
+	writeDoctorKV(b, "tailscale_enabled", strconv.FormatBool(r.cfg.Tailscale.Enabled))
+	writeDoctorKV(b, "tailscale_backend", strings.TrimSpace(r.cfg.Tailscale.Backend))
+	writeDoctorKV(b, "tailscale_expected_tailnet", strings.TrimSpace(r.cfg.Tailscale.ExpectedTailnet))
+	writeDoctorKV(b, "tailscale_expected_hostname", strings.TrimSpace(r.cfg.Tailscale.ExpectedHostname))
+	writeDoctorKV(b, "tailscale_expected_tags", strings.Join(r.cfg.Tailscale.ExpectedTags, ","))
+	snapshot, err := r.TailnetStatusSnapshot(ctx)
+	if err != nil {
+		writeDoctorLine(b, "tailnet_snapshot_error="+strconv.Quote(err.Error()))
+		return
+	}
+	writeDoctorKV(b, "tailnet_status", snapshot.Status)
+	writeDoctorKV(b, "tailnet_summary", snapshot.Summary)
+	writeDoctorKV(b, "tailnet_backend_state", snapshot.BackendState)
+	writeDoctorKV(b, "tailnet_node", firstNonEmpty(strings.TrimSpace(snapshot.DNSName), strings.TrimSpace(snapshot.HostName)))
+	writeDoctorKV(b, "tailnet_name", snapshot.TailnetName)
+	writeDoctorKV(b, "tailnet_ips", strings.Join(snapshot.TailscaleIPs, ","))
+	writeDoctorKV(b, "tailnet_tags", strings.Join(snapshot.Tags, ","))
+	writeDoctorKV(b, "tailnet_netcheck", snapshot.NetcheckSummary)
+	if len(snapshot.Issues) == 0 {
+		writeDoctorLine(b, "tailnet_issues: none")
+		return
+	}
+	writeDoctorLine(b, "tailnet_issues:")
+	for _, issue := range snapshot.Issues {
+		writeDoctorLine(b, fmt.Sprintf("- code=%s severity=%s summary=%q", strings.TrimSpace(issue.Code), strings.TrimSpace(issue.Severity), truncatePreview(issue.Summary, 300)))
 	}
 }
 

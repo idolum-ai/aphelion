@@ -227,6 +227,9 @@ func renderReadableSystemStatusLines(rawText string) []string {
 	if block := renderStatusBlock(rawText, "pending_items:", 8); len(block) > 0 {
 		lines = append(lines, block...)
 	}
+	if block := renderStatusBlock(rawText, "tailnet:", 6); len(block) > 0 {
+		lines = append(lines, block...)
+	}
 	if len(lines) == 1 {
 		lines = append(lines, "- state=idle")
 	}

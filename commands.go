@@ -43,6 +43,7 @@ type commandRouter interface {
 	StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error)
 	StatusReadableSummary(ctx context.Context, view string, statusText string) string
 	StatusMiniAppURL(chatID int64, senderID int64) string
+	TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error)
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
 	StopContinuation(chatID int64) (core.StopResult, error)
@@ -87,6 +88,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "status", Description: "Show live status and controls"},
 	{Command: "debug", Description: "Show a detailed debug snapshot"},
 	{Command: "doctor", Description: "Run an admin runtime diagnosis"},
+	{Command: "tailnet", Description: "Show read-only tailnet status"},
 	{Command: "agents", Description: "List durable agents and controls"},
 	{Command: "memory", Description: "Review memory and set focus"},
 	{Command: "model", Description: "Show and change model slots"},
@@ -173,6 +175,20 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		text = "Doctor diagnostics started. I will post the report here when the read-only model analysis finishes."
+	case "tailnet":
+		if !isAdmin {
+			text = "Tailnet diagnostics are admin only."
+			break
+		}
+		snapshot, err := router.TailnetStatus(ctx, msg.SenderID)
+		if err != nil {
+			return true, err
+		}
+		rendered, rows := renderTailnetCommand(snapshot)
+		if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, rendered, rows, replyToMessageID(msg.MessageID)); err != nil {
+			return true, err
+		}
+		return true, nil
 	case "agents":
 		if !router.CanRestart(msg.SenderID) {
 			text = "Durable-agent controls are admin only."
@@ -326,6 +342,50 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			return true, err
 		}
 		if err := deliverDebugCallbackView(ctx, sender, chatID, messageID, fullText); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+	if action, ok := decodeTailnetCallbackData(cb.Data); ok {
+		chatID := int64(0)
+		messageID := int64(0)
+		senderID := int64(0)
+		if cb.Message != nil {
+			messageID = cb.Message.MessageID
+			if cb.Message.Chat != nil {
+				chatID = cb.Message.Chat.ID
+			}
+		}
+		if cb.From != nil {
+			senderID = cb.From.ID
+		}
+		if action != tailnetCallbackRefresh || chatID == 0 || messageID == 0 {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleStatusCallbackText); err != nil {
+				if !telegram.IsStaleCallbackQueryError(err) {
+					return true, err
+				}
+			}
+			return true, nil
+		}
+		if !router.CanRestart(senderID) {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), adminStatusOnlyText); err != nil {
+				if !telegram.IsStaleCallbackQueryError(err) {
+					return true, err
+				}
+			}
+			return true, nil
+		}
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil {
+			if !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+		}
+		snapshot, err := router.TailnetStatus(ctx, senderID)
+		if err != nil {
+			return true, err
+		}
+		rendered, rows := renderTailnetCommand(snapshot)
+		if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, rendered, "", rows); err != nil {
 			return true, err
 		}
 		return true, nil

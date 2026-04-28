@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -477,6 +478,24 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	})
 	sortPendingItems(snapshot.PendingItems)
 	snapshot.HotChats = buildHotChatRollups(snapshot)
+	if r.cfg != nil && r.cfg.Tailscale.Enabled {
+		tailnetSnapshot, err := r.TailnetStatusSnapshot(context.Background())
+		if err != nil {
+			tailnetSnapshot = core.TailnetStatusSnapshot{
+				GeneratedAt: time.Now().UTC(),
+				Enabled:     true,
+				Backend:     strings.TrimSpace(r.cfg.Tailscale.Backend),
+				Status:      "degraded",
+				Summary:     "Tailnet status snapshot failed.",
+				Issues: []core.TailnetIssue{{
+					Code:     "snapshot_failed",
+					Severity: "error",
+					Summary:  err.Error(),
+				}},
+			}
+		}
+		snapshot.Tailnet = &tailnetSnapshot
+	}
 	return snapshot, nil
 }
 

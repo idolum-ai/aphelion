@@ -58,6 +58,9 @@ external_manifest_dir = "./external-tools"
 	if cfg.Telegram.Media.DownloadMaxSize != "20MB" || !cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || !cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "8MB" {
 		t.Fatalf("telegram media defaults = %#v, want 20MB + auto vision/pdf extract", cfg.Telegram.Media)
 	}
+	if cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "tailscale" || cfg.Tailscale.CommandTimeout != "5s" {
+		t.Fatalf("tailscale defaults = %#v, want disabled cli backend", cfg.Tailscale)
+	}
 	if cfg.Governor.Backend != "auto" {
 		t.Fatalf("governor.backend = %q, want auto", cfg.Governor.Backend)
 	}
@@ -380,6 +383,15 @@ auto_vision_documents = true
 extract_pdf_text = false
 max_pdf_bytes = "4MB"
 
+[tailscale]
+enabled = true
+backend = "cli"
+cli_path = "/usr/bin/tailscale"
+command_timeout = "3s"
+expected_tailnet = "example.ts.net"
+expected_hostname = "aphelion-admin"
+expected_tags = ["tag:admin", "tag:aphelion", "tag:admin"]
+
 [principals.telegram]
 admin_user_ids = [123]
 
@@ -558,6 +570,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if !cfg.Telegram.MiniApp.Enabled || cfg.Telegram.MiniApp.ListenAddr != "127.0.0.1:9999" || cfg.Telegram.MiniApp.PublicURL != "https://status.example.test/telegram/status-app" || cfg.Telegram.MiniApp.AuthMaxAge != "2h" {
 		t.Fatalf("telegram mini app = %#v, want explicit overrides", cfg.Telegram.MiniApp)
+	}
+	if !cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "/usr/bin/tailscale" || cfg.Tailscale.CommandTimeout != "3s" || cfg.Tailscale.ExpectedTailnet != "example.ts.net" || cfg.Tailscale.ExpectedHostname != "aphelion-admin" || !reflect.DeepEqual(cfg.Tailscale.ExpectedTags, []string{"tag:admin", "tag:aphelion"}) {
+		t.Fatalf("tailscale config = %#v, want explicit normalized overrides", cfg.Tailscale)
 	}
 	if cfg.Providers.Anthropic.Model != "claude-opus-4-6" {
 		t.Fatalf("model = %q, want claude-opus-4-6", cfg.Providers.Anthropic.Model)

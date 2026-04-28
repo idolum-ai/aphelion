@@ -1288,6 +1288,36 @@ Tests:
 - JSON parser golden tests
 - `/doctor` reports drift when expected tailnet/tag is absent
 
+Verification gates:
+
+- Disabled-by-default gate: `go test ./...` passes and runtime behavior is
+  unchanged when `[tailscale]` is absent or disabled.
+- Read-only safety gate: milestone 0 never executes mutating Tailscale commands
+  such as `tailscale up`, `tailscale set`, `tailscale serve`,
+  `tailscale funnel`, SSH, route changes, or policy writes.
+- Parser/normalization gate: tests cover healthy `status --json`, missing CLI,
+  daemon unavailable, unauthenticated daemon, malformed JSON, `ip`, and
+  `netcheck` output.
+- Telegram UI gate: `/tailnet` renders healthy, degraded, disabled, and missing
+  daemon states as compact messages within Telegram limits, with a refresh
+  control.
+- Status/doctor gate: `/status` includes only a bounded tailnet summary, while
+  `/doctor` includes evidence-rich diagnostics and concrete recommendations.
+- Failure surfacing gate: missing or degraded Tailscale state is reported in
+  Telegram/admin diagnostics without crashing startup or turn handling.
+- Live smoke gate: when explicitly enabled, Aphelion's read-only snapshot is
+  compared against local `tailscale status --json`, `tailscale ip`, and
+  `tailscale netcheck` output on the host.
+
+Environment:
+
+- No environment variables are required for ordinary milestone 0 unit tests.
+- Live smoke tests require `APHELION_TAILSCALE_INTEGRATION=1` and a host where
+  the `tailscale` CLI is installed and intentionally available to the test
+  process.
+- Milestone 0 should not require a Tailscale auth key because it only observes
+  existing daemon/CLI state.
+
 Why first:
 
 - Low risk.
@@ -1312,6 +1342,30 @@ Tests:
 - fake `tsnet` server lifecycle tests
 - HTTP handler tests without real Tailscale
 - startup/recovery tests for state directory reuse
+
+Verification gates:
+
+- Disabled-by-default gate: parent `tsnet` does not start unless explicitly
+  configured or approved.
+- Lifecycle gate: fake `tsnet` tests prove start, stop, restart, and state
+  directory reuse.
+- Identity gate: configured hostname, observed MagicDNS name, and persisted
+  state match after restart; mismatches are surfaced in `/status`, `/doctor`,
+  and Telegram.
+- Private reachability gate: a tailnet-only `GET /healthz` or `GET /status`
+  smoke test succeeds when integration tests are explicitly enabled.
+- Auth-key safety gate: missing or expired auth-key material blocks startup of
+  the parent node gracefully and never falls back to public exposure.
+
+Environment:
+
+- Ordinary milestone 1 unit tests use a fake `tsnet` implementation and require
+  no secrets.
+- Real `tsnet` integration tests require `APHELION_TAILSCALE_INTEGRATION=1`,
+  `APHELION_TAILSCALE_TEST_AUTHKEY`, and a disposable test hostname such as
+  `APHELION_TAILSCALE_TEST_HOSTNAME=aphelion-test`.
+- The test auth key should be ephemeral, scoped to a test tailnet when possible,
+  and never required for default CI.
 
 Why second:
 

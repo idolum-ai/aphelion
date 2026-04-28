@@ -258,6 +258,39 @@ func TestRenderTelegramStatusSystemIncludesToolAuthorityLifecycleProjection(t *t
 	}
 }
 
+func TestRenderTelegramStatusSystemIncludesTailnetSummary(t *testing.T) {
+	t.Parallel()
+
+	out := RenderTelegramStatusSystem(core.SystemStatusSnapshot{
+		Tailnet: &core.TailnetStatusSnapshot{
+			Enabled:      true,
+			Backend:      "cli",
+			Status:       "degraded",
+			DNSName:      "aphelion.example.ts.net",
+			TailnetName:  "example.ts.net",
+			TailscaleIPs: []string{"100.64.0.10"},
+			Tags:         []string{"tag:admin"},
+			Summary:      "MagicDNS is unavailable.",
+			Issues: []core.TailnetIssue{{
+				Code:     "magicdns_missing",
+				Severity: "warning",
+				Summary:  "no MagicDNS name was observed.",
+			}},
+		},
+	}, "opus", "high")
+	for _, needle := range []string{
+		"tailnet:",
+		"status=degraded",
+		"node=aphelion.example.ts.net",
+		"tailnet=example.ts.net",
+		"issue code=magicdns_missing",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusSystem() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
 func TestRenderTelegramStatusDurablesShowsEmptyState(t *testing.T) {
 	t.Parallel()
 
