@@ -1186,6 +1186,70 @@ func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandStatusUsesReadableCardInsteadOfRawDump(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		statusChat: core.ChatStatusSnapshot{
+			ChatID:           7,
+			OperationStatus:  "blocked",
+			OperationStage:   "approval_wait",
+			OperationSummary: "Waiting for admin review",
+			PlanStepStatus:   "in_progress",
+			PlanStep:         "Await admin approval",
+			ToolLifecycle: []core.ToolLifecycleStatusSnapshot{{
+				ToolName:      "browse_page",
+				InstallStatus: "verified",
+				ProbeStatus:   "passed",
+				AuditStatus:   "passed",
+			}},
+			CapabilityGrants: []core.CapabilityGrantStatusSnapshot{{
+				GrantID:        "capg-status",
+				Kind:           "purchase",
+				Status:         "active",
+				GrantedTo:      "family-child",
+				AllowedActions: []string{"order"},
+			}},
+		},
+		personaEffort:  "opus",
+		governorEffort: "high",
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID: 7,
+		Text:   "/status",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want 1", len(sender.inline))
+	}
+	text := sender.inline[0].text
+	for _, needle := range []string{
+		"Current:",
+		"Operation: Status: blocked Stage: approval_wait",
+		"Plan Step: Status: in_progress Step: \"Await admin approval\"",
+		"Details: /debug has the full execution trace and source attribution.",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("status text = %q, want readable substring %q", text, needle)
+		}
+	}
+	for _, forbidden := range []string{
+		"Tool Lifecycle: Source:",
+		"Capability Grants: Source:",
+		"Source Attribution:",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("status text = %q, should not include raw diagnostic block %q", text, forbidden)
+		}
+	}
+}
+
 func TestHandleTelegramCommandDebugForNonAdminShowsChatDebugOnly(t *testing.T) {
 	t.Parallel()
 
@@ -2092,6 +2156,8 @@ func TestHandleTelegramCommandCallbackStatusChunksOverflowDeterministically(t *t
 	sender := &stubCommandSender{}
 	router := stubCommandRouter{
 		canRestart: true,
+		statusReadableSummary: "System status overflow probe. " +
+			strings.Repeat("This deliberately long quick read verifies deterministic Telegram chunking. ", 80),
 		statusSystem: core.SystemStatusSnapshot{
 			PendingItems: pending,
 		},

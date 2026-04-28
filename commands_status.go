@@ -117,26 +117,308 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		view = statusViewChat
 		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
 	}
-	text = appendStatusReadableSummary(ctx, router, view, text)
-	text = appendStatusSourceAttribution(view, text)
+	summary := statusReadableSummaryText(ctx, router, view, text)
+	text = renderReadableStatusView(view, text, summary)
 	text = humanizeTelegramTelemetryText(text)
 	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded)
 	return text, rows, nil
 }
 
 func appendStatusReadableSummary(ctx context.Context, router commandRouter, view statusView, text string) string {
-	if router == nil || !statusViewSupportsReadableSummary(view) {
+	summary := statusReadableSummaryText(ctx, router, view, text)
+	if summary == "" {
 		return text
+	}
+	return "quick_read " + summary + "\n\n" + text
+}
+
+func statusReadableSummaryText(ctx context.Context, router commandRouter, view statusView, text string) string {
+	if router == nil || !statusViewSupportsReadableSummary(view) {
+		return ""
 	}
 	summary := strings.TrimSpace(router.StatusReadableSummary(ctx, string(view), text))
 	summary = groundStatusReadableSummary(view, summary, text)
 	if summary == "" {
 		summary = composeStatusReadableSummary(view, text)
 	}
-	if summary == "" {
-		return text
+	return summary
+}
+
+func renderReadableStatusView(view statusView, rawText string, quickRead string) string {
+	rawText = strings.TrimSpace(rawText)
+	lines := make([]string, 0, 16)
+	if quickRead = strings.TrimSpace(quickRead); quickRead != "" {
+		lines = append(lines, "quick_read "+quickRead, "")
 	}
-	return "quick_read " + summary + "\n\n" + text
+	if scope := statusRawLine(rawText, "status_scope="); scope != "" {
+		lines = append(lines, scope)
+	}
+	if summary := statusRawLine(rawText, "summary "); summary != "" {
+		lines = append(lines, summary)
+	}
+
+	switch view {
+	case statusViewChat, statusViewPending, statusViewChatTarget:
+		lines = append(lines, renderReadableChatStatusLines(rawText, view == statusViewPending)...)
+	case statusViewSystem:
+		lines = append(lines, renderReadableSystemStatusLines(rawText)...)
+	case statusViewHotChats:
+		lines = append(lines, renderReadableHotChatsStatusLines(rawText)...)
+	case statusViewFindChat:
+		lines = append(lines, renderReadableFindChatStatusLines(rawText)...)
+	case statusViewDurables:
+		lines = append(lines, renderReadableDurablesStatusLines(rawText)...)
+	default:
+		lines = append(lines, renderReadableGenericStatusLines(rawText)...)
+	}
+	if hint := statusDetailsHint(view); hint != "" {
+		lines = append(lines, "", hint)
+	}
+	return strings.Join(compactStatusDisplayLines(lines), "\n")
+}
+
+func renderReadableChatStatusLines(rawText string, pendingOnly bool) []string {
+	lines := []string{"current:"}
+	if pendingOnly {
+		lines = append(lines, renderStatusBlock(rawText, "pending_items:", 12)...)
+		if effort := statusRawLine(rawText, "effort "); effort != "" {
+			lines = append(lines, "- "+effort)
+		}
+		return lines
+	}
+	for _, prefix := range []string{
+		"current_signal=",
+		"turn_phase ",
+		"latest_turn ",
+		"operation ",
+		"plan_step ",
+		"plan_progress ",
+		"delivery ",
+		"continuation ",
+		"hidden_inputs ",
+		"detached_work ",
+		"watchdog ",
+		"effort ",
+	} {
+		if line := statusRawLine(rawText, prefix); line != "" {
+			lines = append(lines, "- "+line)
+		}
+	}
+	if len(lines) == 1 {
+		lines = append(lines, "- state="+firstNonEmptyStatusSummary(statusSummaryStateToken(rawText), "unknown"))
+	}
+	if block := renderStatusBlock(rawText, "pending_items:", 5); len(block) > 0 {
+		lines = append(lines, block...)
+	}
+	return lines
+}
+
+func renderReadableSystemStatusLines(rawText string) []string {
+	lines := []string{"current:"}
+	for _, prefix := range []string{"active_chat_ids=", "watchdog ", "effort "} {
+		if line := statusRawLine(rawText, prefix); line != "" {
+			lines = append(lines, "- "+line)
+		}
+	}
+	lines = append(lines, statusRawLines(rawText, "queue ", 5, "- ")...)
+	if block := renderStatusBlock(rawText, "hot_chats:", 5); len(block) > 0 {
+		lines = append(lines, block...)
+	}
+	if block := renderStatusBlock(rawText, "pending_items:", 8); len(block) > 0 {
+		lines = append(lines, block...)
+	}
+	if len(lines) == 1 {
+		lines = append(lines, "- state=idle")
+	}
+	return lines
+}
+
+func renderReadableHotChatsStatusLines(rawText string) []string {
+	lines := []string{"hot_chats:"}
+	lines = append(lines, statusNumberedRawLines(rawText, 12)...)
+	if len(lines) == 1 {
+		lines = append(lines, statusPlainRawLines(rawText, 4)...)
+	}
+	return lines
+}
+
+func renderReadableFindChatStatusLines(rawText string) []string {
+	lines := []string{"find_chat:"}
+	lines = append(lines, statusPlainRawLines(rawText, 2)...)
+	lines = append(lines, statusNumberedRawLines(rawText, 12)...)
+	return lines
+}
+
+func renderReadableDurablesStatusLines(rawText string) []string {
+	lines := []string{"agents:"}
+	for _, line := range statusRawBlockEntries(rawText, "agents:", 10) {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- id=") ||
+			strings.Contains(trimmed, "health=degraded") ||
+			strings.Contains(trimmed, "apply_error=") ||
+			strings.Contains(trimmed, "child_runtime_blocked=") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 1 {
+		lines = append(lines, "- none")
+	}
+	return lines
+}
+
+func renderReadableGenericStatusLines(rawText string) []string {
+	lines := []string{"current:"}
+	lines = append(lines, statusPlainRawLines(rawText, 8)...)
+	if len(lines) == 1 {
+		lines = append(lines, "- status=unavailable")
+	}
+	return lines
+}
+
+func statusDetailsHint(view statusView) string {
+	switch view {
+	case statusViewChat, statusViewPending, statusViewChatTarget, statusViewSystem, statusViewHotChats, statusViewDurables:
+		return "details: /debug has the full execution trace and source attribution."
+	default:
+		return ""
+	}
+}
+
+func statusRawLine(rawText string, prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return ""
+	}
+	for _, line := range strings.Split(rawText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, prefix) {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func statusRawLines(rawText string, prefix string, max int, outputPrefix string) []string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil
+	}
+	out := make([]string, 0, max)
+	for _, line := range strings.Split(rawText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		out = append(out, outputPrefix+trimmed)
+		if max > 0 && len(out) >= max {
+			return out
+		}
+	}
+	return out
+}
+
+func renderStatusBlock(rawText string, header string, maxEntries int) []string {
+	entries := statusRawBlockEntries(rawText, header, maxEntries)
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(entries)+1)
+	out = append(out, strings.TrimSpace(header))
+	out = append(out, entries...)
+	return out
+}
+
+func statusRawBlockEntries(rawText string, header string, maxEntries int) []string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return nil
+	}
+	lines := strings.Split(rawText, "\n")
+	out := make([]string, 0, maxEntries)
+	inBlock := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == header {
+			inBlock = true
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "  ") {
+			break
+		}
+		out = append(out, trimmed)
+		if maxEntries > 0 && len(out) >= maxEntries {
+			break
+		}
+	}
+	return out
+}
+
+func statusNumberedRawLines(rawText string, max int) []string {
+	out := make([]string, 0, max)
+	for _, line := range strings.Split(rawText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		dot := strings.Index(trimmed, ".")
+		if dot <= 0 {
+			continue
+		}
+		if _, err := strconv.Atoi(trimmed[:dot]); err != nil {
+			continue
+		}
+		out = append(out, trimmed)
+		if max > 0 && len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+func statusPlainRawLines(rawText string, max int) []string {
+	out := make([]string, 0, max)
+	for _, line := range strings.Split(rawText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" ||
+			strings.HasPrefix(trimmed, "status_scope=") ||
+			strings.HasPrefix(trimmed, "summary ") ||
+			strings.HasSuffix(trimmed, ":") {
+			continue
+		}
+		out = append(out, trimmed)
+		if max > 0 && len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+func compactStatusDisplayLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	lastBlank := false
+	for _, line := range lines {
+		line = strings.TrimRight(line, " \t")
+		if strings.TrimSpace(line) == "" {
+			if len(out) == 0 || lastBlank {
+				continue
+			}
+			out = append(out, "")
+			lastBlank = true
+			continue
+		}
+		out = append(out, line)
+		lastBlank = false
+	}
+	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+		out = out[:len(out)-1]
+	}
+	return out
 }
 
 func groundStatusReadableSummary(view statusView, summary string, statusText string) string {
