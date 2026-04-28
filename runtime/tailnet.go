@@ -46,8 +46,15 @@ func buildTailnetBackend(cfg *config.Config) (tailnet.Backend, error) {
 }
 
 func (r *Runtime) TailnetStatusSnapshot(ctx context.Context) (core.TailnetStatusSnapshot, error) {
+	parent := (*core.TailnetParentStatus)(nil)
+	if r != nil && r.tailnetParentStatus != nil {
+		status := r.tailnetParentStatus()
+		parent = &status
+	}
 	if r == nil || r.cfg == nil || !r.cfg.Tailscale.Enabled {
-		return tailnet.DisabledSnapshot(time.Now().UTC()), nil
+		snapshot := tailnet.DisabledSnapshot(time.Now().UTC())
+		snapshot.Parent = parent
+		return snapshot, nil
 	}
 	if r.tailnetBackend == nil {
 		return core.TailnetStatusSnapshot{
@@ -64,7 +71,17 @@ func (r *Runtime) TailnetStatusSnapshot(ctx context.Context) (core.TailnetStatus
 				Severity: "error",
 				Summary:  "Tailscale backend is unavailable.",
 			}},
+			Parent: parent,
 		}, nil
 	}
-	return r.tailnetBackend.Snapshot(ctx)
+	snapshot, err := r.tailnetBackend.Snapshot(ctx)
+	snapshot.Parent = parent
+	return snapshot, err
+}
+
+func (r *Runtime) SetTailnetParentStatusProvider(provider func() core.TailnetParentStatus) {
+	if r == nil {
+		return
+	}
+	r.tailnetParentStatus = provider
 }

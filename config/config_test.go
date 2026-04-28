@@ -61,6 +61,9 @@ external_manifest_dir = "./external-tools"
 	if cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "tailscale" || cfg.Tailscale.CommandTimeout != "5s" {
 		t.Fatalf("tailscale defaults = %#v, want disabled cli backend", cfg.Tailscale)
 	}
+	if cfg.Tailscale.Parent.Enabled || cfg.Tailscale.Parent.Hostname != "aphelion" || !strings.HasSuffix(cfg.Tailscale.Parent.StateDir, "/.aphelion/state/tailnet/parent") || cfg.Tailscale.Parent.ListenAddr != ":8765" || cfg.Tailscale.Parent.AuthKeyEnv != "APHELION_TS_AUTHKEY" {
+		t.Fatalf("tailscale parent defaults = %#v, want disabled parent tsnet defaults", cfg.Tailscale.Parent)
+	}
 	if cfg.Governor.Backend != "auto" {
 		t.Fatalf("governor.backend = %q, want auto", cfg.Governor.Backend)
 	}
@@ -392,6 +395,15 @@ expected_tailnet = "example.ts.net"
 expected_hostname = "aphelion-admin"
 expected_tags = ["tag:admin", "tag:aphelion", "tag:admin"]
 
+[tailscale.parent]
+enabled = true
+hostname = "aphelion-admin"
+state_dir = "~/tailnet-parent"
+listen_addr = ":9443"
+auth_key_env = "APHELION_TAILSCALE_TEST_AUTHKEY"
+auth_key_file = "~/tailnet-auth.key"
+tags = ["tag:aphelion-admin", "tag:admin", "tag:admin"]
+
 [principals.telegram]
 admin_user_ids = [123]
 
@@ -573,6 +585,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if !cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "/usr/bin/tailscale" || cfg.Tailscale.CommandTimeout != "3s" || cfg.Tailscale.ExpectedTailnet != "example.ts.net" || cfg.Tailscale.ExpectedHostname != "aphelion-admin" || !reflect.DeepEqual(cfg.Tailscale.ExpectedTags, []string{"tag:admin", "tag:aphelion"}) {
 		t.Fatalf("tailscale config = %#v, want explicit normalized overrides", cfg.Tailscale)
+	}
+	if !cfg.Tailscale.Parent.Enabled || cfg.Tailscale.Parent.Hostname != "aphelion-admin" || !strings.HasSuffix(cfg.Tailscale.Parent.StateDir, "/tailnet-parent") || cfg.Tailscale.Parent.ListenAddr != ":9443" || cfg.Tailscale.Parent.AuthKeyEnv != "APHELION_TAILSCALE_TEST_AUTHKEY" || !strings.HasSuffix(cfg.Tailscale.Parent.AuthKeyFile, "/tailnet-auth.key") || !reflect.DeepEqual(cfg.Tailscale.Parent.Tags, []string{"tag:aphelion-admin", "tag:admin"}) {
+		t.Fatalf("tailscale parent = %#v, want explicit normalized parent config", cfg.Tailscale.Parent)
 	}
 	if cfg.Providers.Anthropic.Model != "claude-opus-4-6" {
 		t.Fatalf("model = %q, want claude-opus-4-6", cfg.Providers.Anthropic.Model)

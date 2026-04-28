@@ -34,6 +34,15 @@ expected_tailnet = ""
 expected_hostname = ""
 expected_tags = []
 
+[tailscale.parent]
+enabled = false
+hostname = "aphelion"
+state_dir = "~/.aphelion/state/tailnet/parent"
+listen_addr = ":8765"
+auth_key_env = "APHELION_TS_AUTHKEY"
+auth_key_file = ""
+tags = []
+
 [principals.telegram]
 admin_user_ids = [123456789]
 

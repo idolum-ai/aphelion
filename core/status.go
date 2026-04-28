@@ -218,6 +218,7 @@ type TailnetStatusSnapshot struct {
 	ExpectedTailnet   string
 	ExpectedHostname  string
 	ExpectedTags      []string
+	Parent            *TailnetParentStatus
 	Issues            []TailnetIssue
 	RawStatusError    string
 	RawIPError        string
@@ -228,6 +229,18 @@ type TailnetIssue struct {
 	Code     string
 	Severity string
 	Summary  string
+}
+
+type TailnetParentStatus struct {
+	Enabled       bool
+	Running       bool
+	Hostname      string
+	StateDir      string
+	ListenAddr    string
+	MagicDNSURL   string
+	AuthKeySource string
+	Tags          []string
+	LastError     string
 }
 
 type DurableAgentStatusSnapshot struct {

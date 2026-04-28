@@ -376,6 +376,23 @@ func renderTailnetStatusBlock(snapshot *core.TailnetStatusSnapshot) []string {
 	if summary := strings.TrimSpace(snapshot.Summary); summary != "" {
 		lines = append(lines, "  summary="+quoteStatusField(truncateStatusField(summary, 140)))
 	}
+	if snapshot.Parent != nil {
+		parent := snapshot.Parent
+		parentLine := fmt.Sprintf("  parent_tsnet enabled=%t running=%t", parent.Enabled, parent.Running)
+		if host := strings.TrimSpace(parent.Hostname); host != "" {
+			parentLine += " hostname=" + host
+		}
+		if listen := strings.TrimSpace(parent.ListenAddr); listen != "" {
+			parentLine += " listen=" + listen
+		}
+		if magic := strings.TrimSpace(parent.MagicDNSURL); magic != "" {
+			parentLine += " magic_url=" + magic
+		}
+		if errText := strings.TrimSpace(parent.LastError); errText != "" {
+			parentLine += " error=" + quoteStatusField(truncateStatusField(errText, 120))
+		}
+		lines = append(lines, parentLine)
+	}
 	limit := len(snapshot.Issues)
 	if limit > 4 {
 		limit = 4

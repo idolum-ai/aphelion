@@ -900,6 +900,17 @@ func (r *Runtime) writeDoctorTailnetDiagnostics(ctx context.Context, b *strings.
 	writeDoctorKV(b, "tailnet_ips", strings.Join(snapshot.TailscaleIPs, ","))
 	writeDoctorKV(b, "tailnet_tags", strings.Join(snapshot.Tags, ","))
 	writeDoctorKV(b, "tailnet_netcheck", snapshot.NetcheckSummary)
+	if snapshot.Parent != nil {
+		parent := snapshot.Parent
+		writeDoctorKV(b, "tailnet_parent_enabled", strconv.FormatBool(parent.Enabled))
+		writeDoctorKV(b, "tailnet_parent_running", strconv.FormatBool(parent.Running))
+		writeDoctorKV(b, "tailnet_parent_hostname", parent.Hostname)
+		writeDoctorKV(b, "tailnet_parent_state_dir", parent.StateDir)
+		writeDoctorKV(b, "tailnet_parent_listen_addr", parent.ListenAddr)
+		writeDoctorKV(b, "tailnet_parent_magic_url", parent.MagicDNSURL)
+		writeDoctorKV(b, "tailnet_parent_auth_key_source", parent.AuthKeySource)
+		writeDoctorKV(b, "tailnet_parent_last_error", parent.LastError)
+	}
 	if len(snapshot.Issues) == 0 {
 		writeDoctorLine(b, "tailnet_issues: none")
 		return

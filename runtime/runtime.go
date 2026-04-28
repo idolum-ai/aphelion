@@ -100,6 +100,7 @@ type Runtime struct {
 	statusReadableProvider agent.Provider
 	statusReadableReady    bool
 	tailnetBackend         tailnet.Backend
+	tailnetParentStatus    func() core.TailnetParentStatus
 	modelProviderMu        sync.Mutex
 	modelProviderCache     map[string]agent.Provider
 	streamControlMu        sync.Mutex

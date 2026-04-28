@@ -1550,6 +1550,13 @@ func TestHandleTelegramCommandTailnetShowsReadOnlyStatus(t *testing.T) {
 			NetcheckAvailable: true,
 			NetcheckSummary:   "UDP: true",
 			Summary:           "aphelion is healthy.",
+			Parent: &core.TailnetParentStatus{
+				Enabled:     true,
+				Running:     true,
+				Hostname:    "aphelion",
+				ListenAddr:  ":8765",
+				MagicDNSURL: "http://aphelion.example.ts.net:8765",
+			},
 		},
 	}
 	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
@@ -1569,7 +1576,7 @@ func TestHandleTelegramCommandTailnetShowsReadOnlyStatus(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet") || !strings.Contains(got, "Status: healthy") || !strings.Contains(got, "aphelion.example.ts.net") {
+	if got := sender.inline[0].text; !strings.Contains(got, "Tailnet") || !strings.Contains(got, "Status: healthy") || !strings.Contains(got, "aphelion.example.ts.net") || !strings.Contains(got, "Parent tsnet") || !strings.Contains(got, "http://aphelion.example.ts.net:8765") {
 		t.Fatalf("tailnet text = %q, want compact status", got)
 	}
 	if len(sender.inline[0].rows) != 1 || sender.inline[0].rows[0][0].CallbackData != "tailnet:refresh" {

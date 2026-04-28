@@ -34,6 +34,23 @@ func renderTailnetCommand(snapshot core.TailnetStatusSnapshot) (string, [][]tele
 	if snapshot.NetcheckAvailable && strings.TrimSpace(snapshot.NetcheckSummary) != "" {
 		lines = append(lines, "Netcheck: "+truncateTailnetLine(snapshot.NetcheckSummary, 180))
 	}
+	if snapshot.Parent != nil {
+		parent := snapshot.Parent
+		lines = append(lines, "", "Parent tsnet:")
+		lines = append(lines, fmt.Sprintf("- enabled=%t running=%t", parent.Enabled, parent.Running))
+		if host := strings.TrimSpace(parent.Hostname); host != "" {
+			lines = append(lines, "- hostname: "+host)
+		}
+		if listen := strings.TrimSpace(parent.ListenAddr); listen != "" {
+			lines = append(lines, "- listen: "+listen)
+		}
+		if magic := strings.TrimSpace(parent.MagicDNSURL); magic != "" {
+			lines = append(lines, "- private URL: "+magic)
+		}
+		if errText := strings.TrimSpace(parent.LastError); errText != "" {
+			lines = append(lines, "- error: "+truncateTailnetLine(errText, 220))
+		}
+	}
 	if summary := strings.TrimSpace(snapshot.Summary); summary != "" {
 		lines = append(lines, "", "Summary:", "- "+truncateTailnetLine(summary, 220))
 	}

@@ -86,13 +86,24 @@ type TelegramMediaConfig struct {
 }
 
 type TailscaleConfig struct {
-	Enabled          bool     `toml:"enabled"`
-	Backend          string   `toml:"backend"`
-	CLIPath          string   `toml:"cli_path"`
-	CommandTimeout   string   `toml:"command_timeout"`
-	ExpectedTailnet  string   `toml:"expected_tailnet"`
-	ExpectedHostname string   `toml:"expected_hostname"`
-	ExpectedTags     []string `toml:"expected_tags"`
+	Enabled          bool                  `toml:"enabled"`
+	Backend          string                `toml:"backend"`
+	CLIPath          string                `toml:"cli_path"`
+	CommandTimeout   string                `toml:"command_timeout"`
+	ExpectedTailnet  string                `toml:"expected_tailnet"`
+	ExpectedHostname string                `toml:"expected_hostname"`
+	ExpectedTags     []string              `toml:"expected_tags"`
+	Parent           TailscaleParentConfig `toml:"parent"`
+}
+
+type TailscaleParentConfig struct {
+	Enabled     bool     `toml:"enabled"`
+	Hostname    string   `toml:"hostname"`
+	StateDir    string   `toml:"state_dir"`
+	ListenAddr  string   `toml:"listen_addr"`
+	AuthKeyEnv  string   `toml:"auth_key_env"`
+	AuthKeyFile string   `toml:"auth_key_file"`
+	Tags        []string `toml:"tags"`
 }
 
 type PrincipalsConfig struct {
@@ -552,6 +563,13 @@ func Default() Config {
 			Backend:        "cli",
 			CLIPath:        "tailscale",
 			CommandTimeout: "5s",
+			Parent: TailscaleParentConfig{
+				Enabled:    false,
+				Hostname:   "aphelion",
+				StateDir:   "~/.aphelion/state/tailnet/parent",
+				ListenAddr: ":8765",
+				AuthKeyEnv: "APHELION_TS_AUTHKEY",
+			},
 		},
 	}
 }
@@ -632,6 +650,14 @@ func Load(path string) (*Config, error) {
 	cfg.Tools.ExternalManifestDir, err = expandConfiguredPath(cfg.Tools.ExternalManifestDir, baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("expand tools.external_manifest_dir: %w", err)
+	}
+	cfg.Tailscale.Parent.StateDir, err = expandConfiguredPath(cfg.Tailscale.Parent.StateDir, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand tailscale.parent.state_dir: %w", err)
+	}
+	cfg.Tailscale.Parent.AuthKeyFile, err = expandConfiguredPath(cfg.Tailscale.Parent.AuthKeyFile, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("expand tailscale.parent.auth_key_file: %w", err)
 	}
 	normalizeAgentRoots(&cfg)
 	cfg.Face.Backend = NormalizeFaceBackendValue(cfg.Face.Backend)
@@ -1520,6 +1546,27 @@ func validateTailscaleConfig(cfg *Config) error {
 	cfg.Tailscale.ExpectedTailnet = strings.TrimSpace(cfg.Tailscale.ExpectedTailnet)
 	cfg.Tailscale.ExpectedHostname = strings.TrimSpace(cfg.Tailscale.ExpectedHostname)
 	cfg.Tailscale.ExpectedTags = normalizeStringList(cfg.Tailscale.ExpectedTags)
+	cfg.Tailscale.Parent.Hostname = strings.TrimSpace(cfg.Tailscale.Parent.Hostname)
+	cfg.Tailscale.Parent.StateDir = strings.TrimSpace(cfg.Tailscale.Parent.StateDir)
+	cfg.Tailscale.Parent.ListenAddr = strings.TrimSpace(cfg.Tailscale.Parent.ListenAddr)
+	cfg.Tailscale.Parent.AuthKeyEnv = strings.TrimSpace(cfg.Tailscale.Parent.AuthKeyEnv)
+	cfg.Tailscale.Parent.AuthKeyFile = strings.TrimSpace(cfg.Tailscale.Parent.AuthKeyFile)
+	cfg.Tailscale.Parent.Tags = normalizeStringList(cfg.Tailscale.Parent.Tags)
+	if cfg.Tailscale.Parent.Hostname == "" {
+		cfg.Tailscale.Parent.Hostname = "aphelion"
+	}
+	if cfg.Tailscale.Parent.StateDir == "" {
+		cfg.Tailscale.Parent.StateDir = defaultHomePath(".aphelion", "state", "tailnet", "parent")
+	}
+	if cfg.Tailscale.Parent.ListenAddr == "" {
+		cfg.Tailscale.Parent.ListenAddr = ":8765"
+	}
+	if cfg.Tailscale.Parent.AuthKeyEnv == "" {
+		cfg.Tailscale.Parent.AuthKeyEnv = "APHELION_TS_AUTHKEY"
+	}
+	if cfg.Tailscale.Parent.Enabled && !cfg.Tailscale.Enabled {
+		return fmt.Errorf("tailscale.enabled must be true when tailscale.parent.enabled is true")
+	}
 	return nil
 }
 

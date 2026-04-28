@@ -271,6 +271,13 @@ func TestRenderTelegramStatusSystemIncludesTailnetSummary(t *testing.T) {
 			TailscaleIPs: []string{"100.64.0.10"},
 			Tags:         []string{"tag:admin"},
 			Summary:      "MagicDNS is unavailable.",
+			Parent: &core.TailnetParentStatus{
+				Enabled:     true,
+				Running:     true,
+				Hostname:    "aphelion",
+				ListenAddr:  ":8765",
+				MagicDNSURL: "http://aphelion.example.ts.net:8765",
+			},
 			Issues: []core.TailnetIssue{{
 				Code:     "magicdns_missing",
 				Severity: "warning",
@@ -283,6 +290,8 @@ func TestRenderTelegramStatusSystemIncludesTailnetSummary(t *testing.T) {
 		"status=degraded",
 		"node=aphelion.example.ts.net",
 		"tailnet=example.ts.net",
+		"parent_tsnet enabled=true running=true",
+		"magic_url=http://aphelion.example.ts.net:8765",
 		"issue code=magicdns_missing",
 	} {
 		if !strings.Contains(out, needle) {

@@ -740,6 +740,13 @@ func run() error {
 		statusMiniAppPublicURL: telegramMiniAppPublicURL(cfg),
 		statusMiniAppBotToken:  cfg.Telegram.BotToken,
 	}
+	tailnetParent, err := tailnetParentService(cfg, commandControl)
+	if err != nil {
+		return err
+	}
+	if tailnetParent != nil {
+		rt.SetTailnetParentStatusProvider(tailnetParent.Status)
+	}
 	loadDecisionCtx, cancelDecisionLoad := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := decisionBroker.Load(loadDecisionCtx); err != nil {
 		cancelDecisionLoad()
@@ -763,6 +770,9 @@ func run() error {
 		return err
 	}
 	if err := startTelegramMiniApp(ctx, telegramMiniAppServer(cfg, commandControl)); err != nil {
+		return err
+	}
+	if err := startTailnetParent(ctx, tailnetParent); err != nil {
 		return err
 	}
 	rt.StartStartupRecovery(ctx, log.Printf)
