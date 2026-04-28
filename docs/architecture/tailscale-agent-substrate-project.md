@@ -78,6 +78,375 @@ questions:
 - Can an admin inspect, approve, revoke, or repair tailnet surfaces from
   Telegram and from a private tailnet UI?
 
+## Use Case Map
+
+There are two distinct classes of use case:
+
+1. **Aphelion extended by Tailscale.** Tailscale becomes part of Aphelion's
+   runtime body: identity, reachability, private surfaces, distributed child
+   placement, and live operator experience.
+2. **Aphelion managing Tailscale.** Aphelion treats Tailscale as an external
+   system to inspect, diagnose, reconcile, or mutate through governed tools.
+
+The first class is the direction-setting project. The second class is support
+tooling that makes the first class reliable.
+
+### A. Aphelion Extended By Tailscale
+
+These are the primary use cases because they change what Aphelion is.
+
+#### 1. Parent Aphelion as a tailnet node
+
+Parent Aphelion runs an embedded `tsnet` node with a stable hostname such as
+`aphelion-admin`, a persistent state directory, and expected tags.
+
+How it works:
+
+- On startup, Aphelion initializes a `tsnet` server if the config enables it.
+- It verifies that the observed node identity matches the expected tailnet,
+  hostname, and tags.
+- It registers parent-owned private surfaces against this node.
+- `/status`, `/doctor`, and startup recovery report whether this node is
+  healthy or drifted.
+
+This is the root of the project: Aphelion stops being only a local process and
+becomes a private network participant.
+
+#### 2. Private admin control plane
+
+Aphelion exposes a tailnet-only web control surface for status, doctor reports,
+decisions, logs, artifacts, and agent health.
+
+How it works:
+
+- The control plane binds to the parent `tsnet` listener, not a public socket.
+- Tailscale identity is used as request evidence.
+- Aphelion still checks local admin admission before showing privileged actions.
+- Sensitive actions still use Aphelion decisions and approval records.
+
+Telegram remains the interruptible command lane; the private web UI becomes the
+high-bandwidth inspection lane.
+
+#### 3. Durable child as a tailnet node
+
+A durable child can have its own `tsnet` identity, MagicDNS hostname, tags, and
+private status or RPC endpoint.
+
+How it works:
+
+- The durable-agent policy declares `tailnet_mode`, hostname, tags, and allowed
+  surface kinds.
+- Child profile files include the current tailnet identity and boundaries.
+- Reinstall/reconcile logic verifies that the child node exists before the child
+  claims network capability.
+- The parent can revoke or disable the child surface without deleting the child
+  memory.
+
+This makes child identity material: a child can be addressed and bounded as a
+network participant, not just as a row in SQLite.
+
+#### 4. Agent network body
+
+An agent's runtime identity includes memory, tool scope, policy, and private
+network presence.
+
+How it works:
+
+- Agent status includes local process state, durable memory state, tool grants,
+  and tailnet node state.
+- Network reach is treated as materialized capability, not ambient internet.
+- Agent wake/recovery checks include whether expected private services are
+  reachable.
+- Capability claims are grounded against both Aphelion grant records and
+  observed tailnet reachability.
+
+This is the conceptual bridge: Tailscale gives the agent a body in the private
+network, while Aphelion gives that body judgment and limits.
+
+#### 5. Remote child hosting
+
+Durable children can run on other machines while remaining governed by parent
+Aphelion.
+
+How it works:
+
+- A remote child process joins the tailnet with its own `tsnet` node or tagged
+  device identity.
+- The parent communicates with it through a private control endpoint instead of
+  only local child-run execution.
+- The child keeps local memory and workspace roots on its host.
+- The parent owns policy, grants, review artifacts, recovery expectations, and
+  upgrade/reconcile instructions.
+
+This enables a child to live near the hardware, files, service, or network it
+needs without making it independent of the parent.
+
+#### 6. Agent-to-agent private RPC
+
+Parent and children can communicate through private tailnet endpoints with
+explicit authority checks.
+
+How it works:
+
+- Each participating agent exposes a minimal private RPC endpoint.
+- Calls include caller identity evidence, requested action, and correlation ID.
+- The receiver checks Aphelion grants and local policy before acting.
+- TES records the call intent, authorization result, and response summary.
+
+This creates a path for durable children to collaborate without turning every
+interaction into a Telegram-style review relay.
+
+#### 7. Private artifact surface
+
+Reports, PDFs, logs, generated files, child artifacts, and review bundles can be
+browsed privately over the tailnet.
+
+How it works:
+
+- Artifact references already tracked by Aphelion get private URLs.
+- The private UI reads from allowed workspace and memory roots.
+- Access control checks the requesting admin and artifact retention policy.
+- Telegram can send a compact summary plus tailnet link instead of forcing
+  long text or large files through chat.
+
+This solves the repeated Telegram bottleneck: some outputs are better inspected
+as private web artifacts.
+
+#### 8. Private live work surface
+
+Long-running Aphelion work can stream progress, logs, intermediate files, and
+child execution state over a private tailnet page.
+
+How it works:
+
+- The existing progress/TES stream feeds a server-sent-events or websocket
+  endpoint on the private UI.
+- Telegram receives milestone summaries and interrupt controls.
+- The private UI shows full step detail, active tools, logs, and produced
+  artifacts.
+- Stop/reassess controls remain governed by the same decision/control records.
+
+This keeps Telegram concise while preserving observability for serious work.
+
+#### 9. Tailnet-aware principal evidence
+
+Tailnet user, device, and tag identity can strengthen principal resolution
+without replacing Aphelion admission.
+
+How it works:
+
+- Private HTTP requests carry tailnet-derived identity evidence.
+- Aphelion maps that evidence to known principals or marks it unknown.
+- Admin-only actions still require an admitted Aphelion admin.
+- `/doctor` reports identity mismatches and unknown tailnet callers.
+
+The rule remains: Tailscale can prove where a request came from; Aphelion
+decides what that requester may do.
+
+#### 10. Trusted device approvals
+
+Sensitive approvals can require both an admitted admin and a recognized
+tailnet device.
+
+How it works:
+
+- Approval policy can require `telegram_admin && trusted_tailnet_device`.
+- Telegram approval may be paired with a tailnet UI confirmation for high-risk
+  actions.
+- Device posture can become one signal in the approval record.
+- Failed posture or unknown device identity downgrades the action to
+  "requires stronger approval."
+
+This is useful for destructive actions, public exposure, SSH, or policy writes.
+
+#### 11. Private webhook ingress
+
+Internal services can send events to Aphelion without exposing public HTTP
+endpoints.
+
+How it works:
+
+- The parent `tsnet` node exposes private webhook endpoints.
+- Each webhook source is bound to a tailnet identity, token, or both.
+- Events become inbound messages, review events, or maintenance facts.
+- Unknown or unauthorized senders are logged and surfaced without executing
+  their requested actions.
+
+This makes private automation practical without opening Aphelion to the public
+internet.
+
+#### 12. Private service surfaces
+
+Agents can use named tailnet-reachable services such as dashboards, local APIs,
+dev servers, databases, NAS shares, or home services.
+
+How it works:
+
+- A service is declared as a capability target with host, port, protocol,
+  owner, and allowed actions.
+- A child requests access through the delegation lane.
+- If approved, Aphelion materializes a capability grant and, later, a tailnet
+  grant or app capability projection.
+- Reachability probes verify that the service is accessible before the child
+  claims it can use the service.
+
+This turns private services into governed agent organs rather than ambient
+network assumptions.
+
+#### 13. Distributed recovery
+
+After restart, reinstall, or host migration, Aphelion can recover expected
+tailnet identities and private surfaces as part of runtime continuity.
+
+How it works:
+
+- Startup recovery checks parent and child tailnet declarations.
+- Expected node identity, hostname, tags, and state directories are compared
+  with observed Tailscale state.
+- Missing or mismatched surfaces are recorded as recovery issues.
+- The system refuses to silently recreate high-risk surfaces like Funnel,
+  routes, or SSH access.
+
+This extends the existing memory/recovery goal into the private network layer.
+
+#### 14. Tailnet-backed operator presence
+
+Aphelion can use trusted admin device presence as one signal for alerting,
+waiting, escalation, or active-window behavior.
+
+How it works:
+
+- Aphelion observes whether configured admin devices are online.
+- Presence influences notification strategy, not core authority.
+- A serious alert may be sent immediately if a trusted device is online, or
+  summarized/deferred if the operator is unreachable.
+- `/status` and `/doctor` show presence evidence and when it was last observed.
+
+This lets Aphelion become less blind about operator availability.
+
+#### 15. Ephemeral experiment agents
+
+Temporary agents can receive short-lived `tsnet` identities for risky trials,
+benchmarks, or isolated experiments.
+
+How it works:
+
+- An experiment request creates an ephemeral child profile and tailnet surface.
+- The node gets bounded tags, TTL, storage roots, and explicit teardown.
+- The experiment can expose private reports or metrics to the parent UI.
+- Expiry revokes the surface and archives the evidence.
+
+This gives experiments a real network identity without promoting them into
+standing durable children.
+
+### B. Aphelion Managing Tailscale
+
+These are supporting use cases. They are valuable, but they should not distract
+from the deeper goal of making Aphelion tailnet-native.
+
+#### 1. Tailnet doctor
+
+Aphelion diagnoses Tailscale health and explains what is broken.
+
+How it works:
+
+- `/doctor` gathers CLI/API state, daemon status, node identity, MagicDNS,
+  Serve/Funnel, SSH, routes, app connectors, and policy evidence.
+- It compares observed state with Aphelion declarations.
+- It labels each issue as active, likely fixed, residual risk, or unknown.
+- It proposes concrete repairs without applying mutations by default.
+
+This gives the operator one place to see whether the network body is healthy.
+
+#### 2. Grant reconciliation
+
+Aphelion compares its capability grants with Tailscale grants or policy rules.
+
+How it works:
+
+- The grant binding table records which Aphelion grant should correspond to
+  which tailnet reachability rule.
+- Reconciliation checks whether the tailnet rule exists, is too broad, is too
+  narrow, expired, or unmanaged.
+- Drift becomes a status/doctor issue and can optionally become a Telegram
+  alert.
+- Repairs are proposed as policy diffs.
+
+This prevents the two authority models from silently diverging.
+
+#### 3. Policy diff review
+
+Aphelion can generate Tailscale policy diffs from approved Aphelion grants and
+ask the admin before applying them.
+
+How it works:
+
+- A grant approval produces a desired tailnet policy projection.
+- Aphelion renders a human-readable diff with source, destination, ports,
+  app capabilities, risk class, TTL, and rollback.
+- The admin approves or denies the policy change.
+- If applied, TES records policy hash, tool result, and verification.
+
+This keeps policy changes reviewable instead of hiding them behind automation.
+
+#### 4. Network drift detection
+
+Aphelion alerts when tailnet state exists outside its declared model.
+
+How it works:
+
+- Periodic checks compare observed nodes, tags, routes, SSH rules, Serve/Funnel,
+  and grants against Aphelion declarations.
+- Unknown public exposure is high severity.
+- Unknown private surfaces are medium severity until classified.
+- Known intentional unmanaged state can be acknowledged or imported as a
+  declaration.
+
+This is the network equivalent of noticing untracked files or unmanaged tools.
+
+#### 5. Remote repair through Tailscale SSH
+
+Aphelion can run approved diagnostics or repairs on trusted tailnet hosts.
+
+How it works:
+
+- A remote command is classified by risk: read-only, mutation, destructive, or
+  privilege-sensitive.
+- The target host/user and command are shown in the approval prompt.
+- Execution uses a typed `tailnet_ssh_exec` tool, not raw shell improvisation.
+- TES records the command shape, approval, output preview, and result.
+
+This is powerful enough that it should land after identity, grants, and drift
+detection exist.
+
+#### 6. Temporary Funnel sharing
+
+Aphelion can enable public sharing only as a high-risk, TTL-bound operation.
+
+How it works:
+
+- The requested service is tied to an existing private surface.
+- Aphelion explains the public exposure, TTL, rollback, and expected audience.
+- Admin approval is required.
+- Expiry disables the Funnel and alerts if teardown fails.
+
+This should be treated as exception handling, not a default product path.
+
+#### 7. Route and app connector management
+
+Aphelion can inspect or propose subnet routes and app connectors for services
+agents need.
+
+How it works:
+
+- Read-only diagnosis lands first: which routes exist, who advertises them, and
+  whether they are approved.
+- A child can request reachability to a private resource.
+- Aphelion proposes the smallest route/app connector needed.
+- Mutations require explicit approval and verification.
+
+This lets agents reach internal resources without granting broad network access.
+
 ## Feature Map
 
 | Aphelion surface | Tailscale surface | Integration meaning |
