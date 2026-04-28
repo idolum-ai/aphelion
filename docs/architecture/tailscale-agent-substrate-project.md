@@ -78,6 +78,106 @@ questions:
 - Can an admin inspect, approve, revoke, or repair tailnet surfaces from
   Telegram and from a private tailnet UI?
 
+## Current Checkpoint
+
+The current implemented checkpoint is **declared durable-child tailnet
+identity**, not live child materialization.
+
+Implemented:
+
+- durable-agent live policy fields:
+  - `tailnet_mode`
+  - `tailnet_hostname`
+  - `tailnet_tags`
+  - `tailnet_surface_policy`
+- child profile projection into `policy.md`, `runtime.md`, and
+  `surface-rules.md`.
+- `/agents` and durable status projections showing child tailnet declarations.
+- `tailnet_surfaces` registry rows for declared durable-child private status
+  surfaces.
+- `surface_declared_not_observed` diagnosis when a child surface is declared
+  but no live node has been observed.
+- preservation of future active/degraded/revoked child surfaces so declaration
+  sync does not overwrite materialized state.
+
+Not implemented yet:
+
+- starting a child `tsnet` node.
+- installing anything onto a remote child host.
+- issuing or consuming per-child auth keys.
+- writing Tailscale ACL/grant policy.
+- public Serve/Funnel exposure.
+- parent-to-child private RPC.
+
+This gives Aphelion a safe intent layer: the system can say "this child should
+have a private tailnet body" before it actually creates that body.
+
+## User Flow
+
+### Current durable-child flow
+
+1. Admin creates or revives a durable child.
+2. Aphelion records durable identity, policy, memory roots, bootstrap model, and
+   channel config.
+3. Profile sync writes parent-managed files into the child memory layer.
+4. The child wakes through existing Aphelion surfaces such as Telegram, email,
+   daily review, scheduler, or parent conversation.
+5. If the child needs more authority, it submits a delegation or capability
+   request.
+6. Admin approves, rejects, or asks for a narrower request from Telegram.
+7. Debugging happens through `/status`, `/doctor`, logs, profile files, review
+   artifacts, and memory.
+
+### Declared tailnet identity flow
+
+1. Admin or parent policy declares that a child should have a tailnet identity.
+2. Aphelion stores the declaration in durable-agent live policy.
+3. Profile sync writes the declared hostname, tags, and surface policy into the
+   child profile.
+4. `/agents`, `/status durables`, and `/tailnet surfaces` show the declaration.
+5. The tailnet registry records the child status surface as `declared`.
+6. Until an actual child node is observed, `/doctor` and tailnet status can
+   report `surface_declared_not_observed`.
+7. If the surface is revoked, registry reconciliation preserves the revocation
+   instead of silently redeclaring it active.
+
+### Future live child materialization flow
+
+1. Admin asks to materialize a declared child.
+2. Aphelion proposes:
+   - target host.
+   - child agent id.
+   - MagicDNS hostname.
+   - tags.
+   - local state path.
+   - exposed private surfaces.
+   - installer/update channel.
+   - rollback plan.
+3. Admin approves the materialization decision.
+4. Aphelion provisions or instructs installation on the target host.
+5. The child process starts with its own state directory and `tsnet` identity.
+6. The child exposes only the approved private status/control surface.
+7. Parent observes the child over the tailnet and marks the surface `active`.
+8. Child capability claims are gated on both Aphelion grants and observed
+   tailnet materialization.
+9. Reinstall/restart recovery checks whether the child identity is still present
+   before the child claims network reachability.
+
+### User flow delta
+
+Compared with today's flow:
+
+- A child gains an inspectable private network identity, not just a durable
+  SQLite/profile identity.
+- Child existence becomes observable as `declared`, `active`, `degraded`, or
+  `revoked`.
+- Admins can distinguish "policy says this child should exist" from "the
+  private node is actually reachable."
+- Expansion requests can include network surfaces, host placement, tags, or
+  private services instead of only abstract capability grants.
+- Reinstall recovery has one more truth to reconcile: declared child identity
+  versus actual tailnet node state.
+
 ## Use Case Map
 
 There are two distinct classes of use case:
@@ -180,6 +280,78 @@ How it works:
 
 This enables a child to live near the hardware, files, service, or network it
 needs without making it independent of the parent.
+
+#### Child host access model
+
+The parent agent should access a child host through explicit, typed lanes rather
+than ambient SSH or shell:
+
+- **Bootstrap lane:** a one-time install command or installer bundle approved by
+  the admin and run on the child host by a trusted operator or by an approved
+  remote execution grant.
+- **Control lane:** parent-to-child HTTPS/RPC over tailnet, bound to the child's
+  MagicDNS name and Aphelion child identity.
+- **Observation lane:** child `/status`, health, profile hash, policy hash,
+  version, and tailnet node evidence reported to parent.
+- **Repair lane:** typed `tailnet_ssh_exec` or host command grants only after an
+  explicit decision, with command preview, target host, risk class, and rollback
+  plan.
+
+The parent should not treat tailnet reachability as authority. Tailnet identity
+is evidence that the request came from the expected private node; Aphelion still
+checks durable child policy, capability grants, parent/admin admission, and
+decision records.
+
+#### Child host installation model
+
+A child host should receive the smallest runtime needed to materialize the
+declared child:
+
+- `aphelion-child` or the main `aphelion` binary in child mode.
+- a child-specific config file containing:
+  - parent control endpoint.
+  - child agent id.
+  - expected parent identity.
+  - local memory/workspace/state roots.
+  - tailnet mode, hostname, tags, and approved surfaces.
+- a persistent state directory, for example
+  `~/.aphelion/children/<agent_id>/`.
+- a service unit if the host should keep the child alive across reboots.
+- bootstrap secret or enrollment token with a short TTL and narrow scope.
+- optional local adapters needed by that child, installed as declared packages or
+  tool manifests rather than ad hoc code.
+
+The child host should not receive parent-wide secrets, admin Telegram tokens, or
+unbounded write access to Aphelion's main state. Remote children should be
+treated as scoped workers with their own memory, state, and network identity.
+
+#### Signing and update model
+
+The update model should make the host able to prove what it is running:
+
+- Build Aphelion release artifacts with a manifest that records version,
+  commit, platform, SHA-256 checksum, and signing identity.
+- Sign release manifests with the project release key.
+- The child launcher verifies manifest signature and artifact checksum before
+  installing or replacing a binary.
+- The child reports binary version, commit, manifest hash, policy hash, profile
+  manifest hash, and tailnet node identity in `/status`.
+- Parent `/doctor` compares expected versions and hashes against observed child
+  reports.
+- Updates are staged through an Aphelion decision:
+  - proposed version.
+  - diff or changelog summary.
+  - affected children.
+  - compatibility checks.
+  - rollback artifact.
+  - restart behavior.
+- Child updates are applied one child at a time unless an admin approves a batch.
+- If verification fails, the child keeps the previous binary and reports
+  `degraded` instead of running unsigned code.
+
+Tailscale identity can strengthen this but should not replace artifact signing.
+Tailnet Lock can help constrain which node keys are trusted by the tailnet, while
+Aphelion release signatures constrain which software a child is allowed to run.
 
 #### 6. Agent-to-agent private RPC
 
@@ -1398,21 +1570,28 @@ Why third:
 
 Goal: a child can have its own private tailnet presence.
 
-Build:
+Implemented substep:
 
 - durable-agent policy fields:
   - `tailnet_mode`
   - `tailnet_hostname`
   - `tailnet_tags`
   - `tailnet_surface_policy`
-- child `tsnet` state under child local state
 - child profile files include tailnet identity and rules
+- parent registry projection for declared child surfaces
+- `/agents`, `/status durables`, and `/tailnet surfaces` show declarations
+- missing observed child node is reported as declared but not observed
+
+Remaining materialization substep:
+
+- child `tsnet` state under child local state
 - parent wake/reconcile verifies child tailnet materialization
 - child review digest includes tailnet health when relevant
 
 Tests:
 
 - child profile sync tests
+- child declaration registry tests
 - child tailnet config inheritance tests
 - child cannot start public surface without grant
 - reinstall reconciliation test
@@ -1619,18 +1798,19 @@ The admin asks to share a demo.
 
 Fastest useful order:
 
-1. Add `tailnet.Backend` and fake backend.
-2. Add config structs and validation.
-3. Add read-only CLI backend.
-4. Add `/status`, `/doctor`, and `/tailnet` read-only projections.
-5. Add parent `tsnet` node behind config.
-6. Add private status UI.
-7. Add `tailnet_surfaces` table.
-8. Add child tailnet profile fields and profile sync.
-9. Add grant binding and policy projection.
-10. Add approval-gated mutations.
-11. Add Tailscale webhook ingestion.
-12. Add richer private UI.
+1. Done: add `tailnet.Backend` and fake backend.
+2. Done: add config structs and validation.
+3. Done: add read-only CLI backend.
+4. Done: add `/status`, `/doctor`, and `/tailnet` read-only projections.
+5. Done: add parent `tsnet` node behind config.
+6. Done: add private status UI.
+7. Done: add `tailnet_surfaces` table.
+8. Done: add child tailnet profile fields and declaration sync.
+9. Next: materialize one declared child `tsnet` node with private status only.
+10. Add grant binding and policy projection.
+11. Add approval-gated mutations.
+12. Add Tailscale webhook ingestion.
+13. Add richer private UI.
 
 ## Open Questions
 
