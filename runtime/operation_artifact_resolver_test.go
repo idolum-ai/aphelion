@@ -69,3 +69,26 @@ func TestHandleInboundSendsLatestOperationPDFArtifactDirectly(t *testing.T) {
 		t.Fatalf("sent text = %q, want pdf label", sender.sent[0].Text)
 	}
 }
+
+func TestLooksLikeOperationArtifactSendRequestIgnoresReplyContext(t *testing.T) {
+	t.Parallel()
+
+	text := "commit, push and reinstall, let's try it\n\nReply context:\nidolum_bot: Sending Proposal denial bugfix validation log."
+	if looksLikeOperationArtifactSendRequest(text) {
+		t.Fatalf("looksLikeOperationArtifactSendRequest(%q) = true, want false when only reply context has send/file words", text)
+	}
+}
+
+func TestLooksLikeOperationArtifactSendRequestStillUsesUserText(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{
+		"send it\n\nReply context:\nidolum_bot: Proposal denial bugfix validation log.",
+		"please attach the file",
+		"share that report",
+	} {
+		if !looksLikeOperationArtifactSendRequest(text) {
+			t.Fatalf("looksLikeOperationArtifactSendRequest(%q) = false, want true", text)
+		}
+	}
+}

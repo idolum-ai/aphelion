@@ -438,6 +438,39 @@ func TestHandleBusyTelegramMessageUsesStopForMessageWhenAvailable(t *testing.T) 
 	}
 }
 
+func TestProposalApprovalSummaryIsOutcomeFirst(t *testing.T) {
+	t.Parallel()
+
+	details := strings.Join([]string{
+		"Create a local git commit",
+		"Kind: repo_history_mutation",
+		"",
+		"Why now:",
+		"Saving this work as a commit gives us a clean review and rollback point before continuing.",
+		"",
+		"If approved:",
+		"Create one local git commit. This approval will not push to any remote.",
+		"",
+		"Trigger:",
+		"repository commit",
+		"",
+		"Command:",
+		"git commit -m 'Document external channel runtime substrate'",
+	}, "\n")
+
+	text := approvedDecisionConfirmationText("Proposal", "3", decision.KindProposalApproval, details)
+	for _, unwanted := range []string{"Approved content:", "Kind:", "Trigger:"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("approval text = %q, should not contain noisy metadata %q", text, unwanted)
+		}
+	}
+	for _, wanted := range []string{"Proposal approved.", "Decision: 3", "Create a local git commit", "Why: Saving this work", "Will do: Create one local git commit", "Details hidden"} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("approval text = %q, want %q", text, wanted)
+		}
+	}
+}
+
 func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 	t.Parallel()
 

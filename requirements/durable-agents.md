@@ -577,12 +577,16 @@ For an external-channel child, the top-level durable-agent fields should continu
 The channel-specific `channel_config` should hold the rest of the operational shape, such as:
 
 - owned address or external-channel identity
-- adapter kind such as `child_adapter`
+- adapter kind, for example `codex_app_server` or a future email adapter
 - poll interval
 - importance / escalation criteria
 - attachment handling rules
 - synthesis cadence
 - retention ceilings or explicit `never_retain` classes
+
+Runtime continuity for a live external channel belongs in the generic `external_channel` state slot, not in adapter-specific top-level continuity fields. That state records the adapter, cursor/session reference, last command, attempt/success timestamps, artifact pointer, status/error, failure count, backoff, and opaque `adapter_state` for protocol-specific residue.
+
+Adapter operations are command vocabularies governed by policy and grants. Examples include read-only status heartbeat, message search, thread fetch, or approval-callback handling. A prompt or query string may be carried inside a command, but it is not authority by itself.
 
 This keeps the child charter structured without flattening all durable-agent behavior into one giant generic policy object.
 

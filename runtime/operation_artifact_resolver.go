@@ -76,7 +76,7 @@ func (r *Runtime) maybeHandleOperationArtifactRequest(ctx context.Context, key s
 }
 
 func looksLikeOperationArtifactSendRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(text))
+	lower := strings.ToLower(operationArtifactRequestUserText(text))
 	if lower == "" || !(strings.Contains(lower, "send") || strings.Contains(lower, "attach") || strings.Contains(lower, "share")) {
 		return false
 	}
@@ -90,6 +90,21 @@ func looksLikeOperationArtifactSendRequest(text string) bool {
 		}
 	}
 	return false
+}
+
+func operationArtifactRequestUserText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	const replyContextMarker = "\n\nReply context:\n"
+	if idx := strings.Index(text, replyContextMarker); idx >= 0 {
+		return strings.TrimSpace(text[:idx])
+	}
+	if strings.HasPrefix(text, "Reply context:\n") {
+		return ""
+	}
+	return text
 }
 
 func latestSendableOperationArtifact(scope sandbox.Scope, artifacts []session.OperationArtifact, requestText string) (session.OperationArtifact, core.Media, bool) {

@@ -265,9 +265,9 @@ func approvedDecisionConfirmationText(label string, decisionID string, kind deci
 	}
 	pending := decision.PendingDecision{Request: decision.Request{Kind: kind, Details: details}}
 	if summary := strings.TrimSpace(summarizePendingDecision(pending)); summary != "" {
-		lines = append(lines, "", "Approved content:", summary)
+		lines = append(lines, "", summary)
 	} else if compact := compactSentence(details); compact != "" {
-		lines = append(lines, "", "Approved content:", compact)
+		lines = append(lines, "", compact)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
@@ -1110,34 +1110,38 @@ func summarizePendingDecision(pending decision.PendingDecision) string {
 
 func summarizeProposalApprovalDetails(details string) string {
 	sections := splitDecisionSections(details)
-	summary := firstNonEmpty(sections["summary"])
-	kind := firstNonEmpty(sections["kind"])
+	summary := cleanProposalApprovalSummary(firstNonEmpty(sections["summary"]))
 	why := firstNonEmpty(sections["why now"])
 	effect := firstNonEmpty(sections["if approved"])
-	trigger := firstNonEmpty(sections["trigger"])
 	command := firstNonEmpty(sections["command"])
-	lines := make([]string, 0, 6)
+	lines := make([]string, 0, 5)
 	if summary != "" {
 		lines = append(lines, summary)
 	}
-	meta := make([]string, 0, 2)
-	if kind != "" {
-		meta = append(meta, "Kind: "+kind)
-	}
-	if trigger != "" {
-		meta = append(meta, "Trigger: "+trigger)
-	}
-	if len(meta) > 0 {
-		lines = append(lines, strings.Join(meta, " · "))
-	}
 	if why != "" {
-		lines = append(lines, compactSentence("Why now: "+why))
+		lines = append(lines, compactSentence("Why: "+why))
 	}
 	if effect != "" {
-		lines = append(lines, compactSentence("If approved: "+effect))
+		lines = append(lines, compactSentence("Will do: "+effect))
 	}
 	if command != "" {
-		lines = append(lines, "Command hidden by default. Use Expand details to inspect it.")
+		lines = append(lines, "Details hidden. Use Expand details to inspect the command.")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func cleanProposalApprovalSummary(summary string) string {
+	lines := make([]string, 0)
+	for _, raw := range strings.Split(strings.TrimSpace(summary), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "kind:") || strings.HasPrefix(lower, "trigger:") {
+			continue
+		}
+		lines = append(lines, line)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

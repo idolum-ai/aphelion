@@ -92,11 +92,12 @@ type Broker struct {
 }
 
 type pendingDecision struct {
-	request  PendingDecision
-	delivery Delivery
-	resultCh chan string
-	ownerKey string
-	seq      uint64
+	request      PendingDecision
+	delivery     Delivery
+	resultCh     chan string
+	ownerKey     string
+	exclusiveKey string
+	seq          uint64
 }
 
 type EventType string
@@ -203,10 +204,11 @@ func (b *Broker) Load(ctx context.Context) error {
 				ID:      id,
 				Request: req,
 			},
-			delivery: row.Delivery,
-			resultCh: make(chan string, 1),
-			ownerKey: ownerKey,
-			seq:      seq,
+			delivery:     row.Delivery,
+			resultCh:     make(chan string, 1),
+			ownerKey:     ownerKey,
+			exclusiveKey: decisionExclusiveKey(req, ownerKey),
+			seq:          seq,
 		}
 		loadedPending[id] = pending
 		if seq > maxSeq {
@@ -216,26 +218,26 @@ func (b *Broker) Load(ctx context.Context) error {
 
 	loadedByOwner := make(map[string]string, len(loadedPending))
 	for id, pending := range loadedPending {
-		if pending.ownerKey == "" {
+		if pending.exclusiveKey == "" {
 			continue
 		}
-		existingID, ok := loadedByOwner[pending.ownerKey]
+		existingID, ok := loadedByOwner[pending.exclusiveKey]
 		if !ok {
-			loadedByOwner[pending.ownerKey] = id
+			loadedByOwner[pending.exclusiveKey] = id
 			continue
 		}
 		existing := loadedPending[existingID]
 		if existing == nil || existing.seq < pending.seq {
-			loadedByOwner[pending.ownerKey] = id
+			loadedByOwner[pending.exclusiveKey] = id
 		}
 	}
 
 	staleIDs := make([]string, 0)
 	for id, pending := range loadedPending {
-		if pending.ownerKey == "" {
+		if pending.exclusiveKey == "" {
 			continue
 		}
-		if loadedByOwner[pending.ownerKey] != id {
+		if loadedByOwner[pending.exclusiveKey] != id {
 			delete(loadedPending, id)
 			staleIDs = append(staleIDs, id)
 		}
@@ -295,9 +297,10 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 			ID:      decisionID,
 			Request: normalized,
 		},
-		resultCh: make(chan string, 1),
-		ownerKey: ownerKey,
-		seq:      decisionSeq,
+		resultCh:     make(chan string, 1),
+		ownerKey:     ownerKey,
+		exclusiveKey: decisionExclusiveKey(normalized, ownerKey),
+		seq:          decisionSeq,
 	}
 
 	b.mu.Lock()
@@ -465,9 +468,13 @@ func (b *Broker) DetachByOwner(ctx context.Context, ownerKey string) (int, error
 			continue
 		}
 		delete(b.pending, id)
+		if pending.exclusiveKey != "" {
+			if ownerID, exists := b.byOwner[pending.exclusiveKey]; exists && ownerID == id {
+				delete(b.byOwner, pending.exclusiveKey)
+			}
+		}
 		detached = append(detached, pending)
 	}
-	delete(b.byOwner, ownerKey)
 	store := b.durable
 	b.mu.Unlock()
 
@@ -556,9 +563,9 @@ func (b *Broker) clearWithContext(ctx context.Context, id string) error {
 	pending, ok := b.pending[id]
 	if ok {
 		delete(b.pending, id)
-		if pending.ownerKey != "" {
-			if ownerID, exists := b.byOwner[pending.ownerKey]; exists && ownerID == id {
-				delete(b.byOwner, pending.ownerKey)
+		if pending.exclusiveKey != "" {
+			if ownerID, exists := b.byOwner[pending.exclusiveKey]; exists && ownerID == id {
+				delete(b.byOwner, pending.exclusiveKey)
 			}
 		}
 	}
@@ -582,7 +589,7 @@ func (b *Broker) activateOwner(ctx context.Context, id string) bool {
 		b.mu.Unlock()
 		return false
 	}
-	ownerKey := pending.ownerKey
+	ownerKey := pending.exclusiveKey
 	if ownerKey == "" {
 		b.mu.Unlock()
 		return false
@@ -643,6 +650,18 @@ func decisionOwnerKey(req Request) string {
 		return fmt.Sprintf("sender:%d", req.SenderID)
 	}
 	return ""
+}
+
+func decisionExclusiveKey(req Request, ownerKey string) string {
+	ownerKey = strings.TrimSpace(ownerKey)
+	if ownerKey == "" {
+		return ""
+	}
+	kind := strings.TrimSpace(string(req.Kind))
+	if kind == "" {
+		kind = "generic"
+	}
+	return kind + ":" + ownerKey
 }
 
 func normalizeRequest(req Request) Request {

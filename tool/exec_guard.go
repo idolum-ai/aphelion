@@ -155,9 +155,9 @@ func proposalForCommand(command string) (session.OperationProposal, string) {
 	if commandContainsGitCommit(lower) {
 		return session.OperationProposal{
 			Kind:          "repo_history_mutation",
-			Summary:       "Commit repository history",
-			WhyNow:        "This command records local repository history and should only happen after explicit operator approval.",
-			BoundedEffect: "The system will create or amend a local git commit for the current operation; no remote push is performed by this approval.",
+			Summary:       "Create a local git commit",
+			WhyNow:        "Saving this work as a commit gives us a clean review and rollback point before continuing.",
+			BoundedEffect: "Create or amend one local git commit for the current operation. This approval will not push to any remote.",
 		}, "repository commit"
 	}
 	for _, pattern := range capabilityAcquisitionPatterns {

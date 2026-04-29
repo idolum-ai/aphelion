@@ -446,6 +446,110 @@ func TestBrokerRequestSupersedesPendingDecisionForSameSender(t *testing.T) {
 	}
 }
 
+func TestBrokerDifferentDecisionKindsDoNotSupersedeSameSender(t *testing.T) {
+	t.Parallel()
+
+	pendingSeen := make(chan PendingDecision, 2)
+	broker := NewBroker(func(_ context.Context, pending PendingDecision) (Delivery, error) {
+		pendingSeen <- pending
+		return Delivery{MessageID: 90}, nil
+	})
+
+	proposalResultCh := make(chan Result, 1)
+	proposalErrCh := make(chan error, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			Kind:          KindProposalApproval,
+			ChatID:        9,
+			SenderID:      42,
+			Prompt:        "Approve repo commit?",
+			Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+			DefaultChoice: "deny",
+			Timeout:       WaitIndefinitely,
+		})
+		if err != nil {
+			proposalErrCh <- err
+			return
+		}
+		proposalResultCh <- result
+	}()
+
+	var proposalPending PendingDecision
+	select {
+	case proposalPending = <-pendingSeen:
+	case <-time.After(time.Second):
+		t.Fatal("proposal request did not publish pending decision")
+	}
+
+	interruptResultCh := make(chan Result, 1)
+	interruptErrCh := make(chan error, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			Kind:          KindInterrupt,
+			ChatID:        9,
+			SenderID:      42,
+			Prompt:        "Queue unrelated message?",
+			Choices:       []Choice{{ID: "stop", Label: "Stop"}, {ID: "queue", Label: "Queue"}},
+			DefaultChoice: "queue",
+			Timeout:       WaitIndefinitely,
+		})
+		if err != nil {
+			interruptErrCh <- err
+			return
+		}
+		interruptResultCh <- result
+	}()
+
+	var interruptPending PendingDecision
+	select {
+	case interruptPending = <-pendingSeen:
+	case <-time.After(time.Second):
+		t.Fatal("interrupt request did not publish pending decision")
+	}
+	if interruptPending.ID == proposalPending.ID {
+		t.Fatalf("interrupt pending id = %q, want distinct id", interruptPending.ID)
+	}
+
+	select {
+	case result := <-proposalResultCh:
+		t.Fatalf("proposal resolved early with %+v, want it to stay pending while interrupt is active", result)
+	case err := <-proposalErrCh:
+		t.Fatalf("proposal errored early with %v, want it to stay pending", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	if _, ok := broker.Peek(proposalPending.ID); !ok {
+		t.Fatal("proposal was dropped after unrelated interrupt decision")
+	}
+
+	if !broker.Resolve(interruptPending.ID, "queue") {
+		t.Fatal("Resolve(interrupt) = false, want true")
+	}
+	select {
+	case err := <-interruptErrCh:
+		t.Fatalf("interrupt Request() err = %v, want nil", err)
+	case result := <-interruptResultCh:
+		if result.Choice != "queue" {
+			t.Fatalf("interrupt choice = %q, want queue", result.Choice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("interrupt Request() did not resolve")
+	}
+
+	if !broker.Resolve(proposalPending.ID, "approve") {
+		t.Fatal("Resolve(proposal) = false, want true after unrelated interrupt")
+	}
+	select {
+	case err := <-proposalErrCh:
+		t.Fatalf("proposal Request() err = %v, want nil", err)
+	case result := <-proposalResultCh:
+		if result.Choice != "approve" {
+			t.Fatalf("proposal choice = %q, want approve", result.Choice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("proposal Request() did not resolve after approval")
+	}
+}
+
 func TestBrokerRequestKeepsPendingDecisionPerDifferentSender(t *testing.T) {
 	t.Parallel()
 
@@ -1074,6 +1178,61 @@ func TestBrokerLoadKeepsOnlyNewestPendingDecisionPerOwner(t *testing.T) {
 	}
 	if store.has("older") {
 		t.Fatal("durable store still contains stale older decision")
+	}
+}
+
+func TestBrokerLoadKeepsPendingDecisionsForDifferentKindsSameOwner(t *testing.T) {
+	t.Parallel()
+
+	store := newBrokerMemoryDurableStore()
+	store.rows["proposal"] = DurableDecision{
+		Pending: PendingDecision{
+			ID: "proposal",
+			Request: Request{
+				Kind:          KindProposalApproval,
+				ChatID:        7,
+				SenderID:      11,
+				Prompt:        "Approve repo commit?",
+				Choices:       []Choice{{ID: "approve", Label: "Approve"}, {ID: "deny", Label: "Deny"}},
+				DefaultChoice: "deny",
+				Timeout:       WaitIndefinitely,
+			},
+		},
+		Seq:      10,
+		OwnerKey: "chat:7:sender:11",
+		Delivery: Delivery{MessageID: 10},
+	}
+	store.rows["interrupt"] = DurableDecision{
+		Pending: PendingDecision{
+			ID: "interrupt",
+			Request: Request{
+				Kind:          KindInterrupt,
+				ChatID:        7,
+				SenderID:      11,
+				Prompt:        "Queue unrelated message?",
+				Choices:       []Choice{{ID: "stop", Label: "Stop"}, {ID: "queue", Label: "Queue"}},
+				DefaultChoice: "queue",
+				Timeout:       WaitIndefinitely,
+			},
+		},
+		Seq:      11,
+		OwnerKey: "chat:7:sender:11",
+		Delivery: Delivery{MessageID: 11},
+	}
+
+	broker := NewBroker(nil, WithDurableStore(store))
+	if err := broker.Load(context.Background()); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	if _, ok := broker.Peek("proposal"); !ok {
+		t.Fatal("Peek(proposal) = false, want proposal retained")
+	}
+	if _, ok := broker.Peek("interrupt"); !ok {
+		t.Fatal("Peek(interrupt) = false, want interrupt retained")
+	}
+	if !store.has("proposal") || !store.has("interrupt") {
+		t.Fatalf("durable store lost decisions: proposal=%v interrupt=%v", store.has("proposal"), store.has("interrupt"))
 	}
 }
 

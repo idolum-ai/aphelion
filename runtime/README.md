@@ -47,5 +47,7 @@ Authoritative split for maintenance turns (heartbeat/cron/recovery):
 - `turn*.go`, `durable_group.go`, `maintenance_turn.go`: adapters from runtime facts into `turn`
 - `turn_coordinator_common.go`, `turn_coordinator_interactive.go`, `turn_coordinator_durable.go`: shared and species-specific coordinator adapters
 - `durable_wake.go`: pluggable durable wake ingress adapters and shared wake-turn substrate
+- `external_channel_runtime.go`: shared external-channel lifecycle helpers for poll due checks, command attempt/success/failure state, backoff, and adapter state containment
+- `codex_app_server_channel.go`: Codex app-server external-channel adapter for bounded read-only durable child status heartbeats
 - `durable_*.go`: durable-agent channel runtimes and channel adapters
 - `*_runtime_test.go`: runtime-domain integration suites (by concern)
