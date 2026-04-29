@@ -52,9 +52,6 @@ external_manifest_dir = "./external-tools"
 	if cfg.Telegram.ToolProgress != "all" || cfg.Telegram.ToolProgressStyle != "semantic" || cfg.Telegram.ToolProgressWindow != 4 || cfg.Telegram.ToolProgressCleanup {
 		t.Fatalf("telegram progress defaults = %#v, want all/false", cfg.Telegram)
 	}
-	if cfg.Telegram.MiniApp.Enabled || cfg.Telegram.MiniApp.ListenAddr != "127.0.0.1:8765" || cfg.Telegram.MiniApp.PublicURL != "" || cfg.Telegram.MiniApp.AuthMaxAge != "24h" {
-		t.Fatalf("telegram mini app defaults = %#v, want disabled local listener with 24h auth", cfg.Telegram.MiniApp)
-	}
 	if cfg.Telegram.Media.DownloadMaxSize != "20MB" || !cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || !cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "8MB" {
 		t.Fatalf("telegram media defaults = %#v, want 20MB + auto vision/pdf extract", cfg.Telegram.Media)
 	}
@@ -373,12 +370,6 @@ tool_progress_style = "raw"
 tool_progress_window = 6
 tool_progress_cleanup = true
 
-[telegram.mini_app]
-enabled = true
-listen_addr = "127.0.0.1:9999"
-public_url = "https://status.example.test/telegram/status-app"
-auth_max_age = "2h"
-
 [telegram.media]
 download_max_size = "12MB"
 auto_vision_photos = false
@@ -579,9 +570,6 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Telegram.ToolProgress != "new" || cfg.Telegram.ToolProgressStyle != "raw" || cfg.Telegram.ToolProgressWindow != 6 || !cfg.Telegram.ToolProgressCleanup {
 		t.Fatalf("telegram progress = %#v, want new/raw/6/true", cfg.Telegram)
-	}
-	if !cfg.Telegram.MiniApp.Enabled || cfg.Telegram.MiniApp.ListenAddr != "127.0.0.1:9999" || cfg.Telegram.MiniApp.PublicURL != "https://status.example.test/telegram/status-app" || cfg.Telegram.MiniApp.AuthMaxAge != "2h" {
-		t.Fatalf("telegram mini app = %#v, want explicit overrides", cfg.Telegram.MiniApp)
 	}
 	if !cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "/usr/bin/tailscale" || cfg.Tailscale.CommandTimeout != "3s" || cfg.Tailscale.ExpectedTailnet != "example.ts.net" || cfg.Tailscale.ExpectedHostname != "aphelion-admin" || !reflect.DeepEqual(cfg.Tailscale.ExpectedTags, []string{"tag:admin", "tag:aphelion"}) {
 		t.Fatalf("tailscale config = %#v, want explicit normalized overrides", cfg.Tailscale)

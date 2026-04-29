@@ -496,7 +496,7 @@ func TestSendInlineKeyboardPayload(t *testing.T) {
 	}
 }
 
-func TestSendInlineKeyboardPayloadSupportsWebAppAndURLButtons(t *testing.T) {
+func TestSendInlineKeyboardPayloadSupportsURLButtons(t *testing.T) {
 	var requestBody map[string]interface{}
 	transport := testTransport{
 		roundTrip: func(req *http.Request) (*http.Response, error) {
@@ -523,7 +523,6 @@ func TestSendInlineKeyboardPayloadSupportsWebAppAndURLButtons(t *testing.T) {
 
 	_, err := client.SendInlineKeyboard(context.Background(), 5, "Status", [][]InlineButton{
 		{
-			{Text: "Open Console", WebApp: &WebAppInfo{URL: "https://status.example.test/telegram/status-app"}},
 			{Text: "Open Status", URL: "https://aphelion.example.ts.net/status"},
 		},
 	}, nil)
@@ -539,23 +538,12 @@ func TestSendInlineKeyboardPayloadSupportsWebAppAndURLButtons(t *testing.T) {
 		t.Fatalf("inline_keyboard = %#v, want 1 row", replyMarkup["inline_keyboard"])
 	}
 	row, ok := rows[0].([]interface{})
-	if !ok || len(row) != 2 {
-		t.Fatalf("inline_keyboard[0] = %#v, want 2 buttons", rows[0])
+	if !ok || len(row) != 1 {
+		t.Fatalf("inline_keyboard[0] = %#v, want 1 button", rows[0])
 	}
-	button, ok := row[0].(map[string]interface{})
+	urlButton, ok := row[0].(map[string]interface{})
 	if !ok {
-		t.Fatalf("button = %#v, want object", row[0])
-	}
-	webApp, ok := button["web_app"].(map[string]interface{})
-	if !ok || webApp["url"] != "https://status.example.test/telegram/status-app" {
-		t.Fatalf("web_app = %#v, want URL", button["web_app"])
-	}
-	if _, ok := button["callback_data"]; ok {
-		t.Fatalf("callback_data = %#v, want omitted for web app button", button["callback_data"])
-	}
-	urlButton, ok := row[1].(map[string]interface{})
-	if !ok {
-		t.Fatalf("url button = %#v, want object", row[1])
+		t.Fatalf("url button = %#v, want object", row[0])
 	}
 	if urlButton["url"] != "https://aphelion.example.ts.net/status" {
 		t.Fatalf("url button = %#v, want URL", urlButton)

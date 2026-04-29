@@ -12,12 +12,6 @@ tool_progress_style = "semantic"
 tool_progress_window = 4
 tool_progress_cleanup = false
 
-[telegram.mini_app]
-enabled = false
-listen_addr = "127.0.0.1:8765"
-public_url = "" # Set to the public HTTPS URL for /telegram/status-app to add the /status Open Console button.
-auth_max_age = "24h"
-
 [telegram.media]
 download_max_size = "20MB"
 auto_vision_photos = true

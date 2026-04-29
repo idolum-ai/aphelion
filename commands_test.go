@@ -112,7 +112,6 @@ type stubCommandRouter struct {
 	statusSystem                 core.SystemStatusSnapshot
 	statusDurables               core.DurableAgentsStatusSnapshot
 	statusReadableSummary        string
-	statusMiniAppURL             string
 	tailnetStatus                core.TailnetStatusSnapshot
 	tailnetStatusErr             error
 	tailnetStatusSenderID        int64
@@ -287,12 +286,6 @@ func (s stubCommandRouter) StatusReadableSummary(ctx context.Context, view strin
 	_ = view
 	_ = statusText
 	return s.statusReadableSummary
-}
-
-func (s stubCommandRouter) StatusMiniAppURL(chatID int64, senderID int64) string {
-	_ = chatID
-	_ = senderID
-	return s.statusMiniAppURL
 }
 
 func (s *stubCommandRouter) TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error) {
@@ -1227,45 +1220,6 @@ func TestHandleTelegramCommandStatusShowsAdminButtonsForAdmins(t *testing.T) {
 	if !foundSystem || !foundHot || !foundFind || !foundDurables {
 		t.Fatalf("admin status keyboard rows = %#v, want admin controls", sender.inline[0].rows)
 	}
-}
-
-func TestHandleTelegramCommandStatusShowsMiniAppButtonWhenConfigured(t *testing.T) {
-	t.Parallel()
-
-	sender := &stubCommandSender{}
-	router := stubCommandRouter{
-		statusChat:       core.ChatStatusSnapshot{ChatID: 7},
-		statusMiniAppURL: "https://status.example.test/telegram/status-app?chat_id=7&sender_id=99&state_sig=abc",
-	}
-	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
-		ChatID:   7,
-		SenderID: 99,
-		Text:     "/status",
-	})
-	if err != nil {
-		t.Fatalf("handleTelegramCommand() err = %v", err)
-	}
-	if !handled {
-		t.Fatal("handled = false, want true")
-	}
-	if len(sender.inline) != 1 {
-		t.Fatalf("inline count = %d, want 1", len(sender.inline))
-	}
-	for _, row := range sender.inline[0].rows {
-		for _, button := range row {
-			if button.Text != "Open Console" {
-				continue
-			}
-			if button.WebApp == nil || button.WebApp.URL != router.statusMiniAppURL {
-				t.Fatalf("Open Console button = %#v, want web app URL", button)
-			}
-			if button.CallbackData != "" {
-				t.Fatalf("Open Console callback_data = %q, want omitted", button.CallbackData)
-			}
-			return
-		}
-	}
-	t.Fatalf("status keyboard rows = %#v, want Open Console button", sender.inline[0].rows)
 }
 
 func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {

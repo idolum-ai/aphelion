@@ -42,7 +42,6 @@ type commandRouter interface {
 	StatusSystem(senderID int64) (core.SystemStatusSnapshot, error)
 	StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error)
 	StatusReadableSummary(ctx context.Context, view string, statusText string) string
-	StatusMiniAppURL(chatID int64, senderID int64) string
 	TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error)
 	TailnetSurfaces(senderID int64) ([]core.TailnetSurfaceStatus, error)
 	RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error)
