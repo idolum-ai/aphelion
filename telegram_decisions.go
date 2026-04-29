@@ -273,14 +273,24 @@ func approvedDecisionConfirmationText(label string, decisionID string, kind deci
 }
 
 func approvedDecisionConfirmationRows(decisionID string, details string) [][]telegram.InlineButton {
+	return approvedDecisionConfirmationRowsExpanded(decisionID, details, false)
+}
+
+func approvedDecisionConfirmationRowsExpanded(decisionID string, details string, expanded bool) [][]telegram.InlineButton {
 	decisionID = strings.TrimSpace(decisionID)
 	if decisionID == "" || strings.TrimSpace(details) == "" {
 		return nil
 	}
+	label := "Expand details"
+	action := "expand"
+	if expanded {
+		label = "Hide details"
+		action = "collapse"
+	}
 	return [][]telegram.InlineButton{{
 		{
-			Text:         "Expand details",
-			CallbackData: decision.EncodeCallbackData(decisionID, "expand"),
+			Text:         label,
+			CallbackData: decision.EncodeCallbackData(decisionID, action),
 		},
 	}}
 }
@@ -710,7 +720,7 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 		}
 		return nil
 	}
-	if choice == "expand" {
+	if choice == "expand" || choice == "collapse" {
 		pending, found := h.broker.Peek(id)
 		resolved := false
 		if !found {
@@ -735,10 +745,18 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 			chatID = pending.ChatID
 		}
 		if messageID != 0 {
-			text := renderPendingDecisionExpanded(pending)
-			rows := inlineButtonRows(pending)
+			expanded := choice == "expand"
+			text := renderPendingDecisionSummary(pending)
+			rows := inlineButtonRowsExpanded(pending, expanded)
+			if expanded {
+				text = renderPendingDecisionExpanded(pending)
+			}
 			if resolved {
-				rows = approvedDecisionConfirmationRows(pending.ID, pending.Details)
+				text = approvedDecisionConfirmationText(approvedDecisionConfirmationLabel(pending.Kind), pending.ID, pending.Kind, pending.Details)
+				rows = approvedDecisionConfirmationRowsExpanded(pending.ID, pending.Details, expanded)
+				if expanded {
+					text = renderPendingDecisionExpanded(pending)
+				}
 			}
 			if editor, ok := h.sender.(telegramDecisionKeyboardEditor); ok && len(rows) > 0 {
 				if err := editor.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err != nil {
@@ -964,19 +982,44 @@ func reviewerRoleForReview(admin bool) string {
 	return string(principal.RoleApprovedUser)
 }
 
+func approvedDecisionConfirmationLabel(kind decision.Kind) string {
+	switch kind {
+	case decision.KindProposalApproval:
+		return "Proposal"
+	case decision.KindMemoryDelegation:
+		return "Memory delegation"
+	case decision.KindSnapshotRestore:
+		return "Snapshot restore"
+	case decision.KindArtifactRetention:
+		return "Artifact retention"
+	default:
+		return "Approval"
+	}
+}
+
 func telegramPrincipalMatches(target string, userID int64) bool {
 	return userID > 0 && strings.TrimSpace(target) == fmt.Sprintf("telegram:%d", userID)
 }
 
 func inlineButtonRows(pending decision.PendingDecision) [][]telegram.InlineButton {
+	return inlineButtonRowsExpanded(pending, false)
+}
+
+func inlineButtonRowsExpanded(pending decision.PendingDecision, expanded bool) [][]telegram.InlineButton {
 	if len(pending.Choices) == 0 {
 		return nil
 	}
 	rows := make([][]telegram.InlineButton, 0, 2)
 	if strings.TrimSpace(pending.Details) != "" {
+		label := "Expand details"
+		action := "expand"
+		if expanded {
+			label = "Hide details"
+			action = "collapse"
+		}
 		rows = append(rows, []telegram.InlineButton{{
-			Text:         "Expand details",
-			CallbackData: decision.EncodeCallbackData(pending.ID, "expand"),
+			Text:         label,
+			CallbackData: decision.EncodeCallbackData(pending.ID, action),
 		}})
 	}
 	row := make([]telegram.InlineButton, 0, len(pending.Choices))

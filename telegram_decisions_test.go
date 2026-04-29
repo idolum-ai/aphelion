@@ -614,6 +614,30 @@ func TestTelegramExecApprovalConfirmationExpandShowsCommandAfterApproval(t *test
 	if !strings.Contains(expanded.text, "Command:") || !strings.Contains(expanded.text, "rm -rf /tmp/aphelion-runtime-bin") {
 		t.Fatalf("expanded text = %q, want full approved command", expanded.text)
 	}
+	if !hasInlineButton(expanded.rows, "Hide details") || hasInlineButton(expanded.rows, "Expand details") {
+		t.Fatalf("expanded rows = %#v, want hide details button replacing expand", expanded.rows)
+	}
+
+	hideData := callbackDataForButton(t, expanded.rows, "Hide details")
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-hide-approved",
+		Data: hideData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: expanded.messageID,
+			Chat:      &telegram.Chat{ID: expanded.chatID},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery(hide after approval) err = %v", err)
+	}
+
+	collapsed := waitForDecisionEdit(t, sender, 3)
+	if !strings.Contains(collapsed.text, "Proposal approved.") || strings.Contains(collapsed.text, "rm -rf /tmp/aphelion-runtime-bin") {
+		t.Fatalf("collapsed approved text = %q, want compact approval summary without raw command", collapsed.text)
+	}
+	if !hasInlineButton(collapsed.rows, "Expand details") || hasInlineButton(collapsed.rows, "Hide details") {
+		t.Fatalf("collapsed rows = %#v, want expand details button restored", collapsed.rows)
+	}
 }
 
 func TestTelegramExecApprovalExpandKeepsPendingDecisionButtons(t *testing.T) {
@@ -669,18 +693,45 @@ func TestTelegramExecApprovalExpandKeepsPendingDecisionButtons(t *testing.T) {
 	if !hasInlineButton(expanded.rows, "Deny") || !hasInlineButton(expanded.rows, "Approve") {
 		t.Fatalf("expanded rows = %#v, want pending decision buttons", expanded.rows)
 	}
+	if !hasInlineButton(expanded.rows, "Hide details") || hasInlineButton(expanded.rows, "Expand details") {
+		t.Fatalf("expanded rows = %#v, want hide details button replacing expand", expanded.rows)
+	}
 
-	approveData := callbackDataForButton(t, expanded.rows, "Approve")
+	hideData := callbackDataForButton(t, expanded.rows, "Hide details")
 	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
-		ID:   "cb-approve-expanded",
-		Data: approveData,
+		ID:   "cb-hide-pending",
+		Data: hideData,
 		From: &telegram.User{ID: 42},
 		Message: &telegram.Message{
 			MessageID: expanded.messageID,
 			Chat:      &telegram.Chat{ID: expanded.chatID},
 		},
 	}); err != nil {
-		t.Fatalf("HandleCallbackQuery(approve expanded) err = %v", err)
+		t.Fatalf("HandleCallbackQuery(hide pending) err = %v", err)
+	}
+
+	collapsed := waitForDecisionEdit(t, sender, 2)
+	if strings.Contains(collapsed.text, "Command:") || strings.Contains(collapsed.text, "rm -rf /tmp/aphelion-runtime-bin") {
+		t.Fatalf("collapsed text = %q, want compact pending summary without raw command", collapsed.text)
+	}
+	if !hasInlineButton(collapsed.rows, "Deny") || !hasInlineButton(collapsed.rows, "Approve") {
+		t.Fatalf("collapsed rows = %#v, want pending decision buttons", collapsed.rows)
+	}
+	if !hasInlineButton(collapsed.rows, "Expand details") || hasInlineButton(collapsed.rows, "Hide details") {
+		t.Fatalf("collapsed rows = %#v, want expand details button restored", collapsed.rows)
+	}
+
+	approveData := callbackDataForButton(t, collapsed.rows, "Approve")
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-approve-expanded",
+		Data: approveData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: collapsed.messageID,
+			Chat:      &telegram.Chat{ID: collapsed.chatID},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery(approve after hide) err = %v", err)
 	}
 
 	select {
