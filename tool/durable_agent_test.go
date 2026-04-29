@@ -2121,6 +2121,160 @@ func adminSessionKey() session.SessionKey {
 	}
 }
 
+func TestDurableAgentArtifactPutWritesChildSpecificArtifactHome(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	childMemory := filepath.Join(t.TempDir(), "child", "memory")
+	agent := core.DurableAgent{
+		AgentID:           "artifact-child",
+		ChannelKind:       "headless",
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "child", "workspace"), childMemory},
+		Status:            "active",
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"},
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	input, err := json.Marshal(durableAgentInput{
+		Action:  "artifact_put",
+		AgentID: "artifact-child",
+		Artifact: &durableAgentArtifactInput{
+			Path:    "schemas/console_status.schema.json",
+			Kind:    "schema",
+			Reason:  "child-owned status contract",
+			Content: "{\n  \"type\": \"object\"\n}\n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		input,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(artifact_put) err = %v", err)
+	}
+	if !strings.Contains(out, "action: durable-agent artifact put") ||
+		!strings.Contains(out, "written: artifacts/schemas/console_status.schema.json") ||
+		!strings.Contains(out, "sha256:") {
+		t.Fatalf("artifact_put output = %q, want written artifact summary", out)
+	}
+	raw, err := os.ReadFile(filepath.Join(childMemory, "artifacts", "schemas", "console_status.schema.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(artifact) err = %v", err)
+	}
+	if string(raw) != "{\n  \"type\": \"object\"\n}\n" {
+		t.Fatalf("artifact content = %q, want exact child-specific content", raw)
+	}
+	manifestRaw, err := os.ReadFile(filepath.Join(childMemory, "artifacts", "ARTIFACTS.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(manifest) err = %v", err)
+	}
+	for _, needle := range []string{
+		`"agent_id": "artifact-child"`,
+		`"path": "schemas/console_status.schema.json"`,
+		`"kind": "schema"`,
+		`"source": "parent_governed_artifact"`,
+		`"reason": "child-owned status contract"`,
+	} {
+		if !strings.Contains(string(manifestRaw), needle) {
+			t.Fatalf("manifest = %s, want %s", manifestRaw, needle)
+		}
+	}
+
+	listOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"artifact_list","agent_id":"artifact-child"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(artifact_list) err = %v", err)
+	}
+	if !strings.Contains(listOut, "count: 1") || !strings.Contains(listOut, "path=artifacts/schemas/console_status.schema.json") {
+		t.Fatalf("artifact_list output = %q, want artifact entry", listOut)
+	}
+
+	showOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"artifact_show","agent_id":"artifact-child","artifact":{"path":"schemas/console_status.schema.json"}}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(artifact_show) err = %v", err)
+	}
+	if !strings.Contains(showOut, "action: durable-agent artifact show") ||
+		!strings.Contains(showOut, "content:\n{\n  \"type\": \"object\"\n}") {
+		t.Fatalf("artifact_show output = %q, want artifact content", showOut)
+	}
+}
+
+func TestDurableAgentArtifactPutRejectsEscapingPath(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	childMemory := filepath.Join(t.TempDir(), "child", "memory")
+	agent := core.DurableAgent{
+		AgentID:           "artifact-child",
+		ChannelKind:       "headless",
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "child", "workspace"), childMemory},
+		Status:            "active",
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"},
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	input, err := json.Marshal(durableAgentInput{
+		Action:  "artifact_put",
+		AgentID: "artifact-child",
+		Artifact: &durableAgentArtifactInput{
+			Path:    "../core/console_status.go",
+			Content: "package core\n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() err = %v", err)
+	}
+
+	_, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		input,
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(artifact_put) err = nil, want escaping path error")
+	}
+	if !strings.Contains(err.Error(), "artifact path") {
+		t.Fatalf("err = %v, want artifact path context", err)
+	}
+}
+
+func TestDurableAgentDefinitionIncludesArtifactActions(t *testing.T) {
+	registry, _ := newDurableAgentToolRegistry(t)
+	var durableDef string
+	for _, def := range registry.Definitions() {
+		if def.Name == "durable_agent" {
+			durableDef = string(def.Parameters)
+			break
+		}
+	}
+	if durableDef == "" {
+		t.Fatal("durable_agent definition not found")
+	}
+	for _, needle := range []string{`"artifact_put"`, `"artifact_list"`, `"artifact_show"`, `"artifact"`} {
+		if !strings.Contains(durableDef, needle) {
+			t.Fatalf("durable_agent definition missing %s: %s", needle, durableDef)
+		}
+	}
+}
+
 func TestDurableAgentPolicyApplySyncsProfileFiles(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	childWorkspace := filepath.Join(t.TempDir(), "child", "workspace")

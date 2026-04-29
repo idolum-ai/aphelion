@@ -93,6 +93,19 @@ func TestExecDangerousCommandRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestExecGitCommitRequiresApproval(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), 2*time.Second)
+	_, err := registry.Execute(context.Background(), "exec", json.RawMessage(`{"command":"git commit -m test"}`))
+	if err == nil {
+		t.Fatal("Execute() err = nil, want commit approval error")
+	}
+	if !strings.Contains(err.Error(), "requires an approved proposal") || !strings.Contains(err.Error(), "repository commit") {
+		t.Fatalf("err = %v, want repository commit proposal error", err)
+	}
+}
+
 func TestExecDangerousCommandUsesApprover(t *testing.T) {
 	t.Parallel()
 
@@ -122,6 +135,35 @@ func TestExecDangerousCommandUsesApprover(t *testing.T) {
 	}
 	if approver.request.SessionKey.ChatID != 7 {
 		t.Fatalf("approver session = %+v, want chat id 7", approver.request.SessionKey)
+	}
+}
+
+func TestExecGitCommitUsesApprover(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: false}
+	registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"git -C repo commit --amend --no-edit"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 11},
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want denied approval")
+	}
+	if approver.called != 1 {
+		t.Fatalf("approver called = %d, want 1", approver.called)
+	}
+	if approver.request.Proposal.Kind != "repo_history_mutation" {
+		t.Fatalf("proposal kind = %q, want repo_history_mutation", approver.request.Proposal.Kind)
+	}
+	if approver.request.Reason != "repository commit" {
+		t.Fatalf("proposal reason = %q, want repository commit", approver.request.Reason)
 	}
 }
 

@@ -235,6 +235,14 @@ type durableAgentProfileEditInput struct {
 	Content    string `json:"content,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 }
+
+type durableAgentArtifactInput struct {
+	Path    string `json:"path,omitempty"`
+	Content string `json:"content,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 type durableAgentSnapshotInput struct {
 	SnapshotID string `json:"snapshot_id,omitempty"`
 	Reason     string `json:"reason,omitempty"`
@@ -312,6 +320,7 @@ type durableAgentInput struct {
 	MemoryDelegation          *durableAgentMemoryDelegationInput  `json:"memory_delegation,omitempty"`
 	Snapshot                  *durableAgentSnapshotInput          `json:"snapshot,omitempty"`
 	ProfileEdit               *durableAgentProfileEditInput       `json:"profile_edit,omitempty"`
+	Artifact                  *durableAgentArtifactInput          `json:"artifact,omitempty"`
 	DelegationRequest         *durableAgentDelegationRequestInput `json:"delegation_request,omitempty"`
 	DelegationReport          *durableAgentDelegationReportInput  `json:"delegation_report,omitempty"`
 	Operation                 string                              `json:"operation,omitempty"`
@@ -540,7 +549,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 	defs := []agent.ToolDef{
 		{
 			Name:        "exec",
-			Description: "Run a shell command in the configured workspace. Use this for git, file inspection, builds, tests, and repository edits.",
+			Description: "Run a shell command in the configured workspace. Use this for git, file inspection, builds, tests, and repository edits. Repository-history changes such as git commit require explicit proposal approval.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -788,7 +797,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "profile_show", "profile_apply", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "profile_show", "profile_apply", "artifact_put", "artifact_list", "artifact_show", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: external_channel or telegram_group"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
@@ -897,6 +906,16 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"target_file": {"type": "string", "enum": ["persona.md", "skills.md", "notes.md"]},
 								"content": {"type": "string"},
 								"reason": {"type": "string"}
+							}
+						},
+						"artifact": {
+							"type": "object",
+							"description": "Child-specific artifact payload for artifact_put, artifact_list, and artifact_show. Artifacts are stored under the child memory root, not the Aphelion repo.",
+							"properties": {
+								"path": {"type": "string", "description": "Relative artifact path under artifacts/. Rejects absolute paths and .. traversal."},
+								"content": {"type": "string", "description": "Artifact content for artifact_put"},
+								"kind": {"type": "string", "description": "Optional kind such as schema, runtime_plan, status_contract, or note"},
+								"reason": {"type": "string", "description": "Why this child-specific artifact is being stored"}
 							}
 						},
 						"delegation_request": {

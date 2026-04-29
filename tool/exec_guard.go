@@ -152,6 +152,14 @@ func proposalForCommand(command string) (session.OperationProposal, string) {
 	if lower == "" {
 		return session.OperationProposal{}, ""
 	}
+	if commandContainsGitCommit(lower) {
+		return session.OperationProposal{
+			Kind:          "repo_history_mutation",
+			Summary:       "Commit repository history",
+			WhyNow:        "This command records local repository history and should only happen after explicit operator approval.",
+			BoundedEffect: "The system will create or amend a local git commit for the current operation; no remote push is performed by this approval.",
+		}, "repository commit"
+	}
 	for _, pattern := range capabilityAcquisitionPatterns {
 		if pattern.re.MatchString(lower) {
 			return pattern.proposal, pattern.reason
@@ -176,4 +184,68 @@ func proposalForCommand(command string) (session.OperationProposal, string) {
 		}, "sql delete without where"
 	}
 	return session.OperationProposal{}, ""
+}
+
+func commandContainsGitCommit(command string) bool {
+	fields := shellishFields(command)
+	for i, field := range fields {
+		if trimShellishToken(field) == "git" && gitArgsContainCommit(fields[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitArgsContainCommit(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		token := trimShellishToken(args[i])
+		if token == "" || token == "--" {
+			continue
+		}
+		if gitGlobalOptionConsumesValue(token) {
+			i++
+			continue
+		}
+		if gitGlobalOptionHasInlineValue(token) || strings.HasPrefix(token, "-") {
+			continue
+		}
+		return token == "commit"
+	}
+	return false
+}
+
+func gitGlobalOptionConsumesValue(token string) bool {
+	switch token {
+	case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path":
+		return true
+	default:
+		return false
+	}
+}
+
+func gitGlobalOptionHasInlineValue(token string) bool {
+	return strings.HasPrefix(token, "-C") && len(token) > len("-C") ||
+		strings.HasPrefix(token, "-c") && len(token) > len("-c") ||
+		strings.HasPrefix(token, "--git-dir=") ||
+		strings.HasPrefix(token, "--work-tree=") ||
+		strings.HasPrefix(token, "--namespace=") ||
+		strings.HasPrefix(token, "--exec-path=")
+}
+
+func shellishFields(command string) []string {
+	replacer := strings.NewReplacer(
+		"\n", " ",
+		"\r", " ",
+		"\t", " ",
+		";", " ",
+		"&&", " ",
+		"||", " ",
+		"(", " ",
+		")", " ",
+	)
+	return strings.Fields(replacer.Replace(command))
+}
+
+func trimShellishToken(token string) string {
+	return strings.Trim(token, `"'`)
 }

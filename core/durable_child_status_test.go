@@ -1,0 +1,98 @@
+package core
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestParseDurableChildStatusEnvelopeAllowsSpecificPayloadGenerically(t *testing.T) {
+	payload := json.RawMessage(`{"surface":"console","status":"ok","details":{"queue":2}}`)
+	hash := testPayloadHash(t, payload)
+	raw := []byte(`{
+		"kind":"durable_child_status",
+		"agent_id":"console-child",
+		"schema_version":"console.status.v1",
+		"generated_at":"2026-04-29T10:00:00Z",
+		"capability_posture":"report_only",
+		"payload":` + string(payload) + `,
+		"payload_hash":"` + hash + `"
+	}`)
+
+	env, err := ParseDurableChildStatusEnvelope(raw)
+	if err != nil {
+		t.Fatalf("ParseDurableChildStatusEnvelope() err = %v", err)
+	}
+	if env.Kind != DurableChildStatusEnvelopeKind {
+		t.Fatalf("kind = %q, want %q", env.Kind, DurableChildStatusEnvelopeKind)
+	}
+	if env.AgentID != "console-child" || env.SchemaVersion != "console.status.v1" {
+		t.Fatalf("env = %+v, want generic child id and schema version", env)
+	}
+	if env.GeneratedAt.Format(time.RFC3339) != "2026-04-29T10:00:00Z" {
+		t.Fatalf("generated_at = %s, want parsed timestamp", env.GeneratedAt.Format(time.RFC3339))
+	}
+	if !json.Valid(env.Payload) || !bytes.Contains(env.Payload, []byte(`"surface"`)) {
+		t.Fatalf("payload = %s, want preserved specific JSON payload", env.Payload)
+	}
+}
+
+func TestParseDurableChildStatusEnvelopeRejectsUnknownTopLevelFields(t *testing.T) {
+	_, err := ParseDurableChildStatusEnvelope([]byte(`{
+		"kind":"durable_child_status",
+		"agent_id":"child",
+		"schema_version":"status.v1",
+		"generated_at":"2026-04-29T10:00:00Z",
+		"payload":{},
+		"console_specific":true
+	}`))
+	if err == nil {
+		t.Fatal("ParseDurableChildStatusEnvelope() err = nil, want unknown field error")
+	}
+}
+
+func TestParseDurableChildStatusEnvelopeValidatesPayloadHash(t *testing.T) {
+	_, err := ParseDurableChildStatusEnvelope([]byte(`{
+		"kind":"durable_child_status",
+		"agent_id":"child",
+		"schema_version":"status.v1",
+		"generated_at":"2026-04-29T10:00:00Z",
+		"payload":{"ok":true},
+		"payload_hash":"sha256:not-the-payload"
+	}`))
+	if err == nil {
+		t.Fatal("ParseDurableChildStatusEnvelope() err = nil, want hash mismatch")
+	}
+	if !strings.Contains(err.Error(), "payload_hash") {
+		t.Fatalf("err = %v, want payload_hash context", err)
+	}
+}
+
+func TestValidateDurableChildStatusEnvelopeForAgentRejectsMismatch(t *testing.T) {
+	env := DurableChildStatusEnvelope{
+		Kind:          DurableChildStatusEnvelopeKind,
+		AgentID:       "child-a",
+		SchemaVersion: "status.v1",
+		GeneratedAt:   time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC),
+		Payload:       json.RawMessage(`{}`),
+	}
+
+	err := ValidateDurableChildStatusEnvelopeForAgent(env, DurableAgent{AgentID: "child-b"})
+	if err == nil {
+		t.Fatal("ValidateDurableChildStatusEnvelopeForAgent() err = nil, want agent mismatch")
+	}
+}
+
+func testPayloadHash(t *testing.T, payload json.RawMessage) string {
+	t.Helper()
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, payload); err != nil {
+		t.Fatalf("json.Compact() err = %v", err)
+	}
+	sum := sha256.Sum256(compact.Bytes())
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
