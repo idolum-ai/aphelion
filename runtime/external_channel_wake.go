@@ -1,0 +1,305 @@
+//go:build linux
+
+package runtime
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/durableagent"
+	"github.com/idolum-ai/aphelion/session"
+)
+
+const genericExternalChannelWakeAdapterName = "external_channel"
+const genericExternalChannelWakeChannel = "external_channel"
+const genericExternalChannelPollCommandName = "external_channel.poll_due"
+
+type genericExternalChannelWakeAdapter struct{}
+
+func newGenericExternalChannelWakeAdapter() durableWakeIngressAdapter {
+	return genericExternalChannelWakeAdapter{}
+}
+
+func (genericExternalChannelWakeAdapter) Name() string { return genericExternalChannelWakeAdapterName }
+
+func (genericExternalChannelWakeAdapter) Supports(agent core.DurableAgent) bool {
+	if strings.ToLower(strings.TrimSpace(agent.Status)) != "active" {
+		return false
+	}
+	external := agent.ChannelConfig.ExternalConfig()
+	if external == nil || strings.TrimSpace(external.Adapter) == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(external.Adapter), codexAppServerAdapterName) {
+		return false
+	}
+	mode := strings.TrimSpace(agent.WakeupMode)
+	return mode == "" || strings.EqualFold(mode, "poll")
+}
+
+func (genericExternalChannelWakeAdapter) Prepare(_ context.Context, rt *Runtime, agent core.DurableAgent, now time.Time) (*durableWakeTurnPlan, error) {
+	if rt == nil || rt.store == nil {
+		return nil, fmt.Errorf("external channel adapter runtime is unavailable")
+	}
+	external := agent.ChannelConfig.ExternalConfig()
+	if external == nil {
+		return nil, fmt.Errorf("external channel adapter requires external channel_config")
+	}
+	adapterName := externalChannelAdapter(agent)
+	if adapterName == "" {
+		return nil, fmt.Errorf("external channel adapter requires channel_config.external.adapter")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+
+	state, continuity, err := loadDurableAgentContinuityFromStore(rt.store, agent.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	runtimeState := externalChannelStateForAdapter(continuity, adapterName)
+	if !externalChannelPollDue(runtimeState, strings.TrimSpace(external.PollInterval), now) {
+		return nil, nil
+	}
+	runtimeState = externalChannelRecordAttempt(runtimeState, adapterName, genericExternalChannelPollCommandName, now)
+	runtimeState.LastStatus = "wake_started"
+	runtimeState.LastError = ""
+	continuity.ExternalChannel = encodeGenericExternalChannelState(runtimeState, adapterName)
+	raw, err := continuity.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	state.StateJSON = raw
+	if err := rt.store.SaveDurableAgentState(*state); err != nil {
+		return nil, err
+	}
+
+	key := session.SessionKey{ChatID: durableWakeSyntheticChatID(agent.AgentID), Scope: durableAgentScopeRef(agent)}
+	return &durableWakeTurnPlan{
+		Channel:      genericExternalChannelWakeChannel,
+		AuditChannel: genericExternalChannelWakeChannel,
+		Key:          key,
+		Inbound: core.InboundMessage{
+			ChatID:         key.ChatID,
+			ChatType:       genericExternalChannelWakeChannel,
+			ChatTitle:      "external-channel",
+			SenderName:     "external_channel",
+			Text:           genericExternalChannelWakePrompt(agent, *external, now),
+			MessageID:      durableWakeMessageID(now),
+			DurableAgentID: strings.TrimSpace(agent.AgentID),
+			Timestamp:      now,
+		},
+		SessionChatType:      genericExternalChannelWakeChannel,
+		SessionUserName:      "external_channel",
+		PromptContextErrHint: "load external channel durable wake prompt context",
+		PolicyReason:         "mapped from generic external_channel durable-agent adapter command dispatch",
+		PersistenceErrCtx: turnCommitErrorContext{
+			ConvertMessages: "convert external channel durable wake messages",
+			LoadPlanState:   "load external channel durable wake plan state before save",
+			LoadOperation:   "load external channel durable wake operation state before save",
+			SaveSession:     "save external channel durable wake session",
+			RecordOutbound:  "record external channel durable wake outbound reply",
+		},
+		SendErrCtx:   "send external channel durable wake reply",
+		RecordErrCtx: "record external channel durable wake outbound reply",
+		GovernorContext: func(agent core.DurableAgent, policy core.DurableAgentLivePolicy, _ core.InboundMessage, pending []core.DurableAgentConversationMessage) string {
+			lines := []string{
+				"You are handling a durable-agent wake from the generic external_channel adapter dispatcher.",
+				"The parent runtime only determined that a configured external-channel poll is due; it did not execute channel-specific work.",
+				"Use only this child's charter, policy, and explicitly available tools/grants to perform or decline the adapter-local work.",
+				"If the needed adapter/tool/runtime material is unavailable, say what is blocked and what exact grant/materialization is missing.",
+				"Do not claim external-channel reads, writes, sends, deletes, archive actions, or attachment/body access unless actually performed by an authorized child-local tool this turn.",
+				"Finish with EXTERNAL_CHANNEL_STATUS: completed only if authorized adapter-local work actually completed.",
+				"Finish with EXTERNAL_CHANNEL_STATUS: blocked if work could not run, was refused, or material/grants were missing; include EXTERNAL_CHANNEL_ERROR: with the blocker.",
+			}
+			if charter := strings.TrimSpace(policy.Charter); charter != "" {
+				lines = append(lines, "Charter: "+charter)
+			}
+			lines = append(lines,
+				"Durable agent id: "+strings.TrimSpace(agent.AgentID),
+				"External adapter: "+adapterName,
+				"External query label: "+strings.TrimSpace(external.Query),
+				"Poll interval: "+strings.TrimSpace(external.PollInterval),
+			)
+			lines = append(lines, durableParentConversationGovernorLines(pending)...)
+			return strings.Join(lines, "\n")
+		},
+		Finalize: func(turnSummary string) error {
+			return finalizeGenericExternalChannelWake(rt, agent, adapterName, turnSummary, now)
+		},
+		FinalizeFailure: func(turnSummary string, cause error) error {
+			return finalizeGenericExternalChannelWakeFailure(rt, agent, adapterName, turnSummary, cause, now)
+		},
+	}, nil
+}
+
+func genericExternalChannelWakePrompt(agent core.DurableAgent, external core.DurableAgentExternalChannelConfig, now time.Time) string {
+	lines := []string{
+		"External-channel poll is due.",
+		"Agent: " + strings.TrimSpace(agent.AgentID),
+		"Adapter: " + strings.TrimSpace(external.Adapter),
+		"Poll interval: " + strings.TrimSpace(external.PollInterval),
+		"Scheduled at: " + now.UTC().Format(time.RFC3339),
+		"Handle this as a child-local adapter command within the current charter and grants.",
+		"If the adapter/tool/runtime grant is missing, report the blocker instead of improvising parent authority.",
+		"End with EXTERNAL_CHANNEL_STATUS: completed only after authorized adapter-local work actually completed.",
+		"End with EXTERNAL_CHANNEL_STATUS: blocked and EXTERNAL_CHANNEL_ERROR: <reason> if blocked.",
+	}
+	if query := strings.TrimSpace(external.Query); query != "" {
+		lines = append(lines, "Configured query/selector: "+query)
+	}
+	if len(external.SurfaceRules) > 0 {
+		lines = append(lines, "Surface rules: "+strings.Join(external.SurfaceRules, ", "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func finalizeGenericExternalChannelWake(rt *Runtime, agent core.DurableAgent, adapterName string, turnSummary string, now time.Time) error {
+	if rt == nil || rt.store == nil {
+		return nil
+	}
+	outcome := genericExternalChannelWakeOutcomeFromSummary(turnSummary)
+	if !outcome.Completed {
+		return finalizeGenericExternalChannelWakeFailure(rt, agent, adapterName, turnSummary, errors.New(outcome.Error), now)
+	}
+	state, continuity, err := loadDurableAgentContinuityFromStore(rt.store, agent.AgentID)
+	if err != nil {
+		return err
+	}
+	runtimeState := externalChannelStateForAdapter(continuity, adapterName)
+	runtimeState = externalChannelRecordSuccess(runtimeState, externalChannelCommandLifecycle{
+		Adapter:      adapterName,
+		Command:      genericExternalChannelPollCommandName,
+		LastStatus:   "wake_completed",
+		ResetBackoff: true,
+	}, now)
+	continuity.ExternalChannel = encodeGenericExternalChannelState(runtimeState, adapterName)
+	raw, err := continuity.Marshal()
+	if err != nil {
+		return err
+	}
+	state.StateJSON = raw
+	if err := rt.store.SaveDurableAgentState(*state); err != nil {
+		return err
+	}
+	artifact := genericExternalChannelReviewArtifact(agent, adapterName, turnSummary, now, "wake_completed", "")
+	artifact.LocalActions = []string{"External-channel wake completed after child reported authorized adapter-local work completed."}
+	if _, err := durableagent.NewRuntime(rt.store).QueueReviewArtifact(agent, artifact); err != nil {
+		return fmt.Errorf("queue external channel wake review artifact: %w", err)
+	}
+	return nil
+}
+
+func finalizeGenericExternalChannelWakeFailure(rt *Runtime, agent core.DurableAgent, adapterName string, turnSummary string, cause error, now time.Time) error {
+	if rt == nil || rt.store == nil {
+		return nil
+	}
+	if cause == nil {
+		cause = fmt.Errorf("external channel wake did not complete")
+	}
+	state, continuity, err := loadDurableAgentContinuityFromStore(rt.store, agent.AgentID)
+	if err != nil {
+		return err
+	}
+	runtimeState := externalChannelStateForAdapter(continuity, adapterName)
+	runtimeState = externalChannelRecordFailure(runtimeState, externalChannelCommandLifecycle{
+		Adapter:    adapterName,
+		Command:    genericExternalChannelPollCommandName,
+		LastStatus: "wake_blocked",
+		LastError:  truncateRunes(cause.Error(), 900),
+	}, now)
+	continuity.ExternalChannel = encodeGenericExternalChannelState(runtimeState, adapterName)
+	raw, err := continuity.Marshal()
+	if err != nil {
+		return err
+	}
+	state.StateJSON = raw
+	if err := rt.store.SaveDurableAgentState(*state); err != nil {
+		return err
+	}
+	artifact := genericExternalChannelReviewArtifact(agent, adapterName, turnSummary, now, "wake_blocked", cause.Error())
+	artifact.LocalActions = []string{"External-channel wake blocked; recorded explicit failure/backoff instead of success."}
+	if _, err := durableagent.NewRuntime(rt.store).QueueReviewArtifact(agent, artifact); err != nil {
+		return fmt.Errorf("queue external channel wake failure review artifact: %w", err)
+	}
+	return nil
+}
+
+func genericExternalChannelReviewArtifact(agent core.DurableAgent, adapterName string, turnSummary string, now time.Time, status string, errorText string) core.DurableReviewArtifact {
+	metadata := map[string]string{
+		"channel_kind":            strings.TrimSpace(agent.ChannelKind),
+		"channel_adapter":         adapterName,
+		"trigger_kinds":           "external_channel,poll_due",
+		"child_local_subject":     "false",
+		"external_channel_status": status,
+	}
+	if strings.TrimSpace(errorText) != "" {
+		metadata["external_channel_error"] = truncateRunes(errorText, 900)
+	}
+	return core.DurableReviewArtifact{
+		AgentID:       strings.TrimSpace(agent.AgentID),
+		Summary:       genericExternalChannelReviewSummary(agent, adapterName, turnSummary, status, errorText),
+		IntervalLabel: now.UTC().Format(time.RFC3339),
+		RiskFlags:     []string{"external_channel", "adapter_dispatch"},
+		Metadata:      metadata,
+	}
+}
+
+type genericExternalChannelWakeOutcome struct {
+	Completed bool
+	Status    string
+	Error     string
+}
+
+func genericExternalChannelWakeOutcomeFromSummary(turnSummary string) genericExternalChannelWakeOutcome {
+	status := strings.ToLower(strings.TrimSpace(extractGenericExternalChannelStatusLine(turnSummary, "EXTERNAL_CHANNEL_STATUS")))
+	errorText := strings.TrimSpace(extractGenericExternalChannelStatusLine(turnSummary, "EXTERNAL_CHANNEL_ERROR"))
+	switch status {
+	case "completed", "complete", "ok", "success", "wake_completed":
+		return genericExternalChannelWakeOutcome{Completed: true, Status: "wake_completed"}
+	case "blocked", "blocker", "failed", "failure", "error", "unavailable", "wake_blocked":
+		if errorText == "" {
+			errorText = "external channel child reported blocked status"
+		}
+		return genericExternalChannelWakeOutcome{Completed: false, Status: "wake_blocked", Error: errorText}
+	default:
+		return genericExternalChannelWakeOutcome{Completed: false, Status: "wake_blocked", Error: "external channel completion status missing; not marking poll as successful"}
+	}
+}
+
+func extractGenericExternalChannelStatusLine(text string, key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	for _, line := range strings.Split(text, "\n") {
+		left, right, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(left)) == key {
+			return strings.TrimSpace(right)
+		}
+	}
+	return ""
+}
+
+func genericExternalChannelReviewSummary(agent core.DurableAgent, adapterName string, turnSummary string, status string, errorText string) string {
+	parts := []string{
+		fmt.Sprintf("External-channel wake %s from child %s via adapter %s.", strings.TrimSpace(status), strings.TrimSpace(agent.AgentID), strings.TrimSpace(adapterName)),
+	}
+	if trimmed := strings.TrimSpace(turnSummary); trimmed != "" {
+		parts = append(parts, truncateRunes(trimmed, 900))
+	}
+	if strings.TrimSpace(errorText) != "" {
+		parts = append(parts, "Error: "+truncateRunes(strings.TrimSpace(errorText), 300))
+	}
+	return strings.Join(parts, " ")
+}
+
+func encodeGenericExternalChannelState(runtimeState core.DurableAgentExternalChannelRuntimeState, adapterName string) *core.DurableAgentExternalChannelRuntimeState {
+	runtimeState.Adapter = strings.ToLower(strings.TrimSpace(adapterName))
+	return core.NormalizeDurableAgentContinuityState(core.DurableAgentContinuityState{ExternalChannel: &runtimeState}).ExternalChannel
+}

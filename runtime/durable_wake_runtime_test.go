@@ -369,9 +369,9 @@ func TestPollDurableWakeAgentsKeepsParentConversationPendingOnInferenceFailure(t
 	sender.mu.Unlock()
 }
 
-func TestPollDurableWakeAgentsDoesNotSpecialCaseEmailWithoutParentGuidance(t *testing.T) {
+func TestPollDurableWakeAgentsDispatchesGenericExternalChannelWithoutSpecializedParentSemantics(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.replyText = "This should not run."
+	provider.replyText = "The configured adapter runtime material is unavailable; I need a child_runtime grant."
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
@@ -384,14 +384,13 @@ func TestPollDurableWakeAgentsDoesNotSpecialCaseEmailWithoutParentGuidance(t *te
 		ReviewTargetChatID: 1001,
 		ChannelKind:        "external_channel",
 		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
-			Address:      "host@idolum.ai",
-			Account:      "host@idolum.ai",
+			Address:      "external-endpoint",
 			Adapter:      "child_adapter",
 			Query:        "topic:important",
 			PollInterval: "5m",
 		}},
 		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
-			Charter:            "Read host@idolum.ai and summarize job opportunities upward.",
+			Charter:            "Handle the external channel and summarize important findings upward.",
 			CapabilityEnvelope: []string{"read_channel", "bounded_review_artifact"},
 			OutboundMode:       "read_only",
 			DriftPolicy:        "admin_review",
@@ -408,8 +407,17 @@ func TestPollDurableWakeAgentsDoesNotSpecialCaseEmailWithoutParentGuidance(t *te
 	if err := rt.pollDurableWakeAgents(context.Background(), time.Now().UTC()); err != nil {
 		t.Fatalf("pollDurableWakeAgents() err = %v", err)
 	}
-	if len(provider.lastGovernorMsgs) != 0 {
-		t.Fatalf("governor messages = %#v, want no automatic channel wake", provider.lastGovernorMsgs)
+	if len(provider.lastGovernorMsgs) == 0 {
+		t.Fatal("governor messages empty, want generic external-channel wake")
+	}
+	joined := strings.ToLower(fmt.Sprint(provider.lastGovernorMsgs))
+	if !strings.Contains(joined, "generic external_channel adapter dispatcher") {
+		t.Fatalf("governor messages = %#v, want generic dispatcher context", provider.lastGovernorMsgs)
+	}
+	for _, forbidden := range []string{"gmail", "gog", "recruiter", "job"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("governor messages = %#v, should not contain specialized term %q", provider.lastGovernorMsgs, forbidden)
+		}
 	}
 }
 

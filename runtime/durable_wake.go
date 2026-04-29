@@ -41,6 +41,7 @@ type durableWakeTurnPlan struct {
 	RecordErrCtx         string
 	GovernorContext      durableWakeGovernorContextBuilder
 	Finalize             func(turnSummary string) error
+	FinalizeFailure      func(turnSummary string, cause error) error
 }
 
 type durableWakeIngressAdapter interface {
@@ -53,6 +54,7 @@ func defaultDurableWakeIngressAdapters() []durableWakeIngressAdapter {
 	return []durableWakeIngressAdapter{
 		newDailyReviewDurableWakeAdapter(),
 		newCodexAppServerWakeAdapter(),
+		newGenericExternalChannelWakeAdapter(),
 		newDurableParentConversationWakeAdapter(),
 	}
 }
@@ -217,7 +219,11 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, err); markErr != nil {
 			return fmt.Errorf("run durable wake turn: %w (and failed to record apply failure: %v)", err, markErr)
 		}
-		return fmt.Errorf("run durable wake turn: %w", err)
+		wrappedErr := fmt.Errorf("run durable wake turn: %w", err)
+		if finalizeErr := finalizeDurableWakeFailure(plan, turnSummary, wrappedErr); finalizeErr != nil {
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
+		}
+		return wrappedErr
 	}
 	if durableWakeInferenceUnavailable(turnSummary) {
 		inferenceErr := fmt.Errorf("durable wake inference unavailable")
@@ -228,10 +234,8 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		if markErr := r.markDurableAgentPolicyApplyFailure(agent, inferenceErr); markErr != nil {
 			return fmt.Errorf("%w (and failed to record apply failure: %v)", inferenceErr, markErr)
 		}
-		if plan.Finalize != nil {
-			if err := plan.Finalize(turnSummary); err != nil {
-				return err
-			}
+		if finalizeErr := finalizeDurableWakeFailure(plan, turnSummary, inferenceErr); finalizeErr != nil {
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", inferenceErr, finalizeErr)
 		}
 		return inferenceErr
 	}
@@ -240,7 +244,11 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 			"agent_id": strings.TrimSpace(agent.AgentID),
 			"error":    trimError(err.Error()),
 		}, time.Now().UTC())
-		return fmt.Errorf("record durable wake applied policy: %w", err)
+		wrappedErr := fmt.Errorf("record durable wake applied policy: %w", err)
+		if finalizeErr := finalizeDurableWakeFailure(plan, turnSummary, wrappedErr); finalizeErr != nil {
+			return fmt.Errorf("%w (and failed to record wake failure: %v)", wrappedErr, finalizeErr)
+		}
+		return wrappedErr
 	}
 	if plan.Finalize != nil {
 		if err := plan.Finalize(turnSummary); err != nil {
@@ -263,6 +271,13 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 
 func durableWakeInferenceUnavailable(summary string) bool {
 	return strings.Contains(strings.TrimSpace(summary), durableWakeInferenceUnavailableSignal)
+}
+
+func finalizeDurableWakeFailure(plan durableWakeTurnPlan, turnSummary string, cause error) error {
+	if plan.FinalizeFailure == nil {
+		return nil
+	}
+	return plan.FinalizeFailure(turnSummary, cause)
 }
 
 func (r *Runtime) runDurableWakeConversation(
