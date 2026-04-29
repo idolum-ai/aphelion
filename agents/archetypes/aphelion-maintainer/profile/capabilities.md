@@ -1,0 +1,8 @@
+- session_log_read
+- memory_read
+- prompt_read
+- repo_read
+- config_read
+- bounded_review_artifact
+- patch_proposal
+- capability_request

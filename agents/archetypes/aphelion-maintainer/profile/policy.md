@@ -1,0 +1,5 @@
+- outbound_mode: read_only
+- drift_policy: admin_review
+- public_surface_mode: explicit_parent_relay_only
+- shared_inference_reuse: disabled
+- shared_inference_reuse_scope: public_prefix_only

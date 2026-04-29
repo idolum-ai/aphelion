@@ -2268,9 +2268,125 @@ func TestDurableAgentDefinitionIncludesArtifactActions(t *testing.T) {
 	if durableDef == "" {
 		t.Fatal("durable_agent definition not found")
 	}
-	for _, needle := range []string{`"artifact_put"`, `"artifact_list"`, `"artifact_show"`, `"artifact"`} {
+	for _, needle := range []string{`"artifact_put"`, `"artifact_list"`, `"artifact_show"`, `"artifact"`, `"archetype_list"`, `"archetype_show"`, `"create_from_archetype"`, `"archetype"`} {
 		if !strings.Contains(durableDef, needle) {
 			t.Fatalf("durable_agent definition missing %s: %s", needle, durableDef)
+		}
+	}
+}
+
+func TestDurableAgentArchetypeListShowAndCreate(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	writeToolTestArchetype(t, registry.workspace, "aphelion-maintainer")
+	registry.WithDurableAgentBootstrapLLM(core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"})
+
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	listOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"archetype_list"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(archetype_list) err = %v", err)
+	}
+	if !strings.Contains(listOut, "action: durable-agent archetype list") || !strings.Contains(listOut, "aphelion-maintainer") {
+		t.Fatalf("archetype_list output = %q, want maintainer archetype", listOut)
+	}
+
+	showOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"archetype_show","archetype":"aphelion-maintainer"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(archetype_show) err = %v", err)
+	}
+	if !strings.Contains(showOut, "action: durable-agent archetype show") ||
+		!strings.Contains(showOut, "required_files:") ||
+		!strings.Contains(showOut, "examples/doctor-report.md") {
+		t.Fatalf("archetype_show output = %q, want archetype summary", showOut)
+	}
+	if !strings.Contains(showOut, "/tmp clone") || !strings.Contains(showOut, "GitHub PR") {
+		t.Fatalf("archetype_show output = %q, want clone/PR boundary", showOut)
+	}
+
+	createOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		actor,
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"create_from_archetype","agent_id":"aphelion-maintainer-live","archetype":"aphelion-maintainer"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(create_from_archetype) err = %v", err)
+	}
+	if !strings.Contains(createOut, "action: durable-agent archetype create") ||
+		!strings.Contains(createOut, "status: draft") ||
+		!strings.Contains(createOut, "archetype: aphelion-maintainer") {
+		t.Fatalf("create_from_archetype output = %q, want archetype create summary", createOut)
+	}
+
+	agent, err := store.DurableAgent("aphelion-maintainer-live")
+	if err != nil {
+		t.Fatalf("DurableAgent() err = %v", err)
+	}
+	if agent.Status != "draft" {
+		t.Fatalf("agent status = %q, want draft", agent.Status)
+	}
+	if agent.LivePolicy.OutboundMode != "read_only" || !containsString(agent.LivePolicy.CapabilityEnvelope, "session_log_read") {
+		t.Fatalf("agent policy = %+v, want read-only session-log posture", agent.LivePolicy)
+	}
+	memoryRoot, err := durableAgentMemoryRoot(*agent, store)
+	if err != nil {
+		t.Fatalf("durableAgentMemoryRoot() err = %v", err)
+	}
+	provenanceRaw, err := os.ReadFile(filepath.Join(memoryRoot, "profile", "ARCHETYPE.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(ARCHETYPE.json) err = %v", err)
+	}
+	if !strings.Contains(string(provenanceRaw), `"name": "aphelion-maintainer"`) {
+		t.Fatalf("ARCHETYPE.json = %s, want archetype provenance", provenanceRaw)
+	}
+	copiedAgentRaw, err := os.ReadFile(filepath.Join(memoryRoot, "profile", "archetype", "AGENT.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(archetype AGENT.md) err = %v", err)
+	}
+	if !strings.Contains(string(copiedAgentRaw), "Aphelion Maintainer") {
+		t.Fatalf("copied AGENT.md = %q, want archetype template copy", copiedAgentRaw)
+	}
+	runtimeRaw, err := os.ReadFile(filepath.Join(memoryRoot, "profile", "archetype", "profile", "runtime.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(archetype runtime.md) err = %v", err)
+	}
+	if !strings.Contains(string(runtimeRaw), "/tmp clone") || !strings.Contains(string(runtimeRaw), "GitHub PR") {
+		t.Fatalf("copied runtime.md = %q, want clone/PR boundary", runtimeRaw)
+	}
+	if _, err := os.Stat(filepath.Join(registry.workspace, "core", "aphelion_maintainer.go")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected repo-specific child file err = %v", err)
+	}
+}
+
+func writeToolTestArchetype(t *testing.T, workspace, name string) {
+	t.Helper()
+	files := map[string]string{
+		"AGENT.md":                  "# Aphelion Maintainer\n\nDiagnose Aphelion and propose fixes. Implementation work must happen in a /tmp clone and return as a GitHub PR.\n",
+		"profile/charter.md":        "Review Aphelion sessions, memory, prompts, and code health; propose fixes with evidence.\n",
+		"profile/policy.md":         "- outbound_mode: read_only\n- public_surface_mode: explicit_parent_relay_only\n- shared_inference_reuse: disabled\n- shared_inference_reuse_scope: public_prefix_only\n",
+		"profile/capabilities.md":   "- session_log_read\n- repo_read\n- bounded_review_artifact\n- patch_proposal\n",
+		"profile/runtime.md":        "Never mutate the local Aphelion clone. If implementation is approved, use a /tmp clone and propose the result via GitHub PR with an approved GitHub App credential.\n",
+		"examples/doctor-report.md": "## State\n\nConcise diagnosis.\n",
+	}
+	for rel, content := range files {
+		target := filepath.Join(workspace, "agents", "archetypes", name, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s) err = %v", filepath.Dir(target), err)
+		}
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) err = %v", target, err)
 		}
 	}
 }

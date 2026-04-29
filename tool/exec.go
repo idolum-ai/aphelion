@@ -297,6 +297,7 @@ type durableAgentInput struct {
 	ChannelKind               string                              `json:"channel_kind,omitempty"`
 	ReviewEventID             int64                               `json:"review_event_id,omitempty"`
 	ReviewTargetChatID        int64                               `json:"review_target_chat_id,omitempty"`
+	Archetype                 string                              `json:"archetype,omitempty"`
 	Reason                    string                              `json:"reason,omitempty"`
 	BootstrapProfile          string                              `json:"bootstrap_profile,omitempty"`
 	BootstrapLLM              *core.NodeLLMBootstrap              `json:"bootstrap_llm,omitempty"`
@@ -797,8 +798,9 @@ func (r *Registry) Definitions() []agent.ToolDef {
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "access_show", "access_grant", "access_revoke", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "profile_show", "profile_apply", "artifact_put", "artifact_list", "artifact_show", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "create_from_archetype", "activate", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "archetype_list", "archetype_show", "access_show", "access_grant", "access_revoke", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "profile_show", "profile_apply", "artifact_put", "artifact_list", "artifact_show", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
+						"archetype": {"type": "string", "description": "Repo archetype name for archetype_show or create_from_archetype"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: external_channel or telegram_group"},
 						"review_event_id": {"type": "integer", "minimum": 1, "description": "Optional source review event id for policy ratification provenance"},
 						"review_target_chat_id": {"type": "integer", "description": "Optional admin review target chat id override for create"},

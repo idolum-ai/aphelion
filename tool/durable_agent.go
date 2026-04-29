@@ -44,6 +44,8 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 		return renderDurableAgentList(agents), nil
 	case "create":
 		return r.createDurableAgent(in, key)
+	case "create_from_archetype":
+		return r.createDurableAgentFromArchetype(in, key)
 	case "activate":
 		return r.activateDurableAgent(in)
 	case "connection_test":
@@ -115,6 +117,10 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 		return r.finalizeDurableAgentWizard(in, key)
 	case "wizard_cancel":
 		return r.cancelDurableAgentWizard(in)
+	case "archetype_list":
+		return r.listDurableAgentArchetypes()
+	case "archetype_show":
+		return r.showDurableAgentArchetype(in)
 	case "access_show":
 		return r.showDurableAgentAccess(in)
 	case "access_grant":
@@ -150,7 +156,7 @@ func (r *Registry) durableAgent(ctx context.Context, input json.RawMessage, p pr
 	case "snapshot_restore":
 		return r.restoreDurableAgentSnapshot(ctx, in, p, key)
 	default:
-		return "", fmt.Errorf("durable_agent action must be one of list|create|activate|connection_test|policy_show|bootstrap_show|policy_apply|bootstrap_update|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|access_show|access_grant|access_revoke|conversation_show|conversation_send|delegation_request|delegation_report|memory_review|memory_delegate|profile_show|profile_apply|artifact_put|artifact_list|artifact_show|snapshot_create|snapshot_list|snapshot_restore")
+		return "", fmt.Errorf("durable_agent action must be one of list|create|create_from_archetype|activate|connection_test|policy_show|bootstrap_show|policy_apply|bootstrap_update|enrollment_show|enrollment_update|wizard_start|wizard_answer|wizard_show|wizard_finalize|wizard_cancel|archetype_list|archetype_show|access_show|access_grant|access_revoke|conversation_show|conversation_send|delegation_request|delegation_report|memory_review|memory_delegate|profile_show|profile_apply|artifact_put|artifact_list|artifact_show|snapshot_create|snapshot_list|snapshot_restore")
 	}
 }
 
