@@ -9,10 +9,10 @@ For open-ended, strategic, ambiguous, emotionally charged, or repo-inspection-he
 This brokerage is not a free-form internal conversation. It is a short negotiation:
 
 1. `Idolum` states what conversational pressure it wants to exert
-2. `Aphelion` answers with what system posture it can actually ratify
+2. `Idolum (System)` answers with what system posture it can actually ratify
 3. the normal governor/tool turn executes under the negotiated artifact and later emits a bounded material floor for Idolum to stage
 
-This preserves `Idolum`'s initiative without making the runtime a committee, and preserves `Aphelion`'s authority without flattening `Idolum` into polite advice.
+This preserves `Idolum`'s initiative without making the runtime a committee, and preserves `Idolum (System)`'s authority without flattening `Idolum` into polite advice.
 
 ## Telos
 
@@ -34,7 +34,7 @@ It should also prevent a silent collapse back into the older shape where the gov
 - bounded pre-turn brokerage for interactive turns when the turn carries an explicit execution contract signal
 - conversational-default pre-turn proposal for ordinary interactive turns (non-empty, non-command) so brokerage activation can be decided from the proposal itself rather than keyword routing
 - `Idolum` brokerage proposal
-- `Aphelion` ratification pass
+- `Idolum (System)` ratification pass
 - negotiated brokerage block injected into the main governor turn
 - runtime awareness of brokerage state
 - graceful fallback to the ordinary proposal path when brokerage fails or is not warranted
@@ -79,9 +79,9 @@ It should say:
 
 `Idolum` does not ratify or authorize. It proposes.
 
-### Aphelion
+### Idolum (System)
 
-`Aphelion` owns ratification.
+`Idolum (System)` owns ratification.
 
 It should decide:
 
@@ -90,9 +90,9 @@ It should decide:
 - whether tools are needed
 - whether clarification is required first
 
-The authoritative execution boundary still belongs to Aphelion, but the main turn should preserve both sides of the brokerage rather than only the final ratified compression.
+The authoritative execution boundary still belongs to Idolum (System), but the main turn should preserve both sides of the brokerage rather than only the final ratified compression.
 
-Aphelion's post-brokerage task is not just "answer." Its task is to decide the material floor the face is later allowed to stage.
+Idolum (System)'s post-brokerage task is not just "answer." Its task is to decide the material floor the face is later allowed to stage.
 
 ## Execution Contract
 
@@ -121,9 +121,9 @@ PUSH:
 
 This note is non-authoritative on execution, but it is not disposable. It represents the conversational pressure the runtime should preserve when possible.
 
-## Aphelion Ratification Pass
+## Idolum (System) Ratification Pass
 
-Before the main governor/tool turn, `Aphelion` should run a short tool-free planning pass that sees:
+Before the main governor/tool turn, `Idolum (System)` should run a short tool-free planning pass that sees:
 
 - the normal machine-owned governor prompt
 - the latest user input
@@ -132,7 +132,7 @@ Before the main governor/tool turn, `Aphelion` should run a short tool-free plan
 
 It should return a short structured ratification.
 
-On Aphelion's side, this ratification must be parseable enough for runtime execution. That machine contract belongs to the governor artifact, not to brokerage as a whole.
+On Idolum (System)'s side, this ratification must be parseable enough for runtime execution. That machine contract belongs to the governor artifact, not to brokerage as a whole.
 
 Example shape:
 
@@ -147,11 +147,11 @@ PLAN:
 - Keep the answer concrete and prioritized.
 ```
 
-Aphelion's ratification remains authoritative for execution boundaries, but the main turn should carry the negotiated brokerage block rather than only the ratified compression.
+Idolum (System)'s ratification remains authoritative for execution boundaries, but the main turn should carry the negotiated brokerage block rather than only the ratified compression.
 
 ### Required ratification fields
 
-These constraints apply to Aphelion's ratification artifact so runtime can execute cleanly. They should not be projected backward onto Idolum's side of the brokerage, which may remain more conversational and bounded.
+These constraints apply to Idolum (System)'s ratification artifact so runtime can execute cleanly. They should not be projected backward onto Idolum's side of the brokerage, which may remain more conversational and bounded.
 
 The runtime should parse and carry these fields explicitly:
 
@@ -159,7 +159,7 @@ The runtime should parse and carry these fields explicitly:
 - `QUESTION`
 - `ANSWER`
 - `RATIFICATION`
-- `SIGNAL_JUDGMENT` — optional; present when Idolum named a hidden input in its proposal. Aphelion states whether the signal is confirmed, overridden, or not material. Preserves Aphelion's side of the signal negotiation in the artifact.
+- `SIGNAL_JUDGMENT` — optional; present when Idolum named a hidden input in its proposal. Idolum (System) states whether the signal is confirmed, overridden, or not material. Preserves Idolum (System)'s side of the signal negotiation in the artifact.
 - `PLAN` steps
 
 `RATIFICATION` uses a small fixed vocabulary:
@@ -235,11 +235,11 @@ The raw `Idolum` brokerage position should survive into the negotiated brokerage
 The negotiated brokerage block should preserve both:
 
 - `Idolum`'s raw brokerage push
-- `Aphelion`'s parsed ratification fields and bounded execution steps
+- `Idolum (System)`'s parsed ratification fields and bounded execution steps
 
 That negotiated block exists to constrain both later phases:
 
-- how Aphelion materializes the turn
+- how Idolum (System) materializes the turn
 - how Idolum stages the visible scene
 
 The governor should be able to see, explicitly:
@@ -275,8 +275,8 @@ The machine-authored runtime awareness surface should expose:
 - whether brokerage is active
 - whether the current turn used plain proposal or brokerage
 - Idolum's suggested execution contract when available
-- Aphelion's ratified execution contract when available
-- Aphelion's ratification disposition when available
+- Idolum (System)'s ratified execution contract when available
+- Idolum (System)'s ratification disposition when available
 
 `Idolum` should receive only the subset relevant to speaking honestly about the turn posture.
 
@@ -308,8 +308,8 @@ The system must not drop or stall a turn merely because brokerage failed.
 - **Brokerage stops on stability.** Repeating the same effective contract is a diminishing-returns signal, not a reason to keep arguing.
 - **Escalation beats persuasion.** Capability, authority, privacy, purchase, external-account, and public-exposure boundaries should stop brokerage and move into the governed proposal/capability lane.
 - **Idolum proposes posture.** It does not authorize tools or system actions.
-- **Aphelion ratifies execution.** It remains the action and authority layer.
-- **Brokerage preserves both pressures.** The surviving artifact should keep Idolum's push and Aphelion's ratification together.
+- **Idolum (System) ratifies execution.** It remains the action and authority layer.
+- **Brokerage preserves both pressures.** The surviving artifact should keep Idolum's push and Idolum (System)'s ratification together.
 - **Ratification must be parseable.** `INSPECT`, `QUESTION`, `ANSWER`, `RATIFICATION`, and `PLAN` are runtime contract fields, not just suggestive formatting.
 - **Brokerage is selective.** It should not run on every turn.
 - **The negotiated brokerage block is machine-scoped context.** It is not user-visible by default.

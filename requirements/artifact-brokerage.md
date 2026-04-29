@@ -16,12 +16,12 @@ But it cannot always know:
 - whether it is emotionally or structurally important
 - whether it should matter only for this turn or for later continuity
 
-Artifact brokerage exists to let `Idolum` and `Aphelion` deliberate over that ambiguity without letting either invent unsupported file handling.
+Artifact brokerage exists to let `Idolum` and `Idolum (System)` deliberate over that ambiguity without letting either invent unsupported file handling.
 
 The design split is:
 
 - `Idolum` pushes the **meaning** of the artifact
-- `Aphelion` ratifies the **material handling** of the artifact
+- `Idolum (System)` ratifies the **material handling** of the artifact
 
 ## Scope
 
@@ -37,8 +37,8 @@ The design split is:
 ### v0.5
 
 - multi-artifact brokerage across batches/albums
-- bounded artifact-specific brokerage between Idolum and Aphelion
-- Aphelion ratifies handling and retention from a bounded machine vocabulary rather than only inheriting the deterministic v0 path
+- bounded artifact-specific brokerage between Idolum and Idolum (System)
+- Idolum (System) ratifies handling and retention from a bounded machine vocabulary rather than only inheriting the deterministic v0 path
 - heartbeat or maintenance review of stored session artifacts
 - outbound artifact scene planning
 - stronger principal-aware artifact storage policy
@@ -89,11 +89,11 @@ The runtime owns:
 - quarantine promotion
 - raw-binary memory writes
 
-### `Aphelion`
+### `Idolum (System)`
 
-In v0, `Aphelion` consumes the results of deterministic handling and may speak from them in the floor, but it does not yet emit a dedicated artifact-ratification contract.
+In v0, `Idolum (System)` consumes the results of deterministic handling and may speak from them in the floor, but it does not yet emit a dedicated artifact-ratification contract.
 
-In v0.5, `Aphelion` should ratify:
+In v0.5, `Idolum (System)` should ratify:
 
 - what the deterministic handling path materially means for the turn
 - what derived outputs may be trusted
@@ -102,7 +102,7 @@ In v0.5, `Aphelion` should ratify:
 
 ## Artifact Handling Vocabulary
 
-The runtime must maintain a bounded handling vocabulary. In v0, the deterministic capability layer chooses the handling path before the governor turn. In v0.5, Aphelion may ratify among these choices directly.
+The runtime must maintain a bounded handling vocabulary. In v0, the deterministic capability layer chooses the handling path before the governor turn. In v0.5, Idolum (System) may ratify among these choices directly.
 
 ### `attach_for_vision`
 
@@ -238,7 +238,7 @@ Rules:
 ### Screenshot as Bug Report
 
 Idolum pushes that the screenshot seems evidentiary and worth keeping in session.
-Aphelion ratifies:
+Idolum (System) ratifies:
 
 - `HANDLING: attach_for_vision`
 - `RETENTION: session_reference`
@@ -248,7 +248,7 @@ The floor preserves the bug-report reading and the session artifact reference. T
 ### Voice Note as Durable Instruction
 
 Idolum pushes that the file sounds like a real instruction, not casual chatter.
-Aphelion ratifies:
+Idolum (System) ratifies:
 
 - `HANDLING: transcribe`
 - `RETENTION: memory_candidate`
@@ -258,7 +258,7 @@ The raw voice file may still stay ephemeral while the transcript or its distille
 ### Large Foreign PDF Corpus
 
 Idolum pushes that the document feels archival and important.
-Aphelion ratifies:
+Idolum (System) ratifies:
 
 - `HANDLING: quarantine_for_review`
 - `RETENTION: quarantine`

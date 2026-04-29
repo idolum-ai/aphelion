@@ -83,6 +83,12 @@ func TestStatusReadableSummaryUsesProviderAndNormalizesText(t *testing.T) {
 	if provider.callCount != 1 {
 		t.Fatalf("provider call count = %d, want 1", provider.callCount)
 	}
+	provider.mu.Lock()
+	gotVerbosity := provider.lastVerbosity
+	provider.mu.Unlock()
+	if gotVerbosity != agent.VerbosityLow {
+		t.Fatalf("status readable verbosity = %q, want low", gotVerbosity)
+	}
 }
 
 func TestStatusReadableSummaryReturnsEmptyWhenProviderUnavailable(t *testing.T) {

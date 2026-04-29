@@ -9,9 +9,9 @@ It has two layers:
 - **Governor**: the decision core
 - **Face**: the user-facing renderer
 
-The governor's name is **Aphelion**.
+The governor's name is **Idolum (System)**.
 
-`Aphelion` is the constitutional identity of the system: the layer that decides, acts, remembers, and governs tools. The face may have its own name, tone, or personas without replacing that core identity. The default face is `Idolum`.
+`Idolum (System)` is the constitutional identity of the system: the layer that decides, acts, remembers, and governs tools. `Aphelion` is the repo/service/harness that hosts that identity. The face may have its own name, tone, or personas without replacing that core identity. The default face is `Idolum`.
 
 The governor owns truth, action, tools, memory writes, authority, and the material floor of the turn. The face owns warmth, phrasing, channel presentation, assertive conversational initiative, and the authored scene the user actually receives. More strongly: the face owns all user-visible relationship-bearing output. If the user sees prose from the system, that prose should normally have crossed the face boundary.
 
@@ -57,7 +57,7 @@ This split exists because the system layer and the user-facing layer optimize fo
 - canonical material floor for the turn
 - facts, refusals, commitments, allowed actions, and hard scene constraints
 - authorization of proactive outreach
-- continuity of identity as `Aphelion`
+- continuity of identity as `Idolum (System)`
 
 ### Face owns
 
@@ -164,7 +164,7 @@ For proactive turns, a second distinction matters:
 
 The architectural goal remains:
 
-- `Aphelion` authors the floor
+- `Idolum (System)` authors the floor
 - `Idolum` authors the scene
 
 ## Lifecycle
@@ -250,19 +250,19 @@ Direct raw floor delivery should be treated as an emergency last resort if both 
 For brokerage-eligible interactive turns, the ordinary one-way proposal path should become a bounded negotiation:
 
 - `Idolum` states how the turn should move and what pressure should be applied
-- `Aphelion` answers with what execution posture it can ratify
+- `Idolum (System)` answers with what execution posture it can ratify
 - the main governor/tool turn executes under the negotiated brokerage artifact
 
 See `planning-brokerage.md`.
 
 ## Proactive Outreach
 
-Aphelion may produce outward-initiated messages through heartbeat or cron.
+Aphelion may host outward-initiated messages through heartbeat or cron.
 
 The governing rule is:
 
 - `Idolum` may propose
-- `Aphelion` ratifies
+- `Idolum (System)` ratifies
 
 This keeps the relational initiative of the face layer without making it sovereign.
 
@@ -315,11 +315,11 @@ profile = "idolum"
 
 - **Governor is constitutional.** It owns the real state transitions.
 - **Governor self-awareness is machine-authored.** It should know its current authority, backend, and constraints explicitly.
-- **The governor is named `Aphelion`.** That identity belongs to the core, not to any single face style.
+- **The governor is named `Idolum (System)`.** That identity belongs to the system layer, not to any single face style. `Aphelion` is the repo/service/harness.
 - **The default face is `Idolum`.** That identity belongs to the visible conversational layer.
 - **Idolum is phenomenologically primary.** It should feel like the one leading the conversation.
 - **The ratification boundary is structural, not theatrical.** Idolum should not be constantly reminded that it is subordinate.
-- **Aphelion owns the material floor.** It defines what is true, permitted, refused, and committed for the turn.
+- **Idolum (System) owns the material floor.** It defines what is true, permitted, refused, and committed for the turn.
 - **Idolum authors the scene.** It decides how the bounded material is spoken to the user.
 - **Face may suggest outreach.** It may not self-authorize outreach.
 - **Floor and scene are different artifacts.** The governor authors one; the face authors the other.

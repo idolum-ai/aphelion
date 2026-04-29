@@ -6,7 +6,7 @@ Aphelion should not infer its own operating reality from scattered hints.
 
 It should be told, explicitly and machine-authored, what it is, where it is, what it can do, and what kind of turn it is in.
 
-This spec defines the system's **self-awareness surface**: the runtime facts that become model-visible so `Aphelion` and `Idolum` can reason correctly about the system they are operating inside.
+This spec defines the system's **self-awareness surface**: the runtime facts that become model-visible so `Idolum (System)` and `Idolum` can reason correctly about the Aphelion service they are operating inside.
 
 ## Telos
 
@@ -42,7 +42,7 @@ Workspace files may shape identity, temperament, and policy preference. They mus
 
 ## Self-Awareness Layers
 
-Aphelion's self-awareness has three layers.
+The system's self-awareness has three layers.
 
 ### 1. Constitutional awareness
 
@@ -50,8 +50,9 @@ Stable facts about what the system is.
 
 Examples:
 
-- the governor is `Aphelion`
+- the governor is `Idolum (System)`
 - the default face is `Idolum`
+- the repo/service/harness is `Aphelion`
 - the governor decides, acts, and authors the material floor
 - the face proposes, stages, and renders the visible scene
 - tools are machine-owned reality
@@ -101,7 +102,7 @@ At minimum, the governor should be made aware of:
 ### Identity
 
 - current layer: governor or face
-- current name: `Aphelion` or `Idolum`
+- current name: `Idolum (System)` or `Idolum`
 - whether this is an interactive, heartbeat, cron, recovery, or subagent turn
 
 ### Runtime
@@ -144,8 +145,8 @@ At minimum, the governor should be made aware of:
 - whether the current artifact is floor-authoring or scene-authoring
 - whether supported media is attached to the current turn
 - whether that media is being handled as vision input or extracted document text
-- Idolum's suggested execution contract and Aphelion's ratified execution contract when brokerage is active
-- Aphelion's ratification disposition when brokerage is active
+- Idolum's suggested execution contract and Idolum (System)'s ratified execution contract when brokerage is active
+- Idolum (System)'s ratification disposition when brokerage is active
 
 ## Governor vs Idolum
 
@@ -153,7 +154,7 @@ Self-awareness is not identical across layers.
 
 ### Governor
 
-`Aphelion` should receive the full machine-owned operating picture needed for correct action.
+`Idolum (System)` should receive the full machine-owned operating picture needed for correct action.
 
 That includes:
 
@@ -267,7 +268,7 @@ This should be available through operator diagnostics and reflected in logs or s
 - **Self-awareness is a first-class system concern.**
 - **Runtime truth is machine-authored.**
 - **Operator files shape character, not machine reality.**
-- **`Aphelion` should know its own authority and limits explicitly.**
+- **`Idolum (System)` should know its own authority and limits explicitly.**
 - **`Idolum` should know enough to speak honestly, not enough to pretend it governs execution.**
 - **Degraded mode must be legible to the system.**
 

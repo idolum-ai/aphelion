@@ -9,7 +9,7 @@ Heartbeat is not cron.
 - **heartbeat** is reflective, stateful, and selective
 - **cron** is scheduled task execution
 
-Heartbeat belongs to **Aphelion** the governor. If a heartbeat turn produces a user-visible message, `Idolum` should own the delivered relationship surface when available. If nothing is worth surfacing, heartbeat should stay quiet.
+Heartbeat belongs to **Idolum (System)** the governor. If a heartbeat turn produces a user-visible message, `Idolum` should own the delivered relationship surface when available. If nothing is worth surfacing, heartbeat should stay quiet.
 
 Heartbeat is one of Aphelion's mechanisms for **reflective proactivity**.
 
@@ -268,7 +268,7 @@ This is not the same thing as a normal periodic heartbeat wake, but it belongs t
 
 ## Decisions
 
-- **Heartbeat is a governor maintenance turn.** It belongs to `Aphelion`, not to cron.
+- **Heartbeat is a governor maintenance turn.** It belongs to `Idolum (System)`, not to cron.
 - **Heartbeat is reflective proactivity.** It may surface things Aphelion noticed, not just things it was told to schedule.
 - **Startup recovery belongs to maintenance.** Restart-disruption analysis should land in the maintenance ledger, not be invented ad hoc in user chat.
 - **Heartbeat runs in its own session.** Maintenance continuity should not pollute user DM transcripts.

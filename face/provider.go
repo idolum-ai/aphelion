@@ -72,7 +72,7 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 
 	resp, err := r.complete(ctx, []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
-		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the %s-authored material below. Return only the reply text.", faceName, governorName)},
+		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the material authorized by %s below. Return only the reply text.", faceName, governorName)},
 	}, nil)
 	if err != nil {
 		return "", err
@@ -123,7 +123,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 	var rendered strings.Builder
 	messages := []agent.Message{
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
-		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the %s-authored material below. Return only the reply text.", faceName, governorName)},
+		{Role: "user", Content: fmt.Sprintf("Speak to the user directly as %s, from the material authorized by %s below. Return only the reply text.", faceName, governorName)},
 	}
 	onStreamChunk := func(chunk agent.StreamChunk) error {
 		if chunk.Text == "" {

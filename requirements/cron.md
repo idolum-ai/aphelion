@@ -149,7 +149,7 @@ The face layer owns the relationship-bearing scheduled wording when available, b
 The rule remains:
 
 - `Idolum` may propose
-- `Aphelion` ratifies
+- `Idolum (System)` ratifies
 
 ## Relationship to Heartbeat
 

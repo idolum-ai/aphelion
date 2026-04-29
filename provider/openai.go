@@ -178,6 +178,7 @@ func (o *OpenAI) completeResponses(ctx context.Context, messages []agent.Message
 		Input:           openAIResponsesInputItems(messages),
 		MaxOutputTokens: o.maxTokens,
 		Reasoning:       openAIResponsesReasoning(opts.Reasoning),
+		Text:            openAIResponsesText(opts.Verbosity),
 		Store:           boolPtr(false),
 	}
 	if defs := toOpenAIResponsesTools(tools); len(defs) > 0 {
@@ -280,6 +281,7 @@ func (o *OpenAI) streamResponses(ctx context.Context, messages []agent.Message, 
 		Input:           openAIResponsesInputItems(messages),
 		MaxOutputTokens: o.maxTokens,
 		Reasoning:       openAIResponsesReasoning(opts.Reasoning),
+		Text:            openAIResponsesText(opts.Verbosity),
 		Stream:          true,
 		Store:           boolPtr(false),
 	}
@@ -361,15 +363,20 @@ func openAIReasoningEffort(effort agent.ReasoningEffort) string {
 }
 
 type openAIResponsesRequest struct {
-	Model           string           `json:"model"`
-	Instructions    string           `json:"instructions,omitempty"`
-	Input           []map[string]any `json:"input"`
-	MaxOutputTokens int              `json:"max_output_tokens,omitempty"`
-	Tools           []map[string]any `json:"tools,omitempty"`
-	ToolChoice      string           `json:"tool_choice,omitempty"`
-	Reasoning       map[string]any   `json:"reasoning,omitempty"`
-	Stream          bool             `json:"stream,omitempty"`
-	Store           *bool            `json:"store,omitempty"`
+	Model           string                     `json:"model"`
+	Instructions    string                     `json:"instructions,omitempty"`
+	Input           []map[string]any           `json:"input"`
+	MaxOutputTokens int                        `json:"max_output_tokens,omitempty"`
+	Tools           []map[string]any           `json:"tools,omitempty"`
+	ToolChoice      string                     `json:"tool_choice,omitempty"`
+	Reasoning       map[string]any             `json:"reasoning,omitempty"`
+	Text            *openAIResponsesTextConfig `json:"text,omitempty"`
+	Stream          bool                       `json:"stream,omitempty"`
+	Store           *bool                      `json:"store,omitempty"`
+}
+
+type openAIResponsesTextConfig struct {
+	Verbosity string `json:"verbosity,omitempty"`
 }
 
 type openAIStreamOptions struct {
@@ -438,10 +445,15 @@ type openAIStreamFailure struct {
 }
 
 func shouldUseOpenAIResponses(model string, tools []agent.ToolDef, opts agent.CompleteOptions) bool {
-	if opts.Reasoning.Effort == "" || opts.Reasoning.Effort == agent.ReasoningEffortNone || len(toOpenRouterTools(tools)) == 0 {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5") {
 		return false
 	}
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5")
+	if openAIResponsesVerbosity(opts.Verbosity) != "" {
+		return true
+	}
+	return opts.Reasoning.Effort != "" &&
+		opts.Reasoning.Effort != agent.ReasoningEffortNone &&
+		len(toOpenRouterTools(tools)) > 0
 }
 
 func openAIResponsesInstructions(messages []agent.Message) string {
@@ -582,6 +594,23 @@ func openAIResponsesReasoning(cfg agent.ReasoningConfig) map[string]any {
 		out["summary"] = "concise"
 	}
 	return out
+}
+
+func openAIResponsesText(verbosity agent.Verbosity) *openAIResponsesTextConfig {
+	value := openAIResponsesVerbosity(verbosity)
+	if value == "" {
+		return nil
+	}
+	return &openAIResponsesTextConfig{Verbosity: value}
+}
+
+func openAIResponsesVerbosity(verbosity agent.Verbosity) string {
+	switch verbosity {
+	case agent.VerbosityLow, agent.VerbosityMedium, agent.VerbosityHigh:
+		return string(verbosity)
+	default:
+		return ""
+	}
 }
 
 func mapOpenAIResponsesResponse(res openAIResponsesResponse) *agent.Response {

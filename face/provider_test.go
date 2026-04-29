@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/prompt"
 )
 
 type stubProvider struct {
@@ -107,7 +108,7 @@ func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
 
 	provider := &stubProvider{reply: "Rendered idolum reply"}
 	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
-		GovernorName:  "Aphelion",
+		GovernorName:  prompt.DefaultGovernorName,
 		FaceName:      "Idolum",
 		Channel:       "telegram",
 		WorkspaceRoot: root,
@@ -136,7 +137,7 @@ func TestProviderRendererLoadsIdolumFiles(t *testing.T) {
 	if !strings.Contains(provider.lastPrompt, "### memory/dreams.md") || !strings.Contains(provider.lastPrompt, "negotiate time to write songs") {
 		t.Fatalf("face prompt missing dreams continuity content: %q", provider.lastPrompt)
 	}
-	if !strings.Contains(provider.lastUser, "Idolum") || !strings.Contains(provider.lastUser, "Aphelion-authored material") {
+	if !strings.Contains(provider.lastUser, "Idolum") || !strings.Contains(provider.lastUser, "material authorized by Idolum (System)") {
 		t.Fatalf("render transport prompt = %q, want resolved face and governor names", provider.lastUser)
 	}
 }
@@ -152,9 +153,9 @@ func TestProviderRendererProposalLoadsIdolumFiles(t *testing.T) {
 		t.Fatalf("write QUESTIONS-TO-IDOLUM.md: %v", err)
 	}
 
-	provider := &stubProvider{reply: "Tell Aphelion to lead with warmth."}
+	provider := &stubProvider{reply: "Tell Idolum (System) to lead with warmth."}
 	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
-		GovernorName:  "Aphelion",
+		GovernorName:  prompt.DefaultGovernorName,
 		FaceName:      "Idolum",
 		Channel:       "telegram",
 		WorkspaceRoot: root,
@@ -170,7 +171,7 @@ func TestProviderRendererProposalLoadsIdolumFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Propose() err = %v", err)
 	}
-	if got != "Tell Aphelion to lead with warmth." {
+	if got != "Tell Idolum (System) to lead with warmth." {
 		t.Fatalf("Propose() = %q, want advisory text", got)
 	}
 	if !strings.Contains(provider.lastPrompt, "mode: proposal") {
@@ -179,7 +180,7 @@ func TestProviderRendererProposalLoadsIdolumFiles(t *testing.T) {
 	if !strings.Contains(provider.lastPrompt, "push for initiative") {
 		t.Fatalf("proposal prompt missing dynamic face file: %q", provider.lastPrompt)
 	}
-	if !strings.Contains(provider.lastUser, "Aphelion") {
+	if !strings.Contains(provider.lastUser, "Idolum (System)") {
 		t.Fatalf("proposal transport prompt = %q, want resolved governor name", provider.lastUser)
 	}
 }
@@ -204,7 +205,7 @@ func TestProviderRendererUsesResolvedNamesInTransportPrompts(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Render() err = %v", err)
 	}
-	if !strings.Contains(provider.lastUser, "Mada") || !strings.Contains(provider.lastUser, "Host-authored material") {
+	if !strings.Contains(provider.lastUser, "Mada") || !strings.Contains(provider.lastUser, "material authorized by Host") {
 		t.Fatalf("render transport prompt = %q, want configured names", provider.lastUser)
 	}
 
@@ -241,7 +242,7 @@ func TestProviderRendererRenderPromptIncludesMaterialFloor(t *testing.T) {
 
 	provider := &stubProvider{reply: "Rendered reply"}
 	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
-		GovernorName: "Aphelion",
+		GovernorName: prompt.DefaultGovernorName,
 		FaceName:     "Idolum",
 		Channel:      "telegram",
 	})
@@ -278,7 +279,7 @@ func TestProviderRendererRenderStream(t *testing.T) {
 
 	provider := &stubProvider{streamText: "Rendered idolum reply"}
 	renderer, err := NewProviderRenderer(provider, ProviderRendererConfig{
-		GovernorName:  "Aphelion",
+		GovernorName:  prompt.DefaultGovernorName,
 		FaceName:      "Idolum",
 		Channel:       "telegram",
 		WorkspaceRoot: root,

@@ -99,6 +99,7 @@ type StreamCallback func(StreamChunk) error
 
 type CompleteOptions struct {
 	Reasoning ReasoningConfig
+	Verbosity Verbosity
 }
 
 type ReasoningConfig struct {
@@ -122,6 +123,14 @@ const (
 	ReasoningSummaryNone    ReasoningSummaryMode = "none"
 	ReasoningSummaryAuto    ReasoningSummaryMode = "auto"
 	ReasoningSummaryCompact ReasoningSummaryMode = "compact"
+)
+
+type Verbosity string
+
+const (
+	VerbosityLow    Verbosity = "low"
+	VerbosityMedium Verbosity = "medium"
+	VerbosityHigh   Verbosity = "high"
 )
 
 const (

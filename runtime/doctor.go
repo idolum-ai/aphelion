@@ -884,6 +884,9 @@ func (r *Runtime) writeDoctorIssueStatusChecks(b *strings.Builder, input doctorD
 	writeDoctorLine(b, "allowed_statuses: active, likely_fixed, historical_resolved, residual_risk, unknown")
 	writeDoctorLine(b, "reporting_rule: if evidence is old and the current-state check passes, report it as historical/resolved or residual risk, not as an active failure.")
 
+	identityStatus, identityEvidence := doctorPromptIdentityStatus(input.PromptContext)
+	writeDoctorIssueCheck(b, "prompt_identity_canonical", identityStatus, identityEvidence)
+
 	workingRoot := strings.TrimSpace(input.Scope.WorkingRoot)
 	retrySourceOK := doctorSourceContainsAll(workingRoot, "agent/turn.go", []string{"completeWithRetry", "isRetryableProviderError", "maxProviderRetries"})
 	transportRetries := 0
@@ -1284,6 +1287,51 @@ func doctorPromptContextHasFile(ctx *workspace.PromptContext, want string) bool 
 		}
 	}
 	return false
+}
+
+func doctorPromptIdentityStatus(ctx *workspace.PromptContext) (string, string) {
+	if ctx == nil {
+		return "unknown", "prompt context unavailable"
+	}
+
+	var stale []string
+	var sawSystem bool
+	var sawHarness bool
+	for _, file := range ctx.Stable {
+		path := filepath.ToSlash(strings.TrimSpace(file.Path))
+		content := strings.TrimSpace(file.Content)
+		if path == "" || content == "" {
+			continue
+		}
+		lower := strings.ToLower(content)
+		switch {
+		case strings.Contains(lower, "aphelion is the governor"),
+			strings.Contains(lower, "aphelion decides"),
+			strings.Contains(lower, "final authority still belongs to aphelion"),
+			strings.Contains(lower, "aphelion authorizes"):
+			stale = append(stale, path)
+		}
+		if strings.Contains(content, "Idolum (System)") {
+			sawSystem = true
+		}
+		if strings.Contains(lower, "aphelion") &&
+			(strings.Contains(lower, "repo/service/harness") ||
+				strings.Contains(lower, "repo") ||
+				strings.Contains(lower, "service") ||
+				strings.Contains(lower, "harness")) {
+			sawHarness = true
+		}
+	}
+	if len(stale) > 0 {
+		return "active", "stable prompt files still contain stale Aphelion-governor claims: " + strings.Join(uniqueDoctorPaths(stale), ", ")
+	}
+	if sawSystem && sawHarness {
+		return "likely_fixed", "stable prompt files identify Idolum (System) as governor/system and Aphelion as repo/service/harness"
+	}
+	if sawSystem {
+		return "residual_risk", "stable prompt files name Idolum (System), but did not clearly bind Aphelion to repo/service/harness"
+	}
+	return "unknown", "canonical governor/system identity was not confirmed in loaded stable prompt files"
 }
 
 func doctorSourceContainsAll(root string, rel string, needles []string) bool {

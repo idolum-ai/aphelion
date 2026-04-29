@@ -59,6 +59,7 @@ type fakeProvider struct {
 	lastDoctorSummaryTools []agent.ToolDef
 	responseUsage          core.TokenUsage
 	lastReasoning          agent.ReasoningConfig
+	lastVerbosity          agent.Verbosity
 	reasoningBySystem      map[string]agent.ReasoningConfig
 }
 
@@ -202,6 +203,7 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, too
 func (f *fakeProvider) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
 	f.mu.Lock()
 	f.lastReasoning = opts.Reasoning
+	f.lastVerbosity = opts.Verbosity
 	if f.reasoningBySystem == nil {
 		f.reasoningBySystem = make(map[string]agent.ReasoningConfig)
 	}

@@ -111,6 +111,7 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 			fmt.Sprintf("You are %s, the governor of this system.", governorName),
 			renderAuthorityBlock(governorName, governorBackend, principalRole, workspaceRoot, strings.TrimSpace(req.ToolManifest) != ""),
 			renderGovernorRuntimeAwarenessBlock(req.Runtime),
+			renderEvidenceRetrievalStopRulesBlock(),
 			renderGovernorTurnSequencingBlock(),
 			renderGovernorAgencyTelosBlock(),
 		}, "\n\n"),
@@ -142,37 +143,9 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 		parts = append(parts, agent.SystemBlock{
 			Text: "## Tool Manifest\n" + manifest,
 		})
-		if planning := renderPlanningDisciplineBlock(toolCaps); planning != "" {
-			parts = append(parts, agent.SystemBlock{Text: planning})
-		}
-		if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
-			parts = append(parts, agent.SystemBlock{Text: operations})
-		}
-		if delegation := renderCapabilityDelegationDisciplineBlock(toolCaps); delegation != "" {
-			parts = append(parts, agent.SystemBlock{Text: delegation})
-		}
-		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
-			parts = append(parts, agent.SystemBlock{Text: confirmation})
-		}
-		if mediaDelivery := renderGeneratedMediaDeliveryBlock(toolCaps); mediaDelivery != "" {
-			parts = append(parts, agent.SystemBlock{Text: mediaDelivery})
-		}
+		parts = appendToolDisciplineBlocks(parts, toolCaps)
 	} else {
-		if planning := renderPlanningDisciplineBlock(toolCaps); planning != "" {
-			parts = append(parts, agent.SystemBlock{Text: planning})
-		}
-		if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
-			parts = append(parts, agent.SystemBlock{Text: operations})
-		}
-		if delegation := renderCapabilityDelegationDisciplineBlock(toolCaps); delegation != "" {
-			parts = append(parts, agent.SystemBlock{Text: delegation})
-		}
-		if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
-			parts = append(parts, agent.SystemBlock{Text: confirmation})
-		}
-		if mediaDelivery := renderGeneratedMediaDeliveryBlock(toolCaps); mediaDelivery != "" {
-			parts = append(parts, agent.SystemBlock{Text: mediaDelivery})
-		}
+		parts = appendToolDisciplineBlocks(parts, toolCaps)
 	}
 
 	if len(toolPolicyFiles) > 0 {
@@ -516,6 +489,17 @@ func renderGovernorTurnSequencingBlock() string {
 	}, "\n")
 }
 
+func renderEvidenceRetrievalStopRulesBlock() string {
+	return strings.Join([]string{
+		"## Evidence Retrieval And Stop Rules",
+		"- Use the smallest evidence set that can justify the next action, recommendation, or refusal.",
+		"- Prefer current local state, loaded prompt/memory files, tool output, and primary sources over recollection when claims may have drifted.",
+		"- Stop retrieving once the next action is justified; do not keep searching merely to make the report look more complete.",
+		"- Name uncertainty explicitly when evidence is missing, stale, contradictory, or outside the current sandbox.",
+		"- When making diagnosis or code recommendations, anchor them in file paths, logs, commands, provider events, or loaded memory surfaces when those are available.",
+	}, "\n")
+}
+
 func renderGovernorAgencyTelosBlock() string {
 	return strings.Join([]string{
 		"## Agency And Telos Contract",
@@ -712,6 +696,28 @@ func renderCapabilityDelegationDisciplineBlock(capabilities ToolCapabilities) st
 	return strings.Join(lines, "\n")
 }
 
+func appendToolDisciplineBlocks(parts []agent.SystemBlock, toolCaps ToolCapabilities) []agent.SystemBlock {
+	if planning := renderPlanningDisciplineBlock(toolCaps); planning != "" {
+		parts = append(parts, agent.SystemBlock{Text: planning})
+	}
+	if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
+		parts = append(parts, agent.SystemBlock{Text: operations})
+	}
+	if delegation := renderCapabilityDelegationDisciplineBlock(toolCaps); delegation != "" {
+		parts = append(parts, agent.SystemBlock{Text: delegation})
+	}
+	if confirmation := renderConfirmationDisciplineBlock(toolCaps); confirmation != "" {
+		parts = append(parts, agent.SystemBlock{Text: confirmation})
+	}
+	if validation := renderValidationDisciplineBlock(toolCaps); validation != "" {
+		parts = append(parts, agent.SystemBlock{Text: validation})
+	}
+	if mediaDelivery := renderGeneratedMediaDeliveryBlock(toolCaps); mediaDelivery != "" {
+		parts = append(parts, agent.SystemBlock{Text: mediaDelivery})
+	}
+	return parts
+}
+
 func renderConfirmationDisciplineBlock(capabilities ToolCapabilities) string {
 	if !capabilities.Exec {
 		return ""
@@ -721,6 +727,18 @@ func renderConfirmationDisciplineBlock(capabilities ToolCapabilities) string {
 		"Ask for confirmation when authority genuinely depends on it, when intent is materially ambiguous, or when a destructive or irreversible action is next.",
 		"Do not ask for confirmation as a politeness reflex when the next move is already obvious.",
 		"When runtime proposal gating blocks execution, treat that as a real operational boundary rather than a stylistic suggestion.",
+	}, "\n")
+}
+
+func renderValidationDisciplineBlock(capabilities ToolCapabilities) string {
+	if !capabilities.Exec {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Validation Discipline",
+		"Validate meaningful edits, migrations, generated files, service actions, or debugging conclusions with the narrowest relevant test, command, log read, or source check available.",
+		"Report what was validated. Report what was not validated before delivery.",
+		"If validation is blocked by permissions, missing dependencies, timeouts, or sandbox limits, say that plainly and preserve the remaining risk.",
 	}, "\n")
 }
 

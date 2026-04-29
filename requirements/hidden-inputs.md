@@ -82,7 +82,7 @@ A single signal is usually not enough. Convergence is the threshold.
 
 Idolum may propose a proactive check-in during heartbeat when it can name the hidden input that justifies it. The proposal must include the signal that triggered it — not just the tone of the message.
 
-Aphelion ratifies or declines based on whether the signal is real and the timing is appropriate.
+Idolum (System) ratifies or declines based on whether the signal is real and the timing is appropriate.
 
 ## Latent Signal Provenance
 
@@ -143,11 +143,11 @@ Its persisted shape is transcript content (`messages.content`) and should not si
 
 ### Brokerage as Signal Negotiation
 
-When brokerage is active, Idolum's proposal should include the hidden input that is shaping its push. Aphelion's ratification should either confirm that signal or name why it is not material for this turn.
+When brokerage is active, Idolum's proposal should include the hidden input that is shaping its push. Idolum (System)'s ratification should either confirm that signal or name why it is not material for this turn.
 
 The negotiated brokerage block should preserve both:
 - Idolum's named signal and proposed reaction
-- Aphelion's structural reaction to the same hidden input
+- Idolum (System)'s structural reaction to the same hidden input
 
 This makes brokerage a real negotiation between two readings of the same latent state, not just a posture handshake.
 
@@ -161,7 +161,7 @@ This makes brokerage a real negotiation between two readings of the same latent 
 - temporal pressure as proactive eligibility signal
 - hidden-input convergence gates heartbeat-originated reflective outreach
 - Idolum brokerage proposals name the hidden input when one is materially shaping the push
-- Aphelion ratification may preserve `SIGNAL_JUDGMENT` when Idolum named a hidden input
+- Idolum (System) ratification may preserve `SIGNAL_JUDGMENT` when Idolum named a hidden input
 - floor sidecar metadata preserves hidden inputs when material
 - runtime self-awareness exposes active hidden-input categories and whether a provenance summary was assembled
 
@@ -187,25 +187,25 @@ This makes brokerage a real negotiation between two readings of the same latent 
 
 A user asks: "How does compaction work in this repo?"
 
-Aphelion answers directly from the visible request and available code context. No hidden input is required. No provenance should be invented. Idolum stages the scene clearly, but the system does not pretend there was some deeper latent cause.
+Idolum (System) answers directly from the visible request and available code context. No hidden input is required. No provenance should be invented. Idolum stages the scene clearly, but the system does not pretend there was some deeper latent cause.
 
 ### Strategic Turn With Brokerage
 
 A user asks: "Come up with some features for my codebase."
 
-Idolum notices a recurring architectural tension and pushes for inspection before answering rather than generic brainstorming. If that push is materially shaped by a hidden input, the brokerage note names it. Aphelion ratifies the resulting execution contract, records whether the signal is confirmed or not material, and executes the main turn under that negotiated artifact. The user receives one coherent answer, but the system preserves both the signal-shaped push and the structural ratification.
+Idolum notices a recurring architectural tension and pushes for inspection before answering rather than generic brainstorming. If that push is materially shaped by a hidden input, the brokerage note names it. Idolum (System) ratifies the resulting execution contract, records whether the signal is confirmed or not material, and executes the main turn under that negotiated artifact. The user receives one coherent answer, but the system preserves both the signal-shaped push and the structural ratification.
 
 ### Reflective Heartbeat Outreach
 
 Heartbeat wakes on cadence, but it stays quiet unless reflective outreach is eligible.
 
-A recurring design fork has appeared across multiple turns. `memory/questions.md` still carries the unresolved question. The current time falls inside the active work window. Idolum proposes outreach and names the hidden input. Aphelion confirms that the signal is real and that the timing is appropriate. The delivered scene feels proactive, but the cause is machine-legible rather than mystical.
+A recurring design fork has appeared across multiple turns. `memory/questions.md` still carries the unresolved question. The current time falls inside the active work window. Idolum proposes outreach and names the hidden input. Idolum (System) confirms that the signal is real and that the timing is appropriate. The delivered scene feels proactive, but the cause is machine-legible rather than mystical.
 
 ### Heartbeat Silence After Review
 
 Heartbeat wakes on cadence and performs maintenance, but the signals do not converge into outreach.
 
-Perhaps one thematic recurrence exists, but there is no unresolved memory state, or the work window is inactive, or the prior turn already addressed the cluster. Idolum does not get to speak just because the subsystem woke up. Aphelion ratifies silence. Maintenance still happens; no user-visible scene is delivered.
+Perhaps one thematic recurrence exists, but there is no unresolved memory state, or the work window is inactive, or the prior turn already addressed the cluster. Idolum does not get to speak just because the subsystem woke up. Idolum (System) ratifies silence. Maintenance still happens; no user-visible scene is delivered.
 
 ### Scheduled Cron Reminder
 
@@ -217,13 +217,13 @@ When the job becomes due, cron sends the reminder because it is scheduler-origin
 
 A user asks for something outside the system's authority boundary.
 
-Aphelion's floor narrows allowed actions or emits a refusal, possibly shaped by prior commitment, principal boundary, or sandbox rule. Idolum stages that refusal so it feels intentional rather than robotic. The scene remains alive, but the floor keeps the refusal materially grounded.
+Idolum (System)'s floor narrows allowed actions or emits a refusal, possibly shaped by prior commitment, principal boundary, or sandbox rule. Idolum stages that refusal so it feels intentional rather than robotic. The scene remains alive, but the floor keeps the refusal materially grounded.
 
 ### Contradiction Nudge
 
 Curated memory and recent turns point in different directions about the system's desired identity or posture.
 
-On a later architectural turn, Idolum names the contradiction as the real pressure in the conversation. Aphelion ratifies that signal as material and constrains the floor accordingly. The result is not generic ideation but a redirection toward resolving the contradiction before adding more behavior.
+On a later architectural turn, Idolum names the contradiction as the real pressure in the conversation. Idolum (System) ratifies that signal as material and constrains the floor accordingly. The result is not generic ideation but a redirection toward resolving the contradiction before adding more behavior.
 
 ### Recovery Continuity
 

@@ -204,7 +204,7 @@ Additional per-channel or per-principal voice overrides may come later.
 - **Voice mode is explicit.** `auto` is the best default for messaging.
 - **Voice replies follow voice/audio input by default.** If the user sends voice or audio and voice mode is enabled, reply with voice unless configured otherwise.
 - **The session ledger stays text-first.** Audio remains sidecar media state.
-- **Voice is rendering, not authority.** Aphelion authorizes, Idolum speaks, voice renders the speech form.
+- **Voice is rendering, not authority.** Idolum (System) authorizes, Idolum speaks, voice renders the speech form.
 
 ## Test Plan
 

@@ -179,6 +179,7 @@ func TestOpenAICompleteWithToolsAndReasoningUsesResponsesAPI(t *testing.T) {
 		Parameters:  json.RawMessage(`{"type":"object"}`),
 	}}, agent.CompleteOptions{
 		Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortMedium},
+		Verbosity: agent.VerbosityLow,
 	})
 	if err != nil {
 		t.Fatalf("CompleteWithOptions() err = %v", err)
@@ -197,6 +198,9 @@ func TestOpenAICompleteWithToolsAndReasoningUsesResponsesAPI(t *testing.T) {
 	}
 	if seen.Reasoning["effort"] != "medium" {
 		t.Fatalf("reasoning = %#v, want medium effort", seen.Reasoning)
+	}
+	if seen.Text == nil || seen.Text.Verbosity != "low" {
+		t.Fatalf("text config = %#v, want low verbosity", seen.Text)
 	}
 	if !responsesInputHasType(seen.Input, "function_call_output") {
 		t.Fatalf("responses input = %#v, want function_call_output item", seen.Input)
@@ -253,6 +257,7 @@ func TestOpenAIStreamWithOptionsUsesResponsesAPI(t *testing.T) {
 		{Role: "user", Content: "hi"},
 	}, nil, agent.CompleteOptions{
 		Reasoning: agent.ReasoningConfig{Effort: agent.ReasoningEffortHigh, Summary: agent.ReasoningSummaryAuto},
+		Verbosity: agent.VerbosityHigh,
 	}, func(chunk agent.StreamChunk) error {
 		chunks = append(chunks, chunk.Text)
 		return nil
@@ -271,6 +276,9 @@ func TestOpenAIStreamWithOptionsUsesResponsesAPI(t *testing.T) {
 	}
 	if seen.Reasoning["effort"] != "high" || seen.Reasoning["summary"] != "auto" {
 		t.Fatalf("reasoning = %#v, want high/auto", seen.Reasoning)
+	}
+	if seen.Text == nil || seen.Text.Verbosity != "high" {
+		t.Fatalf("text config = %#v, want high verbosity", seen.Text)
 	}
 	if strings.Join(chunks, "") != "hello" || resp.Content != "hello" {
 		t.Fatalf("chunks/content = %#v/%q, want hello", chunks, resp.Content)

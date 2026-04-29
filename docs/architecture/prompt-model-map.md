@@ -43,7 +43,7 @@ selection. It reflects the current branch and the live local configuration in
 
 | File | Live size | Loaded into | Placement | Intended purpose | Review notes |
 | --- | ---: | --- | --- | --- | --- |
-| `SOUL.md` | 1.1 KB | Governor | Stable | Governor constitutional identity and anti-patterns. | Should remain Aphelion/governor-focused, not face-style-heavy. |
+| `SOUL.md` | 1.1 KB | Governor | Stable | Governor constitutional identity and anti-patterns. | Should define Idolum (System) as governor and Aphelion as repo/service/harness, not face-style-heavy. |
 | `IDENTITY.md` | 126 B | Governor | Stable | Short identity anchor. | Likely keep small and stable. |
 | `USER.md` | 218 B | Governor | Stable | Admin/operator profile. | Avoid turning this into general memory; per-user memory should stay scoped. |
 | `AGENTS.md` | 283 B | Governor | Stable | Agent topology and roles. | Should describe boundaries, not scripts. |
@@ -91,7 +91,7 @@ turn intimacy into hidden authorization.
 
 | Area | Question | Why it matters |
 | --- | --- | --- |
-| Governor stable files | Do `SOUL.md`, `IDENTITY.md`, and `BOOTSTRAP.md` define Aphelion as governor cleanly, without overloading Idolum style? | Prevents identity collapse between authority and face. |
+| Governor stable files | Do `SOUL.md`, `IDENTITY.md`, and `BOOTSTRAP.md` define Idolum (System) as governor and Aphelion as repo/service/harness cleanly, without overloading Idolum style? | Prevents identity collapse between authority, face, and harness. |
 | Face files | Does `IDOLUM.md` express the personality we want without telling Idolum to reveal internals? | This is the primary visible persona contract. |
 | Memory split | Should `memory/dreams.md` be split into `memory/telos.md`, `memory/relationships.md`, and `memory/projects.md` as the corpus grows? | Dreams are load-bearing, but separate files may make retrieval and review easier. |
 | Prompt volume | Is `MEMORY.md` still load-bearing now that structured memory exists? | It is large and may duplicate structured stores. |

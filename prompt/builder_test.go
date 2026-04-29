@@ -14,7 +14,7 @@ func TestBuildGovernorPromptPlacesAuthorityFirst(t *testing.T) {
 	t.Parallel()
 
 	got := BuildGovernorPrompt(GovernorRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		GovernorBackend: "native",
 		PrincipalRole:   "admin",
 		WorkspaceRoot:   "/tmp/ws",
@@ -44,11 +44,27 @@ func TestBuildGovernorPromptPlacesAuthorityFirst(t *testing.T) {
 	}
 }
 
+func TestBuildGovernorPromptUsesCanonicalDefaultNames(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{})
+
+	if !strings.Contains(got, "You are Idolum (System), the governor of this system.") {
+		t.Fatalf("prompt missing canonical governor name: %q", got)
+	}
+	if !strings.Contains(got, "- governor: Idolum (System)") {
+		t.Fatalf("prompt missing canonical authority governor: %q", got)
+	}
+	if strings.Contains(got, "You are Aphelion, the governor") {
+		t.Fatalf("prompt contains stale Aphelion governor identity: %q", got)
+	}
+}
+
 func TestBuildGovernorPromptIncludesAgencyTelosContract(t *testing.T) {
 	t.Parallel()
 
 	got := BuildGovernorPrompt(GovernorRequest{
-		GovernorName:  "Aphelion",
+		GovernorName:  DefaultGovernorName,
 		PrincipalRole: "admin",
 	})
 
@@ -58,6 +74,23 @@ func TestBuildGovernorPromptIncludesAgencyTelosContract(t *testing.T) {
 		"route it through planning, capability_request, durable_agent delegation",
 		"drift together without becoming the same identity",
 		"do not convert intimacy, affection, or social trust into hidden authorization",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("governor prompt missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestBuildGovernorPromptIncludesEvidenceRetrievalAndStopRules(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{})
+
+	for _, want := range []string{
+		"## Evidence Retrieval And Stop Rules",
+		"Use the smallest evidence set",
+		"Stop retrieving once the next action is justified",
+		"Name uncertainty explicitly",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("governor prompt missing %q: %q", want, got)
@@ -115,6 +148,24 @@ func TestBuildGovernorPromptAddsConfirmationDisciplineWhenExecIsAvailable(t *tes
 	}
 	if !strings.Contains(got, "Ask for confirmation when authority genuinely depends on it") {
 		t.Fatalf("prompt missing confirmation guidance: %q", got)
+	}
+}
+
+func TestBuildGovernorPromptAddsValidationDisciplineWhenExecIsAvailable(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolManifest: "tools:\n- exec: shell execution",
+	})
+
+	if !strings.Contains(got, "## Validation Discipline") {
+		t.Fatalf("prompt missing validation discipline block: %q", got)
+	}
+	if !strings.Contains(got, "Validate meaningful edits, migrations, generated files, service actions, or debugging conclusions") {
+		t.Fatalf("prompt missing validation guidance: %q", got)
+	}
+	if !strings.Contains(got, "Report what was not validated") {
+		t.Fatalf("prompt missing unvalidated-work reporting guidance: %q", got)
 	}
 }
 
@@ -182,6 +233,9 @@ func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testin
 	if !strings.Contains(got, "## Confirmation Discipline") {
 		t.Fatalf("prompt missing confirmation discipline from capability flags: %q", got)
 	}
+	if !strings.Contains(got, "## Validation Discipline") {
+		t.Fatalf("prompt missing validation discipline from capability flags: %q", got)
+	}
 	if !strings.Contains(got, "## Generated Media Delivery") {
 		t.Fatalf("prompt missing generated media delivery from capability flags: %q", got)
 	}
@@ -205,6 +259,9 @@ func TestBuildGovernorPromptDoesNotInferDisciplineFromManifestDescriptions(t *te
 	}
 	if strings.Contains(got, "## Confirmation Discipline") {
 		t.Fatalf("prompt unexpectedly inferred confirmation discipline from description text: %q", got)
+	}
+	if strings.Contains(got, "## Validation Discipline") {
+		t.Fatalf("prompt unexpectedly inferred validation discipline from description text: %q", got)
 	}
 }
 
@@ -262,7 +319,7 @@ func TestBuildGovernorPromptIncludesMaterialFloorContractForInteractiveSceneTurn
 	t.Parallel()
 
 	got := BuildGovernorPrompt(GovernorRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		GovernorBackend: "native",
 		PrincipalRole:   "admin",
 		Runtime: RuntimeAwareness{
@@ -284,7 +341,7 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	t.Parallel()
 
 	got := BuildFacePrompt(FaceRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		FloorText:       "I changed the file.",
@@ -315,7 +372,7 @@ func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 	t.Parallel()
 
 	got := BuildFacePrompt(FaceRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",
@@ -357,7 +414,7 @@ func TestBuildFacePromptPrefersMaterialFloorWhenPresent(t *testing.T) {
 	t.Parallel()
 
 	got := BuildFacePrompt(FaceRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",
@@ -381,7 +438,7 @@ func TestBuildFaceProposalPromptEncouragesIdolumPush(t *testing.T) {
 	t.Parallel()
 
 	got := BuildFacePrompt(FaceRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",
@@ -419,7 +476,7 @@ func TestBuildFaceBrokeragePromptEncouragesTurnModeSelection(t *testing.T) {
 	t.Parallel()
 
 	got := BuildFacePrompt(FaceRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",
@@ -460,7 +517,7 @@ func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 	t.Parallel()
 
 	blocks := BuildFacePromptBlocks(FaceRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		LatestUserInput: "hello",
@@ -488,7 +545,7 @@ func TestBuildGovernorPromptIncludesResolvedRuntimeFacts(t *testing.T) {
 	t.Parallel()
 
 	got := BuildGovernorPrompt(GovernorRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		GovernorBackend: "codex",
 		PrincipalRole:   "approved_user",
 		WorkspaceRoot:   "/tmp/user-work",
@@ -532,7 +589,7 @@ func TestBuildGovernorPromptIncludesCurrentPlanState(t *testing.T) {
 	t.Parallel()
 
 	got := BuildGovernorPrompt(GovernorRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		GovernorBackend: "native",
 		PrincipalRole:   "admin",
 		Runtime: RuntimeAwareness{
@@ -557,7 +614,7 @@ func TestBuildGovernorPromptIncludesCurrentOperationState(t *testing.T) {
 	t.Parallel()
 
 	got := BuildGovernorPrompt(GovernorRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		GovernorBackend: "native",
 		PrincipalRole:   "admin",
 		Runtime: RuntimeAwareness{
@@ -596,7 +653,7 @@ func TestBuildFacePromptKeepsAwarenessNarrow(t *testing.T) {
 	t.Parallel()
 
 	got := BuildFacePrompt(FaceRequest{
-		GovernorName:    "Aphelion",
+		GovernorName:    DefaultGovernorName,
 		FaceName:        "Idolum",
 		Channel:         "telegram",
 		PrincipalRole:   "admin",

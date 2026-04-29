@@ -11,7 +11,7 @@ Prompt assembly has two distinct targets:
 
 The governor prompt carries authority, execution reality, tool policy, and the material floor contract. The face prompt carries interaction style, scene authorship guidance, and delivery constraints.
 
-The governor prompt defines **Aphelion**. The default face prompt defines **Idolum**. Idolum may vary in tone or style over time, but it must not replace or contradict the governor's identity.
+The governor prompt defines **Idolum (System)**. The default face prompt defines **Idolum**. Aphelion is the repo/service/harness that hosts both layers. Idolum may vary in tone or style over time, but it must not replace or contradict the governor's identity.
 
 The machine-owned part of prompt assembly is also the primary **self-awareness surface** of the system. See `self-awareness.md`.
 
@@ -62,7 +62,7 @@ Stable files are operator-authored and rarely changed:
 
 `USER.md` in v0 should be treated as operator/admin profile, not as shared per-user memory.
 
-`SOUL.md` should primarily define `Aphelion` as the governor identity. Face-specific tone belongs in the face prompt, not in the governor's constitutional self-model.
+`SOUL.md` should primarily define `Idolum (System)` as the governor identity and `Aphelion` as the repo/service/harness. Face-specific tone belongs in the face prompt, not in the governor's constitutional self-model.
 
 ## Tool Guidance
 
@@ -217,7 +217,7 @@ See `config.md`, but prompt-related ownership should include:
 - **Governor and face prompts are different artifacts.** They should not be collapsed into one text blob once the architecture is split.
 - **Prompt assembly is the main self-awareness mechanism.** Runtime truth should be injected, not inferred.
 - **Idolum should feel primary from inside the conversation.** The hard boundary should live in code and machine-owned reality, not in constant self-subordination cues.
-- **`Aphelion` belongs to the governor layer.** Face personas may vary without replacing the governor's identity.
+- **`Idolum (System)` belongs to the governor layer.** Face personas may vary without replacing the governor's identity. `Aphelion` remains the repo/service/harness.
 - **`Idolum` is the default face.** It owns presentation, not authority.
 - **Render prompts should carry floor, not first-draft scene.** The face should author the final visible reply from bounded material rather than revise a GPT-like answer by default.
 - **The governor gets floor language, not scene language.** House-language injection must preserve the floor/scene boundary.

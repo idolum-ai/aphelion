@@ -64,6 +64,7 @@ func (r *Runtime) StatusReadableSummary(ctx context.Context, view string, status
 			Effort:  agent.ReasoningEffortLow,
 			Summary: agent.ReasoningSummaryCompact,
 		},
+		Verbosity: agent.VerbosityLow,
 	})
 	if err != nil {
 		log.Printf("WARN status readable summary failed view=%s err=%v", strings.TrimSpace(view), err)

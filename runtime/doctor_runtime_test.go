@@ -18,9 +18,19 @@ import (
 func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "State of Things\nRuntime is diagnosable.\n\nRecommendations\nKeep /doctor read-only."
+	cfg.Agent.BootstrapFiles = []string{"SOUL.md", "IDENTITY.md", "AGENTS.md"}
 	cfg.Agent.DynamicFiles = []string{"MEMORY.md", "SKILLS.md", "memory/knowledge.md", "memory/decisions.md"}
 
 	root := cfg.Agent.SharedMemoryRoot
+	if err := os.WriteFile(filepath.Join(root, "SOUL.md"), []byte("Idolum (System) is the governor of this system.\nAphelion is the repo/service/harness that hosts it.\n"), 0o600); err != nil {
+		t.Fatalf("write SOUL.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "IDENTITY.md"), []byte("Name: Idolum (System)\nAphelion: repo/service/harness\nIdolum (System) decides.\nIdolum speaks.\n"), 0o600); err != nil {
+		t.Fatalf("write IDENTITY.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("Agent topology:\n- Idolum (System) is the governor/system.\n- Idolum is the public-facing persona.\n- Aphelion is the repo/service/harness.\n"), 0o600); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(root, "SKILLS.md"), []byte("# Skills\n\n- [Commit Archaeology](practices/commit-archeology.md)"), 0o600); err != nil {
 		t.Fatalf("write SKILLS.md: %v", err)
 	}
@@ -140,6 +150,7 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		"Known Issue Status Checks",
 		"Maintainer Delegate",
 		"maintainer_delegate_status=\"absent\"",
+		"issue=prompt_identity_canonical status=likely_fixed",
 		"issue=dynamic_skills_prompt_loading status=likely_fixed",
 		"tailnet_surfaces: none",
 		"allowed_statuses: active, likely_fixed, historical_resolved, residual_risk, unknown",

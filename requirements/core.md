@@ -36,7 +36,7 @@ This spec is **staged**. The initial "core runnable" milestone is the minimal en
 - **Runtime**: House shell. Owns transport wiring, principal/scope resolution, session locking, background loops, and assembly of concrete ports for turn execution. Interactive DM and durable-group turns should share one explicit interactive-like assembly spine with bounded species specialization hooks.
 - **turn**: Owns one-turn stage order and policy for interactive, durable-child, and maintenance species.
 - **pipeline**: Owns governor/face conversational transformations (brokerage parsing, floor shaping, render/fallback contracts) consumed by turn/runtime.
-- **Governor**: Owns the floor of a turn. This layer is named `Aphelion`. It may be backed by Codex or by the native provider/tool loop.
+- **Governor**: Owns the floor of a turn. This layer is named `Idolum (System)`. It may be backed by Codex or by the native provider/tool loop. `Aphelion` is the repo/service/harness that hosts it.
 - **Face**: Authors the user-visible scene from the governor-owned floor.
 - **Agent**: The native governor path. Runs a single conversational turn via the provider/tool loop.
 - **Session Store**: SQLite via CGo. Persists conversation history, system prompt snapshots, metadata. Start with a single-connection SQLite access model (`SetMaxOpenConns(1)`); add a dedicated writer goroutine only if contention or correctness requires it.

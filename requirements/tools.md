@@ -43,7 +43,7 @@ Aphelion's tool model should be read against two nearby patterns:
 
 Aphelion should end up closer to OpenClaw on **enforcement shape**, but with a different constitutional split:
 
-- `Aphelion` governs tool availability and side effects
+- `Idolum (System)` governs tool availability and side effects
 - `Idolum` never owns tools
 - principal role and run kind are first-class manifest inputs
 
@@ -51,7 +51,7 @@ So the intended synthesis is:
 
 - OpenClaw-style layered runtime enforcement
 - Hermes-style registry clarity
-- Aphelion-specific governor/Idolum and principal/isolation boundaries
+- Idolum (System)/Idolum and principal/isolation boundaries inside the Aphelion harness
 
 ## Philosophy
 
