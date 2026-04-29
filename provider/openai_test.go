@@ -216,6 +216,71 @@ func TestOpenAICompleteWithToolsAndReasoningUsesResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAICompleteWithVerbosityOnlyUsesResponsesAPI(t *testing.T) {
+	var (
+		seenPath string
+		seen     openAIResponsesRequest
+	)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(openAIResponsesResponse{
+			Output: []openAIResponsesOutputItem{{
+				Type: "message",
+				Content: []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}{{Type: "output_text", Text: "brief answer"}},
+			}},
+			Usage: openAIResponsesUsage{InputTokens: 5, OutputTokens: 2, TotalTokens: 7},
+		})
+	})
+
+	client, err := NewOpenAI(OpenAIOptions{
+		APIKey:     "test-key",
+		Model:      "gpt-5.5",
+		MaxTokens:  128,
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAI() err = %v", err)
+	}
+
+	resp, err := client.CompleteWithOptions(context.Background(), []agent.Message{
+		{Role: "system", Content: "answer concisely"},
+		{Role: "user", Content: "hi"},
+	}, nil, agent.CompleteOptions{Verbosity: agent.VerbosityLow})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions() err = %v", err)
+	}
+	if seenPath != "/v1/responses" {
+		t.Fatalf("path = %q, want /v1/responses", seenPath)
+	}
+	if seen.Model != "gpt-5.5" || seen.MaxOutputTokens != 128 {
+		t.Fatalf("request model/tokens = %q/%d, want gpt-5.5/128", seen.Model, seen.MaxOutputTokens)
+	}
+	if seen.Instructions != "answer concisely" {
+		t.Fatalf("instructions = %q, want answer concisely", seen.Instructions)
+	}
+	if seen.Reasoning != nil {
+		t.Fatalf("reasoning = %#v, want nil for verbosity-only request", seen.Reasoning)
+	}
+	if len(seen.Tools) != 0 || seen.ToolChoice != "" {
+		t.Fatalf("tools/tool_choice = %#v/%q, want none", seen.Tools, seen.ToolChoice)
+	}
+	if seen.Text == nil || seen.Text.Verbosity != "low" {
+		t.Fatalf("text config = %#v, want low verbosity", seen.Text)
+	}
+	if resp.Content != "brief answer" {
+		t.Fatalf("content = %q, want brief answer", resp.Content)
+	}
+	if resp.Usage.InputTokens != 5 || resp.Usage.OutputTokens != 2 || resp.Usage.TotalTokens != 7 {
+		t.Fatalf("usage = %+v, want 5/2/7", resp.Usage)
+	}
+}
+
 func TestOpenAIStreamWithOptionsUsesResponsesAPI(t *testing.T) {
 	var (
 		seenPath string
