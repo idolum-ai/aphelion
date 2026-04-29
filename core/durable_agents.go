@@ -177,13 +177,14 @@ func DurableAgentRuntimeStateFrom(state DurableAgentState) DurableAgentRuntimeSt
 }
 
 type DurableAgentContinuityState struct {
-	RecentInteractions []DurableAgentRecentInteraction `json:"recent_interactions,omitempty"`
-	PendingQuestions   []DurableAgentPendingQuestion   `json:"pending_questions,omitempty"`
-	ReviewRefs         []DurableAgentReviewReference   `json:"review_refs,omitempty"`
-	RatifiedOutcomes   []DurableAgentRatifiedOutcome   `json:"ratified_outcomes,omitempty"`
-	Conversation       *DurableAgentConversationState  `json:"conversation,omitempty"`
-	SetupWizard        *DurableAgentSetupWizardState   `json:"setup_wizard,omitempty"`
-	EmailPending       *DurableAgentEmailPendingState  `json:"email_pending,omitempty"`
+	RecentInteractions []DurableAgentRecentInteraction          `json:"recent_interactions,omitempty"`
+	PendingQuestions   []DurableAgentPendingQuestion            `json:"pending_questions,omitempty"`
+	ReviewRefs         []DurableAgentReviewReference            `json:"review_refs,omitempty"`
+	RatifiedOutcomes   []DurableAgentRatifiedOutcome            `json:"ratified_outcomes,omitempty"`
+	Conversation       *DurableAgentConversationState           `json:"conversation,omitempty"`
+	SetupWizard        *DurableAgentSetupWizardState            `json:"setup_wizard,omitempty"`
+	EmailPending       *DurableAgentEmailPendingState           `json:"email_pending,omitempty"`
+	ExternalChannel    *DurableAgentExternalChannelRuntimeState `json:"external_channel,omitempty"`
 }
 
 type DurableAgentConversationState struct {
@@ -225,6 +226,44 @@ type DurableAgentSetupWizardAnswers struct {
 	Capabilities     []string `json:"capabilities,omitempty"`
 	NeverRetain      []string `json:"never_retain,omitempty"`
 	DriftPolicy      string   `json:"drift_policy,omitempty"`
+}
+
+// DurableAgentExternalChannelRuntimeState stores generic external-channel
+// continuity for a durable child. It carries transport lifecycle state shared by
+// adapters: cursor/session references, last command/attempt/success, artifact
+// pointers, and failure backoff. Protocol-specific residue belongs in
+// AdapterState, not as a top-level core field.
+type DurableAgentExternalChannelRuntimeState struct {
+	Adapter       string          `json:"adapter,omitempty"`
+	Cursor        string          `json:"cursor,omitempty"`
+	SessionRef    string          `json:"session_ref,omitempty"`
+	LastCommand   string          `json:"last_command,omitempty"`
+	LastAttemptAt time.Time       `json:"last_attempt_at,omitempty"`
+	LastSuccessAt time.Time       `json:"last_success_at,omitempty"`
+	LastArtifact  string          `json:"last_artifact,omitempty"`
+	LastStatus    string          `json:"last_status,omitempty"`
+	LastError     string          `json:"last_error,omitempty"`
+	LastErrorAt   time.Time       `json:"last_error_at,omitempty"`
+	BackoffUntil  time.Time       `json:"backoff_until,omitempty"`
+	FailureCount  int             `json:"failure_count,omitempty"`
+	AdapterState  json.RawMessage `json:"adapter_state,omitempty"`
+}
+
+// durableAgentLegacyCodexAppServerState is retained only to migrate pre-generic
+// continuity records. New runtime code must use ExternalChannel plus
+// adapter_state.
+type durableAgentLegacyCodexAppServerState struct {
+	ThreadID        string    `json:"thread_id,omitempty"`
+	LastTurnID      string    `json:"last_turn_id,omitempty"`
+	LastAttemptAt   time.Time `json:"last_attempt_at,omitempty"`
+	LastHeartbeatAt time.Time `json:"last_heartbeat_at,omitempty"`
+	LastPayloadHash string    `json:"last_payload_hash,omitempty"`
+	LastArtifact    string    `json:"last_artifact,omitempty"`
+	LastStatus      string    `json:"last_status,omitempty"`
+	LastError       string    `json:"last_error,omitempty"`
+	LastErrorAt     time.Time `json:"last_error_at,omitempty"`
+	BackoffUntil    time.Time `json:"backoff_until,omitempty"`
+	FailureCount    int       `json:"failure_count,omitempty"`
 }
 
 type DurableAgentEmailPendingState struct {
@@ -829,9 +868,33 @@ func ParseDurableAgentContinuityState(raw string) (DurableAgentContinuityState, 
 	if raw == "" {
 		return DurableAgentContinuityState{}, nil
 	}
-	var state DurableAgentContinuityState
-	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+	type durableAgentContinuityWire struct {
+		RecentInteractions []DurableAgentRecentInteraction          `json:"recent_interactions,omitempty"`
+		PendingQuestions   []DurableAgentPendingQuestion            `json:"pending_questions,omitempty"`
+		ReviewRefs         []DurableAgentReviewReference            `json:"review_refs,omitempty"`
+		RatifiedOutcomes   []DurableAgentRatifiedOutcome            `json:"ratified_outcomes,omitempty"`
+		Conversation       *DurableAgentConversationState           `json:"conversation,omitempty"`
+		SetupWizard        *DurableAgentSetupWizardState            `json:"setup_wizard,omitempty"`
+		EmailPending       *DurableAgentEmailPendingState           `json:"email_pending,omitempty"`
+		ExternalChannel    *DurableAgentExternalChannelRuntimeState `json:"external_channel,omitempty"`
+		LegacyCodex        *durableAgentLegacyCodexAppServerState   `json:"codex_app_server,omitempty"`
+	}
+	var wire durableAgentContinuityWire
+	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
 		return DurableAgentContinuityState{}, err
+	}
+	state := DurableAgentContinuityState{
+		RecentInteractions: wire.RecentInteractions,
+		PendingQuestions:   wire.PendingQuestions,
+		ReviewRefs:         wire.ReviewRefs,
+		RatifiedOutcomes:   wire.RatifiedOutcomes,
+		Conversation:       wire.Conversation,
+		SetupWizard:        wire.SetupWizard,
+		EmailPending:       wire.EmailPending,
+		ExternalChannel:    wire.ExternalChannel,
+	}
+	if state.ExternalChannel == nil && wire.LegacyCodex != nil {
+		state.ExternalChannel = durableAgentExternalChannelFromLegacyCodex(*wire.LegacyCodex)
 	}
 	return NormalizeDurableAgentContinuityState(state), nil
 }
@@ -844,6 +907,7 @@ func NormalizeDurableAgentContinuityState(state DurableAgentContinuityState) Dur
 	state.Conversation = normalizeDurableAgentConversationState(state.Conversation)
 	state.SetupWizard = normalizeDurableAgentSetupWizardState(state.SetupWizard)
 	state.EmailPending = normalizeDurableAgentEmailPendingState(state.EmailPending)
+	state.ExternalChannel = normalizeDurableAgentExternalChannelRuntimeState(state.ExternalChannel)
 	return state
 }
 
@@ -866,7 +930,8 @@ func (s DurableAgentContinuityState) IsZero() bool {
 		len(s.RatifiedOutcomes) == 0 &&
 		s.Conversation == nil &&
 		s.SetupWizard == nil &&
-		s.EmailPending == nil
+		s.EmailPending == nil &&
+		s.ExternalChannel == nil
 }
 
 func (s DurableAgentContinuityState) WithReviewArtifact(reviewEventID int64, artifact DurableReviewArtifact, at time.Time) DurableAgentContinuityState {
@@ -1451,6 +1516,82 @@ func normalizeDurableAgentBootstrapProfile(value string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeDurableAgentExternalChannelRuntimeState(state *DurableAgentExternalChannelRuntimeState) *DurableAgentExternalChannelRuntimeState {
+	if state == nil {
+		return nil
+	}
+	normalized := *state
+	normalized.Adapter = strings.ToLower(strings.TrimSpace(normalized.Adapter))
+	normalized.Cursor = strings.TrimSpace(normalized.Cursor)
+	normalized.SessionRef = strings.TrimSpace(normalized.SessionRef)
+	normalized.LastCommand = strings.TrimSpace(normalized.LastCommand)
+	normalized.LastArtifact = strings.TrimSpace(normalized.LastArtifact)
+	normalized.LastStatus = strings.TrimSpace(normalized.LastStatus)
+	normalized.LastError = strings.TrimSpace(normalized.LastError)
+	if normalized.FailureCount < 0 {
+		normalized.FailureCount = 0
+	}
+	normalized.AdapterState = normalizeDurableAgentRawJSON(normalized.AdapterState)
+	if normalized.Adapter == "" && normalized.Cursor == "" && normalized.SessionRef == "" && normalized.LastCommand == "" &&
+		normalized.LastAttemptAt.IsZero() && normalized.LastSuccessAt.IsZero() && normalized.LastArtifact == "" &&
+		normalized.LastStatus == "" && normalized.LastError == "" && normalized.LastErrorAt.IsZero() &&
+		normalized.BackoffUntil.IsZero() && normalized.FailureCount == 0 && len(normalized.AdapterState) == 0 {
+		return nil
+	}
+	return &normalized
+}
+
+func normalizeDurableAgentRawJSON(raw json.RawMessage) json.RawMessage {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == "{}" {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return append(json.RawMessage(nil), raw...)
+	}
+	compact, err := json.Marshal(v)
+	if err != nil || string(compact) == "null" || string(compact) == "{}" {
+		return nil
+	}
+	return json.RawMessage(compact)
+}
+
+func durableAgentExternalChannelFromLegacyCodex(legacy durableAgentLegacyCodexAppServerState) *DurableAgentExternalChannelRuntimeState {
+	legacy.ThreadID = strings.TrimSpace(legacy.ThreadID)
+	legacy.LastTurnID = strings.TrimSpace(legacy.LastTurnID)
+	legacy.LastPayloadHash = strings.TrimSpace(legacy.LastPayloadHash)
+	adapterState := map[string]string{}
+	if legacy.ThreadID != "" {
+		adapterState["thread_id"] = legacy.ThreadID
+	}
+	if legacy.LastTurnID != "" {
+		adapterState["last_turn_id"] = legacy.LastTurnID
+	}
+	if legacy.LastPayloadHash != "" {
+		adapterState["last_payload_hash"] = legacy.LastPayloadHash
+	}
+	adapterRaw, _ := json.Marshal(adapterState)
+	lastSuccess := legacy.LastHeartbeatAt
+	if lastSuccess.IsZero() && strings.EqualFold(strings.TrimSpace(legacy.LastStatus), "ok") {
+		lastSuccess = legacy.LastAttemptAt
+	}
+	return normalizeDurableAgentExternalChannelRuntimeState(&DurableAgentExternalChannelRuntimeState{
+		Adapter:       "codex_app_server",
+		SessionRef:    legacy.ThreadID,
+		LastCommand:   "codex_app_server.status_heartbeat",
+		LastAttemptAt: legacy.LastAttemptAt,
+		LastSuccessAt: lastSuccess,
+		LastArtifact:  legacy.LastArtifact,
+		LastStatus:    legacy.LastStatus,
+		LastError:     legacy.LastError,
+		LastErrorAt:   legacy.LastErrorAt,
+		BackoffUntil:  legacy.BackoffUntil,
+		FailureCount:  legacy.FailureCount,
+		AdapterState:  json.RawMessage(adapterRaw),
+	})
 }
 
 func normalizeDurableAgentEmailPendingState(state *DurableAgentEmailPendingState) *DurableAgentEmailPendingState {

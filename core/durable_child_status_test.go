@@ -96,3 +96,43 @@ func testPayloadHash(t *testing.T, payload json.RawMessage) string {
 	sum := sha256.Sum256(compact.Bytes())
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
+
+func TestParseDurableAgentContinuityStateMigratesLegacyCodexAppServerState(t *testing.T) {
+	raw := `{
+		"codex_app_server":{
+			"thread_id":" thread-1 ",
+			"last_turn_id":" turn-1 ",
+			"last_attempt_at":"2026-04-29T11:12:35Z",
+			"last_heartbeat_at":"2026-04-29T11:12:35Z",
+			"last_payload_hash":"sha256:abc",
+			"last_artifact":"artifacts/heartbeats/codex.json",
+			"last_status":"ok"
+		}
+	}`
+	state, err := ParseDurableAgentContinuityState(raw)
+	if err != nil {
+		t.Fatalf("ParseDurableAgentContinuityState() err = %v", err)
+	}
+	if state.ExternalChannel == nil {
+		t.Fatal("ExternalChannel = nil, want migrated state")
+	}
+	if state.ExternalChannel.Adapter != "codex_app_server" || state.ExternalChannel.SessionRef != "thread-1" {
+		t.Fatalf("ExternalChannel = %#v, want codex adapter and thread session", state.ExternalChannel)
+	}
+	if state.ExternalChannel.LastCommand != "codex_app_server.status_heartbeat" || state.ExternalChannel.LastArtifact != "artifacts/heartbeats/codex.json" {
+		t.Fatalf("ExternalChannel = %#v, want migrated command/artifact", state.ExternalChannel)
+	}
+	if got := string(state.ExternalChannel.AdapterState); got == "" || !strings.Contains(got, `"thread_id":"thread-1"`) || !strings.Contains(got, `"last_turn_id":"turn-1"`) {
+		t.Fatalf("AdapterState = %s, want compact codex adapter residue", got)
+	}
+	marshaled, err := state.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal() err = %v", err)
+	}
+	if strings.Contains(marshaled, "codex_app_server") && strings.Contains(marshaled, "last_heartbeat_at") {
+		t.Fatalf("Marshal() = %s, appears to preserve legacy codex top-level shape", marshaled)
+	}
+	if !strings.Contains(marshaled, "external_channel") {
+		t.Fatalf("Marshal() = %s, want external_channel", marshaled)
+	}
+}
