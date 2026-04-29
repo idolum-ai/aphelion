@@ -4,7 +4,10 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +23,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/durableagent"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
@@ -29,16 +33,17 @@ import (
 )
 
 const (
-	doctorRequestMarker      = "DOCTOR_DIAGNOSTIC_REQUEST"
-	doctorSummaryMarker      = "DOCTOR_TELEGRAM_SUMMARY_REQUEST"
-	doctorReportFallbackText = "Doctor diagnostics finished, but the model returned an empty report."
-	doctorRunTimeout         = 5 * time.Minute
-	doctorPacketMaxChars     = 120000
-	doctorLogTailBytes       = 16000
-	doctorFilePreviewChars   = 700
-	doctorMessageLimit       = 12
-	doctorTelegramMaxChars   = 3800
-	doctorTelegramHardLimit  = 4096
+	doctorRequestMarker       = "DOCTOR_DIAGNOSTIC_REQUEST"
+	doctorSummaryMarker       = "DOCTOR_TELEGRAM_SUMMARY_REQUEST"
+	doctorReportFallbackText  = "Doctor diagnostics finished, but the model returned an empty report."
+	doctorMaintainerArchetype = "aphelion-maintainer"
+	doctorRunTimeout          = 5 * time.Minute
+	doctorPacketMaxChars      = 120000
+	doctorLogTailBytes        = 16000
+	doctorFilePreviewChars    = 700
+	doctorMessageLimit        = 12
+	doctorTelegramMaxChars    = 3800
+	doctorTelegramHardLimit   = 4096
 )
 
 type doctorDiagnosticInput struct {
@@ -49,7 +54,36 @@ type doctorDiagnosticInput struct {
 	Scope         sandbox.Scope
 	PromptContext *workspace.PromptContext
 	Exec          pipeline.TurnExecutionContract
+	Maintainer    *doctorMaintainerDelegate
 	Now           time.Time
+}
+
+type doctorMaintainerDelegate struct {
+	Agent        core.DurableAgent
+	MemoryRoot   string
+	ProfileRoot  string
+	RuntimeRules string
+	Charter      string
+	Capabilities string
+}
+
+type doctorMaintainerArchetypeProvenance struct {
+	Name string `json:"name"`
+}
+
+type doctorArtifactManifest struct {
+	AgentID   string                        `json:"agent_id"`
+	UpdatedAt time.Time                     `json:"updated_at"`
+	Artifacts []doctorArtifactManifestEntry `json:"artifacts"`
+}
+
+type doctorArtifactManifestEntry struct {
+	Path      string    `json:"path"`
+	Kind      string    `json:"kind,omitempty"`
+	Source    string    `json:"source,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	SHA256    string    `json:"sha256"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (r *Runtime) StartDoctor(ctx context.Context, msg core.InboundMessage) error {
@@ -112,6 +146,12 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		monitor.Finish(ctx, monitorErr)
 	}()
 
+	maintainer, err := r.doctorMaintainerDelegate()
+	if err != nil {
+		monitorErr = fmt.Errorf("load doctor maintainer delegate: %w", err)
+		return monitorErr
+	}
+
 	surfaceDoctorProgress(ctx, progress, "Loading prompt and memory context")
 	promptContext, err := r.promptContextForScope(scope, now)
 	if err != nil {
@@ -133,6 +173,7 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		Scope:         scope,
 		PromptContext: promptContext,
 		Exec:          exec,
+		Maintainer:    maintainer,
 		Now:           now,
 	})
 
@@ -152,6 +193,9 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 		{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks},
 		{Role: "system", Content: doctorReadOnlySystemNote()},
 		{Role: "user", Content: packet},
+	}
+	if note := doctorMaintainerSystemNote(maintainer); note != "" {
+		input = []agent.Message{input[0], input[1], {Role: "system", Content: note}, input[2]}
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventProviderAttemptStarted, "provider", "started", map[string]any{
 		"backend":       strings.TrimSpace(exec.Backend),
@@ -206,8 +250,17 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 	}
 	report = redactDoctorText(report)
 	telegramReport, summaryUsage := r.telegramDoctorReport(ctx, key, exec, systemPrompt, systemBlocks, report, progress)
+	var maintainerArtifact string
+	if maintainer != nil {
+		surfaceDoctorProgress(ctx, progress, "Storing the full report in maintainer child artifacts")
+		if artifact, artifactErr := r.writeDoctorMaintainerReport(*maintainer, report, telegramReport, now); artifactErr != nil {
+			r.reportOperationalIssueAsync("doctor_maintainer_artifact", artifactErr)
+		} else {
+			maintainerArtifact = artifact
+		}
+	}
 	surfaceDoctorProgress(ctx, progress, "Saving the doctor report into chat history")
-	newMessages := appendSyntheticTurn(sess, "/doctor", report, telegramReport, doctorFloorMetadata(report, telegramReport))
+	newMessages := appendSyntheticTurn(sess, "/doctor", report, telegramReport, doctorFloorMetadata(report, telegramReport, maintainer, maintainerArtifact))
 	if err := r.store.Save(sess, newMessages, addTokenUsage(turnResult.TokenUsage, summaryUsage)); err != nil {
 		monitorErr = fmt.Errorf("save doctor report: %w", err)
 		return monitorErr
@@ -256,6 +309,179 @@ func (r *Runtime) newDoctorProgressReporter(key session.SessionKey, msg core.Inb
 	progress.taskSummary = "doctor diagnostics"
 	progress.currentPlanStep = ""
 	return progress
+}
+
+func (r *Runtime) doctorMaintainerDelegate() (*doctorMaintainerDelegate, error) {
+	if r == nil || r.store == nil {
+		return nil, nil
+	}
+	agents, err := r.store.ListDurableAgents()
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(agents, func(i, j int) bool {
+		return strings.TrimSpace(agents[i].AgentID) < strings.TrimSpace(agents[j].AgentID)
+	})
+	for _, agent := range agents {
+		if !strings.EqualFold(strings.TrimSpace(agent.Status), "active") {
+			continue
+		}
+		delegate, ok, err := r.doctorMaintainerDelegateFromAgent(agent)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return delegate, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *Runtime) doctorMaintainerDelegateFromAgent(agent core.DurableAgent) (*doctorMaintainerDelegate, bool, error) {
+	memoryRoot, err := r.doctorDurableAgentMemoryRoot(agent)
+	if err != nil {
+		return nil, false, err
+	}
+	profileRoot := filepath.Join(memoryRoot, "profile")
+	raw, err := os.ReadFile(filepath.Join(profileRoot, "ARCHETYPE.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("read maintainer archetype provenance for %s: %w", strings.TrimSpace(agent.AgentID), err)
+	}
+	var provenance doctorMaintainerArchetypeProvenance
+	if err := json.Unmarshal(raw, &provenance); err != nil {
+		return nil, false, fmt.Errorf("decode maintainer archetype provenance for %s: %w", strings.TrimSpace(agent.AgentID), err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(provenance.Name), doctorMaintainerArchetype) {
+		return nil, false, nil
+	}
+	return &doctorMaintainerDelegate{
+		Agent:        agent,
+		MemoryRoot:   memoryRoot,
+		ProfileRoot:  profileRoot,
+		RuntimeRules: readDoctorProfileFile(filepath.Join(profileRoot, "archetype", "profile", "runtime.md")),
+		Charter:      readDoctorProfileFile(filepath.Join(profileRoot, "archetype", "profile", "charter.md")),
+		Capabilities: readDoctorProfileFile(filepath.Join(profileRoot, "archetype", "profile", "capabilities.md")),
+	}, true, nil
+}
+
+func (r *Runtime) doctorDurableAgentMemoryRoot(agent core.DurableAgent) (string, error) {
+	_, memoryRoot := durableagent.LocalRoots(agent.AgentID, agent.LocalStorageRoots)
+	if strings.TrimSpace(memoryRoot) == "" && r != nil && r.store != nil {
+		if dbPath := strings.TrimSpace(r.store.DBPath()); dbPath != "" {
+			_, memoryRoot = durableagent.DefaultLocalRoots(dbPath, strings.TrimSpace(agent.AgentID))
+		}
+	}
+	if strings.TrimSpace(memoryRoot) == "" {
+		return "", fmt.Errorf("durable agent %q has no local memory root", strings.TrimSpace(agent.AgentID))
+	}
+	return memoryRoot, nil
+}
+
+func readDoctorProfileFile(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+func (r *Runtime) writeDoctorMaintainerReport(maintainer doctorMaintainerDelegate, report string, telegramReport string, now time.Time) (string, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	artifactRoot := filepath.Join(maintainer.MemoryRoot, "artifacts")
+	rel := filepath.ToSlash(filepath.Join("reports", now.UTC().Format("20060102T150405Z")+"-doctor.md"))
+	target := filepath.Join(artifactRoot, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return "", fmt.Errorf("create doctor maintainer artifact directory: %w", err)
+	}
+	content := strings.Join([]string{
+		"# Doctor Report",
+		"",
+		"generated_at_utc: " + now.UTC().Format(time.RFC3339),
+		"delegate_agent_id: " + strings.TrimSpace(maintainer.Agent.AgentID),
+		"delegate_archetype: " + doctorMaintainerArchetype,
+		"mode: read_only",
+		"",
+		"## Telegram Summary",
+		"",
+		strings.TrimSpace(telegramReport),
+		"",
+		"## Full Report",
+		"",
+		strings.TrimSpace(report),
+		"",
+	}, "\n")
+	if err := os.WriteFile(target, []byte(content), 0o600); err != nil {
+		return "", fmt.Errorf("write doctor maintainer artifact: %w", err)
+	}
+	sum := sha256.Sum256([]byte(content))
+	hash := "sha256:" + hex.EncodeToString(sum[:])
+	if err := writeDoctorMaintainerArtifactManifest(artifactRoot, strings.TrimSpace(maintainer.Agent.AgentID), doctorArtifactManifestEntry{
+		Path:      rel,
+		Kind:      "doctor_report",
+		Source:    "doctor_delegate",
+		Reason:    "/doctor delegated read-only diagnosis",
+		SHA256:    hash,
+		UpdatedAt: now.UTC(),
+	}); err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(filepath.Join("artifacts", rel)), nil
+}
+
+func writeDoctorMaintainerArtifactManifest(artifactRoot string, agentID string, entry doctorArtifactManifestEntry) error {
+	manifestPath := filepath.Join(artifactRoot, "ARTIFACTS.json")
+	manifest := doctorArtifactManifest{
+		AgentID:   strings.TrimSpace(agentID),
+		Artifacts: []doctorArtifactManifestEntry{},
+	}
+	if raw, err := os.ReadFile(manifestPath); err == nil {
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			return fmt.Errorf("decode doctor maintainer artifact manifest: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read doctor maintainer artifact manifest: %w", err)
+	}
+	manifest.AgentID = strings.TrimSpace(agentID)
+	entry.Path = strings.TrimSpace(filepath.ToSlash(entry.Path))
+	entry.Kind = strings.TrimSpace(entry.Kind)
+	entry.Source = strings.TrimSpace(entry.Source)
+	entry.Reason = strings.TrimSpace(entry.Reason)
+	entry.SHA256 = strings.TrimSpace(entry.SHA256)
+	if entry.UpdatedAt.IsZero() {
+		entry.UpdatedAt = time.Now().UTC()
+	}
+	replaced := false
+	for i := range manifest.Artifacts {
+		if manifest.Artifacts[i].Path == entry.Path {
+			manifest.Artifacts[i] = entry
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		manifest.Artifacts = append(manifest.Artifacts, entry)
+	}
+	sort.SliceStable(manifest.Artifacts, func(i, j int) bool {
+		return manifest.Artifacts[i].Path < manifest.Artifacts[j].Path
+	})
+	manifest.UpdatedAt = entry.UpdatedAt.UTC()
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode doctor maintainer artifact manifest: %w", err)
+	}
+	raw = append(raw, '\n')
+	if err := os.MkdirAll(artifactRoot, 0o700); err != nil {
+		return fmt.Errorf("create doctor maintainer artifact root: %w", err)
+	}
+	if err := os.WriteFile(manifestPath, raw, 0o600); err != nil {
+		return fmt.Errorf("write doctor maintainer artifact manifest: %w", err)
+	}
+	return nil
 }
 
 func surfaceDoctorProgress(ctx context.Context, progress *toolProgressReporter, text string) {
@@ -361,13 +587,23 @@ func doctorTelegramSummarySystemNote() string {
 	}, "\n")
 }
 
-func doctorFloorMetadata(fullReport string, telegramReport string) string {
+func doctorFloorMetadata(fullReport string, telegramReport string, maintainer *doctorMaintainerDelegate, maintainerArtifact string) string {
 	fullChars := doctorCharCount(fullReport)
 	telegramChars := doctorCharCount(telegramReport)
-	if fullChars <= 0 && telegramChars <= 0 {
+	parts := make([]string, 0, 5)
+	if fullChars > 0 || telegramChars > 0 {
+		parts = append(parts, fmt.Sprintf("doctor_full_report_chars=%d doctor_telegram_report_chars=%d doctor_telegram_limit_chars=%d", fullChars, telegramChars, doctorTelegramMaxChars))
+	}
+	if maintainer != nil {
+		parts = append(parts, "doctor_delegate_agent_id="+strings.TrimSpace(maintainer.Agent.AgentID))
+	}
+	if strings.TrimSpace(maintainerArtifact) != "" {
+		parts = append(parts, "doctor_delegate_artifact="+strings.TrimSpace(maintainerArtifact))
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("doctor_full_report_chars=%d doctor_telegram_report_chars=%d doctor_telegram_limit_chars=%d", fullChars, telegramChars, doctorTelegramMaxChars)
+	return strings.Join(parts, " ")
 }
 
 func doctorFitTelegramReport(text string, limit int) string {
@@ -422,6 +658,19 @@ func doctorReadOnlySystemNote() string {
 	}, "\n")
 }
 
+func doctorMaintainerSystemNote(maintainer *doctorMaintainerDelegate) string {
+	if maintainer == nil {
+		return ""
+	}
+	return strings.Join([]string{
+		"This /doctor run is delegated to the aphelion-maintainer durable child in read-only mode.",
+		"Durable agent: " + strings.TrimSpace(maintainer.Agent.AgentID),
+		"Use the maintainer archetype and profile as the operating boundary for diagnosis and recommendations.",
+		"Do not mutate the local Aphelion clone. If recommending implementation, specify the approved path: isolated /tmp clone, tests there, GitHub PR via a separately approved GitHub App PEM.",
+		"Do not claim active grants, repository edits, service restarts, commits, pushes, or PRs unless the diagnostic packet contains concrete evidence that they happened.",
+	}, "\n")
+}
+
 func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorDiagnosticInput) string {
 	now := input.Now
 	if now.IsZero() {
@@ -447,6 +696,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 
 	writeDoctorSection(&b, "Memory Footprint")
 	r.writeDoctorMemoryFootprint(&b, input.Scope, now)
+
+	writeDoctorSection(&b, "Maintainer Delegate")
+	writeDoctorMaintainerDelegate(&b, input.Maintainer)
 
 	writeDoctorSection(&b, "Known Issue Status Checks")
 	r.writeDoctorIssueStatusChecks(&b, input)
@@ -596,6 +848,34 @@ func (r *Runtime) writeDoctorMemoryFootprint(b *strings.Builder, scope sandbox.S
 		yesterday := filepath.ToSlash(filepath.Join("memory", "daily", now.AddDate(0, 0, -1).Format("2006-01-02")+".md"))
 		writeDoctorFileStat(b, root, today)
 		writeDoctorFileStat(b, root, yesterday)
+	}
+}
+
+func writeDoctorMaintainerDelegate(b *strings.Builder, maintainer *doctorMaintainerDelegate) {
+	if maintainer == nil {
+		writeDoctorKV(b, "maintainer_delegate_status", "absent")
+		writeDoctorLine(b, "maintainer_delegate_next=\"create and activate a durable_agent from archetype aphelion-maintainer to route /doctor through the maintained child profile\"")
+		return
+	}
+	writeDoctorKV(b, "maintainer_delegate_status", "active")
+	writeDoctorKV(b, "maintainer_delegate_agent_id", strings.TrimSpace(maintainer.Agent.AgentID))
+	writeDoctorKV(b, "maintainer_delegate_archetype", doctorMaintainerArchetype)
+	writeDoctorKV(b, "maintainer_delegate_memory_root", strings.TrimSpace(maintainer.MemoryRoot))
+	writeDoctorKV(b, "maintainer_delegate_profile_root", strings.TrimSpace(maintainer.ProfileRoot))
+	writeDoctorKV(b, "maintainer_delegate_channel_kind", strings.TrimSpace(maintainer.Agent.ChannelKind))
+	writeDoctorKV(b, "maintainer_delegate_outbound_mode", strings.TrimSpace(maintainer.Agent.LivePolicy.OutboundMode))
+	writeDoctorKV(b, "maintainer_delegate_capabilities", strings.Join(maintainer.Agent.LivePolicy.CapabilityEnvelope, ","))
+	if strings.TrimSpace(maintainer.RuntimeRules) != "" {
+		writeDoctorLine(b, "Maintainer runtime boundary:")
+		writeDoctorLine(b, truncatePreview(maintainer.RuntimeRules, 1200))
+	}
+	if strings.TrimSpace(maintainer.Charter) != "" {
+		writeDoctorLine(b, "Maintainer charter:")
+		writeDoctorLine(b, truncatePreview(maintainer.Charter, 700))
+	}
+	if strings.TrimSpace(maintainer.Capabilities) != "" {
+		writeDoctorLine(b, "Maintainer archetype capabilities:")
+		writeDoctorLine(b, truncatePreview(maintainer.Capabilities, 700))
 	}
 }
 

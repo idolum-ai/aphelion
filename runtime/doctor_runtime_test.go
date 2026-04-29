@@ -138,6 +138,8 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		"semantic_enabled",
 		"Recent Service Log Tail",
 		"Known Issue Status Checks",
+		"Maintainer Delegate",
+		"maintainer_delegate_status=\"absent\"",
 		"issue=dynamic_skills_prompt_loading status=likely_fixed",
 		"tailnet_surfaces: none",
 		"allowed_statuses: active, likely_fixed, historical_resolved, residual_risk, unknown",
@@ -150,6 +152,110 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		if strings.Contains(userPrompt, secret) {
 			t.Fatalf("doctor prompt leaked secret %q:\n%s", secret, userPrompt)
 		}
+	}
+}
+
+func TestRunDoctorOnceDelegatesToActiveMaintainerChild(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "State of Things\nMaintainer delegated diagnosis is healthy.\n\nRecommendations\nKeep implementation work in /tmp PR clones."
+	childWorkspace := filepath.Join(t.TempDir(), "maintainer", "workspace")
+	childMemory := filepath.Join(t.TempDir(), "maintainer", "memory")
+	agent := core.DurableAgent{
+		AgentID:            "aphelion-maintainer-live",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		LocalStorageRoots:  []string{childWorkspace, childMemory},
+		Status:             "active",
+		BootstrapLLM:       durableGroupTestBootstrapLLM(),
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:                   "Review Aphelion and propose fixes.",
+			CapabilityEnvelope:        []string{"session_log_read", "repo_read", "bounded_review_artifact", "patch_proposal"},
+			OutboundMode:              "read_only",
+			DriftPolicy:               "admin_review",
+			PublicSurfaceMode:         "explicit_parent_relay_only",
+			SharedInferenceReuse:      "disabled",
+			SharedInferenceReuseScope: "public_prefix_only",
+		}),
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	writeMaintainerProvenance(t, childMemory)
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	err = rt.runDoctorOnce(context.Background(), core.InboundMessage{
+		ChatID:     1001,
+		SenderID:   1001,
+		SenderName: "admin",
+		ChatType:   "private",
+		Text:       "/doctor",
+		MessageID:  41,
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("runDoctorOnce() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	var userPrompt string
+	var systemPrompt string
+	for _, msg := range provider.lastGovernorMsgs {
+		if msg.Role == "user" {
+			userPrompt += "\n" + msg.Content
+		}
+		if msg.Role == "system" {
+			systemPrompt += "\n" + msg.Content
+		}
+	}
+	provider.mu.Unlock()
+	for _, want := range []string{
+		"maintainer_delegate_status=\"active\"",
+		"maintainer_delegate_agent_id=\"aphelion-maintainer-live\"",
+		"Maintainer runtime boundary",
+		"/tmp clone",
+		"GitHub PR",
+	} {
+		if !strings.Contains(userPrompt, want) && !strings.Contains(systemPrompt, want) {
+			t.Fatalf("doctor delegate prompt missing %q\nsystem:\n%s\nuser:\n%s", want, systemPrompt, userPrompt)
+		}
+	}
+
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	assistantMsg := sess.Messages[len(sess.Messages)-1]
+	if !strings.Contains(assistantMsg.FloorMetadata, "doctor_delegate_agent_id=aphelion-maintainer-live") ||
+		!strings.Contains(assistantMsg.FloorMetadata, "doctor_delegate_artifact=artifacts/reports/") {
+		t.Fatalf("assistant floor metadata = %q, want maintainer delegate artifact", assistantMsg.FloorMetadata)
+	}
+	reportFiles, err := filepath.Glob(filepath.Join(childMemory, "artifacts", "reports", "*-doctor.md"))
+	if err != nil {
+		t.Fatalf("Glob(report) err = %v", err)
+	}
+	if len(reportFiles) != 1 {
+		t.Fatalf("report files = %#v, want one maintainer artifact", reportFiles)
+	}
+	reportRaw, err := os.ReadFile(reportFiles[0])
+	if err != nil {
+		t.Fatalf("ReadFile(report artifact) err = %v", err)
+	}
+	if !strings.Contains(string(reportRaw), "Maintainer delegated diagnosis is healthy") ||
+		!strings.Contains(string(reportRaw), "aphelion-maintainer-live") {
+		t.Fatalf("report artifact = %q, want delegated doctor report", reportRaw)
+	}
+	manifestRaw, err := os.ReadFile(filepath.Join(childMemory, "artifacts", "ARTIFACTS.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(ARTIFACTS.json) err = %v", err)
+	}
+	if !strings.Contains(string(manifestRaw), `"kind": "doctor_report"`) ||
+		!strings.Contains(string(manifestRaw), `"source": "doctor_delegate"`) {
+		t.Fatalf("ARTIFACTS.json = %s, want doctor artifact manifest entry", manifestRaw)
 	}
 }
 
@@ -262,4 +368,27 @@ func doctorEditsContain(edits []messageEdit, want string) bool {
 		}
 	}
 	return false
+}
+
+func writeMaintainerProvenance(t *testing.T, memoryRoot string) {
+	t.Helper()
+	profileRoot := filepath.Join(memoryRoot, "profile")
+	if err := os.MkdirAll(filepath.Join(profileRoot, "archetype", "profile"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(profile archetype) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileRoot, "ARCHETYPE.json"), []byte(`{"name":"aphelion-maintainer","files":["profile/archetype/AGENT.md"]}`+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(ARCHETYPE.json) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileRoot, "archetype", "AGENT.md"), []byte("# Aphelion Maintainer\n\nReview and propose fixes.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(AGENT.md) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileRoot, "archetype", "profile", "runtime.md"), []byte("Never mutate the local Aphelion clone. Approved implementation uses a /tmp clone and GitHub PR.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(runtime.md) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileRoot, "archetype", "profile", "charter.md"), []byte("Review Aphelion and propose fixes.\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(charter.md) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profileRoot, "archetype", "profile", "capabilities.md"), []byte("- session_log_read\n- repo_read\n- patch_proposal\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(capabilities.md) err = %v", err)
+	}
 }
