@@ -52,6 +52,7 @@ type durableWakeIngressAdapter interface {
 func defaultDurableWakeIngressAdapters() []durableWakeIngressAdapter {
 	return []durableWakeIngressAdapter{
 		newDailyReviewDurableWakeAdapter(),
+		newCodexAppServerWakeAdapter(),
 		newDurableParentConversationWakeAdapter(),
 	}
 }
