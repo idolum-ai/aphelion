@@ -336,6 +336,10 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		return out, monitorErr
 	}
 
+	turnResult.Media, monitorErr = materializeGeneratedReplyMedia(input.Scope, turnResult.Media)
+	if monitorErr != nil {
+		return out, monitorErr
+	}
 	turnResult.Text, turnResult.Media = extractOutboundReplyMedia(input.Scope, turnResult.Text, turnResult.Media)
 	if input.Audit != nil {
 		input.Audit.RecordGovernorReply(turnResult.Text, turnResult.Media)

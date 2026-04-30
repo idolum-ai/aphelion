@@ -135,6 +135,34 @@ func TestSimpleTurn(t *testing.T) {
 	}
 }
 
+func TestRunTurnPropagatesProviderMedia(t *testing.T) {
+	provider := &mockProvider{complete: func(_ context.Context, _ int, _ []Message, _ []ToolDef) (*Response, error) {
+		return &Response{
+			Content: "Draft generated.",
+			Media: []core.Media{{
+				Type:     "image",
+				Data:     []byte("png-bytes"),
+				MimeType: "image/png",
+				Filename: "image-generation-call-ig-1.png",
+			}},
+		}, nil
+	}}
+
+	result, _, err := RunTurn(context.Background(), provider, nil, defaultBudget(), nil, []Message{{Role: "user", Content: "make image"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "Draft generated." {
+		t.Fatalf("result text = %q", result.Text)
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("media len = %d, want 1", len(result.Media))
+	}
+	if result.Media[0].Type != "image" || result.Media[0].MimeType != "image/png" || string(result.Media[0].Data) != "png-bytes" {
+		t.Fatalf("media = %#v, want generated image bytes", result.Media[0])
+	}
+}
+
 func TestToolCallLoop(t *testing.T) {
 	provider := &mockProvider{
 		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {

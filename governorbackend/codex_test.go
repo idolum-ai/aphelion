@@ -201,6 +201,112 @@ func TestCodexCompleteToolCallViaResponsesOutput(t *testing.T) {
 	}
 }
 
+func TestCodexCompleteMapsImageGenerationCallToMedia(t *testing.T) {
+	t.Parallel()
+
+	png := "iVBORw0KGgo="
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "Draft generated.",
+			}),
+			sseEvent("response.output_item.done", map[string]any{
+				"type": "response.output_item.done",
+				"item": map[string]any{
+					"type":           "image_generation_call",
+					"id":             "ig_456",
+					"status":         "completed",
+					"revised_prompt": "A quiet phosphor gate.",
+					"result":         png,
+				},
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type":     "response.completed",
+				"response": map[string]any{"id": "resp1"},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "make image"}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "Draft generated." {
+		t.Fatalf("content = %q", resp.Content)
+	}
+	if len(resp.Media) != 1 {
+		t.Fatalf("media len = %d, want 1", len(resp.Media))
+	}
+	media := resp.Media[0]
+	if media.Type != "image" || media.MimeType != "image/png" || media.Filename != "image-generation-call-ig_456.png" {
+		t.Fatalf("media metadata = %#v", media)
+	}
+	if string(media.Data) != string([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+		t.Fatalf("media bytes = %v, want PNG signature", media.Data)
+	}
+}
+
+func TestCodexRequestIncludesImageGenerationBuiltInTool(t *testing.T) {
+	t.Parallel()
+
+	var seenTools []any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if tools, ok := payload["tools"].([]any); ok {
+			seenTools = tools
+		}
+		writeSSE(t, w,
+			sseEvent("response.output_text.delta", map[string]any{
+				"type":  "response.output_text.delta",
+				"delta": "blocked",
+			}),
+			sseEvent("response.completed", map[string]any{
+				"type":     "response.completed",
+				"response": map[string]any{"id": "resp1"},
+			}),
+		)
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "make image"}}, []agent.ToolDef{{Name: "image_generation", Parameters: json.RawMessage(`{"type":"builtin","output_format":"png"}`)}})
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if len(seenTools) != 1 {
+		t.Fatalf("tools len = %d, want 1: %#v", len(seenTools), seenTools)
+	}
+	tool, ok := seenTools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want object", seenTools[0])
+	}
+	if tool["type"] != "image_generation" || tool["output_format"] != "png" {
+		t.Fatalf("image_generation tool = %#v, want built-in tool spec", tool)
+	}
+}
+
 func TestCodexCompleteMapsAssistantHistoryAsOutputText(t *testing.T) {
 	t.Parallel()
 

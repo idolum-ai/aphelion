@@ -105,7 +105,7 @@ func runDurableAgentChildWakeBootstrap(ctx context.Context, bootstrap runtimepkg
 	if err != nil {
 		return err
 	}
-	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
+	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store).WithDurableAgentPrincipalFallback()
 	tools.WithSemanticEngine(memory.NewSemanticEngine(memory.SemanticOptions{
 		Enabled:             cfg.Memory.Semantic.Enabled,
 		DBPath:              memory.DefaultSemanticDBPath(cfg.Sessions.DBPath),

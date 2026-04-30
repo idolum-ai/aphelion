@@ -361,8 +361,9 @@ func New(
 	}
 
 	activeProvider := provider
+	var codexProvider agent.Provider
 	if governorAuth.Backend == governorauth.BackendCodex {
-		codexProvider, err := newCodexProvider(governorAuth, cfg)
+		codexProvider, err = newCodexProvider(governorAuth, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("init codex governor backend: %w", err)
 		}
@@ -376,6 +377,11 @@ func New(
 				return nil, fmt.Errorf("init governor failover chain: %w", err)
 			}
 			activeProvider = chain
+		}
+	}
+	if codexProvider != nil {
+		if setter, ok := tools.(interface{ SetCodexImageGenerationProvider(agent.Provider) }); ok {
+			setter.SetCodexImageGenerationProvider(codexProvider)
 		}
 	}
 

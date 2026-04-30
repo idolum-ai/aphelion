@@ -392,11 +392,15 @@ type openAIResponsesResponse struct {
 }
 
 type openAIResponsesOutputItem struct {
-	Type      string          `json:"type"`
-	CallID    string          `json:"call_id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
-	Content   []struct {
+	Type          string          `json:"type"`
+	ID            string          `json:"id"`
+	CallID        string          `json:"call_id"`
+	Name          string          `json:"name"`
+	Arguments     json.RawMessage `json:"arguments"`
+	Status        string          `json:"status"`
+	RevisedPrompt string          `json:"revised_prompt"`
+	Result        string          `json:"result"`
+	Content       []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
@@ -419,6 +423,7 @@ type openAIResponsesStreamEvent struct {
 	Type     string                  `json:"type"`
 	Delta    string                  `json:"delta,omitempty"`
 	Text     string                  `json:"text,omitempty"`
+	Item     json.RawMessage         `json:"item,omitempty"`
 	Response openAIResponsesResponse `json:"response,omitempty"`
 	Error    *openAIStreamFailure    `json:"error,omitempty"`
 }
@@ -636,6 +641,10 @@ func mapOpenAIResponsesResponse(res openAIResponsesResponse) *agent.Response {
 				Name:  name,
 				Input: json.RawMessage(normalizeOpenAIResponsesArguments(item.Arguments)),
 			})
+		case "image_generation_call":
+			if media, ok := imageGenerationCallMedia(item.ID, item.Result); ok {
+				resp.Media = append(resp.Media, media)
+			}
 		case "reasoning":
 			for _, summary := range item.Summary {
 				if summaryText := strings.TrimSpace(summary.Text); summaryText != "" {
@@ -667,6 +676,56 @@ func mapOpenAIResponsesResponse(res openAIResponsesResponse) *agent.Response {
 		resp.Usage.TotalTokens = resp.Usage.InputTokens + resp.Usage.OutputTokens
 	}
 	return resp
+}
+
+func imageGenerationCallMedia(id string, result string) (core.Media, bool) {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return core.Media{}, false
+	}
+	bytes, err := base64.StdEncoding.DecodeString(trimmed)
+	if err != nil || len(bytes) == 0 {
+		return core.Media{}, false
+	}
+	mimeType := http.DetectContentType(bytes)
+	ext := imageExtensionForMimeType(mimeType)
+	return core.Media{
+		Type:     "image",
+		Data:     bytes,
+		MimeType: mimeType,
+		Filename: "image-generation-call-" + sanitizeImageGenerationID(id) + ext,
+	}, true
+}
+
+func imageExtensionForMimeType(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".png"
+	}
+}
+
+func sanitizeImageGenerationID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "generated"
+	}
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "generated"
+	}
+	return b.String()
 }
 
 func normalizeOpenAIResponsesArguments(raw json.RawMessage) string {
@@ -779,6 +838,7 @@ type openAIResponsesStreamParser struct {
 	cb          agent.StreamCallback
 	text        strings.Builder
 	doneText    string
+	media       []core.Media
 	completed   *openAIResponsesResponse
 	callbackErr error
 	parseErr    error
@@ -805,8 +865,21 @@ func (p *openAIResponsesStreamParser) consume(event internal.Event) error {
 		eventType = strings.TrimSpace(event.Type)
 	}
 	switch eventType {
-	case "", "response.created", "response.in_progress", "response.output_item.added", "response.content_part.added", "response.content_part.done", "response.output_item.done":
+	case "", "response.created", "response.in_progress", "response.output_item.added", "response.content_part.added", "response.content_part.done":
 		return p.err()
+	case "response.output_item.done":
+		if len(payload.Item) > 0 {
+			var item openAIResponsesOutputItem
+			if err := json.Unmarshal(payload.Item, &item); err != nil {
+				p.parseErr = fmt.Errorf("openai: decode responses stream item: %w", err)
+				return p.parseErr
+			}
+			if strings.TrimSpace(item.Type) == "image_generation_call" {
+				if media, ok := imageGenerationCallMedia(item.ID, item.Result); ok {
+					p.media = append(p.media, media)
+				}
+			}
+		}
 	case "response.output_text.delta":
 		if payload.Delta == "" {
 			return p.err()
@@ -840,6 +913,9 @@ func (p *openAIResponsesStreamParser) response() *agent.Response {
 	}
 	if strings.TrimSpace(content) != "" {
 		resp.Content = content
+	}
+	if len(p.media) > 0 {
+		resp.Media = append(resp.Media, p.media...)
 	}
 	return resp
 }

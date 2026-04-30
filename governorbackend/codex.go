@@ -611,6 +611,10 @@ func toCodexTools(tools []agent.ToolDef) []map[string]any {
 		if name == "" {
 			continue
 		}
+		if builtin, ok := codexBuiltInToolSpec(name, tool.Parameters); ok {
+			out = append(out, builtin)
+			continue
+		}
 		entry := map[string]any{
 			"type": "function",
 			"name": name,
@@ -624,6 +628,30 @@ func toCodexTools(tools []agent.ToolDef) []map[string]any {
 		out = append(out, entry)
 	}
 	return out
+}
+
+func codexBuiltInToolSpec(name string, params json.RawMessage) (map[string]any, bool) {
+	if strings.TrimSpace(name) != "image_generation" {
+		return nil, false
+	}
+	var cfg struct {
+		Type         string `json:"type"`
+		OutputFormat string `json:"output_format"`
+	}
+	if len(bytes.TrimSpace(params)) > 0 {
+		_ = json.Unmarshal(params, &cfg)
+	}
+	if strings.TrimSpace(cfg.Type) != "builtin" {
+		return nil, false
+	}
+	outputFormat := strings.TrimSpace(cfg.OutputFormat)
+	if outputFormat == "" {
+		outputFormat = "png"
+	}
+	return map[string]any{
+		"type":          "image_generation",
+		"output_format": outputFormat,
+	}, true
 }
 
 func mapCodexReasoning(cfg agent.ReasoningConfig) map[string]any {
@@ -676,11 +704,15 @@ type codexCompletedResponse struct {
 }
 
 type codexOutputItem struct {
-	Type      string          `json:"type"`
-	CallID    string          `json:"call_id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
-	Summary   []struct {
+	Type          string          `json:"type"`
+	ID            string          `json:"id"`
+	CallID        string          `json:"call_id"`
+	Name          string          `json:"name"`
+	Arguments     json.RawMessage `json:"arguments"`
+	Status        string          `json:"status"`
+	RevisedPrompt string          `json:"revised_prompt"`
+	Result        string          `json:"result"`
+	Summary       []struct {
 		Text string `json:"text"`
 	} `json:"summary"`
 }
@@ -702,6 +734,7 @@ type codexStreamParser struct {
 	thinking     strings.Builder
 	thinkingMeta []agent.ThinkingBlock
 	toolCalls    []agent.ToolCall
+	media        []core.Media
 	reasoningRaw []json.RawMessage
 	usage        core.TokenUsage
 	responseID   string
@@ -780,6 +813,10 @@ func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallbac
 					})
 				}
 			}
+		case "image_generation_call":
+			if media, ok := codexImageGenerationCallMedia(item.ID, item.Result); ok {
+				p.media = append(p.media, media)
+			}
 		case "message":
 			// Text is normally streamed via output_text.delta; ignore here to avoid duplication.
 		}
@@ -809,12 +846,63 @@ func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallbac
 	}
 }
 
+func codexImageGenerationCallMedia(id string, result string) (core.Media, bool) {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return core.Media{}, false
+	}
+	bytes, err := base64.StdEncoding.DecodeString(trimmed)
+	if err != nil || len(bytes) == 0 {
+		return core.Media{}, false
+	}
+	mimeType := http.DetectContentType(bytes)
+	ext := codexImageExtensionForMimeType(mimeType)
+	return core.Media{
+		Type:     "image",
+		Data:     bytes,
+		MimeType: mimeType,
+		Filename: "image-generation-call-" + sanitizeCodexImageGenerationID(id) + ext,
+	}, true
+}
+
+func codexImageExtensionForMimeType(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".png"
+	}
+}
+
+func sanitizeCodexImageGenerationID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "generated"
+	}
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "generated"
+	}
+	return b.String()
+}
+
 func (p *codexStreamParser) response() (*codexCompletionResult, error) {
 	resp := &agent.Response{
 		Content:      p.text.String(),
 		Thinking:     p.thinking.String(),
 		ThinkingMeta: append([]agent.ThinkingBlock(nil), p.thinkingMeta...),
 		ToolCalls:    append([]agent.ToolCall(nil), p.toolCalls...),
+		Media:        append([]core.Media(nil), p.media...),
 		Usage:        p.usage,
 	}
 	if strings.TrimSpace(p.responseID) != "" {
@@ -1165,6 +1253,8 @@ type codexResponseAccumulator struct {
 	thinkingMeta []agent.ThinkingBlock
 	toolCalls    []agent.ToolCall
 	toolCallSet  map[string]struct{}
+	media        []core.Media
+	mediaSet     map[string]struct{}
 	reasoningRaw []json.RawMessage
 	reasoningSet map[string]struct{}
 	usage        core.TokenUsage
@@ -1174,6 +1264,7 @@ type codexResponseAccumulator struct {
 func newCodexResponseAccumulator() *codexResponseAccumulator {
 	return &codexResponseAccumulator{
 		toolCallSet:  map[string]struct{}{},
+		mediaSet:     map[string]struct{}{},
 		reasoningSet: map[string]struct{}{},
 	}
 }
@@ -1196,6 +1287,14 @@ func (a *codexResponseAccumulator) merge(resp *agent.Response, responseID string
 		}
 		a.toolCallSet[key] = struct{}{}
 		a.toolCalls = append(a.toolCalls, call)
+	}
+	for _, media := range resp.Media {
+		key := strings.Join([]string{strings.TrimSpace(media.Filename), strings.TrimSpace(media.MimeType), string(media.Data)}, "\x00")
+		if _, ok := a.mediaSet[key]; ok {
+			continue
+		}
+		a.mediaSet[key] = struct{}{}
+		a.media = append(a.media, media)
 	}
 	if state, ok := decodeCodexProviderState(resp.ProviderState); ok {
 		for _, raw := range state.ReasoningItems {
@@ -1228,6 +1327,7 @@ func (a *codexResponseAccumulator) response() *agent.Response {
 		Thinking:     strings.TrimSpace(a.thinking.String()),
 		ThinkingMeta: append([]agent.ThinkingBlock(nil), a.thinkingMeta...),
 		ToolCalls:    append([]agent.ToolCall(nil), a.toolCalls...),
+		Media:        append([]core.Media(nil), a.media...),
 		Usage:        a.usage,
 	}
 	if a.responseID != "" {

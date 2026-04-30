@@ -44,6 +44,8 @@ type Registry struct {
 	durableAgentBootstrapLLM        core.NodeLLMBootstrap
 	externalManifests               []ExternalToolManifest
 	externalExecutor                ExternalToolExecutor
+	codexImageGenerationProvider    agent.Provider
+	durableAgentPrincipalFallback   bool
 }
 
 type execInput struct {
@@ -358,6 +360,25 @@ func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
 	return r
 }
 
+func (r *Registry) WithCodexImageGenerationProvider(provider agent.Provider) *Registry {
+	r.SetCodexImageGenerationProvider(provider)
+	return r
+}
+
+func (r *Registry) SetCodexImageGenerationProvider(provider agent.Provider) {
+	if r == nil {
+		return
+	}
+	r.codexImageGenerationProvider = provider
+}
+
+func (r *Registry) WithDurableAgentPrincipalFallback() *Registry {
+	if r != nil {
+		r.durableAgentPrincipalFallback = true
+	}
+	return r
+}
+
 func (r *Registry) WithExecApprover(approver ExecApprover) *Registry {
 	r.execApprover = approver
 	return r
@@ -445,14 +466,35 @@ func (r *Registry) SupportsPrincipal(p principal.Principal) bool {
 		return false
 	}
 
-	scope, err := r.sandbox.Resolve(p)
+	scope, err := r.scopeForPrincipalToolExecution(p)
 	if err != nil {
 		return false
+	}
+	if r.durableAgentPrincipalFallback && p.Role == principal.RoleDurableAgent && strings.TrimSpace(p.DurableAgentID) != "" {
+		return true
 	}
 	if r.runner == nil {
 		return p.Role == principal.RoleAdmin
 	}
 	return r.runner.Supports(scope)
+}
+
+func (r *Registry) scopeForPrincipalToolExecution(p principal.Principal) (sandbox.Scope, error) {
+	if r == nil || r.sandbox == nil {
+		return sandbox.Scope{}, fmt.Errorf("principal-aware execution requires sandbox resolver")
+	}
+	scope, err := r.sandbox.Resolve(p)
+	if err == nil {
+		return scope, nil
+	}
+	if r.durableAgentPrincipalFallback && p.Role == principal.RoleDurableAgent && strings.TrimSpace(p.DurableAgentID) != "" {
+		return sandbox.Scope{
+			Principal:        p,
+			WorkingRoot:      strings.TrimSpace(r.workspace),
+			SharedMemoryRoot: strings.TrimSpace(r.workspace),
+		}, nil
+	}
+	return sandbox.Scope{}, err
 }
 
 func (r *Registry) DefinitionsForPrincipal(p principal.Principal) []agent.ToolDef {
@@ -470,6 +512,13 @@ func (r *Registry) nativeDefinitionsForPrincipal(p principal.Principal) []agent.
 	filtered := make([]agent.ToolDef, 0, len(defs))
 	for _, def := range defs {
 		name := strings.TrimSpace(def.Name)
+		if name == codexImageGenerationToolName {
+			allowed, err := r.codexImageGenerationAccessAllowed(p)
+			if err == nil && allowed {
+				filtered = append(filtered, def)
+			}
+			continue
+		}
 		if !r.authorityManagedTool(name) {
 			filtered = append(filtered, def)
 			continue
@@ -594,6 +643,9 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				"required": ["query"]
 			}`),
 		},
+	}
+	if def, ok := r.codexImageGenerationToolDefinition(); ok {
+		defs = append(defs, def)
 	}
 	if r.semantic != nil && r.semantic.Enabled() {
 		defs = append(defs, agent.ToolDef{
@@ -995,7 +1047,7 @@ func (r *Registry) ExecuteForSessionPrincipal(ctx context.Context, p principal.P
 		return "", fmt.Errorf("principal-aware execution requires sandbox resolver")
 	}
 
-	scope, err := r.sandbox.Resolve(p)
+	scope, err := r.scopeForPrincipalToolExecution(p)
 	if err != nil {
 		return "", err
 	}
@@ -1003,10 +1055,13 @@ func (r *Registry) ExecuteForSessionPrincipal(ctx context.Context, p principal.P
 		return "", err
 	}
 	if r.runner == nil {
-		return "", fmt.Errorf("principal-aware execution requires sandbox runner")
-	}
-	if !r.runner.Supports(scope) {
-		return "", fmt.Errorf("no supported sandbox backend for principal role %q", p.Role)
+		if !(r.durableAgentPrincipalFallback && p.Role == principal.RoleDurableAgent && name != "exec") {
+			return "", fmt.Errorf("principal-aware execution requires sandbox runner")
+		}
+	} else if !r.runner.Supports(scope) {
+		if !(r.durableAgentPrincipalFallback && p.Role == principal.RoleDurableAgent && name != "exec") {
+			return "", fmt.Errorf("no supported sandbox backend for principal role %q", p.Role)
+		}
 	}
 	return r.executeWithScopeAndPrincipal(ctx, name, input, scope, p, key)
 }
@@ -1048,6 +1103,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.openAIVectorStore(ctx, input, p)
 	case "durable_agent":
 		return r.durableAgent(ctx, input, p, key, scope)
+	case codexImageGenerationToolName:
+		return r.codexImageGeneration(ctx, input, scope, p)
 	default:
 		if manifest, ok := r.externalManifestByName(name); ok {
 			if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) {

@@ -281,6 +281,42 @@ func TestOpenAICompleteWithVerbosityOnlyUsesResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesMapsImageGenerationCallToMedia(t *testing.T) {
+	png := "iVBORw0KGgo="
+	resp := mapOpenAIResponsesResponse(openAIResponsesResponse{
+		Output: []openAIResponsesOutputItem{
+			{
+				Type: "message",
+				Content: []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}{{Type: "output_text", Text: "Draft generated."}},
+			},
+			{
+				Type:          "image_generation_call",
+				ID:            "ig_123",
+				Status:        "completed",
+				RevisedPrompt: "A phosphor gate turns telemetry into care.",
+				Result:        png,
+			},
+		},
+	})
+
+	if resp.Content != "Draft generated." {
+		t.Fatalf("content = %q", resp.Content)
+	}
+	if len(resp.Media) != 1 {
+		t.Fatalf("media len = %d, want 1", len(resp.Media))
+	}
+	media := resp.Media[0]
+	if media.Type != "image" || media.MimeType != "image/png" || media.Filename != "image-generation-call-ig_123.png" {
+		t.Fatalf("media metadata = %#v", media)
+	}
+	if string(media.Data) != string([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+		t.Fatalf("media bytes = %v, want PNG signature", media.Data)
+	}
+}
+
 func TestOpenAIStreamWithOptionsUsesResponsesAPI(t *testing.T) {
 	var (
 		seenPath string
@@ -353,6 +389,49 @@ func TestOpenAIStreamWithOptionsUsesResponsesAPI(t *testing.T) {
 	}
 	if resp.Usage.CacheReadTokens != 1 || resp.Usage.CacheWriteTokens != 2 {
 		t.Fatalf("cache usage = %+v, want read=1 write=2", resp.Usage)
+	}
+}
+
+func TestOpenAIStreamWithOptionsMapsImageGenerationCallToMedia(t *testing.T) {
+	png := "iVBORw0KGgo="
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			"event: response.output_text.delta",
+			`data: {"type":"response.output_text.delta","delta":"Draft generated."}`,
+			"",
+			"event: response.output_item.done",
+			`data: {"type":"response.output_item.done","item":{"type":"image_generation_call","id":"ig_stream","status":"completed","result":"` + png + `"}}`,
+			"",
+			"event: response.completed",
+			`data: {"type":"response.completed","response":{"id":"resp1"}}`,
+			"",
+		}, "\n"))
+	})
+
+	client, err := NewOpenAI(OpenAIOptions{
+		APIKey:     "test-key",
+		Model:      "gpt-5.5",
+		Transport:  core.ModelTransportOpenAIResponses,
+		HTTPClient: &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAI() err = %v", err)
+	}
+
+	resp, err := client.StreamWithOptions(context.Background(), []agent.Message{{Role: "user", Content: "make image"}}, nil, agent.CompleteOptions{}, nil)
+	if err != nil {
+		t.Fatalf("StreamWithOptions() err = %v", err)
+	}
+	if resp.Content != "Draft generated." {
+		t.Fatalf("content = %q", resp.Content)
+	}
+	if len(resp.Media) != 1 {
+		t.Fatalf("media len = %d, want 1", len(resp.Media))
+	}
+	media := resp.Media[0]
+	if media.Type != "image" || media.MimeType != "image/png" || media.Filename != "image-generation-call-ig_stream.png" {
+		t.Fatalf("media metadata = %#v", media)
 	}
 }
 

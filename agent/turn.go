@@ -84,6 +84,7 @@ type Response struct {
 	ThinkingMeta   []ThinkingBlock
 	ProviderState  json.RawMessage
 	ToolCalls      []ToolCall
+	Media          []core.Media
 	Usage          core.TokenUsage
 	ProviderEvents []core.ProviderEvent
 }
@@ -242,6 +243,7 @@ func RunTurn(
 			log.Printf("INFO turn completed tool_calls=%d", len(toolLog))
 			return &core.TurnResult{
 				Text:           resp.Content,
+				Media:          append([]core.Media(nil), resp.Media...),
 				ToolLog:        toolLog,
 				TokenUsage:     resp.Usage,
 				ProviderEvents: append([]core.ProviderEvent(nil), providerEvents...),

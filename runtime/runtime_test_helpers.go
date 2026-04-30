@@ -61,6 +61,7 @@ type fakeProvider struct {
 	lastReasoning          agent.ReasoningConfig
 	lastVerbosity          agent.Verbosity
 	reasoningBySystem      map[string]agent.ReasoningConfig
+	replyMedia             []core.Media
 }
 
 type planningErrorProvider struct {
@@ -196,6 +197,7 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, too
 	return &agent.Response{
 		Content:  f.replyText,
 		Thinking: f.thinkingText,
+		Media:    append([]core.Media(nil), f.replyMedia...),
 		Usage:    f.responseUsage,
 	}, nil
 }
