@@ -256,6 +256,12 @@ func (a *telegramDurableSnapshotRestoreApprover) ConfirmDurableSnapshotRestore(c
 }
 
 func approvedDecisionConfirmationText(label string, decisionID string, kind decision.Kind, details string) string {
+	if kind == decision.KindProposalApproval {
+		pending := decision.PendingDecision{Request: decision.Request{Kind: kind, Details: details}}
+		if summary := strings.TrimSpace(summarizePendingDecision(pending)); summary != "" {
+			return approvedProposalConfirmationSummary(summary)
+		}
+	}
 	label = strings.TrimSpace(label)
 	if label == "" {
 		label = "Approval"
@@ -271,6 +277,23 @@ func approvedDecisionConfirmationText(label string, decisionID string, kind deci
 		lines = append(lines, "", compact)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func approvedProposalConfirmationSummary(summary string) string {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return "Approved."
+	}
+	lower := strings.ToLower(summary)
+	for _, prefix := range []string{"i’d like to ", "i'd like to "} {
+		if strings.HasPrefix(lower, prefix) {
+			return "Approved — I’ll " + strings.TrimSpace(summary[len(prefix):])
+		}
+	}
+	if strings.HasPrefix(lower, "high-risk approval:") {
+		return "Approved — high-risk: " + strings.TrimSpace(summary[len("High-risk approval:"):])
+	}
+	return "Approved — " + summary
 }
 
 func approvedDecisionConfirmationRows(decisionID string, details string) [][]telegram.InlineButton {
@@ -1141,6 +1164,9 @@ func renderPendingDecisionSummary(pending decision.PendingDecision) string {
 	if summary == "" {
 		return renderPendingDecisionExpanded(pending)
 	}
+	if pending.Kind == decision.KindProposalApproval {
+		return summary
+	}
 	if prompt == "" {
 		return summary
 	}
@@ -1179,24 +1205,78 @@ func summarizePendingDecision(pending decision.PendingDecision) string {
 
 func summarizeProposalApprovalDetails(details string) string {
 	sections := splitDecisionSections(details)
-	summary := cleanProposalApprovalSummary(firstNonEmpty(sections["summary"]))
-	why := firstNonEmpty(sections["why now"])
-	effect := firstNonEmpty(sections["if approved"])
+	summary := compactSentence(cleanProposalApprovalSummary(firstNonEmpty(sections["summary"])))
+	kind := firstNonEmpty(sections["kind"])
 	command := firstNonEmpty(sections["command"])
-	lines := make([]string, 0, 5)
+	if message := commitMessageFromProposalCommand(command); message != "" {
+		return "I’d like to commit: `" + message + "`."
+	}
+	if proposalSummaryLooksHighRisk(kind, summary) {
+		return "High-risk approval: " + ensureDecisionSentence(summary)
+	}
 	if summary != "" {
-		lines = append(lines, summary)
+		return "I’d like to " + lowercaseDecisionStart(ensureDecisionSentence(summary))
 	}
-	if why != "" {
-		lines = append(lines, compactSentence("Why: "+why))
+	if effect := compactSentence(firstNonEmpty(sections["if approved"])); effect != "" {
+		return "I’d like to " + lowercaseDecisionStart(ensureDecisionSentence(effect))
 	}
-	if effect != "" {
-		lines = append(lines, compactSentence("Will do: "+effect))
+	return compactSentence(details)
+}
+
+func commitMessageFromProposalCommand(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
 	}
-	if command != "" {
-		lines = append(lines, "Details hidden. Use Expand details to inspect the command.")
+	needle := "git" + " commit"
+	if !strings.Contains(command, needle) {
+		return ""
 	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	idx := strings.Index(command, " -m ")
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(command[idx+4:])
+	if rest == "" {
+		return ""
+	}
+	quote := rest[0]
+	if quote == '\'' || quote == '"' {
+		for i := 1; i < len(rest); i++ {
+			if rest[i] == quote && rest[i-1] != '\\' {
+				return strings.TrimSpace(rest[1:i])
+			}
+		}
+	}
+	return compactSentence(rest)
+}
+
+func proposalSummaryLooksHighRisk(kind string, summary string) bool {
+	joined := strings.ToLower(strings.Join([]string{kind, summary}, " "))
+	return strings.Contains(joined, "destructive") || strings.Contains(joined, "delete") || strings.Contains(joined, "remove")
+}
+
+func lowercaseDecisionStart(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	r := []rune(s)
+	r[0] = []rune(strings.ToLower(string(r[0])))[0]
+	return string(r)
+}
+
+func ensureDecisionSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	switch s[len(s)-1] {
+	case '.', '!', '?':
+		return s
+	default:
+		return s + "."
+	}
 }
 
 func cleanProposalApprovalSummary(summary string) string {

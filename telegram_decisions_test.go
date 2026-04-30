@@ -464,9 +464,14 @@ func TestProposalApprovalSummaryIsOutcomeFirst(t *testing.T) {
 			t.Fatalf("approval text = %q, should not contain noisy metadata %q", text, unwanted)
 		}
 	}
-	for _, wanted := range []string{"Proposal approved.", "Decision: 3", "Create a local git commit", "Why: Saving this work", "Will do: Create one local git commit", "Details hidden"} {
+	for _, wanted := range []string{"Approved — I’ll commit: `Document external channel runtime substrate`."} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("approval text = %q, want %q", text, wanted)
+		}
+	}
+	for _, hidden := range []string{"Decision:", "Why:", "Will do:", "Details hidden", "git" + " commit -m"} {
+		if strings.Contains(text, hidden) {
+			t.Fatalf("approval text = %q, should keep %q behind Expand details", text, hidden)
 		}
 	}
 }
@@ -512,8 +517,8 @@ func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 	if len(sender.edits) != 1 {
 		t.Fatalf("edits = %#v, want durable approval confirmation", sender.edits)
 	}
-	if !strings.Contains(sender.edits[0].text, "Proposal approved.") || !strings.Contains(sender.edits[0].text, "Decision:") || !strings.Contains(sender.edits[0].text, "Perform a destructive change") {
-		t.Fatalf("approval edit = %q, want proposal confirmation with decision id and summary", sender.edits[0].text)
+	if !strings.Contains(sender.edits[0].text, "Approved — high-risk:") || !strings.Contains(sender.edits[0].text, "Perform a destructive change") || strings.Contains(sender.edits[0].text, "Decision:") {
+		t.Fatalf("approval edit = %q, want compact proposal confirmation", sender.edits[0].text)
 	}
 	if !hasInlineButton(sender.edits[0].rows, "Expand details") {
 		t.Fatalf("approval rows = %#v, want retained expand details button", sender.edits[0].rows)
@@ -632,7 +637,7 @@ func TestTelegramExecApprovalConfirmationExpandShowsCommandAfterApproval(t *test
 	}
 
 	collapsed := waitForDecisionEdit(t, sender, 3)
-	if !strings.Contains(collapsed.text, "Proposal approved.") || strings.Contains(collapsed.text, "rm -rf /tmp/aphelion-runtime-bin") {
+	if !strings.Contains(collapsed.text, "Approved — high-risk:") || strings.Contains(collapsed.text, "rm -rf /tmp/aphelion-runtime-bin") || strings.Contains(collapsed.text, "Decision:") {
 		t.Fatalf("collapsed approved text = %q, want compact approval summary without raw command", collapsed.text)
 	}
 	if !hasInlineButton(collapsed.rows, "Expand details") || hasInlineButton(collapsed.rows, "Hide details") {
@@ -779,8 +784,8 @@ func TestTelegramExecApproverTimesOutToDeny(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline = %#v, want one proposal prompt", sender.inline)
 	}
-	if !strings.Contains(sender.inline[0].text, "Acquire browser automation") {
-		t.Fatalf("inline text = %q, want capability proposal summary", sender.inline[0].text)
+	if !strings.Contains(sender.inline[0].text, "I’d like to acquire browser automation.") {
+		t.Fatalf("inline text = %q, want intent-first capability proposal summary", sender.inline[0].text)
 	}
 }
 
