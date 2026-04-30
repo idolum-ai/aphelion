@@ -606,6 +606,15 @@ func (r *Runtime) startIdleExpiryLoop(ctx context.Context, cadence time.Duration
 		if expired > 0 {
 			logger("INFO expired %d idle session(s)", expired)
 		}
+		removedAudio, cleanupErr := r.cleanupTemporaryAudioArtifacts(time.Now().UTC())
+		if cleanupErr != nil {
+			logger("WARN temporary audio cleanup failed: %v", cleanupErr)
+			r.reportOperationalIssue(runCtx, "temporary_audio_cleanup", cleanupErr)
+			return
+		}
+		if removedAudio > 0 {
+			logger("INFO removed %d temporary audio artifact(s)", removedAudio)
+		}
 	})
 }
 

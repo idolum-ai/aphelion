@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +63,10 @@ type telegramDecisionMessageStopRouter interface {
 	StopForMessage(msg core.InboundMessage) core.StopResult
 }
 
+type telegramAudioRetentionKeeper interface {
+	KeepAudioArtifactsPermanently(ctx context.Context, msg core.InboundMessage) error
+}
+
 func editDecisionMessageClearingInlineKeyboard(ctx context.Context, sender telegramDecisionSender, chatID int64, messageID int64, text string) error {
 	if clearer, ok := sender.(telegramDecisionKeyboardClearer); ok {
 		return clearer.EditMessageTextWithoutInlineKeyboard(ctx, chatID, messageID, text, "")
@@ -74,6 +79,7 @@ type telegramDecisionHandler struct {
 	router                   telegramDecisionRouter
 	broker                   *decision.Broker
 	store                    *session.SQLiteStore
+	audioRetentionKeeper     telegramAudioRetentionKeeper
 	interruptTimeout         time.Duration
 	stopWordTimeout          time.Duration
 	artifactRetentionTimeout time.Duration
@@ -97,12 +103,17 @@ type telegramDurableSnapshotRestoreApprover struct {
 	timeout time.Duration
 }
 
-func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker, store *session.SQLiteStore) *telegramDecisionHandler {
+func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker, store *session.SQLiteStore, keepers ...telegramAudioRetentionKeeper) *telegramDecisionHandler {
+	var keeper telegramAudioRetentionKeeper
+	if len(keepers) > 0 {
+		keeper = keepers[0]
+	}
 	return &telegramDecisionHandler{
 		sender:                   sender,
 		router:                   router,
 		broker:                   broker,
 		store:                    store,
+		audioRetentionKeeper:     keeper,
 		interruptTimeout:         defaultInterruptTimeout,
 		stopWordTimeout:          defaultStopWordTimeout,
 		artifactRetentionTimeout: defaultArtifactRetentionTimeout,
@@ -419,6 +430,9 @@ func (h *telegramDecisionHandler) HandleArtifactRetentionMessage(ctx context.Con
 	if h == nil || h.sender == nil || h.router == nil || h.broker == nil {
 		return false, nil
 	}
+	if hasOnlyAudioArtifactRetentionCandidates(msg) {
+		return h.handleAudioArtifactRetentionMessage(ctx, msg)
+	}
 	if !hasArtifactRetentionCandidates(msg) {
 		return false, nil
 	}
@@ -515,6 +529,67 @@ func (h *telegramDecisionHandler) resumePendingArtifactRetention(ctx context.Con
 	}
 	h.router.Route(ctx, updated)
 	return nil
+}
+
+func (h *telegramDecisionHandler) handleAudioArtifactRetentionMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
+	updated := applyArtifactRetentionChoice(msg, "session")
+	storedForKeep := false
+	if h.store != nil {
+		if raw, err := json.Marshal(msg); err == nil {
+			err = h.store.UpsertPendingArtifactRetention(session.PendingArtifactRetentionRecord{
+				OwnerKey:           decision.OwnerKey(msg.ChatID, msg.SenderID),
+				ChatID:             msg.ChatID,
+				SenderID:           msg.SenderID,
+				InboundMessageJSON: string(raw),
+			})
+			storedForKeep = err == nil
+		}
+	}
+	if storedForKeep && h.audioRetentionKeeper != nil {
+		_ = h.sendAudioRetentionOffer(ctx, msg)
+	}
+	h.router.Route(ctx, updated)
+	return true, nil
+}
+
+func (h *telegramDecisionHandler) sendAudioRetentionOffer(ctx context.Context, msg core.InboundMessage) error {
+	if h == nil || h.sender == nil {
+		return nil
+	}
+	text := "Audio is available while we work with it. I won't keep it permanently unless you ask."
+	rows := [][]telegram.InlineButton{{{
+		Text:         "Keep audio permanently",
+		CallbackData: encodeAudioKeepCallbackData(msg.MessageID),
+	}}}
+	_, err := h.sender.SendInlineKeyboard(ctx, msg.ChatID, text, rows, replyToMessageID(msg.MessageID))
+	return err
+}
+
+func hasOnlyAudioArtifactRetentionCandidates(msg core.InboundMessage) bool {
+	if strings.TrimSpace(msg.DurableAgentID) != "" {
+		return false
+	}
+	seenAudio := false
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if strings.TrimSpace(artifact.Channel) != "telegram" {
+			continue
+		}
+		if strings.TrimSpace(artifact.RemoteID) == "" && len(artifact.Data) == 0 {
+			continue
+		}
+		if artifact.Kind == "structured" {
+			continue
+		}
+		if strings.TrimSpace(artifact.Metadata["aphelion_retention_choice"]) != "" {
+			continue
+		}
+		if artifact.Kind != "audio" {
+			return false
+		}
+		seenAudio = true
+	}
+	return seenAudio
 }
 
 func hasArtifactRetentionCandidates(msg core.InboundMessage) bool {
@@ -737,6 +812,9 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 	if eventID, action, ok := core.DecodeReviewEventCallbackData(cb.Data); ok {
 		return h.handleReviewEventCallback(ctx, cb, eventID, action)
 	}
+	if messageID, ok := decodeAudioKeepCallbackData(cb.Data); ok {
+		return h.handleAudioKeepCallback(ctx, cb, messageID)
+	}
 	id, choice, ok := decision.DecodeCallbackData(cb.Data)
 	if !ok {
 		if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
@@ -803,6 +881,76 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 		return err
 	}
 	return nil
+}
+
+func encodeAudioKeepCallbackData(messageID int64) string {
+	return "audio_keep:" + strconv.FormatInt(messageID, 10)
+}
+
+func decodeAudioKeepCallbackData(data string) (int64, bool) {
+	trimmed := strings.TrimSpace(data)
+	if !strings.HasPrefix(trimmed, "audio_keep:") {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(trimmed, "audio_keep:")), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+func (h *telegramDecisionHandler) handleAudioKeepCallback(ctx context.Context, cb telegram.CallbackQuery, sourceMessageID int64) error {
+	chatID := callbackChatID(cb)
+	senderID := callbackSenderID(cb)
+	if chatID == 0 || senderID == 0 || h == nil || h.store == nil || h.audioRetentionKeeper == nil {
+		return h.answerAudioKeepCallback(ctx, cb, "I can't save that audio from this prompt.")
+	}
+	record, err := h.store.PendingArtifactRetention(decision.OwnerKey(chatID, senderID))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return h.answerAudioKeepCallback(ctx, cb, "That audio is no longer available to save from this button.")
+		}
+		return err
+	}
+	var msg core.InboundMessage
+	if err := json.Unmarshal([]byte(record.InboundMessageJSON), &msg); err != nil {
+		return fmt.Errorf("decode pending audio retention message: %w", err)
+	}
+	if sourceMessageID != 0 && msg.MessageID != 0 && msg.MessageID != sourceMessageID {
+		return h.answerAudioKeepCallback(ctx, cb, "That audio button is stale.")
+	}
+	if err := h.audioRetentionKeeper.KeepAudioArtifactsPermanently(ctx, msg); err != nil {
+		return h.answerAudioKeepCallback(ctx, cb, "I couldn't save that audio permanently.")
+	}
+	_ = h.store.DeletePendingArtifactRetention(decision.OwnerKey(chatID, senderID))
+	if cb.Message != nil && cb.Message.MessageID != 0 {
+		_ = editDecisionMessageClearingInlineKeyboard(ctx, h.sender, chatID, cb.Message.MessageID, "Audio saved permanently.")
+	}
+	return h.answerAudioKeepCallback(ctx, cb, "Saved.")
+}
+
+func (h *telegramDecisionHandler) answerAudioKeepCallback(ctx context.Context, cb telegram.CallbackQuery, text string) error {
+	if h == nil || h.sender == nil {
+		return nil
+	}
+	if err := h.sender.AnswerCallbackQuery(ctx, cb.ID, text); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+		return err
+	}
+	return nil
+}
+
+func callbackChatID(cb telegram.CallbackQuery) int64 {
+	if cb.Message != nil && cb.Message.Chat != nil {
+		return cb.Message.Chat.ID
+	}
+	return 0
+}
+
+func callbackSenderID(cb telegram.CallbackQuery) int64 {
+	if cb.From != nil {
+		return cb.From.ID
+	}
+	return 0
 }
 
 func (h *telegramDecisionHandler) handleReviewEventCallback(ctx context.Context, cb telegram.CallbackQuery, eventID int64, action core.ReviewEventAction) error {

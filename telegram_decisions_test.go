@@ -80,6 +80,16 @@ func (s *decisionTestSender) AnswerCallbackQuery(_ context.Context, id string, t
 	return s.answerErr
 }
 
+type decisionTestAudioKeeper struct {
+	messages []core.InboundMessage
+	err      error
+}
+
+func (k *decisionTestAudioKeeper) KeepAudioArtifactsPermanently(_ context.Context, msg core.InboundMessage) error {
+	k.messages = append(k.messages, msg)
+	return k.err
+}
+
 type decisionTestRouter struct {
 	status             core.SessionStatus
 	statusForMessageFn func(core.InboundMessage) core.SessionStatus
@@ -1064,6 +1074,135 @@ func TestHandleCallbackQueryReturnsStaleMessageForMissingDecision(t *testing.T) 
 	}
 	if !strings.Contains(sender.answers[0].text, "no longer active") {
 		t.Fatalf("answer text = %q, want stale-decision hint", sender.answers[0].text)
+	}
+}
+
+func TestHandleArtifactRetentionMessageAudioDefaultsToSessionAndOffersPermanentKeep(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	router := &decisionTestRouter{}
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	keeper := &decisionTestAudioKeeper{}
+	handler := newTelegramDecisionHandler(sender, router, broker, store, keeper)
+
+	msg := core.InboundMessage{
+		ChatID:    7,
+		SenderID:  42,
+		MessageID: 99,
+		Artifacts: []core.Artifact{{
+			ID:         "voice-1",
+			Channel:    "telegram",
+			RemoteID:   "voice-file",
+			Kind:       "audio",
+			SourceType: "voice",
+			Subtype:    "voice_note",
+			Filename:   "voice.ogg",
+			MimeType:   "audio/ogg",
+		}},
+	}
+
+	handled, err := handler.HandleArtifactRetentionMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleArtifactRetentionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want one routed audio message", router.routed)
+	}
+	artifact := router.routed[0].Artifacts[0]
+	if got := artifact.Metadata["aphelion_retention_choice"]; got != "session" {
+		t.Fatalf("retention choice = %q, want session", got)
+	}
+	if got := artifact.DefaultRetention; got != "session_reference" {
+		t.Fatalf("DefaultRetention = %q, want session_reference", got)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one non-blocking audio keep prompt", sender.inline)
+	}
+	if strings.Contains(sender.inline[0].text, "turn") || strings.Contains(sender.inline[0].text, "session") {
+		t.Fatalf("inline text = %q, should not expose turn/session retention jargon", sender.inline[0].text)
+	}
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 1 {
+		t.Fatalf("rows = %#v, want one keep-permanent button", sender.inline[0].rows)
+	}
+	button := sender.inline[0].rows[0][0]
+	if button.Text != "Keep audio permanently" {
+		t.Fatalf("button text = %q, want Keep audio permanently", button.Text)
+	}
+	if strings.Contains(button.CallbackData, "decision:") {
+		t.Fatalf("callback data = %q, should use non-blocking audio keep lane", button.CallbackData)
+	}
+}
+
+func TestHandleAudioKeepCallbackSavesWithoutReroutingTurn(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	router := &decisionTestRouter{}
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	keeper := &decisionTestAudioKeeper{}
+	handler := newTelegramDecisionHandler(sender, router, broker, store, keeper)
+
+	msg := core.InboundMessage{
+		ChatID:    7,
+		SenderID:  42,
+		MessageID: 99,
+		Artifacts: []core.Artifact{{
+			ID:         "voice-1",
+			Channel:    "telegram",
+			RemoteID:   "voice-file",
+			Kind:       "audio",
+			SourceType: "voice",
+			Subtype:    "voice_note",
+			Filename:   "voice.ogg",
+			MimeType:   "audio/ogg",
+		}},
+	}
+	if handled, err := handler.HandleArtifactRetentionMessage(context.Background(), msg); err != nil || !handled {
+		t.Fatalf("HandleArtifactRetentionMessage() = %v, %v; want handled", handled, err)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one audio keep prompt", sender.inline)
+	}
+	callbackData := sender.inline[0].rows[0][0].CallbackData
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-audio-keep",
+		Data: callbackData,
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: 1,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery() err = %v", err)
+	}
+	if len(keeper.messages) != 1 || keeper.messages[0].MessageID != 99 {
+		t.Fatalf("keeper messages = %#v, want original audio message", keeper.messages)
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want no extra model turn after keep callback", router.routed)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "Audio saved permanently") {
+		t.Fatalf("edits = %#v, want saved confirmation edit", sender.edits)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != "Saved." {
+		t.Fatalf("answers = %#v, want Saved callback ack", sender.answers)
+	}
+	if _, err := store.PendingArtifactRetention(decision.OwnerKey(7, 42)); err == nil {
+		t.Fatal("PendingArtifactRetention() err = nil, want pending audio record deleted")
 	}
 }
 

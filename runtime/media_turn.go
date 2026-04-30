@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/idolum-ai/aphelion/config"
@@ -180,7 +181,10 @@ func (r *Runtime) persistInboundArtifactBytes(scope sandbox.Scope, artifact core
 	if len(artifact.Data) == 0 {
 		return "", nil
 	}
-	root := inboundArtifactRoot(scope, r.cfg.Agent)
+	root := inboundArtifactRootForArtifact(scope, r.cfg.Agent, artifact)
+	if temporaryAudioArtifact(artifact) {
+		_, _ = cleanupArtifactFilesOlderThan(root, r.idleExpiry, time.Now().UTC())
+	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", fmt.Errorf("create inbound artifact root: %w", err)
 	}
@@ -201,6 +205,64 @@ func inboundArtifactRoot(scope sandbox.Scope, cfg config.AgentConfig) string {
 		base = strings.TrimSpace(cfg.ExecRoot)
 	}
 	return filepath.Join(base, ".aphelion", "inbound")
+}
+
+func inboundArtifactRootForArtifact(scope sandbox.Scope, cfg config.AgentConfig, artifact core.Artifact) string {
+	root := inboundArtifactRoot(scope, cfg)
+	if temporaryAudioArtifact(core.NormalizeArtifact(artifact)) {
+		return filepath.Join(root, "audio-session")
+	}
+	return root
+}
+
+func temporaryAudioArtifact(artifact core.Artifact) bool {
+	artifact = core.NormalizeArtifact(artifact)
+	return artifact.Kind == "audio" && strings.TrimSpace(artifact.DefaultRetention) == "session_reference"
+}
+
+func (r *Runtime) cleanupTemporaryAudioArtifacts(now time.Time) (int, error) {
+	if r == nil {
+		return 0, nil
+	}
+	root := filepath.Join(strings.TrimSpace(r.cfg.Agent.ExecRoot), ".aphelion", "inbound", "audio-session")
+	return cleanupArtifactFilesOlderThan(root, r.idleExpiry, now)
+}
+
+func cleanupArtifactFilesOlderThan(root string, maxAge time.Duration, now time.Time) (int, error) {
+	root = strings.TrimSpace(root)
+	if root == "" || maxAge <= 0 {
+		return 0, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	removed := 0
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
+	}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if now.Sub(info.ModTime()) <= maxAge {
+			return nil
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		removed++
+		return nil
+	})
+	return removed, err
 }
 
 func safeInboundArtifactFilename(artifact core.Artifact) string {

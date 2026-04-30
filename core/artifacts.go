@@ -143,7 +143,7 @@ func artifactCapabilities(a Artifact) []string {
 func artifactDefaultRetention(a Artifact) string {
 	switch a.Kind {
 	case "audio":
-		return "ephemeral"
+		return "session_reference"
 	case "archive":
 		return "quarantine"
 	default:
