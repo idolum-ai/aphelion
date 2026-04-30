@@ -797,6 +797,7 @@ func run() error {
 	rt.StartHeartbeatLoop(ctx, log.Printf)
 	rt.StartDurableWakeLoop(ctx, log.Printf)
 	rt.StartCronLoop(ctx, log.Printf)
+	rt.StartNocturneLoop(ctx, log.Printf)
 
 	poller := telegram.NewPoller(tgClient, func(parent context.Context, msg core.InboundMessage) error {
 		msg = rewriteDurableWizardIntent(msg, commandControl)

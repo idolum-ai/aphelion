@@ -28,6 +28,7 @@ type Config struct {
 	Face          FaceConfig          `toml:"face"`
 	Heartbeat     HeartbeatConfig     `toml:"heartbeat"`
 	Cron          CronConfig          `toml:"cron"`
+	Nocturne      NocturneConfig      `toml:"nocturne"`
 	Voice         VoiceConfig         `toml:"voice"`
 	DurableAgents DurableAgentsConfig `toml:"durable_agents"`
 	Tailscale     TailscaleConfig     `toml:"tailscale"`
@@ -321,6 +322,17 @@ type CronJobConfig struct {
 	Enabled  bool   `toml:"enabled"`
 }
 
+type NocturneConfig struct {
+	Enabled      bool   `toml:"enabled"`
+	CheckEvery   string `toml:"check_every"`
+	WindowStart  string `toml:"window_start"`
+	WindowEnd    string `toml:"window_end"`
+	Timezone     string `toml:"timezone"`
+	ArtifactDir  string `toml:"artifact_dir"`
+	Prompt       string `toml:"prompt"`
+	Confirmation string `toml:"confirmation"`
+}
+
 type VoiceConfig struct {
 	Mode              string `toml:"mode"`
 	OpenAIAPIKey      string `toml:"openai_api_key"`
@@ -537,6 +549,14 @@ func Default() Config {
 		},
 		Cron: CronConfig{
 			Enabled: false,
+		},
+		Nocturne: NocturneConfig{
+			Enabled:      false,
+			CheckEvery:   "15m",
+			WindowStart:  "23:00",
+			WindowEnd:    "07:00",
+			ArtifactDir:  "memory/nocturne",
+			Confirmation: "Nocturne happened",
 		},
 		Voice: VoiceConfig{
 			Mode:              "off",

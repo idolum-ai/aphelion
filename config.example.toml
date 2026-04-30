@@ -212,6 +212,16 @@ prompt = "Summarize anything worth surfacing to the admin."
 delivery = "none"
 enabled = false
 
+[nocturne]
+enabled = false
+check_every = "15m"
+window_start = "23:00"
+window_end = "07:00"
+timezone = ""
+artifact_dir = "memory/nocturne"
+prompt = ""
+confirmation = "Nocturne happened"
+
 [voice]
 mode = "off"
 # off = always text replies
