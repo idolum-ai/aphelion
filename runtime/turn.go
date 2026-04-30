@@ -187,18 +187,32 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 		return err
 	}
 	for _, event := range events {
-		text := formatReviewEventMessage(event)
-		rows := reviewEventInlineRows(event)
+		text := FormatReviewEventMessage(event)
+		if ReviewEventDetailsExpandable(event) {
+			text = FormatReviewEventCompactMessage(event)
+		}
+		rows := ReviewEventInlineRows(event)
 		msgID := int64(0)
 		if len(rows) > 0 {
 			inline, ok := r.outbound.(reviewEventInlineSender)
-			if !ok {
+			if !ok && reviewEventCapabilityRequestID(event) != "" {
 				return fmt.Errorf("review event %d requires inline approval delivery but outbound sender does not support inline keyboards", event.ID)
 			}
-			var sendErr error
-			msgID, sendErr = inline.SendInlineKeyboard(ctx, key.ChatID, text, rows, nil)
-			if sendErr != nil {
-				return sendErr
+			if ok {
+				var sendErr error
+				msgID, sendErr = inline.SendInlineKeyboard(ctx, key.ChatID, text, rows, nil)
+				if sendErr != nil {
+					return sendErr
+				}
+			} else {
+				var sendErr error
+				msgID, sendErr = r.outbound.SendMessage(ctx, core.OutboundMessage{
+					ChatID: key.ChatID,
+					Text:   text,
+				})
+				if sendErr != nil {
+					return sendErr
+				}
 			}
 		} else {
 			var sendErr error
@@ -224,12 +238,25 @@ func (r *Runtime) deliverReviewEvents(ctx context.Context, key session.SessionKe
 	return nil
 }
 
-func reviewEventInlineRows(event session.ReviewEvent) [][]telegram.InlineButton {
+func ReviewEventInlineRows(event session.ReviewEvent) [][]telegram.InlineButton {
+	return ReviewEventInlineRowsExpanded(event, false)
+}
+
+func ReviewEventInlineRowsExpanded(event session.ReviewEvent, expanded bool) [][]telegram.InlineButton {
+	rows := [][]telegram.InlineButton{}
+	if ReviewEventDetailsExpandable(event) {
+		action := core.ReviewEventActionExpand
+		label := "Expand details"
+		if expanded {
+			action = core.ReviewEventActionHide
+			label = "Hide details"
+		}
+		rows = append(rows, []telegram.InlineButton{{Text: label, CallbackData: core.EncodeReviewEventCallbackData(event.ID, action)}})
+	}
 	requestID := reviewEventCapabilityRequestID(event)
 	if requestID == "" {
-		return nil
+		return rows
 	}
-	rows := [][]telegram.InlineButton{}
 	if reviewEventMetadataString(event, "parent_principal") != "" && reviewEventMetadataString(event, "review_status") == string(session.CapabilityReviewStatusProposed) {
 		rows = append(rows, []telegram.InlineButton{{Text: "Parent approve", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionParentApprove)}})
 	}
@@ -238,6 +265,14 @@ func reviewEventInlineRows(event session.ReviewEvent) [][]telegram.InlineButton 
 		{Text: "Approve", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionApprove)},
 	})
 	return rows
+}
+
+func ReviewEventDetailsExpandable(event session.ReviewEvent) bool {
+	if strings.TrimSpace(event.Summary) == "" {
+		return false
+	}
+	scope := session.NormalizeScopeRef(event.SourceScope)
+	return scope.Kind == session.ScopeKindDurableAgent || strings.TrimSpace(scope.DurableAgentID) != "" || strings.TrimSpace(event.SourceRole) == "durable_agent"
 }
 
 func reviewEventCapabilityRequestID(event session.ReviewEvent) string {
@@ -278,7 +313,226 @@ func uniquePositiveIDs(ids []int64) []int64 {
 	return out
 }
 
-func formatReviewEventMessage(event session.ReviewEvent) string {
+type reviewEventArtifactMetadata struct {
+	AgentID       string            `json:"agent_id"`
+	Summary       string            `json:"summary"`
+	IntervalLabel string            `json:"interval_label"`
+	LocalActions  []string          `json:"local_actions"`
+	Questions     []string          `json:"questions"`
+	RiskFlags     []string          `json:"risk_flags"`
+	ArtifactRefs  []string          `json:"artifact_refs"`
+	Metadata      map[string]string `json:"metadata"`
+}
+
+func FormatReviewEventCompactMessage(event session.ReviewEvent) string {
+	meta, _ := parseReviewEventArtifactMetadata(event)
+	lines := []string{"**" + reviewEventCompactTitle(event, meta) + "**"}
+	if context := reviewEventCompactContext(meta); context != "" {
+		lines = append(lines, context)
+	}
+	if status := reviewEventCompactStatus(event, meta); status != "" {
+		lines = append(lines, "", "**Status**", status)
+	}
+	if summary := reviewEventCompactSummary(event, meta); summary != "" {
+		lines = append(lines, "", "**Summary**", truncateReviewEventText(summary, 420))
+	}
+	if points := reviewEventCompactPoints(meta); len(points) > 0 {
+		lines = append(lines, "", "**Key points**")
+		for _, point := range points {
+			lines = append(lines, "- "+truncateReviewEventText(point, 180))
+		}
+	}
+	if next := reviewEventCompactNextAction(meta); next != "" {
+		lines = append(lines, "", "**Needs attention**", "- "+truncateReviewEventText(next, 220))
+	}
+	lines = append(lines, "", "Use Expand details to inspect the full child update.")
+	return truncateReviewEventBlock(strings.Join(lines, "\n"), 1800)
+}
+
+func FormatReviewEventDetailsMessage(event session.ReviewEvent) string {
+	lines := []string{FormatReviewEventMessage(event)}
+	meta, ok := parseReviewEventArtifactMetadata(event)
+	if ok && len(meta.ArtifactRefs) > 0 {
+		lines = append(lines, "", "**Artifacts**")
+		for _, ref := range meta.ArtifactRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			lines = append(lines, "- "+truncateReviewEventText(ref, 220))
+		}
+	}
+	if ok && len(meta.Metadata) > 0 {
+		keys := make([]string, 0, len(meta.Metadata))
+		for key := range meta.Metadata {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		if len(keys) > 0 {
+			lines = append(lines, "", "**Metadata**")
+			for _, key := range keys {
+				value := strings.TrimSpace(meta.Metadata[key])
+				if value == "" {
+					continue
+				}
+				lines = append(lines, "- "+key+": "+truncateReviewEventText(value, 220))
+			}
+		}
+	}
+	lines = append(lines, "", "Use Hide details to return to the compact summary.")
+	return truncateReviewEventBlock(strings.Join(lines, "\n"), 3900)
+}
+
+func parseReviewEventArtifactMetadata(event session.ReviewEvent) (reviewEventArtifactMetadata, bool) {
+	var meta reviewEventArtifactMetadata
+	if strings.TrimSpace(event.MetadataJSON) == "" {
+		return meta, false
+	}
+	if err := json.Unmarshal([]byte(event.MetadataJSON), &meta); err != nil {
+		return reviewEventArtifactMetadata{}, false
+	}
+	return meta, true
+}
+
+func reviewEventCompactTitle(event session.ReviewEvent, meta reviewEventArtifactMetadata) string {
+	agent := strings.TrimSpace(meta.AgentID)
+	if agent == "" {
+		agent = formattedReviewEventAgent(event)
+	}
+	switch strings.ToLower(agent) {
+	case "idolum-email":
+		return "Email child review"
+	case "idolum-daily-review":
+		return "Daily review"
+	case "":
+		return "Child update"
+	default:
+		return "Review: " + agent
+	}
+}
+
+func reviewEventCompactContext(meta reviewEventArtifactMetadata) string {
+	parts := make([]string, 0, 3)
+	if channel := strings.TrimSpace(meta.Metadata["channel_kind"]); channel != "" {
+		parts = append(parts, reviewEventHumanChannel(channel))
+	}
+	if interval := strings.TrimSpace(meta.IntervalLabel); interval != "" {
+		parts = append(parts, interval)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " • ")
+}
+
+func reviewEventHumanChannel(channel string) string {
+	switch strings.TrimSpace(strings.ToLower(channel)) {
+	case "email":
+		return "Email"
+	case "daily_review":
+		return "Daily review"
+	case "external_channel":
+		return "external channel"
+	default:
+		return strings.ReplaceAll(strings.TrimSpace(channel), "_", " ")
+	}
+}
+
+func reviewEventCompactStatus(event session.ReviewEvent, meta reviewEventArtifactMetadata) string {
+	status := strings.TrimSpace(meta.Metadata["external_channel_status"])
+	if status == "" {
+		status = strings.TrimSpace(meta.Metadata["status"])
+	}
+	text := strings.ToLower(strings.TrimSpace(status + " " + meta.Summary + " " + event.Summary))
+	switch {
+	case strings.Contains(text, "wake_completed") || strings.Contains(text, "completed") || strings.Contains(text, "success"):
+		return "COMPLETED"
+	case strings.Contains(text, "wake_blocked") || strings.Contains(text, "blocked") || strings.Contains(text, "blocker"):
+		return "BLOCKED"
+	case strings.Contains(text, "failed") || strings.Contains(text, "error"):
+		return "FAILED"
+	case strings.Contains(text, "needs_review") || strings.Contains(text, "review"):
+		return "NEEDS REVIEW"
+	default:
+		return "UPDATE"
+	}
+}
+
+func reviewEventCompactSummary(event session.ReviewEvent, meta reviewEventArtifactMetadata) string {
+	if summary := strings.TrimSpace(meta.Summary); summary != "" {
+		return normalizeReviewEventWhitespace(summary)
+	}
+	for _, line := range strings.Split(event.Summary, "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "summary:"); ok {
+			return normalizeReviewEventWhitespace(rest)
+		}
+	}
+	return normalizeReviewEventWhitespace(event.Summary)
+}
+
+func reviewEventCompactPoints(meta reviewEventArtifactMetadata) []string {
+	points := make([]string, 0, 3)
+	for _, action := range meta.LocalActions {
+		if len(points) >= 3 {
+			break
+		}
+		if action = normalizeReviewEventWhitespace(action); action != "" {
+			points = append(points, action)
+		}
+	}
+	if len(points) < 3 {
+		for _, risk := range meta.RiskFlags {
+			if len(points) >= 3 {
+				break
+			}
+			if risk = normalizeReviewEventWhitespace(risk); risk != "" {
+				points = append(points, "risk: "+risk)
+			}
+		}
+	}
+	return points
+}
+
+func reviewEventCompactNextAction(meta reviewEventArtifactMetadata) string {
+	for _, question := range meta.Questions {
+		if question = normalizeReviewEventWhitespace(question); question != "" {
+			return question
+		}
+	}
+	if errText := normalizeReviewEventWhitespace(meta.Metadata["external_channel_error"]); errText != "" {
+		return errText
+	}
+	return ""
+}
+
+func normalizeReviewEventWhitespace(s string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+}
+
+func truncateReviewEventText(s string, limit int) string {
+	s = strings.TrimSpace(s)
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return strings.TrimSpace(string(runes[:limit-3])) + "..."
+}
+
+func truncateReviewEventBlock(s string, limit int) string {
+	return truncateReviewEventText(s, limit)
+}
+
+func FormatReviewEventMessage(event session.ReviewEvent) string {
 	turnRange := "n/a"
 	if event.TurnFrom > 0 && event.TurnTo >= event.TurnFrom {
 		turnRange = fmt.Sprintf("%d-%d", event.TurnFrom, event.TurnTo)

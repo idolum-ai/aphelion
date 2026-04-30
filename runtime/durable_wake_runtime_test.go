@@ -134,14 +134,14 @@ func TestPollDurableWakeAgentsUsesPluggableIngressAdapter(t *testing.T) {
 	}
 
 	sender.mu.Lock()
-	if got := len(sender.sent); got != 1 {
-		t.Fatalf("sent len = %d, want 1 immediate durable review relay", got)
+	if got := len(sender.inline); got != 1 {
+		t.Fatalf("inline len = %d, want 1 immediate durable review relay", got)
 	}
-	if sender.sent[0].ChatID != 1001 {
-		t.Fatalf("sent chat_id = %d, want 1001", sender.sent[0].ChatID)
+	if sender.inline[0].chatID != 1001 {
+		t.Fatalf("inline chat_id = %d, want 1001", sender.inline[0].chatID)
 	}
-	if !strings.Contains(sender.sent[0].Text, "**Review: idolum-test-adapter**") {
-		t.Fatalf("sent text = %q, want review digest relay", sender.sent[0].Text)
+	if !strings.Contains(sender.inline[0].text, "**Review: idolum-test-adapter**") {
+		t.Fatalf("inline text = %q, want review digest relay", sender.inline[0].text)
 	}
 	sender.mu.Unlock()
 
@@ -274,14 +274,14 @@ func TestPollDurableWakeAgentsDeliversReviewEventsAfterChildExecutorWake(t *test
 	}
 
 	sender.mu.Lock()
-	if got := len(sender.sent); got != 1 {
-		t.Fatalf("sent len = %d, want 1 immediate relay after child wake", got)
+	if got := len(sender.inline); got != 1 {
+		t.Fatalf("inline len = %d, want 1 immediate relay after child wake", got)
 	}
-	if sender.sent[0].ChatID != 1001 {
-		t.Fatalf("sent chat_id = %d, want 1001", sender.sent[0].ChatID)
+	if sender.inline[0].chatID != 1001 {
+		t.Fatalf("inline chat_id = %d, want 1001", sender.inline[0].chatID)
 	}
-	if !strings.Contains(sender.sent[0].Text, "**Review: idolum-child-relay**") {
-		t.Fatalf("sent text = %q, want review digest relay", sender.sent[0].Text)
+	if !strings.Contains(sender.inline[0].text, "**Review: idolum-child-relay**") {
+		t.Fatalf("inline text = %q, want review digest relay", sender.inline[0].text)
 	}
 	sender.mu.Unlock()
 
@@ -499,14 +499,14 @@ func TestPollDurableWakeAgentsConsumesPendingParentConversationForAnyChannel(t *
 	}
 
 	sender.mu.Lock()
-	if got := len(sender.sent); got != 1 {
-		t.Fatalf("sent len = %d, want 1 immediate parent-conversation review relay", got)
+	if got := len(sender.inline); got != 1 {
+		t.Fatalf("inline len = %d, want 1 immediate parent-conversation review relay", got)
 	}
-	if !strings.Contains(sender.sent[0].Text, "**Review: child-alpha**") || !strings.Contains(sender.sent[0].Text, "Processed pending parent guidance") {
-		t.Fatalf("sent text = %q, want parent conversation ack summary", sender.sent[0].Text)
+	if !strings.Contains(sender.inline[0].text, "**Review: child-alpha**") || !strings.Contains(sender.inline[0].text, "Processed pending parent guidance") {
+		t.Fatalf("inline text = %q, want parent conversation ack summary", sender.inline[0].text)
 	}
-	if !strings.Contains(sender.sent[0].Text, "headless") || strings.Contains(sender.sent[0].Text, "channel=headless") {
-		t.Fatalf("sent text = %q, want human channel context without raw metadata", sender.sent[0].Text)
+	if !strings.Contains(sender.inline[0].text, "headless") || strings.Contains(sender.inline[0].text, "channel=headless") {
+		t.Fatalf("inline text = %q, want human channel context without raw metadata", sender.inline[0].text)
 	}
 	sender.mu.Unlock()
 }
@@ -625,14 +625,14 @@ func TestParentConversationAckSuppressedWhenChildQueuesConcreteReview(t *testing
 
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
-	if got := len(sender.sent); got != 1 {
-		t.Fatalf("sent len = %d, want only concrete child review", got)
+	if got := len(sender.inline); got != 1 {
+		t.Fatalf("inline len = %d, want only concrete child review", got)
 	}
-	if !strings.Contains(sender.sent[0].Text, "Concrete child report from the wake.") {
-		t.Fatalf("sent text = %q, want concrete child report", sender.sent[0].Text)
+	if !strings.Contains(sender.inline[0].text, "Concrete child report from the wake.") {
+		t.Fatalf("inline text = %q, want concrete child report", sender.inline[0].text)
 	}
-	if strings.Contains(sender.sent[0].Text, "Processed pending parent guidance") {
-		t.Fatalf("sent text = %q, want parent ack wrapper suppressed", sender.sent[0].Text)
+	if strings.Contains(sender.inline[0].text, "Processed pending parent guidance") {
+		t.Fatalf("inline text = %q, want parent ack wrapper suppressed", sender.inline[0].text)
 	}
 }
 

@@ -268,3 +268,48 @@ func TestHandleInboundDeliversActionableCapabilityReviewEventWithButtons(t *test
 		t.Fatalf("inline row = %#v, want Reject/Approve", sender.inline[0].rows[0])
 	}
 }
+
+func TestHandleInboundDeliversDurableReviewEventCompactWithExpandButton(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceRole:        "durable_agent",
+		SourceScope:       session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "image2", DurableAgentID: "image2"},
+		TargetAdminChatID: 42,
+		Summary:           "durable_agent=image2 channel=external_channel interval=2026-04-30T03:00:00Z\nsummary: External-channel wake wake_completed from child image2 via adapter codex_image_generation. Generated one image artifact successfully.\nlocal: External-channel wake completed after child reported authorized adapter-local work completed.\nrisks: external_channel; adapter_dispatch",
+		MetadataJSON:      `{"agent_id":"image2","summary":"External-channel wake wake_completed from child image2 via adapter codex_image_generation. Generated one image artifact successfully.","interval_label":"2026-04-30T03:00:00Z","local_actions":["External-channel wake completed after child reported authorized adapter-local work completed."],"risk_flags":["external_channel","adapter_dispatch"],"metadata":{"channel_kind":"external_channel","external_channel_status":"wake_completed"}}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{ChatID: 42, SenderID: 1001, SenderName: "admin", Text: "status", MessageID: 99})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline len = %d, want compact child review delivered with inline keyboard", len(sender.inline))
+	}
+	text := sender.inline[0].text
+	if !strings.Contains(text, "**Review: image2**") || !strings.Contains(text, "**Status**") || !strings.Contains(text, "COMPLETED") || !strings.Contains(text, "Use Expand details") {
+		t.Fatalf("compact text = %q, want readable child update summary", text)
+	}
+	if strings.Contains(text, "**Metadata**") {
+		t.Fatalf("compact text = %q, should not include expanded metadata", text)
+	}
+	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 1 {
+		t.Fatalf("rows = %#v, want single expand row", sender.inline[0].rows)
+	}
+	button := sender.inline[0].rows[0][0]
+	if button.Text != "Expand details" || button.CallbackData != core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionExpand) {
+		t.Fatalf("button = %#v, want expand callback for review event %d", button, eventID)
+	}
+}

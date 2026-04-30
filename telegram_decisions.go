@@ -13,6 +13,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
 	"github.com/idolum-ai/aphelion/principal"
+	runtimepkg "github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 	toolpkg "github.com/idolum-ai/aphelion/tool"
@@ -790,7 +791,10 @@ func (h *telegramDecisionHandler) handleReviewEventCallback(ctx context.Context,
 		return err
 	}
 	if event == nil {
-		return h.answerReviewEventCallback(ctx, cb, "This approval is no longer active. Use the newest prompt.")
+		return h.answerReviewEventCallback(ctx, cb, "This review item is no longer available.")
+	}
+	if action == core.ReviewEventActionExpand || action == core.ReviewEventActionHide {
+		return h.handleReviewEventDetailToggle(ctx, cb, *event, action == core.ReviewEventActionExpand)
 	}
 	if reviewEventCallbackExpired(*event, time.Now()) {
 		_ = h.editReviewEventCallbackMessage(ctx, cb, "Approval timed out — use a fresh prompt.")
@@ -837,6 +841,28 @@ func (h *telegramDecisionHandler) handleReviewEventCallback(ctx context.Context,
 		label = "rejected"
 	}
 	_ = h.editReviewEventCallbackMessage(ctx, cb, reviewEventConfirmationText(label, record, *event))
+	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func (h *telegramDecisionHandler) handleReviewEventDetailToggle(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent, expanded bool) error {
+	if !runtimepkg.ReviewEventDetailsExpandable(event) {
+		return h.answerReviewEventCallback(ctx, cb, "This review item has no expandable details.")
+	}
+	if h == nil || h.sender == nil || cb.Message == nil || cb.Message.Chat == nil || cb.Message.MessageID == 0 {
+		return h.answerReviewEventCallback(ctx, cb, "")
+	}
+	text := runtimepkg.FormatReviewEventCompactMessage(event)
+	if expanded {
+		text = runtimepkg.FormatReviewEventDetailsMessage(event)
+	}
+	rows := runtimepkg.ReviewEventInlineRowsExpanded(event, expanded)
+	if editor, ok := h.sender.(telegramDecisionKeyboardEditor); ok && len(rows) > 0 {
+		if err := editor.EditMessageTextWithInlineKeyboard(ctx, cb.Message.Chat.ID, cb.Message.MessageID, text, "", rows); err != nil {
+			return err
+		}
+	} else if err := editDecisionMessageClearingInlineKeyboard(ctx, h.sender, cb.Message.Chat.ID, cb.Message.MessageID, text); err != nil {
+		return err
+	}
 	return h.answerReviewEventCallback(ctx, cb, "")
 }
 

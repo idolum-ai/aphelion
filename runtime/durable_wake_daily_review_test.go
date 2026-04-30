@@ -69,14 +69,14 @@ func TestDailyReviewWakeStagesTranscriptAndQueuesScheduledCheckIn(t *testing.T) 
 	}
 
 	sender.mu.Lock()
-	if got := len(sender.sent); got != 1 {
-		t.Fatalf("sent len = %d, want 1 immediate daily-review relay", got)
+	if got := len(sender.inline); got != 1 {
+		t.Fatalf("inline len = %d, want 1 immediate daily-review relay", got)
 	}
-	if sender.sent[0].ChatID != 1001 {
-		t.Fatalf("sent chat_id = %d, want 1001", sender.sent[0].ChatID)
+	if sender.inline[0].chatID != 1001 {
+		t.Fatalf("inline chat_id = %d, want 1001", sender.inline[0].chatID)
 	}
-	if !strings.Contains(strings.ToLower(sender.sent[0].Text), "scheduled check-in") {
-		t.Fatalf("sent text = %q, want scheduled check-in framing", sender.sent[0].Text)
+	if !strings.Contains(strings.ToLower(sender.inline[0].text), "scheduled check-in") {
+		t.Fatalf("inline text = %q, want scheduled check-in framing", sender.inline[0].text)
 	}
 	sender.mu.Unlock()
 
