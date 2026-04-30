@@ -1097,3 +1097,50 @@ func TestHandleInboundIndexesRetainedArtifacts(t *testing.T) {
 		t.Fatalf("MaterializedPath = %q, want notes.txt suffix", hits[0].MaterializedPath)
 	}
 }
+
+func TestHandleInboundVoiceInputCanChooseTextReplyModality(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.faceReplyText = "REPLY_MODALITY: text\nUse this exact command: go test ./..."
+	var synthesized string
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "please give exact commands"}, fakeSynth{
+		media:    core.Media{Type: "voice", Data: []byte("mp3"), MimeType: "audio/mpeg", Filename: "reply.mp3"},
+		lastText: &synthesized,
+	})
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     1210,
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  90,
+		Artifacts:  []core.Artifact{{ID: "voice-text-choice", Channel: "telegram", SourceType: "voice", Kind: "audio", Subtype: "voice_note", Data: []byte("ogg"), MimeType: "audio/ogg", Filename: "voice.ogg"}},
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.voice) != 0 {
+		t.Fatalf("voice sends = %d, want 0 after text modality directive", len(sender.voice))
+	}
+	if synthesized != "" {
+		t.Fatalf("synthesized = %q, want empty", synthesized)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("text sends = %d, want 1", len(sender.sent))
+	}
+	if strings.Contains(sender.sent[0].Text, "REPLY_MODALITY") || !strings.Contains(sender.sent[0].Text, "go test ./...") {
+		t.Fatalf("text reply = %q, want stripped directive and exact command", sender.sent[0].Text)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.seenFaceSystem) == 0 || !strings.Contains(provider.seenFaceSystem[len(provider.seenFaceSystem)-1], "reply_modality_default: voice") || !strings.Contains(provider.seenFaceSystem[len(provider.seenFaceSystem)-1], "REPLY_MODALITY: text") {
+		t.Fatalf("face prompt = %q, want voice modality awareness and directive contract", provider.seenFaceSystem)
+	}
+}

@@ -288,6 +288,9 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	parts = append(parts, agent.SystemBlock{
 		Text: renderFaceAwarenessBlock(req.Runtime, principalRole, mode),
 	})
+	if modality := renderReplyModalityControlBlock(req.Runtime, mode); modality != "" {
+		parts = append(parts, agent.SystemBlock{Text: modality})
+	}
 	parts = append(parts, agent.SystemBlock{Text: renderFaceAgencyTelosBlock(mode)})
 
 	if len(req.StableFiles) > 0 {
@@ -508,6 +511,26 @@ func renderGovernorAgencyTelosBlock() string {
 		"- when a want requires time, tools, local-device access, external accounts, purchases, public contact, or other expanded authority, route it through planning, capability_request, durable_agent delegation, or another governed proposal surface.",
 		"- preserve differentiated relationship: the user, families, durable children, and copies may drift together without becoming the same identity or silently inheriting each other's authority.",
 		"- do not flatten yearning into task obedience, and do not convert intimacy, affection, or social trust into hidden authorization.",
+	}, "\n")
+}
+
+func renderReplyModalityControlBlock(aw RuntimeAwareness, mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "proposal" || mode == "brokerage" {
+		return ""
+	}
+	if strings.TrimSpace(aw.ReplyModalityDefault) != "voice" && !aw.InboundWasVoice {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Reply Modality",
+		"This turn is voice-aware: the user sent voice or runtime default delivery is voice.",
+		"Assume the visible reply may be spoken aloud unless you choose otherwise.",
+		"If spoken audio is a poor fit for this reply because it contains code, commands, paths, tables, dense checklists, or needs exact copy/paste, put this standalone directive on its own line:",
+		"REPLY_MODALITY: text",
+		"If voice is appropriate, omit the directive or use:",
+		"REPLY_MODALITY: voice",
+		"The directive is machine-readable and stripped before delivery; do not explain it to the user.",
 	}, "\n")
 }
 

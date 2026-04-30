@@ -46,6 +46,7 @@ type RenderStageResult struct {
 	Streamed      bool
 	RenderedID    int64
 	RenderedType  string
+	ReplyModality string
 	ShouldRender  bool
 	RenderError   error
 	StreamHandled bool
@@ -104,6 +105,7 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 			result.RenderedType = strings.TrimSpace(streamResult.RenderedType)
 			result.Usage = addTokenUsage(result.Usage, streamResult.Usage)
 			result.ReplyText = strings.TrimSpace(streamResult.Text)
+			result.ReplyModality = strings.TrimSpace(streamResult.ReplyModality)
 			if result.ReplyText == "" {
 				result.ReplyText = renderStageFallback(callbacks, req.Render.MaterialFloor, req.Render.FloorText, req.FallbackOptions)
 			}
@@ -121,6 +123,7 @@ func RunRenderStage(ctx context.Context, req RenderStageRequest, callbacks Rende
 			result.RenderError = err
 		} else if rendered != nil {
 			result.ReplyText = strings.TrimSpace(rendered.Text)
+			result.ReplyModality = strings.TrimSpace(rendered.ReplyModality)
 			result.Usage = addTokenUsage(result.Usage, rendered.Usage)
 			if result.ReplyText == "" {
 				result.ReplyText = renderStageFallback(callbacks, req.Render.MaterialFloor, req.Render.FloorText, req.FallbackOptions)

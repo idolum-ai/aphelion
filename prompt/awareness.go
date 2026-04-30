@@ -35,6 +35,10 @@ type RuntimeAwareness struct {
 	PersonaEffortRecipe        string
 	DeliveryMode               string
 	StreamReply                bool
+	InboundWasVoice            bool
+	ReplyModalityDefault       string
+	ReplyModalityReason        string
+	ReplyModalityOverride      string
 	MediaAttached              bool
 	MediaMode                  string
 	HiddenInputsActive         bool
@@ -121,6 +125,10 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, nonEmptyAwarenessLine("continuation_governor_rationale", aw.ContinuationGovernorWhy))
 	lines = append(lines, fmt.Sprintf("- continuation_governor_ratified: %t", aw.ContinuationRatified))
 	lines = append(lines, nonEmptyAwarenessLine("continuation_blocked_reason", aw.ContinuationBlockedReason))
+	lines = append(lines, fmt.Sprintf("- inbound_was_voice: %t", aw.InboundWasVoice))
+	lines = append(lines, nonEmptyAwarenessLine("reply_modality_default", aw.ReplyModalityDefault))
+	lines = append(lines, nonEmptyAwarenessLine("reply_modality_reason", aw.ReplyModalityReason))
+	lines = append(lines, nonEmptyAwarenessLine("reply_modality_override", aw.ReplyModalityOverride))
 	lines = append(lines, fmt.Sprintf("- media_attached: %t", aw.MediaAttached))
 	lines = append(lines, nonEmptyAwarenessLine("media_mode", aw.MediaMode))
 	lines = append(lines, nonEmptyAwarenessLine("prompt_root", aw.PromptRoot))
@@ -165,6 +173,10 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode st
 	lines = append(lines, nonEmptyAwarenessLine("persona_effort_recipe", aw.PersonaEffortRecipe))
 	lines = append(lines, nonEmptyAwarenessLine("delivery_mode", aw.DeliveryMode))
 	lines = append(lines, fmt.Sprintf("- stream_reply: %t", aw.StreamReply))
+	lines = append(lines, fmt.Sprintf("- inbound_was_voice: %t", aw.InboundWasVoice))
+	lines = append(lines, nonEmptyAwarenessLine("reply_modality_default", aw.ReplyModalityDefault))
+	lines = append(lines, nonEmptyAwarenessLine("reply_modality_reason", aw.ReplyModalityReason))
+	lines = append(lines, nonEmptyAwarenessLine("reply_modality_override", aw.ReplyModalityOverride))
 	lines = append(lines, fmt.Sprintf("- proposal_active: %t", aw.ProposalActive))
 	lines = append(lines, nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus))
 	lines = append(lines, nonEmptyAwarenessLine("continuation_status", aw.ContinuationStatus))

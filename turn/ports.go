@@ -105,11 +105,12 @@ type FaceRenderRequest struct {
 
 // FaceRenderResult is the visible outcome of face scene authorship.
 type FaceRenderResult struct {
-	Text         string
-	Usage        core.TokenUsage
-	Streamed     bool
-	RenderedID   int64
-	RenderedType string
+	Text          string
+	Usage         core.TokenUsage
+	Streamed      bool
+	RenderedID    int64
+	RenderedType  string
+	ReplyModality string
 }
 
 // PersistencePort captures the durable write boundary the turn engine should

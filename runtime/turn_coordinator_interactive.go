@@ -132,11 +132,12 @@ func (c *interactiveTurnCoordinator) Render(ctx context.Context, req turn.FaceRe
 		return &turn.FaceRenderResult{}, nil
 	}
 	return &turn.FaceRenderResult{
-		Text:         strings.TrimSpace(rendered.ReplyText),
-		Usage:        rendered.Usage,
-		Streamed:     rendered.StreamedReply,
-		RenderedID:   rendered.OutboundID,
-		RenderedType: rendered.OutboundType,
+		Text:          strings.TrimSpace(rendered.ReplyText),
+		Usage:         rendered.Usage,
+		Streamed:      rendered.StreamedReply,
+		RenderedID:    rendered.OutboundID,
+		RenderedType:  rendered.OutboundType,
+		ReplyModality: rendered.ReplyModality,
 	}, nil
 }
 

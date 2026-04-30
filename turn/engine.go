@@ -32,7 +32,7 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 	}
 	prepared := m.prepareContext(req)
 	policy := m.policyFor(req)
-	result := &Result{Policy: policy}
+	result := &Result{Policy: policy, ReplyWithVoice: req.ReplyWithVoice}
 
 	proposal, err := m.maybePropose(ctx, prepared, policy)
 	if err != nil {
@@ -70,11 +70,18 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 		result.RenderedStream = rendered.Streamed
 		result.RenderedID = rendered.RenderedID
 		result.RenderedType = rendered.RenderedType
+		result.ReplyModality = strings.TrimSpace(rendered.ReplyModality)
 	} else {
 		result.VisibleReply = fallbackVisibleReply(gov)
 	}
 	if rendered != nil {
 		result.Turn.TokenUsage = addTokenUsage(result.Turn.TokenUsage, rendered.Usage)
+	}
+	switch strings.ToLower(strings.TrimSpace(result.ReplyModality)) {
+	case "text":
+		result.ReplyWithVoice = false
+	case "voice":
+		result.ReplyWithVoice = true
 	}
 
 	plan := DefaultCommitPlan(policy)
@@ -92,7 +99,7 @@ func (m *Machine) Handle(ctx context.Context, req Request) (*Result, error) {
 		delivered, err := m.Delivery.Deliver(ctx, DeliveryRequest{
 			Message:         buildOutboundMessage(req, result),
 			InboundWasVoice: req.InboundWasVoice,
-			ReplyWithVoice:  req.ReplyWithVoice,
+			ReplyWithVoice:  result.ReplyWithVoice,
 			Result:          result,
 		})
 		if err != nil {

@@ -134,11 +134,12 @@ func (c *durableGroupTurnCoordinator) Render(ctx context.Context, req turn.FaceR
 		return &turn.FaceRenderResult{}, nil
 	}
 	return &turn.FaceRenderResult{
-		Text:         strings.TrimSpace(rendered.ReplyText),
-		Usage:        rendered.Usage,
-		Streamed:     rendered.StreamedReply,
-		RenderedID:   rendered.OutboundID,
-		RenderedType: rendered.OutboundType,
+		Text:          strings.TrimSpace(rendered.ReplyText),
+		Usage:         rendered.Usage,
+		Streamed:      rendered.StreamedReply,
+		RenderedID:    rendered.OutboundID,
+		RenderedType:  rendered.OutboundType,
+		ReplyModality: rendered.ReplyModality,
 	}, nil
 }
 

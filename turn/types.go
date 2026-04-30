@@ -68,6 +68,8 @@ type Result struct {
 	RenderedStream  bool
 	RenderedID      int64
 	RenderedType    string
+	ReplyWithVoice  bool
+	ReplyModality   string
 	Policy          Policy
 	ProposalNote    string
 	Commit          CommitResult

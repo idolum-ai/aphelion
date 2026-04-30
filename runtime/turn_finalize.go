@@ -51,6 +51,7 @@ type turnRenderResult struct {
 	StreamedReply bool
 	OutboundID    int64
 	OutboundType  string
+	ReplyModality string
 	Usage         core.TokenUsage
 }
 
@@ -197,6 +198,7 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 		log.Printf("WARN face render failed backend=%s err=%v; using floor_fallback serializer", r.faceBackend, stageResult.RenderError)
 	}
 	output.ReplyText = strings.TrimSpace(stageResult.ReplyText)
+	output.ReplyModality = strings.TrimSpace(stageResult.ReplyModality)
 	output.Usage = addTokenUsage(output.Usage, stageResult.Usage)
 	output.StreamedReply = stageResult.Streamed
 	output.OutboundID = stageResult.RenderedID
@@ -217,6 +219,11 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 		input.Result.Media,
 		input.Audit,
 	)
+	var directiveModality string
+	output.ReplyText, directiveModality = extractReplyModalityDirective(output.ReplyText)
+	if directiveModality != "" {
+		output.ReplyModality = directiveModality
+	}
 
 	return output, nil
 }

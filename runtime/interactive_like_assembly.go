@@ -111,6 +111,7 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 		),
 		sess.ContinuationState,
 	)
+	baseGovernorAwareness = r.applyReplyModalityAwareness(baseGovernorAwareness, prepared)
 	if useMaterialFloor {
 		baseGovernorAwareness.ArtifactMode = "floor"
 	}
