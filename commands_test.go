@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2167,8 +2168,91 @@ func TestHandleTelegramCommandCallbackModelEffortSetsSlot(t *testing.T) {
 	if router.setModelSlotActor != "telegram:1001" {
 		t.Fatalf("actor = %q, want telegram:1001", router.setModelSlotActor)
 	}
+	if router.setModelSlotTTL != modelButtonOverrideTTL {
+		t.Fatalf("ttl = %s, want %s", router.setModelSlotTTL, modelButtonOverrideTTL)
+	}
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+}
+
+func TestHandleTelegramCommandCallbackModelPresetDoctorGPTUsesCodexWithTTL(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		modelStatuses: []core.ModelSlotStatus{{
+			Slot: core.ModelSlotDoctor,
+			Effective: core.ModelSlotConfig{
+				Slot:      core.ModelSlotDoctor,
+				Provider:  core.ModelProviderAnthropic,
+				Model:     "claude-sonnet-4-6",
+				Effort:    "xhigh",
+				Transport: core.ModelTransportAuto,
+			},
+			Source: "default",
+			Validation: core.ModelValidation{
+				Valid:             true,
+				ResolvedTransport: core.ModelTransportAnthropicMessages,
+			},
+		}},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "model-preset-doctor",
+		Data: encodeModelCallbackData(modelCallbackPreset, core.ModelSlotDoctor, "gpt55"),
+		From: &telegram.User{ID: 1001},
+		Message: &telegram.Message{
+			MessageID: 33,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.setModelSlotInput.Slot != core.ModelSlotDoctor {
+		t.Fatalf("slot = %q, want doctor", router.setModelSlotInput.Slot)
+	}
+	if router.setModelSlotInput.Provider != core.ModelProviderCodex || router.setModelSlotInput.Model != "gpt-5.5" {
+		t.Fatalf("provider/model = %s/%s, want codex/gpt-5.5", router.setModelSlotInput.Provider, router.setModelSlotInput.Model)
+	}
+	if router.setModelSlotInput.Effort != "xhigh" {
+		t.Fatalf("effort = %q, want inherited xhigh", router.setModelSlotInput.Effort)
+	}
+	if router.setModelSlotTTL != modelButtonOverrideTTL {
+		t.Fatalf("ttl = %s, want %s", router.setModelSlotTTL, modelButtonOverrideTTL)
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
+	}
+}
+
+func TestRenderModelSlotRowsHidesMaxForDoctorDirectOpenAI(t *testing.T) {
+	t.Parallel()
+
+	rows := renderModelSlotRows(core.ModelSlotStatus{
+		Slot: core.ModelSlotDoctor,
+		Effective: core.ModelSlotConfig{
+			Slot:     core.ModelSlotDoctor,
+			Provider: core.ModelProviderOpenAI,
+			Model:    "gpt-5.5",
+			Effort:   "high",
+		},
+	})
+	var labels []string
+	for _, row := range rows {
+		for _, button := range row {
+			labels = append(labels, button.Text)
+		}
+	}
+	if !slices.Contains(labels, "Codex GPT-5.5") {
+		t.Fatalf("labels = %#v, want doctor GPT preset labeled as Codex", labels)
+	}
+	if slices.Contains(labels, "Max") {
+		t.Fatalf("labels = %#v, should hide Max for direct OpenAI doctor slot", labels)
 	}
 }
 

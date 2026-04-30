@@ -17,6 +17,7 @@ import (
 const (
 	modelCallbackPrefix    = "model:"
 	staleModelCallbackText = "This model action is no longer active. Run /model again."
+	modelButtonOverrideTTL = 2 * time.Hour
 )
 
 type modelCallbackAction string
@@ -247,7 +248,7 @@ func setModelSlotEffortFromCallback(router commandRouter, slot string, effort st
 	if cfg.Effort == "" {
 		return core.ModelSlotStatus{}, fmt.Errorf("unknown effort %q", effort)
 	}
-	return router.SetModelSlotConfig(cfg, actor, "telegram button: effort "+cfg.Effort, 0)
+	return router.SetModelSlotConfig(cfg, actor, "telegram button: effort "+cfg.Effort, modelButtonOverrideTTL)
 }
 
 func setModelSlotPresetFromCallback(router commandRouter, slot string, preset string, actor string) (core.ModelSlotStatus, error) {
@@ -259,7 +260,7 @@ func setModelSlotPresetFromCallback(router commandRouter, slot string, preset st
 	if err != nil {
 		return core.ModelSlotStatus{}, err
 	}
-	return router.SetModelSlotConfig(cfg, actor, "telegram button: preset "+strings.TrimSpace(preset), 0)
+	return router.SetModelSlotConfig(cfg, actor, "telegram button: preset "+strings.TrimSpace(preset), modelButtonOverrideTTL)
 }
 
 func modelSlotStatus(router commandRouter, slot string) (core.ModelSlotStatus, error) {
@@ -299,7 +300,11 @@ func modelPresetConfig(status core.ModelSlotStatus, preset string) (core.ModelSl
 			effort = "xhigh"
 		}
 	case "gpt55":
-		cfg.Provider = core.ModelProviderOpenAI
+		if slot == core.ModelSlotDoctor {
+			cfg.Provider = core.ModelProviderCodex
+		} else {
+			cfg.Provider = core.ModelProviderOpenAI
+		}
 		cfg.Model = "gpt-5.5"
 		if effort == "" {
 			effort = "high"
@@ -533,18 +538,21 @@ func renderModelSlotDetail(status core.ModelSlotStatus) string {
 
 func renderModelSlotRows(status core.ModelSlotStatus) [][]telegram.InlineButton {
 	slot := core.NormalizeModelSlot(status.Slot)
+	effortRow := []telegram.InlineButton{
+		{Text: "Low", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "low")},
+		{Text: "Medium", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "medium")},
+		{Text: "High", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "high")},
+	}
+	if !hideModelSlotMaxEffort(status) {
+		effortRow = append(effortRow, telegram.InlineButton{Text: "Max", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "xhigh")})
+	}
 	rows := [][]telegram.InlineButton{
 		{
 			{Text: "Sonnet", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "sonnet")},
 			{Text: "Opus 4.7", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "opus47")},
-			{Text: "GPT-5.5", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "gpt55")},
+			{Text: modelGPT55PresetLabel(slot), CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "gpt55")},
 		},
-		{
-			{Text: "Low", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "low")},
-			{Text: "Medium", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "medium")},
-			{Text: "High", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "high")},
-			{Text: "Max", CallbackData: encodeModelCallbackData(modelCallbackEffort, slot, "xhigh")},
-		},
+		effortRow,
 		{
 			{Text: "History", CallbackData: encodeModelCallbackData(modelCallbackHistory, slot, "")},
 			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackSlot, slot, "")},
@@ -558,6 +566,18 @@ func renderModelSlotRows(status core.ModelSlotStatus) [][]telegram.InlineButton 
 		})
 	}
 	return rows
+}
+
+func modelGPT55PresetLabel(slot string) string {
+	if core.NormalizeModelSlot(slot) == core.ModelSlotDoctor {
+		return "Codex GPT-5.5"
+	}
+	return "GPT-5.5"
+}
+
+func hideModelSlotMaxEffort(status core.ModelSlotStatus) bool {
+	return core.NormalizeModelSlot(status.Slot) == core.ModelSlotDoctor &&
+		core.NormalizeModelProvider(status.Effective.Provider) == core.ModelProviderOpenAI
 }
 
 func renderModelHistoryRows(slot string) [][]telegram.InlineButton {
