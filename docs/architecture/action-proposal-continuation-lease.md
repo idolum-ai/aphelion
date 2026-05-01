@@ -130,3 +130,31 @@ Buttons:
 This card deliberately does not authorize execution. It only decides whether an
 idea becomes a candidate mission that may later receive an ActionProposal /
 ContinuationLease.
+
+## Continuation controls v2
+
+Continuation prompts now use explicit lease-control buttons instead of a single
+ambiguous `Continue` button:
+
+- `Approve lease`: approve the pending ContinuationLease exactly as written and
+  trigger the bounded continuation.
+- `Continue once`: same approval path, phrased as one immediate bounded step;
+  the one-turn lease is consumed before the continuation turn runs.
+- `Ask edit`: revoke/park the pending continuation prompt and ask for a revised
+  lease. It does not trigger continuation.
+- `Stop / park`: revoke/park the pending or approved continuation prompt.
+- `Resume edge`: for post-boundary recovery, resume only if a lease is already
+  approved and has remaining turns; otherwise it reports that approval is still
+  needed.
+- `Ask next lease`: show the current edge and ask for the next explicit lease;
+  it does not approve or trigger work.
+- `Status only`: render the current continuation edge without mutating state.
+- `Stop`: revoke continuation approval using the existing stop/revoke path.
+
+Compatibility note: legacy callback actions `continue` / `approve` still decode
+as approval, but newly rendered prompts use the v2 labels above.
+
+Authority rule: status and edit buttons must not grant execution authority.
+Only `Approve lease`, `Continue once`, or legacy `approve` can activate the
+lease, and activation still uses the persisted proposal/lease identity rather
+than freeform text or a boop.

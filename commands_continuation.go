@@ -12,9 +12,24 @@ import (
 const continuationCallbackPrefix = "continuation:"
 const staleContinuationCallbackText = "This continuation prompt is no longer active. Use the newest prompt."
 
+const (
+	continuationActionApprove      = "approve"
+	continuationActionApproveLease = "approve_lease"
+	continuationActionContinueOnce = "continue_once"
+	continuationActionAskEdit      = "ask_edit"
+	continuationActionStop         = "stop"
+	continuationActionStopPark     = "stop_park"
+	continuationActionResumeEdge   = "resume_edge"
+	continuationActionAskNextLease = "ask_next_lease"
+	continuationActionStatusOnly   = "status_only"
+)
+
 func encodeContinuationCallbackData(decisionID string, action string) string {
 	decisionID = strings.TrimSpace(decisionID)
-	action = strings.TrimSpace(action)
+	action = normalizeContinuationCallbackAction(action)
+	if action == "" {
+		action = strings.TrimSpace(action)
+	}
 	if decisionID == "" {
 		return continuationCallbackPrefix + action
 	}
@@ -32,45 +47,108 @@ func decodeContinuationCallbackData(data string) (decisionID string, action stri
 	}
 	parts := strings.SplitN(payload, ":", 2)
 	if len(parts) == 1 {
-		action = strings.TrimSpace(parts[0])
+		action = normalizeContinuationCallbackAction(parts[0])
 		if action == "" {
 			return "", "", false
 		}
 		return "", action, true
 	}
 	decisionID = strings.TrimSpace(parts[0])
-	action = strings.TrimSpace(parts[1])
+	action = normalizeContinuationCallbackAction(parts[1])
 	if decisionID == "" || action == "" {
 		return "", "", false
 	}
 	return decisionID, action, true
 }
 
+func normalizeContinuationCallbackAction(action string) string {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case continuationActionApprove, "continue":
+		return continuationActionApprove
+	case continuationActionApproveLease, "approve-lease":
+		return continuationActionApproveLease
+	case continuationActionContinueOnce, "continue-once":
+		return continuationActionContinueOnce
+	case continuationActionAskEdit, "ask-edit", "edit":
+		return continuationActionAskEdit
+	case continuationActionStop:
+		return continuationActionStop
+	case continuationActionStopPark, "stop-park", "park":
+		return continuationActionStopPark
+	case continuationActionResumeEdge, "resume-edge", "resume":
+		return continuationActionResumeEdge
+	case continuationActionAskNextLease, "ask-next-lease", "next_lease", "next-lease":
+		return continuationActionAskNextLease
+	case continuationActionStatusOnly, "status-only", "status":
+		return continuationActionStatusOnly
+	default:
+		return ""
+	}
+}
+
 func continuationCallbackMatchesState(state session.ContinuationState, decisionID string, action string) bool {
 	state = session.NormalizeContinuationState(state)
 	decisionID = strings.TrimSpace(decisionID)
-	action = strings.TrimSpace(action)
-	if decisionID == "" || state.DecisionID == "" {
+	action = normalizeContinuationCallbackAction(action)
+	if decisionID == "" || state.DecisionID == "" || action == "" {
 		return false
 	}
 	if decisionID != state.DecisionID && decisionID != strings.TrimSpace(state.ActionProposal.ID) && decisionID != strings.TrimSpace(state.ContinuationLease.ID) && decisionID != strings.TrimSpace(state.ContinuationLease.ProposalID) {
 		return false
 	}
 	switch action {
-	case "approve":
+	case continuationActionApprove, continuationActionApproveLease, continuationActionContinueOnce:
 		return state.Status == session.ContinuationStatusPending && state.RemainingTurns > 0
-	case "stop":
+	case continuationActionAskEdit:
+		return state.Status == session.ContinuationStatusPending
+	case continuationActionStop, continuationActionStopPark:
+		return state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
+	case continuationActionResumeEdge:
+		return state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
+	case continuationActionAskNextLease, continuationActionStatusOnly:
 		return state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
 	default:
 		return false
 	}
 }
 
-func renderContinuationDecision(state session.ContinuationState, approved bool) string {
-	if !approved {
-		return ""
+func continuationActionApprovesLease(action string) bool {
+	switch normalizeContinuationCallbackAction(action) {
+	case continuationActionApprove, continuationActionApproveLease, continuationActionContinueOnce:
+		return true
+	default:
+		return false
 	}
-	text := "Continuation approved."
+}
+
+func renderContinuationDecision(state session.ContinuationState, action string) string {
+	state = session.NormalizeContinuationState(state)
+	switch normalizeContinuationCallbackAction(action) {
+	case continuationActionApprove, continuationActionApproveLease:
+		return renderContinuationApprovedDecision(state, "Continuation lease approved.")
+	case continuationActionContinueOnce:
+		return renderContinuationApprovedDecision(state, "Continuing once under the approved lease.")
+	case continuationActionAskEdit:
+		return "Continuation lease needs edits. I parked this prompt; no continuation was approved or started."
+	case continuationActionAskNextLease:
+		return renderContinuationEdgeStatus(state, "Next lease needed.")
+	case continuationActionStatusOnly:
+		return renderContinuationEdgeStatus(state, "Continuation status only.")
+	case continuationActionResumeEdge:
+		if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
+			return renderContinuationApprovedDecision(state, "Resuming the approved edge.")
+		}
+		return renderContinuationEdgeStatus(state, "Resume edge needs an approved lease first.")
+	default:
+		return renderContinuationEdgeStatus(state, "Continuation decision recorded.")
+	}
+}
+
+func renderContinuationApprovedDecision(state session.ContinuationState, prefix string) string {
+	text := strings.TrimSpace(prefix)
+	if text == "" {
+		text = "Continuation approved."
+	}
 	if state.RemainingTurns > 0 {
 		text += fmt.Sprintf(" Remaining turns: %d.", state.RemainingTurns)
 	}
@@ -78,4 +156,29 @@ func renderContinuationDecision(state session.ContinuationState, approved bool) 
 		text += " Next: " + state.StageSummary
 	}
 	return text
+}
+
+func renderContinuationEdgeStatus(state session.ContinuationState, prefix string) string {
+	state = session.NormalizeContinuationState(state)
+	lines := []string{strings.TrimSpace(prefix)}
+	if lines[0] == "" {
+		lines[0] = "Continuation edge."
+	}
+	if state.Status != "" {
+		lines = append(lines, "Status: "+string(state.Status))
+	}
+	if state.Objective != "" {
+		lines = append(lines, "Objective: "+state.Objective)
+	}
+	if state.StageSummary != "" {
+		lines = append(lines, "Next: "+state.StageSummary)
+	}
+	if state.RemainingTurns > 0 {
+		lines = append(lines, fmt.Sprintf("Remaining turns: %d", state.RemainingTurns))
+	}
+	if state.HandshakeBlockedReason != "" {
+		lines = append(lines, "Blocked reason: "+state.HandshakeBlockedReason)
+	}
+	lines = append(lines, "No new authority was granted by this status view.")
+	return strings.Join(lines, "\n")
 }

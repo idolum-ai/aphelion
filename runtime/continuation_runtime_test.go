@@ -97,11 +97,20 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if strings.Contains(strings.ToLower(sender.inline[0].text), "governor rationale:") {
 		t.Fatalf("inline text = %q, want single-system framing without persona/governor blocks", sender.inline[0].text)
 	}
-	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 2 {
-		t.Fatalf("rows = %#v, want Stop/Continue row", sender.inline[0].rows)
+	if len(sender.inline[0].rows) != 4 {
+		t.Fatalf("rows = %#v, want four continuation-control rows", sender.inline[0].rows)
 	}
-	if sender.inline[0].rows[0][0].Text != "Stop" || sender.inline[0].rows[0][1].Text != "Continue" {
-		t.Fatalf("button order = %#v, want left=Stop right=Continue", sender.inline[0].rows[0])
+	labels := []string{
+		sender.inline[0].rows[0][0].Text, sender.inline[0].rows[0][1].Text,
+		sender.inline[0].rows[1][0].Text, sender.inline[0].rows[1][1].Text,
+		sender.inline[0].rows[2][0].Text, sender.inline[0].rows[2][1].Text,
+		sender.inline[0].rows[3][0].Text, sender.inline[0].rows[3][1].Text,
+	}
+	wantLabels := []string{"Approve lease", "Continue once", "Ask edit", "Stop / park", "Resume edge", "Ask next lease", "Status only", "Stop"}
+	for i, want := range wantLabels {
+		if labels[i] != want {
+			t.Fatalf("button labels = %#v, want %#v", labels, wantLabels)
+		}
 	}
 	state, err := store.ContinuationState(session.SessionKey{ChatID: 8101, UserID: 0})
 	if err != nil {

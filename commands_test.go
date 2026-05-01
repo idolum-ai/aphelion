@@ -3669,3 +3669,121 @@ func TestActionProposalApproveCallbackAppliesMissionDecision(t *testing.T) {
 		t.Fatalf("edit text = %q, want approval and authority boundary", sender.editClear[0].text)
 	}
 }
+
+func TestContinuationControlsV2DecodeAliases(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"approve", continuationActionApprove},
+		{"approve_lease", continuationActionApproveLease},
+		{"continue_once", continuationActionContinueOnce},
+		{"ask-edit", continuationActionAskEdit},
+		{"park", continuationActionStopPark},
+		{"resume", continuationActionResumeEdge},
+		{"next-lease", continuationActionAskNextLease},
+		{"status-only", continuationActionStatusOnly},
+	} {
+		id, action, ok := decodeContinuationCallbackData(encodeContinuationCallbackData("decision-v2", tc.raw))
+		if !ok || id != "decision-v2" || action != tc.want {
+			t.Fatalf("decode %q = id=%q action=%q ok=%t, want decision-v2/%q/true", tc.raw, id, action, ok, tc.want)
+		}
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationApproveLease(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{continuationState: session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-approve-lease",
+		RemainingTurns: 1,
+		StageSummary:   "Resume the next bounded step.",
+	}}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-approve-lease",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-approve-lease", continuationActionApproveLease),
+		Message: &telegram.Message{MessageID: 293, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 7 || router.approveContinuationApprover != 1002 {
+		t.Fatalf("approve input/approver = %d/%d, want 7/1002", router.approveContinuationInput, router.approveContinuationApprover)
+	}
+	if router.triggerContinuationInput != 7 {
+		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Continuation lease approved") {
+		t.Fatalf("editClear = %#v, want lease approval confirmation", sender.editClear)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationStatusOnlyDoesNotMutateOrTrigger(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{continuationState: session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-status",
+		RemainingTurns: 1,
+		Objective:      "Keep the edge visible.",
+		StageSummary:   "Report status only.",
+	}}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-status-only",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-status", continuationActionStatusOnly),
+		Message: &telegram.Message{MessageID: 294, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 || router.stopContinuationInput != 0 {
+		t.Fatalf("router mutated approve/trigger/stop = %d/%d/%d, want 0/0/0", router.approveContinuationInput, router.triggerContinuationInput, router.stopContinuationInput)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "No new authority was granted") {
+		t.Fatalf("editClear = %#v, want status-only no-authority text", sender.editClear)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationAskEditParksWithoutTrigger(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		continuationState:      session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "decision-edit", RemainingTurns: 1},
+		stopContinuationResult: core.StopResult{ContinuationRevoked: true},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-ask-edit",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-edit", continuationActionAskEdit),
+		Message: &telegram.Message{MessageID: 295, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.stopContinuationInput != 7 {
+		t.Fatalf("stopContinuationInput = %d, want 7", router.stopContinuationInput)
+	}
+	if router.triggerContinuationInput != 0 || router.approveContinuationInput != 0 {
+		t.Fatalf("trigger/approve = %d/%d, want 0/0", router.triggerContinuationInput, router.approveContinuationInput)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "needs edits") {
+		t.Fatalf("editClear = %#v, want ask-edit confirmation", sender.editClear)
+	}
+}

@@ -606,7 +606,7 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		}
 		var text string
 		switch action {
-		case "approve":
+		case continuationActionApprove, continuationActionApproveLease, continuationActionContinueOnce:
 			approverID := int64(0)
 			if cb.From != nil {
 				approverID = cb.From.ID
@@ -618,19 +618,55 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			if err := router.TriggerContinuation(ctx, chatID); err != nil {
 				return true, err
 			}
-			text = renderContinuationDecision(state, true)
+			text = renderContinuationDecision(state, action)
 			if messageID != 0 {
 				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
 					log.Printf("WARN continuation approve message update failed chat_id=%d message_id=%d err=%v", chatID, messageID, err)
 				}
 			}
 			return true, nil
-		case "stop":
+		case continuationActionResumeEdge:
+			if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
+				if err := router.TriggerContinuation(ctx, chatID); err != nil {
+					return true, err
+				}
+			}
+			text = renderContinuationDecision(state, action)
+			if messageID != 0 {
+				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+					return true, err
+				}
+			}
+			return true, nil
+		case continuationActionAskEdit:
+			if _, err := router.StopContinuation(chatID); err != nil {
+				return true, err
+			}
+			text = renderContinuationDecision(state, action)
+			if messageID != 0 {
+				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+					return true, err
+				}
+			}
+			return true, nil
+		case continuationActionStop, continuationActionStopPark:
 			stopped, err := router.StopContinuation(chatID)
 			if err != nil {
 				return true, err
 			}
-			text = face.RenderTelegramStop(stopped)
+			if action == continuationActionStopPark {
+				text = "Continuation parked. " + face.RenderTelegramStop(stopped)
+			} else {
+				text = face.RenderTelegramStop(stopped)
+			}
+			if messageID != 0 {
+				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+					return true, err
+				}
+			}
+			return true, nil
+		case continuationActionAskNextLease, continuationActionStatusOnly:
+			text = renderContinuationDecision(state, action)
 			if messageID != 0 {
 				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
 					return true, err

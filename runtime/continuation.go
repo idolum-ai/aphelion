@@ -31,6 +31,17 @@ type continuationConsensus struct {
 const continuationOperationalStateNote = "operational continuation_state remains authoritative"
 const continuationLeaseDefaultTTL = 30 * time.Minute
 
+const (
+	continuationActionApproveLease = "approve_lease"
+	continuationActionContinueOnce = "continue_once"
+	continuationActionAskEdit      = "ask_edit"
+	continuationActionStopPark     = "stop_park"
+	continuationActionResumeEdge   = "resume_edge"
+	continuationActionAskNextLease = "ask_next_lease"
+	continuationActionStatusOnly   = "status_only"
+	continuationActionStop         = "stop"
+)
+
 func (c continuationConsensus) eligible() bool {
 	return strings.TrimSpace(c.BlockedReason) == "" &&
 		c.PersonaIntent.Decision == session.ContinuationIntentDecisionContinue &&
@@ -807,10 +818,28 @@ func continuationCallbackID(state session.ContinuationState) string {
 }
 
 func continuationApprovalButtonRows(decisionID string) [][]telegram.InlineButton {
-	return [][]telegram.InlineButton{{
-		{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, "stop")},
-		{Text: "Continue", CallbackData: encodeContinuationCallbackData(decisionID, "approve")},
-	}}
+	decisionID = strings.TrimSpace(decisionID)
+	if decisionID == "" {
+		return nil
+	}
+	return [][]telegram.InlineButton{
+		{
+			{Text: "Approve lease", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionApproveLease)},
+			{Text: "Continue once", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionContinueOnce)},
+		},
+		{
+			{Text: "Ask edit", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskEdit)},
+			{Text: "Stop / park", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
+		},
+		{
+			{Text: "Resume edge", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionResumeEdge)},
+			{Text: "Ask next lease", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskNextLease)},
+		},
+		{
+			{Text: "Status only", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
+			{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
+		},
+	}
 }
 
 func newContinuationDecisionID() string {
