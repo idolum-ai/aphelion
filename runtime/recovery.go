@@ -247,6 +247,10 @@ func (r *Runtime) flushRecoveryRunMemory(ctx context.Context, runs []session.Tur
 		}
 		seen[run.ChatID] = struct{}{}
 		if err := r.FlushChatMemory(ctx, run.ChatID, reason); err != nil {
+			if isRecoveryMemoryFlushTimeout(err) {
+				log.Printf("INFO recovery memory flush deferred chat_id=%d reason=%s err=%v", run.ChatID, strings.TrimSpace(reason), err)
+				continue
+			}
 			log.Printf("WARN recovery memory flush skipped chat_id=%d reason=%s err=%v", run.ChatID, strings.TrimSpace(reason), err)
 			r.reportOperationalIssueAsync("memory_recovery_flush", fmt.Errorf("chat_id=%d reason=%s: %w", run.ChatID, strings.TrimSpace(reason), err))
 		}

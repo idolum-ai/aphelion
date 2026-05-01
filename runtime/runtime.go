@@ -113,6 +113,7 @@ type Runtime struct {
 	recipeState            runtimeRecipeState
 	memoryFocusMu          sync.RWMutex
 	memoryFocusByChat      map[int64]core.MemoryFocus
+	shuttingDown           atomic.Bool
 }
 
 func (r *Runtime) ContinuationState(chatID int64) (session.ContinuationState, error) {

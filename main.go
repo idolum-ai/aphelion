@@ -155,6 +155,9 @@ func (c telegramCommandControl) Restart(chatID int64) error {
 		}
 	}
 	log.Printf("WARN restart requested via telegram chat_id=%d", chatID)
+	if c.rt != nil {
+		c.rt.BeginShutdown()
+	}
 	go func() {
 		time.Sleep(restartExitWait)
 		processExit(exitCodeFailure)
@@ -799,6 +802,10 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		<-ctx.Done()
+		rt.BeginShutdown()
+	}()
 	if err := startDurableAgentControlPlane(ctx, durableAgentControlPlaneServer(cfg, store)); err != nil {
 		return err
 	}
@@ -809,6 +816,7 @@ func run() error {
 	rt.StartIdleExpiryLoop(ctx, log.Printf)
 	rt.SetStaleTurnWatchdogHook(func(runs []session.TurnRun) {
 		log.Printf("WARN stale turn watchdog requesting process restart after interrupting %d run(s)", len(runs))
+		rt.BeginShutdown()
 		go func() {
 			time.Sleep(restartExitWait)
 			processExit(exitCodeFailure)

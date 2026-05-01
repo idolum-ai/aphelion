@@ -124,7 +124,11 @@ func (m *turnMonitor) ToolStarted(ctx context.Context, name string, input json.R
 	}
 	if m.runID != 0 {
 		if err := m.runtime.store.NoteTurnRunToolStart(m.runID, name, preview); err != nil {
-			log.Printf("WARN note turn run tool start id=%d tool=%s err=%v", m.runID, name, err)
+			if m.runtime.expectedShutdownNoise(ctx, err) {
+				log.Printf("INFO suppressing expected shutdown tool-start note failure id=%d tool=%s err=%v", m.runID, name, err)
+			} else {
+				log.Printf("WARN note turn run tool start id=%d tool=%s err=%v", m.runID, name, err)
+			}
 		}
 	}
 	m.runtime.recordExecutionEvent(m.key, core.ExecutionEventToolStarted, "tool", "started", map[string]any{
@@ -148,7 +152,11 @@ func (m *turnMonitor) ToolFinished(ctx context.Context, name string, input json.
 	}
 	if m.runID != 0 {
 		if storeErr := m.runtime.store.NoteTurnRunToolFinish(m.runID, resultPreview, errorText); storeErr != nil {
-			log.Printf("WARN note turn run tool finish id=%d tool=%s err=%v", m.runID, name, storeErr)
+			if m.runtime.expectedShutdownNoise(ctx, storeErr) {
+				log.Printf("INFO suppressing expected shutdown tool-finish note failure id=%d tool=%s err=%v", m.runID, name, storeErr)
+			} else {
+				log.Printf("WARN note turn run tool finish id=%d tool=%s err=%v", m.runID, name, storeErr)
+			}
 		}
 	}
 	eventType := core.ExecutionEventToolSucceeded
@@ -185,7 +193,11 @@ func (m *turnMonitor) startRunActivityHeartbeat() {
 		default:
 		}
 		if err := m.runtime.store.TouchTurnRunActivity(m.runID); err != nil {
-			log.Printf("WARN touch turn run activity id=%d err=%v", m.runID, err)
+			if m.runtime.expectedShutdownNoise(runCtx, err) {
+				log.Printf("INFO suppressing expected shutdown turn activity touch failure id=%d err=%v", m.runID, err)
+			} else {
+				log.Printf("WARN touch turn run activity id=%d err=%v", m.runID, err)
+			}
 		}
 		if m.progress != nil {
 			m.progress.Heartbeat(runCtx)
@@ -212,7 +224,11 @@ func (m *turnMonitor) Finish(ctx context.Context, turnErr error) {
 		errorText = trimError(turnErr.Error())
 	}
 	if err := m.runtime.store.CompleteTurnRun(m.runID, status, errorText); err != nil {
-		log.Printf("WARN complete turn run id=%d status=%s err=%v", m.runID, status, err)
+		if m.runtime.expectedShutdownNoise(ctx, err) {
+			log.Printf("INFO suppressing expected shutdown turn completion failure id=%d status=%s err=%v", m.runID, status, err)
+		} else {
+			log.Printf("WARN complete turn run id=%d status=%s err=%v", m.runID, status, err)
+		}
 	}
 	eventType := core.ExecutionEventTurnCompleted
 	eventStatus := "completed"
@@ -653,7 +669,7 @@ func (p *toolProgressReporter) sendOrEditLocked(ctx context.Context, done bool, 
 }
 
 func (p *toolProgressReporter) shouldSuppressDeliveryError(err error) bool {
-	return isExpectedDurableChildOutboundUnavailable(err)
+	return isExpectedDurableChildOutboundUnavailable(err) || (p != nil && p.runtime != nil && p.runtime.expectedShutdownNoise(context.Background(), err))
 }
 
 func isExpectedDurableChildOutboundUnavailable(err error) bool {
@@ -678,6 +694,10 @@ func (p *toolProgressReporter) Finish(ctx context.Context) {
 	p.finished = true
 	if p.cleanup && p.deleter != nil {
 		if err := p.deleter.DeleteMessage(ctx, p.chatID, p.messageID); err != nil {
+			if p.shouldSuppressDeliveryError(err) {
+				log.Printf("INFO suppressing expected tool progress delete failure chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
+				return
+			}
 			log.Printf("WARN delete tool progress chat_id=%d msg_id=%d err=%v", p.chatID, p.messageID, err)
 			if p.reportIssue != nil {
 				p.reportIssue(ctx, fmt.Errorf("delete tool progress chat_id=%d msg_id=%d: %w", p.chatID, p.messageID, err))

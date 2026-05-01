@@ -284,7 +284,11 @@ func RunTurn(
 
 			out, toolErr := tools.Execute(ctx, call.Name, call.Input)
 			if toolErr != nil {
-				log.Printf("WARN tool execution failed tool=%s id=%s err=%v", call.Name, call.ID, toolErr)
+				if errors.Is(toolErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+					log.Printf("INFO suppressing expected canceled tool execution tool=%s id=%s err=%v", call.Name, call.ID, toolErr)
+				} else {
+					log.Printf("WARN tool execution failed tool=%s id=%s err=%v", call.Name, call.ID, toolErr)
+				}
 			} else {
 				log.Printf("INFO tool execution completed tool=%s id=%s", call.Name, call.ID)
 			}

@@ -33,6 +33,10 @@ func (r *Runtime) reportOperationalIssue(ctx context.Context, component string, 
 	if r == nil || r.store == nil || r.outbound == nil || r.cfg == nil || err == nil {
 		return
 	}
+	if r.expectedShutdownNoise(ctx, err) {
+		log.Printf("INFO suppressing expected shutdown operational alert component=%s err=%v", strings.TrimSpace(component), err)
+		return
+	}
 	component = strings.TrimSpace(component)
 	if component == "" {
 		component = "runtime"
@@ -49,6 +53,10 @@ func (r *Runtime) reportOperationalIssue(ctx context.Context, component string, 
 	}
 	text := renderOperationalIssueMessage(component, detail, suppressed, now)
 	if sendErr := r.sendOperationalNoticeToAdmin(ctx, text); sendErr != nil {
+		if r.expectedShutdownNoise(ctx, sendErr) {
+			log.Printf("INFO suppressing expected shutdown operational alert delivery failure component=%s err=%v", component, sendErr)
+			return
+		}
 		log.Printf("WARN operational alert delivery failed component=%s err=%v", component, sendErr)
 	}
 }

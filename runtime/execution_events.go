@@ -207,6 +207,16 @@ func (r *Runtime) recordExecutionEvent(
 		createdAt = time.Now().UTC()
 	}
 	if _, err := r.appendExecutionEvent(key, eventType, stage, status, payload, createdAt); err != nil {
+		if r.expectedShutdownNoise(context.Background(), err) {
+			log.Printf(
+				"INFO suppressing expected shutdown execution event append failure type=%s chat_id=%d scope=%s err=%v",
+				strings.TrimSpace(eventType),
+				key.ChatID,
+				key.Scope.String(),
+				err,
+			)
+			return
+		}
 		log.Printf(
 			"WARN append execution event failed type=%s chat_id=%d scope=%s err=%v",
 			strings.TrimSpace(eventType),
