@@ -43,7 +43,7 @@ Classifications below use the shared truth classes defined in
 | `sessions.plan_state_json` | operational current-state store | What plan intent is currently declared? |
 | `sessions.operation_state_json` | operational current-state store | What operation intent/stage is currently declared? |
 | `pending_decisions` | operational current-state store | What decisions are currently pending and actionable? |
-| `sessions.continuation_state_json` | operational current-state store | What continuation state is currently declared? |
+| `sessions.continuation_state_json` | operational current-state store | What continuation state, embedded `ActionProposal`, and embedded `ContinuationLease` are currently declared? |
 | `session.review_events (status='pending')` | operational current-state store | Which review artifacts are queued for governance delivery? |
 | `/status` | projection | How should system/chat state be rendered for operators now? |
 | `/debug` | projection | How should execution evidence be rendered for diagnosis now? |
@@ -59,6 +59,11 @@ Classifications below use the shared truth classes defined in
 - Fallback rows must not silently override canonical or operational answers.
 - When `/status` or `/debug` uses fallback rows, that usage should be surfaced
   as source attribution.
+
+ActionProposal / ContinuationLease note:
+
+- In v1 these records are embedded in `sessions.continuation_state_json` so the existing continuation button flow remains the operational current-state surface.
+- TES `continuation.*` events remain canonical for what was offered, approved, consumed, revoked, or blocked at runtime.
 
 Staged identity decision:
 

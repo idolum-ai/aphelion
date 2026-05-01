@@ -4,6 +4,9 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -26,6 +29,7 @@ type continuationConsensus struct {
 }
 
 const continuationOperationalStateNote = "operational continuation_state remains authoritative"
+const continuationLeaseDefaultTTL = 30 * time.Minute
 
 func (c continuationConsensus) eligible() bool {
 	return strings.TrimSpace(c.BlockedReason) == "" &&
@@ -66,6 +70,8 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		state.Status = session.ContinuationStatusPending
 		state.DecisionID = newContinuationDecisionID()
 		state.RemainingTurns = 1
+		state.ActionProposal = buildContinuationActionProposal(state.DecisionID, consensus, objective, nextStep, time.Now().UTC())
+		state.ContinuationLease = buildContinuationLease(state.ActionProposal, state.RemainingTurns, time.Now().UTC())
 	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return fmt.Errorf("persist continuation state: %w", err)
@@ -90,7 +96,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		ctx,
 		msg.ChatID,
 		r.renderContinuationPrompt(ctx, key, msg, state),
-		continuationApprovalButtonRows(state.DecisionID),
+		continuationApprovalButtonRows(continuationCallbackID(state)),
 		nil,
 	)
 	if err != nil {
@@ -501,13 +507,234 @@ func (r *Runtime) groundContinuationPromptWithExecutionEvidence(
 }
 
 func continuationExecutionPayload(state session.ContinuationState) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"decision_id":     strings.TrimSpace(state.DecisionID),
 		"objective":       strings.TrimSpace(state.Objective),
 		"stage_summary":   strings.TrimSpace(state.StageSummary),
 		"remaining_turns": state.RemainingTurns,
 		"state_source":    "continuation_state",
 	}
+	proposal := session.NormalizeActionProposal(state.ActionProposal)
+	if proposal.Active() {
+		payload["proposal_id"] = strings.TrimSpace(proposal.ID)
+		payload["proposal_status"] = strings.TrimSpace(string(proposal.Status))
+		payload["risk_class"] = strings.TrimSpace(proposal.RiskClass)
+		payload["plan_hash"] = strings.TrimSpace(proposal.PlanHash)
+		if !proposal.ExpiresAt.IsZero() {
+			payload["expires_at"] = proposal.ExpiresAt.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	if strings.TrimSpace(lease.ID) != "" || strings.TrimSpace(lease.ProposalID) != "" {
+		payload["lease_id"] = strings.TrimSpace(lease.ID)
+		payload["lease_status"] = strings.TrimSpace(string(lease.Status))
+		payload["lease_remaining_turns"] = lease.RemainingTurns
+		payload["lease_max_turns"] = lease.MaxTurns
+	}
+	return payload
+}
+
+func buildContinuationActionProposal(decisionID string, consensus continuationConsensus, objective string, nextStep string, now time.Time) session.ActionProposal {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	op := session.NormalizeOperationState(consensus.OperationState)
+	proposal := op.Proposal
+	actionProposal := session.ActionProposal{
+		ID:               "aprop-" + strings.TrimSpace(decisionID),
+		OperationID:      strings.TrimSpace(op.ID),
+		Summary:          firstNonEmptyContinuation(proposal.Summary, nextStep, objective),
+		WhyNow:           firstNonEmptyContinuation(proposal.WhyNow, consensus.GovernorIntent.Rationale, consensus.PersonaIntent.Rationale),
+		BoundedEffect:    firstNonEmptyContinuation(proposal.BoundedEffect, consensus.GovernorIntent.Constraints, "Resume one bounded continuation turn and report the result."),
+		RiskClass:        firstNonEmptyContinuation(proposal.Kind, "continuation"),
+		AllowedActions:   []string{"continue_one_turn", "use_existing_authority_only", "report_evidence"},
+		ForbiddenActions: []string{"expand_authority_without_new_approval", "external_effect_outside_bounded_effect", "ignore_stop_or_revocation"},
+		ValidationPlan:   []string{"consume at most the approved continuation turn", "report what changed and what evidence supports it"},
+		ExpiresAt:        now.Add(continuationLeaseDefaultTTL),
+		Status:           session.ProposalStatusPending,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	actionProposal.PlanHash = actionProposalHash(actionProposal)
+	return session.NormalizeActionProposal(actionProposal)
+}
+
+func buildContinuationLease(proposal session.ActionProposal, turns int, now time.Time) session.ContinuationLease {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	proposal = session.NormalizeActionProposal(proposal)
+	if turns <= 0 {
+		turns = 1
+	}
+	lease := session.ContinuationLease{
+		ID:               "lease-" + strings.TrimPrefix(strings.TrimSpace(proposal.ID), "aprop-"),
+		ProposalID:       strings.TrimSpace(proposal.ID),
+		MissionID:        strings.TrimSpace(proposal.MissionID),
+		Status:           session.ContinuationLeaseStatusPending,
+		MaxTurns:         turns,
+		RemainingTurns:   turns,
+		AllowedActions:   append([]string(nil), proposal.AllowedActions...),
+		ForbiddenActions: append([]string(nil), proposal.ForbiddenActions...),
+		ValidationPlan:   append([]string(nil), proposal.ValidationPlan...),
+		ExpiresAt:        proposal.ExpiresAt,
+		PlanHash:         proposal.PlanHash,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	return session.NormalizeContinuationLease(lease)
+}
+
+func actionProposalHash(proposal session.ActionProposal) string {
+	proposal.PlanHash = ""
+	proposal.CreatedAt = time.Time{}
+	proposal.UpdatedAt = time.Time{}
+	raw, err := json.Marshal(proposal)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func continuationStateWithLeaseApproved(state session.ContinuationState, approverID int64, now time.Time) (session.ContinuationState, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	if state.ActionProposal.Active() && !state.ActionProposal.ExpiresAt.IsZero() && !state.ActionProposal.ExpiresAt.After(now) {
+		state.ActionProposal.Status = session.ProposalStatusExpired
+		state.ContinuationLease.Status = session.ContinuationLeaseStatusExpired
+		state.ContinuationLease.RemainingTurns = 0
+		state.Status = session.ContinuationStatusIdle
+		state.RemainingTurns = 0
+		state.UpdatedAt = now
+		return session.NormalizeContinuationState(state), fmt.Errorf("continuation proposal expired")
+	}
+	if strings.TrimSpace(state.ContinuationLease.ID) == "" {
+		if !state.ActionProposal.Active() {
+			state.ActionProposal = buildContinuationActionProposal(state.DecisionID, continuationConsensus{PersonaIntent: state.PersonaIntent, GovernorIntent: state.GovernorIntent}, state.Objective, state.StageSummary, now)
+		}
+		state.ContinuationLease = buildContinuationLease(state.ActionProposal, state.RemainingTurns, now)
+	}
+	if !state.ContinuationLease.ExpiresAt.IsZero() && !state.ContinuationLease.ExpiresAt.After(now) {
+		state.ContinuationLease.Status = session.ContinuationLeaseStatusExpired
+		state.ContinuationLease.RemainingTurns = 0
+		state.ActionProposal.Status = session.ProposalStatusExpired
+		state.Status = session.ContinuationStatusIdle
+		state.RemainingTurns = 0
+		state.UpdatedAt = now
+		return session.NormalizeContinuationState(state), fmt.Errorf("continuation lease expired")
+	}
+	if state.RemainingTurns <= 0 {
+		state.RemainingTurns = state.ContinuationLease.RemainingTurns
+	}
+	if state.RemainingTurns <= 0 {
+		state.RemainingTurns = 1
+	}
+	state.Status = session.ContinuationStatusApproved
+	state.ApprovedBy = approverID
+	state.UpdatedAt = now
+	state.ActionProposal.Status = session.ProposalStatusApproved
+	state.ActionProposal.UpdatedAt = now
+	state.ContinuationLease.Status = session.ContinuationLeaseStatusActive
+	state.ContinuationLease.ApprovedBy = approverID
+	state.ContinuationLease.ApprovedAt = now
+	state.ContinuationLease.UpdatedAt = now
+	if state.ContinuationLease.RemainingTurns <= 0 {
+		state.ContinuationLease.RemainingTurns = state.RemainingTurns
+	}
+	if state.ContinuationLease.MaxTurns <= 0 {
+		state.ContinuationLease.MaxTurns = state.ContinuationLease.RemainingTurns
+	}
+	return session.NormalizeContinuationState(state), nil
+}
+
+func continuationStateWithLeaseRevoked(state session.ContinuationState, now time.Time) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	if state.ActionProposal.Active() && state.ActionProposal.Status != session.ProposalStatusApproved {
+		state.ActionProposal.Status = session.ProposalStatusDenied
+		state.ActionProposal.UpdatedAt = now
+	}
+	if strings.TrimSpace(state.ContinuationLease.ID) != "" || strings.TrimSpace(state.ContinuationLease.ProposalID) != "" {
+		state.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+		state.ContinuationLease.RemainingTurns = 0
+		state.ContinuationLease.RevokedAt = now
+		state.ContinuationLease.UpdatedAt = now
+	}
+	state.Status = session.ContinuationStatusRevoked
+	state.RemainingTurns = 0
+	state.ApprovedBy = 0
+	state.DecisionID = ""
+	state.UpdatedAt = now
+	return session.NormalizeContinuationState(state)
+}
+
+func continuationLeaseExpired(state session.ContinuationState, now time.Time) bool {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	state = session.NormalizeContinuationState(state)
+	lease := state.ContinuationLease
+	return strings.TrimSpace(lease.ID) != "" && !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now.UTC())
+}
+
+func continuationStateWithLeaseExpired(state session.ContinuationState, now time.Time) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	state.Status = session.ContinuationStatusIdle
+	state.RemainingTurns = 0
+	state.ApprovedBy = 0
+	state.DecisionID = ""
+	if state.ActionProposal.Active() {
+		state.ActionProposal.Status = session.ProposalStatusExpired
+		state.ActionProposal.UpdatedAt = now
+	}
+	if strings.TrimSpace(state.ContinuationLease.ID) != "" || strings.TrimSpace(state.ContinuationLease.ProposalID) != "" {
+		state.ContinuationLease.Status = session.ContinuationLeaseStatusExpired
+		state.ContinuationLease.RemainingTurns = 0
+		state.ContinuationLease.UpdatedAt = now
+	}
+	state.UpdatedAt = now
+	return session.NormalizeContinuationState(state)
+}
+
+func continuationStateAfterLeaseTurnConsumed(state session.ContinuationState, now time.Time) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	if state.RemainingTurns > 0 {
+		state.RemainingTurns--
+	}
+	if strings.TrimSpace(state.ContinuationLease.ID) != "" || strings.TrimSpace(state.ContinuationLease.ProposalID) != "" {
+		if state.ContinuationLease.RemainingTurns > 0 {
+			state.ContinuationLease.RemainingTurns--
+		}
+		state.ContinuationLease.UpdatedAt = now
+		if state.ContinuationLease.RemainingTurns <= 0 {
+			state.ContinuationLease.Status = session.ContinuationLeaseStatusConsumed
+			state.ContinuationLease.ConsumedAt = now
+		}
+	}
+	if state.RemainingTurns <= 0 {
+		state.Status = session.ContinuationStatusIdle
+		state.DecisionID = ""
+		state.ApprovedBy = 0
+	}
+	state.UpdatedAt = now
+	return session.NormalizeContinuationState(state)
 }
 
 func continuationPromptHasSplitRoleLabels(text string) bool {
@@ -543,6 +770,18 @@ func renderContinuationPromptFallback(state session.ContinuationState) string {
 	if constraints := strings.TrimSpace(state.GovernorIntent.Constraints); constraints != "" {
 		lines = append(lines, "", "Boundaries:", constraints)
 	}
+	proposal := session.NormalizeActionProposal(state.ActionProposal)
+	if proposal.Active() {
+		if effect := strings.TrimSpace(proposal.BoundedEffect); effect != "" {
+			lines = append(lines, "", "Bounded effect:", effect)
+		}
+		if len(proposal.AllowedActions) > 0 {
+			lines = append(lines, "", "Allowed actions:", strings.Join(proposal.AllowedActions, ", "))
+		}
+		if len(proposal.ForbiddenActions) > 0 {
+			lines = append(lines, "", "Forbidden actions:", strings.Join(proposal.ForbiddenActions, ", "))
+		}
+	}
 	if objective := strings.TrimSpace(state.Objective); objective != "" {
 		lines = append(lines, "", "Objective:", objective)
 	}
@@ -551,6 +790,20 @@ func renderContinuationPromptFallback(state session.ContinuationState) string {
 	}
 	lines = append(lines, "", fmt.Sprintf("Should I continue for %d more turn(s)?", state.RemainingTurns))
 	return strings.Join(lines, "\n")
+}
+
+func continuationCallbackID(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	if id := strings.TrimSpace(state.ActionProposal.ID); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(state.ContinuationLease.ProposalID); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(state.ContinuationLease.ID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(state.DecisionID)
 }
 
 func continuationApprovalButtonRows(decisionID string) [][]telegram.InlineButton {

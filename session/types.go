@@ -119,6 +119,53 @@ type OperationProposal struct {
 	Status        ProposalStatus `json:"status,omitempty"`
 	UpdatedAt     time.Time      `json:"updated_at,omitempty"`
 }
+type ActionProposal struct {
+	ID               string         `json:"id,omitempty"`
+	OperationID      string         `json:"operation_id,omitempty"`
+	MissionID        string         `json:"mission_id,omitempty"`
+	Summary          string         `json:"summary,omitempty"`
+	WhyNow           string         `json:"why_now,omitempty"`
+	BoundedEffect    string         `json:"bounded_effect,omitempty"`
+	RiskClass        string         `json:"risk_class,omitempty"`
+	AllowedActions   []string       `json:"allowed_actions,omitempty"`
+	ForbiddenActions []string       `json:"forbidden_actions,omitempty"`
+	ValidationPlan   []string       `json:"validation_plan,omitempty"`
+	ExpiresAt        time.Time      `json:"expires_at,omitempty"`
+	PlanHash         string         `json:"plan_hash,omitempty"`
+	Status           ProposalStatus `json:"status,omitempty"`
+	CreatedAt        time.Time      `json:"created_at,omitempty"`
+	UpdatedAt        time.Time      `json:"updated_at,omitempty"`
+}
+
+type ContinuationLeaseStatus string
+
+const (
+	ContinuationLeaseStatusPending  ContinuationLeaseStatus = "pending"
+	ContinuationLeaseStatusActive   ContinuationLeaseStatus = "active"
+	ContinuationLeaseStatusConsumed ContinuationLeaseStatus = "consumed"
+	ContinuationLeaseStatusRevoked  ContinuationLeaseStatus = "revoked"
+	ContinuationLeaseStatusExpired  ContinuationLeaseStatus = "expired"
+)
+
+type ContinuationLease struct {
+	ID               string                  `json:"id,omitempty"`
+	ProposalID       string                  `json:"proposal_id,omitempty"`
+	MissionID        string                  `json:"mission_id,omitempty"`
+	Status           ContinuationLeaseStatus `json:"status,omitempty"`
+	MaxTurns         int                     `json:"max_turns,omitempty"`
+	RemainingTurns   int                     `json:"remaining_turns,omitempty"`
+	ApprovedBy       int64                   `json:"approved_by,omitempty"`
+	AllowedActions   []string                `json:"allowed_actions,omitempty"`
+	ForbiddenActions []string                `json:"forbidden_actions,omitempty"`
+	ValidationPlan   []string                `json:"validation_plan,omitempty"`
+	ExpiresAt        time.Time               `json:"expires_at,omitempty"`
+	PlanHash         string                  `json:"plan_hash,omitempty"`
+	CreatedAt        time.Time               `json:"created_at,omitempty"`
+	UpdatedAt        time.Time               `json:"updated_at,omitempty"`
+	ApprovedAt       time.Time               `json:"approved_at,omitempty"`
+	ConsumedAt       time.Time               `json:"consumed_at,omitempty"`
+	RevokedAt        time.Time               `json:"revoked_at,omitempty"`
+}
 
 type OperationFinding struct {
 	Claim      string            `json:"claim"`
@@ -431,6 +478,8 @@ type TurnAuthorizationState struct {
 	ApprovedBy             int64                   `json:"approved_by,omitempty"`
 	PersonaIntent          ContinuationIntent      `json:"persona_intent,omitempty"`
 	GovernorIntent         ContinuationIntent      `json:"governor_intent,omitempty"`
+	ActionProposal         ActionProposal          `json:"action_proposal,omitempty"`
+	ContinuationLease      ContinuationLease       `json:"continuation_lease,omitempty"`
 	HandshakeBlockedReason string                  `json:"handshake_blocked_reason,omitempty"`
 	UpdatedAt              time.Time               `json:"updated_at,omitempty"`
 }
@@ -1257,8 +1306,10 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	state.StageSummary = strings.TrimSpace(state.StageSummary)
 	state.PersonaIntent = normalizeContinuationIntent(state.PersonaIntent)
 	state.GovernorIntent = normalizeContinuationIntent(state.GovernorIntent)
+	state.ActionProposal = NormalizeActionProposal(state.ActionProposal)
+	state.ContinuationLease = NormalizeContinuationLease(state.ContinuationLease)
 	state.HandshakeBlockedReason = normalizeContinuationStage(state.HandshakeBlockedReason)
-	if state.Kind == "" && (state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
+	if state.Kind == "" && (state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "") {
 		state.Kind = TurnAuthorizationKindContinuation
 	}
 	if state.RemainingTurns < 0 {
@@ -1268,7 +1319,7 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 		state.ApprovedBy = 0
 		state.DecisionID = ""
 	}
-	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0) {
+	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "") {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state
@@ -1293,6 +1344,126 @@ func (p OperationProposal) Active() bool {
 		strings.TrimSpace(p.WhyNow) != "" ||
 		strings.TrimSpace(p.BoundedEffect) != "" ||
 		strings.TrimSpace(string(p.Status)) != ""
+}
+
+func (p ActionProposal) Active() bool {
+	return strings.TrimSpace(p.ID) != "" ||
+		strings.TrimSpace(p.OperationID) != "" ||
+		strings.TrimSpace(p.MissionID) != "" ||
+		strings.TrimSpace(p.Summary) != "" ||
+		strings.TrimSpace(p.WhyNow) != "" ||
+		strings.TrimSpace(p.BoundedEffect) != "" ||
+		strings.TrimSpace(p.RiskClass) != "" ||
+		len(p.AllowedActions) > 0 ||
+		len(p.ForbiddenActions) > 0 ||
+		len(p.ValidationPlan) > 0 ||
+		!p.ExpiresAt.IsZero() ||
+		strings.TrimSpace(p.PlanHash) != "" ||
+		strings.TrimSpace(string(p.Status)) != ""
+}
+
+func (l ContinuationLease) Active() bool {
+	lease := NormalizeContinuationLease(l)
+	if lease.Status != ContinuationLeaseStatusActive || lease.RemainingTurns <= 0 {
+		return false
+	}
+	return lease.ExpiresAt.IsZero() || lease.ExpiresAt.After(time.Now().UTC())
+}
+
+func NormalizeActionProposal(proposal ActionProposal) ActionProposal {
+	proposal.ID = strings.TrimSpace(proposal.ID)
+	proposal.OperationID = strings.TrimSpace(proposal.OperationID)
+	proposal.MissionID = strings.TrimSpace(proposal.MissionID)
+	proposal.Summary = strings.TrimSpace(proposal.Summary)
+	proposal.WhyNow = strings.TrimSpace(proposal.WhyNow)
+	proposal.BoundedEffect = strings.TrimSpace(proposal.BoundedEffect)
+	proposal.RiskClass = normalizeEnumValue(proposal.RiskClass)
+	proposal.AllowedActions = normalizeActionStringSlice(proposal.AllowedActions)
+	proposal.ForbiddenActions = normalizeActionStringSlice(proposal.ForbiddenActions)
+	proposal.ValidationPlan = normalizeActionStringSlice(proposal.ValidationPlan)
+	proposal.PlanHash = strings.TrimSpace(proposal.PlanHash)
+	proposal.Status = NormalizeProposalStatus(proposal.Status)
+	if !proposal.ExpiresAt.IsZero() {
+		proposal.ExpiresAt = proposal.ExpiresAt.UTC()
+	}
+	if !proposal.CreatedAt.IsZero() {
+		proposal.CreatedAt = proposal.CreatedAt.UTC()
+	}
+	if !proposal.UpdatedAt.IsZero() {
+		proposal.UpdatedAt = proposal.UpdatedAt.UTC()
+	}
+	if proposal.Status == "" && proposal.Active() {
+		proposal.Status = ProposalStatusPending
+	}
+	if proposal.CreatedAt.IsZero() && proposal.Active() {
+		proposal.CreatedAt = time.Now().UTC()
+	}
+	if proposal.UpdatedAt.IsZero() && proposal.Active() {
+		proposal.UpdatedAt = time.Now().UTC()
+	}
+	return proposal
+}
+
+func NormalizeContinuationLeaseStatus(status ContinuationLeaseStatus) ContinuationLeaseStatus {
+	value := normalizeEnumValue(string(status))
+	switch ContinuationLeaseStatus(value) {
+	case ContinuationLeaseStatusPending, ContinuationLeaseStatusActive, ContinuationLeaseStatusConsumed, ContinuationLeaseStatusRevoked, ContinuationLeaseStatusExpired:
+		return ContinuationLeaseStatus(value)
+	default:
+		return ""
+	}
+}
+
+func NormalizeContinuationLease(lease ContinuationLease) ContinuationLease {
+	lease.ID = strings.TrimSpace(lease.ID)
+	lease.ProposalID = strings.TrimSpace(lease.ProposalID)
+	lease.MissionID = strings.TrimSpace(lease.MissionID)
+	lease.Status = NormalizeContinuationLeaseStatus(lease.Status)
+	lease.AllowedActions = normalizeActionStringSlice(lease.AllowedActions)
+	lease.ForbiddenActions = normalizeActionStringSlice(lease.ForbiddenActions)
+	lease.ValidationPlan = normalizeActionStringSlice(lease.ValidationPlan)
+	lease.PlanHash = strings.TrimSpace(lease.PlanHash)
+	if lease.MaxTurns < 0 {
+		lease.MaxTurns = 0
+	}
+	if lease.RemainingTurns < 0 {
+		lease.RemainingTurns = 0
+	}
+	if lease.MaxTurns == 0 && lease.RemainingTurns > 0 {
+		lease.MaxTurns = lease.RemainingTurns
+	}
+	if !lease.ExpiresAt.IsZero() {
+		lease.ExpiresAt = lease.ExpiresAt.UTC()
+	}
+	if !lease.CreatedAt.IsZero() {
+		lease.CreatedAt = lease.CreatedAt.UTC()
+	}
+	if !lease.UpdatedAt.IsZero() {
+		lease.UpdatedAt = lease.UpdatedAt.UTC()
+	}
+	if !lease.ApprovedAt.IsZero() {
+		lease.ApprovedAt = lease.ApprovedAt.UTC()
+	}
+	if !lease.ConsumedAt.IsZero() {
+		lease.ConsumedAt = lease.ConsumedAt.UTC()
+	}
+	if !lease.RevokedAt.IsZero() {
+		lease.RevokedAt = lease.RevokedAt.UTC()
+	}
+	if lease.Status == "" && (lease.ID != "" || lease.ProposalID != "" || lease.RemainingTurns > 0 || lease.MaxTurns > 0) {
+		lease.Status = ContinuationLeaseStatusPending
+	}
+	switch lease.Status {
+	case ContinuationLeaseStatusConsumed, ContinuationLeaseStatusRevoked, ContinuationLeaseStatusExpired:
+		lease.RemainingTurns = 0
+	}
+	if lease.CreatedAt.IsZero() && (lease.ID != "" || lease.ProposalID != "" || lease.Status != "") {
+		lease.CreatedAt = time.Now().UTC()
+	}
+	if lease.UpdatedAt.IsZero() && (lease.ID != "" || lease.ProposalID != "" || lease.Status != "") {
+		lease.UpdatedAt = time.Now().UTC()
+	}
+	return lease
 }
 
 func NormalizeOperationStatus(status OperationStatus) OperationStatus {
@@ -1343,6 +1514,23 @@ func normalizeOperationProposal(proposal OperationProposal) OperationProposal {
 
 func normalizeOperationStage(stage string) string {
 	return normalizeEnumValue(stage)
+}
+
+func normalizeActionStringSlice(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func normalizeContinuationIntent(intent ContinuationIntent) ContinuationIntent {

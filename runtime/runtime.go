@@ -146,17 +146,21 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 	if state.RemainingTurns <= 0 {
 		return state, fmt.Errorf("continuation has no remaining turns")
 	}
-	state.Status = session.ContinuationStatusApproved
-	state.ApprovedBy = approverID
-	state.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	state, err = continuationStateWithLeaseApproved(state, approverID, now)
+	if err != nil {
+		if updateErr := r.store.UpdateContinuationState(key, state); updateErr != nil {
+			return session.ContinuationState{}, updateErr
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
+		return state, err
+	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, err
 	}
-	r.recordExecutionEvent(key, core.ExecutionEventContinuationApproved, "continuation", "approved", map[string]any{
-		"decision_id":      strings.TrimSpace(state.DecisionID),
-		"remaining_turns":  state.RemainingTurns,
-		"approved_by_user": approverID,
-	}, time.Now().UTC())
+	payload := continuationExecutionPayload(state)
+	payload["approved_by_user"] = approverID
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationApproved, "continuation", "approved", payload, now)
 	return state, nil
 }
 
@@ -174,18 +178,11 @@ func (r *Runtime) RevokeContinuation(chatID int64) (ContinuationRevokeResult, er
 	state = session.NormalizeContinuationState(state)
 	revoked := state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
 	if revoked {
-		state.Status = session.ContinuationStatusRevoked
-		state.DecisionID = ""
-		state.RemainingTurns = 0
-		state.ApprovedBy = 0
-		state.UpdatedAt = time.Now().UTC()
+		state = continuationStateWithLeaseRevoked(state, time.Now().UTC())
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
 			return ContinuationRevokeResult{}, err
 		}
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationRevoked, "continuation", "revoked", map[string]any{
-			"decision_id":     strings.TrimSpace(state.DecisionID),
-			"remaining_turns": state.RemainingTurns,
-		}, time.Now().UTC())
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationRevoked, "continuation", "revoked", continuationExecutionPayload(state), time.Now().UTC())
 	}
 	return ContinuationRevokeResult{State: state, Revoked: revoked}, nil
 }
@@ -198,12 +195,17 @@ func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
 	if err != nil {
 		return err
 	}
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	if continuationLeaseExpired(state, time.Now().UTC()) {
+		state = continuationStateWithLeaseExpired(state, time.Now().UTC())
+		if err := r.store.UpdateContinuationState(key, state); err != nil {
+			return err
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
+		return nil
+	}
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
-		key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", map[string]any{
-			"status":          strings.TrimSpace(string(state.Status)),
-			"remaining_turns": state.RemainingTurns,
-		}, time.Now().UTC())
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
 		return nil
 	}
 	approverID := state.ApprovedBy
@@ -222,26 +224,18 @@ func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.P
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
 		return nil
 	}
-	state.RemainingTurns--
-	if state.RemainingTurns <= 0 {
-		state.Status = session.ContinuationStatusIdle
-		state.DecisionID = ""
-		state.ApprovedBy = 0
+	approvedBy := state.ApprovedBy
+	if approvedBy == 0 {
+		approvedBy = actor.TelegramUserID
 	}
-	state.UpdatedAt = time.Now().UTC()
+	state = continuationStateAfterLeaseTurnConsumed(state, time.Now().UTC())
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return err
 	}
-	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", map[string]any{
-		"remaining_turns": state.RemainingTurns,
-		"approved_by_user": func() int64 {
-			if state.ApprovedBy != 0 {
-				return state.ApprovedBy
-			}
-			return actor.TelegramUserID
-		}(),
-	}, time.Now().UTC())
+	payload := continuationExecutionPayload(state)
+	payload["approved_by_user"] = approvedBy
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, time.Now().UTC())
 	_, err := r.handleInternalContinuation(ctx, actor, core.InboundMessage{
 		ChatID:       chatID,
 		SenderID:     actor.TelegramUserID,

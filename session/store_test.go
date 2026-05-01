@@ -3565,3 +3565,64 @@ func TestDurableChildAgreementTracksCapabilityReviewStatus(t *testing.T) {
 		t.Fatalf("agreement artifact refs = %#v, want persisted review_event ref", agreement.ArtifactRefs)
 	}
 }
+
+func TestContinuationStatePersistsActionProposalAndLease(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	key := SessionKey{ChatID: 1901, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1901"}}
+	expiresAt := time.Now().UTC().Add(2 * time.Hour).Round(0)
+	state := ContinuationState{
+		Status:         ContinuationStatusPending,
+		DecisionID:     "decision-action-proposal",
+		Objective:      "Implement ActionProposal and ContinuationLease v1.",
+		StageSummary:   "Wire continuation approval to a lease.",
+		RemainingTurns: 1,
+		ActionProposal: ActionProposal{
+			ID:               "aprop-action-lease",
+			OperationID:      "op-action-lease",
+			MissionID:        "mission-ledger-runtime",
+			Summary:          "Implement the approval-button primitive.",
+			WhyNow:           "Continuation and deploy approvals need a reusable bounded contract.",
+			BoundedEffect:    "Local source/docs/tests only.",
+			RiskClass:        "system_change",
+			AllowedActions:   []string{"edit_repo", "run_tests", "edit_repo"},
+			ForbiddenActions: []string{"external_account", "purchase"},
+			ValidationPlan:   []string{"go test ./session", "go test ./runtime"},
+			ExpiresAt:        expiresAt,
+			PlanHash:         "sha256:test-plan",
+		},
+		ContinuationLease: ContinuationLease{
+			ID:             "lease-action-lease",
+			ProposalID:     "aprop-action-lease",
+			MissionID:      "mission-ledger-runtime",
+			Status:         ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:test-plan",
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.ActionProposal.ID != "aprop-action-lease" || got.ActionProposal.Status != ProposalStatusPending {
+		t.Fatalf("ActionProposal = %#v, want persisted pending proposal", got.ActionProposal)
+	}
+	if len(got.ActionProposal.AllowedActions) != 2 {
+		t.Fatalf("AllowedActions = %#v, want deduped action list", got.ActionProposal.AllowedActions)
+	}
+	if got.ContinuationLease.ID != "lease-action-lease" || got.ContinuationLease.Status != ContinuationLeaseStatusPending {
+		t.Fatalf("ContinuationLease = %#v, want persisted pending lease", got.ContinuationLease)
+	}
+	if got.ContinuationLease.MaxTurns != 1 || got.ContinuationLease.RemainingTurns != 1 {
+		t.Fatalf("ContinuationLease turns = %d/%d, want 1/1", got.ContinuationLease.MaxTurns, got.ContinuationLease.RemainingTurns)
+	}
+	if got.ContinuationLease.ExpiresAt.IsZero() || got.ContinuationLease.ExpiresAt.UTC() != expiresAt.UTC() {
+		t.Fatalf("Lease ExpiresAt = %v, want %v", got.ContinuationLease.ExpiresAt, expiresAt)
+	}
+}

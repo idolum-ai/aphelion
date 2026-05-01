@@ -53,7 +53,7 @@ func continuationCallbackMatchesState(state session.ContinuationState, decisionI
 	if decisionID == "" || state.DecisionID == "" {
 		return false
 	}
-	if decisionID != state.DecisionID {
+	if decisionID != state.DecisionID && decisionID != strings.TrimSpace(state.ActionProposal.ID) && decisionID != strings.TrimSpace(state.ContinuationLease.ID) && decisionID != strings.TrimSpace(state.ContinuationLease.ProposalID) {
 		return false
 	}
 	switch action {

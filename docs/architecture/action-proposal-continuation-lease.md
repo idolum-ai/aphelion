@@ -1,0 +1,94 @@
+# ActionProposal and ContinuationLease
+
+`ActionProposal` and `ContinuationLease` are the v1 contract for turning a
+model-authored “I can continue / execute this bounded plan” into explicit human
+approval without widening authority by vibe.
+
+## Purpose
+
+- `ActionProposal` names the proposed bounded action contract.
+- `ContinuationLease` is the consumable authorization derived from an approved
+  proposal.
+- Approval callbacks carry proposal/lease identity, not freeform authority.
+- The lease is consumed, revoked, or expired by runtime state; it does not grant
+  new tools, accounts, devices, purchases, or public effects by itself.
+
+## Current Storage
+
+For v1, both records are embedded in
+`session.ContinuationState` / `sessions.continuation_state_json`.
+
+This keeps the current Telegram `Continue` / `Stop` flow intact while making the
+implicit continuation prompt contract typed and auditable.
+
+## ActionProposal Fields
+
+The typed record includes:
+
+- `id`
+- `operation_id`
+- `mission_id`
+- `summary`
+- `why_now`
+- `bounded_effect`
+- `risk_class`
+- `allowed_actions`
+- `forbidden_actions`
+- `validation_plan`
+- `expires_at`
+- `plan_hash`
+- `status`
+
+Runtime builds a proposal when continuation consensus is eligible. The proposal
+is pending until the user presses `Continue`, then approved if still fresh.
+
+## ContinuationLease Fields
+
+The typed record includes:
+
+- `id`
+- `proposal_id`
+- `mission_id`
+- `status`
+- `max_turns`
+- `remaining_turns`
+- `approved_by`
+- `allowed_actions`
+- `forbidden_actions`
+- `validation_plan`
+- `expires_at`
+- `plan_hash`
+- lifecycle timestamps
+
+The current v1 lease is one-turn by default with a short TTL. On trigger, stale
+leases expire closed. On execution, the lease consumes a turn before the
+machine-authored continuation event is processed.
+
+## Lifecycle
+
+1. A turn produces both persona and governor continuation intent.
+2. If both are eligible and governor-ratified, runtime creates:
+   - pending `ActionProposal`
+   - pending `ContinuationLease`
+   - pending continuation state
+3. Telegram renders a `Continue` / `Stop` button pair.
+4. `Continue` approves the proposal and activates the lease.
+5. Runtime triggers one machine-authored continuation turn.
+6. Consuming the turn decrements the lease; zero remaining turns marks it
+   consumed and returns continuation state to idle.
+7. `Stop` revokes the continuation and lease.
+8. Expired proposals/leases fail closed and emit `continuation.blocked`.
+
+## Non-Authority Rule
+
+A `ContinuationLease` authorizes only continuation under existing authority and
+bounded effect. Any expanded capability still goes through the capability
+request/review/grant lane.
+
+## Code Anchors
+
+- [`session/types.go`](../../session/types.go)
+- [`session/store.go`](../../session/store.go)
+- [`runtime/continuation.go`](../../runtime/continuation.go)
+- [`runtime/runtime.go`](../../runtime/runtime.go)
+- [`commands_continuation.go`](../../commands_continuation.go)

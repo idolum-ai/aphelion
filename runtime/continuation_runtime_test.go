@@ -134,11 +134,23 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if state.HandshakeBlockedReason != "" {
 		t.Fatalf("handshake blocked reason = %q, want empty", state.HandshakeBlockedReason)
 	}
-	if got := sender.inline[0].rows[0][0].CallbackData; !strings.Contains(got, state.DecisionID) {
-		t.Fatalf("stop callback = %q, want decision id %q", got, state.DecisionID)
+	if state.ActionProposal.ID == "" || state.ActionProposal.Status != session.ProposalStatusPending {
+		t.Fatalf("ActionProposal = %#v, want pending action proposal", state.ActionProposal)
 	}
-	if got := sender.inline[0].rows[0][1].CallbackData; !strings.Contains(got, state.DecisionID) {
-		t.Fatalf("continue callback = %q, want decision id %q", got, state.DecisionID)
+	if state.ActionProposal.BoundedEffect != "Local code/test changes limited to continuation UI generation and directly affected tests." {
+		t.Fatalf("ActionProposal bounded effect = %q, want operation proposal bounded effect", state.ActionProposal.BoundedEffect)
+	}
+	if state.ContinuationLease.ID == "" || state.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("ContinuationLease = %#v, want pending lease", state.ContinuationLease)
+	}
+	if state.ContinuationLease.ProposalID != state.ActionProposal.ID || state.ContinuationLease.RemainingTurns != 1 {
+		t.Fatalf("ContinuationLease = %#v, want proposal-linked one-turn lease", state.ContinuationLease)
+	}
+	if got := sender.inline[0].rows[0][0].CallbackData; !strings.Contains(got, state.ActionProposal.ID) {
+		t.Fatalf("stop callback = %q, want proposal id %q", got, state.ActionProposal.ID)
+	}
+	if got := sender.inline[0].rows[0][1].CallbackData; !strings.Contains(got, state.ActionProposal.ID) {
+		t.Fatalf("continue callback = %q, want proposal id %q", got, state.ActionProposal.ID)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 200)
 	if err != nil {
@@ -748,6 +760,78 @@ func TestApproveContinuationRejectsNonPendingState(t *testing.T) {
 	_, err = rt.ApproveContinuation(8106, 1001)
 	if err == nil || !strings.Contains(err.Error(), "not pending") {
 		t.Fatalf("ApproveContinuation() err = %v, want not pending error", err)
+	}
+}
+
+func TestApproveContinuationActivatesContinuationLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8107, UserID: 0, Scope: telegramDMScopeRef(8107)}
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:            session.ContinuationStatusPending,
+		DecisionID:        "decision-lease-approve",
+		RemainingTurns:    1,
+		ActionProposal:    session.ActionProposal{ID: "aprop-lease-approve", Summary: "Approve lease", ExpiresAt: expiresAt, PlanHash: "sha256:lease"},
+		ContinuationLease: session.ContinuationLease{ID: "lease-approve", ProposalID: "aprop-lease-approve", Status: session.ContinuationLeaseStatusPending, MaxTurns: 1, RemainingTurns: 1, ExpiresAt: expiresAt, PlanHash: "sha256:lease"},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	state, err := rt.ApproveContinuation(8107, 1002)
+	if err != nil {
+		t.Fatalf("ApproveContinuation() err = %v", err)
+	}
+	if state.ActionProposal.Status != session.ProposalStatusApproved {
+		t.Fatalf("proposal status = %q, want approved", state.ActionProposal.Status)
+	}
+	if state.ContinuationLease.Status != session.ContinuationLeaseStatusActive {
+		t.Fatalf("lease status = %q, want active", state.ContinuationLease.Status)
+	}
+	if state.ContinuationLease.ApprovedBy != 1002 || state.ContinuationLease.ApprovedAt.IsZero() {
+		t.Fatalf("lease approval = by %d at %v, want recorded approver", state.ContinuationLease.ApprovedBy, state.ContinuationLease.ApprovedAt)
+	}
+}
+
+func TestTriggerContinuationExpiresStaleLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8108, UserID: 0, Scope: telegramDMScopeRef(8108)}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        "decision-expired-lease",
+		RemainingTurns:    1,
+		ApprovedBy:        1002,
+		ActionProposal:    session.ActionProposal{ID: "aprop-expired-lease", Summary: "Expired lease", Status: session.ProposalStatusApproved, ExpiresAt: expiredAt},
+		ContinuationLease: session.ContinuationLease{ID: "lease-expired", ProposalID: "aprop-expired-lease", Status: session.ContinuationLeaseStatusActive, MaxTurns: 1, RemainingTurns: 1, ApprovedBy: 1002, ExpiresAt: expiredAt},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 8108); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.ContinuationLease.Status != session.ContinuationLeaseStatusExpired {
+		t.Fatalf("lease status = %q, want expired", got.ContinuationLease.Status)
+	}
+	if got.ActionProposal.Status != session.ProposalStatusExpired {
+		t.Fatalf("proposal status = %q, want expired", got.ActionProposal.Status)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.RemainingTurns != 0 {
+		t.Fatalf("continuation state = %q/%d, want idle/0", got.Status, got.RemainingTurns)
 	}
 }
 

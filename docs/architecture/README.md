@@ -35,6 +35,7 @@ These invariants are normative for architecture and requirements alignment:
 
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
 - [turn-lifecycle.md](turn-lifecycle.md): stage order across interactive, maintenance, and durable-child turns.
+- [action-proposal-continuation-lease.md](action-proposal-continuation-lease.md): typed bounded action proposals and consumable continuation leases.
 - [constitution-and-delivery.md](constitution-and-delivery.md): floor/scene and commit/delivery invariants.
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.
