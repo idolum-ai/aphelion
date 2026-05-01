@@ -672,3 +672,68 @@ func TestRunDurableAgentChildWakeSkipsWithoutPendingParentConversation(t *testin
 		t.Fatalf("governor prompts = %#v, want no child turn without pending parent conversation", provider.seenGovernorSystem)
 	}
 }
+
+func TestPollDurableWakeAgentsBacksOffExpiredGrantChildRuntimeBlock(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "unused because child runtime blocks before inference"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	agent := core.DurableAgent{
+		AgentID:            "image2",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Address:      "local://image2",
+			Adapter:      "codex_image_generation",
+			PollInterval: "168h",
+		}},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Generate images only when a concrete parent request and active grant exist.",
+			CapabilityEnvelope: []string{"image_brief_refinement", "codex_image_generation_probe", "artifact_return", "blocker_report"},
+			OutboundMode:       "draft_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{newGenericExternalChannelWakeAdapter()}
+	childRuns := 0
+	rt.durableWakeChild = inlineDurableWakeChildExecutor{run: func(_ context.Context, _ sandbox.Scope, _ core.DurableAgent, _ time.Time) error {
+		childRuns++
+		return fmt.Errorf("child_runtime_blocked: grant_expired grant_id=capg-image2")
+	}}
+
+	now := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	if err := rt.pollDurableWakeAgents(context.Background(), now); err != nil {
+		t.Fatalf("pollDurableWakeAgents(first) err = %v, want suppressed blocked wake", err)
+	}
+	if childRuns != 1 {
+		t.Fatalf("childRuns = %d, want first blocked child attempt", childRuns)
+	}
+	cont := loadExternalChannelContinuity(t, store, "image2")
+	if cont.ExternalChannel == nil {
+		t.Fatal("ExternalChannel = nil, want blocked wake state")
+	}
+	if cont.ExternalChannel.LastStatus != "wake_blocked" || !strings.Contains(cont.ExternalChannel.LastError, "grant_expired") {
+		t.Fatalf("external channel state = %#v, want grant_expired wake_blocked", cont.ExternalChannel)
+	}
+	if cont.ExternalChannel.BackoffUntil.Before(now.Add(29 * time.Minute)) {
+		t.Fatalf("backoff_until = %v, want recorded backoff", cont.ExternalChannel.BackoffUntil)
+	}
+
+	if err := rt.pollDurableWakeAgents(context.Background(), now.Add(time.Minute)); err != nil {
+		t.Fatalf("pollDurableWakeAgents(backoff) err = %v, want quiet skip", err)
+	}
+	if childRuns != 1 {
+		t.Fatalf("childRuns after suppressed retry = %d, want 1", childRuns)
+	}
+}

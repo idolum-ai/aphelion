@@ -61,6 +61,15 @@ func (r *Runtime) pollDurableAgentWakeViaChild(ctx context.Context, agent core.D
 	if r == nil || r.durableWakeChild == nil {
 		return r.runDurableAgentChildWakeLoaded(ctx, agent, now)
 	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	if suppressed, err := r.shouldSuppressDurableWakeChildPoll(agent, now); err != nil {
+		return err
+	} else if suppressed {
+		return nil
+	}
 	scope, err := r.scopeForDurableAgent(agent)
 	if err != nil {
 		return err
@@ -68,7 +77,13 @@ func (r *Runtime) pollDurableAgentWakeViaChild(ctx context.Context, agent core.D
 	if !r.durableWakeChild.Supports(scope, agent) {
 		return r.runDurableAgentChildWakeLoaded(ctx, agent, now)
 	}
-	return r.durableWakeChild.Run(ctx, scope, agent, now)
+	if err := r.durableWakeChild.Run(ctx, scope, agent, now); err != nil {
+		if handled, handleErr := r.recordDurableWakeChildRuntimeBlock(agent, err, now); handled {
+			return handleErr
+		}
+		return err
+	}
+	return nil
 }
 
 func (e *sandboxDurableWakeChildExecutor) Supports(scope sandbox.Scope, agent core.DurableAgent) bool {
