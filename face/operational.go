@@ -27,6 +27,16 @@ type StartupRecoveryNotice struct {
 	RecoverySummary   string
 }
 
+type RestartAwakeNotice struct {
+	StartedAtUTC      string
+	InterruptedCount  int
+	RecoveredCount    int
+	CandidateMissions int
+	ActiveMissions    int
+	PendingHandoffs   int
+	MemoryNote        string
+}
+
 type ToolProgressEntry struct {
 	Text  string
 	Count int
@@ -694,8 +704,26 @@ func truncateReviewDigestBlock(value string, limit int) string {
 	return strings.TrimSpace(string(runes[:limit-3])) + "..."
 }
 
+func RenderRestartAwake(notice RestartAwakeNotice) string {
+	parts := []string{"Restart awake signal."}
+	if started := strings.TrimSpace(notice.StartedAtUTC); started != "" {
+		parts = append(parts, "started_at_utc: "+started)
+	}
+	if notice.InterruptedCount == 0 {
+		parts = append(parts, "startup_recovery: no interrupted turns pending")
+	} else {
+		parts = append(parts, fmt.Sprintf("startup_recovery: interrupted=%d recovered=%d", notice.InterruptedCount, notice.RecoveredCount))
+	}
+	parts = append(parts, fmt.Sprintf("mission_control: candidates=%d active=%d pending_handoffs=%d", notice.CandidateMissions, notice.ActiveMissions, notice.PendingHandoffs))
+	if note := strings.TrimSpace(notice.MemoryNote); note != "" {
+		parts = append(parts, "memory: "+note)
+	}
+	parts = append(parts, "next: no auto-resume; use /status, /debug, or approve the next lease")
+	return strings.Join(parts, "\n")
+}
+
 func RenderStartupRecovery(notice StartupRecoveryNotice) string {
-	parts := []string{"Restart catch-up."}
+	parts := []string{"Restart catch-up.", "Awake signal: startup recovery ran."}
 	if notice.InterruptedCount == 1 {
 		parts = append(parts, "I recovered 1 interrupted turn.")
 	} else {

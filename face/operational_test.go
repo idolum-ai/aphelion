@@ -111,3 +111,26 @@ func TestRenderReviewDigestKeepsSimpleReviewCompact(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderRestartAwakeFormatsEvidenceAndBoundary(t *testing.T) {
+	out := RenderRestartAwake(RestartAwakeNotice{
+		StartedAtUTC:      "2026-05-01T14:29:56Z",
+		InterruptedCount:  0,
+		CandidateMissions: 4,
+		ActiveMissions:    1,
+		PendingHandoffs:   2,
+		MemoryNote:        "continuity loaded",
+	})
+	for _, needle := range []string{
+		"Restart awake signal.",
+		"started_at_utc: 2026-05-01T14:29:56Z",
+		"startup_recovery: no interrupted turns pending",
+		"mission_control: candidates=4 active=1 pending_handoffs=2",
+		"memory: continuity loaded",
+		"next: no auto-resume",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderRestartAwake() = %q, want substring %q", out, needle)
+		}
+	}
+}

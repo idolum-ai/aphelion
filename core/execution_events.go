@@ -60,6 +60,7 @@ const (
 	ExecutionEventDecisionExpired  = "decision.expired"
 	ExecutionEventDecisionDetached = "decision.detached"
 
+	ExecutionEventRecoveryAwake     = "recovery.awake"
 	ExecutionEventRecoveryDetected  = "recovery.detected"
 	ExecutionEventRecoveryIssued    = "recovery.issued"
 	ExecutionEventRecoveryCompleted = "recovery.completed"

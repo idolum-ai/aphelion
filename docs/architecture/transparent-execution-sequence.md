@@ -127,6 +127,7 @@ TES write/read behavior currently relies on the following indexes:
   - `decision.expired`
   - `decision.detached`
 - Startup recovery
+  - `recovery.awake`
   - `recovery.detected`
   - `recovery.issued`
   - `recovery.completed`

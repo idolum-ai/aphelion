@@ -61,6 +61,14 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		return fmt.Errorf("load pending recovery turn runs: %w", err)
 	}
 	if len(runs) == 0 {
+		if err := r.deliverRestartAwakeSignal(ctx, now, 0, 0, "continuity loaded; no recovery rows pending"); err != nil {
+			return fmt.Errorf("deliver restart awake signal: %w", err)
+		}
+		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryAwake, "recovery", "awake", map[string]any{
+			"interrupted_count": 0,
+			"recovered_count":   0,
+			"delivery_sent":     true,
+		}, time.Now().UTC())
 		return nil
 	}
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
@@ -165,6 +173,11 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err := r.deliverStartupRecoveryCatchup(ctx, maintenanceSession.SystemPrompt, runs, recoverySummary); err != nil {
 		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
 	}
+	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryAwake, "recovery", "awake", map[string]any{
+		"interrupted_count": len(runs),
+		"recovered_count":   len(ids),
+		"delivery_sent":     true,
+	}, time.Now().UTC())
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryCompleted, "recovery", "completed", map[string]any{
 		"pending_count":   len(runs),
 		"persisted":       true,
@@ -238,6 +251,56 @@ func (r *Runtime) flushRecoveryRunMemory(ctx context.Context, runs []session.Tur
 			r.reportOperationalIssueAsync("memory_recovery_flush", fmt.Errorf("chat_id=%d reason=%s: %w", run.ChatID, strings.TrimSpace(reason), err))
 		}
 	}
+}
+
+func (r *Runtime) deliverRestartAwakeSignal(ctx context.Context, startedAt time.Time, interruptedCount int, recoveredCount int, memoryNote string) error {
+	if r == nil || r.cfg == nil || r.store == nil || r.outbound == nil {
+		return nil
+	}
+	adminIDs := uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)
+	if len(adminIDs) == 0 {
+		return nil
+	}
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	health, err := r.store.MissionLedgerHealth(time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("load mission ledger health for awake signal: %w", err)
+	}
+	targetChatID := r.lastActiveAdminChat(adminIDs)
+	if targetChatID == 0 {
+		targetChatID = adminIDs[0]
+	}
+	text := face.RenderRestartAwake(face.RestartAwakeNotice{
+		StartedAtUTC:      startedAt.UTC().Format(time.RFC3339),
+		InterruptedCount:  interruptedCount,
+		RecoveredCount:    recoveredCount,
+		CandidateMissions: health.CandidateCount,
+		ActiveMissions:    health.ActiveCount,
+		PendingHandoffs:   health.PendingHandoffCount,
+		MemoryNote:        strings.TrimSpace(memoryNote),
+	})
+	msgID, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: targetChatID, Text: text})
+	if err != nil {
+		return err
+	}
+	adminKey := session.SessionKey{ChatID: targetChatID, UserID: 0, Scope: telegramDMScopeRef(targetChatID)}
+	unlockAdmin := r.lockSession(adminKey)
+	defer unlockAdmin()
+	adminSession, err := r.store.Load(adminKey)
+	if err != nil {
+		return fmt.Errorf("load restart awake target session: %w", err)
+	}
+	applySessionScope(adminSession, adminKey)
+	adminSession.ChatType = "dm"
+	if err := r.store.Save(adminSession, appendAssistantTurn(adminSession, text, text, ""), core.TokenUsage{}); err != nil {
+		return fmt.Errorf("save restart awake admin session: %w", err)
+	}
+	if err := r.store.RecordOutbound(adminKey, adminSession.TurnCount, msgID, "restart_awake"); err != nil {
+		return fmt.Errorf("record restart awake outbound: %w", err)
+	}
+	return nil
 }
 
 func fallbackRecoverySummary(runs []session.TurnRun) string {

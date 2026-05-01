@@ -13,6 +13,52 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+func TestStartupRecoverySendsAwakeSignalWhenNoInterruptedRuns(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := store.UpsertMission(session.MissionState{
+		ID:        "mission-awake-candidate",
+		Title:     "Awake candidate",
+		Objective: "Keep restart awake signals honest.",
+		Scope:     "principal",
+		Owner:     "telegram:1001",
+		Status:    session.MissionStatusCandidate,
+	}, "test", "create"); err != nil {
+		t.Fatalf("UpsertMission() err = %v", err)
+	}
+
+	startedAt := time.Date(2026, time.May, 1, 14, 29, 56, 0, time.UTC)
+	if err := rt.runStartupRecoveryOnce(context.Background(), startedAt); err != nil {
+		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1 awake signal", len(sender.sent))
+	}
+	got := sender.sent[0]
+	if got.ChatID != 1001 {
+		t.Fatalf("awake chat id = %d, want admin 1001", got.ChatID)
+	}
+	for _, needle := range []string{
+		"Restart awake signal.",
+		"started_at_utc: 2026-05-01T14:29:56Z",
+		"startup_recovery: no interrupted turns pending",
+		"mission_control: candidates=1 active=0 pending_handoffs=0",
+		"next: no auto-resume",
+	} {
+		if !strings.Contains(got.Text, needle) {
+			t.Fatalf("awake text = %q, want substring %q", got.Text, needle)
+		}
+	}
+}
+
 func TestStartupRecoverySendsAdminCatchupMessage(t *testing.T) {
 	t.Parallel()
 

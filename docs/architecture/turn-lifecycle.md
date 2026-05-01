@@ -45,7 +45,7 @@ Maintenance family order:
 2. Runtime maintenance assembler builds one-turn coordinator/ports for maintenance species.
 3. `turn.Machine` runs stage order according to maintenance policy.
 4. `turn` persists maintenance ledger updates.
-5. Runtime maintenance loop executes species-specific post-turn fanout (for example heartbeat/cron admin outbound or startup recovery catch-up).
+5. Runtime maintenance loop executes species-specific post-turn fanout (for example heartbeat/cron admin outbound, startup recovery catch-up, or a Restart awake signal when no interrupted turn needs recovery).
 
 Code anchors:
 
