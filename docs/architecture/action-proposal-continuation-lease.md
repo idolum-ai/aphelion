@@ -158,3 +158,23 @@ Authority rule: status and edit buttons must not grant execution authority.
 Only `Approve lease`, `Continue once`, or legacy `approve` can activate the
 lease, and activation still uses the persisted proposal/lease identity rather
 than freeform text or a boop.
+
+## Operation-proposal lease materialization
+
+Assistant-authored bounded operation proposals should not remain plain text when
+button transport is available. After the visible reply is delivered, a pending
+`OperationProposal` with a stable id is materialized into the existing
+`ContinuationState` shape:
+
+- `ActionProposal.OperationID` points back to the operation proposal id.
+- `ContinuationLease` carries a one-turn pending lease with the proposal hash.
+- Telegram receives the continuation-control buttons (`Approve lease`,
+  `Continue once`, `Ask edit`, `Stop / park`, plus the edge/status controls).
+- Approving the continuation also marks the matching operation proposal
+  approved; revoking/parking the pending lease marks it denied so the same ask
+  is not re-offered endlessly.
+
+This is intentionally narrower than parsing arbitrary assistant prose. The first
+materialization path requires a structured pending `OperationProposal` so the
+button carries an auditable proposal id and bounded effect. Plain text remains a
+fallback, not the primary approval surface.

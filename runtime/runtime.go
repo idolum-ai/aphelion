@@ -159,6 +159,7 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, err
 	}
+	r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusApproved)
 	payload := continuationExecutionPayload(state)
 	payload["approved_by_user"] = approverID
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationApproved, "continuation", "approved", payload, now)
@@ -183,6 +184,7 @@ func (r *Runtime) RevokeContinuation(chatID int64) (ContinuationRevokeResult, er
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
 			return ContinuationRevokeResult{}, err
 		}
+		r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationRevoked, "continuation", "revoked", continuationExecutionPayload(state), time.Now().UTC())
 	}
 	return ContinuationRevokeResult{State: state, Revoked: revoked}, nil

@@ -168,6 +168,10 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 			},
 			PostReplyContinuationUI: func(postCtx context.Context, result *turn.Result) error {
 				ledgerText := interactivePreparedLedgerText(prepared.LedgerText, result)
+				materialized, err := r.materializePendingOperationProposalApproval(postCtx, key, msg, ledgerText, result)
+				if err != nil || materialized {
+					return err
+				}
 				return r.offerContinuationApproval(postCtx, key, msg, ledgerText, result)
 			},
 		},
