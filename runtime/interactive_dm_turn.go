@@ -77,6 +77,7 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 
 	msg := input.Msg
 	key := input.Key
+	r.recordWorkingObjectiveForInbound(key, msg)
 	actor := input.Actor
 
 	sess.ChatType = "dm"

@@ -140,6 +140,17 @@ type CapabilityGrantStatusSnapshot struct {
 	LastInvokedAt     time.Time
 }
 
+type MissionLedgerStatusSnapshot struct {
+	ActiveCount                  int
+	PinnedCount                  int
+	RecurringCount               int
+	BlockedCount                 int
+	SelfContinuationEnabledCount int
+	StaleCandidateCount          int
+	PendingHandoffCount          int
+	WorkingObjective             string
+}
+
 type ChatStatusSnapshot struct {
 	GeneratedAt           time.Time
 	ChatID                int64
@@ -169,6 +180,7 @@ type ChatStatusSnapshot struct {
 	CapabilityGrants      []CapabilityGrantStatusSnapshot
 	StaleRunningTurns     []TurnRunStatusSnapshot
 	RestartHealth         RestartHealthSnapshot
+	MissionLedger         MissionLedgerStatusSnapshot
 }
 
 type ChatStatusRollup struct {
@@ -194,6 +206,7 @@ type SystemStatusSnapshot struct {
 	HotChats             []ChatStatusRollup
 	RestartHealth        RestartHealthSnapshot
 	Tailnet              *TailnetStatusSnapshot
+	MissionLedger        MissionLedgerStatusSnapshot
 }
 
 type TailnetStatusSnapshot struct {

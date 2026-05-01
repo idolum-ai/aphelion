@@ -48,6 +48,7 @@ These invariants are normative for architecture and requirements alignment:
 ## Draft Roadmaps (Non-Normative)
 
 - [canonical-state-and-autonomy-roadmap.md](canonical-state-and-autonomy-roadmap.md): draft convergence map for canonical truth surfaces and safer autonomy.
+- [mission-ledger-roadmap.md](mission-ledger-roadmap.md): draft plan for durable missions, self-summon as review, and bounded self-continuation without hidden authority.
 - [organic-agent-owned-tools-proposal.md](organic-agent-owned-tools-proposal.md): draft proposal for moving from core-embedded domain tools toward agent-owned external tools with governed install and attestation.
 - [tailscale-agent-substrate-project.md](tailscale-agent-substrate-project.md): draft project plan for making Tailscale/tsnet a first-class private network substrate for Aphelion and durable children.
 

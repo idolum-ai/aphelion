@@ -24,6 +24,10 @@ Current command surface:
   - Opens memory review with inline controls across session history and semantic memory views.
   - Lets the user set an active memory focus from a candidate item (`Focus 1/2/3`).
   - Active focus is injected as bounded turn context on subsequent non-command chat messages until cleared.
+- `/mission`
+  - Shows the current working objective and the caller-owned Mission Ledger entries.
+  - Supports manual `list`, `show`, `create`, `pin`, `unpin`, `activate`, `pause`, `block`, `complete`, `archive`, `summon`, and admin `health` actions.
+  - Self-summon is review-only; Mission Ledger state does not grant self-continuation or new capabilities.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
   - When `memory.aggressive.flush_on_session_boundary` is enabled, it also runs a bounded memory flush first.

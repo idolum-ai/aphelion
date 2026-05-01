@@ -545,6 +545,13 @@ func (c telegramCommandControl) MemoryReviewSnapshot(ctx context.Context, chatID
 	return c.rt.MemoryReviewSnapshot(ctx, chatID, senderID, core.NormalizeMemoryReviewSource(string(source)))
 }
 
+func (c telegramCommandControl) MissionCommand(ctx context.Context, chatID int64, senderID int64, args string) (string, error) {
+	if c.rt == nil {
+		return "Mission Ledger is unavailable.", nil
+	}
+	return c.rt.MissionCommand(ctx, chatID, senderID, args)
+}
+
 func (c telegramCommandControl) MemoryFocus(chatID int64) (core.MemoryFocus, bool) {
 	if c.rt == nil {
 		return core.MemoryFocus{}, false

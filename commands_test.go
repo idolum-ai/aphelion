@@ -207,6 +207,11 @@ type stubCommandRouter struct {
 	startDurableAgentID          string
 	startDurableResult           string
 	startDurableErr              error
+	missionCommandText           string
+	missionCommandErr            error
+	missionCommandChatID         int64
+	missionCommandSenderID       int64
+	missionCommandArgs           string
 	memoryReviewBySource         map[memoryReviewSource]memoryReviewSnapshot
 	memoryReviewErr              error
 	memoryReviewChatID           int64
@@ -548,6 +553,20 @@ func (s *stubCommandRouter) StartDurableAgentConversation(ctx context.Context, c
 	return "Started background conversation with durable agent " + strings.TrimSpace(agentID) + ".", nil
 }
 
+func (s *stubCommandRouter) MissionCommand(ctx context.Context, chatID int64, senderID int64, args string) (string, error) {
+	_ = ctx
+	s.missionCommandChatID = chatID
+	s.missionCommandSenderID = senderID
+	s.missionCommandArgs = args
+	if s.missionCommandErr != nil {
+		return "", s.missionCommandErr
+	}
+	if strings.TrimSpace(s.missionCommandText) != "" {
+		return s.missionCommandText, nil
+	}
+	return "Mission Ledger\n- none", nil
+}
+
 func (s *stubCommandRouter) MemoryReviewSnapshot(ctx context.Context, chatID int64, senderID int64, source memoryReviewSource) (memoryReviewSnapshot, error) {
 	_ = ctx
 	s.memoryReviewChatID = chatID
@@ -617,6 +636,7 @@ func TestParseTelegramCommand(t *testing.T) {
 		{text: "/tailnet", want: "tailnet", ok: true},
 		{text: "/agents", want: "agents", ok: true},
 		{text: "/memory", want: "memory", ok: true},
+		{text: "/mission", want: "mission", ok: true},
 		{text: "/model status", want: "model", ok: true},
 		{text: "/set_persona_model", want: "set_persona_model", ok: true},
 		{text: "/set_governor_effort", want: "set_governor_effort", ok: true},
@@ -646,6 +666,21 @@ func TestDefaultTelegramCommandsIncludeMemory(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("defaultTelegramCommands = %#v, want /memory command entry", defaultTelegramCommands)
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeMission(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "mission" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /mission command entry", defaultTelegramCommands)
 	}
 }
 

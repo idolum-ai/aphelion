@@ -67,6 +67,7 @@ type commandRouter interface {
 	DurableAgentsList(senderID int64) ([]core.DurableAgentStatusSnapshot, error)
 	StartDurableAgentConversation(ctx context.Context, chatID int64, senderID int64, agentID string) (string, error)
 	MemoryReviewSnapshot(ctx context.Context, chatID int64, senderID int64, source memoryReviewSource) (memoryReviewSnapshot, error)
+	MissionCommand(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	MemoryFocus(chatID int64) (core.MemoryFocus, bool)
 	SetMemoryFocus(chatID int64, focus core.MemoryFocus)
 	ClearMemoryFocus(chatID int64) bool
@@ -92,6 +93,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "tailnet", Description: "Show tailnet status and controls"},
 	{Command: "agents", Description: "List durable agents and controls"},
 	{Command: "memory", Description: "Review memory and set focus"},
+	{Command: "mission", Description: "Show and manage the Mission Ledger"},
 	{Command: "model", Description: "Show and change model slots"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "new", Description: "Start a fresh chat session context"},
@@ -239,6 +241,12 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		return true, nil
+	case "mission":
+		missionText, err := router.MissionCommand(ctx, msg.ChatID, msg.SenderID, telegramCommandArgs(msg.Text))
+		if err != nil {
+			return true, err
+		}
+		text = missionText
 	case "model":
 		if !isAdmin {
 			text = "Model controls are admin only."

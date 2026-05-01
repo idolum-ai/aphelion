@@ -47,6 +47,9 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 		if planProgressLine := renderPlanProgressLine(snapshot); planProgressLine != "" {
 			lines = append(lines, planProgressLine)
 		}
+		if missionLine := renderMissionLedgerStatusLine(snapshot.MissionLedger); missionLine != "" {
+			lines = append(lines, missionLine)
+		}
 		if hiddenInputLine := renderHiddenInputStatusLine(snapshot); hiddenInputLine != "" {
 			lines = append(lines, hiddenInputLine)
 		}
@@ -158,6 +161,17 @@ func renderPlanProgressLine(snapshot core.ChatStatusSnapshot) string {
 		snapshot.PlanTotalSteps,
 		snapshot.PlanFullyExecuted,
 	)
+}
+
+func renderMissionLedgerStatusLine(snapshot core.MissionLedgerStatusSnapshot) string {
+	if snapshot.ActiveCount == 0 && snapshot.PinnedCount == 0 && snapshot.RecurringCount == 0 && snapshot.BlockedCount == 0 && snapshot.SelfContinuationEnabledCount == 0 && snapshot.StaleCandidateCount == 0 && snapshot.PendingHandoffCount == 0 && strings.TrimSpace(snapshot.WorkingObjective) == "" {
+		return ""
+	}
+	line := fmt.Sprintf("mission_ledger active=%d pinned=%d recurring=%d blocked=%d self_continue=%d stale_candidates=%d pending_handoffs=%d", snapshot.ActiveCount, snapshot.PinnedCount, snapshot.RecurringCount, snapshot.BlockedCount, snapshot.SelfContinuationEnabledCount, snapshot.StaleCandidateCount, snapshot.PendingHandoffCount)
+	if objective := strings.TrimSpace(snapshot.WorkingObjective); objective != "" {
+		line += " working_objective=" + quoteStatusField(truncateStatusField(objective, 120))
+	}
+	return line
 }
 
 func renderHiddenInputStatusLine(snapshot core.ChatStatusSnapshot) string {

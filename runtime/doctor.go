@@ -691,6 +691,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSessionSummary(&b, input.Session)
 	writeDoctorRecentMessages(&b, input.Session, doctorMessageLimit)
 
+	writeDoctorSection(&b, "Mission Ledger")
+	r.writeDoctorMissionLedger(&b, input.Key, now)
+
 	writeDoctorSection(&b, "Prompt Context Inventory")
 	writeDoctorPromptInventory(&b, input.PromptContext)
 
@@ -794,6 +797,41 @@ func writeDoctorRecentMessages(b *strings.Builder, sess *session.Session, limit 
 			msg.ContentChars,
 			truncatePreview(msg.Content, 300),
 		))
+	}
+}
+
+func (r *Runtime) writeDoctorMissionLedger(b *strings.Builder, key session.SessionKey, now time.Time) {
+	if r == nil || r.store == nil {
+		writeDoctorLine(b, "mission_ledger: unavailable")
+		return
+	}
+	health, err := r.store.MissionLedgerHealth(now)
+	if err != nil {
+		writeDoctorLine(b, "mission_ledger_error="+strconv.Quote(err.Error()))
+		return
+	}
+	writeDoctorKV(b, "mission_active", strconv.Itoa(health.ActiveCount))
+	writeDoctorKV(b, "mission_pinned", strconv.Itoa(health.PinnedCount))
+	writeDoctorKV(b, "mission_recurring", strconv.Itoa(health.RecurringCount))
+	writeDoctorKV(b, "mission_blocked", strconv.Itoa(health.BlockedCount))
+	writeDoctorKV(b, "mission_self_continuation_enabled", strconv.Itoa(health.SelfContinuationEnabledCount))
+	writeDoctorKV(b, "mission_stale_candidates", strconv.Itoa(health.StaleCandidateCount))
+	writeDoctorKV(b, "mission_pending_handoffs", strconv.Itoa(health.PendingHandoffCount))
+	if working, err := r.store.WorkingObjective(key); err == nil && strings.TrimSpace(working.Objective) != "" {
+		writeDoctorKV(b, "working_objective", truncatePreview(working.Objective, 400))
+	}
+	missions, err := r.store.Missions(session.MissionFilter{Limit: 12})
+	if err != nil {
+		writeDoctorLine(b, "mission_list_error="+strconv.Quote(err.Error()))
+		return
+	}
+	writeDoctorLine(b, "recent_missions:")
+	if len(missions) == 0 {
+		writeDoctorLine(b, "- none")
+		return
+	}
+	for _, mission := range missions {
+		writeDoctorLine(b, fmt.Sprintf("- id=%s status=%s pinned=%t owner=%s title=%q self_continue=%t", mission.ID, mission.Status, mission.Pinned, mission.Owner, truncatePreview(mission.Title, 120), mission.Authority.CanSelfContinue))
 	}
 }
 

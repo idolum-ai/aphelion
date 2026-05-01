@@ -772,6 +772,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				}
 			}`),
 		})
+		defs = append(defs, missionLedgerToolDefinition())
 		defs = append(defs, agent.ToolDef{
 			Name:        "capability_request",
 			Description: "Request a governed capability or delegation. Covers tools, local devices, external accounts, purchases, public web, communication, file/network access, and emergent permissions under one reviewable contract.",
@@ -1089,6 +1090,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.updateOperation(ctx, input, key)
 	case "update_plan":
 		return r.updatePlan(ctx, input, key)
+	case missionLedgerToolName:
+		return r.missionLedger(ctx, input, p, key)
 	case "tool_authority":
 		return r.toolAuthority(ctx, input, p, key, scope)
 	case "capability_request":

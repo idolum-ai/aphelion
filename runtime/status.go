@@ -78,6 +78,7 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		QueueDepth:    system.QueueDepthByChat[chatID],
 		RestartHealth: system.RestartHealth,
 	}
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
 	if ids := system.ActiveTurnsByChat[chatID]; len(ids) > 0 {
 		snapshot.ActiveTurnIDs = append(snapshot.ActiveTurnIDs, ids...)
 	}
@@ -99,7 +100,6 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		snapshot.LatestTurnRun = &copied
 	}
 	if r != nil && r.store != nil {
-		key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
 		events, eventsErr := r.store.ExecutionEventsBySession(key, 0, 500)
 		if eventsErr != nil {
 			return core.ChatStatusSnapshot{}, eventsErr
@@ -162,6 +162,12 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		}
 	}
 	if r != nil && r.store != nil {
+		snapshot.MissionLedger = system.MissionLedger
+		if working, err := r.store.WorkingObjective(key); err != nil {
+			return core.ChatStatusSnapshot{}, err
+		} else {
+			snapshot.MissionLedger.WorkingObjective = strings.TrimSpace(working.Objective)
+		}
 		if toolRows, err := r.toolLifecycleStatusSnapshot(20); err != nil {
 			return core.ChatStatusSnapshot{}, err
 		} else {
@@ -462,6 +468,20 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 			SourceClass:   "operational_current_state_store",
 			SourceSurface: "turn_runs",
 		})
+	}
+
+	if health, err := r.store.MissionLedgerHealth(now); err != nil {
+		return core.SystemStatusSnapshot{}, err
+	} else {
+		snapshot.MissionLedger = core.MissionLedgerStatusSnapshot{
+			ActiveCount:                  health.ActiveCount,
+			PinnedCount:                  health.PinnedCount,
+			RecurringCount:               health.RecurringCount,
+			BlockedCount:                 health.BlockedCount,
+			SelfContinuationEnabledCount: health.SelfContinuationEnabledCount,
+			StaleCandidateCount:          health.StaleCandidateCount,
+			PendingHandoffCount:          health.PendingHandoffCount,
+		}
 	}
 
 	sort.Slice(snapshot.Continuations, func(i, j int) bool {

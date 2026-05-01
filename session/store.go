@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 39
+	schemaVersion                       = 40
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -88,6 +88,7 @@ func (s *SQLiteStore) init() error {
 			plan_state_json TEXT NOT NULL DEFAULT '{}',
 			operation_state_json TEXT NOT NULL DEFAULT '{}',
 			continuation_state_json TEXT NOT NULL DEFAULT '{}',
+			working_objective_json TEXT NOT NULL DEFAULT '{}',
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
 			turn_count INTEGER NOT NULL DEFAULT 0,
@@ -5135,6 +5136,9 @@ func applyMigrations(tx *sql.Tx) error {
 	if err := ensureSessionColumn(tx, "plan_state_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
 		return fmt.Errorf("ensure sessions.plan_state_json: %w", err)
 	}
+	if err := ensureSessionColumn(tx, "working_objective_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return fmt.Errorf("ensure sessions.working_objective_json: %w", err)
+	}
 	if err := ensureTableColumn(tx, "messages", "floor_content", "TEXT"); err != nil {
 		return fmt.Errorf("ensure messages.floor_content: %w", err)
 	}
@@ -5443,6 +5447,9 @@ func applyMigrations(tx *sql.Tx) error {
 		}
 	}
 	if err := ensureTailnetSurfaceTables(tx); err != nil {
+		return err
+	}
+	if err := ensureMissionLedgerTables(tx); err != nil {
 		return err
 	}
 	if currentVersion >= schemaVersion {
