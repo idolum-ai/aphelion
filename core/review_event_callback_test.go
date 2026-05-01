@@ -25,3 +25,18 @@ func TestReviewEventCallbackRoundTrip(t *testing.T) {
 		t.Fatal("DecodeReviewEventCallbackData() ok=true for other callback lane")
 	}
 }
+
+func TestMissionControlReviewEventCallbackActionsRoundTrip(t *testing.T) {
+	for _, action := range []ReviewEventAction{
+		ReviewEventActionMissionAdd,
+		ReviewEventActionMissionAskEdit,
+		ReviewEventActionMissionPark,
+		ReviewEventActionMissionReject,
+	} {
+		data := EncodeReviewEventCallbackData(77, action)
+		id, got, ok := DecodeReviewEventCallbackData(data)
+		if !ok || id != 77 || got != action {
+			t.Fatalf("DecodeReviewEventCallbackData(%q) = id=%d action=%q ok=%t, want 77/%q/true", data, id, got, ok, action)
+		}
+	}
+}

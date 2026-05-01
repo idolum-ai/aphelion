@@ -967,6 +967,13 @@ func (h *telegramDecisionHandler) handleReviewEventCallback(ctx context.Context,
 	if action == core.ReviewEventActionExpand || action == core.ReviewEventActionHide {
 		return h.handleReviewEventDetailToggle(ctx, cb, *event, action == core.ReviewEventActionExpand)
 	}
+	if proposal, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
+		if reviewEventCallbackExpired(*event, time.Now()) {
+			_ = h.editReviewEventCallbackMessage(ctx, cb, "Mission Control proposal timed out — use a fresh prompt.")
+			return h.answerReviewEventCallback(ctx, cb, "Proposal timed out. Use a fresh prompt.")
+		}
+		return h.handleMissionControlProposalCallback(ctx, cb, *event, proposal, action)
+	}
 	if reviewEventCallbackExpired(*event, time.Now()) {
 		_ = h.editReviewEventCallbackMessage(ctx, cb, "Approval timed out — use a fresh prompt.")
 		return h.answerReviewEventCallback(ctx, cb, "Approval timed out. Use a fresh prompt.")
@@ -1013,6 +1020,105 @@ func (h *telegramDecisionHandler) handleReviewEventCallback(ctx context.Context,
 	}
 	_ = h.editReviewEventCallbackMessage(ctx, cb, reviewEventConfirmationText(label, record, *event))
 	return h.answerReviewEventCallback(ctx, cb, "")
+}
+
+func (h *telegramDecisionHandler) handleMissionControlProposalCallback(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent, proposal core.MissionControlProposal, action core.ReviewEventAction) error {
+	if h == nil || h.store == nil {
+		return nil
+	}
+	fromID := int64(0)
+	if cb.From != nil {
+		fromID = cb.From.ID
+	}
+	if fromID <= 0 || (event.TargetAdminChatID > 0 && fromID != event.TargetAdminChatID) {
+		return h.answerReviewEventCallback(ctx, cb, "Only the target admin can review this Mission Control proposal.")
+	}
+	proposal = core.NormalizeMissionControlProposal(proposal)
+	switch action {
+	case core.ReviewEventActionMissionAdd:
+		missionID := strings.TrimSpace(proposal.MissionID)
+		if missionID == "" {
+			missionID = fmt.Sprintf("mission-proposal-%d", event.ID)
+		}
+		owner := strings.TrimSpace(proposal.Owner)
+		if owner == "" {
+			owner = fmt.Sprintf("telegram:%d", fromID)
+		}
+		refs := append([]string(nil), proposal.SourceRefs...)
+		refs = append(refs, fmt.Sprintf("review_event:%d", event.ID))
+		mission, err := h.store.UpsertMission(session.MissionState{
+			ID:                missionID,
+			Title:             proposal.Title,
+			Objective:         proposal.Objective,
+			Origin:            firstTelegramDecisionNonEmpty(proposal.Origin, "proposed"),
+			Scope:             firstTelegramDecisionNonEmpty(proposal.Scope, "principal"),
+			Owner:             owner,
+			Status:            session.MissionStatusCandidate,
+			Pinned:            false,
+			Tags:              proposal.Tags,
+			SourceRefs:        refs,
+			SuccessCriteria:   proposal.SuccessCriteria,
+			NextAllowedAction: proposal.NextAllowedAction,
+			Authority:         session.DefaultMissionAuthority(),
+			Decay:             session.DefaultMissionDecay(),
+		}, fmt.Sprintf("telegram:%d", fromID), "Mission Control proposal approved; candidate mission added")
+		if err != nil {
+			return err
+		}
+		_ = h.editReviewEventCallbackMessage(ctx, cb, renderMissionControlProposalCallbackResult("added", mission, proposal))
+		return h.answerReviewEventCallback(ctx, cb, "")
+	case core.ReviewEventActionMissionAskEdit:
+		_ = h.editReviewEventCallbackMessage(ctx, cb, renderMissionControlProposalCallbackResult("ask_edit", session.MissionState{}, proposal))
+		return h.answerReviewEventCallback(ctx, cb, "")
+	case core.ReviewEventActionMissionPark:
+		_ = h.editReviewEventCallbackMessage(ctx, cb, renderMissionControlProposalCallbackResult("parked", session.MissionState{}, proposal))
+		return h.answerReviewEventCallback(ctx, cb, "")
+	case core.ReviewEventActionMissionReject:
+		_ = h.editReviewEventCallbackMessage(ctx, cb, renderMissionControlProposalCallbackResult("rejected", session.MissionState{}, proposal))
+		return h.answerReviewEventCallback(ctx, cb, "")
+	default:
+		return h.answerReviewEventCallback(ctx, cb, "This Mission Control proposal action is not available.")
+	}
+}
+
+func renderMissionControlProposalCallbackResult(status string, mission session.MissionState, proposal core.MissionControlProposal) string {
+	proposal = core.NormalizeMissionControlProposal(proposal)
+	title := strings.TrimSpace(mission.Title)
+	if title == "" {
+		title = strings.TrimSpace(proposal.Title)
+	}
+	if title == "" {
+		title = strings.TrimSpace(proposal.Objective)
+	}
+	switch strings.TrimSpace(status) {
+	case "added":
+		lines := []string{"Mission Control proposal added."}
+		if mission.ID != "" {
+			lines = append(lines, "Mission: "+mission.ID)
+		}
+		if title != "" {
+			lines = append(lines, "Title: "+title)
+		}
+		lines = append(lines, "Status: candidate", "No execution or self-continuation authority was granted.")
+		return strings.Join(lines, "\n")
+	case "ask_edit":
+		return "Mission Control proposal needs edits. I will revise it before asking again. No mission was created."
+	case "parked":
+		return "Mission Control proposal parked. No mission was created and no execution authority was granted."
+	case "rejected":
+		return "Mission Control proposal rejected. No mission was created."
+	default:
+		return "Mission Control proposal reviewed."
+	}
+}
+
+func firstTelegramDecisionNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (h *telegramDecisionHandler) handleReviewEventDetailToggle(ctx context.Context, cb telegram.CallbackQuery, event session.ReviewEvent, expanded bool) error {

@@ -12,11 +12,15 @@ const reviewEventCallbackPrefix = "review_event:"
 type ReviewEventAction string
 
 const (
-	ReviewEventActionApprove       ReviewEventAction = "approve"
-	ReviewEventActionReject        ReviewEventAction = "reject"
-	ReviewEventActionParentApprove ReviewEventAction = "parent_approve"
-	ReviewEventActionExpand        ReviewEventAction = "expand"
-	ReviewEventActionHide          ReviewEventAction = "hide"
+	ReviewEventActionApprove        ReviewEventAction = "approve"
+	ReviewEventActionReject         ReviewEventAction = "reject"
+	ReviewEventActionParentApprove  ReviewEventAction = "parent_approve"
+	ReviewEventActionExpand         ReviewEventAction = "expand"
+	ReviewEventActionHide           ReviewEventAction = "hide"
+	ReviewEventActionMissionAdd     ReviewEventAction = "mission_add"
+	ReviewEventActionMissionAskEdit ReviewEventAction = "mission_ask_edit"
+	ReviewEventActionMissionPark    ReviewEventAction = "mission_park"
+	ReviewEventActionMissionReject  ReviewEventAction = "mission_reject"
 )
 
 func EncodeReviewEventCallbackData(eventID int64, action ReviewEventAction) string {
@@ -48,7 +52,8 @@ func DecodeReviewEventCallbackData(data string) (eventID int64, action ReviewEve
 
 func validReviewEventAction(action ReviewEventAction) bool {
 	switch action {
-	case ReviewEventActionApprove, ReviewEventActionReject, ReviewEventActionParentApprove, ReviewEventActionExpand, ReviewEventActionHide:
+	case ReviewEventActionApprove, ReviewEventActionReject, ReviewEventActionParentApprove, ReviewEventActionExpand, ReviewEventActionHide,
+		ReviewEventActionMissionAdd, ReviewEventActionMissionAskEdit, ReviewEventActionMissionPark, ReviewEventActionMissionReject:
 		return true
 	default:
 		return false

@@ -111,3 +111,22 @@ This v1 UI is intentionally not a tool execution grant and does not create a
 self-continuation lease. It makes the approval control surface real while
 keeping actual execution authority in later, bounded ActionProposal or
 ContinuationLease requests.
+
+
+## Mission Control Proposal Card
+
+Mission Control proposal cards are pre-ActionProposal intake gates. They let the
+system suggest a candidate mission with inline buttons before the mission exists
+in the ledger.
+
+Buttons:
+
+- `Add to Mission Control`: create a candidate mission with default review-only
+  authority.
+- `Ask edit`: request a revised proposal; no mission is created.
+- `Park`: leave the idea untracked for now; no mission is created.
+- `Reject`: reject the idea; no mission is created.
+
+This card deliberately does not authorize execution. It only decides whether an
+idea becomes a candidate mission that may later receive an ActionProposal /
+ContinuationLease.

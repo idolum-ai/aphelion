@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -84,5 +85,50 @@ func TestMissionLedgerToolWorkingObjectiveDoesNotPromoteMission(t *testing.T) {
 	}
 	if len(missions) != 0 {
 		t.Fatalf("missions len = %d, want no durable promotion", len(missions))
+	}
+}
+
+func TestMissionLedgerToolProposeCandidateQueuesReviewOnlyCard(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, missionLedgerToolName, json.RawMessage(`{
+		"action":"propose_candidate",
+		"mission_id":"mission-ralph-loops",
+		"title":"Ralph loops",
+		"objective":"Track recurring Ralph loop patterns in Mission Control.",
+		"why_proposed":"Daniel asked when we can get into the Ralph loops.",
+		"not_included":["no execution","no self-continuation"],
+		"next_allowed_action":"Ask Daniel for the first Ralph loop anchor."
+	}`))
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(propose_candidate) err = %v", err)
+	}
+	if !strings.Contains(out, "[MISSION_CONTROL_PROPOSAL]") || !strings.Contains(out, "effect: candidate_review_only") {
+		t.Fatalf("out = %q, want proposal card result", out)
+	}
+	missions, err := store.Missions(session.MissionFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("Missions() err = %v", err)
+	}
+	if len(missions) != 0 {
+		t.Fatalf("missions len = %d, want no mission until button approval", len(missions))
+	}
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(events))
+	}
+	proposal, ok := core.MissionControlProposalFromMetadataJSON(events[0].MetadataJSON)
+	if !ok {
+		t.Fatalf("metadata = %q, want mission control proposal", events[0].MetadataJSON)
+	}
+	if proposal.MissionID != "mission-ralph-loops" || proposal.Owner != "telegram:1001" || proposal.Scope != "telegram_dm" {
+		t.Fatalf("proposal = %#v, want owner/scope/id populated", proposal)
 	}
 }

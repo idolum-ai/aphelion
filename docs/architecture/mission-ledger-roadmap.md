@@ -862,3 +862,28 @@ That gives Aphelion continuity without compulsion: direction, not hunger.
 ### Mission Control surfacing v1
 
 Candidate missions now project into status pending items as `kind=mission` when the mission owner maps to a Telegram chat. This is review-only and does not activate, pin, or self-continue the mission.
+
+
+### Mission-backed ActionProposal UI v1
+
+`/mission propose <mission_id>` renders a generic `ActionProposal` with
+`Deny`, `Ask edit`, and `Approve` buttons. The first approval effect is narrow:
+activate the mission for review/planning or record that the proposal needs edits
+/ was denied. It does not self-continue, run tools, or grant additional
+authority.
+
+### Mission Control proposal cards v1
+
+The system can now propose new Mission Control candidates through the
+`mission_ledger` tool action `propose_candidate`. The action queues a review
+card with buttons:
+
+- `Add to Mission Control`
+- `Ask edit`
+- `Park`
+- `Reject`
+
+`Add to Mission Control` creates a candidate mission only. It does not activate,
+pin, self-continue, run tools, or grant additional authority. The card is a
+Mission Control intake gate; execution still requires a later ActionProposal or
+ContinuationLease.

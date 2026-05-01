@@ -244,6 +244,15 @@ func ReviewEventInlineRows(event session.ReviewEvent) [][]telegram.InlineButton 
 
 func ReviewEventInlineRowsExpanded(event session.ReviewEvent, expanded bool) [][]telegram.InlineButton {
 	rows := [][]telegram.InlineButton{}
+	if _, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
+		return [][]telegram.InlineButton{{
+			{Text: "Add to Mission Control", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionMissionAdd)},
+			{Text: "Ask edit", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionMissionAskEdit)},
+		}, {
+			{Text: "Park", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionMissionPark)},
+			{Text: "Reject", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionMissionReject)},
+		}}
+	}
 	if ReviewEventDetailsExpandable(event) {
 		action := core.ReviewEventActionExpand
 		label := "Expand details"
@@ -268,6 +277,9 @@ func ReviewEventInlineRowsExpanded(event session.ReviewEvent, expanded bool) [][
 }
 
 func ReviewEventDetailsExpandable(event session.ReviewEvent) bool {
+	if _, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
+		return false
+	}
 	if strings.TrimSpace(event.Summary) == "" {
 		return false
 	}
@@ -325,6 +337,9 @@ type reviewEventArtifactMetadata struct {
 }
 
 func FormatReviewEventCompactMessage(event session.ReviewEvent) string {
+	if proposal, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
+		return FormatMissionControlProposalMessage(proposal)
+	}
 	meta, _ := parseReviewEventArtifactMetadata(event)
 	lines := []string{"**" + reviewEventCompactTitle(event, meta) + "**"}
 	if context := reviewEventCompactContext(meta); context != "" {
@@ -532,7 +547,38 @@ func truncateReviewEventBlock(s string, limit int) string {
 	return truncateReviewEventText(s, limit)
 }
 
+func FormatMissionControlProposalMessage(proposal core.MissionControlProposal) string {
+	proposal = core.NormalizeMissionControlProposal(proposal)
+	lines := []string{"Mission Control Proposal"}
+	if title := strings.TrimSpace(proposal.Title); title != "" {
+		lines = append(lines, "", "Title:", title)
+	}
+	if objective := strings.TrimSpace(proposal.Objective); objective != "" {
+		lines = append(lines, "", "Objective:", objective)
+	}
+	if why := strings.TrimSpace(proposal.WhyProposed); why != "" {
+		lines = append(lines, "", "Why I’m proposing it:", why)
+	}
+	if scope := strings.TrimSpace(proposal.Scope); scope != "" {
+		lines = append(lines, "", "Suggested state:", "candidate mission, review-only", "scope: "+scope)
+	}
+	if next := strings.TrimSpace(proposal.NextAllowedAction); next != "" {
+		lines = append(lines, "", "Next allowed action:", next)
+	}
+	if len(proposal.NotIncluded) > 0 {
+		lines = append(lines, "", "Not included:")
+		for _, item := range proposal.NotIncluded {
+			lines = append(lines, "- "+item)
+		}
+	}
+	lines = append(lines, "", "Adding this only creates a candidate. It does not start execution or grant self-continuation.")
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 func FormatReviewEventMessage(event session.ReviewEvent) string {
+	if proposal, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
+		return FormatMissionControlProposalMessage(proposal)
+	}
 	turnRange := "n/a"
 	if event.TurnFrom > 0 && event.TurnTo >= event.TurnFrom {
 		turnRange = fmt.Sprintf("%d-%d", event.TurnFrom, event.TurnTo)

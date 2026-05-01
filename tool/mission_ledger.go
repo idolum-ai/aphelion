@@ -19,39 +19,43 @@ import (
 const missionLedgerToolName = "mission_ledger"
 
 type missionLedgerInput struct {
-	Action            string                        `json:"action"`
-	MissionID         string                        `json:"mission_id,omitempty"`
-	Title             string                        `json:"title,omitempty"`
-	Objective         string                        `json:"objective,omitempty"`
-	Origin            string                        `json:"origin,omitempty"`
-	Scope             string                        `json:"scope,omitempty"`
-	Owner             string                        `json:"owner,omitempty"`
-	Status            string                        `json:"status,omitempty"`
-	Pinned            *bool                         `json:"pinned,omitempty"`
-	Tags              []string                      `json:"tags,omitempty"`
-	SourceRefs        []string                      `json:"source_refs,omitempty"`
-	SuccessCriteria   []string                      `json:"success_criteria,omitempty"`
-	Evidence          []session.MissionEvidenceItem `json:"evidence,omitempty"`
-	NextAllowedAction string                        `json:"next_allowed_action,omitempty"`
-	BlockedReason     string                        `json:"blocked_reason,omitempty"`
-	WaitingFor        string                        `json:"waiting_for,omitempty"`
-	Context           string                        `json:"context,omitempty"`
-	Summary           string                        `json:"summary,omitempty"`
-	EventType         string                        `json:"event_type,omitempty"`
-	ResultID          string                        `json:"result_id,omitempty"`
-	Payload           json.RawMessage               `json:"payload,omitempty"`
-	Limit             int                           `json:"limit,omitempty"`
-	WorkingObjective  string                        `json:"working_objective,omitempty"`
-	WorkingSource     string                        `json:"working_source,omitempty"`
-	WorkingConfidence string                        `json:"working_confidence,omitempty"`
-	HandoffID         string                        `json:"handoff_id,omitempty"`
-	OperationID       string                        `json:"operation_id,omitempty"`
-	PlannedAction     string                        `json:"planned_action,omitempty"`
-	ExpectedEvidence  []string                      `json:"expected_evidence,omitempty"`
-	RecoveryQuestion  string                        `json:"recovery_question,omitempty"`
-	ResultStatus      string                        `json:"result_status,omitempty"`
-	EvidenceRefs      []string                      `json:"evidence_refs,omitempty"`
-	RemainingRisk     string                        `json:"remaining_risk,omitempty"`
+	Action             string                        `json:"action"`
+	MissionID          string                        `json:"mission_id,omitempty"`
+	Title              string                        `json:"title,omitempty"`
+	Objective          string                        `json:"objective,omitempty"`
+	Origin             string                        `json:"origin,omitempty"`
+	Scope              string                        `json:"scope,omitempty"`
+	Owner              string                        `json:"owner,omitempty"`
+	Status             string                        `json:"status,omitempty"`
+	Pinned             *bool                         `json:"pinned,omitempty"`
+	Tags               []string                      `json:"tags,omitempty"`
+	SourceRefs         []string                      `json:"source_refs,omitempty"`
+	SuccessCriteria    []string                      `json:"success_criteria,omitempty"`
+	Evidence           []session.MissionEvidenceItem `json:"evidence,omitempty"`
+	NextAllowedAction  string                        `json:"next_allowed_action,omitempty"`
+	BlockedReason      string                        `json:"blocked_reason,omitempty"`
+	WaitingFor         string                        `json:"waiting_for,omitempty"`
+	Context            string                        `json:"context,omitempty"`
+	Summary            string                        `json:"summary,omitempty"`
+	EventType          string                        `json:"event_type,omitempty"`
+	ResultID           string                        `json:"result_id,omitempty"`
+	Payload            json.RawMessage               `json:"payload,omitempty"`
+	Limit              int                           `json:"limit,omitempty"`
+	WorkingObjective   string                        `json:"working_objective,omitempty"`
+	WorkingSource      string                        `json:"working_source,omitempty"`
+	WorkingConfidence  string                        `json:"working_confidence,omitempty"`
+	HandoffID          string                        `json:"handoff_id,omitempty"`
+	OperationID        string                        `json:"operation_id,omitempty"`
+	PlannedAction      string                        `json:"planned_action,omitempty"`
+	ExpectedEvidence   []string                      `json:"expected_evidence,omitempty"`
+	RecoveryQuestion   string                        `json:"recovery_question,omitempty"`
+	ResultStatus       string                        `json:"result_status,omitempty"`
+	EvidenceRefs       []string                      `json:"evidence_refs,omitempty"`
+	RemainingRisk      string                        `json:"remaining_risk,omitempty"`
+	WhyProposed        string                        `json:"why_proposed,omitempty"`
+	NotIncluded        []string                      `json:"not_included,omitempty"`
+	RiskClass          string                        `json:"risk_class,omitempty"`
+	ReviewTargetChatID int64                         `json:"review_target_chat_id,omitempty"`
 }
 
 func missionLedgerToolDefinition() agent.ToolDef {
@@ -61,7 +65,7 @@ func missionLedgerToolDefinition() agent.ToolDef {
 		Parameters: json.RawMessage(`{
 			"type":"object",
 			"properties":{
-				"action":{"type":"string","enum":["list","show","create_candidate","update_evidence","block","archive","event","summon","health","working_objective_set","working_objective_show","handoff_create","result_record"],"description":"Mission Ledger operation"},
+				"action":{"type":"string","enum":["list","show","create_candidate","propose_candidate","update_evidence","block","archive","event","summon","health","working_objective_set","working_objective_show","handoff_create","result_record"],"description":"Mission Ledger operation"},
 				"mission_id":{"type":"string","description":"Mission id for show/update/archive/event/handoff/result actions"},
 				"title":{"type":"string","description":"Mission title when creating a candidate"},
 				"objective":{"type":"string","description":"Mission objective when creating a candidate"},
@@ -93,7 +97,11 @@ func missionLedgerToolDefinition() agent.ToolDef {
 				"recovery_question":{"type":"string"},
 				"result_status":{"type":"string","description":"completed, failed, partial, or unknown"},
 				"evidence_refs":{"type":"array","items":{"type":"string"}},
-				"remaining_risk":{"type":"string"}
+				"remaining_risk":{"type":"string"},
+				"why_proposed":{"type":"string","description":"Why the candidate mission is being proposed for Mission Control review"},
+				"not_included":{"type":"array","items":{"type":"string"},"description":"Explicit non-scope boundaries for proposed candidate mission"},
+				"risk_class":{"type":"string","description":"Operator-facing risk label for proposed candidate mission"},
+				"review_target_chat_id":{"type":"integer","description":"Optional Telegram chat id for Mission Control proposal card; defaults to current chat"}
 			},
 			"required":["action"]
 		}`),
@@ -173,6 +181,60 @@ func (r *Registry) missionLedger(_ context.Context, input json.RawMessage, p pri
 			return "", err
 		}
 		return renderMissionShow(stored, nil), nil
+	case "propose_candidate":
+		objective := strings.TrimSpace(in.Objective)
+		if objective == "" {
+			return "", fmt.Errorf("mission_ledger propose_candidate requires objective")
+		}
+		targetChatID := in.ReviewTargetChatID
+		if targetChatID == 0 {
+			targetChatID = key.ChatID
+		}
+		if targetChatID == 0 && p.TelegramUserID > 0 {
+			targetChatID = p.TelegramUserID
+		}
+		if targetChatID == 0 {
+			return "", fmt.Errorf("mission_ledger propose_candidate requires review_target_chat_id or current chat")
+		}
+		proposal := core.NormalizeMissionControlProposal(core.MissionControlProposal{
+			MissionID:         strings.TrimSpace(in.MissionID),
+			Title:             strings.TrimSpace(in.Title),
+			Objective:         objective,
+			WhyProposed:       firstMissionToolNonEmpty(in.WhyProposed, in.Summary),
+			Scope:             missionScopeFromInput(in, p, key),
+			Owner:             missionOwnerFromInput(in, p),
+			Origin:            firstMissionToolNonEmpty(in.Origin, "proposed"),
+			Tags:              in.Tags,
+			SourceRefs:        in.SourceRefs,
+			SuccessCriteria:   in.SuccessCriteria,
+			NextAllowedAction: strings.TrimSpace(in.NextAllowedAction),
+			NotIncluded:       in.NotIncluded,
+			RiskClass:         strings.TrimSpace(in.RiskClass),
+		})
+		metadata, err := core.MissionControlProposalMetadataJSON(proposal)
+		if err != nil {
+			return "", fmt.Errorf("encode mission control proposal metadata: %w", err)
+		}
+		sourceScope := key.Scope
+		if sourceScope.IsZero() && key.ChatID != 0 {
+			sourceScope = session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: strconv.FormatInt(key.ChatID, 10)}
+		}
+		targetScope := session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: strconv.FormatInt(targetChatID, 10)}
+		eventID, err := r.store.InsertReviewEvent(session.ReviewEvent{
+			SourceChatID:      key.ChatID,
+			SourceUserID:      p.TelegramUserID,
+			SourceRole:        string(p.Role),
+			SourceScope:       sourceScope,
+			TargetAdminChatID: targetChatID,
+			TargetScope:       targetScope,
+			Summary:           renderMissionControlProposalSummary(proposal),
+			MetadataJSON:      metadata,
+			Status:            "pending",
+		})
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("[MISSION_CONTROL_PROPOSAL]\nreview_event_id: %d\ntitle: %s\nstatus: pending\neffect: candidate_review_only", eventID, proposal.Title), nil
 	case "update_evidence":
 		if strings.TrimSpace(in.MissionID) == "" {
 			return "", fmt.Errorf("mission_ledger update_evidence requires mission_id")
@@ -272,7 +334,7 @@ func (r *Registry) missionLedger(_ context.Context, input json.RawMessage, p pri
 		}
 		return renderMissionResult(result), nil
 	default:
-		return "", fmt.Errorf("mission_ledger action must be one of list|show|create_candidate|update_evidence|block|archive|event|summon|health|working_objective_set|working_objective_show|handoff_create|result_record")
+		return "", fmt.Errorf("mission_ledger action must be one of list|show|create_candidate|propose_candidate|update_evidence|block|archive|event|summon|health|working_objective_set|working_objective_show|handoff_create|result_record")
 	}
 }
 
@@ -344,6 +406,21 @@ func firstMissionToolNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func renderMissionControlProposalSummary(proposal core.MissionControlProposal) string {
+	proposal = core.NormalizeMissionControlProposal(proposal)
+	parts := []string{"Mission Control proposal"}
+	if title := strings.TrimSpace(proposal.Title); title != "" {
+		parts = append(parts, "title="+strconv.Quote(title))
+	}
+	if objective := strings.TrimSpace(proposal.Objective); objective != "" {
+		parts = append(parts, "objective="+strconv.Quote(objective))
+	}
+	if why := strings.TrimSpace(proposal.WhyProposed); why != "" {
+		parts = append(parts, "why="+strconv.Quote(why))
+	}
+	return strings.Join(parts, " ")
 }
 
 func renderMissionList(header string, missions []session.MissionState) string {
