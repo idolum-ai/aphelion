@@ -857,3 +857,8 @@ The spine is:
 7. Route all autonomy through existing governance.
 
 That gives Aphelion continuity without compulsion: direction, not hunger.
+
+
+### Mission Control surfacing v1
+
+Candidate missions now project into status pending items as `kind=mission` when the mission owner maps to a Telegram chat. This is review-only and does not activate, pin, or self-continue the mission.

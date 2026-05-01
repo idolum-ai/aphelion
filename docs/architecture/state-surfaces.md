@@ -44,6 +44,7 @@ Classifications below use the shared truth classes defined in
 | `sessions.operation_state_json` | operational current-state store | What operation intent/stage is currently declared? |
 | `pending_decisions` | operational current-state store | What decisions are currently pending and actionable? |
 | `sessions.continuation_state_json` | operational current-state store | What continuation state, embedded `ActionProposal`, and embedded `ContinuationLease` are currently declared? |
+| `mission_ledger` candidate rows projected as pending items | projection | Which durable candidate missions should be visible for operator review now? |
 | `session.review_events (status='pending')` | operational current-state store | Which review artifacts are queued for governance delivery? |
 | `/status` | projection | How should system/chat state be rendered for operators now? |
 | `/debug` | projection | How should execution evidence be rendered for diagnosis now? |

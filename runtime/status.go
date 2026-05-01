@@ -16,6 +16,8 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+const telegramMissionOwnerPrefix = "telegram:"
+
 func (r *Runtime) IsTelegramAdmin(userID int64) bool {
 	if r == nil || r.resolver == nil || userID <= 0 {
 		return false
@@ -475,6 +477,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	} else {
 		snapshot.MissionLedger = core.MissionLedgerStatusSnapshot{
 			ActiveCount:                  health.ActiveCount,
+			CandidateCount:               health.CandidateCount,
 			PinnedCount:                  health.PinnedCount,
 			RecurringCount:               health.RecurringCount,
 			BlockedCount:                 health.BlockedCount,
@@ -482,6 +485,25 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 			StaleCandidateCount:          health.StaleCandidateCount,
 			PendingHandoffCount:          health.PendingHandoffCount,
 		}
+	}
+
+	candidateMissions, err := r.store.Missions(session.MissionFilter{Status: session.MissionStatusCandidate, Limit: 20})
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
+	for _, mission := range candidateMissions {
+		updatedAt := coalesceTime(mission.UpdatedAt, mission.CreatedAt)
+		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+			Kind:          core.PendingItemKindMission,
+			ChatID:        missionOwnerChatID(mission.Owner),
+			ID:            strings.TrimSpace(mission.ID),
+			Summary:       renderMissionPendingSummary(mission),
+			Age:           statusAge(now, updatedAt, mission.CreatedAt),
+			CreatedAt:     mission.CreatedAt,
+			UpdatedAt:     updatedAt,
+			SourceClass:   "operational_current_state_store",
+			SourceSurface: "mission_ledger",
+		})
 	}
 
 	sort.Slice(snapshot.Continuations, func(i, j int) bool {
@@ -1373,6 +1395,34 @@ func minStatusInt(left int, right int) int {
 		return left
 	}
 	return right
+}
+
+func missionOwnerChatID(owner string) int64 {
+	owner = strings.TrimSpace(owner)
+	if !strings.HasPrefix(owner, telegramMissionOwnerPrefix) {
+		return 0
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(owner, telegramMissionOwnerPrefix)), 10, 64)
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
+}
+
+func renderMissionPendingSummary(mission session.MissionState) string {
+	parts := []string{
+		"status=" + strings.TrimSpace(string(mission.Status)),
+	}
+	if title := strings.TrimSpace(mission.Title); title != "" {
+		parts = append(parts, "title="+truncateStatusDiagnostic(title, 80))
+	}
+	if action := strings.TrimSpace(mission.NextAllowedAction); action != "" {
+		parts = append(parts, "next="+truncateStatusDiagnostic(action, 100))
+	}
+	if mission.Authority.RequiresUserReview {
+		parts = append(parts, "requires_user_review=true")
+	}
+	return strings.Join(parts, " ")
 }
 
 func renderDecisionSummary(record session.PendingDecisionRecord) string {

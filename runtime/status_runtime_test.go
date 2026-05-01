@@ -563,6 +563,48 @@ func TestChatStatusSnapshotPrefersOperationalContinuationStateOverTES(t *testing
 	}
 }
 
+func TestSystemStatusSnapshotSurfacesCandidateMissionsAsPendingItems(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	mission, err := store.UpsertMission(session.MissionState{
+		ID:                "mission-control-surface",
+		Title:             "Mission Control surface",
+		Objective:         "Surface candidate missions as reviewable pending work.",
+		Scope:             "principal",
+		Owner:             "telegram:1001",
+		Status:            session.MissionStatusCandidate,
+		NextAllowedAction: "Propose one bounded continuation lease.",
+	}, "telegram:1001", "candidate")
+	if err != nil {
+		t.Fatalf("UpsertMission() err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(1001, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if snapshot.MissionLedger.CandidateCount != 1 {
+		t.Fatalf("MissionLedger.CandidateCount = %d, want 1", snapshot.MissionLedger.CandidateCount)
+	}
+	for _, item := range snapshot.PendingItems {
+		if item.Kind == core.PendingItemKindMission && item.ID == mission.ID {
+			if item.ChatID != 1001 {
+				t.Fatalf("mission pending chat_id = %d, want 1001", item.ChatID)
+			}
+			if !strings.Contains(item.Summary, "Mission Control surface") || !strings.Contains(item.Summary, "requires_user_review=true") {
+				t.Fatalf("mission pending summary = %q, want title and review boundary", item.Summary)
+			}
+			return
+		}
+	}
+	t.Fatalf("PendingItems missing candidate mission %s: %#v", mission.ID, snapshot.PendingItems)
+}
+
 func TestSystemStatusSnapshotIncludesPendingReviewQueueItems(t *testing.T) {
 	t.Parallel()
 

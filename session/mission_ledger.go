@@ -148,6 +148,7 @@ type MissionFilter struct {
 
 type MissionLedgerHealth struct {
 	ActiveCount                  int
+	CandidateCount               int
 	PinnedCount                  int
 	RecurringCount               int
 	BlockedCount                 int
@@ -737,6 +738,7 @@ func (s *SQLiteStore) MissionLedgerHealth(now time.Time) (MissionLedgerHealth, e
 		case MissionStatusBlocked:
 			health.BlockedCount++
 		case MissionStatusCandidate:
+			health.CandidateCount++
 			if !m.Pinned && !m.UpdatedAt.IsZero() && now.Sub(m.UpdatedAt) > 60*24*time.Hour {
 				health.StaleCandidateCount++
 			}

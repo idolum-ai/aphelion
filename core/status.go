@@ -10,6 +10,7 @@ const (
 	PendingItemKindDecision     PendingItemKind = "decision"
 	PendingItemKindContinuation PendingItemKind = "continuation"
 	PendingItemKindReview       PendingItemKind = "review"
+	PendingItemKindMission      PendingItemKind = "mission"
 	PendingItemKindQueue        PendingItemKind = "queue"
 	PendingItemKindRecovery     PendingItemKind = "recovery"
 	PendingItemKindStaleTurn    PendingItemKind = "stale_turn"
@@ -142,6 +143,7 @@ type CapabilityGrantStatusSnapshot struct {
 
 type MissionLedgerStatusSnapshot struct {
 	ActiveCount                  int
+	CandidateCount               int
 	PinnedCount                  int
 	RecurringCount               int
 	BlockedCount                 int
