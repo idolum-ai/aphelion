@@ -552,6 +552,20 @@ func (c telegramCommandControl) MissionCommand(ctx context.Context, chatID int64
 	return c.rt.MissionCommand(ctx, chatID, senderID, args)
 }
 
+func (c telegramCommandControl) MissionActionProposal(ctx context.Context, chatID int64, senderID int64, missionID string) (session.ActionProposal, error) {
+	if c.rt == nil {
+		return session.ActionProposal{}, fmt.Errorf("Mission Ledger is unavailable.")
+	}
+	return c.rt.MissionActionProposal(ctx, chatID, senderID, missionID)
+}
+
+func (c telegramCommandControl) ApplyMissionActionProposalDecision(ctx context.Context, chatID int64, senderID int64, missionID string, choice string) (session.MissionState, bool, error) {
+	if c.rt == nil {
+		return session.MissionState{}, false, fmt.Errorf("Mission Ledger is unavailable.")
+	}
+	return c.rt.ApplyMissionActionProposalDecision(ctx, chatID, senderID, missionID, choice)
+}
+
 func (c telegramCommandControl) MemoryFocus(chatID int64) (core.MemoryFocus, bool) {
 	if c.rt == nil {
 		return core.MemoryFocus{}, false

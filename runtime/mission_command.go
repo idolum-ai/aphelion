@@ -129,7 +129,7 @@ func (r *Runtime) renderMissionCommandHome(key session.SessionKey, owner string)
 		b.WriteString("working_objective: none\n")
 	}
 	b.WriteString(renderMissionCommandList("Missions", missions))
-	b.WriteString("\n\nCommands: /mission create <objective>, /mission show <id>, /mission summon [context], /mission pin <id>, /mission archive <id>.")
+	b.WriteString("\n\nCommands: /mission create <objective>, /mission show <id>, /mission propose <id>, /mission summon [context], /mission pin <id>, /mission archive <id>.")
 	return strings.TrimSpace(b.String()), nil
 }
 

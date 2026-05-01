@@ -68,6 +68,8 @@ type commandRouter interface {
 	StartDurableAgentConversation(ctx context.Context, chatID int64, senderID int64, agentID string) (string, error)
 	MemoryReviewSnapshot(ctx context.Context, chatID int64, senderID int64, source memoryReviewSource) (memoryReviewSnapshot, error)
 	MissionCommand(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
+	MissionActionProposal(ctx context.Context, chatID int64, senderID int64, missionID string) (session.ActionProposal, error)
+	ApplyMissionActionProposalDecision(ctx context.Context, chatID int64, senderID int64, missionID string, choice string) (session.MissionState, bool, error)
 	MemoryFocus(chatID int64) (core.MemoryFocus, bool)
 	SetMemoryFocus(chatID int64, focus core.MemoryFocus)
 	ClearMemoryFocus(chatID int64) bool
@@ -242,7 +244,18 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		}
 		return true, nil
 	case "mission":
-		missionText, err := router.MissionCommand(ctx, msg.ChatID, msg.SenderID, telegramCommandArgs(msg.Text))
+		args := telegramCommandArgs(msg.Text)
+		if missionID, ok := missionProposalCommandMissionID(args); ok {
+			proposal, err := router.MissionActionProposal(ctx, msg.ChatID, msg.SenderID, missionID)
+			if err != nil {
+				return true, err
+			}
+			if _, err := sender.SendInlineKeyboard(ctx, msg.ChatID, renderActionProposalPrompt(proposal), actionProposalButtonRows(proposal.ID), replyToMessageID(msg.MessageID)); err != nil {
+				return true, err
+			}
+			return true, nil
+		}
+		missionText, err := router.MissionCommand(ctx, msg.ChatID, msg.SenderID, args)
 		if err != nil {
 			return true, err
 		}
@@ -523,6 +536,47 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		}
 		if err := deliverStatusCallbackView(ctx, sender, chatID, messageID, rendered, rows); err != nil {
 			return true, err
+		}
+		return true, nil
+	}
+	if proposalID, action, ok := decodeActionProposalCallbackData(cb.Data); ok {
+		chatID := int64(0)
+		messageID := int64(0)
+		senderID := int64(0)
+		if cb.Message != nil {
+			messageID = cb.Message.MessageID
+			if cb.Message.Chat != nil {
+				chatID = cb.Message.Chat.ID
+			}
+		}
+		if cb.From != nil {
+			senderID = cb.From.ID
+		}
+		missionID := missionIDFromActionProposalID(proposalID)
+		if missionID == "" || chatID == 0 {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleActionProposalCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		proposal, err := router.MissionActionProposal(ctx, chatID, senderID, missionID)
+		if err != nil || strings.TrimSpace(proposal.ID) != proposalID {
+			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleActionProposalCallbackText); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+				return true, err
+			}
+			return true, nil
+		}
+		mission, changed, err := router.ApplyMissionActionProposalDecision(ctx, chatID, senderID, missionID, action)
+		if err != nil {
+			return true, err
+		}
+		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil && !telegram.IsStaleCallbackQueryError(err) {
+			return true, err
+		}
+		if messageID != 0 {
+			if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, renderActionProposalDecision(proposal, mission, action, changed)); err != nil {
+				return true, err
+			}
 		}
 		return true, nil
 	}
