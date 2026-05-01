@@ -178,3 +178,10 @@ This is intentionally narrower than parsing arbitrary assistant prose. The first
 materialization path requires a structured pending `OperationProposal` so the
 button carries an auditable proposal id and bounded effect. Plain text remains a
 fallback, not the primary approval surface.
+
+Telegram `callback_data` is capped at 64 bytes. Continuation buttons therefore
+use a compact deterministic alias when a human-readable proposal id would make
+`continuation:<id>:<action>` too long. The full proposal id stays in
+`ContinuationState`, `ActionProposal`, `ContinuationLease`, and execution events;
+the compact id is transport-only and resolves by comparing against the aliases of
+persisted ids.

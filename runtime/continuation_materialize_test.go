@@ -67,8 +67,8 @@ func TestHandleInboundMaterializesPendingOperationProposalAsButtonBackedLease(t 
 			t.Fatalf("labels = %#v, want prefix %#v", labels, wantLabels)
 		}
 	}
-	if got := sender.inline[0].rows[0][0].CallbackData; !strings.Contains(got, "button-backed-lease-local-v1") {
-		t.Fatalf("approve callback = %q, want proposal id", got)
+	if got := sender.inline[0].rows[0][0].CallbackData; got == "" || len(got) > core.TelegramCallbackDataMaxBytes {
+		t.Fatalf("approve callback = %q len=%d, want non-empty <= %d", got, len(got), core.TelegramCallbackDataMaxBytes)
 	}
 
 	state, err := store.ContinuationState(key)

@@ -155,11 +155,11 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if state.ContinuationLease.ProposalID != state.ActionProposal.ID || state.ContinuationLease.RemainingTurns != 1 {
 		t.Fatalf("ContinuationLease = %#v, want proposal-linked one-turn lease", state.ContinuationLease)
 	}
-	if got := sender.inline[0].rows[0][0].CallbackData; !strings.Contains(got, state.ActionProposal.ID) {
-		t.Fatalf("stop callback = %q, want proposal id %q", got, state.ActionProposal.ID)
+	if got := sender.inline[0].rows[0][0].CallbackData; got == "" || len(got) > core.TelegramCallbackDataMaxBytes {
+		t.Fatalf("approve callback = %q len=%d, want non-empty <= %d", got, len(got), core.TelegramCallbackDataMaxBytes)
 	}
-	if got := sender.inline[0].rows[0][1].CallbackData; !strings.Contains(got, state.ActionProposal.ID) {
-		t.Fatalf("continue callback = %q, want proposal id %q", got, state.ActionProposal.ID)
+	if got := sender.inline[0].rows[0][1].CallbackData; got == "" || len(got) > core.TelegramCallbackDataMaxBytes {
+		t.Fatalf("continue callback = %q len=%d, want non-empty <= %d", got, len(got), core.TelegramCallbackDataMaxBytes)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 200)
 	if err != nil {

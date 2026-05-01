@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
 
-const continuationCallbackPrefix = "continuation:"
+const continuationCallbackPrefix = core.ContinuationCallbackPrefix
 const staleContinuationCallbackText = "This continuation prompt is no longer active. Use the newest prompt."
 
 const (
@@ -30,32 +31,16 @@ func encodeContinuationCallbackData(decisionID string, action string) string {
 	if action == "" {
 		action = strings.TrimSpace(action)
 	}
-	if decisionID == "" {
-		return continuationCallbackPrefix + action
-	}
-	return continuationCallbackPrefix + decisionID + ":" + action
+	return core.EncodeContinuationCallbackData(decisionID, action)
 }
 
 func decodeContinuationCallbackData(data string) (decisionID string, action string, ok bool) {
-	trimmed := strings.TrimSpace(data)
-	if !strings.HasPrefix(trimmed, continuationCallbackPrefix) {
+	decisionID, action, ok = core.DecodeContinuationCallbackData(data)
+	if !ok {
 		return "", "", false
 	}
-	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, continuationCallbackPrefix))
-	if payload == "" {
-		return "", "", false
-	}
-	parts := strings.SplitN(payload, ":", 2)
-	if len(parts) == 1 {
-		action = normalizeContinuationCallbackAction(parts[0])
-		if action == "" {
-			return "", "", false
-		}
-		return "", action, true
-	}
-	decisionID = strings.TrimSpace(parts[0])
-	action = normalizeContinuationCallbackAction(parts[1])
-	if decisionID == "" || action == "" {
+	action = normalizeContinuationCallbackAction(action)
+	if action == "" {
 		return "", "", false
 	}
 	return decisionID, action, true
@@ -93,7 +78,7 @@ func continuationCallbackMatchesState(state session.ContinuationState, decisionI
 	if decisionID == "" || state.DecisionID == "" || action == "" {
 		return false
 	}
-	if decisionID != state.DecisionID && decisionID != strings.TrimSpace(state.ActionProposal.ID) && decisionID != strings.TrimSpace(state.ContinuationLease.ID) && decisionID != strings.TrimSpace(state.ContinuationLease.ProposalID) {
+	if !continuationCallbackIDMatchesState(state, decisionID) {
 		return false
 	}
 	switch action {
@@ -110,6 +95,29 @@ func continuationCallbackMatchesState(state session.ContinuationState, decisionI
 	default:
 		return false
 	}
+}
+
+func continuationCallbackIDMatchesState(state session.ContinuationState, decisionID string) bool {
+	state = session.NormalizeContinuationState(state)
+	decisionID = strings.TrimSpace(decisionID)
+	if decisionID == "" {
+		return false
+	}
+	ids := []string{
+		strings.TrimSpace(state.DecisionID),
+		strings.TrimSpace(state.ActionProposal.ID),
+		strings.TrimSpace(state.ContinuationLease.ID),
+		strings.TrimSpace(state.ContinuationLease.ProposalID),
+	}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if decisionID == id || decisionID == core.ContinuationCallbackAlias(id) {
+			return true
+		}
+	}
+	return false
 }
 
 func continuationActionApprovesLease(action string) bool {

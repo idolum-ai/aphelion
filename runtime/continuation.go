@@ -847,10 +847,5 @@ func newContinuationDecisionID() string {
 }
 
 func encodeContinuationCallbackData(decisionID string, action string) string {
-	decisionID = strings.TrimSpace(decisionID)
-	action = strings.TrimSpace(action)
-	if decisionID == "" {
-		return "continuation:" + action
-	}
-	return "continuation:" + decisionID + ":" + action
+	return core.EncodeContinuationCallbackData(decisionID, action)
 }

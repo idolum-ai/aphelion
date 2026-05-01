@@ -3693,6 +3693,33 @@ func TestContinuationControlsV2DecodeAliases(t *testing.T) {
 	}
 }
 
+func TestContinuationCallbackCompactsLongIDsAndMatchesState(t *testing.T) {
+	t.Parallel()
+
+	longID := "button-backed-materialization-live-test-v1"
+	data := encodeContinuationCallbackData(longID, continuationActionAskNextLease)
+	if data == "" || len(data) > core.TelegramCallbackDataMaxBytes {
+		t.Fatalf("callback data = %q len=%d, want non-empty <= %d", data, len(data), core.TelegramCallbackDataMaxBytes)
+	}
+	decodedID, action, ok := decodeContinuationCallbackData(data)
+	if !ok || action != continuationActionAskNextLease || decodedID == longID {
+		t.Fatalf("decode = id=%q action=%q ok=%t, want compact id/%q/true", decodedID, action, ok, continuationActionAskNextLease)
+	}
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     longID,
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{ID: "aprop-" + longID},
+		ContinuationLease: session.ContinuationLease{
+			ID:         "lease-" + longID,
+			ProposalID: "aprop-" + longID,
+		},
+	}
+	if !continuationCallbackMatchesState(state, decodedID, action) {
+		t.Fatalf("continuationCallbackMatchesState() = false for compact id %q", decodedID)
+	}
+}
+
 func TestHandleTelegramCommandCallbackContinuationApproveLease(t *testing.T) {
 	t.Parallel()
 
