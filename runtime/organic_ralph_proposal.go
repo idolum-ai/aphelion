@@ -156,7 +156,7 @@ func (r *Runtime) inferOrganicRalphProposalCandidateFromState(
 	)
 	summary := clampContinuationText(nextStep, 120)
 	boundedEffect := firstNonEmptyContinuation(
-		opState.Proposal.BoundedEffect,
+		organicRalphProposalBoundedEffectForStateInference(opState.Proposal),
 		organicRalphBoundedEffectFromState(nextStep),
 	)
 	kind := organicRalphKindFromStateText(strings.Join([]string{summary, objective, boundedEffect}, "\n"))
@@ -177,11 +177,29 @@ func terminalOperationProposalBlocksStateInference(proposal session.OperationPro
 		return false
 	}
 	switch proposal.Status {
-	case session.ProposalStatusApproved, session.ProposalStatusDenied, session.ProposalStatusExpired, session.ProposalStatusSuperseded:
+	case session.ProposalStatusApproved, session.ProposalStatusDenied, session.ProposalStatusSuperseded:
 		return true
 	default:
 		return false
 	}
+}
+
+func organicRalphProposalFieldsForStateInference(proposal session.OperationProposal) (summary string, boundedEffect string) {
+	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
+	if !proposal.Active() {
+		return "", ""
+	}
+	switch proposal.Status {
+	case session.ProposalStatusExpired, session.ProposalStatusDenied, session.ProposalStatusSuperseded, session.ProposalStatusApproved:
+		return "", ""
+	default:
+		return strings.TrimSpace(proposal.Summary), strings.TrimSpace(proposal.BoundedEffect)
+	}
+}
+
+func organicRalphProposalBoundedEffectForStateInference(proposal session.OperationProposal) string {
+	_, boundedEffect := organicRalphProposalFieldsForStateInference(proposal)
+	return boundedEffect
 }
 
 func organicRalphStateNextStep(planState session.PlanState, opState session.OperationState, priorContinuation session.ContinuationState, priorContinuationExists bool) (string, string) {
@@ -194,16 +212,29 @@ func organicRalphStateNextStep(planState session.PlanState, opState session.Oper
 		}
 	}
 	if opState.Status == session.OperationStatusBlocked || opState.Status == session.OperationStatusActive {
-		if next := continuationNextStep(session.PlanState{}, opState); next != "" {
-			return next, "operation state"
-		}
-		if text := firstNonEmptyContinuation(opState.Stage, opState.Summary, opState.Objective); text != "" {
-			return text, "operation state"
+		proposalSummary, proposalBoundedEffect := organicRalphProposalFieldsForStateInference(opState.Proposal)
+		for _, text := range []string{
+			proposalSummary,
+			proposalBoundedEffect,
+			opState.Summary,
+			opState.Objective,
+			opState.Stage,
+		} {
+			if organicRalphConcreteStateStep(text) {
+				return strings.TrimSpace(text), "operation state"
+			}
 		}
 	}
 	if priorContinuationExists && !priorContinuation.Active() {
-		if text := firstNonEmptyContinuation(priorContinuation.StageSummary, priorContinuation.Objective, priorContinuation.ActionProposal.Summary, priorContinuation.ActionProposal.BoundedEffect); text != "" {
-			return text, "continuation state"
+		for _, text := range []string{
+			priorContinuation.StageSummary,
+			priorContinuation.Objective,
+			priorContinuation.ActionProposal.Summary,
+			priorContinuation.ActionProposal.BoundedEffect,
+		} {
+			if organicRalphConcreteStateStep(text) {
+				return strings.TrimSpace(text), "continuation state"
+			}
 		}
 	}
 	return "", ""
@@ -215,6 +246,7 @@ func organicRalphConcreteStateStep(step string) bool {
 		return false
 	}
 	lower := strings.ToLower(trimmed)
+	normalized := strings.Trim(strings.ReplaceAll(strings.ReplaceAll(lower, "-", "_"), " ", "_"), "._ ")
 	for _, generic := range []string{
 		"continue with the next bounded step",
 		"resume the next bounded step",
@@ -223,6 +255,23 @@ func organicRalphConcreteStateStep(step string) bool {
 		"take the next bounded step",
 	} {
 		if strings.Trim(lower, ". ") == generic {
+			return false
+		}
+	}
+	for _, internal := range []string{
+		"awaiting_ordinary_prompt",
+		"button_press_verification",
+		"delivery",
+		"local_patch_validated",
+		"awaiting_button_approval",
+		"awaiting_live_test_button",
+		"no_button_reported",
+		"recovery_assessment",
+		"implementation",
+		"diagnosis",
+		"intake",
+	} {
+		if normalized == internal {
 			return false
 		}
 	}

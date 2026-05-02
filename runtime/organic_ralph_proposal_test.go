@@ -298,3 +298,79 @@ func organicRalphHighConfidenceTestContract() string {
 		"ORGANIC_RALPH_CONFIDENCE: high",
 	}, "\n")
 }
+
+func TestOrganicRalphExpiredOperationProposalIsStaleEvidenceNotBlocker(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9027, UserID: 0, Scope: telegramDMScopeRef(9027)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "clean-organic-ralph-regression",
+		Objective: "Clean live-test Organic Ralph v1 inference from ordinary conversation without a manually pre-written OperationProposal.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "awaiting_ordinary_prompt",
+		Summary:   "Inspect whether Organic Ralph can infer a harmless status-check proposal from this conversation and stop after evidence.",
+		Proposal: session.OperationProposal{
+			ID:      "stale-organic-ralph-live-test",
+			Summary: "Expired prior live-test proposal",
+			Status:  session.ProposalStatusExpired,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	msg := core.InboundMessage{ChatID: 9027, SenderID: 1001, Text: "approved", MessageID: 11}
+	inferred, err := rt.maybeInferOrganicOperationProposal(context.Background(), key, msg, msg.Text, &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferOrganicOperationProposal() err = %v", err)
+	}
+	if !inferred {
+		t.Fatal("maybeInferOrganicOperationProposal() = false, want inference despite expired stale proposal")
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Proposal.Status != session.ProposalStatusPending {
+		t.Fatalf("proposal status = %q, want pending", opState.Proposal.Status)
+	}
+	if strings.Contains(opState.Proposal.Summary, "awaiting_ordinary_prompt") {
+		t.Fatalf("proposal summary = %q, want semantic summary not internal stage", opState.Proposal.Summary)
+	}
+	if !strings.Contains(opState.Proposal.Summary, "Inspect whether Organic Ralph") {
+		t.Fatalf("proposal summary = %q, want operation summary semantic fallback", opState.Proposal.Summary)
+	}
+}
+
+func TestOrganicRalphDoesNotInferOnlyInternalStageLabel(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9028, UserID: 0, Scope: telegramDMScopeRef(9028)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:     "internal-stage-only",
+		Status: session.OperationStatusBlocked,
+		Stage:  "awaiting_ordinary_prompt",
+		Proposal: session.OperationProposal{
+			ID:     "expired-no-semantic-evidence",
+			Status: session.ProposalStatusExpired,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	msg := core.InboundMessage{ChatID: 9028, SenderID: 1001, Text: "approved", MessageID: 12}
+	inferred, err := rt.maybeInferOrganicOperationProposal(context.Background(), key, msg, msg.Text, &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferOrganicOperationProposal() err = %v", err)
+	}
+	if inferred {
+		t.Fatal("maybeInferOrganicOperationProposal() = true, want false when only internal stage label remains")
+	}
+}
