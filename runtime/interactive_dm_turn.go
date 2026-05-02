@@ -172,6 +172,14 @@ func (r *Runtime) runInteractiveDMTurn(ctx context.Context, input interactiveDMT
 				if err != nil || materialized {
 					return err
 				}
+				inferred, err := r.maybeInferOrganicOperationProposal(postCtx, key, msg, ledgerText, result)
+				if err != nil {
+					return err
+				}
+				if inferred {
+					_, err := r.materializePendingOperationProposalApproval(postCtx, key, msg, ledgerText, result)
+					return err
+				}
 				return r.offerContinuationApproval(postCtx, key, msg, ledgerText, result)
 			},
 		},
