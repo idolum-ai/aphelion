@@ -127,7 +127,7 @@ func TestRenderRestartAwakeFormatsEvidenceAndBoundary(t *testing.T) {
 		"startup_recovery: no interrupted turns pending",
 		"mission_control: candidates=4 active=1 pending_handoffs=2",
 		"memory: continuity loaded",
-		"next: no auto-resume",
+		"next: use /status or /debug; parked leases are re-offered or resumed when available",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderRestartAwake() = %q, want substring %q", out, needle)

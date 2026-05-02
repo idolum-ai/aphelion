@@ -481,6 +481,9 @@ type TurnAuthorizationState struct {
 	ActionProposal         ActionProposal          `json:"action_proposal,omitempty"`
 	ContinuationLease      ContinuationLease       `json:"continuation_lease,omitempty"`
 	HandshakeBlockedReason string                  `json:"handshake_blocked_reason,omitempty"`
+	ParkedAt               time.Time               `json:"parked_at,omitempty"`
+	ParkedReason           string                  `json:"parked_reason,omitempty"`
+	ParkedSource           string                  `json:"parked_source,omitempty"`
 	UpdatedAt              time.Time               `json:"updated_at,omitempty"`
 }
 
@@ -1309,6 +1312,11 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	state.ActionProposal = NormalizeActionProposal(state.ActionProposal)
 	state.ContinuationLease = NormalizeContinuationLease(state.ContinuationLease)
 	state.HandshakeBlockedReason = normalizeContinuationStage(state.HandshakeBlockedReason)
+	if !state.ParkedAt.IsZero() {
+		state.ParkedAt = state.ParkedAt.UTC()
+	}
+	state.ParkedReason = strings.TrimSpace(state.ParkedReason)
+	state.ParkedSource = strings.TrimSpace(state.ParkedSource)
 	if state.Kind == "" && (state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "") {
 		state.Kind = TurnAuthorizationKindContinuation
 	}
@@ -1318,8 +1326,11 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	if state.Status == TurnAuthorizationStatusIdle || state.Status == TurnAuthorizationStatusRevoked {
 		state.ApprovedBy = 0
 		state.DecisionID = ""
+		state.ParkedAt = time.Time{}
+		state.ParkedReason = ""
+		state.ParkedSource = ""
 	}
-	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "") {
+	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "" || !state.ParkedAt.IsZero() || state.ParkedReason != "" || state.ParkedSource != "") {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state

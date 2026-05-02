@@ -145,7 +145,6 @@ func (c telegramCommandControl) Detach(chatID int64, senderID int64) (core.Detac
 }
 
 func (c telegramCommandControl) Restart(chatID int64) error {
-	_ = c.Stop(chatID)
 	if c.detachPendingOnRestart && c.decisionDetacher != nil {
 		removed, err := c.decisionDetacher.DetachAll(context.Background())
 		if err != nil {

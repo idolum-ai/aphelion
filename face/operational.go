@@ -206,7 +206,7 @@ func RenderTelegramDetach(detached core.DetachResult) string {
 }
 
 func RenderTelegramRestart() string {
-	return "Restarting the gateway now. Active and queued work will be dropped."
+	return "Restarting the gateway now. Active work and continuation leases will be parked for startup recovery."
 }
 
 func RenderTelegramRestartDenied() string {
@@ -718,7 +718,7 @@ func RenderRestartAwake(notice RestartAwakeNotice) string {
 	if note := strings.TrimSpace(notice.MemoryNote); note != "" {
 		parts = append(parts, "memory: "+note)
 	}
-	parts = append(parts, "next: no auto-resume; use /status, /debug, or approve the next lease")
+	parts = append(parts, "next: use /status or /debug; parked leases are re-offered or resumed when available")
 	return strings.Join(parts, "\n")
 }
 

@@ -3689,7 +3689,7 @@ func TestHandleTelegramCommandRestartForcesRestart(t *testing.T) {
 	if len(sender.msgs) != 1 {
 		t.Fatalf("sender msgs = %#v, want one restart ack", sender.msgs)
 	}
-	if sender.msgs[0].Text != "Restarting the gateway now. Active and queued work will be dropped." {
+	if sender.msgs[0].Text != "Restarting the gateway now. Active work and continuation leases will be parked for startup recovery." {
 		t.Fatalf("restart ack text = %q, want restart confirmation", sender.msgs[0].Text)
 	}
 }

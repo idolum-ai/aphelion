@@ -5,14 +5,23 @@ package runtime
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
+	"time"
 )
 
 func (r *Runtime) BeginShutdown() {
 	if r == nil {
 		return
 	}
-	r.shuttingDown.Store(true)
+	if !r.shuttingDown.CompareAndSwap(false, true) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := r.ParkActiveWorkForRestart(ctx, restartParkSourceShutdown); err != nil {
+		log.Printf("WARN restart parking failed during shutdown: %v", err)
+	}
 }
 
 func (r *Runtime) isShuttingDown() bool {

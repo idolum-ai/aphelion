@@ -542,6 +542,15 @@ func continuationExecutionPayload(state session.ContinuationState) map[string]an
 		payload["lease_remaining_turns"] = lease.RemainingTurns
 		payload["lease_max_turns"] = lease.MaxTurns
 	}
+	if !state.ParkedAt.IsZero() {
+		payload["parked_at"] = state.ParkedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if reason := strings.TrimSpace(state.ParkedReason); reason != "" {
+		payload["parked_reason"] = reason
+	}
+	if source := strings.TrimSpace(state.ParkedSource); source != "" {
+		payload["parked_source"] = source
+	}
 	return payload
 }
 

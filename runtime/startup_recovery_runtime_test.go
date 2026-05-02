@@ -51,7 +51,7 @@ func TestStartupRecoverySendsAwakeSignalWhenNoInterruptedRuns(t *testing.T) {
 		"started_at_utc: 2026-05-01T14:29:56Z",
 		"startup_recovery: no interrupted turns pending",
 		"mission_control: candidates=1 active=0 pending_handoffs=0",
-		"next: no auto-resume",
+		"next: use /status or /debug; parked leases are re-offered or resumed when available",
 	} {
 		if !strings.Contains(got.Text, needle) {
 			t.Fatalf("awake text = %q, want substring %q", got.Text, needle)

@@ -55,6 +55,8 @@ const (
 	ExecutionEventContinuationRevoked  = "continuation.revoked"
 	ExecutionEventContinuationConsumed = "continuation.consumed"
 	ExecutionEventContinuationBlocked  = "continuation.blocked"
+	ExecutionEventContinuationParked   = "continuation.parked"
+	ExecutionEventContinuationResumed  = "continuation.resumed"
 
 	ExecutionEventDecisionOpened   = "decision.opened"
 	ExecutionEventDecisionResolved = "decision.resolved"

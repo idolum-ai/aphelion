@@ -61,14 +61,31 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		return fmt.Errorf("load pending recovery turn runs: %w", err)
 	}
 	if len(runs) == 0 {
-		if err := r.deliverRestartAwakeSignal(ctx, now, 0, 0, "continuity loaded; no recovery rows pending"); err != nil {
+		resumeResult, resumeErr := r.resumeRestartParkedContinuations(ctx, now)
+		memoryNote := "continuity loaded; no recovery rows pending"
+		if summary := resumeResult.summary(); summary != "" {
+			memoryNote += "; " + summary
+		}
+		if resumeErr != nil {
+			log.Printf("WARN parked continuation resume failed during startup recovery: %v", resumeErr)
+			r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryFailed, "recovery", "failed", map[string]any{
+				"phase": "parked_continuation_resume",
+				"error": trimError(resumeErr.Error()),
+			}, time.Now().UTC())
+			memoryNote += "; parked_continuation_resume warning=" + trimError(resumeErr.Error())
+		}
+		if err := r.deliverRestartAwakeSignal(ctx, now, 0, 0, memoryNote); err != nil {
 			return fmt.Errorf("deliver restart awake signal: %w", err)
 		}
-		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryAwake, "recovery", "awake", map[string]any{
+		payload := map[string]any{
 			"interrupted_count": 0,
 			"recovered_count":   0,
 			"delivery_sent":     true,
-		}, time.Now().UTC())
+		}
+		if resumeResult.total() > 0 {
+			payload["parked_continuations"] = recordRestartResumeSummaryPayload(resumeResult)
+		}
+		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryAwake, "recovery", "awake", payload, time.Now().UTC())
 		return nil
 	}
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
@@ -173,17 +190,32 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err := r.deliverStartupRecoveryCatchup(ctx, maintenanceSession.SystemPrompt, runs, recoverySummary); err != nil {
 		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
 	}
-	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryAwake, "recovery", "awake", map[string]any{
+	resumeResult, resumeErr := r.resumeRestartParkedContinuations(ctx, now)
+	if resumeErr != nil {
+		log.Printf("WARN parked continuation resume failed during startup recovery: %v", resumeErr)
+		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryFailed, "recovery", "failed", map[string]any{
+			"phase": "parked_continuation_resume",
+			"error": trimError(resumeErr.Error()),
+		}, time.Now().UTC())
+	}
+	awakePayload := map[string]any{
 		"interrupted_count": len(runs),
 		"recovered_count":   len(ids),
 		"delivery_sent":     true,
-	}, time.Now().UTC())
-	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryCompleted, "recovery", "completed", map[string]any{
+	}
+	completedPayload := map[string]any{
 		"pending_count":   len(runs),
 		"persisted":       true,
 		"delivery_sent":   true,
 		"recovered_count": len(ids),
-	}, time.Now().UTC())
+	}
+	if resumeResult.total() > 0 {
+		resumePayload := recordRestartResumeSummaryPayload(resumeResult)
+		awakePayload["parked_continuations"] = resumePayload
+		completedPayload["parked_continuations"] = resumePayload
+	}
+	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryAwake, "recovery", "awake", awakePayload, time.Now().UTC())
+	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryCompleted, "recovery", "completed", completedPayload, time.Now().UTC())
 	return nil
 }
 
