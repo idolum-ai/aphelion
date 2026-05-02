@@ -159,6 +159,152 @@ func TestMaterializePendingOperationProposalAfterTurnAuthorization(t *testing.T)
 	}
 }
 
+func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9015, UserID: 0, Scope: telegramDMScopeRef(9015)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "phase-plan-op",
+		Objective: "Deliver Lighthouse inbox workflow.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_plan",
+		Proposal: session.OperationProposal{
+			ID:      "stale-single-step",
+			Summary: "Do the whole thing in one step",
+			Status:  session.ProposalStatusPending,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "phase-plan",
+			Goal: "Deliver Lighthouse inbox workflow.",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "phase-1-contract",
+					Summary:          "Write the read-only contract",
+					Status:           session.PlanStatusCompleted,
+					AuthorityClass:   "read_only_review",
+					BoundedEffect:    "Inspect only and write the contract.",
+					RequiresApproval: true,
+				},
+				{
+					ID:               "phase-2-implementation",
+					Summary:          "Implement the local inbox bridge",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "workspace_write",
+					WhyNow:           "The contract phase is complete.",
+					BoundedEffect:    "Edit local files and run tests; stop before deploy.",
+					AllowedActions:   []string{"edit_files", "run_tests"},
+					ForbiddenActions: []string{"deploy", "restart_service"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9015, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want phase-plan approval")
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation = %#v, want pending lease", cont)
+	}
+	if cont.ActionProposal.Summary != "Implement the local inbox bridge" || cont.ActionProposal.RiskClass != "workspace_write" {
+		t.Fatalf("action proposal = %#v, want next pending phase action", cont.ActionProposal)
+	}
+	if cont.ActionProposal.BoundedEffect != "Edit local files and run tests; stop before deploy." {
+		t.Fatalf("bounded effect = %q", cont.ActionProposal.BoundedEffect)
+	}
+	if cont.ContinuationLease.MaxTurns != 1 || cont.ContinuationLease.RemainingTurns != 1 {
+		t.Fatalf("lease = %#v, want one-turn phase lease", cont.ContinuationLease)
+	}
+
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Proposal.Status != session.ProposalStatusPending || opState.Proposal.Summary != "Implement the local inbox bridge" {
+		t.Fatalf("operation proposal = %#v, want synthetic pending phase proposal", opState.Proposal)
+	}
+	if opState.PhasePlan.CurrentPhaseID != "phase-2-implementation" || opState.PhasePlan.Phases[1].LeaseID != cont.ContinuationLease.ID {
+		t.Fatalf("phase plan = %#v, want current phase linked to lease", opState.PhasePlan)
+	}
+
+	sender.mu.Lock()
+	inlineText := ""
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(inlineText, "Implement the local inbox bridge") || strings.Contains(inlineText, "Do the whole thing in one step") {
+		t.Fatalf("inline text = %q, want next phase without stale proposal", inlineText)
+	}
+}
+
+func TestApproveDurablePhasePlanLeaseMarksPhaseInProgress(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9016, UserID: 0, Scope: telegramDMScopeRef(9016)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "phase-plan-approve-op",
+		Objective: "Deliver durable phase plan.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID: "phase-plan-approve",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-1",
+				Summary:        "Patch the operation planner",
+				Status:         session.PlanStatusPending,
+				AuthorityClass: "workspace_write",
+				BoundedEffect:  "Edit files and run tests.",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9016, SenderID: 1001, Text: "go", MessageID: 1}, "go", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want phase lease")
+	}
+
+	if _, err := rt.ApproveContinuation(9016, 1001); err != nil {
+		t.Fatalf("ApproveContinuation() err = %v", err)
+	}
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.Proposal.Status != session.ProposalStatusApproved || got.Status != session.OperationStatusActive {
+		t.Fatalf("operation = %#v, want approved active synthetic proposal", got)
+	}
+	if len(got.PhasePlan.Phases) != 1 || got.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
+		t.Fatalf("phase plan = %#v, want approved phase in_progress", got.PhasePlan)
+	}
+	if got.PhasePlan.CurrentPhaseID != "phase-1" {
+		t.Fatalf("CurrentPhaseID = %q, want phase-1", got.PhasePlan.CurrentPhaseID)
+	}
+}
+
 func TestRevokeMaterializedOperationProposalDeniesPendingOperationProposal(t *testing.T) {
 	t.Parallel()
 

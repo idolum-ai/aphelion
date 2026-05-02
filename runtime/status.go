@@ -1656,6 +1656,41 @@ func operationStatusFields(state session.OperationState) (status string, stage s
 	return status, stage, summary
 }
 
+func operationPhasePlanStatusFields(state session.OperationState) (currentID string, currentStatus string, currentSummary string, completed int, total int, active bool) {
+	normalized := session.NormalizeOperationState(state)
+	phases := normalized.PhasePlan.Phases
+	total = len(phases)
+	if total == 0 {
+		return "", "", "", 0, 0, false
+	}
+	active = true
+	for _, phase := range phases {
+		if phase.Status == session.PlanStatusCompleted {
+			completed++
+		}
+	}
+	currentID = strings.TrimSpace(normalized.PhasePlan.CurrentPhaseID)
+	var current session.OperationPhase
+	for _, phase := range phases {
+		if currentID != "" && strings.TrimSpace(phase.ID) == currentID {
+			current = phase
+			break
+		}
+	}
+	if strings.TrimSpace(current.ID) == "" && strings.TrimSpace(current.Summary) == "" {
+		for _, phase := range phases {
+			if phase.Status == session.PlanStatusInProgress || phase.Status == session.PlanStatusPending {
+				current = phase
+				break
+			}
+		}
+	}
+	currentID = strings.TrimSpace(current.ID)
+	currentStatus = strings.TrimSpace(string(current.Status))
+	currentSummary = truncateStatusDiagnostic(strings.TrimSpace(current.Summary), 160)
+	return currentID, currentStatus, currentSummary, completed, total, active
+}
+
 func planStatusFields(state session.PlanState) (status string, step string) {
 	normalized := session.NormalizePlanState(state)
 	if len(normalized.Steps) == 0 {

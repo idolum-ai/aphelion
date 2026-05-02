@@ -116,7 +116,7 @@ func TestBuildGovernorPromptIncludesGoalContinuityContractWhenOperationActive(t 
 	for _, want := range []string{
 		"## Goal Continuity Contract",
 		"A contract, architecture note, read-only review, or tiny probe is usually phase one",
-		"propose the next bounded lease instead of marking the whole goal completed",
+		"advance the next phase in phase_plan instead of marking the whole goal completed",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("governor prompt missing %q: %q", want, got)
@@ -661,19 +661,27 @@ func TestBuildGovernorPromptIncludesCurrentOperationState(t *testing.T) {
 		GovernorBackend: "native",
 		PrincipalRole:   "admin",
 		Runtime: RuntimeAwareness{
-			OperationActive:       true,
-			OperationObjective:    "Investigate my internet footprint.",
-			OperationStatus:       "blocked",
-			OperationStage:        "proposal",
-			OperationSummary:      "Waiting on a proposal before external execution.",
-			ProposalActive:        true,
-			ProposalKind:          "capability_acquisition",
-			ProposalStatus:        "pending",
-			ProposalSummary:       "Acquire browser automation",
-			ProposalWhyNow:        "A screenshot requires browser automation in this operation.",
-			ProposalBoundedEffect: "Install Playwright locally and capture one screenshot.",
-			OperationFindings:     []string{"[high] Browser automation is not currently available. (basis: No browser tool is exposed.)"},
-			OperationArtifacts:    []string{"working-note: tmp/notes.md"},
+			OperationActive:         true,
+			OperationObjective:      "Investigate my internet footprint.",
+			OperationStatus:         "blocked",
+			OperationStage:          "proposal",
+			OperationSummary:        "Waiting on a proposal before external execution.",
+			ProposalActive:          true,
+			ProposalKind:            "capability_acquisition",
+			ProposalStatus:          "pending",
+			ProposalSummary:         "Acquire browser automation",
+			ProposalWhyNow:          "A screenshot requires browser automation in this operation.",
+			ProposalBoundedEffect:   "Install Playwright locally and capture one screenshot.",
+			PhasePlanActive:         true,
+			PhasePlanID:             "internet-footprint-plan",
+			PhasePlanGoal:           "Investigate my internet footprint without losing the broad goal.",
+			PhasePlanCurrentPhaseID: "phase-2",
+			OperationPhases: []string{
+				"[completed] phase-1: inspect prior context (authority: read_only_review)",
+				"[pending] phase-2: capture screenshot evidence (authority: workspace_write)",
+			},
+			OperationFindings:  []string{"[high] Browser automation is not currently available. (basis: No browser tool is exposed.)"},
+			OperationArtifacts: []string{"working-note: tmp/notes.md"},
 		},
 	})
 
@@ -684,6 +692,8 @@ func TestBuildGovernorPromptIncludesCurrentOperationState(t *testing.T) {
 		"Investigate my internet footprint.",
 		"Acquire browser automation",
 		"Install Playwright locally and capture one screenshot.",
+		"### Durable Phase Plan",
+		"phase-2: capture screenshot evidence",
 		"working-note: tmp/notes.md",
 	} {
 		if !strings.Contains(got, want) {

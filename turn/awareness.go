@@ -74,6 +74,31 @@ func ApplyOperationAwareness(aw prompt.RuntimeAwareness, state session.Operation
 	aw.ProposalSummary = strings.TrimSpace(state.Proposal.Summary)
 	aw.ProposalWhyNow = strings.TrimSpace(state.Proposal.WhyNow)
 	aw.ProposalBoundedEffect = strings.TrimSpace(state.Proposal.BoundedEffect)
+	aw.PhasePlanActive = state.PhasePlan.Active()
+	aw.PhasePlanID = strings.TrimSpace(state.PhasePlan.ID)
+	aw.PhasePlanGoal = strings.TrimSpace(state.PhasePlan.Goal)
+	aw.PhasePlanCurrentPhaseID = strings.TrimSpace(state.PhasePlan.CurrentPhaseID)
+	aw.OperationPhases = aw.OperationPhases[:0]
+	for _, phase := range state.PhasePlan.Phases {
+		if strings.TrimSpace(phase.ID) == "" && strings.TrimSpace(phase.Summary) == "" {
+			continue
+		}
+		line := "[" + string(phase.Status) + "] " + strings.TrimSpace(phase.ID)
+		if summary := strings.TrimSpace(phase.Summary); summary != "" {
+			if strings.TrimSpace(phase.ID) == "" {
+				line = "[" + string(phase.Status) + "] " + summary
+			} else {
+				line += ": " + summary
+			}
+		}
+		if authority := strings.TrimSpace(phase.AuthorityClass); authority != "" {
+			line += " (authority: " + authority + ")"
+		}
+		if effect := strings.TrimSpace(phase.BoundedEffect); effect != "" {
+			line += " bounded_effect: " + effect
+		}
+		aw.OperationPhases = append(aw.OperationPhases, line)
+	}
 	aw.OperationFindings = aw.OperationFindings[:0]
 	for _, finding := range state.Findings {
 		if strings.TrimSpace(finding.Claim) == "" {

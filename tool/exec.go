@@ -99,6 +99,27 @@ type updateOperationProposalInput struct {
 	Status        string `json:"status,omitempty"`
 }
 
+type updateOperationPhaseInput struct {
+	ID               string   `json:"id,omitempty"`
+	Summary          string   `json:"summary,omitempty"`
+	Status           string   `json:"status,omitempty"`
+	AuthorityClass   string   `json:"authority_class,omitempty"`
+	WhyNow           string   `json:"why_now,omitempty"`
+	BoundedEffect    string   `json:"bounded_effect,omitempty"`
+	AllowedActions   []string `json:"allowed_actions,omitempty"`
+	ForbiddenActions []string `json:"forbidden_actions,omitempty"`
+	ValidationPlan   []string `json:"validation_plan,omitempty"`
+	RequiresApproval *bool    `json:"requires_approval,omitempty"`
+	LeaseID          string   `json:"lease_id,omitempty"`
+}
+
+type updateOperationPhasePlanInput struct {
+	ID             string                      `json:"id,omitempty"`
+	Goal           string                      `json:"goal,omitempty"`
+	CurrentPhaseID string                      `json:"current_phase_id,omitempty"`
+	Phases         []updateOperationPhaseInput `json:"phases,omitempty"`
+}
+
 type updateOperationFindingInput struct {
 	Claim      string `json:"claim"`
 	Confidence string `json:"confidence,omitempty"`
@@ -118,6 +139,7 @@ type updateOperationInput struct {
 	Summary   string                         `json:"summary,omitempty"`
 	Merge     bool                           `json:"merge,omitempty"`
 	Proposal  *updateOperationProposalInput  `json:"proposal,omitempty"`
+	PhasePlan *updateOperationPhasePlanInput `json:"phase_plan,omitempty"`
 	Findings  []updateOperationFindingInput  `json:"findings,omitempty"`
 	Artifacts []updateOperationArtifactInput `json:"artifacts,omitempty"`
 }
@@ -699,7 +721,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 	if r.store != nil {
 		defs = append(defs, agent.ToolDef{
 			Name:        "update_operation",
-			Description: "Persist or inspect the current operational state for this session. Use this to track the objective, stage, proposal, findings, and artifacts as work evolves across turns.",
+			Description: "Persist or inspect the current operational state for this session. Use this to track the objective, stage, proposal, durable phase plan, findings, and artifacts as work evolves across turns.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -719,6 +741,35 @@ func (r *Registry) Definitions() []agent.ToolDef {
 							"why_now": {"type": "string", "description": "Why this proposal is needed now"},
 							"bounded_effect": {"type": "string", "description": "What will happen if approved"},
 							"status": {"type": "string", "enum": ["pending", "approved", "denied", "expired", "superseded"], "description": "Current proposal status"}
+						}
+					},
+					"phase_plan": {
+						"type": "object",
+						"description": "Optional durable multi-phase operation plan. Use this when a broad goal must survive across approval leases; each pending phase can be materialized as its own bounded approval.",
+						"properties": {
+							"id": {"type": "string", "description": "Optional stable phase plan id"},
+							"goal": {"type": "string", "description": "Broad end-to-end goal this phase plan serves"},
+							"current_phase_id": {"type": "string", "description": "Current or next phase id; defaults to the first in-progress or pending phase"},
+							"phases": {
+								"type": "array",
+								"description": "Durable phases. Omit during merge to keep existing phases; include one or more phases to update by id or append.",
+								"items": {
+									"type": "object",
+									"properties": {
+										"id": {"type": "string", "description": "Stable phase id"},
+										"summary": {"type": "string", "description": "Bounded phase summary"},
+										"status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Current phase status"},
+										"authority_class": {"type": "string", "description": "Authority/risk class such as read_only_review, status_check, workspace_write, commit, deploy, or system_change"},
+										"why_now": {"type": "string", "description": "Why this phase should be offered next"},
+										"bounded_effect": {"type": "string", "description": "What the phase approval permits"},
+										"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed action labels for this phase"},
+										"forbidden_actions": {"type": "array", "items": {"type": "string"}, "description": "Forbidden action labels for this phase"},
+										"validation_plan": {"type": "array", "items": {"type": "string"}, "description": "Evidence checks expected after this phase"},
+										"requires_approval": {"type": "boolean", "description": "Whether this phase requires a button-backed approval lease; defaults to true for active non-completed phases"}
+									},
+									"required": ["summary"]
+								}
+							}
 						}
 					},
 					"findings": {

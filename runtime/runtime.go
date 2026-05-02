@@ -394,6 +394,26 @@ func workPromptForContinuation(state session.ContinuationState, opState session.
 	if effect := strings.TrimSpace(state.ActionProposal.BoundedEffect); effect != "" {
 		lines = append(lines, "Bounded effect: "+effect)
 	}
+	if opState.PhasePlan.Active() {
+		lines = append(lines, "Durable phase plan: "+firstNonEmptyContinuation(opState.PhasePlan.Goal, opState.PhasePlan.ID))
+		if current := strings.TrimSpace(opState.PhasePlan.CurrentPhaseID); current != "" {
+			lines = append(lines, "Current phase id: "+current)
+		}
+		for _, phase := range opState.PhasePlan.Phases {
+			label := strings.TrimSpace(phase.ID)
+			if summary := strings.TrimSpace(phase.Summary); summary != "" {
+				if label == "" {
+					label = summary
+				} else {
+					label += ": " + summary
+				}
+			}
+			if label == "" {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("Phase [%s] %s", phase.Status, label))
+		}
+	}
 	lines = append(lines, "Stop after this bounded step and report changed files, commands, tests, evidence, and remaining risk.")
 	return strings.Join(lines, "\n")
 }

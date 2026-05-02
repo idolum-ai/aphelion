@@ -48,11 +48,18 @@ func (r *Runtime) maybeInferGoalContinuationProposal(ctx context.Context, key se
 		return false, err
 	}
 	opState = session.NormalizeOperationState(opState)
+	persistedOpState := opState
 	if result != nil && result.OperationState.Active() {
 		resultOp := session.NormalizeOperationState(result.OperationState)
 		if !pendingOperationProposalNeedsButton(resultOp.Proposal) {
+			if !resultOp.PhasePlan.Active() && persistedOpState.PhasePlan.Active() {
+				resultOp.PhasePlan = persistedOpState.PhasePlan
+			}
 			opState = resultOp
 		}
+	}
+	if operationPhasePlanOwnsContinuation(opState.PhasePlan) {
+		return false, nil
 	}
 	if pendingOperationProposalNeedsButton(opState.Proposal) {
 		return false, nil

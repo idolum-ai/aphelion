@@ -184,6 +184,79 @@ func TestUpdateOperationToolMergeAppendsFindingsAndAdvancesProposal(t *testing.T
 	}
 }
 
+func TestUpdateOperationToolPersistsDurablePhasePlan(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{
+			"id":"op-phase-plan",
+			"objective":"Deliver the Lighthouse inbox workflow end to end.",
+			"status":"blocked",
+			"stage":"phase_plan",
+			"summary":"The broad goal is split into durable approval phases.",
+			"phase_plan":{
+				"id":"lighthouse-inbox-plan",
+				"goal":"Deliver the Lighthouse inbox workflow end to end.",
+				"phases":[
+					{
+						"id":"phase-1-contract",
+						"summary":"Write the read-only integration contract",
+						"status":"completed",
+						"authority_class":"read_only_review",
+						"bounded_effect":"Inspect runtime state and write down the contract only.",
+						"validation_plan":["contract references live evidence"]
+					},
+					{
+						"id":"phase-2-implementation",
+						"summary":"Implement the local inbox bridge",
+						"status":"pending",
+						"authority_class":"workspace_write",
+						"why_now":"The contract is complete and implementation is the next bounded phase.",
+						"bounded_effect":"Edit local files, run tests, and stop before deploy.",
+						"allowed_actions":["edit_files","run_tests"],
+						"forbidden_actions":["deploy","restart_service"]
+					}
+				]
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation phase_plan) err = %v", err)
+	}
+	if !strings.Contains(out, "phase_plan:") || !strings.Contains(out, "phase-2-implementation") {
+		t.Fatalf("update output = %q, want rendered phase plan", out)
+	}
+
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if state.PhasePlan.ID != "lighthouse-inbox-plan" || state.PhasePlan.CurrentPhaseID != "phase-2-implementation" {
+		t.Fatalf("PhasePlan = %#v, want durable current pending phase", state.PhasePlan)
+	}
+	if len(state.PhasePlan.Phases) != 2 {
+		t.Fatalf("phase count = %d, want 2", len(state.PhasePlan.Phases))
+	}
+	phase := state.PhasePlan.Phases[1]
+	if phase.Status != session.PlanStatusPending || phase.AuthorityClass != "workspace_write" {
+		t.Fatalf("phase 2 = %#v, want pending workspace_write phase", phase)
+	}
+	if !phase.RequiresApproval {
+		t.Fatalf("phase 2 RequiresApproval = false, want default approval gate")
+	}
+}
+
 func TestUpdateOperationToolRejectsInvalidProposalStatus(t *testing.T) {
 	t.Parallel()
 

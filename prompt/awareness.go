@@ -58,6 +58,11 @@ type RuntimeAwareness struct {
 	ProposalSummary            string
 	ProposalWhyNow             string
 	ProposalBoundedEffect      string
+	PhasePlanActive            bool
+	PhasePlanID                string
+	PhasePlanGoal              string
+	PhasePlanCurrentPhaseID    string
+	OperationPhases            []string
 	OperationFindings          []string
 	OperationArtifacts         []string
 	ContinuationStatus         string
@@ -117,6 +122,8 @@ func renderGovernorRuntimeAwarenessBlock(aw RuntimeAwareness) string {
 	lines = append(lines, nonEmptyAwarenessLine("proposal_kind", aw.ProposalKind))
 	lines = append(lines, nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus))
 	lines = append(lines, nonEmptyAwarenessLine("proposal_summary", aw.ProposalSummary))
+	lines = append(lines, fmt.Sprintf("- phase_plan_active: %t", aw.PhasePlanActive))
+	lines = append(lines, nonEmptyAwarenessLine("phase_plan_current_phase_id", aw.PhasePlanCurrentPhaseID))
 	lines = append(lines, nonEmptyAwarenessLine("continuation_status", aw.ContinuationStatus))
 	lines = append(lines, fmt.Sprintf("- continuation_active: %t", aw.ContinuationActive))
 	lines = append(lines, nonEmptyAwarenessLine("continuation_persona_intent", aw.ContinuationPersonaIntent))
@@ -179,6 +186,8 @@ func renderFaceAwarenessBlock(aw RuntimeAwareness, principalRole string, mode st
 	lines = append(lines, nonEmptyAwarenessLine("reply_modality_override", aw.ReplyModalityOverride))
 	lines = append(lines, fmt.Sprintf("- proposal_active: %t", aw.ProposalActive))
 	lines = append(lines, nonEmptyAwarenessLine("proposal_status", aw.ProposalStatus))
+	lines = append(lines, fmt.Sprintf("- phase_plan_active: %t", aw.PhasePlanActive))
+	lines = append(lines, nonEmptyAwarenessLine("phase_plan_current_phase_id", aw.PhasePlanCurrentPhaseID))
 	lines = append(lines, nonEmptyAwarenessLine("continuation_status", aw.ContinuationStatus))
 	lines = append(lines, fmt.Sprintf("- continuation_active: %t", aw.ContinuationActive))
 	lines = append(lines, nonEmptyAwarenessLine("continuation_persona_intent", aw.ContinuationPersonaIntent))

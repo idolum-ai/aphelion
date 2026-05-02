@@ -3,6 +3,7 @@
 package session
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -119,6 +120,30 @@ type OperationProposal struct {
 	Status        ProposalStatus `json:"status,omitempty"`
 	UpdatedAt     time.Time      `json:"updated_at,omitempty"`
 }
+
+type OperationPhase struct {
+	ID               string     `json:"id,omitempty"`
+	Summary          string     `json:"summary,omitempty"`
+	Status           PlanStatus `json:"status,omitempty"`
+	AuthorityClass   string     `json:"authority_class,omitempty"`
+	WhyNow           string     `json:"why_now,omitempty"`
+	BoundedEffect    string     `json:"bounded_effect,omitempty"`
+	AllowedActions   []string   `json:"allowed_actions,omitempty"`
+	ForbiddenActions []string   `json:"forbidden_actions,omitempty"`
+	ValidationPlan   []string   `json:"validation_plan,omitempty"`
+	RequiresApproval bool       `json:"requires_approval,omitempty"`
+	LeaseID          string     `json:"lease_id,omitempty"`
+	CompletedAt      time.Time  `json:"completed_at,omitempty"`
+}
+
+type OperationPhasePlan struct {
+	ID             string           `json:"id,omitempty"`
+	Goal           string           `json:"goal,omitempty"`
+	CurrentPhaseID string           `json:"current_phase_id,omitempty"`
+	Phases         []OperationPhase `json:"phases,omitempty"`
+	UpdatedAt      time.Time        `json:"updated_at,omitempty"`
+}
+
 type ActionProposal struct {
 	ID               string         `json:"id,omitempty"`
 	OperationID      string         `json:"operation_id,omitempty"`
@@ -222,6 +247,7 @@ type OperationState struct {
 	Stage     string                `json:"stage,omitempty"`
 	Summary   string                `json:"summary,omitempty"`
 	Proposal  OperationProposal     `json:"proposal,omitempty"`
+	PhasePlan OperationPhasePlan    `json:"phase_plan,omitempty"`
 	Findings  []OperationFinding    `json:"findings,omitempty"`
 	Artifacts []OperationArtifact   `json:"artifacts,omitempty"`
 	Work      WorkOperationMetadata `json:"work,omitempty"`
@@ -909,6 +935,7 @@ func NormalizeOperationState(state OperationState) OperationState {
 	state.Stage = normalizeOperationStage(state.Stage)
 	state.Summary = strings.TrimSpace(state.Summary)
 	state.Proposal = normalizeOperationProposal(state.Proposal)
+	state.PhasePlan = normalizeOperationPhasePlan(state.PhasePlan)
 
 	findings := make([]OperationFinding, 0, len(state.Findings))
 	for _, finding := range state.Findings {
@@ -946,6 +973,99 @@ func NormalizeOperationState(state OperationState) OperationState {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state
+}
+
+func normalizeOperationPhasePlan(plan OperationPhasePlan) OperationPhasePlan {
+	plan.ID = strings.TrimSpace(plan.ID)
+	plan.Goal = strings.TrimSpace(plan.Goal)
+	plan.CurrentPhaseID = strings.TrimSpace(plan.CurrentPhaseID)
+	phases := make([]OperationPhase, 0, len(plan.Phases))
+	seenIDs := make(map[string]struct{}, len(plan.Phases))
+	for index, phase := range plan.Phases {
+		phase = normalizeOperationPhase(phase, index)
+		if !phase.Active() {
+			continue
+		}
+		baseID := phase.ID
+		if baseID == "" {
+			baseID = fmt.Sprintf("phase-%d", index+1)
+		}
+		id := baseID
+		for suffix := 2; ; suffix++ {
+			if _, exists := seenIDs[id]; !exists {
+				break
+			}
+			id = fmt.Sprintf("%s-%d", baseID, suffix)
+		}
+		phase.ID = id
+		seenIDs[id] = struct{}{}
+		phases = append(phases, phase)
+	}
+	plan.Phases = phases
+	if plan.CurrentPhaseID != "" {
+		currentStatus := PlanStatus("")
+		for _, phase := range plan.Phases {
+			if phase.ID == plan.CurrentPhaseID {
+				currentStatus = phase.Status
+				break
+			}
+		}
+		if _, ok := seenIDs[plan.CurrentPhaseID]; !ok {
+			plan.CurrentPhaseID = ""
+		} else if currentStatus == PlanStatusCompleted {
+			for _, phase := range plan.Phases {
+				if phase.Status == PlanStatusInProgress || phase.Status == PlanStatusPending {
+					plan.CurrentPhaseID = ""
+					break
+				}
+			}
+		}
+	}
+	if plan.CurrentPhaseID == "" {
+		for _, phase := range plan.Phases {
+			if phase.Status == PlanStatusInProgress || phase.Status == PlanStatusPending {
+				plan.CurrentPhaseID = phase.ID
+				break
+			}
+		}
+	}
+	if plan.CurrentPhaseID == "" && len(plan.Phases) > 0 {
+		plan.CurrentPhaseID = plan.Phases[0].ID
+	}
+	if !plan.UpdatedAt.IsZero() {
+		plan.UpdatedAt = plan.UpdatedAt.UTC()
+	}
+	if plan.UpdatedAt.IsZero() && plan.Active() {
+		plan.UpdatedAt = time.Now().UTC()
+	}
+	return plan
+}
+
+func normalizeOperationPhase(phase OperationPhase, index int) OperationPhase {
+	_ = index
+	phase.ID = strings.TrimSpace(phase.ID)
+	phase.Summary = strings.TrimSpace(phase.Summary)
+	phase.Status = NormalizePlanStatus(phase.Status)
+	phase.AuthorityClass = normalizeEnumValue(phase.AuthorityClass)
+	phase.WhyNow = strings.TrimSpace(phase.WhyNow)
+	phase.BoundedEffect = strings.TrimSpace(phase.BoundedEffect)
+	phase.AllowedActions = normalizeActionStringSlice(phase.AllowedActions)
+	phase.ForbiddenActions = normalizeActionStringSlice(phase.ForbiddenActions)
+	phase.ValidationPlan = normalizeActionStringSlice(phase.ValidationPlan)
+	phase.LeaseID = strings.TrimSpace(phase.LeaseID)
+	if !phase.CompletedAt.IsZero() {
+		phase.CompletedAt = phase.CompletedAt.UTC()
+	}
+	if phase.Status == "" && phase.Active() {
+		phase.Status = PlanStatusPending
+	}
+	if phase.Status != PlanStatusCompleted {
+		phase.CompletedAt = time.Time{}
+	}
+	if phase.Status == PlanStatusCompleted && phase.CompletedAt.IsZero() {
+		phase.CompletedAt = time.Now().UTC()
+	}
+	return phase
 }
 
 func NormalizeWorkOperationMetadata(work WorkOperationMetadata) WorkOperationMetadata {
@@ -1035,6 +1155,27 @@ func truncateOperationString(value string, limit int) string {
 	return strings.TrimSpace(string(runes[:limit-12])) + " [truncated]"
 }
 
+func (p OperationPhasePlan) Active() bool {
+	return strings.TrimSpace(p.ID) != "" ||
+		strings.TrimSpace(p.Goal) != "" ||
+		strings.TrimSpace(p.CurrentPhaseID) != "" ||
+		len(p.Phases) > 0
+}
+
+func (p OperationPhase) Active() bool {
+	return strings.TrimSpace(p.ID) != "" ||
+		strings.TrimSpace(p.Summary) != "" ||
+		strings.TrimSpace(string(p.Status)) != "" ||
+		strings.TrimSpace(p.AuthorityClass) != "" ||
+		strings.TrimSpace(p.WhyNow) != "" ||
+		strings.TrimSpace(p.BoundedEffect) != "" ||
+		len(p.AllowedActions) > 0 ||
+		len(p.ForbiddenActions) > 0 ||
+		len(p.ValidationPlan) > 0 ||
+		strings.TrimSpace(p.LeaseID) != "" ||
+		!p.CompletedAt.IsZero()
+}
+
 func (s OperationState) Active() bool {
 	normalized := s
 	return strings.TrimSpace(normalized.ID) != "" ||
@@ -1043,6 +1184,7 @@ func (s OperationState) Active() bool {
 		strings.TrimSpace(normalized.Stage) != "" ||
 		strings.TrimSpace(normalized.Summary) != "" ||
 		normalized.Proposal.Active() ||
+		normalized.PhasePlan.Active() ||
 		len(normalized.Findings) > 0 ||
 		len(normalized.Artifacts) > 0
 }

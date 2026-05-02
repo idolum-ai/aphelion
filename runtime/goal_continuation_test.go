@@ -295,3 +295,94 @@ func TestGoalContinuationInfersWithPendingPlanStepAsRemainingWork(t *testing.T) 
 		t.Fatal("maybeInferGoalContinuationProposal() = false, want true with durable objective, phase-one signal, and pending plan work")
 	}
 }
+
+func TestGoalContinuationDoesNotInferWhenDurablePhasePlanOwnsNextStep(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9046, UserID: 0, Scope: telegramDMScopeRef(9046)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "lighthouse-durable-phase-plan",
+		Objective: "Deliver the Lighthouse inbox workflow through a durable phase plan.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_plan",
+		Summary:   "Phase one is done and phase two is pending approval.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "lighthouse-durable-plan",
+			CurrentPhaseID: "phase-2",
+			Phases: []session.OperationPhase{
+				{ID: "phase-1", Summary: "Write the read-only contract", Status: session.PlanStatusCompleted},
+				{ID: "phase-2", Summary: "Implement the local inbox bridge", Status: session.PlanStatusPending, AuthorityClass: "workspace_write"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:            session.ContinuationStatusIdle,
+		ContinuationLease: session.ContinuationLease{Status: session.ContinuationLeaseStatusConsumed},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, core.InboundMessage{
+		ChatID: 9046,
+		Text:   approvedContinuationEventText,
+		Origin: core.InboundOriginTurnAuthorization,
+	}, "phase one complete; next phase remains", &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+	}
+	if inferred {
+		t.Fatal("maybeInferGoalContinuationProposal() = true, want false because phase_plan owns the pending next step")
+	}
+}
+
+func TestGoalContinuationDoesNotInferWhenDurablePhasePlanCompleted(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9047, UserID: 0, Scope: telegramDMScopeRef(9047)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "lighthouse-durable-phase-plan-complete",
+		Objective: "Deliver the Lighthouse inbox workflow through a durable phase plan.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "phase_plan_complete",
+		Summary:   "All durable phases are complete.",
+		PhasePlan: session.OperationPhasePlan{
+			ID: "lighthouse-durable-plan-complete",
+			Phases: []session.OperationPhase{
+				{ID: "phase-1", Summary: "Write the read-only contract", Status: session.PlanStatusCompleted},
+				{ID: "phase-2", Summary: "Implement the local inbox bridge", Status: session.PlanStatusCompleted},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:            session.ContinuationStatusIdle,
+		ContinuationLease: session.ContinuationLease{Status: session.ContinuationLeaseStatusConsumed},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, core.InboundMessage{
+		ChatID: 9047,
+		Text:   approvedContinuationEventText,
+		Origin: core.InboundOriginTurnAuthorization,
+	}, "all phases complete", &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+	}
+	if inferred {
+		t.Fatal("maybeInferGoalContinuationProposal() = true, want false because durable phase plan is complete")
+	}
+}

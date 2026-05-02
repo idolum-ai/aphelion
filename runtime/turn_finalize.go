@@ -615,6 +615,7 @@ func (r *Runtime) recordTurnSidecarsCapturedEvent(key session.SessionKey, sess *
 		return
 	}
 	opStatus, opStage, opSummary := operationStatusFields(sess.OperationState)
+	phaseID, phaseStatus, phaseSummary, phaseCompleted, phaseTotal, phasePlanActive := operationPhasePlanStatusFields(sess.OperationState)
 	planStepStatus, planStep := planStatusFields(sess.PlanState)
 	planCompleted, planTotal, planFullyExecuted := planProgressFields(sess.PlanState)
 	hiddenCategories, hiddenSummary := hiddenInputStatusFields(sess.LastFloorMetadata)
@@ -622,6 +623,12 @@ func (r *Runtime) recordTurnSidecarsCapturedEvent(key session.SessionKey, sess *
 		"operation_status":        strings.TrimSpace(opStatus),
 		"operation_stage":         strings.TrimSpace(opStage),
 		"operation_summary":       strings.TrimSpace(opSummary),
+		"phase_plan_active":       phasePlanActive,
+		"phase_current_id":        strings.TrimSpace(phaseID),
+		"phase_current_status":    strings.TrimSpace(phaseStatus),
+		"phase_current_summary":   strings.TrimSpace(phaseSummary),
+		"phase_completed":         phaseCompleted,
+		"phase_total":             phaseTotal,
 		"plan_step_status":        strings.TrimSpace(planStepStatus),
 		"plan_step":               strings.TrimSpace(planStep),
 		"plan_completed_steps":    planCompleted,

@@ -68,6 +68,7 @@ func TestApplyOperationAwarenessBuildsRuntimeFindingsAndArtifacts(t *testing.T) 
 	base := prompt.RuntimeAwareness{
 		OperationFindings:  []string{"stale"},
 		OperationArtifacts: []string{"stale"},
+		OperationPhases:    []string{"stale"},
 	}
 	state := session.OperationState{
 		Objective: "  evaluate options  ",
@@ -81,6 +82,15 @@ func TestApplyOperationAwarenessBuildsRuntimeFindingsAndArtifacts(t *testing.T) 
 			WhyNow:        "  urgency  ",
 			Summary:       "  review needed  ",
 			BoundedEffect: "  concise action  ",
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-1",
+			Goal:           "  evaluate options safely  ",
+			CurrentPhaseID: "phase-2",
+			Phases: []session.OperationPhase{
+				{ID: "phase-1", Summary: "  inspect first  ", Status: session.PlanStatusCompleted, AuthorityClass: "read_only_review"},
+				{ID: "phase-2", Summary: "  patch next  ", Status: session.PlanStatusPending, AuthorityClass: "workspace_write", BoundedEffect: "  edit files and run tests  "},
+			},
 		},
 		Findings: []session.OperationFinding{
 			{Claim: "  signal detected  ", Confidence: session.FindingConfidenceHigh, Basis: "  first pass  "},
@@ -116,6 +126,21 @@ func TestApplyOperationAwarenessBuildsRuntimeFindingsAndArtifacts(t *testing.T) 
 	}
 	if got, want := aw.ProposalBoundedEffect, "concise action"; got != want {
 		t.Fatalf("ProposalBoundedEffect = %q, want %q", got, want)
+	}
+	if !aw.PhasePlanActive {
+		t.Fatal("PhasePlanActive = false, want true")
+	}
+	if got, want := aw.PhasePlanID, "plan-1"; got != want {
+		t.Fatalf("PhasePlanID = %q, want %q", got, want)
+	}
+	if got, want := aw.PhasePlanCurrentPhaseID, "phase-2"; got != want {
+		t.Fatalf("PhasePlanCurrentPhaseID = %q, want %q", got, want)
+	}
+	if got, want := aw.OperationPhases, []string{
+		"[completed] phase-1: inspect first (authority: read_only_review)",
+		"[pending] phase-2: patch next (authority: workspace_write) bounded_effect: edit files and run tests",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("OperationPhases = %#v, want %#v", got, want)
 	}
 	if got, want := aw.OperationFindings, []string{"[high] signal detected (basis: first pass)"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OperationFindings = %#v, want %#v", got, want)

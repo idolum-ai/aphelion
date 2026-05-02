@@ -513,9 +513,9 @@ func renderGoalContinuityContractBlock(aw RuntimeAwareness) string {
 	}
 	return strings.Join([]string{
 		"## Goal Continuity Contract",
-		"When the user gives a broad concrete goal, preserve the broad goal and split it into phases.",
+		"When the user gives a broad concrete goal, preserve the broad goal and split it into durable phase_plan phases.",
 		"A contract, architecture note, read-only review, or tiny probe is usually phase one, not completion of the durable goal.",
-		"If the first phase is complete but the broader goal remains, keep operation state active or blocked and propose the next bounded lease instead of marking the whole goal completed.",
+		"If the first phase is complete but the broader goal remains, keep operation state active or blocked and advance the next phase in phase_plan instead of marking the whole goal completed.",
 		"Prefer a broader phased plan plus one next safe live test over a single isolated test when privacy, credentials, agents, or external accounts are involved.",
 	}, "\n")
 }
@@ -650,13 +650,15 @@ func renderCurrentOperationStateBlock(aw RuntimeAwareness) string {
 		strings.TrimSpace(aw.OperationObjective) == "" &&
 		strings.TrimSpace(aw.OperationSummary) == "" &&
 		!aw.ProposalActive &&
+		!aw.PhasePlanActive &&
+		len(aw.OperationPhases) == 0 &&
 		len(aw.OperationFindings) == 0 &&
 		len(aw.OperationArtifacts) == 0 {
 		return ""
 	}
 	lines := []string{
 		"## Current Operation State",
-		"This operation is durable session state. Use update_operation to keep the objective, stage, proposal, findings, and artifacts honest as work evolves across turns.",
+		"This operation is durable session state. Use update_operation to keep the objective, stage, proposal, phase_plan, findings, and artifacts honest as work evolves across turns.",
 	}
 	if objective := strings.TrimSpace(aw.OperationObjective); objective != "" {
 		lines = append(lines, "- objective: "+objective)
@@ -686,6 +688,25 @@ func renderCurrentOperationStateBlock(aw RuntimeAwareness) string {
 		}
 		if bounded := strings.TrimSpace(aw.ProposalBoundedEffect); bounded != "" {
 			lines = append(lines, "- bounded_effect: "+bounded)
+		}
+	}
+	if aw.PhasePlanActive || len(aw.OperationPhases) > 0 {
+		lines = append(lines, "### Durable Phase Plan")
+		if id := strings.TrimSpace(aw.PhasePlanID); id != "" {
+			lines = append(lines, "- id: "+id)
+		}
+		if goal := strings.TrimSpace(aw.PhasePlanGoal); goal != "" {
+			lines = append(lines, "- goal: "+goal)
+		}
+		if current := strings.TrimSpace(aw.PhasePlanCurrentPhaseID); current != "" {
+			lines = append(lines, "- current_phase_id: "+current)
+		}
+		for _, phase := range aw.OperationPhases {
+			phase = strings.TrimSpace(phase)
+			if phase == "" {
+				continue
+			}
+			lines = append(lines, "- "+phase)
 		}
 	}
 	if len(aw.OperationFindings) > 0 {
@@ -730,7 +751,7 @@ func renderOperationalDisciplineBlock(capabilities ToolCapabilities) string {
 	return strings.Join([]string{
 		"## Operational Discipline",
 		"Treat open-ended work as an operation with durable state rather than a one-turn improvisation.",
-		"Use update_operation to keep the objective, current stage, proposal state, findings, and artifacts current when those details materially shape execution or delivery.",
+		"Use update_operation to keep the objective, current stage, proposal state, durable phase_plan, findings, and artifacts current when those details materially shape execution or delivery.",
 		"Operate autonomously between gates. When the next move materially expands capability, external effect, privacy scope, or irreversible risk, surface a bounded proposal instead of silently pushing through.",
 	}, "\n")
 }
