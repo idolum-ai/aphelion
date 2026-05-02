@@ -46,7 +46,14 @@ func (r *Runtime) maybeInferOrganicOperationProposal(ctx context.Context, key se
 	if pendingOperationProposalNeedsButton(opState.Proposal) || opState.Proposal.Status == session.ProposalStatusApproved {
 		return false, nil
 	}
-	candidate, ok := parseOrganicRalphProposalContract(resultProposalNote(result))
+	candidate, basis, ok := organicRalphProposalCandidateFromResult(result)
+	if !ok {
+		var inferErr error
+		candidate, basis, ok, inferErr = r.inferOrganicRalphProposalCandidateFromState(key, msg, promptInput, result, opState)
+		if inferErr != nil {
+			return false, inferErr
+		}
+	}
 	if !ok || !candidate.ready() {
 		return false, nil
 	}
@@ -77,7 +84,7 @@ func (r *Runtime) maybeInferOrganicOperationProposal(ctx context.Context, key se
 		Findings: []session.OperationFinding{{
 			Claim:      "Organic Ralph inferred exactly one high-confidence bounded next lease from ordinary conversation.",
 			Confidence: session.FindingConfidenceHigh,
-			Basis:      "Face proposal contract carried ORGANIC_RALPH_PROPOSAL=yes, confidence=high, summary, why_now, and bounded_effect.",
+			Basis:      basis,
 		}},
 		Artifacts: []session.OperationArtifact{{
 			Label: "source_message",
@@ -89,6 +96,169 @@ func (r *Runtime) maybeInferOrganicOperationProposal(ctx context.Context, key se
 		return false, fmt.Errorf("persist organic ralph operation proposal: %w", err)
 	}
 	return true, nil
+}
+
+func organicRalphProposalCandidateFromResult(result *turn.Result) (organicRalphProposalCandidate, string, bool) {
+	candidate, ok := parseOrganicRalphProposalContract(resultProposalNote(result))
+	if !ok {
+		return organicRalphProposalCandidate{}, "", false
+	}
+	return candidate, "Face proposal contract carried ORGANIC_RALPH_PROPOSAL=yes, confidence=high, summary, why_now, and bounded_effect.", true
+}
+
+func (r *Runtime) inferOrganicRalphProposalCandidateFromState(
+	key session.SessionKey,
+	msg core.InboundMessage,
+	promptInput string,
+	result *turn.Result,
+	opState session.OperationState,
+) (organicRalphProposalCandidate, string, bool, error) {
+	if r == nil || r.store == nil {
+		return organicRalphProposalCandidate{}, "", false, nil
+	}
+	opState = session.NormalizeOperationState(opState)
+	if terminalOperationProposalBlocksStateInference(opState.Proposal) {
+		return organicRalphProposalCandidate{}, "", false, nil
+	}
+	planState, _ := r.store.PlanState(key)
+	planState = session.NormalizePlanState(planState)
+	if result != nil && organicRalphPlanStateHasConcreteStep(result.PlanState) {
+		planState = session.NormalizePlanState(result.PlanState)
+	}
+	if result != nil && result.OperationState.Active() && !pendingOperationProposalNeedsButton(result.OperationState.Proposal) {
+		resultOp := session.NormalizeOperationState(result.OperationState)
+		if !terminalOperationProposalBlocksStateInference(resultOp.Proposal) {
+			opState = resultOp
+		}
+	}
+	priorContinuation, priorContinuationExists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return organicRalphProposalCandidate{}, "", false, err
+	}
+	priorContinuation = session.NormalizeContinuationState(priorContinuation)
+
+	nextStep, source := organicRalphStateNextStep(planState, opState, priorContinuation, priorContinuationExists)
+	if nextStep == "" {
+		return organicRalphProposalCandidate{}, "", false, nil
+	}
+	objective := firstNonEmptyContinuation(
+		opState.Objective,
+		opState.Summary,
+		planState.Explanation,
+		priorContinuation.Objective,
+		summarizeContinuationFallback(promptInput),
+	)
+	whyNow := firstNonEmptyContinuation(
+		opState.Summary,
+		planState.Explanation,
+		priorContinuation.StageSummary,
+		"Persisted operation, plan, or continuation state names one bounded next step that needs explicit approval.",
+	)
+	summary := clampContinuationText(nextStep, 120)
+	boundedEffect := firstNonEmptyContinuation(
+		opState.Proposal.BoundedEffect,
+		organicRalphBoundedEffectFromState(nextStep),
+	)
+	kind := organicRalphKindFromStateText(strings.Join([]string{summary, objective, boundedEffect}, "\n"))
+	candidate := organicRalphProposalCandidate{
+		Kind:          kind,
+		Summary:       summary,
+		WhyNow:        clampContinuationText(whyNow, 220),
+		BoundedEffect: boundedEffect,
+		Confidence:    "high",
+	}
+	basis := "Persisted " + source + " carried a concrete next step; no explicit face contract was required."
+	return candidate, basis, true, nil
+}
+
+func terminalOperationProposalBlocksStateInference(proposal session.OperationProposal) bool {
+	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
+	if !proposal.Active() {
+		return false
+	}
+	switch proposal.Status {
+	case session.ProposalStatusApproved, session.ProposalStatusDenied, session.ProposalStatusExpired, session.ProposalStatusSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+func organicRalphStateNextStep(planState session.PlanState, opState session.OperationState, priorContinuation session.ContinuationState, priorContinuationExists bool) (string, string) {
+	planState = session.NormalizePlanState(planState)
+	opState = session.NormalizeOperationState(opState)
+	priorContinuation = session.NormalizeContinuationState(priorContinuation)
+	for _, step := range planState.Steps {
+		if (step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending) && organicRalphConcreteStateStep(step.Step) {
+			return step.Step, "plan state"
+		}
+	}
+	if opState.Status == session.OperationStatusBlocked || opState.Status == session.OperationStatusActive {
+		if next := continuationNextStep(session.PlanState{}, opState); next != "" {
+			return next, "operation state"
+		}
+		if text := firstNonEmptyContinuation(opState.Stage, opState.Summary, opState.Objective); text != "" {
+			return text, "operation state"
+		}
+	}
+	if priorContinuationExists && !priorContinuation.Active() {
+		if text := firstNonEmptyContinuation(priorContinuation.StageSummary, priorContinuation.Objective, priorContinuation.ActionProposal.Summary, priorContinuation.ActionProposal.BoundedEffect); text != "" {
+			return text, "continuation state"
+		}
+	}
+	return "", ""
+}
+
+func organicRalphConcreteStateStep(step string) bool {
+	trimmed := strings.TrimSpace(step)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, generic := range []string{
+		"continue with the next bounded step",
+		"resume the next bounded step",
+		"resume the next bounded step from this thread",
+		"continue the current thread",
+		"take the next bounded step",
+	} {
+		if strings.Trim(lower, ". ") == generic {
+			return false
+		}
+	}
+	return true
+}
+
+func organicRalphPlanStateHasConcreteStep(state session.PlanState) bool {
+	state = session.NormalizePlanState(state)
+	for _, step := range state.Steps {
+		if (step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending) && organicRalphConcreteStateStep(step.Step) {
+			return true
+		}
+	}
+	return false
+}
+
+func organicRalphBoundedEffectFromState(nextStep string) string {
+	nextStep = strings.TrimSpace(nextStep)
+	if nextStep == "" {
+		nextStep = "the current bounded next step"
+	}
+	return "Work only on: " + nextStep + "; use existing authority only; report evidence and stop."
+}
+
+func organicRalphKindFromStateText(text string) string {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	switch {
+	case strings.Contains(lower, "status") || strings.Contains(lower, "doctor") || strings.Contains(lower, "health"):
+		return "status_check"
+	case strings.Contains(lower, "patch") || strings.Contains(lower, "implement") || strings.Contains(lower, "edit") ||
+		strings.Contains(lower, "commit") || strings.Contains(lower, "deploy") || strings.Contains(lower, "restart") ||
+		strings.Contains(lower, "write") || strings.Contains(lower, "change"):
+		return "system_change"
+	default:
+		return "read_only_review"
+	}
 }
 
 func resultProposalNote(result *turn.Result) string {

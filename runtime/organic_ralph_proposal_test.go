@@ -78,6 +78,83 @@ func TestHandleInboundInfersOrganicRalphProposalAndMaterializesButtons(t *testin
 	}
 }
 
+func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9025, UserID: 0, Scope: telegramDMScopeRef(9025)}
+	if err := store.UpdatePlanState(key, session.PlanState{
+		Explanation: "Finish the callback recovery work.",
+		Steps: []session.PlanStep{{
+			Step:   "Patch Organic Ralph fallback inference and prove it with tests",
+			Status: session.PlanStatusInProgress,
+		}},
+	}); err != nil {
+		t.Fatalf("UpdatePlanState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "organic-state-fallback",
+		Objective: "Deliver the intended Organic Ralph loop.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "awaiting_button_backed_lease",
+		Summary:   "The plan has one bounded next implementation step but no explicit face contract.",
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	msg := core.InboundMessage{ChatID: 9025, SenderID: 1001, Text: "keep going with that", MessageID: 91}
+	inferred, err := rt.maybeInferOrganicOperationProposal(context.Background(), key, msg, msg.Text, &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferOrganicOperationProposal() err = %v", err)
+	}
+	if !inferred {
+		t.Fatal("maybeInferOrganicOperationProposal() = false, want state-inferred proposal")
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Proposal.Status != session.ProposalStatusPending {
+		t.Fatalf("proposal status = %q, want pending", opState.Proposal.Status)
+	}
+	if opState.Proposal.Kind != "system_change" || !strings.Contains(opState.Proposal.Summary, "Patch Organic Ralph fallback") {
+		t.Fatalf("proposal = %#v, want system_change patch proposal from plan state", opState.Proposal)
+	}
+	if len(opState.Findings) != 1 {
+		t.Fatalf("findings = %#v, want one inference finding", opState.Findings)
+	}
+	if !strings.Contains(opState.Findings[0].Basis, "plan state") || strings.Contains(opState.Findings[0].Basis, "ORGANIC_RALPH") {
+		t.Fatalf("finding basis = %q, want persisted plan-state inference basis", opState.Findings[0].Basis)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, msg, msg.Text, &turn.Result{})
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want inferred proposal buttons")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one inferred proposal prompt", inlineCount)
+	}
+	if _, err := rt.ApproveContinuation(9025, 1001); err != nil {
+		t.Fatalf("ApproveContinuation() err = %v", err)
+	}
+	approved, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(approved) err = %v", err)
+	}
+	if approved.Proposal.Status != session.ProposalStatusApproved || approved.Status != session.OperationStatusActive {
+		t.Fatalf("approved operation = %#v, want normalized approved/active proposal", approved)
+	}
+}
+
 func TestOrganicRalphInferenceSkipsCommandsTurnAuthorizationAndLowConfidence(t *testing.T) {
 	t.Parallel()
 
@@ -121,6 +198,24 @@ func TestOrganicRalphInferenceSkipsCommandsTurnAuthorizationAndLowConfidence(t *
 	}
 	if opState.Active() {
 		t.Fatalf("operation state = %#v, want no inferred proposal", opState)
+	}
+}
+
+func TestOrganicRalphDoesNotInferWithoutContractOrState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9026, UserID: 0, Scope: telegramDMScopeRef(9026)}
+	inferred, err := rt.maybeInferOrganicOperationProposal(context.Background(), key, core.InboundMessage{ChatID: 9026, SenderID: 1001, Text: "sounds good", MessageID: 1}, "sounds good", &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferOrganicOperationProposal() err = %v", err)
+	}
+	if inferred {
+		t.Fatal("maybeInferOrganicOperationProposal() = true, want false without contract or persisted state")
 	}
 }
 
