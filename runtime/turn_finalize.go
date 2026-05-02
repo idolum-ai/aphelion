@@ -224,8 +224,49 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	if directiveModality != "" {
 		output.ReplyModality = directiveModality
 	}
+	output.ReplyText = enforceVisibleRecurrenceContract(output.ReplyText, stageResult.Runtime)
 
 	return output, nil
+}
+
+func enforceVisibleRecurrenceContract(reply string, aw prompt.RuntimeAwareness) string {
+	reply = strings.TrimSpace(reply)
+	note := visibleRecurrenceNote(aw)
+	if note == "" || reply == "" {
+		return reply
+	}
+	lower := strings.ToLower(reply)
+	if strings.Contains(lower, "continuity note:") || (strings.Contains(lower, "prior") && strings.Contains(lower, "thread")) {
+		return reply
+	}
+	return strings.TrimSpace(reply + "\n\n" + note)
+}
+
+func visibleRecurrenceNote(aw prompt.RuntimeAwareness) string {
+	if !aw.HiddenInputsActive || !runtimeAwarenessHasAnyHiddenCategory(aw, hiddenInputSemanticRecurrence, hiddenInputUnresolvedMemory) {
+		return ""
+	}
+	summary := strings.TrimSpace(aw.ProvenanceSummary)
+	if summary == "" {
+		return "Continuity note: I see this resembles a prior unresolved thread, but I cannot identify which one from available memory."
+	}
+	return "Continuity note: I see related prior context: " + clampContinuationText(summary, 260)
+}
+
+func runtimeAwarenessHasAnyHiddenCategory(aw prompt.RuntimeAwareness, categories ...string) bool {
+	wanted := make(map[string]struct{}, len(categories))
+	for _, category := range categories {
+		category = strings.TrimSpace(category)
+		if category != "" {
+			wanted[category] = struct{}{}
+		}
+	}
+	for _, category := range aw.HiddenInputCategories {
+		if _, ok := wanted[strings.TrimSpace(category)]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 type turnCommitInput struct {

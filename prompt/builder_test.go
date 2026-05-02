@@ -81,6 +81,49 @@ func TestBuildGovernorPromptIncludesAgencyTelosContract(t *testing.T) {
 	}
 }
 
+func TestBuildGovernorPromptIncludesVisibleRecurrenceContractWhenHiddenRecurrenceActive(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		Runtime: RuntimeAwareness{
+			HiddenInputsActive:    true,
+			HiddenInputCategories: []string{"semantic_recurrence"},
+			ProvenanceSummary:     "Similar request appeared in a prior Lighthouse thread.",
+		},
+	})
+
+	for _, want := range []string{
+		"## Visible Recurrence Contract",
+		"The visible answer must explicitly name the prior thread",
+		"Do not bury this only in internal planning or hidden sidecars.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("governor prompt missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestBuildGovernorPromptIncludesGoalContinuityContractWhenOperationActive(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		Runtime: RuntimeAwareness{
+			OperationObjective: "Enable Lighthouse to reason over Proton Bridge inbox plans.",
+			OperationSummary:   "Phase one produced a read-only probe.",
+		},
+	})
+
+	for _, want := range []string{
+		"## Goal Continuity Contract",
+		"A contract, architecture note, read-only review, or tiny probe is usually phase one",
+		"propose the next bounded lease instead of marking the whole goal completed",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("governor prompt missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestBuildGovernorPromptIncludesEvidenceRetrievalAndStopRules(t *testing.T) {
 	t.Parallel()
 

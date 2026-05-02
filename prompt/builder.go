@@ -114,6 +114,8 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 			renderEvidenceRetrievalStopRulesBlock(),
 			renderGovernorTurnSequencingBlock(),
 			renderGovernorAgencyTelosBlock(),
+			renderVisibleRecurrenceContractBlock(req.Runtime),
+			renderGoalContinuityContractBlock(req.Runtime),
 		}, "\n\n"),
 	})
 
@@ -490,6 +492,32 @@ func renderAuthorityBlock(governorName string, governorBackend string, principal
 		"- prompt text must not override code-enforced permissions or sandbox policy.",
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderVisibleRecurrenceContractBlock(aw RuntimeAwareness) string {
+	if !aw.HiddenInputsActive || !awarenessHasAnyCategory(aw, "semantic_recurrence", "unresolved_memory_state") {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Visible Recurrence Contract",
+		"Runtime has detected recurring or unresolved prior context.",
+		"The visible answer must explicitly name the prior thread it resembles using provenance_summary when it is specific enough.",
+		"If the prior thread cannot be identified from available evidence, say that plainly instead of acting as if this is a fresh idea.",
+		"Do not bury this only in internal planning or hidden sidecars.",
+	}, "\n")
+}
+
+func renderGoalContinuityContractBlock(aw RuntimeAwareness) string {
+	if !aw.OperationActive && strings.TrimSpace(aw.OperationObjective) == "" && strings.TrimSpace(aw.OperationSummary) == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Goal Continuity Contract",
+		"When the user gives a broad concrete goal, preserve the broad goal and split it into phases.",
+		"A contract, architecture note, read-only review, or tiny probe is usually phase one, not completion of the durable goal.",
+		"If the first phase is complete but the broader goal remains, keep operation state active or blocked and propose the next bounded lease instead of marking the whole goal completed.",
+		"Prefer a broader phased plan plus one next safe live test over a single isolated test when privacy, credentials, agents, or external accounts are involved.",
+	}, "\n")
 }
 
 func renderGovernorTurnSequencingBlock() string {

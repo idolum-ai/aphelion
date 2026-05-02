@@ -113,6 +113,52 @@ func TestApproveMaterializedOperationProposalUpdatesOperationProposalStatus(t *t
 	}
 }
 
+func TestMaterializePendingOperationProposalAfterTurnAuthorization(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9014, UserID: 0, Scope: telegramDMScopeRef(9014)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "post-continuation-next-lease",
+		Objective: "Continue a broader goal after one approved turn.",
+		Status:    session.OperationStatusBlocked,
+		Proposal: session.OperationProposal{
+			ID:            "post-continuation-next-lease-v1",
+			Kind:          "read_only_review",
+			Summary:       "Plan the next safe phase",
+			WhyNow:        "The approved turn completed only phase one.",
+			BoundedEffect: "Review only and report one next proposal.",
+			Status:        session.ProposalStatusPending,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{
+		ChatID:       9014,
+		SenderID:     1001,
+		Text:         approvedContinuationEventText,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+	}, approvedContinuationEventText, nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want post-authorization proposal buttons")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want 1", inlineCount)
+	}
+}
+
 func TestRevokeMaterializedOperationProposalDeniesPendingOperationProposal(t *testing.T) {
 	t.Parallel()
 

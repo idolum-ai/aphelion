@@ -12,6 +12,7 @@ type InboundOrigin string
 const (
 	InboundOriginUser              InboundOrigin = "user"
 	InboundOriginTurnAuthorization InboundOrigin = "turn_authorization"
+	InboundOriginStartupRecovery   InboundOrigin = "startup_recovery"
 )
 
 type InboundMessage struct {

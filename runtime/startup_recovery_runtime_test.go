@@ -13,6 +13,18 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+type asyncRecordingInteractiveDMTurnAssembler struct {
+	ch     chan interactiveDMTurnAssemblyInput
+	done   chan struct{}
+	result *core.TurnResult
+}
+
+func (a *asyncRecordingInteractiveDMTurnAssembler) Run(_ context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
+	defer close(a.done)
+	a.ch <- input
+	return a.result, nil
+}
+
 func TestStartupRecoverySendsAwakeSignalWhenNoInterruptedRuns(t *testing.T) {
 	t.Parallel()
 
@@ -261,5 +273,75 @@ func TestStartupRecoveryFlushesInterruptedChatMemory(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("proposals = %#v, want startup recovery memory proposal", proposals)
+	}
+}
+
+func TestStartupRecoveryAutoResumesLatestInterruptedAdminDMTurn(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Recovered: auto-resume the latest admin DM turn."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &asyncRecordingInteractiveDMTurnAssembler{
+		ch:     make(chan interactiveDMTurnAssemblyInput, 1),
+		done:   make(chan struct{}),
+		result: &core.TurnResult{Text: "auto-resumed"},
+	}
+	rt.interactiveDMAssembler = recorder
+
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "continue the deploy interruption policy")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.NoteTurnRunToolStart(run.ID, "exec", `{"command":"go test ./..."}`); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+
+	if err := rt.runStartupRecoveryOnce(context.Background(), time.Date(2026, time.May, 2, 19, 12, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
+	}
+
+	var input interactiveDMTurnAssemblyInput
+	select {
+	case input = <-recorder.ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup recovery did not auto-resume interrupted admin DM turn")
+	}
+	if input.Msg.Origin != core.InboundOriginStartupRecovery || input.Msg.OriginDetail != "auto_resume" {
+		t.Fatalf("auto-resume origin = %q/%q, want startup_recovery/auto_resume", input.Msg.Origin, input.Msg.OriginDetail)
+	}
+	if input.Msg.SenderID != 1001 || input.Actor.Role == "" {
+		t.Fatalf("auto-resume actor/msg = %#v / %#v, want admitted admin sender", input.Actor, input.Msg)
+	}
+	if !strings.Contains(input.Msg.Text, startupRecoveryAutoResumePrefix) || !strings.Contains(input.Msg.Text, "continue the deploy interruption policy") {
+		t.Fatalf("auto-resume text = %q, want original request and recovery prefix", input.Msg.Text)
+	}
+	if input.EventAwareness.Origin != string(core.InboundOriginStartupRecovery) {
+		t.Fatalf("event awareness origin = %q, want startup_recovery", input.EventAwareness.Origin)
+	}
+	select {
+	case <-recorder.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("auto-resume assembler did not finish")
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	foundQueued := false
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventRecoveryAutoResume && event.Status == "queued" {
+			foundQueued = true
+			break
+		}
+	}
+	if !foundQueued {
+		t.Fatalf("events = %#v, want recovery.auto_resume queued event", events)
 	}
 }

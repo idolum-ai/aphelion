@@ -15,7 +15,7 @@ import (
 )
 
 func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, _ *turn.Result) (bool, error) {
-	if r == nil || r.store == nil || r.outbound == nil || msg.ChatID == 0 || msg.Origin == core.InboundOriginTurnAuthorization {
+	if r == nil || r.store == nil || r.outbound == nil || msg.ChatID == 0 {
 		return false, nil
 	}
 	sender, ok := r.outbound.(interface {
@@ -146,6 +146,7 @@ func actionProposalFromOperationProposal(opState session.OperationState, proposa
 		UpdatedAt:        now,
 	}
 	actionProposal = applyOrganicRalphSandbox(actionProposal, opState, proposal)
+	actionProposal = applyGoalContinuationSandbox(actionProposal, opState, proposal)
 	actionProposal.PlanHash = actionProposalHash(actionProposal)
 	return session.NormalizeActionProposal(actionProposal)
 }

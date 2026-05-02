@@ -73,6 +73,35 @@ func applyOrganicRalphSandbox(action session.ActionProposal, opState session.Ope
 	return session.NormalizeActionProposal(action)
 }
 
+func applyGoalContinuationSandbox(action session.ActionProposal, opState session.OperationState, proposal session.OperationProposal) session.ActionProposal {
+	if !goalContinuationOperationProposal(opState, proposal) {
+		return action
+	}
+	action.AllowedActions = append(action.AllowedActions,
+		"inspect_readonly_state",
+		"draft_next_phase_plan",
+		"propose_one_safe_live_test",
+	)
+	action.ForbiddenActions = append(action.ForbiddenActions,
+		"edit_files",
+		"write_files",
+		"read_secrets_or_credentials",
+		"use_credentials",
+		"external_account_action",
+		"commit",
+		"deploy",
+		"restart_service",
+		"push_remote",
+		"purchase_or_public_effect",
+	)
+	action.ValidationPlan = append(action.ValidationPlan,
+		"keep the next-phase lease read-only",
+		"report the broader phased plan and exactly one safe next live smoke test before requesting any execution lease",
+	)
+	action.BoundedEffect = appendOrganicRalphSandboxBoundedEffect(action.BoundedEffect, "Sandbox boundary: read-only next-phase planning only; no edits, secrets, credentials, external account actions, commit, deploy, restart, or push without a separate lease.")
+	return session.NormalizeActionProposal(action)
+}
+
 func organicRalphOperationProposal(opState session.OperationState, proposal session.OperationProposal) bool {
 	opState = session.NormalizeOperationState(opState)
 	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
@@ -83,6 +112,18 @@ func organicRalphOperationProposal(opState session.OperationState, proposal sess
 		return true
 	}
 	return strings.HasPrefix(strings.TrimSpace(proposal.ID), "organic-ralph-")
+}
+
+func goalContinuationOperationProposal(opState session.OperationState, proposal session.OperationProposal) bool {
+	opState = session.NormalizeOperationState(opState)
+	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
+	if strings.HasPrefix(strings.TrimSpace(opState.ID), goalContinuationIDPrefix) {
+		return true
+	}
+	if strings.TrimSpace(opState.Stage) == "next_phase_proposal" {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(proposal.ID), goalContinuationIDPrefix)
 }
 
 func organicRalphProposalIsSystemChange(action session.ActionProposal, proposal session.OperationProposal) bool {

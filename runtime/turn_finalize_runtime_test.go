@@ -5,9 +5,11 @@ package runtime
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/turn"
 )
 
@@ -50,5 +52,34 @@ func TestTurnDeliveryPortPostCommitHooksReceiveTurnResult(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, []*turn.Result{result, result, result, result}) {
 		t.Fatalf("hook results = %#v, want all hooks to receive same turn result", got)
+	}
+}
+
+func TestEnforceVisibleRecurrenceContractAppendsSpecificNote(t *testing.T) {
+	t.Parallel()
+
+	got := enforceVisibleRecurrenceContract("Here is the plan.", prompt.RuntimeAwareness{
+		HiddenInputsActive:    true,
+		HiddenInputCategories: []string{hiddenInputSemanticRecurrence},
+		ProvenanceSummary:     "Prior Lighthouse thread about Proton Bridge inbox testing.",
+	})
+
+	if !strings.Contains(got, "Here is the plan.") || !strings.Contains(got, "Continuity note: I see related prior context: Prior Lighthouse thread") {
+		t.Fatalf("reply = %q, want appended continuity note", got)
+	}
+}
+
+func TestEnforceVisibleRecurrenceContractDoesNotDuplicatePriorThreadMention(t *testing.T) {
+	t.Parallel()
+
+	reply := "This matches the prior thread about Lighthouse."
+	got := enforceVisibleRecurrenceContract(reply, prompt.RuntimeAwareness{
+		HiddenInputsActive:    true,
+		HiddenInputCategories: []string{hiddenInputUnresolvedMemory},
+		ProvenanceSummary:     "Prior Lighthouse thread.",
+	})
+
+	if got != reply {
+		t.Fatalf("reply = %q, want unchanged %q", got, reply)
 	}
 }

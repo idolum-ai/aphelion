@@ -222,6 +222,25 @@ func formatProviderPath(path []string) string {
 	return strings.Join(out, " -> ")
 }
 
+func awarenessHasAnyCategory(aw RuntimeAwareness, categories ...string) bool {
+	wanted := make(map[string]struct{}, len(categories))
+	for _, category := range categories {
+		category = strings.TrimSpace(category)
+		if category != "" {
+			wanted[category] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return false
+	}
+	for _, category := range aw.HiddenInputCategories {
+		if _, ok := wanted[strings.TrimSpace(category)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func formatAwarenessList(values []string) string {
 	if len(values) == 0 {
 		return ""
