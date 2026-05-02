@@ -100,6 +100,17 @@ purpose = "assistants"
 enabled = false
 default_store = ""
 
+[work]
+# auto prefers Codex runtime when a work app-server is reachable, then falls
+# back to Aphelion's native tool loop. Use "codex" or "native" to force one.
+executor = "auto"
+auto_order = ["codex", "native"]
+
+[work.codex]
+# Optional Codex app-server websocket address for governed repo work lanes.
+# Leave empty to make auto mode fall back to native execution.
+app_server_address = ""
+
 [sessions]
 db_path = "~/.aphelion/state/sessions.db"
 idle_expiry = "24h"

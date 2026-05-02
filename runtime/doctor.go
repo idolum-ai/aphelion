@@ -743,6 +743,17 @@ func (r *Runtime) writeDoctorRuntimeConfig(b *strings.Builder, exec pipeline.Tur
 	writeDoctorKV(b, "configured_provider_chain", strings.Join(config.EffectiveProviderChain(r.cfg), " -> "))
 	writeDoctorKV(b, "codex_context_window", strconv.Itoa(r.cfg.Governor.Codex.ContextWindow))
 	writeDoctorKV(b, "codex_transport_retries", strconv.Itoa(r.cfg.Governor.Codex.TransportRetries))
+	workStatus := WorkExecutorStatus{}
+	if r.workExecutor != nil {
+		workStatus = r.workExecutor.Status()
+	}
+	writeDoctorKV(b, "work_executor_configured", firstNonEmpty(strings.TrimSpace(workStatus.Configured), strings.TrimSpace(r.cfg.Work.Executor)))
+	writeDoctorKV(b, "work_executor_preferred", firstNonEmpty(strings.TrimSpace(workStatus.Preferred), firstRuntimeWorkExecutor(r.cfg.Work)))
+	writeDoctorKV(b, "work_executor_active", strings.TrimSpace(workStatus.Active))
+	writeDoctorKV(b, "work_executor_last_attempted", strings.TrimSpace(workStatus.LastAttempted))
+	writeDoctorKV(b, "work_executor_fallback_reason", strings.TrimSpace(workStatus.FallbackReason))
+	writeDoctorKV(b, "work_executor_last_error", strings.TrimSpace(workStatus.LastError))
+	writeDoctorKV(b, "codex_work_app_server", strings.TrimSpace(r.cfg.Work.Codex.AppServerAddress))
 	writeDoctorKV(b, "session_max_context_ratio", fmt.Sprintf("%.2f", r.cfg.Sessions.MaxContextRatio))
 	writeDoctorKV(b, "session_compaction_ratio", fmt.Sprintf("%.2f", r.cfg.Sessions.CompactionRatio))
 	writeDoctorKV(b, "bootstrap_total_max_chars", strconv.Itoa(r.cfg.Agent.BootstrapTotalMaxChars))

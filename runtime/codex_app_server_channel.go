@@ -65,6 +65,8 @@ type codexAppServerApprovalDecision struct {
 	Reason   string `json:"reason,omitempty"`
 }
 
+type codexAppServerApprovalHandler func(method string, params map[string]any) codexAppServerApprovalDecision
+
 type codexAppServerWakeAdapter struct {
 	doer codexAppServerDoer
 }
@@ -313,15 +315,20 @@ func (realCodexAppServerDoer) Do(ctx context.Context, req codexAppServerRequest)
 }
 
 type codexAppServerClient struct {
-	address       string
-	conn          *websocket.Conn
-	mu            sync.Mutex
-	approvalLog   []codexAppServerApprovalDecision
-	notifications int
+	address         string
+	conn            *websocket.Conn
+	approvalHandler codexAppServerApprovalHandler
+	mu              sync.Mutex
+	approvalLog     []codexAppServerApprovalDecision
+	notifications   int
 }
 
-func newCodexAppServerClient(address string) *codexAppServerClient {
-	return &codexAppServerClient{address: strings.TrimSpace(address)}
+func newCodexAppServerClient(address string, handlers ...codexAppServerApprovalHandler) *codexAppServerClient {
+	var handler codexAppServerApprovalHandler
+	if len(handlers) > 0 {
+		handler = handlers[0]
+	}
+	return &codexAppServerClient{address: strings.TrimSpace(address), approvalHandler: handler}
 }
 
 func (c *codexAppServerClient) Connect(ctx context.Context) error {
@@ -508,6 +515,31 @@ func (c *codexAppServerClient) writeMessage(ctx context.Context, payload map[str
 }
 
 func (c *codexAppServerClient) handleServerRequest(method string, params map[string]any) map[string]any {
+	if c != nil && c.approvalHandler != nil {
+		decision := c.approvalHandler(method, params)
+		if strings.TrimSpace(decision.Method) == "" {
+			decision.Method = method
+		}
+		if strings.TrimSpace(decision.Decision) == "" {
+			decision.Decision = "cancel"
+		}
+		c.recordApproval(decision)
+		if decision.Decision == "cancel" && method != "item/commandExecution/requestApproval" && method != "item/fileChange/requestApproval" {
+			return map[string]any{}
+		}
+		return map[string]any{"decision": decision.Decision}
+	}
+	decision := codexAppServerReadOnlyApprovalDecision(method, params)
+	if c != nil {
+		c.recordApproval(decision)
+	}
+	if decision.Decision == "cancel" && method != "item/commandExecution/requestApproval" && method != "item/fileChange/requestApproval" {
+		return map[string]any{}
+	}
+	return map[string]any{"decision": decision.Decision}
+}
+
+func codexAppServerReadOnlyApprovalDecision(method string, params map[string]any) codexAppServerApprovalDecision {
 	decision := codexAppServerApprovalDecision{Method: method, Decision: "cancel"}
 	switch method {
 	case "item/commandExecution/requestApproval":
@@ -515,27 +547,31 @@ func (c *codexAppServerClient) handleServerRequest(method string, params map[str
 		decision.Reason = stringField(params, "reason")
 		if codexAppServerCommandAllowed(decision.Command) {
 			decision.Decision = "accept"
-			c.recordApproval(decision)
-			return map[string]any{"decision": "accept"}
+			return decision
 		}
 		decision.Decision = "decline"
-		c.recordApproval(decision)
-		return map[string]any{"decision": "decline"}
 	case "item/fileChange/requestApproval":
 		decision.Reason = stringField(params, "reason")
 		decision.Decision = "cancel"
-		c.recordApproval(decision)
-		return map[string]any{"decision": "cancel"}
 	default:
-		c.recordApproval(decision)
-		return map[string]any{}
+		decision.Decision = "cancel"
 	}
+	return decision
 }
 
 func (c *codexAppServerClient) recordApproval(decision codexAppServerApprovalDecision) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.approvalLog = append(c.approvalLog, decision)
+}
+
+func (c *codexAppServerClient) ApprovalLog() []codexAppServerApprovalDecision {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]codexAppServerApprovalDecision(nil), c.approvalLog...)
 }
 
 func codexAppServerCommandAllowed(command string) bool {

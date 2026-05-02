@@ -178,16 +178,36 @@ type OperationArtifact struct {
 	Ref   string `json:"ref"`
 }
 
+type WorkOperationMetadata struct {
+	Executor              string    `json:"executor,omitempty"`
+	ConfiguredExecutor    string    `json:"configured_executor,omitempty"`
+	PreferredExecutor     string    `json:"preferred_executor,omitempty"`
+	FallbackReason        string    `json:"fallback_reason,omitempty"`
+	CodexThreadID         string    `json:"codex_thread_id,omitempty"`
+	CodexLastTurnID       string    `json:"codex_last_turn_id,omitempty"`
+	CodexLaneMode         string    `json:"codex_lane_mode,omitempty"`
+	RepoRoot              string    `json:"repo_root,omitempty"`
+	Workdir               string    `json:"workdir,omitempty"`
+	ChangedFiles          []string  `json:"changed_files,omitempty"`
+	Commands              []string  `json:"commands,omitempty"`
+	LastSummary           string    `json:"last_summary,omitempty"`
+	LastError             string    `json:"last_error,omitempty"`
+	PendingCodexApproval  string    `json:"pending_codex_approval,omitempty"`
+	LastCompletedAt       time.Time `json:"last_completed_at,omitempty"`
+	LastExecutorUpdatedAt time.Time `json:"last_executor_updated_at,omitempty"`
+}
+
 type OperationState struct {
-	ID        string              `json:"id,omitempty"`
-	Objective string              `json:"objective,omitempty"`
-	Status    OperationStatus     `json:"status,omitempty"`
-	Stage     string              `json:"stage,omitempty"`
-	Summary   string              `json:"summary,omitempty"`
-	Proposal  OperationProposal   `json:"proposal,omitempty"`
-	Findings  []OperationFinding  `json:"findings,omitempty"`
-	Artifacts []OperationArtifact `json:"artifacts,omitempty"`
-	UpdatedAt time.Time           `json:"updated_at,omitempty"`
+	ID        string                `json:"id,omitempty"`
+	Objective string                `json:"objective,omitempty"`
+	Status    OperationStatus       `json:"status,omitempty"`
+	Stage     string                `json:"stage,omitempty"`
+	Summary   string                `json:"summary,omitempty"`
+	Proposal  OperationProposal     `json:"proposal,omitempty"`
+	Findings  []OperationFinding    `json:"findings,omitempty"`
+	Artifacts []OperationArtifact   `json:"artifacts,omitempty"`
+	Work      WorkOperationMetadata `json:"work,omitempty"`
+	UpdatedAt time.Time             `json:"updated_at,omitempty"`
 }
 
 type CapabilityKind string
@@ -902,11 +922,50 @@ func NormalizeOperationState(state OperationState) OperationState {
 		})
 	}
 	state.Artifacts = artifacts
+	state.Work = NormalizeWorkOperationMetadata(state.Work)
 
 	if state.UpdatedAt.IsZero() && state.Active() {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state
+}
+
+func NormalizeWorkOperationMetadata(work WorkOperationMetadata) WorkOperationMetadata {
+	work.Executor = strings.TrimSpace(work.Executor)
+	work.ConfiguredExecutor = strings.TrimSpace(work.ConfiguredExecutor)
+	work.PreferredExecutor = strings.TrimSpace(work.PreferredExecutor)
+	work.FallbackReason = strings.TrimSpace(work.FallbackReason)
+	work.CodexThreadID = strings.TrimSpace(work.CodexThreadID)
+	work.CodexLastTurnID = strings.TrimSpace(work.CodexLastTurnID)
+	work.CodexLaneMode = strings.TrimSpace(work.CodexLaneMode)
+	work.RepoRoot = strings.TrimSpace(work.RepoRoot)
+	work.Workdir = strings.TrimSpace(work.Workdir)
+	work.LastSummary = strings.TrimSpace(work.LastSummary)
+	work.LastError = strings.TrimSpace(work.LastError)
+	work.PendingCodexApproval = strings.TrimSpace(work.PendingCodexApproval)
+	work.ChangedFiles = normalizeOperationStringList(work.ChangedFiles)
+	work.Commands = normalizeOperationStringList(work.Commands)
+	if work.LastExecutorUpdatedAt.IsZero() && (work.Executor != "" || work.LastSummary != "" || work.LastError != "") {
+		work.LastExecutorUpdatedAt = time.Now().UTC()
+	}
+	return work
+}
+
+func normalizeOperationStringList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func (s OperationState) Active() bool {

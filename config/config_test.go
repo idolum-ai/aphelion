@@ -64,6 +64,9 @@ external_manifest_dir = "./external-tools"
 	if cfg.Governor.Backend != "auto" {
 		t.Fatalf("governor.backend = %q, want auto", cfg.Governor.Backend)
 	}
+	if cfg.Work.Executor != "auto" || !reflect.DeepEqual(cfg.Work.AutoOrder, []string{"codex", "native"}) {
+		t.Fatalf("work executor defaults = %#v, want auto codex->native", cfg.Work)
+	}
 	if cfg.Governor.NativeProvider != "anthropic" || cfg.Providers.Default != "anthropic" {
 		t.Fatalf("provider heuristic = governor:%q default:%q, want anthropic/anthropic", cfg.Governor.NativeProvider, cfg.Providers.Default)
 	}

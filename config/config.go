@@ -20,6 +20,7 @@ type Config struct {
 	Governor      GovernorConfig      `toml:"governor"`
 	Providers     ProvidersConfig     `toml:"providers"`
 	OpenAI        OpenAIConfig        `toml:"openai"`
+	Work          WorkConfig          `toml:"work"`
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Agent         AgentConfig         `toml:"agent"`
 	Tools         ToolsConfig         `toml:"tools"`
@@ -174,6 +175,16 @@ type OpenAIProviderConfig struct {
 type OpenAIConfig struct {
 	Files        OpenAIFilesConfig        `toml:"files"`
 	VectorStores OpenAIVectorStoresConfig `toml:"vector_stores"`
+}
+
+type WorkConfig struct {
+	Executor  string          `toml:"executor"`
+	AutoOrder []string        `toml:"auto_order"`
+	Codex     WorkCodexConfig `toml:"codex"`
+}
+
+type WorkCodexConfig struct {
+	AppServerAddress string `toml:"app_server_address"`
 }
 
 type OpenAIFilesConfig struct {
@@ -451,6 +462,10 @@ func Default() Config {
 				Enabled: false,
 			},
 		},
+		Work: WorkConfig{
+			Executor:  "auto",
+			AutoOrder: []string{"codex", "native"},
+		},
 		Sessions: SessionsConfig{
 			DBPath:             "~/.aphelion/state/sessions.db",
 			IdleExpiry:         "24h",
@@ -620,6 +635,12 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Providers.OpenAI.FallbackModels = normalizeOpenAIModelFallbacks(cfg.Providers.OpenAI.Model, cfg.Providers.OpenAI.FallbackModels)
 	applyProviderSelectionHeuristic(&cfg, md)
+	cfg.Work.Executor = normalizeWorkExecutor(cfg.Work.Executor)
+	cfg.Work.AutoOrder = normalizeWorkExecutorList(cfg.Work.AutoOrder)
+	if len(cfg.Work.AutoOrder) == 0 {
+		cfg.Work.AutoOrder = []string{"codex", "native"}
+	}
+	cfg.Work.Codex.AppServerAddress = strings.TrimSpace(cfg.Work.Codex.AppServerAddress)
 
 	cfg.Sessions.DBPath, err = expandConfiguredPath(cfg.Sessions.DBPath, baseDir)
 	if err != nil {
@@ -770,6 +791,36 @@ func normalizeProviderNameList(values []string) []string {
 	for _, raw := range values {
 		name := providerName(raw)
 		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func normalizeWorkExecutor(value string) string {
+	name := strings.ToLower(strings.TrimSpace(value))
+	name = strings.ReplaceAll(name, "-", "_")
+	switch name {
+	case "", "auto":
+		return "auto"
+	case "codex", "native":
+		return name
+	default:
+		return name
+	}
+}
+
+func normalizeWorkExecutorList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		name := normalizeWorkExecutor(raw)
+		if name == "" || name == "auto" {
 			continue
 		}
 		if _, ok := seen[name]; ok {
@@ -1116,6 +1167,21 @@ func validate(cfg *Config) error {
 			}
 		default:
 			return fmt.Errorf("providers.fallback_chain[%d] must be one of anthropic|openai|openrouter", i)
+		}
+	}
+	switch normalizeWorkExecutor(cfg.Work.Executor) {
+	case "auto", "codex", "native":
+	default:
+		return fmt.Errorf("work.executor must be one of auto|codex|native")
+	}
+	if len(cfg.Work.AutoOrder) == 0 {
+		return fmt.Errorf("work.auto_order must contain at least one executor")
+	}
+	for i, name := range cfg.Work.AutoOrder {
+		switch normalizeWorkExecutor(name) {
+		case "codex", "native":
+		default:
+			return fmt.Errorf("work.auto_order[%d] must be one of codex|native", i)
 		}
 	}
 	nativePrimary := providerName(firstNonEmpty(strings.TrimSpace(cfg.Governor.NativeProvider), strings.TrimSpace(cfg.Providers.Default)))

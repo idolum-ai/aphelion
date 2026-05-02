@@ -58,6 +58,12 @@ const (
 	ExecutionEventContinuationParked   = "continuation.parked"
 	ExecutionEventContinuationResumed  = "continuation.resumed"
 
+	ExecutionEventWorkExecutorSelected  = "work.executor.selected"
+	ExecutionEventWorkExecutorFallback  = "work.executor.fallback"
+	ExecutionEventWorkExecutorStarted   = "work.executor.started"
+	ExecutionEventWorkExecutorSucceeded = "work.executor.succeeded"
+	ExecutionEventWorkExecutorFailed    = "work.executor.failed"
+
 	ExecutionEventDecisionOpened   = "decision.opened"
 	ExecutionEventDecisionResolved = "decision.resolved"
 	ExecutionEventDecisionExpired  = "decision.expired"

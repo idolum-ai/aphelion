@@ -47,14 +47,15 @@ type inboundArtifactFetcher interface {
 }
 
 type Runtime struct {
-	cfg      *config.Config
-	store    *session.SQLiteStore
-	provider agent.Provider
-	native   agent.Provider
-	tools    agent.ToolRegistry
-	outbound OutboundSender
-	resolver *principal.Resolver
-	inbound  inboundArtifactFetcher
+	cfg          *config.Config
+	store        *session.SQLiteStore
+	provider     agent.Provider
+	native       agent.Provider
+	tools        agent.ToolRegistry
+	outbound     OutboundSender
+	resolver     *principal.Resolver
+	inbound      inboundArtifactFetcher
+	workExecutor *WorkExecutorSelector
 
 	faceBackend face.Backend
 	faceModel   face.Renderer
@@ -227,6 +228,17 @@ func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.P
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
 		return nil
 	}
+	if r.shouldRouteContinuationThroughWorkExecutor(state) {
+		return r.runApprovedWorkContinuation(ctx, actor, chatID, state)
+	}
+	return r.runApprovedContinuationNative(ctx, actor, chatID, state)
+}
+
+func (r *Runtime) runApprovedContinuationNative(ctx context.Context, actor principal.Principal, chatID int64, state session.ContinuationState) error {
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
+		return nil
+	}
 	sandboxRequired := continuationRequiresApprovedUserSandbox(state)
 	executionActor := continuationExecutionActor(actor, state)
 	approvedBy := state.ApprovedBy
@@ -257,6 +269,237 @@ func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.P
 		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})
 	return err
+}
+
+func (r *Runtime) shouldRouteContinuationThroughWorkExecutor(state session.ContinuationState) bool {
+	if r == nil || r.workExecutor == nil {
+		return false
+	}
+	if continuationRequiresApprovedUserSandbox(state) {
+		return false
+	}
+	return continuationWorkMode(state) != ""
+}
+
+func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor principal.Principal, chatID int64, state session.ContinuationState) error {
+	if r == nil || r.store == nil || r.workExecutor == nil {
+		return r.runApprovedContinuationNative(ctx, actor, chatID, state)
+	}
+	state = session.NormalizeContinuationState(state)
+	executionActor := continuationExecutionActor(actor, state)
+	approvedBy := state.ApprovedBy
+	if approvedBy == 0 {
+		approvedBy = actor.TelegramUserID
+	}
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	opState, _ := r.store.OperationState(key)
+	opState = session.NormalizeOperationState(opState)
+	req := r.workRequestForContinuation(key, chatID, executionActor, state, opState)
+	state = continuationStateAfterLeaseTurnConsumed(state, time.Now().UTC())
+	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return err
+	}
+	payload := continuationExecutionPayload(state)
+	payload["approved_by_user"] = approvedBy
+	payload["execution_principal_role"] = string(executionActor.Role)
+	payload["work_executor_requested"] = true
+	payload["work_mode"] = string(req.Mode)
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, time.Now().UTC())
+	r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorStarted, "work", "started", map[string]any{
+		"operation_id": strings.TrimSpace(req.OperationID),
+		"lease_id":     strings.TrimSpace(req.LeaseID),
+		"mode":         strings.TrimSpace(string(req.Mode)),
+	}, time.Now().UTC())
+	result, err := r.workExecutor.Run(ctx, req)
+	status := r.workExecutor.Status()
+	if err != nil {
+		r.persistWorkResult(key, req, result, status, err)
+		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "failed", workResultPayload(req, result, status, err), time.Now().UTC())
+		return err
+	}
+	r.persistWorkResult(key, req, result, status, nil)
+	r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorSucceeded, "work", "succeeded", workResultPayload(req, result, status, nil), time.Now().UTC())
+	if err := r.deliverWorkResult(ctx, chatID, result); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *Runtime) workRequestForContinuation(key session.SessionKey, chatID int64, actor principal.Principal, state session.ContinuationState, opState session.OperationState) WorkRequest {
+	mode := continuationWorkMode(state)
+	if mode == "" {
+		mode = WorkModeReadOnly
+	}
+	repoRoot := firstNonEmptyContinuation(opState.Work.RepoRoot, opState.Work.Workdir)
+	if repoRoot == "" && r != nil && r.cfg != nil {
+		repoRoot = r.cfg.Agent.ExecRoot
+	}
+	workdir := firstNonEmptyContinuation(opState.Work.Workdir, repoRoot)
+	threadID := strings.TrimSpace(opState.Work.CodexThreadID)
+	return WorkRequest{
+		OperationID: firstNonEmptyContinuation(opState.ID, state.ActionProposal.OperationID),
+		RepoRoot:    repoRoot,
+		Workdir:     workdir,
+		Prompt:      workPromptForContinuation(state, opState),
+		Mode:        mode,
+		LeaseID:     state.ContinuationLease.ID,
+		ThreadID:    threadID,
+		Key:         key,
+		ChatID:      chatID,
+		Actor:       actor,
+		State:       state,
+		Operation:   opState,
+	}
+}
+
+func continuationWorkMode(state session.ContinuationState) WorkMode {
+	state = session.NormalizeContinuationState(state)
+	proposal := session.NormalizeActionProposal(state.ActionProposal)
+	lower := strings.ToLower(strings.Join(append(append([]string{
+		proposal.RiskClass,
+		proposal.Summary,
+		proposal.BoundedEffect,
+		state.StageSummary,
+	}, proposal.AllowedActions...), state.ContinuationLease.AllowedActions...), " "))
+	switch {
+	case strings.Contains(lower, "deploy") || strings.Contains(lower, "restart") || strings.Contains(lower, "system_change"):
+		return WorkModeDeploy
+	case strings.Contains(lower, "git commit") || strings.Contains(lower, "repo_history_mutation"):
+		return WorkModeCommit
+	case strings.Contains(lower, "workspace_write") ||
+		strings.Contains(lower, "patch") ||
+		strings.Contains(lower, "edit ") ||
+		strings.Contains(lower, "code") ||
+		strings.Contains(lower, "test"):
+		return WorkModeWorkspaceWrite
+	case strings.Contains(lower, "read_only") || strings.Contains(lower, "status_check"):
+		return WorkModeReadOnly
+	default:
+		return ""
+	}
+}
+
+func workPromptForContinuation(state session.ContinuationState, opState session.OperationState) string {
+	state = session.NormalizeContinuationState(state)
+	opState = session.NormalizeOperationState(opState)
+	lines := []string{
+		"Execute this Aphelion-approved bounded continuation.",
+	}
+	if objective := firstNonEmptyContinuation(opState.Objective, state.Objective); objective != "" {
+		lines = append(lines, "Objective: "+objective)
+	}
+	if summary := firstNonEmptyContinuation(state.ActionProposal.Summary, state.StageSummary); summary != "" {
+		lines = append(lines, "Next step: "+summary)
+	}
+	if effect := strings.TrimSpace(state.ActionProposal.BoundedEffect); effect != "" {
+		lines = append(lines, "Bounded effect: "+effect)
+	}
+	lines = append(lines, "Stop after this bounded step and report changed files, commands, tests, evidence, and remaining risk.")
+	return strings.Join(lines, "\n")
+}
+
+func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) {
+	if r == nil || r.store == nil {
+		return
+	}
+	opState, err := r.store.OperationState(key)
+	if err != nil {
+		return
+	}
+	opState = session.NormalizeOperationState(opState)
+	if strings.TrimSpace(opState.ID) == "" {
+		opState.ID = strings.TrimSpace(req.OperationID)
+	}
+	opState.Work.Executor = firstRuntimeWorkNonEmpty(result.ExecutorName, status.Active)
+	opState.Work.ConfiguredExecutor = status.Configured
+	opState.Work.PreferredExecutor = status.Preferred
+	opState.Work.FallbackReason = status.FallbackReason
+	opState.Work.CodexThreadID = firstRuntimeWorkNonEmpty(result.ThreadID, opState.Work.CodexThreadID)
+	opState.Work.CodexLastTurnID = firstRuntimeWorkNonEmpty(result.TurnID, opState.Work.CodexLastTurnID)
+	opState.Work.CodexLaneMode = string(req.Mode)
+	opState.Work.RepoRoot = firstRuntimeWorkNonEmpty(req.RepoRoot, opState.Work.RepoRoot)
+	opState.Work.Workdir = firstRuntimeWorkNonEmpty(req.Workdir, opState.Work.Workdir)
+	opState.Work.ChangedFiles = append([]string(nil), result.ChangedFiles...)
+	opState.Work.Commands = append([]string(nil), result.Commands...)
+	opState.Work.LastSummary = strings.TrimSpace(result.Summary)
+	opState.Work.LastError = ""
+	if cause != nil {
+		opState.Work.LastError = cause.Error()
+	}
+	opState.Work.LastExecutorUpdatedAt = time.Now().UTC()
+	if cause == nil {
+		opState.Work.LastCompletedAt = opState.Work.LastExecutorUpdatedAt
+	}
+	if err := r.store.UpdateOperationState(key, opState); err != nil {
+		log.Printf("WARN persist work result failed chat_id=%d err=%v", key.ChatID, err)
+	}
+}
+
+func (r *Runtime) deliverWorkResult(ctx context.Context, chatID int64, result WorkResult) error {
+	if r == nil || r.outbound == nil || chatID == 0 {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(result.ExecutorName), "native") {
+		return nil
+	}
+	text := renderWorkResultMessage(result)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: chatID, Text: text}); err != nil {
+		return fmt.Errorf("send work executor result: %w", err)
+	}
+	return nil
+}
+
+func renderWorkResultMessage(result WorkResult) string {
+	executor := firstRuntimeWorkNonEmpty(result.ExecutorName, "work executor")
+	lines := []string{"Work executor finished via " + executor + "."}
+	if summary := strings.TrimSpace(result.Summary); summary != "" {
+		lines = append(lines, "", summary)
+	}
+	if len(result.ChangedFiles) > 0 {
+		lines = append(lines, "", "Changed files:")
+		for _, file := range result.ChangedFiles {
+			lines = append(lines, "- "+strings.TrimSpace(file))
+		}
+	}
+	if len(result.Commands) > 0 {
+		lines = append(lines, "", "Commands:")
+		for _, command := range result.Commands {
+			lines = append(lines, "- "+strings.TrimSpace(command))
+		}
+	}
+	if strings.TrimSpace(result.Summary) == "" && len(result.ChangedFiles) == 0 && len(result.Commands) == 0 {
+		lines = append(lines, "", "No detailed summary was returned.")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) map[string]any {
+	payload := map[string]any{
+		"operation_id":          strings.TrimSpace(req.OperationID),
+		"lease_id":              strings.TrimSpace(req.LeaseID),
+		"mode":                  strings.TrimSpace(string(req.Mode)),
+		"executor":              strings.TrimSpace(result.ExecutorName),
+		"configured_executor":   strings.TrimSpace(status.Configured),
+		"preferred_executor":    strings.TrimSpace(status.Preferred),
+		"active_executor":       strings.TrimSpace(status.Active),
+		"fallback_reason":       strings.TrimSpace(status.FallbackReason),
+		"changed_files_count":   len(result.ChangedFiles),
+		"commands_count":        len(result.Commands),
+		"approval_events_count": len(result.ApprovalLog),
+	}
+	if strings.TrimSpace(result.ThreadID) != "" {
+		payload["thread_id"] = strings.TrimSpace(result.ThreadID)
+	}
+	if strings.TrimSpace(result.TurnID) != "" {
+		payload["turn_id"] = strings.TrimSpace(result.TurnID)
+	}
+	if cause != nil {
+		payload["error"] = trimError(cause.Error())
+	}
+	return payload
 }
 
 func actorLabel(actor principal.Principal) string {
@@ -522,14 +765,24 @@ func New(
 		recipeState:              recipeState,
 		memoryFocusByChat:        make(map[int64]core.MemoryFocus),
 		scopeResolver:            scopeResolver,
-		durableGroupChild:        newSandboxDurableGroupChildExecutor(cfg, store),
-		durableWakeChild:         newSandboxDurableWakeChildExecutor(cfg, store),
-		durableWakeAdapters:      defaultDurableWakeIngressAdapters(),
-		constitutionGate:         DefaultTurnConstitutionGate(),
-		operationalAlerts:        make(map[string]operationalAlertState),
-		operationalAlertClock:    time.Now,
-		operationalAlertWindow:   10 * time.Minute,
-		sessionLocks:             make(map[string]*sync.Mutex),
+		workExecutor: newWorkExecutorSelector(cfg.Work, []WorkExecutor{
+			newCodexWorkExecutor(cfg.Work.Codex),
+			nativeWorkExecutor{},
+		}),
+		durableGroupChild:      newSandboxDurableGroupChildExecutor(cfg, store),
+		durableWakeChild:       newSandboxDurableWakeChildExecutor(cfg, store),
+		durableWakeAdapters:    defaultDurableWakeIngressAdapters(),
+		constitutionGate:       DefaultTurnConstitutionGate(),
+		operationalAlerts:      make(map[string]operationalAlertState),
+		operationalAlertClock:  time.Now,
+		operationalAlertWindow: 10 * time.Minute,
+		sessionLocks:           make(map[string]*sync.Mutex),
+	}
+	if rt.workExecutor != nil {
+		if native, ok := rt.workExecutor.executors["native"].(nativeWorkExecutor); ok {
+			native.runtime = rt
+			rt.workExecutor.executors["native"] = native
+		}
 	}
 	rt.interactiveDMAssembler = newInteractiveDMTurnAssembler(rt)
 	return rt, nil
@@ -561,6 +814,12 @@ func normalizeRuntimeConfig(cfg *config.Config) *config.Config {
 	copy.Agent = cfg.Agent
 	copy.Face = cfg.Face
 	copy.Face.Backend = string(face.NormalizeBackend(cfg.Face.Backend))
+	copy.Work.Executor = normalizeRuntimeWorkExecutor(cfg.Work.Executor)
+	copy.Work.AutoOrder = normalizeRuntimeWorkExecutorList(cfg.Work.AutoOrder)
+	if len(copy.Work.AutoOrder) == 0 {
+		copy.Work.AutoOrder = []string{"codex", "native"}
+	}
+	copy.Work.Codex.AppServerAddress = strings.TrimSpace(cfg.Work.Codex.AppServerAddress)
 	copy.Agent.PromptRoot = cfg.Agent.EffectivePromptRoot()
 	copy.Agent.ExecRoot = cfg.Agent.EffectiveExecRoot()
 	copy.Agent.SharedMemoryRoot = cfg.Agent.EffectiveSharedMemoryRoot()
