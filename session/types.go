@@ -178,23 +178,41 @@ type OperationArtifact struct {
 	Ref   string `json:"ref"`
 }
 
+type WorkCodexEvent struct {
+	Kind     string `json:"kind,omitempty"`
+	Method   string `json:"method,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Subject  string `json:"subject,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Command  string `json:"command,omitempty"`
+	Preview  string `json:"preview,omitempty"`
+	ThreadID string `json:"thread_id,omitempty"`
+	TurnID   string `json:"turn_id,omitempty"`
+	AgentID  string `json:"agent_id,omitempty"`
+	Server   string `json:"server,omitempty"`
+	Tool     string `json:"tool,omitempty"`
+}
+
 type WorkOperationMetadata struct {
-	Executor              string    `json:"executor,omitempty"`
-	ConfiguredExecutor    string    `json:"configured_executor,omitempty"`
-	PreferredExecutor     string    `json:"preferred_executor,omitempty"`
-	FallbackReason        string    `json:"fallback_reason,omitempty"`
-	CodexThreadID         string    `json:"codex_thread_id,omitempty"`
-	CodexLastTurnID       string    `json:"codex_last_turn_id,omitempty"`
-	CodexLaneMode         string    `json:"codex_lane_mode,omitempty"`
-	RepoRoot              string    `json:"repo_root,omitempty"`
-	Workdir               string    `json:"workdir,omitempty"`
-	ChangedFiles          []string  `json:"changed_files,omitempty"`
-	Commands              []string  `json:"commands,omitempty"`
-	LastSummary           string    `json:"last_summary,omitempty"`
-	LastError             string    `json:"last_error,omitempty"`
-	PendingCodexApproval  string    `json:"pending_codex_approval,omitempty"`
-	LastCompletedAt       time.Time `json:"last_completed_at,omitempty"`
-	LastExecutorUpdatedAt time.Time `json:"last_executor_updated_at,omitempty"`
+	Executor              string           `json:"executor,omitempty"`
+	ConfiguredExecutor    string           `json:"configured_executor,omitempty"`
+	PreferredExecutor     string           `json:"preferred_executor,omitempty"`
+	FallbackReason        string           `json:"fallback_reason,omitempty"`
+	CodexThreadID         string           `json:"codex_thread_id,omitempty"`
+	CodexLastTurnID       string           `json:"codex_last_turn_id,omitempty"`
+	CodexLaneMode         string           `json:"codex_lane_mode,omitempty"`
+	RepoRoot              string           `json:"repo_root,omitempty"`
+	Workdir               string           `json:"workdir,omitempty"`
+	ChangedFiles          []string         `json:"changed_files,omitempty"`
+	Commands              []string         `json:"commands,omitempty"`
+	CodexEvents           []WorkCodexEvent `json:"codex_events,omitempty"`
+	PatchPreview          string           `json:"patch_preview,omitempty"`
+	CommitLaneStatus      string           `json:"commit_lane_status,omitempty"`
+	LastSummary           string           `json:"last_summary,omitempty"`
+	LastError             string           `json:"last_error,omitempty"`
+	PendingCodexApproval  string           `json:"pending_codex_approval,omitempty"`
+	LastCompletedAt       time.Time        `json:"last_completed_at,omitempty"`
+	LastExecutorUpdatedAt time.Time        `json:"last_executor_updated_at,omitempty"`
 }
 
 type OperationState struct {
@@ -943,12 +961,46 @@ func NormalizeWorkOperationMetadata(work WorkOperationMetadata) WorkOperationMet
 	work.LastSummary = strings.TrimSpace(work.LastSummary)
 	work.LastError = strings.TrimSpace(work.LastError)
 	work.PendingCodexApproval = strings.TrimSpace(work.PendingCodexApproval)
+	work.PatchPreview = truncateOperationString(strings.TrimSpace(work.PatchPreview), 4000)
+	work.CommitLaneStatus = strings.TrimSpace(work.CommitLaneStatus)
 	work.ChangedFiles = normalizeOperationStringList(work.ChangedFiles)
 	work.Commands = normalizeOperationStringList(work.Commands)
+	work.CodexEvents = normalizeWorkCodexEvents(work.CodexEvents)
 	if work.LastExecutorUpdatedAt.IsZero() && (work.Executor != "" || work.LastSummary != "" || work.LastError != "") {
 		work.LastExecutorUpdatedAt = time.Now().UTC()
 	}
 	return work
+}
+
+func normalizeWorkCodexEvents(values []WorkCodexEvent) []WorkCodexEvent {
+	out := make([]WorkCodexEvent, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		event := WorkCodexEvent{
+			Kind:     strings.TrimSpace(value.Kind),
+			Method:   strings.TrimSpace(value.Method),
+			Status:   strings.TrimSpace(value.Status),
+			Subject:  strings.TrimSpace(value.Subject),
+			Path:     strings.TrimSpace(value.Path),
+			Command:  strings.TrimSpace(value.Command),
+			Preview:  truncateOperationString(strings.TrimSpace(value.Preview), 1000),
+			ThreadID: strings.TrimSpace(value.ThreadID),
+			TurnID:   strings.TrimSpace(value.TurnID),
+			AgentID:  strings.TrimSpace(value.AgentID),
+			Server:   strings.TrimSpace(value.Server),
+			Tool:     strings.TrimSpace(value.Tool),
+		}
+		if event.Kind == "" && event.Method == "" && event.Subject == "" && event.Path == "" && event.Command == "" {
+			continue
+		}
+		key := strings.Join([]string{event.Kind, event.Method, event.Status, event.Subject, event.Path, event.Command, event.ThreadID, event.TurnID, event.AgentID, event.Server, event.Tool, event.Preview}, "\x00")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, event)
+	}
+	return out
 }
 
 func normalizeOperationStringList(values []string) []string {
@@ -966,6 +1018,21 @@ func normalizeOperationStringList(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func truncateOperationString(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 12 {
+		return string(runes[:limit])
+	}
+	return strings.TrimSpace(string(runes[:limit-12])) + " [truncated]"
 }
 
 func (s OperationState) Active() bool {

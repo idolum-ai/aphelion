@@ -52,6 +52,8 @@ type codexAppServerResult struct {
 	Envelope       core.DurableChildStatusEnvelope
 	PayloadHash    string
 	ApprovalLog    []codexAppServerApprovalDecision
+	CodexEvents    []session.WorkCodexEvent
+	PatchPreview   string
 	Notifications  int
 	Completed      bool
 	ArtifactRel    string
@@ -320,6 +322,7 @@ type codexAppServerClient struct {
 	approvalHandler codexAppServerApprovalHandler
 	mu              sync.Mutex
 	approvalLog     []codexAppServerApprovalDecision
+	workEvents      []session.WorkCodexEvent
 	notifications   int
 }
 
@@ -425,6 +428,7 @@ func (c *codexAppServerClient) StreamTurn(ctx context.Context, threadID string, 
 		}
 		notifications++
 		params := asObject(msg["params"])
+		c.recordWorkNotification(method, params)
 		switch method {
 		case "item/agentMessage/delta":
 			if stringField(params, "turnId") == turnID {
@@ -440,6 +444,8 @@ func (c *codexAppServerClient) StreamTurn(ctx context.Context, threadID string, 
 					Text:          strings.TrimSpace(text.String()),
 					EnvelopeRaw:   raw,
 					ApprovalLog:   append([]codexAppServerApprovalDecision(nil), c.approvalLog...),
+					CodexEvents:   c.WorkEvents(),
+					PatchPreview:  codexWorkPatchPreviewFromEvents(c.WorkEvents()),
 					Notifications: notifications,
 					Completed:     completed,
 				}, nil
@@ -466,6 +472,10 @@ func (c *codexAppServerClient) request(ctx context.Context, method string, param
 				}
 				continue
 			}
+		}
+		if method, _ := msg["method"].(string); method != "" {
+			c.recordWorkNotification(method, asObject(msg["params"]))
+			continue
 		}
 		if fmt.Sprint(msg["id"]) != id {
 			continue
@@ -524,6 +534,7 @@ func (c *codexAppServerClient) handleServerRequest(method string, params map[str
 			decision.Decision = "cancel"
 		}
 		c.recordApproval(decision)
+		c.recordWorkServerRequest(method, params, decision)
 		if decision.Decision == "cancel" && method != "item/commandExecution/requestApproval" && method != "item/fileChange/requestApproval" {
 			return map[string]any{}
 		}
@@ -532,6 +543,7 @@ func (c *codexAppServerClient) handleServerRequest(method string, params map[str
 	decision := codexAppServerReadOnlyApprovalDecision(method, params)
 	if c != nil {
 		c.recordApproval(decision)
+		c.recordWorkServerRequest(method, params, decision)
 	}
 	if decision.Decision == "cancel" && method != "item/commandExecution/requestApproval" && method != "item/fileChange/requestApproval" {
 		return map[string]any{}
@@ -565,6 +577,34 @@ func (c *codexAppServerClient) recordApproval(decision codexAppServerApprovalDec
 	c.approvalLog = append(c.approvalLog, decision)
 }
 
+func (c *codexAppServerClient) recordWorkNotification(method string, params map[string]any) {
+	if c == nil {
+		return
+	}
+	event, ok := codexWorkEventFromNotification(method, params)
+	if !ok {
+		return
+	}
+	c.recordWorkEvent(event)
+}
+
+func (c *codexAppServerClient) recordWorkServerRequest(method string, params map[string]any, decision codexAppServerApprovalDecision) {
+	if c == nil {
+		return
+	}
+	event, ok := codexWorkEventFromServerRequest(method, params, decision)
+	if !ok {
+		return
+	}
+	c.recordWorkEvent(event)
+}
+
+func (c *codexAppServerClient) recordWorkEvent(event session.WorkCodexEvent) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.workEvents = codexWorkAppendEvent(c.workEvents, event)
+}
+
 func (c *codexAppServerClient) ApprovalLog() []codexAppServerApprovalDecision {
 	if c == nil {
 		return nil
@@ -572,6 +612,15 @@ func (c *codexAppServerClient) ApprovalLog() []codexAppServerApprovalDecision {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]codexAppServerApprovalDecision(nil), c.approvalLog...)
+}
+
+func (c *codexAppServerClient) WorkEvents() []session.WorkCodexEvent {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]session.WorkCodexEvent(nil), c.workEvents...)
 }
 
 func codexAppServerCommandAllowed(command string) bool {

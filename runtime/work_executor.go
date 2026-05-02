@@ -42,15 +42,18 @@ type WorkRequest struct {
 }
 
 type WorkResult struct {
-	ExecutorName   string
-	ThreadID       string
-	TurnID         string
-	Summary        string
-	ChangedFiles   []string
-	Commands       []string
-	ApprovalLog    []codexAppServerApprovalDecision
-	CompletionKind string
-	SideEffects    bool
+	ExecutorName     string
+	ThreadID         string
+	TurnID           string
+	Summary          string
+	ChangedFiles     []string
+	Commands         []string
+	CodexEvents      []session.WorkCodexEvent
+	PatchPreview     string
+	CommitLaneStatus string
+	ApprovalLog      []codexAppServerApprovalDecision
+	CompletionKind   string
+	SideEffects      bool
 }
 
 type WorkAvailability struct {
@@ -316,17 +319,17 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 	}
 	result, err := client.StreamTurn(ctx, threadID, turnID)
 	if err != nil {
-		return WorkResult{ExecutorName: "codex", ThreadID: threadID, TurnID: turnID, SideEffects: len(client.ApprovalLog()) > 0}, err
+		partial := codexWorkResultFromAppServer(req, threadID, turnID, codexAppServerResult{
+			ThreadID:     threadID,
+			TurnID:       turnID,
+			ApprovalLog:  client.ApprovalLog(),
+			CodexEvents:  client.WorkEvents(),
+			PatchPreview: codexWorkPatchPreviewFromEvents(client.WorkEvents()),
+		})
+		partial.SideEffects = partial.SideEffects || len(client.ApprovalLog()) > 0
+		return partial, err
 	}
-	return WorkResult{
-		ExecutorName:   "codex",
-		ThreadID:       firstNonEmpty(strings.TrimSpace(result.ThreadID), threadID),
-		TurnID:         firstNonEmpty(strings.TrimSpace(result.TurnID), turnID),
-		Summary:        strings.TrimSpace(result.Text),
-		ApprovalLog:    append([]codexAppServerApprovalDecision(nil), result.ApprovalLog...),
-		CompletionKind: "codex_app_server",
-		SideEffects:    codexApprovalLogHasSideEffects(result.ApprovalLog),
-	}, nil
+	return codexWorkResultFromAppServer(req, threadID, turnID, result), nil
 }
 
 func normalizeRuntimeWorkExecutor(value string) string {

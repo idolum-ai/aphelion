@@ -133,6 +133,12 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 		Summary:      "patched tests",
 		ChangedFiles: []string{"runtime/work_executor.go"},
 		Commands:     []string{"go test ./runtime"},
+		CodexEvents: []session.WorkCodexEvent{
+			{Kind: "file_change", Method: "item/fileChange/completed", Path: "runtime/work_executor.go", Status: "completed", Preview: "@@ patched"},
+			{Kind: "command", Method: "item/commandExecution/completed", Command: "go test ./runtime", Status: "completed"},
+		},
+		PatchPreview:     "@@ patched",
+		CommitLaneStatus: "commit_requires_separate_lease",
 	}}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex", "native"}}, []WorkExecutor{work})
 	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{}}
@@ -212,10 +218,129 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	if op.Work.Executor != "codex" || op.Work.LastSummary != "patched tests" || len(op.Work.ChangedFiles) != 1 {
 		t.Fatalf("operation work metadata = %#v, want codex result persisted", op.Work)
 	}
+	if len(op.Work.CodexEvents) != 2 || op.Work.CodexEvents[0].Kind != "file_change" || op.Work.PatchPreview != "@@ patched" || op.Work.CommitLaneStatus != "commit_requires_separate_lease" {
+		t.Fatalf("operation codex work metadata = %#v, want captured Codex interface evidence", op.Work)
+	}
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
-	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "patched tests") || !strings.Contains(sender.sent[0].Text, "runtime/work_executor.go") {
+	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "patched tests") || !strings.Contains(sender.sent[0].Text, "runtime/work_executor.go") || !strings.Contains(sender.sent[0].Text, "commit_requires_separate_lease") {
 		t.Fatalf("sent = %#v, want visible work executor summary", sender.sent)
+	}
+}
+
+func TestCodexWorkEventFromNotificationCapturesCoreInterfaces(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		method  string
+		params  map[string]any
+		kind    string
+		subject string
+	}{
+		{
+			name:    "file change",
+			method:  "item/fileChange/completed",
+			params:  map[string]any{"path": "runtime/work_executor.go", "diff": "@@ changed", "status": "completed"},
+			kind:    "file_change",
+			subject: "runtime/work_executor.go",
+		},
+		{
+			name:    "command",
+			method:  "item/commandExecution/completed",
+			params:  map[string]any{"command": "go test ./runtime", "exitCode": 0, "status": "completed"},
+			kind:    "command",
+			subject: "go test ./runtime",
+		},
+		{
+			name:    "user input",
+			method:  "tool/requestUserInput",
+			params:  map[string]any{"prompt": "Pick the next test"},
+			kind:    "user_input",
+			subject: "Pick the next test",
+		},
+		{
+			name:    "subagent",
+			method:  "agent/spawned",
+			params:  map[string]any{"agentId": "agent-1", "name": "reviewer"},
+			kind:    "subagent",
+			subject: "agent-1",
+		},
+		{
+			name:    "mcp",
+			method:  "mcp/tool/called",
+			params:  map[string]any{"server": "github", "tool": "pull_request_read"},
+			kind:    "mcp",
+			subject: "github/pull_request_read",
+		},
+		{
+			name:    "auto review",
+			method:  "autoReview/completed",
+			params:  map[string]any{"summary": "needs tests", "status": "completed"},
+			kind:    "auto_review",
+			subject: "needs tests",
+		},
+		{
+			name:    "rollout history",
+			method:  "rollout/history/synced",
+			params:  map[string]any{"threadId": "thread-1", "turnId": "turn-1"},
+			kind:    "rollout_history",
+			subject: "thread-1/turn-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event, ok := codexWorkEventFromNotification(tt.method, tt.params)
+			if !ok {
+				t.Fatalf("codexWorkEventFromNotification(%q) ok=false", tt.method)
+			}
+			if event.Kind != tt.kind || event.Subject != tt.subject {
+				t.Fatalf("event = %#v, want kind=%q subject=%q", event, tt.kind, tt.subject)
+			}
+		})
+	}
+}
+
+func TestCodexAppServerClientRecordsServerRequestEvents(t *testing.T) {
+	t.Parallel()
+
+	client := newCodexAppServerClient("ws://127.0.0.1:1", codexWorkApprovalHandler(WorkRequest{Mode: WorkModeWorkspaceWrite}))
+	response := client.handleServerRequest("tool/requestUserInput", map[string]any{"prompt": "Pick a branch", "status": "pending"})
+	if len(response) != 0 {
+		t.Fatalf("response = %#v, want empty safe response for unsupported user input request", response)
+	}
+	events := client.WorkEvents()
+	if len(events) != 1 || events[0].Kind != "user_input" || events[0].Subject != "Pick a branch" {
+		t.Fatalf("work events = %#v, want user_input request event", events)
+	}
+	log := client.ApprovalLog()
+	if len(log) != 1 || log[0].Method != "tool/requestUserInput" || log[0].Decision != "cancel" {
+		t.Fatalf("approval log = %#v, want canceled user input request recorded", log)
+	}
+}
+
+func TestCodexWorkResultDerivesEvidenceAndCommitLane(t *testing.T) {
+	t.Parallel()
+
+	events := []session.WorkCodexEvent{
+		{Kind: "file_change", Path: "runtime/work_executor.go", Preview: "@@ diff"},
+		{Kind: "command", Command: "go test ./runtime", Status: "completed"},
+	}
+	result := codexWorkResultFromAppServer(WorkRequest{Mode: WorkModeWorkspaceWrite}, "thread-1", "turn-1", codexAppServerResult{
+		ThreadID:    "thread-1",
+		TurnID:      "turn-1",
+		Text:        "done",
+		CodexEvents: events,
+	})
+	if len(result.ChangedFiles) != 1 || result.ChangedFiles[0] != "runtime/work_executor.go" {
+		t.Fatalf("changed files = %#v, want file evidence derived from Codex event", result.ChangedFiles)
+	}
+	if len(result.Commands) != 1 || result.Commands[0] != "go test ./runtime" {
+		t.Fatalf("commands = %#v, want command evidence derived from Codex event", result.Commands)
+	}
+	if !strings.Contains(result.PatchPreview, "@@ diff") || result.CommitLaneStatus != "commit_requires_separate_lease" {
+		t.Fatalf("result = %#v, want patch preview and separate commit lane", result)
 	}
 }
 

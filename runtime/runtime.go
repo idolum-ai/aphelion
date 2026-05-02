@@ -421,6 +421,9 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 	opState.Work.Workdir = firstRuntimeWorkNonEmpty(req.Workdir, opState.Work.Workdir)
 	opState.Work.ChangedFiles = append([]string(nil), result.ChangedFiles...)
 	opState.Work.Commands = append([]string(nil), result.Commands...)
+	opState.Work.CodexEvents = append([]session.WorkCodexEvent(nil), result.CodexEvents...)
+	opState.Work.PatchPreview = strings.TrimSpace(result.PatchPreview)
+	opState.Work.CommitLaneStatus = strings.TrimSpace(result.CommitLaneStatus)
 	opState.Work.LastSummary = strings.TrimSpace(result.Summary)
 	opState.Work.LastError = ""
 	if cause != nil {
@@ -470,6 +473,12 @@ func renderWorkResultMessage(result WorkResult) string {
 			lines = append(lines, "- "+strings.TrimSpace(command))
 		}
 	}
+	if status := strings.TrimSpace(result.CommitLaneStatus); status != "" {
+		lines = append(lines, "", "Commit lane: "+status)
+	}
+	if preview := strings.TrimSpace(result.PatchPreview); preview != "" {
+		lines = append(lines, "", "Patch preview:", truncatePreview(preview, 900))
+	}
 	if strings.TrimSpace(result.Summary) == "" && len(result.ChangedFiles) == 0 && len(result.Commands) == 0 {
 		lines = append(lines, "", "No detailed summary was returned.")
 	}
@@ -488,6 +497,7 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 		"fallback_reason":       strings.TrimSpace(status.FallbackReason),
 		"changed_files_count":   len(result.ChangedFiles),
 		"commands_count":        len(result.Commands),
+		"codex_events_count":    len(result.CodexEvents),
 		"approval_events_count": len(result.ApprovalLog),
 	}
 	if strings.TrimSpace(result.ThreadID) != "" {
@@ -495,6 +505,9 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 	}
 	if strings.TrimSpace(result.TurnID) != "" {
 		payload["turn_id"] = strings.TrimSpace(result.TurnID)
+	}
+	if strings.TrimSpace(result.CommitLaneStatus) != "" {
+		payload["commit_lane_status"] = strings.TrimSpace(result.CommitLaneStatus)
 	}
 	if cause != nil {
 		payload["error"] = trimError(cause.Error())

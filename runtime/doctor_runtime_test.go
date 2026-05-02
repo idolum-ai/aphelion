@@ -354,6 +354,73 @@ func TestRunDoctorOnceCondensesOversizedTelegramReport(t *testing.T) {
 	}
 }
 
+func TestDoctorCodexWorkMigrationReviewReportsPersistedInterfaceEvidence(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Work.Codex.AppServerAddress = "ws://127.0.0.1:4666"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:     "op-codex-work",
+		Status: session.OperationStatusActive,
+		Work: session.WorkOperationMetadata{
+			Executor:         "codex",
+			CodexLaneMode:    "workspace_write",
+			CodexThreadID:    "thread-1",
+			CodexLastTurnID:  "turn-1",
+			PatchPreview:     "@@ patch",
+			CommitLaneStatus: "commit_requires_separate_lease",
+			CodexEvents: []session.WorkCodexEvent{
+				{Kind: "file_change", Path: "runtime/work_executor.go"},
+				{Kind: "command", Command: "go test ./runtime"},
+				{Kind: "subagent", Subject: "reviewer"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status: session.ContinuationStatusApproved,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease",
+			Status:         session.ContinuationLeaseStatusActive,
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	var b strings.Builder
+	rt.writeDoctorCodexWorkMigrationReview(context.Background(), &b, doctorDiagnosticInput{Key: key, Now: time.Now().UTC()})
+	report := b.String()
+	for _, want := range []string{
+		`codex_work_executor="codex"`,
+		`codex_work_thread_id="thread-1"`,
+		`codex_work_event_count="3"`,
+		`codex_work_file_change_events="1"`,
+		`codex_work_command_events="1"`,
+		`codex_work_subagent_events="1"`,
+		`codex_work_commit_lane_status="commit_requires_separate_lease"`,
+		`codex_work_migration_status="evidence_present"`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("migration review missing %s:\n%s", want, report)
+		}
+	}
+}
+
 func TestStartDoctorRejectsNonAdmin(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

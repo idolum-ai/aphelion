@@ -721,6 +721,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Recent Service Log Tail")
 	r.writeDoctorLogTail(&b)
 
+	writeDoctorSection(&b, "Codex Work Migration Review")
+	r.writeDoctorCodexWorkMigrationReview(ctx, &b, input)
+
 	writeDoctorSection(&b, "Doctor Instructions")
 	writeDoctorLine(&b, "Analyze the evidence above and the loaded prompt/memory context. Identify likely causes, residual risks, and specific follow-up work. Do not perform actions. Before reporting a failure as current, check whether the Known Issue Status Checks or newer runtime evidence indicate it has already been fixed.")
 
@@ -766,6 +769,108 @@ func (r *Runtime) writeDoctorRuntimeConfig(b *strings.Builder, exec pipeline.Tur
 	writeDoctorKV(b, "exec_root", r.cfg.Agent.ExecRoot)
 	writeDoctorKV(b, "shared_memory_root", strings.TrimSpace(scope.SharedMemoryRoot))
 	writeDoctorKV(b, "working_root", strings.TrimSpace(scope.WorkingRoot))
+}
+
+func (r *Runtime) writeDoctorCodexWorkMigrationReview(ctx context.Context, b *strings.Builder, input doctorDiagnosticInput) {
+	if r == nil || r.store == nil {
+		writeDoctorLine(b, "codex_work_migration_review: unavailable")
+		return
+	}
+	opState, err := r.store.OperationState(input.Key)
+	if err != nil {
+		writeDoctorLine(b, "codex_work_operation_error="+strconv.Quote(err.Error()))
+		return
+	}
+	opState = session.NormalizeOperationState(opState)
+	work := opState.Work
+	writeDoctorKV(b, "codex_work_executor", strings.TrimSpace(work.Executor))
+	writeDoctorKV(b, "codex_work_configured_executor", strings.TrimSpace(work.ConfiguredExecutor))
+	writeDoctorKV(b, "codex_work_preferred_executor", strings.TrimSpace(work.PreferredExecutor))
+	writeDoctorKV(b, "codex_work_lane_mode", strings.TrimSpace(work.CodexLaneMode))
+	writeDoctorKV(b, "codex_work_thread_id", strings.TrimSpace(work.CodexThreadID))
+	writeDoctorKV(b, "codex_work_turn_id", strings.TrimSpace(work.CodexLastTurnID))
+	writeDoctorKV(b, "codex_work_commit_lane_status", strings.TrimSpace(work.CommitLaneStatus))
+	writeDoctorKV(b, "codex_work_changed_files", strconv.Itoa(len(work.ChangedFiles)))
+	writeDoctorKV(b, "codex_work_commands", strconv.Itoa(len(work.Commands)))
+	counts := codexWorkEventCounts(work.CodexEvents)
+	writeDoctorKV(b, "codex_work_event_count", strconv.Itoa(len(work.CodexEvents)))
+	writeDoctorKV(b, "codex_work_file_change_events", strconv.Itoa(counts["file_change"]))
+	writeDoctorKV(b, "codex_work_command_events", strconv.Itoa(counts["command"]))
+	writeDoctorKV(b, "codex_work_user_input_events", strconv.Itoa(counts["user_input"]))
+	writeDoctorKV(b, "codex_work_subagent_events", strconv.Itoa(counts["subagent"]))
+	writeDoctorKV(b, "codex_work_mcp_events", strconv.Itoa(counts["mcp"]))
+	writeDoctorKV(b, "codex_work_auto_review_events", strconv.Itoa(counts["auto_review"]))
+	writeDoctorKV(b, "codex_work_rollout_history_events", strconv.Itoa(counts["rollout_history"]))
+	if len(work.CodexEvents) > 0 {
+		writeDoctorLine(b, "codex_work_recent_events:")
+		start := len(work.CodexEvents) - 8
+		if start < 0 {
+			start = 0
+		}
+		for _, event := range work.CodexEvents[start:] {
+			writeDoctorLine(b, fmt.Sprintf("- kind=%s method=%s status=%s subject=%q path=%q command=%q",
+				strings.TrimSpace(event.Kind),
+				strings.TrimSpace(event.Method),
+				strings.TrimSpace(event.Status),
+				truncatePreview(event.Subject, 180),
+				truncatePreview(event.Path, 180),
+				truncatePreview(event.Command, 220),
+			))
+		}
+	}
+	if preview := strings.TrimSpace(work.PatchPreview); preview != "" {
+		writeDoctorKV(b, "codex_work_patch_preview_chars", strconv.Itoa(len(preview)))
+	}
+	continuation, continuationErr := r.store.ContinuationState(input.Key)
+	if continuationErr != nil {
+		writeDoctorLine(b, "codex_work_continuation_error="+strconv.Quote(continuationErr.Error()))
+	} else {
+		continuation = session.NormalizeContinuationState(continuation)
+		writeDoctorKV(b, "codex_work_continuation_status", string(continuation.Status))
+		writeDoctorKV(b, "codex_work_lease_status", string(continuation.ContinuationLease.Status))
+		writeDoctorKV(b, "codex_work_lease_id", strings.TrimSpace(continuation.ContinuationLease.ID))
+		writeDoctorKV(b, "codex_work_lease_expires_at", continuation.ContinuationLease.ExpiresAt.UTC().Format(time.RFC3339))
+		writeDoctorKV(b, "codex_work_continuation_mode", string(continuationWorkMode(continuation)))
+		writeDoctorKV(b, "codex_work_continuation_eligible", strconv.FormatBool(r.shouldRouteContinuationThroughWorkExecutor(continuation)))
+	}
+	if r.cfg != nil {
+		writeDoctorKV(b, "codex_work_config_executor", strings.TrimSpace(r.cfg.Work.Executor))
+		writeDoctorKV(b, "codex_work_config_auto_order", strings.Join(r.cfg.Work.AutoOrder, " -> "))
+		writeDoctorKV(b, "codex_work_config_app_server", strings.TrimSpace(r.cfg.Work.Codex.AppServerAddress))
+	}
+	recentWorkEvents := 0
+	if events, eventErr := r.store.ExecutionEventsRecent(120); eventErr == nil {
+		for _, event := range events {
+			if strings.HasPrefix(strings.TrimSpace(event.EventType), "work.executor.") {
+				recentWorkEvents++
+			}
+		}
+		writeDoctorKV(b, "codex_work_recent_executor_events", strconv.Itoa(recentWorkEvents))
+	} else {
+		writeDoctorLine(b, "codex_work_recent_events_error="+strconv.Quote(eventErr.Error()))
+	}
+	status := "not_started"
+	switch {
+	case len(work.CodexEvents) > 0:
+		status = "evidence_present"
+	case strings.EqualFold(strings.TrimSpace(work.Executor), "codex") || strings.TrimSpace(work.CodexThreadID) != "":
+		status = "needs_event_migration_review"
+	case r.cfg != nil && strings.TrimSpace(r.cfg.Work.Codex.AppServerAddress) == "":
+		status = "codex_app_server_unconfigured"
+	}
+	writeDoctorKV(b, "codex_work_migration_status", status)
+	writeDoctorLine(b, "codex_work_migration_next=\"Before expanding Codex runtime features, confirm live operation_state.work carries codex_events, patch_preview, commit_lane_status, thread ids, and recent work.executor execution events.\"")
+	_ = ctx
+}
+
+func codexWorkEventCounts(events []session.WorkCodexEvent) map[string]int {
+	counts := map[string]int{}
+	for _, event := range events {
+		if kind := strings.TrimSpace(event.Kind); kind != "" {
+			counts[kind]++
+		}
+	}
+	return counts
 }
 
 func writeDoctorSessionSummary(b *strings.Builder, sess *session.Session) {
