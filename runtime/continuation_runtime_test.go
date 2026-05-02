@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -767,8 +768,8 @@ func TestApproveContinuationRejectsNonPendingState(t *testing.T) {
 		t.Fatalf("UpdateContinuationState() err = %v", err)
 	}
 	_, err = rt.ApproveContinuation(8106, 1001)
-	if err == nil || !strings.Contains(err.Error(), "not pending") {
-		t.Fatalf("ApproveContinuation() err = %v, want not pending error", err)
+	if !errors.Is(err, core.ErrContinuationNotPending) {
+		t.Fatalf("ApproveContinuation() err = %v, want ErrContinuationNotPending", err)
 	}
 }
 
@@ -803,6 +804,63 @@ func TestApproveContinuationActivatesContinuationLease(t *testing.T) {
 	}
 	if state.ContinuationLease.ApprovedBy != 1002 || state.ContinuationLease.ApprovedAt.IsZero() {
 		t.Fatalf("lease approval = by %d at %v, want recorded approver", state.ContinuationLease.ApprovedBy, state.ContinuationLease.ApprovedAt)
+	}
+}
+
+func TestApproveContinuationReturnsTypedExpiredErrorAndRecordsBlocked(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8109, UserID: 0, Scope: telegramDMScopeRef(8109)}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-expired-approval",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:        "aprop-expired-approval",
+			Summary:   "Expired approval",
+			Status:    session.ProposalStatusPending,
+			ExpiresAt: expiredAt,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-expired-approval",
+			ProposalID:     "aprop-expired-approval",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      expiredAt,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	state, err := rt.ApproveContinuation(8109, 1002)
+	if !errors.Is(err, core.ErrContinuationExpired) {
+		t.Fatalf("ApproveContinuation() err = %v, want ErrContinuationExpired", err)
+	}
+	if state.Status != session.ContinuationStatusIdle || state.RemainingTurns != 0 {
+		t.Fatalf("state status/turns = %q/%d, want idle/0", state.Status, state.RemainingTurns)
+	}
+	if state.ActionProposal.Status != session.ProposalStatusExpired || state.ContinuationLease.Status != session.ContinuationLeaseStatusExpired {
+		t.Fatalf("state proposal/lease status = %q/%q, want expired/expired", state.ActionProposal.Status, state.ContinuationLease.Status)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.ActionProposal.Status != session.ProposalStatusExpired || got.ContinuationLease.Status != session.ContinuationLeaseStatusExpired {
+		t.Fatalf("persisted continuation = %#v, want expired idle state", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventContinuationBlocked) {
+		t.Fatalf("events = %#v, want continuation blocked event", events)
 	}
 }
 

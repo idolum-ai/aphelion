@@ -623,7 +623,7 @@ func continuationStateWithLeaseApproved(state session.ContinuationState, approve
 		state.Status = session.ContinuationStatusIdle
 		state.RemainingTurns = 0
 		state.UpdatedAt = now
-		return session.NormalizeContinuationState(state), fmt.Errorf("continuation proposal expired")
+		return session.NormalizeContinuationState(state), fmt.Errorf("continuation proposal expired: %w", core.ErrContinuationExpired)
 	}
 	if strings.TrimSpace(state.ContinuationLease.ID) == "" {
 		if !state.ActionProposal.Active() {
@@ -638,7 +638,7 @@ func continuationStateWithLeaseApproved(state session.ContinuationState, approve
 		state.Status = session.ContinuationStatusIdle
 		state.RemainingTurns = 0
 		state.UpdatedAt = now
-		return session.NormalizeContinuationState(state), fmt.Errorf("continuation lease expired")
+		return session.NormalizeContinuationState(state), fmt.Errorf("continuation lease expired: %w", core.ErrContinuationExpired)
 	}
 	if state.RemainingTurns <= 0 {
 		state.RemainingTurns = state.ContinuationLease.RemainingTurns

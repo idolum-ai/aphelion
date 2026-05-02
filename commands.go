@@ -79,6 +79,38 @@ type commandStreamControlRouter interface {
 	MarkStreamControlStopping(streamID string, chatID int64) bool
 }
 
+type telegramCallbackErrorRecorder interface {
+	RecordTelegramCallbackError(chatID int64, callbackKind string, err error)
+}
+
+func recordTelegramCallbackError(router commandRouter, chatID int64, callbackKind string, err error) {
+	if err == nil {
+		return
+	}
+	if recorder, ok := router.(telegramCallbackErrorRecorder); ok {
+		recorder.RecordTelegramCallbackError(chatID, callbackKind, err)
+	}
+}
+
+func answerContinuationCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, cb telegram.CallbackQuery, callbackKind string, text string) {
+	err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), text)
+	if err == nil || telegram.IsStaleCallbackQueryError(err) {
+		return
+	}
+	recordTelegramCallbackError(router, chatID, callbackKind+".answer", err)
+	log.Printf("WARN continuation callback answer failed chat_id=%d callback_id=%s kind=%s err=%v", chatID, strings.TrimSpace(cb.ID), strings.TrimSpace(callbackKind), err)
+}
+
+func editContinuationCallbackMessage(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string) {
+	if messageID == 0 {
+		return
+	}
+	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+		recordTelegramCallbackError(router, chatID, callbackKind+".edit", err)
+		log.Printf("WARN continuation callback message update failed chat_id=%d message_id=%d kind=%s err=%v", chatID, messageID, strings.TrimSpace(callbackKind), err)
+	}
+}
+
 func editCallbackMessageClearingInlineKeyboard(ctx context.Context, sender commandCallbackSender, chatID int64, messageID int64, text string) error {
 	if clearer, ok := sender.(commandInlineKeyboardClearer); ok {
 		return clearer.EditMessageTextWithoutInlineKeyboard(ctx, chatID, messageID, text, "")
@@ -592,17 +624,8 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			return true, err
 		}
 		if !continuationCallbackMatchesState(state, decisionID, action) {
-			if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), staleContinuationCallbackText); err != nil {
-				if !telegram.IsStaleCallbackQueryError(err) {
-					return true, err
-				}
-			}
+			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.stale", staleContinuationCallbackText)
 			return true, nil
-		}
-		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), ""); err != nil {
-			if !telegram.IsStaleCallbackQueryError(err) {
-				return true, err
-			}
 		}
 		var text string
 		switch action {
@@ -613,65 +636,66 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			}
 			state, err := router.ApproveContinuation(chatID, approverID)
 			if err != nil {
-				return true, err
+				recordTelegramCallbackError(router, chatID, "continuation.approve", err)
+				log.Printf("WARN continuation approve callback failed chat_id=%d approver_id=%d err=%v", chatID, approverID, err)
+				answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", continuationCallbackErrorText(err))
+				editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", renderContinuationCallbackError(state, err))
+				return true, nil
 			}
+			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "")
 			if err := router.TriggerContinuation(ctx, chatID); err != nil {
-				return true, err
+				recordTelegramCallbackError(router, chatID, "continuation.trigger", err)
+				log.Printf("WARN continuation trigger callback failed chat_id=%d err=%v", chatID, err)
+				editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.trigger", renderContinuationCallbackError(state, err))
+				return true, nil
 			}
 			text = renderContinuationDecision(state, action)
-			if messageID != 0 {
-				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
-					log.Printf("WARN continuation approve message update failed chat_id=%d message_id=%d err=%v", chatID, messageID, err)
-				}
-			}
+			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", text)
 			return true, nil
 		case continuationActionResumeEdge:
+			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.resume", "")
 			if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
 				if err := router.TriggerContinuation(ctx, chatID); err != nil {
-					return true, err
+					recordTelegramCallbackError(router, chatID, "continuation.resume", err)
+					log.Printf("WARN continuation resume callback failed chat_id=%d err=%v", chatID, err)
+					editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.resume", renderContinuationCallbackError(state, err))
+					return true, nil
 				}
 			}
 			text = renderContinuationDecision(state, action)
-			if messageID != 0 {
-				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
-					return true, err
-				}
-			}
+			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.resume", text)
 			return true, nil
 		case continuationActionAskEdit:
+			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.ask_edit", "")
 			if _, err := router.StopContinuation(chatID); err != nil {
-				return true, err
+				recordTelegramCallbackError(router, chatID, "continuation.ask_edit", err)
+				log.Printf("WARN continuation ask-edit callback failed chat_id=%d err=%v", chatID, err)
+				editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.ask_edit", renderContinuationCallbackError(state, err))
+				return true, nil
 			}
 			text = renderContinuationDecision(state, action)
-			if messageID != 0 {
-				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
-					return true, err
-				}
-			}
+			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.ask_edit", text)
 			return true, nil
 		case continuationActionStop, continuationActionStopPark:
+			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.stop", "")
 			stopped, err := router.StopContinuation(chatID)
 			if err != nil {
-				return true, err
+				recordTelegramCallbackError(router, chatID, "continuation.stop", err)
+				log.Printf("WARN continuation stop callback failed chat_id=%d err=%v", chatID, err)
+				editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stop", renderContinuationCallbackError(state, err))
+				return true, nil
 			}
 			if action == continuationActionStopPark {
 				text = "Continuation parked. " + face.RenderTelegramStop(stopped)
 			} else {
 				text = face.RenderTelegramStop(stopped)
 			}
-			if messageID != 0 {
-				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
-					return true, err
-				}
-			}
+			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stop", text)
 			return true, nil
 		case continuationActionAskNextLease, continuationActionStatusOnly:
+			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.status", "")
 			text = renderContinuationDecision(state, action)
-			if messageID != 0 {
-				if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
-					return true, err
-				}
-			}
+			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.status", text)
 			return true, nil
 		default:
 			return true, nil

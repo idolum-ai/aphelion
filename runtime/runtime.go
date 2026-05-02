@@ -142,10 +142,10 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 	}
 	state = session.NormalizeContinuationState(state)
 	if state.Status != session.ContinuationStatusPending {
-		return state, fmt.Errorf("continuation is not pending")
+		return state, core.ErrContinuationNotPending
 	}
 	if state.RemainingTurns <= 0 {
-		return state, fmt.Errorf("continuation has no remaining turns")
+		return state, core.ErrContinuationNoTurns
 	}
 	now := time.Now().UTC()
 	state, err = continuationStateWithLeaseApproved(state, approverID, now)

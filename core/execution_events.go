@@ -47,6 +47,7 @@ const (
 	ExecutionEventDeliveryProgressFailed = "delivery.progress.failed"
 	ExecutionEventDeliveryFinalSent      = "delivery.final.sent"
 	ExecutionEventDeliveryFinalFailed    = "delivery.final.failed"
+	ExecutionEventTelegramCallbackFailed = "telegram.callback.failed"
 	ExecutionEventProgressSurface        = "progress.surface"
 
 	ExecutionEventContinuationOffered  = "continuation.offered"

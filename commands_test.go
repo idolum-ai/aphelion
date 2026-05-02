@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -51,6 +52,12 @@ type stubEditInlineCall struct {
 type stubAnswerCall struct {
 	id   string
 	text string
+}
+
+type stubCallbackErrorRecord struct {
+	chatID       int64
+	callbackKind string
+	err          error
 }
 
 func (s *stubCommandSender) SendMessage(_ context.Context, msg core.OutboundMessage) (int64, error) {
@@ -184,9 +191,14 @@ type stubCommandRouter struct {
 	continuationStateErr         error
 	approveContinuationInput     int64
 	approveContinuationApprover  int64
+	approveContinuationReturn    session.ContinuationState
+	approveContinuationErr       error
 	stopContinuationInput        int64
 	stopContinuationResult       core.StopResult
+	stopContinuationErr          error
 	triggerContinuationInput     int64
+	triggerContinuationErr       error
+	callbackErrorRecords         []stubCallbackErrorRecord
 	restartInput                 int64
 	restartCalls                 int
 	queuedReinstallMsg           *core.InboundMessage
@@ -360,6 +372,12 @@ func (s *stubCommandRouter) ContinuationState(chatID int64) (session.Continuatio
 func (s *stubCommandRouter) ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error) {
 	s.approveContinuationInput = chatID
 	s.approveContinuationApprover = approverID
+	if s.approveContinuationErr != nil {
+		if s.approveContinuationReturn.Status != "" {
+			return s.approveContinuationReturn, s.approveContinuationErr
+		}
+		return s.continuationState, s.approveContinuationErr
+	}
 	if s.continuationState.Status == "" {
 		s.continuationState = session.ContinuationState{
 			Status:         session.ContinuationStatusApproved,
@@ -377,13 +395,24 @@ func (s *stubCommandRouter) ApproveContinuation(chatID int64, approverID int64) 
 
 func (s *stubCommandRouter) StopContinuation(chatID int64) (core.StopResult, error) {
 	s.stopContinuationInput = chatID
+	if s.stopContinuationErr != nil {
+		return core.StopResult{}, s.stopContinuationErr
+	}
 	return s.stopContinuationResult, nil
 }
 
 func (s *stubCommandRouter) TriggerContinuation(ctx context.Context, chatID int64) error {
 	s.triggerContinuationInput = chatID
 	_ = ctx
-	return nil
+	return s.triggerContinuationErr
+}
+
+func (s *stubCommandRouter) RecordTelegramCallbackError(chatID int64, callbackKind string, err error) {
+	s.callbackErrorRecords = append(s.callbackErrorRecords, stubCallbackErrorRecord{
+		chatID:       chatID,
+		callbackKind: callbackKind,
+		err:          err,
+	})
 }
 
 func (s *stubCommandRouter) QueueReinstall(ctx context.Context, msg core.InboundMessage) error {
@@ -3124,6 +3153,95 @@ func TestHandleTelegramCommandCallbackContinuationApproveContinuesWhenEditFails(
 	}
 	if len(sender.editClear) != 1 {
 		t.Fatalf("editClear count = %d, want 1", len(sender.editClear))
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationApproveContainsExpiredLease(t *testing.T) {
+	t.Parallel()
+
+	pending := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-expired",
+		RemainingTurns: 1,
+		StageSummary:   "Resume the expired bounded step.",
+	}
+	expired := pending
+	expired.Status = session.ContinuationStatusIdle
+	expired.RemainingTurns = 0
+	expired.ActionProposal = session.ActionProposal{ID: "aprop-expired", Status: session.ProposalStatusExpired}
+	expired.ContinuationLease = session.ContinuationLease{ID: "lease-expired", ProposalID: "aprop-expired", Status: session.ContinuationLeaseStatusExpired}
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		continuationState:         pending,
+		approveContinuationReturn: expired,
+		approveContinuationErr:    fmt.Errorf("approve continuation: %w", core.ErrContinuationExpired),
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-expired",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-expired", "approve"),
+		Message: &telegram.Message{MessageID: 194, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v, want nil for expired continuation", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 7 || router.approveContinuationApprover != 1002 {
+		t.Fatalf("approve input/approver = %d/%d, want 7/1002", router.approveContinuationInput, router.approveContinuationApprover)
+	}
+	if router.triggerContinuationInput != 0 {
+		t.Fatalf("triggerContinuationInput = %d, want 0 after expired approval", router.triggerContinuationInput)
+	}
+	if len(sender.answers) != 1 || !strings.Contains(strings.ToLower(sender.answers[0].text), "expired") {
+		t.Fatalf("answers = %#v, want expired callback answer", sender.answers)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(strings.ToLower(sender.editClear[0].text), "expired") {
+		t.Fatalf("editClear = %#v, want expired message update", sender.editClear)
+	}
+	if len(router.callbackErrorRecords) != 1 {
+		t.Fatalf("callbackErrorRecords = %#v, want one record", router.callbackErrorRecords)
+	}
+	if router.callbackErrorRecords[0].chatID != 7 || router.callbackErrorRecords[0].callbackKind != "continuation.approve" || !errors.Is(router.callbackErrorRecords[0].err, core.ErrContinuationExpired) {
+		t.Fatalf("callback error record = %#v, want continuation.approve expired", router.callbackErrorRecords[0])
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationApproveRecordsAckErrorWithoutFailing(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{answerErr: errors.New("telegram answerCallbackQuery failed: Bad Request: chat not found")}
+	router := stubCommandRouter{continuationState: session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-ack-error",
+		RemainingTurns: 1,
+		StageSummary:   "Resume despite callback ack failure.",
+	}}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-ack-error",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-ack-error", "approve"),
+		Message: &telegram.Message{MessageID: 195, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v, want nil for callback ack failure", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.triggerContinuationInput != 7 {
+		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
+	}
+	if len(sender.answers) != 1 {
+		t.Fatalf("answers count = %d, want 1", len(sender.answers))
+	}
+	if len(router.callbackErrorRecords) != 1 {
+		t.Fatalf("callbackErrorRecords = %#v, want one ack record", router.callbackErrorRecords)
+	}
+	if router.callbackErrorRecords[0].chatID != 7 || router.callbackErrorRecords[0].callbackKind != "continuation.approve.answer" {
+		t.Fatalf("callback error record = %#v, want continuation.approve.answer", router.callbackErrorRecords[0])
 	}
 }
 

@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -78,6 +79,26 @@ func TestRuntimeRecordsProviderRetryAndFailoverEvents(t *testing.T) {
 	}
 	assertHasEventType(t, events, core.ExecutionEventProviderAttemptRetried)
 	assertHasEventType(t, events, core.ExecutionEventProviderFailoverEngaged)
+}
+
+func TestRuntimeRecordsTelegramCallbackErrorEvent(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	chatID := int64(99104)
+	rt.RecordTelegramCallbackError(chatID, "continuation.approve", errors.New("continuation proposal expired"))
+
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	assertHasEventType(t, events, core.ExecutionEventTelegramCallbackFailed)
 }
 
 func TestChatStatusSnapshotUsesExecutionEventPhase(t *testing.T) {

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 
 const continuationCallbackPrefix = core.ContinuationCallbackPrefix
 const staleContinuationCallbackText = "This continuation prompt is no longer active. Use the newest prompt."
+const continuationCallbackFailureText = "Continuation action failed. Check /doctor for details."
 
 const (
 	continuationActionApprove      = "approve"
@@ -149,6 +151,28 @@ func renderContinuationDecision(state session.ContinuationState, action string) 
 		return renderContinuationEdgeStatus(state, "Resume edge needs an approved lease first.")
 	default:
 		return renderContinuationEdgeStatus(state, "Continuation decision recorded.")
+	}
+}
+
+func continuationCallbackErrorText(err error) string {
+	switch {
+	case errors.Is(err, core.ErrContinuationExpired):
+		return "That continuation lease expired before it could be approved."
+	case errors.Is(err, core.ErrContinuationNotPending), errors.Is(err, core.ErrContinuationNoTurns), errors.Is(err, core.ErrContinuationStale):
+		return staleContinuationCallbackText
+	default:
+		return continuationCallbackFailureText
+	}
+}
+
+func renderContinuationCallbackError(state session.ContinuationState, err error) string {
+	switch {
+	case errors.Is(err, core.ErrContinuationExpired):
+		return renderContinuationEdgeStatus(state, "Continuation lease expired before approval.")
+	case errors.Is(err, core.ErrContinuationNotPending), errors.Is(err, core.ErrContinuationNoTurns), errors.Is(err, core.ErrContinuationStale):
+		return renderContinuationEdgeStatus(state, "Continuation prompt is no longer active.")
+	default:
+		return renderContinuationEdgeStatus(state, "Continuation action failed.")
 	}
 }
 

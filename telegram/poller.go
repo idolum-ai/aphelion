@@ -5,6 +5,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -142,7 +143,7 @@ func (p *Poller) Run(ctx context.Context) error {
 					if errors.Is(err, context.Canceled) {
 						return nil
 					}
-					return err
+					log.Printf("WARN telegram callback handler failed update_id=%d callback_id=%s err=%v", upd.UpdateID, strings.TrimSpace(upd.CallbackQuery.ID), err)
 				}
 				if next := upd.UpdateID + 1; next > offset {
 					offset = next

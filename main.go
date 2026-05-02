@@ -328,6 +328,13 @@ func (c telegramCommandControl) TriggerContinuation(ctx context.Context, chatID 
 	return nil
 }
 
+func (c telegramCommandControl) RecordTelegramCallbackError(chatID int64, callbackKind string, err error) {
+	if c.rt == nil || err == nil {
+		return
+	}
+	c.rt.RecordTelegramCallbackError(chatID, callbackKind, err)
+}
+
 func (c telegramCommandControl) QueueReinstall(ctx context.Context, msg core.InboundMessage) error {
 	if c.router == nil {
 		return fmt.Errorf("router is not configured")
@@ -861,11 +868,16 @@ func run() error {
 		telegram.WithBotIdentity(botUser),
 		telegram.WithCallbackHandler(func(parent context.Context, cb telegram.CallbackQuery) error {
 			if handled, err := handleTelegramCommandCallback(parent, tgOutbound, commandControl, cb); err != nil {
+				commandControl.RecordTelegramCallbackError(callbackChatID(cb), "command", err)
 				return err
 			} else if handled {
 				return nil
 			}
-			return decisionHandler.HandleCallbackQuery(parent, cb)
+			if err := decisionHandler.HandleCallbackQuery(parent, cb); err != nil {
+				commandControl.RecordTelegramCallbackError(callbackChatID(cb), "decision", err)
+				return err
+			}
+			return nil
 		}),
 	)
 

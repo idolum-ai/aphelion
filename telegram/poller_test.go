@@ -4,6 +4,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -65,6 +66,82 @@ func TestPollerDispatchesCallbackQueries(t *testing.T) {
 	case <-handlerCalled:
 		t.Fatal("message handler should not run for callback query")
 	default:
+	}
+}
+
+func TestPollerContinuesAfterCallbackHandlerError(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Unix()
+	updates := []Update{
+		{
+			UpdateID: 10,
+			CallbackQuery: &CallbackQuery{
+				ID:   "cb-fails",
+				Data: "continuation:decision:approve",
+				From: &User{ID: 7, Username: "alice"},
+				Message: &Message{
+					MessageID: 42,
+					Chat:      &Chat{ID: 100, Type: "private"},
+					Date:      now,
+				},
+			},
+		},
+		{
+			UpdateID: 11,
+			Message: &Message{
+				MessageID: 43,
+				Chat:      &Chat{ID: 100, Type: "private"},
+				From:      &User{ID: 7, Username: "alice"},
+				Text:      "after callback",
+				Date:      now + 1,
+			},
+		},
+	}
+	call := 0
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/botTOKEN/getUpdates" {
+				t.Fatalf("unexpected path %s", req.URL.Path)
+			}
+			call++
+			resp := getUpdatesResponse{Ok: true}
+			if call == 1 {
+				resp.Result = updates
+			}
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	callbackCalls := 0
+	handled := make([]core.InboundMessage, 0, 1)
+	poller := NewPoller(client, func(_ context.Context, msg core.InboundMessage) error {
+		handled = append(handled, msg)
+		cancel()
+		return nil
+	}, WithCallbackHandler(func(_ context.Context, cb CallbackQuery) error {
+		callbackCalls++
+		if cb.ID != "cb-fails" {
+			t.Fatalf("callback ID = %q, want cb-fails", cb.ID)
+		}
+		return errors.New("callback handler failed")
+	}), WithPollerTimeout(1))
+	if err := poller.Run(ctx); err != nil {
+		t.Fatalf("Poller.Run() err = %v, want nil after contained callback error", err)
+	}
+	if callbackCalls != 1 {
+		t.Fatalf("callbackCalls = %d, want 1", callbackCalls)
+	}
+	if len(handled) != 1 || handled[0].Text != "after callback" {
+		t.Fatalf("handled = %#v, want message after failed callback", handled)
 	}
 }
 
