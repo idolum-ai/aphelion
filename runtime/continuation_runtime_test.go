@@ -864,6 +864,100 @@ func TestApproveContinuationReturnsTypedExpiredErrorAndRecordsBlocked(t *testing
 	}
 }
 
+func TestRefreshContinuationProposalCreatesFreshLeaseForSameBoundedAction(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+	key := session.SessionKey{ChatID: 8110, UserID: 0, Scope: telegramDMScopeRef(8110)}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	prior := session.ContinuationState{
+		Status:         session.ContinuationStatusIdle,
+		Objective:      "Finish the bounded local patch.",
+		StageSummary:   "Patch and test the callback flow.",
+		RemainingTurns: 0,
+		ActionProposal: session.ActionProposal{
+			ID:               "aprop-old-expired",
+			OperationID:      "op-refresh-v1",
+			Summary:          "Refresh the expired lease",
+			WhyNow:           "The previous prompt expired.",
+			BoundedEffect:    "Patch only continuation callback refresh behavior.",
+			RiskClass:        "system_change",
+			AllowedActions:   []string{"patch_code", "run_tests"},
+			ForbiddenActions: []string{"deploy", "restart"},
+			ValidationPlan:   []string{"go test ./..."},
+			Status:           session.ProposalStatusExpired,
+			ExpiresAt:        expiredAt,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-old-expired",
+			ProposalID:     "aprop-old-expired",
+			Status:         session.ContinuationLeaseStatusExpired,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			ExpiresAt:      expiredAt,
+		},
+	}
+	if err := store.UpdateContinuationState(key, prior); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	state, sent, err := rt.RefreshContinuationProposal(context.Background(), 8110, "expired approval callback")
+	if err != nil {
+		t.Fatalf("RefreshContinuationProposal() err = %v", err)
+	}
+	if !sent {
+		t.Fatal("sent = false, want fresh inline prompt")
+	}
+	if state.Status != session.ContinuationStatusPending || state.RemainingTurns != 1 {
+		t.Fatalf("state status/turns = %q/%d, want pending/1", state.Status, state.RemainingTurns)
+	}
+	if state.ActionProposal.ID == prior.ActionProposal.ID || state.ContinuationLease.ID == prior.ContinuationLease.ID {
+		t.Fatalf("fresh ids reused old proposal/lease: proposal=%q lease=%q", state.ActionProposal.ID, state.ContinuationLease.ID)
+	}
+	if state.ActionProposal.OperationID != prior.ActionProposal.OperationID || state.ActionProposal.BoundedEffect != prior.ActionProposal.BoundedEffect {
+		t.Fatalf("fresh proposal = %#v, want same operation and bounded effect", state.ActionProposal)
+	}
+	if state.ActionProposal.Status != session.ProposalStatusPending || !state.ActionProposal.ExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("fresh proposal status/expires = %q/%v, want pending future expiry", state.ActionProposal.Status, state.ActionProposal.ExpiresAt)
+	}
+	if state.ContinuationLease.Status != session.ContinuationLeaseStatusPending || state.ContinuationLease.ProposalID != state.ActionProposal.ID {
+		t.Fatalf("fresh lease = %#v, want pending lease tied to fresh proposal", state.ContinuationLease)
+	}
+
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.ActionProposal.ID != state.ActionProposal.ID || got.Status != session.ContinuationStatusPending {
+		t.Fatalf("persisted state = %#v, want fresh pending state", got)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want one fresh prompt", len(sender.inline))
+	}
+	if !strings.Contains(sender.inline[0].text, "Patch only continuation callback refresh behavior") {
+		t.Fatalf("inline text = %q, want refreshed bounded effect", sender.inline[0].text)
+	}
+	oldCallback := core.EncodeContinuationCallbackData(prior.ActionProposal.ID, "approve_lease")
+	newCallback := sender.inline[0].rows[0][0].CallbackData
+	if newCallback == "" || newCallback == oldCallback {
+		t.Fatalf("fresh callback = %q old = %q, want distinct non-empty callback", newCallback, oldCallback)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("events = %#v, want continuation offered event", events)
+	}
+}
+
 func TestTriggerContinuationExpiresStaleLease(t *testing.T) {
 	t.Parallel()
 

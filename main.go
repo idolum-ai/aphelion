@@ -335,6 +335,13 @@ func (c telegramCommandControl) RecordTelegramCallbackError(chatID int64, callba
 	c.rt.RecordTelegramCallbackError(chatID, callbackKind, err)
 }
 
+func (c telegramCommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
+	if c.rt == nil {
+		return session.ContinuationState{}, false, fmt.Errorf("runtime is unavailable")
+	}
+	return c.rt.RefreshContinuationProposal(ctx, chatID, reason)
+}
+
 func (c telegramCommandControl) QueueReinstall(ctx context.Context, msg core.InboundMessage) error {
 	if c.router == nil {
 		return fmt.Errorf("router is not configured")

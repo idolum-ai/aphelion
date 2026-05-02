@@ -199,6 +199,11 @@ type stubCommandRouter struct {
 	triggerContinuationInput     int64
 	triggerContinuationErr       error
 	callbackErrorRecords         []stubCallbackErrorRecord
+	refreshContinuationInput     int64
+	refreshContinuationReason    string
+	refreshContinuationReturn    session.ContinuationState
+	refreshContinuationSent      bool
+	refreshContinuationErr       error
 	restartInput                 int64
 	restartCalls                 int
 	queuedReinstallMsg           *core.InboundMessage
@@ -413,6 +418,24 @@ func (s *stubCommandRouter) RecordTelegramCallbackError(chatID int64, callbackKi
 		callbackKind: callbackKind,
 		err:          err,
 	})
+}
+
+func (s *stubCommandRouter) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
+	s.refreshContinuationInput = chatID
+	s.refreshContinuationReason = reason
+	_ = ctx
+	if s.refreshContinuationErr != nil {
+		return session.ContinuationState{}, false, s.refreshContinuationErr
+	}
+	if s.refreshContinuationReturn.Status != "" {
+		return s.refreshContinuationReturn, s.refreshContinuationSent, nil
+	}
+	return session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-refreshed",
+		RemainingTurns: 1,
+		StageSummary:   "Use the fresh approval prompt.",
+	}, true, nil
 }
 
 func (s *stubCommandRouter) QueueReinstall(ctx context.Context, msg core.InboundMessage) error {
@@ -3176,6 +3199,13 @@ func TestHandleTelegramCommandCallbackContinuationApproveContainsExpiredLease(t 
 		continuationState:         pending,
 		approveContinuationReturn: expired,
 		approveContinuationErr:    fmt.Errorf("approve continuation: %w", core.ErrContinuationExpired),
+		refreshContinuationReturn: session.ContinuationState{
+			Status:         session.ContinuationStatusPending,
+			DecisionID:     "decision-refreshed",
+			RemainingTurns: 1,
+			StageSummary:   "Resume the expired bounded step.",
+		},
+		refreshContinuationSent: true,
 	}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-expired",
@@ -3195,11 +3225,18 @@ func TestHandleTelegramCommandCallbackContinuationApproveContainsExpiredLease(t 
 	if router.triggerContinuationInput != 0 {
 		t.Fatalf("triggerContinuationInput = %d, want 0 after expired approval", router.triggerContinuationInput)
 	}
-	if len(sender.answers) != 1 || !strings.Contains(strings.ToLower(sender.answers[0].text), "expired") {
-		t.Fatalf("answers = %#v, want expired callback answer", sender.answers)
+	if router.refreshContinuationInput != 7 || !strings.Contains(router.refreshContinuationReason, "expired") {
+		t.Fatalf("refresh input/reason = %d/%q, want 7 expired reason", router.refreshContinuationInput, router.refreshContinuationReason)
 	}
-	if len(sender.editClear) != 1 || !strings.Contains(strings.ToLower(sender.editClear[0].text), "expired") {
-		t.Fatalf("editClear = %#v, want expired message update", sender.editClear)
+	if len(sender.answers) != 1 || !strings.Contains(strings.ToLower(sender.answers[0].text), "fresh approval prompt") {
+		t.Fatalf("answers = %#v, want fresh approval prompt callback answer", sender.answers)
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear = %#v, want one expired refresh message update", sender.editClear)
+	}
+	editText := strings.ToLower(sender.editClear[0].text)
+	if !strings.Contains(editText, "expired") || !strings.Contains(editText, "fresh approval prompt") {
+		t.Fatalf("editClear = %#v, want expired refresh message update", sender.editClear)
 	}
 	if len(router.callbackErrorRecords) != 1 {
 		t.Fatalf("callbackErrorRecords = %#v, want one record", router.callbackErrorRecords)

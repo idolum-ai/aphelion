@@ -176,6 +176,14 @@ func renderContinuationCallbackError(state session.ContinuationState, err error)
 	}
 }
 
+func renderContinuationRefreshedDecision(state session.ContinuationState) string {
+	return renderContinuationEdgeStatus(state, "Continuation lease expired before approval. I sent a fresh approval prompt.")
+}
+
+func renderContinuationRefreshAlreadyActiveDecision(state session.ContinuationState) string {
+	return renderContinuationEdgeStatus(state, "Continuation lease expired before approval. A fresh approval prompt is already active.")
+}
+
 func renderContinuationApprovedDecision(state session.ContinuationState, prefix string) string {
 	text := strings.TrimSpace(prefix)
 	if text == "" {

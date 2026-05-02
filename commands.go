@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -83,6 +84,10 @@ type telegramCallbackErrorRecorder interface {
 	RecordTelegramCallbackError(chatID int64, callbackKind string, err error)
 }
 
+type continuationProposalRefresher interface {
+	RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error)
+}
+
 func recordTelegramCallbackError(router commandRouter, chatID int64, callbackKind string, err error) {
 	if err == nil {
 		return
@@ -90,6 +95,14 @@ func recordTelegramCallbackError(router commandRouter, chatID int64, callbackKin
 	if recorder, ok := router.(telegramCallbackErrorRecorder); ok {
 		recorder.RecordTelegramCallbackError(chatID, callbackKind, err)
 	}
+}
+
+func refreshContinuationProposal(ctx context.Context, router commandRouter, chatID int64, reason string) (session.ContinuationState, bool, error) {
+	refresher, ok := router.(continuationProposalRefresher)
+	if !ok {
+		return session.ContinuationState{}, false, nil
+	}
+	return refresher.RefreshContinuationProposal(ctx, chatID, reason)
 }
 
 func answerContinuationCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, cb telegram.CallbackQuery, callbackKind string, text string) {
@@ -638,6 +651,21 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			if err != nil {
 				recordTelegramCallbackError(router, chatID, "continuation.approve", err)
 				log.Printf("WARN continuation approve callback failed chat_id=%d approver_id=%d err=%v", chatID, approverID, err)
+				if errors.Is(err, core.ErrContinuationExpired) {
+					refreshedState, refreshed, refreshErr := refreshContinuationProposal(ctx, router, chatID, "expired approval callback")
+					if refreshErr != nil {
+						recordTelegramCallbackError(router, chatID, "continuation.refresh", refreshErr)
+						log.Printf("WARN continuation refresh callback failed chat_id=%d err=%v", chatID, refreshErr)
+					} else if refreshed {
+						answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "That continuation lease expired, so I sent a fresh approval prompt.")
+						editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", renderContinuationRefreshedDecision(refreshedState))
+						return true, nil
+					} else if refreshedState.Status == session.ContinuationStatusPending {
+						answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "A fresh continuation prompt is already active. Use the newest prompt.")
+						editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", renderContinuationRefreshAlreadyActiveDecision(refreshedState))
+						return true, nil
+					}
+				}
 				answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", continuationCallbackErrorText(err))
 				editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", renderContinuationCallbackError(state, err))
 				return true, nil
