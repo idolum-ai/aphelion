@@ -4,7 +4,9 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -52,6 +54,54 @@ func (s *stubChainProvider) Stream(_ context.Context, _ []agent.Message, _ []age
 		reply = s.streamText
 	}
 	return &agent.Response{Content: reply}, nil
+}
+
+type openAIToolResultRejectingProvider struct {
+	callCount int
+}
+
+func (p *openAIToolResultRejectingProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
+	p.callCount++
+	for _, msg := range messages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "tool") {
+			return nil, stubStatusError{code: 400, msg: "openai: status 400: invalid_request_error: rejected tool_call response for call_id call-1"}
+		}
+	}
+	return &agent.Response{ToolCalls: []agent.ToolCall{{
+		ID:    "call-1",
+		Name:  "exec",
+		Input: []byte(`{"cmd":"git status --short"}`),
+	}}}, nil
+}
+
+type toolHistoryAssertingProvider struct {
+	reply               string
+	requiredToolContent string
+	callCount           int
+}
+
+func (p *toolHistoryAssertingProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
+	p.callCount++
+	for _, msg := range messages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "tool") && strings.Contains(msg.Content, p.requiredToolContent) {
+			return &agent.Response{Content: p.reply}, nil
+		}
+	}
+	return nil, errors.New("missing expected tool evidence")
+}
+
+type fixedToolRegistry struct {
+	output    string
+	callCount int
+}
+
+func (r *fixedToolRegistry) Definitions() []agent.ToolDef {
+	return []agent.ToolDef{{Name: "exec"}}
+}
+
+func (r *fixedToolRegistry) Execute(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+	r.callCount++
+	return r.output, nil
 }
 
 func TestFailoverChainFallsBackToSecondary(t *testing.T) {
@@ -217,6 +267,122 @@ func TestFailoverChainDoesNotCascadeOpenAIClientErrorToAnthropic(t *testing.T) {
 	}
 	if secondary.callCount != 0 {
 		t.Fatalf("secondary.callCount = %d, want 0", secondary.callCount)
+	}
+}
+
+func TestFailoverChainSkipsOpenAIFamilyAfterToolResultRejection(t *testing.T) {
+	primary := &stubChainProvider{err: stubStatusError{code: 400, msg: "openai: status 400: invalid_request_error: no tool output found for call_id call-1"}}
+	openAIFallback := &stubChainProvider{reply: "should not run"}
+	anthropic := &stubChainProvider{reply: "anthropic final synthesis"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: primary},
+		{Name: "openai:gpt-5.4", Provider: openAIFallback},
+		{Name: "anthropic", Provider: anthropic},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	messages := []agent.Message{
+		{Role: "user", Content: "inspect the repo"},
+		{Role: "assistant", ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "exec", Input: []byte(`{"cmd":"git status"}`)}}},
+		{Role: "tool", ToolCallID: "call-1", ToolName: "exec", Content: "clean"},
+	}
+	resp, err := chain.CompleteManaged(context.Background(), messages, []agent.ToolDef{{Name: "exec"}}, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "anthropic final synthesis" {
+		t.Fatalf("content = %q, want anthropic final synthesis", resp.Content)
+	}
+	if primary.callCount == 0 {
+		t.Fatal("primary OpenAI provider was not called")
+	}
+	if openAIFallback.callCount != 0 {
+		t.Fatalf("openAIFallback.callCount = %d, want 0 after tool-result rejection", openAIFallback.callCount)
+	}
+	if anthropic.callCount == 0 {
+		t.Fatal("anthropic provider was not called")
+	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
+		t.Fatalf("provider events = %#v, want failover engaged", resp.ProviderEvents)
+	}
+}
+
+func TestFailoverChainUsesOpenRouterWhenAnthropicAlsoFailsAfterToolResultRejection(t *testing.T) {
+	openAI := &stubChainProvider{err: stubStatusError{code: 422, msg: "openai: status 422: rejected tool_call response"}}
+	anthropic := &stubChainProvider{err: stubStatusError{code: 503, msg: "anthropic overloaded"}}
+	openRouter := &stubChainProvider{reply: "openrouter final synthesis"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: openAI},
+		{Name: "anthropic", Provider: anthropic},
+		{Name: "openrouter", Provider: openRouter},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	messages := []agent.Message{
+		{Role: "assistant", ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "exec", Input: []byte(`{"cmd":"git diff"}`)}}},
+		{Role: "tool", ToolCallID: "call-1", ToolName: "exec", Content: "diff output"},
+	}
+	resp, err := chain.CompleteManaged(context.Background(), messages, []agent.ToolDef{{Name: "exec"}}, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "openrouter final synthesis" {
+		t.Fatalf("content = %q, want openrouter final synthesis", resp.Content)
+	}
+	if anthropic.callCount == 0 || openRouter.callCount == 0 {
+		t.Fatalf("call counts anthropic=%d openrouter=%d, want both after OpenAI rejection", anthropic.callCount, openRouter.callCount)
+	}
+}
+
+func TestRunTurnSynthesizesWithAnthropicAfterOpenAIToolResultRejection(t *testing.T) {
+	openAI := &openAIToolResultRejectingProvider{}
+	anthropic := &toolHistoryAssertingProvider{
+		reply:               "anthropic synthesized tool evidence",
+		requiredToolContent: "stdout: clean",
+	}
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: openAI},
+		{Name: "anthropic", Provider: anthropic},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+	tools := &fixedToolRegistry{output: "stdout: clean"}
+
+	result, history, err := agent.RunTurn(context.Background(), chain, tools, &agent.Budget{Max: 4, Caution: 0.7, Warning: 0.9}, nil, []agent.Message{{Role: "user", Content: "inspect the repo"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "anthropic synthesized tool evidence" {
+		t.Fatalf("result text = %q, want anthropic synthesis", result.Text)
+	}
+	if openAI.callCount != 2 {
+		t.Fatalf("openAI.callCount = %d, want initial tool call and post-tool rejection", openAI.callCount)
+	}
+	if anthropic.callCount != 1 {
+		t.Fatalf("anthropic.callCount = %d, want one final synthesis attempt", anthropic.callCount)
+	}
+	if tools.callCount != 1 {
+		t.Fatalf("tool call count = %d, want one tool execution", tools.callCount)
+	}
+	if !providerEventsContain(result.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
+		t.Fatalf("provider events = %#v, want failover engaged", result.ProviderEvents)
+	}
+	foundToolEvidence := false
+	for _, msg := range history {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "tool") && strings.Contains(msg.Content, "stdout: clean") {
+			foundToolEvidence = true
+			break
+		}
+	}
+	if !foundToolEvidence {
+		t.Fatalf("history = %#v, want preserved tool evidence", history)
 	}
 }
 

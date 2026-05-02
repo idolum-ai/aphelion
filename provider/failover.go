@@ -167,7 +167,8 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 	}
 	var attempts []FailoverAttempt
 	var events []core.ProviderEvent
-	for idx, entry := range c.entries {
+	for idx := 0; idx < len(c.entries); idx++ {
+		entry := c.entries[idx]
 		resp, err := c.completeWithRetry(ctx, entry, messages, tools, opts, &events)
 		if err == nil {
 			c.recordSuccess(idx)
@@ -182,13 +183,36 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
 		recordProviderFailedEvent(&events, entry.name, err)
-		if !shouldFailoverOnError(err) && !shouldFallbackToNextEntry(err, entry.name, nextFailoverEntryName(c.entries, idx)) {
+		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, messages)
+		if !routeToNext {
 			return nil, err
 		}
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
-		recordProviderFailoverEvent(&events, entry.name, nextFailoverEntryName(c.entries, idx), err)
+		if nextIdx >= len(c.entries) {
+			continue
+		}
+		recordProviderFailoverEvent(&events, entry.name, c.entries[nextIdx].name, err)
+		if nextIdx > idx+1 {
+			idx = nextIdx - 1
+		}
 	}
 	return nil, ExhaustedError{Attempts: attempts}
+}
+
+func (c *FailoverChain) nextCompleteFailoverIndex(idx int, err error, messages []agent.Message) (int, bool) {
+	if c == nil || idx < 0 || idx >= len(c.entries) {
+		return 0, false
+	}
+	if shouldFallbackAfterToolResultRejection(err, c.entries[idx].name, messages) {
+		nextIdx := nextNonOpenAIProviderIndex(c.entries, idx)
+		return nextIdx, nextIdx > idx && nextIdx < len(c.entries)
+	}
+	nextIdx := idx + 1
+	nextName := ""
+	if nextIdx < len(c.entries) {
+		nextName = c.entries[nextIdx].name
+	}
+	return nextIdx, shouldFailoverOnError(err) || shouldFallbackToNextEntry(err, c.entries[idx].name, nextName)
 }
 
 func (c *FailoverChain) recordSuccess(idx int) {
@@ -390,6 +414,75 @@ func shouldFallbackToNextEntry(err error, current string, next string) bool {
 		return false
 	}
 	return isOpenAIModelUnavailableError(err)
+}
+
+func shouldFallbackAfterToolResultRejection(err error, current string, messages []agent.Message) bool {
+	if !historyHasToolResults(messages) {
+		return false
+	}
+	switch providerFamilyName(current) {
+	case "codex", "openai":
+	default:
+		return false
+	}
+	return isRejectedToolResultRequest(err)
+}
+
+func historyHasToolResults(messages []agent.Message) bool {
+	for _, msg := range messages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "tool") {
+			return true
+		}
+	}
+	return false
+}
+
+func isRejectedToolResultRequest(err error) bool {
+	if err == nil {
+		return false
+	}
+	var sc statusCoder
+	if errors.As(err, &sc) {
+		switch sc.StatusCode() {
+		case 400, 409, 422:
+			return true
+		default:
+			return false
+		}
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	if !(strings.Contains(msg, "400") || strings.Contains(msg, "409") || strings.Contains(msg, "422")) {
+		return false
+	}
+	for _, marker := range []string{
+		"tool",
+		"function_call",
+		"tool_call",
+		"call_id",
+		"previous_response",
+		"response id",
+		"invalid_request",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func nextNonOpenAIProviderIndex(entries []failoverEntry, idx int) int {
+	for i := idx + 1; i < len(entries); i++ {
+		switch providerFamilyName(entries[i].name) {
+		case "codex", "openai":
+			continue
+		default:
+			return i
+		}
+	}
+	return len(entries)
 }
 
 func isOpenAIModelUnavailableError(err error) bool {
