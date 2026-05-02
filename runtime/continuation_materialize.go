@@ -145,6 +145,7 @@ func actionProposalFromOperationProposal(opState session.OperationState, proposa
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
+	actionProposal = applyOrganicRalphSandbox(actionProposal, opState, proposal)
 	actionProposal.PlanHash = actionProposalHash(actionProposal)
 	return session.NormalizeActionProposal(actionProposal)
 }

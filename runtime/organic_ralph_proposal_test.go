@@ -76,6 +76,12 @@ func TestHandleInboundInfersOrganicRalphProposalAndMaterializesButtons(t *testin
 	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != opState.Proposal.ID {
 		t.Fatalf("continuation = %#v, want pending linked to operation proposal %q", cont, opState.Proposal.ID)
 	}
+	if !actionListContains(cont.ActionProposal.AllowedActions, organicRalphSandboxAction) {
+		t.Fatalf("allowed actions = %#v, want Organic Ralph sandbox action", cont.ActionProposal.AllowedActions)
+	}
+	if !actionListContains(cont.ActionProposal.ForbiddenActions, "edit_files") || !actionListContains(cont.ActionProposal.ForbiddenActions, "network_access_without_separate_grant") {
+		t.Fatalf("forbidden actions = %#v, want read-only sandbox boundaries", cont.ActionProposal.ForbiddenActions)
+	}
 }
 
 func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.T) {
@@ -142,6 +148,34 @@ func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.
 	sender.mu.Unlock()
 	if inlineCount != 1 {
 		t.Fatalf("inline count = %d, want one inferred proposal prompt", inlineCount)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if !actionListContains(cont.ActionProposal.AllowedActions, organicRalphSandboxAction) || !actionListContains(cont.ActionProposal.AllowedActions, organicRalphSandboxWriteBoundary) {
+		t.Fatalf("allowed actions = %#v, want approved_user sandbox write boundary", cont.ActionProposal.AllowedActions)
+	}
+	for _, want := range []string{"commit_without_separate_approval", "deploy", "restart_service", "push_remote", "network_access_without_separate_grant"} {
+		if !actionListContains(cont.ActionProposal.ForbiddenActions, want) {
+			t.Fatalf("forbidden actions = %#v, want %q", cont.ActionProposal.ForbiddenActions, want)
+		}
+	}
+	if !actionListContains(cont.ContinuationLease.AllowedActions, organicRalphSandboxAction) || !actionListContains(cont.ContinuationLease.ForbiddenActions, "deploy") {
+		t.Fatalf("lease sandbox actions = allowed %#v forbidden %#v, want sandbox copied into lease", cont.ContinuationLease.AllowedActions, cont.ContinuationLease.ForbiddenActions)
+	}
+	if !strings.Contains(cont.ActionProposal.BoundedEffect, "Sandbox boundary") || !strings.Contains(cont.ActionProposal.BoundedEffect, "approved_user isolated") {
+		t.Fatalf("bounded effect = %q, want explicit approved_user sandbox boundary", cont.ActionProposal.BoundedEffect)
+	}
+	validationMentionsSandbox := false
+	for _, step := range cont.ActionProposal.ValidationPlan {
+		if strings.Contains(step, "approved_user isolated sandbox") {
+			validationMentionsSandbox = true
+			break
+		}
+	}
+	if !validationMentionsSandbox {
+		t.Fatalf("validation plan = %#v, want approved_user sandbox verification", cont.ActionProposal.ValidationPlan)
 	}
 	if _, err := rt.ApproveContinuation(9025, 1001); err != nil {
 		t.Fatalf("ApproveContinuation() err = %v", err)

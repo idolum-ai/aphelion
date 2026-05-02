@@ -185,3 +185,22 @@ use a compact deterministic alias when a human-readable proposal id would make
 `ContinuationState`, `ActionProposal`, `ContinuationLease`, and execution events;
 the compact id is transport-only and resolves by comparing against the aliases of
 persisted ids.
+
+## Organic Ralph sandbox leases
+
+Organic Ralph may infer a bounded proposal from plan, operation, or continuation
+state even when the face model did not emit the explicit proposal contract. That
+inference is allowed to create `system_change` proposals, but materialization
+adds a sandbox contract before the button can approve execution:
+
+- `ActionProposal` and `ContinuationLease` include
+  `execute_in_approved_user_sandbox`.
+- System-change leases allow writes only to the approved-user workspace, user
+  memory, or `/tmp`; prompt root and shared memory remain read-only.
+- Network access, secrets, commit, deploy, restart, and remote push remain
+  forbidden unless a separate capability/lease explicitly grants them.
+- When the approved continuation turn spawns, runtime executes it under the
+  `approved_user` isolated profile even if the approving human is an admin.
+
+The approval still records the original approver. The sandbox role is only the
+execution principal for that bounded Organic Ralph continuation.

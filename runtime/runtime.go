@@ -227,6 +227,8 @@ func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.P
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {
 		return nil
 	}
+	sandboxRequired := continuationRequiresApprovedUserSandbox(state)
+	executionActor := continuationExecutionActor(actor, state)
 	approvedBy := state.ApprovedBy
 	if approvedBy == 0 {
 		approvedBy = actor.TelegramUserID
@@ -238,11 +240,18 @@ func (r *Runtime) runApprovedContinuation(ctx context.Context, actor principal.P
 	}
 	payload := continuationExecutionPayload(state)
 	payload["approved_by_user"] = approvedBy
+	payload["execution_principal_role"] = string(executionActor.Role)
+	if sandboxRequired {
+		payload["sandbox_profile"] = organicRalphSandboxProfile
+	}
+	if executionActor.Role != actor.Role {
+		payload["sandboxed_from_role"] = string(actor.Role)
+	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, time.Now().UTC())
-	_, err := r.handleInternalContinuation(ctx, actor, core.InboundMessage{
+	_, err := r.handleInternalContinuation(ctx, executionActor, core.InboundMessage{
 		ChatID:       chatID,
-		SenderID:     actor.TelegramUserID,
-		SenderName:   actorLabel(actor),
+		SenderID:     executionActor.TelegramUserID,
+		SenderName:   actorLabel(executionActor),
 		Text:         approvedContinuationEventText,
 		Origin:       core.InboundOriginTurnAuthorization,
 		OriginDetail: string(session.TurnAuthorizationKindContinuation),

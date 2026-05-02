@@ -14,6 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
@@ -1033,6 +1034,92 @@ func TestTriggerContinuationRunsAsApprovedUser(t *testing.T) {
 	}
 	if got.HandshakeBlockedReason == "" {
 		t.Fatal("HandshakeBlockedReason empty, want explicit reason when continuation is not offered again")
+	}
+}
+
+func TestTriggerSandboxedOrganicRalphContinuationDowngradesAdminToApprovedUserSandbox(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{}}
+	rt.interactiveDMAssembler = recorder
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8104, UserID: 0, Scope: telegramDMScopeRef(8104)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "organic-ralph-sandbox",
+		Objective:      "Run one Organic Ralph system-change step.",
+		StageSummary:   "Patch one local file and report evidence.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-organic-ralph-sandbox",
+			Summary:        "Patch one local file",
+			RiskClass:      "system_change",
+			AllowedActions: []string{organicRalphSandboxAction, organicRalphSandboxWriteBoundary},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:organic-ralph-sandbox",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-organic-ralph-sandbox",
+			ProposalID:       "aprop-organic-ralph-sandbox",
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			AllowedActions:   []string{organicRalphSandboxAction, organicRalphSandboxWriteBoundary},
+			ForbiddenActions: []string{"deploy"},
+			ExpiresAt:        expiresAt,
+			PlanHash:         "sha256:organic-ralph-sandbox",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8104); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if !recorder.called {
+		t.Fatal("interactive assembler not called")
+	}
+	if recorder.input.Actor.Role != principal.RoleApprovedUser {
+		t.Fatalf("actor role = %q, want approved_user sandbox execution", recorder.input.Actor.Role)
+	}
+	if recorder.input.Actor.TelegramUserID != 1001 {
+		t.Fatalf("actor user id = %d, want admin approver preserved", recorder.input.Actor.TelegramUserID)
+	}
+	if recorder.input.Scope.Profile.Mode != sandbox.ModeIsolated || recorder.input.Scope.Profile.Network != sandbox.NetworkDeny {
+		t.Fatalf("scope profile = %#v, want isolated network-deny approved_user sandbox", recorder.input.Scope.Profile)
+	}
+	if !strings.Contains(recorder.input.Scope.WorkingRoot, "isolated/workspaces/1001") {
+		t.Fatalf("working root = %q, want admin approver isolated user workspace", recorder.input.Scope.WorkingRoot)
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var consumed session.ExecutionEvent
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationConsumed {
+			consumed = event
+		}
+	}
+	if consumed.ID == 0 {
+		t.Fatalf("events = %#v, want continuation consumed event", events)
+	}
+	payload := executionEventPayload(consumed.PayloadJSON)
+	if payloadString(payload, "execution_principal_role") != string(principal.RoleApprovedUser) {
+		t.Fatalf("execution role payload = %q, want approved_user", payloadString(payload, "execution_principal_role"))
+	}
+	if payloadString(payload, "sandbox_profile") != organicRalphSandboxProfile || payloadString(payload, "sandboxed_from_role") != string(principal.RoleAdmin) {
+		t.Fatalf("sandbox payload = profile %q from %q, want approved_user_isolated from admin", payloadString(payload, "sandbox_profile"), payloadString(payload, "sandboxed_from_role"))
 	}
 }
 
