@@ -170,3 +170,128 @@ func TestGoalContinuationDoesNotInferForNarrowCompletedTask(t *testing.T) {
 		t.Fatal("maybeInferGoalContinuationProposal() = true, want false for narrow completed task")
 	}
 }
+
+func TestGoalContinuationDoesNotInferFromGenericSystemTestLanguage(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9043, UserID: 0, Scope: telegramDMScopeRef(9043)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "review-system-tests",
+		Objective: "Review system tests.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "review_complete",
+		Summary:   "Reviewed the system tests and the plan is done.",
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status: session.ContinuationStatusIdle,
+		ContinuationLease: session.ContinuationLease{
+			Status: session.ContinuationLeaseStatusConsumed,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, core.InboundMessage{
+		ChatID: 9043,
+		Text:   approvedContinuationEventText,
+		Origin: core.InboundOriginTurnAuthorization,
+	}, "review system tests done", &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+	}
+	if inferred {
+		t.Fatal("maybeInferGoalContinuationProposal() = true, want false for generic system/test language")
+	}
+}
+
+func TestGoalContinuationDoesNotInferWhenPlanDoneWithoutDurableObjective(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9044, UserID: 0, Scope: telegramDMScopeRef(9044)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "small-plan-answer",
+		Objective: "Answer the small planning question.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "plan_done",
+		Summary:   "The plan is done.",
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:            session.ContinuationStatusIdle,
+		ContinuationLease: session.ContinuationLease{Status: session.ContinuationLeaseStatusConsumed},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, core.InboundMessage{
+		ChatID: 9044,
+		Text:   approvedContinuationEventText,
+		Origin: core.InboundOriginTurnAuthorization,
+	}, "plan is done", &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+	}
+	if inferred {
+		t.Fatal("maybeInferGoalContinuationProposal() = true, want false when no durable objective remains")
+	}
+}
+
+func TestGoalContinuationInfersWithPendingPlanStepAsRemainingWork(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9045, UserID: 0, Scope: telegramDMScopeRef(9045)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "lighthouse-mini-agent",
+		Objective: "Enable a Lighthouse local inbox workflow.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "phase_one_complete",
+		Summary:   "Phase one completed the read-only contract.",
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdatePlanState(key, session.PlanState{
+		Explanation: "Enable a Lighthouse local inbox workflow.",
+		Steps: []session.PlanStep{{
+			Step:   "Run one local-only smoke test without credentials.",
+			Status: session.PlanStatusPending,
+		}},
+	}); err != nil {
+		t.Fatalf("UpdatePlanState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:            session.ContinuationStatusIdle,
+		ContinuationLease: session.ContinuationLease{Status: session.ContinuationLeaseStatusConsumed},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	inferred, err := rt.maybeInferGoalContinuationProposal(context.Background(), key, core.InboundMessage{
+		ChatID: 9045,
+		Text:   approvedContinuationEventText,
+		Origin: core.InboundOriginTurnAuthorization,
+	}, "phase one complete", &turn.Result{})
+	if err != nil {
+		t.Fatalf("maybeInferGoalContinuationProposal() err = %v", err)
+	}
+	if !inferred {
+		t.Fatal("maybeInferGoalContinuationProposal() = false, want true with durable objective, phase-one signal, and pending plan work")
+	}
+}

@@ -5,7 +5,6 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -13,72 +12,178 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/telegram"
 )
 
-const startupRecoveryAutoResumePrefix = "[restart recovery auto-resume]"
+const startupRecoveryResumePrefix = "[restart recovery resume proposal]"
 
-type startupRecoveryAutoResumeResult struct {
-	Queued  int
-	Skipped int
+type startupRecoveryResumeProposalResult struct {
+	Proposed int
+	Skipped  int
 }
 
-func (r startupRecoveryAutoResumeResult) total() int {
-	return r.Queued + r.Skipped
+func (r startupRecoveryResumeProposalResult) total() int {
+	return r.Proposed + r.Skipped
 }
 
-func recordStartupRecoveryAutoResumePayload(result startupRecoveryAutoResumeResult) map[string]any {
+func recordStartupRecoveryResumeProposalPayload(result startupRecoveryResumeProposalResult) map[string]any {
 	return map[string]any{
-		"queued":  result.Queued,
-		"skipped": result.Skipped,
+		"proposed": result.Proposed,
+		"skipped":  result.Skipped,
 	}
 }
 
-func (r *Runtime) startStartupRecoveryAutoResume(runs []session.TurnRun, now time.Time) startupRecoveryAutoResumeResult {
-	result := startupRecoveryAutoResumeResult{}
-	if r == nil || len(runs) == 0 {
+func (r *Runtime) startStartupRecoveryResumeProposals(ctx context.Context, runs []session.TurnRun, now time.Time) startupRecoveryResumeProposalResult {
+	result := startupRecoveryResumeProposalResult{}
+	if r == nil || r.store == nil || len(runs) == 0 {
 		return result
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	for _, run := range latestAutoResumableRunsByChat(runs) {
-		actor, ok := r.startupRecoveryAutoResumeActor(run)
+	for _, run := range latestRecoveryResumableRunsByChat(runs) {
+		key := startupRecoveryRunSessionKey(run)
+		payload := startupRecoveryResumePayload(run)
+		if prior, exists, err := r.store.ContinuationStateIfExists(key); err == nil && exists {
+			prior = session.NormalizeContinuationState(prior)
+			if prior.Active() || continuationStateRestartParked(prior) {
+				payload["reason"] = "continuation_state_already_requires_confirmation"
+				r.recordExecutionEvent(key, core.ExecutionEventRecoveryResume, "recovery", "skipped", payload, now)
+				result.Skipped++
+				continue
+			}
+		}
+		actor, ok := r.startupRecoveryResumeActor(run)
 		if !ok {
+			payload["reason"] = "actor_not_admitted"
+			r.recordExecutionEvent(key, core.ExecutionEventRecoveryResume, "recovery", "skipped", payload, now)
 			result.Skipped++
 			continue
 		}
-		msg := startupRecoveryAutoResumeMessage(run, actor, now)
-		key := startupRecoveryRunSessionKey(run)
-		payload := map[string]any{
-			"run_id":           run.ID,
-			"chat_id":          run.ChatID,
-			"session_id":       strings.TrimSpace(run.SessionID),
-			"request_preview":  truncatePreview(run.RequestText, 220),
-			"auto_resume_mode": "bounded_state_verify",
+		if err := r.proposeStartupRecoveryResume(ctx, key, run, actor, now); err != nil {
+			payload["error"] = trimError(err.Error())
+			r.recordExecutionEvent(key, core.ExecutionEventRecoveryResume, "recovery", "failed", payload, now)
+			result.Skipped++
+			continue
 		}
-		r.recordExecutionEvent(key, core.ExecutionEventRecoveryAutoResume, "recovery", "queued", payload, now)
-		result.Queued++
-		go func(run session.TurnRun, actor principal.Principal, msg core.InboundMessage, key session.SessionKey) {
-			if _, err := r.handleInternalContinuation(context.Background(), actor, msg); err != nil {
-				log.Printf("WARN startup recovery auto-resume failed chat_id=%d run_id=%d err=%v", run.ChatID, run.ID, err)
-				failPayload := map[string]any{
-					"run_id":          run.ID,
-					"chat_id":         run.ChatID,
-					"request_preview": truncatePreview(run.RequestText, 220),
-					"error":           trimError(err.Error()),
-				}
-				r.recordExecutionEvent(key, core.ExecutionEventRecoveryAutoResume, "recovery", "failed", failPayload, time.Now().UTC())
-			}
-		}(run, actor, msg, key)
+		r.recordExecutionEvent(key, core.ExecutionEventRecoveryResume, "recovery", "proposed", payload, now)
+		result.Proposed++
 	}
 	return result
 }
 
-func latestAutoResumableRunsByChat(runs []session.TurnRun) []session.TurnRun {
+func (r *Runtime) proposeStartupRecoveryResume(ctx context.Context, key session.SessionKey, run session.TurnRun, actor principal.Principal, now time.Time) error {
+	if r == nil || r.store == nil || r.outbound == nil {
+		return fmt.Errorf("startup recovery resume proposal dependencies are unavailable")
+	}
+	if key.ChatID == 0 {
+		return fmt.Errorf("startup recovery resume proposal chat id is empty")
+	}
+	sender, ok := r.outbound.(interface {
+		SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
+	})
+	if !ok {
+		return fmt.Errorf("startup recovery resume proposal outbound does not support inline keyboards")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state := startupRecoveryResumeContinuationState(run, actor, now)
+	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return fmt.Errorf("persist startup recovery resume continuation: %w", err)
+	}
+	msg := core.InboundMessage{ChatID: key.ChatID, Origin: core.InboundOriginStartupRecovery, OriginDetail: "resume_proposal", Text: startupRecoveryResumePrefix}
+	text := r.renderContinuationPrompt(ctx, key, msg, state)
+	if strings.TrimSpace(text) == "" {
+		text = renderContinuationPromptFallback(state)
+	}
+	if _, err := sender.SendInlineKeyboard(ctx, key.ChatID, text, continuationApprovalButtonRows(continuationCallbackID(state)), nil); err != nil {
+		return fmt.Errorf("send startup recovery resume proposal: %w", err)
+	}
+	return nil
+}
+
+func startupRecoveryResumeContinuationState(run session.TurnRun, actor principal.Principal, now time.Time) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	decisionID := fmt.Sprintf("recovery-resume-%d", run.ID)
+	requestPreview := truncatePreview(strings.TrimSpace(run.RequestText), 500)
+	lastTool := strings.TrimSpace(run.LastToolName)
+	lastResult := truncatePreview(strings.TrimSpace(run.LastToolResultPreview), 260)
+	lastErr := truncatePreview(strings.TrimSpace(run.LastToolError), 260)
+
+	summary := "Confirm restart recovery resume for interrupted turn"
+	if requestPreview != "" {
+		summary = "Confirm restart recovery resume: " + truncatePreview(requestPreview, 120)
+	}
+	whyParts := []string{"Restart recovery preserved an interrupted turn, but restart boundaries require fresh user confirmation before execution resumes."}
+	if lastTool != "" {
+		whyParts = append(whyParts, "Last tool: "+lastTool+".")
+	}
+	if lastResult != "" {
+		whyParts = append(whyParts, "Last result: "+lastResult)
+	}
+	if lastErr != "" {
+		whyParts = append(whyParts, "Last error: "+lastErr)
+	}
+	boundedEffect := "Run one bounded restart-recovery turn: first verify persisted state, including git/service/operation state when relevant; continue only still-needed work from the interrupted request; do not repeat destructive or external actions unless current evidence proves they are still needed and already within the prior user request; report evidence and stop."
+
+	action := session.ActionProposal{
+		ID:               "aprop-" + decisionID,
+		Summary:          summary,
+		WhyNow:           strings.Join(whyParts, " "),
+		BoundedEffect:    boundedEffect,
+		RiskClass:        "restart_recovery",
+		AllowedActions:   []string{"verify_persisted_state", "continue_still_needed_bounded_work", "report_evidence"},
+		ForbiddenActions: []string{"auto_resume_without_user_confirmation", "repeat_destructive_or_external_action_without_current_evidence", "expand_authority_without_new_approval"},
+		ValidationPlan:   []string{"verify the interrupted work is still needed", "consume at most one approved recovery turn", "report evidence and residual risk"},
+		ExpiresAt:        now.Add(continuationLeaseDefaultTTL),
+		Status:           session.ProposalStatusPending,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     decisionID,
+		Objective:      firstNonEmptyContinuation("Recover interrupted turn after restart", requestPreview),
+		StageSummary:   summary,
+		RemainingTurns: 1,
+		PersonaIntent: session.ContinuationIntent{
+			Decision:   session.ContinuationIntentDecisionContinue,
+			Rationale:  "Restart recovery preserved an edge, but it should resume only after explicit confirmation.",
+			NextStep:   "Verify persisted state, then resume only still-needed bounded work.",
+			Confidence: "high",
+			UpdatedAt:  now,
+		},
+		GovernorIntent: session.ContinuationIntent{
+			Decision:    session.ContinuationIntentDecisionContinue,
+			Rationale:   "Restart happened after the original request; preserved intent is not execution authority until the user confirms.",
+			NextStep:    "Verify persisted state, then continue only still-needed bounded work.",
+			Constraints: boundedEffect,
+			Confidence:  "high",
+			Ratified:    true,
+			UpdatedAt:   now,
+		},
+		ActionProposal: action,
+		UpdatedAt:      now,
+	}
+	state.ContinuationLease = buildContinuationLease(action, 1, now)
+	return session.NormalizeContinuationState(state)
+}
+
+func latestRecoveryResumableRunsByChat(runs []session.TurnRun) []session.TurnRun {
 	byChat := make(map[int64]session.TurnRun)
 	for _, run := range runs {
-		if !startupRecoveryRunAutoResumable(run) {
+		if !startupRecoveryRunResumable(run) {
 			continue
 		}
 		prior, exists := byChat[run.ChatID]
@@ -93,7 +198,7 @@ func latestAutoResumableRunsByChat(runs []session.TurnRun) []session.TurnRun {
 	return out
 }
 
-func startupRecoveryRunAutoResumable(run session.TurnRun) bool {
+func startupRecoveryRunResumable(run session.TurnRun) bool {
 	if run.Kind != session.TurnRunKindInteractive || run.ChatID <= 0 {
 		return false
 	}
@@ -105,13 +210,13 @@ func startupRecoveryRunAutoResumable(run session.TurnRun) bool {
 		return false
 	}
 	request := strings.TrimSpace(run.RequestText)
-	if request == "" || strings.HasPrefix(request, startupRecoveryAutoResumePrefix) {
+	if request == "" || strings.HasPrefix(request, startupRecoveryResumePrefix) {
 		return false
 	}
 	return true
 }
 
-func (r *Runtime) startupRecoveryAutoResumeActor(run session.TurnRun) (principal.Principal, bool) {
+func (r *Runtime) startupRecoveryResumeActor(run session.TurnRun) (principal.Principal, bool) {
 	if r == nil || r.resolver == nil {
 		return principal.Principal{}, false
 	}
@@ -125,27 +230,13 @@ func (r *Runtime) startupRecoveryAutoResumeActor(run session.TurnRun) (principal
 	return principal.Principal{}, false
 }
 
-func startupRecoveryAutoResumeMessage(run session.TurnRun, actor principal.Principal, now time.Time) core.InboundMessage {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	now = now.UTC()
-	text := strings.Join([]string{
-		startupRecoveryAutoResumePrefix,
-		"The previous process ended while this turn was running.",
-		"Original request: " + fmt.Sprintf("%q", truncatePreview(run.RequestText, 500)),
-		"First verify persisted state, including git/service/operation state when relevant.",
-		"Then continue only the still-needed bounded work, or report clearly that the work is already complete or blocked.",
-		"Do not repeat destructive or external actions unless current state proves they are still needed and already within the prior user request.",
-	}, "\n")
-	return core.InboundMessage{
-		ChatID:       run.ChatID,
-		SenderID:     actor.TelegramUserID,
-		SenderName:   actorLabel(actor),
-		Text:         text,
-		Origin:       core.InboundOriginStartupRecovery,
-		OriginDetail: "auto_resume",
-		Timestamp:    now,
+func startupRecoveryResumePayload(run session.TurnRun) map[string]any {
+	return map[string]any{
+		"run_id":           run.ID,
+		"chat_id":          run.ChatID,
+		"session_id":       strings.TrimSpace(run.SessionID),
+		"request_preview":  truncatePreview(run.RequestText, 220),
+		"auto_resume_mode": "requires_user_confirmation",
 	}
 }
 

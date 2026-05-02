@@ -246,11 +246,56 @@ func visibleRecurrenceNote(aw prompt.RuntimeAwareness) string {
 	if !aw.HiddenInputsActive || !runtimeAwarenessHasAnyHiddenCategory(aw, hiddenInputSemanticRecurrence, hiddenInputUnresolvedMemory) {
 		return ""
 	}
-	summary := strings.TrimSpace(aw.ProvenanceSummary)
-	if summary == "" {
-		return "Continuity note: I see this resembles a prior unresolved thread, but I cannot identify which one from available memory."
+	if summary, ok := sanitizeVisibleRecurrenceSummary(aw.ProvenanceSummary); ok {
+		return "Continuity note: This resembles " + summary
 	}
-	return "Continuity note: I see related prior context: " + clampContinuationText(summary, 260)
+	return "Continuity note: I see this resembles a prior unresolved thread, but I can't identify it cleanly from available context."
+}
+
+func sanitizeVisibleRecurrenceSummary(summary string) (string, bool) {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return "", false
+	}
+	lower := strings.ToLower(summary)
+	for _, internal := range []string{
+		"memory.md",
+		"memory/",
+		"decisions.md",
+		"knowledge.md",
+		"questions.md",
+		"related prior material",
+		"hidden input",
+		"open question overlaps",
+		"surfacing again",
+	} {
+		if strings.Contains(lower, internal) {
+			return "", false
+		}
+	}
+	for _, sep := range []string{";", "\n"} {
+		if idx := strings.Index(summary, sep); idx >= 0 {
+			summary = strings.TrimSpace(summary[:idx])
+		}
+	}
+	summary = strings.Trim(summary, " .\t\r\n")
+	if summary == "" {
+		return "", false
+	}
+	if !visibleRecurrenceSummaryNamesThread(summary) {
+		return "", false
+	}
+	return clampContinuationText(summary, 220) + ".", true
+}
+
+func visibleRecurrenceSummaryNamesThread(summary string) bool {
+	lower := strings.ToLower(strings.TrimSpace(summary))
+	return strings.Contains(lower, "thread") ||
+		strings.Contains(lower, "conversation") ||
+		strings.Contains(lower, "mission") ||
+		strings.Contains(lower, "lighthouse") ||
+		strings.Contains(lower, "proton") ||
+		strings.Contains(lower, "ralph")
 }
 
 func runtimeAwarenessHasAnyHiddenCategory(aw prompt.RuntimeAwareness, categories ...string) bool {

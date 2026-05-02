@@ -63,12 +63,12 @@ const (
 	ExecutionEventDecisionExpired  = "decision.expired"
 	ExecutionEventDecisionDetached = "decision.detached"
 
-	ExecutionEventRecoveryAwake      = "recovery.awake"
-	ExecutionEventRecoveryDetected   = "recovery.detected"
-	ExecutionEventRecoveryIssued     = "recovery.issued"
-	ExecutionEventRecoveryCompleted  = "recovery.completed"
-	ExecutionEventRecoveryFailed     = "recovery.failed"
-	ExecutionEventRecoveryAutoResume = "recovery.auto_resume"
+	ExecutionEventRecoveryAwake     = "recovery.awake"
+	ExecutionEventRecoveryDetected  = "recovery.detected"
+	ExecutionEventRecoveryIssued    = "recovery.issued"
+	ExecutionEventRecoveryCompleted = "recovery.completed"
+	ExecutionEventRecoveryFailed    = "recovery.failed"
+	ExecutionEventRecoveryResume    = "recovery.resume"
 
 	ExecutionEventTailnetSurfaceChanged = "tailnet.surface.changed"
 

@@ -276,18 +276,14 @@ func TestStartupRecoveryFlushesInterruptedChatMemory(t *testing.T) {
 	}
 }
 
-func TestStartupRecoveryAutoResumesLatestInterruptedAdminDMTurn(t *testing.T) {
+func TestStartupRecoveryProposesConfirmationForLatestInterruptedAdminDMTurn(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.replyText = "Recovered: auto-resume the latest admin DM turn."
+	provider.replyText = "Recovered: propose confirmation for the latest admin DM turn."
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	recorder := &asyncRecordingInteractiveDMTurnAssembler{
-		ch:     make(chan interactiveDMTurnAssemblyInput, 1),
-		done:   make(chan struct{}),
-		result: &core.TurnResult{Text: "auto-resumed"},
-	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{}}
 	rt.interactiveDMAssembler = recorder
 
 	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
@@ -306,42 +302,47 @@ func TestStartupRecoveryAutoResumesLatestInterruptedAdminDMTurn(t *testing.T) {
 		t.Fatalf("runStartupRecoveryOnce() err = %v", err)
 	}
 
-	var input interactiveDMTurnAssemblyInput
-	select {
-	case input = <-recorder.ch:
-	case <-time.After(2 * time.Second):
-		t.Fatal("startup recovery did not auto-resume interrupted admin DM turn")
+	if recorder.called {
+		t.Fatal("startup recovery auto-ran an interrupted admin DM turn; want confirmation prompt only")
 	}
-	if input.Msg.Origin != core.InboundOriginStartupRecovery || input.Msg.OriginDetail != "auto_resume" {
-		t.Fatalf("auto-resume origin = %q/%q, want startup_recovery/auto_resume", input.Msg.Origin, input.Msg.OriginDetail)
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
 	}
-	if input.Msg.SenderID != 1001 || input.Actor.Role == "" {
-		t.Fatalf("auto-resume actor/msg = %#v / %#v, want admitted admin sender", input.Actor, input.Msg)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want 1 restart recovery confirmation prompt", inlineCount)
 	}
-	if !strings.Contains(input.Msg.Text, startupRecoveryAutoResumePrefix) || !strings.Contains(input.Msg.Text, "continue the deploy interruption policy") {
-		t.Fatalf("auto-resume text = %q, want original request and recovery prefix", input.Msg.Text)
+	for _, want := range []string{"Restart", "confirm", "verify persisted state", "continue the deploy interruption policy"} {
+		if !strings.Contains(strings.ToLower(inlineText), strings.ToLower(want)) {
+			t.Fatalf("inline text = %q, want substring %q", inlineText, want)
+		}
 	}
-	if input.EventAwareness.Origin != string(core.InboundOriginStartupRecovery) {
-		t.Fatalf("event awareness origin = %q, want startup_recovery", input.EventAwareness.Origin)
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	select {
-	case <-recorder.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("auto-resume assembler did not finish")
+	if state.Status != session.ContinuationStatusPending || !strings.HasPrefix(state.DecisionID, "recovery-resume-") {
+		t.Fatalf("continuation state = %#v, want pending recovery-resume confirmation", state)
+	}
+	if !actionListContains(state.ActionProposal.ForbiddenActions, "auto_resume_without_user_confirmation") {
+		t.Fatalf("forbidden actions = %#v, want auto-resume forbidden", state.ActionProposal.ForbiddenActions)
 	}
 
 	events, err := store.ExecutionEventsBySession(key, 0, 20)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
-	foundQueued := false
+	foundProposed := false
 	for _, event := range events {
-		if event.EventType == core.ExecutionEventRecoveryAutoResume && event.Status == "queued" {
-			foundQueued = true
+		if event.EventType == core.ExecutionEventRecoveryResume && event.Status == "proposed" {
+			foundProposed = true
 			break
 		}
 	}
-	if !foundQueued {
-		t.Fatalf("events = %#v, want recovery.auto_resume queued event", events)
+	if !foundProposed {
+		t.Fatalf("events = %#v, want recovery.resume proposed event", events)
 	}
 }

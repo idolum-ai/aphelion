@@ -135,7 +135,7 @@ func goalContinuationCandidateFromState(
 		return goalContinuationCandidate{}, false
 	}
 	sourceText := goalContinuationSourceText(promptInput, opState, planState, priorContinuation)
-	if !goalContinuationLooksBroad(sourceText) || !goalContinuationLooksLikePhaseOne(sourceText) {
+	if !goalContinuationHasEnoughSignals(sourceText, planState) {
 		return goalContinuationCandidate{}, false
 	}
 	objective := firstNonEmptyContinuation(
@@ -193,12 +193,26 @@ func goalContinuationSourceText(promptInput string, opState session.OperationSta
 	return strings.Join(parts, "\n")
 }
 
+func goalContinuationHasEnoughSignals(text string, planState session.PlanState) bool {
+	signals := 0
+	if goalContinuationLooksBroad(text) {
+		signals++
+	}
+	if goalContinuationLooksLikePhaseOne(text) {
+		signals++
+	}
+	if goalContinuationHasRemainingWork(text, planState) {
+		signals++
+	}
+	return signals >= 2
+}
+
 func goalContinuationLooksBroad(text string) bool {
 	lower := strings.ToLower(text)
 	for _, needle := range []string{
 		"goal", "make ", "build ", "enable ", "agent", "integration", "bridge", "inbox",
-		"external account", "account", "proton", "lighthouse", "live", "feature", "workflow",
-		"system", "service", "tool", "tailnet", "tailscale", "durable", "sandbox", "production",
+		"external account", "proton", "lighthouse", "live feature", "workflow",
+		"tailnet", "tailscale", "durable", "sandbox", "production",
 	} {
 		if strings.Contains(lower, needle) {
 			return true
@@ -210,9 +224,28 @@ func goalContinuationLooksBroad(text string) bool {
 func goalContinuationLooksLikePhaseOne(text string) bool {
 	lower := strings.ToLower(text)
 	for _, needle := range []string{
-		"contract", "architecture", "plan", "read-only", "readonly", "minimal", "first",
-		"phase", "probe", "test", "smoke", "inspect", "review", "initial", "one simple",
-		"completed", "complete", "done",
+		"contract", "architecture", "read-only", "readonly", "minimal", "first",
+		"phase one", "phase-one", "phase 1", "probe", "smoke", "initial", "one simple",
+		"first slice", "first pass", "first version", "v0",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func goalContinuationHasRemainingWork(text string, planState session.PlanState) bool {
+	planState = session.NormalizePlanState(planState)
+	for _, step := range planState.Steps {
+		if step.Status == session.PlanStatusPending || step.Status == session.PlanStatusInProgress {
+			return true
+		}
+	}
+	lower := strings.ToLower(text)
+	for _, needle := range []string{
+		"broader goal remains", "still needs", "next phase", "next bounded", "follow-through",
+		"remaining", "not complete", "not done", "needs phased", "later explicit lease",
 	} {
 		if strings.Contains(lower, needle) {
 			return true

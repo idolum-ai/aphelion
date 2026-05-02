@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -50,7 +49,7 @@ func (r RestartResumeResult) summary() string {
 		parts = append(parts, fmt.Sprintf("reoffered=%d", r.PendingContinuationsReoffered))
 	}
 	if r.ApprovedContinuationsResumed > 0 {
-		parts = append(parts, fmt.Sprintf("auto_resumed=%d", r.ApprovedContinuationsResumed))
+		parts = append(parts, fmt.Sprintf("approved_reoffered=%d", r.ApprovedContinuationsResumed))
 	}
 	if r.ApprovedContinuationsExpired > 0 {
 		parts = append(parts, fmt.Sprintf("expired_reoffered=%d", r.ApprovedContinuationsExpired))
@@ -166,31 +165,29 @@ func (r *Runtime) resumeRestartParkedContinuations(ctx context.Context, now time
 			}
 			result.PendingContinuationsReoffered++
 		case session.ContinuationStatusApproved:
+			reason := "Restart/deploy parked this approved lease; confirm again after startup before execution resumes."
 			if continuationLeaseExpired(state, now) || state.ApprovedBy <= 0 {
-				refreshed := restartParkPendingContinuationState(state, "Restart/deploy parked this approved lease, but the lease was no longer valid at startup; approve the fresh lease to resume.", restartParkSourceStartup, now)
-				if err := r.store.UpdateContinuationState(record.Key, refreshed); err != nil {
-					result.ContinuationsFailed++
-					wrapped := fmt.Errorf("refresh expired parked continuation chat_id=%d: %w", record.Key.ChatID, err)
-					r.recordRestartParkedResumeFailure(record.Key, state, wrapped, now)
-					joined = errors.Join(joined, wrapped)
-					continue
-				}
-				if err := r.reofferRestartParkedContinuation(ctx, record.Key, refreshed, now); err != nil {
-					result.ContinuationsFailed++
-					r.recordRestartParkedResumeFailure(record.Key, refreshed, err, now)
-					joined = errors.Join(joined, err)
-					continue
-				}
-				result.ApprovedContinuationsExpired++
+				reason = "Restart/deploy parked this approved lease, but the lease was no longer valid at startup; approve the fresh lease to resume."
+			}
+			refreshed := restartParkPendingContinuationState(state, reason, restartParkSourceStartup, now)
+			if err := r.store.UpdateContinuationState(record.Key, refreshed); err != nil {
+				result.ContinuationsFailed++
+				wrapped := fmt.Errorf("refresh parked approved continuation chat_id=%d: %w", record.Key.ChatID, err)
+				r.recordRestartParkedResumeFailure(record.Key, state, wrapped, now)
+				joined = errors.Join(joined, wrapped)
 				continue
 			}
-			if err := r.resumeApprovedRestartParkedContinuation(record.Key, state, now); err != nil {
+			if err := r.reofferRestartParkedContinuation(ctx, record.Key, refreshed, now); err != nil {
 				result.ContinuationsFailed++
-				r.recordRestartParkedResumeFailure(record.Key, state, err, now)
+				r.recordRestartParkedResumeFailure(record.Key, refreshed, err, now)
 				joined = errors.Join(joined, err)
 				continue
 			}
-			result.ApprovedContinuationsResumed++
+			if continuationLeaseExpired(state, now) || state.ApprovedBy <= 0 {
+				result.ApprovedContinuationsExpired++
+			} else {
+				result.ApprovedContinuationsResumed++
+			}
 		default:
 			result.ContinuationsFailed++
 			err := fmt.Errorf("parked continuation chat_id=%d has unsupported status %q", record.Key.ChatID, state.Status)
@@ -237,34 +234,12 @@ func (r *Runtime) reofferRestartParkedContinuation(ctx context.Context, key sess
 	return nil
 }
 
-func (r *Runtime) resumeApprovedRestartParkedContinuation(key session.SessionKey, state session.ContinuationState, now time.Time) error {
-	if key.ChatID == 0 {
-		return fmt.Errorf("resume parked approved continuation: chat id is empty")
-	}
-	state = clearRestartParkedContinuation(state, now)
-	if err := r.store.UpdateContinuationState(key, state); err != nil {
-		return fmt.Errorf("clear parked approved continuation marker: %w", err)
-	}
-	payload := continuationExecutionPayload(state)
-	payload["auto_triggered"] = true
-	payload["resume_mode"] = "approved_lease"
-	r.recordExecutionEvent(key, core.ExecutionEventContinuationResumed, "continuation", "resumed", payload, now)
-	chatID := key.ChatID
-	go func() {
-		if err := r.TriggerContinuation(context.Background(), chatID); err != nil {
-			log.Printf("WARN restart parked continuation trigger failed chat_id=%d err=%v", chatID, err)
-			r.recordRestartParkedResumeFailure(key, state, err, time.Now().UTC())
-		}
-	}()
-	return nil
-}
-
 func recordRestartResumeSummaryPayload(result RestartResumeResult) map[string]any {
 	return map[string]any{
-		"pending_reoffered": result.PendingContinuationsReoffered,
-		"approved_resumed":  result.ApprovedContinuationsResumed,
-		"approved_expired":  result.ApprovedContinuationsExpired,
-		"failed":            result.ContinuationsFailed,
+		"pending_reoffered":  result.PendingContinuationsReoffered,
+		"approved_reoffered": result.ApprovedContinuationsResumed,
+		"approved_expired":   result.ApprovedContinuationsExpired,
+		"failed":             result.ContinuationsFailed,
 	}
 }
 

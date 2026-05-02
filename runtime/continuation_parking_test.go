@@ -114,7 +114,7 @@ func TestParkActiveWorkForRestartRefreshesAndReoffersPendingContinuation(t *test
 	assertHasEventType(t, events, core.ExecutionEventContinuationResumed)
 }
 
-func TestParkActiveWorkForRestartInterruptsRunsAndResumesApprovedContinuation(t *testing.T) {
+func TestParkActiveWorkForRestartInterruptsRunsAndReoffersApprovedContinuation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -185,26 +185,32 @@ func TestParkActiveWorkForRestartInterruptsRunsAndResumesApprovedContinuation(t 
 		t.Fatalf("resumeRestartParkedContinuations() err = %v", err)
 	}
 	if resume.ApprovedContinuationsResumed != 1 {
-		t.Fatalf("resume result = %#v, want one approved continuation resumed", resume)
+		t.Fatalf("resume result = %#v, want one approved continuation reoffered", resume)
 	}
-	deadline := time.Now().Add(time.Second)
-	for !recorder.called && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	if recorder.called {
+		t.Fatal("approved parked continuation auto-ran after restart; want confirmation prompt only")
 	}
-	if !recorder.called {
-		t.Fatal("approved parked continuation was not triggered after resume")
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
 	}
-	if recorder.input.Msg.Text != approvedContinuationEventText {
-		t.Fatalf("continuation message = %q, want approved continuation event text", recorder.input.Msg.Text)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want approved continuation reoffer prompt", inlineCount)
 	}
-	consumed, err := store.ContinuationState(key)
+	if !strings.Contains(inlineText, "confirm again after startup") && !strings.Contains(inlineText, "Restart/deploy parked this approved lease") {
+		t.Fatalf("inline text = %q, want restart confirmation language", inlineText)
+	}
+	reoffered, err := store.ContinuationState(key)
 	if err != nil {
-		t.Fatalf("ContinuationState(consumed) err = %v", err)
+		t.Fatalf("ContinuationState(reoffered) err = %v", err)
 	}
-	if consumed.Status != session.ContinuationStatusIdle {
-		t.Fatalf("status after auto resume = %q, want idle after one turn consumed", consumed.Status)
+	if reoffered.Status != session.ContinuationStatusPending {
+		t.Fatalf("status after restart reoffer = %q, want pending confirmation", reoffered.Status)
 	}
-	if continuationStateRestartParked(consumed) {
-		t.Fatalf("park marker still set after approved resume: %#v", consumed)
+	if continuationStateRestartParked(reoffered) {
+		t.Fatalf("park marker still set after approved reoffer: %#v", reoffered)
 	}
 }

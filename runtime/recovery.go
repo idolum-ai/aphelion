@@ -190,7 +190,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err := r.deliverStartupRecoveryCatchup(ctx, maintenanceSession.SystemPrompt, runs, recoverySummary); err != nil {
 		return fmt.Errorf("deliver startup recovery catch-up: %w", err)
 	}
-	autoResumeResult := r.startStartupRecoveryAutoResume(runs, now)
+	resumeProposalResult := r.startStartupRecoveryResumeProposals(ctx, runs, now)
 	resumeResult, resumeErr := r.resumeRestartParkedContinuations(ctx, now)
 	if resumeErr != nil {
 		log.Printf("WARN parked continuation resume failed during startup recovery: %v", resumeErr)
@@ -215,10 +215,10 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		awakePayload["parked_continuations"] = resumePayload
 		completedPayload["parked_continuations"] = resumePayload
 	}
-	if autoResumeResult.total() > 0 {
-		autoResumePayload := recordStartupRecoveryAutoResumePayload(autoResumeResult)
-		awakePayload["auto_resume"] = autoResumePayload
-		completedPayload["auto_resume"] = autoResumePayload
+	if resumeProposalResult.total() > 0 {
+		resumeProposalPayload := recordStartupRecoveryResumeProposalPayload(resumeProposalResult)
+		awakePayload["resume_proposals"] = resumeProposalPayload
+		completedPayload["resume_proposals"] = resumeProposalPayload
 	}
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryAwake, "recovery", "awake", awakePayload, time.Now().UTC())
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryCompleted, "recovery", "completed", completedPayload, time.Now().UTC())

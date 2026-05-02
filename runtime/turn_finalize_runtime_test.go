@@ -64,8 +64,25 @@ func TestEnforceVisibleRecurrenceContractAppendsSpecificNote(t *testing.T) {
 		ProvenanceSummary:     "Prior Lighthouse thread about Proton Bridge inbox testing.",
 	})
 
-	if !strings.Contains(got, "Here is the plan.") || !strings.Contains(got, "Continuity note: I see related prior context: Prior Lighthouse thread") {
+	if !strings.Contains(got, "Here is the plan.") || !strings.Contains(got, "Continuity note: This resembles Prior Lighthouse thread") {
 		t.Fatalf("reply = %q, want appended continuity note", got)
+	}
+}
+
+func TestEnforceVisibleRecurrenceContractSanitizesInternalProvenance(t *testing.T) {
+	t.Parallel()
+
+	got := enforceVisibleRecurrenceContract("Here is the plan.", prompt.RuntimeAwareness{
+		HiddenInputsActive:    true,
+		HiddenInputCategories: []string{hiddenInputSemanticRecurrence},
+		ProvenanceSummary:     "related prior material in memory/decisions.md is surfacing again; an open question overlaps with this turn",
+	})
+
+	if strings.Contains(got, "memory/decisions.md") || strings.Contains(got, "related prior material") {
+		t.Fatalf("reply = %q, want sanitized recurrence note without raw provenance", got)
+	}
+	if !strings.Contains(got, "can't identify it cleanly") {
+		t.Fatalf("reply = %q, want generic unclear-prior note", got)
 	}
 }
 
