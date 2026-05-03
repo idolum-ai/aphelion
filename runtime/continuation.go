@@ -543,6 +543,19 @@ func continuationExecutionPayload(state session.ContinuationState) map[string]an
 		payload["lease_remaining_turns"] = lease.RemainingTurns
 		payload["lease_max_turns"] = lease.MaxTurns
 	}
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	if bundle.Active() {
+		payload["bundle_id"] = strings.TrimSpace(bundle.ID)
+		payload["bundle_status"] = strings.TrimSpace(string(bundle.Status))
+		payload["bundle_current_phase_id"] = strings.TrimSpace(bundle.CurrentPhaseID)
+		payload["bundle_phase_count"] = len(bundle.Phases)
+		if phase, ok := currentContinuationBundlePhase(bundle); ok {
+			payload["bundle_phase_id"] = strings.TrimSpace(phase.ID)
+			payload["bundle_operation_phase_id"] = strings.TrimSpace(phase.OperationPhaseID)
+			payload["bundle_phase_index"] = phase.Index
+			payload["bundle_phase_authority_class"] = strings.TrimSpace(phase.AuthorityClass)
+		}
+	}
 	if !state.ParkedAt.IsZero() {
 		payload["parked_at"] = state.ParkedAt.UTC().Format(time.RFC3339Nano)
 	}
@@ -665,6 +678,21 @@ func continuationStateWithLeaseApproved(state session.ContinuationState, approve
 	state.ContinuationLease.ApprovedBy = approverID
 	state.ContinuationLease.ApprovedAt = now
 	state.ContinuationLease.UpdatedAt = now
+	if state.ApprovalBundle.Active() {
+		state.ApprovalBundle.Status = session.ContinuationLeaseStatusActive
+		state.ApprovalBundle.ApprovedBy = approverID
+		state.ApprovalBundle.ApprovedAt = now
+		state.ApprovalBundle.UpdatedAt = now
+		if state.ApprovalBundle.CurrentPhaseID == "" {
+			state.ApprovalBundle.CurrentPhaseID = firstContinuationBundlePhaseID(state.ApprovalBundle.Phases)
+		}
+		for i := range state.ApprovalBundle.Phases {
+			if strings.TrimSpace(state.ApprovalBundle.Phases[i].ID) == strings.TrimSpace(state.ApprovalBundle.CurrentPhaseID) {
+				state.ApprovalBundle.Phases[i].Status = session.ContinuationLeaseStatusActive
+				break
+			}
+		}
+	}
 	if state.ContinuationLease.RemainingTurns <= 0 {
 		state.ContinuationLease.RemainingTurns = state.RemainingTurns
 	}
@@ -689,6 +717,11 @@ func continuationStateWithLeaseRevoked(state session.ContinuationState, now time
 		state.ContinuationLease.RemainingTurns = 0
 		state.ContinuationLease.RevokedAt = now
 		state.ContinuationLease.UpdatedAt = now
+	}
+	if state.ApprovalBundle.Active() {
+		state.ApprovalBundle.Status = session.ContinuationLeaseStatusRevoked
+		state.ApprovalBundle.RevokedAt = now
+		state.ApprovalBundle.UpdatedAt = now
 	}
 	state.Status = session.ContinuationStatusRevoked
 	state.RemainingTurns = 0
@@ -726,6 +759,10 @@ func continuationStateWithLeaseExpired(state session.ContinuationState, now time
 		state.ContinuationLease.RemainingTurns = 0
 		state.ContinuationLease.UpdatedAt = now
 	}
+	if state.ApprovalBundle.Active() {
+		state.ApprovalBundle.Status = session.ContinuationLeaseStatusExpired
+		state.ApprovalBundle.UpdatedAt = now
+	}
 	state.UpdatedAt = now
 	return session.NormalizeContinuationState(state)
 }
@@ -749,6 +786,7 @@ func continuationStateAfterLeaseTurnConsumed(state session.ContinuationState, no
 			state.ContinuationLease.ConsumedAt = now
 		}
 	}
+	state.ApprovalBundle = continuationApprovalBundleAfterTurnConsumed(state.ApprovalBundle, now)
 	if state.RemainingTurns <= 0 {
 		state.Status = session.ContinuationStatusIdle
 		state.DecisionID = ""
@@ -859,7 +897,10 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 	if state.Status == session.ContinuationStatusPending {
 		approveLabel := "Approve & run"
 		reviseLabel := "Revise proposal"
-		if continuationButtonStateIsPhasePlan(state) {
+		if label := continuationBundleButtonLabel(state); label != "" {
+			approveLabel = "Approve " + label
+			reviseLabel = "Revise " + label
+		} else if continuationButtonStateIsPhasePlan(state) {
 			approveLabel = "Approve phase"
 			reviseLabel = "Revise phase"
 			if subject := continuationApprovalButtonSubject(state); subject != "" {
@@ -887,6 +928,89 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 			{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
 		},
 	}
+}
+
+func continuationBundleButtonLabel(state session.ContinuationState) string {
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	if len(bundle.Phases) < 2 {
+		return ""
+	}
+	first := bundle.Phases[0].Index
+	last := bundle.Phases[len(bundle.Phases)-1].Index
+	if first <= 0 {
+		first = 1
+	}
+	if last <= 0 {
+		last = len(bundle.Phases)
+	}
+	if first == last {
+		return fmt.Sprintf("stage %d", first)
+	}
+	return fmt.Sprintf("stages %d–%d", first, last)
+}
+
+func currentContinuationBundlePhase(bundle session.ContinuationApprovalBundle) (session.ContinuationApprovalBundlePhase, bool) {
+	bundle = session.NormalizeContinuationApprovalBundle(bundle)
+	if len(bundle.Phases) == 0 {
+		return session.ContinuationApprovalBundlePhase{}, false
+	}
+	currentID := strings.TrimSpace(bundle.CurrentPhaseID)
+	if currentID != "" {
+		for _, phase := range bundle.Phases {
+			if strings.TrimSpace(phase.ID) == currentID {
+				return phase, true
+			}
+		}
+	}
+	for _, phase := range bundle.Phases {
+		if phase.Status == session.ContinuationLeaseStatusActive || phase.Status == session.ContinuationLeaseStatusPending || phase.Status == "" {
+			return phase, true
+		}
+	}
+	return bundle.Phases[0], true
+}
+
+func continuationApprovalBundleAfterTurnConsumed(bundle session.ContinuationApprovalBundle, now time.Time) session.ContinuationApprovalBundle {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	bundle = session.NormalizeContinuationApprovalBundle(bundle)
+	if !bundle.Active() || len(bundle.Phases) == 0 {
+		return bundle
+	}
+	currentID := strings.TrimSpace(bundle.CurrentPhaseID)
+	currentIndex := -1
+	for i := range bundle.Phases {
+		if strings.TrimSpace(bundle.Phases[i].ID) == currentID {
+			currentIndex = i
+			break
+		}
+	}
+	if currentIndex < 0 {
+		currentIndex = 0
+	}
+	bundle.Phases[currentIndex].Status = session.ContinuationLeaseStatusConsumed
+	nextIndex := -1
+	for i := currentIndex + 1; i < len(bundle.Phases); i++ {
+		if bundle.Phases[i].Status == session.ContinuationLeaseStatusPending || bundle.Phases[i].Status == "" {
+			nextIndex = i
+			break
+		}
+	}
+	if nextIndex >= 0 {
+		bundle.Phases[nextIndex].Status = session.ContinuationLeaseStatusActive
+		bundle.CurrentPhaseID = strings.TrimSpace(bundle.Phases[nextIndex].ID)
+		if bundle.Status != session.ContinuationLeaseStatusRevoked && bundle.Status != session.ContinuationLeaseStatusExpired {
+			bundle.Status = session.ContinuationLeaseStatusActive
+		}
+	} else if bundle.Status != session.ContinuationLeaseStatusRevoked && bundle.Status != session.ContinuationLeaseStatusExpired {
+		bundle.Status = session.ContinuationLeaseStatusConsumed
+		bundle.ConsumedAt = now
+		bundle.CurrentPhaseID = ""
+	}
+	bundle.UpdatedAt = now
+	return session.NormalizeContinuationApprovalBundle(bundle)
 }
 
 func continuationButtonStateExpired(state session.ContinuationState) bool {
@@ -1053,6 +1177,36 @@ func approvedContinuationEventTextForState(state session.ContinuationState) stri
 			appended = true
 		}
 		lines = append(lines, field.name+": "+value)
+	}
+	if bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle); bundle.Active() {
+		if !appended {
+			lines = append(lines, "", "Approved continuation lease:")
+			appended = true
+		}
+		lines = append(lines, "bundle_id: "+strings.TrimSpace(bundle.ID))
+		lines = append(lines, fmt.Sprintf("bundle_phase_count: %d", len(bundle.Phases)))
+		if phase, ok := currentContinuationBundlePhase(bundle); ok {
+			lines = append(lines, "bundle_phase_id: "+strings.TrimSpace(phase.ID))
+			lines = append(lines, "bundle_operation_phase_id: "+strings.TrimSpace(phase.OperationPhaseID))
+			lines = append(lines, fmt.Sprintf("bundle_phase_index: %d", phase.Index))
+			if authority := strings.TrimSpace(phase.AuthorityClass); authority != "" {
+				lines = append(lines, "bundle_phase_authority_class: "+authority)
+			}
+			if effect := strings.TrimSpace(phase.BoundedEffect); effect != "" {
+				lines = append(lines, "bundle_phase_bounded_effect: "+effect)
+			}
+		}
+		if len(bundle.Phases) > 0 {
+			parts := make([]string, 0, len(bundle.Phases))
+			for _, phase := range bundle.Phases {
+				label := fmt.Sprintf("%d", phase.Index)
+				if summary := strings.TrimSpace(phase.Summary); summary != "" {
+					label += ":" + summary
+				}
+				parts = append(parts, label)
+			}
+			lines = append(lines, "bundle_phases: "+strings.Join(parts, " | "))
+		}
 	}
 	return strings.Join(lines, "\n")
 }

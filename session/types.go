@@ -192,6 +192,34 @@ type ContinuationLease struct {
 	RevokedAt        time.Time               `json:"revoked_at,omitempty"`
 }
 
+type ContinuationApprovalBundlePhase struct {
+	ID               string                  `json:"id,omitempty"`
+	OperationPhaseID string                  `json:"operation_phase_id,omitempty"`
+	Index            int                     `json:"index,omitempty"`
+	Summary          string                  `json:"summary,omitempty"`
+	AuthorityClass   string                  `json:"authority_class,omitempty"`
+	WhyNow           string                  `json:"why_now,omitempty"`
+	BoundedEffect    string                  `json:"bounded_effect,omitempty"`
+	AllowedActions   []string                `json:"allowed_actions,omitempty"`
+	ForbiddenActions []string                `json:"forbidden_actions,omitempty"`
+	ValidationPlan   []string                `json:"validation_plan,omitempty"`
+	Status           ContinuationLeaseStatus `json:"status,omitempty"`
+}
+
+type ContinuationApprovalBundle struct {
+	ID             string                            `json:"id,omitempty"`
+	Status         ContinuationLeaseStatus           `json:"status,omitempty"`
+	CurrentPhaseID string                            `json:"current_phase_id,omitempty"`
+	ApprovedBy     int64                             `json:"approved_by,omitempty"`
+	Phases         []ContinuationApprovalBundlePhase `json:"phases,omitempty"`
+	ExpiresAt      time.Time                         `json:"expires_at,omitempty"`
+	CreatedAt      time.Time                         `json:"created_at,omitempty"`
+	UpdatedAt      time.Time                         `json:"updated_at,omitempty"`
+	ApprovedAt     time.Time                         `json:"approved_at,omitempty"`
+	ConsumedAt     time.Time                         `json:"consumed_at,omitempty"`
+	RevokedAt      time.Time                         `json:"revoked_at,omitempty"`
+}
+
 type OperationFinding struct {
 	Claim      string            `json:"claim"`
 	Confidence FindingConfidence `json:"confidence,omitempty"`
@@ -533,22 +561,23 @@ type ContinuationIntent struct {
 }
 
 type TurnAuthorizationState struct {
-	Kind                   TurnAuthorizationKind   `json:"kind,omitempty"`
-	Status                 TurnAuthorizationStatus `json:"status,omitempty"`
-	DecisionID             string                  `json:"decision_id,omitempty"`
-	Objective              string                  `json:"objective,omitempty"`
-	StageSummary           string                  `json:"stage_summary,omitempty"`
-	RemainingTurns         int                     `json:"remaining_turns,omitempty"`
-	ApprovedBy             int64                   `json:"approved_by,omitempty"`
-	PersonaIntent          ContinuationIntent      `json:"persona_intent,omitempty"`
-	GovernorIntent         ContinuationIntent      `json:"governor_intent,omitempty"`
-	ActionProposal         ActionProposal          `json:"action_proposal,omitempty"`
-	ContinuationLease      ContinuationLease       `json:"continuation_lease,omitempty"`
-	HandshakeBlockedReason string                  `json:"handshake_blocked_reason,omitempty"`
-	ParkedAt               time.Time               `json:"parked_at,omitempty"`
-	ParkedReason           string                  `json:"parked_reason,omitempty"`
-	ParkedSource           string                  `json:"parked_source,omitempty"`
-	UpdatedAt              time.Time               `json:"updated_at,omitempty"`
+	Kind                   TurnAuthorizationKind      `json:"kind,omitempty"`
+	Status                 TurnAuthorizationStatus    `json:"status,omitempty"`
+	DecisionID             string                     `json:"decision_id,omitempty"`
+	Objective              string                     `json:"objective,omitempty"`
+	StageSummary           string                     `json:"stage_summary,omitempty"`
+	RemainingTurns         int                        `json:"remaining_turns,omitempty"`
+	ApprovedBy             int64                      `json:"approved_by,omitempty"`
+	PersonaIntent          ContinuationIntent         `json:"persona_intent,omitempty"`
+	GovernorIntent         ContinuationIntent         `json:"governor_intent,omitempty"`
+	ActionProposal         ActionProposal             `json:"action_proposal,omitempty"`
+	ContinuationLease      ContinuationLease          `json:"continuation_lease,omitempty"`
+	ApprovalBundle         ContinuationApprovalBundle `json:"approval_bundle,omitempty"`
+	HandshakeBlockedReason string                     `json:"handshake_blocked_reason,omitempty"`
+	ParkedAt               time.Time                  `json:"parked_at,omitempty"`
+	ParkedReason           string                     `json:"parked_reason,omitempty"`
+	ParkedSource           string                     `json:"parked_source,omitempty"`
+	UpdatedAt              time.Time                  `json:"updated_at,omitempty"`
 }
 
 type ContinuationStatus = TurnAuthorizationStatus
@@ -1579,13 +1608,14 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 	state.GovernorIntent = normalizeContinuationIntent(state.GovernorIntent)
 	state.ActionProposal = NormalizeActionProposal(state.ActionProposal)
 	state.ContinuationLease = NormalizeContinuationLease(state.ContinuationLease)
+	state.ApprovalBundle = NormalizeContinuationApprovalBundle(state.ApprovalBundle)
 	state.HandshakeBlockedReason = normalizeContinuationStage(state.HandshakeBlockedReason)
 	if !state.ParkedAt.IsZero() {
 		state.ParkedAt = state.ParkedAt.UTC()
 	}
 	state.ParkedReason = strings.TrimSpace(state.ParkedReason)
 	state.ParkedSource = strings.TrimSpace(state.ParkedSource)
-	if state.Kind == "" && (state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "") {
+	if state.Kind == "" && (state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "" || state.ApprovalBundle.Active()) {
 		state.Kind = TurnAuthorizationKindContinuation
 	}
 	if state.RemainingTurns < 0 {
@@ -1598,7 +1628,7 @@ func NormalizeTurnAuthorizationState(state TurnAuthorizationState) TurnAuthoriza
 		state.ParkedReason = ""
 		state.ParkedSource = ""
 	}
-	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "" || !state.ParkedAt.IsZero() || state.ParkedReason != "" || state.ParkedSource != "") {
+	if state.UpdatedAt.IsZero() && (state.Kind != "" || state.Status != "" || state.DecisionID != "" || state.Objective != "" || state.StageSummary != "" || state.RemainingTurns > 0 || state.ApprovedBy > 0 || state.ActionProposal.Active() || state.ContinuationLease.ID != "" || state.ContinuationLease.ProposalID != "" || state.ApprovalBundle.Active() || !state.ParkedAt.IsZero() || state.ParkedReason != "" || state.ParkedSource != "") {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state
@@ -1691,6 +1721,125 @@ func NormalizeContinuationLeaseStatus(status ContinuationLeaseStatus) Continuati
 	default:
 		return ""
 	}
+}
+
+func NormalizeContinuationApprovalBundle(bundle ContinuationApprovalBundle) ContinuationApprovalBundle {
+	bundle.ID = strings.TrimSpace(bundle.ID)
+	bundle.Status = NormalizeContinuationLeaseStatus(bundle.Status)
+	bundle.CurrentPhaseID = strings.TrimSpace(bundle.CurrentPhaseID)
+	phases := make([]ContinuationApprovalBundlePhase, 0, len(bundle.Phases))
+	seen := make(map[string]struct{}, len(bundle.Phases))
+	for i, phase := range bundle.Phases {
+		phase = NormalizeContinuationApprovalBundlePhase(phase)
+		if !phase.Active() {
+			continue
+		}
+		if phase.Index <= 0 {
+			phase.Index = i + 1
+		}
+		baseID := strings.TrimSpace(phase.ID)
+		if baseID == "" {
+			baseID = strings.TrimSpace(phase.OperationPhaseID)
+		}
+		if baseID == "" {
+			baseID = fmt.Sprintf("phase-%d", phase.Index)
+		}
+		id := baseID
+		for suffix := 2; ; suffix++ {
+			if _, exists := seen[id]; !exists {
+				break
+			}
+			id = fmt.Sprintf("%s-%d", baseID, suffix)
+		}
+		phase.ID = id
+		seen[id] = struct{}{}
+		phases = append(phases, phase)
+	}
+	bundle.Phases = phases
+	if bundle.CurrentPhaseID != "" {
+		if _, ok := seen[bundle.CurrentPhaseID]; !ok {
+			bundle.CurrentPhaseID = ""
+		}
+	}
+	if bundle.CurrentPhaseID == "" {
+		for _, phase := range bundle.Phases {
+			if phase.Status == ContinuationLeaseStatusActive || phase.Status == ContinuationLeaseStatusPending || phase.Status == "" {
+				bundle.CurrentPhaseID = phase.ID
+				break
+			}
+		}
+	}
+	if !bundle.ExpiresAt.IsZero() {
+		bundle.ExpiresAt = bundle.ExpiresAt.UTC()
+	}
+	if !bundle.CreatedAt.IsZero() {
+		bundle.CreatedAt = bundle.CreatedAt.UTC()
+	}
+	if !bundle.UpdatedAt.IsZero() {
+		bundle.UpdatedAt = bundle.UpdatedAt.UTC()
+	}
+	if !bundle.ApprovedAt.IsZero() {
+		bundle.ApprovedAt = bundle.ApprovedAt.UTC()
+	}
+	if !bundle.ConsumedAt.IsZero() {
+		bundle.ConsumedAt = bundle.ConsumedAt.UTC()
+	}
+	if !bundle.RevokedAt.IsZero() {
+		bundle.RevokedAt = bundle.RevokedAt.UTC()
+	}
+	if bundle.Status == "" && bundle.Active() {
+		bundle.Status = ContinuationLeaseStatusPending
+	}
+	if bundle.CreatedAt.IsZero() && bundle.Active() {
+		bundle.CreatedAt = time.Now().UTC()
+	}
+	if bundle.UpdatedAt.IsZero() && bundle.Active() {
+		bundle.UpdatedAt = time.Now().UTC()
+	}
+	return bundle
+}
+
+func NormalizeContinuationApprovalBundlePhase(phase ContinuationApprovalBundlePhase) ContinuationApprovalBundlePhase {
+	phase.ID = strings.TrimSpace(phase.ID)
+	phase.OperationPhaseID = strings.TrimSpace(phase.OperationPhaseID)
+	phase.Summary = strings.TrimSpace(phase.Summary)
+	phase.AuthorityClass = normalizeEnumValue(phase.AuthorityClass)
+	phase.WhyNow = strings.TrimSpace(phase.WhyNow)
+	phase.BoundedEffect = strings.TrimSpace(phase.BoundedEffect)
+	phase.AllowedActions = normalizeActionStringSlice(phase.AllowedActions)
+	phase.ForbiddenActions = normalizeActionStringSlice(phase.ForbiddenActions)
+	phase.ValidationPlan = normalizeActionStringSlice(phase.ValidationPlan)
+	phase.Status = NormalizeContinuationLeaseStatus(phase.Status)
+	if phase.Index < 0 {
+		phase.Index = 0
+	}
+	return phase
+}
+
+func (b ContinuationApprovalBundle) Active() bool {
+	return strings.TrimSpace(b.ID) != "" ||
+		strings.TrimSpace(string(b.Status)) != "" ||
+		strings.TrimSpace(b.CurrentPhaseID) != "" ||
+		b.ApprovedBy > 0 ||
+		len(b.Phases) > 0 ||
+		!b.ExpiresAt.IsZero() ||
+		!b.ApprovedAt.IsZero() ||
+		!b.ConsumedAt.IsZero() ||
+		!b.RevokedAt.IsZero()
+}
+
+func (p ContinuationApprovalBundlePhase) Active() bool {
+	return strings.TrimSpace(p.ID) != "" ||
+		strings.TrimSpace(p.OperationPhaseID) != "" ||
+		p.Index > 0 ||
+		strings.TrimSpace(p.Summary) != "" ||
+		strings.TrimSpace(p.AuthorityClass) != "" ||
+		strings.TrimSpace(p.WhyNow) != "" ||
+		strings.TrimSpace(p.BoundedEffect) != "" ||
+		len(p.AllowedActions) > 0 ||
+		len(p.ForbiddenActions) > 0 ||
+		len(p.ValidationPlan) > 0 ||
+		strings.TrimSpace(string(p.Status)) != ""
 }
 
 func NormalizeContinuationLease(lease ContinuationLease) ContinuationLease {

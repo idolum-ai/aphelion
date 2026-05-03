@@ -527,3 +527,217 @@ func TestRevokeMaterializedOperationProposalDeniesPendingOperationProposal(t *te
 		t.Fatalf("operation state = %#v, want denied/blocked", got)
 	}
 }
+
+func TestMaterializeDurablePhasePlanBundlesConsecutiveSafePhases(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9020, UserID: 0, Scope: telegramDMScopeRef(9020)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "phase-bundle-op",
+		Objective: "Ship approval bundles safely.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "phase-bundle-plan",
+			Goal: "Let Daniel approve multiple bounded stages at once.",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-1-design",
+					Summary:        "Design the bundle contract",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "read_only_review",
+					BoundedEffect:  "Inspect only and write the contract.",
+					AllowedActions: []string{"inspect_code", "draft_contract"},
+				},
+				{
+					ID:               "phase-2-implementation",
+					Summary:          "Implement bundled approvals",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "workspace_write",
+					BoundedEffect:    "Edit continuation code and focused tests; stop before deploy.",
+					AllowedActions:   []string{"edit_files", "run_tests"},
+					ForbiddenActions: []string{"deploy", "mailbox_access"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9020, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want bundled phase approval")
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation = %#v, want pending bundled lease", cont)
+	}
+	if cont.RemainingTurns != 2 || cont.ContinuationLease.MaxTurns != 2 || cont.ContinuationLease.RemainingTurns != 2 {
+		t.Fatalf("turns = state %d lease %d/%d, want bundled 2", cont.RemainingTurns, cont.ContinuationLease.MaxTurns, cont.ContinuationLease.RemainingTurns)
+	}
+	bundle := session.NormalizeContinuationApprovalBundle(cont.ApprovalBundle)
+	if bundle.ID == "" || len(bundle.Phases) != 2 || bundle.CurrentPhaseID != bundle.Phases[0].ID {
+		t.Fatalf("bundle = %#v, want two phases with first current", bundle)
+	}
+	if bundle.Phases[0].OperationPhaseID != "phase-1-design" || bundle.Phases[0].AuthorityClass != "read_only_review" {
+		t.Fatalf("bundle first phase = %#v", bundle.Phases[0])
+	}
+	if bundle.Phases[1].OperationPhaseID != "phase-2-implementation" || bundle.Phases[1].AuthorityClass != "workspace_write" {
+		t.Fatalf("bundle second phase = %#v", bundle.Phases[1])
+	}
+	if got := cont.ActionProposal.RiskClass; got != "workspace_write" {
+		t.Fatalf("risk class = %q, want strongest bundled authority workspace_write", got)
+	}
+	if !strings.Contains(cont.ActionProposal.BoundedEffect, "phase 1") || !strings.Contains(cont.ActionProposal.BoundedEffect, "phase 2") || !strings.Contains(cont.ActionProposal.BoundedEffect, "Stop before any phase not named") {
+		t.Fatalf("bounded effect = %q, want per-phase stop-gate provenance", cont.ActionProposal.BoundedEffect)
+	}
+
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Stage != "bundle_approval" || opState.Proposal.ID != bundle.ID || opState.Proposal.Status != session.ProposalStatusPending {
+		t.Fatalf("operation = %#v, want synthetic bundle proposal", opState)
+	}
+	if opState.PhasePlan.CurrentPhaseID != "phase-1-design" || opState.PhasePlan.Phases[0].LeaseID != cont.ContinuationLease.ID || opState.PhasePlan.Phases[1].LeaseID != cont.ContinuationLease.ID {
+		t.Fatalf("phase plan = %#v, want both bundled phases linked to same lease", opState.PhasePlan)
+	}
+
+	sender.mu.Lock()
+	inlineText := ""
+	var labels []string
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+		labels = continuationButtonLabels(sender.inline[0].rows)
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(inlineText, "Bundle phases:") || !strings.Contains(inlineText, "Design the bundle contract") || !strings.Contains(inlineText, "Implement bundled approvals") {
+		t.Fatalf("inline text = %q, want bundled phase details", inlineText)
+	}
+	if got, want := labels, []string{"Approve stages 1–2", "Scope details", "Revise stages 1–2", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+}
+
+func TestMaterializeDurablePhasePlanBundleStopsBeforeHardEscalationGate(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9021, UserID: 0, Scope: telegramDMScopeRef(9021)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "phase-bundle-stop-op",
+		Objective: "Stop bundles before deploy.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID: "phase-bundle-stop-plan",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-1-readonly",
+					Summary:        "Inspect state",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "read_only_review",
+					BoundedEffect:  "Read only and report.",
+				},
+				{
+					ID:             "phase-2-deploy",
+					Summary:        "Deploy the runtime",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "deploy",
+					BoundedEffect:  "Commit, restart, and smoke test.",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9021, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want single phase approval before hard gate")
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ApprovalBundle.Active() || len(cont.ApprovalBundle.Phases) != 0 {
+		t.Fatalf("approval bundle = %#v, want no bundle across deploy gate", cont.ApprovalBundle)
+	}
+	if cont.ActionProposal.Summary != "Inspect state" || cont.ActionProposal.RiskClass != "read_only_review" || cont.RemainingTurns != 1 {
+		t.Fatalf("continuation = %#v, want single read-only phase", cont)
+	}
+	sender.mu.Lock()
+	labels := []string(nil)
+	if len(sender.inline) > 0 {
+		labels = continuationButtonLabels(sender.inline[0].rows)
+	}
+	sender.mu.Unlock()
+	if got, want := labels, []string{"Approve Phase 1", "Scope details", "Revise Phase 1", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+}
+
+func TestApproveBundledPhasePlanLeaseMarksOnlyCurrentPhaseInProgress(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9022, UserID: 0, Scope: telegramDMScopeRef(9022)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "phase-bundle-approve-op",
+		Objective: "Approve bundle sequentially.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID: "phase-bundle-approve-plan",
+			Phases: []session.OperationPhase{
+				{ID: "phase-1", Summary: "Read", Status: session.PlanStatusPending, AuthorityClass: "read_only_review", BoundedEffect: "Read only."},
+				{ID: "phase-2", Summary: "Patch", Status: session.PlanStatusPending, AuthorityClass: "workspace_write", BoundedEffect: "Patch only."},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9022, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil); err != nil || !materialized {
+		t.Fatalf("materialize = %v err=%v, want bundled continuation", materialized, err)
+	}
+
+	approved, err := rt.ApproveContinuation(9022, 1001)
+	if err != nil {
+		t.Fatalf("ApproveContinuation() err = %v", err)
+	}
+	bundle := session.NormalizeContinuationApprovalBundle(approved.ApprovalBundle)
+	if bundle.Status != session.ContinuationLeaseStatusActive || len(bundle.Phases) != 2 || bundle.Phases[0].Status != session.ContinuationLeaseStatusActive || bundle.Phases[1].Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("approved bundle = %#v, want active first phase and pending second", bundle)
+	}
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.Status != session.OperationStatusActive || got.Proposal.Status != session.ProposalStatusApproved {
+		t.Fatalf("operation = %#v, want active approved bundle proposal", got)
+	}
+	if got.PhasePlan.Phases[0].Status != session.PlanStatusInProgress || got.PhasePlan.Phases[1].Status != session.PlanStatusPending {
+		t.Fatalf("phase plan = %#v, want only first bundled phase in_progress", got.PhasePlan)
+	}
+}
