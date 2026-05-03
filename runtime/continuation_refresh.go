@@ -48,7 +48,7 @@ func (r *Runtime) RefreshContinuationProposal(ctx context.Context, chatID int64,
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 
 	msg := core.InboundMessage{ChatID: chatID, Origin: core.InboundOriginTurnAuthorization, Text: "continuation proposal refresh"}
-	if _, err := sender.SendInlineKeyboard(ctx, chatID, r.renderContinuationPrompt(ctx, key, msg, state), continuationApprovalButtonRows(continuationCallbackID(state)), nil); err != nil {
+	if _, err := sender.SendInlineKeyboard(ctx, chatID, r.renderContinuationPrompt(ctx, key, msg, state), continuationApprovalButtonRows(state), nil); err != nil {
 		return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
 	}
 	return state, true, nil

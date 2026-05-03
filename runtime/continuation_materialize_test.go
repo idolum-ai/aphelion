@@ -61,7 +61,7 @@ func TestHandleInboundMaterializesPendingOperationProposalAsButtonBackedLease(t 
 		sender.inline[0].rows[0][0].Text, sender.inline[0].rows[0][1].Text,
 		sender.inline[0].rows[1][0].Text, sender.inline[0].rows[1][1].Text,
 	}
-	wantLabels := []string{"Approve lease", "Continue once", "Ask edit", "Stop / park"}
+	wantLabels := []string{"Approve & run", "Scope details", "Revise proposal", "Park"}
 	for i, want := range wantLabels {
 		if labels[i] != want {
 			t.Fatalf("labels = %#v, want prefix %#v", labels, wantLabels)

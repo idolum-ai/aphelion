@@ -102,7 +102,7 @@ func (r *Runtime) proposeStartupRecoveryResume(ctx context.Context, key session.
 	if strings.TrimSpace(text) == "" {
 		text = renderContinuationPromptFallback(state)
 	}
-	if _, err := sender.SendInlineKeyboard(ctx, key.ChatID, text, continuationApprovalButtonRows(continuationCallbackID(state)), nil); err != nil {
+	if _, err := sender.SendInlineKeyboard(ctx, key.ChatID, text, continuationApprovalButtonRows(state), nil); err != nil {
 		return fmt.Errorf("send startup recovery resume proposal: %w", err)
 	}
 	return nil

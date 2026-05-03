@@ -220,7 +220,7 @@ func (r *Runtime) reofferRestartParkedContinuation(ctx context.Context, key sess
 	if reason := strings.TrimSpace(state.ParkedReason); reason != "" && !strings.Contains(text, reason) {
 		text = strings.TrimSpace(text) + "\n\nRestart note:\n" + reason
 	}
-	if _, err := sender.SendInlineKeyboard(ctx, key.ChatID, text, continuationApprovalButtonRows(continuationCallbackID(state)), nil); err != nil {
+	if _, err := sender.SendInlineKeyboard(ctx, key.ChatID, text, continuationApprovalButtonRows(state), nil); err != nil {
 		return fmt.Errorf("send parked continuation prompt: %w", err)
 	}
 	resumed := clearRestartParkedContinuation(state, now)

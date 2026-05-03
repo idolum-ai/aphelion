@@ -77,7 +77,7 @@ func continuationCallbackMatchesState(state session.ContinuationState, decisionI
 	state = session.NormalizeContinuationState(state)
 	decisionID = strings.TrimSpace(decisionID)
 	action = normalizeContinuationCallbackAction(action)
-	if decisionID == "" || state.DecisionID == "" || action == "" {
+	if decisionID == "" || action == "" {
 		return false
 	}
 	if !continuationCallbackIDMatchesState(state, decisionID) {
@@ -89,14 +89,20 @@ func continuationCallbackMatchesState(state session.ContinuationState, decisionI
 	case continuationActionAskEdit:
 		return state.Status == session.ContinuationStatusPending
 	case continuationActionStop, continuationActionStopPark:
-		return state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
+		return state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved || continuationCallbackStateExpired(state)
 	case continuationActionResumeEdge:
 		return state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
 	case continuationActionAskNextLease, continuationActionStatusOnly:
-		return state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved
+		return state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved || continuationCallbackStateExpired(state)
 	default:
 		return false
 	}
+}
+
+func continuationCallbackStateExpired(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	return state.ActionProposal.Status == session.ProposalStatusExpired ||
+		state.ContinuationLease.Status == session.ContinuationLeaseStatusExpired
 }
 
 func continuationCallbackIDMatchesState(state session.ContinuationState, decisionID string) bool {
@@ -143,6 +149,9 @@ func renderContinuationDecision(state session.ContinuationState, action string) 
 	case continuationActionAskNextLease:
 		return renderContinuationEdgeStatus(state, "Next lease needed.")
 	case continuationActionStatusOnly:
+		if state.Status == session.ContinuationStatusPending {
+			return renderContinuationScopeDetails(state, "Lease scope details.")
+		}
 		return renderContinuationEdgeStatus(state, "Continuation status only.")
 	case continuationActionResumeEdge:
 		if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
@@ -221,4 +230,62 @@ func renderContinuationEdgeStatus(state session.ContinuationState, prefix string
 	}
 	lines = append(lines, "No new authority was granted by this status view.")
 	return strings.Join(lines, "\n")
+}
+
+func renderContinuationScopeDetails(state session.ContinuationState, prefix string) string {
+	state = session.NormalizeContinuationState(state)
+	proposal := session.NormalizeActionProposal(state.ActionProposal)
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	lines := []string{strings.TrimSpace(prefix)}
+	if lines[0] == "" {
+		lines[0] = "Lease scope details."
+	}
+	if state.Status != "" {
+		lines = append(lines, "Status: "+string(state.Status))
+	}
+	if state.Objective != "" {
+		lines = append(lines, "Objective: "+state.Objective)
+	}
+	if state.StageSummary != "" {
+		lines = append(lines, "Next: "+state.StageSummary)
+	}
+	if proposal.Summary != "" {
+		lines = append(lines, "Proposal: "+proposal.Summary)
+	}
+	if proposal.WhyNow != "" {
+		lines = append(lines, "Why now: "+proposal.WhyNow)
+	}
+	if proposal.BoundedEffect != "" {
+		lines = append(lines, "Bounded effect: "+proposal.BoundedEffect)
+	}
+	if allowed := firstNonEmptyContinuationCommandList(proposal.AllowedActions, lease.AllowedActions); len(allowed) > 0 {
+		lines = append(lines, "Allowed actions: "+strings.Join(allowed, ", "))
+	}
+	if forbidden := firstNonEmptyContinuationCommandList(proposal.ForbiddenActions, lease.ForbiddenActions); len(forbidden) > 0 {
+		lines = append(lines, "Forbidden actions: "+strings.Join(forbidden, ", "))
+	}
+	if validation := firstNonEmptyContinuationCommandList(proposal.ValidationPlan, lease.ValidationPlan); len(validation) > 0 {
+		lines = append(lines, "Validation plan: "+strings.Join(validation, "; "))
+	}
+	if state.RemainingTurns > 0 {
+		lines = append(lines, fmt.Sprintf("Remaining turns: %d", state.RemainingTurns))
+	}
+	lines = append(lines, "No new authority was granted by this status view.")
+	return strings.Join(lines, "\n")
+}
+
+func firstNonEmptyContinuationCommandList(values ...[]string) []string {
+	for _, list := range values {
+		out := make([]string, 0, len(list))
+		for _, value := range list {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				out = append(out, value)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
 }

@@ -54,7 +54,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			ctx,
 			msg.ChatID,
 			renderOperationProposalMaterializedPromptFallback(state),
-			continuationApprovalButtonRows(continuationCallbackID(state)),
+			continuationApprovalButtonRows(state),
 			nil,
 		)
 		if err != nil {
@@ -87,7 +87,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		ctx,
 		msg.ChatID,
 		renderOperationProposalMaterializedPromptFallback(state),
-		continuationApprovalButtonRows(continuationCallbackID(state)),
+		continuationApprovalButtonRows(state),
 		nil,
 	)
 	if err != nil {

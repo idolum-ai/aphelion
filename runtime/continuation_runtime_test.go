@@ -14,6 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/telegram"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
@@ -99,16 +100,15 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if strings.Contains(strings.ToLower(sender.inline[0].text), "governor rationale:") {
 		t.Fatalf("inline text = %q, want single-system framing without persona/governor blocks", sender.inline[0].text)
 	}
-	if len(sender.inline[0].rows) != 4 {
-		t.Fatalf("rows = %#v, want four continuation-control rows", sender.inline[0].rows)
+	if len(sender.inline[0].rows) != 3 {
+		t.Fatalf("rows = %#v, want three pending continuation-control rows", sender.inline[0].rows)
 	}
 	labels := []string{
 		sender.inline[0].rows[0][0].Text, sender.inline[0].rows[0][1].Text,
 		sender.inline[0].rows[1][0].Text, sender.inline[0].rows[1][1].Text,
-		sender.inline[0].rows[2][0].Text, sender.inline[0].rows[2][1].Text,
-		sender.inline[0].rows[3][0].Text, sender.inline[0].rows[3][1].Text,
+		sender.inline[0].rows[2][0].Text,
 	}
-	wantLabels := []string{"Approve lease", "Continue once", "Ask edit", "Stop / park", "Resume edge", "Ask next lease", "Status only", "Stop"}
+	wantLabels := []string{"Approve & run", "Scope details", "Revise proposal", "Park", "Stop"}
 	for i, want := range wantLabels {
 		if labels[i] != want {
 			t.Fatalf("button labels = %#v, want %#v", labels, wantLabels)
@@ -193,6 +193,75 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if payloadString(payload, "state_source") != "continuation_state" {
 		t.Fatalf("offered payload state_source = %q, want continuation_state", payloadString(payload, "state_source"))
 	}
+}
+
+func TestContinuationApprovalButtonRowsAdaptToLeaseState(t *testing.T) {
+	t.Parallel()
+
+	pending := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-pending",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{ID: "aprop-pending"},
+		ContinuationLease: session.ContinuationLease{
+			ID:         "lease-pending",
+			ProposalID: "aprop-pending",
+			Status:     session.ContinuationLeaseStatusPending,
+		},
+	}
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(pending)), []string{"Approve & run", "Scope details", "Revise proposal", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("pending labels = %#v, want %#v", got, want)
+	}
+
+	phase := pending
+	phase.DecisionID = "decision-phase"
+	phase.ActionProposal = session.ActionProposal{
+		ID:             "aprop-phase",
+		OperationID:    "phase-op-phase-1",
+		AllowedActions: []string{"execute_phase_once", "update_operation_phase_plan"},
+	}
+	phase.ContinuationLease = session.ContinuationLease{ID: "lease-phase", ProposalID: "aprop-phase", Status: session.ContinuationLeaseStatusPending}
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(phase)), []string{"Approve phase", "Scope details", "Revise phase", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("phase labels = %#v, want %#v", got, want)
+	}
+
+	approved := pending
+	approved.Status = session.ContinuationStatusApproved
+	approved.ContinuationLease.Status = session.ContinuationLeaseStatusActive
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(approved)), []string{"Run now", "Status", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("approved labels = %#v, want %#v", got, want)
+	}
+
+	expired := pending
+	expired.Status = session.ContinuationStatusIdle
+	expired.RemainingTurns = 0
+	expired.ActionProposal.Status = session.ProposalStatusExpired
+	expired.ContinuationLease.Status = session.ContinuationLeaseStatusExpired
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(expired)), []string{"Refresh lease", "Status", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("expired labels = %#v, want %#v", got, want)
+	}
+}
+
+func continuationButtonLabels(rows [][]telegram.InlineButton) []string {
+	labels := make([]string, 0)
+	for _, row := range rows {
+		for _, button := range row {
+			labels = append(labels, button.Text)
+		}
+	}
+	return labels
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestHandleInboundContinuationApprovalPromptFallsBackWhenRenderedTextUsesSplitRoleLabels(t *testing.T) {

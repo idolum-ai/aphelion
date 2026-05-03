@@ -3918,6 +3918,13 @@ func TestHandleTelegramCommandCallbackContinuationStatusOnlyDoesNotMutateOrTrigg
 		RemainingTurns: 1,
 		Objective:      "Keep the edge visible.",
 		StageSummary:   "Report status only.",
+		ActionProposal: session.ActionProposal{
+			Summary:          "Inspect the proposed scope",
+			BoundedEffect:    "Inspect local state and report only.",
+			AllowedActions:   []string{"inspect_readonly_state"},
+			ForbiddenActions: []string{"edit_files", "deploy"},
+			ValidationPlan:   []string{"report evidence"},
+		},
 	}}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-status-only",
@@ -3934,8 +3941,61 @@ func TestHandleTelegramCommandCallbackContinuationStatusOnlyDoesNotMutateOrTrigg
 	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 || router.stopContinuationInput != 0 {
 		t.Fatalf("router mutated approve/trigger/stop = %d/%d/%d, want 0/0/0", router.approveContinuationInput, router.triggerContinuationInput, router.stopContinuationInput)
 	}
-	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "No new authority was granted") {
+	if len(sender.editClear) != 1 {
 		t.Fatalf("editClear = %#v, want status-only no-authority text", sender.editClear)
+	}
+	if !strings.Contains(sender.editClear[0].text, "Lease scope details") ||
+		!strings.Contains(sender.editClear[0].text, "Bounded effect: Inspect local state and report only.") ||
+		!strings.Contains(sender.editClear[0].text, "Forbidden actions: edit_files, deploy") ||
+		!strings.Contains(sender.editClear[0].text, "No new authority was granted") {
+		t.Fatalf("editClear = %#v, want detailed scope no-authority text", sender.editClear)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationAskNextLeaseRefreshesProposal(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		continuationState: session.ContinuationState{
+			Status:         session.ContinuationStatusIdle,
+			DecisionID:     "decision-expired-refresh",
+			RemainingTurns: 0,
+			ActionProposal: session.ActionProposal{ID: "aprop-expired-refresh", Status: session.ProposalStatusExpired},
+			ContinuationLease: session.ContinuationLease{
+				ID:         "lease-expired-refresh",
+				ProposalID: "aprop-expired-refresh",
+				Status:     session.ContinuationLeaseStatusExpired,
+			},
+		},
+		refreshContinuationReturn: session.ContinuationState{
+			Status:         session.ContinuationStatusPending,
+			DecisionID:     "decision-refreshed",
+			RemainingTurns: 1,
+			StageSummary:   "Use the fresh approval prompt.",
+		},
+		refreshContinuationSent: true,
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-next-lease",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("aprop-expired-refresh", continuationActionAskNextLease),
+		Message: &telegram.Message{MessageID: 296, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.refreshContinuationInput != 7 || !strings.Contains(router.refreshContinuationReason, "requested") {
+		t.Fatalf("refresh input/reason = %d/%q, want requested refresh", router.refreshContinuationInput, router.refreshContinuationReason)
+	}
+	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 || router.stopContinuationInput != 0 {
+		t.Fatalf("router approve/trigger/stop = %d/%d/%d, want 0/0/0", router.approveContinuationInput, router.triggerContinuationInput, router.stopContinuationInput)
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "fresh approval prompt") {
+		t.Fatalf("editClear = %#v, want refreshed prompt status", sender.editClear)
 	}
 }
 

@@ -107,7 +107,7 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		ctx,
 		msg.ChatID,
 		r.renderContinuationPrompt(ctx, key, msg, state),
-		continuationApprovalButtonRows(continuationCallbackID(state)),
+		continuationApprovalButtonRows(state),
 		nil,
 	)
 	if err != nil {
@@ -826,29 +826,79 @@ func continuationCallbackID(state session.ContinuationState) string {
 	return strings.TrimSpace(state.DecisionID)
 }
 
-func continuationApprovalButtonRows(decisionID string) [][]telegram.InlineButton {
-	decisionID = strings.TrimSpace(decisionID)
+func continuationApprovalButtonRows(state session.ContinuationState) [][]telegram.InlineButton {
+	state = session.NormalizeContinuationState(state)
+	decisionID := continuationCallbackID(state)
 	if decisionID == "" {
 		return nil
 	}
+	if continuationButtonStateExpired(state) {
+		return [][]telegram.InlineButton{
+			{
+				{Text: "Refresh lease", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskNextLease)},
+				{Text: "Status", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
+			},
+			{
+				{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
+			},
+		}
+	}
+	if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
+		return [][]telegram.InlineButton{
+			{
+				{Text: "Run now", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionResumeEdge)},
+				{Text: "Status", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
+			},
+			{
+				{Text: "Park", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
+				{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
+			},
+		}
+	}
+	if state.Status == session.ContinuationStatusPending {
+		approveLabel := "Approve & run"
+		reviseLabel := "Revise proposal"
+		if continuationButtonStateIsPhasePlan(state) {
+			approveLabel = "Approve phase"
+			reviseLabel = "Revise phase"
+		}
+		return [][]telegram.InlineButton{
+			{
+				{Text: approveLabel, CallbackData: encodeContinuationCallbackData(decisionID, continuationActionApproveLease)},
+				{Text: "Scope details", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
+			},
+			{
+				{Text: reviseLabel, CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskEdit)},
+				{Text: "Park", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
+			},
+			{
+				{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
+			},
+		}
+	}
 	return [][]telegram.InlineButton{
 		{
-			{Text: "Approve lease", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionApproveLease)},
-			{Text: "Continue once", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionContinueOnce)},
-		},
-		{
-			{Text: "Ask edit", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskEdit)},
-			{Text: "Stop / park", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
-		},
-		{
-			{Text: "Resume edge", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionResumeEdge)},
-			{Text: "Ask next lease", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskNextLease)},
-		},
-		{
-			{Text: "Status only", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
+			{Text: "Status", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
 			{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
 		},
 	}
+}
+
+func continuationButtonStateExpired(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	return state.ActionProposal.Status == session.ProposalStatusExpired ||
+		state.ContinuationLease.Status == session.ContinuationLeaseStatusExpired
+}
+
+func continuationButtonStateIsPhasePlan(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	if strings.HasPrefix(strings.TrimSpace(state.ActionProposal.OperationID), "phase-") {
+		return true
+	}
+	return actionListContains(state.ActionProposal.AllowedActions, "update_operation_phase_plan") ||
+		actionListContains(state.ContinuationLease.AllowedActions, "update_operation_phase_plan") ||
+		actionListContains(state.ActionProposal.AllowedActions, "execute_phase_once") ||
+		actionListContains(state.ContinuationLease.AllowedActions, "execute_phase_once")
 }
 
 func newContinuationDecisionID() string {

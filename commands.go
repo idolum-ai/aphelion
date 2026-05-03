@@ -720,7 +720,25 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			}
 			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.stop", text)
 			return true, nil
-		case continuationActionAskNextLease, continuationActionStatusOnly:
+		case continuationActionAskNextLease:
+			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.refresh", "")
+			refreshedState, refreshed, refreshErr := refreshContinuationProposal(ctx, router, chatID, "operator requested next lease")
+			if refreshErr != nil {
+				recordTelegramCallbackError(router, chatID, "continuation.refresh", refreshErr)
+				log.Printf("WARN continuation refresh callback failed chat_id=%d err=%v", chatID, refreshErr)
+				editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.refresh", renderContinuationCallbackError(state, refreshErr))
+				return true, nil
+			}
+			if refreshed {
+				text = renderContinuationRefreshedDecision(refreshedState)
+			} else if refreshedState.Status == session.ContinuationStatusPending {
+				text = renderContinuationRefreshAlreadyActiveDecision(refreshedState)
+			} else {
+				text = renderContinuationDecision(state, action)
+			}
+			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.refresh", text)
+			return true, nil
+		case continuationActionStatusOnly:
 			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.status", "")
 			text = renderContinuationDecision(state, action)
 			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.status", text)
