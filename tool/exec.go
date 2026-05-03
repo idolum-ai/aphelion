@@ -5,6 +5,7 @@ package tool
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/durableagent"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
@@ -505,18 +507,63 @@ func (r *Registry) scopeForPrincipalToolExecution(p principal.Principal) (sandbo
 	if r == nil || r.sandbox == nil {
 		return sandbox.Scope{}, fmt.Errorf("principal-aware execution requires sandbox resolver")
 	}
+	if scope, ok, err := r.durableAgentScopeForPrincipalToolExecution(p); ok || err != nil {
+		return scope, err
+	}
 	scope, err := r.sandbox.Resolve(p)
 	if err == nil {
 		return scope, nil
 	}
-	if r.durableAgentPrincipalFallback && p.Role == principal.RoleDurableAgent && strings.TrimSpace(p.DurableAgentID) != "" {
-		return sandbox.Scope{
-			Principal:        p,
-			WorkingRoot:      strings.TrimSpace(r.workspace),
-			SharedMemoryRoot: strings.TrimSpace(r.workspace),
-		}, nil
-	}
 	return sandbox.Scope{}, err
+}
+
+func (r *Registry) durableAgentScopeForPrincipalToolExecution(p principal.Principal) (sandbox.Scope, bool, error) {
+	if p.Role != principal.RoleDurableAgent {
+		return sandbox.Scope{}, false, nil
+	}
+	agentID := strings.TrimSpace(p.DurableAgentID)
+	if agentID == "" {
+		return sandbox.Scope{}, true, fmt.Errorf("durable_agent principal requires durable agent id")
+	}
+
+	globalRoot := strings.TrimSpace(r.workspace)
+	if r.sandbox != nil {
+		roots := r.sandbox.Roots()
+		globalRoot = firstNonEmpty(roots.GlobalRoot, globalRoot)
+	}
+
+	var workingRoot, memoryRoot, networkPolicy string
+	if r.store != nil {
+		agent, err := r.store.DurableAgent(agentID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return sandbox.Scope{}, true, fmt.Errorf("load durable agent %q for tool scope: %w", agentID, err)
+		}
+		if agent != nil {
+			workingRoot, memoryRoot = durableagent.LocalRoots(agent.AgentID, agent.LocalStorageRoots)
+			if workingRoot == "" || memoryRoot == "" {
+				workingRoot, memoryRoot = durableagent.DefaultLocalRoots(r.store.DBPath(), agent.AgentID)
+			}
+			networkPolicy = agent.NetworkPolicy
+		}
+		if workingRoot == "" || memoryRoot == "" {
+			workingRoot, memoryRoot = durableagent.DefaultLocalRoots(r.store.DBPath(), agentID)
+		}
+	}
+
+	if workingRoot == "" || memoryRoot == "" {
+		if r.durableAgentPrincipalFallback && strings.TrimSpace(r.workspace) != "" {
+			workingRoot = strings.TrimSpace(r.workspace)
+			memoryRoot = strings.TrimSpace(r.workspace)
+		} else {
+			return sandbox.Scope{}, true, fmt.Errorf("durable_agent principal %q requires durable local roots", agentID)
+		}
+	}
+
+	scope, err := sandbox.DurableAgentScope(agentID, globalRoot, workingRoot, memoryRoot, networkPolicy)
+	if err != nil {
+		return sandbox.Scope{}, true, err
+	}
+	return scope, true, nil
 }
 
 func (r *Registry) DefinitionsForPrincipal(p principal.Principal) []agent.ToolDef {

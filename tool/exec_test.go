@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -480,6 +481,115 @@ func TestExecuteForPrincipalApprovedUserRequiresIsolatedBackend(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no supported sandbox backend") {
 		t.Fatalf("err = %v, want isolated backend error", err)
+	}
+}
+
+func TestExecuteForDurableAgentUsesLocalRootsForExec(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	globalRoot := filepath.Join(tmp, "global")
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        globalRoot,
+			AdminExecRoot:     filepath.Join(tmp, "admin"),
+			SharedMemoryRoot:  filepath.Join(tmp, "shared"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users", "workspaces"),
+			UserMemoryRoot:    filepath.Join(tmp, "users", "memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(tmp, "state"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(state) err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(filepath.Join(tmp, "state", "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	workspaceRoot := filepath.Join(tmp, "durable", "child-alpha", "workspace")
+	memoryRoot := filepath.Join(tmp, "durable", "child-alpha", "memory")
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:           "child-alpha",
+		ChannelKind:       "daily_review",
+		Status:            "active",
+		LocalStorageRoots: []string{workspaceRoot, memoryRoot},
+		NetworkPolicy:     "restricted",
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"},
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	registry := NewRegistryWithSandbox(filepath.Join(tmp, "admin-workspace"), 2*time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunner(t, registry)
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"},
+		session.SessionKey{ChatID: -1},
+		"exec",
+		json.RawMessage(`{"command":"pwd"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(exec durable_agent) err = %v", err)
+	}
+	if !strings.Contains(out, workspaceRoot) {
+		t.Fatalf("output = %q, want durable workspace root %q", out, workspaceRoot)
+	}
+}
+
+func TestExecuteForDurableAgentUsesDefaultLocalRootsWhenAgentHasNoConfiguredRoots(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        filepath.Join(tmp, "global"),
+			AdminExecRoot:     filepath.Join(tmp, "admin"),
+			SharedMemoryRoot:  filepath.Join(tmp, "shared"),
+			UserWorkspaceRoot: filepath.Join(tmp, "users", "workspaces"),
+			UserMemoryRoot:    filepath.Join(tmp, "users", "memory"),
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+
+	dbPath := filepath.Join(tmp, "state", "sessions.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(state) err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if err := store.UpsertDurableAgent(core.DurableAgent{AgentID: "child-beta", ChannelKind: "daily_review", Status: "active", BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"}}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	registry := NewRegistryWithSandbox(filepath.Join(tmp, "admin-workspace"), 2*time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunner(t, registry)
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-beta"},
+		session.SessionKey{ChatID: -2},
+		"exec",
+		json.RawMessage(`{"command":"pwd"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(exec durable_agent) err = %v", err)
+	}
+	wantWorkspace := filepath.Join(filepath.Dir(dbPath), "durable_agents", "child-beta", "workspace")
+	if !strings.Contains(out, wantWorkspace) {
+		t.Fatalf("output = %q, want default durable workspace root %q", out, wantWorkspace)
 	}
 }
 

@@ -559,6 +559,10 @@ func (p *toolRequestingProvider) Complete(_ context.Context, _ []agent.Message, 
 	return &agent.Response{Content: "done"}, nil
 }
 
+func (p *toolRequestingProvider) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+	return p.Complete(ctx, messages, tools)
+}
+
 type multiToolRequestingProvider struct {
 	mu        sync.Mutex
 	callCount int

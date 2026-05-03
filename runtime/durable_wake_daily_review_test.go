@@ -4,13 +4,19 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func TestDailyReviewWakeStagesTranscriptAndQueuesScheduledCheckIn(t *testing.T) {
@@ -121,4 +127,113 @@ func TestDailyReviewWakeStagesTranscriptAndQueuesScheduledCheckIn(t *testing.T) 
 	if afterSecond != beforeSecond {
 		t.Fatalf("provider call count after second poll = %d, want unchanged %d", afterSecond, beforeSecond)
 	}
+}
+
+func TestDailyReviewWakeCanUseDurableAgentScopedExec(t *testing.T) {
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &durableWakeExecRequestingProvider{}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, 2*time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableWakeChild = nil
+
+	agent := core.DurableAgent{
+		AgentID:            defaultDailyReviewDurableAgentID,
+		ParentScopeKind:    string(session.ScopeKindHeartbeat),
+		ParentScopeID:      "admin-house",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        dailyReviewDurableChannelKind,
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Review yesterday's logs and propose tomorrow action items.",
+			CapabilityEnvelope: []string{"bounded_review_artifact", "session_recall"},
+			OutboundMode:       "read_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM:      durableGroupTestBootstrapLLM(),
+		WakeupMode:        "poll",
+		Status:            "active",
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), filepath.Join(t.TempDir(), "memory")},
+		NetworkPolicy:     "restricted",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 17, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.TurnCount = 1
+	if err := store.Save(sess, []session.Message{{Role: "user", Content: "daily-review-exec-path-entry", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+	seedHits, err := store.SearchMessages("daily-review-exec-path-entry", 1, nil)
+	if err != nil {
+		t.Fatalf("SearchMessages(seed) err = %v", err)
+	}
+	if len(seedHits) != 1 {
+		t.Fatalf("SearchMessages(seed) len = %d, want 1", len(seedHits))
+	}
+	seedAt := seedHits[0].CreatedAt.UTC()
+	now := time.Date(seedAt.Year(), seedAt.Month(), seedAt.Day(), 0, 15, 0, 0, time.UTC).AddDate(0, 0, 1)
+
+	if err := rt.pollDurableWakeAgents(context.Background(), now); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	firstToolCount := provider.firstToolCount
+	calls := provider.callCount
+	provider.mu.Unlock()
+	if firstToolCount == 0 || calls < 2 {
+		t.Fatalf("provider firstToolCount/calls = %d/%d, want durable wake tool execution loop", firstToolCount, calls)
+	}
+	state, err := store.DurableAgentState(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentState() err = %v", err)
+	}
+	if strings.TrimSpace(state.Cursor) == "" {
+		t.Fatalf("daily review cursor empty, want finalized wake after scoped exec")
+	}
+}
+
+type durableWakeExecRequestingProvider struct {
+	mu             sync.Mutex
+	callCount      int
+	firstToolCount int
+	requested      bool
+}
+
+func (p *durableWakeExecRequestingProvider) Complete(_ context.Context, _ []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.callCount++
+	if len(tools) > 0 && !p.requested {
+		p.requested = true
+		p.firstToolCount = len(tools)
+		return &agent.Response{ToolCalls: []agent.ToolCall{{ID: "durable-wake-exec", Name: "exec", Input: json.RawMessage(`{"command":"echo hi"}`)}}}, nil
+	}
+	return &agent.Response{Content: "done"}, nil
+}
+
+func (p *durableWakeExecRequestingProvider) CompleteWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, _ agent.CompleteOptions) (*agent.Response, error) {
+	return p.Complete(ctx, messages, tools)
 }
