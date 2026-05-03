@@ -121,6 +121,71 @@ func TestWorkExecutorSelectorFallsBackAfterCodexPreEffectFailure(t *testing.T) {
 	}
 }
 
+func TestContinuationWorkModeDoesNotPromoteRestartRecoverySmokeTestToDeploy(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		StageSummary: "Run restart recovery confirmation smoke test",
+		ActionProposal: session.ActionProposal{
+			Summary:       "Run restart recovery confirmation smoke test",
+			BoundedEffect: "Run tests only; do not restart services or deploy.",
+			AllowedActions: []string{
+				"run_tests",
+			},
+			ForbiddenActions: []string{
+				"restart_service",
+				"deploy",
+			},
+		},
+	}
+
+	if got := continuationWorkMode(state); got != WorkModeWorkspaceWrite {
+		t.Fatalf("continuationWorkMode() = %q, want %q", got, WorkModeWorkspaceWrite)
+	}
+}
+
+func TestContinuationWorkModeTrustsExplicitReadOnlyRiskClassOverRestartText(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		StageSummary: "Review restart recovery status",
+		ActionProposal: session.ActionProposal{
+			RiskClass:     "read_only_review",
+			Summary:       "Review restart recovery status",
+			BoundedEffect: "Inspect evidence only; do not restart the service.",
+			AllowedActions: []string{
+				"inspect_readonly_state",
+			},
+			ForbiddenActions: []string{
+				"restart_service",
+			},
+		},
+	}
+
+	if got := continuationWorkMode(state); got != WorkModeReadOnly {
+		t.Fatalf("continuationWorkMode() = %q, want %q", got, WorkModeReadOnly)
+	}
+}
+
+func TestContinuationWorkModeClassifiesExplicitRestartActionAsDeploy(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		StageSummary: "Restart the service after install",
+		ActionProposal: session.ActionProposal{
+			RiskClass: "system_change",
+			Summary:   "Restart the service after install",
+			AllowedActions: []string{
+				"restart_service",
+			},
+		},
+	}
+
+	if got := continuationWorkMode(state); got != WorkModeDeploy {
+		t.Fatalf("continuationWorkMode() = %q, want %q", got, WorkModeDeploy)
+	}
+}
+
 func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	t.Parallel()
 

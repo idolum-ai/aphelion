@@ -355,17 +355,21 @@ func (r *Runtime) workRequestForContinuation(key session.SessionKey, chatID int6
 func continuationWorkMode(state session.ContinuationState) WorkMode {
 	state = session.NormalizeContinuationState(state)
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
-	lower := strings.ToLower(strings.Join(append(append([]string{
-		proposal.RiskClass,
+	mode := strongestWorkMode(
+		workModeFromStructuredAuthority(proposal.RiskClass),
+		workModeFromStructuredAuthorityList(proposal.AllowedActions),
+		workModeFromStructuredAuthorityList(state.ContinuationLease.AllowedActions),
+	)
+	if mode != "" {
+		return mode
+	}
+
+	lower := strings.ToLower(strings.Join([]string{
 		proposal.Summary,
 		proposal.BoundedEffect,
 		state.StageSummary,
-	}, proposal.AllowedActions...), state.ContinuationLease.AllowedActions...), " "))
+	}, " "))
 	switch {
-	case strings.Contains(lower, "deploy") || strings.Contains(lower, "restart") || strings.Contains(lower, "system_change"):
-		return WorkModeDeploy
-	case strings.Contains(lower, "git commit") || strings.Contains(lower, "repo_history_mutation"):
-		return WorkModeCommit
 	case strings.Contains(lower, "workspace_write") ||
 		strings.Contains(lower, "patch") ||
 		strings.Contains(lower, "edit ") ||
@@ -376,6 +380,79 @@ func continuationWorkMode(state session.ContinuationState) WorkMode {
 		return WorkModeReadOnly
 	default:
 		return ""
+	}
+}
+
+func workModeFromStructuredAuthorityList(values []string) WorkMode {
+	mode := WorkMode("")
+	for _, value := range values {
+		mode = strongestWorkMode(mode, workModeFromStructuredAuthority(value))
+	}
+	return mode
+}
+
+func workModeFromStructuredAuthority(value string) WorkMode {
+	switch normalizeWorkModeAuthorityToken(value) {
+	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart":
+		return WorkModeDeploy
+	case "commit", "git_commit", "repo_history_mutation":
+		return WorkModeCommit
+	case "workspace_write", "workspace", "code", "code_change", "code_changes", "edit", "edit_files", "patch", "run_tests", "test", "tests":
+		return WorkModeWorkspaceWrite
+	case "read_only", "read_only_review", "status_check", "inspect_readonly_state":
+		return WorkModeReadOnly
+	default:
+		return ""
+	}
+}
+
+func normalizeWorkModeAuthorityToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastUnderscore = false
+		default:
+			if !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "_")
+}
+
+func strongestWorkMode(modes ...WorkMode) WorkMode {
+	strongest := WorkMode("")
+	strongestRank := 0
+	for _, mode := range modes {
+		rank := workModeRank(mode)
+		if rank > strongestRank {
+			strongest = mode
+			strongestRank = rank
+		}
+	}
+	return strongest
+}
+
+func workModeRank(mode WorkMode) int {
+	switch mode {
+	case WorkModeDeploy:
+		return 4
+	case WorkModeCommit:
+		return 3
+	case WorkModeWorkspaceWrite:
+		return 2
+	case WorkModeReadOnly:
+		return 1
+	default:
+		return 0
 	}
 }
 

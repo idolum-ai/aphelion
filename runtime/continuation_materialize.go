@@ -62,12 +62,15 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 		return true, nil
 	}
-	if operationPhasePlanOwnsContinuation(opState.PhasePlan) {
-		return true, nil
-	}
 	proposal := opState.Proposal
 	if !pendingOperationProposalNeedsButton(proposal) {
+		if operationPhasePlanOwnsContinuation(opState.PhasePlan) {
+			return true, nil
+		}
 		return false, nil
+	}
+	if operationPhasePlanOwnsContinuation(opState.PhasePlan) && operationProposalBelongsToPhasePlan(opState, proposal) {
+		return true, nil
 	}
 	priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
 	priorState = session.NormalizeContinuationState(priorState)
@@ -139,6 +142,21 @@ func nextOperationPhaseForApproval(plan session.OperationPhasePlan) (session.Ope
 func operationPhasePlanOwnsContinuation(plan session.OperationPhasePlan) bool {
 	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
 	return len(plan.Phases) > 0
+}
+
+func operationProposalBelongsToPhasePlan(opState session.OperationState, proposal session.OperationProposal) bool {
+	opState = session.NormalizeOperationState(opState)
+	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
+	proposalID := strings.TrimSpace(proposal.ID)
+	if proposalID == "" || len(opState.PhasePlan.Phases) == 0 {
+		return false
+	}
+	for _, phase := range opState.PhasePlan.Phases {
+		if proposalID == operationPhaseProposalID(opState, phase) {
+			return true
+		}
+	}
+	return false
 }
 
 func operationPhaseNeedsApproval(phase session.OperationPhase) bool {

@@ -253,6 +253,194 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	}
 }
 
+func TestMaterializePendingOperationProposalWhenPhasePlanHasNoPendingPhase(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9017, UserID: 0, Scope: telegramDMScopeRef(9017)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "completed-phase-plan-op",
+		Objective: "Ship the remaining operator cleanup.",
+		Status:    session.OperationStatusBlocked,
+		Proposal: session.OperationProposal{
+			ID:            "ordinary-proposal-after-phases",
+			Kind:          "read_only_review",
+			Summary:       "Review the completed phase evidence and propose cleanup",
+			WhyNow:        "The durable phases are complete, but the operator asked for one more ordinary proposal.",
+			BoundedEffect: "Inspect only and report the next bounded proposal.",
+			Status:        session.ProposalStatusPending,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID: "completed-phase-plan",
+			Phases: []session.OperationPhase{
+				{
+					ID:          "phase-1",
+					Summary:     "Write contract",
+					Status:      session.PlanStatusCompleted,
+					LeaseID:     "lease-phase-1",
+					CompletedAt: time.Now().UTC(),
+				},
+				{
+					ID:          "phase-2",
+					Summary:     "Implement contract",
+					Status:      session.PlanStatusCompleted,
+					LeaseID:     "lease-phase-2",
+					CompletedAt: time.Now().UTC(),
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9017, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want ordinary proposal approval")
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != "ordinary-proposal-after-phases" {
+		t.Fatalf("continuation = %#v, want pending ordinary proposal lease", cont)
+	}
+	sender.mu.Lock()
+	inlineText := ""
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(inlineText, "Review the completed phase evidence and propose cleanup") {
+		t.Fatalf("inline text = %q, want ordinary proposal prompt", inlineText)
+	}
+}
+
+func TestMaterializePendingOperationProposalWhilePhasePlanIsInProgress(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9018, UserID: 0, Scope: telegramDMScopeRef(9018)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "in-progress-phase-plan-op",
+		Objective: "Keep operator work moving without suppressing explicit proposals.",
+		Status:    session.OperationStatusBlocked,
+		Proposal: session.OperationProposal{
+			ID:            "ordinary-proposal-during-phase",
+			Kind:          "status_check",
+			Summary:       "Report whether the active phase has enough evidence",
+			WhyNow:        "The operator asked for a separate status proposal while a phase is marked in progress.",
+			BoundedEffect: "Inspect state only and report status; do not advance the active phase.",
+			Status:        session.ProposalStatusPending,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "in-progress-phase-plan",
+			CurrentPhaseID: "phase-1",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-1",
+					Summary:        "Patch the implementation",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "workspace_write",
+					LeaseID:        "lease-phase-1",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9018, SenderID: 1001, Text: "status", MessageID: 1}, "status", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want ordinary proposal approval")
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != "ordinary-proposal-during-phase" {
+		t.Fatalf("continuation = %#v, want pending ordinary proposal lease", cont)
+	}
+	sender.mu.Lock()
+	inlineText := ""
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(inlineText, "Report whether the active phase has enough evidence") {
+		t.Fatalf("inline text = %q, want ordinary proposal prompt", inlineText)
+	}
+}
+
+func TestMaterializeDoesNotReofferSyntheticPhaseProposalAsOrdinaryProposal(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9019, UserID: 0, Scope: telegramDMScopeRef(9019)}
+	opState := session.OperationState{
+		ID:        "synthetic-phase-proposal-op",
+		Objective: "Avoid duplicate phase approvals.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "synthetic-phase-plan",
+			CurrentPhaseID: "phase-1",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-1",
+					Summary:        "Patch the implementation",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "workspace_write",
+					LeaseID:        "lease-phase-1",
+				},
+			},
+		},
+	}
+	opState.Proposal = session.OperationProposal{
+		ID:            operationPhaseProposalID(opState, opState.PhasePlan.Phases[0]),
+		Kind:          "workspace_write",
+		Summary:       "Patch the implementation",
+		BoundedEffect: "Edit files and run tests.",
+		Status:        session.ProposalStatusPending,
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9019, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want phase-plan ownership to suppress generic continuation")
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no duplicate ordinary proposal prompt", inlineCount)
+	}
+}
+
 func TestApproveDurablePhasePlanLeaseMarksPhaseInProgress(t *testing.T) {
 	t.Parallel()
 
