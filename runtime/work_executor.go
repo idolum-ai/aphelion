@@ -246,7 +246,7 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 		ChatID:       req.ChatID,
 		SenderID:     req.Actor.TelegramUserID,
 		SenderName:   actorLabel(req.Actor),
-		Text:         approvedContinuationEventText,
+		Text:         approvedContinuationEventTextForState(req.State),
 		Origin:       core.InboundOriginTurnAuthorization,
 		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})

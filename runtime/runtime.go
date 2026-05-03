@@ -245,6 +245,7 @@ func (r *Runtime) runApprovedContinuationNative(ctx context.Context, actor princ
 	if approvedBy == 0 {
 		approvedBy = actor.TelegramUserID
 	}
+	continuationEventText := approvedContinuationEventTextForState(state)
 	state = continuationStateAfterLeaseTurnConsumed(state, time.Now().UTC())
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
@@ -264,7 +265,7 @@ func (r *Runtime) runApprovedContinuationNative(ctx context.Context, actor princ
 		ChatID:       chatID,
 		SenderID:     executionActor.TelegramUserID,
 		SenderName:   actorLabel(executionActor),
-		Text:         approvedContinuationEventText,
+		Text:         continuationEventText,
 		Origin:       core.InboundOriginTurnAuthorization,
 		OriginDetail: string(session.TurnAuthorizationKindContinuation),
 	})

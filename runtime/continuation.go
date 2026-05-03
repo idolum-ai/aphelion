@@ -11,6 +11,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
@@ -861,6 +862,10 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 		if continuationButtonStateIsPhasePlan(state) {
 			approveLabel = "Approve phase"
 			reviseLabel = "Revise phase"
+			if subject := continuationApprovalButtonSubject(state); subject != "" {
+				approveLabel = "Approve " + subject
+				reviseLabel = "Revise " + subject
+			}
 		}
 		return [][]telegram.InlineButton{
 			{
@@ -899,6 +904,157 @@ func continuationButtonStateIsPhasePlan(state session.ContinuationState) bool {
 		actionListContains(state.ContinuationLease.AllowedActions, "update_operation_phase_plan") ||
 		actionListContains(state.ActionProposal.AllowedActions, "execute_phase_once") ||
 		actionListContains(state.ContinuationLease.AllowedActions, "execute_phase_once")
+}
+
+func continuationApprovalButtonSubject(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	candidates := []string{
+		state.ActionProposal.Summary,
+		state.StageSummary,
+		state.ActionProposal.OperationID,
+		state.DecisionID,
+		state.ContinuationLease.ProposalID,
+		state.ActionProposal.ID,
+	}
+	for _, candidate := range candidates {
+		if subject := compactContinuationPhaseSubject(candidate); subject != "" {
+			return subject
+		}
+	}
+	return ""
+}
+
+func compactContinuationPhaseSubject(raw string) string {
+	fields := continuationSubjectFields(raw)
+	if len(fields) == 0 {
+		return ""
+	}
+	for i := 0; i < len(fields); i++ {
+		field := strings.ToLower(strings.TrimSpace(fields[i]))
+		if field == "" {
+			continue
+		}
+		phaseToken := ""
+		restStart := i + 1
+		if field == "phase" && i+1 < len(fields) {
+			phaseToken = normalizeContinuationPhaseToken(fields[i+1])
+			restStart = i + 2
+		} else if strings.HasPrefix(field, "phase") && len(field) > len("phase") {
+			phaseToken = normalizeContinuationPhaseToken(field[len("phase"):])
+		}
+		if phaseToken == "" {
+			continue
+		}
+		words := make([]string, 0, 3)
+		for j := restStart; j < len(fields) && len(words) < 3; j++ {
+			word := normalizeContinuationSubjectWord(fields[j])
+			if word == "" || continuationSubjectStopWord(strings.ToLower(word)) {
+				continue
+			}
+			words = append(words, word)
+		}
+		subject := "Phase " + phaseToken
+		if len(words) > 0 {
+			subject += " " + strings.Join(words, " ")
+		}
+		return subject
+	}
+	return ""
+}
+
+func continuationSubjectFields(raw string) []string {
+	replacer := strings.NewReplacer(
+		"-", " ",
+		"_", " ",
+		":", " ",
+		"/", " ",
+		"\\", " ",
+		".", " ",
+		",", " ",
+		";", " ",
+		"(", " ",
+		")", " ",
+		"[", " ",
+		"]", " ",
+	)
+	return strings.Fields(replacer.Replace(strings.TrimSpace(raw)))
+}
+
+func normalizeContinuationPhaseToken(token string) string {
+	var b strings.Builder
+	hasDigit := false
+	for _, r := range strings.TrimSpace(token) {
+		if unicode.IsDigit(r) {
+			hasDigit = true
+			b.WriteRune(r)
+			continue
+		}
+		if unicode.IsLetter(r) {
+			b.WriteRune(unicode.ToUpper(r))
+		}
+	}
+	if !hasDigit {
+		return ""
+	}
+	return b.String()
+}
+
+func normalizeContinuationSubjectWord(word string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(word) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	out := b.String()
+	switch out {
+	case "ui":
+		return "UI"
+	case "ux":
+		return "UX"
+	case "id":
+		return "ID"
+	default:
+		return out
+	}
+}
+
+func continuationSubjectStopWord(word string) bool {
+	switch strings.ToLower(strings.TrimSpace(word)) {
+	case "", "a", "an", "the", "and", "or", "to", "of", "for", "in", "on", "one", "next", "safe", "bounded", "bundle", "bundled", "rebundled", "read", "readonly", "only", "adapter", "local", "child", "idolum", "status", "check", "lane", "remaining", "run":
+		return true
+	default:
+		return false
+	}
+}
+
+func approvedContinuationEventTextForState(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	lines := []string{approvedContinuationEventText}
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "proposal_id", value: state.ActionProposal.ID},
+		{name: "operation_id", value: state.ActionProposal.OperationID},
+		{name: "lease_id", value: state.ContinuationLease.ID},
+		{name: "approved_step", value: firstNonEmptyContinuation(state.StageSummary, state.ActionProposal.Summary)},
+		{name: "bounded_effect", value: state.ActionProposal.BoundedEffect},
+		{name: "risk_class", value: state.ActionProposal.RiskClass},
+	}
+	appended := false
+	for _, field := range fields {
+		value := strings.TrimSpace(field.value)
+		if value == "" {
+			continue
+		}
+		if !appended {
+			lines = append(lines, "", "Approved continuation lease:")
+			appended = true
+		}
+		lines = append(lines, field.name+": "+value)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func newContinuationDecisionID() string {

@@ -216,12 +216,13 @@ func TestContinuationApprovalButtonRowsAdaptToLeaseState(t *testing.T) {
 	phase := pending
 	phase.DecisionID = "decision-phase"
 	phase.ActionProposal = session.ActionProposal{
-		ID:             "aprop-phase",
-		OperationID:    "phase-op-phase-1",
+		ID:             "aprop-phase-4b-rebundled-email-proof",
+		OperationID:    "phase-4b-rebundled-email-proof",
+		Summary:        "Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
 		AllowedActions: []string{"execute_phase_once", "update_operation_phase_plan"},
 	}
-	phase.ContinuationLease = session.ContinuationLease{ID: "lease-phase", ProposalID: "aprop-phase", Status: session.ContinuationLeaseStatusPending}
-	if got, want := continuationButtonLabels(continuationApprovalButtonRows(phase)), []string{"Approve phase", "Scope details", "Revise phase", "Park", "Stop"}; !equalStringSlices(got, want) {
+	phase.ContinuationLease = session.ContinuationLease{ID: "lease-phase-4b-rebundled-email-proof", ProposalID: "aprop-phase-4b-rebundled-email-proof", Status: session.ContinuationLeaseStatusPending}
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(phase)), []string{"Approve Phase 4B email proof", "Scope details", "Revise Phase 4B email proof", "Park", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("phase labels = %#v, want %#v", got, want)
 	}
 
@@ -1221,7 +1222,24 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	}
 
 	key := session.SessionKey{ChatID: 8105, UserID: 0, Scope: telegramDMScopeRef(8105)}
-	if err := store.UpdateContinuationState(key, session.ContinuationState{Status: session.ContinuationStatusApproved, RemainingTurns: 1, ApprovedBy: 1002}); err != nil {
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		StageSummary:   "Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
+		RemainingTurns: 1,
+		ApprovedBy:     1002,
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-phase-4b-rebundled-email-proof",
+			OperationID:   "phase-4b-rebundled-email-proof",
+			Summary:       "Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
+			BoundedEffect: "Inspect current email due/backoff state, run at most one bounded read-only proof, then report.",
+			RiskClass:     "status_check",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:         "lease-phase-4b-rebundled-email-proof",
+			ProposalID: "aprop-phase-4b-rebundled-email-proof",
+			Status:     session.ContinuationLeaseStatusActive,
+		},
+	}); err != nil {
 		t.Fatalf("UpdateContinuationState() err = %v", err)
 	}
 	if err := rt.TriggerContinuation(context.Background(), 8105); err != nil {
@@ -1236,8 +1254,17 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	if last.Role != "user" {
 		t.Fatalf("last role = %q, want user-compatible provider input", last.Role)
 	}
-	if last.Content != approvedContinuationEventText {
-		t.Fatalf("last content = %q, want machine-authored continuation event text", last.Content)
+	for _, want := range []string{
+		approvedContinuationEventText,
+		"proposal_id: aprop-phase-4b-rebundled-email-proof",
+		"operation_id: phase-4b-rebundled-email-proof",
+		"lease_id: lease-phase-4b-rebundled-email-proof",
+		"approved_step: Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
+		"bounded_effect: Inspect current email due/backoff state, run at most one bounded read-only proof, then report.",
+	} {
+		if !strings.Contains(last.Content, want) {
+			t.Fatalf("last content = %q, want substring %q", last.Content, want)
+		}
 	}
 }
 

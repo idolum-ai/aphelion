@@ -244,12 +244,17 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 
 	sender.mu.Lock()
 	inlineText := ""
+	var labels []string
 	if len(sender.inline) > 0 {
 		inlineText = sender.inline[0].text
+		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
 	if !strings.Contains(inlineText, "Implement the local inbox bridge") || strings.Contains(inlineText, "Do the whole thing in one step") {
 		t.Fatalf("inline text = %q, want next phase without stale proposal", inlineText)
+	}
+	if got, want := labels, []string{"Approve Phase 2 implementation", "Scope details", "Revise Phase 2 implementation", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
 
