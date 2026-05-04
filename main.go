@@ -679,7 +679,7 @@ func run() error {
 		UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
 		UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
 	}
-	sandboxResolver, err := sandbox.NewResolver(sandboxRoots, sandbox.DefaultProfiles())
+	sandboxResolver, err := sandbox.NewResolver(sandboxRoots, runtime.SandboxProfilesFromConfig(cfg.Sandbox))
 	if err != nil {
 		return err
 	}

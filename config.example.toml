@@ -120,6 +120,26 @@ purpose = "assistants"
 enabled = false
 default_store = ""
 
+[sandbox.profiles.admin]
+mode = "trusted"
+network = "allowlist"
+
+[sandbox.profiles.approved_user]
+mode = "isolated"
+readonly_root = true
+writable_paths = ["{user_workspace}", "{user_memory}", "/tmp"]
+readonly_paths = ["{global_root}", "{shared_memory_root}"]
+hidden_paths = ["~/.aphelion/aphelion.toml", "~/.config/aphelion/config.toml", "~/.ssh", "~/.gnupg"]
+network = "deny"
+
+[sandbox.profiles.durable_agent]
+mode = "isolated"
+readonly_root = true
+writable_paths = ["{working_root}", "{shared_memory_root}", "/tmp"]
+readonly_paths = ["{global_root}"]
+hidden_paths = ["~/.aphelion/aphelion.toml", "~/.config/aphelion/config.toml", "~/.ssh", "~/.gnupg"]
+network = "deny"
+
 [work]
 # auto prefers Codex runtime when a work app-server is reachable, then falls
 # back to Aphelion's native tool loop. Use "codex" or "native" to force one.

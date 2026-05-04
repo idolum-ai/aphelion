@@ -544,6 +544,26 @@ bootstrap_total_max_chars = 600
 daily_notes = false
 daily_notes_dir = "notes"
 
+[sandbox.profiles.admin]
+mode = "trusted"
+network = "allowlist"
+
+[sandbox.profiles.approved_user]
+mode = "isolated"
+readonly_root = true
+writable_paths = ["{user_workspace}", "/tmp/aphelion-approved"]
+readonly_paths = ["{global_root}"]
+hidden_paths = ["~/.ssh", "~/.tokens"]
+network = "deny"
+
+[sandbox.profiles.durable_agent]
+mode = "isolated"
+readonly_root = true
+writable_paths = ["{working_root}", "{shared_memory_root}", "/tmp/aphelion-durable"]
+readonly_paths = ["{global_root}"]
+hidden_paths = ["~/.ssh"]
+network = "allowlist"
+
 [memory.reflection]
 enabled = false
 every = "12h"
@@ -720,6 +740,15 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Agent.DailyNotes {
 		t.Fatal("daily_notes = true, want false")
+	}
+	if cfg.Sandbox.Profiles.ApprovedUser.Mode != "isolated" || !cfg.Sandbox.Profiles.ApprovedUser.ReadonlyRoot || cfg.Sandbox.Profiles.ApprovedUser.Network != "deny" {
+		t.Fatalf("sandbox approved_user profile = %#v, want isolated readonly deny", cfg.Sandbox.Profiles.ApprovedUser)
+	}
+	if got, want := cfg.Sandbox.Profiles.ApprovedUser.WritablePaths, []string{"{user_workspace}", "/tmp/aphelion-approved"}; !equalStrings(got, want) {
+		t.Fatalf("sandbox approved_user writable_paths = %#v, want %#v", got, want)
+	}
+	if cfg.Sandbox.Profiles.DurableAgent.Network != "allowlist" {
+		t.Fatalf("sandbox durable_agent network = %q, want allowlist", cfg.Sandbox.Profiles.DurableAgent.Network)
 	}
 	if cfg.Memory.Reflection.Enabled || cfg.Memory.Reflection.Every != "12h" {
 		t.Fatalf("memory.reflection = %#v, want disabled/12h", cfg.Memory.Reflection)
@@ -1546,6 +1575,50 @@ api_key = "sk-ant-test"
 			_, err := Load(configPath)
 			if err == nil {
 				t.Fatal("Load() err = nil, want cache validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %s", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidSandboxProfile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		setting string
+		wantErr string
+	}{
+		{name: "mode", setting: `mode = "container"`, wantErr: "sandbox.profiles.approved_user.mode"},
+		{name: "network", setting: `network = "full"`, wantErr: "sandbox.profiles.approved_user.network"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.toml")
+			raw := fmt.Sprintf(`
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[sandbox.profiles.approved_user]
+%s
+`, tt.setting)
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(configPath)
+			if err == nil {
+				t.Fatal("Load() err = nil, want sandbox validation error")
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("error = %v, want %s", err, tt.wantErr)

@@ -25,6 +25,7 @@ type Config struct {
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Agent         AgentConfig         `toml:"agent"`
 	Tools         ToolsConfig         `toml:"tools"`
+	Sandbox       SandboxConfig       `toml:"sandbox"`
 	Memory        MemoryConfig        `toml:"memory"`
 	Thinking      ThinkingConfig      `toml:"thinking"`
 	Face          FaceConfig          `toml:"face"`
@@ -264,6 +265,25 @@ type AgentConfig struct {
 
 type ToolsConfig struct {
 	ExternalManifestDir string `toml:"external_manifest_dir"`
+}
+
+type SandboxConfig struct {
+	Profiles SandboxProfilesConfig `toml:"profiles"`
+}
+
+type SandboxProfilesConfig struct {
+	Admin        SandboxProfileConfig `toml:"admin"`
+	ApprovedUser SandboxProfileConfig `toml:"approved_user"`
+	DurableAgent SandboxProfileConfig `toml:"durable_agent"`
+}
+
+type SandboxProfileConfig struct {
+	Mode          string   `toml:"mode"`
+	ReadonlyRoot  bool     `toml:"readonly_root"`
+	WritablePaths []string `toml:"writable_paths"`
+	ReadonlyPaths []string `toml:"readonly_paths"`
+	HiddenPaths   []string `toml:"hidden_paths"`
+	Network       string   `toml:"network"`
 }
 
 type MemoryConfig struct {
@@ -554,6 +574,40 @@ func Default() Config {
 			DailyNotes:             true,
 			DailyNotesDir:          "memory/daily",
 		},
+		Sandbox: SandboxConfig{
+			Profiles: SandboxProfilesConfig{
+				Admin: SandboxProfileConfig{
+					Mode:    "trusted",
+					Network: "allowlist",
+				},
+				ApprovedUser: SandboxProfileConfig{
+					Mode:          "isolated",
+					ReadonlyRoot:  true,
+					WritablePaths: []string{"{user_workspace}", "{user_memory}", "/tmp"},
+					ReadonlyPaths: []string{"{global_root}", "{shared_memory_root}"},
+					HiddenPaths: []string{
+						"~/.aphelion/aphelion.toml",
+						"~/.config/aphelion/config.toml",
+						"~/.ssh",
+						"~/.gnupg",
+					},
+					Network: "deny",
+				},
+				DurableAgent: SandboxProfileConfig{
+					Mode:          "isolated",
+					ReadonlyRoot:  true,
+					WritablePaths: []string{"{working_root}", "{shared_memory_root}", "/tmp"},
+					ReadonlyPaths: []string{"{global_root}"},
+					HiddenPaths: []string{
+						"~/.aphelion/aphelion.toml",
+						"~/.config/aphelion/config.toml",
+						"~/.ssh",
+						"~/.gnupg",
+					},
+					Network: "deny",
+				},
+			},
+		},
 		Memory: MemoryConfig{
 			SessionSearch:    false,
 			SemanticIndexing: false,
@@ -696,6 +750,9 @@ func Load(path string) (*Config, error) {
 		cfg.Work.AutoOrder = []string{"codex", "native"}
 	}
 	cfg.Work.Codex.AppServerAddress = strings.TrimSpace(cfg.Work.Codex.AppServerAddress)
+	cfg.Sandbox.Profiles.Admin = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.Admin)
+	cfg.Sandbox.Profiles.ApprovedUser = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.ApprovedUser)
+	cfg.Sandbox.Profiles.DurableAgent = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.DurableAgent)
 
 	cfg.Sessions.DBPath, err = expandConfiguredPath(cfg.Sessions.DBPath, baseDir)
 	if err != nil {
@@ -992,6 +1049,15 @@ func normalizeWorkExecutorList(values []string) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+func normalizeSandboxProfileConfig(profile SandboxProfileConfig) SandboxProfileConfig {
+	profile.Mode = strings.ToLower(strings.TrimSpace(profile.Mode))
+	profile.Network = strings.ToLower(strings.TrimSpace(profile.Network))
+	profile.WritablePaths = normalizeStringList(profile.WritablePaths)
+	profile.ReadonlyPaths = normalizeStringList(profile.ReadonlyPaths)
+	profile.HiddenPaths = normalizeStringList(profile.HiddenPaths)
+	return profile
 }
 
 func normalizeOpenAIModelFallbacks(primary string, fallbacks []string) []string {
@@ -1342,6 +1408,15 @@ func validate(cfg *Config) error {
 		default:
 			return fmt.Errorf("work.auto_order[%d] must be one of codex|native", i)
 		}
+	}
+	if err := validateSandboxProfileConfig("sandbox.profiles.admin", cfg.Sandbox.Profiles.Admin); err != nil {
+		return err
+	}
+	if err := validateSandboxProfileConfig("sandbox.profiles.approved_user", cfg.Sandbox.Profiles.ApprovedUser); err != nil {
+		return err
+	}
+	if err := validateSandboxProfileConfig("sandbox.profiles.durable_agent", cfg.Sandbox.Profiles.DurableAgent); err != nil {
+		return err
 	}
 	nativePrimary := providerName(firstNonEmpty(strings.TrimSpace(cfg.Governor.NativeProvider), strings.TrimSpace(cfg.Providers.Default)))
 	switch nativePrimary {
@@ -1914,6 +1989,20 @@ func isNativeProviderName(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validateSandboxProfileConfig(path string, profile SandboxProfileConfig) error {
+	switch profile.Mode {
+	case "trusted", "isolated":
+	default:
+		return fmt.Errorf("%s.mode must be one of trusted|isolated", path)
+	}
+	switch profile.Network {
+	case "allowlist", "deny":
+	default:
+		return fmt.Errorf("%s.network must be one of allowlist|deny", path)
+	}
+	return nil
 }
 
 func firstNonEmpty(values ...string) string {
