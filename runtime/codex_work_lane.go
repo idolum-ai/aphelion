@@ -164,10 +164,48 @@ func codexApprovalLogHasSideEffects(log []codexAppServerApprovalDecision) bool {
 		if cmd == "" {
 			continue
 		}
-		if strings.Contains(cmd, "git commit") ||
-			strings.Contains(cmd, "go test") ||
-			strings.Contains(cmd, "npm test") ||
-			strings.Contains(cmd, "apply_patch") {
+		if codexApprovedCommandHasSideEffects(cmd) {
+			return true
+		}
+	}
+	return false
+}
+
+func codexApprovedCommandHasSideEffects(command string) bool {
+	compact := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(command)), " "))
+	if compact == "" {
+		return false
+	}
+	markers := []string{
+		"apply_patch",
+		"git add",
+		"git checkout",
+		"git cherry-pick",
+		"git clean",
+		"git commit",
+		"git merge",
+		"git mv",
+		"git push",
+		"git rebase",
+		"git reset",
+		"git restore",
+		"git revert",
+		"git rm",
+		"git switch",
+		"go build",
+		"go generate",
+		"go install",
+		"make install",
+		"make restart",
+		"make update",
+		"npm install",
+		"npm run build",
+		"pnpm install",
+		"systemctl",
+		"yarn install",
+	}
+	for _, marker := range markers {
+		if strings.Contains(compact, marker) {
 			return true
 		}
 	}

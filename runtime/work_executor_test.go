@@ -126,6 +126,115 @@ func TestWorkExecutorSelectorFallsBackAfterCodexPreEffectFailure(t *testing.T) {
 	}
 }
 
+func TestWorkExecutorSelectorFallsBackAfterReadOnlyCodexApprovalFailure(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		write := func(payload map[string]any) bool {
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				return false
+			}
+			return conn.Write(context.Background(), websocket.MessageText, raw) == nil
+		}
+		for {
+			_, raw, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			var msg map[string]any
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				return
+			}
+			id, hasID := msg["id"].(string)
+			if !hasID {
+				continue
+			}
+			method, _ := msg["method"].(string)
+			switch method {
+			case "initialize":
+				if !write(map[string]any{"id": id, "result": map[string]any{}}) {
+					return
+				}
+			case "thread/start":
+				if !write(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-readonly-fallback"}}}) {
+					return
+				}
+			case "turn/start":
+				if !write(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-readonly-fallback"}}}) {
+					return
+				}
+				if !write(map[string]any{
+					"id":     "approval-readonly",
+					"method": "item/commandExecution/requestApproval",
+					"params": map[string]any{
+						"command": "git status --short",
+						"reason":  "inspect worktree",
+					},
+				}) {
+					return
+				}
+			default:
+				if id == "approval-readonly" {
+					_ = conn.Close(websocket.StatusInternalError, "simulated upstream read failure")
+					return
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	codex := codexWorkExecutor{
+		address:                  "ws://" + strings.TrimPrefix(server.URL, "http://"),
+		rpcTimeout:               time.Second,
+		firstNotificationTimeout: time.Second,
+	}
+	native := &fakeWorkExecutor{name: "native", ready: true}
+	selector := newWorkExecutorSelector(config.WorkConfig{
+		Executor:  "auto",
+		AutoOrder: []string{"codex", "native"},
+	}, []WorkExecutor{codex, native})
+
+	result, err := selector.Run(context.Background(), WorkRequest{Prompt: "inspect status", Mode: WorkModeReadOnly})
+	if err != nil {
+		t.Fatalf("Run() err = %v, want native fallback after read-only Codex approval failure", err)
+	}
+	if result.ExecutorName != "native" || native.calls != 1 {
+		t.Fatalf("result=%#v native_calls=%d, want native fallback", result, native.calls)
+	}
+	if got := selector.Status().FallbackReason; !strings.Contains(got, "codex failed before side effects") {
+		t.Fatalf("fallback reason = %q, want before-side-effects fallback", got)
+	}
+}
+
+func TestCodexApprovalLogSideEffectsIgnoreReadOnlyApprovals(t *testing.T) {
+	t.Parallel()
+
+	readOnly := []codexAppServerApprovalDecision{
+		{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "git status --short"},
+		{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "rg doctor runtime"},
+		{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "go test ./runtime"},
+	}
+	if codexApprovalLogHasSideEffects(readOnly) {
+		t.Fatalf("read-only approvals were classified as side effects: %#v", readOnly)
+	}
+	for _, log := range [][]codexAppServerApprovalDecision{
+		{{Method: "item/fileChange/requestApproval", Decision: "accept"}},
+		{{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "apply_patch < patch.diff"}},
+		{{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "git commit -am fix"}},
+		{{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "systemctl --user restart aphelion"}},
+	} {
+		if !codexApprovalLogHasSideEffects(log) {
+			t.Fatalf("mutating approval was not classified as side effect: %#v", log)
+		}
+	}
+}
+
 func TestContinuationWorkModeDoesNotPromoteRestartRecoverySmokeTestToDeploy(t *testing.T) {
 	t.Parallel()
 
@@ -686,6 +795,106 @@ func TestCodexWorkExecutorTimesOutSilentTurnBeforeSideEffects(t *testing.T) {
 	}
 	if result.ThreadID != "thread-silent" || result.TurnID != "turn-silent" {
 		t.Fatalf("result thread/turn = %q/%q, want partial ids preserved", result.ThreadID, result.TurnID)
+	}
+}
+
+func TestCodexWorkExecutorRetainsTruncatedOversizedEvidence(t *testing.T) {
+	t.Parallel()
+
+	largeOutput := strings.Repeat("x", 40*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		write := func(payload map[string]any) bool {
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				return false
+			}
+			return conn.Write(context.Background(), websocket.MessageText, raw) == nil
+		}
+		for {
+			_, raw, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			var msg map[string]any
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				return
+			}
+			id, hasID := msg["id"].(string)
+			if !hasID {
+				continue
+			}
+			method, _ := msg["method"].(string)
+			switch method {
+			case "initialize":
+				if !write(map[string]any{"id": id, "result": map[string]any{}}) {
+					return
+				}
+			case "thread/start":
+				if !write(map[string]any{"id": id, "result": map[string]any{"thread": map[string]any{"id": "thread-evidence"}}}) {
+					return
+				}
+			case "turn/start":
+				if !write(map[string]any{"id": id, "result": map[string]any{"turn": map[string]any{"id": "turn-evidence"}}}) {
+					return
+				}
+				if !write(map[string]any{
+					"method": "item/commandExecution/completed",
+					"params": map[string]any{
+						"threadId": "thread-evidence",
+						"turnId":   "turn-evidence",
+						"command":  "rg doctor runtime",
+						"status":   "completed",
+						"stdout":   largeOutput,
+					},
+				}) {
+					return
+				}
+				if !write(map[string]any{
+					"method": "turn/completed",
+					"params": map[string]any{
+						"threadId": "thread-evidence",
+						"turn":     map[string]any{"id": "turn-evidence"},
+					},
+				}) {
+					return
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	executor := codexWorkExecutor{
+		address:                  "ws://" + strings.TrimPrefix(server.URL, "http://"),
+		rpcTimeout:               time.Second,
+		firstNotificationTimeout: time.Second,
+	}
+	result, err := executor.Run(context.Background(), WorkRequest{Prompt: "collect evidence", Mode: WorkModeReadOnly})
+	if err != nil {
+		t.Fatalf("Run() err = %v, want oversized evidence retained without breaking turn", err)
+	}
+	var event session.WorkCodexEvent
+	for _, candidate := range result.CodexEvents {
+		if candidate.Kind == "command" {
+			event = candidate
+			break
+		}
+	}
+	if event.Kind == "" {
+		t.Fatalf("CodexEvents = %#v, want retained command event", result.CodexEvents)
+	}
+	if event.Command != "rg doctor runtime" {
+		t.Fatalf("event command = %q, want rg command", event.Command)
+	}
+	if len(event.Preview) > 1000 {
+		t.Fatalf("event preview length = %d, want normalized truncated evidence", len(event.Preview))
+	}
+	if len(result.Commands) != 1 || result.Commands[0] != "rg doctor runtime" {
+		t.Fatalf("commands = %#v, want command evidence retained", result.Commands)
 	}
 }
 

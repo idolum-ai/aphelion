@@ -363,7 +363,6 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 			CodexEvents:  client.WorkEvents(),
 			PatchPreview: codexWorkPatchPreviewFromEvents(client.WorkEvents()),
 		})
-		partial.SideEffects = partial.SideEffects || len(client.ApprovalLog()) > 0
 		return partial, err
 	}
 	return codexWorkResultFromAppServer(req, threadID, turnID, result), nil

@@ -377,10 +377,16 @@ type statusCoder interface {
 }
 
 func isRetryableProviderError(err error) bool {
+	if isProviderBufferLimitError(err) {
+		return false
+	}
 	var sc statusCoder
 	if errors.As(err, &sc) {
-		switch sc.StatusCode() {
-		case 429, 500, 503:
+		code := sc.StatusCode()
+		switch {
+		case code == 429:
+			return true
+		case code >= 500 && code < 600:
 			return true
 		default:
 			return false
@@ -394,10 +400,16 @@ func isRetryableProviderError(err error) bool {
 }
 
 func shouldFailoverOnError(err error) bool {
+	if isProviderBufferLimitError(err) {
+		return true
+	}
 	var sc statusCoder
 	if errors.As(err, &sc) {
-		switch sc.StatusCode() {
-		case 401, 403, 429, 500, 503:
+		code := sc.StatusCode()
+		switch {
+		case code == 401 || code == 403 || code == 429:
+			return true
+		case code >= 500 && code < 600:
 			return true
 		default:
 			return false
@@ -471,6 +483,19 @@ func isRejectedToolResultRequest(err error) bool {
 		}
 	}
 	return false
+}
+
+func isProviderBufferLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, "buffer limit") ||
+		strings.Contains(msg, "request buffer") ||
+		strings.Contains(msg, "response buffer")
 }
 
 func nextNonOpenAIProviderIndex(entries []failoverEntry, idx int) int {

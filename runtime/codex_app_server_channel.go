@@ -25,8 +25,11 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-const codexAppServerAdapterName = "codex_app_server"
-const codexAppServerWakeChannel = "codex_app_server"
+const (
+	codexAppServerAdapterName     = "codex_app_server"
+	codexAppServerWakeChannel     = "codex_app_server"
+	codexAppServerMaxMessageBytes = int64(1 << 20)
+)
 
 var errCodexAppServerNoStatusEnvelope = errors.New("codex app-server turn did not return a durable child status envelope")
 
@@ -346,6 +349,7 @@ func (c *codexAppServerClient) Connect(ctx context.Context) error {
 		}
 		return fmt.Errorf("connect codex app-server %s: %w", c.address, err)
 	}
+	conn.SetReadLimit(codexAppServerMaxMessageBytes)
 	c.conn = conn
 	return nil
 }

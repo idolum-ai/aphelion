@@ -134,6 +134,39 @@ func TestFailoverChainFallsBackToSecondary(t *testing.T) {
 	}
 }
 
+func TestFailoverChainFallsBackOnProviderBufferLimitWithoutRetryingPrimary(t *testing.T) {
+	primary := &stubChainProvider{err: stubStatusError{code: 507, msg: "codex: status 507 server_error: exceeded request buffer limit while retrying upstream"}}
+	secondary := &stubChainProvider{reply: "fallback after buffer limit"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "codex", Provider: primary},
+		{Name: "anthropic", Provider: secondary},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "fallback after buffer limit" {
+		t.Fatalf("content = %q, want buffer-limit fallback reply", resp.Content)
+	}
+	if primary.callCount != 1 {
+		t.Fatalf("primary.callCount = %d, want no same-provider retry after buffer limit", primary.callCount)
+	}
+	if secondary.callCount != 1 {
+		t.Fatalf("secondary.callCount = %d, want fallback provider called", secondary.callCount)
+	}
+	if providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderAttemptRetried) {
+		t.Fatalf("provider events = %#v, want failover without same-provider retry", resp.ProviderEvents)
+	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
+		t.Fatalf("provider events = %#v, want failover event", resp.ProviderEvents)
+	}
+}
+
 func TestFailoverChainRecordsRetryEvents(t *testing.T) {
 	primary := &stubChainProvider{err: stubStatusError{code: 503, msg: "upstream unavailable"}}
 	secondary := &stubChainProvider{reply: "fallback reply"}

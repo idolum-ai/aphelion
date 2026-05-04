@@ -5,10 +5,13 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/idolum-ai/aphelion/core"
 )
 
@@ -66,6 +69,42 @@ func TestCodexAppServerWakeAdapterStoresHeartbeatAndThreadState(t *testing.T) {
 	}
 	if !strings.Contains(cont.ExternalChannel.LastArtifact, "artifacts/heartbeats/codex-app-server-") {
 		t.Fatalf("artifact = %q", cont.ExternalChannel.LastArtifact)
+	}
+}
+
+func TestCodexAppServerClientRaisesWebsocketReadLimit(t *testing.T) {
+	t.Parallel()
+
+	large := strings.Repeat("x", 40*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		raw, err := json.Marshal(map[string]any{
+			"id":     "aphelion-large-message-test",
+			"result": map[string]any{"blob": large},
+		})
+		if err != nil {
+			return
+		}
+		_ = conn.Write(context.Background(), websocket.MessageText, raw)
+	}))
+	defer server.Close()
+
+	client := newCodexAppServerClient("ws://" + strings.TrimPrefix(server.URL, "http://"))
+	defer client.Close(websocket.StatusNormalClosure, "done")
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect() err = %v", err)
+	}
+	msg, err := client.readMessage(context.Background())
+	if err != nil {
+		t.Fatalf("readMessage() err = %v, want large websocket message accepted", err)
+	}
+	result := asObject(msg["result"])
+	if got := stringField(result, "blob"); len(got) != len(large) {
+		t.Fatalf("blob length = %d, want %d", len(got), len(large))
 	}
 }
 
