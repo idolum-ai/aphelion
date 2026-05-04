@@ -294,6 +294,71 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	}
 }
 
+func TestTriggerCodingContinuationWarnsWhenFallingBackToNative(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	codex := &fakeWorkExecutor{name: "codex", ready: false, reason: "app-server unreachable"}
+	native := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{Summary: "native completed"}}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex", "native"}}, []WorkExecutor{codex, native})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8198, UserID: 0, Scope: telegramDMScopeRef(8198)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "work-fallback",
+		Objective:      "Run bounded work with fallback.",
+		StageSummary:   "Patch code.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-work-fallback",
+			Summary:        "Patch code",
+			BoundedEffect:  "Patch code under workspace write authority.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-fallback",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-work-fallback",
+			ProposalID:     "aprop-work-fallback",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"workspace_write"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-fallback",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-work-fallback", Objective: "Run bounded work with fallback.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8198); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if native.calls != 1 {
+		t.Fatalf("native calls = %d, want fallback native execution", native.calls)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want one fallback warning", len(sender.sent))
+	}
+	if got := sender.sent[0].Text; got != "Work executor fallback: codex unavailable; using native." || strings.Contains(got, "\n") {
+		t.Fatalf("warning = %q, want one-line work fallback warning", got)
+	}
+}
+
 func TestTriggerCodingContinuationStoresFullWorkEvidenceArtifact(t *testing.T) {
 	t.Parallel()
 

@@ -3,6 +3,8 @@
 package runtime
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -46,6 +48,28 @@ func (r *Runtime) recordProviderAttemptEvents(key session.SessionKey, exec pipel
 			payload["error"] = trimError(value)
 		}
 		r.recordExecutionEvent(key, eventType, "provider", status, payload, time.Now().UTC())
+	}
+}
+
+func (r *Runtime) warnProviderFailovers(ctx context.Context, key session.SessionKey, events []core.ProviderEvent) {
+	if r == nil || r.outbound == nil || key.ChatID == 0 || len(events) == 0 {
+		return
+	}
+	seen := map[string]struct{}{}
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventProviderFailoverEngaged {
+			continue
+		}
+		from := firstRuntimeWorkNonEmpty(event.FromProvider, event.Provider, "primary provider")
+		to := firstRuntimeWorkNonEmpty(event.ToProvider, "next provider")
+		line := fmt.Sprintf("Provider fallback: %s failed; trying %s.", from, to)
+		if _, ok := seen[line]; ok {
+			continue
+		}
+		seen[line] = struct{}{}
+		if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: key.ChatID, Text: line}); err != nil {
+			return
+		}
 	}
 }
 

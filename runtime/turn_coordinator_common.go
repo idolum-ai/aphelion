@@ -316,6 +316,9 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		return out, monitorErr
 	}
 	r.recordProviderAttemptEvents(input.Key, input.Exec, turnResult)
+	if turnResult != nil {
+		r.warnProviderFailovers(ctx, input.Key, turnResult.ProviderEvents)
+	}
 	if turnResult != nil && strings.TrimSpace(turnResult.ProviderFailure) != "" {
 		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{
 			"backend":  strings.TrimSpace(input.Exec.Backend),

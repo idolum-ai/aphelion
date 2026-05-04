@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,33 @@ func TestRuntimeRecordsProviderRetryAndFailoverEvents(t *testing.T) {
 	}
 	assertHasEventType(t, events, core.ExecutionEventProviderAttemptRetried)
 	assertHasEventType(t, events, core.ExecutionEventProviderFailoverEngaged)
+}
+
+func TestRuntimeWarnsProviderFailoverInOneLine(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 99104, UserID: 0, Scope: telegramDMScopeRef(99104)}
+	rt.warnProviderFailovers(context.Background(), key, []core.ProviderEvent{{
+		EventType:    core.ExecutionEventProviderFailoverEngaged,
+		FromProvider: "openai:gpt-5.5",
+		ToProvider:   "anthropic",
+		Error:        "tool result rejected",
+	}})
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if got := sender.sent[0].Text; got != "Provider fallback: openai:gpt-5.5 failed; trying anthropic." || strings.Contains(got, "\n") {
+		t.Fatalf("warning = %q, want one-line provider fallback warning", got)
+	}
 }
 
 func TestRuntimeRecordsTelegramCallbackErrorEvent(t *testing.T) {

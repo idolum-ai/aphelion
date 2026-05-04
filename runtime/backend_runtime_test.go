@@ -552,11 +552,14 @@ func TestCodexRuntimeFailureFallsBackToNativeProviderChain(t *testing.T) {
 
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
-	if len(sender.sent) != 1 {
-		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	if len(sender.sent) != 2 {
+		t.Fatalf("sent len = %d, want fallback warning + final reply", len(sender.sent))
 	}
-	if sender.sent[0].Text != nativeProvider.replyText {
-		t.Fatalf("outbound text = %q, want %q", sender.sent[0].Text, nativeProvider.replyText)
+	if got := sender.sent[0].Text; !strings.HasPrefix(got, "Provider fallback:") || strings.Contains(got, "\n") {
+		t.Fatalf("fallback warning = %q, want one-line provider fallback warning", got)
+	}
+	if sender.sent[1].Text != nativeProvider.replyText {
+		t.Fatalf("outbound text = %q, want %q", sender.sent[1].Text, nativeProvider.replyText)
 	}
 }
 

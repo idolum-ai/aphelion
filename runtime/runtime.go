@@ -330,6 +330,21 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "failed", payload, time.Now().UTC())
 		return err
 	}
+	if strings.TrimSpace(status.FallbackReason) != "" {
+		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFallback, "work", "fallback", map[string]any{
+			"operation_id":     strings.TrimSpace(req.OperationID),
+			"lease_id":         strings.TrimSpace(req.LeaseID),
+			"active_executor":  strings.TrimSpace(status.Active),
+			"fallback_reason":  strings.TrimSpace(status.FallbackReason),
+			"last_attempted":   strings.TrimSpace(status.LastAttempted),
+			"configured":       strings.TrimSpace(status.Configured),
+			"preferred":        strings.TrimSpace(status.Preferred),
+			"executor_warning": workExecutorFallbackWarning(status),
+		}, time.Now().UTC())
+		if err := r.warnWorkExecutorFallback(ctx, chatID, status); err != nil {
+			log.Printf("WARN send work executor fallback warning failed chat_id=%d err=%v", chatID, err)
+		}
+	}
 	artifact := r.persistWorkResult(key, req, result, status, nil)
 	payload = workResultPayload(req, result, status, nil)
 	if artifact.Ref != "" {
@@ -340,6 +355,30 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 		return err
 	}
 	return nil
+}
+
+func (r *Runtime) warnWorkExecutorFallback(ctx context.Context, chatID int64, status WorkExecutorStatus) error {
+	if r == nil || r.outbound == nil || chatID == 0 {
+		return nil
+	}
+	text := workExecutorFallbackWarning(status)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	_, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: chatID, Text: text})
+	return err
+}
+
+func workExecutorFallbackWarning(status WorkExecutorStatus) string {
+	if strings.TrimSpace(status.FallbackReason) == "" {
+		return ""
+	}
+	active := firstRuntimeWorkNonEmpty(status.Active, "native")
+	preferred := firstRuntimeWorkNonEmpty(status.Preferred, status.LastAttempted, "preferred executor")
+	if active == preferred {
+		return ""
+	}
+	return fmt.Sprintf("Work executor fallback: %s unavailable; using %s.", preferred, active)
 }
 
 func (r *Runtime) workRequestForContinuation(key session.SessionKey, chatID int64, actor principal.Principal, state session.ContinuationState, opState session.OperationState) WorkRequest {
