@@ -12,7 +12,6 @@ import (
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
-	"github.com/idolum-ai/aphelion/prompt"
 	providerpkg "github.com/idolum-ai/aphelion/provider"
 )
 
@@ -92,8 +91,8 @@ func (r *Runtime) newFaceRendererForProvider(provider agent.Provider, slot core.
 		reasoning.Summary = agent.ReasoningSummaryAuto
 	}
 	return newFaceRenderer(provider, face.ProviderRendererConfig{
-		GovernorName:  prompt.DefaultGovernorName,
-		FaceName:      face.DefaultFaceName,
+		GovernorName:  r.governorName(),
+		FaceName:      r.faceName(),
 		Channel:       "telegram",
 		WorkspaceRoot: r.cfg.Agent.PromptRoot,
 		Reasoning:     reasoning,

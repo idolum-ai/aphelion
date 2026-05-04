@@ -43,6 +43,15 @@ external_manifest_dir = "./external-tools"
 	if cfg.Telegram.PollTimeout != 30 {
 		t.Fatalf("poll timeout = %d, want 30", cfg.Telegram.PollTimeout)
 	}
+	if cfg.Identity.ProjectName != "aphelion" || cfg.Identity.AnonymousProfile {
+		t.Fatalf("identity defaults = %#v, want project_name aphelion and anonymous disabled", cfg.Identity)
+	}
+	if got := EffectiveGovernorName(cfg, "Idolum (System)"); got != "Idolum (System)" {
+		t.Fatalf("EffectiveGovernorName = %q, want live default", got)
+	}
+	if got := EffectiveFaceName(cfg, "Idolum"); got != "Idolum" {
+		t.Fatalf("EffectiveFaceName = %q, want live default", got)
+	}
 	if !cfg.Telegram.DetachPendingOnRestart {
 		t.Fatalf("detach_pending_on_restart = %t, want true by default", cfg.Telegram.DetachPendingOnRestart)
 	}
@@ -180,6 +189,66 @@ external_manifest_dir = "./external-tools"
 	}
 	if cfg.DurableAgents.ControlPlane.Enabled {
 		t.Fatalf("durable_agents.control_plane.enabled = true, want false by default")
+	}
+}
+
+func TestLoadWarnsOnIgnoredConfigKeys(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+allowed_chats = [123]
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+cache_ttl = "1h"
+
+[providers.gemini]
+api_key = "gemini-test"
+
+[agent]
+workspace = "./workspace"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	summary := cfg.WarningSummary()
+	for _, want := range []string{"telegram.allowed_chats", "providers.anthropic.cache_ttl", "providers.gemini"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("warning summary = %q, want %s", summary, want)
+		}
+	}
+}
+
+func TestIdentityAnonymousProfileUsesGenericDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.Identity.AnonymousProfile = true
+	if got := EffectiveGovernorName(&cfg, "Idolum (System)"); got != "System" {
+		t.Fatalf("anonymous governor name = %q, want System", got)
+	}
+	if got := EffectiveFaceName(&cfg, "Idolum"); got != "Assistant" {
+		t.Fatalf("anonymous face name = %q, want Assistant", got)
+	}
+	cfg.Identity.GovernorName = "House"
+	cfg.Identity.FaceName = "Scene"
+	if got := EffectiveGovernorName(&cfg, "Idolum (System)"); got != "House" {
+		t.Fatalf("configured governor name = %q, want House", got)
+	}
+	if got := EffectiveFaceName(&cfg, "Idolum"); got != "Scene" {
+		t.Fatalf("configured face name = %q, want Scene", got)
 	}
 }
 

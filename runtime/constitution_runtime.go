@@ -396,8 +396,8 @@ func (r *Runtime) repairTurnReply(
 		return "", false
 	}
 	repaired, err := currentFaceModel.Render(ctx, face.RenderRequest{
-		GovernorName:    prompt.DefaultGovernorName,
-		FaceName:        face.DefaultFaceName,
+		GovernorName:    r.governorName(),
+		FaceName:        r.faceName(),
 		Channel:         contract.Channel,
 		Mode:            "repair",
 		PrincipalRole:   contract.PrincipalRole,

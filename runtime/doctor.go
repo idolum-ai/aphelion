@@ -179,7 +179,7 @@ func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, no
 
 	awareness := r.governorRuntimeAwareness(scope, session.TurnRunKindDoctor, "telegram", exec)
 	systemBlocks := prompt.BuildGovernorPromptBlocks(prompt.GovernorRequest{
-		GovernorName:    prompt.DefaultGovernorName,
+		GovernorName:    r.governorName(),
 		GovernorBackend: exec.Backend,
 		PrincipalRole:   "admin",
 		WorkspaceRoot:   scope.WorkingRoot,
@@ -751,6 +751,14 @@ func (r *Runtime) writeDoctorRuntimeConfig(b *strings.Builder, exec pipeline.Tur
 	writeDoctorKV(b, "governor_model", strings.TrimSpace(exec.ModelName))
 	writeDoctorKV(b, "provider_path", strings.Join(exec.ProviderPath, " -> "))
 	writeDoctorKV(b, "configured_provider_chain", strings.Join(config.EffectiveProviderChain(r.cfg), " -> "))
+	warnings := r.cfg.Warnings()
+	writeDoctorKV(b, "config_ignored_key_count", strconv.Itoa(len(warnings)))
+	for _, warning := range warnings {
+		writeDoctorLine(b, fmt.Sprintf("config_ignored_key=%s message=%s", strconv.Quote(strings.TrimSpace(warning.Path)), strconv.Quote(strings.TrimSpace(warning.Message))))
+	}
+	writeDoctorKV(b, "identity_anonymous_profile", strconv.FormatBool(r.cfg.Identity.AnonymousProfile))
+	writeDoctorKV(b, "identity_governor_name_effective", r.governorName())
+	writeDoctorKV(b, "identity_face_name_effective", r.faceName())
 	writeDoctorKV(b, "codex_context_window", strconv.Itoa(r.cfg.Governor.Codex.ContextWindow))
 	writeDoctorKV(b, "codex_transport_retries", strconv.Itoa(r.cfg.Governor.Codex.TransportRetries))
 	workStatus := WorkExecutorStatus{}

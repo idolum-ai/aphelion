@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/face"
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
@@ -88,7 +87,7 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	hiddenInputAwareness := hiddenInputs.toTurnAwareness()
 	governorAwareness := turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", pipeline.TurnExecutionContract{}), hiddenInputAwareness)
 	governorPrompt := prompt.GovernorRequest{
-		GovernorName:    prompt.DefaultGovernorName,
+		GovernorName:    r.governorName(),
 		GovernorBackend: r.governorBackend,
 		PrincipalRole:   "admin",
 		WorkspaceRoot:   scope.WorkingRoot,
@@ -165,8 +164,8 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		PromptContext:         promptContext,
 		HiddenInputs:          hiddenInputs,
 		UseMaterialFloor:      true,
-		GovernorName:          prompt.DefaultGovernorName,
-		FaceName:              face.DefaultFaceName,
+		GovernorName:          r.governorName(),
+		FaceName:              r.faceName(),
 		Channel:               "telegram",
 		PrincipalRole:         "admin",
 		SessionUserName:       "heartbeat",

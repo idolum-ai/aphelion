@@ -40,11 +40,11 @@ func (m *Machine) prepareContext(req Request) preparedContext {
 	}
 	governorName := strings.TrimSpace(m.Options.GovernorName)
 	if governorName == "" {
-		governorName = "Aphelion"
+		governorName = "System"
 	}
 	faceName := strings.TrimSpace(m.Options.FaceName)
 	if faceName == "" {
-		faceName = "Idolum"
+		faceName = "Assistant"
 	}
 	channel := strings.TrimSpace(m.Options.Channel)
 	if channel == "" {

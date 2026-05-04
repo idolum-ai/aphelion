@@ -202,6 +202,9 @@ func (c *interactiveTurnCoordinator) coordinatorGovernorName() string {
 	if trimmed := strings.TrimSpace(c.governorName); trimmed != "" {
 		return trimmed
 	}
+	if c.runtime != nil {
+		return c.runtime.governorName()
+	}
 	return prompt.DefaultGovernorName
 }
 
@@ -211,6 +214,9 @@ func (c *interactiveTurnCoordinator) coordinatorFaceName() string {
 	}
 	if trimmed := strings.TrimSpace(c.faceName); trimmed != "" {
 		return trimmed
+	}
+	if c.runtime != nil {
+		return c.runtime.faceName()
 	}
 	return face.DefaultFaceName
 }

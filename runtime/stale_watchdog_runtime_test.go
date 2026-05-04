@@ -110,4 +110,3 @@ func TestStaleTurnWatchdogCadence(t *testing.T) {
 		})
 	}
 }
-

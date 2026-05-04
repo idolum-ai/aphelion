@@ -231,8 +231,8 @@ func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, key sessi
 	}
 
 	rendered, err := renderer.Render(ctx, face.RenderRequest{
-		GovernorName:    prompt.DefaultGovernorName,
-		FaceName:        face.DefaultFaceName,
+		GovernorName:    r.governorName(),
+		FaceName:        r.faceName(),
 		Channel:         "telegram",
 		Mode:            "repair",
 		PrincipalRole:   "approved_user",
@@ -414,8 +414,8 @@ func (r *Runtime) renderContinuationPrompt(ctx context.Context, key session.Sess
 	}
 
 	rendered, err := renderer.Render(ctx, face.RenderRequest{
-		GovernorName:    prompt.DefaultGovernorName,
-		FaceName:        face.DefaultFaceName,
+		GovernorName:    r.governorName(),
+		FaceName:        r.faceName(),
 		Channel:         "telegram",
 		Mode:            "repair",
 		PrincipalRole:   "approved_user",

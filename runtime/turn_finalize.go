@@ -69,8 +69,8 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	workspaceRoot := faceWorkspaceRoot(input.Scope)
 	stageResult, err := turn.RunRenderStage(input.Ctx, turn.RenderStageRequest{
 		Render: turn.FaceRenderRequest{
-			GovernorName:    prompt.DefaultGovernorName,
-			FaceName:        face.DefaultFaceName,
+			GovernorName:    r.governorName(),
+			FaceName:        r.faceName(),
 			Channel:         input.Channel,
 			PrincipalRole:   input.PrincipalRole,
 			WorkspaceRoot:   workspaceRoot,

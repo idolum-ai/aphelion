@@ -1,5 +1,9 @@
 [identity]
 user_agent = ""
+project_name = "aphelion"
+governor_name = ""
+face_name = ""
+anonymous_profile = false
 
 [telegram]
 bot_token = "telegram-bot-token"

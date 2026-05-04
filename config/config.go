@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,10 +34,21 @@ type Config struct {
 	Voice         VoiceConfig         `toml:"voice"`
 	DurableAgents DurableAgentsConfig `toml:"durable_agents"`
 	Tailscale     TailscaleConfig     `toml:"tailscale"`
+
+	warnings []ConfigWarning
+}
+
+type ConfigWarning struct {
+	Path    string
+	Message string
 }
 
 type IdentityConfig struct {
-	UserAgent string `toml:"user_agent"`
+	UserAgent        string `toml:"user_agent"`
+	ProjectName      string `toml:"project_name"`
+	GovernorName     string `toml:"governor_name"`
+	FaceName         string `toml:"face_name"`
+	AnonymousProfile bool   `toml:"anonymous_profile"`
 }
 
 type TelegramConfig struct {
@@ -389,6 +401,13 @@ func (a AgentConfig) EffectiveUserMemoryRoot() string {
 
 func Default() Config {
 	return Config{
+		Identity: IdentityConfig{
+			UserAgent:        "",
+			ProjectName:      "aphelion",
+			GovernorName:     "",
+			FaceName:         "",
+			AnonymousProfile: false,
+		},
 		Telegram: TelegramConfig{
 			DetachPendingOnRestart: true,
 			PollTimeout:            30,
@@ -626,6 +645,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode toml: %w", err)
 	}
+	cfg.warnings = configWarningsFromMetadata(md)
 
 	applyLegacyAgentRoots(&cfg, md)
 	cfg.Providers.Selection = normalizeProviderSelection(cfg.Providers.Selection)
@@ -694,6 +714,87 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func (cfg *Config) Warnings() []ConfigWarning {
+	if cfg == nil || len(cfg.warnings) == 0 {
+		return nil
+	}
+	return append([]ConfigWarning(nil), cfg.warnings...)
+}
+
+func (cfg *Config) WarningSummary() string {
+	warnings := cfg.Warnings()
+	if len(warnings) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		path := strings.TrimSpace(warning.Path)
+		message := strings.TrimSpace(warning.Message)
+		switch {
+		case path != "" && message != "":
+			parts = append(parts, path+": "+message)
+		case path != "":
+			parts = append(parts, path)
+		case message != "":
+			parts = append(parts, message)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func configWarningsFromMetadata(md toml.MetaData) []ConfigWarning {
+	undecoded := md.Undecoded()
+	if len(undecoded) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(undecoded))
+	for _, key := range undecoded {
+		path := strings.TrimSpace(key.String())
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	out := make([]ConfigWarning, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, ConfigWarning{
+			Path:    path,
+			Message: "ignored by this build; config remains valid but this key has no runtime effect",
+		})
+	}
+	return out
+}
+
+func EffectiveGovernorName(cfg *Config, defaultName string) string {
+	if cfg != nil {
+		if trimmed := strings.TrimSpace(cfg.Identity.GovernorName); trimmed != "" {
+			return trimmed
+		}
+		if cfg.Identity.AnonymousProfile {
+			return "System"
+		}
+	}
+	if trimmed := strings.TrimSpace(defaultName); trimmed != "" {
+		return trimmed
+	}
+	return "System"
+}
+
+func EffectiveFaceName(cfg *Config, defaultName string) string {
+	if cfg != nil {
+		if trimmed := strings.TrimSpace(cfg.Identity.FaceName); trimmed != "" {
+			return trimmed
+		}
+		if cfg.Identity.AnonymousProfile {
+			return "Assistant"
+		}
+	}
+	if trimmed := strings.TrimSpace(defaultName); trimmed != "" {
+		return trimmed
+	}
+	return "Assistant"
 }
 
 func applyProviderSelectionHeuristic(cfg *Config, md toml.MetaData) {

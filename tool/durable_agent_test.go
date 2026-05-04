@@ -63,6 +63,18 @@ func TestDurableAgentToolDefinitionIncludesPolicyPatchSurface(t *testing.T) {
 	}
 }
 
+func TestToolDefinitionsAvoidProviderVisibleProjectName(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry(t.TempDir(), time.Second)
+	for _, def := range registry.Definitions() {
+		raw := def.Description + "\n" + string(def.Parameters)
+		if strings.Contains(raw, "Aphelion repo") {
+			t.Fatalf("tool definition %s leaks project-name repo phrasing: %s", def.Name, raw)
+		}
+	}
+}
+
 func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	t.Parallel()
 

@@ -83,8 +83,8 @@ func (a *runtimeMaintenanceTurnAssembler) Run(ctx context.Context, input mainten
 		input.Now = time.Now().UTC()
 	}
 	channel := firstNonEmpty(strings.TrimSpace(input.Channel), "telegram")
-	governorName := firstNonEmpty(strings.TrimSpace(input.GovernorName), prompt.DefaultGovernorName)
-	faceName := firstNonEmpty(strings.TrimSpace(input.FaceName), face.DefaultFaceName)
+	governorName := firstNonEmpty(strings.TrimSpace(input.GovernorName), a.runtime.governorName())
+	faceName := firstNonEmpty(strings.TrimSpace(input.FaceName), a.runtime.faceName())
 	style := firstNonEmpty(strings.TrimSpace(input.Style), defaultMaintenanceTurnStyle)
 	policyFunc := input.PolicyFunc
 	if policyFunc == nil {

@@ -14,7 +14,6 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
-	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/turn"
 )
@@ -139,8 +138,8 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		PromptContext:         promptContext,
 		RecoveryRuns:          runs,
 		UseMaterialFloor:      false,
-		GovernorName:          prompt.DefaultGovernorName,
-		FaceName:              face.DefaultFaceName,
+		GovernorName:          r.governorName(),
+		FaceName:              r.faceName(),
 		Channel:               "system",
 		PrincipalRole:         "admin",
 		SessionUserName:       "startup-recovery",

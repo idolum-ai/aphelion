@@ -1116,7 +1116,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						},
 						"artifact": {
 							"type": "object",
-							"description": "Child-specific artifact payload for artifact_put, artifact_list, and artifact_show. Artifacts are stored under the child memory root, not the Aphelion repo.",
+							"description": "Child-specific artifact payload for artifact_put, artifact_list, and artifact_show. Artifacts are stored under the child memory root, not the parent runtime repository.",
 							"properties": {
 								"path": {"type": "string", "description": "Relative artifact path under artifacts/. Rejects absolute paths and .. traversal."},
 								"content": {"type": "string", "description": "Artifact content for artifact_put"},

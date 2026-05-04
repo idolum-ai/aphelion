@@ -1004,8 +1004,8 @@ func New(
 	}
 
 	faceModel, err := newFaceRenderer(faceProvider, face.ProviderRendererConfig{
-		GovernorName:  prompt.DefaultGovernorName,
-		FaceName:      face.DefaultFaceName,
+		GovernorName:  config.EffectiveGovernorName(cfg, prompt.DefaultGovernorName),
+		FaceName:      config.EffectiveFaceName(cfg, face.DefaultFaceName),
 		Channel:       "telegram",
 		WorkspaceRoot: cfg.Agent.PromptRoot,
 	})
@@ -1197,6 +1197,20 @@ func normalizeRuntimeConfig(cfg *config.Config) *config.Config {
 		copy.Agent.Workspace = copy.Agent.ExecRoot
 	}
 	return &copy
+}
+
+func (r *Runtime) governorName() string {
+	if r == nil {
+		return prompt.DefaultGovernorName
+	}
+	return config.EffectiveGovernorName(r.cfg, prompt.DefaultGovernorName)
+}
+
+func (r *Runtime) faceName() string {
+	if r == nil {
+		return face.DefaultFaceName
+	}
+	return config.EffectiveFaceName(r.cfg, face.DefaultFaceName)
 }
 
 func (r *Runtime) AgentFunc() core.AgentFunc {

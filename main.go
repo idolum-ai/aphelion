@@ -641,6 +641,7 @@ func run() error {
 	if err != nil {
 		return &configStartupError{Path: configPath, Err: err}
 	}
+	logConfigWarnings(configPath, cfg)
 
 	if err := prepareFilesystem(cfg); err != nil {
 		return &configStartupError{Path: configPath, Err: err}
@@ -897,6 +898,15 @@ func run() error {
 		strings.Join(cfg.Providers.FallbackChain, ","),
 	)
 	return poller.Run(ctx)
+}
+
+func logConfigWarnings(configPath string, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	for _, warning := range cfg.Warnings() {
+		log.Printf("WARN config ignored_key path=%s key=%s message=%s", configPath, strings.TrimSpace(warning.Path), strings.TrimSpace(warning.Message))
+	}
 }
 
 func shouldAllowUnresolvedPrivateDurableRelayMessage(msg *telegram.Message) bool {

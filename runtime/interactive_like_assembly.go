@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
@@ -62,8 +61,8 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 		runKind = session.TurnRunKindInteractive
 	}
 	channel := firstNonEmpty(strings.TrimSpace(input.Channel), "telegram")
-	governorName := firstNonEmpty(strings.TrimSpace(input.GovernorName), prompt.DefaultGovernorName)
-	faceName := firstNonEmpty(strings.TrimSpace(input.FaceName), face.DefaultFaceName)
+	governorName := firstNonEmpty(strings.TrimSpace(input.GovernorName), r.governorName())
+	faceName := firstNonEmpty(strings.TrimSpace(input.FaceName), r.faceName())
 	style := firstNonEmpty(strings.TrimSpace(input.Style), defaultInteractiveLikeTurnStyle)
 	policyReason := firstNonEmpty(strings.TrimSpace(input.PolicyReason), "mapped from pipeline interactive face policy")
 	promptContextErr := firstNonEmpty(strings.TrimSpace(input.PromptContextErrHint), "load workspace prompt context")

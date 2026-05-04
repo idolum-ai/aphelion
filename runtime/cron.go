@@ -12,10 +12,8 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
-	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
-	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/turn"
 )
@@ -90,8 +88,8 @@ func (r *Runtime) runCronJobOnce(ctx context.Context, job config.CronJobConfig) 
 		Prepared:              prepared,
 		Exec:                  exec,
 		UseMaterialFloor:      true,
-		GovernorName:          prompt.DefaultGovernorName,
-		FaceName:              face.DefaultFaceName,
+		GovernorName:          r.governorName(),
+		FaceName:              r.faceName(),
 		Channel:               "telegram",
 		PrincipalRole:         "admin",
 		SessionUserName:       "cron:" + job.ID,
