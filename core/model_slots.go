@@ -17,6 +17,8 @@ const (
 	ModelProviderOpenAI     = "openai"
 	ModelProviderAnthropic  = "anthropic"
 	ModelProviderOpenRouter = "openrouter"
+	ModelProviderGemini     = "gemini"
+	ModelProviderOllama     = "ollama"
 	ModelProviderCodex      = "codex"
 
 	ModelTransportAuto              = "auto"
@@ -24,6 +26,8 @@ const (
 	ModelTransportOpenAIChat        = "chat_completions"
 	ModelTransportAnthropicMessages = "anthropic_messages"
 	ModelTransportOpenRouterChat    = "openrouter_chat"
+	ModelTransportGeminiGenerate    = "gemini_generate_content"
+	ModelTransportOllamaChat        = "ollama_chat"
 	ModelTransportCodex             = "codex"
 )
 
@@ -122,6 +126,10 @@ func NormalizeModelProvider(provider string) string {
 		return ModelProviderAnthropic
 	case ModelProviderOpenRouter, "or":
 		return ModelProviderOpenRouter
+	case ModelProviderGemini, "google":
+		return ModelProviderGemini
+	case ModelProviderOllama, "local":
+		return ModelProviderOllama
 	case ModelProviderCodex:
 		return ModelProviderCodex
 	default:
@@ -160,6 +168,10 @@ func NormalizeModelTransport(transport string) string {
 		return ModelTransportAnthropicMessages
 	case ModelTransportOpenRouterChat, "openrouter":
 		return ModelTransportOpenRouterChat
+	case ModelTransportGeminiGenerate, "gemini":
+		return ModelTransportGeminiGenerate
+	case ModelTransportOllamaChat, "ollama":
+		return ModelTransportOllamaChat
 	case ModelTransportCodex:
 		return ModelTransportCodex
 	default:
@@ -190,7 +202,7 @@ func ValidateModelSlotConfig(cfg ModelSlotConfig, usesTools bool) ModelValidatio
 		return result
 	}
 	if normalized.Provider == "" {
-		result.Error = "model provider must be one of openai, anthropic, openrouter, codex"
+		result.Error = "model provider must be one of openai, anthropic, openrouter, gemini, ollama, codex"
 		return result
 	}
 	if normalized.Model == "" {
@@ -198,7 +210,7 @@ func ValidateModelSlotConfig(cfg ModelSlotConfig, usesTools bool) ModelValidatio
 		return result
 	}
 	if normalized.Transport == "" {
-		result.Error = "transport must be auto, responses, chat_completions, anthropic_messages, openrouter_chat, or codex"
+		result.Error = "transport must be auto, responses, chat_completions, anthropic_messages, openrouter_chat, gemini_generate_content, ollama_chat, or codex"
 		return result
 	}
 
@@ -234,6 +246,10 @@ func ResolveModelTransport(cfg ModelSlotConfig, usesTools bool) string {
 		return ModelTransportAnthropicMessages
 	case ModelProviderOpenRouter:
 		return ModelTransportOpenRouterChat
+	case ModelProviderGemini:
+		return ModelTransportGeminiGenerate
+	case ModelProviderOllama:
+		return ModelTransportOllamaChat
 	case ModelProviderCodex:
 		return ModelTransportCodex
 	default:
@@ -259,6 +275,14 @@ func validateResolvedModelTransport(cfg ModelSlotConfig, resolved string, usesTo
 	case ModelProviderOpenRouter:
 		if resolved != ModelTransportOpenRouterChat {
 			return fmt.Errorf("openrouter requires openrouter_chat transport")
+		}
+	case ModelProviderGemini:
+		if resolved != ModelTransportGeminiGenerate {
+			return fmt.Errorf("gemini requires gemini_generate_content transport")
+		}
+	case ModelProviderOllama:
+		if resolved != ModelTransportOllamaChat {
+			return fmt.Errorf("ollama requires ollama_chat transport")
 		}
 	case ModelProviderCodex:
 		if resolved != ModelTransportCodex {

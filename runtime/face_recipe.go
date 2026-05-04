@@ -230,6 +230,34 @@ func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,
 		})
+	case "gemini":
+		if strings.TrimSpace(cfg.Providers.Gemini.APIKey) == "" {
+			return nil, nil
+		}
+		model := strings.TrimSpace(cfg.Providers.Gemini.Model)
+		if model == "" {
+			return nil, nil
+		}
+		return providerpkg.NewGemini(providerpkg.GeminiOptions{
+			APIKey:     cfg.Providers.Gemini.APIKey,
+			BaseURL:    cfg.Providers.Gemini.BaseURL,
+			Model:      model,
+			MaxTokens:  cfg.Providers.Gemini.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+	case "ollama":
+		model := strings.TrimSpace(cfg.Providers.Ollama.Model)
+		if strings.TrimSpace(cfg.Providers.Ollama.BaseURL) == "" || model == "" {
+			return nil, nil
+		}
+		return providerpkg.NewOllama(providerpkg.OllamaOptions{
+			BaseURL:    cfg.Providers.Ollama.BaseURL,
+			Model:      model,
+			MaxTokens:  cfg.Providers.Ollama.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
 	case "":
 		return nil, nil
 	default:

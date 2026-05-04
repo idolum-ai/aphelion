@@ -16,6 +16,7 @@ selection. It reflects the current branch and the live local configuration in
 | Native OpenAI model chain | `gpt-5.5 -> gpt-5.4 -> gpt-5.4-mini` | `providers.openai.model`, `providers.openai.fallback_models` | Applies to native governor fallback, face provider with GPT persona recipe, and status-readable provider chains. |
 | Native Anthropic fallback | `claude-sonnet-4-6` | `providers.anthropic.model` | Used when OpenAI path is unavailable or when face recipe is Anthropic-compatible. |
 | Native OpenRouter fallback | `anthropic/claude-sonnet-4-6` | `providers.openrouter.model` | For generic native chain; face recipe may map GPT persona to `openai/gpt-5.5` on OpenRouter. |
+| Native Gemini/Ollama options | available but not in live default chain | `providers.gemini`, `providers.ollama`, `providers.auto_order`, `providers.fallback_chain` | Can be selected explicitly for native governor/model slots/durable child bootstrap. |
 | Face backend | `provider` | `face.backend` | Face prompts use the persona provider chain, not the Codex governor backend. |
 | Runtime persona recipe | `gpt-5.5` | `~/.aphelion/state/runtime_recipes.json` | Face model selection is recipe-driven. |
 | Runtime governor effort recipe | `xhigh` | `~/.aphelion/state/runtime_recipes.json` | Overrides interactive and recovery reasoning effort. |
@@ -80,7 +81,7 @@ turn intimacy into hidden authorization.
 
 | Rule | Current state | Review stance |
 | --- | --- | --- |
-| Configuration decides provider order. | Effective chain is `openai -> anthropic -> openrouter` because OpenAI is configured and live fallback chain is explicit. | Keep. Do not hardcode Anthropic. |
+| Configuration decides provider order. | Effective chain is `openai -> anthropic -> openrouter` because OpenAI is configured and live fallback chain is explicit; Gemini/Ollama are available when configured into the chain. | Keep. Do not hardcode Anthropic. |
 | OpenAI has model-level fallback before provider fallback. | `gpt-5.5 -> gpt-5.4 -> gpt-5.4-mini`. | Keep. This matches the GPT 5.5 migration intent. |
 | Post-tool OpenAI/Codex request rejection is provider-specific. | If tool results are already in the history and OpenAI/Codex rejects the synthesis request, skip remaining OpenAI-family entries and try Anthropic, then OpenRouter with the same tool evidence. | Keep. This preserves final synthesis without discarding executed tool work. |
 | Governor and face may both use GPT 5.5. | Live governor Codex model is `gpt-5.5`; live persona recipe is `gpt-5.5`. | Keep. Prompt/context, not model name, separates behavior. |

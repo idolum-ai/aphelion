@@ -19,6 +19,7 @@ const (
 	statusReadableModelAnthropic  = "claude-haiku-4-5"
 	statusReadableModelOpenAI     = "gpt-5.4"
 	statusReadableModelOpenRouter = "anthropic/claude-haiku-4-5"
+	statusReadableModelGemini     = "gemini-3.1-flash"
 	statusReadableInputMaxChars   = 2600
 	statusReadableOutputMaxChars  = 320
 	statusReadableSummaryTimeout  = 4 * time.Second
@@ -33,6 +34,12 @@ var (
 	}
 	newStatusReadableOpenRouterProvider = func(opts providerpkg.OpenRouterOptions) (agent.Provider, error) {
 		return providerpkg.NewOpenRouter(opts)
+	}
+	newStatusReadableGeminiProvider = func(opts providerpkg.GeminiOptions) (agent.Provider, error) {
+		return providerpkg.NewGemini(opts)
+	}
+	newStatusReadableOllamaProvider = func(opts providerpkg.OllamaOptions) (agent.Provider, error) {
+		return providerpkg.NewOllama(opts)
 	}
 	newStatusReadableFailoverChain = func(entries []providerpkg.NamedProvider) (agent.Provider, error) {
 		return providerpkg.NewFailoverChain(entries)
@@ -154,6 +161,34 @@ func buildNamedStatusReadableProvider(name string, cfg *config.Config, httpClien
 			APIKey:     cfg.Providers.OpenRouter.APIKey,
 			BaseURL:    cfg.Providers.OpenRouter.BaseURL,
 			Model:      statusReadableModelOpenRouter,
+			MaxTokens:  512,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+	case "gemini":
+		if strings.TrimSpace(cfg.Providers.Gemini.APIKey) == "" {
+			return nil, nil
+		}
+		model := strings.TrimSpace(cfg.Providers.Gemini.Model)
+		if model == "" {
+			model = statusReadableModelGemini
+		}
+		return newStatusReadableGeminiProvider(providerpkg.GeminiOptions{
+			APIKey:     cfg.Providers.Gemini.APIKey,
+			BaseURL:    cfg.Providers.Gemini.BaseURL,
+			Model:      model,
+			MaxTokens:  512,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+	case "ollama":
+		model := strings.TrimSpace(cfg.Providers.Ollama.Model)
+		if strings.TrimSpace(cfg.Providers.Ollama.BaseURL) == "" || model == "" {
+			return nil, nil
+		}
+		return newStatusReadableOllamaProvider(providerpkg.OllamaOptions{
+			BaseURL:    cfg.Providers.Ollama.BaseURL,
+			Model:      model,
 			MaxTokens:  512,
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,

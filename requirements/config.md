@@ -74,7 +74,7 @@ review_target_chat_id = 123456789
 llm_backend = "native"          # "native" | "codex"
 
 # Native child bootstrap
-llm_provider = "openrouter"     # "anthropic" | "openai" | "openrouter"
+llm_provider = "openrouter"     # "anthropic" | "openai" | "openrouter" | "gemini" | "ollama"
 llm_api_key = ""
 llm_base_url = "https://openrouter.ai/api/v1"
 llm_model = "anthropic/claude-sonnet-4-6"
@@ -89,7 +89,7 @@ llm_max_tokens = 64000
 # ─── Providers ───
 [providers]
 selection = "auto"                         # "auto" | "manual"
-auto_order = ["openai", "anthropic", "openrouter"]
+auto_order = ["openai", "anthropic", "openrouter"]  # gemini/ollama can be added explicitly.
 default = ""                               # Optional manual primary.
 # fallback_chain is omitted in auto mode so configured providers after the primary become fallbacks.
 # For a manual chain, set selection = "manual", default, and fallback_chain explicitly.
@@ -435,7 +435,7 @@ Implemented behavior:
 - `[[telegram.durable_groups]]` admits specific Telegram groups as durable children.
 - Each admitted group must define a child-local node LLM bootstrap.
 - The runtime currently supports:
-- `llm_backend = "native"` with `llm_provider = "anthropic" | "openai" | "openrouter"`
+- `llm_backend = "native"` with `llm_provider = "anthropic" | "openai" | "openrouter" | "gemini" | "ollama"`
   - `llm_backend = "codex"` with child-local Codex auth/home settings
 - A durable child must not inherit the parent governor/provider credentials.
 - If the child bootstrap is missing or invalid, the durable child should fail rather than silently execute on the parent's LLM credentials.

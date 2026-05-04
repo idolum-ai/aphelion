@@ -942,7 +942,7 @@ For LLM-backed children, the bootstrap should also define the node's own inferen
 At minimum, the child bootstrap should be able to express:
 
 - `backend = native`
-  - `native_provider = anthropic | openai | openrouter`
+  - `native_provider = anthropic | openai | openrouter | gemini | ollama`
   - child-local API key
   - optional base URL, model, max tokens
 - `backend = codex`

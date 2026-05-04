@@ -148,12 +148,15 @@ Ollama belongs here only as a local inference backend.
 - OpenAI inference
 - narrow multimodal native requests for supported image turns
 
-### Deferred after v0.5
+### Current native set
 
+- Anthropic
+- OpenAI inference
+- OpenRouter
 - Gemini
 - Ollama
 
-The reason for this staging is to avoid freezing the inference abstraction around a single narrow adapter while also avoiding four half-done adapters too early.
+The adapter boundary must stay small: request mapping, response mapping, streaming, tool calls, media parts where supported, and usage extraction.
 
 ## Streaming
 
@@ -196,7 +199,7 @@ The native-provider failover chain should be explicit and ordered.
 Example:
 
 - governor backend: `codex`
-- native fallback chain: `anthropic -> openai -> openrouter`
+- native fallback chain: `openai -> anthropic -> openrouter -> gemini -> ollama`
 
 That means:
 

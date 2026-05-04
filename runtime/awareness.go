@@ -156,8 +156,14 @@ func (r *Runtime) nativeModelName() string {
 		return strings.TrimSpace(r.cfg.Providers.OpenAI.Model)
 	case "openrouter":
 		return strings.TrimSpace(r.cfg.Providers.OpenRouter.Model)
-	default:
+	case "gemini":
+		return strings.TrimSpace(r.cfg.Providers.Gemini.Model)
+	case "ollama":
+		return strings.TrimSpace(r.cfg.Providers.Ollama.Model)
+	case "anthropic":
 		return strings.TrimSpace(r.cfg.Providers.Anthropic.Model)
+	default:
+		return ""
 	}
 }
 

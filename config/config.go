@@ -158,6 +158,8 @@ type ProvidersConfig struct {
 	Anthropic     AnthropicConfig      `toml:"anthropic"`
 	OpenAI        OpenAIProviderConfig `toml:"openai"`
 	OpenRouter    OpenRouterConfig     `toml:"openrouter"`
+	Gemini        GeminiConfig         `toml:"gemini"`
+	Ollama        OllamaConfig         `toml:"ollama"`
 }
 
 type AnthropicConfig struct {
@@ -182,6 +184,21 @@ type OpenAIProviderConfig struct {
 	FallbackModels []string `toml:"fallback_models"`
 	MaxTokens      int      `toml:"max_tokens"`
 	ContextWindow  int      `toml:"context_window"`
+}
+
+type GeminiConfig struct {
+	APIKey        string `toml:"api_key"`
+	BaseURL       string `toml:"base_url"`
+	Model         string `toml:"model"`
+	MaxTokens     int    `toml:"max_tokens"`
+	ContextWindow int    `toml:"context_window"`
+}
+
+type OllamaConfig struct {
+	BaseURL       string `toml:"base_url"`
+	Model         string `toml:"model"`
+	MaxTokens     int    `toml:"max_tokens"`
+	ContextWindow int    `toml:"context_window"`
 }
 
 type OpenAIConfig struct {
@@ -470,6 +487,18 @@ func Default() Config {
 				Model:         "anthropic/claude-sonnet-4-6",
 				MaxTokens:     4096,
 				ContextWindow: 200000,
+			},
+			Gemini: GeminiConfig{
+				BaseURL:       "https://generativelanguage.googleapis.com/v1beta",
+				Model:         "gemini-3.1-pro",
+				MaxTokens:     16384,
+				ContextWindow: 1048576,
+			},
+			Ollama: OllamaConfig{
+				BaseURL:       "http://localhost:11434",
+				Model:         "llama3.2",
+				MaxTokens:     4096,
+				ContextWindow: 128000,
 			},
 		},
 		OpenAI: OpenAIConfig{
@@ -870,6 +899,10 @@ func providerConfigured(cfg *Config, name string) bool {
 		return strings.TrimSpace(cfg.Providers.OpenAI.APIKey) != ""
 	case "openrouter":
 		return strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) != ""
+	case "gemini":
+		return strings.TrimSpace(cfg.Providers.Gemini.APIKey) != ""
+	case "ollama":
+		return strings.TrimSpace(cfg.Providers.Ollama.BaseURL) != "" && strings.TrimSpace(cfg.Providers.Ollama.Model) != ""
 	default:
 		return false
 	}
@@ -1249,25 +1282,22 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("providers.auto_order must contain at least one provider")
 	}
 	for i, name := range cfg.Providers.AutoOrder {
-		switch providerName(name) {
-		case "anthropic", "openai", "openrouter":
-		default:
-			return fmt.Errorf("providers.auto_order[%d] must be one of anthropic|openai|openrouter", i)
+		if !isNativeProviderName(providerName(name)) {
+			return fmt.Errorf("providers.auto_order[%d] must be one of anthropic|openai|openrouter|gemini|ollama", i)
 		}
 	}
 	switch providerName(strings.TrimSpace(cfg.Providers.Default)) {
-	case "", "anthropic", "openai", "openrouter":
+	case "":
+	case "anthropic", "openai", "openrouter", "gemini", "ollama":
 	default:
-		return fmt.Errorf("providers.default must be one of anthropic|openai|openrouter")
+		return fmt.Errorf("providers.default must be one of anthropic|openai|openrouter|gemini|ollama")
 	}
 	for i, name := range cfg.Providers.FallbackChain {
-		switch providerName(name) {
-		case "", "anthropic", "openai", "openrouter":
-			if providerName(name) == "" {
-				return fmt.Errorf("providers.fallback_chain[%d] must not be empty", i)
-			}
-		default:
-			return fmt.Errorf("providers.fallback_chain[%d] must be one of anthropic|openai|openrouter", i)
+		if providerName(name) == "" {
+			return fmt.Errorf("providers.fallback_chain[%d] must not be empty", i)
+		}
+		if !isNativeProviderName(providerName(name)) {
+			return fmt.Errorf("providers.fallback_chain[%d] must be one of anthropic|openai|openrouter|gemini|ollama", i)
 		}
 	}
 	switch normalizeWorkExecutor(cfg.Work.Executor) {
@@ -1287,12 +1317,14 @@ func validate(cfg *Config) error {
 	}
 	nativePrimary := providerName(firstNonEmpty(strings.TrimSpace(cfg.Governor.NativeProvider), strings.TrimSpace(cfg.Providers.Default)))
 	switch nativePrimary {
-	case "", "anthropic", "openai", "openrouter":
+	case "":
 		if nativePrimary == "" && (governorBackend == "native" || faceBackend == "" || faceBackend == "provider") {
 			return fmt.Errorf("governor.native_provider or providers.default is required when native provider access is enabled")
 		}
 	default:
-		return fmt.Errorf("governor.native_provider must be one of anthropic|openai|openrouter")
+		if !isNativeProviderName(nativePrimary) {
+			return fmt.Errorf("governor.native_provider must be one of anthropic|openai|openrouter|gemini|ollama")
+		}
 	}
 	needsNativeProvider := governorBackend == "native" || faceBackend == "" || faceBackend == "provider" || len(cfg.Providers.FallbackChain) > 0
 	if needsNativeProvider && nativePrimary == "" {
@@ -1307,11 +1339,23 @@ func validate(cfg *Config) error {
 	if cfg.Providers.OpenRouter.ContextWindow <= 0 {
 		return fmt.Errorf("providers.openrouter.context_window must be > 0")
 	}
+	if cfg.Providers.Gemini.ContextWindow <= 0 {
+		return fmt.Errorf("providers.gemini.context_window must be > 0")
+	}
+	if cfg.Providers.Ollama.ContextWindow <= 0 {
+		return fmt.Errorf("providers.ollama.context_window must be > 0")
+	}
 	if strings.TrimSpace(cfg.Providers.OpenAI.BaseURL) == "" {
 		return fmt.Errorf("providers.openai.base_url is required")
 	}
 	if strings.TrimSpace(cfg.Providers.OpenRouter.BaseURL) == "" {
 		return fmt.Errorf("providers.openrouter.base_url is required")
+	}
+	if strings.TrimSpace(cfg.Providers.Gemini.BaseURL) == "" {
+		return fmt.Errorf("providers.gemini.base_url is required")
+	}
+	if strings.TrimSpace(cfg.Providers.Ollama.BaseURL) == "" {
+		return fmt.Errorf("providers.ollama.base_url is required")
 	}
 	if needsNativeProvider {
 		required := append([]string{nativePrimary}, cfg.Providers.FallbackChain...)
@@ -1331,6 +1375,23 @@ func validate(cfg *Config) error {
 			case "openrouter":
 				if strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) == "" {
 					return fmt.Errorf("providers.openrouter.api_key is required when openrouter is in the native provider chain")
+				}
+				if strings.TrimSpace(cfg.Providers.OpenRouter.Model) == "" {
+					return fmt.Errorf("providers.openrouter.model is required when openrouter is in the native provider chain")
+				}
+			case "gemini":
+				if strings.TrimSpace(cfg.Providers.Gemini.APIKey) == "" {
+					return fmt.Errorf("providers.gemini.api_key is required when gemini is in the native provider chain")
+				}
+				if strings.TrimSpace(cfg.Providers.Gemini.Model) == "" {
+					return fmt.Errorf("providers.gemini.model is required when gemini is in the native provider chain")
+				}
+			case "ollama":
+				if strings.TrimSpace(cfg.Providers.Ollama.BaseURL) == "" {
+					return fmt.Errorf("providers.ollama.base_url is required when ollama is in the native provider chain")
+				}
+				if strings.TrimSpace(cfg.Providers.Ollama.Model) == "" {
+					return fmt.Errorf("providers.ollama.model is required when ollama is in the native provider chain")
 				}
 			}
 		}
@@ -1638,12 +1699,10 @@ func validateTelegramDurableGroups(cfg *Config) error {
 		}
 		switch group.LLMBackend {
 		case "native":
-			switch group.LLMProvider {
-			case "anthropic", "openai", "openrouter":
-			default:
-				return fmt.Errorf("telegram.durable_groups[%d].llm_provider must be one of anthropic|openai|openrouter for native backend", i)
+			if !isNativeProviderName(group.LLMProvider) {
+				return fmt.Errorf("telegram.durable_groups[%d].llm_provider must be one of anthropic|openai|openrouter|gemini|ollama for native backend", i)
 			}
-			if strings.TrimSpace(group.LLMAPIKey) == "" {
+			if group.LLMProvider != "ollama" && strings.TrimSpace(group.LLMAPIKey) == "" {
 				return fmt.Errorf("telegram.durable_groups[%d].llm_api_key is required for native backend", i)
 			}
 			if strings.TrimSpace(group.LLMCodexAuthSource) != "" || strings.TrimSpace(group.LLMCodexHome) != "" || strings.TrimSpace(group.LLMCodexBaseURL) != "" {
@@ -1808,6 +1867,15 @@ func fileExists(path string) bool {
 
 func providerName(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func isNativeProviderName(value string) bool {
+	switch providerName(value) {
+	case "anthropic", "openai", "openrouter", "gemini", "ollama":
+		return true
+	default:
+		return false
+	}
 }
 
 func firstNonEmpty(values ...string) string {

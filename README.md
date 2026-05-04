@@ -7,15 +7,14 @@ A minimal, focused agent runtime for personal AI assistants.
 - **Only what we need.** No plugin marketplace, no multi-channel support, no enterprise features.
 - **Linux only.** No macOS/Windows compat. Single target, no conditionals.
 - **Anonymizable by design.** Provider-visible identity should be configurable or absent; current gaps are tracked in [docs/promises.md](docs/promises.md).
-- **Go.** Single Linux binary, with a static release target planned separately from the normal developer build. Goroutines for concurrency. Deploy = `scp` or the bundled service scripts.
+- **Go.** Single Linux binary, with a static release target separate from the normal developer build. Goroutines for concurrency. Deploy = `scp` or the bundled service scripts.
 - **Anthropic-first caching.** Structured cache breakpoints exist; config-backed cache TTL policy is tracked in [docs/promises.md](docs/promises.md).
 - **File-based memory.** Workspace files are the source of truth. Vector search optional.
 
 ## Target Stack
 
 - **Channels:** Telegram
-- **Providers now:** Anthropic (Claude), OpenAI, OpenRouter
-- **Providers planned:** Google (Gemini), local models (Ollama)
+- **Providers now:** Anthropic (Claude), OpenAI, OpenRouter, Google Gemini, local Ollama
 - **Tools now:** exec, curated memory, session recall, optional OpenAI storage tools
 - **Tools planned:** constrained native file tools and web fetch
 - **Voice:** ElevenLabs TTS
@@ -223,7 +222,7 @@ charter = "Help the group investigate topics and summarize findings without wide
 respond_on = "mentions"         # "mentions" | "all"
 review_target_chat_id = 123456789
 llm_backend = "native"          # "native" | "codex"
-llm_provider = "openrouter"     # "anthropic" | "openai" | "openrouter"
+llm_provider = "openrouter"     # "anthropic" | "openai" | "openrouter" | "gemini" | "ollama"
 llm_api_key = "..."
 llm_model = "anthropic/claude-sonnet-4-6"
 ```

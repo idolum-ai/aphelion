@@ -447,6 +447,23 @@ func buildSingleProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConf
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,
 		})
+	case core.ModelProviderGemini:
+		return providerpkg.NewGemini(providerpkg.GeminiOptions{
+			APIKey:     cfg.Providers.Gemini.APIKey,
+			BaseURL:    cfg.Providers.Gemini.BaseURL,
+			Model:      model,
+			MaxTokens:  cfg.Providers.Gemini.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+	case core.ModelProviderOllama:
+		return providerpkg.NewOllama(providerpkg.OllamaOptions{
+			BaseURL:    cfg.Providers.Ollama.BaseURL,
+			Model:      model,
+			MaxTokens:  cfg.Providers.Ollama.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
 	case core.ModelProviderCodex:
 		local := *cfg
 		local.Governor.Backend = governorauth.BackendCodex
@@ -568,6 +585,10 @@ func (r *Runtime) modelProviderConfigured(providerName string) bool {
 		return strings.TrimSpace(r.cfg.Providers.Anthropic.APIKey) != ""
 	case core.ModelProviderOpenRouter:
 		return strings.TrimSpace(r.cfg.Providers.OpenRouter.APIKey) != ""
+	case core.ModelProviderGemini:
+		return strings.TrimSpace(r.cfg.Providers.Gemini.APIKey) != ""
+	case core.ModelProviderOllama:
+		return strings.TrimSpace(r.cfg.Providers.Ollama.BaseURL) != "" && strings.TrimSpace(r.cfg.Providers.Ollama.Model) != ""
 	case core.ModelProviderCodex:
 		local := *r.cfg
 		local.Governor.Backend = governorauth.BackendCodex

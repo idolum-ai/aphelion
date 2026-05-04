@@ -209,8 +209,8 @@ admin_user_ids = [123]
 api_key = "sk-ant-test"
 cache_ttl = "1h"
 
-[providers.gemini]
-api_key = "gemini-test"
+[providers.experimental]
+api_key = "experimental-test"
 
 [agent]
 workspace = "./workspace"
@@ -224,7 +224,7 @@ workspace = "./workspace"
 		t.Fatalf("Load() err = %v", err)
 	}
 	summary := cfg.WarningSummary()
-	for _, want := range []string{"telegram.allowed_chats", "providers.anthropic.cache_ttl", "providers.gemini"} {
+	for _, want := range []string{"telegram.allowed_chats", "providers.anthropic.cache_ttl", "providers.experimental"} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("warning summary = %q, want %s", summary, want)
 		}
@@ -1006,6 +1006,86 @@ model = "gpt-5.5"
 	}
 	if cfg.Providers.OpenAI.Model != "gpt-5.5" {
 		t.Fatalf("providers.openai.model = %q, want gpt-5.5", cfg.Providers.OpenAI.Model)
+	}
+}
+
+func TestLoadAcceptsGeminiAndOllamaNativeProviders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		raw        string
+		wantModel  string
+		wantAPIKey string
+	}{
+		{
+			name: "gemini",
+			raw: `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[governor]
+backend = "native"
+native_provider = "gemini"
+
+[providers.gemini]
+api_key = "gemini-test"
+model = "gemini-test-model"
+`,
+			wantModel:  "gemini-test-model",
+			wantAPIKey: "gemini-test",
+		},
+		{
+			name: "ollama",
+			raw: `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[governor]
+backend = "native"
+native_provider = "ollama"
+
+[providers.ollama]
+base_url = "http://ollama.test:11434"
+model = "llama-test"
+`,
+			wantModel: "llama-test",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(configPath, []byte(tt.raw), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := Load(configPath)
+			if err != nil {
+				t.Fatalf("Load() err = %v", err)
+			}
+			if cfg.Governor.NativeProvider != tt.name {
+				t.Fatalf("governor.native_provider = %q, want %s", cfg.Governor.NativeProvider, tt.name)
+			}
+			switch tt.name {
+			case "gemini":
+				if cfg.Providers.Gemini.Model != tt.wantModel || cfg.Providers.Gemini.APIKey != tt.wantAPIKey {
+					t.Fatalf("providers.gemini = %#v", cfg.Providers.Gemini)
+				}
+			case "ollama":
+				if cfg.Providers.Ollama.Model != tt.wantModel || cfg.Providers.Ollama.BaseURL != "http://ollama.test:11434" {
+					t.Fatalf("providers.ollama = %#v", cfg.Providers.Ollama)
+				}
+			}
+		})
 	}
 }
 

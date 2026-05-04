@@ -52,7 +52,7 @@ if rg -n "tmp-diagrams/" \
   exit 1
 fi
 
-if ! rg -q "Provider support for Gemini and Ollama \\| planned" docs/promises.md; then
+if ! rg -q "Provider support for Anthropic, OpenAI, OpenRouter, Gemini, and Ollama \\| implemented" docs/promises.md; then
   echo "promise ledger must track Gemini/Ollama provider status" >&2
   exit 1
 fi

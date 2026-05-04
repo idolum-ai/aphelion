@@ -288,6 +288,8 @@ The current durable-group adapter supports two child bootstrap shapes:
   - `anthropic`
   - `openai`
   - `openrouter`
+  - `gemini`
+  - `ollama`
 - `codex`
 
 If the configured bootstrap is missing or invalid, the group child should fail rather than silently falling back to the parent's LLM path.

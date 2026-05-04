@@ -1089,6 +1089,23 @@ func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client
 			HTTPClient: httpClient,
 			UserAgent:  cfg.Identity.UserAgent,
 		})
+	case "gemini":
+		return provider.NewGemini(provider.GeminiOptions{
+			APIKey:     cfg.Providers.Gemini.APIKey,
+			BaseURL:    cfg.Providers.Gemini.BaseURL,
+			Model:      cfg.Providers.Gemini.Model,
+			MaxTokens:  cfg.Providers.Gemini.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
+	case "ollama":
+		return provider.NewOllama(provider.OllamaOptions{
+			BaseURL:    cfg.Providers.Ollama.BaseURL,
+			Model:      cfg.Providers.Ollama.Model,
+			MaxTokens:  cfg.Providers.Ollama.MaxTokens,
+			HTTPClient: httpClient,
+			UserAgent:  cfg.Identity.UserAgent,
+		})
 	case "":
 		return nil, nil
 	default:
@@ -1110,8 +1127,14 @@ func activeNativeModel(cfg *config.Config) string {
 		return cfg.Providers.OpenAI.Model
 	case "openrouter":
 		return cfg.Providers.OpenRouter.Model
-	default:
+	case "gemini":
+		return cfg.Providers.Gemini.Model
+	case "ollama":
+		return cfg.Providers.Ollama.Model
+	case "anthropic":
 		return cfg.Providers.Anthropic.Model
+	default:
+		return ""
 	}
 }
 
@@ -1132,6 +1155,10 @@ func isConfiguredProvider(name string, cfg *config.Config) bool {
 		return strings.TrimSpace(cfg.Providers.OpenAI.APIKey) != ""
 	case "openrouter":
 		return strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) != ""
+	case "gemini":
+		return strings.TrimSpace(cfg.Providers.Gemini.APIKey) != ""
+	case "ollama":
+		return strings.TrimSpace(cfg.Providers.Ollama.BaseURL) != "" && strings.TrimSpace(cfg.Providers.Ollama.Model) != ""
 	default:
 		return false
 	}

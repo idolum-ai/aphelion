@@ -74,6 +74,7 @@ auto_order = ["openai", "anthropic", "openrouter"]
 default = ""
 # fallback_chain is omitted in auto mode so configured providers after the primary become fallbacks.
 # For a manual chain, set selection = "manual", default, and fallback_chain explicitly.
+# Add "gemini" or "ollama" to auto_order/default/fallback_chain to opt into those providers.
 
 [providers.anthropic]
 api_key = "anthropic-api-key"
@@ -95,6 +96,19 @@ base_url = "https://openrouter.ai/api/v1"
 model = "anthropic/claude-sonnet-4-6"
 max_tokens = 4096
 context_window = 200000
+
+[providers.gemini]
+api_key = ""
+base_url = "https://generativelanguage.googleapis.com/v1beta"
+model = "gemini-3.1-pro"
+max_tokens = 16384
+context_window = 1048576
+
+[providers.ollama]
+base_url = "http://localhost:11434"
+model = "llama3.2"
+max_tokens = 4096
+context_window = 128000
 
 [openai.files]
 enabled = false

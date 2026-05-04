@@ -14,8 +14,7 @@ surface is not obvious from the code.
 | Promise | Status | Current behavior | Next implementation target |
 |---|---:|---|---|
 | Single Linux daemon for Telegram, sessions, tools, and delivery | implemented | Telegram polling, SQLite sessions, progress, slash commands, maintenance loops, and delivery guards exist. | Keep covered by runtime and deployment tests. |
-| Provider support for Anthropic, OpenAI, and OpenRouter | implemented | Native adapters and failover chain exist for these providers. | Keep provider request/stream/failover tests current. |
-| Provider support for Gemini and Ollama | planned | Config and runtime currently reject these provider names. | Add config, adapters, streaming, tool calls, readiness checks, and provider events. |
+| Provider support for Anthropic, OpenAI, OpenRouter, Gemini, and Ollama | implemented | Native adapters, streaming, tool-call mapping, model-slot routing, and failover-chain config exist for these providers. | Keep provider request/stream/failover tests current; add live readiness probes if operator experience needs them. |
 | Anthropic prompt caching with explicit cache breakpoints | partial | Structured `cache_control: ephemeral` is emitted for selected system/tool blocks. | Add config-backed strategy/TTL validation and request-shape tests. |
 | Single static binary | implemented | Normal build remains a fast developer binary; `make build-static` and release CI produce a statically linked Linux binary. | Keep static proof covered by release CI. |
 | String anonymization / provider-visible identity control | partial | `identity.user_agent` is configurable and cache boundaries are structural, but some provider-visible names/tool descriptions are still hardcoded. | Add config-owned names and an opt-in anonymous profile with leak tests. |
