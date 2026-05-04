@@ -13,6 +13,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
@@ -82,7 +83,7 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 		FacePolicy:        input.FacePolicy,
 		UseMaterialFloor:  input.UseMaterialFloor,
 		ReplyWithVoice:    input.ReplyWithVoice,
-		AllowStream:       input.AllowStream,
+		AllowStream:       input.AllowStream && !r.personaContextRequestEligible(input),
 		Media:             input.Result.Media,
 		ToolLog:           input.Result.ToolLog,
 		GeneratedMessages: generatedMessages,
@@ -203,6 +204,24 @@ func (r *Runtime) renderTurnReply(input turnRenderInput) (turnRenderResult, erro
 	output.StreamedReply = stageResult.Streamed
 	output.OutboundID = stageResult.RenderedID
 	output.OutboundType = stageResult.RenderedType
+	if query, ok := extractPersonaContextRequest(output.ReplyText); ok {
+		notes := r.fulfillPersonaContextRequest(input.Ctx, input.Scope, firstNonEmpty(strings.TrimSpace(query), strings.TrimSpace(input.PromptInput)), time.Now().UTC())
+		if len(notes) > 0 {
+			renderedReply, usage, renderErr := r.renderFaceWithRequestedContext(input.Ctx, input, stageResult.Runtime, notes)
+			if renderErr != nil {
+				log.Printf("WARN face context retry failed backend=%s err=%v; using floor fallback", r.faceBackend, renderErr)
+				output.ReplyText = pipeline.FloorTextOrFallback(input.FloorText)
+			} else {
+				output.ReplyText = strings.TrimSpace(renderedReply)
+				output.Usage = addTokenUsage(output.Usage, usage)
+				output.StreamedReply = false
+				output.OutboundID = 0
+				output.OutboundType = ""
+			}
+		} else {
+			output.ReplyText = pipeline.FloorTextOrFallback(input.FloorText)
+		}
+	}
 
 	output.ReplyText = r.applyTurnConstitution(
 		input.Ctx,
@@ -242,6 +261,133 @@ func enforceVisibleRecurrenceContract(reply string, aw prompt.RuntimeAwareness) 
 	return strings.TrimSpace(reply + "\n\n" + note)
 }
 
+const personaContextRequestPrefix = "PERSONA_CONTEXT_REQUEST:"
+
+func extractPersonaContextRequest(reply string) (string, bool) {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return "", false
+	}
+	for _, line := range strings.Split(reply, "\n") {
+		line = strings.TrimSpace(strings.Trim(line, "`"))
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, personaContextRequestPrefix) {
+			return "", false
+		}
+		return strings.TrimSpace(strings.TrimPrefix(line, personaContextRequestPrefix)), true
+	}
+	return "", false
+}
+
+func (r *Runtime) personaContextRequestEligible(input turnRenderInput) bool {
+	if r == nil || r.semantic == nil || !r.semantic.Enabled() || input.CurrentFaceModel == nil {
+		return false
+	}
+	if input.MediaOnlyReply || input.Result == nil || strings.TrimSpace(input.Result.ProviderFailure) != "" {
+		return false
+	}
+	return input.FaceAwareness.HiddenInputsActive &&
+		runtimeAwarenessHasAnyHiddenCategory(input.FaceAwareness, hiddenInputSemanticRecurrence, hiddenInputUnresolvedMemory)
+}
+
+func (r *Runtime) fulfillPersonaContextRequest(ctx context.Context, scope sandbox.Scope, query string, now time.Time) []string {
+	if r == nil || r.semantic == nil || !r.semantic.Enabled() {
+		return nil
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	semanticScope, principalID := splitSemanticScope(semanticScopeForPrincipal(scope.Principal))
+	hits, err := r.semantic.Search(ctx, memstore.SemanticSearchRequest{
+		Root:        dynamicPromptRoot(scope),
+		Scope:       semanticScope,
+		PrincipalID: principalID,
+		Query:       query,
+		Mode:        memstore.SemanticModeInteractive,
+		Limit:       3,
+		MaxLen:      2400,
+		Now:         now,
+	})
+	if err != nil || len(hits) == 0 {
+		return nil
+	}
+	notes := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		excerpt := compactPersonaContextExcerpt(hit.Excerpt)
+		if excerpt == "" {
+			continue
+		}
+		source := humanizePersonaContextSource(hit.Source, hit.Kind)
+		if source != "" {
+			notes = append(notes, source+": "+excerpt)
+		} else {
+			notes = append(notes, excerpt)
+		}
+	}
+	return notes
+}
+
+func compactPersonaContextExcerpt(text string) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if text == "" {
+		return ""
+	}
+	return truncateRunes(text, 420)
+}
+
+func humanizePersonaContextSource(source string, kind string) string {
+	source = strings.TrimSpace(source)
+	kind = strings.TrimSpace(kind)
+	base := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(source, ".md"), ".markdown"))
+	base = strings.Trim(strings.ReplaceAll(base, "\\", "/"), "/")
+	if idx := strings.LastIndex(base, "/"); idx >= 0 {
+		base = base[idx+1:]
+	}
+	base = strings.ReplaceAll(base, "_", " ")
+	base = strings.ReplaceAll(base, "-", " ")
+	base = strings.TrimSpace(base)
+	switch strings.ToLower(base) {
+	case "", "memory", "knowledge", "decisions", "questions":
+		if kind != "" {
+			return "prior " + strings.ReplaceAll(kind, "_", " ")
+		}
+		return "prior context"
+	default:
+		return "prior " + base
+	}
+}
+
+func (r *Runtime) renderFaceWithRequestedContext(ctx context.Context, input turnRenderInput, aw prompt.RuntimeAwareness, notes []string) (string, core.TokenUsage, error) {
+	if input.CurrentFaceModel == nil {
+		return "", core.TokenUsage{}, fmt.Errorf("face model unavailable")
+	}
+	faceReq := face.RenderRequest{
+		GovernorName:    r.governorName(),
+		FaceName:        r.faceName(),
+		Channel:         input.Channel,
+		Style:           "",
+		PrincipalRole:   input.PrincipalRole,
+		WorkspaceRoot:   faceWorkspaceRoot(input.Scope),
+		FloorText:       input.FloorText,
+		MaterialFloor:   input.MaterialFloor,
+		LatestUserInput: input.PromptInput,
+		ContextNotes:    append([]string(nil), notes...),
+		Runtime:         aw,
+	}
+	rendered, err := input.CurrentFaceModel.Render(ctx, faceReq)
+	if err != nil {
+		return "", core.TokenUsage{}, err
+	}
+	rendered = strings.TrimSpace(rendered)
+	if rendered == "" {
+		return "", core.TokenUsage{}, face.ErrEmptyRender
+	}
+	return rendered, consumeFaceUsage(input.CurrentFaceModel), nil
+}
+
 func visibleRecurrenceNote(aw prompt.RuntimeAwareness) string {
 	if !aw.HiddenInputsActive || !runtimeAwarenessHasAnyHiddenCategory(aw, hiddenInputSemanticRecurrence, hiddenInputUnresolvedMemory) {
 		return ""
@@ -249,7 +395,7 @@ func visibleRecurrenceNote(aw prompt.RuntimeAwareness) string {
 	if summary, ok := sanitizeVisibleRecurrenceSummary(aw.ProvenanceSummary); ok {
 		return "Continuity note: This resembles " + summary
 	}
-	return "Continuity note: I see this resembles a prior unresolved thread, but I can't identify it cleanly from available context."
+	return ""
 }
 
 func sanitizeVisibleRecurrenceSummary(summary string) (string, bool) {

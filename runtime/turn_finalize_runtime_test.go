@@ -69,7 +69,7 @@ func TestEnforceVisibleRecurrenceContractAppendsSpecificNote(t *testing.T) {
 	}
 }
 
-func TestEnforceVisibleRecurrenceContractSanitizesInternalProvenance(t *testing.T) {
+func TestEnforceVisibleRecurrenceContractSuppressesInternalOnlyProvenance(t *testing.T) {
 	t.Parallel()
 
 	got := enforceVisibleRecurrenceContract("Here is the plan.", prompt.RuntimeAwareness{
@@ -81,8 +81,20 @@ func TestEnforceVisibleRecurrenceContractSanitizesInternalProvenance(t *testing.
 	if strings.Contains(got, "memory/decisions.md") || strings.Contains(got, "related prior material") {
 		t.Fatalf("reply = %q, want sanitized recurrence note without raw provenance", got)
 	}
-	if !strings.Contains(got, "can't identify it cleanly") {
-		t.Fatalf("reply = %q, want generic unclear-prior note", got)
+	if got != "Here is the plan." {
+		t.Fatalf("reply = %q, want unchanged reply without generic continuity caveat", got)
+	}
+}
+
+func TestExtractPersonaContextRequest(t *testing.T) {
+	t.Parallel()
+
+	got, ok := extractPersonaContextRequest("PERSONA_CONTEXT_REQUEST: Lighthouse idea from yesterday")
+	if !ok || got != "Lighthouse idea from yesterday" {
+		t.Fatalf("extractPersonaContextRequest() = %q/%t, want request", got, ok)
+	}
+	if _, ok := extractPersonaContextRequest("Here is the answer.\nPERSONA_CONTEXT_REQUEST: hidden"); ok {
+		t.Fatal("extractPersonaContextRequest() accepted mixed visible reply")
 	}
 }
 

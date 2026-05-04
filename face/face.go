@@ -35,6 +35,7 @@ type RenderRequest struct {
 	LatestUserInput string
 	CandidateReply  string
 	RepairNotes     []string
+	ContextNotes    []string
 	Runtime         prompt.RuntimeAwareness
 }
 
