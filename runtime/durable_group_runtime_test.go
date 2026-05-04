@@ -221,6 +221,9 @@ func TestHandleInboundDurableTelegramGroupAppliesPendingParentConversation(t *te
 	if !strings.Contains(events[0].MetadataJSON, "\"trigger_kinds\":\"parent_conversation\"") {
 		t.Fatalf("metadata = %q, want parent conversation trigger kind", events[0].MetadataJSON)
 	}
+	if !strings.Contains(events[0].MetadataJSON, "\"status\":\"update\"") || !strings.Contains(events[0].MetadataJSON, "\"status_source\":\"parent_conversation_ack_default\"") {
+		t.Fatalf("metadata = %q, want typed default update status", events[0].MetadataJSON)
+	}
 
 	healthKey := session.SessionKey{
 		ChatID: 1001,

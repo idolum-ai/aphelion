@@ -237,6 +237,8 @@ func genericExternalChannelReviewArtifact(agent core.DurableAgent, adapterName s
 		"trigger_kinds":           "external_channel,poll_due",
 		"child_local_subject":     "false",
 		"external_channel_status": status,
+		"status":                  status,
+		"status_source":           "external_channel_status",
 	}
 	if strings.TrimSpace(errorText) != "" {
 		metadata["external_channel_error"] = truncateRunes(errorText, 900)

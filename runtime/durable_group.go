@@ -964,6 +964,7 @@ func (r *Runtime) queueDurableAgentParentConversationAck(agent core.DurableAgent
 	if summary == "" {
 		return nil
 	}
+	status, statusSource := durableAgentParentConversationReviewStatus(localReply)
 	metadata := map[string]string{
 		"durable_agent_id":    strings.TrimSpace(agent.AgentID),
 		"channel_kind":        firstNonEmpty(durableTelegramChannel(agent.ChannelKind), strings.TrimSpace(agent.ChannelKind)),
@@ -972,6 +973,8 @@ func (r *Runtime) queueDurableAgentParentConversationAck(agent core.DurableAgent
 		"parent_note_excerpt": truncateRunes(strings.TrimSpace(messages[0].Text), 240),
 		"acknowledged_at":     at.UTC().Format(time.RFC3339),
 		"child_local_subject": "false",
+		"status":              status,
+		"status_source":       statusSource,
 	}
 	if trimmedReply := strings.TrimSpace(localReply); trimmedReply != "" {
 		metadata["local_response"] = truncateRunes(trimmedReply, 240)
@@ -1006,6 +1009,15 @@ func (r *Runtime) queueDurableReviewArtifactPending(agent core.DurableAgent, art
 	// QueueReviewArtifact writes review_events(status='pending') as the operational queue;
 	// delivery later transitions those rows to status='delivered'.
 	return durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact)
+}
+
+func durableAgentParentConversationReviewStatus(localReply string) (string, string) {
+	for _, key := range []string{"REVIEW_STATUS", "CHILD_REVIEW_STATUS"} {
+		if status := strings.TrimSpace(extractGenericExternalChannelStatusLine(localReply, key)); status != "" {
+			return status, strings.ToLower(strings.ReplaceAll(key, "_", "-"))
+		}
+	}
+	return "update", "parent_conversation_ack_default"
 }
 
 func durableAgentParentConversationAckSummary(messages []core.DurableAgentConversationMessage, localReply string) string {

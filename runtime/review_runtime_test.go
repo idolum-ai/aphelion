@@ -269,6 +269,60 @@ func TestHandleInboundDeliversActionableCapabilityReviewEventWithButtons(t *test
 	}
 }
 
+func TestReviewEventCompactStatusUsesTypedMetadataNotQuotedProse(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		SourceRole:   "durable_agent",
+		SourceScope:  session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "image2", DurableAgentID: "image2"},
+		Summary:      "summary: Processed parent request: \"If generation is blocked, return the exact blocker.\" Local response: One-shot complete; generated one PNG artifact successfully.",
+		MetadataJSON: `{"agent_id":"image2","summary":"Processed parent request: \"If generation is blocked, return the exact blocker.\" Local response: One-shot complete; generated one PNG artifact successfully.","interval_label":"2026-05-04T19:50:16Z","local_actions":["Processed pending parent guidance during this durable child turn."],"risk_flags":["parent_conversation_sync"],"artifact_refs":["conversation://durable-agent/image2"],"metadata":{"channel_kind":"external_channel","status":"completed","status_source":"review_status","artifact_count":"1"}}`,
+	}
+
+	text := FormatReviewEventCompactMessage(event)
+	if !strings.Contains(text, "COMPLETED") {
+		t.Fatalf("compact text = %q, want COMPLETED from typed metadata", text)
+	}
+	if strings.Contains(text, "\nBLOCKED\n") {
+		t.Fatalf("compact text = %q, must not classify quoted blocked prose as BLOCKED", text)
+	}
+}
+
+func TestReviewEventCompactStatusDefaultsUpdateWithoutTypedStatus(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		SourceRole:   "durable_agent",
+		SourceScope:  session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "image2", DurableAgentID: "image2"},
+		Summary:      "summary: Processed parent request: \"If generation is blocked, return the exact blocker.\" Local response: One-shot complete; generated one PNG artifact successfully.",
+		MetadataJSON: `{"agent_id":"image2","summary":"Processed parent request: \"If generation is blocked, return the exact blocker.\" Local response: One-shot complete; generated one PNG artifact successfully.","interval_label":"2026-05-04T19:50:16Z","metadata":{"channel_kind":"external_channel"}}`,
+	}
+
+	text := FormatReviewEventCompactMessage(event)
+	if !strings.Contains(text, "UPDATE") {
+		t.Fatalf("compact text = %q, want UPDATE when typed status is absent", text)
+	}
+	if strings.Contains(text, "\nBLOCKED\n") || strings.Contains(text, "\nCOMPLETED\n") {
+		t.Fatalf("compact text = %q, must not infer terminal status from prose", text)
+	}
+}
+
+func TestReviewEventCompactStatusExplicitBlockedMetadata(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		SourceRole:   "durable_agent",
+		SourceScope:  session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "image2", DurableAgentID: "image2"},
+		Summary:      "summary: Child reported a concrete blocker.",
+		MetadataJSON: `{"agent_id":"image2","summary":"Child reported a concrete blocker.","metadata":{"channel_kind":"external_channel","status":"blocked","status_source":"review_status"}}`,
+	}
+
+	text := FormatReviewEventCompactMessage(event)
+	if !strings.Contains(text, "BLOCKED") {
+		t.Fatalf("compact text = %q, want BLOCKED from explicit metadata", text)
+	}
+}
+
 func TestHandleInboundDeliversDurableReviewEventCompactWithExpandButton(t *testing.T) {
 	t.Parallel()
 

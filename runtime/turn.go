@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -456,24 +457,74 @@ func reviewEventHumanChannel(channel string) string {
 	}
 }
 
-func reviewEventCompactStatus(event session.ReviewEvent, meta reviewEventArtifactMetadata) string {
-	status := strings.TrimSpace(meta.Metadata["external_channel_status"])
+func reviewEventCompactStatus(_ session.ReviewEvent, meta reviewEventArtifactMetadata) string {
+	status := firstReviewEventOutcomeStatus(meta)
 	if status == "" {
-		status = strings.TrimSpace(meta.Metadata["status"])
+		return "UPDATE"
 	}
-	text := strings.ToLower(strings.TrimSpace(status + " " + meta.Summary + " " + event.Summary))
-	switch {
-	case strings.Contains(text, "wake_completed") || strings.Contains(text, "completed") || strings.Contains(text, "success"):
+	return reviewEventOutcomeStatusLabel(status)
+}
+
+func firstReviewEventOutcomeStatus(meta reviewEventArtifactMetadata) string {
+	if len(meta.Metadata) == 0 {
+		return ""
+	}
+	for _, key := range []string{
+		"external_channel_status",
+		"status",
+		"review_status",
+		"outcome",
+		"child_outcome",
+	} {
+		if status := strings.TrimSpace(meta.Metadata[key]); status != "" {
+			return status
+		}
+	}
+	if errText := strings.TrimSpace(meta.Metadata["external_channel_error"]); errText != "" {
+		return "blocked"
+	}
+	if errText := strings.TrimSpace(meta.Metadata["blocker"]); errText != "" {
+		return "blocked"
+	}
+	if errText := strings.TrimSpace(meta.Metadata["error"]); errText != "" {
+		return "failed"
+	}
+	if count := parsePositiveReviewEventCount(meta.Metadata["artifact_count"]); count > 0 {
+		return "completed"
+	}
+	if count := parsePositiveReviewEventCount(meta.Metadata["generated_artifact_count"]); count > 0 {
+		return "completed"
+	}
+	return ""
+}
+
+func reviewEventOutcomeStatusLabel(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	status = strings.ReplaceAll(status, "-", "_")
+	switch status {
+	case "wake_completed", "completed", "complete", "success", "succeeded", "ok":
 		return "COMPLETED"
-	case strings.Contains(text, "wake_blocked") || strings.Contains(text, "blocked") || strings.Contains(text, "blocker"):
+	case "wake_blocked", "blocked", "blocker", "refused", "unavailable":
 		return "BLOCKED"
-	case strings.Contains(text, "failed") || strings.Contains(text, "error"):
+	case "failed", "failure", "error":
 		return "FAILED"
-	case strings.Contains(text, "needs_review") || strings.Contains(text, "review"):
+	case "needs_review", "review", "review_required":
 		return "NEEDS REVIEW"
 	default:
 		return "UPDATE"
 	}
+}
+
+func parsePositiveReviewEventCount(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	count, err := strconv.Atoi(raw)
+	if err != nil || count <= 0 {
+		return 0
+	}
+	return count
 }
 
 func reviewEventCompactSummary(event session.ReviewEvent, meta reviewEventArtifactMetadata) string {

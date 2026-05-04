@@ -112,6 +112,7 @@ func durableParentConversationWakePrompt(agent core.DurableAgent, messages []cor
 		"Channel: " + strings.TrimSpace(agent.ChannelKind),
 		fmt.Sprintf("Pending parent messages: %d", len(messages)),
 		"Process pending parent guidance and report a concise, truthful status update.",
+		"Finish with REVIEW_STATUS: completed, blocked, failed, needs_review, or update.",
 	}
 	for i, message := range messages {
 		text := truncateRunes(strings.TrimSpace(message.Text), 300)
