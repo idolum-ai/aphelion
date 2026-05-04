@@ -331,6 +331,12 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 			if reason == "" {
 				reason = "auto_approved"
 			}
+			if err := b.clearSupersededPendingForAutoResolve(ctx, pending); err != nil {
+				return Result{}, err
+			}
+			b.mu.Lock()
+			b.archiveResolvedDecisionLocked(pending.request)
+			b.mu.Unlock()
 			b.emitEvent(ctx, pending, EventTypeResolved, choice, false, reason)
 			return Result{DecisionID: pending.request.ID, Choice: choice, Delivery: pending.delivery}, nil
 		}
@@ -582,6 +588,31 @@ func (b *Broker) upsertPending(ctx context.Context, pending *pendingDecision) er
 		OwnerKey: pending.ownerKey,
 		Delivery: pending.delivery,
 	})
+}
+
+func (b *Broker) clearSupersededPendingForAutoResolve(ctx context.Context, pending *pendingDecision) error {
+	if b == nil || pending == nil || strings.TrimSpace(pending.exclusiveKey) == "" {
+		return nil
+	}
+	b.mu.Lock()
+	existingID := strings.TrimSpace(b.byOwner[pending.exclusiveKey])
+	if existingID == "" {
+		b.mu.Unlock()
+		return nil
+	}
+	existing := b.pending[existingID]
+	if existing == nil {
+		delete(b.byOwner, pending.exclusiveKey)
+		b.mu.Unlock()
+		return b.clearWithContext(ctx, existingID)
+	}
+	delete(b.pending, existingID)
+	delete(b.byOwner, pending.exclusiveKey)
+	b.mu.Unlock()
+
+	b.emitEvent(ctx, existing, EventTypeDetached, strings.TrimSpace(existing.request.DefaultChoice), false, "superseded_by_auto_resolve")
+	resolveDefaultChoice(existing)
+	return b.clearWithContext(ctx, existingID)
 }
 
 func (b *Broker) clearWithContext(ctx context.Context, id string) error {

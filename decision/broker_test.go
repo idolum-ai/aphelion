@@ -80,6 +80,105 @@ func TestBrokerAutoResolverSkipsNotifierAndEmitsResolved(t *testing.T) {
 	}
 }
 
+func TestBrokerAutoResolverSupersedesOlderPendingDecision(t *testing.T) {
+	store := newBrokerMemoryDurableStore()
+	pendingSeen := make(chan PendingDecision, 1)
+	firstResult := make(chan Result, 1)
+	firstErr := make(chan error, 1)
+	autoApprove := false
+	var eventsMu sync.Mutex
+	var events []Event
+
+	broker := NewBroker(func(_ context.Context, pending PendingDecision) (Delivery, error) {
+		pendingSeen <- pending
+		return Delivery{MessageID: 77}, nil
+	}, WithDurableStore(store), WithAutoResolver(func(_ context.Context, pending PendingDecision) (AutoResolution, error) {
+		if autoApprove && pending.Kind == KindProposalApproval {
+			return AutoResolution{Choice: "approve", Reason: "auto_approved:test"}, nil
+		}
+		return AutoResolution{}, nil
+	}), WithObserver(func(_ context.Context, event Event) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, event)
+	}))
+
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			Kind:          KindProposalApproval,
+			ChatID:        7,
+			SenderID:      1001,
+			Prompt:        "Old approval prompt",
+			Choices:       []Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+			Timeout:       WaitIndefinitely,
+		})
+		if err != nil {
+			firstErr <- err
+			return
+		}
+		firstResult <- result
+	}()
+
+	var old PendingDecision
+	select {
+	case old = <-pendingSeen:
+	case <-time.After(time.Second):
+		t.Fatal("old request did not become pending")
+	}
+	if !store.has(old.ID) {
+		t.Fatalf("durable store missing old pending decision %q", old.ID)
+	}
+	autoApprove = true
+	result, err := broker.Request(context.Background(), Request{
+		Kind:          KindProposalApproval,
+		ChatID:        7,
+		SenderID:      1001,
+		Prompt:        "New auto-approved prompt",
+		Choices:       []Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+		DefaultChoice: "deny",
+		Timeout:       time.Second,
+	})
+	if err != nil {
+		t.Fatalf("auto Request() err = %v", err)
+	}
+	if result.Choice != "approve" {
+		t.Fatalf("auto result = %#v, want approve", result)
+	}
+
+	select {
+	case err := <-firstErr:
+		t.Fatalf("first Request() err = %v", err)
+	case oldResult := <-firstResult:
+		if oldResult.Choice != "deny" {
+			t.Fatalf("old result = %#v, want default deny after supersession", oldResult)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("old pending decision was not released after auto-resolve")
+	}
+	if store.has(old.ID) {
+		t.Fatalf("durable store still has old pending decision %q after auto-resolve", old.ID)
+	}
+	if _, ok := broker.Peek(old.ID); ok {
+		t.Fatalf("broker still exposes old pending decision %q", old.ID)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	var sawDetach, sawResolve bool
+	for _, event := range events {
+		if event.Decision.ID == old.ID && event.Type == EventTypeDetached && event.Reason == "superseded_by_auto_resolve" {
+			sawDetach = true
+		}
+		if event.Type == EventTypeResolved && event.Choice == "approve" && event.Reason == "auto_approved:test" {
+			sawResolve = true
+		}
+	}
+	if !sawDetach || !sawResolve {
+		t.Fatalf("events = %#v, want old detach and new auto-resolve", events)
+	}
+}
+
 func TestBrokerRequestFallsBackToDefaultChoiceOnTimeout(t *testing.T) {
 	t.Parallel()
 

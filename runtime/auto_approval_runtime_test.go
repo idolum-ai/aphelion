@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,87 @@ func TestRuntimeAutoApprovalCommandAndDecisionResolution(t *testing.T) {
 	}
 	assertHasEventType(t, events, core.ExecutionEventAutoApprovalGranted)
 	assertHasEventType(t, events, core.ExecutionEventAutoApprovalUsed)
+}
+
+func TestRuntimeAutoApprovalRejectsZeroUses(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	_, err = rt.ConfigureAutoApproval(context.Background(), 99122, 1001, "15m all uses=0")
+	if err == nil || !strings.Contains(err.Error(), "invalid auto-approval max uses") {
+		t.Fatalf("ConfigureAutoApproval() err = %v, want invalid max uses", err)
+	}
+}
+
+func TestAutoApprovedContinuationTriggerFailureIsRecordedAndReported(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	execErr := errors.New("work executor failed after auto approval")
+	rt.workExecutor = newWorkExecutorSelector(cfg.Work, []WorkExecutor{&fakeWorkExecutor{name: "native", ready: true, err: execErr}})
+
+	key := session.SessionKey{ChatID: 99123, UserID: 0, Scope: telegramDMScopeRef(99123)}
+	now := time.Now().UTC()
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "decision-auto-trigger-fail",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		StageSummary:   "Run the auto-approved workspace step.",
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-auto-trigger-fail",
+			RiskClass:      "workspace_write",
+			Summary:        "Run the auto-approved workspace step.",
+			AllowedActions: []string{"workspace_write"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      now.Add(30 * time.Minute),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-auto-trigger-fail",
+			ProposalID:     "aprop-auto-trigger-fail",
+			Status:         session.ContinuationLeaseStatusActive,
+			AllowedActions: []string{"workspace_write"},
+			ApprovedBy:     1001,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ApprovedAt:     now,
+			ExpiresAt:      now.Add(30 * time.Minute),
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	lease := session.OperatorAutoApprovalLease{ID: "auto-trigger-fail", AdminUserID: 1001, ChatID: 99123}
+
+	rt.triggerAutoApprovedContinuation(context.Background(), key, state, lease)
+
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var found bool
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventContinuationBlocked && event.Stage == "auto_approval" && event.Status == "trigger_failed" && strings.Contains(event.PayloadJSON, "auto_approval_trigger_failed") && strings.Contains(event.PayloadJSON, "auto-trigger-fail") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("events = %#v, want auto-approval trigger failure event", events)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) == 0 || !strings.Contains(sender.sent[len(sender.sent)-1].Text, "Auto-approved continuation failed") {
+		t.Fatalf("sent = %#v, want failure report message", sender.sent)
+	}
 }
 
 func TestRuntimeAutoApprovesPendingPlanLeaseContinuation(t *testing.T) {

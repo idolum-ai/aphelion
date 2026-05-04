@@ -126,12 +126,45 @@ func (r *Runtime) maybeAutoApproveContinuationOffer(ctx context.Context, key ses
 		return true, err
 	}
 	if approved.Status == session.ContinuationStatusApproved && approved.RemainingTurns > 0 {
-		go func(chatID int64) {
-			_ = r.TriggerContinuation(context.Background(), chatID)
-		}(key.ChatID)
+		go r.triggerAutoApprovedContinuation(context.Background(), key, approved, lease)
 	}
 	_ = msg
 	return true, nil
+}
+
+func (r *Runtime) triggerAutoApprovedContinuation(ctx context.Context, key session.SessionKey, state session.ContinuationState, lease session.OperatorAutoApprovalLease) {
+	if r == nil || key.ChatID == 0 {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err := fmt.Errorf("auto-approved continuation trigger panic: %v", recovered)
+			r.recordAutoApprovedContinuationTriggerFailure(ctx, key, state, lease, err)
+		}
+	}()
+	if err := r.TriggerContinuation(ctx, key.ChatID); err != nil {
+		r.recordAutoApprovedContinuationTriggerFailure(ctx, key, state, lease, err)
+	}
+}
+
+func (r *Runtime) recordAutoApprovedContinuationTriggerFailure(ctx context.Context, key session.SessionKey, state session.ContinuationState, lease session.OperatorAutoApprovalLease, err error) {
+	if r == nil || err == nil || key.ChatID == 0 {
+		return
+	}
+	now := time.Now().UTC()
+	payload := continuationExecutionPayload(state)
+	payload["reason"] = "auto_approval_trigger_failed"
+	payload["auto_approval_lease_id"] = strings.TrimSpace(lease.ID)
+	payload["approved_by_user"] = lease.AdminUserID
+	payload["error"] = truncatePreview(strings.TrimSpace(err.Error()), 500)
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "auto_approval", "trigger_failed", payload, now)
+	if r.outbound == nil {
+		return
+	}
+	_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{
+		ChatID: key.ChatID,
+		Text:   "Auto-approved continuation failed to start; I recorded the failure instead of silently dropping it. Error: " + truncatePreview(strings.TrimSpace(err.Error()), 300),
+	})
 }
 
 func autoApprovalChoiceForDecision(pending decision.PendingDecision) string {
@@ -321,6 +354,9 @@ func parsePositiveInt(raw string) (int, error) {
 			return 0, fmt.Errorf("invalid integer")
 		}
 		out = out*10 + int(r-'0')
+	}
+	if out <= 0 {
+		return 0, fmt.Errorf("integer must be positive")
 	}
 	return out, nil
 }
