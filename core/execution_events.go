@@ -22,6 +22,7 @@ const (
 	ExecutionEventProviderAttemptStarted   = "provider.attempt.started"
 	ExecutionEventProviderAttemptRetried   = "provider.attempt.retried"
 	ExecutionEventProviderAttemptFailed    = "provider.attempt.failed"
+	ExecutionEventProviderPartial          = "provider.partial"
 	ExecutionEventProviderAttemptSucceeded = "provider.attempt.succeeded"
 	ExecutionEventProviderFailoverEngaged  = "provider.failover.engaged"
 	ExecutionEventModelConfigValidated     = "model.config.validated"

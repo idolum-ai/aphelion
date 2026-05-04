@@ -29,6 +29,13 @@ const (
 	defaultCodexPrompt           = "You are Codex, a coding agent. Help the user directly and use tools when needed."
 	maxCodexContinuations        = 3
 	defaultCodexTransportRetries = 1
+	codexStreamCloseRecoverDelay = 250 * time.Millisecond
+)
+
+const (
+	codexIncompleteReasonStatusClosed        = "response.incomplete"
+	codexIncompleteReasonStreamClosed        = "stream_closed_after_response_id"
+	codexIncompleteReasonPartialStreamClosed = "partial_stream_closed"
 )
 
 var (
@@ -68,11 +75,10 @@ type Codex struct {
 	saveTokens       func(governorauth.CodexTokens, time.Time) error
 	now              func() time.Time
 
-	mu               sync.Mutex
-	accessToken      string
-	refreshToken     string
-	accountID        string
-	storeUnsupported bool
+	mu           sync.Mutex
+	accessToken  string
+	refreshToken string
+	accountID    string
 }
 
 var _ agent.Provider = (*Codex)(nil)
@@ -148,7 +154,8 @@ func (c *Codex) Stream(ctx context.Context, messages []agent.Message, tools []ag
 
 func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, allowRetry bool) (*agent.Response, error) {
 	aggregate := newCodexResponseAccumulator()
-	storeResponses := c.effectiveStoreResponses()
+	configuredStoreResponses := c.effectiveStoreResponses()
+	storeResponses := configuredStoreResponses
 	plan := planFullCodexRequest(messages, storeResponses)
 	if storeResponses {
 		plan = planCodexRequest(messages)
@@ -160,7 +167,9 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 		result, err := c.completeRequest(ctx, plan, tools, opts, cb, allowRetry, storeResponses)
 		if err != nil {
 			if storeResponses && isStoreResponsesRejected(err) {
-				c.disableStoreResponses()
+				if aggregate.hasPartial() {
+					return nil, newCodexIncompleteError("stored-response continuation rejected", aggregate.response(), aggregate.responseID, plan.mode, storeResponses)
+				}
 				storeResponses = false
 				aggregate = newCodexResponseAccumulator()
 				plan = planFullCodexRequest(messages, false)
@@ -180,17 +189,26 @@ func (c *Codex) complete(ctx context.Context, messages []agent.Message, tools []
 		if result.Complete {
 			return aggregate.response(), nil
 		}
-		if !storeResponses {
-			return nil, fmt.Errorf("codex: incomplete response without stored-response continuation")
-		}
-		if strings.TrimSpace(result.ResponseID) == "" {
-			return nil, fmt.Errorf("codex: incomplete response missing response id")
+		responseID := strings.TrimSpace(result.ResponseID)
+		if responseID == "" {
+			return nil, newCodexIncompleteError("missing response id", aggregate.response(), "", plan.mode, storeResponses)
 		}
 		continuations++
 		if continuations > c.maxContinuations {
-			return nil, fmt.Errorf("codex: response remained incomplete after %d continuation attempts", c.maxContinuations)
+			return nil, newCodexIncompleteError(fmt.Sprintf("response remained incomplete after %d continuation attempts", c.maxContinuations), aggregate.response(), responseID, plan.mode, storeResponses)
 		}
-		plan = planCodexContinuation(messages, result.ResponseID)
+		if !storeResponses {
+			if !configuredStoreResponses {
+				return nil, newCodexIncompleteError("without stored-response continuation", aggregate.response(), responseID, plan.mode, storeResponses)
+			}
+			storeResponses = true
+		}
+		if result.IncompleteReason == codexIncompleteReasonStreamClosed {
+			if err := codexSleepWithContext(ctx, codexStreamCloseRecoverDelay); err != nil {
+				return nil, err
+			}
+		}
+		plan = planCodexContinuation(messages, responseID)
 	}
 }
 
@@ -244,16 +262,21 @@ func (c *Codex) effectiveStoreResponses() bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.storeResponses && !c.storeUnsupported
+	return c.storeResponses
 }
 
-func (c *Codex) disableStoreResponses() {
-	if c == nil {
-		return
+func codexSleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.storeUnsupported = true
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *Codex) syncCredentialsFromStore() {
@@ -750,9 +773,98 @@ const (
 )
 
 type codexCompletionResult struct {
-	Response   *agent.Response
-	ResponseID string
-	Complete   bool
+	Response         *agent.Response
+	ResponseID       string
+	Complete         bool
+	IncompleteReason string
+}
+
+type codexIncompleteError struct {
+	message        string
+	partial        *agent.Response
+	responseID     string
+	mode           codexTurnMode
+	storeResponses bool
+}
+
+func newCodexIncompleteError(message string, partial *agent.Response, responseID string, mode codexTurnMode, storeResponses bool) *codexIncompleteError {
+	return &codexIncompleteError{
+		message:        strings.TrimSpace(message),
+		partial:        cloneAgentResponse(partial),
+		responseID:     strings.TrimSpace(responseID),
+		mode:           mode,
+		storeResponses: storeResponses,
+	}
+}
+
+func (e *codexIncompleteError) Error() string {
+	if e == nil {
+		return "codex: incomplete response"
+	}
+	switch e.message {
+	case "without stored-response continuation":
+		return "codex: incomplete response without stored-response continuation"
+	case "missing response id":
+		return "codex: incomplete response missing response id"
+	case "stored-response continuation rejected":
+		return "codex: stored-response continuation rejected after incomplete response"
+	default:
+		if strings.TrimSpace(e.message) != "" {
+			return "codex: " + strings.TrimSpace(e.message)
+		}
+		return "codex: incomplete response"
+	}
+}
+
+func (e *codexIncompleteError) PartialProviderResponse() *agent.Response {
+	if e == nil {
+		return nil
+	}
+	return cloneAgentResponse(e.partial)
+}
+
+func (e *codexIncompleteError) PartialProviderResponseID() string {
+	if e == nil {
+		return ""
+	}
+	return strings.TrimSpace(e.responseID)
+}
+
+func (e *codexIncompleteError) PartialProviderReason() string {
+	if e == nil {
+		return ""
+	}
+	parts := []string{}
+	if msg := strings.TrimSpace(e.message); msg != "" {
+		parts = append(parts, msg)
+	}
+	if e.mode != "" {
+		parts = append(parts, "mode="+string(e.mode))
+	}
+	parts = append(parts, fmt.Sprintf("store_responses=%t", e.storeResponses))
+	return strings.Join(parts, "; ")
+}
+
+func cloneAgentResponse(resp *agent.Response) *agent.Response {
+	if resp == nil {
+		return nil
+	}
+	out := *resp
+	out.ProviderState = append(json.RawMessage(nil), resp.ProviderState...)
+	out.ToolCalls = append([]agent.ToolCall(nil), resp.ToolCalls...)
+	for i := range out.ToolCalls {
+		out.ToolCalls[i].Input = append(json.RawMessage(nil), resp.ToolCalls[i].Input...)
+	}
+	out.Media = append([]core.Media(nil), resp.Media...)
+	for i := range out.Media {
+		out.Media[i].Data = append([]byte(nil), resp.Media[i].Data...)
+	}
+	out.ThinkingMeta = append([]agent.ThinkingBlock(nil), resp.ThinkingMeta...)
+	for i := range out.ThinkingMeta {
+		out.ThinkingMeta[i].Raw = append(json.RawMessage(nil), resp.ThinkingMeta[i].Raw...)
+	}
+	out.ProviderEvents = append([]core.ProviderEvent(nil), resp.ProviderEvents...)
+	return &out
 }
 
 func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallback) error {
@@ -913,15 +1025,15 @@ func (p *codexStreamParser) response() (*codexCompletionResult, error) {
 	case codexResponseStatusCompleted:
 		return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: true}, nil
 	case codexResponseStatusIncomplete:
-		return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: false}, nil
+		return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: false, IncompleteReason: codexIncompleteReasonStatusClosed}, nil
 	}
 	if strings.TrimSpace(p.responseID) != "" {
-		return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: false}, nil
+		return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: false, IncompleteReason: codexIncompleteReasonStreamClosed}, nil
 	}
 	if resp.Content == "" && resp.Thinking == "" && len(resp.ToolCalls) == 0 {
 		return nil, fmt.Errorf("codex: stream closed before response.completed")
 	}
-	return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: false}, nil
+	return &codexCompletionResult{Response: resp, ResponseID: p.responseID, Complete: false, IncompleteReason: codexIncompleteReasonPartialStreamClosed}, nil
 }
 
 func (p *codexStreamParser) captureResponseEnvelope(raw json.RawMessage) {
@@ -1316,6 +1428,17 @@ func (a *codexResponseAccumulator) merge(resp *agent.Response, responseID string
 	if strings.TrimSpace(responseID) != "" {
 		a.responseID = strings.TrimSpace(responseID)
 	}
+}
+
+func (a *codexResponseAccumulator) hasPartial() bool {
+	if a == nil {
+		return false
+	}
+	return strings.TrimSpace(a.content.String()) != "" ||
+		strings.TrimSpace(a.thinking.String()) != "" ||
+		len(a.toolCalls) > 0 ||
+		len(a.media) > 0 ||
+		strings.TrimSpace(a.responseID) != ""
 }
 
 func (a *codexResponseAccumulator) response() *agent.Response {

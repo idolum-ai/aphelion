@@ -95,13 +95,17 @@ type TurnResult struct {
 }
 
 type ProviderEvent struct {
-	EventType    string
-	Provider     string
-	FromProvider string
-	ToProvider   string
-	Attempt      int
-	MaxRetries   int
-	Error        string
+	EventType           string
+	Provider            string
+	FromProvider        string
+	ToProvider          string
+	Attempt             int
+	MaxRetries          int
+	Error               string
+	Reason              string
+	ResponseID          string
+	PartialContentChars int
+	PartialToolCalls    int
 }
 
 type TokenUsage struct {

@@ -47,6 +47,18 @@ func (r *Runtime) recordProviderAttemptEvents(key session.SessionKey, exec pipel
 		if value := strings.TrimSpace(event.Error); value != "" {
 			payload["error"] = trimError(value)
 		}
+		if value := strings.TrimSpace(event.Reason); value != "" {
+			payload["reason"] = value
+		}
+		if value := strings.TrimSpace(event.ResponseID); value != "" {
+			payload["response_id"] = value
+		}
+		if event.PartialContentChars > 0 {
+			payload["partial_content_chars"] = event.PartialContentChars
+		}
+		if event.PartialToolCalls > 0 {
+			payload["partial_tool_calls"] = event.PartialToolCalls
+		}
 		r.recordExecutionEvent(key, eventType, "provider", status, payload, time.Now().UTC())
 	}
 }
@@ -81,7 +93,26 @@ func providerAttemptEventStatus(eventType string) string {
 		return "failed"
 	case core.ExecutionEventProviderFailoverEngaged:
 		return "engaged"
+	case core.ExecutionEventProviderPartial:
+		return "partial"
 	default:
 		return "observed"
 	}
+}
+
+func providerNameAfterProviderEvents(defaultName string, events []core.ProviderEvent) string {
+	name := strings.TrimSpace(defaultName)
+	for _, event := range events {
+		switch strings.TrimSpace(event.EventType) {
+		case core.ExecutionEventProviderFailoverEngaged:
+			if to := strings.TrimSpace(event.ToProvider); to != "" {
+				name = to
+			}
+		case core.ExecutionEventProviderAttemptSucceeded:
+			if provider := strings.TrimSpace(event.Provider); provider != "" {
+				name = provider
+			}
+		}
+	}
+	return name
 }

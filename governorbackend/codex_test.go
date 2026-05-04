@@ -1186,6 +1186,16 @@ func TestCodexCompleteErrorsOnIncompleteWithoutStoredResponses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "incomplete response without stored-response continuation") {
 		t.Fatalf("Complete() err = %v, want incomplete-without-continuation error", err)
 	}
+	var incomplete *codexIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("Complete() err = %T, want codexIncompleteError", err)
+	}
+	if incomplete.PartialProviderResponseID() != "resp-incomplete" {
+		t.Fatalf("partial response id = %q, want resp-incomplete", incomplete.PartialProviderResponseID())
+	}
+	if partial := incomplete.PartialProviderResponse(); partial == nil || partial.Content != "partial" {
+		t.Fatalf("partial response = %#v, want content", partial)
+	}
 }
 
 func TestCodexCompleteFallsBackWhenStoredResponsesUnsupported(t *testing.T) {
@@ -1199,16 +1209,10 @@ func TestCodexCompleteFallsBackWhenStoredResponsesUnsupported(t *testing.T) {
 		}
 		store, _ := payload["store"].(bool)
 		stores = append(stores, store)
-		if len(stores) == 1 {
-			if !store {
-				t.Fatalf("first request store = false, want true")
-			}
+		if store {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"detail":"Store must be set to false"}`))
 			return
-		}
-		if store {
-			t.Fatalf("retry request store = true, want false after unsupported-store fallback")
 		}
 		if _, ok := payload["previous_response_id"]; ok {
 			t.Fatalf("retry previous_response_id = %#v, want omitted", payload["previous_response_id"])
@@ -1246,6 +1250,9 @@ func TestCodexCompleteFallsBackWhenStoredResponsesUnsupported(t *testing.T) {
 	if len(stores) != 2 {
 		t.Fatalf("request count = %d, want 2", len(stores))
 	}
+	if !stores[0] || stores[1] {
+		t.Fatalf("stores after first Complete = %#v, want [true false]", stores)
+	}
 
 	resp, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "again"}}, nil)
 	if err != nil {
@@ -1254,11 +1261,90 @@ func TestCodexCompleteFallsBackWhenStoredResponsesUnsupported(t *testing.T) {
 	if resp.Content != "stateless fallback" {
 		t.Fatalf("second content = %q, want stateless fallback", resp.Content)
 	}
-	if len(stores) != 3 {
-		t.Fatalf("request count after second Complete = %d, want 3", len(stores))
+	if len(stores) != 4 {
+		t.Fatalf("request count after second Complete = %d, want 4", len(stores))
 	}
-	if stores[2] {
-		t.Fatalf("second Complete store = true, want remembered stateless fallback")
+	if !stores[2] || stores[3] {
+		t.Fatalf("stores after second Complete = %#v, want per-request [true false true false]", stores)
+	}
+}
+
+func TestCodexCompleteForcesStoredContinuationAfterStatelessIncomplete(t *testing.T) {
+	t.Parallel()
+
+	var seen []map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seen = append(seen, payload)
+		switch len(seen) {
+		case 1:
+			if store, _ := payload["store"].(bool); !store {
+				t.Fatalf("first request store = false, want true")
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"detail":"Store must be set to false"}`))
+		case 2:
+			if store, _ := payload["store"].(bool); store {
+				t.Fatalf("stateless retry store = true, want false")
+			}
+			writeSSE(t, w,
+				sseEvent("response.output_text.delta", map[string]any{
+					"type":  "response.output_text.delta",
+					"delta": "partial ",
+				}),
+				sseEvent("response.incomplete", map[string]any{
+					"type": "response.incomplete",
+					"response": map[string]any{
+						"id":     "resp-stateless-incomplete",
+						"status": "incomplete",
+					},
+				}),
+			)
+		case 3:
+			if store, _ := payload["store"].(bool); !store {
+				t.Fatalf("forced continuation store = false, want true")
+			}
+			if got := payload["previous_response_id"]; got != "resp-stateless-incomplete" {
+				t.Fatalf("previous_response_id = %#v, want resp-stateless-incomplete", got)
+			}
+			writeSSE(t, w,
+				sseEvent("response.output_text.delta", map[string]any{
+					"type":  "response.output_text.delta",
+					"delta": "recovered",
+				}),
+				sseEvent("response.completed", map[string]any{
+					"type":     "response.completed",
+					"response": map[string]any{"id": "resp-recovered"},
+				}),
+			)
+		default:
+			t.Fatalf("unexpected request count %d", len(seen))
+		}
+	})
+
+	client, err := NewCodex(CodexOptions{
+		BaseURL:        "https://chatgpt.com/backend-api",
+		AccessToken:    "secret-token",
+		AccountID:      "acct-123",
+		StoreResponses: true,
+		HTTPClient:     &http.Client{Transport: &testTransport{handler: handler}},
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	resp, err := client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Complete() err = %v", err)
+	}
+	if resp.Content != "partial recovered" {
+		t.Fatalf("content = %q, want partial recovered", resp.Content)
+	}
+	if len(seen) != 3 {
+		t.Fatalf("request count = %d, want 3", len(seen))
 	}
 }
 

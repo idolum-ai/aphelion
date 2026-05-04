@@ -94,6 +94,45 @@ func (p *toolHistoryAssertingProvider) Complete(_ context.Context, messages []ag
 	return nil, errors.New("missing expected tool evidence")
 }
 
+type messageContentAssertingProvider struct {
+	reply     string
+	required  string
+	callCount int
+}
+
+func (p *messageContentAssertingProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
+	p.callCount++
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, p.required) {
+			return &agent.Response{Content: p.reply}, nil
+		}
+	}
+	return nil, errors.New("missing expected recovery note")
+}
+
+type stubPartialProviderError struct {
+	msg        string
+	responseID string
+	partial    *agent.Response
+	reason     string
+}
+
+func (e stubPartialProviderError) Error() string {
+	return e.msg
+}
+
+func (e stubPartialProviderError) PartialProviderResponse() *agent.Response {
+	return e.partial
+}
+
+func (e stubPartialProviderError) PartialProviderResponseID() string {
+	return e.responseID
+}
+
+func (e stubPartialProviderError) PartialProviderReason() string {
+	return e.reason
+}
+
 type fixedToolRegistry struct {
 	output    string
 	callCount int
@@ -385,6 +424,58 @@ func TestFailoverChainSkipsOpenAIFamilyAndCompactsAfterContextWindowError(t *tes
 	}
 	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
 		t.Fatalf("provider events = %#v, want failover engaged", resp.ProviderEvents)
+	}
+}
+
+func TestFailoverChainPassesPartialProviderEvidenceToFallback(t *testing.T) {
+	primary := &stubChainProvider{err: stubPartialProviderError{
+		msg:        "codex: incomplete response without stored-response continuation",
+		responseID: "resp-partial",
+		reason:     "without stored-response continuation",
+		partial: &agent.Response{
+			Content: "partial synthesis from codex",
+			ToolCalls: []agent.ToolCall{{
+				ID:    "call-1",
+				Name:  "exec",
+				Input: []byte(`{"command":"git diff"}`),
+			}},
+		},
+	}}
+	secondary := &messageContentAssertingProvider{
+		reply:    "fallback used partial evidence",
+		required: "partial synthesis from codex",
+	}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "codex", Provider: primary},
+		{Name: "native", Provider: secondary},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "finish"}}, nil, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "fallback used partial evidence" {
+		t.Fatalf("content = %q, want fallback used partial evidence", resp.Content)
+	}
+	if secondary.callCount != 1 {
+		t.Fatalf("secondary.callCount = %d, want 1", secondary.callCount)
+	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderPartial) {
+		t.Fatalf("provider events = %#v, want partial event", resp.ProviderEvents)
+	}
+	var partialEvent core.ProviderEvent
+	for _, event := range resp.ProviderEvents {
+		if event.EventType == core.ExecutionEventProviderPartial {
+			partialEvent = event
+			break
+		}
+	}
+	if partialEvent.ResponseID != "resp-partial" || partialEvent.PartialContentChars == 0 || partialEvent.PartialToolCalls != 1 {
+		t.Fatalf("partial event = %#v, want response id/content/tool count", partialEvent)
 	}
 }
 

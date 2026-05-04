@@ -328,9 +328,13 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		}, time.Now().UTC())
 		r.reportOperationalIssueAsync("provider", fmt.Errorf("%s", strings.TrimSpace(turnResult.ProviderFailure)))
 	} else {
+		providerName := strings.TrimSpace(input.Exec.ProviderName)
+		if turnResult != nil {
+			providerName = providerNameAfterProviderEvents(providerName, turnResult.ProviderEvents)
+		}
 		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", map[string]any{
 			"backend":  strings.TrimSpace(input.Exec.Backend),
-			"provider": strings.TrimSpace(input.Exec.ProviderName),
+			"provider": providerName,
 			"model":    strings.TrimSpace(input.Exec.ModelName),
 		}, time.Now().UTC())
 	}

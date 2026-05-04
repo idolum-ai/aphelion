@@ -154,10 +154,12 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
 		recordProviderFailedEvent(&events, entry.name, err)
+		recordProviderPartialEvent(&events, entry.name, err)
 		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, attemptMessages)
 		if !routeToNext {
 			return nil, err
 		}
+		attemptMessages = appendPartialProviderRecoveryMessage(attemptMessages, entry.name, err)
 		if isProviderContextWindowError(err) && historyHasToolResults(attemptMessages) {
 			attemptMessages = compactToolResultMessagesForProviderFallback(attemptMessages)
 		}
@@ -196,10 +198,12 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
 		recordProviderFailedEvent(&events, entry.name, err)
+		recordProviderPartialEvent(&events, entry.name, err)
 		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, attemptMessages)
 		if !routeToNext {
 			return nil, err
 		}
+		attemptMessages = appendPartialProviderRecoveryMessage(attemptMessages, entry.name, err)
 		if isProviderContextWindowError(err) && historyHasToolResults(attemptMessages) {
 			attemptMessages = compactToolResultMessagesForProviderFallback(attemptMessages)
 		}
@@ -369,6 +373,34 @@ func recordProviderFailedEvent(events *[]core.ProviderEvent, provider string, er
 	})
 }
 
+type partialProviderError interface {
+	PartialProviderResponse() *agent.Response
+	PartialProviderResponseID() string
+	PartialProviderReason() string
+}
+
+func recordProviderPartialEvent(events *[]core.ProviderEvent, provider string, err error) {
+	if events == nil {
+		return
+	}
+	partial, responseID, reason, ok := partialProviderSnapshot(err)
+	if !ok {
+		return
+	}
+	event := core.ProviderEvent{
+		EventType:  core.ExecutionEventProviderPartial,
+		Provider:   strings.TrimSpace(provider),
+		Reason:     reason,
+		ResponseID: responseID,
+		Error:      trimProviderEventError(err),
+	}
+	if partial != nil {
+		event.PartialContentChars = len(strings.TrimSpace(partial.Content))
+		event.PartialToolCalls = len(partial.ToolCalls)
+	}
+	*events = append(*events, event)
+}
+
 func recordProviderFailoverEvent(events *[]core.ProviderEvent, from string, to string, err error) {
 	if events == nil || strings.TrimSpace(to) == "" {
 		return
@@ -390,6 +422,78 @@ func trimProviderEventError(err error) string {
 		return text[:500] + "..."
 	}
 	return text
+}
+
+func appendPartialProviderRecoveryMessage(messages []agent.Message, provider string, err error) []agent.Message {
+	partial, responseID, reason, ok := partialProviderSnapshot(err)
+	if !ok {
+		return messages
+	}
+	note := renderPartialProviderRecoveryNote(provider, responseID, reason, partial)
+	if strings.TrimSpace(note) == "" {
+		return messages
+	}
+	out := append([]agent.Message(nil), messages...)
+	out = append(out, agent.Message{
+		Role:    "user",
+		Content: note,
+	})
+	return out
+}
+
+func partialProviderSnapshot(err error) (*agent.Response, string, string, bool) {
+	if err == nil {
+		return nil, "", "", false
+	}
+	var partialErr partialProviderError
+	if !errors.As(err, &partialErr) {
+		return nil, "", "", false
+	}
+	partial := partialErr.PartialProviderResponse()
+	responseID := strings.TrimSpace(partialErr.PartialProviderResponseID())
+	reason := strings.TrimSpace(partialErr.PartialProviderReason())
+	if partial == nil && responseID == "" && reason == "" {
+		return nil, "", "", false
+	}
+	return partial, responseID, reason, true
+}
+
+func renderPartialProviderRecoveryNote(provider string, responseID string, reason string, partial *agent.Response) string {
+	var b strings.Builder
+	b.WriteString("Provider recovery note: ")
+	b.WriteString(firstNonEmpty(strings.TrimSpace(provider), "primary provider"))
+	b.WriteString(" produced an incomplete response before failing. Treat this as partial, non-authoritative evidence while completing the user's request.")
+	if reason = strings.TrimSpace(reason); reason != "" {
+		b.WriteString("\nreason: ")
+		b.WriteString(reason)
+	}
+	if responseID = strings.TrimSpace(responseID); responseID != "" {
+		b.WriteString("\nresponse_id: ")
+		b.WriteString(responseID)
+	}
+	if partial == nil {
+		return b.String()
+	}
+	if text := strings.TrimSpace(partial.Content); text != "" {
+		b.WriteString("\npartial_text:\n")
+		b.WriteString(compactProviderFallbackText(text, providerFallbackRecentToolChars))
+	}
+	if len(partial.ToolCalls) > 0 {
+		b.WriteString("\npartial_tool_calls:")
+		for _, call := range partial.ToolCalls {
+			b.WriteString("\n- ")
+			b.WriteString(firstNonEmpty(strings.TrimSpace(call.Name), "tool"))
+			if id := strings.TrimSpace(call.ID); id != "" {
+				b.WriteString(" id=")
+				b.WriteString(id)
+			}
+			if input := strings.TrimSpace(string(call.Input)); input != "" {
+				b.WriteString(" input=")
+				b.WriteString(compactProviderFallbackText(input, providerFallbackOlderToolChars))
+			}
+		}
+	}
+	return b.String()
 }
 
 type statusCoder interface {
@@ -683,6 +787,7 @@ func isCodexContinuationFailure(err error) bool {
 		"codex: incomplete response without stored-response continuation",
 		"codex: incomplete response missing response id",
 		"codex: response remained incomplete after",
+		"codex: stored-response continuation rejected after incomplete response",
 	}
 	for _, marker := range markers {
 		if strings.Contains(msg, marker) {

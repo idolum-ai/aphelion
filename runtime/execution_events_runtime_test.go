@@ -71,6 +71,7 @@ func TestRuntimeRecordsProviderRetryAndFailoverEvents(t *testing.T) {
 		ProviderPath: []string{"codex", "native"},
 	}, &core.TurnResult{ProviderEvents: []core.ProviderEvent{
 		{EventType: core.ExecutionEventProviderAttemptRetried, Provider: "codex", Attempt: 1, MaxRetries: 3, Error: "503"},
+		{EventType: core.ExecutionEventProviderPartial, Provider: "codex", ResponseID: "resp-partial", Reason: "incomplete", PartialContentChars: 17, PartialToolCalls: 1},
 		{EventType: core.ExecutionEventProviderFailoverEngaged, FromProvider: "codex", ToProvider: "native", Error: "codex incomplete"},
 	}})
 
@@ -79,7 +80,19 @@ func TestRuntimeRecordsProviderRetryAndFailoverEvents(t *testing.T) {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
 	assertHasEventType(t, events, core.ExecutionEventProviderAttemptRetried)
+	assertHasEventType(t, events, core.ExecutionEventProviderPartial)
 	assertHasEventType(t, events, core.ExecutionEventProviderFailoverEngaged)
+}
+
+func TestProviderNameAfterProviderEventsUsesFallbackTarget(t *testing.T) {
+	t.Parallel()
+
+	got := providerNameAfterProviderEvents("codex", []core.ProviderEvent{
+		{EventType: core.ExecutionEventProviderFailoverEngaged, FromProvider: "codex", ToProvider: "native"},
+	})
+	if got != "native" {
+		t.Fatalf("providerNameAfterProviderEvents() = %q, want native", got)
+	}
 }
 
 func TestRuntimeWarnsProviderFailoverInOneLine(t *testing.T) {
