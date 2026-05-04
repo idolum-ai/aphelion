@@ -62,8 +62,8 @@ external_manifest_dir = "./external-tools"
 	if cfg.Telegram.ToolProgress != "all" || cfg.Telegram.ToolProgressStyle != "semantic" || cfg.Telegram.ToolProgressWindow != 4 || cfg.Telegram.ToolProgressCleanup {
 		t.Fatalf("telegram progress defaults = %#v, want all/false", cfg.Telegram)
 	}
-	if cfg.Telegram.Media.DownloadMaxSize != "20MB" || !cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || !cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "8MB" {
-		t.Fatalf("telegram media defaults = %#v, want 20MB + auto vision/pdf extract", cfg.Telegram.Media)
+	if cfg.Telegram.Media.DownloadMaxSize != "20MB" || !cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || !cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "8MB" || !cfg.Telegram.Media.AmbiguousButtons || cfg.Telegram.Media.AmbiguousButtonTimeout != "30s" {
+		t.Fatalf("telegram media defaults = %#v, want 20MB + auto vision/pdf extract + ambiguous buttons", cfg.Telegram.Media)
 	}
 	if cfg.Tailscale.Enabled || cfg.Tailscale.Backend != "cli" || cfg.Tailscale.CLIPath != "tailscale" || cfg.Tailscale.CommandTimeout != "5s" {
 		t.Fatalf("tailscale defaults = %#v, want disabled cli backend", cfg.Tailscale)
@@ -449,6 +449,8 @@ auto_vision_photos = false
 auto_vision_documents = true
 extract_pdf_text = false
 max_pdf_bytes = "4MB"
+ambiguous_buttons = false
+ambiguous_button_timeout = "45s"
 
 [tailscale]
 enabled = true
@@ -657,7 +659,7 @@ elevenlabs_voice_id = "voice-123"
 	if cfg.Telegram.DetachPendingOnRestart {
 		t.Fatalf("detach_pending_on_restart = %t, want false", cfg.Telegram.DetachPendingOnRestart)
 	}
-	if cfg.Telegram.Media.DownloadMaxSize != "12MB" || cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "4MB" {
+	if cfg.Telegram.Media.DownloadMaxSize != "12MB" || cfg.Telegram.Media.AutoVisionPhotos || !cfg.Telegram.Media.AutoVisionDocs || cfg.Telegram.Media.ExtractPDFText || cfg.Telegram.Media.MaxPDFBytes != "4MB" || cfg.Telegram.Media.AmbiguousButtons || cfg.Telegram.Media.AmbiguousButtonTimeout != "45s" {
 		t.Fatalf("telegram.media = %#v, want explicit overrides", cfg.Telegram.Media)
 	}
 	if cfg.Telegram.StreamEditInterval != "450ms" || cfg.Telegram.StreamCursor != " .." {

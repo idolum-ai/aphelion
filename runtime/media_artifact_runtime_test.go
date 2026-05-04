@@ -888,6 +888,103 @@ func TestPrepareInboundTurnDoesNotPersistUnfetchedArtifact(t *testing.T) {
 	}
 }
 
+func TestPrepareInboundTurnSkipsMediaWhenOperatorChoseSkip(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.ConfigureVoice(config.VoiceConfig{Mode: "auto"}, fakeTranscriber{text: "should not appear"}, fakeSynth{})
+	fetcher := &fakeInboundFetcher{data: map[string][]byte{
+		"voice-skip": []byte("voice-bytes"),
+	}}
+	rt.inbound = fetcher
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    1402,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{{
+			ID:         "voice-skip",
+			Channel:    "telegram",
+			RemoteID:   "voice-skip",
+			SourceType: "voice",
+			Kind:       "audio",
+			Subtype:    "voice_note",
+			Filename:   "voice.ogg",
+			MimeType:   "audio/ogg",
+			Metadata: map[string]string{
+				core.ArtifactMetadataMediaProcessingChoice: "skip",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	if len(fetcher.requests) != 0 {
+		t.Fatalf("fetch requests = %#v, want none after skip", fetcher.requests)
+	}
+	if strings.Contains(prepared.UserText, "should not appear") || !strings.Contains(prepared.UserText, "skipped") {
+		t.Fatalf("user text = %q, want skipped note without transcript", prepared.UserText)
+	}
+	if got := prepared.ArtifactRefs[0].Handling; got != "inspect_metadata" {
+		t.Fatalf("handling = %q, want inspect_metadata", got)
+	}
+}
+
+func TestPrepareInboundTurnAnalyzesVideoWithNativeMedia(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	fetcher := &fakeInboundFetcher{data: map[string][]byte{
+		"video-analyze": []byte("video-bytes"),
+	}}
+	rt.inbound = fetcher
+	scope, err := rt.scopeForPrincipal(principal.Principal{TelegramUserID: 1001, Role: principal.RoleAdmin})
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	prepared, err := rt.prepareInboundTurn(context.Background(), scope, core.InboundMessage{
+		ChatID:    1403,
+		SenderID:  1001,
+		MessageID: 1,
+		Artifacts: []core.Artifact{{
+			ID:         "video-analyze",
+			Channel:    "telegram",
+			RemoteID:   "video-analyze",
+			SourceType: "video",
+			Kind:       "video",
+			Filename:   "clip.mp4",
+			MimeType:   "video/mp4",
+			Metadata: map[string]string{
+				core.ArtifactMetadataMediaProcessingChoice: "analyze",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("prepareInboundTurn() err = %v", err)
+	}
+	if len(fetcher.requests) != 1 || fetcher.requests[0] != "video-analyze" {
+		t.Fatalf("fetch requests = %#v, want video analysis download", fetcher.requests)
+	}
+	if prepared.MediaMode != "video_analysis" || len(prepared.AgentMedia) != 1 {
+		t.Fatalf("prepared media mode=%q agent_media=%#v, want video analysis media", prepared.MediaMode, prepared.AgentMedia)
+	}
+	if prepared.AgentMedia[0].Type != "video" || string(prepared.AgentMedia[0].Data) != "video-bytes" {
+		t.Fatalf("agent media = %#v, want video bytes", prepared.AgentMedia[0])
+	}
+	if got := prepared.ArtifactRefs[0].Handling; got != "attach_for_media_analysis" {
+		t.Fatalf("handling = %q, want attach_for_media_analysis", got)
+	}
+}
+
 func TestHandleInboundPersistsArtifactDecisionHiddenInput(t *testing.T) {
 	t.Parallel()
 

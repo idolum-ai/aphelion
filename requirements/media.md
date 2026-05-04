@@ -46,7 +46,8 @@ Media services are also separate from the face layer. The governor may invoke tr
 In v0, that means:
 
 - images, PDFs, text-like documents, and audio may download bytes during transport normalization
-- video and structured Telegram objects may remain metadata-first
+- ambiguous Telegram audio/video can be button-routed before the turn; timeout defaults to agent-decide
+- video and structured Telegram objects may remain metadata-first unless the operator chooses analysis
 - download policy is driven by deterministic capability needs, not by ad hoc agent requests
 
 ## Transcription

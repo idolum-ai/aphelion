@@ -64,6 +64,17 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 				prepared.MediaAttached = true
 				prepared.MediaMode = "vision"
 			}
+		case "attach_for_media_analysis":
+			ref.Handling = "attach_for_media_analysis"
+			media, ok := artifactAnalysisMedia(artifact)
+			if ok {
+				prepared.AgentMedia = append(prepared.AgentMedia, media)
+				prepared.MediaAttached = true
+				prepared.MediaMode = mediaAnalysisMode(artifact)
+				prepared.UserText = appendTextSection(prepared.UserText, fmt.Sprintf("[%s attached for analysis: %s]", artifactHumanLabel(artifact), firstNonEmpty(strings.TrimSpace(artifact.Filename), strings.TrimSpace(artifact.RemoteID), "media")))
+			} else {
+				prepared.UserText = appendTextSection(prepared.UserText, metadataNoteForArtifact(artifact))
+			}
 		case "transcribe":
 			prepared.InboundWasVoice = true
 			ref.Handling = "transcribe"
@@ -154,6 +165,14 @@ func (r *Runtime) materializeInboundArtifact(ctx context.Context, scope sandbox.
 
 func (r *Runtime) shouldFetchInboundArtifactNow(artifact core.Artifact) bool {
 	artifact = core.NormalizeArtifact(artifact)
+	switch artifactMediaProcessingChoice(artifact) {
+	case "skip":
+		return false
+	case "analyze":
+		if artifact.Kind == "audio" || artifact.Kind == "video" {
+			return true
+		}
+	}
 	if hasExplicitArtifactRetentionChoice(artifact) && shouldPersistInboundArtifactLocally(artifact) {
 		return true
 	}
@@ -337,6 +356,9 @@ func summarizeArtifactDecision(ref core.ArtifactReference, artifact core.Artifac
 	if choice := strings.TrimSpace(artifact.Metadata["aphelion_retention_choice"]); choice != "" {
 		parts = append(parts, "operator_"+choice)
 	}
+	if choice := artifactMediaProcessingChoice(artifact); choice != "" {
+		parts = append(parts, "media_"+choice)
+	}
 	if fetch := strings.TrimSpace(ref.FetchState); fetch != "" {
 		parts = append(parts, fetch)
 	}
@@ -376,7 +398,7 @@ func (r *Runtime) executionForTurn(prepared pipeline.TurnPrepareContract) pipeli
 		MediaMode:     prepared.MediaMode,
 	}
 	r.applyModelSlotExecution(&exec, core.ModelSlotGovernor)
-	if prepared.MediaMode == "vision" && r.native != nil {
+	if (prepared.MediaMode == "vision" || prepared.MediaMode == "audio_analysis" || prepared.MediaMode == "video_analysis") && r.native != nil {
 		exec.Provider = r.native
 		exec.Backend = "native"
 		exec.ProviderName = r.nativeProviderName()
@@ -388,6 +410,10 @@ func (r *Runtime) executionForTurn(prepared pipeline.TurnPrepareContract) pipeli
 
 func artifactHandling(artifact core.Artifact) string {
 	switch {
+	case artifactMediaProcessingChoice(artifact) == "skip":
+		return "inspect_metadata"
+	case artifactMediaProcessingChoice(artifact) == "analyze" && (artifact.Kind == "audio" || artifact.Kind == "video") && len(artifact.Data) > 0:
+		return "attach_for_media_analysis"
 	case artifact.HasCapability("vision") && len(artifact.Data) > 0:
 		return "attach_for_vision"
 	case artifact.HasCapability("extract_text") && len(artifact.Data) > 0:
@@ -398,6 +424,18 @@ func artifactHandling(artifact core.Artifact) string {
 		return "inspect_metadata"
 	default:
 		return "store_reference_only"
+	}
+}
+
+func artifactMediaProcessingChoice(artifact core.Artifact) string {
+	if artifact.Metadata == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(artifact.Metadata[core.ArtifactMetadataMediaProcessingChoice])) {
+	case "transcribe", "analyze", "agent", "skip":
+		return strings.ToLower(strings.TrimSpace(artifact.Metadata[core.ArtifactMetadataMediaProcessingChoice]))
+	default:
+		return ""
 	}
 }
 
@@ -424,6 +462,32 @@ func artifactVisionMedia(artifact core.Artifact) (core.Media, bool) {
 		}
 	}
 	return core.Media{}, false
+}
+
+func artifactAnalysisMedia(artifact core.Artifact) (core.Media, bool) {
+	if len(artifact.Data) == 0 {
+		return core.Media{}, false
+	}
+	switch artifact.Kind {
+	case "audio", "video":
+		return core.Media{
+			Type:     artifact.Kind,
+			Data:     artifact.Data,
+			MimeType: artifact.MimeType,
+			Filename: artifact.Filename,
+		}, true
+	default:
+		return core.Media{}, false
+	}
+}
+
+func mediaAnalysisMode(artifact core.Artifact) string {
+	switch artifact.Kind {
+	case "video":
+		return "video_analysis"
+	default:
+		return "audio_analysis"
+	}
 }
 
 func (r *Runtime) extractArtifactText(ctx context.Context, scope sandbox.Scope, artifact core.Artifact) (string, error) {
@@ -570,6 +634,9 @@ func documentTextSectionForArtifact(artifact core.Artifact, extracted string) st
 
 func metadataNoteForArtifact(artifact core.Artifact) string {
 	name := firstNonEmpty(strings.TrimSpace(artifact.Filename), artifact.SourceType, artifact.Subtype, artifact.Kind, "artifact")
+	if artifactMediaProcessingChoice(artifact) == "skip" {
+		return fmt.Sprintf("[%s attached: skipped]", artifactHumanLabel(artifact))
+	}
 	switch artifact.Kind {
 	case "video":
 		return fmt.Sprintf("[video attached: %s]", name)

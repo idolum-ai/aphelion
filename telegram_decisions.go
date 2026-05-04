@@ -32,6 +32,7 @@ const (
 	defaultArtifactRetentionTimeout = defaultUserApprovalTimeout
 	defaultMemoryDelegationTimeout  = defaultUserApprovalTimeout
 	defaultSnapshotRestoreTimeout   = defaultUserApprovalTimeout
+	defaultMediaProcessingTimeout   = 30 * time.Second
 )
 
 type telegramDecisionSender interface {
@@ -80,6 +81,8 @@ type telegramDecisionHandler struct {
 	broker                   *decision.Broker
 	store                    *session.SQLiteStore
 	audioRetentionKeeper     telegramAudioRetentionKeeper
+	mediaProcessingButtons   bool
+	mediaProcessingTimeout   time.Duration
 	interruptTimeout         time.Duration
 	stopWordTimeout          time.Duration
 	artifactRetentionTimeout time.Duration
@@ -114,10 +117,22 @@ func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDe
 		broker:                   broker,
 		store:                    store,
 		audioRetentionKeeper:     keeper,
+		mediaProcessingTimeout:   defaultMediaProcessingTimeout,
 		interruptTimeout:         defaultInterruptTimeout,
 		stopWordTimeout:          defaultStopWordTimeout,
 		artifactRetentionTimeout: defaultArtifactRetentionTimeout,
 	}
+}
+
+func (h *telegramDecisionHandler) WithMediaProcessingButtons(enabled bool, timeout time.Duration) *telegramDecisionHandler {
+	if h == nil {
+		return h
+	}
+	h.mediaProcessingButtons = enabled
+	if timeout > 0 {
+		h.mediaProcessingTimeout = timeout
+	}
+	return h
 }
 
 func newTelegramExecApprover(sender telegramDecisionSender, broker *decision.Broker) *telegramExecApprover {
@@ -430,6 +445,9 @@ func (h *telegramDecisionHandler) HandleArtifactRetentionMessage(ctx context.Con
 	if h == nil || h.sender == nil || h.router == nil || h.broker == nil {
 		return false, nil
 	}
+	if h.mediaProcessingButtons && hasAmbiguousMediaProcessingCandidates(msg) {
+		return h.handleAmbiguousMediaProcessingMessage(ctx, msg)
+	}
 	if hasOnlyAudioArtifactRetentionCandidates(msg) {
 		return h.handleAudioArtifactRetentionMessage(ctx, msg)
 	}
@@ -487,6 +505,103 @@ func (h *telegramDecisionHandler) HandleArtifactRetentionMessage(ctx context.Con
 		Timeout:       h.artifactRetentionTimeout,
 	})
 	return true, nil
+}
+
+func (h *telegramDecisionHandler) handleAmbiguousMediaProcessingMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
+	ownerKey := decision.OwnerKey(msg.ChatID, msg.SenderID)
+	if ownerKey == "" {
+		return false, fmt.Errorf("media processing owner key is required")
+	}
+	req := decision.Request{
+		Kind:          decision.KindMediaProcessing,
+		ChatID:        msg.ChatID,
+		SenderID:      msg.SenderID,
+		MessageID:     msg.MessageID,
+		Prompt:        mediaProcessingPrompt(msg),
+		Details:       formatMediaProcessingDetails(msg),
+		Choices:       mediaProcessingChoices(msg),
+		DefaultChoice: "agent",
+		Timeout:       h.mediaProcessingTimeout,
+	}
+	if h.store == nil {
+		result, err := h.broker.Request(ctx, req)
+		if err != nil {
+			return true, err
+		}
+		updated := applyMediaProcessingChoice(msg, result.Choice)
+		if result.Delivery.MessageID != 0 {
+			_ = editDecisionMessageClearingInlineKeyboard(ctx, h.sender, msg.ChatID, result.Delivery.MessageID, mediaProcessingResolutionText(result))
+		}
+		h.router.Route(ctx, updated)
+		return true, nil
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return true, fmt.Errorf("marshal pending media processing message: %w", err)
+	}
+	if err := h.store.UpsertPendingArtifactRetention(session.PendingArtifactRetentionRecord{
+		OwnerKey:           ownerKey,
+		ChatID:             msg.ChatID,
+		SenderID:           msg.SenderID,
+		InboundMessageJSON: string(raw),
+	}); err != nil {
+		return true, err
+	}
+	go h.awaitMediaProcessingDecision(context.Background(), ownerKey, req)
+	return true, nil
+}
+
+func (h *telegramDecisionHandler) awaitMediaProcessingDecision(ctx context.Context, ownerKey string, req decision.Request) {
+	result, err := h.broker.Request(ctx, req)
+	if err != nil {
+		if h.store != nil {
+			_ = h.store.DeletePendingArtifactRetention(ownerKey)
+		}
+		return
+	}
+	if err := h.resumePendingMediaProcessing(ctx, ownerKey, result); err != nil {
+		if h.store != nil {
+			_ = h.store.DeletePendingArtifactRetention(ownerKey)
+		}
+	}
+}
+
+func (h *telegramDecisionHandler) resumePendingMediaProcessing(ctx context.Context, ownerKey string, result decision.Result) error {
+	if h == nil || h.router == nil || h.store == nil {
+		return nil
+	}
+	record, err := h.store.PendingArtifactRetention(ownerKey)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if err := h.store.DeletePendingArtifactRetention(ownerKey); err != nil {
+		return err
+	}
+	var msg core.InboundMessage
+	if err := json.Unmarshal([]byte(record.InboundMessageJSON), &msg); err != nil {
+		return fmt.Errorf("decode pending media processing message: %w", err)
+	}
+	updated := applyMediaProcessingChoice(msg, result.Choice)
+	if result.Delivery.MessageID != 0 && h.sender != nil {
+		_ = editDecisionMessageClearingInlineKeyboard(ctx, h.sender, msg.ChatID, result.Delivery.MessageID, mediaProcessingResolutionText(result))
+	}
+	if h.shouldOfferAudioKeepAfterMediaChoice(updated, result.Choice) {
+		if raw, err := json.Marshal(updated); err == nil {
+			if err := h.store.UpsertPendingArtifactRetention(session.PendingArtifactRetentionRecord{
+				OwnerKey:           ownerKey,
+				ChatID:             updated.ChatID,
+				SenderID:           updated.SenderID,
+				InboundMessageJSON: string(raw),
+			}); err == nil {
+				_ = h.sendAudioRetentionOffer(ctx, updated)
+			}
+		}
+	}
+	h.router.Route(ctx, updated)
+	return nil
 }
 
 func (h *telegramDecisionHandler) awaitArtifactRetentionDecision(ctx context.Context, ownerKey string, req decision.Request) {
@@ -672,6 +787,189 @@ func applyArtifactRetentionChoice(msg core.InboundMessage, choice string) core.I
 		out.Artifacts = append(out.Artifacts, core.NormalizeArtifact(artifact))
 	}
 	return out
+}
+
+func hasAmbiguousMediaProcessingCandidates(msg core.InboundMessage) bool {
+	if strings.TrimSpace(msg.DurableAgentID) != "" || !mediaProcessingTextAllowsPrompt(msg.Text) {
+		return false
+	}
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if strings.TrimSpace(artifact.Channel) != "telegram" {
+			continue
+		}
+		if strings.TrimSpace(artifact.RemoteID) == "" && len(artifact.Data) == 0 {
+			continue
+		}
+		if strings.TrimSpace(artifact.Metadata[core.ArtifactMetadataMediaProcessingChoice]) != "" {
+			continue
+		}
+		if artifact.Kind == "audio" || artifact.Kind == "video" {
+			return true
+		}
+	}
+	return false
+}
+
+func mediaProcessingTextAllowsPrompt(text string) bool {
+	text = strings.TrimSpace(text)
+	return text == "" || strings.HasPrefix(text, "Reply context:\n")
+}
+
+func mediaProcessingPrompt(msg core.InboundMessage) string {
+	hasAudio, hasVideo := mediaProcessingKinds(msg)
+	switch {
+	case hasAudio && hasVideo:
+		return "Audio and video received. How should I process them?"
+	case hasVideo:
+		return "Video received. How should I process it?"
+	default:
+		return "Audio received. How should I process it?"
+	}
+}
+
+func mediaProcessingChoices(msg core.InboundMessage) []decision.Choice {
+	hasAudio, hasVideo := mediaProcessingKinds(msg)
+	switch {
+	case hasAudio && !hasVideo:
+		return []decision.Choice{
+			{ID: "transcribe", Label: "Transcribe"},
+			{ID: "analyze", Label: "Analyze audio"},
+			{ID: "agent", Label: "Agent decide"},
+			{ID: "skip", Label: "Skip"},
+		}
+	case hasVideo && !hasAudio:
+		return []decision.Choice{
+			{ID: "analyze", Label: "Analyze video"},
+			{ID: "agent", Label: "Agent decide"},
+			{ID: "skip", Label: "Skip"},
+		}
+	default:
+		return []decision.Choice{
+			{ID: "agent", Label: "Agent decide"},
+			{ID: "skip", Label: "Skip"},
+		}
+	}
+}
+
+func mediaProcessingKinds(msg core.InboundMessage) (hasAudio bool, hasVideo bool) {
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if strings.TrimSpace(artifact.Channel) != "telegram" {
+			continue
+		}
+		switch artifact.Kind {
+		case "audio":
+			hasAudio = true
+		case "video":
+			hasVideo = true
+		}
+	}
+	return hasAudio, hasVideo
+}
+
+func formatMediaProcessingDetails(msg core.InboundMessage) string {
+	items := make([]string, 0, len(msg.Artifacts))
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if strings.TrimSpace(artifact.Channel) != "telegram" || (artifact.Kind != "audio" && artifact.Kind != "video") {
+			continue
+		}
+		name := firstNonEmpty(strings.TrimSpace(artifact.Filename), strings.TrimSpace(artifact.SourceType), strings.TrimSpace(artifact.Kind), "media")
+		label := strings.TrimSpace(artifact.Kind)
+		if artifact.Subtype != "" {
+			label = strings.TrimSpace(artifact.Subtype)
+		}
+		line := "- " + label + ": " + name
+		if artifact.SizeBytes > 0 {
+			line += fmt.Sprintf(" (%d bytes)", artifact.SizeBytes)
+		}
+		items = append(items, line)
+	}
+	if len(items) == 0 {
+		return "Choose whether to transcribe, analyze, let the agent decide, or skip this media."
+	}
+	return strings.Join([]string{
+		"Choose how I should process this media before routing the turn.",
+		"",
+		"Media:",
+		strings.Join(items, "\n"),
+	}, "\n")
+}
+
+func applyMediaProcessingChoice(msg core.InboundMessage, choice string) core.InboundMessage {
+	choice = normalizeMediaProcessingChoice(choice)
+	out := msg
+	out.Artifacts = make([]core.Artifact, 0, len(msg.Artifacts))
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if strings.TrimSpace(artifact.Channel) == "telegram" && (artifact.Kind == "audio" || artifact.Kind == "video") && (strings.TrimSpace(artifact.RemoteID) != "" || len(artifact.Data) > 0) {
+			if artifact.Metadata == nil {
+				artifact.Metadata = map[string]string{}
+			}
+			artifact.Metadata[core.ArtifactMetadataMediaProcessingChoice] = choice
+			switch choice {
+			case "skip":
+				artifact.Capabilities = []string{"inspect_metadata", "store_reference"}
+				artifact.Metadata["aphelion_materialize"] = "memory_only"
+			case "analyze":
+				artifact.Capabilities = ensureArtifactCapability(artifact.Capabilities, "analyze_media")
+				artifact.Metadata["aphelion_materialize"] = "local"
+			case "transcribe":
+				if artifact.Kind == "audio" {
+					artifact.Capabilities = ensureArtifactCapability(artifact.Capabilities, "transcribe")
+					artifact.Metadata["aphelion_materialize"] = "local"
+				}
+			}
+		}
+		out.Artifacts = append(out.Artifacts, core.NormalizeArtifact(artifact))
+	}
+	return out
+}
+
+func normalizeMediaProcessingChoice(choice string) string {
+	switch strings.ToLower(strings.TrimSpace(choice)) {
+	case "transcribe", "analyze", "skip":
+		return strings.ToLower(strings.TrimSpace(choice))
+	default:
+		return "agent"
+	}
+}
+
+func ensureArtifactCapability(capabilities []string, capability string) []string {
+	capability = strings.TrimSpace(capability)
+	if capability == "" {
+		return capabilities
+	}
+	for _, existing := range capabilities {
+		if strings.EqualFold(strings.TrimSpace(existing), capability) {
+			return capabilities
+		}
+	}
+	return append(append([]string(nil), capabilities...), capability)
+}
+
+func mediaProcessingResolutionText(result decision.Result) string {
+	if result.TimedOut {
+		return "No media choice received, so I’ll let the agent decide."
+	}
+	switch normalizeMediaProcessingChoice(result.Choice) {
+	case "transcribe":
+		return "Got it. I’ll transcribe the audio."
+	case "analyze":
+		return "Got it. I’ll analyze the media."
+	case "skip":
+		return "Got it. I’ll skip the media content and keep only metadata."
+	default:
+		return "Got it. I’ll let the agent decide."
+	}
+}
+
+func (h *telegramDecisionHandler) shouldOfferAudioKeepAfterMediaChoice(msg core.InboundMessage, choice string) bool {
+	if h == nil || h.store == nil || h.audioRetentionKeeper == nil || normalizeMediaProcessingChoice(choice) == "skip" {
+		return false
+	}
+	return hasOnlyAudioArtifactRetentionCandidates(msg)
 }
 
 func artifactRetentionResolutionText(result decision.Result) string {
@@ -1295,6 +1593,8 @@ func approvedDecisionConfirmationLabel(kind decision.Kind) string {
 		return "Snapshot restore"
 	case decision.KindArtifactRetention:
 		return "Artifact retention"
+	case decision.KindMediaProcessing:
+		return "Media processing"
 	default:
 		return "Approval"
 	}
@@ -1448,6 +1748,8 @@ func summarizePendingDecision(pending decision.PendingDecision) string {
 		return summarizeProposalApprovalDetails(details)
 	case decision.KindArtifactRetention:
 		return summarizeArtifactRetentionDetails(details)
+	case decision.KindMediaProcessing:
+		return summarizeMediaProcessingDetails(details)
 	case decision.KindMemoryDelegation:
 		return summarizeMemoryDelegationDetails(details)
 	case decision.KindSnapshotRestore:
@@ -1570,6 +1872,30 @@ func summarizeArtifactRetentionDetails(details string) string {
 		"Choose how long to keep the inbound artifact.",
 		"Artifact: " + preview,
 		"Use Expand details to inspect the full artifact list.",
+	}, "\n"))
+}
+
+func summarizeMediaProcessingDetails(details string) string {
+	sections := splitDecisionSections(details)
+	media := strings.TrimSpace(sections["media"])
+	items := []string{}
+	for _, line := range strings.Split(media, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+		if line != "" {
+			items = append(items, line)
+		}
+	}
+	if len(items) == 0 {
+		return compactSentence(details)
+	}
+	preview := items[0]
+	if len(items) > 1 {
+		preview += fmt.Sprintf(" +%d more", len(items)-1)
+	}
+	return strings.TrimSpace(strings.Join([]string{
+		"Choose how to process the media.",
+		"Media: " + preview,
+		"Use Expand details to inspect the full media list.",
 	}, "\n"))
 }
 

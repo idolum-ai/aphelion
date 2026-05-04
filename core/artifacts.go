@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const ArtifactMetadataMediaProcessingChoice = "aphelion_media_processing_choice"
+
 func (a Artifact) HasCapability(name string) bool {
 	name = strings.TrimSpace(strings.ToLower(name))
 	if name == "" {

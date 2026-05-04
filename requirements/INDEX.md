@@ -42,7 +42,7 @@ As-built architecture docs: [`../docs/architecture/`](../docs/architecture/READM
 
 ## Media
 27. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
-28. 🟡 [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation; ambiguous-media buttons remain planned.
+28. 🟢 [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation, and config-enabled ambiguous-media buttons.
 
 ## Operations
 29. ✅ [`deployment.md`](deployment.md) — GitHub Releases, static binary target, systemd services, updates, rollback

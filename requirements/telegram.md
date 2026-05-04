@@ -1078,17 +1078,16 @@ func isTextFile(mime string, name string) bool {
 
 ### Voice messages
 
-Voice continues to use the existing transcription-first runtime path from `voice.md`.
-
-This Telegram media pass does **not** add a button-driven voice workflow.
+Voice can use the existing transcription-first runtime path from `voice.md`, or
+when `telegram.media.ambiguous_buttons = true`, first show a Telegram callback
+workflow for transcribe/analyze/agent-decide/skip. Timeout defaults to
+agent-decide so the previous automatic path remains the fallback.
 
 ### Deferred media classes
 
 The following remain intentionally deferred in Aphelion:
 
-- `video`
-- `video_note`
-- `audio` beyond the existing voice path
+- richer semantic video analysis beyond the configured native media provider
 - sticker semantics beyond bounded metadata
 - arbitrary binary files
 

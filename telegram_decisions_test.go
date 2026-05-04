@@ -1142,6 +1142,135 @@ func TestHandleArtifactRetentionMessageAudioDefaultsToSessionAndOffersPermanentK
 	}
 }
 
+func TestHandleMediaProcessingMessagePromptsAndRoutesSelectedChoice(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	router := &decisionTestRouter{}
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	keeper := &decisionTestAudioKeeper{}
+	handler := newTelegramDecisionHandler(sender, router, broker, store, keeper).
+		WithMediaProcessingButtons(true, time.Minute)
+
+	msg := core.InboundMessage{
+		ChatID:    7,
+		SenderID:  42,
+		MessageID: 99,
+		Artifacts: []core.Artifact{{
+			ID:         "voice-1",
+			Channel:    "telegram",
+			RemoteID:   "voice-file",
+			Kind:       "audio",
+			SourceType: "voice",
+			Subtype:    "voice_note",
+			Filename:   "voice.ogg",
+			MimeType:   "audio/ogg",
+		}},
+	}
+
+	handled, err := handler.HandleArtifactRetentionMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleArtifactRetentionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	prompt := waitForDecisionInline(t, sender)
+	if !strings.Contains(prompt.text, "How should I process") {
+		t.Fatalf("prompt text = %q, want media processing prompt", prompt.text)
+	}
+	for _, label := range []string{"Transcribe", "Analyze audio", "Agent decide", "Skip"} {
+		if !hasInlineButton(prompt.rows, label) {
+			t.Fatalf("rows = %#v, want %q button", prompt.rows, label)
+		}
+	}
+
+	if err := handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:   "cb-media-skip",
+		Data: callbackDataForButton(t, prompt.rows, "Skip"),
+		From: &telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: 1,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	}); err != nil {
+		t.Fatalf("HandleCallbackQuery() err = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(router.routed) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want routed media message", router.routed)
+	}
+	artifact := router.routed[0].Artifacts[0]
+	if got := artifact.Metadata[core.ArtifactMetadataMediaProcessingChoice]; got != "skip" {
+		t.Fatalf("media processing choice = %q, want skip", got)
+	}
+	if artifact.HasCapability("transcribe") {
+		t.Fatalf("artifact capabilities = %#v, want transcribe removed after skip", artifact.Capabilities)
+	}
+	if len(sender.edits) == 0 || !strings.Contains(sender.edits[len(sender.edits)-1].text, "skip") {
+		t.Fatalf("edits = %#v, want skip confirmation", sender.edits)
+	}
+}
+
+func TestHandleMediaProcessingMessageTimeoutDefaultsToAgent(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	router := &decisionTestRouter{}
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	handler := newTelegramDecisionHandler(sender, router, broker, store).
+		WithMediaProcessingButtons(true, 10*time.Millisecond)
+
+	msg := core.InboundMessage{
+		ChatID:    7,
+		SenderID:  42,
+		MessageID: 100,
+		Artifacts: []core.Artifact{{
+			ID:         "video-1",
+			Channel:    "telegram",
+			RemoteID:   "video-file",
+			Kind:       "video",
+			SourceType: "video",
+			Filename:   "clip.mp4",
+			MimeType:   "video/mp4",
+		}},
+	}
+	handled, err := handler.HandleArtifactRetentionMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleArtifactRetentionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	_ = waitForDecisionInline(t, sender)
+	deadline := time.Now().Add(time.Second)
+	for len(router.routed) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want timeout-routed media message", router.routed)
+	}
+	if got := router.routed[0].Artifacts[0].Metadata[core.ArtifactMetadataMediaProcessingChoice]; got != "agent" {
+		t.Fatalf("media processing choice = %q, want agent default", got)
+	}
+	if len(sender.edits) == 0 || !strings.Contains(sender.edits[len(sender.edits)-1].text, "agent decide") {
+		t.Fatalf("edits = %#v, want timeout confirmation", sender.edits)
+	}
+}
+
 func TestHandleAudioKeepCallbackSavesWithoutReroutingTurn(t *testing.T) {
 	t.Parallel()
 

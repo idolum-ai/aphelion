@@ -84,11 +84,13 @@ type TelegramDurableGroupConfig struct {
 }
 
 type TelegramMediaConfig struct {
-	DownloadMaxSize  string `toml:"download_max_size"`
-	AutoVisionPhotos bool   `toml:"auto_vision_photos"`
-	AutoVisionDocs   bool   `toml:"auto_vision_documents"`
-	ExtractPDFText   bool   `toml:"extract_pdf_text"`
-	MaxPDFBytes      string `toml:"max_pdf_bytes"`
+	DownloadMaxSize        string `toml:"download_max_size"`
+	AutoVisionPhotos       bool   `toml:"auto_vision_photos"`
+	AutoVisionDocs         bool   `toml:"auto_vision_documents"`
+	ExtractPDFText         bool   `toml:"extract_pdf_text"`
+	MaxPDFBytes            string `toml:"max_pdf_bytes"`
+	AmbiguousButtons       bool   `toml:"ambiguous_buttons"`
+	AmbiguousButtonTimeout string `toml:"ambiguous_button_timeout"`
 }
 
 type TailscaleConfig struct {
@@ -457,11 +459,13 @@ func Default() Config {
 			ToolProgressWindow:     4,
 			ToolProgressCleanup:    false,
 			Media: TelegramMediaConfig{
-				DownloadMaxSize:  "20MB",
-				AutoVisionPhotos: true,
-				AutoVisionDocs:   true,
-				ExtractPDFText:   true,
-				MaxPDFBytes:      "8MB",
+				DownloadMaxSize:        "20MB",
+				AutoVisionPhotos:       true,
+				AutoVisionDocs:         true,
+				ExtractPDFText:         true,
+				MaxPDFBytes:            "8MB",
+				AmbiguousButtons:       true,
+				AmbiguousButtonTimeout: "30s",
 			},
 		},
 		Governor: GovernorConfig{
@@ -1156,6 +1160,15 @@ func validate(cfg *Config) error {
 	}
 	if _, err := ParseByteSize(strings.TrimSpace(cfg.Telegram.Media.MaxPDFBytes)); err != nil {
 		return fmt.Errorf("telegram.media.max_pdf_bytes must be a valid positive size: %w", err)
+	}
+	if raw := strings.TrimSpace(cfg.Telegram.Media.AmbiguousButtonTimeout); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("telegram.media.ambiguous_button_timeout must be a valid duration: %w", err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("telegram.media.ambiguous_button_timeout must be > 0")
+		}
 	}
 	if err := validateTelegramDurableGroups(cfg); err != nil {
 		return err
