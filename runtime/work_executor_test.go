@@ -5,6 +5,8 @@ package runtime
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -532,6 +534,52 @@ func TestCodexAppServerClientRecordsServerRequestEvents(t *testing.T) {
 	log := client.ApprovalLog()
 	if len(log) != 1 || log[0].Method != "tool/requestUserInput" || log[0].Decision != "cancel" {
 		t.Fatalf("approval log = %#v, want canceled user input request recorded", log)
+	}
+}
+
+func TestCodexWorkExecutorReadinessUsesHealthz(t *testing.T) {
+	t.Parallel()
+
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Error(w, "upgrade required", http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	address := "ws://" + strings.TrimPrefix(server.URL, "http://")
+	if err := checkCodexWorkAppServerReady(context.Background(), address); err != nil {
+		t.Fatalf("checkCodexWorkAppServerReady() err = %v", err)
+	}
+	if len(paths) != 1 || paths[0] != "/healthz" {
+		t.Fatalf("probed paths = %#v, want only /healthz", paths)
+	}
+}
+
+func TestCodexWorkExecutorReadinessFallsBackToHealth(t *testing.T) {
+	t.Parallel()
+
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	address := "ws://" + strings.TrimPrefix(server.URL, "http://")
+	if err := checkCodexWorkAppServerReady(context.Background(), address); err != nil {
+		t.Fatalf("checkCodexWorkAppServerReady() err = %v", err)
+	}
+	if len(paths) != 2 || paths[0] != "/healthz" || paths[1] != "/health" {
+		t.Fatalf("probed paths = %#v, want /healthz then /health", paths)
 	}
 }
 
