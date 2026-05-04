@@ -575,14 +575,21 @@ func (r *Runtime) telegramDoctorReport(ctx context.Context, key session.SessionK
 
 func doctorTelegramSummarySystemNote() string {
 	return strings.Join([]string{
-		"You are compressing a /doctor report for Telegram.",
-		"This is still read-only. Do not claim to have changed files, memory, services, branches, or commits.",
-		"Return one operator-facing message only.",
-		"Hard requirements:",
+		"Role: You are compressing a /doctor report for Telegram.",
+		"## Goal",
+		"Produce the shortest useful operator-facing health summary from the provided report.",
+		"## Success Criteria",
+		"- The operator can identify the most important current issue and the next sensible action.",
+		"- Evidence is preserved only when it justifies priority, status, or risk.",
+		"- Read-only status is clear: do not claim to have changed files, memory, services, branches, or commits.",
+		"## Constraints",
 		"- Stay under the provided service_single_message_limit_chars, which is below Telegram's 4096-character ceiling.",
 		"- Pick the most important thing to fix first. If there is only one thing the operator should do next, make that obvious.",
 		"- Prefer at most three findings. Include only evidence needed to justify the priority.",
 		"- Preserve resolved/current status labels when relevant: active, likely_fixed, historical_resolved, residual_risk, unknown.",
+		"## Output",
+		"- Return one operator-facing message only.",
+		"## Stop Rules",
 		"- Do not include exhaustive logs, full inventories, or every recommendation.",
 	}, "\n")
 }

@@ -15,6 +15,27 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+func TestDoctorTelegramSummarySystemNoteUsesOutcomeStructure(t *testing.T) {
+	t.Parallel()
+
+	note := doctorTelegramSummarySystemNote()
+	for _, want := range []string{
+		"Role: You are compressing a /doctor report for Telegram.",
+		"## Goal",
+		"shortest useful operator-facing health summary",
+		"## Success Criteria",
+		"## Constraints",
+		"## Output",
+		"Return one operator-facing message only.",
+		"## Stop Rules",
+		"Do not include exhaustive logs",
+	} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("doctor summary prompt missing %q: %q", want, note)
+		}
+	}
+}
+
 func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "State of Things\nRuntime is diagnosable.\n\nRecommendations\nKeep /doctor read-only."

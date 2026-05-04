@@ -516,7 +516,24 @@ func workPromptForContinuation(state session.ContinuationState, opState session.
 	state = session.NormalizeContinuationState(state)
 	opState = session.NormalizeOperationState(opState)
 	lines := []string{
-		"Execute this Aphelion-approved bounded continuation.",
+		"Role: You are the bounded work executor for an Aphelion-approved continuation.",
+		"",
+		"## Goal",
+		"Complete only the approved next step and return evidence the parent runtime can store and summarize.",
+		"",
+		"## Success Criteria",
+		"- Stay within the lease, work mode, repository, and sandbox implied by this request.",
+		"- Preserve durable operation context and do not collapse a broad objective into a one-step plan.",
+		"- Validate meaningful edits, generated artifacts, service actions, or conclusions with the narrowest relevant check available.",
+		"- Report changed files, commands, tests, evidence, residual risk, and any blocked validation.",
+		"",
+		"## Constraints",
+		"- Do not expand authority, credentials, network use, deploy, restart, commit, or external effects beyond this approved lease.",
+		"- Do not ask for approval to make a plan. If more work remains, propose concrete bounded next phases or lanes.",
+		"",
+		"## Stop Rules",
+		"- Stop before any action outside the lease or any action whose failure could create irreversible, external, privacy, or credential risk.",
+		"- If required evidence or validation is unavailable, report that limitation instead of inventing certainty.",
 	}
 	if objective := firstNonEmptyContinuation(opState.Objective, state.Objective); objective != "" {
 		lines = append(lines, "Objective: "+objective)

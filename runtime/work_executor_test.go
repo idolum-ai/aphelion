@@ -191,6 +191,45 @@ func TestContinuationWorkModeClassifiesExplicitRestartActionAsDeploy(t *testing.
 	}
 }
 
+func TestWorkPromptForContinuationIncludesOutcomeValidationAndStopRules(t *testing.T) {
+	t.Parallel()
+
+	prompt := workPromptForContinuation(session.ContinuationState{
+		Objective:    "Repair the live planning lease.",
+		StageSummary: "Patch prompt handling and validate it.",
+		ActionProposal: session.ActionProposal{
+			Summary:       "Patch prompt handling",
+			BoundedEffect: "Edit prompt code and run tests; stop before deploy.",
+		},
+	}, session.OperationState{
+		Objective: "Make Aphelion follow GPT-5.5 prompt guidance.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "prompt-guidance-plan",
+			CurrentPhaseID: "phase-1",
+			Phases: []session.OperationPhase{
+				{ID: "phase-1", Summary: "Patch prompts", Status: session.PlanStatusPending},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"Role: You are the bounded work executor",
+		"## Goal",
+		"Complete only the approved next step",
+		"## Success Criteria",
+		"Validate meaningful edits",
+		"## Constraints",
+		"Do not ask for approval to make a plan.",
+		"## Stop Rules",
+		"Stop before any action outside the lease",
+		"Phase [pending] phase-1: Patch prompts",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("work prompt missing %q: %q", want, prompt)
+		}
+	}
+}
+
 func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	t.Parallel()
 

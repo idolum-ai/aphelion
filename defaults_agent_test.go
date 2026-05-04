@@ -85,3 +85,60 @@ func TestDefaultAgentIdentityUsesCanonicalLayerNames(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultAgentPromptFilesUseGPT55OutcomeStructure(t *testing.T) {
+	t.Parallel()
+
+	required := map[string][]string{
+		"defaults/agent/SOUL.md": {
+			"Role:",
+			"## Goal",
+			"## Success Criteria",
+			"## Stop Rules",
+		},
+		"defaults/agent/IDOLUM.md": {
+			"Role:",
+			"## Goal",
+			"## Success Criteria",
+			"## Output",
+			"## Stop Rules",
+		},
+		"defaults/agent/TOOLS.md": {
+			"## Goal",
+			"## Success Criteria",
+			"## Validation",
+			"## Stop Rules",
+		},
+		"defaults/agent/HEARTBEAT.md": {
+			"## Goal",
+			"## Success Criteria",
+			"## Output",
+			"## Stop Rules",
+		},
+		"defaults/agent/practices/document-intake.md": {
+			"## Goal",
+			"## Success Criteria",
+			"## Operational Rules",
+			"## Stop Rules",
+		},
+		"defaults/agent/practices/pdf-generation.md": {
+			"## Goal",
+			"## Success Criteria",
+			"## Operational Rules",
+			"## Stop Rules",
+		},
+	}
+
+	for path, wants := range required {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) err = %v", path, err)
+		}
+		text := string(raw)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing %q:\n%s", path, want, text)
+			}
+		}
+	}
+}

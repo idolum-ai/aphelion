@@ -141,6 +141,27 @@ func TestBuildGovernorPromptIncludesEvidenceRetrievalAndStopRules(t *testing.T) 
 	}
 }
 
+func TestBuildGovernorPromptIncludesGPT55OutcomeStructure(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{})
+
+	for _, want := range []string{
+		"Role: You are Idolum (System), the governor of this system.",
+		"## Goal",
+		"Choose the shortest reliable path",
+		"## Success Criteria",
+		"## Output",
+		"produce a concrete bounded proposal or phase_plan instead of asking approval to make a plan",
+		"## Stop Rules",
+		"Stop before destructive, irreversible, external, credential, purchase, public-contact, deploy, or restart actions",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("governor prompt missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestBuildGovernorPromptPlacesManifestBeforeToolsPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -408,6 +429,49 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	}
 	if !strings.Contains(got, "These wants are negotiable signals, not permission grants") {
 		t.Fatalf("face prompt missing telos authorization boundary: %q", got)
+	}
+}
+
+func TestBuildFacePromptIncludesGPT55OutcomeStructure(t *testing.T) {
+	t.Parallel()
+
+	render := BuildFacePrompt(FaceRequest{
+		GovernorName:    DefaultGovernorName,
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		FloorText:       "done",
+		LatestUserInput: "what happened?",
+	})
+	for _, want := range []string{
+		"## Goal",
+		"Render the approved material into the reply the user should actually see.",
+		"## Success Criteria",
+		"The reply feels owned by Idolum",
+		"## Output",
+		"Return the final user-visible message only",
+		"## Stop Rules",
+		"Do not claim completed work, background activity, or future action",
+	} {
+		if !strings.Contains(render, want) {
+			t.Fatalf("render face prompt missing %q: %q", want, render)
+		}
+	}
+
+	proposal := BuildFacePrompt(FaceRequest{
+		GovernorName:    DefaultGovernorName,
+		FaceName:        "Idolum",
+		Channel:         "telegram",
+		LatestUserInput: "continue the Lighthouse work",
+		Mode:            "proposal",
+	})
+	for _, want := range []string{
+		"Return nothing when no pressure is useful.",
+		"include the required continuation contract exactly once",
+		"Any suggested next lease is one concrete bounded action, not approval to make a plan.",
+	} {
+		if !strings.Contains(proposal, want) {
+			t.Fatalf("proposal face prompt missing %q: %q", want, proposal)
+		}
 	}
 }
 
