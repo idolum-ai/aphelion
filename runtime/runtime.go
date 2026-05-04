@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -321,13 +322,21 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 	result, err := r.workExecutor.Run(ctx, req)
 	status := r.workExecutor.Status()
 	if err != nil {
-		r.persistWorkResult(key, req, result, status, err)
-		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "failed", workResultPayload(req, result, status, err), time.Now().UTC())
+		artifact := r.persistWorkResult(key, req, result, status, err)
+		payload := workResultPayload(req, result, status, err)
+		if artifact.Ref != "" {
+			payload["artifact_ref"] = artifact.Ref
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "failed", payload, time.Now().UTC())
 		return err
 	}
-	r.persistWorkResult(key, req, result, status, nil)
-	r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorSucceeded, "work", "succeeded", workResultPayload(req, result, status, nil), time.Now().UTC())
-	if err := r.deliverWorkResult(ctx, chatID, result); err != nil {
+	artifact := r.persistWorkResult(key, req, result, status, nil)
+	payload = workResultPayload(req, result, status, nil)
+	if artifact.Ref != "" {
+		payload["artifact_ref"] = artifact.Ref
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorSucceeded, "work", "succeeded", payload, time.Now().UTC())
+	if err := r.deliverWorkResult(ctx, chatID, result, artifact); err != nil {
 		return err
 	}
 	return nil
@@ -503,13 +512,13 @@ func workPromptForContinuation(state session.ContinuationState, opState session.
 	return strings.Join(lines, "\n")
 }
 
-func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) {
+func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) session.OperationArtifact {
 	if r == nil || r.store == nil {
-		return
+		return session.OperationArtifact{}
 	}
 	opState, err := r.store.OperationState(key)
 	if err != nil {
-		return
+		return session.OperationArtifact{}
 	}
 	opState = session.NormalizeOperationState(opState)
 	if strings.TrimSpace(opState.ID) == "" {
@@ -538,19 +547,24 @@ func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, res
 	if cause == nil {
 		opState.Work.LastCompletedAt = opState.Work.LastExecutorUpdatedAt
 	}
+	artifact := r.writeWorkResultArtifact(key, req, result, status, cause, opState.Work.LastExecutorUpdatedAt)
+	if artifact.Ref != "" {
+		opState.Artifacts = appendOperationArtifact(opState.Artifacts, artifact)
+	}
 	if err := r.store.UpdateOperationState(key, opState); err != nil {
 		log.Printf("WARN persist work result failed chat_id=%d err=%v", key.ChatID, err)
 	}
+	return artifact
 }
 
-func (r *Runtime) deliverWorkResult(ctx context.Context, chatID int64, result WorkResult) error {
+func (r *Runtime) deliverWorkResult(ctx context.Context, chatID int64, result WorkResult, artifact session.OperationArtifact) error {
 	if r == nil || r.outbound == nil || chatID == 0 {
 		return nil
 	}
 	if strings.EqualFold(strings.TrimSpace(result.ExecutorName), "native") {
 		return nil
 	}
-	text := renderWorkResultMessage(result)
+	text := renderWorkResultMessage(result, artifact)
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -560,11 +574,11 @@ func (r *Runtime) deliverWorkResult(ctx context.Context, chatID int64, result Wo
 	return nil
 }
 
-func renderWorkResultMessage(result WorkResult) string {
+func renderWorkResultMessage(result WorkResult, artifact session.OperationArtifact) string {
 	executor := firstRuntimeWorkNonEmpty(result.ExecutorName, "work executor")
 	lines := []string{"Work executor finished via " + executor + "."}
 	if summary := strings.TrimSpace(result.Summary); summary != "" {
-		lines = append(lines, "", summary)
+		lines = append(lines, "", truncatePreview(summary, 900))
 	}
 	if len(result.ChangedFiles) > 0 {
 		lines = append(lines, "", "Changed files:")
@@ -584,10 +598,181 @@ func renderWorkResultMessage(result WorkResult) string {
 	if preview := strings.TrimSpace(result.PatchPreview); preview != "" {
 		lines = append(lines, "", "Patch preview:", truncatePreview(preview, 900))
 	}
+	if artifact.Ref != "" {
+		lines = append(lines, "", "Full evidence artifact:", artifact.Ref)
+	}
 	if strings.TrimSpace(result.Summary) == "" && len(result.ChangedFiles) == 0 && len(result.Commands) == 0 {
 		lines = append(lines, "", "No detailed summary was returned.")
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func appendOperationArtifact(values []session.OperationArtifact, artifact session.OperationArtifact) []session.OperationArtifact {
+	artifact.Ref = strings.TrimSpace(artifact.Ref)
+	if artifact.Ref == "" {
+		return values
+	}
+	artifact.Label = strings.TrimSpace(artifact.Label)
+	out := make([]session.OperationArtifact, 0, len(values)+1)
+	seen := false
+	for _, value := range values {
+		if strings.TrimSpace(value.Ref) == artifact.Ref {
+			out = append(out, artifact)
+			seen = true
+			continue
+		}
+		out = append(out, value)
+	}
+	if !seen {
+		out = append(out, artifact)
+	}
+	return out
+}
+
+func (r *Runtime) writeWorkResultArtifact(key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error, now time.Time) session.OperationArtifact {
+	if r == nil || r.cfg == nil {
+		return session.OperationArtifact{}
+	}
+	body := workResultArtifactMarkdown(key, req, result, status, cause, now)
+	if strings.TrimSpace(body) == "" {
+		return session.OperationArtifact{}
+	}
+	root := firstRuntimeWorkNonEmpty(r.cfg.Agent.SharedMemoryRoot, r.cfg.Agent.Workspace, r.cfg.Agent.ExecRoot)
+	if strings.TrimSpace(root) == "" {
+		return session.OperationArtifact{}
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	dir := filepath.Join(root, "memory", "work-evidence", now.Format("2006-01-02"), fmt.Sprintf("chat-%d", key.ChatID))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Printf("WARN write work evidence artifact mkdir failed chat_id=%d err=%v", key.ChatID, err)
+		return session.OperationArtifact{}
+	}
+	base := sanitizeWorkArtifactName(firstRuntimeWorkNonEmpty(req.OperationID, req.LeaseID, "work"))
+	if base == "" {
+		base = "work"
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-%d.md", base, now.UnixNano()))
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		log.Printf("WARN write work evidence artifact failed chat_id=%d err=%v", key.ChatID, err)
+		return session.OperationArtifact{}
+	}
+	return session.OperationArtifact{Label: "Work evidence", Ref: path}
+}
+
+func workResultArtifactMarkdown(key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error, now time.Time) string {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	if strings.TrimSpace(result.Summary) == "" &&
+		len(result.ChangedFiles) == 0 &&
+		len(result.Commands) == 0 &&
+		len(result.CodexEvents) == 0 &&
+		strings.TrimSpace(result.PatchPreview) == "" &&
+		len(result.ApprovalLog) == 0 &&
+		cause == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# Work Evidence\n\n")
+	fmt.Fprintf(&b, "- captured_at: %s\n", now.Format(time.RFC3339))
+	fmt.Fprintf(&b, "- chat_id: %d\n", key.ChatID)
+	if req.OperationID != "" {
+		fmt.Fprintf(&b, "- operation_id: %s\n", req.OperationID)
+	}
+	if req.LeaseID != "" {
+		fmt.Fprintf(&b, "- lease_id: %s\n", req.LeaseID)
+	}
+	if result.ExecutorName != "" {
+		fmt.Fprintf(&b, "- executor: %s\n", result.ExecutorName)
+	}
+	if status.Configured != "" {
+		fmt.Fprintf(&b, "- configured_executor: %s\n", status.Configured)
+	}
+	if status.FallbackReason != "" {
+		fmt.Fprintf(&b, "- fallback_reason: %s\n", status.FallbackReason)
+	}
+	if cause != nil {
+		fmt.Fprintf(&b, "- error: %s\n", trimError(cause.Error()))
+	}
+	if summary := strings.TrimSpace(result.Summary); summary != "" {
+		b.WriteString("\n## Summary\n\n")
+		b.WriteString(summary)
+		b.WriteString("\n")
+	}
+	if len(result.ChangedFiles) > 0 {
+		b.WriteString("\n## Changed Files\n\n")
+		for _, file := range result.ChangedFiles {
+			fmt.Fprintf(&b, "- %s\n", strings.TrimSpace(file))
+		}
+	}
+	if len(result.Commands) > 0 {
+		b.WriteString("\n## Commands\n\n")
+		for _, command := range result.Commands {
+			fmt.Fprintf(&b, "- `%s`\n", strings.TrimSpace(command))
+		}
+	}
+	if len(result.CodexEvents) > 0 {
+		b.WriteString("\n## Codex Events\n\n")
+		for _, event := range result.CodexEvents {
+			parts := []string{}
+			for _, part := range []string{event.Kind, event.Method, event.Status, event.Subject, event.Path, event.Command, event.Server, event.Tool, event.ThreadID, event.TurnID} {
+				if trimmed := strings.TrimSpace(part); trimmed != "" {
+					parts = append(parts, trimmed)
+				}
+			}
+			if len(parts) == 0 {
+				continue
+			}
+			fmt.Fprintf(&b, "- %s\n", strings.Join(parts, " | "))
+			if preview := strings.TrimSpace(event.Preview); preview != "" {
+				b.WriteString("\n```text\n")
+				b.WriteString(preview)
+				b.WriteString("\n```\n")
+			}
+		}
+	}
+	if len(result.ApprovalLog) > 0 {
+		b.WriteString("\n## Approval Log\n\n")
+		for _, item := range result.ApprovalLog {
+			fmt.Fprintf(&b, "- %s: %s", strings.TrimSpace(item.Method), strings.TrimSpace(item.Decision))
+			if item.Command != "" {
+				fmt.Fprintf(&b, " `%s`", item.Command)
+			}
+			if item.Reason != "" {
+				fmt.Fprintf(&b, " (%s)", item.Reason)
+			}
+			b.WriteString("\n")
+		}
+	}
+	if preview := strings.TrimSpace(result.PatchPreview); preview != "" {
+		b.WriteString("\n## Patch Preview\n\n```diff\n")
+		b.WriteString(preview)
+		b.WriteString("\n```\n")
+	}
+	return strings.TrimSpace(b.String()) + "\n"
+}
+
+func sanitizeWorkArtifactName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) map[string]any {

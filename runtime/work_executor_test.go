@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -290,6 +291,90 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	defer sender.mu.Unlock()
 	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "patched tests") || !strings.Contains(sender.sent[0].Text, "runtime/work_executor.go") || !strings.Contains(sender.sent[0].Text, "commit_requires_separate_lease") {
 		t.Fatalf("sent = %#v, want visible work executor summary", sender.sent)
+	}
+}
+
+func TestTriggerCodingContinuationStoresFullWorkEvidenceArtifact(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	longSummary := "full tool evidence " + strings.Repeat("line-with-important-output ", 120)
+	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+		Summary:      longSummary,
+		ChangedFiles: []string{"runtime/runtime.go"},
+		Commands:     []string{"go test ./runtime"},
+		PatchPreview: strings.Repeat("+patch\n", 120),
+	}}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex", "native"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8199, UserID: 0, Scope: telegramDMScopeRef(8199)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "work-artifact",
+		Objective:      "Preserve work evidence.",
+		StageSummary:   "Run work and report.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-work-artifact",
+			Summary:        "Run work",
+			BoundedEffect:  "Run one bounded work turn.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-artifact",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-work-artifact",
+			ProposalID:     "aprop-work-artifact",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"workspace_write"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-artifact",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-work-artifact", Objective: "Preserve work evidence.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8199); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if len(op.Artifacts) != 1 || op.Artifacts[0].Label != "Work evidence" {
+		t.Fatalf("artifacts = %#v, want one work evidence artifact", op.Artifacts)
+	}
+	raw, err := os.ReadFile(op.Artifacts[0].Ref)
+	if err != nil {
+		t.Fatalf("ReadFile(work evidence) err = %v", err)
+	}
+	if !strings.Contains(string(raw), strings.TrimSpace(longSummary)) || !strings.Contains(string(raw), "## Patch Preview") {
+		t.Fatalf("artifact body missing full evidence: %q", string(raw))
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if strings.Contains(sender.sent[0].Text, longSummary) {
+		t.Fatalf("telegram text includes untruncated full evidence")
+	}
+	if !strings.Contains(sender.sent[0].Text, "Full evidence artifact:") || !strings.Contains(sender.sent[0].Text, op.Artifacts[0].Ref) {
+		t.Fatalf("telegram text = %q, want artifact reference", sender.sent[0].Text)
 	}
 }
 

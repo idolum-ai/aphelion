@@ -410,7 +410,8 @@ func TestHandleInboundDurableTelegramGroupDeliversChildMedia(t *testing.T) {
 	if err := os.WriteFile(documentPath, []byte("note"), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q) err = %v", documentPath, err)
 	}
-	provider.replyText = "Attached.\nMEDIA: family-note.txt"
+	provider.replyText = `Attached.
+MEDIA: {"path":"family-note.txt"}`
 	provider.faceReplyText = "Attached."
 
 	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{

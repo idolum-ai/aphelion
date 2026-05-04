@@ -22,7 +22,8 @@ func TestHandleInboundRepairsVisibleGovernorLeakageBeforeDelivery(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(cfg.Agent.ExecRoot, "diagram.png"), []byte("png"), 0o600); err != nil {
 		t.Fatalf("write diagram: %v", err)
 	}
-	provider.replyText = "Here are the files.\nMEDIA: diagram.png"
+	provider.replyText = `Here are the files.
+MEDIA: {"path":"diagram.png"}`
 	provider.faceReplyText = "I deferred this to Aphelion, but here are the diagrams."
 	provider.repairReplyText = "Here are the diagrams I mapped from the codebase."
 
@@ -71,7 +72,7 @@ func TestHandleInboundRepairsMediaOnlyReplyWithNarration(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.Agent.ExecRoot, "diagram.png"), []byte("png"), 0o600); err != nil {
 		t.Fatalf("write diagram: %v", err)
 	}
-	provider.replyText = "MEDIA: diagram.png"
+	provider.replyText = `MEDIA: {"path":"diagram.png"}`
 	provider.repairReplyText = "I mapped the codebase into the attached diagram."
 
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -116,7 +117,8 @@ func TestHandleInboundRepairsMediaContradictionBeforeDelivery(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.Agent.ExecRoot, "diagram.png"), []byte("png"), 0o600); err != nil {
 		t.Fatalf("write diagram: %v", err)
 	}
-	provider.replyText = "Here are the files.\nMEDIA: diagram.png"
+	provider.replyText = `Here are the files.
+MEDIA: {"path":"diagram.png"}`
 	provider.faceReplyText = "I can't generate diagrams, but here are the images."
 	provider.repairReplyText = "I mapped the codebase into the attached diagrams."
 

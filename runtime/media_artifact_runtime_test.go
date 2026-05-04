@@ -267,7 +267,8 @@ func TestHandleInboundSendsTelegramMediaReply(t *testing.T) {
 	if err := os.WriteFile(chartPath, []byte("png-bytes"), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q) err = %v", chartPath, err)
 	}
-	provider.replyText = "Here you go.\nMEDIA: chart.png"
+	provider.replyText = `Here you go.
+MEDIA: {"path":"chart.png"}`
 	provider.faceReplyText = "Here you go."
 
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -391,7 +392,7 @@ func TestHandleInboundMediaOnlyReplyOmitsNoResponseCaption(t *testing.T) {
 	if err := os.WriteFile(chartPath, []byte("png-bytes"), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q) err = %v", chartPath, err)
 	}
-	provider.replyText = "MEDIA: chart.png"
+	provider.replyText = `MEDIA: {"path":"chart.png"}`
 
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -444,7 +445,7 @@ func TestHandleInboundExplicitMediaBeatsVoiceSynthesis(t *testing.T) {
 	if err := os.WriteFile(chartPath, []byte("png-bytes"), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q) err = %v", chartPath, err)
 	}
-	provider.replyText = "MEDIA: chart.png"
+	provider.replyText = `MEDIA: {"path":"chart.png"}`
 	var synthesized string
 
 	rt, err := New(cfg, store, provider, nil, sender)

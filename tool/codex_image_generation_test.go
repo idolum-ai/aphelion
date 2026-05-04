@@ -63,8 +63,8 @@ func TestCodexImageGenerationInvokesBuiltInAndWritesArtifact(t *testing.T) {
 	if len(provider.tools) != 1 || provider.tools[0].Name != "image_generation" || !strings.Contains(string(provider.tools[0].Parameters), `"builtin"`) {
 		t.Fatalf("provider tools = %#v, want image_generation builtin", provider.tools)
 	}
-	if !strings.Contains(out, `"status": "completed"`) || !strings.Contains(out, "MEDIA: ") {
-		t.Fatalf("output = %s, want completed MEDIA directive", out)
+	if !strings.Contains(out, `"status": "completed"`) || !strings.Contains(out, `MEDIA: {\"path\":`) {
+		t.Fatalf("output = %s, want completed structured MEDIA directive", out)
 	}
 	path := registry.workspace + "/generated/image-generation/draft.png"
 	if _, err := os.Stat(path); err != nil {

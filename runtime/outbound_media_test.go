@@ -30,7 +30,10 @@ func TestExtractOutboundReplyMediaParsesDirectives(t *testing.T) {
 		WorkingRoot:      root,
 		SharedMemoryRoot: shared,
 		UserMemory:       user,
-	}, "Here you go.\n\nMEDIA: chart.png\n", nil)
+	}, `Here you go.
+
+MEDIA: {"path":"chart.png"}
+`, nil)
 
 	if text != "Here you go." {
 		t.Fatalf("text = %q, want %q", text, "Here you go.")
@@ -55,7 +58,7 @@ func TestExtractOutboundReplyMediaMarksAudioAsVoice(t *testing.T) {
 		t.Fatalf("WriteFile(%q) err = %v", path, err)
 	}
 
-	text, media := extractOutboundReplyMedia(sandbox.Scope{WorkingRoot: root}, "[[audio_as_voice]]\nMEDIA: reply.mp3", nil)
+	text, media := extractOutboundReplyMedia(sandbox.Scope{WorkingRoot: root}, `MEDIA: {"path":"reply.mp3","type":"voice"}`, nil)
 
 	if text != "" {
 		t.Fatalf("text = %q, want empty", text)
@@ -78,10 +81,30 @@ func TestExtractOutboundReplyMediaDropsPathsOutsideScope(t *testing.T) {
 		t.Fatalf("WriteFile(%q) err = %v", outside, err)
 	}
 
-	text, media := extractOutboundReplyMedia(sandbox.Scope{WorkingRoot: root}, "Summary\nMEDIA: "+outside, nil)
+	text, media := extractOutboundReplyMedia(sandbox.Scope{WorkingRoot: root}, `Summary
+MEDIA: {"path":"`+outside+`"}`, nil)
 
 	if text != "Summary" {
 		t.Fatalf("text = %q, want %q", text, "Summary")
+	}
+	if len(media) != 0 {
+		t.Fatalf("media len = %d, want 0", len(media))
+	}
+}
+
+func TestExtractOutboundReplyMediaIgnoresLegacyBareMediaText(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "chart.png")
+	if err := os.WriteFile(path, []byte("png"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q) err = %v", path, err)
+	}
+
+	text, media := extractOutboundReplyMedia(sandbox.Scope{WorkingRoot: root}, "Summary\nMEDIA: chart.png", nil)
+
+	if text != "Summary\nMEDIA: chart.png" {
+		t.Fatalf("text = %q, want legacy media line preserved as ordinary text", text)
 	}
 	if len(media) != 0 {
 		t.Fatalf("media len = %d, want 0", len(media))

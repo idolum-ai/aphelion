@@ -222,7 +222,7 @@ func TestBuildGovernorPromptAddsGeneratedMediaDeliveryWhenExecIsAvailable(t *tes
 	if !strings.Contains(got, "## Generated Media Delivery") {
 		t.Fatalf("prompt missing generated media delivery block: %q", got)
 	}
-	if !strings.Contains(got, "MEDIA: <path>") {
+	if !strings.Contains(got, `MEDIA: {"path":"<path>"}`) {
 		t.Fatalf("prompt missing outbound media directive contract: %q", got)
 	}
 	if !strings.Contains(got, "Do not claim inability to generate, render, attach, send, or provide media while attaching it.") {

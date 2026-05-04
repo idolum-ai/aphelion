@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"log"
 	"mime"
 	"os"
@@ -14,6 +15,11 @@ import (
 )
 
 const audioAsVoiceDirective = "[[audio_as_voice]]"
+
+type outboundReplyMediaDirective struct {
+	Path string `json:"path"`
+	Type string `json:"type,omitempty"`
+}
 
 func extractOutboundReplyMedia(scope sandbox.Scope, text string, existing []core.Media) (string, []core.Media) {
 	wantsVoice := strings.Contains(text, audioAsVoiceDirective)
@@ -28,9 +34,16 @@ func extractOutboundReplyMedia(scope sandbox.Scope, text string, existing []core
 		case strings.EqualFold(strings.TrimSpace(rawLine), audioAsVoiceDirective):
 			continue
 		case strings.HasPrefix(trimmed, "MEDIA:"):
-			rawPath := strings.TrimSpace(strings.TrimSpace(trimmed[len("MEDIA:"):]))
-			media, ok := normalizeOutboundReplyMediaPath(scope, rawPath, wantsVoice)
+			directive, structured := parseOutboundReplyMediaDirective(strings.TrimSpace(trimmed[len("MEDIA:"):]))
+			if !structured {
+				kept = append(kept, strings.TrimRight(lineWithoutDirective, " \t"))
+				continue
+			}
+			media, ok := normalizeOutboundReplyMediaPath(scope, directive.Path, wantsVoice || strings.EqualFold(directive.Type, "voice"))
 			if ok {
+				if mediaType := normalizeOutboundReplyMediaDirectiveType(directive.Type); mediaType != "" {
+					media.Type = mediaType
+				}
 				mediaItems = append(mediaItems, media)
 			}
 			continue
@@ -44,6 +57,42 @@ func extractOutboundReplyMedia(scope sandbox.Scope, text string, existing []core
 	}
 
 	return compactReplyText(strings.Join(kept, "\n")), dedupeOutboundReplyMedia(mediaItems)
+}
+
+func parseOutboundReplyMediaDirective(raw string) (outboundReplyMediaDirective, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || !strings.HasPrefix(raw, "{") {
+		return outboundReplyMediaDirective{}, false
+	}
+	var directive outboundReplyMediaDirective
+	if err := json.Unmarshal([]byte(raw), &directive); err != nil {
+		return outboundReplyMediaDirective{}, false
+	}
+	directive.Path = strings.TrimSpace(directive.Path)
+	directive.Type = strings.TrimSpace(directive.Type)
+	if directive.Path == "" {
+		return outboundReplyMediaDirective{}, false
+	}
+	return directive, true
+}
+
+func normalizeOutboundReplyMediaDirectiveType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "image", "photo":
+		return "image"
+	case "voice":
+		return "voice"
+	case "audio":
+		return "audio"
+	case "video":
+		return "video"
+	case "animation":
+		return "animation"
+	case "document", "file":
+		return "document"
+	default:
+		return ""
+	}
 }
 
 func normalizeOutboundReplyMediaPath(scope sandbox.Scope, rawPath string, wantsVoice bool) (core.Media, bool) {

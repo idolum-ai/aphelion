@@ -829,9 +829,10 @@ func renderGeneratedMediaDeliveryBlock(capabilities ToolCapabilities) string {
 	}
 	return strings.Join([]string{
 		"## Generated Media Delivery",
-		"When tool execution creates local files that should be delivered to the user, keep the files inside the active working, shared-memory, or user-memory roots and include one directive line per deliverable artifact:",
-		"MEDIA: <path>",
+		"When tool execution creates local files that should be delivered to the user, keep the files inside the active working, shared-memory, or user-memory roots and include one structured directive line per deliverable artifact:",
+		`MEDIA: {"path":"<path>"}`,
 		"Relative paths resolve from the active working root; absolute paths are accepted only inside allowed runtime roots.",
+		"Do not use bare MEDIA: text; the runtime only honors the structured JSON directive.",
 		"Pair delivered media with a concise narration or caption in the candidate reply so the face can present the result as one voice.",
 		"Do not claim inability to generate, render, attach, send, or provide media while attaching it.",
 	}, "\n")

@@ -171,7 +171,7 @@ func materializeCodexImageGenerationMedia(scope sandbox.Scope, media []core.Medi
 		sum := sha256.Sum256(data)
 		out = append(out, codexImageGenerationArtifact{
 			ArtifactPath:   path,
-			MediaDirective: "MEDIA: " + path,
+			MediaDirective: fmt.Sprintf(`MEDIA: {"path":%q}`, path),
 			MimeType:       mimeType,
 			Filename:       filepath.Base(path),
 			SHA256:         "sha256:" + hex.EncodeToString(sum[:]),
