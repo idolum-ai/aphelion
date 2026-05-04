@@ -758,6 +758,59 @@ func TestRunDurableAgentForensicShowReadsRestrictedSidecar(t *testing.T) {
 	}
 }
 
+type fakeDurableAgentWakeRuntime struct {
+	agentID string
+	now     time.Time
+}
+
+func (f *fakeDurableAgentWakeRuntime) RunDurableAgentChildWake(_ context.Context, agentID string, now time.Time) error {
+	f.agentID = strings.TrimSpace(agentID)
+	f.now = now.UTC()
+	return nil
+}
+
+func TestRunDurableAgentWakeCommandRunsOneNamedAgent(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	wakeTime := time.Date(2026, time.May, 4, 18, 30, 0, 123, time.UTC)
+	fake := &fakeDurableAgentWakeRuntime{}
+	cleanupCalled := false
+
+	out, err := captureStdout(t, func() error {
+		return runDurableAgentWakeCommandWithFactory([]string{
+			"--config", cfgPath,
+			"--agent", " image2 ",
+			"--now", wakeTime.Format(time.RFC3339Nano),
+		}, func(cfg *config.Config) (durableAgentWakeRuntime, func(), error) {
+			if cfg == nil || !strings.HasSuffix(cfg.Sessions.DBPath, "sessions.db") {
+				t.Fatalf("factory cfg = %#v, want loaded config", cfg)
+			}
+			return fake, func() { cleanupCalled = true }, nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("runDurableAgentWakeCommandWithFactory() err = %v", err)
+	}
+	if fake.agentID != "image2" || !fake.now.Equal(wakeTime) {
+		t.Fatalf("wake call = agent %q now %s, want image2 %s", fake.agentID, fake.now.Format(time.RFC3339Nano), wakeTime.Format(time.RFC3339Nano))
+	}
+	if !cleanupCalled {
+		t.Fatal("cleanup was not called")
+	}
+	for _, needle := range []string{"action: durable-agent wake", "agent_id: image2", "status: completed"} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("wake output = %q, want substring %q", out, needle)
+		}
+	}
+}
+
+func TestRunDurableAgentCommandAcceptsWakeSubcommand(t *testing.T) {
+	err := runDurableAgentCommand([]string{"wake"})
+	if err == nil || !strings.Contains(err.Error(), "durable-agent wake requires --agent") {
+		t.Fatalf("runDurableAgentCommand(wake) err = %v, want --agent requirement", err)
+	}
+}
+
 func TestRunDurableAgentListShowsRegisteredAgents(t *testing.T) {
 	t.Parallel()
 

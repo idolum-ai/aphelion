@@ -647,6 +647,68 @@ func TestParentConversationAckSuppressedWhenChildQueuesConcreteReview(t *testing
 	}
 }
 
+func TestRunDurableAgentChildWakeProcessesPendingParentBeforeExternalCadence(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "Processed pending parent image job."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.durableWakeChild = nil
+
+	agent := core.DurableAgent{
+		AgentID:            "image2",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Adapter:      "codex_image_generation",
+			PollInterval: "168h",
+		}},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Generate one image artifact when parent asks.",
+			CapabilityEnvelope: []string{"image_brief_refinement", "codex_image_generation_probe", "artifact_return", "blocker_report"},
+			OutboundMode:       "draft_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	continuity := core.DurableAgentContinuityState{}
+	continuity = continuity.WithConversationMessage("parent", "Generate exactly one image artifact.", time.Now().UTC().Add(-time.Minute))
+	continuity.ExternalChannel = encodeGenericExternalChannelState(core.DurableAgentExternalChannelRuntimeState{
+		Adapter:       "codex_image_generation",
+		LastAttemptAt: time.Now().UTC(),
+		LastStatus:    "wake_completed",
+	}, "codex_image_generation")
+	raw, err := continuity.Marshal()
+	if err != nil {
+		t.Fatalf("continuity.Marshal() err = %v", err)
+	}
+	if err := store.SaveDurableAgentState(core.DurableAgentState{AgentID: agent.AgentID, StateJSON: raw}); err != nil {
+		t.Fatalf("SaveDurableAgentState() err = %v", err)
+	}
+
+	if err := rt.RunDurableAgentChildWake(context.Background(), agent.AgentID, time.Now().UTC()); err != nil {
+		t.Fatalf("RunDurableAgentChildWake() err = %v", err)
+	}
+	pending, err := rt.pendingDurableAgentParentConversation(agent.AgentID, 5)
+	if err != nil {
+		t.Fatalf("pendingDurableAgentParentConversation() err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending parent messages = %d, want acked by forced parent wake", len(pending))
+	}
+	if len(provider.seenGovernorSystem) == 0 || !strings.Contains(strings.Join(provider.seenGovernorSystem, "\n"), "parent conversation wake") {
+		t.Fatalf("governor prompts = %#v, want parent conversation wake", provider.seenGovernorSystem)
+	}
+}
+
 func TestRunDurableAgentChildWakeSkipsWithoutPendingParentConversation(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "Unsupported channel should not run"

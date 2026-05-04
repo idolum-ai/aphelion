@@ -25,6 +25,14 @@ func (r *Runtime) RunDurableAgentChildWake(ctx context.Context, agentID string, 
 	if agent == nil {
 		return fmt.Errorf("durable agent %q not found", agentID)
 	}
+	if plan, err := prepareDurableParentConversationWakePlan(r, *agent, now, true); err != nil {
+		return err
+	} else if plan != nil {
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+		return r.runDurableWakeTurn(ctx, *agent, *plan, now.UTC())
+	}
 	return r.runDurableAgentChildWakeLoaded(ctx, *agent, now)
 }
 
