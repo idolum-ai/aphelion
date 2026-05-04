@@ -234,6 +234,30 @@ func TestExecWrappedDangerousCommandsStillRequireApproval(t *testing.T) {
 	}
 }
 
+func TestExecGuardClassifiesReadOnlyAndWrappedCommands(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{
+		`rg -n "rm -rf|systemctl stop" .`,
+		`git --no-pager grep "drop table"`,
+		`sed -n '1,40p' tool/exec_guard.go`,
+	} {
+		if proposal, reason := proposalForCommand(command); reason != "" || strings.TrimSpace(proposal.Kind) != "" {
+			t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want no approval", command, proposal.Kind, reason)
+		}
+	}
+	for _, command := range []string{
+		`bash -c 'rm -rf build'`,
+		`env -i PATH=/usr/bin rm -rf build`,
+		`timeout 5 rm -rf build`,
+	} {
+		proposal, reason := proposalForCommand(command)
+		if reason == "" || proposal.Kind != "possible_delete_command" {
+			t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want possible_delete_command", command, proposal.Kind, reason)
+		}
+	}
+}
+
 func TestExecRemotePipeToShellRequiresHighImpactApproval(t *testing.T) {
 	t.Parallel()
 

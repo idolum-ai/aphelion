@@ -134,8 +134,10 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 	}
 	var attempts []FailoverAttempt
 	var events []core.ProviderEvent
-	for idx, entry := range c.entries {
-		resp, started, err := c.streamWithRetry(ctx, entry, messages, tools, cb, &events)
+	attemptMessages := messages
+	for idx := 0; idx < len(c.entries); idx++ {
+		entry := c.entries[idx]
+		resp, started, err := c.streamWithRetry(ctx, entry, attemptMessages, tools, cb, &events)
 		if err == nil {
 			c.recordSuccess(idx)
 			if idx > 0 {
@@ -152,11 +154,21 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
 		recordProviderFailedEvent(&events, entry.name, err)
-		if !shouldFailoverOnError(err) && !shouldFallbackToNextEntry(err, entry.name, nextFailoverEntryName(c.entries, idx)) {
+		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, attemptMessages)
+		if !routeToNext {
 			return nil, err
 		}
+		if isProviderContextWindowError(err) && historyHasToolResults(attemptMessages) {
+			attemptMessages = compactToolResultMessagesForProviderFallback(attemptMessages)
+		}
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
-		recordProviderFailoverEvent(&events, entry.name, nextFailoverEntryName(c.entries, idx), err)
+		if nextIdx >= len(c.entries) {
+			continue
+		}
+		recordProviderFailoverEvent(&events, entry.name, c.entries[nextIdx].name, err)
+		if nextIdx > idx+1 {
+			idx = nextIdx - 1
+		}
 	}
 	return nil, ExhaustedError{Attempts: attempts}
 }

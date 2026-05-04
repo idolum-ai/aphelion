@@ -15,13 +15,15 @@ import (
 
 func TestGeminiCompleteMapsRequestResponseAndProviderState(t *testing.T) {
 	var (
-		seenPath  string
-		seenQuery string
-		seen      geminiRequest
+		seenPath   string
+		seenQuery  string
+		seenAPIKey string
+		seen       geminiRequest
 	)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seenPath = r.URL.Path
 		seenQuery = r.URL.RawQuery
+		seenAPIKey = r.Header.Get("x-goog-api-key")
 		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
@@ -72,8 +74,11 @@ func TestGeminiCompleteMapsRequestResponseAndProviderState(t *testing.T) {
 	if seenPath != "/v1beta/models/gemini-test:generateContent" {
 		t.Fatalf("path = %q", seenPath)
 	}
-	if !strings.Contains(seenQuery, "key=gemini-key") {
-		t.Fatalf("query = %q, want api key", seenQuery)
+	if strings.Contains(seenQuery, "key=") {
+		t.Fatalf("query = %q, did not want api key in URL", seenQuery)
+	}
+	if seenAPIKey != "gemini-key" {
+		t.Fatalf("x-goog-api-key = %q, want configured key", seenAPIKey)
 	}
 	if seen.SystemInstruction == nil || len(seen.SystemInstruction.Parts) != 1 || seen.SystemInstruction.Parts[0].Text != "system instructions" {
 		t.Fatalf("system instruction = %#v", seen.SystemInstruction)
@@ -112,8 +117,12 @@ func TestGeminiCompleteMapsRequestResponseAndProviderState(t *testing.T) {
 
 func TestGeminiStreamMapsTextToolCallsAndUsage(t *testing.T) {
 	var seenPath string
+	var seenQuery string
+	var seenAPIKey string
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seenPath = r.URL.Path
+		seenQuery = r.URL.RawQuery
+		seenAPIKey = r.Header.Get("x-goog-api-key")
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"he"}]}}]}` + "\n\n"))
 		_, _ = w.Write([]byte(`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"llo"},{"functionCall":{"name":"exec","args":{"cmd":"pwd"}}}]}}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5}}` + "\n\n"))
@@ -145,6 +154,12 @@ func TestGeminiStreamMapsTextToolCallsAndUsage(t *testing.T) {
 	}
 	if seenPath != "/v1beta/models/gemini-test:streamGenerateContent" {
 		t.Fatalf("path = %q", seenPath)
+	}
+	if strings.Contains(seenQuery, "key=") || !strings.Contains(seenQuery, "alt=sse") {
+		t.Fatalf("query = %q, want alt=sse without api key", seenQuery)
+	}
+	if seenAPIKey != "gemini-key" {
+		t.Fatalf("x-goog-api-key = %q, want configured key", seenAPIKey)
 	}
 	if streamed.String() != "hello" || resp.Content != "hello" {
 		t.Fatalf("stream/content = %q/%q, want hello", streamed.String(), resp.Content)

@@ -388,6 +388,51 @@ func TestFailoverChainSkipsOpenAIFamilyAndCompactsAfterContextWindowError(t *tes
 	}
 }
 
+func TestFailoverChainStreamSkipsOpenAIFamilyAndCompactsAfterContextWindowError(t *testing.T) {
+	openAI := &stubChainProvider{err: stubStatusError{code: 400, msg: "codex: stream failed: Your input exceeds the context window of this model"}}
+	openAIFallback := &stubChainProvider{reply: "should not run"}
+	anthropic := &toolHistoryAssertingProvider{
+		reply:               "anthropic compact streamed synthesis",
+		requiredToolContent: "important tail evidence",
+		maxToolContent:      providerFallbackRecentToolChars + 300,
+	}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: openAI},
+		{Name: "openai:gpt-5.4", Provider: openAIFallback},
+		{Name: "anthropic", Provider: anthropic},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	largeToolOutput := strings.Repeat("large output\n", 9000) + "important tail evidence"
+	messages := []agent.Message{
+		{Role: "assistant", ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "exec", Input: []byte(`{"cmd":"git diff"}`)}}},
+		{Role: "tool", ToolCallID: "call-1", ToolName: "exec", Content: largeToolOutput},
+	}
+	var streamed strings.Builder
+	resp, err := chain.Stream(context.Background(), messages, []agent.ToolDef{{Name: "exec"}}, func(chunk agent.StreamChunk) error {
+		streamed.WriteString(chunk.Text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream() err = %v", err)
+	}
+	if resp.Content != "anthropic compact streamed synthesis" || streamed.String() != "anthropic compact streamed synthesis" {
+		t.Fatalf("content/stream = %q/%q, want compact streamed synthesis", resp.Content, streamed.String())
+	}
+	if openAIFallback.callCount != 0 {
+		t.Fatalf("openAIFallback.callCount = %d, want OpenAI family skipped after streamed context-window failure", openAIFallback.callCount)
+	}
+	if anthropic.callCount != 1 {
+		t.Fatalf("anthropic.callCount = %d, want one compact fallback synthesis", anthropic.callCount)
+	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
+		t.Fatalf("provider events = %#v, want failover engaged", resp.ProviderEvents)
+	}
+}
+
 func TestFailoverChainUsesOpenRouterWhenAnthropicAlsoFailsAfterToolResultRejection(t *testing.T) {
 	openAI := &stubChainProvider{err: stubStatusError{code: 422, msg: "openai: status 422: rejected tool_call response"}}
 	anthropic := &stubChainProvider{err: stubStatusError{code: 503, msg: "anthropic overloaded"}}

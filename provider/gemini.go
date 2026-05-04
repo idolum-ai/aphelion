@@ -179,6 +179,9 @@ func (g *Gemini) doJSONRequest(ctx context.Context, endpoint string, body io.Rea
 		return nil, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(g.apiKey) != "" {
+		req.Header.Set("x-goog-api-key", g.apiKey)
+	}
 	if g.userAgent != "" {
 		req.Header.Set("User-Agent", g.userAgent)
 	}
@@ -189,9 +192,11 @@ func (g *Gemini) endpoint(method string) string {
 	escapedModel := url.PathEscape(strings.TrimSpace(g.model))
 	u := fmt.Sprintf("%s/models/%s:%s", g.baseURL, escapedModel, method)
 	values := url.Values{}
-	values.Set("key", g.apiKey)
 	if method == "streamGenerateContent" {
 		values.Set("alt", "sse")
+	}
+	if len(values) == 0 {
+		return u
 	}
 	return u + "?" + values.Encode()
 }

@@ -192,6 +192,9 @@ func (r *Registry) writeFile(_ context.Context, input json.RawMessage, scope san
 	}
 	parent := filepath.Dir(path)
 	if in.CreateDirs {
+		if err := validateNativeWriteParentForCreate(scope, parent); err != nil {
+			return "", err
+		}
 		if err := os.MkdirAll(parent, 0o755); err != nil {
 			return "", fmt.Errorf("write_file create parent %q: %w", parent, err)
 		}
@@ -507,6 +510,74 @@ func validateNativeWriteParent(scope sandbox.Scope, parent string) error {
 		return fmt.Errorf("write_file parent %q resolves outside writable sandbox roots", parent)
 	}
 	if hidden, _ := nativeHiddenPaths(scope); pathWithinAnyRoot(realParent, hidden) {
+		return fmt.Errorf("write_file parent %q is hidden by the sandbox profile", parent)
+	}
+	return nil
+}
+
+func validateNativeWriteParentForCreate(scope sandbox.Scope, parent string) error {
+	if _, err := os.Stat(parent); err == nil {
+		return validateNativeWriteParent(scope, parent)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("write_file stat parent %q: %w", parent, err)
+	}
+	allowed, err := nativeAllowedRoots(scope, nativePathWrite)
+	if err != nil {
+		return err
+	}
+	hidden, _ := nativeHiddenPaths(scope)
+	ancestor := filepath.Clean(parent)
+	for {
+		if info, err := os.Stat(ancestor); err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("write_file parent ancestor %q is not a directory", ancestor)
+			}
+			return validateNativeWriteAncestorForCreate(parent, ancestor, allowed, hidden)
+		} else if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("write_file stat parent ancestor %q: %w", ancestor, err)
+		}
+		next := filepath.Dir(ancestor)
+		if next == ancestor {
+			return fmt.Errorf("write_file parent %q has no existing writable ancestor", parent)
+		}
+		ancestor = next
+	}
+}
+
+func validateNativeWriteAncestorForCreate(parent string, ancestor string, allowed []string, hidden []string) error {
+	realAncestor, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		return fmt.Errorf("resolve write_file parent ancestor %q: %w", ancestor, err)
+	}
+	realAncestor, err = filepath.Abs(filepath.Clean(realAncestor))
+	if err != nil {
+		return fmt.Errorf("resolve write_file parent ancestor %q: %w", ancestor, err)
+	}
+	if !pathWithinAnyRoot(realAncestor, allowed) {
+		return fmt.Errorf("write_file parent %q resolves outside writable sandbox roots", parent)
+	}
+	if pathWithinAnyRoot(realAncestor, hidden) {
+		return fmt.Errorf("write_file parent %q is hidden by the sandbox profile", parent)
+	}
+	rel, err := filepath.Rel(filepath.Clean(ancestor), filepath.Clean(parent))
+	if err != nil {
+		return fmt.Errorf("resolve write_file parent %q relative to ancestor %q: %w", parent, ancestor, err)
+	}
+	if rel == "." {
+		return nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("write_file parent %q escapes existing ancestor %q", parent, ancestor)
+	}
+	intended := filepath.Join(realAncestor, rel)
+	intended, err = filepath.Abs(filepath.Clean(intended))
+	if err != nil {
+		return fmt.Errorf("resolve write_file parent %q: %w", parent, err)
+	}
+	if !pathWithinAnyRoot(intended, allowed) {
+		return fmt.Errorf("write_file parent %q resolves outside writable sandbox roots", parent)
+	}
+	if pathWithinAnyRoot(intended, hidden) {
 		return fmt.Errorf("write_file parent %q is hidden by the sandbox profile", parent)
 	}
 	return nil

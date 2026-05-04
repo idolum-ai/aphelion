@@ -218,7 +218,6 @@ func TestCodexApprovalLogSideEffectsIgnoreReadOnlyApprovals(t *testing.T) {
 	readOnly := []codexAppServerApprovalDecision{
 		{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "git status --short"},
 		{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "rg doctor runtime"},
-		{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "go test ./runtime"},
 	}
 	if codexApprovalLogHasSideEffects(readOnly) {
 		t.Fatalf("read-only approvals were classified as side effects: %#v", readOnly)
@@ -227,10 +226,84 @@ func TestCodexApprovalLogSideEffectsIgnoreReadOnlyApprovals(t *testing.T) {
 		{{Method: "item/fileChange/requestApproval", Decision: "accept"}},
 		{{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "apply_patch < patch.diff"}},
 		{{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "git commit -am fix"}},
+		{{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "go test ./runtime"}},
 		{{Method: "item/commandExecution/requestApproval", Decision: "accept", Command: "systemctl --user restart aphelion"}},
 	} {
 		if !codexApprovalLogHasSideEffects(log) {
 			t.Fatalf("mutating approval was not classified as side effect: %#v", log)
+		}
+	}
+}
+
+func TestCodexWorkReadOnlyModeAllowsOnlyReadOnlyCommandTaxonomy(t *testing.T) {
+	t.Parallel()
+
+	req := WorkRequest{Mode: WorkModeReadOnly}
+	allowed := []string{
+		"git status --short",
+		"git diff -- runtime/codex_work_lane.go",
+		"rg doctor runtime",
+		"sed -n '1,40p' runtime/codex_work_lane.go",
+		"hostname",
+		"go env GOPATH",
+	}
+	for _, command := range allowed {
+		if !codexWorkCommandAllowed(req, command) {
+			t.Fatalf("codexWorkCommandAllowed(read_only %q) = false, want true", command)
+		}
+	}
+	denied := []string{
+		"go test ./runtime",
+		"go build ./...",
+		"npm test",
+		"pytest",
+		"make build",
+		"git fetch origin",
+		"git checkout -b branch",
+		"curl https://example.com",
+		"mkdir out",
+		"sed -i s/a/b/ file.txt",
+		"sqlite3 state.db 'delete from runs'",
+		"systemctl --user restart aphelion",
+		"unknown-tool --flag",
+	}
+	for _, command := range denied {
+		if codexWorkCommandAllowed(req, command) {
+			t.Fatalf("codexWorkCommandAllowed(read_only %q) = true, want false", command)
+		}
+	}
+}
+
+func TestCodexApprovedCommandSideEffectTaxonomy(t *testing.T) {
+	t.Parallel()
+
+	readOnly := []string{
+		"git status --short",
+		"rg doctor runtime",
+		"sed -n '1,40p' runtime/codex_work_lane.go",
+		"go list ./runtime",
+	}
+	for _, command := range readOnly {
+		if codexApprovedCommandHasSideEffects(command) {
+			t.Fatalf("codexApprovedCommandHasSideEffects(%q) = true, want false", command)
+		}
+	}
+	mutating := []string{
+		"go test ./runtime",
+		"go build ./...",
+		"npm install",
+		"git fetch origin",
+		"git commit -am fix",
+		"curl https://example.com",
+		"mkdir out",
+		"cat README.md > out.txt",
+		"sqlite3 state.db 'drop table runs'",
+		"systemctl --user restart aphelion",
+		"unknown-tool --flag",
+	}
+	for _, command := range mutating {
+		if !codexApprovedCommandHasSideEffects(command) {
+			t.Fatalf("codexApprovedCommandHasSideEffects(%q) = false, want true", command)
 		}
 	}
 }

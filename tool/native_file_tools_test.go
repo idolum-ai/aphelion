@@ -129,6 +129,33 @@ func TestNativeFileToolsHonorApprovedUserProfile(t *testing.T) {
 	}
 }
 
+func TestWriteFileCreateDirsValidatesSymlinkAncestorBeforeMkdir(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(workspace, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	_, err := registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"link/newdir/file.txt","content":"nope","create_dirs":true}`), scope, scope.Principal, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "outside writable sandbox roots") {
+		t.Fatalf("write_file err = %v, want pre-mkdir writable-root rejection", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "newdir")); !os.IsNotExist(statErr) {
+		t.Fatalf("outside newdir stat err = %v, want directory not created", statErr)
+	}
+}
+
 func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	t.Parallel()
 
