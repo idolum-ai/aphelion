@@ -59,7 +59,7 @@ func (f *fakeWorkExecutor) Run(_ context.Context, req WorkRequest) (WorkResult, 
 	return out, nil
 }
 
-func TestWorkExecutorSelectorDefaultsToCodexAndFallsBackNative(t *testing.T) {
+func TestWorkExecutorSelectorAutoCanPreferCodexAndFallBackNative(t *testing.T) {
 	t.Parallel()
 
 	codex := &fakeWorkExecutor{name: "codex", ready: false, reason: "app-server unreachable"}
@@ -82,6 +82,26 @@ func TestWorkExecutorSelectorDefaultsToCodexAndFallsBackNative(t *testing.T) {
 	}
 	if !strings.Contains(status.FallbackReason, "codex unavailable: app-server unreachable") {
 		t.Fatalf("fallback reason = %q, want codex unavailable detail", status.FallbackReason)
+	}
+}
+
+func TestWorkExecutorSelectorEmptyAutoOrderDefaultsNativeFirst(t *testing.T) {
+	t.Parallel()
+
+	codex := &fakeWorkExecutor{name: "codex", ready: true}
+	native := &fakeWorkExecutor{name: "native", ready: true}
+	selector := newWorkExecutorSelector(config.WorkConfig{Executor: "auto"}, []WorkExecutor{codex, native})
+
+	result, err := selector.Run(context.Background(), WorkRequest{Prompt: "patch the bug", Mode: WorkModeWorkspaceWrite})
+	if err != nil {
+		t.Fatalf("Run() err = %v", err)
+	}
+	if result.ExecutorName != "native" || native.calls != 1 || codex.calls != 0 {
+		t.Fatalf("result=%#v codex_calls=%d native_calls=%d, want default native first", result, codex.calls, native.calls)
+	}
+	status := selector.Status()
+	if status.Configured != "auto" || status.Active != "native" || status.Preferred != "native" {
+		t.Fatalf("status = %#v, want auto active native preferred native", status)
 	}
 }
 

@@ -3260,11 +3260,8 @@ func TestHandleTelegramCommandCallbackContinuationApproveContainsExpiredLease(t 
 	if !strings.Contains(editText, "expired") || !strings.Contains(editText, "fresh approval prompt") {
 		t.Fatalf("editClear = %#v, want expired refresh message update", sender.editClear)
 	}
-	if len(router.callbackErrorRecords) != 1 {
-		t.Fatalf("callbackErrorRecords = %#v, want one record", router.callbackErrorRecords)
-	}
-	if router.callbackErrorRecords[0].chatID != 7 || router.callbackErrorRecords[0].callbackKind != "continuation.approve" || !errors.Is(router.callbackErrorRecords[0].err, core.ErrContinuationExpired) {
-		t.Fatalf("callback error record = %#v, want continuation.approve expired", router.callbackErrorRecords[0])
+	if len(router.callbackErrorRecords) != 0 {
+		t.Fatalf("callbackErrorRecords = %#v, want no callback failure when expired approval refreshes successfully", router.callbackErrorRecords)
 	}
 }
 

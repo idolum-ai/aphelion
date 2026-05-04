@@ -88,7 +88,7 @@ func newWorkExecutorSelector(cfg config.WorkConfig, executors []WorkExecutor) *W
 	cfg.Executor = normalizeRuntimeWorkExecutor(cfg.Executor)
 	cfg.AutoOrder = normalizeRuntimeWorkExecutorList(cfg.AutoOrder)
 	if len(cfg.AutoOrder) == 0 {
-		cfg.AutoOrder = []string{"codex", "native"}
+		cfg.AutoOrder = []string{"native", "codex"}
 	}
 	byName := make(map[string]WorkExecutor, len(executors))
 	for _, executor := range executors {
@@ -200,7 +200,7 @@ func (s *WorkExecutorSelector) candidates() []string {
 	}
 	order := normalizeRuntimeWorkExecutorList(s.cfg.AutoOrder)
 	if len(order) == 0 {
-		return []string{"codex", "native"}
+		return []string{"native", "codex"}
 	}
 	return order
 }
@@ -432,7 +432,7 @@ func firstRuntimeWorkExecutor(cfg config.WorkConfig) string {
 	}
 	order := normalizeRuntimeWorkExecutorList(cfg.AutoOrder)
 	if len(order) == 0 {
-		return "codex"
+		return "native"
 	}
 	return order[0]
 }

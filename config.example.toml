@@ -143,10 +143,10 @@ hidden_paths = ["~/.aphelion/aphelion.toml", "~/.config/aphelion/config.toml", "
 network = "deny"
 
 [work]
-# auto prefers Codex runtime when a work app-server is reachable, then falls
-# back to Aphelion's native tool loop. Use "codex" or "native" to force one.
+# auto uses Aphelion's native tool loop by default. Put "codex" first only
+# when a Codex work app-server is installed and reachable.
 executor = "auto"
-auto_order = ["codex", "native"]
+auto_order = ["native", "codex"]
 
 [work.codex]
 # Optional Codex app-server websocket address for governed repo work lanes.

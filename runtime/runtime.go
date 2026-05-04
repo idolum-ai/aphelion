@@ -1280,7 +1280,7 @@ func normalizeRuntimeConfig(cfg *config.Config) *config.Config {
 	copy.Work.Executor = normalizeRuntimeWorkExecutor(cfg.Work.Executor)
 	copy.Work.AutoOrder = normalizeRuntimeWorkExecutorList(cfg.Work.AutoOrder)
 	if len(copy.Work.AutoOrder) == 0 {
-		copy.Work.AutoOrder = []string{"codex", "native"}
+		copy.Work.AutoOrder = []string{"native", "codex"}
 	}
 	copy.Work.Codex.AppServerAddress = strings.TrimSpace(cfg.Work.Codex.AppServerAddress)
 	copy.Agent.PromptRoot = cfg.Agent.EffectivePromptRoot()

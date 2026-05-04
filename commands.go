@@ -669,8 +669,6 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 			}
 			state, err := router.ApproveContinuation(chatID, approverID)
 			if err != nil {
-				recordTelegramCallbackError(router, chatID, "continuation.approve", err)
-				log.Printf("WARN continuation approve callback failed chat_id=%d approver_id=%d err=%v", chatID, approverID, err)
 				if errors.Is(err, core.ErrContinuationExpired) {
 					refreshedState, refreshed, refreshErr := refreshContinuationProposal(ctx, router, chatID, "expired approval callback")
 					if refreshErr != nil {
@@ -686,6 +684,8 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 						return true, nil
 					}
 				}
+				recordTelegramCallbackError(router, chatID, "continuation.approve", err)
+				log.Printf("WARN continuation approve callback failed chat_id=%d approver_id=%d err=%v", chatID, approverID, err)
 				answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", continuationCallbackErrorText(err))
 				editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.approve", renderContinuationCallbackError(state, err))
 				return true, nil

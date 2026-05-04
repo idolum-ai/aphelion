@@ -99,8 +99,14 @@ type StreamChunk struct {
 type StreamCallback func(StreamChunk) error
 
 type CompleteOptions struct {
-	Reasoning ReasoningConfig
-	Verbosity Verbosity
+	Reasoning        ReasoningConfig
+	Verbosity        Verbosity
+	ProviderFailover *ProviderFailoverState
+}
+
+type ProviderFailoverState struct {
+	PreferredProvider string
+	Reason            string
 }
 
 type ReasoningConfig struct {
@@ -154,6 +160,16 @@ func RunTurn(
 ) (*core.TurnResult, []Message, error) {
 	if provider == nil {
 		return nil, messages, errors.New("provider is nil")
+	}
+	if _, ok := provider.(ManagedProvider); ok {
+		runOpts := CompleteOptions{}
+		if opts != nil {
+			runOpts = *opts
+		}
+		if runOpts.ProviderFailover == nil {
+			runOpts.ProviderFailover = &ProviderFailoverState{}
+		}
+		opts = &runOpts
 	}
 
 	var (

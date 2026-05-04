@@ -96,6 +96,7 @@ type TurnResult struct {
 
 type ProviderEvent struct {
 	EventType           string
+	ObservedAt          time.Time
 	Provider            string
 	FromProvider        string
 	ToProvider          string

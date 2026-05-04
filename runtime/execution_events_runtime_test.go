@@ -64,6 +64,7 @@ func TestRuntimeRecordsProviderRetryAndFailoverEvents(t *testing.T) {
 	}
 
 	key := session.SessionKey{ChatID: 99103, UserID: 0, Scope: telegramDMScopeRef(99103)}
+	observedAt := time.Date(2026, 5, 4, 20, 30, 0, 0, time.UTC)
 	rt.recordProviderAttemptEvents(key, pipeline.TurnExecutionContract{
 		Backend:      "native",
 		ProviderName: "failover",
@@ -72,7 +73,7 @@ func TestRuntimeRecordsProviderRetryAndFailoverEvents(t *testing.T) {
 	}, &core.TurnResult{ProviderEvents: []core.ProviderEvent{
 		{EventType: core.ExecutionEventProviderAttemptRetried, Provider: "codex", Attempt: 1, MaxRetries: 3, Error: "503"},
 		{EventType: core.ExecutionEventProviderPartial, Provider: "codex", ResponseID: "resp-partial", Reason: "incomplete", PartialContentChars: 17, PartialToolCalls: 1},
-		{EventType: core.ExecutionEventProviderFailoverEngaged, FromProvider: "codex", ToProvider: "native", Error: "codex incomplete"},
+		{EventType: core.ExecutionEventProviderFailoverEngaged, ObservedAt: observedAt, FromProvider: "codex", ToProvider: "native", Error: "codex incomplete"},
 	}})
 
 	events, err := store.ExecutionEventsBySession(key, 0, 20)
@@ -82,6 +83,16 @@ func TestRuntimeRecordsProviderRetryAndFailoverEvents(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventProviderAttemptRetried)
 	assertHasEventType(t, events, core.ExecutionEventProviderPartial)
 	assertHasEventType(t, events, core.ExecutionEventProviderFailoverEngaged)
+	var foundObservedAt bool
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventProviderFailoverEngaged {
+			foundObservedAt = event.CreatedAt.Equal(observedAt)
+			break
+		}
+	}
+	if !foundObservedAt {
+		t.Fatalf("events = %#v, want failover event created_at to use provider observed_at %s", events, observedAt.Format(time.RFC3339))
+	}
 }
 
 func TestProviderNameAfterProviderEventsUsesFallbackTarget(t *testing.T) {

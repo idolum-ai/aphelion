@@ -59,7 +59,11 @@ func (r *Runtime) recordProviderAttemptEvents(key session.SessionKey, exec pipel
 		if event.PartialToolCalls > 0 {
 			payload["partial_tool_calls"] = event.PartialToolCalls
 		}
-		r.recordExecutionEvent(key, eventType, "provider", status, payload, time.Now().UTC())
+		observedAt := event.ObservedAt
+		if observedAt.IsZero() {
+			observedAt = time.Now().UTC()
+		}
+		r.recordExecutionEvent(key, eventType, "provider", status, payload, observedAt.UTC())
 	}
 }
 

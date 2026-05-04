@@ -25,6 +25,7 @@ var _ agent.Provider = (*FailoverChain)(nil)
 var _ agent.ProviderWithOptions = (*FailoverChain)(nil)
 var _ agent.ManagedProvider = (*FailoverChain)(nil)
 var _ agent.StreamingProvider = (*FailoverChain)(nil)
+var _ agent.StreamingProviderWithOptions = (*FailoverChain)(nil)
 
 type NamedProvider struct {
 	Name     string
@@ -166,18 +167,23 @@ func (c *FailoverChain) CompleteManaged(ctx context.Context, messages []agent.Me
 }
 
 func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, cb agent.StreamCallback) (*agent.Response, error) {
+	return c.StreamWithOptions(ctx, messages, tools, agent.CompleteOptions{}, cb)
+}
+
+func (c *FailoverChain) StreamWithOptions(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback) (*agent.Response, error) {
 	if c == nil {
 		return nil, fmt.Errorf("provider failover chain is nil")
 	}
 	var attempts []FailoverAttempt
 	var events []core.ProviderEvent
 	attemptMessages := messages
-	for idx := 0; idx < len(c.entries); idx++ {
+	startIdx := c.startIndexForFailover(opts)
+	for idx := startIdx; idx < len(c.entries); idx++ {
 		entry := c.entries[idx]
-		resp, started, err := c.streamWithRetry(ctx, entry, attemptMessages, tools, cb, &events)
+		resp, started, err := c.streamWithRetry(ctx, entry, attemptMessages, tools, opts, cb, &events)
 		if err == nil {
 			c.recordSuccess(idx)
-			if idx > 0 {
+			if idx > 0 && idx != startIdx {
 				log.Printf("WARN provider failover engaged from=%s to=%s", c.entries[0].name, entry.name)
 			}
 			resp.ProviderEvents = append(events, resp.ProviderEvents...)
@@ -205,6 +211,7 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 			continue
 		}
 		recordProviderFailoverEvent(&events, entry.name, c.entries[nextIdx].name, err)
+		c.rememberFailoverPreference(opts, idx, nextIdx, err, attemptMessages, startIdx)
 		if nextIdx > idx+1 {
 			idx = nextIdx - 1
 		}
@@ -219,12 +226,13 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 	var attempts []FailoverAttempt
 	var events []core.ProviderEvent
 	attemptMessages := messages
-	for idx := 0; idx < len(c.entries); idx++ {
+	startIdx := c.startIndexForFailover(opts)
+	for idx := startIdx; idx < len(c.entries); idx++ {
 		entry := c.entries[idx]
 		resp, err := c.completeWithRetry(ctx, entry, attemptMessages, tools, opts, &events)
 		if err == nil {
 			c.recordSuccess(idx)
-			if idx > 0 {
+			if idx > 0 && idx != startIdx {
 				log.Printf("WARN provider failover engaged from=%s to=%s", c.entries[0].name, entry.name)
 			}
 			resp.ProviderEvents = append(events, resp.ProviderEvents...)
@@ -249,6 +257,7 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 			continue
 		}
 		recordProviderFailoverEvent(&events, entry.name, c.entries[nextIdx].name, err)
+		c.rememberFailoverPreference(opts, idx, nextIdx, err, attemptMessages, startIdx)
 		if nextIdx > idx+1 {
 			idx = nextIdx - 1
 		}
@@ -278,6 +287,49 @@ func (c *FailoverChain) nextCompleteFailoverIndex(idx int, err error, messages [
 		nextName = c.entries[nextIdx].name
 	}
 	return nextIdx, shouldFailoverOnError(err) || shouldFallbackToNextEntry(err, c.entries[idx].name, nextName)
+}
+
+func (c *FailoverChain) startIndexForFailover(opts agent.CompleteOptions) int {
+	if c == nil || opts.ProviderFailover == nil {
+		return 0
+	}
+	preferred := strings.TrimSpace(opts.ProviderFailover.PreferredProvider)
+	if preferred == "" {
+		return 0
+	}
+	for idx, entry := range c.entries {
+		if strings.EqualFold(strings.TrimSpace(entry.name), preferred) {
+			return idx
+		}
+	}
+	return 0
+}
+
+func (c *FailoverChain) rememberFailoverPreference(opts agent.CompleteOptions, idx int, nextIdx int, err error, messages []agent.Message, startIdx int) {
+	if c == nil || opts.ProviderFailover == nil || idx < 0 || idx >= len(c.entries) || nextIdx < 0 || nextIdx >= len(c.entries) {
+		return
+	}
+	if reason := stickyFailoverReason(err, c.entries[idx].name, messages, startIdx > 0); reason != "" {
+		opts.ProviderFailover.PreferredProvider = strings.TrimSpace(c.entries[nextIdx].name)
+		opts.ProviderFailover.Reason = reason
+	}
+}
+
+func stickyFailoverReason(err error, current string, messages []agent.Message, alreadyOnFallback bool) string {
+	switch {
+	case isProviderBufferLimitError(err):
+		return "provider_buffer_limit"
+	case shouldFallbackAfterOpenAIFamilyCapacity(err, current):
+		return "openai_family_capacity"
+	case shouldFallbackAfterToolResultRejection(err, current, messages):
+		return "tool_result_rejection"
+	case shouldFallbackAfterContextWindowError(err, current, messages):
+		return "context_window_after_tools"
+	case alreadyOnFallback && shouldFailoverOnError(err):
+		return "fallback_provider_failed"
+	default:
+		return ""
+	}
 }
 
 func (c *FailoverChain) recordSuccess(idx int) {
@@ -320,12 +372,12 @@ func (c *FailoverChain) completeWithRetry(ctx context.Context, entry failoverEnt
 	}
 }
 
-func (c *FailoverChain) streamWithRetry(ctx context.Context, entry failoverEntry, messages []agent.Message, tools []agent.ToolDef, cb agent.StreamCallback, events *[]core.ProviderEvent) (*agent.Response, bool, error) {
+func (c *FailoverChain) streamWithRetry(ctx context.Context, entry failoverEntry, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback, events *[]core.ProviderEvent) (*agent.Response, bool, error) {
 	backoff := failoverInitialBackoff
 	attempt := 0
 	for {
 		var started bool
-		resp, err := streamViaProvider(ctx, entry.provider, messages, tools, func(chunk agent.StreamChunk) error {
+		resp, err := streamViaProvider(ctx, entry.provider, messages, tools, opts, func(chunk agent.StreamChunk) error {
 			if chunk.Text != "" || chunk.ToolCall != nil || chunk.Usage != nil {
 				started = true
 			}
@@ -363,7 +415,10 @@ func completeViaProvider(ctx context.Context, provider agent.Provider, messages 
 	return provider.Complete(ctx, messages, tools)
 }
 
-func streamViaProvider(ctx context.Context, provider agent.Provider, messages []agent.Message, tools []agent.ToolDef, cb agent.StreamCallback) (*agent.Response, error) {
+func streamViaProvider(ctx context.Context, provider agent.Provider, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions, cb agent.StreamCallback) (*agent.Response, error) {
+	if streamingWithOptions, ok := provider.(agent.StreamingProviderWithOptions); ok {
+		return streamingWithOptions.StreamWithOptions(ctx, messages, tools, opts, cb)
+	}
 	if streaming, ok := provider.(agent.StreamingProvider); ok {
 		return streaming.Stream(ctx, messages, tools, cb)
 	}
@@ -396,6 +451,7 @@ func recordProviderRetryEvent(events *[]core.ProviderEvent, provider string, att
 	}
 	*events = append(*events, core.ProviderEvent{
 		EventType:  core.ExecutionEventProviderAttemptRetried,
+		ObservedAt: time.Now().UTC(),
 		Provider:   strings.TrimSpace(provider),
 		Attempt:    attempt,
 		MaxRetries: failoverMaxRetries,
@@ -408,9 +464,10 @@ func recordProviderFailedEvent(events *[]core.ProviderEvent, provider string, er
 		return
 	}
 	*events = append(*events, core.ProviderEvent{
-		EventType: core.ExecutionEventProviderAttemptFailed,
-		Provider:  strings.TrimSpace(provider),
-		Error:     trimProviderEventError(err),
+		EventType:  core.ExecutionEventProviderAttemptFailed,
+		ObservedAt: time.Now().UTC(),
+		Provider:   strings.TrimSpace(provider),
+		Error:      trimProviderEventError(err),
 	})
 }
 
@@ -438,6 +495,7 @@ func recordProviderPartialEvent(events *[]core.ProviderEvent, provider string, e
 	}
 	event := core.ProviderEvent{
 		EventType:  core.ExecutionEventProviderPartial,
+		ObservedAt: time.Now().UTC(),
 		Provider:   strings.TrimSpace(provider),
 		Reason:     reason,
 		ResponseID: responseID,
@@ -456,6 +514,7 @@ func recordProviderFailoverEvent(events *[]core.ProviderEvent, from string, to s
 	}
 	*events = append(*events, core.ProviderEvent{
 		EventType:    core.ExecutionEventProviderFailoverEngaged,
+		ObservedAt:   time.Now().UTC(),
 		FromProvider: strings.TrimSpace(from),
 		ToProvider:   strings.TrimSpace(to),
 		Error:        trimProviderEventError(err),

@@ -1235,9 +1235,13 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 			RiskClass:     "status_check",
 		},
 		ContinuationLease: session.ContinuationLease{
-			ID:         "lease-phase-4b-rebundled-email-proof",
-			ProposalID: "aprop-phase-4b-rebundled-email-proof",
-			Status:     session.ContinuationLeaseStatusActive,
+			ID:             "lease-phase-4b-rebundled-email-proof",
+			ProposalID:     "aprop-phase-4b-rebundled-email-proof",
+			Status:         session.ContinuationLeaseStatusActive,
+			LeaseClass:     session.ContinuationLeaseClassLocalWorkspace,
+			AllowedActions: []string{string(WorkModeReadOnly)},
+			MaxTurns:       1,
+			RemainingTurns: 1,
 		},
 	}); err != nil {
 		t.Fatalf("UpdateContinuationState() err = %v", err)

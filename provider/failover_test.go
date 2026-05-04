@@ -75,6 +75,40 @@ func (p *openAIToolResultRejectingProvider) Complete(_ context.Context, messages
 	}}}, nil
 }
 
+type openAIToolContextWindowProvider struct {
+	callCount int
+}
+
+func (p *openAIToolContextWindowProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
+	p.callCount++
+	for _, msg := range messages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "tool") {
+			return nil, stubStatusError{code: 400, msg: "openai: status 400: invalid_request_error: context window exceeded after tool results"}
+		}
+	}
+	return &agent.Response{ToolCalls: []agent.ToolCall{{
+		ID:    "call-1",
+		Name:  "exec",
+		Input: []byte(`{"cmd":"git status --short"}`),
+	}}}, nil
+}
+
+type anthropicTwoStepProvider struct {
+	callCount int
+}
+
+func (p *anthropicTwoStepProvider) Complete(_ context.Context, _ []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
+	p.callCount++
+	if p.callCount == 1 {
+		return &agent.Response{ToolCalls: []agent.ToolCall{{
+			ID:    "call-2",
+			Name:  "exec",
+			Input: []byte(`{"cmd":"git diff --stat"}`),
+		}}}, nil
+	}
+	return &agent.Response{Content: "anthropic completed after its own tool call"}, nil
+}
+
 type toolHistoryAssertingProvider struct {
 	reply               string
 	requiredToolContent string
@@ -753,6 +787,36 @@ func TestRunTurnSynthesizesWithAnthropicAfterOpenAIToolResultRejection(t *testin
 	}
 	if !foundToolEvidence {
 		t.Fatalf("history = %#v, want preserved tool evidence", history)
+	}
+}
+
+func TestRunTurnKeepsFallbackProviderForLaterCallsInSameTurn(t *testing.T) {
+	openAI := &openAIToolContextWindowProvider{}
+	anthropic := &anthropicTwoStepProvider{}
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: openAI},
+		{Name: "anthropic", Provider: anthropic},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+	tools := &fixedToolRegistry{output: "stdout: clean"}
+
+	result, _, err := agent.RunTurn(context.Background(), chain, tools, &agent.Budget{Max: 6, Caution: 0.7, Warning: 0.9}, nil, []agent.Message{{Role: "user", Content: "inspect the repo"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.Text != "anthropic completed after its own tool call" {
+		t.Fatalf("result text = %q, want anthropic final synthesis", result.Text)
+	}
+	if openAI.callCount != 2 {
+		t.Fatalf("openAI.callCount = %d, want initial tool call and one post-tool context failure only", openAI.callCount)
+	}
+	if anthropic.callCount != 2 {
+		t.Fatalf("anthropic.callCount = %d, want fallback synthesis and later sticky call", anthropic.callCount)
+	}
+	if tools.callCount != 2 {
+		t.Fatalf("tool call count = %d, want both tool executions", tools.callCount)
 	}
 }
 

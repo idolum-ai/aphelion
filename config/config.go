@@ -540,7 +540,7 @@ func Default() Config {
 		},
 		Work: WorkConfig{
 			Executor:  "auto",
-			AutoOrder: []string{"codex", "native"},
+			AutoOrder: []string{"native", "codex"},
 		},
 		Sessions: SessionsConfig{
 			DBPath:             "~/.aphelion/state/sessions.db",
@@ -751,7 +751,7 @@ func Load(path string) (*Config, error) {
 	cfg.Work.Executor = normalizeWorkExecutor(cfg.Work.Executor)
 	cfg.Work.AutoOrder = normalizeWorkExecutorList(cfg.Work.AutoOrder)
 	if len(cfg.Work.AutoOrder) == 0 {
-		cfg.Work.AutoOrder = []string{"codex", "native"}
+		cfg.Work.AutoOrder = []string{"native", "codex"}
 	}
 	cfg.Work.Codex.AppServerAddress = strings.TrimSpace(cfg.Work.Codex.AppServerAddress)
 	cfg.Sandbox.Profiles.Admin = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.Admin)
