@@ -16,6 +16,7 @@ required_docs=(
   "docs/architecture/diagrams/README.md"
   "docs/architecture/diagrams/src/README.md"
   "docs/architecture/diagrams/generated/README.md"
+  "docs/promises.md"
 )
 
 for file in "${required_docs[@]}"; do
@@ -48,6 +49,16 @@ if rg -n "tmp-diagrams/" \
   --glob '!*.svg' \
   README.md requirements runtime turn pipeline docs/architecture constitution_live_test.go .gitignore Makefile >/dev/null; then
   echo "found legacy tmp-diagrams references outside diagram archive" >&2
+  exit 1
+fi
+
+if ! rg -q "Provider support for Gemini and Ollama \\| planned" docs/promises.md; then
+  echo "promise ledger must track Gemini/Ollama provider status" >&2
+  exit 1
+fi
+
+if ! rg -q "Native constrained file tools and web fetch \\| planned" docs/promises.md; then
+  echo "promise ledger must track native file/web tool status" >&2
   exit 1
 fi
 

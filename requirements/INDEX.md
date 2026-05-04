@@ -6,7 +6,7 @@ As-built architecture docs: [`../docs/architecture/`](../docs/architecture/READM
 
 ## Foundation
 1. ✅ [`core.md`](core.md) — Event loop, message lifecycle, error handling, shutdown
-2. ✅ [`config.md`](config.md) — Config system, string anonymization, environment variables
+2. 🟡 [`config.md`](config.md) — Config system, string anonymization, environment variables; broad schema gaps tracked in [`../docs/promises.md`](../docs/promises.md)
 3. ✅ [`principals.md`](principals.md) — Config-assigned Telegram DM principals, admission, authority
 4. ✅ [`sessions.md`](sessions.md) — Conversation state and truth-class contract (canonical/projection/operational current-state/compatibility fallback)
 5. ✅ [`governor.md`](governor.md) — Governor backend, face pipeline, Codex-first core
@@ -14,14 +14,14 @@ As-built architecture docs: [`../docs/architecture/`](../docs/architecture/READM
 7. ✅ [`terminology.md`](terminology.md) — Brokerage/floor/scene/fallback language plus normative truth-class taxonomy
 
 ## LLM
-8. ✅ [`providers.md`](providers.md) — Inference adapters only. Streaming, retries, and failover staging.
+8. 🟡 [`providers.md`](providers.md) — Inference adapters only. Streaming, retries, failover staging, and planned Gemini/Ollama parity.
 9. ✅ [`thinking.md`](thinking.md) — Reasoning effort, summaries, run-kind defaults, governor-owned budgeting
 
 ## Channels
-10. ✅ [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics
+10. 🟡 [`telegram.md`](telegram.md) — Bot API, polling/webhooks, formatting, media, reactions, groups, topics; media-button workflow remains planned.
 
 ## Agent
-11. ✅ [`tools.md`](tools.md) — Tool definition, per-run manifest shaping, sandboxing, exec, file ops, web fetch
+11. 🟡 [`tools.md`](tools.md) — Tool definition, per-run manifest shaping, sandboxing, exec, planned native file ops and web fetch
 12. ✅ [`memory.md`](memory.md) — Workspace files, shared/per-user memory, OpenAI files, vector stores
 13. ✅ [`system-prompt.md`](system-prompt.md) — Governor prompt, face prompt, cache boundary, dynamic vs stable sections
 14. 🟡 [`semantic-store.md`](semantic-store.md) — Aphelion-owned local semantic substrate, provenance-preserving import, retrieval modes
@@ -42,10 +42,10 @@ As-built architecture docs: [`../docs/architecture/`](../docs/architecture/READM
 
 ## Media
 27. ✅ [`voice.md`](voice.md) — Whisper/OpenAI STT, ElevenLabs TTS, voice reply modes
-28. ✅ [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation
+28. 🟡 [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation; ambiguous-media buttons remain planned.
 
 ## Operations
-29. ✅ [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback
-30. ✅ [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model
+29. 🟡 [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback; static release proof remains planned.
+30. 🟡 [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model; config-backed sandbox profiles remain planned.
 31. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
 32. ✅ [`turn-pipeline-refactor.md`](turn-pipeline-refactor.md) — Plan for aligning live package ownership with the runtime/turn/pipeline architecture

@@ -6,16 +6,18 @@ A minimal, focused agent runtime for personal AI assistants.
 
 - **Only what we need.** No plugin marketplace, no multi-channel support, no enterprise features.
 - **Linux only.** No macOS/Windows compat. Single target, no conditionals.
-- **Undetectable by design.** Every identifiable string — project name, user-agent, system prompt markers — is configurable or absent.
-- **Go.** Single static binary. Linux-native syscalls. Goroutines for concurrency. Deploy = `scp`.
-- **Anthropic-first caching.** Prompt caching done right: cache boundary splitting, 1h TTL, compaction that preserves prefixes.
+- **Anonymizable by design.** Provider-visible identity should be configurable or absent; current gaps are tracked in [docs/promises.md](docs/promises.md).
+- **Go.** Single Linux binary, with a static release target planned separately from the normal developer build. Goroutines for concurrency. Deploy = `scp` or the bundled service scripts.
+- **Anthropic-first caching.** Structured cache breakpoints exist; config-backed cache TTL policy is tracked in [docs/promises.md](docs/promises.md).
 - **File-based memory.** Workspace files are the source of truth. Vector search optional.
 
 ## Target Stack
 
 - **Channels:** Telegram
-- **Providers:** Anthropic (Claude), OpenAI, OpenRouter, Google (Gemini), local models (Ollama)
-- **Tools:** exec, curated memory, session recall, optional OpenAI storage tools
+- **Providers now:** Anthropic (Claude), OpenAI, OpenRouter
+- **Providers planned:** Google (Gemini), local models (Ollama)
+- **Tools now:** exec, curated memory, session recall, optional OpenAI storage tools
+- **Tools planned:** constrained native file tools and web fetch
 - **Voice:** ElevenLabs TTS
 - **Automation:** heartbeat, cron
 
@@ -67,6 +69,9 @@ Runnable v0:
 - Default daily-review durable child (`idolum-daily-review`) that wakes daily, stages yesterday's transcript into child-local files, and opens a scheduled child-to-parent check-in
 - Telegram voice transcription + optional TTS replies
 - Telegram slash commands: `/start`, `/help`, `/status`, `/debug`, `/doctor`, `/agents`, `/memory`, `/model`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
+
+Current promise gaps and accepted implementation targets are tracked in
+[docs/promises.md](docs/promises.md).
 
 ## Run
 
