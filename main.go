@@ -313,18 +313,13 @@ func (c telegramCommandControl) StopContinuation(chatID int64) (core.StopResult,
 }
 
 func (c telegramCommandControl) TriggerContinuation(ctx context.Context, chatID int64) error {
-	_ = ctx
 	if c.rt == nil {
 		return nil
 	}
-	go func() {
-		triggerCtx, cancel := newTurnContext(context.Background(), turnTimeout)
-		defer cancel()
-		if err := c.rt.TriggerContinuation(triggerCtx, chatID); err != nil {
-			log.Printf("WARN trigger continuation failed chat_id=%d err=%v", chatID, err)
-		}
-	}()
-	return nil
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return c.rt.TriggerContinuation(ctx, chatID)
 }
 
 func (c telegramCommandControl) RecordTelegramCallbackError(chatID int64, callbackKind string, err error) {

@@ -96,6 +96,10 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	}
 	if phase, ok := nextOperationPhaseForApproval(opState.PhasePlan); ok {
 		now := time.Now().UTC()
+		if operationPhaseIsPlanningOnlyApproval(phase) {
+			r.recordPlanningOnlyOperationPhaseBlocked(key, opState, phase, now)
+			return true, nil
+		}
 		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
 		priorState = session.NormalizeContinuationState(priorState)
 		if priorExists && continuationStateHasFreshPendingLease(priorState, now) && operationPhaseMatchesContinuation(opState, phase, priorState) {
@@ -259,6 +263,9 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 		if !operationPhaseNeedsApproval(phase) {
 			break
 		}
+		if operationPhaseIsPlanningOnlyApproval(phase) {
+			break
+		}
 		if operationPhaseRequiresFreshApprovalGate(phase) {
 			break
 		}
@@ -272,6 +279,9 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 				continue
 			}
 			if !operationPhaseNeedsApproval(phase) || operationPhaseRequiresFreshApprovalGate(phase) {
+				break
+			}
+			if operationPhaseIsPlanningOnlyApproval(phase) {
 				break
 			}
 			bundle = append(bundle, phase)
@@ -298,6 +308,127 @@ func operationPhaseRequiresFreshApprovalGate(phase session.OperationPhase) bool 
 		}
 	}
 	return false
+}
+
+func operationPhaseIsPlanningOnlyApproval(phase session.OperationPhase) bool {
+	phase = normalizeSingleOperationPhase(phase)
+	if !operationPhaseNeedsApproval(phase) {
+		return false
+	}
+	if len(phase.AllowedActions) > 0 {
+		hasPlanningAction := false
+		hasConcreteAction := false
+		for _, action := range phase.AllowedActions {
+			if operationPhaseActionIsPlanningOnly(action) {
+				hasPlanningAction = true
+				continue
+			}
+			if operationPhaseActionIsConcrete(action) {
+				hasConcreteAction = true
+			}
+		}
+		if hasPlanningAction && !hasConcreteAction {
+			return true
+		}
+	}
+	text := strings.ToLower(strings.TrimSpace(strings.Join(operationPhasePlanningTextParts(phase), " ")))
+	if text == "" {
+		return false
+	}
+	if operationPhaseTextIsPlanningOnly(text) && !operationPhaseTextHasConcreteExecution(text) {
+		return true
+	}
+	return false
+}
+
+func operationPhasePlanningTextParts(phase session.OperationPhase) []string {
+	parts := []string{phase.Summary, phase.WhyNow, phase.BoundedEffect}
+	parts = append(parts, phase.ValidationPlan...)
+	return parts
+}
+
+func operationPhaseActionIsPlanningOnly(action string) bool {
+	value := strings.ToLower(strings.TrimSpace(action))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "draft_plan", "draft_repair_plan", "draft_repair_phases", "make_plan", "make_a_plan", "plan", "planning", "propose_plan", "propose_repair_plan", "propose_repair_phases", "update_operation_phase_plan":
+		return true
+	default:
+		return strings.Contains(value, "draft") && strings.Contains(value, "plan") ||
+			strings.Contains(value, "propose") && strings.Contains(value, "phase") ||
+			strings.Contains(value, "make") && strings.Contains(value, "plan")
+	}
+}
+
+func operationPhaseActionIsConcrete(action string) bool {
+	value := strings.ToLower(strings.TrimSpace(action))
+	if value == "" {
+		return false
+	}
+	if workModeFromStructuredAuthority(value) != "" {
+		return true
+	}
+	for _, token := range []string{
+		"inspect", "read", "review", "edit", "patch", "write_file", "run_test", "test", "build", "install", "commit", "deploy", "restart", "migrate", "repair", "execute", "verify", "smoke",
+	} {
+		if strings.Contains(value, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func operationPhaseTextIsPlanningOnly(text string) bool {
+	patterns := []string{
+		"make a plan",
+		"make plan",
+		"draft a plan",
+		"draft plan",
+		"draft repair plan",
+		"draft repair phases",
+		"repair planning",
+		"planning phase",
+		"propose a plan",
+		"propose repair phases",
+		"turn child diagnostic failures into explicit repair phases",
+		"turn failures into explicit repair phases",
+		"turn findings into phases",
+		"turn issues into phases",
+		"convert findings into phases",
+		"convert issues into phases",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(text, pattern) {
+			return true
+		}
+	}
+	return strings.HasPrefix(text, "plan ") || strings.HasPrefix(text, "draft ")
+}
+
+func operationPhaseTextHasConcreteExecution(text string) bool {
+	for _, token := range []string{
+		"edit files", "patch", "run tests", "go test", "build", "install", "commit", "deploy", "restart", "migrate", "repair state", "write artifact", "verify", "smoke test", "inspect state",
+	} {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runtime) recordPlanningOnlyOperationPhaseBlocked(key session.SessionKey, opState session.OperationState, phase session.OperationPhase, now time.Time) {
+	if r == nil {
+		return
+	}
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", map[string]any{
+		"blocked_reason": "planning_only_phase_requires_plan_lease",
+		"phase_plan_id":  strings.TrimSpace(opState.PhasePlan.ID),
+		"phase_id":       strings.TrimSpace(phase.ID),
+		"phase_summary":  strings.TrimSpace(phase.Summary),
+		"operation_id":   strings.TrimSpace(opState.ID),
+	}, now)
 }
 
 func operationPhasePlanOwnsContinuation(plan session.OperationPhasePlan) bool {

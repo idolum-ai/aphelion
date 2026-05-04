@@ -198,6 +198,8 @@ type stubCommandRouter struct {
 	stopContinuationErr          error
 	triggerContinuationInput     int64
 	triggerContinuationErr       error
+	triggerContinuationStarted   chan struct{}
+	triggerContinuationRelease   <-chan struct{}
 	callbackErrorRecords         []stubCallbackErrorRecord
 	refreshContinuationInput     int64
 	refreshContinuationReason    string
@@ -409,7 +411,23 @@ func (s *stubCommandRouter) StopContinuation(chatID int64) (core.StopResult, err
 func (s *stubCommandRouter) TriggerContinuation(ctx context.Context, chatID int64) error {
 	s.triggerContinuationInput = chatID
 	_ = ctx
+	if s.triggerContinuationStarted != nil {
+		close(s.triggerContinuationStarted)
+		s.triggerContinuationStarted = nil
+	}
+	if s.triggerContinuationRelease != nil {
+		<-s.triggerContinuationRelease
+	}
 	return s.triggerContinuationErr
+}
+
+func waitForStubContinuationTrigger(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("continuation trigger did not start")
+	}
 }
 
 func (s *stubCommandRouter) RecordTelegramCallbackError(chatID int64, callbackKind string, err error) {
@@ -3108,12 +3126,13 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
+	triggerStarted := make(chan struct{})
 	router := stubCommandRouter{continuationState: session.ContinuationState{
 		Status:         session.ContinuationStatusPending,
 		DecisionID:     "decision-1",
 		RemainingTurns: 1,
 		StageSummary:   "Resume the next bounded step.",
-	}}
+	}, triggerContinuationStarted: triggerStarted}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-continue",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -3132,6 +3151,7 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	if router.approveContinuationApprover != 1002 {
 		t.Fatalf("approveContinuationApprover = %d, want 1002", router.approveContinuationApprover)
 	}
+	waitForStubContinuationTrigger(t, triggerStarted)
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
@@ -3150,12 +3170,13 @@ func TestHandleTelegramCommandCallbackContinuationApproveContinuesWhenEditFails(
 	t.Parallel()
 
 	sender := &stubCommandSender{editErr: errors.New("telegram editMessageText failed: message is not modified")}
+	triggerStarted := make(chan struct{})
 	router := stubCommandRouter{continuationState: session.ContinuationState{
 		Status:         session.ContinuationStatusPending,
 		DecisionID:     "decision-2",
 		RemainingTurns: 1,
 		StageSummary:   "Resume the next bounded step.",
-	}}
+	}, triggerContinuationStarted: triggerStarted}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-continue-edit-fail",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -3168,6 +3189,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveContinuesWhenEditFails(
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
+	waitForStubContinuationTrigger(t, triggerStarted)
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
@@ -3250,12 +3272,13 @@ func TestHandleTelegramCommandCallbackContinuationApproveRecordsAckErrorWithoutF
 	t.Parallel()
 
 	sender := &stubCommandSender{answerErr: errors.New("telegram answerCallbackQuery failed: Bad Request: chat not found")}
+	triggerStarted := make(chan struct{})
 	router := stubCommandRouter{continuationState: session.ContinuationState{
 		Status:         session.ContinuationStatusPending,
 		DecisionID:     "decision-ack-error",
 		RemainingTurns: 1,
 		StageSummary:   "Resume despite callback ack failure.",
-	}}
+	}, triggerContinuationStarted: triggerStarted}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-ack-error",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -3268,6 +3291,7 @@ func TestHandleTelegramCommandCallbackContinuationApproveRecordsAckErrorWithoutF
 	if !handled {
 		t.Fatal("handled = false, want true")
 	}
+	waitForStubContinuationTrigger(t, triggerStarted)
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
@@ -3879,12 +3903,13 @@ func TestHandleTelegramCommandCallbackContinuationApproveLease(t *testing.T) {
 	t.Parallel()
 
 	sender := &stubCommandSender{}
+	triggerStarted := make(chan struct{})
 	router := stubCommandRouter{continuationState: session.ContinuationState{
 		Status:         session.ContinuationStatusPending,
 		DecisionID:     "decision-approve-lease",
 		RemainingTurns: 1,
 		StageSummary:   "Resume the next bounded step.",
-	}}
+	}, triggerContinuationStarted: triggerStarted}
 	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
 		ID:      "cb-approve-lease",
 		From:    &telegram.User{ID: 1002, Username: "approved"},
@@ -3900,11 +3925,46 @@ func TestHandleTelegramCommandCallbackContinuationApproveLease(t *testing.T) {
 	if router.approveContinuationInput != 7 || router.approveContinuationApprover != 1002 {
 		t.Fatalf("approve input/approver = %d/%d, want 7/1002", router.approveContinuationInput, router.approveContinuationApprover)
 	}
+	waitForStubContinuationTrigger(t, triggerStarted)
 	if router.triggerContinuationInput != 7 {
 		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
 	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Continuation lease approved") {
 		t.Fatalf("editClear = %#v, want lease approval confirmation", sender.editClear)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationApproveDoesNotWaitForTrigger(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	triggerStarted := make(chan struct{})
+	triggerRelease := make(chan struct{})
+	defer close(triggerRelease)
+	router := stubCommandRouter{continuationState: session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-blocked-trigger",
+		RemainingTurns: 1,
+		StageSummary:   "Run a bounded continuation.",
+	}, triggerContinuationStarted: triggerStarted, triggerContinuationRelease: triggerRelease}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-blocked-trigger",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-blocked-trigger", continuationActionApproveLease),
+		Message: &telegram.Message{MessageID: 294, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Continuation lease approved") {
+		t.Fatalf("editClear = %#v, want immediate lease approval confirmation", sender.editClear)
+	}
+	waitForStubContinuationTrigger(t, triggerStarted)
+	if router.triggerContinuationInput != 7 {
+		t.Fatalf("triggerContinuationInput = %d, want 7", router.triggerContinuationInput)
 	}
 }
 

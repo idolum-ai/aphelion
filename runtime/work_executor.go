@@ -261,12 +261,19 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 }
 
 type codexWorkExecutor struct {
-	address string
-	check   func(context.Context, string) error
+	address                  string
+	check                    func(context.Context, string) error
+	rpcTimeout               time.Duration
+	firstNotificationTimeout time.Duration
 }
 
+const (
+	codexWorkDefaultRPCOperationTimeout   = 20 * time.Second
+	codexWorkDefaultFirstNotificationWait = 45 * time.Second
+)
+
 func newCodexWorkExecutor(cfg config.WorkCodexConfig) WorkExecutor {
-	return codexWorkExecutor{address: strings.TrimSpace(cfg.AppServerAddress), check: func(ctx context.Context, address string) error {
+	return codexWorkExecutor{address: strings.TrimSpace(cfg.AppServerAddress), rpcTimeout: codexWorkDefaultRPCOperationTimeout, firstNotificationTimeout: codexWorkDefaultFirstNotificationWait, check: func(ctx context.Context, address string) error {
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		return checkCodexWorkAppServerReady(checkCtx, address)
@@ -306,31 +313,48 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 	}
 	client := newCodexAppServerClient(e.address, codexWorkApprovalHandler(req))
 	defer client.Close(websocket.StatusNormalClosure, "done")
-	if err := client.Connect(ctx); err != nil {
+	if err := e.withRPCTimeout(ctx, client.Connect); err != nil {
 		return WorkResult{}, err
 	}
-	if err := client.Initialize(ctx); err != nil {
+	if err := e.withRPCTimeout(ctx, client.Initialize); err != nil {
 		return WorkResult{}, err
 	}
 	threadID := strings.TrimSpace(req.ThreadID)
 	if threadID == "" {
-		created, err := client.ThreadStart(ctx, codexWorkThreadStartParams(req))
+		var created string
+		err := e.withRPCTimeout(ctx, func(callCtx context.Context) error {
+			var createErr error
+			created, createErr = client.ThreadStart(callCtx, codexWorkThreadStartParams(req))
+			return createErr
+		})
 		if err != nil {
 			return WorkResult{}, err
 		}
 		threadID = created
-	} else if err := client.ThreadResume(ctx, threadID, codexWorkThreadResumeParams(req)); err != nil {
-		created, createErr := client.ThreadStart(ctx, codexWorkThreadStartParams(req))
+	} else if err := e.withRPCTimeout(ctx, func(callCtx context.Context) error {
+		return client.ThreadResume(callCtx, threadID, codexWorkThreadResumeParams(req))
+	}); err != nil {
+		var created string
+		createErr := e.withRPCTimeout(ctx, func(callCtx context.Context) error {
+			var err error
+			created, err = client.ThreadStart(callCtx, codexWorkThreadStartParams(req))
+			return err
+		})
 		if createErr != nil {
 			return WorkResult{}, fmt.Errorf("resume codex work thread %q: %w (new thread also failed: %v)", threadID, err, createErr)
 		}
 		threadID = created
 	}
-	turnID, err := client.TurnStart(ctx, threadID, req.Prompt, codexWorkTurnStartParams(req))
+	var turnID string
+	err := e.withRPCTimeout(ctx, func(callCtx context.Context) error {
+		var turnErr error
+		turnID, turnErr = client.TurnStart(callCtx, threadID, req.Prompt, codexWorkTurnStartParams(req))
+		return turnErr
+	})
 	if err != nil {
 		return WorkResult{}, err
 	}
-	result, err := client.StreamTurn(ctx, threadID, turnID)
+	result, err := client.StreamTurnWithOptions(ctx, threadID, turnID, codexAppServerStreamOptions{FirstNotificationTimeout: e.firstNotificationWait()})
 	if err != nil {
 		partial := codexWorkResultFromAppServer(req, threadID, turnID, codexAppServerResult{
 			ThreadID:     threadID,
@@ -343,6 +367,33 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 		return partial, err
 	}
 	return codexWorkResultFromAppServer(req, threadID, turnID, result), nil
+}
+
+func (e codexWorkExecutor) withRPCTimeout(ctx context.Context, call func(context.Context) error) error {
+	if call == nil {
+		return nil
+	}
+	timeout := e.rpcOperationTimeout()
+	if timeout <= 0 {
+		return call(ctx)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return call(callCtx)
+}
+
+func (e codexWorkExecutor) rpcOperationTimeout() time.Duration {
+	if e.rpcTimeout > 0 {
+		return e.rpcTimeout
+	}
+	return codexWorkDefaultRPCOperationTimeout
+}
+
+func (e codexWorkExecutor) firstNotificationWait() time.Duration {
+	if e.firstNotificationTimeout > 0 {
+		return e.firstNotificationTimeout
+	}
+	return codexWorkDefaultFirstNotificationWait
 }
 
 func normalizeRuntimeWorkExecutor(value string) string {

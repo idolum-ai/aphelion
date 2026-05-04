@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/pipeline"
@@ -580,6 +582,71 @@ func TestCodexWorkExecutorReadinessFallsBackToHealth(t *testing.T) {
 	}
 	if len(paths) != 2 || paths[0] != "/healthz" || paths[1] != "/health" {
 		t.Fatalf("probed paths = %#v, want /healthz then /health", paths)
+	}
+}
+
+func TestCodexWorkExecutorTimesOutSilentTurnBeforeSideEffects(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		for {
+			_, raw, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			var msg map[string]any
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				return
+			}
+			id, hasID := msg["id"]
+			if !hasID {
+				continue
+			}
+			method, _ := msg["method"].(string)
+			result := map[string]any{}
+			switch method {
+			case "thread/start":
+				result = map[string]any{"thread": map[string]any{"id": "thread-silent"}}
+			case "turn/start":
+				result = map[string]any{"turn": map[string]any{"id": "turn-silent"}}
+			}
+			rawResponse, err := json.Marshal(map[string]any{"id": id, "result": result})
+			if err != nil {
+				return
+			}
+			if err := conn.Write(context.Background(), websocket.MessageText, rawResponse); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	executor := codexWorkExecutor{
+		address:                  "ws://" + strings.TrimPrefix(server.URL, "http://"),
+		rpcTimeout:               time.Second,
+		firstNotificationTimeout: 25 * time.Millisecond,
+	}
+	started := time.Now()
+	result, err := executor.Run(context.Background(), WorkRequest{Prompt: "diagnose the live lease", Mode: WorkModeReadOnly})
+	if err == nil {
+		t.Fatal("Run() err = nil, want silent turn timeout")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Run() elapsed = %s, want bounded timeout", elapsed)
+	}
+	if !strings.Contains(err.Error(), "produced no notifications") {
+		t.Fatalf("Run() err = %v, want first-notification timeout", err)
+	}
+	if result.SideEffects {
+		t.Fatalf("result.SideEffects = true, want safe pre-effect failure for native fallback")
+	}
+	if result.ThreadID != "thread-silent" || result.TurnID != "turn-silent" {
+		t.Fatalf("result thread/turn = %q/%q, want partial ids preserved", result.ThreadID, result.TurnID)
 	}
 }
 

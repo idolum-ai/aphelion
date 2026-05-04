@@ -258,6 +258,68 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	}
 }
 
+func TestMaterializePlanningOnlyPhaseDoesNotOfferExecutableLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9031, UserID: 0, Scope: telegramDMScopeRef(9031)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "children-diagnostic-20260504",
+		Objective: "Repair child diagnostic failures.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "phase-children-diagnostic-20260504",
+			CurrentPhaseID: "phase-2-repair-planning",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "phase-2-repair-planning",
+					Summary:          "Turn child diagnostic failures into explicit repair phases.",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "read_only_review",
+					BoundedEffect:    "Draft repair phases only; do not execute repairs.",
+					AllowedActions:   []string{"draft_repair_phases", "update_operation_phase_plan"},
+					RequiresApproval: true,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9031, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want phase plan handled without offering a runnable plan-making lease")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no approval button for planning-only phase", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	found := false
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventContinuationBlocked && strings.Contains(event.PayloadJSON, "planning_only_phase_requires_plan_lease") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("events = %#v, want planning-only phase blocked event", events)
+	}
+}
+
 func TestMaterializePendingOperationProposalWhenPhasePlanHasNoPendingPhase(t *testing.T) {
 	t.Parallel()
 

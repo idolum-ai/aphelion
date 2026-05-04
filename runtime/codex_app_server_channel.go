@@ -404,13 +404,33 @@ func (c *codexAppServerClient) TurnStart(ctx context.Context, threadID string, t
 	return turnID, nil
 }
 
+type codexAppServerStreamOptions struct {
+	FirstNotificationTimeout time.Duration
+}
+
 func (c *codexAppServerClient) StreamTurn(ctx context.Context, threadID string, turnID string) (codexAppServerResult, error) {
+	return c.StreamTurnWithOptions(ctx, threadID, turnID, codexAppServerStreamOptions{})
+}
+
+func (c *codexAppServerClient) StreamTurnWithOptions(ctx context.Context, threadID string, turnID string, opts codexAppServerStreamOptions) (codexAppServerResult, error) {
 	var text strings.Builder
 	var completed bool
 	var notifications int
 	for {
-		msg, err := c.readMessage(ctx)
+		readCtx := ctx
+		var cancel context.CancelFunc
+		if notifications == 0 && opts.FirstNotificationTimeout > 0 {
+			readCtx, cancel = context.WithTimeout(ctx, opts.FirstNotificationTimeout)
+		}
+		msg, err := c.readMessage(readCtx)
+		timedOut := readCtx.Err() == context.DeadlineExceeded
+		if cancel != nil {
+			cancel()
+		}
 		if err != nil {
+			if notifications == 0 && opts.FirstNotificationTimeout > 0 && (timedOut || errors.Is(err, context.DeadlineExceeded)) {
+				return codexAppServerResult{}, fmt.Errorf("codex app-server turn %s produced no notifications within %s", strings.TrimSpace(turnID), opts.FirstNotificationTimeout)
+			}
 			return codexAppServerResult{}, err
 		}
 		if _, ok := msg["id"]; ok {
