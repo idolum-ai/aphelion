@@ -231,6 +231,65 @@ type OperationArtifact struct {
 	Ref   string `json:"ref"`
 }
 
+type PlanLeaseStatus string
+
+const (
+	PlanLeaseStatusProposed  PlanLeaseStatus = "proposed"
+	PlanLeaseStatusApproved  PlanLeaseStatus = "approved"
+	PlanLeaseStatusActive    PlanLeaseStatus = "active"
+	PlanLeaseStatusPaused    PlanLeaseStatus = "paused"
+	PlanLeaseStatusRevoked   PlanLeaseStatus = "revoked"
+	PlanLeaseStatusExpired   PlanLeaseStatus = "expired"
+	PlanLeaseStatusCompleted PlanLeaseStatus = "completed"
+)
+
+type OperationPlanLeaseLane struct {
+	ID               string   `json:"id,omitempty"`
+	Summary          string   `json:"summary,omitempty"`
+	AuthorityClass   string   `json:"authority_class,omitempty"`
+	ExpectedTurns    int      `json:"expected_turns,omitempty"`
+	AllowedActions   []string `json:"allowed_actions,omitempty"`
+	ForbiddenActions []string `json:"forbidden_actions,omitempty"`
+}
+
+type OperationPlanLeaseEvidenceDigest struct {
+	TurnsSpent         int       `json:"turns_spent,omitempty"`
+	LanesUsed          []string  `json:"lanes_used,omitempty"`
+	Completed          []string  `json:"completed,omitempty"`
+	Blocked            []string  `json:"blocked,omitempty"`
+	InterruptsRaised   []string  `json:"interrupts_raised,omitempty"`
+	EvidenceRefs       []string  `json:"evidence_refs,omitempty"`
+	ChangesMade        []string  `json:"changes_made,omitempty"`
+	ResidualRisk       string    `json:"residual_risk,omitempty"`
+	SuggestedNextLease string    `json:"suggested_next_lease,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+}
+
+type OperationPlanLease struct {
+	ID                   string                           `json:"id,omitempty"`
+	Summary              string                           `json:"summary,omitempty"`
+	Objective            string                           `json:"objective,omitempty"`
+	MissionID            string                           `json:"mission_id,omitempty"`
+	OperationID          string                           `json:"operation_id,omitempty"`
+	Status               PlanLeaseStatus                  `json:"status,omitempty"`
+	TurnBudget           int                              `json:"turn_budget,omitempty"`
+	RemainingTurns       int                              `json:"remaining_turns,omitempty"`
+	CoveredPhaseIDs      []string                         `json:"covered_phase_ids,omitempty"`
+	ExpiresAt            time.Time                        `json:"expires_at,omitempty"`
+	Lanes                []OperationPlanLeaseLane         `json:"lanes,omitempty"`
+	AllowedActions       []string                         `json:"allowed_actions,omitempty"`
+	ForbiddenActions     []string                         `json:"forbidden_actions,omitempty"`
+	ValidationGates      []string                         `json:"validation_gates,omitempty"`
+	ExitConditions       []string                         `json:"exit_conditions,omitempty"`
+	HardInterrupts       []string                         `json:"hard_interrupts,omitempty"`
+	ChildInitiationLanes []string                         `json:"child_initiation_lanes,omitempty"`
+	EvidenceDigest       OperationPlanLeaseEvidenceDigest `json:"evidence_digest,omitempty"`
+	ApprovedBy           int64                            `json:"approved_by,omitempty"`
+	ApprovedAt           time.Time                        `json:"approved_at,omitempty"`
+	CreatedAt            time.Time                        `json:"created_at,omitempty"`
+	UpdatedAt            time.Time                        `json:"updated_at,omitempty"`
+}
+
 type WorkCodexEvent struct {
 	Kind     string `json:"kind,omitempty"`
 	Method   string `json:"method,omitempty"`
@@ -276,6 +335,7 @@ type OperationState struct {
 	Summary   string                `json:"summary,omitempty"`
 	Proposal  OperationProposal     `json:"proposal,omitempty"`
 	PhasePlan OperationPhasePlan    `json:"phase_plan,omitempty"`
+	PlanLease OperationPlanLease    `json:"plan_lease,omitempty"`
 	Findings  []OperationFinding    `json:"findings,omitempty"`
 	Artifacts []OperationArtifact   `json:"artifacts,omitempty"`
 	Work      WorkOperationMetadata `json:"work,omitempty"`
@@ -965,6 +1025,7 @@ func NormalizeOperationState(state OperationState) OperationState {
 	state.Summary = strings.TrimSpace(state.Summary)
 	state.Proposal = normalizeOperationProposal(state.Proposal)
 	state.PhasePlan = normalizeOperationPhasePlan(state.PhasePlan)
+	state.PlanLease = NormalizeOperationPlanLease(state.PlanLease)
 
 	findings := make([]OperationFinding, 0, len(state.Findings))
 	for _, finding := range state.Findings {
@@ -1002,6 +1063,142 @@ func NormalizeOperationState(state OperationState) OperationState {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state
+}
+
+func NormalizePlanLeaseStatus(status PlanLeaseStatus) PlanLeaseStatus {
+	value := normalizeEnumValue(string(status))
+	switch PlanLeaseStatus(value) {
+	case PlanLeaseStatusProposed, PlanLeaseStatusApproved, PlanLeaseStatusActive, PlanLeaseStatusPaused, PlanLeaseStatusRevoked, PlanLeaseStatusExpired, PlanLeaseStatusCompleted:
+		return PlanLeaseStatus(value)
+	default:
+		return ""
+	}
+}
+
+func NormalizeOperationPlanLease(lease OperationPlanLease) OperationPlanLease {
+	lease.ID = strings.TrimSpace(lease.ID)
+	lease.Summary = strings.TrimSpace(lease.Summary)
+	lease.Objective = strings.TrimSpace(lease.Objective)
+	lease.MissionID = strings.TrimSpace(lease.MissionID)
+	lease.OperationID = strings.TrimSpace(lease.OperationID)
+	lease.Status = NormalizePlanLeaseStatus(lease.Status)
+	if lease.TurnBudget < 0 {
+		lease.TurnBudget = 0
+	}
+	if lease.RemainingTurns < 0 {
+		lease.RemainingTurns = 0
+	}
+	if lease.TurnBudget > 0 && lease.RemainingTurns == 0 && (lease.Status == "" || lease.Status == PlanLeaseStatusProposed || lease.Status == PlanLeaseStatusApproved || lease.Status == PlanLeaseStatusActive) {
+		lease.RemainingTurns = lease.TurnBudget
+	}
+	lease.CoveredPhaseIDs = normalizeActionStringSlice(lease.CoveredPhaseIDs)
+	if !lease.ExpiresAt.IsZero() {
+		lease.ExpiresAt = lease.ExpiresAt.UTC()
+	}
+	lease.Lanes = normalizeOperationPlanLeaseLanes(lease.Lanes)
+	lease.AllowedActions = normalizeActionStringSlice(lease.AllowedActions)
+	lease.ForbiddenActions = normalizeActionStringSlice(lease.ForbiddenActions)
+	lease.ValidationGates = normalizeActionStringSlice(lease.ValidationGates)
+	lease.ExitConditions = normalizeActionStringSlice(lease.ExitConditions)
+	lease.HardInterrupts = normalizeActionStringSlice(lease.HardInterrupts)
+	lease.ChildInitiationLanes = normalizeActionStringSlice(lease.ChildInitiationLanes)
+	if lease.Active() {
+		if len(lease.HardInterrupts) == 0 {
+			lease.HardInterrupts = defaultPlanLeaseHardInterrupts()
+		}
+		if len(lease.ChildInitiationLanes) == 0 {
+			lease.ChildInitiationLanes = defaultPlanLeaseChildInitiationLanes()
+		}
+	}
+	lease.EvidenceDigest = normalizeOperationPlanLeaseEvidenceDigest(lease.EvidenceDigest)
+	if !lease.ApprovedAt.IsZero() {
+		lease.ApprovedAt = lease.ApprovedAt.UTC()
+	}
+	if !lease.CreatedAt.IsZero() {
+		lease.CreatedAt = lease.CreatedAt.UTC()
+	}
+	if !lease.UpdatedAt.IsZero() {
+		lease.UpdatedAt = lease.UpdatedAt.UTC()
+	}
+	if lease.Status == "" && lease.Active() {
+		lease.Status = PlanLeaseStatusProposed
+	}
+	if lease.CreatedAt.IsZero() && lease.Active() {
+		lease.CreatedAt = time.Now().UTC()
+	}
+	if lease.UpdatedAt.IsZero() && lease.Active() {
+		lease.UpdatedAt = time.Now().UTC()
+	}
+	return lease
+}
+
+func normalizeOperationPlanLeaseLanes(values []OperationPlanLeaseLane) []OperationPlanLeaseLane {
+	out := make([]OperationPlanLeaseLane, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for index, lane := range values {
+		lane.ID = strings.TrimSpace(lane.ID)
+		lane.Summary = strings.TrimSpace(lane.Summary)
+		lane.AuthorityClass = normalizeEnumValue(lane.AuthorityClass)
+		if lane.ExpectedTurns < 0 {
+			lane.ExpectedTurns = 0
+		}
+		lane.AllowedActions = normalizeActionStringSlice(lane.AllowedActions)
+		lane.ForbiddenActions = normalizeActionStringSlice(lane.ForbiddenActions)
+		if !lane.Active() {
+			continue
+		}
+		baseID := lane.ID
+		if baseID == "" {
+			baseID = fmt.Sprintf("lane-%d", index+1)
+		}
+		id := baseID
+		for suffix := 2; ; suffix++ {
+			if _, exists := seen[id]; !exists {
+				break
+			}
+			id = fmt.Sprintf("%s-%d", baseID, suffix)
+		}
+		lane.ID = id
+		seen[id] = struct{}{}
+		out = append(out, lane)
+	}
+	return out
+}
+
+func normalizeOperationPlanLeaseEvidenceDigest(summary OperationPlanLeaseEvidenceDigest) OperationPlanLeaseEvidenceDigest {
+	if summary.TurnsSpent < 0 {
+		summary.TurnsSpent = 0
+	}
+	summary.LanesUsed = normalizeOperationStringList(summary.LanesUsed)
+	summary.Completed = normalizeOperationStringList(summary.Completed)
+	summary.Blocked = normalizeOperationStringList(summary.Blocked)
+	summary.InterruptsRaised = normalizeOperationStringList(summary.InterruptsRaised)
+	summary.EvidenceRefs = normalizeOperationStringList(summary.EvidenceRefs)
+	summary.ChangesMade = normalizeOperationStringList(summary.ChangesMade)
+	summary.ResidualRisk = strings.TrimSpace(summary.ResidualRisk)
+	summary.SuggestedNextLease = strings.TrimSpace(summary.SuggestedNextLease)
+	if !summary.UpdatedAt.IsZero() {
+		summary.UpdatedAt = summary.UpdatedAt.UTC()
+	}
+	return summary
+}
+
+func defaultPlanLeaseHardInterrupts() []string {
+	return []string{
+		"credentials_or_tokens",
+		"mailbox_content_or_mutation",
+		"external_account_mutation",
+		"public_contact_or_posting",
+		"purchases_or_spend",
+		"policy_or_grant_change",
+		"deploy_or_restart_without_parking",
+		"destructive_migration",
+		"child_authority_expansion",
+	}
+}
+
+func defaultPlanLeaseChildInitiationLanes() []string {
+	return []string{"scheduled_digest", "blocked_question", "capability_request", "urgent_interrupt", "result_report"}
 }
 
 func normalizeOperationPhasePlan(plan OperationPhasePlan) OperationPhasePlan {
@@ -1205,6 +1402,51 @@ func (p OperationPhase) Active() bool {
 		!p.CompletedAt.IsZero()
 }
 
+func (l OperationPlanLease) Active() bool {
+	return strings.TrimSpace(l.ID) != "" ||
+		strings.TrimSpace(l.Summary) != "" ||
+		strings.TrimSpace(l.Objective) != "" ||
+		strings.TrimSpace(l.MissionID) != "" ||
+		strings.TrimSpace(l.OperationID) != "" ||
+		strings.TrimSpace(string(l.Status)) != "" ||
+		l.TurnBudget > 0 ||
+		l.RemainingTurns > 0 ||
+		len(l.CoveredPhaseIDs) > 0 ||
+		!l.ExpiresAt.IsZero() ||
+		len(l.Lanes) > 0 ||
+		len(l.AllowedActions) > 0 ||
+		len(l.ForbiddenActions) > 0 ||
+		len(l.ValidationGates) > 0 ||
+		len(l.ExitConditions) > 0 ||
+		len(l.HardInterrupts) > 0 ||
+		len(l.ChildInitiationLanes) > 0 ||
+		l.EvidenceDigest.Active() ||
+		l.ApprovedBy > 0 ||
+		!l.ApprovedAt.IsZero()
+}
+
+func (l OperationPlanLeaseLane) Active() bool {
+	return strings.TrimSpace(l.ID) != "" ||
+		strings.TrimSpace(l.Summary) != "" ||
+		strings.TrimSpace(l.AuthorityClass) != "" ||
+		l.ExpectedTurns > 0 ||
+		len(l.AllowedActions) > 0 ||
+		len(l.ForbiddenActions) > 0
+}
+
+func (s OperationPlanLeaseEvidenceDigest) Active() bool {
+	return s.TurnsSpent > 0 ||
+		len(s.LanesUsed) > 0 ||
+		len(s.Completed) > 0 ||
+		len(s.Blocked) > 0 ||
+		len(s.InterruptsRaised) > 0 ||
+		len(s.EvidenceRefs) > 0 ||
+		len(s.ChangesMade) > 0 ||
+		strings.TrimSpace(s.ResidualRisk) != "" ||
+		strings.TrimSpace(s.SuggestedNextLease) != "" ||
+		!s.UpdatedAt.IsZero()
+}
+
 func (s OperationState) Active() bool {
 	normalized := s
 	return strings.TrimSpace(normalized.ID) != "" ||
@@ -1214,6 +1456,7 @@ func (s OperationState) Active() bool {
 		strings.TrimSpace(normalized.Summary) != "" ||
 		normalized.Proposal.Active() ||
 		normalized.PhasePlan.Active() ||
+		normalized.PlanLease.Active() ||
 		len(normalized.Findings) > 0 ||
 		len(normalized.Artifacts) > 0
 }

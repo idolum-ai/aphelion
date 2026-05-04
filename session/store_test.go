@@ -3626,3 +3626,75 @@ func TestContinuationStatePersistsActionProposalAndLease(t *testing.T) {
 		t.Fatalf("Lease ExpiresAt = %v, want %v", got.ContinuationLease.ExpiresAt, expiresAt)
 	}
 }
+
+func TestOperationPlanLeaseRoundTripAndDefaults(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 8080, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "8080"}}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	sess.OperationState = OperationState{
+		ID:        "op-plan-lease",
+		Objective: "Reduce approval pings without widening authority.",
+		Status:    OperationStatusBlocked,
+		Stage:     "plan_lease_proposal",
+		PlanLease: OperationPlanLease{
+			ID:              "plan-lease-20260503",
+			Summary:         "Low-risk coordination lease",
+			Status:          PlanLeaseStatusProposed,
+			TurnBudget:      5,
+			CoveredPhaseIDs: []string{"phase-1", "phase-2"},
+			Lanes: []OperationPlanLeaseLane{
+				{ID: "readonly", Summary: "Read-only review", AuthorityClass: "read-only review", ExpectedTurns: 3, AllowedActions: []string{"inspect_status"}},
+				{ID: "workspace", Summary: "Local patch", AuthorityClass: "workspace_write", ExpectedTurns: 2, ForbiddenActions: []string{"deploy"}},
+			},
+			EvidenceDigest: OperationPlanLeaseEvidenceDigest{
+				TurnsSpent:   1,
+				LanesUsed:    []string{"readonly"},
+				Completed:    []string{"summarized status"},
+				ResidualRisk: "Implementation not deployed.",
+			},
+		},
+	}
+	if err := store.Save(sess, []Message{{Role: "assistant", Content: "plan lease proposed", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save() err = %v", err)
+	}
+
+	reloaded, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	lease := reloaded.PlanLease
+	if lease.ID != "plan-lease-20260503" || lease.Status != PlanLeaseStatusProposed {
+		t.Fatalf("plan lease = %#v, want proposed persisted lease", lease)
+	}
+	if lease.TurnBudget != 5 || lease.RemainingTurns != 5 || len(lease.Lanes) != 2 {
+		t.Fatalf("plan lease turns/lanes = %#v", lease)
+	}
+	if lease.Lanes[0].AuthorityClass != "read_only_review" || lease.Lanes[0].ExpectedTurns != 3 {
+		t.Fatalf("plan lease first lane = %#v, want normalized authority and expected turns", lease.Lanes[0])
+	}
+	if len(lease.HardInterrupts) == 0 || len(lease.ChildInitiationLanes) == 0 {
+		t.Fatalf("plan lease guardrails = hard=%#v child=%#v, want defaults", lease.HardInterrupts, lease.ChildInitiationLanes)
+	}
+	if !stringSliceContains(lease.HardInterrupts, "policy_or_grant_change") || !stringSliceContains(lease.ChildInitiationLanes, "capability_request") {
+		t.Fatalf("plan lease guardrails = hard=%#v child=%#v, want hard gates and review lanes", lease.HardInterrupts, lease.ChildInitiationLanes)
+	}
+	if lease.EvidenceDigest.TurnsSpent != 1 || lease.EvidenceDigest.ResidualRisk == "" {
+		t.Fatalf("evidence digest = %#v, want bounded digest persisted", lease.EvidenceDigest)
+	}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
