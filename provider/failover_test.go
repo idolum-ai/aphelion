@@ -77,12 +77,16 @@ func (p *openAIToolResultRejectingProvider) Complete(_ context.Context, messages
 type toolHistoryAssertingProvider struct {
 	reply               string
 	requiredToolContent string
+	maxToolContent      int
 	callCount           int
 }
 
 func (p *toolHistoryAssertingProvider) Complete(_ context.Context, messages []agent.Message, _ []agent.ToolDef) (*agent.Response, error) {
 	p.callCount++
 	for _, msg := range messages {
+		if p.maxToolContent > 0 && strings.EqualFold(strings.TrimSpace(msg.Role), "tool") && len(msg.Content) > p.maxToolContent {
+			return nil, errors.New("tool evidence was not compacted")
+		}
 		if strings.EqualFold(strings.TrimSpace(msg.Role), "tool") && strings.Contains(msg.Content, p.requiredToolContent) {
 			return &agent.Response{Content: p.reply}, nil
 		}
@@ -337,6 +341,47 @@ func TestFailoverChainSkipsOpenAIFamilyAfterToolResultRejection(t *testing.T) {
 	}
 	if anthropic.callCount == 0 {
 		t.Fatal("anthropic provider was not called")
+	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
+		t.Fatalf("provider events = %#v, want failover engaged", resp.ProviderEvents)
+	}
+}
+
+func TestFailoverChainSkipsOpenAIFamilyAndCompactsAfterContextWindowError(t *testing.T) {
+	openAI := &stubChainProvider{err: stubStatusError{code: 400, msg: "codex: stream failed: Your input exceeds the context window of this model"}}
+	openAIFallback := &stubChainProvider{reply: "should not run"}
+	anthropic := &toolHistoryAssertingProvider{
+		reply:               "anthropic compact synthesis",
+		requiredToolContent: "important tail evidence",
+		maxToolContent:      providerFallbackRecentToolChars + 300,
+	}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: openAI},
+		{Name: "openai:gpt-5.4", Provider: openAIFallback},
+		{Name: "anthropic", Provider: anthropic},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	largeToolOutput := strings.Repeat("large output\n", 9000) + "important tail evidence"
+	messages := []agent.Message{
+		{Role: "assistant", ToolCalls: []agent.ToolCall{{ID: "call-1", Name: "exec", Input: []byte(`{"cmd":"git diff"}`)}}},
+		{Role: "tool", ToolCallID: "call-1", ToolName: "exec", Content: largeToolOutput},
+	}
+	resp, err := chain.CompleteManaged(context.Background(), messages, []agent.ToolDef{{Name: "exec"}}, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "anthropic compact synthesis" {
+		t.Fatalf("content = %q, want anthropic compact synthesis", resp.Content)
+	}
+	if openAIFallback.callCount != 0 {
+		t.Fatalf("openAIFallback.callCount = %d, want OpenAI family skipped after context-window failure", openAIFallback.callCount)
+	}
+	if anthropic.callCount != 1 {
+		t.Fatalf("anthropic.callCount = %d, want one compact fallback synthesis", anthropic.callCount)
 	}
 	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
 		t.Fatalf("provider events = %#v, want failover engaged", resp.ProviderEvents)

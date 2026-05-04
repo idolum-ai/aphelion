@@ -167,9 +167,10 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 	}
 	var attempts []FailoverAttempt
 	var events []core.ProviderEvent
+	attemptMessages := messages
 	for idx := 0; idx < len(c.entries); idx++ {
 		entry := c.entries[idx]
-		resp, err := c.completeWithRetry(ctx, entry, messages, tools, opts, &events)
+		resp, err := c.completeWithRetry(ctx, entry, attemptMessages, tools, opts, &events)
 		if err == nil {
 			c.recordSuccess(idx)
 			if idx > 0 {
@@ -183,9 +184,12 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 		}
 		attempts = append(attempts, FailoverAttempt{Name: entry.name, Err: err})
 		recordProviderFailedEvent(&events, entry.name, err)
-		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, messages)
+		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, attemptMessages)
 		if !routeToNext {
 			return nil, err
+		}
+		if isProviderContextWindowError(err) && historyHasToolResults(attemptMessages) {
+			attemptMessages = compactToolResultMessagesForProviderFallback(attemptMessages)
 		}
 		log.Printf("WARN provider failed name=%s err=%v", entry.name, err)
 		if nextIdx >= len(c.entries) {
@@ -204,6 +208,10 @@ func (c *FailoverChain) nextCompleteFailoverIndex(idx int, err error, messages [
 		return 0, false
 	}
 	if shouldFallbackAfterToolResultRejection(err, c.entries[idx].name, messages) {
+		nextIdx := nextNonOpenAIProviderIndex(c.entries, idx)
+		return nextIdx, nextIdx > idx && nextIdx < len(c.entries)
+	}
+	if shouldFallbackAfterContextWindowError(err, c.entries[idx].name, messages) {
 		nextIdx := nextNonOpenAIProviderIndex(c.entries, idx)
 		return nextIdx, nextIdx > idx && nextIdx < len(c.entries)
 	}
@@ -403,6 +411,9 @@ func shouldFailoverOnError(err error) bool {
 	if isProviderBufferLimitError(err) {
 		return true
 	}
+	if isProviderContextWindowError(err) {
+		return true
+	}
 	var sc statusCoder
 	if errors.As(err, &sc) {
 		code := sc.StatusCode()
@@ -438,6 +449,18 @@ func shouldFallbackAfterToolResultRejection(err error, current string, messages 
 		return false
 	}
 	return isRejectedToolResultRequest(err)
+}
+
+func shouldFallbackAfterContextWindowError(err error, current string, messages []agent.Message) bool {
+	if !historyHasToolResults(messages) || !isProviderContextWindowError(err) {
+		return false
+	}
+	switch providerFamilyName(current) {
+	case "codex", "openai":
+		return true
+	default:
+		return false
+	}
 }
 
 func historyHasToolResults(messages []agent.Message) bool {
@@ -496,6 +519,75 @@ func isProviderBufferLimitError(err error) bool {
 	return strings.Contains(msg, "buffer limit") ||
 		strings.Contains(msg, "request buffer") ||
 		strings.Contains(msg, "response buffer")
+}
+
+func isProviderContextWindowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"context window",
+		"context length",
+		"context_length_exceeded",
+		"maximum context",
+		"too many tokens",
+		"input exceeds",
+		"exceeds the context",
+		"token limit",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	providerFallbackRecentToolChars = 4000
+	providerFallbackOlderToolChars  = 800
+	providerFallbackTotalToolChars  = 60000
+)
+
+func compactToolResultMessagesForProviderFallback(messages []agent.Message) []agent.Message {
+	out := append([]agent.Message(nil), messages...)
+	totalToolChars := 0
+	for i := len(out) - 1; i >= 0; i-- {
+		if !strings.EqualFold(strings.TrimSpace(out[i].Role), "tool") {
+			continue
+		}
+		limit := providerFallbackRecentToolChars
+		if totalToolChars >= providerFallbackTotalToolChars {
+			limit = providerFallbackOlderToolChars
+		}
+		out[i].Content = compactProviderFallbackText(out[i].Content, limit)
+		totalToolChars += len(out[i].Content)
+	}
+	return out
+}
+
+func compactProviderFallbackText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	head := limit * 2 / 3
+	tail := limit - head
+	if head < 1 {
+		head = 1
+	}
+	if tail < 1 {
+		tail = 1
+	}
+	if head+tail >= len(text) {
+		return text
+	}
+	return strings.TrimSpace(text[:head]) +
+		fmt.Sprintf("\n\n[tool output compacted for provider context: original_chars=%d omitted_chars=%d]\n\n", len(text), len(text)-head-tail) +
+		strings.TrimSpace(text[len(text)-tail:])
 }
 
 func nextNonOpenAIProviderIndex(entries []failoverEntry, idx int) int {

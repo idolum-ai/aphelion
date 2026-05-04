@@ -28,12 +28,11 @@ func (r *Registry) persistExecProposalState(key session.SessionKey, proposal ses
 	if status != "" {
 		proposal.Status = status
 	}
+	if execProposalShouldStaySidecar(current, proposal) {
+		return nil
+	}
 	if proposal.ID == "" {
-		if current.Proposal.ID != "" {
-			proposal.ID = current.Proposal.ID
-		} else {
-			proposal.ID = generatedOperationID("proposal")
-		}
+		proposal.ID = generatedOperationID("exec-proposal")
 	}
 	proposal.UpdatedAt = now
 
@@ -62,6 +61,38 @@ func (r *Registry) persistExecProposalState(key session.SessionKey, proposal ses
 	current.Proposal = proposal
 	current.UpdatedAt = now
 	return r.store.UpdateOperationState(key, current)
+}
+
+func execProposalShouldStaySidecar(current session.OperationState, proposal session.OperationProposal) bool {
+	current = session.NormalizeOperationState(current)
+	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
+	if !current.Active() || !execProposalIsHeuristicConfirmation(proposal) {
+		return false
+	}
+	for _, phase := range current.PhasePlan.Phases {
+		if phase.Status == session.PlanStatusInProgress {
+			return true
+		}
+	}
+	return false
+}
+
+func execProposalIsHeuristicConfirmation(proposal session.OperationProposal) bool {
+	switch strings.TrimSpace(proposal.Kind) {
+	case "possible_delete_command",
+		"possible_database_delete_command",
+		"high_impact_storage_command",
+		"service_interruption_command",
+		"process_interruption_command",
+		"remote_shell_execution",
+		"capability_acquisition",
+		"external_operation",
+		"repo_history_mutation",
+		"workspace_escape":
+		return true
+	default:
+		return false
+	}
 }
 
 func proposalStatusSummary(proposal session.OperationProposal) string {

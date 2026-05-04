@@ -159,9 +159,20 @@ func newTelegramDurableSnapshotRestoreApprover(sender telegramDecisionSender, br
 	}
 }
 
+type telegramDecisionSummaryFunc func(context.Context, decision.PendingDecision) string
+
 func newTelegramDecisionBroker(sender telegramDecisionSender, opts ...decision.BrokerOption) *decision.Broker {
+	return newTelegramDecisionBrokerWithSummary(sender, nil, opts...)
+}
+
+func newTelegramDecisionBrokerWithSummary(sender telegramDecisionSender, summarize telegramDecisionSummaryFunc, opts ...decision.BrokerOption) *decision.Broker {
 	return decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
 		text := renderPendingDecisionSummary(pending)
+		if summarize != nil {
+			if summary := strings.TrimSpace(summarize(ctx, pending)); summary != "" {
+				text = summary
+			}
+		}
 		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, inlineButtonRows(pending), replyToMessageID(pending.MessageID))
 		if err != nil {
 			return decision.Delivery{}, err
@@ -1770,6 +1781,9 @@ func summarizeProposalApprovalDetails(details string) string {
 	if proposalSummaryLooksHighRisk(kind, summary) {
 		return "High-risk approval: " + ensureDecisionSentence(summary)
 	}
+	if proposalSummaryLooksLikePossibleMatch(kind, summary) {
+		return "Command needs confirmation: " + lowercaseDecisionStart(ensureDecisionSentence(summary))
+	}
 	if summary != "" {
 		return "I’d like to " + lowercaseDecisionStart(ensureDecisionSentence(summary))
 	}
@@ -1809,7 +1823,17 @@ func commitMessageFromProposalCommand(command string) string {
 
 func proposalSummaryLooksHighRisk(kind string, summary string) bool {
 	joined := strings.ToLower(strings.Join([]string{kind, summary}, " "))
-	return strings.Contains(joined, "destructive") || strings.Contains(joined, "delete") || strings.Contains(joined, "remove")
+	return strings.Contains(joined, "remote_shell") ||
+		strings.Contains(joined, "high_impact") ||
+		strings.Contains(joined, "service_interruption") ||
+		strings.Contains(joined, "process_interruption")
+}
+
+func proposalSummaryLooksLikePossibleMatch(kind string, summary string) bool {
+	joined := strings.ToLower(strings.Join([]string{kind, summary}, " "))
+	return strings.Contains(joined, "possible") ||
+		strings.Contains(joined, "may delete") ||
+		strings.Contains(joined, "delete pattern")
 }
 
 func lowercaseDecisionStart(s string) string {

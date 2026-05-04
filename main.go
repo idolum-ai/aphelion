@@ -772,8 +772,14 @@ func run() error {
 	router := core.NewRouter(rt.AgentFunc())
 	router.SetEventHandler(rt.RouterEventHandler())
 	ingress := newIngressSequencer(router, turnTimeout)
-	decisionBroker := newTelegramDecisionBroker(
+	decisionBroker := newTelegramDecisionBrokerWithSummary(
 		tgOutbound,
+		func(ctx context.Context, pending decision.PendingDecision) string {
+			if pending.Kind != decision.KindProposalApproval || rt == nil {
+				return ""
+			}
+			return rt.StatusReadableSummary(ctx, "approval", renderPendingDecisionExpanded(pending))
+		},
 		decision.WithDurableStore(newTelegramDecisionDurableStore(store)),
 		decision.WithObserver(rt.DecisionEventObserver()),
 	)

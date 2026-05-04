@@ -508,10 +508,10 @@ func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 		Command:    "rm -rf build",
 		Reason:     "recursive delete",
 		Proposal: session.OperationProposal{
-			Kind:          "destructive_mutation",
-			Summary:       "Perform a destructive change",
-			WhyNow:        "The requested command deletes existing local state.",
-			BoundedEffect: "Remove the targeted files and continue the operation.",
+			Kind:          "possible_delete_command",
+			Summary:       "Approve command with possible delete pattern",
+			WhyNow:        "This command text matched a pattern that may delete local state.",
+			BoundedEffect: "Approving allows this command once. It does not approve unrelated edits, deploys, restarts, or account actions.",
 			Status:        session.ProposalStatusPending,
 		},
 	})
@@ -527,7 +527,7 @@ func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 	if len(sender.edits) != 1 {
 		t.Fatalf("edits = %#v, want durable approval confirmation", sender.edits)
 	}
-	if !strings.Contains(sender.edits[0].text, "Approved — high-risk:") || !strings.Contains(sender.edits[0].text, "Perform a destructive change") || strings.Contains(sender.edits[0].text, "Decision:") {
+	if !strings.Contains(sender.edits[0].text, "Approved — Command needs confirmation:") || !strings.Contains(sender.edits[0].text, "possible delete pattern") || strings.Contains(sender.edits[0].text, "Decision:") {
 		t.Fatalf("approval edit = %q, want compact proposal confirmation", sender.edits[0].text)
 	}
 	if !hasInlineButton(sender.edits[0].rows, "Expand details") {
@@ -536,7 +536,7 @@ func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline = %#v, want one proposal prompt", sender.inline)
 	}
-	if !strings.Contains(sender.inline[0].text, "Perform a destructive change") {
+	if !strings.Contains(sender.inline[0].text, "possible delete pattern") {
 		t.Fatalf("inline text = %q, want proposal summary", sender.inline[0].text)
 	}
 	if len(sender.inline[0].rows) == 0 {
@@ -569,10 +569,10 @@ func TestTelegramExecApprovalConfirmationExpandShowsCommandAfterApproval(t *test
 			Command:    "rm -rf /tmp/aphelion-runtime-bin",
 			Reason:     "recursive delete",
 			Proposal: session.OperationProposal{
-				Kind:          "destructive_mutation",
-				Summary:       "Perform a destructive change",
-				WhyNow:        "The requested command deletes existing local state.",
-				BoundedEffect: "Remove the targeted files and continue the operation.",
+				Kind:          "possible_delete_command",
+				Summary:       "Approve command with possible delete pattern",
+				WhyNow:        "This command text matched a pattern that may delete local state.",
+				BoundedEffect: "Approving allows this command once. It does not approve unrelated edits, deploys, restarts, or account actions.",
 				Status:        session.ProposalStatusPending,
 			},
 		})
@@ -647,7 +647,7 @@ func TestTelegramExecApprovalConfirmationExpandShowsCommandAfterApproval(t *test
 	}
 
 	collapsed := waitForDecisionEdit(t, sender, 3)
-	if !strings.Contains(collapsed.text, "Approved — high-risk:") || strings.Contains(collapsed.text, "rm -rf /tmp/aphelion-runtime-bin") || strings.Contains(collapsed.text, "Decision:") {
+	if !strings.Contains(collapsed.text, "Approved — Command needs confirmation:") || strings.Contains(collapsed.text, "rm -rf /tmp/aphelion-runtime-bin") || strings.Contains(collapsed.text, "Decision:") {
 		t.Fatalf("collapsed approved text = %q, want compact approval summary without raw command", collapsed.text)
 	}
 	if !hasInlineButton(collapsed.rows, "Expand details") || hasInlineButton(collapsed.rows, "Hide details") {
@@ -673,10 +673,10 @@ func TestTelegramExecApprovalExpandKeepsPendingDecisionButtons(t *testing.T) {
 			Command:    "rm -rf /tmp/aphelion-runtime-bin",
 			Reason:     "recursive delete",
 			Proposal: session.OperationProposal{
-				Kind:          "destructive_mutation",
-				Summary:       "Perform a destructive change",
-				WhyNow:        "The requested command deletes existing local state.",
-				BoundedEffect: "Remove the targeted files and continue the operation.",
+				Kind:          "possible_delete_command",
+				Summary:       "Approve command with possible delete pattern",
+				WhyNow:        "This command text matched a pattern that may delete local state.",
+				BoundedEffect: "Approving allows this command once. It does not approve unrelated edits, deploys, restarts, or account actions.",
 				Status:        session.ProposalStatusPending,
 			},
 		})
