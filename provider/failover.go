@@ -52,7 +52,30 @@ func (e ExhaustedError) Error() string {
 }
 
 func (e ExhaustedError) UserFacingFailure() string {
-	return "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
+	if len(e.Attempts) <= 1 {
+		return "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
+	}
+	return "Inference backends are unavailable after provider fallback attempts. This turn did not complete. You can /stop to cancel current work and try again."
+}
+
+type TerminalProviderError struct {
+	Provider string
+	Err      error
+}
+
+func (e TerminalProviderError) Error() string {
+	if strings.TrimSpace(e.Provider) == "" {
+		return fmt.Sprintf("provider failed: %v", e.Err)
+	}
+	return fmt.Sprintf("%s failed: %v", strings.TrimSpace(e.Provider), e.Err)
+}
+
+func (e TerminalProviderError) Unwrap() error {
+	return e.Err
+}
+
+func (e TerminalProviderError) UserFacingFailure() string {
+	return "Inference backend failed before provider fallback was applicable. This turn did not complete. You can /stop to cancel current work and try again."
 }
 
 type failoverEntry struct {
@@ -157,7 +180,7 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 		recordProviderPartialEvent(&events, entry.name, err)
 		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, attemptMessages)
 		if !routeToNext {
-			return nil, err
+			return nil, TerminalProviderError{Provider: entry.name, Err: err}
 		}
 		attemptMessages = appendPartialProviderRecoveryMessage(attemptMessages, entry.name, err)
 		if isProviderContextWindowError(err) && historyHasToolResults(attemptMessages) {
@@ -201,7 +224,7 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 		recordProviderPartialEvent(&events, entry.name, err)
 		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, attemptMessages)
 		if !routeToNext {
-			return nil, err
+			return nil, TerminalProviderError{Provider: entry.name, Err: err}
 		}
 		attemptMessages = appendPartialProviderRecoveryMessage(attemptMessages, entry.name, err)
 		if isProviderContextWindowError(err) && historyHasToolResults(attemptMessages) {
@@ -222,6 +245,10 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 func (c *FailoverChain) nextCompleteFailoverIndex(idx int, err error, messages []agent.Message) (int, bool) {
 	if c == nil || idx < 0 || idx >= len(c.entries) {
 		return 0, false
+	}
+	if shouldFallbackAfterOpenAIFamilyCapacity(err, c.entries[idx].name) {
+		nextIdx := nextNonOpenAIProviderIndex(c.entries, idx)
+		return nextIdx, nextIdx > idx && nextIdx < len(c.entries)
 	}
 	if shouldFallbackAfterToolResultRejection(err, c.entries[idx].name, messages) {
 		nextIdx := nextNonOpenAIProviderIndex(c.entries, idx)
@@ -263,13 +290,13 @@ func (c *FailoverChain) completeWithRetry(ctx context.Context, entry failoverEnt
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		if !isRetryableProviderError(err) || attempt >= failoverMaxRetries {
+		if shouldBypassSameProviderRetry(err, entry.name) || !isRetryableProviderError(err) || attempt >= failoverMaxRetries {
 			return nil, err
 		}
 		attempt++
 		log.Printf("WARN provider call failed; retrying provider=%s attempt=%d max_retries=%d err=%v", entry.name, attempt, failoverMaxRetries, err)
 		recordProviderRetryEvent(events, entry.name, attempt, err)
-		if err := sleepWithContext(ctx, backoff); err != nil {
+		if err := sleepWithContext(ctx, providerRetryDelay(err, backoff)); err != nil {
 			return nil, err
 		}
 		backoff *= 2
@@ -299,13 +326,13 @@ func (c *FailoverChain) streamWithRetry(ctx context.Context, entry failoverEntry
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, started, ctxErr
 		}
-		if started || !isRetryableProviderError(err) || attempt >= failoverMaxRetries {
+		if started || shouldBypassSameProviderRetry(err, entry.name) || !isRetryableProviderError(err) || attempt >= failoverMaxRetries {
 			return nil, started, err
 		}
 		attempt++
 		log.Printf("WARN provider stream failed; retrying provider=%s attempt=%d max_retries=%d err=%v", entry.name, attempt, failoverMaxRetries, err)
 		recordProviderRetryEvent(events, entry.name, attempt, err)
-		if err := sleepWithContext(ctx, backoff); err != nil {
+		if err := sleepWithContext(ctx, providerRetryDelay(err, backoff)); err != nil {
 			return nil, false, err
 		}
 		backoff *= 2
@@ -377,6 +404,14 @@ type partialProviderError interface {
 	PartialProviderResponse() *agent.Response
 	PartialProviderResponseID() string
 	PartialProviderReason() string
+}
+
+type providerFailureCoder interface {
+	ProviderFailureCode() string
+}
+
+type providerRetryAfterer interface {
+	ProviderRetryAfter() time.Duration
 }
 
 func recordProviderPartialEvent(events *[]core.ProviderEvent, provider string, err error) {
@@ -504,6 +539,9 @@ func isRetryableProviderError(err error) bool {
 	if isProviderBufferLimitError(err) {
 		return false
 	}
+	if isProviderRateLimitError(err) || isProviderCapacityError(err) {
+		return true
+	}
 	var sc statusCoder
 	if errors.As(err, &sc) {
 		code := sc.StatusCode()
@@ -527,6 +565,9 @@ func shouldFailoverOnError(err error) bool {
 	if isProviderBufferLimitError(err) {
 		return true
 	}
+	if isProviderRateLimitError(err) || isProviderCapacityError(err) {
+		return true
+	}
 	if isProviderContextWindowError(err) {
 		return true
 	}
@@ -548,6 +589,43 @@ func shouldFailoverOnError(err error) bool {
 	return isRetryableProviderError(err)
 }
 
+func shouldBypassSameProviderRetry(err error, current string) bool {
+	if err == nil {
+		return false
+	}
+	if isProviderBufferLimitError(err) || isCodexContinuationFailure(err) || isOpenAIModelUnavailableError(err) {
+		return true
+	}
+	switch providerFamilyName(current) {
+	case "codex", "openai":
+		return isProviderRateLimitError(err) || isProviderCapacityError(err)
+	default:
+		return false
+	}
+}
+
+func shouldFallbackAfterOpenAIFamilyCapacity(err error, current string) bool {
+	switch providerFamilyName(current) {
+	case "codex", "openai":
+		return isProviderRateLimitError(err) || isProviderCapacityError(err)
+	default:
+		return false
+	}
+}
+
+func providerRetryDelay(err error, fallback time.Duration) time.Duration {
+	var retryAfter providerRetryAfterer
+	if errors.As(err, &retryAfter) {
+		if d := retryAfter.ProviderRetryAfter(); d > 0 {
+			if d > failoverMaximumBackoff {
+				return failoverMaximumBackoff
+			}
+			return d
+		}
+	}
+	return fallback
+}
+
 func shouldFallbackToNextEntry(err error, current string, next string) bool {
 	if providerFamilyName(current) != "openai" || strings.TrimSpace(next) == "" {
 		return false
@@ -565,6 +643,50 @@ func shouldFallbackAfterToolResultRejection(err error, current string, messages 
 		return false
 	}
 	return isRejectedToolResultRequest(err)
+}
+
+func isProviderRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.EqualFold(providerFailureCode(err), "rate_limit_exceeded") {
+		return true
+	}
+	var sc statusCoder
+	if errors.As(err, &sc) && sc.StatusCode() == 429 {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "rate_limit_exceeded") ||
+		strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "rate-limit")
+}
+
+func isProviderCapacityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch strings.ToLower(providerFailureCode(err)) {
+	case "server_is_overloaded", "slow_down":
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "server_is_overloaded") ||
+		strings.Contains(msg, "slow_down") ||
+		strings.Contains(msg, "slow down") ||
+		strings.Contains(msg, "overload") ||
+		strings.Contains(msg, "at capacity")
+}
+
+func providerFailureCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	var coded providerFailureCoder
+	if errors.As(err, &coded) {
+		return strings.TrimSpace(coded.ProviderFailureCode())
+	}
+	return ""
 }
 
 func shouldFallbackAfterContextWindowError(err error, current string, messages []agent.Message) bool {

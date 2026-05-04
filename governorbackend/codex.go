@@ -12,6 +12,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +38,14 @@ const (
 	codexIncompleteReasonStatusClosed        = "response.incomplete"
 	codexIncompleteReasonStreamClosed        = "stream_closed_after_response_id"
 	codexIncompleteReasonPartialStreamClosed = "partial_stream_closed"
+)
+
+const (
+	codexFailureCodeContextWindow    = "context_length_exceeded"
+	codexFailureCodeInvalidPrompt    = "invalid_prompt"
+	codexFailureCodeRateLimit        = "rate_limit_exceeded"
+	codexFailureCodeServerOverloaded = "server_is_overloaded"
+	codexFailureCodeSlowDown         = "slow_down"
 )
 
 var (
@@ -747,9 +757,13 @@ type codexProviderState struct {
 }
 
 type codexFailedResponse struct {
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error"`
+	Error *codexResponseError `json:"error"`
+}
+
+type codexResponseError struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 type codexStreamParser struct {
@@ -787,6 +801,13 @@ type codexIncompleteError struct {
 	storeResponses bool
 }
 
+type codexFailedError struct {
+	errorType  string
+	code       string
+	message    string
+	retryAfter time.Duration
+}
+
 func newCodexIncompleteError(message string, partial *agent.Response, responseID string, mode codexTurnMode, storeResponses bool) *codexIncompleteError {
 	return &codexIncompleteError{
 		message:        strings.TrimSpace(message),
@@ -794,6 +815,17 @@ func newCodexIncompleteError(message string, partial *agent.Response, responseID
 		responseID:     strings.TrimSpace(responseID),
 		mode:           mode,
 		storeResponses: storeResponses,
+	}
+}
+
+func newCodexFailedError(errorType string, code string, message string) *codexFailedError {
+	message = strings.TrimSpace(message)
+	code = inferCodexFailureCode(code, message)
+	return &codexFailedError{
+		errorType:  strings.TrimSpace(errorType),
+		code:       code,
+		message:    message,
+		retryAfter: parseCodexRetryAfter(message),
 	}
 }
 
@@ -814,6 +846,41 @@ func (e *codexIncompleteError) Error() string {
 		}
 		return "codex: incomplete response"
 	}
+}
+
+func (e *codexFailedError) Error() string {
+	if e == nil {
+		return "codex: stream failed"
+	}
+	message := strings.TrimSpace(e.message)
+	if message == "" {
+		message = strings.TrimSpace(e.code)
+	}
+	if message == "" {
+		message = "response.failed event received"
+	}
+	return "codex: stream failed: " + message
+}
+
+func (e *codexFailedError) ProviderFailureCode() string {
+	if e == nil {
+		return ""
+	}
+	return strings.TrimSpace(e.code)
+}
+
+func (e *codexFailedError) ProviderRetryAfter() time.Duration {
+	if e == nil {
+		return 0
+	}
+	return e.retryAfter
+}
+
+func (e *codexFailedError) ProviderFailureMessage() string {
+	if e == nil {
+		return ""
+	}
+	return strings.TrimSpace(e.message)
 }
 
 func (e *codexIncompleteError) PartialProviderResponse() *agent.Response {
@@ -843,6 +910,61 @@ func (e *codexIncompleteError) PartialProviderReason() string {
 	}
 	parts = append(parts, fmt.Sprintf("store_responses=%t", e.storeResponses))
 	return strings.Join(parts, "; ")
+}
+
+func inferCodexFailureCode(code string, message string) string {
+	code = strings.TrimSpace(code)
+	if code != "" {
+		return code
+	}
+	msg := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case msg == "":
+		return ""
+	case strings.Contains(msg, "server_is_overloaded"):
+		return codexFailureCodeServerOverloaded
+	case strings.Contains(msg, "slow_down") || strings.Contains(msg, "slow down"):
+		return codexFailureCodeSlowDown
+	case strings.Contains(msg, "overload") || strings.Contains(msg, "at capacity"):
+		return codexFailureCodeServerOverloaded
+	case strings.Contains(msg, "rate_limit") || strings.Contains(msg, "rate limit"):
+		return codexFailureCodeRateLimit
+	case strings.Contains(msg, "context_length_exceeded") ||
+		strings.Contains(msg, "context window") ||
+		strings.Contains(msg, "context length") ||
+		strings.Contains(msg, "input exceeds"):
+		return codexFailureCodeContextWindow
+	case strings.Contains(msg, "invalid_prompt") || strings.Contains(msg, "invalid prompt"):
+		return codexFailureCodeInvalidPrompt
+	default:
+		return ""
+	}
+}
+
+func parseCodexRetryAfter(message string) time.Duration {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return 0
+	}
+	match := codexRetryAfterPattern().FindStringSubmatch(message)
+	if len(match) != 3 {
+		return 0
+	}
+	value, err := strconv.ParseFloat(match[1], 64)
+	if err != nil || value <= 0 {
+		return 0
+	}
+	unit := strings.ToLower(match[2])
+	switch {
+	case unit == "ms" || strings.HasPrefix(unit, "millisecond"):
+		return time.Duration(value * float64(time.Millisecond))
+	default:
+		return time.Duration(value * float64(time.Second))
+	}
+}
+
+func codexRetryAfterPattern() *regexp.Regexp {
+	return regexp.MustCompile(`(?i)(?:try again|retry)\s+in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|milliseconds?|s|sec|secs|seconds?)`)
 }
 
 func cloneAgentResponse(resp *agent.Response) *agent.Response {
@@ -948,11 +1070,11 @@ func (p *codexStreamParser) consume(event internal.Event, cb agent.StreamCallbac
 	case "response.failed":
 		var failed codexFailedResponse
 		if len(env.Response) > 0 && json.Unmarshal(env.Response, &failed) == nil {
-			if failed.Error != nil && strings.TrimSpace(failed.Error.Message) != "" {
-				return fmt.Errorf("codex: stream failed: %s", strings.TrimSpace(failed.Error.Message))
+			if failed.Error != nil {
+				return newCodexFailedError(failed.Error.Type, failed.Error.Code, failed.Error.Message)
 			}
 		}
-		return fmt.Errorf("codex: stream failed")
+		return newCodexFailedError("", "", "response.failed event received")
 	default:
 		return nil
 	}

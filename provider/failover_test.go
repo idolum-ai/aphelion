@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
@@ -133,6 +134,24 @@ func (e stubPartialProviderError) PartialProviderReason() string {
 	return e.reason
 }
 
+type stubProviderFailureCodeError struct {
+	msg        string
+	code       string
+	retryAfter time.Duration
+}
+
+func (e stubProviderFailureCodeError) Error() string {
+	return e.msg
+}
+
+func (e stubProviderFailureCodeError) ProviderFailureCode() string {
+	return e.code
+}
+
+func (e stubProviderFailureCodeError) ProviderRetryAfter() time.Duration {
+	return e.retryAfter
+}
+
 type fixedToolRegistry struct {
 	output    string
 	callCount int
@@ -207,6 +226,115 @@ func TestFailoverChainFallsBackOnProviderBufferLimitWithoutRetryingPrimary(t *te
 	}
 	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
 		t.Fatalf("provider events = %#v, want failover event", resp.ProviderEvents)
+	}
+}
+
+func TestFailoverChainSkipsOpenAIFamilyOnCodexOverload(t *testing.T) {
+	primary := &stubChainProvider{err: stubProviderFailureCodeError{
+		code: "server_is_overloaded",
+		msg:  "codex: stream failed: Our servers are currently overloaded. Please try again later.",
+	}}
+	openAI := &stubChainProvider{reply: "should not run"}
+	anthropic := &stubChainProvider{reply: "anthropic after codex overload"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "codex", Provider: primary},
+		{Name: "openai:gpt-5.5", Provider: openAI},
+		{Name: "anthropic", Provider: anthropic},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "anthropic after codex overload" {
+		t.Fatalf("content = %q, want anthropic fallback", resp.Content)
+	}
+	if primary.callCount != 1 {
+		t.Fatalf("primary.callCount = %d, want no same-provider retries on Codex overload", primary.callCount)
+	}
+	if openAI.callCount != 0 {
+		t.Fatalf("openAI.callCount = %d, want OpenAI family skipped", openAI.callCount)
+	}
+	if anthropic.callCount != 1 {
+		t.Fatalf("anthropic.callCount = %d, want one fallback call", anthropic.callCount)
+	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderAttemptFailed) {
+		t.Fatalf("provider events = %#v, want failed event", resp.ProviderEvents)
+	}
+	if !providerEventsContain(resp.ProviderEvents, core.ExecutionEventProviderFailoverEngaged) {
+		t.Fatalf("provider events = %#v, want failover event", resp.ProviderEvents)
+	}
+}
+
+func TestFailoverChainFallsBackOnTextOnlyOpenAIOverload(t *testing.T) {
+	primary := &stubChainProvider{err: errors.New("codex: stream failed: Our servers are currently overloaded. Please try again later.")}
+	anthropic := &stubChainProvider{reply: "anthropic after text overload"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "openai:gpt-5.5", Provider: primary},
+		{Name: "anthropic", Provider: anthropic},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.Stream(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("Stream() err = %v", err)
+	}
+	if resp.Content != "anthropic after text overload" {
+		t.Fatalf("content = %q, want anthropic fallback", resp.Content)
+	}
+	if primary.callCount != 1 {
+		t.Fatalf("primary.callCount = %d, want no same-provider retries on overload", primary.callCount)
+	}
+	if anthropic.callCount != 1 {
+		t.Fatalf("anthropic.callCount = %d, want one fallback call", anthropic.callCount)
+	}
+}
+
+func TestFailoverChainFallsBackOnOpenAIRateLimitWithoutRetryingPrimary(t *testing.T) {
+	primary := &stubChainProvider{err: stubProviderFailureCodeError{
+		code: "rate_limit_exceeded",
+		msg:  "codex: stream failed: Rate limit reached. Please try again in 11.054s.",
+	}}
+	anthropic := &stubChainProvider{reply: "anthropic after rate limit"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "codex", Provider: primary},
+		{Name: "anthropic", Provider: anthropic},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	resp, err := chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err != nil {
+		t.Fatalf("CompleteManaged() err = %v", err)
+	}
+	if resp.Content != "anthropic after rate limit" {
+		t.Fatalf("content = %q, want anthropic fallback", resp.Content)
+	}
+	if primary.callCount != 1 {
+		t.Fatalf("primary.callCount = %d, want no same-provider retries on OpenAI-family rate limit", primary.callCount)
+	}
+	if anthropic.callCount != 1 {
+		t.Fatalf("anthropic.callCount = %d, want one fallback call", anthropic.callCount)
+	}
+}
+
+func TestProviderRetryDelayUsesBoundedRetryAfterHint(t *testing.T) {
+	err := stubProviderFailureCodeError{msg: "retry later", retryAfter: 150 * time.Millisecond}
+	if got := providerRetryDelay(err, 100*time.Millisecond); got != 150*time.Millisecond {
+		t.Fatalf("providerRetryDelay() = %v, want retry-after hint", got)
+	}
+	err.retryAfter = 10 * time.Second
+	if got := providerRetryDelay(err, 100*time.Millisecond); got != failoverMaximumBackoff {
+		t.Fatalf("providerRetryDelay() = %v, want capped %v", got, failoverMaximumBackoff)
 	}
 }
 

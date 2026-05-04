@@ -137,7 +137,7 @@ const (
 const (
 	maxProviderRetries   = 3
 	initialRetryBackoff  = 100 * time.Millisecond
-	providerFailureReply = "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
+	providerFailureReply = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
 	budgetExhaustedReply = "Iteration budget exhausted before final response."
 	planningOnlySteer    = "Your previous reply only described a plan. Do not restate the plan. Start executing now using available tools. Use update_plan only if the work is genuinely multi-step."
 )
@@ -494,7 +494,20 @@ type statusCoder interface {
 	StatusCode() int
 }
 
+type providerFailureCoder interface {
+	ProviderFailureCode() string
+}
+
 func isRetryableProviderError(err error) bool {
+	var coded providerFailureCoder
+	if errors.As(err, &coded) {
+		switch strings.ToLower(strings.TrimSpace(coded.ProviderFailureCode())) {
+		case "rate_limit_exceeded", "server_is_overloaded", "slow_down":
+			return true
+		case "context_length_exceeded", "invalid_prompt":
+			return false
+		}
+	}
 	var sc statusCoder
 	if errors.As(err, &sc) {
 		switch sc.StatusCode() {
@@ -505,8 +518,12 @@ func isRetryableProviderError(err error) bool {
 		}
 	}
 
-	msg := err.Error()
-	return strings.Contains(msg, "429") || strings.Contains(msg, "500") || strings.Contains(msg, "503")
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "429") ||
+		strings.Contains(msg, "500") ||
+		strings.Contains(msg, "503") ||
+		strings.Contains(msg, "overload") ||
+		strings.Contains(msg, "rate limit")
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {

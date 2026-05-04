@@ -145,6 +145,110 @@ func TestCodexCompleteUsesConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestCodexCompleteParsesResponseFailedErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		code       string
+		message    string
+		wantCode   string
+		wantRetry  time.Duration
+		wantErrSub string
+	}{
+		{
+			name:       "coded overload",
+			code:       "server_is_overloaded",
+			message:    "Our servers are currently overloaded. Please try again later.",
+			wantCode:   "server_is_overloaded",
+			wantErrSub: "currently overloaded",
+		},
+		{
+			name:       "text overload",
+			message:    "Our servers are currently overloaded. Please try again later.",
+			wantCode:   "server_is_overloaded",
+			wantErrSub: "currently overloaded",
+		},
+		{
+			name:       "slow down",
+			code:       "slow_down",
+			message:    "Please slow down and try again later.",
+			wantCode:   "slow_down",
+			wantErrSub: "slow down",
+		},
+		{
+			name:       "rate limit with delay",
+			code:       "rate_limit_exceeded",
+			message:    "Rate limit reached for gpt-5.5. Please try again in 11.054s.",
+			wantCode:   "rate_limit_exceeded",
+			wantRetry:  11054 * time.Millisecond,
+			wantErrSub: "Rate limit reached",
+		},
+		{
+			name:       "context window",
+			code:       "context_length_exceeded",
+			message:    "Your input exceeds the context window of this model.",
+			wantCode:   "context_length_exceeded",
+			wantErrSub: "context window",
+		},
+		{
+			name:       "invalid prompt",
+			code:       "invalid_prompt",
+			message:    "Invalid prompt.",
+			wantCode:   "invalid_prompt",
+			wantErrSub: "Invalid prompt",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeSSE(t, w,
+					sseEvent("response.failed", map[string]any{
+						"type": "response.failed",
+						"response": map[string]any{
+							"id":     "resp-failed",
+							"status": "failed",
+							"error": map[string]any{
+								"code":    tt.code,
+								"message": tt.message,
+							},
+						},
+					}),
+				)
+			})
+			client, err := NewCodex(CodexOptions{
+				BaseURL:     "https://chatgpt.com/backend-api",
+				AccessToken: "secret-token",
+				AccountID:   "acct-123",
+				HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+			})
+			if err != nil {
+				t.Fatalf("NewCodex() err = %v", err)
+			}
+			_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+			if err == nil {
+				t.Fatal("Complete() err = nil, want response.failed error")
+			}
+			var failed *codexFailedError
+			if !errors.As(err, &failed) {
+				t.Fatalf("Complete() err = %T/%v, want codexFailedError", err, err)
+			}
+			if failed.ProviderFailureCode() != tt.wantCode {
+				t.Fatalf("ProviderFailureCode() = %q, want %q", failed.ProviderFailureCode(), tt.wantCode)
+			}
+			if failed.ProviderRetryAfter() != tt.wantRetry {
+				t.Fatalf("ProviderRetryAfter() = %v, want %v", failed.ProviderRetryAfter(), tt.wantRetry)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrSub) {
+				t.Fatalf("err = %q, want substring %q", err.Error(), tt.wantErrSub)
+			}
+		})
+	}
+}
+
 func TestCodexCompleteToolCallViaResponsesOutput(t *testing.T) {
 	t.Parallel()
 

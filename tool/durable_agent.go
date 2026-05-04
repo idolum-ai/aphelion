@@ -2765,7 +2765,7 @@ func durableAgentConversationState(continuity core.DurableAgentContinuityState) 
 			if lastChildAt.IsZero() {
 				lastChildAt = message.CreatedAt.UTC()
 			}
-			if lastChildError == "" && strings.Contains(strings.TrimSpace(message.Text), "Inference backends are unavailable after retries and fallback.") {
+			if lastChildError == "" && durableAgentMessageIsInferenceUnavailable(message.Text) {
 				lastChildError = strings.TrimSpace(message.Text)
 			}
 		}
@@ -2784,6 +2784,13 @@ func durableAgentConversationState(continuity core.DurableAgentContinuityState) 
 		state = "conversation_open"
 	}
 	return state, lastParentAt, lastChildAt, lastParentAckAt, lastChildError
+}
+
+func durableAgentMessageIsInferenceUnavailable(text string) bool {
+	text = strings.TrimSpace(text)
+	return strings.Contains(text, "Inference backend is unavailable.") ||
+		strings.Contains(text, "Inference backends are unavailable after retries and fallback.") ||
+		strings.Contains(text, "Inference backends are unavailable after provider fallback attempts.")
 }
 
 func formatDurableAgentTelegramUserIDs(values []int64) string {

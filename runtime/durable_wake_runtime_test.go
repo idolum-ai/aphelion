@@ -296,7 +296,7 @@ func TestPollDurableWakeAgentsDeliversReviewEventsAfterChildExecutorWake(t *test
 
 func TestPollDurableWakeAgentsKeepsParentConversationPendingOnInferenceFailure(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
-	provider.replyText = "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
+	provider.replyText = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)

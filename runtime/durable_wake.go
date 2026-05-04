@@ -17,7 +17,8 @@ import (
 	"github.com/idolum-ai/aphelion/turn"
 )
 
-const durableWakeInferenceUnavailableSignal = "Inference backends are unavailable after retries and fallback."
+const durableWakeInferenceUnavailableSignal = "Inference backend is unavailable."
+const durableWakeLegacyInferenceUnavailableSignal = "Inference backends are unavailable after retries and fallback."
 const durableWakeAwakeLockStaleAfter = 30 * time.Minute
 
 type durableWakeGovernorContextBuilder func(
@@ -270,7 +271,9 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 }
 
 func durableWakeInferenceUnavailable(summary string) bool {
-	return strings.Contains(strings.TrimSpace(summary), durableWakeInferenceUnavailableSignal)
+	summary = strings.TrimSpace(summary)
+	return strings.Contains(summary, durableWakeInferenceUnavailableSignal) ||
+		strings.Contains(summary, durableWakeLegacyInferenceUnavailableSignal)
 }
 
 func finalizeDurableWakeFailure(plan durableWakeTurnPlan, turnSummary string, cause error) error {

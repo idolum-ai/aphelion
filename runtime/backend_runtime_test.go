@@ -356,7 +356,7 @@ func TestRenderTurnReplyBypassesFaceRenderForProviderFailure(t *testing.T) {
 	rt.faceBackend = face.BackendProvider
 	renderer := &countingFaceRenderer{text: "I haven't actually seen the repo work yet."}
 
-	const failureText = "Inference backends are unavailable after retries and fallback. This turn did not complete. You can /stop to cancel current work and try again."
+	const failureText = "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again."
 	result, err := rt.renderTurnReply(turnRenderInput{
 		Ctx:              context.Background(),
 		Result:           &core.TurnResult{Text: failureText, ProviderFailure: "codex: incomplete response without stored-response continuation"},
