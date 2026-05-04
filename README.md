@@ -15,8 +15,7 @@ A minimal, focused agent runtime for personal AI assistants.
 
 - **Channels:** Telegram
 - **Providers now:** Anthropic (Claude), OpenAI, OpenRouter, Google Gemini, local Ollama
-- **Tools now:** exec, curated memory, session recall, optional OpenAI storage tools
-- **Tools planned:** constrained native file tools and web fetch
+- **Tools now:** exec, scoped native file/search/fetch tools, curated memory, session recall, optional OpenAI storage tools
 - **Voice:** ElevenLabs TTS
 - **Automation:** heartbeat, cron
 
@@ -59,6 +58,7 @@ Runnable v0:
 - Anthropic inference
 - SQLite session persistence
 - Shell execution tool (`exec`)
+- Scoped native file/search/fetch tools (`read_file`, `write_file`, `list_dir`, `search`, `fetch_url`)
 - Curated memory tool (`memory`) and transcript recall tool (`session_search`)
 - Optional OpenAI file storage and vector-store tools
 - Config-assigned principals

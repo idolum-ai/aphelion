@@ -504,24 +504,21 @@ Required controls for non-admin execution in v0.5:
 
 Later hardening may use native Linux primitives directly or swap to a stronger backend such as `runsc`, but the observable contract to the rest of Aphelion should remain the same.
 
-## Planned Tool Families
+## Tool Families
 
 ### Required
 
 - `exec`
-
-### Likely next
-
 - `read_file`
 - `write_file`
 - `list_dir`
 - `search`
+- `fetch_url`
 
-These are useful because they can be more constrained and auditable than a shell.
+The native file/search/fetch tools are more constrained and auditable than a shell. They resolve paths through the current sandbox profile, reject hidden/out-of-scope file paths, and deny fetches when the profile network policy is `deny`.
 
 ### Later
 
-- `fetch_url`
 - media helpers (`transcribe_audio`, `extract_pdf_text`)
 - sub-agent launch/control helpers
 

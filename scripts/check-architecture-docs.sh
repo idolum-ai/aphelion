@@ -57,7 +57,7 @@ if ! rg -q "Provider support for Anthropic, OpenAI, OpenRouter, Gemini, and Olla
   exit 1
 fi
 
-if ! rg -q "Native constrained file tools and web fetch \\| planned" docs/promises.md; then
+if ! rg -q "Native constrained file tools and web fetch \\| implemented" docs/promises.md; then
   echo "promise ledger must track native file/web tool status" >&2
   exit 1
 fi

@@ -732,6 +732,9 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				"required": ["command"]
 			}`),
 		},
+	}
+	defs = append(defs, nativeFileToolDefinitions()...)
+	defs = append(defs, []agent.ToolDef{
 		{
 			Name:        "memory",
 			Description: "Write curated memory for the current principal. Use this for compact durable notes, knowledge, decisions, questions, or rhizome associations.",
@@ -765,7 +768,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				"required": ["query"]
 			}`),
 		},
-	}
+	}...)
 	if def, ok := r.codexImageGenerationToolDefinition(); ok {
 		defs = append(defs, def)
 	}
@@ -1233,6 +1236,16 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	switch name {
 	case "exec":
 		return r.exec(ctx, input, scope, p, key)
+	case "read_file":
+		return r.readFile(ctx, input, scope)
+	case "write_file":
+		return r.writeFile(ctx, input, scope)
+	case "list_dir":
+		return r.listDir(ctx, input, scope)
+	case "search":
+		return r.searchFiles(ctx, input, scope)
+	case "fetch_url":
+		return r.fetchURL(ctx, input, scope, p)
 	case "memory":
 		return r.memory(ctx, input, scope)
 	case "session_search":
