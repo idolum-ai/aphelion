@@ -141,6 +141,12 @@ make build
 ./bin/aphelion --config ~/.aphelion/aphelion.toml
 ```
 
+Build a proven static binary:
+
+```bash
+make build-static
+```
+
 Optional OpenAI platform storage:
 
 ```toml

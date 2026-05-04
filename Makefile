@@ -2,12 +2,20 @@ APP := aphelion
 BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP)
 CONFIG ?= $(HOME)/.aphelion/aphelion.toml
+STATIC_BIN ?= $(BIN_DIR)/$(APP)-static
+STATIC_TAGS ?= netgo osusergo sqlite_omit_load_extension
+STATIC_LDFLAGS ?= -linkmode external -extldflags "-static"
 
-.PHONY: build run test check-config init install-user-service restart-user-service logs-user-service update install-release update-release paths gc docs-architecture
+.PHONY: build build-static run test check-config init install-user-service restart-user-service logs-user-service update install-release update-release paths gc docs-architecture
 
 build:
 	mkdir -p $(BIN_DIR)
 	go build -o $(BIN) .
+
+build-static:
+	mkdir -p $(dir $(STATIC_BIN))
+	CGO_ENABLED=1 go build -tags '$(STATIC_TAGS)' -ldflags '$(STATIC_LDFLAGS)' -o $(STATIC_BIN) .
+	./scripts/check-static-binary.sh $(STATIC_BIN)
 
 run: build
 	./$(BIN) --config $(CONFIG)

@@ -19,14 +19,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build binary
-        env:
-          CGO_ENABLED: "1"
-          GOOS: linux
-          GOARCH: amd64
+      - name: Build static binary
         run: |
-          mkdir -p dist
-          go build -o dist/aphelion .
+          make build-static STATIC_BIN=dist/aphelion
 
       - name: Package tarball
         run: |

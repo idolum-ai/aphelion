@@ -17,11 +17,10 @@ surface is not obvious from the code.
 | Provider support for Anthropic, OpenAI, and OpenRouter | implemented | Native adapters and failover chain exist for these providers. | Keep provider request/stream/failover tests current. |
 | Provider support for Gemini and Ollama | planned | Config and runtime currently reject these provider names. | Add config, adapters, streaming, tool calls, readiness checks, and provider events. |
 | Anthropic prompt caching with explicit cache breakpoints | partial | Structured `cache_control: ephemeral` is emitted for selected system/tool blocks. | Add config-backed strategy/TTL validation and request-shape tests. |
-| Single static binary | partial | Normal build produces a single binary, but it is dynamically linked by default because SQLite uses CGo. | Add a separate static release target and CI proof. |
+| Single static binary | implemented | Normal build remains a fast developer binary; `make build-static` and release CI produce a statically linked Linux binary. | Keep static proof covered by release CI. |
 | String anonymization / provider-visible identity control | partial | `identity.user_agent` is configurable and cache boundaries are structural, but some provider-visible names/tool descriptions are still hardcoded. | Add config-owned names and an opt-in anonymous profile with leak tests. |
 | Config schema covers all documented knobs | partial | Runnable config is narrower than the broad requirements schema; unknown keys are accepted silently. | Warn on ignored/future keys in check-config, startup, and doctor. |
 | Sandbox isolation for non-admin/durable execution | partial | Bubblewrap profiles isolate roots, hide secrets, clear env, drop caps, and can deny network. | Add config-backed profiles and honest warnings for deeper primitives not yet enforced. |
 | Native constrained file tools and web fetch | planned | `exec`, memory/session tools, optional OpenAI storage, and governed external-tool lifecycle exist; native file/fetch tools do not. | Add scoped `read_file`, `write_file`, `list_dir`, `search`, then `fetch_url`. |
 | Telegram media buttons for ambiguous voice/audio/video | planned | Automatic media handling exists for transcription, vision, PDFs/text, metadata, and outbound media. | Add config-enabled callback workflows with stale/timeout handling. |
-| Release install/update path | implemented | Release workflow, install/update scripts, park-restart, config preflight, init, and verify-deploy exist. | Extend release CI with static binary proof. |
-
+| Release install/update path | implemented | Release workflow builds the static binary, install/update scripts run park-restart, config preflight, init, and verify-deploy. | Keep release scripts covered by deploy checks. |

@@ -45,7 +45,7 @@ As-built architecture docs: [`../docs/architecture/`](../docs/architecture/READM
 28. 🟡 [`media.md`](media.md) — Image/audio/video handling, OpenAI transcription/translation; ambiguous-media buttons remain planned.
 
 ## Operations
-29. 🟡 [`deployment.md`](deployment.md) — GitHub Releases, binaries, systemd services, updates, rollback; static release proof remains planned.
+29. ✅ [`deployment.md`](deployment.md) — GitHub Releases, static binary target, systemd services, updates, rollback
 30. 🟡 [`security.md`](security.md) — Trusted-admin floor, isolation boundaries, sandbox assembly, credential lifecycle, permission model; config-backed sandbox profiles remain planned.
 31. 🟡 [`reliability.md`](reliability.md) — Error handling, degradation, delivery semantics, recovery, and disaster discipline
 32. ✅ [`turn-pipeline-refactor.md`](turn-pipeline-refactor.md) — Plan for aligning live package ownership with the runtime/turn/pipeline architecture
