@@ -172,6 +172,16 @@ const (
 	ContinuationLeaseStatusExpired  ContinuationLeaseStatus = "expired"
 )
 
+type ContinuationLeaseClass string
+
+const (
+	ContinuationLeaseClassLocalWorkspace  ContinuationLeaseClass = "local_workspace"
+	ContinuationLeaseClassDataAccess      ContinuationLeaseClass = "data_access"
+	ContinuationLeaseClassChildWake       ContinuationLeaseClass = "child_wake"
+	ContinuationLeaseClassCapabilityGrant ContinuationLeaseClass = "capability_grant"
+	ContinuationLeaseClassDeployRestart   ContinuationLeaseClass = "deploy_restart"
+)
+
 type ContinuationLease struct {
 	ID               string                  `json:"id,omitempty"`
 	ProposalID       string                  `json:"proposal_id,omitempty"`
@@ -180,6 +190,8 @@ type ContinuationLease struct {
 	MaxTurns         int                     `json:"max_turns,omitempty"`
 	RemainingTurns   int                     `json:"remaining_turns,omitempty"`
 	ApprovedBy       int64                   `json:"approved_by,omitempty"`
+	LeaseClass       ContinuationLeaseClass  `json:"lease_class,omitempty"`
+	Constraints      map[string]string       `json:"constraints,omitempty"`
 	AllowedActions   []string                `json:"allowed_actions,omitempty"`
 	ForbiddenActions []string                `json:"forbidden_actions,omitempty"`
 	ValidationPlan   []string                `json:"validation_plan,omitempty"`
@@ -1928,12 +1940,225 @@ func (p ActionProposal) Active() bool {
 		strings.TrimSpace(string(p.Status)) != ""
 }
 
+func NormalizeContinuationLeaseClass(class ContinuationLeaseClass) ContinuationLeaseClass {
+	value := normalizeEnumValue(string(class))
+	switch ContinuationLeaseClass(value) {
+	case ContinuationLeaseClassLocalWorkspace,
+		ContinuationLeaseClassDataAccess,
+		ContinuationLeaseClassChildWake,
+		ContinuationLeaseClassCapabilityGrant,
+		ContinuationLeaseClassDeployRestart:
+		return ContinuationLeaseClass(value)
+	default:
+		return ""
+	}
+}
+
+func InferContinuationLeaseClass(riskClass string, allowedActions []string, boundedEffect string) ContinuationLeaseClass {
+	_ = boundedEffect
+	text := normalizeEnumValue(strings.Join(append([]string{riskClass}, allowedActions...), " "))
+	if text == "" {
+		return ""
+	}
+	containsAny := func(values ...string) bool {
+		for _, value := range values {
+			if strings.Contains(text, normalizeEnumValue(value)) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case containsAny("deploy", "restart", "service_restart", "git_push", "push_remote", "git_commit", "repo_history_mutation"):
+		return ContinuationLeaseClassDeployRestart
+	case containsAny("capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority"):
+		return ContinuationLeaseClassCapabilityGrant
+	case containsAny("child_wake", "durable_child_wake", "selected_child_wake", "durable_agent_wake"):
+		return ContinuationLeaseClassChildWake
+	case containsAny("data_access", "file_access", "read_image", "read_file", "consume_attachment", "artifact_read", "network_access"):
+		return ContinuationLeaseClassDataAccess
+	case containsAny("workspace_write", "repo_edit", "edit_files", "patch", "run_tests", "focused_tests", "git_diff_check", "read_only", "read_only_review", "status_check"):
+		return ContinuationLeaseClassLocalWorkspace
+	default:
+		return ""
+	}
+}
+
+func ContinuationLeaseClassLabel(class ContinuationLeaseClass) string {
+	switch NormalizeContinuationLeaseClass(class) {
+	case ContinuationLeaseClassLocalWorkspace:
+		return "local workspace"
+	case ContinuationLeaseClassDataAccess:
+		return "data access"
+	case ContinuationLeaseClassChildWake:
+		return "child wake"
+	case ContinuationLeaseClassCapabilityGrant:
+		return "capability grant"
+	case ContinuationLeaseClassDeployRestart:
+		return "deploy/restart"
+	default:
+		return "generic"
+	}
+}
+
+func ContinuationLeaseClassBoundary(class ContinuationLeaseClass) string {
+	switch NormalizeContinuationLeaseClass(class) {
+	case ContinuationLeaseClassLocalWorkspace:
+		return "local repo/workspace work only; no repository history, deploy, restart, credentials, or external effects unless separately granted"
+	case ContinuationLeaseClassDataAccess:
+		return "read exactly the approved resource descriptors; no silent broad ingestion, retention, or external-account access"
+	case ContinuationLeaseClassChildWake:
+		return "wake only the named child and approved count; no policy drift, grants, or external effects beyond the child charter"
+	case ContinuationLeaseClassCapabilityGrant:
+		return "request/review authority only unless a separate active capability grant exists; leases do not grant capabilities by themselves"
+	case ContinuationLeaseClassDeployRestart:
+		return "release-class work requires fresh evidence, handoff, verification, and rollback/stop gates; no unbounded restart/deploy loops"
+	default:
+		return "bounded continuation only; do not infer authority outside explicit allowed actions"
+	}
+}
+
+func DefaultContinuationLeaseConstraints(class ContinuationLeaseClass) map[string]string {
+	switch NormalizeContinuationLeaseClass(class) {
+	case ContinuationLeaseClassLocalWorkspace:
+		return map[string]string{
+			"scope":       "local workspace/repository only",
+			"history":     "commit/push require separate lease",
+			"externality": "no deploy, restart, credentials, purchases, public contact, or external accounts",
+			"validation":  "focused tests or diff checks before report",
+		}
+	case ContinuationLeaseClassDataAccess:
+		return map[string]string{
+			"resource":  "explicit descriptor required: artifact/file/attachment/url/account surface",
+			"scope":     "one approved resource or bounded resource set",
+			"retention": "ephemeral by default; durable retention requires explicit approval",
+			"redaction": "apply connector redaction before model consumption when available",
+		}
+	case ContinuationLeaseClassChildWake:
+		return map[string]string{
+			"agent":      "named durable child required",
+			"wake_count": "bounded count/cadence required",
+			"outbound":   "child policy controls outbound effects",
+			"no_drift":   "no policy/bootstrap/grant changes without separate approval",
+		}
+	case ContinuationLeaseClassCapabilityGrant:
+		return map[string]string{
+			"request":    "request_id or target_resource required",
+			"grant":      "grant_set/access_check remains separate capability_authority state",
+			"actions":    "allowed actions must be explicit; wildcard is insufficient",
+			"activation": "approved lease may prepare/review, not silently activate broad authority",
+		}
+	case ContinuationLeaseClassDeployRestart:
+		return map[string]string{
+			"handoff":      "pre-restart/deploy handoff required",
+			"verification": "post-action status/journal/smoke evidence required",
+			"rollback":     "stop or rollback path must be named when risk is nontrivial",
+			"separation":   "commit/push/deploy/restart should remain separately visible steps",
+		}
+	default:
+		return nil
+	}
+}
+
+func normalizeContinuationLeaseConstraints(class ContinuationLeaseClass, constraints map[string]string) map[string]string {
+	defaults := DefaultContinuationLeaseConstraints(class)
+	if len(defaults) == 0 && len(constraints) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(defaults)+len(constraints))
+	for key, value := range defaults {
+		key = normalizeEnumValue(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			out[key] = value
+		}
+	}
+	for key, value := range constraints {
+		key = normalizeEnumValue(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func continuationLeaseClassRequiresExactActions(class ContinuationLeaseClass) bool {
+	switch NormalizeContinuationLeaseClass(class) {
+	case ContinuationLeaseClassDataAccess, ContinuationLeaseClassChildWake, ContinuationLeaseClassCapabilityGrant, ContinuationLeaseClassDeployRestart:
+		return true
+	default:
+		return false
+	}
+}
+
+type ContinuationLeaseAccessDecision struct {
+	LeaseID string `json:"lease_id,omitempty"`
+	Action  string `json:"action,omitempty"`
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 func (l ContinuationLease) Active() bool {
+	return l.ActiveAt(time.Now().UTC())
+}
+
+func (l ContinuationLease) ActiveAt(now time.Time) bool {
 	lease := NormalizeContinuationLease(l)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
 	if lease.Status != ContinuationLeaseStatusActive || lease.RemainingTurns <= 0 {
 		return false
 	}
-	return lease.ExpiresAt.IsZero() || lease.ExpiresAt.After(time.Now().UTC())
+	return lease.ExpiresAt.IsZero() || lease.ExpiresAt.After(now)
+}
+
+func CheckContinuationLeaseAction(lease ContinuationLease, action string, now time.Time) ContinuationLeaseAccessDecision {
+	lease = NormalizeContinuationLease(lease)
+	action = normalizeEnumValue(action)
+	decision := ContinuationLeaseAccessDecision{LeaseID: lease.ID, Action: action}
+	if action == "" {
+		decision.Reason = "action_required"
+		return decision
+	}
+	if !lease.ActiveAt(now) {
+		decision.Reason = "lease_inactive_or_expired"
+		return decision
+	}
+	if actionListMatches(lease.ForbiddenActions, action) {
+		decision.Reason = "action_forbidden"
+		return decision
+	}
+	exactAllowed := actionListMatches(lease.AllowedActions, action)
+	if actionListMatches(lease.AllowedActions, "*") && !exactAllowed && continuationLeaseClassRequiresExactActions(lease.LeaseClass) {
+		decision.Reason = "lease_class_requires_explicit_action"
+		return decision
+	}
+	if actionListMatches(lease.AllowedActions, "*") || exactAllowed {
+		decision.Allowed = true
+		decision.Reason = "allowed"
+		return decision
+	}
+	decision.Reason = "action_not_allowed"
+	return decision
+}
+
+func actionListMatches(values []string, action string) bool {
+	action = normalizeEnumValue(action)
+	if action == "" {
+		return false
+	}
+	for _, value := range values {
+		if normalizeEnumValue(value) == action {
+			return true
+		}
+	}
+	return false
 }
 
 func NormalizeActionProposal(proposal ActionProposal) ActionProposal {
@@ -2104,9 +2329,14 @@ func NormalizeContinuationLease(lease ContinuationLease) ContinuationLease {
 	lease.ProposalID = strings.TrimSpace(lease.ProposalID)
 	lease.MissionID = strings.TrimSpace(lease.MissionID)
 	lease.Status = NormalizeContinuationLeaseStatus(lease.Status)
+	lease.LeaseClass = NormalizeContinuationLeaseClass(lease.LeaseClass)
 	lease.AllowedActions = normalizeActionStringSlice(lease.AllowedActions)
 	lease.ForbiddenActions = normalizeActionStringSlice(lease.ForbiddenActions)
 	lease.ValidationPlan = normalizeActionStringSlice(lease.ValidationPlan)
+	if lease.LeaseClass == "" {
+		lease.LeaseClass = InferContinuationLeaseClass("", lease.AllowedActions, "")
+	}
+	lease.Constraints = normalizeContinuationLeaseConstraints(lease.LeaseClass, lease.Constraints)
 	lease.PlanHash = strings.TrimSpace(lease.PlanHash)
 	if lease.MaxTurns < 0 {
 		lease.MaxTurns = 0

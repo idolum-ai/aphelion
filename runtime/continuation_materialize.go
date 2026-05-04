@@ -1217,6 +1217,7 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	if len(action.ValidationPlan) == 0 {
 		action.ValidationPlan = []string{"verify the action stays within the phase bounded effect", "update operation phase status and report evidence"}
 	}
+	action = applyContinuationLeaseClassBoundaries(action)
 	action.PlanHash = actionProposalHash(action)
 	state.ActionProposal = session.NormalizeActionProposal(action)
 	state.ContinuationLease = buildContinuationLease(state.ActionProposal, 1, now)
@@ -1252,6 +1253,7 @@ func actionProposalFromOperationProposal(opState session.OperationState, proposa
 	}
 	actionProposal = applyOrganicRalphSandbox(actionProposal, opState, proposal)
 	actionProposal = applyGoalContinuationSandbox(actionProposal, opState, proposal)
+	actionProposal = applyContinuationLeaseClassBoundaries(actionProposal)
 	actionProposal.PlanHash = actionProposalHash(actionProposal)
 	return session.NormalizeActionProposal(actionProposal)
 }
@@ -1651,6 +1653,10 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 	}
 	if effect := strings.TrimSpace(proposal.BoundedEffect); effect != "" {
 		lines = append(lines, "", "Bounded effect:", effect)
+	}
+	if card := continuationOperatorCardLines(state); len(card) > 0 {
+		lines = append(lines, "", "Operator card:")
+		lines = append(lines, card...)
 	}
 	if continuationActionIsPlanLeaseApproval(state) {
 		lines = append(lines, "", "Plan lease authority:", "Bounded plan envelope only; approval does not grant capabilities or automatically start work.")

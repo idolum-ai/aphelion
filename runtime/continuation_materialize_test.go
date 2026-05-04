@@ -83,6 +83,65 @@ func TestHandleInboundMaterializesPendingOperationProposalAsButtonBackedLease(t 
 	}
 }
 
+func TestMaterializeOperationProposalShowsDataAccessLeaseClassCard(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9031, UserID: 0, Scope: telegramDMScopeRef(9031)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "data-access-card",
+		Objective: "Inspect generated image artifact through governed data access.",
+		Status:    session.OperationStatusBlocked,
+		Proposal: session.OperationProposal{
+			ID:            "data-access-image-read",
+			Kind:          "data_access",
+			Summary:       "Read one generated image artifact",
+			WhyNow:        "The model can analyze the image only if the artifact is routed as data.",
+			BoundedEffect: "Read artifact://image2/field-of-attention.png once; no retention or broad filesystem scan.",
+			Status:        session.ProposalStatusPending,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9031, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want data-access lease card")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassDataAccess {
+		t.Fatalf("lease class = %q, want data_access", cont.ContinuationLease.LeaseClass)
+	}
+	if !actionListContains(cont.ActionProposal.AllowedActions, "read_approved_resource") || !actionListContains(cont.ActionProposal.ForbiddenActions, "silent_data_ingestion") {
+		t.Fatalf("proposal actions allowed=%#v forbidden=%#v, want data-access boundaries", cont.ActionProposal.AllowedActions, cont.ActionProposal.ForbiddenActions)
+	}
+	if cont.ContinuationLease.Constraints["resource"] == "" || cont.ContinuationLease.Constraints["retention"] == "" {
+		t.Fatalf("lease constraints = %#v, want data-access constraints", cont.ContinuationLease.Constraints)
+	}
+
+	sender.mu.Lock()
+	inlineText := ""
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	for _, want := range []string{"Operator card:", "Lease class: data access", "no silent broad ingestion", "Constraint: resource=", "Constraint: retention="} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want %q", inlineText, want)
+		}
+	}
+}
+
 func TestApproveMaterializedOperationProposalUpdatesOperationProposalStatus(t *testing.T) {
 	t.Parallel()
 

@@ -412,6 +412,87 @@ func TestWorkPromptForContinuationIncludesOutcomeValidationAndStopRules(t *testi
 	}
 }
 
+func TestTriggerContinuationBlocksWorkExecutorWhenLeaseForbidsMode(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8187, UserID: 0, Scope: telegramDMScopeRef(8187)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "work-lane-forbidden",
+		Objective:      "Patch the work lane.",
+		StageSummary:   "Edit runtime work executor files and test.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-work-lane-forbidden",
+			Summary:       "Patch work executor",
+			BoundedEffect: "Edit runtime work executor files and run focused tests.",
+			RiskClass:     "workspace_write",
+			Status:        session.ProposalStatusApproved,
+			ExpiresAt:     expiresAt,
+			PlanHash:      "sha256:work-lane-forbidden",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-work-lane-forbidden",
+			ProposalID:       "aprop-work-lane-forbidden",
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			AllowedActions:   []string{"read_only"},
+			ForbiddenActions: []string{"workspace_write"},
+			ExpiresAt:        expiresAt,
+			PlanHash:         "sha256:work-lane-forbidden",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8187); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 0 {
+		t.Fatalf("work calls = %d, want lease access denial before executor", work.calls)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusRevoked || got.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked {
+		t.Fatalf("continuation = %#v, want revoked after lease action denial", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	foundDenied := false
+	for _, event := range events {
+		if event.EventType != core.ExecutionEventContinuationBlocked {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+			t.Fatalf("decode blocked payload %q: %v", event.PayloadJSON, err)
+		}
+		if payloadString(payload, "reason") == "lease_action_denied" && payloadString(payload, "lease_access_reason") == "action_forbidden" {
+			foundDenied = true
+			break
+		}
+	}
+	if !foundDenied {
+		t.Fatalf("events missing lease_action_denied block: %#v", events)
+	}
+}
+
 func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	t.Parallel()
 

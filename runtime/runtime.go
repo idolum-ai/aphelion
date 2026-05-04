@@ -295,6 +295,11 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 		return r.runApprovedContinuationNative(ctx, actor, chatID, state)
 	}
 	state = session.NormalizeContinuationState(state)
+	mode := continuationWorkMode(state)
+	leaseDecision := continuationWorkModeAccessCheck(state, mode, time.Now().UTC())
+	if !leaseDecision.Allowed {
+		return r.blockContinuationForLeaseAccessDenied(chatID, state, leaseDecision)
+	}
 	executionActor := continuationExecutionActor(actor, state)
 	approvedBy := state.ApprovedBy
 	if approvedBy == 0 {
@@ -381,6 +386,25 @@ func workExecutorFallbackWarning(status WorkExecutorStatus) string {
 	return fmt.Sprintf("Work executor fallback: %s unavailable; using %s.", preferred, active)
 }
 
+func (r *Runtime) blockContinuationForLeaseAccessDenied(chatID int64, state session.ContinuationState, decision session.ContinuationLeaseAccessDecision) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	state = continuationStateWithLeaseRevoked(state, now)
+	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return err
+	}
+	payload := continuationExecutionPayload(state)
+	payload["reason"] = "lease_action_denied"
+	payload["lease_action"] = strings.TrimSpace(decision.Action)
+	payload["lease_access_reason"] = strings.TrimSpace(decision.Reason)
+	payload["lease_id"] = strings.TrimSpace(decision.LeaseID)
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", payload, now)
+	return nil
+}
+
 func (r *Runtime) workRequestForContinuation(key session.SessionKey, chatID int64, actor principal.Principal, state session.ContinuationState, opState session.OperationState) WorkRequest {
 	mode := continuationWorkMode(state)
 	if mode == "" {
@@ -442,6 +466,81 @@ func continuationWorkMode(state session.ContinuationState) WorkMode {
 	default:
 		return ""
 	}
+}
+
+func continuationWorkModeAccessCheck(state session.ContinuationState, mode WorkMode, now time.Time) session.ContinuationLeaseAccessDecision {
+	state = session.NormalizeContinuationState(state)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	action := strings.TrimSpace(string(mode))
+	decision := session.CheckContinuationLeaseAction(state.ContinuationLease, action, now)
+	if decision.Allowed {
+		return decision
+	}
+	if decision.Reason != "action_not_allowed" {
+		return decision
+	}
+	requestedRank := workModeRank(mode)
+	if requestedRank <= 0 {
+		decision.Reason = "work_mode_required"
+		return decision
+	}
+	if continuationWorkModeForbiddenByLease(state, mode) {
+		decision.Reason = "action_forbidden"
+		return decision
+	}
+	if continuationAllowedWorkModeRank(state) >= requestedRank {
+		decision.Allowed = true
+		decision.Reason = "allowed_by_structured_authority"
+		return decision
+	}
+	return decision
+}
+
+func continuationAllowedWorkModeRank(state session.ContinuationState) int {
+	state = session.NormalizeContinuationState(state)
+	mode := WorkMode("")
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		mode = strongestWorkMode(mode, workModeFromStructuredAuthority(phase.AuthorityClass))
+		mode = strongestWorkMode(mode, workModeFromStructuredAuthorityList(phase.AllowedActions))
+	}
+	proposal := session.NormalizeActionProposal(state.ActionProposal)
+	mode = strongestWorkMode(mode, workModeFromStructuredAuthority(proposal.RiskClass))
+	mode = strongestWorkMode(mode, workModeFromStructuredAuthorityList(proposal.AllowedActions))
+	mode = strongestWorkMode(mode, workModeFromStructuredAuthorityList(state.ContinuationLease.AllowedActions))
+	return workModeRank(mode)
+}
+
+func continuationWorkModeForbiddenByLease(state session.ContinuationState, mode WorkMode) bool {
+	state = session.NormalizeContinuationState(state)
+	requestedRank := workModeRank(mode)
+	if requestedRank <= 0 {
+		return false
+	}
+	for _, forbidden := range continuationForbiddenWorkModeActions(state) {
+		forbiddenMode := workModeFromStructuredAuthority(forbidden)
+		forbiddenRank := workModeRank(forbiddenMode)
+		if forbiddenRank > 0 && requestedRank >= forbiddenRank {
+			return true
+		}
+		if normalizeWorkModeAuthorityToken(forbidden) == normalizeWorkModeAuthorityToken(string(mode)) {
+			return true
+		}
+	}
+	return false
+}
+
+func continuationForbiddenWorkModeActions(state session.ContinuationState) []string {
+	state = session.NormalizeContinuationState(state)
+	out := make([]string, 0, len(state.ActionProposal.ForbiddenActions)+len(state.ContinuationLease.ForbiddenActions)+8)
+	out = append(out, state.ActionProposal.ForbiddenActions...)
+	out = append(out, state.ContinuationLease.ForbiddenActions...)
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		out = append(out, phase.ForbiddenActions...)
+	}
+	return out
 }
 
 func workModeFromStructuredAuthorityList(values []string) WorkMode {

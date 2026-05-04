@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -590,8 +591,82 @@ func buildContinuationActionProposal(decisionID string, consensus continuationCo
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
+	actionProposal = applyContinuationLeaseClassBoundaries(actionProposal)
 	actionProposal.PlanHash = actionProposalHash(actionProposal)
 	return session.NormalizeActionProposal(actionProposal)
+}
+
+func applyContinuationLeaseClassBoundaries(action session.ActionProposal) session.ActionProposal {
+	action = session.NormalizeActionProposal(action)
+	class := session.InferContinuationLeaseClass(action.RiskClass, action.AllowedActions, action.BoundedEffect)
+	switch class {
+	case session.ContinuationLeaseClassDataAccess:
+		action.AllowedActions = append(action.AllowedActions,
+			"request_data_access",
+			"read_approved_resource",
+			"report_data_access_result",
+		)
+		action.ForbiddenActions = append(action.ForbiddenActions,
+			"silent_data_ingestion",
+			"read_unapproved_resource",
+			"broad_filesystem_scan",
+			"persist_data_without_approval",
+			"external_account_access_without_grant",
+		)
+		action.ValidationPlan = append(action.ValidationPlan,
+			"record resource descriptor, transform, retention, and access result",
+			"verify no data was consumed before approval",
+		)
+	case session.ContinuationLeaseClassChildWake:
+		action.AllowedActions = append(action.AllowedActions,
+			"request_child_wake",
+			"wake_named_child",
+			"report_child_wake_result",
+		)
+		action.ForbiddenActions = append(action.ForbiddenActions,
+			"wake_unnamed_child",
+			"change_child_policy_without_approval",
+			"grant_child_capability_without_capability_authority",
+			"unbounded_child_wake_loop",
+		)
+		action.ValidationPlan = append(action.ValidationPlan,
+			"record child agent id, wake count, parent message, and final child state",
+		)
+	case session.ContinuationLeaseClassCapabilityGrant:
+		action.AllowedActions = append(action.AllowedActions,
+			"prepare_capability_request",
+			"review_capability_scope",
+			"capability_access_check",
+			"report_capability_decision",
+		)
+		action.ForbiddenActions = append(action.ForbiddenActions,
+			"treat_lease_as_capability_grant",
+			"grant_without_capability_authority",
+			"invoke_without_active_capability_grant",
+			"broaden_capability_target_silently",
+		)
+		action.ValidationPlan = append(action.ValidationPlan,
+			"show request id, target resource, allowed actions, and active grant/access-check evidence before invocation",
+		)
+	case session.ContinuationLeaseClassDeployRestart:
+		action.AllowedActions = append(action.AllowedActions,
+			"prepare_release_handoff",
+			"run_explicit_release_step",
+			"post_restart_verification",
+			"report_release_result",
+		)
+		action.ForbiddenActions = append(action.ForbiddenActions,
+			"deploy_without_handoff",
+			"restart_without_recovery_artifact",
+			"unbounded_restart_loop",
+			"skip_post_deploy_verification",
+			"push_or_commit_outside_release_lease",
+		)
+		action.ValidationPlan = append(action.ValidationPlan,
+			"record pre-action git/service state, handoff, post-action status, journal/smoke evidence, and rollback/residual risk",
+		)
+	}
+	return session.NormalizeActionProposal(action)
 }
 
 func buildContinuationLease(proposal session.ActionProposal, turns int, now time.Time) session.ContinuationLease {
@@ -603,6 +678,7 @@ func buildContinuationLease(proposal session.ActionProposal, turns int, now time
 	if turns <= 0 {
 		turns = 1
 	}
+	leaseClass := session.InferContinuationLeaseClass(proposal.RiskClass, proposal.AllowedActions, proposal.BoundedEffect)
 	lease := session.ContinuationLease{
 		ID:               "lease-" + strings.TrimPrefix(strings.TrimSpace(proposal.ID), "aprop-"),
 		ProposalID:       strings.TrimSpace(proposal.ID),
@@ -610,6 +686,8 @@ func buildContinuationLease(proposal session.ActionProposal, turns int, now time
 		Status:           session.ContinuationLeaseStatusPending,
 		MaxTurns:         turns,
 		RemainingTurns:   turns,
+		LeaseClass:       leaseClass,
+		Constraints:      session.DefaultContinuationLeaseConstraints(leaseClass),
 		AllowedActions:   append([]string(nil), proposal.AllowedActions...),
 		ForbiddenActions: append([]string(nil), proposal.ForbiddenActions...),
 		ValidationPlan:   append([]string(nil), proposal.ValidationPlan...),
@@ -833,6 +911,41 @@ func continuationPromptHasSplitRoleLabels(text string) bool {
 	return false
 }
 
+func continuationOperatorCardLines(state session.ContinuationState) []string {
+	state = session.NormalizeContinuationState(state)
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	class := lease.LeaseClass
+	if class == "" {
+		class = session.InferContinuationLeaseClass(state.ActionProposal.RiskClass, state.ActionProposal.AllowedActions, state.ActionProposal.BoundedEffect)
+	}
+	lines := []string{
+		"Lease class: " + session.ContinuationLeaseClassLabel(class),
+		"Boundary: " + session.ContinuationLeaseClassBoundary(class),
+	}
+	constraints := lease.Constraints
+	if len(constraints) == 0 {
+		constraints = session.DefaultContinuationLeaseConstraints(class)
+	}
+	if len(constraints) > 0 {
+		keys := make([]string, 0, len(constraints))
+		for key := range constraints {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			value := strings.TrimSpace(constraints[key])
+			if value == "" {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("Constraint: %s=%s", key, value))
+		}
+	}
+	return lines
+}
+
 func renderContinuationPromptFallback(state session.ContinuationState) string {
 	lines := []string{"I can continue from here."}
 	reasons := make([]string, 0, 2)
@@ -859,6 +972,10 @@ func renderContinuationPromptFallback(state session.ContinuationState) string {
 		if len(proposal.ForbiddenActions) > 0 {
 			lines = append(lines, "", "Forbidden actions:", strings.Join(proposal.ForbiddenActions, ", "))
 		}
+	}
+	if card := continuationOperatorCardLines(state); len(card) > 0 {
+		lines = append(lines, "", "Operator card:")
+		lines = append(lines, card...)
 	}
 	if objective := strings.TrimSpace(state.Objective); objective != "" {
 		lines = append(lines, "", "Objective:", objective)
