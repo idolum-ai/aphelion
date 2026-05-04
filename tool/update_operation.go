@@ -70,6 +70,16 @@ func (r *Registry) updateOperation(_ context.Context, input json.RawMessage, key
 			}
 			state.PhasePlan.UpdatedAt = now
 		}
+		if state.PlanLease.Active() {
+			if strings.TrimSpace(state.PlanLease.ID) == "" {
+				if current.PlanLease.ID != "" {
+					state.PlanLease.ID = current.PlanLease.ID
+				} else {
+					state.PlanLease.ID = generatedOperationID("plan-lease")
+				}
+			}
+			state.PlanLease.UpdatedAt = now
+		}
 	}
 
 	if err := r.store.UpdateOperationState(key, state); err != nil {
@@ -87,6 +97,7 @@ func operationInputEmpty(in updateOperationInput) bool {
 		!in.Merge &&
 		in.Proposal == nil &&
 		in.PhasePlan == nil &&
+		in.PlanLease == nil &&
 		in.Findings == nil &&
 		in.Artifacts == nil
 }
@@ -119,6 +130,12 @@ func applyOperationInput(current session.OperationState, in updateOperationInput
 		return session.OperationState{}, err
 	}
 	state.PhasePlan = phasePlan
+
+	planLease, err := parseOperationPlanLeaseInput(in.PlanLease)
+	if err != nil {
+		return session.OperationState{}, err
+	}
+	state.PlanLease = planLease
 
 	findings, err := parseOperationFindingInputs(in.Findings)
 	if err != nil {
@@ -172,6 +189,14 @@ func mergeOperationInput(current session.OperationState, in updateOperationInput
 			return session.OperationState{}, err
 		}
 		state.PhasePlan = phasePlan
+	}
+
+	if in.PlanLease != nil {
+		planLease, err := mergeOperationPlanLeaseInput(state.PlanLease, *in.PlanLease)
+		if err != nil {
+			return session.OperationState{}, err
+		}
+		state.PlanLease = planLease
 	}
 
 	findings, err := parseOperationFindingInputs(in.Findings)
@@ -403,6 +428,189 @@ func mergeOperationPhaseInput(current session.OperationPhase, in updateOperation
 	return plan.Phases[0], nil
 }
 
+func parseOperationPlanLeaseInput(in *updateOperationPlanLeaseInput) (session.OperationPlanLease, error) {
+	if in == nil {
+		return session.OperationPlanLease{}, nil
+	}
+	lease := session.OperationPlanLease{
+		ID:                   strings.TrimSpace(in.ID),
+		Summary:              strings.TrimSpace(in.Summary),
+		Objective:            strings.TrimSpace(in.Objective),
+		MissionID:            strings.TrimSpace(in.MissionID),
+		OperationID:          strings.TrimSpace(in.OperationID),
+		TurnBudget:           in.TurnBudget,
+		RemainingTurns:       in.RemainingTurns,
+		CoveredPhaseIDs:      append([]string(nil), in.CoveredPhaseIDs...),
+		AllowedActions:       append([]string(nil), in.AllowedActions...),
+		ForbiddenActions:     append([]string(nil), in.ForbiddenActions...),
+		ValidationGates:      append([]string(nil), in.ValidationGates...),
+		ExitConditions:       append([]string(nil), in.ExitConditions...),
+		HardInterrupts:       append([]string(nil), in.HardInterrupts...),
+		ChildInitiationLanes: append([]string(nil), in.ChildInitiationLanes...),
+		ApprovedBy:           in.ApprovedBy,
+	}
+	if strings.TrimSpace(in.Status) != "" {
+		lease.Status = session.NormalizePlanLeaseStatus(session.PlanLeaseStatus(in.Status))
+		if lease.Status == "" {
+			return session.OperationPlanLease{}, fmt.Errorf("update_operation plan_lease status must be proposed, approved, active, paused, revoked, expired, or completed")
+		}
+	}
+	expiresAt, err := parseOperationTime(in.ExpiresAt, "plan_lease expires_at")
+	if err != nil {
+		return session.OperationPlanLease{}, err
+	}
+	lease.ExpiresAt = expiresAt
+	approvedAt, err := parseOperationTime(in.ApprovedAt, "plan_lease approved_at")
+	if err != nil {
+		return session.OperationPlanLease{}, err
+	}
+	lease.ApprovedAt = approvedAt
+	lease.Lanes = parseOperationPlanLeaseLanes(in.Lanes)
+	if in.EvidenceDigest != nil {
+		lease.EvidenceDigest = parseOperationPlanLeaseEvidenceDigest(*in.EvidenceDigest)
+	}
+	lease = session.NormalizeOperationPlanLease(lease)
+	if err := validateOperationPlanLease(lease); err != nil {
+		return session.OperationPlanLease{}, err
+	}
+	return lease, nil
+}
+
+func mergeOperationPlanLeaseInput(current session.OperationPlanLease, in updateOperationPlanLeaseInput) (session.OperationPlanLease, error) {
+	lease := current
+	if id := strings.TrimSpace(in.ID); id != "" {
+		lease.ID = id
+	}
+	if summary := strings.TrimSpace(in.Summary); summary != "" {
+		lease.Summary = summary
+	}
+	if objective := strings.TrimSpace(in.Objective); objective != "" {
+		lease.Objective = objective
+	}
+	if missionID := strings.TrimSpace(in.MissionID); missionID != "" {
+		lease.MissionID = missionID
+	}
+	if operationID := strings.TrimSpace(in.OperationID); operationID != "" {
+		lease.OperationID = operationID
+	}
+	if strings.TrimSpace(in.Status) != "" {
+		status := session.NormalizePlanLeaseStatus(session.PlanLeaseStatus(in.Status))
+		if status == "" {
+			return session.OperationPlanLease{}, fmt.Errorf("update_operation plan_lease status must be proposed, approved, active, paused, revoked, expired, or completed")
+		}
+		lease.Status = status
+	}
+	if in.TurnBudget != 0 {
+		lease.TurnBudget = in.TurnBudget
+	}
+	if in.RemainingTurns != 0 {
+		lease.RemainingTurns = in.RemainingTurns
+	}
+	if in.CoveredPhaseIDs != nil {
+		lease.CoveredPhaseIDs = append([]string(nil), in.CoveredPhaseIDs...)
+	}
+	if expiresAt, err := parseOperationTime(in.ExpiresAt, "plan_lease expires_at"); err != nil {
+		return session.OperationPlanLease{}, err
+	} else if !expiresAt.IsZero() {
+		lease.ExpiresAt = expiresAt
+	}
+	if in.Lanes != nil {
+		lease.Lanes = parseOperationPlanLeaseLanes(in.Lanes)
+	}
+	if in.AllowedActions != nil {
+		lease.AllowedActions = append([]string(nil), in.AllowedActions...)
+	}
+	if in.ForbiddenActions != nil {
+		lease.ForbiddenActions = append([]string(nil), in.ForbiddenActions...)
+	}
+	if in.ValidationGates != nil {
+		lease.ValidationGates = append([]string(nil), in.ValidationGates...)
+	}
+	if in.ExitConditions != nil {
+		lease.ExitConditions = append([]string(nil), in.ExitConditions...)
+	}
+	if in.HardInterrupts != nil {
+		lease.HardInterrupts = append([]string(nil), in.HardInterrupts...)
+	}
+	if in.ChildInitiationLanes != nil {
+		lease.ChildInitiationLanes = append([]string(nil), in.ChildInitiationLanes...)
+	}
+	if in.EvidenceDigest != nil {
+		lease.EvidenceDigest = parseOperationPlanLeaseEvidenceDigest(*in.EvidenceDigest)
+	}
+	if in.ApprovedBy > 0 {
+		lease.ApprovedBy = in.ApprovedBy
+	}
+	if approvedAt, err := parseOperationTime(in.ApprovedAt, "plan_lease approved_at"); err != nil {
+		return session.OperationPlanLease{}, err
+	} else if !approvedAt.IsZero() {
+		lease.ApprovedAt = approvedAt
+	}
+	lease = session.NormalizeOperationPlanLease(lease)
+	if err := validateOperationPlanLease(lease); err != nil {
+		return session.OperationPlanLease{}, err
+	}
+	return lease, nil
+}
+
+func parseOperationPlanLeaseLanes(inputs []updateOperationPlanLeaseLaneInput) []session.OperationPlanLeaseLane {
+	lanes := make([]session.OperationPlanLeaseLane, 0, len(inputs))
+	for _, in := range inputs {
+		lanes = append(lanes, session.OperationPlanLeaseLane{
+			ID:               strings.TrimSpace(in.ID),
+			Summary:          strings.TrimSpace(in.Summary),
+			AuthorityClass:   strings.TrimSpace(in.AuthorityClass),
+			ExpectedTurns:    in.ExpectedTurns,
+			AllowedActions:   append([]string(nil), in.AllowedActions...),
+			ForbiddenActions: append([]string(nil), in.ForbiddenActions...),
+		})
+	}
+	return session.NormalizeOperationPlanLease(session.OperationPlanLease{Lanes: lanes}).Lanes
+}
+
+func parseOperationPlanLeaseEvidenceDigest(in updateOperationPlanLeaseEvidenceInput) session.OperationPlanLeaseEvidenceDigest {
+	return session.OperationPlanLeaseEvidenceDigest{
+		TurnsSpent:         in.TurnsSpent,
+		LanesUsed:          append([]string(nil), in.LanesUsed...),
+		Completed:          append([]string(nil), in.Completed...),
+		Blocked:            append([]string(nil), in.Blocked...),
+		InterruptsRaised:   append([]string(nil), in.InterruptsRaised...),
+		EvidenceRefs:       append([]string(nil), in.EvidenceRefs...),
+		ChangesMade:        append([]string(nil), in.ChangesMade...),
+		ResidualRisk:       strings.TrimSpace(in.ResidualRisk),
+		SuggestedNextLease: strings.TrimSpace(in.SuggestedNextLease),
+		UpdatedAt:          time.Now().UTC(),
+	}
+}
+
+func validateOperationPlanLease(lease session.OperationPlanLease) error {
+	lease = session.NormalizeOperationPlanLease(lease)
+	if !lease.Active() {
+		return nil
+	}
+	for _, lane := range lease.Lanes {
+		if strings.TrimSpace(lane.AuthorityClass) == "" {
+			return fmt.Errorf("update_operation plan_lease lane %q requires authority_class", lane.ID)
+		}
+		if lane.ExpectedTurns <= 0 {
+			return fmt.Errorf("update_operation plan_lease lane %q requires expected_turns > 0", lane.ID)
+		}
+	}
+	return nil
+}
+
+func parseOperationTime(value string, field string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("update_operation %s must be RFC3339: %w", field, err)
+	}
+	return parsed.UTC(), nil
+}
+
 func parseOperationFindingInputs(inputs []updateOperationFindingInput) ([]session.OperationFinding, error) {
 	findings := make([]session.OperationFinding, 0, len(inputs))
 	for _, item := range inputs {
@@ -478,6 +686,107 @@ func generatedOperationID(prefix string) string {
 		prefix = "op"
 	}
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
+}
+
+func renderOperationPlanLease(b *strings.Builder, lease session.OperationPlanLease) {
+	lease = session.NormalizeOperationPlanLease(lease)
+	b.WriteString("plan_lease:\n")
+	if lease.ID != "" {
+		fmt.Fprintf(b, "- id: %s\n", lease.ID)
+	}
+	if lease.Summary != "" {
+		fmt.Fprintf(b, "- summary: %s\n", lease.Summary)
+	}
+	if lease.Objective != "" {
+		fmt.Fprintf(b, "- objective: %s\n", lease.Objective)
+	}
+	if lease.MissionID != "" {
+		fmt.Fprintf(b, "- mission_id: %s\n", lease.MissionID)
+	}
+	if lease.OperationID != "" {
+		fmt.Fprintf(b, "- operation_id: %s\n", lease.OperationID)
+	}
+	if lease.Status != "" {
+		fmt.Fprintf(b, "- status: %s\n", lease.Status)
+	}
+	if lease.TurnBudget > 0 || lease.RemainingTurns > 0 {
+		fmt.Fprintf(b, "- turns: budget=%d remaining=%d\n", lease.TurnBudget, lease.RemainingTurns)
+	}
+	if len(lease.CoveredPhaseIDs) > 0 {
+		fmt.Fprintf(b, "- covered_phase_ids: %s\n", strings.Join(lease.CoveredPhaseIDs, ", "))
+	}
+	if !lease.ExpiresAt.IsZero() {
+		fmt.Fprintf(b, "- expires_at: %s\n", lease.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if len(lease.Lanes) > 0 {
+		b.WriteString("- lanes:\n")
+		for _, lane := range lease.Lanes {
+			fmt.Fprintf(b, "  - %s", lane.ID)
+			if lane.Summary != "" {
+				fmt.Fprintf(b, ": %s", lane.Summary)
+			}
+			b.WriteString("\n")
+			if lane.AuthorityClass != "" {
+				fmt.Fprintf(b, "    authority_class: %s\n", lane.AuthorityClass)
+			}
+			if lane.ExpectedTurns > 0 {
+				fmt.Fprintf(b, "    expected_turns: %d\n", lane.ExpectedTurns)
+			}
+			if len(lane.AllowedActions) > 0 {
+				fmt.Fprintf(b, "    allowed_actions: %s\n", strings.Join(lane.AllowedActions, ", "))
+			}
+			if len(lane.ForbiddenActions) > 0 {
+				fmt.Fprintf(b, "    forbidden_actions: %s\n", strings.Join(lane.ForbiddenActions, ", "))
+			}
+		}
+	}
+	if len(lease.AllowedActions) > 0 {
+		fmt.Fprintf(b, "- allowed_actions: %s\n", strings.Join(lease.AllowedActions, ", "))
+	}
+	if len(lease.ForbiddenActions) > 0 {
+		fmt.Fprintf(b, "- forbidden_actions: %s\n", strings.Join(lease.ForbiddenActions, ", "))
+	}
+	if len(lease.ValidationGates) > 0 {
+		fmt.Fprintf(b, "- validation_gates: %s\n", strings.Join(lease.ValidationGates, "; "))
+	}
+	if len(lease.ExitConditions) > 0 {
+		fmt.Fprintf(b, "- exit_conditions: %s\n", strings.Join(lease.ExitConditions, "; "))
+	}
+	if len(lease.HardInterrupts) > 0 {
+		fmt.Fprintf(b, "- hard_interrupts: %s\n", strings.Join(lease.HardInterrupts, ", "))
+	}
+	if len(lease.ChildInitiationLanes) > 0 {
+		fmt.Fprintf(b, "- child_initiation_lanes: %s\n", strings.Join(lease.ChildInitiationLanes, ", "))
+	}
+	if lease.EvidenceDigest.Active() {
+		b.WriteString("- evidence_digest:\n")
+		fmt.Fprintf(b, "  turns_spent: %d\n", lease.EvidenceDigest.TurnsSpent)
+		if len(lease.EvidenceDigest.LanesUsed) > 0 {
+			fmt.Fprintf(b, "  lanes_used: %s\n", strings.Join(lease.EvidenceDigest.LanesUsed, ", "))
+		}
+		if len(lease.EvidenceDigest.Completed) > 0 {
+			fmt.Fprintf(b, "  completed: %s\n", strings.Join(lease.EvidenceDigest.Completed, "; "))
+		}
+		if len(lease.EvidenceDigest.Blocked) > 0 {
+			fmt.Fprintf(b, "  blocked: %s\n", strings.Join(lease.EvidenceDigest.Blocked, "; "))
+		}
+		if len(lease.EvidenceDigest.InterruptsRaised) > 0 {
+			fmt.Fprintf(b, "  interrupts_raised: %s\n", strings.Join(lease.EvidenceDigest.InterruptsRaised, "; "))
+		}
+		if len(lease.EvidenceDigest.EvidenceRefs) > 0 {
+			fmt.Fprintf(b, "  evidence_refs: %s\n", strings.Join(lease.EvidenceDigest.EvidenceRefs, ", "))
+		}
+		if len(lease.EvidenceDigest.ChangesMade) > 0 {
+			fmt.Fprintf(b, "  changes_made: %s\n", strings.Join(lease.EvidenceDigest.ChangesMade, "; "))
+		}
+		if lease.EvidenceDigest.ResidualRisk != "" {
+			fmt.Fprintf(b, "  residual_risk: %s\n", lease.EvidenceDigest.ResidualRisk)
+		}
+		if lease.EvidenceDigest.SuggestedNextLease != "" {
+			fmt.Fprintf(b, "  suggested_next_lease: %s\n", lease.EvidenceDigest.SuggestedNextLease)
+		}
+	}
+	b.WriteString("- authority_note: plan lease is a bounded plan envelope, not a capability grant\n")
 }
 
 func renderOperationState(header string, state session.OperationState) string {
@@ -570,6 +879,11 @@ func renderOperationState(header string, state session.OperationState) string {
 		}
 	} else {
 		b.WriteString("phase_plan: none\n")
+	}
+	if state.PlanLease.Active() {
+		renderOperationPlanLease(&b, state.PlanLease)
+	} else {
+		b.WriteString("plan_lease: none\n")
 	}
 	if len(state.Findings) == 0 {
 		b.WriteString("findings: none\n")

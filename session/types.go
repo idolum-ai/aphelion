@@ -1096,6 +1096,14 @@ func NormalizeOperationPlanLease(lease OperationPlanLease) OperationPlanLease {
 		lease.ExpiresAt = lease.ExpiresAt.UTC()
 	}
 	lease.Lanes = normalizeOperationPlanLeaseLanes(lease.Lanes)
+	if lease.TurnBudget == 0 {
+		for _, lane := range lease.Lanes {
+			lease.TurnBudget += lane.ExpectedTurns
+		}
+	}
+	if lease.TurnBudget > 0 && lease.RemainingTurns == 0 && (lease.Status == "" || lease.Status == PlanLeaseStatusProposed || lease.Status == PlanLeaseStatusApproved || lease.Status == PlanLeaseStatusActive) {
+		lease.RemainingTurns = lease.TurnBudget
+	}
 	lease.AllowedActions = normalizeActionStringSlice(lease.AllowedActions)
 	lease.ForbiddenActions = normalizeActionStringSlice(lease.ForbiddenActions)
 	lease.ValidationGates = normalizeActionStringSlice(lease.ValidationGates)

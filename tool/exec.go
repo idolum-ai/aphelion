@@ -133,6 +133,50 @@ type updateOperationArtifactInput struct {
 	Ref   string `json:"ref"`
 }
 
+type updateOperationPlanLeaseLaneInput struct {
+	ID               string   `json:"id,omitempty"`
+	Summary          string   `json:"summary,omitempty"`
+	AuthorityClass   string   `json:"authority_class,omitempty"`
+	ExpectedTurns    int      `json:"expected_turns,omitempty"`
+	AllowedActions   []string `json:"allowed_actions,omitempty"`
+	ForbiddenActions []string `json:"forbidden_actions,omitempty"`
+}
+
+type updateOperationPlanLeaseEvidenceInput struct {
+	TurnsSpent         int      `json:"turns_spent,omitempty"`
+	LanesUsed          []string `json:"lanes_used,omitempty"`
+	Completed          []string `json:"completed,omitempty"`
+	Blocked            []string `json:"blocked,omitempty"`
+	InterruptsRaised   []string `json:"interrupts_raised,omitempty"`
+	EvidenceRefs       []string `json:"evidence_refs,omitempty"`
+	ChangesMade        []string `json:"changes_made,omitempty"`
+	ResidualRisk       string   `json:"residual_risk,omitempty"`
+	SuggestedNextLease string   `json:"suggested_next_lease,omitempty"`
+}
+
+type updateOperationPlanLeaseInput struct {
+	ID                   string                                 `json:"id,omitempty"`
+	Summary              string                                 `json:"summary,omitempty"`
+	Objective            string                                 `json:"objective,omitempty"`
+	MissionID            string                                 `json:"mission_id,omitempty"`
+	OperationID          string                                 `json:"operation_id,omitempty"`
+	Status               string                                 `json:"status,omitempty"`
+	TurnBudget           int                                    `json:"turn_budget,omitempty"`
+	RemainingTurns       int                                    `json:"remaining_turns,omitempty"`
+	CoveredPhaseIDs      []string                               `json:"covered_phase_ids,omitempty"`
+	ExpiresAt            string                                 `json:"expires_at,omitempty"`
+	Lanes                []updateOperationPlanLeaseLaneInput    `json:"lanes,omitempty"`
+	AllowedActions       []string                               `json:"allowed_actions,omitempty"`
+	ForbiddenActions     []string                               `json:"forbidden_actions,omitempty"`
+	ValidationGates      []string                               `json:"validation_gates,omitempty"`
+	ExitConditions       []string                               `json:"exit_conditions,omitempty"`
+	HardInterrupts       []string                               `json:"hard_interrupts,omitempty"`
+	ChildInitiationLanes []string                               `json:"child_initiation_lanes,omitempty"`
+	EvidenceDigest       *updateOperationPlanLeaseEvidenceInput `json:"evidence_digest,omitempty"`
+	ApprovedBy           int64                                  `json:"approved_by,omitempty"`
+	ApprovedAt           string                                 `json:"approved_at,omitempty"`
+}
+
 type updateOperationInput struct {
 	ID        string                         `json:"id,omitempty"`
 	Objective string                         `json:"objective,omitempty"`
@@ -142,6 +186,7 @@ type updateOperationInput struct {
 	Merge     bool                           `json:"merge,omitempty"`
 	Proposal  *updateOperationProposalInput  `json:"proposal,omitempty"`
 	PhasePlan *updateOperationPhasePlanInput `json:"phase_plan,omitempty"`
+	PlanLease *updateOperationPlanLeaseInput `json:"plan_lease,omitempty"`
 	Findings  []updateOperationFindingInput  `json:"findings,omitempty"`
 	Artifacts []updateOperationArtifactInput `json:"artifacts,omitempty"`
 }

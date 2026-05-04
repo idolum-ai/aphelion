@@ -277,3 +277,106 @@ func TestUpdateOperationToolRejectsInvalidProposalStatus(t *testing.T) {
 		t.Fatalf("err = %v, want proposal status validation", err)
 	}
 }
+
+func TestUpdateOperationToolPersistsAndRendersPlanLease(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{
+			"id":"op-plan-lease",
+			"objective":"Reduce approval pings without widening authority.",
+			"status":"blocked",
+			"stage":"plan_lease_proposal",
+			"summary":"A plan lease is pending explicit approval.",
+			"plan_lease":{
+				"id":"plan-lease-20260503",
+				"summary":"Low-risk coordination lease",
+				"status":"proposed",
+				"turn_budget":5,
+				"covered_phase_ids":["phase-1","phase-2"],
+				"lanes":[
+					{"id":"readonly","summary":"Read-only review","authority_class":"read_only_review","expected_turns":3,"allowed_actions":["inspect_status","draft_proposal"]},
+					{"id":"child-checkins","summary":"Child status check-ins","authority_class":"read_only_review","expected_turns":2,"allowed_actions":["request_child_status"],"forbidden_actions":["grant_or_revoke_capability"]}
+				],
+				"evidence_digest":{
+					"turns_spent":1,
+					"lanes_used":["readonly"],
+					"completed":["drafted lease protocol"],
+					"interrupts_raised":["policy_or_grant_change"],
+					"evidence_refs":["runtime/continuation_materialize.go"],
+					"residual_risk":"Not deployed or activated.",
+					"suggested_next_lease":"Focused tests only."
+				}
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation plan_lease) err = %v", err)
+	}
+	for _, want := range []string{"plan_lease:", "Low-risk coordination lease", "expected_turns: 3", "hard_interrupts:", "policy_or_grant_change", "child_initiation_lanes:", "capability_request", "authority_note: plan lease is a bounded plan envelope, not a capability grant", "evidence_digest:"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output = %q, want %q", out, want)
+		}
+	}
+
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	lease := state.PlanLease
+	if lease.ID != "plan-lease-20260503" || lease.Status != session.PlanLeaseStatusProposed {
+		t.Fatalf("PlanLease = %#v, want proposed lease", lease)
+	}
+	if lease.TurnBudget != 5 || lease.RemainingTurns != 5 || len(lease.Lanes) != 2 {
+		t.Fatalf("PlanLease turns/lanes = %#v", lease)
+	}
+	if lease.Lanes[0].AuthorityClass != "read_only_review" || lease.Lanes[0].ExpectedTurns != 3 {
+		t.Fatalf("PlanLease first lane = %#v", lease.Lanes[0])
+	}
+	if !containsString(lease.HardInterrupts, "policy_or_grant_change") || !containsString(lease.ChildInitiationLanes, "capability_request") {
+		t.Fatalf("PlanLease guardrails = hard=%#v child=%#v", lease.HardInterrupts, lease.ChildInitiationLanes)
+	}
+	if lease.EvidenceDigest.TurnsSpent != 1 || lease.EvidenceDigest.ResidualRisk != "Not deployed or activated." {
+		t.Fatalf("PlanLease evidence = %#v", lease.EvidenceDigest)
+	}
+}
+
+func TestUpdateOperationToolRequiresPlanLeaseLaneAuthorityAndTurns(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{
+			"id":"op-plan-lease",
+			"plan_lease":{
+				"id":"bad-plan-lease",
+				"summary":"Invalid lease",
+				"status":"proposed",
+				"lanes":[{"id":"vague","summary":"Too vague"}]
+			}
+		}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "requires authority_class") {
+		t.Fatalf("err = %v, want lane authority validation", err)
+	}
+}
