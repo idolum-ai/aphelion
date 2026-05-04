@@ -249,6 +249,40 @@ func TestCodexCompleteParsesResponseFailedErrors(t *testing.T) {
 	}
 }
 
+func TestCodexHTTPStatusErrorCarriesFailureCodeAndRetryAfter(t *testing.T) {
+	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "2.5")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"detail":"Rate limit reached for gpt-5.5."}`))
+	})
+	client, err := NewCodex(CodexOptions{
+		BaseURL:     "https://chatgpt.com/backend-api",
+		AccessToken: "secret-token",
+		AccountID:   "acct-123",
+		HTTPClient:  &http.Client{Transport: &testTransport{handler: handler}},
+		Now:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewCodex() err = %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("Complete() err = nil, want HTTP status error")
+	}
+	var apiErr codexAPIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Complete() err = %T/%v, want codexAPIError", err, err)
+	}
+	if apiErr.ProviderFailureCode() != codexFailureCodeRateLimit {
+		t.Fatalf("ProviderFailureCode() = %q, want %q", apiErr.ProviderFailureCode(), codexFailureCodeRateLimit)
+	}
+	if apiErr.ProviderRetryAfter() != 2500*time.Millisecond {
+		t.Fatalf("ProviderRetryAfter() = %v, want 2.5s", apiErr.ProviderRetryAfter())
+	}
+}
+
 func TestCodexCompleteToolCallViaResponsesOutput(t *testing.T) {
 	t.Parallel()
 

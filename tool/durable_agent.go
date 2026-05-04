@@ -2788,9 +2788,12 @@ func durableAgentConversationState(continuity core.DurableAgentContinuityState) 
 
 func durableAgentMessageIsInferenceUnavailable(text string) bool {
 	text = strings.TrimSpace(text)
+	lower := strings.ToLower(text)
 	return strings.Contains(text, "Inference backend is unavailable.") ||
 		strings.Contains(text, "Inference backends are unavailable after retries and fallback.") ||
-		strings.Contains(text, "Inference backends are unavailable after provider fallback attempts.")
+		strings.Contains(text, "Inference backends are unavailable after provider fallback attempts.") ||
+		strings.Contains(lower, "provider_failure:") ||
+		strings.Contains(lower, "provider failure:")
 }
 
 func formatDurableAgentTelegramUserIDs(values []int64) string {

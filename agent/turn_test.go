@@ -341,6 +341,37 @@ func TestProviderPersistentError(t *testing.T) {
 	}
 }
 
+type providerEventsError struct {
+	events []core.ProviderEvent
+}
+
+func (e providerEventsError) Error() string {
+	return "terminal provider failure"
+}
+
+func (e providerEventsError) ProviderEvents() []core.ProviderEvent {
+	return append([]core.ProviderEvent(nil), e.events...)
+}
+
+func TestRunTurnPreservesProviderEventsFromTerminalError(t *testing.T) {
+	provider := &mockProvider{
+		complete: func(_ context.Context, _ int, _ []Message, _ []ToolDef) (*Response, error) {
+			return nil, providerEventsError{events: []core.ProviderEvent{{EventType: core.ExecutionEventProviderAttemptFailed, Provider: "codex", Error: "terminal"}}}
+		},
+	}
+
+	result, _, err := RunTurn(context.Background(), provider, nil, defaultBudget(), nil, []Message{{Role: "user", Content: "hi"}})
+	if err != nil {
+		t.Fatalf("RunTurn() err = %v", err)
+	}
+	if result.ProviderFailure == "" {
+		t.Fatal("ProviderFailure = empty, want terminal provider detail")
+	}
+	if len(result.ProviderEvents) != 1 || result.ProviderEvents[0].EventType != core.ExecutionEventProviderAttemptFailed {
+		t.Fatalf("ProviderEvents = %#v, want failed provider event from error", result.ProviderEvents)
+	}
+}
+
 func TestToolError(t *testing.T) {
 	provider := &mockProvider{
 		complete: func(_ context.Context, call int, messages []Message, _ []ToolDef) (*Response, error) {

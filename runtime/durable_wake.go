@@ -211,7 +211,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		return fmt.Errorf("load durable wake parent conversation: %w", err)
 	}
 
-	turnSummary, err := r.runDurableWakeConversation(ctx, agent, scope, key, plan, pendingParentConversation)
+	turnResult, turnSummary, err := r.runDurableWakeConversation(ctx, agent, scope, key, plan, pendingParentConversation)
 	if err != nil {
 		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
 			"agent_id": strings.TrimSpace(agent.AgentID),
@@ -226,7 +226,7 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 		}
 		return wrappedErr
 	}
-	if durableWakeInferenceUnavailable(turnSummary) {
+	if durableTurnInferenceUnavailable(turnResult, turnSummary) {
 		inferenceErr := fmt.Errorf("durable wake inference unavailable")
 		r.recordExecutionEvent(key, core.ExecutionEventDurableWakeFailed, "durable", "failed", map[string]any{
 			"agent_id": strings.TrimSpace(agent.AgentID),
@@ -270,6 +270,13 @@ func (r *Runtime) runDurableWakeTurn(ctx context.Context, agent core.DurableAgen
 	return nil
 }
 
+func durableTurnInferenceUnavailable(result *turn.Result, summary string) bool {
+	if result != nil && result.Turn != nil && strings.TrimSpace(result.Turn.ProviderFailure) != "" {
+		return true
+	}
+	return durableWakeInferenceUnavailable(summary)
+}
+
 func durableWakeInferenceUnavailable(summary string) bool {
 	summary = strings.TrimSpace(summary)
 	return strings.Contains(summary, durableWakeInferenceUnavailableSignal) ||
@@ -290,7 +297,7 @@ func (r *Runtime) runDurableWakeConversation(
 	key session.SessionKey,
 	plan durableWakeTurnPlan,
 	pendingParentConversation []core.DurableAgentConversationMessage,
-) (string, error) {
+) (*turn.Result, string, error) {
 	livePolicy := core.NormalizeDurableAgentLivePolicy(agent.LivePolicy)
 	channel := firstNonEmpty(strings.TrimSpace(plan.Channel), "durable_wake")
 	assembled, err := r.assembleInteractiveLikeTurn(ctx, interactiveLikeAssemblyInput{
@@ -305,7 +312,7 @@ func (r *Runtime) runDurableWakeConversation(
 		PolicyReason:         firstNonEmpty(strings.TrimSpace(plan.PolicyReason), "mapped from interactive face policy for durable wake channels"),
 	})
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 
 	now := assembled.Now
@@ -396,14 +403,14 @@ func (r *Runtime) runDurableWakeConversation(
 	})
 	if err != nil {
 		if turnResult == nil || !turnResult.Commit.Persisted {
-			return "", err
+			return nil, "", err
 		}
 	}
 	if turnResult == nil || turnResult.Turn == nil {
-		return "", fmt.Errorf("durable wake turn did not return a result")
+		return nil, "", fmt.Errorf("durable wake turn did not return a result")
 	}
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
-	return strings.TrimSpace(turnResult.VisibleReply), nil
+	return turnResult, strings.TrimSpace(turnResult.VisibleReply), nil
 }

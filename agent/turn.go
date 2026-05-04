@@ -200,6 +200,7 @@ func RunTurn(
 			}
 
 			log.Printf("ERROR provider failed after retries err=%v", err)
+			providerEvents = append(providerEvents, providerEventsFromError(err)...)
 			reply := providerFailureReply
 			var userFacing interface{ UserFacingFailure() string }
 			if errors.As(err, &userFacing) {
@@ -496,6 +497,21 @@ type statusCoder interface {
 
 type providerFailureCoder interface {
 	ProviderFailureCode() string
+}
+
+type providerEventsCarrier interface {
+	ProviderEvents() []core.ProviderEvent
+}
+
+func providerEventsFromError(err error) []core.ProviderEvent {
+	if err == nil {
+		return nil
+	}
+	var carrier providerEventsCarrier
+	if errors.As(err, &carrier) {
+		return append([]core.ProviderEvent(nil), carrier.ProviderEvents()...)
+	}
+	return nil
 }
 
 func isRetryableProviderError(err error) bool {

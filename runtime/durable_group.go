@@ -304,7 +304,7 @@ func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.Inbo
 	}
 	turnReply := strings.TrimSpace(turnResult.VisibleReply)
 	if len(pendingParentConversation) > 0 {
-		if durableWakeInferenceUnavailable(turnReply) {
+		if durableTurnInferenceUnavailable(turnResult, turnReply) {
 			log.Printf("WARN durable parent conversation not acknowledged due to transient inference failure agent_id=%s", registered.AgentID)
 			return &DurableGroupChildResult{
 				TurnResult:      *turnResult.Turn,

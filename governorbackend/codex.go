@@ -349,10 +349,16 @@ func (c *Codex) doRequest(ctx context.Context, body *bytes.Buffer, accessToken s
 			return nil, fmt.Errorf("codex: read response: %w", err)
 		}
 		bodyMessage := redactBodyExcerpt(raw, accessToken, refreshTokenForRedaction(c), accountID)
+		retryAfter := parseCodexRetryAfterHeader(resp.Header.Get("Retry-After"), c.now())
+		if retryAfter <= 0 {
+			retryAfter = parseCodexRetryAfter(bodyMessage)
+		}
 		return nil, codexAPIError{
 			statusCode: resp.StatusCode,
 			message:    codexStatusMessage(resp.StatusCode, bodyMessage),
 			cause:      codexStatusCause(resp.StatusCode),
+			code:       inferCodexHTTPFailureCode(resp.StatusCode, bodyMessage),
+			retryAfter: retryAfter,
 		}
 	}
 	return resp, nil
@@ -941,6 +947,20 @@ func inferCodexFailureCode(code string, message string) string {
 	}
 }
 
+func inferCodexHTTPFailureCode(statusCode int, body string) string {
+	if code := inferCodexFailureCode("", body); code != "" {
+		return code
+	}
+	switch {
+	case statusCode == http.StatusTooManyRequests:
+		return codexFailureCodeRateLimit
+	case statusCode >= 500:
+		return codexFailureCodeServerOverloaded
+	default:
+		return ""
+	}
+}
+
 func parseCodexRetryAfter(message string) time.Duration {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -965,6 +985,28 @@ func parseCodexRetryAfter(message string) time.Duration {
 
 func codexRetryAfterPattern() *regexp.Regexp {
 	return regexp.MustCompile(`(?i)(?:try again|retry)\s+in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|milliseconds?|s|sec|secs|seconds?)`)
+}
+
+func parseCodexRetryAfterHeader(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseFloat(value, 64); err == nil && seconds > 0 {
+		return time.Duration(seconds * float64(time.Second))
+	}
+	at, err := http.ParseTime(value)
+	if err != nil {
+		return 0
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	d := at.Sub(now)
+	if d <= 0 {
+		return 0
+	}
+	return d
 }
 
 func cloneAgentResponse(resp *agent.Response) *agent.Response {
@@ -1594,6 +1636,8 @@ type codexAPIError struct {
 	statusCode int
 	message    string
 	cause      error
+	code       string
+	retryAfter time.Duration
 }
 
 func (e codexAPIError) Error() string {
@@ -1606,6 +1650,14 @@ func (e codexAPIError) StatusCode() int {
 
 func (e codexAPIError) Unwrap() error {
 	return e.cause
+}
+
+func (e codexAPIError) ProviderFailureCode() string {
+	return strings.TrimSpace(e.code)
+}
+
+func (e codexAPIError) ProviderRetryAfter() time.Duration {
+	return e.retryAfter
 }
 
 func isPreviousResponseRejected(err error) bool {

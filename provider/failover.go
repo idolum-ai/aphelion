@@ -38,6 +38,7 @@ type FailoverAttempt struct {
 
 type ExhaustedError struct {
 	Attempts []FailoverAttempt
+	Events   []core.ProviderEvent
 }
 
 func (e ExhaustedError) Error() string {
@@ -58,9 +59,14 @@ func (e ExhaustedError) UserFacingFailure() string {
 	return "Inference backends are unavailable after provider fallback attempts. This turn did not complete. You can /stop to cancel current work and try again."
 }
 
+func (e ExhaustedError) ProviderEvents() []core.ProviderEvent {
+	return providerEventsSnapshot(e.Events)
+}
+
 type TerminalProviderError struct {
 	Provider string
 	Err      error
+	Events   []core.ProviderEvent
 }
 
 func (e TerminalProviderError) Error() string {
@@ -76,6 +82,14 @@ func (e TerminalProviderError) Unwrap() error {
 
 func (e TerminalProviderError) UserFacingFailure() string {
 	return "Inference backend failed before provider fallback was applicable. This turn did not complete. You can /stop to cancel current work and try again."
+}
+
+func (e TerminalProviderError) ProviderEvents() []core.ProviderEvent {
+	return providerEventsSnapshot(e.Events)
+}
+
+func providerEventsSnapshot(events []core.ProviderEvent) []core.ProviderEvent {
+	return append([]core.ProviderEvent(nil), events...)
 }
 
 type failoverEntry struct {
@@ -180,7 +194,7 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 		recordProviderPartialEvent(&events, entry.name, err)
 		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, attemptMessages)
 		if !routeToNext {
-			return nil, TerminalProviderError{Provider: entry.name, Err: err}
+			return nil, TerminalProviderError{Provider: entry.name, Err: err, Events: providerEventsSnapshot(events)}
 		}
 		attemptMessages = appendPartialProviderRecoveryMessage(attemptMessages, entry.name, err)
 		if isProviderContextWindowError(err) && historyHasToolResults(attemptMessages) {
@@ -195,7 +209,7 @@ func (c *FailoverChain) Stream(ctx context.Context, messages []agent.Message, to
 			idx = nextIdx - 1
 		}
 	}
-	return nil, ExhaustedError{Attempts: attempts}
+	return nil, ExhaustedError{Attempts: attempts, Events: providerEventsSnapshot(events)}
 }
 
 func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agent.Message, tools []agent.ToolDef, opts agent.CompleteOptions) (*agent.Response, error) {
@@ -224,7 +238,7 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 		recordProviderPartialEvent(&events, entry.name, err)
 		nextIdx, routeToNext := c.nextCompleteFailoverIndex(idx, err, attemptMessages)
 		if !routeToNext {
-			return nil, TerminalProviderError{Provider: entry.name, Err: err}
+			return nil, TerminalProviderError{Provider: entry.name, Err: err, Events: providerEventsSnapshot(events)}
 		}
 		attemptMessages = appendPartialProviderRecoveryMessage(attemptMessages, entry.name, err)
 		if isProviderContextWindowError(err) && historyHasToolResults(attemptMessages) {
@@ -239,7 +253,7 @@ func (c *FailoverChain) completeAcrossChain(ctx context.Context, messages []agen
 			idx = nextIdx - 1
 		}
 	}
-	return nil, ExhaustedError{Attempts: attempts}
+	return nil, ExhaustedError{Attempts: attempts, Events: providerEventsSnapshot(events)}
 }
 
 func (c *FailoverChain) nextCompleteFailoverIndex(idx int, err error, messages []agent.Message) (int, bool) {

@@ -13,6 +13,7 @@ import (
 	"github.com/idolum-ai/aphelion/durableagent"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
+	"github.com/idolum-ai/aphelion/turn"
 )
 
 type testDurableWakeAdapter struct {
@@ -291,6 +292,16 @@ func TestPollDurableWakeAgentsDeliversReviewEventsAfterChildExecutorWake(t *test
 	}
 	if len(events) != 0 {
 		t.Fatalf("PendingReviewEvents() len = %d, want 0 after immediate relay", len(events))
+	}
+}
+
+func TestDurableTurnInferenceUnavailableUsesProviderFailure(t *testing.T) {
+	result := &turn.Result{Turn: &core.TurnResult{ProviderFailure: "codex: server_is_overloaded"}}
+	if !durableTurnInferenceUnavailable(result, "ordinary visible text") {
+		t.Fatal("durableTurnInferenceUnavailable() = false, want provider failure to count structurally")
+	}
+	if durableTurnInferenceUnavailable(&turn.Result{Turn: &core.TurnResult{}}, "ordinary visible text") {
+		t.Fatal("durableTurnInferenceUnavailable() = true, want false without provider failure or legacy visible signal")
 	}
 }
 

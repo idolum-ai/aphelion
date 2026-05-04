@@ -660,7 +660,7 @@ func TestDurableAgentToolConversationShowIncludesRetryStateOnInferenceFailure(t 
 
 	continuity := core.DurableAgentContinuityState{}
 	continuity = continuity.WithConversationMessage("parent", "Please summarize the latest intake.", time.Now().UTC().Add(-2*time.Minute))
-	continuity = continuity.WithConversationMessage("child", "Inference backend is unavailable. This turn did not complete. You can /stop to cancel current work and try again.", time.Now().UTC().Add(-time.Minute))
+	continuity = continuity.WithConversationMessage("child", "provider_failure: codex: server_is_overloaded", time.Now().UTC().Add(-time.Minute))
 	raw, err := continuity.Marshal()
 	if err != nil {
 		t.Fatalf("continuity.Marshal() err = %v", err)
@@ -685,7 +685,7 @@ func TestDurableAgentToolConversationShowIncludesRetryStateOnInferenceFailure(t 
 	if !strings.Contains(showOut, "thread_state: retrying_after_inference_failure") {
 		t.Fatalf("conversation_show output = %q, want retrying thread state", showOut)
 	}
-	if !strings.Contains(showOut, "last_child_error: Inference backend is unavailable.") {
+	if !strings.Contains(showOut, "last_child_error: provider_failure: codex: server_is_overloaded") {
 		t.Fatalf("conversation_show output = %q, want surfaced child inference error", showOut)
 	}
 }

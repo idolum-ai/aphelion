@@ -399,6 +399,34 @@ func TestFailoverChainFallsBackOnForbidden(t *testing.T) {
 	}
 }
 
+func TestFailoverChainTerminalErrorCarriesProviderEvents(t *testing.T) {
+	primary := &stubChainProvider{err: stubStatusError{code: 400, msg: "bad request"}}
+	secondary := &stubChainProvider{reply: "should not run"}
+
+	chain, err := NewFailoverChain([]NamedProvider{
+		{Name: "codex", Provider: primary},
+		{Name: "anthropic", Provider: secondary},
+	})
+	if err != nil {
+		t.Fatalf("NewFailoverChain() err = %v", err)
+	}
+
+	_, err = chain.CompleteManaged(context.Background(), []agent.Message{{Role: "user", Content: "hi"}}, nil, agent.CompleteOptions{})
+	if err == nil {
+		t.Fatal("CompleteManaged() err = nil, want terminal error")
+	}
+	var terminal TerminalProviderError
+	if !errors.As(err, &terminal) {
+		t.Fatalf("err = %T/%v, want TerminalProviderError", err, err)
+	}
+	if !providerEventsContain(terminal.ProviderEvents(), core.ExecutionEventProviderAttemptFailed) {
+		t.Fatalf("terminal events = %#v, want provider attempt failed", terminal.ProviderEvents())
+	}
+	if secondary.callCount != 0 {
+		t.Fatalf("secondary.callCount = %d, want no fallback for terminal bad request", secondary.callCount)
+	}
+}
+
 func TestFailoverChainDoesNotCascadeClientErrors(t *testing.T) {
 	primary := &stubChainProvider{err: stubStatusError{code: 400, msg: "bad request"}}
 	secondary := &stubChainProvider{reply: "should not run"}
