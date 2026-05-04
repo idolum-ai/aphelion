@@ -131,11 +131,13 @@ func buildNamedStatusReadableProvider(name string, cfg *config.Config, httpClien
 			return nil, nil
 		}
 		return newStatusReadableAnthropicProvider(providerpkg.AnthropicOptions{
-			APIKey:     cfg.Providers.Anthropic.APIKey,
-			Model:      statusReadableModelAnthropic,
-			MaxTokens:  512,
-			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			APIKey:        cfg.Providers.Anthropic.APIKey,
+			Model:         statusReadableModelAnthropic,
+			MaxTokens:     512,
+			CacheStrategy: cfg.Providers.Anthropic.CacheStrategy,
+			CacheTTL:      cfg.Providers.Anthropic.CacheTTL,
+			HTTPClient:    httpClient,
+			UserAgent:     cfg.Identity.UserAgent,
 		})
 	case "openai":
 		if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {

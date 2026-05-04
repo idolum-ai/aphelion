@@ -432,11 +432,13 @@ func buildSingleProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConf
 		})
 	case core.ModelProviderAnthropic:
 		return providerpkg.NewAnthropic(providerpkg.AnthropicOptions{
-			APIKey:     cfg.Providers.Anthropic.APIKey,
-			Model:      model,
-			MaxTokens:  cfg.Providers.Anthropic.MaxTokens,
-			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			APIKey:        cfg.Providers.Anthropic.APIKey,
+			Model:         model,
+			MaxTokens:     cfg.Providers.Anthropic.MaxTokens,
+			CacheStrategy: cfg.Providers.Anthropic.CacheStrategy,
+			CacheTTL:      cfg.Providers.Anthropic.CacheTTL,
+			HTTPClient:    httpClient,
+			UserAgent:     cfg.Identity.UserAgent,
 		})
 	case core.ModelProviderOpenRouter:
 		return providerpkg.NewOpenRouter(providerpkg.OpenRouterOptions{

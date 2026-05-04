@@ -32,6 +32,8 @@ type AnthropicOptions struct {
 	APIKey           string
 	Model            string
 	MaxTokens        int
+	CacheStrategy    string
+	CacheTTL         string
 	HTTPClient       *http.Client
 	BaseURL          string
 	AnthropicVersion string
@@ -47,6 +49,7 @@ type Anthropic struct {
 	maxTokens int
 	version   string
 	userAgent string
+	cache     anthropicCachePolicy
 }
 
 // NewAnthropic creates a new Anthropic client.
@@ -69,6 +72,10 @@ func NewAnthropic(opts AnthropicOptions) (*Anthropic, error) {
 	if version == "" {
 		version = defaultAnthropicVersion
 	}
+	cache, err := newAnthropicCachePolicy(opts.CacheStrategy, opts.CacheTTL)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Anthropic{
 		endpoint:  endpoint,
@@ -78,6 +85,7 @@ func NewAnthropic(opts AnthropicOptions) (*Anthropic, error) {
 		maxTokens: opts.MaxTokens,
 		version:   version,
 		userAgent: opts.UserAgent,
+		cache:     cache,
 	}, nil
 }
 
@@ -197,7 +205,7 @@ func mapAnthropicResponse(res anthropicResponse, summaryMode agent.ReasoningSumm
 }
 
 func (a *Anthropic) buildRequest(messages []agent.Message, tools []agent.ToolDef, stream bool, opts agent.CompleteOptions) anthropicRequest {
-	systemPrompt, reqMessages := splitMessages(messages)
+	systemPrompt, reqMessages := splitMessages(messages, a.cache)
 	reqBody := anthropicRequest{
 		Model:     a.model,
 		MaxTokens: a.maxTokens,
@@ -205,7 +213,7 @@ func (a *Anthropic) buildRequest(messages []agent.Message, tools []agent.ToolDef
 		Messages:  toAnthropicMessages(reqMessages),
 		Stream:    stream,
 	}
-	if toolDefs := toAnthropicTools(tools); len(toolDefs) > 0 {
+	if toolDefs := toAnthropicTools(tools, a.cache); len(toolDefs) > 0 {
 		reqBody.Tools = toolDefs
 	}
 	if thinking := anthropicThinkingForOptions(opts.Reasoning, a.maxTokens); thinking != nil {
@@ -311,6 +319,41 @@ type anthropicStreamFailure struct {
 
 type anthropicCacheControl struct {
 	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
+}
+
+type anthropicCachePolicy struct {
+	Strategy string
+	TTL      string
+}
+
+func newAnthropicCachePolicy(strategy string, ttl string) (anthropicCachePolicy, error) {
+	strategy = strings.ToLower(strings.TrimSpace(strategy))
+	if strategy == "" {
+		strategy = "explicit"
+	}
+	switch strategy {
+	case "auto", "explicit", "hybrid", "off":
+	default:
+		return anthropicCachePolicy{}, fmt.Errorf("anthropic: cache strategy must be one of auto|explicit|hybrid|off")
+	}
+	ttl = strings.ToLower(strings.TrimSpace(ttl))
+	if ttl == "" {
+		ttl = "5m"
+	}
+	switch ttl {
+	case "5m", "1h":
+	default:
+		return anthropicCachePolicy{}, fmt.Errorf("anthropic: cache ttl must be one of 5m|1h")
+	}
+	return anthropicCachePolicy{Strategy: strategy, TTL: ttl}, nil
+}
+
+func (p anthropicCachePolicy) cacheControl() *anthropicCacheControl {
+	if p.Strategy == "off" {
+		return nil
+	}
+	return &anthropicCacheControl{Type: "ephemeral", TTL: p.TTL}
 }
 
 type anthropicThinking struct {
@@ -466,7 +509,7 @@ func rawString(v string) json.RawMessage {
 	return json.RawMessage(b)
 }
 
-func toAnthropicTools(tools []agent.ToolDef) []anthropicToolDef {
+func toAnthropicTools(tools []agent.ToolDef, cache anthropicCachePolicy) []anthropicToolDef {
 	out := make([]anthropicToolDef, 0, len(tools))
 	for _, t := range tools {
 		if t.Name == "" || len(t.Parameters) == 0 {
@@ -479,7 +522,7 @@ func toAnthropicTools(tools []agent.ToolDef) []anthropicToolDef {
 		})
 	}
 	if len(out) > 0 {
-		out[len(out)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+		out[len(out)-1].CacheControl = cache.cacheControl()
 	}
 	return out
 }
@@ -524,12 +567,12 @@ func anthropicThinkingForOptions(reasoning agent.ReasoningConfig, maxTokens int)
 	}
 }
 
-func splitMessages(messages []agent.Message) ([]anthropicContent, []agent.Message) {
+func splitMessages(messages []agent.Message, cache anthropicCachePolicy) ([]anthropicContent, []agent.Message) {
 	var systemParts []anthropicContent
 	out := make([]agent.Message, 0, len(messages))
 	for _, msg := range messages {
 		if strings.EqualFold(strings.TrimSpace(msg.Role), "system") {
-			systemParts = append(systemParts, systemMessageToContent(msg)...)
+			systemParts = append(systemParts, systemMessageToContent(msg, cache)...)
 			continue
 		}
 		out = append(out, msg)
@@ -537,7 +580,7 @@ func splitMessages(messages []agent.Message) ([]anthropicContent, []agent.Messag
 	return systemParts, out
 }
 
-func systemMessageToContent(msg agent.Message) []anthropicContent {
+func systemMessageToContent(msg agent.Message, cache anthropicCachePolicy) []anthropicContent {
 	if len(msg.SystemBlocks) > 0 {
 		out := make([]anthropicContent, 0, len(msg.SystemBlocks))
 		for _, block := range msg.SystemBlocks {
@@ -550,7 +593,7 @@ func systemMessageToContent(msg agent.Message) []anthropicContent {
 				Text: text,
 			}
 			if block.CacheBreakpoint {
-				content.CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+				content.CacheControl = cache.cacheControl()
 			}
 			out = append(out, content)
 		}

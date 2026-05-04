@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -207,7 +208,7 @@ admin_user_ids = [123]
 
 [providers.anthropic]
 api_key = "sk-ant-test"
-cache_ttl = "1h"
+old_cache_ttl = "1h"
 
 [providers.experimental]
 api_key = "experimental-test"
@@ -224,7 +225,7 @@ workspace = "./workspace"
 		t.Fatalf("Load() err = %v", err)
 	}
 	summary := cfg.WarningSummary()
-	for _, want := range []string{"telegram.allowed_chats", "providers.anthropic.cache_ttl", "providers.experimental"} {
+	for _, want := range []string{"telegram.allowed_chats", "providers.anthropic.old_cache_ttl", "providers.experimental"} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("warning summary = %q, want %s", summary, want)
 		}
@@ -500,6 +501,8 @@ api_key = "sk-ant-test"
 model = "claude-opus-4-6"
 max_tokens = 8192
 context_window = 190000
+cache_strategy = "hybrid"
+cache_ttl = "1h"
 
 [providers.openai]
 api_key = "sk-openai-test"
@@ -654,6 +657,9 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if cfg.Providers.Anthropic.MaxTokens != 8192 {
 		t.Fatalf("max_tokens = %d, want 8192", cfg.Providers.Anthropic.MaxTokens)
+	}
+	if cfg.Providers.Anthropic.CacheStrategy != "hybrid" || cfg.Providers.Anthropic.CacheTTL != "1h" {
+		t.Fatalf("anthropic cache = %s/%s, want hybrid/1h", cfg.Providers.Anthropic.CacheStrategy, cfg.Providers.Anthropic.CacheTTL)
 	}
 	if cfg.Providers.OpenAI.APIKey != "sk-openai-test" || cfg.Providers.OpenAI.BaseURL != "https://api.openai.test/v1" {
 		t.Fatalf("providers.openai = %#v, want parsed openai provider config", cfg.Providers.OpenAI)
@@ -1503,6 +1509,48 @@ api_key = "sk-ant-test"
 	}
 	if !strings.Contains(err.Error(), "governor.brokerage.min_rounds") {
 		t.Fatalf("error = %v, want governor.brokerage.min_rounds message", err)
+	}
+}
+
+func TestLoadRejectsInvalidAnthropicCachePolicy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		setting string
+		wantErr string
+	}{
+		{name: "strategy", setting: `cache_strategy = "forever"`, wantErr: "providers.anthropic.cache_strategy"},
+		{name: "ttl", setting: `cache_ttl = "10m"`, wantErr: "providers.anthropic.cache_ttl"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.toml")
+			raw := fmt.Sprintf(`
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+%s
+`, tt.setting)
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(configPath)
+			if err == nil {
+				t.Fatal("Load() err = nil, want cache validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %s", err, tt.wantErr)
+			}
+		})
 	}
 }
 

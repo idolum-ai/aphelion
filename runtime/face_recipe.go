@@ -192,11 +192,13 @@ func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string
 			return nil, nil
 		}
 		return providerpkg.NewAnthropic(providerpkg.AnthropicOptions{
-			APIKey:     cfg.Providers.Anthropic.APIKey,
-			Model:      model,
-			MaxTokens:  cfg.Providers.Anthropic.MaxTokens,
-			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			APIKey:        cfg.Providers.Anthropic.APIKey,
+			Model:         model,
+			MaxTokens:     cfg.Providers.Anthropic.MaxTokens,
+			CacheStrategy: cfg.Providers.Anthropic.CacheStrategy,
+			CacheTTL:      cfg.Providers.Anthropic.CacheTTL,
+			HTTPClient:    httpClient,
+			UserAgent:     cfg.Identity.UserAgent,
 		})
 	case "openai":
 		if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {

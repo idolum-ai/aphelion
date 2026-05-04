@@ -230,8 +230,89 @@ func TestAnthropicCompletePreservesSystemCacheBreakpoints(t *testing.T) {
 	if seen.System[1].CacheControl == nil || seen.System[1].CacheControl.Type != "ephemeral" {
 		t.Fatalf("cache control on stable breakpoint = %#v, want ephemeral", seen.System[1].CacheControl)
 	}
+	if seen.System[1].CacheControl.TTL != "5m" {
+		t.Fatalf("cache ttl = %q, want default 5m", seen.System[1].CacheControl.TTL)
+	}
 	if seen.System[2].CacheControl != nil {
 		t.Fatalf("dynamic block cache control = %#v, want nil", seen.System[2].CacheControl)
+	}
+}
+
+func TestAnthropicCachePolicyTTLAndOff(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		opts         AnthropicOptions
+		wantToolTTL  string
+		wantNoCache  bool
+		wantNewError string
+	}{
+		{
+			name:        "one hour ttl",
+			opts:        AnthropicOptions{APIKey: "test-key", Model: "claude-2", CacheTTL: "1h"},
+			wantToolTTL: "1h",
+		},
+		{
+			name:        "cache off",
+			opts:        AnthropicOptions{APIKey: "test-key", Model: "claude-2", CacheStrategy: "off", CacheTTL: "1h"},
+			wantNoCache: true,
+		},
+		{
+			name:         "invalid ttl",
+			opts:         AnthropicOptions{APIKey: "test-key", Model: "claude-2", CacheTTL: "10m"},
+			wantNewError: "cache ttl",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var seen anthropicRequest
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				_ = json.NewEncoder(w).Encode(anthropicResponse{Content: []anthropicContent{{Type: "text", Text: "ok"}}})
+			})
+			opts := tt.opts
+			opts.HTTPClient = &http.Client{Transport: &testTransport{handler: handler}}
+			client, err := NewAnthropic(opts)
+			if tt.wantNewError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantNewError) {
+					t.Fatalf("NewAnthropic() err = %v, want %s", err, tt.wantNewError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewAnthropic() err = %v", err)
+			}
+			_, err = client.Complete(context.Background(), []agent.Message{{
+				Role: "system",
+				SystemBlocks: []agent.SystemBlock{
+					{Text: "stable", CacheBreakpoint: true},
+				},
+			}, {Role: "user", Content: "hi"}}, []agent.ToolDef{{
+				Name:       "exec",
+				Parameters: json.RawMessage(`{"type":"object"}`),
+			}})
+			if err != nil {
+				t.Fatalf("Complete() err = %v", err)
+			}
+			if tt.wantNoCache {
+				if seen.System[0].CacheControl != nil || seen.Tools[0].CacheControl != nil {
+					t.Fatalf("cache controls = system:%#v tool:%#v, want nil", seen.System[0].CacheControl, seen.Tools[0].CacheControl)
+				}
+				return
+			}
+			if seen.System[0].CacheControl == nil || seen.System[0].CacheControl.TTL != tt.wantToolTTL {
+				t.Fatalf("system cache control = %#v, want ttl %s", seen.System[0].CacheControl, tt.wantToolTTL)
+			}
+			if seen.Tools[0].CacheControl == nil || seen.Tools[0].CacheControl.TTL != tt.wantToolTTL {
+				t.Fatalf("tool cache control = %#v, want ttl %s", seen.Tools[0].CacheControl, tt.wantToolTTL)
+			}
+		})
 	}
 }
 

@@ -167,6 +167,8 @@ type AnthropicConfig struct {
 	Model         string `toml:"model"`
 	MaxTokens     int    `toml:"max_tokens"`
 	ContextWindow int    `toml:"context_window"`
+	CacheStrategy string `toml:"cache_strategy"`
+	CacheTTL      string `toml:"cache_ttl"`
 }
 
 type OpenRouterConfig struct {
@@ -474,6 +476,8 @@ func Default() Config {
 				Model:         "claude-sonnet-4-6",
 				MaxTokens:     4096,
 				ContextWindow: 200000,
+				CacheStrategy: "explicit",
+				CacheTTL:      "5m",
 			},
 			OpenAI: OpenAIProviderConfig{
 				BaseURL:        "https://api.openai.com/v1",
@@ -682,6 +686,8 @@ func Load(path string) (*Config, error) {
 	if len(cfg.Providers.AutoOrder) == 0 {
 		cfg.Providers.AutoOrder = []string{"openai", "anthropic", "openrouter"}
 	}
+	cfg.Providers.Anthropic.CacheStrategy = normalizeAnthropicCacheStrategy(cfg.Providers.Anthropic.CacheStrategy)
+	cfg.Providers.Anthropic.CacheTTL = normalizeAnthropicCacheTTL(cfg.Providers.Anthropic.CacheTTL)
 	cfg.Providers.OpenAI.FallbackModels = normalizeOpenAIModelFallbacks(cfg.Providers.OpenAI.Model, cfg.Providers.OpenAI.FallbackModels)
 	applyProviderSelectionHeuristic(&cfg, md)
 	cfg.Work.Executor = normalizeWorkExecutor(cfg.Work.Executor)
@@ -916,6 +922,28 @@ func normalizeProviderSelection(selection string) string {
 		return "manual"
 	default:
 		return strings.ToLower(strings.TrimSpace(selection))
+	}
+}
+
+func normalizeAnthropicCacheStrategy(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "", "explicit":
+		return "explicit"
+	case "auto", "hybrid", "off":
+		return strings.ToLower(strings.TrimSpace(strategy))
+	default:
+		return strings.ToLower(strings.TrimSpace(strategy))
+	}
+}
+
+func normalizeAnthropicCacheTTL(ttl string) string {
+	switch strings.ToLower(strings.TrimSpace(ttl)) {
+	case "", "5m":
+		return "5m"
+	case "1h":
+		return "1h"
+	default:
+		return strings.ToLower(strings.TrimSpace(ttl))
 	}
 }
 
@@ -1332,6 +1360,16 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Providers.Anthropic.ContextWindow <= 0 {
 		return fmt.Errorf("providers.anthropic.context_window must be > 0")
+	}
+	switch cfg.Providers.Anthropic.CacheStrategy {
+	case "auto", "explicit", "hybrid", "off":
+	default:
+		return fmt.Errorf("providers.anthropic.cache_strategy must be one of auto|explicit|hybrid|off")
+	}
+	switch cfg.Providers.Anthropic.CacheTTL {
+	case "5m", "1h":
+	default:
+		return fmt.Errorf("providers.anthropic.cache_ttl must be one of 5m|1h")
 	}
 	if cfg.Providers.OpenAI.ContextWindow <= 0 {
 		return fmt.Errorf("providers.openai.context_window must be > 0")

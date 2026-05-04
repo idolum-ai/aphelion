@@ -81,6 +81,8 @@ api_key = "anthropic-api-key"
 model = "claude-sonnet-4-6"
 max_tokens = 4096
 context_window = 200000
+cache_strategy = "explicit" # "auto" | "explicit" | "hybrid" | "off"
+cache_ttl = "5m"            # "5m" | "1h"
 
 [providers.openai]
 api_key = ""
