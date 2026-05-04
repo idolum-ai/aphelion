@@ -58,12 +58,6 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		return nil
 	}
 	priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
-	sender, ok := r.outbound.(interface {
-		SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
-	})
-	if !ok {
-		return nil
-	}
 
 	consensus := r.buildContinuationConsensus(key, result)
 	objective, nextStep := summarizeContinuationPlan(consensus.PlanState, consensus.OperationState, promptInput)
@@ -104,11 +98,22 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		return nil
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", continuationExecutionPayload(state), time.Now().UTC())
+	if approved, err := r.maybeAutoApproveContinuationOffer(ctx, key, msg, state, "organic_continuation"); approved || err != nil {
+		return err
+	}
 
+	return r.sendContinuationApprovalPrompt(ctx, key, msg, state, r.renderContinuationPrompt(ctx, key, msg, state))
+}
+
+func (r *Runtime) sendContinuationApprovalPrompt(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string) error {
+	sender, ok := r.continuationApprovalPromptSender()
+	if !ok {
+		return nil
+	}
 	_, err := sender.SendInlineKeyboard(
 		ctx,
 		msg.ChatID,
-		r.renderContinuationPrompt(ctx, key, msg, state),
+		text,
 		continuationApprovalButtonRows(state),
 		nil,
 	)
@@ -116,6 +121,18 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		return fmt.Errorf("send continuation approval: %w", err)
 	}
 	return nil
+}
+
+func (r *Runtime) continuationApprovalPromptSender() (interface {
+	SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
+}, bool) {
+	if r == nil || r.outbound == nil {
+		return nil, false
+	}
+	sender, ok := r.outbound.(interface {
+		SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
+	})
+	return sender, ok
 }
 
 func shouldNotifyContinuationBlocked(priorState session.ContinuationState, priorExists bool, consensus continuationConsensus) bool {

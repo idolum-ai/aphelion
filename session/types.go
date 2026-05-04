@@ -877,6 +877,80 @@ type PendingDecisionRecord struct {
 	UpdatedAt         time.Time
 }
 
+const (
+	OperatorAutoApprovalScopeAll       = "all"
+	OperatorAutoApprovalScopeWorkspace = "workspace"
+	OperatorAutoApprovalScopeDeploy    = "deploy"
+)
+
+type OperatorAutoApprovalLease struct {
+	ID          string
+	AdminUserID int64
+	ChatID      int64
+	Scope       string
+	Reason      string
+	MaxUses     int
+	UsedCount   int
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+	RevokedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func NormalizeOperatorAutoApprovalScope(scope string) string {
+	switch normalizeEnumValue(scope) {
+	case OperatorAutoApprovalScopeWorkspace:
+		return OperatorAutoApprovalScopeWorkspace
+	case OperatorAutoApprovalScopeDeploy:
+		return OperatorAutoApprovalScopeDeploy
+	default:
+		return OperatorAutoApprovalScopeAll
+	}
+}
+
+func NormalizeOperatorAutoApprovalLease(lease OperatorAutoApprovalLease) OperatorAutoApprovalLease {
+	lease.ID = strings.TrimSpace(lease.ID)
+	lease.Scope = NormalizeOperatorAutoApprovalScope(lease.Scope)
+	lease.Reason = strings.TrimSpace(lease.Reason)
+	if lease.MaxUses < 0 {
+		lease.MaxUses = 0
+	}
+	if lease.UsedCount < 0 {
+		lease.UsedCount = 0
+	}
+	if !lease.CreatedAt.IsZero() {
+		lease.CreatedAt = lease.CreatedAt.UTC()
+	}
+	if !lease.ExpiresAt.IsZero() {
+		lease.ExpiresAt = lease.ExpiresAt.UTC()
+	}
+	if !lease.RevokedAt.IsZero() {
+		lease.RevokedAt = lease.RevokedAt.UTC()
+	}
+	if !lease.UpdatedAt.IsZero() {
+		lease.UpdatedAt = lease.UpdatedAt.UTC()
+	}
+	return lease
+}
+
+func (l OperatorAutoApprovalLease) ActiveAt(now time.Time) bool {
+	lease := NormalizeOperatorAutoApprovalLease(l)
+	if lease.ID == "" || lease.AdminUserID <= 0 || lease.ChatID == 0 {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	if !lease.RevokedAt.IsZero() {
+		return false
+	}
+	if lease.ExpiresAt.IsZero() || !lease.ExpiresAt.After(now) {
+		return false
+	}
+	return lease.MaxUses <= 0 || lease.UsedCount < lease.MaxUses
+}
+
 // PendingArtifactRetentionRecord persists inbound artifact context while a
 // retention decision is outstanding so routing can resume asynchronously.
 type PendingArtifactRetentionRecord struct {

@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	schemaVersion                       = 40
+	schemaVersion                       = 41
 	minimumSupportedLegacySchemaVersion = 11
 )
 
@@ -411,6 +411,21 @@ func (s *SQLiteStore) init() error {
 			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_pending_decisions_owner_seq ON pending_decisions(owner_key, decision_seq DESC)`,
+		`CREATE TABLE IF NOT EXISTS operator_auto_approvals (
+			lease_id TEXT PRIMARY KEY,
+			admin_user_id INTEGER NOT NULL DEFAULT 0,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			scope TEXT NOT NULL DEFAULT 'all',
+			reason TEXT NOT NULL DEFAULT '',
+			max_uses INTEGER NOT NULL DEFAULT 0,
+			used_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at TEXT NOT NULL,
+			revoked_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_chat_active ON operator_auto_approvals(chat_id, expires_at DESC, revoked_at, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_admin_active ON operator_auto_approvals(admin_user_id, expires_at DESC, revoked_at, updated_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS pending_artifact_retention (
 			owner_key TEXT PRIMARY KEY,
 			chat_id INTEGER NOT NULL DEFAULT 0,
@@ -4190,6 +4205,7 @@ func (s *SQLiteStore) ResetRuntime() error {
 	}()
 
 	statements := []string{
+		`DELETE FROM operator_auto_approvals`,
 		`DELETE FROM pending_decisions`,
 		`DELETE FROM review_events`,
 		`DELETE FROM execution_events`,
@@ -5292,6 +5308,9 @@ func applyMigrations(tx *sql.Tx) error {
 			return fmt.Errorf("ensure execution_events index: %w", err)
 		}
 	}
+	if err := ensureOperatorAutoApprovalTables(tx); err != nil {
+		return err
+	}
 
 	if err := ensureSessionColumn(tx, "plan_state_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
 		return fmt.Errorf("ensure sessions.plan_state_json: %w", err)
@@ -5532,6 +5551,31 @@ func ensureModelSlotOverridesTable(tx *sql.Tx) error {
 	} {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("ensure model slot override table: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureOperatorAutoApprovalTables(tx *sql.Tx) error {
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS operator_auto_approvals (
+			lease_id TEXT PRIMARY KEY,
+			admin_user_id INTEGER NOT NULL DEFAULT 0,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			scope TEXT NOT NULL DEFAULT 'all',
+			reason TEXT NOT NULL DEFAULT '',
+			max_uses INTEGER NOT NULL DEFAULT 0,
+			used_count INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at TEXT NOT NULL,
+			revoked_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_chat_active ON operator_auto_approvals(chat_id, expires_at DESC, revoked_at, updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_auto_approvals_admin_active ON operator_auto_approvals(admin_user_id, expires_at DESC, revoked_at, updated_at DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure operator auto approvals table: %w", err)
 		}
 	}
 	return nil

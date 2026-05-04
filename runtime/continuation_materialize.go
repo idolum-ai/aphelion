@@ -10,7 +10,6 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
-	"github.com/idolum-ai/aphelion/telegram"
 	"github.com/idolum-ai/aphelion/turn"
 )
 
@@ -18,10 +17,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	if r == nil || r.store == nil || r.outbound == nil || msg.ChatID == 0 {
 		return false, nil
 	}
-	sender, ok := r.outbound.(interface {
-		SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
-	})
-	if !ok {
+	if _, ok := r.continuationApprovalPromptSender(); !ok {
 		return false, nil
 	}
 	opState, err := r.store.OperationState(key)
@@ -49,14 +45,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["materialized_from"] = "operation_plan_lease"
 		payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-		_, err = sender.SendInlineKeyboard(
-			ctx,
-			msg.ChatID,
-			renderOperationProposalMaterializedPromptFallback(state),
-			continuationApprovalButtonRows(state),
-			nil,
-		)
-		if err != nil {
+		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
 			return false, fmt.Errorf("send operation plan lease continuation approval: %w", err)
 		}
 		return true, nil
@@ -83,14 +72,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
 		payload["synthesized_from_phase_plan"] = true
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-		_, err = sender.SendInlineKeyboard(
-			ctx,
-			msg.ChatID,
-			renderOperationProposalMaterializedPromptFallback(state),
-			continuationApprovalButtonRows(state),
-			nil,
-		)
-		if err != nil {
+		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
 			return false, fmt.Errorf("send synthesized operation plan lease continuation approval: %w", err)
 		}
 		return true, nil
@@ -116,14 +98,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["bundle_phase_count"] = len(bundle)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-		_, err = sender.SendInlineKeyboard(
-			ctx,
-			msg.ChatID,
-			renderOperationProposalMaterializedPromptFallback(state),
-			continuationApprovalButtonRows(state),
-			nil,
-		)
-		if err != nil {
+		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_bundle"); err != nil {
 			return false, fmt.Errorf("send operation phase bundle continuation approval: %w", err)
 		}
 		return true, nil
@@ -153,14 +128,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["phase_id"] = strings.TrimSpace(phase.ID)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-		_, err = sender.SendInlineKeyboard(
-			ctx,
-			msg.ChatID,
-			renderOperationProposalMaterializedPromptFallback(state),
-			continuationApprovalButtonRows(state),
-			nil,
-		)
-		if err != nil {
+		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_plan"); err != nil {
 			return false, fmt.Errorf("send operation phase continuation approval: %w", err)
 		}
 		return true, nil
@@ -189,17 +157,17 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	payload := continuationExecutionPayload(state)
 	payload["materialized_from"] = "operation_proposal"
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-	_, err = sender.SendInlineKeyboard(
-		ctx,
-		msg.ChatID,
-		renderOperationProposalMaterializedPromptFallback(state),
-		continuationApprovalButtonRows(state),
-		nil,
-	)
-	if err != nil {
+	if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_proposal"); err != nil {
 		return false, fmt.Errorf("send operation proposal continuation approval: %w", err)
 	}
 	return true, nil
+}
+
+func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string, source string) error {
+	if approved, err := r.maybeAutoApproveContinuationOffer(ctx, key, msg, state, source); approved || err != nil {
+		return err
+	}
+	return r.sendContinuationApprovalPrompt(ctx, key, msg, state, text)
 }
 
 func pendingOperationProposalNeedsButton(proposal session.OperationProposal) bool {

@@ -64,6 +64,13 @@ type PendingDecision struct {
 
 type Notifier func(context.Context, PendingDecision) (Delivery, error)
 
+type AutoResolution struct {
+	Choice string
+	Reason string
+}
+
+type AutoResolver func(context.Context, PendingDecision) (AutoResolution, error)
+
 type DurableDecision struct {
 	Pending  PendingDecision
 	Seq      uint64
@@ -89,6 +96,7 @@ type Broker struct {
 	resolvedOrder []string
 	durable       DurableStore
 	observer      Observer
+	autoResolver  AutoResolver
 	loaded        bool
 }
 
@@ -134,6 +142,12 @@ func WithDurableStore(store DurableStore) BrokerOption {
 func WithObserver(observer Observer) BrokerOption {
 	return func(b *Broker) {
 		b.observer = observer
+	}
+}
+
+func WithAutoResolver(resolver AutoResolver) BrokerOption {
+	return func(b *Broker) {
+		b.autoResolver = resolver
 	}
 }
 
@@ -302,6 +316,24 @@ func (b *Broker) Request(ctx context.Context, req Request) (Result, error) {
 		ownerKey:     ownerKey,
 		exclusiveKey: decisionExclusiveKey(normalized, ownerKey),
 		seq:          decisionSeq,
+	}
+	if b.autoResolver != nil {
+		resolution, err := b.autoResolver(ctx, pending.request)
+		if err != nil {
+			return Result{}, err
+		}
+		choice := strings.TrimSpace(resolution.Choice)
+		if choice != "" {
+			if !containsChoice(pending.request.Choices, choice) {
+				return Result{}, fmt.Errorf("auto-resolved choice %q is not present", choice)
+			}
+			reason := strings.TrimSpace(resolution.Reason)
+			if reason == "" {
+				reason = "auto_approved"
+			}
+			b.emitEvent(ctx, pending, EventTypeResolved, choice, false, reason)
+			return Result{DecisionID: pending.request.ID, Choice: choice, Delivery: pending.delivery}, nil
+		}
 	}
 
 	b.mu.Lock()

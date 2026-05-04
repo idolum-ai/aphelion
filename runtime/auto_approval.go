@@ -1,0 +1,412 @@
+//go:build linux
+
+package runtime
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/session"
+)
+
+const (
+	operatorAutoApprovalDefaultScope = session.OperatorAutoApprovalScopeAll
+	operatorAutoApprovalMinDuration  = time.Minute
+	operatorAutoApprovalMaxDuration  = 2 * time.Hour
+)
+
+type operatorAutoApprovalRequest struct {
+	ChatID     int64
+	Kind       string
+	Choice     string
+	DecisionID string
+	ProposalID string
+	Summary    string
+	Details    string
+	WorkMode   WorkMode
+}
+
+func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, adminUserID int64, args string) (string, error) {
+	if r == nil || r.store == nil {
+		return "Auto-approval is unavailable.", nil
+	}
+	if !r.IsTelegramAdmin(adminUserID) {
+		return "Auto-approval controls are admin only.", nil
+	}
+	action, spec, err := parseOperatorAutoApprovalCommand(args)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	switch action {
+	case "status":
+		return r.renderOperatorAutoApprovalStatus(chatID, adminUserID, now)
+	case "off":
+		count, err := r.store.RevokeOperatorAutoApprovalLeases(chatID, adminUserID, now)
+		if err != nil {
+			return "", err
+		}
+		r.recordOperatorAutoApprovalEvent(chatID, core.ExecutionEventAutoApprovalRevoked, "revoked", session.OperatorAutoApprovalLease{
+			AdminUserID: adminUserID,
+			ChatID:      chatID,
+		}, map[string]any{"revoked_count": count})
+		if count == 0 {
+			return "No active auto-approval lease was found for this chat.", nil
+		}
+		return fmt.Sprintf("Auto-approval revoked for this chat. Revoked leases: %d.", count), nil
+	case "enable":
+		lease := session.OperatorAutoApprovalLease{
+			ID:          newOperatorAutoApprovalLeaseID(chatID, adminUserID, now),
+			AdminUserID: adminUserID,
+			ChatID:      chatID,
+			Scope:       spec.Scope,
+			Reason:      spec.Reason,
+			MaxUses:     spec.MaxUses,
+			CreatedAt:   now,
+			ExpiresAt:   now.Add(spec.Duration),
+			UpdatedAt:   now,
+		}
+		if _, err := r.store.RevokeOperatorAutoApprovalLeases(chatID, adminUserID, now); err != nil {
+			return "", err
+		}
+		created, err := r.store.CreateOperatorAutoApprovalLease(lease)
+		if err != nil {
+			return "", err
+		}
+		r.recordOperatorAutoApprovalEvent(chatID, core.ExecutionEventAutoApprovalGranted, "active", created, nil)
+		return renderOperatorAutoApprovalEnabled(created, now), nil
+	default:
+		return "", fmt.Errorf("unknown auto-approval action %q", action)
+	}
+}
+
+func (r *Runtime) AutoResolveDecision(ctx context.Context, pending decision.PendingDecision) (decision.AutoResolution, error) {
+	choice := autoApprovalChoiceForDecision(pending)
+	if choice == "" {
+		return decision.AutoResolution{}, nil
+	}
+	lease, ok, err := r.consumeOperatorAutoApproval(ctx, operatorAutoApprovalRequest{
+		ChatID:     pending.ChatID,
+		Kind:       "decision:" + strings.TrimSpace(string(pending.Kind)),
+		Choice:     choice,
+		DecisionID: strings.TrimSpace(pending.ID),
+		Summary:    strings.TrimSpace(pending.Prompt),
+		Details:    strings.TrimSpace(pending.Details),
+	})
+	if err != nil || !ok {
+		return decision.AutoResolution{}, err
+	}
+	return decision.AutoResolution{Choice: choice, Reason: "auto_approved:" + strings.TrimSpace(lease.ID)}, nil
+}
+
+func (r *Runtime) maybeAutoApproveContinuationOffer(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, source string) (bool, error) {
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending || state.RemainingTurns <= 0 {
+		return false, nil
+	}
+	lease, ok, err := r.consumeOperatorAutoApproval(ctx, operatorAutoApprovalRequest{
+		ChatID:     key.ChatID,
+		Kind:       "continuation:" + strings.TrimSpace(source),
+		Choice:     "approve",
+		DecisionID: strings.TrimSpace(state.DecisionID),
+		ProposalID: strings.TrimSpace(state.ActionProposal.ID),
+		Summary:    firstNonEmptyContinuation(state.StageSummary, state.ActionProposal.Summary),
+		Details:    firstNonEmptyContinuation(state.ActionProposal.BoundedEffect, state.GovernorIntent.Constraints),
+		WorkMode:   continuationWorkMode(state),
+	})
+	if err != nil || !ok {
+		return false, err
+	}
+	approved, err := r.ApproveContinuation(key.ChatID, lease.AdminUserID)
+	if err != nil {
+		return true, err
+	}
+	if approved.Status == session.ContinuationStatusApproved && approved.RemainingTurns > 0 {
+		go func(chatID int64) {
+			_ = r.TriggerContinuation(context.Background(), chatID)
+		}(key.ChatID)
+	}
+	_ = msg
+	return true, nil
+}
+
+func autoApprovalChoiceForDecision(pending decision.PendingDecision) string {
+	switch pending.Kind {
+	case decision.KindProposalApproval, decision.KindMemoryDelegation, decision.KindSnapshotRestore:
+	default:
+		return ""
+	}
+	for _, choice := range pending.Choices {
+		if strings.TrimSpace(choice.ID) == "approve" {
+			return "approve"
+		}
+	}
+	return ""
+}
+
+func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorAutoApprovalRequest) (session.OperatorAutoApprovalLease, bool, error) {
+	if r == nil || r.store == nil || req.ChatID == 0 {
+		return session.OperatorAutoApprovalLease{}, false, nil
+	}
+	now := time.Now().UTC()
+	leases, err := r.store.ActiveOperatorAutoApprovalLeases(req.ChatID, now)
+	if err != nil {
+		return session.OperatorAutoApprovalLease{}, false, err
+	}
+	for _, lease := range leases {
+		if !operatorAutoApprovalScopeAllows(lease.Scope, req) {
+			continue
+		}
+		used, ok, err := r.store.IncrementOperatorAutoApprovalUse(lease.ID, now)
+		if err != nil {
+			return session.OperatorAutoApprovalLease{}, false, err
+		}
+		if !ok {
+			continue
+		}
+		r.recordOperatorAutoApprovalEvent(req.ChatID, core.ExecutionEventAutoApprovalUsed, "used", used, map[string]any{
+			"request_kind": strings.TrimSpace(req.Kind),
+			"choice":       strings.TrimSpace(req.Choice),
+			"decision_id":  strings.TrimSpace(req.DecisionID),
+			"proposal_id":  strings.TrimSpace(req.ProposalID),
+			"summary":      truncatePreview(strings.TrimSpace(req.Summary), 220),
+			"details":      truncatePreview(strings.TrimSpace(req.Details), 220),
+			"work_mode":    strings.TrimSpace(string(req.WorkMode)),
+		})
+		_ = ctx
+		return used, true, nil
+	}
+	return session.OperatorAutoApprovalLease{}, false, nil
+}
+
+func operatorAutoApprovalScopeAllows(scope string, req operatorAutoApprovalRequest) bool {
+	switch session.NormalizeOperatorAutoApprovalScope(scope) {
+	case session.OperatorAutoApprovalScopeAll:
+		return true
+	case session.OperatorAutoApprovalScopeWorkspace:
+		return operatorAutoApprovalRequestClass(req) == "workspace"
+	case session.OperatorAutoApprovalScopeDeploy:
+		return operatorAutoApprovalRequestClass(req) == "deploy"
+	default:
+		return false
+	}
+}
+
+func operatorAutoApprovalRequestClass(req operatorAutoApprovalRequest) string {
+	switch req.WorkMode {
+	case WorkModeDeploy, WorkModeCommit:
+		return "deploy"
+	case WorkModeReadOnly, WorkModeWorkspaceWrite:
+		return "workspace"
+	}
+	lower := strings.ToLower(strings.Join([]string{req.Kind, req.Summary, req.Details}, " "))
+	for _, marker := range []string{"deploy", "restart", "systemctl", "commit", "push", "release", "install-user-service", "reinstall"} {
+		if strings.Contains(lower, marker) {
+			return "deploy"
+		}
+	}
+	for _, marker := range []string{"workspace", "read_only", "status_check", "inspect", "review", "patch", "edit", "test", "diff", "exec"} {
+		if strings.Contains(lower, marker) {
+			return "workspace"
+		}
+	}
+	return "generic"
+}
+
+func (r *Runtime) renderOperatorAutoApprovalStatus(chatID int64, adminUserID int64, now time.Time) (string, error) {
+	leases, err := r.store.ActiveOperatorAutoApprovalLeases(chatID, now)
+	if err != nil {
+		return "", err
+	}
+	for _, lease := range leases {
+		if lease.AdminUserID == adminUserID && lease.ActiveAt(now) {
+			return renderOperatorAutoApprovalStatusActive(lease, now), nil
+		}
+	}
+	latest, ok, err := r.store.LatestOperatorAutoApprovalLease(chatID, adminUserID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "Auto-approval is inactive for this chat.", nil
+	}
+	return renderOperatorAutoApprovalStatusInactive(latest, now), nil
+}
+
+type operatorAutoApprovalCommandSpec struct {
+	Duration time.Duration
+	Scope    string
+	MaxUses  int
+	Reason   string
+}
+
+func parseOperatorAutoApprovalCommand(raw string) (string, operatorAutoApprovalCommandSpec, error) {
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) == 0 {
+		return "status", operatorAutoApprovalCommandSpec{}, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(fields[0])) {
+	case "status":
+		return "status", operatorAutoApprovalCommandSpec{}, nil
+	case "off", "disable", "revoke", "stop":
+		return "off", operatorAutoApprovalCommandSpec{}, nil
+	}
+	spec := operatorAutoApprovalCommandSpec{Scope: operatorAutoApprovalDefaultScope}
+	durationSet := false
+	reason := make([]string, 0)
+	for _, field := range fields {
+		token := strings.TrimSpace(field)
+		lower := strings.ToLower(token)
+		if token == "" {
+			continue
+		}
+		if strings.HasPrefix(lower, "uses=") || strings.HasPrefix(lower, "max_uses=") || strings.HasPrefix(lower, "max=") {
+			value := strings.TrimSpace(token[strings.IndexByte(token, '=')+1:])
+			parsed, err := parsePositiveInt(value)
+			if err != nil {
+				return "", spec, fmt.Errorf("invalid auto-approval max uses %q", value)
+			}
+			spec.MaxUses = parsed
+			continue
+		}
+		if isOperatorAutoApprovalScope(lower) {
+			spec.Scope = session.NormalizeOperatorAutoApprovalScope(lower)
+			continue
+		}
+		if !durationSet {
+			if parsed, err := time.ParseDuration(lower); err == nil {
+				spec.Duration = parsed
+				durationSet = true
+				continue
+			}
+		}
+		reason = append(reason, token)
+	}
+	if !durationSet {
+		return "", spec, fmt.Errorf("usage: /autoapprove <duration> [all|workspace|deploy] [uses=N] [reason]")
+	}
+	if spec.Duration < operatorAutoApprovalMinDuration {
+		return "", spec, fmt.Errorf("auto-approval duration must be at least %s", operatorAutoApprovalMinDuration)
+	}
+	if spec.Duration > operatorAutoApprovalMaxDuration {
+		return "", spec, fmt.Errorf("auto-approval duration is capped at %s", operatorAutoApprovalMaxDuration)
+	}
+	spec.Reason = strings.TrimSpace(strings.Join(reason, " "))
+	return "enable", spec, nil
+}
+
+func isOperatorAutoApprovalScope(scope string) bool {
+	switch session.NormalizeOperatorAutoApprovalScope(scope) {
+	case session.OperatorAutoApprovalScopeAll:
+		return strings.TrimSpace(scope) == "" || strings.EqualFold(strings.TrimSpace(scope), "all")
+	case session.OperatorAutoApprovalScopeWorkspace, session.OperatorAutoApprovalScopeDeploy:
+		return true
+	default:
+		return false
+	}
+}
+
+func parsePositiveInt(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("empty integer")
+	}
+	var out int
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("invalid integer")
+		}
+		out = out*10 + int(r-'0')
+	}
+	return out, nil
+}
+
+func newOperatorAutoApprovalLeaseID(chatID int64, adminUserID int64, now time.Time) string {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return fmt.Sprintf("auto-%d-%d-%d", adminUserID, chatID, now.UTC().UnixNano())
+}
+
+func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, now time.Time) string {
+	lease = session.NormalizeOperatorAutoApprovalLease(lease)
+	parts := []string{
+		"Auto-approval enabled for this chat.",
+		"Scope: " + lease.Scope + ".",
+		"Expires: " + lease.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(lease.ExpiresAt.Sub(now)) + ").",
+	}
+	if lease.MaxUses > 0 {
+		parts = append(parts, fmt.Sprintf("Use budget: %d approval(s).", lease.MaxUses))
+	}
+	parts = append(parts, "Use /autoapprove off to revoke it.")
+	return strings.Join(parts, "\n")
+}
+
+func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLease, now time.Time) string {
+	lease = session.NormalizeOperatorAutoApprovalLease(lease)
+	lines := []string{
+		"Auto-approval is active for this chat.",
+		"Scope: " + lease.Scope + ".",
+		"Expires: " + lease.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(lease.ExpiresAt.Sub(now)) + ").",
+		fmt.Sprintf("Used: %d", lease.UsedCount),
+	}
+	if lease.MaxUses > 0 {
+		lines[len(lines)-1] = fmt.Sprintf("Used: %d/%d", lease.UsedCount, lease.MaxUses)
+	}
+	if lease.Reason != "" {
+		lines = append(lines, "Reason: "+lease.Reason)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApprovalLease, now time.Time) string {
+	lease = session.NormalizeOperatorAutoApprovalLease(lease)
+	reason := "expired"
+	if !lease.RevokedAt.IsZero() {
+		reason = "revoked"
+	} else if lease.MaxUses > 0 && lease.UsedCount >= lease.MaxUses {
+		reason = "use budget exhausted"
+	} else if lease.ExpiresAt.After(now) {
+		reason = "inactive"
+	}
+	return "Auto-approval is inactive for this chat. Last lease: " + reason + "."
+}
+
+func roundDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if d >= time.Hour {
+		return d.Round(time.Minute).String()
+	}
+	return d.Round(time.Second).String()
+}
+
+func (r *Runtime) recordOperatorAutoApprovalEvent(chatID int64, eventType string, status string, lease session.OperatorAutoApprovalLease, extra map[string]any) {
+	if r == nil || r.store == nil || chatID == 0 {
+		return
+	}
+	lease = session.NormalizeOperatorAutoApprovalLease(lease)
+	payload := map[string]any{
+		"lease_id":      strings.TrimSpace(lease.ID),
+		"admin_user_id": lease.AdminUserID,
+		"scope":         strings.TrimSpace(lease.Scope),
+		"reason":        strings.TrimSpace(lease.Reason),
+		"max_uses":      lease.MaxUses,
+		"used_count":    lease.UsedCount,
+	}
+	if !lease.ExpiresAt.IsZero() {
+		payload["expires_at"] = lease.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	for key, value := range extra {
+		if strings.TrimSpace(key) != "" {
+			payload[key] = value
+		}
+	}
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	r.recordExecutionEvent(key, eventType, "auto_approval", status, payload, time.Now().UTC())
+}

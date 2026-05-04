@@ -44,6 +44,42 @@ func TestBrokerRequestResolvesChoice(t *testing.T) {
 	}
 }
 
+func TestBrokerAutoResolverSkipsNotifierAndEmitsResolved(t *testing.T) {
+	t.Parallel()
+
+	var notified bool
+	var observed Event
+	broker := NewBroker(func(_ context.Context, _ PendingDecision) (Delivery, error) {
+		notified = true
+		return Delivery{MessageID: 77}, nil
+	}, WithAutoResolver(func(_ context.Context, pending PendingDecision) (AutoResolution, error) {
+		if pending.Kind != KindProposalApproval {
+			return AutoResolution{}, nil
+		}
+		return AutoResolution{Choice: "approve", Reason: "auto_approved:test"}, nil
+	}), WithObserver(func(_ context.Context, event Event) {
+		observed = event
+	}))
+
+	result, err := broker.Request(context.Background(), Request{
+		Kind:          KindProposalApproval,
+		ChatID:        7,
+		Prompt:        "Approve?",
+		Choices:       []Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+		DefaultChoice: "deny",
+		Timeout:       time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Request() err = %v", err)
+	}
+	if result.Choice != "approve" || result.Delivery.MessageID != 0 || notified {
+		t.Fatalf("result=%#v notified=%v, want auto approve without notifier delivery", result, notified)
+	}
+	if observed.Type != EventTypeResolved || observed.Choice != "approve" || observed.Reason != "auto_approved:test" {
+		t.Fatalf("observed = %#v, want resolved auto-approved event", observed)
+	}
+}
+
 func TestBrokerRequestFallsBackToDefaultChoiceOnTimeout(t *testing.T) {
 	t.Parallel()
 

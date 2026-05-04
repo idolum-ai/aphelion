@@ -72,6 +72,10 @@ const (
 	ExecutionEventDecisionExpired  = "decision.expired"
 	ExecutionEventDecisionDetached = "decision.detached"
 
+	ExecutionEventAutoApprovalGranted = "auto_approval.granted"
+	ExecutionEventAutoApprovalUsed    = "auto_approval.used"
+	ExecutionEventAutoApprovalRevoked = "auto_approval.revoked"
+
 	ExecutionEventRecoveryAwake     = "recovery.awake"
 	ExecutionEventRecoveryDetected  = "recovery.detected"
 	ExecutionEventRecoveryIssued    = "recovery.issued"

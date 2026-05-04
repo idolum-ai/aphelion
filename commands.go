@@ -52,6 +52,7 @@ type commandRouter interface {
 	TriggerContinuation(ctx context.Context, chatID int64) error
 	QueueReinstall(ctx context.Context, msg core.InboundMessage) error
 	QueueDoctor(ctx context.Context, msg core.InboundMessage) error
+	ConfigureAutoApproval(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	CurrentEfforts() (persona string, governor string)
 	CurrentPersonaModel() string
 	PersonaModelOptions() []string
@@ -162,6 +163,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "memory", Description: "Review memory and set focus"},
 	{Command: "mission", Description: "Show and manage the Mission Ledger"},
 	{Command: "model", Description: "Show and change model slots"},
+	{Command: "autoapprove", Description: "Temporarily auto-approve admin approval prompts"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "new", Description: "Start a fresh chat session context"},
 	{Command: "detach", Description: "Detach from pending work in this chat"},
@@ -331,6 +333,16 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			break
 		}
 		return handleTelegramModelCommand(ctx, sender, router, msg)
+	case "autoapprove":
+		if !isAdmin {
+			text = "Auto-approval controls are admin only."
+			break
+		}
+		configured, err := router.ConfigureAutoApproval(ctx, msg.ChatID, msg.SenderID, telegramCommandArgs(msg.Text))
+		if err != nil {
+			return true, err
+		}
+		text = configured
 	case "stop":
 		text = face.RenderTelegramStop(router.Stop(msg.ChatID))
 	case "new":

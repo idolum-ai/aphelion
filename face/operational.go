@@ -66,7 +66,10 @@ func RenderTelegramStart(personaEffort, governorEffort string, includeAdminComma
 		"/detach - detach this chat from pending work",
 	}
 	if includeAdminCommands {
-		lines = append(lines, "/restart - force an immediate gateway restart")
+		lines = append(lines,
+			"/autoapprove - temporarily auto-approve admin approval prompts",
+			"/restart - force an immediate gateway restart",
+		)
 	}
 	lines = append(lines,
 		"/reinstall - queue a rebuild/reinstall/restart request",
@@ -98,7 +101,10 @@ func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminComman
 		"/detach - detach this chat from pending work",
 	}
 	if includeAdminCommands {
-		lines = append(lines, "/restart - force an immediate gateway restart")
+		lines = append(lines,
+			"/autoapprove - temporarily auto-approve admin approval prompts",
+			"/restart - force an immediate gateway restart",
+		)
 	}
 	lines = append(lines,
 		"/reinstall - queue a rebuild/reinstall/restart request",

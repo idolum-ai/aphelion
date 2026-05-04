@@ -10,17 +10,13 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
-	"github.com/idolum-ai/aphelion/telegram"
 )
 
 func (r *Runtime) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
 	if r == nil || r.store == nil || r.outbound == nil {
 		return session.ContinuationState{}, false, fmt.Errorf("runtime continuation refresh dependencies are unavailable")
 	}
-	sender, ok := r.outbound.(interface {
-		SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
-	})
-	if !ok {
+	if _, ok := r.continuationApprovalPromptSender(); !ok {
 		return session.ContinuationState{}, false, fmt.Errorf("runtime outbound does not support inline continuation prompts")
 	}
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
@@ -48,7 +44,7 @@ func (r *Runtime) RefreshContinuationProposal(ctx context.Context, chatID int64,
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 
 	msg := core.InboundMessage{ChatID: chatID, Origin: core.InboundOriginTurnAuthorization, Text: "continuation proposal refresh"}
-	if _, err := sender.SendInlineKeyboard(ctx, chatID, r.renderContinuationPrompt(ctx, key, msg, state), continuationApprovalButtonRows(state), nil); err != nil {
+	if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, r.renderContinuationPrompt(ctx, key, msg, state), "continuation_refresh"); err != nil {
 		return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
 	}
 	return state, true, nil

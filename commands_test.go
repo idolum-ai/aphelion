@@ -211,6 +211,11 @@ type stubCommandRouter struct {
 	queuedReinstallMsg           *core.InboundMessage
 	queuedDoctorMsg              *core.InboundMessage
 	queueDoctorErr               error
+	autoApproveChatID            int64
+	autoApproveSenderID          int64
+	autoApproveArgs              string
+	autoApproveReturn            string
+	autoApproveErr               error
 	durableWizardChatID          int64
 	durableWizardSenderID        int64
 	durableWizardAction          string
@@ -436,6 +441,19 @@ func (s *stubCommandRouter) RecordTelegramCallbackError(chatID int64, callbackKi
 		callbackKind: callbackKind,
 		err:          err,
 	})
+}
+
+func (s *stubCommandRouter) ConfigureAutoApproval(_ context.Context, chatID int64, senderID int64, args string) (string, error) {
+	s.autoApproveChatID = chatID
+	s.autoApproveSenderID = senderID
+	s.autoApproveArgs = args
+	if s.autoApproveErr != nil {
+		return "", s.autoApproveErr
+	}
+	if strings.TrimSpace(s.autoApproveReturn) != "" {
+		return s.autoApproveReturn, nil
+	}
+	return "Auto-approval enabled for this chat.", nil
 }
 
 func (s *stubCommandRouter) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
@@ -882,6 +900,70 @@ func TestDefaultTelegramCommandsIncludeTailnet(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("defaultTelegramCommands = %#v, want /tailnet command entry", defaultTelegramCommands)
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeAutoApprove(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "autoapprove" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /autoapprove command entry", defaultTelegramCommands)
+	}
+}
+
+func TestHandleTelegramCommandAutoApproveAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{canRestart: true, autoApproveReturn: "Auto-approval enabled for this chat."}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/autoapprove 15m all uses=2",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.autoApproveChatID != 7 || router.autoApproveSenderID != 1001 || router.autoApproveArgs != "15m all uses=2" {
+		t.Fatalf("autoapprove inputs = chat:%d sender:%d args:%q, want 7/1001/15m all uses=2", router.autoApproveChatID, router.autoApproveSenderID, router.autoApproveArgs)
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "enabled") {
+		t.Fatalf("messages = %#v, want enabled response", sender.msgs)
+	}
+}
+
+func TestHandleTelegramCommandAutoApproveDeniedForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1002,
+		Text:     "/autoapprove 15m all",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.autoApproveChatID != 0 {
+		t.Fatalf("autoApproveChatID = %d, want not called", router.autoApproveChatID)
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(strings.ToLower(sender.msgs[0].Text), "admin only") {
+		t.Fatalf("messages = %#v, want admin-only denial", sender.msgs)
 	}
 }
 

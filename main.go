@@ -329,6 +329,13 @@ func (c telegramCommandControl) RecordTelegramCallbackError(chatID int64, callba
 	c.rt.RecordTelegramCallbackError(chatID, callbackKind, err)
 }
 
+func (c telegramCommandControl) ConfigureAutoApproval(ctx context.Context, chatID int64, senderID int64, args string) (string, error) {
+	if c.rt == nil {
+		return "Auto-approval is unavailable.", nil
+	}
+	return c.rt.ConfigureAutoApproval(ctx, chatID, senderID, args)
+}
+
 func (c telegramCommandControl) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
 	if c.rt == nil {
 		return session.ContinuationState{}, false, fmt.Errorf("runtime is unavailable")
@@ -782,6 +789,7 @@ func run() error {
 		},
 		decision.WithDurableStore(newTelegramDecisionDurableStore(store)),
 		decision.WithObserver(rt.DecisionEventObserver()),
+		decision.WithAutoResolver(rt.AutoResolveDecision),
 	)
 	commandControl := telegramCommandControl{
 		router:                 router,
