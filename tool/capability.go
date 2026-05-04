@@ -44,7 +44,7 @@ func (r *Registry) capabilityRequest(_ context.Context, input json.RawMessage, p
 	}
 }
 
-func (r *Registry) capabilityAuthority(_ context.Context, input json.RawMessage, p principal.Principal, key session.SessionKey) (string, error) {
+func (r *Registry) capabilityAuthority(ctx context.Context, input json.RawMessage, p principal.Principal, key session.SessionKey) (string, error) {
 	if r.store == nil {
 		return "", fmt.Errorf("capability_authority requires transcript store")
 	}
@@ -67,7 +67,7 @@ func (r *Registry) capabilityAuthority(_ context.Context, input json.RawMessage,
 	case "request_review":
 		return r.capabilityAuthorityRequestReview(in, p, key)
 	case "grant_set":
-		return r.capabilityAuthorityGrantSet(in, p, key)
+		return r.capabilityAuthorityGrantSet(ctx, in, p, key)
 	case "grant_show":
 		return r.capabilityAuthorityGrantShow(in, p)
 	case "grant_list":
@@ -319,7 +319,7 @@ func (r *Registry) capabilityAuthorityRequestReview(in capabilityInput, actor pr
 	return renderCapabilityRequest("[CAPABILITY_REQUEST_REVIEWED]", updated), nil
 }
 
-func (r *Registry) capabilityAuthorityGrantSet(in capabilityInput, actor principal.Principal, key session.SessionKey) (string, error) {
+func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilityInput, actor principal.Principal, key session.SessionKey) (string, error) {
 	if actor.Role != principal.RoleAdmin {
 		return "", fmt.Errorf("capability_authority grant_set is admin-only")
 	}
@@ -483,6 +483,9 @@ func (r *Registry) capabilityAuthorityGrantSet(in capabilityInput, actor princip
 		}); err != nil {
 			return "", err
 		}
+	}
+	if grant.Status == session.CapabilityGrantStatusActive && r.capabilityGrantObserver != nil {
+		r.capabilityGrantObserver(ctx, key, grant)
 	}
 	return renderCapabilityGrantWithUpdate("[CAPABILITY_GRANT]", grant, updateResult), nil
 }

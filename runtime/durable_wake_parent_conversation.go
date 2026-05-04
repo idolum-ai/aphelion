@@ -30,13 +30,17 @@ func (durableParentConversationWakeAdapter) Supports(agent core.DurableAgent) bo
 }
 
 func (durableParentConversationWakeAdapter) Prepare(_ context.Context, rt *Runtime, agent core.DurableAgent, now time.Time) (*durableWakeTurnPlan, error) {
+	return prepareDurableParentConversationWakePlan(rt, agent, now, false)
+}
+
+func prepareDurableParentConversationWakePlan(rt *Runtime, agent core.DurableAgent, now time.Time, force bool) (*durableWakeTurnPlan, error) {
 	if rt == nil || rt.store == nil {
 		return nil, fmt.Errorf("parent conversation wake runtime is unavailable")
 	}
 	if strings.ToLower(strings.TrimSpace(agent.Status)) != "active" {
 		return nil, nil
 	}
-	if mode := strings.TrimSpace(agent.WakeupMode); mode != "" && !strings.EqualFold(mode, "poll") {
+	if mode := strings.TrimSpace(agent.WakeupMode); !force && mode != "" && !strings.EqualFold(mode, "poll") {
 		return nil, nil
 	}
 	if now.IsZero() {

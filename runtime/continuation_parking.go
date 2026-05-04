@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -61,25 +62,53 @@ func (r RestartResumeResult) summary() string {
 }
 
 func (r *Runtime) ParkActiveWorkForRestart(ctx context.Context, source string) (RestartParkResult, error) {
-	result := RestartParkResult{}
 	if r == nil || r.store == nil {
+		return RestartParkResult{}, nil
+	}
+	return parkActiveWorkForRestart(ctx, r.store, source, time.Now().UTC(), r.interruptRunningTurnRuns, func(key session.SessionKey, eventType string, stage string, status string, payload map[string]any, createdAt time.Time) {
+		r.recordExecutionEvent(key, eventType, stage, status, payload, createdAt)
+	})
+}
+
+func ParkStoreActiveWorkForRestart(ctx context.Context, store *session.SQLiteStore, source string, now time.Time) (RestartParkResult, error) {
+	if store == nil {
+		return RestartParkResult{}, nil
+	}
+	return parkActiveWorkForRestart(ctx, store, source, now, store.InterruptRunningTurnRuns, func(key session.SessionKey, eventType string, stage string, status string, payload map[string]any, createdAt time.Time) {
+		_ = appendRestartParkingExecutionEvent(store, key, eventType, stage, status, payload, createdAt)
+	})
+}
+
+func parkActiveWorkForRestart(
+	ctx context.Context,
+	store *session.SQLiteStore,
+	source string,
+	now time.Time,
+	interruptRunningTurnRuns func() ([]session.TurnRun, error),
+	recordExecutionEvent func(session.SessionKey, string, string, string, map[string]any, time.Time),
+) (RestartParkResult, error) {
+	result := RestartParkResult{}
+	if store == nil {
 		return result, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	source = normalizeRestartParkSource(source)
-	now := time.Now().UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
 	maintenanceKey := session.SessionKey{ChatID: heartbeatSessionChatID, UserID: 0, Scope: heartbeatScopeRef()}
 
-	if r.interruptRunningTurnRuns != nil {
-		interrupted, err := r.interruptRunningTurnRuns()
+	if interruptRunningTurnRuns != nil {
+		interrupted, err := interruptRunningTurnRuns()
 		if err != nil {
 			return result, fmt.Errorf("interrupt running turn runs for restart: %w", err)
 		}
 		result.TurnRunsInterrupted = len(interrupted)
 		if len(interrupted) > 0 {
-			r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
+			recordRestartParkingExecutionEvent(recordExecutionEvent, maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
 				"interrupted_count": len(interrupted),
 				"restart_source":    source,
 				"phase":             "shutdown_park",
@@ -87,7 +116,7 @@ func (r *Runtime) ParkActiveWorkForRestart(ctx context.Context, source string) (
 		}
 	}
 
-	records, err := r.store.ContinuationStates()
+	records, err := store.ContinuationStates()
 	if err != nil {
 		return result, fmt.Errorf("load continuation states for restart parking: %w", err)
 	}
@@ -105,7 +134,7 @@ func (r *Runtime) ParkActiveWorkForRestart(ctx context.Context, source string) (
 			result.AlreadyParkedContinuations++
 			continue
 		}
-		if err := r.store.UpdateContinuationState(record.Key, parked); err != nil {
+		if err := store.UpdateContinuationState(record.Key, parked); err != nil {
 			return result, fmt.Errorf("park continuation chat_id=%d: %w", record.Key.ChatID, err)
 		}
 		payload := continuationExecutionPayload(parked)
@@ -114,7 +143,7 @@ func (r *Runtime) ParkActiveWorkForRestart(ctx context.Context, source string) (
 		payload["prior_proposal_id"] = strings.TrimSpace(prior.ActionProposal.ID)
 		payload["prior_lease_id"] = strings.TrimSpace(prior.ContinuationLease.ID)
 		payload["parking_mode"] = mode
-		r.recordExecutionEvent(record.Key, core.ExecutionEventContinuationParked, "continuation", "parked", payload, now)
+		recordRestartParkingExecutionEvent(recordExecutionEvent, record.Key, core.ExecutionEventContinuationParked, "continuation", "parked", payload, now)
 
 		result.ContinuationsParked++
 		switch mode {
@@ -128,6 +157,50 @@ func (r *Runtime) ParkActiveWorkForRestart(ctx context.Context, source string) (
 		}
 	}
 	return result, nil
+}
+
+func recordRestartParkingExecutionEvent(
+	recordExecutionEvent func(session.SessionKey, string, string, string, map[string]any, time.Time),
+	key session.SessionKey,
+	eventType string,
+	stage string,
+	status string,
+	payload map[string]any,
+	createdAt time.Time,
+) {
+	if recordExecutionEvent == nil {
+		return
+	}
+	recordExecutionEvent(key, eventType, stage, status, payload, createdAt)
+}
+
+func appendRestartParkingExecutionEvent(
+	store *session.SQLiteStore,
+	key session.SessionKey,
+	eventType string,
+	stage string,
+	status string,
+	payload map[string]any,
+	createdAt time.Time,
+) error {
+	if store == nil {
+		return nil
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal restart parking event payload: %w", err)
+	}
+	_, err = store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   strings.TrimSpace(eventType),
+		Stage:       strings.TrimSpace(stage),
+		Status:      strings.TrimSpace(status),
+		PayloadJSON: string(raw),
+		CreatedAt:   createdAt.UTC(),
+	})
+	return err
 }
 
 func (r *Runtime) resumeRestartParkedContinuations(ctx context.Context, now time.Time) (RestartResumeResult, error) {

@@ -16,6 +16,7 @@ mkdir -p bin
 go build -o bin/aphelion .
 "${repo_root}/bin/aphelion" --config "${config_path}" --check-config
 "${repo_root}/bin/aphelion" init --config "${config_path}"
+"${repo_root}/bin/aphelion" park-restart --config "${config_path}" --source source_update
 systemctl --user restart aphelion
 for _ in {1..10}; do
   if systemctl --user is-active --quiet aphelion; then

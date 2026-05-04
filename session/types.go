@@ -893,6 +893,12 @@ type ContinuationStateRecord struct {
 	UpdatedAt time.Time
 }
 
+type OperationStateRecord struct {
+	Key       SessionKey
+	State     OperationState
+	UpdatedAt time.Time
+}
+
 type SessionStatusState struct {
 	PlanState           PlanState
 	OperationState      OperationState

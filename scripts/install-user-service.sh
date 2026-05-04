@@ -26,7 +26,12 @@ sed \
   "${repo_root}/deploy/aphelion.service" > "${service_path}"
 
 systemctl --user daemon-reload
-systemctl --user enable --now aphelion
+if systemctl --user is-active --quiet aphelion; then
+  "${exec_path}" park-restart --config "${config_path}" --source install_user_service
+  systemctl --user restart aphelion
+else
+  systemctl --user enable --now aphelion
+fi
 for _ in {1..10}; do
   if systemctl --user is-active --quiet aphelion; then
     break

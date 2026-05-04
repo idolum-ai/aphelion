@@ -14,6 +14,7 @@ fi
 "${repo_root}/scripts/install-release.sh" "${1:-}"
 "${exec_path}" --config "${config_path}" --check-config
 "${exec_path}" init --config "${config_path}"
+"${exec_path}" park-restart --config "${config_path}" --source release_update
 systemctl --user restart aphelion
 for _ in {1..10}; do
   if systemctl --user is-active --quiet aphelion; then

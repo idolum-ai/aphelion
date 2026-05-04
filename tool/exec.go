@@ -48,6 +48,7 @@ type Registry struct {
 	externalExecutor                ExternalToolExecutor
 	codexImageGenerationProvider    agent.Provider
 	durableAgentPrincipalFallback   bool
+	capabilityGrantObserver         func(context.Context, session.SessionKey, session.CapabilityGrant)
 }
 
 type execInput struct {
@@ -426,6 +427,13 @@ func (r *Registry) WithRunner(runner *sandbox.Runner) *Registry {
 
 func (r *Registry) WithSessionStore(store *session.SQLiteStore) *Registry {
 	r.store = store
+	return r
+}
+
+func (r *Registry) WithCapabilityGrantObserver(observer func(context.Context, session.SessionKey, session.CapabilityGrant)) *Registry {
+	if r != nil {
+		r.capabilityGrantObserver = observer
+	}
 	return r
 }
 

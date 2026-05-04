@@ -634,7 +634,7 @@ func run() error {
 		return err
 	}
 	if extra, ok := firstPositionalArg(flags.Args()); ok {
-		return fmt.Errorf("unknown command %q (known maintenance commands: init|paths|gc|forget|reset|import-audit|import-semantic|verify-deploy|durable-agent|version)", extra)
+		return fmt.Errorf("unknown command %q (known maintenance commands: init|paths|park-restart|repair-live-state|gc|forget|reset|import-audit|import-semantic|verify-deploy|durable-agent|version)", extra)
 	}
 
 	configPath, err := config.ResolveConfigPath(*configPathFlag)
@@ -742,6 +742,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	tools.WithCapabilityGrantObserver(rt.HandleCapabilityGrantActivated)
 
 	if cfg.Voice.Mode != "" && cfg.Voice.Mode != "off" {
 		openaiClient, err := openai.NewClient(openai.ClientOptions{

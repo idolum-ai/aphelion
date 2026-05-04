@@ -214,3 +214,56 @@ func TestParkActiveWorkForRestartInterruptsRunsAndReoffersApprovedContinuation(t
 		t.Fatalf("park marker still set after approved reoffer: %#v", reoffered)
 	}
 }
+
+func TestParkStoreActiveWorkForRestartWorksWithoutRuntime(t *testing.T) {
+	_, store, _, _ := buildRuntimeFixtures(t)
+
+	key := session.SessionKey{ChatID: 8703, UserID: 0, Scope: telegramDMScopeRef(8703)}
+	if _, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "restart from deploy script"); err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "pending-decision",
+		Objective:      "Preserve command-level restart work.",
+		StageSummary:   "Waiting for a deploy restart.",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-pending-decision",
+			Summary:       "Continue after restart",
+			BoundedEffect: "Run one bounded follow-up after restart.",
+			Status:        session.ProposalStatusPending,
+			ExpiresAt:     time.Now().UTC().Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-pending-decision",
+			ProposalID:     "aprop-pending-decision",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	result, err := ParkStoreActiveWorkForRestart(context.Background(), store, "maintenance_command", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ParkStoreActiveWorkForRestart() err = %v", err)
+	}
+	if result.TurnRunsInterrupted != 1 || result.PendingContinuationsParked != 1 {
+		t.Fatalf("park result = %#v, want interrupted run and parked continuation", result)
+	}
+	parked, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if !continuationStateRestartParked(parked) || parked.ParkedSource != "maintenance_command" {
+		t.Fatalf("park marker = at %v source %q, want maintenance_command", parked.ParkedAt, parked.ParkedSource)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	assertHasEventType(t, events, core.ExecutionEventContinuationParked)
+}

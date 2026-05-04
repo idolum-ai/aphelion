@@ -1890,6 +1890,174 @@ func TestRunVerifyDeployCommandPrintsFailureReport(t *testing.T) {
 	}
 }
 
+func TestRunParkRestartCommandParksLiveContinuation(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	key := session.SessionKey{
+		ChatID: 9901,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "9901"},
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "deploy-decision",
+		Objective:      "Resume after service reinstall.",
+		StageSummary:   "Approved before a deploy restart.",
+		RemainingTurns: 1,
+		ApprovedBy:     1,
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-deploy-decision",
+			Summary:       "Resume after deploy",
+			BoundedEffect: "One bounded follow-up after restart.",
+			Status:        session.ProposalStatusApproved,
+			ExpiresAt:     time.Now().UTC().Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-deploy-decision",
+			ProposalID:     "aprop-deploy-decision",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ApprovedBy:     1,
+			ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	store.Close()
+
+	out, err := captureStdout(t, func() error {
+		return runParkRestartCommand([]string{"--config", cfgPath, "--source", "test_reinstall"})
+	})
+	if err != nil {
+		t.Fatalf("runParkRestartCommand() err = %v", err)
+	}
+	if !strings.Contains(out, "action: park-restart") || !strings.Contains(out, "approved_continuations_parked: 1") {
+		t.Fatalf("park-restart output = %q, want parked approved continuation", out)
+	}
+	store, err = session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer store.Close()
+	parked, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if parked.ParkedSource != "test_reinstall" || parked.Status != session.ContinuationStatusApproved {
+		t.Fatalf("parked continuation = %#v, want approved test_reinstall marker", parked)
+	}
+}
+
+func TestRepairLiveStateClosesContinuationsPlanLeasesAndPendingDecisions(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	key := session.SessionKey{
+		ChatID: 9902,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "9902"},
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "stale-decision",
+		Objective:      "Old turn-by-turn recovery.",
+		StageSummary:   "Generated before live repair.",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-stale-decision",
+			Summary:       "Run one more stale turn",
+			BoundedEffect: "Continue old turn-by-turn work.",
+			Status:        session.ProposalStatusPending,
+			ExpiresAt:     time.Now().UTC().Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-stale-decision",
+			ProposalID:     "aprop-stale-decision",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:      "op-stale",
+		Status:  session.OperationStatusActive,
+		Stage:   "old_live_loop",
+		Summary: "Old state",
+		PlanLease: session.OperationPlanLease{
+			ID:             "plan-lease-stale",
+			Summary:        "Old one-step lease bundle",
+			Status:         session.PlanLeaseStatusActive,
+			TurnBudget:     1,
+			RemainingTurns: 1,
+			Lanes: []session.OperationPlanLeaseLane{{
+				ID:             "lane-1",
+				Summary:        "Old lane",
+				AuthorityClass: "read_only_review",
+				ExpectedTurns:  1,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpsertPendingDecision(session.PendingDecisionRecord{
+		ID:          "decision-stale",
+		OwnerKey:    "telegram:9902",
+		Kind:        "exec",
+		ChatID:      9902,
+		Prompt:      "Approve stale tool call?",
+		ChoicesJSON: `[{"id":"approve","label":"Approve"}]`,
+	}); err != nil {
+		t.Fatalf("UpsertPendingDecision() err = %v", err)
+	}
+
+	result, err := repairLiveState(context.Background(), store, "test_live_repair", true, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("repairLiveState() err = %v", err)
+	}
+	if result.ContinuationsClosed != 1 || result.PlanLeasesRevoked != 1 || result.PendingDecisionsCleared != 1 {
+		t.Fatalf("repair result = %#v, want continuation, plan lease, and decision cleaned", result)
+	}
+	continuation, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if continuation.Status != session.ContinuationStatusRevoked || continuation.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked {
+		t.Fatalf("continuation = %#v, want revoked lease", continuation)
+	}
+	_, op, exists, err := store.PlanAndOperationStateIfExists(key)
+	if err != nil {
+		t.Fatalf("PlanAndOperationStateIfExists() err = %v", err)
+	}
+	if !exists || op.PlanLease.Status != session.PlanLeaseStatusRevoked || !strings.Contains(op.Summary, "Live state repair revoked") {
+		t.Fatalf("operation = %#v exists=%t, want revoked plan lease repair note", op, exists)
+	}
+	decisions, err := store.PendingDecisions()
+	if err != nil {
+		t.Fatalf("PendingDecisions() err = %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("pending decisions = %#v, want cleared", decisions)
+	}
+}
+
 func TestPruneExecutionEventsForRetentionExportsThenPrunes(t *testing.T) {
 	t.Parallel()
 

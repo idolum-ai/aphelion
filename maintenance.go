@@ -22,6 +22,7 @@ import (
 	"github.com/idolum-ai/aphelion/durableagent"
 	"github.com/idolum-ai/aphelion/face"
 	memstore "github.com/idolum-ai/aphelion/memory"
+	aphruntime "github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/workspace"
@@ -59,6 +60,10 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runInitCommand(args[1:])
 	case "paths":
 		return true, runPathsCommand(args[1:])
+	case "park-restart":
+		return true, runParkRestartCommand(args[1:])
+	case "repair-live-state":
+		return true, runRepairLiveStateCommand(args[1:])
 	case "gc":
 		return true, runGCCommand(args[1:])
 	case "forget":
@@ -153,6 +158,278 @@ func runPathsCommand(args []string) error {
 	printPathGroup("loaded_idolum_stable_files", idolumStable)
 	printPathGroup("loaded_idolum_dynamic_files", idolumDynamic)
 	return nil
+}
+
+func runParkRestartCommand(args []string) error {
+	fs := flag.NewFlagSet("park-restart", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	sourceFlag := fs.String("source", "deploy_restart", "restart source label recorded in cleanup events")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, configPath, err := loadConfigForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	result, err := aphruntime.ParkStoreActiveWorkForRestart(context.Background(), store, *sourceFlag, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "action: park-restart\n")
+	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
+	fmt.Fprintf(os.Stdout, "source: %s\n", strings.TrimSpace(*sourceFlag))
+	fmt.Fprintf(os.Stdout, "turn_runs_interrupted: %d\n", result.TurnRunsInterrupted)
+	fmt.Fprintf(os.Stdout, "continuations_parked: %d\n", result.ContinuationsParked)
+	fmt.Fprintf(os.Stdout, "pending_continuations_parked: %d\n", result.PendingContinuationsParked)
+	fmt.Fprintf(os.Stdout, "approved_continuations_parked: %d\n", result.ApprovedContinuationsParked)
+	fmt.Fprintf(os.Stdout, "expired_approved_continuations: %d\n", result.ExpiredApprovedContinuations)
+	fmt.Fprintf(os.Stdout, "already_parked_continuations: %d\n", result.AlreadyParkedContinuations)
+	fmt.Fprintf(os.Stdout, "skipped_continuations: %d\n", result.SkippedContinuations)
+	return nil
+}
+
+type liveStateRepairResult struct {
+	RestartPark              aphruntime.RestartParkResult
+	ContinuationsClosed      int
+	PlanLeasesRevoked        int
+	PendingDecisionsCleared  int
+	PendingDecisionSnapshots int
+}
+
+func runRepairLiveStateCommand(args []string) error {
+	fs := flag.NewFlagSet("repair-live-state", flag.ContinueOnError)
+	configFlag := fs.String("config", "", "path to config.toml")
+	sourceFlag := fs.String("source", "live_state_repair", "repair source label recorded in cleanup events")
+	closeLive := fs.Bool("close-live", true, "close pending/approved live continuations and plan leases after parking")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, configPath, err := loadConfigForCommand(*configFlag)
+	if err != nil {
+		return err
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	result, err := repairLiveState(context.Background(), store, *sourceFlag, *closeLive, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "action: repair-live-state\n")
+	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
+	fmt.Fprintf(os.Stdout, "source: %s\n", strings.TrimSpace(*sourceFlag))
+	fmt.Fprintf(os.Stdout, "close_live: %t\n", *closeLive)
+	fmt.Fprintf(os.Stdout, "turn_runs_interrupted: %d\n", result.RestartPark.TurnRunsInterrupted)
+	fmt.Fprintf(os.Stdout, "continuations_parked: %d\n", result.RestartPark.ContinuationsParked)
+	fmt.Fprintf(os.Stdout, "continuations_closed: %d\n", result.ContinuationsClosed)
+	fmt.Fprintf(os.Stdout, "plan_leases_revoked: %d\n", result.PlanLeasesRevoked)
+	fmt.Fprintf(os.Stdout, "pending_decisions_cleared: %d\n", result.PendingDecisionsCleared)
+	fmt.Fprintf(os.Stdout, "pending_decision_snapshots: %d\n", result.PendingDecisionSnapshots)
+	return nil
+}
+
+func repairLiveState(ctx context.Context, store *session.SQLiteStore, source string, closeLive bool, now time.Time) (liveStateRepairResult, error) {
+	result := liveStateRepairResult{}
+	if store == nil {
+		return result, fmt.Errorf("repair live state requires session store")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "live_state_repair"
+	}
+
+	park, err := aphruntime.ParkStoreActiveWorkForRestart(ctx, store, source, now)
+	if err != nil {
+		return result, err
+	}
+	result.RestartPark = park
+
+	decisions, err := store.PendingDecisions()
+	if err != nil {
+		return result, fmt.Errorf("load pending decisions for live repair: %w", err)
+	}
+	result.PendingDecisionSnapshots = len(decisions)
+	if len(decisions) > 0 {
+		cleared, err := store.DeleteAllPendingDecisions()
+		if err != nil {
+			return result, fmt.Errorf("clear pending decisions for live repair: %w", err)
+		}
+		result.PendingDecisionsCleared = cleared
+		if err := appendMaintenanceExecutionEvent(store, maintenanceRepairKey(), core.ExecutionEventDecisionDetached, "decision", "detached", map[string]any{
+			"source":         source,
+			"decision_count": cleared,
+			"snapshot_count": len(decisions),
+			"cleanup_reason": "live_state_repair",
+		}, now); err != nil {
+			return result, err
+		}
+	}
+
+	if !closeLive {
+		return result, nil
+	}
+	records, err := store.ContinuationStates()
+	if err != nil {
+		return result, fmt.Errorf("load continuation states for live repair: %w", err)
+	}
+	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		state, changed := closeContinuationForLiveRepair(record.State, source, now)
+		if changed {
+			if err := store.UpdateContinuationState(record.Key, state); err != nil {
+				return result, fmt.Errorf("close live continuation chat_id=%d: %w", record.Key.ChatID, err)
+			}
+			result.ContinuationsClosed++
+			if err := appendMaintenanceExecutionEvent(store, record.Key, core.ExecutionEventContinuationRevoked, "continuation", "revoked", map[string]any{
+				"source":         source,
+				"cleanup_reason": "live_state_repair",
+				"prior_status":   string(record.State.Status),
+				"decision_id":    record.State.DecisionID,
+				"proposal_id":    record.State.ActionProposal.ID,
+				"lease_id":       record.State.ContinuationLease.ID,
+			}, now); err != nil {
+				return result, err
+			}
+		}
+	}
+	operationRecords, err := store.OperationStates()
+	if err != nil {
+		return result, fmt.Errorf("load operation states for live repair: %w", err)
+	}
+	for _, record := range operationRecords {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		if revoked, err := revokeOperationPlanLeaseForLiveRepair(store, record.Key, record.State, source, now); err != nil {
+			return result, err
+		} else if revoked {
+			result.PlanLeasesRevoked++
+		}
+	}
+	if err := appendMaintenanceExecutionEvent(store, maintenanceRepairKey(), core.ExecutionEventRecoveryCompleted, "recovery", "completed", map[string]any{
+		"source":                    source,
+		"phase":                     "live_state_repair",
+		"turn_runs_interrupted":     result.RestartPark.TurnRunsInterrupted,
+		"continuations_parked":      result.RestartPark.ContinuationsParked,
+		"continuations_closed":      result.ContinuationsClosed,
+		"plan_leases_revoked":       result.PlanLeasesRevoked,
+		"pending_decisions_cleared": result.PendingDecisionsCleared,
+	}, now); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func closeContinuationForLiveRepair(prior session.ContinuationState, source string, now time.Time) (session.ContinuationState, bool) {
+	prior = session.NormalizeContinuationState(prior)
+	if prior.Status != session.ContinuationStatusPending && prior.Status != session.ContinuationStatusApproved {
+		return prior, false
+	}
+	state := prior
+	state.Status = session.ContinuationStatusRevoked
+	state.RemainingTurns = 0
+	state.HandshakeBlockedReason = "Live state repair closed stale pending/approved continuation; ask for a fresh proposal if this work is still needed."
+	state.ParkedAt = now
+	state.ParkedSource = strings.TrimSpace(source)
+	state.ParkedReason = state.HandshakeBlockedReason
+	if state.ActionProposal.Active() {
+		state.ActionProposal.Status = session.ProposalStatusSuperseded
+		state.ActionProposal.WhyNow = state.HandshakeBlockedReason
+		state.ActionProposal.UpdatedAt = now
+	}
+	if strings.TrimSpace(state.ContinuationLease.ID) != "" || strings.TrimSpace(state.ContinuationLease.ProposalID) != "" {
+		state.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+		state.ContinuationLease.RemainingTurns = 0
+		state.ContinuationLease.UpdatedAt = now
+	}
+	state.UpdatedAt = now
+	return session.NormalizeContinuationState(state), true
+}
+
+func revokeOperationPlanLeaseForLiveRepair(store *session.SQLiteStore, key session.SessionKey, op session.OperationState, source string, now time.Time) (bool, error) {
+	op = session.NormalizeOperationState(op)
+	if !op.PlanLease.Active() {
+		return false, nil
+	}
+	status := session.NormalizePlanLeaseStatus(op.PlanLease.Status)
+	switch status {
+	case session.PlanLeaseStatusProposed, session.PlanLeaseStatusApproved, session.PlanLeaseStatusActive, session.PlanLeaseStatusPaused:
+	default:
+		return false, nil
+	}
+	op.PlanLease.Status = session.PlanLeaseStatusRevoked
+	op.PlanLease.RemainingTurns = 0
+	op.PlanLease.UpdatedAt = now
+	op.Status = session.OperationStatusBlocked
+	op.Stage = "live_state_repair"
+	op.Summary = strings.TrimSpace(op.Summary)
+	if op.Summary != "" {
+		op.Summary += "\n"
+	}
+	op.Summary += "Live state repair revoked stale plan lease; request a fresh lease before more autonomous work."
+	op.Artifacts = append(op.Artifacts, session.OperationArtifact{
+		Label: "Live state repair",
+		Ref:   "cleanup://" + strings.TrimSpace(source) + "/" + now.UTC().Format(time.RFC3339Nano),
+	})
+	op.UpdatedAt = now
+	if err := store.UpdateOperationState(key, op); err != nil {
+		return false, fmt.Errorf("update operation state for live repair chat_id=%d: %w", key.ChatID, err)
+	}
+	if err := appendMaintenanceExecutionEvent(store, key, core.ExecutionEventRecoveryCompleted, "recovery", "plan_lease_revoked", map[string]any{
+		"source":         strings.TrimSpace(source),
+		"cleanup_reason": "live_state_repair",
+		"operation_id":   op.ID,
+		"plan_lease_id":  op.PlanLease.ID,
+	}, now); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func maintenanceRepairKey() session.SessionKey {
+	return session.SessionKey{
+		ChatID: -1,
+		UserID: 0,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindHeartbeat, ID: "admin-house"},
+	}
+}
+
+func appendMaintenanceExecutionEvent(store *session.SQLiteStore, key session.SessionKey, eventType string, stage string, status string, payload map[string]any, createdAt time.Time) error {
+	if store == nil {
+		return nil
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal maintenance execution payload: %w", err)
+	}
+	_, err = store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   strings.TrimSpace(eventType),
+		Stage:       strings.TrimSpace(stage),
+		Status:      strings.TrimSpace(status),
+		PayloadJSON: string(raw),
+		CreatedAt:   createdAt.UTC(),
+	})
+	return err
 }
 
 func runMigrateMemoryCommand(args []string) error {

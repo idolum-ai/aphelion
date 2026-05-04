@@ -168,6 +168,51 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	}
 }
 
+func TestCapabilityGrantSetNotifiesActiveGrantObserver(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-observed",
+		RequestedBy:    "durable_agent:child-alpha",
+		RequestedFor:   "durable_agent:child-alpha",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "codex",
+		Purpose:        "allow child agent to use codex",
+		ReviewStatus:   session.CapabilityReviewStatusApproved,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	var observed []session.CapabilityGrant
+	registry.WithCapabilityGrantObserver(func(_ context.Context, observedKey session.SessionKey, grant session.CapabilityGrant) {
+		if observedKey.ChatID != key.ChatID {
+			t.Fatalf("observer key chat_id = %d, want %d", observedKey.ChatID, key.ChatID)
+		}
+		observed = append(observed, grant)
+	})
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
+		"action":"grant_set",
+		"request_id":"cap-observed",
+		"grant_id":"capg-observed",
+		"principal":"durable_agent:child-alpha",
+		"allowed_actions":["invoke"]
+	}`))
+	if err != nil {
+		t.Fatalf("grant_set err = %v", err)
+	}
+	if !strings.Contains(out, "status: active") {
+		t.Fatalf("grant_set output = %q, want active", out)
+	}
+	if len(observed) != 1 {
+		t.Fatalf("observer calls = %d, want 1", len(observed))
+	}
+	if observed[0].GrantID != "capg-observed" || observed[0].GrantedTo != "durable_agent:child-alpha" || observed[0].Status != session.CapabilityGrantStatusActive {
+		t.Fatalf("observed grant = %#v, want active capg-observed", observed[0])
+	}
+}
+
 func TestCapabilityGrantFailureNextActionsDescribeBootstrapCeiling(t *testing.T) {
 	t.Parallel()
 
@@ -321,7 +366,7 @@ func TestCapabilityGrantRendersFirstClassChildRuntimeContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
 	}
-	out, err := registry.capabilityAuthorityGrantSet(capabilityInput{RequestID: request.RequestID, Principal: "profile-child"}, actor, key)
+	out, err := registry.capabilityAuthorityGrantSet(context.Background(), capabilityInput{RequestID: request.RequestID, Principal: "profile-child"}, actor, key)
 	if err != nil {
 		t.Fatalf("capabilityAuthorityGrantSet() err = %v", err)
 	}
@@ -347,7 +392,7 @@ func TestCapabilityGrantRejectsInvalidChildRuntimeContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
 	}
-	_, err = registry.capabilityAuthorityGrantSet(capabilityInput{RequestID: request.RequestID, Principal: "profile-child"}, actor, key)
+	_, err = registry.capabilityAuthorityGrantSet(context.Background(), capabilityInput{RequestID: request.RequestID, Principal: "profile-child"}, actor, key)
 	if err == nil {
 		t.Fatal("capabilityAuthorityGrantSet() err = nil, want child_runtime validation error")
 	}

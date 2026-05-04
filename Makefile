@@ -34,6 +34,7 @@ install-user-service: build
 	./scripts/install-user-service.sh
 
 restart-user-service:
+	./$(BIN) park-restart --config $(CONFIG) --source make_restart
 	systemctl --user restart $(APP)
 
 logs-user-service:

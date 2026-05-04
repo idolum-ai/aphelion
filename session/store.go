@@ -1127,6 +1127,56 @@ func (s *SQLiteStore) ContinuationStates() ([]ContinuationStateRecord, error) {
 	return records, nil
 }
 
+func (s *SQLiteStore) OperationStates() ([]OperationStateRecord, error) {
+	rows, err := s.db.Query(`
+		SELECT
+			chat_id, user_id, scope_kind, scope_id, durable_agent_id, operation_state_json, updated_at
+		FROM sessions
+		ORDER BY updated_at DESC, session_id DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query operation states: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]OperationStateRecord, 0, 16)
+	for rows.Next() {
+		var (
+			record         OperationStateRecord
+			scopeKind      sql.NullString
+			scopeID        sql.NullString
+			durableAgentID sql.NullString
+			operationRaw   sql.NullString
+			updatedRaw     string
+		)
+		if err := rows.Scan(
+			&record.Key.ChatID, &record.Key.UserID, &scopeKind, &scopeID, &durableAgentID, &operationRaw, &updatedRaw,
+		); err != nil {
+			return nil, fmt.Errorf("scan operation state record: %w", err)
+		}
+		record.Key.Scope = NormalizeScopeRef(ScopeRef{
+			Kind:           ScopeKind(nullToString(scopeKind)),
+			ID:             nullToString(scopeID),
+			DurableAgentID: nullToString(durableAgentID),
+		})
+		record.State = decodeOperationState(operationRaw.String)
+		record.State = NormalizeOperationState(record.State)
+		if !record.State.Active() {
+			continue
+		}
+		updatedAt, err := parseSQLiteTime(updatedRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse operation state updated_at: %w", err)
+		}
+		record.UpdatedAt = updatedAt
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate operation states: %w", err)
+	}
+	return records, nil
+}
+
 func (s *SQLiteStore) UpsertPendingArtifactRetention(record PendingArtifactRetentionRecord) error {
 	record.OwnerKey = strings.TrimSpace(record.OwnerKey)
 	if record.OwnerKey == "" {
