@@ -702,6 +702,25 @@ func continuationStateWithLeaseApproved(state session.ContinuationState, approve
 	return session.NormalizeContinuationState(state), nil
 }
 
+func continuationStateWithPlanLeaseApprovalConsumed(state session.ContinuationState, now time.Time) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state = session.NormalizeContinuationState(state)
+	state.Status = session.ContinuationStatusIdle
+	state.RemainingTurns = 0
+	state.DecisionID = ""
+	state.ActionProposal.Status = session.ProposalStatusApproved
+	state.ActionProposal.UpdatedAt = now
+	state.ContinuationLease.Status = session.ContinuationLeaseStatusConsumed
+	state.ContinuationLease.RemainingTurns = 0
+	state.ContinuationLease.ConsumedAt = now
+	state.ContinuationLease.UpdatedAt = now
+	state.UpdatedAt = now
+	return session.NormalizeContinuationState(state)
+}
+
 func continuationStateWithLeaseRevoked(state session.ContinuationState, now time.Time) session.ContinuationState {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -882,6 +901,14 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 			},
 		}
 	}
+	if continuationButtonStateIsPlanLease(state) && state.Status == session.ContinuationStatusApproved {
+		return [][]telegram.InlineButton{
+			{
+				{Text: "Status", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
+				{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
+			},
+		}
+	}
 	if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
 		return [][]telegram.InlineButton{
 			{
@@ -897,7 +924,10 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 	if state.Status == session.ContinuationStatusPending {
 		approveLabel := "Approve & run"
 		reviseLabel := "Revise proposal"
-		if label := continuationBundleButtonLabel(state); label != "" {
+		if continuationButtonStateIsPlanLease(state) {
+			approveLabel = "Approve plan lease"
+			reviseLabel = "Revise plan lease"
+		} else if label := continuationBundleButtonLabel(state); label != "" {
 			approveLabel = "Approve " + label
 			reviseLabel = "Revise " + label
 		} else if continuationButtonStateIsPhasePlan(state) {
@@ -1017,6 +1047,17 @@ func continuationButtonStateExpired(state session.ContinuationState) bool {
 	state = session.NormalizeContinuationState(state)
 	return state.ActionProposal.Status == session.ProposalStatusExpired ||
 		state.ContinuationLease.Status == session.ContinuationLeaseStatusExpired
+}
+
+func continuationButtonStateIsPlanLease(state session.ContinuationState) bool {
+	return continuationActionIsPlanLeaseApproval(state)
+}
+
+func continuationActionIsPlanLeaseApproval(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	return strings.TrimSpace(state.ActionProposal.RiskClass) == "plan_lease" ||
+		actionListContains(state.ActionProposal.AllowedActions, "approve_operation_plan_lease") ||
+		actionListContains(state.ContinuationLease.AllowedActions, "approve_operation_plan_lease")
 }
 
 func continuationButtonStateIsPhasePlan(state session.ContinuationState) bool {
@@ -1207,6 +1248,14 @@ func approvedContinuationEventTextForState(state session.ContinuationState) stri
 			}
 			lines = append(lines, "bundle_phases: "+strings.Join(parts, " | "))
 		}
+	}
+	if continuationActionIsPlanLeaseApproval(state) {
+		if !appended {
+			lines = append(lines, "", "Approved continuation lease:")
+			appended = true
+		}
+		lines = append(lines, "plan_lease_authority: bounded_plan_envelope_not_capability_grant")
+		lines = append(lines, "plan_lease_activation: not_automatic")
 	}
 	return strings.Join(lines, "\n")
 }

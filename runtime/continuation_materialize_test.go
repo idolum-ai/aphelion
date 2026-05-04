@@ -741,3 +741,128 @@ func TestApproveBundledPhasePlanLeaseMarksOnlyCurrentPhaseInProgress(t *testing.
 		t.Fatalf("phase plan = %#v, want only first bundled phase in_progress", got.PhasePlan)
 	}
 }
+
+func TestMaterializePlanLeaseApprovalDoesNotGrantCapabilities(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9026, UserID: 0, Scope: telegramDMScopeRef(9026)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "plan-lease-op",
+		Objective: "Execute a broad recovery plan without approval churn.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "plan_lease_proposal",
+		PlanLease: session.OperationPlanLease{
+			ID:             "plan-lease-broad-recovery",
+			Summary:        "Approve a bounded multi-turn recovery envelope",
+			Status:         session.PlanLeaseStatusProposed,
+			TurnBudget:     4,
+			AllowedActions: []string{"read_runtime_state", "patch_local_files"},
+			Lanes: []session.OperationPlanLeaseLane{
+				{ID: "review", Summary: "Review state", AuthorityClass: "read_only_review", ExpectedTurns: 1, AllowedActions: []string{"inspect_status"}},
+				{ID: "patch", Summary: "Patch local code", AuthorityClass: "workspace_write", ExpectedTurns: 3, AllowedActions: []string{"edit_files"}, ForbiddenActions: []string{"deploy"}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9026, SenderID: 1001, Text: "approve the broad plan", MessageID: 1}, "approve the broad plan", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want plan lease approval")
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.RiskClass != "plan_lease" {
+		t.Fatalf("continuation = %#v, want pending plan_lease", cont)
+	}
+	if cont.ActionProposal.OperationID != "plan-lease-broad-recovery" || cont.RemainingTurns != 4 {
+		t.Fatalf("continuation operation/turns = %#v, want plan lease id and turn budget", cont)
+	}
+	for _, forbidden := range []string{"treat_plan_lease_as_capability_grant", "activate_unapproved_autonomous_work", "grant_or_revoke_capability", "deploy"} {
+		if !actionListContains(cont.ActionProposal.ForbiddenActions, forbidden) {
+			t.Fatalf("forbidden actions = %#v, want %q", cont.ActionProposal.ForbiddenActions, forbidden)
+		}
+	}
+	if !strings.Contains(cont.ActionProposal.BoundedEffect, "not a capability grant") || !strings.Contains(cont.ActionProposal.BoundedEffect, "review read_only_review 1 turn") {
+		t.Fatalf("bounded effect = %q, want explicit bounded plan lease authority", cont.ActionProposal.BoundedEffect)
+	}
+	sender.mu.Lock()
+	labels := []string(nil)
+	if len(sender.inline) > 0 {
+		labels = continuationButtonLabels(sender.inline[0].rows)
+	}
+	sender.mu.Unlock()
+	if got, want := labels, []string{"Approve plan lease", "Scope details", "Revise plan lease", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+}
+
+func TestApprovePlanLeaseMarksEnvelopeApprovedNotActive(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9027, UserID: 0, Scope: telegramDMScopeRef(9027)}
+	opState := session.OperationState{
+		ID:        "plan-lease-approve-op",
+		Objective: "Approve a broad plan lease only.",
+		Status:    session.OperationStatusBlocked,
+		PlanLease: session.OperationPlanLease{
+			ID:         "plan-lease-approval-only",
+			Summary:    "Approve the envelope",
+			Status:     session.PlanLeaseStatusProposed,
+			TurnBudget: 2,
+			Lanes: []session.OperationPlanLeaseLane{
+				{ID: "inspect", Summary: "Inspect", AuthorityClass: "read_only_review", ExpectedTurns: 2},
+			},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	state := continuationStateFromOperationPlanLease(opState, opState.PlanLease, "", time.Now().UTC())
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	approved, err := rt.ApproveContinuation(9027, 1001)
+	if err != nil {
+		t.Fatalf("ApproveContinuation() err = %v", err)
+	}
+	if approved.Status != session.ContinuationStatusIdle || approved.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed || approved.RemainingTurns != 0 {
+		t.Fatalf("approved continuation = %#v, want consumed approval edge without runnable continuation", approved)
+	}
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.PlanLease.Status != session.PlanLeaseStatusApproved || got.PlanLease.ApprovedBy != 1001 || got.PlanLease.ApprovedAt.IsZero() {
+		t.Fatalf("plan lease = %#v, want approved with approver metadata", got.PlanLease)
+	}
+	if got.PlanLease.Status == session.PlanLeaseStatusActive || got.Status == session.OperationStatusActive {
+		t.Fatalf("operation = %#v, want approved envelope but no active work", got)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 9027); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v, want no-op for consumed plan lease approval", err)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no extra prompt from approval-only trigger", inlineCount)
+	}
+}

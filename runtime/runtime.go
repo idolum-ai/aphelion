@@ -157,6 +157,9 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
 		return state, err
 	}
+	if continuationActionIsPlanLeaseApproval(state) {
+		state = continuationStateWithPlanLeaseApprovalConsumed(state, now)
+	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, err
 	}
@@ -206,6 +209,10 @@ func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
 			return err
 		}
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
+		return nil
+	}
+	if continuationActionIsPlanLeaseApproval(state) {
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "approval_only", continuationExecutionPayload(state), time.Now().UTC())
 		return nil
 	}
 	if state.Status != session.ContinuationStatusApproved || state.RemainingTurns <= 0 {

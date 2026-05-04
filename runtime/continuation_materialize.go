@@ -29,6 +29,38 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		return false, nil
 	}
 	opState = session.NormalizeOperationState(opState)
+	if pendingOperationPlanLeaseNeedsButton(opState.PlanLease) {
+		now := time.Now().UTC()
+		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
+		priorState = session.NormalizeContinuationState(priorState)
+		if priorExists && continuationStateHasFreshPendingLease(priorState, now) && operationPlanLeaseMatchesContinuation(opState.PlanLease, priorState) {
+			return true, nil
+		}
+
+		state := continuationStateFromOperationPlanLease(opState, opState.PlanLease, promptInput, now)
+		opState = operationStateWithMaterializedPlanLease(opState, state, now)
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return false, fmt.Errorf("persist operation plan lease state: %w", err)
+		}
+		if err := r.store.UpdateContinuationState(key, state); err != nil {
+			return false, fmt.Errorf("persist operation plan lease continuation state: %w", err)
+		}
+		payload := continuationExecutionPayload(state)
+		payload["materialized_from"] = "operation_plan_lease"
+		payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
+		_, err = sender.SendInlineKeyboard(
+			ctx,
+			msg.ChatID,
+			renderOperationProposalMaterializedPromptFallback(state),
+			continuationApprovalButtonRows(state),
+			nil,
+		)
+		if err != nil {
+			return false, fmt.Errorf("send operation plan lease continuation approval: %w", err)
+		}
+		return true, nil
+	}
 	if bundle, ok := nextOperationPhaseBundleForApproval(opState.PhasePlan); ok {
 		now := time.Now().UTC()
 		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
@@ -137,6 +169,18 @@ func pendingOperationProposalNeedsButton(proposal session.OperationProposal) boo
 	return proposal.Active() && proposal.Status == session.ProposalStatusPending && strings.TrimSpace(proposal.ID) != "" && strings.TrimSpace(proposal.Summary) != ""
 }
 
+func pendingOperationPlanLeaseNeedsButton(lease session.OperationPlanLease) bool {
+	lease = session.NormalizeOperationState(session.OperationState{PlanLease: lease}).PlanLease
+	if !lease.Active() || lease.Status != session.PlanLeaseStatusProposed || strings.TrimSpace(lease.ID) == "" {
+		return false
+	}
+	return strings.TrimSpace(lease.Summary) != "" ||
+		strings.TrimSpace(lease.Objective) != "" ||
+		len(lease.Lanes) > 0 ||
+		len(lease.AllowedActions) > 0 ||
+		len(lease.ValidationGates) > 0
+}
+
 func operationProposalMatchesContinuation(proposal session.OperationProposal, state session.ContinuationState) bool {
 	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
 	state = session.NormalizeContinuationState(state)
@@ -145,6 +189,19 @@ func operationProposalMatchesContinuation(proposal session.OperationProposal, st
 		return false
 	}
 	return strings.TrimSpace(state.ActionProposal.OperationID) == proposalID || strings.TrimPrefix(strings.TrimSpace(state.ActionProposal.ID), "aprop-") == proposalID || strings.TrimSpace(state.DecisionID) == proposalID
+}
+
+func operationPlanLeaseMatchesContinuation(lease session.OperationPlanLease, state session.ContinuationState) bool {
+	lease = session.NormalizeOperationState(session.OperationState{PlanLease: lease}).PlanLease
+	state = session.NormalizeContinuationState(state)
+	leaseID := strings.TrimSpace(lease.ID)
+	if leaseID == "" {
+		return false
+	}
+	return strings.TrimSpace(state.ActionProposal.OperationID) == leaseID ||
+		strings.TrimPrefix(strings.TrimSpace(state.ActionProposal.ID), "aprop-") == operationPlanLeaseProposalID(lease) ||
+		strings.TrimSpace(state.DecisionID) == operationPlanLeaseProposalID(lease) ||
+		strings.TrimSpace(state.ContinuationLease.ID) == "lease-"+operationPlanLeaseProposalID(lease)
 }
 
 func nextOperationPhaseForApproval(plan session.OperationPhasePlan) (session.OperationPhase, bool) {
@@ -541,6 +598,178 @@ func continuationStateFromOperationProposal(opState session.OperationState, prom
 	return session.NormalizeContinuationState(state)
 }
 
+func continuationStateFromOperationPlanLease(opState session.OperationState, lease session.OperationPlanLease, promptInput string, now time.Time) session.ContinuationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	lease = session.NormalizeOperationPlanLease(lease)
+	decisionID := operationPlanLeaseProposalID(lease)
+	if decisionID == "" {
+		decisionID = newContinuationDecisionID()
+	}
+	turns := lease.RemainingTurns
+	if turns <= 0 {
+		turns = lease.TurnBudget
+	}
+	if turns <= 0 {
+		turns = len(lease.Lanes)
+	}
+	if turns <= 0 {
+		turns = 1
+	}
+	objective := firstNonEmptyContinuation(lease.Objective, opState.Objective, opState.Summary, lease.Summary, summarizeContinuationFallback(promptInput))
+	nextStep := firstNonEmptyContinuation(lease.Summary, lease.Objective, "Approve a bounded plan lease.")
+	boundedEffect := operationPlanLeaseBoundedEffect(lease)
+	whyNow := "This broad plan needs a button-backed bounded envelope before Aphelion can execute multiple leased lanes."
+	if opState.Stage != "" {
+		whyNow = "Operation stage " + strings.TrimSpace(opState.Stage) + " requires a button-backed bounded plan lease."
+	}
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     decisionID,
+		Objective:      objective,
+		StageSummary:   nextStep,
+		RemainingTurns: turns,
+		PersonaIntent: session.ContinuationIntent{
+			Decision:   session.ContinuationIntentDecisionContinue,
+			Rationale:  "A bounded plan lease is ready for explicit approval.",
+			NextStep:   nextStep,
+			Confidence: "high",
+			UpdatedAt:  now,
+		},
+		GovernorIntent: session.ContinuationIntent{
+			Decision:    session.ContinuationIntentDecisionContinue,
+			Rationale:   whyNow,
+			NextStep:    nextStep,
+			Constraints: boundedEffect,
+			Confidence:  "high",
+			Ratified:    true,
+			UpdatedAt:   now,
+		},
+		UpdatedAt: now,
+	}
+	action := session.ActionProposal{
+		ID:               "aprop-" + decisionID,
+		OperationID:      strings.TrimSpace(lease.ID),
+		MissionID:        strings.TrimSpace(lease.MissionID),
+		Summary:          nextStep,
+		WhyNow:           whyNow,
+		BoundedEffect:    boundedEffect,
+		RiskClass:        "plan_lease",
+		AllowedActions:   operationPlanLeaseAllowedActions(lease),
+		ForbiddenActions: operationPlanLeaseForbiddenActions(lease),
+		ValidationPlan:   operationPlanLeaseValidationPlan(lease),
+		ExpiresAt:        now.Add(continuationLeaseDefaultTTL),
+		Status:           session.ProposalStatusPending,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	state.ActionProposal = session.NormalizeActionProposal(action)
+	state.ContinuationLease = buildContinuationLease(state.ActionProposal, turns, now)
+	return session.NormalizeContinuationState(state)
+}
+
+func operationPlanLeaseProposalID(lease session.OperationPlanLease) string {
+	lease = session.NormalizeOperationPlanLease(lease)
+	base := firstNonEmptyContinuation(lease.OperationID, lease.ID, lease.Summary, "plan-lease")
+	id := sanitizeOperationPhaseProposalID("plan-lease-" + base)
+	if len(id) <= 128 {
+		return id
+	}
+	return strings.TrimRight(id[:96], "-_") + "-" + core.ContinuationCallbackAlias(id)
+}
+
+func operationPlanLeaseBoundedEffect(lease session.OperationPlanLease) string {
+	lease = session.NormalizeOperationPlanLease(lease)
+	parts := []string{"Approve a bounded multi-turn plan envelope; this is not a capability grant and does not automatically start work."}
+	if lease.TurnBudget > 0 {
+		parts = append(parts, fmt.Sprintf("turn_budget=%d", lease.TurnBudget))
+	}
+	if lease.RemainingTurns > 0 {
+		parts = append(parts, fmt.Sprintf("remaining_turns=%d", lease.RemainingTurns))
+	}
+	for _, lane := range lease.Lanes {
+		label := firstNonEmptyContinuation(lane.ID, lane.Summary, "lane")
+		detail := strings.TrimSpace(label)
+		if authority := strings.TrimSpace(lane.AuthorityClass); authority != "" {
+			detail += " " + authority
+		}
+		if lane.ExpectedTurns > 0 {
+			detail += fmt.Sprintf(" %d turn(s)", lane.ExpectedTurns)
+		}
+		if summary := strings.TrimSpace(lane.Summary); summary != "" && summary != label {
+			detail += ": " + summary
+		}
+		parts = append(parts, "lane "+detail)
+	}
+	if len(lease.ValidationGates) > 0 {
+		parts = append(parts, "validation gates: "+strings.Join(lease.ValidationGates, "; "))
+	}
+	if len(lease.ExitConditions) > 0 {
+		parts = append(parts, "exit conditions: "+strings.Join(lease.ExitConditions, "; "))
+	}
+	if len(lease.HardInterrupts) > 0 {
+		parts = append(parts, "hard interrupts require a separate grant: "+strings.Join(lease.HardInterrupts, ", "))
+	}
+	if len(lease.ChildInitiationLanes) > 0 {
+		parts = append(parts, "child initiation lanes: "+strings.Join(lease.ChildInitiationLanes, ", "))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func operationPlanLeaseAllowedActions(lease session.OperationPlanLease) []string {
+	lease = session.NormalizeOperationPlanLease(lease)
+	actions := []string{
+		"approve_operation_plan_lease",
+		"record_plan_lease_approval",
+		"use_plan_lease_as_bounded_envelope",
+		"require_separate_capability_grant_for_external_effects",
+		"report_plan_lease_evidence_digest",
+	}
+	actions = append(actions, lease.AllowedActions...)
+	for _, lane := range lease.Lanes {
+		actions = append(actions, lane.AllowedActions...)
+	}
+	return session.NormalizeActionProposal(session.ActionProposal{AllowedActions: actions}).AllowedActions
+}
+
+func operationPlanLeaseForbiddenActions(lease session.OperationPlanLease) []string {
+	lease = session.NormalizeOperationPlanLease(lease)
+	actions := []string{
+		"treat_plan_lease_as_capability_grant",
+		"activate_unapproved_autonomous_work",
+		"bypass_lane_authority",
+		"bypass_hard_interrupt",
+		"deploy_or_restart_without_parking",
+		"grant_or_revoke_capability",
+		"mailbox_access_without_separate_grant",
+		"external_effect_without_separate_grant",
+	}
+	actions = append(actions, lease.ForbiddenActions...)
+	actions = append(actions, lease.HardInterrupts...)
+	for _, lane := range lease.Lanes {
+		actions = append(actions, lane.ForbiddenActions...)
+	}
+	return session.NormalizeActionProposal(session.ActionProposal{ForbiddenActions: actions}).ForbiddenActions
+}
+
+func operationPlanLeaseValidationPlan(lease session.OperationPlanLease) []string {
+	lease = session.NormalizeOperationPlanLease(lease)
+	plan := []string{
+		"verify every leased lane declares authority_class and expected_turns",
+		"stop and ask for a separate grant at any hard interrupt",
+		"do not treat plan approval as tool, capability, deploy, or restart authority",
+		"record evidence digest before proposing follow-up lease",
+	}
+	plan = append(plan, lease.ValidationGates...)
+	plan = append(plan, lease.ExitConditions...)
+	return session.NormalizeActionProposal(session.ActionProposal{ValidationPlan: plan}).ValidationPlan
+}
+
 func continuationStateFromOperationPhase(opState session.OperationState, phase session.OperationPhase, promptInput string, now time.Time) session.ContinuationState {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -688,6 +917,32 @@ func operationStateWithMaterializedPhaseBundleLease(opState session.OperationSta
 	return session.NormalizeOperationState(opState)
 }
 
+func operationStateWithMaterializedPlanLease(opState session.OperationState, state session.ContinuationState, now time.Time) session.OperationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	state = session.NormalizeContinuationState(state)
+	opState.Status = session.OperationStatusBlocked
+	opState.Stage = "plan_lease_approval"
+	opState.Proposal = session.OperationProposal{
+		ID:            strings.TrimSpace(state.ActionProposal.OperationID),
+		Kind:          strings.TrimSpace(state.ActionProposal.RiskClass),
+		Summary:       strings.TrimSpace(state.ActionProposal.Summary),
+		WhyNow:        strings.TrimSpace(state.ActionProposal.WhyNow),
+		BoundedEffect: strings.TrimSpace(state.ActionProposal.BoundedEffect),
+		Status:        session.ProposalStatusPending,
+		UpdatedAt:     now,
+	}
+	if opState.PlanLease.Status == "" {
+		opState.PlanLease.Status = session.PlanLeaseStatusProposed
+	}
+	opState.PlanLease.UpdatedAt = now
+	opState.UpdatedAt = now
+	return session.NormalizeOperationState(opState)
+}
+
 func operationStateWithMaterializedPhaseLease(opState session.OperationState, phaseID string, state session.ContinuationState, now time.Time) session.OperationState {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -779,7 +1034,11 @@ func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.Sessio
 		return
 	}
 	opState = session.NormalizeOperationState(opState)
-	updated := syncOperationBundlePhaseStatusFromContinuation(&opState, state, status)
+	planLeaseUpdated := syncOperationPlanLeaseStatusFromContinuation(&opState, state, status)
+	updated := planLeaseUpdated
+	if syncOperationBundlePhaseStatusFromContinuation(&opState, state, status) {
+		updated = true
+	}
 	if syncOperationPhaseStatusFromContinuation(&opState, state, status) {
 		updated = true
 	}
@@ -792,12 +1051,75 @@ func (r *Runtime) syncOperationProposalStatusFromContinuation(key session.Sessio
 		return
 	}
 	if status == session.ProposalStatusApproved {
-		opState.Status = session.OperationStatusActive
+		if planLeaseUpdated && continuationActionIsPlanLeaseApproval(state) {
+			opState.Status = session.OperationStatusBlocked
+			opState.Stage = "plan_lease_approved"
+		} else {
+			opState.Status = session.OperationStatusActive
+		}
 	} else if status == session.ProposalStatusDenied || status == session.ProposalStatusExpired || status == session.ProposalStatusSuperseded {
 		opState.Status = session.OperationStatusBlocked
 	}
 	opState.UpdatedAt = time.Now().UTC()
 	_ = r.store.UpdateOperationState(key, opState)
+}
+
+func syncOperationPlanLeaseStatusFromContinuation(opState *session.OperationState, state session.ContinuationState, status session.ProposalStatus) bool {
+	if opState == nil {
+		return false
+	}
+	*opState = session.NormalizeOperationState(*opState)
+	state = session.NormalizeContinuationState(state)
+	if !continuationActionIsPlanLeaseApproval(state) {
+		return false
+	}
+	leaseID := strings.TrimSpace(state.ActionProposal.OperationID)
+	if leaseID == "" {
+		leaseID = strings.TrimPrefix(strings.TrimSpace(state.ActionProposal.ID), "aprop-plan-lease-")
+	}
+	if leaseID == "" || strings.TrimSpace(opState.PlanLease.ID) != leaseID {
+		return false
+	}
+	now := time.Now().UTC()
+	switch status {
+	case session.ProposalStatusApproved:
+		opState.PlanLease.Status = session.PlanLeaseStatusApproved
+		opState.PlanLease.ApprovedBy = firstNonZeroInt64(state.ContinuationLease.ApprovedBy, state.ApprovedBy)
+		if !state.ContinuationLease.ApprovedAt.IsZero() {
+			opState.PlanLease.ApprovedAt = state.ContinuationLease.ApprovedAt.UTC()
+		} else {
+			opState.PlanLease.ApprovedAt = now
+		}
+		if opState.Proposal.Status == session.ProposalStatusPending {
+			opState.Proposal.Status = session.ProposalStatusApproved
+			opState.Proposal.UpdatedAt = now
+		}
+	case session.ProposalStatusDenied:
+		opState.PlanLease.Status = session.PlanLeaseStatusRevoked
+		if opState.Proposal.Status == session.ProposalStatusPending {
+			opState.Proposal.Status = session.ProposalStatusDenied
+			opState.Proposal.UpdatedAt = now
+		}
+	case session.ProposalStatusExpired, session.ProposalStatusSuperseded:
+		opState.PlanLease.Status = session.PlanLeaseStatusExpired
+		if opState.Proposal.Status == session.ProposalStatusPending {
+			opState.Proposal.Status = status
+			opState.Proposal.UpdatedAt = now
+		}
+	}
+	opState.PlanLease.UpdatedAt = now
+	opState.UpdatedAt = now
+	*opState = session.NormalizeOperationState(*opState)
+	return true
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func syncOperationBundlePhaseStatusFromContinuation(opState *session.OperationState, state session.ContinuationState, status session.ProposalStatus) bool {
@@ -911,6 +1233,9 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 	}
 	if effect := strings.TrimSpace(proposal.BoundedEffect); effect != "" {
 		lines = append(lines, "", "Bounded effect:", effect)
+	}
+	if continuationActionIsPlanLeaseApproval(state) {
+		lines = append(lines, "", "Plan lease authority:", "Bounded plan envelope only; approval does not grant capabilities or automatically start work.")
 	}
 	if bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle); len(bundle.Phases) > 0 {
 		lines = append(lines, "", "Bundle phases:")
