@@ -925,8 +925,8 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 		approveLabel := "Approve & run"
 		reviseLabel := "Revise proposal"
 		if continuationButtonStateIsPlanLease(state) {
-			approveLabel = "Approve plan lease"
-			reviseLabel = "Revise plan lease"
+			approveLabel = "Approve plan budget"
+			reviseLabel = "Narrow scope"
 		} else if label := continuationBundleButtonLabel(state); label != "" {
 			approveLabel = "Approve " + label
 			reviseLabel = "Revise " + label
@@ -1255,7 +1255,11 @@ func approvedContinuationEventTextForState(state session.ContinuationState) stri
 			appended = true
 		}
 		lines = append(lines, "plan_lease_authority: bounded_plan_envelope_not_capability_grant")
-		lines = append(lines, "plan_lease_activation: not_automatic")
+		if state.ApprovalBundle.Active() {
+			lines = append(lines, "plan_lease_activation: runnable_budget_lane")
+		} else {
+			lines = append(lines, "plan_lease_activation: approval_record_only")
+		}
 	}
 	return strings.Join(lines, "\n")
 }

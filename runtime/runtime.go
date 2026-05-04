@@ -158,7 +158,7 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), now)
 		return state, err
 	}
-	if continuationActionIsPlanLeaseApproval(state) {
+	if continuationActionIsPlanLeaseApproval(state) && !state.ApprovalBundle.Active() {
 		state = continuationStateWithPlanLeaseApprovalConsumed(state, now)
 	}
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
@@ -212,7 +212,7 @@ func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", continuationExecutionPayload(state), time.Now().UTC())
 		return nil
 	}
-	if continuationActionIsPlanLeaseApproval(state) {
+	if continuationActionIsPlanLeaseApproval(state) && !state.ApprovalBundle.Active() {
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "approval_only", continuationExecutionPayload(state), time.Now().UTC())
 		return nil
 	}
@@ -410,6 +410,11 @@ func (r *Runtime) workRequestForContinuation(key session.SessionKey, chatID int6
 
 func continuationWorkMode(state session.ContinuationState) WorkMode {
 	state = session.NormalizeContinuationState(state)
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		if mode := workModeFromStructuredAuthority(phase.AuthorityClass); mode != "" {
+			return mode
+		}
+	}
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
 	mode := strongestWorkMode(
 		workModeFromStructuredAuthority(proposal.RiskClass),

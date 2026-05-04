@@ -258,7 +258,7 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	}
 }
 
-func TestMaterializePlanningOnlyPhaseDoesNotOfferExecutableLease(t *testing.T) {
+func TestMaterializePlanningOnlyPhaseOffersPlanBudget(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -296,27 +296,31 @@ func TestMaterializePlanningOnlyPhaseDoesNotOfferExecutableLease(t *testing.T) {
 		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
 	}
 	if !materialized {
-		t.Fatal("materialized = false, want phase plan handled without offering a runnable plan-making lease")
+		t.Fatal("materialized = false, want planning phase offered as a plan budget")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ActionProposal.RiskClass != "plan_lease" || cont.RemainingTurns != 1 {
+		t.Fatalf("continuation = %#v, want one-turn plan budget", cont)
+	}
+	if len(cont.ApprovalBundle.Phases) != 1 || cont.ApprovalBundle.Phases[0].OperationPhaseID != "phase-2-repair-planning" {
+		t.Fatalf("approval bundle = %#v, want planning phase as budget lane", cont.ApprovalBundle)
 	}
 	sender.mu.Lock()
-	inlineCount := len(sender.inline)
+	inlineText := ""
+	labels := []string(nil)
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+		labels = continuationButtonLabels(sender.inline[0].rows)
+	}
 	sender.mu.Unlock()
-	if inlineCount != 0 {
-		t.Fatalf("inline count = %d, want no approval button for planning-only phase", inlineCount)
+	if !strings.Contains(inlineText, "Approve plan budget") || !strings.Contains(inlineText, "Included:") || strings.Contains(inlineText, "Allowed actions:") {
+		t.Fatalf("inline text = %q, want compact plan budget prompt", inlineText)
 	}
-	events, err := store.ExecutionEventsBySession(key, 0, 20)
-	if err != nil {
-		t.Fatalf("ExecutionEventsBySession() err = %v", err)
-	}
-	found := false
-	for _, event := range events {
-		if event.EventType == core.ExecutionEventContinuationBlocked && strings.Contains(event.PayloadJSON, "planning_only_phase_requires_plan_lease") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("events = %#v, want planning-only phase blocked event", events)
+	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
 
@@ -658,19 +662,22 @@ func TestMaterializeDurablePhasePlanBundlesConsecutiveSafePhases(t *testing.T) {
 	if bundle.Phases[1].OperationPhaseID != "phase-2-implementation" || bundle.Phases[1].AuthorityClass != "workspace_write" {
 		t.Fatalf("bundle second phase = %#v", bundle.Phases[1])
 	}
-	if got := cont.ActionProposal.RiskClass; got != "workspace_write" {
-		t.Fatalf("risk class = %q, want strongest bundled authority workspace_write", got)
+	if got := cont.ActionProposal.RiskClass; got != "plan_lease" {
+		t.Fatalf("risk class = %q, want plan_lease budget envelope", got)
 	}
-	if !strings.Contains(cont.ActionProposal.BoundedEffect, "phase 1") || !strings.Contains(cont.ActionProposal.BoundedEffect, "phase 2") || !strings.Contains(cont.ActionProposal.BoundedEffect, "Stop before any phase not named") {
-		t.Fatalf("bounded effect = %q, want per-phase stop-gate provenance", cont.ActionProposal.BoundedEffect)
+	if !strings.Contains(cont.ActionProposal.BoundedEffect, "Work inside this approved plan budget only") ||
+		!strings.Contains(cont.ActionProposal.BoundedEffect, "turn_budget=2") ||
+		!strings.Contains(cont.ActionProposal.BoundedEffect, "lane phase-1-design read_only_review") ||
+		!strings.Contains(cont.ActionProposal.BoundedEffect, "lane phase-2-implementation workspace_write") {
+		t.Fatalf("bounded effect = %q, want compact plan-budget lane boundaries", cont.ActionProposal.BoundedEffect)
 	}
 
 	opState, err := store.OperationState(key)
 	if err != nil {
 		t.Fatalf("OperationState() err = %v", err)
 	}
-	if opState.Stage != "bundle_approval" || opState.Proposal.ID != bundle.ID || opState.Proposal.Status != session.ProposalStatusPending {
-		t.Fatalf("operation = %#v, want synthetic bundle proposal", opState)
+	if opState.Stage != "plan_lease_approval" || opState.Proposal.ID != cont.ActionProposal.OperationID || opState.Proposal.Status != session.ProposalStatusPending {
+		t.Fatalf("operation = %#v, want synthetic plan budget proposal", opState)
 	}
 	if opState.PhasePlan.CurrentPhaseID != "phase-1-design" || opState.PhasePlan.Phases[0].LeaseID != cont.ContinuationLease.ID || opState.PhasePlan.Phases[1].LeaseID != cont.ContinuationLease.ID {
 		t.Fatalf("phase plan = %#v, want both bundled phases linked to same lease", opState.PhasePlan)
@@ -684,10 +691,10 @@ func TestMaterializeDurablePhasePlanBundlesConsecutiveSafePhases(t *testing.T) {
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Bundle phases:") || !strings.Contains(inlineText, "Design the bundle contract") || !strings.Contains(inlineText, "Implement bundled approvals") {
-		t.Fatalf("inline text = %q, want bundled phase details", inlineText)
+	if !strings.Contains(inlineText, "Approve plan budget") || !strings.Contains(inlineText, "Included:") || !strings.Contains(inlineText, "Design the bundle contract") || !strings.Contains(inlineText, "Implement bundled approvals") {
+		t.Fatalf("inline text = %q, want compact plan budget details", inlineText)
 	}
-	if got, want := labels, []string{"Approve stages 1–2", "Scope details", "Revise stages 1–2", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
@@ -740,11 +747,11 @@ func TestMaterializeDurablePhasePlanBundleStopsBeforeHardEscalationGate(t *testi
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if cont.ApprovalBundle.Active() || len(cont.ApprovalBundle.Phases) != 0 {
-		t.Fatalf("approval bundle = %#v, want no bundle across deploy gate", cont.ApprovalBundle)
+	if len(cont.ApprovalBundle.Phases) != 1 || cont.ApprovalBundle.Phases[0].OperationPhaseID != "phase-1-readonly" {
+		t.Fatalf("approval bundle = %#v, want only safe phase before deploy gate", cont.ApprovalBundle)
 	}
-	if cont.ActionProposal.Summary != "Inspect state" || cont.ActionProposal.RiskClass != "read_only_review" || cont.RemainingTurns != 1 {
-		t.Fatalf("continuation = %#v, want single read-only phase", cont)
+	if cont.ActionProposal.RiskClass != "plan_lease" || cont.RemainingTurns != 1 {
+		t.Fatalf("continuation = %#v, want one-turn plan budget before deploy gate", cont)
 	}
 	sender.mu.Lock()
 	labels := []string(nil)
@@ -752,7 +759,7 @@ func TestMaterializeDurablePhasePlanBundleStopsBeforeHardEscalationGate(t *testi
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if got, want := labels, []string{"Approve Phase 1", "Scope details", "Revise Phase 1", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
@@ -792,12 +799,21 @@ func TestApproveBundledPhasePlanLeaseMarksOnlyCurrentPhaseInProgress(t *testing.
 	if bundle.Status != session.ContinuationLeaseStatusActive || len(bundle.Phases) != 2 || bundle.Phases[0].Status != session.ContinuationLeaseStatusActive || bundle.Phases[1].Status != session.ContinuationLeaseStatusPending {
 		t.Fatalf("approved bundle = %#v, want active first phase and pending second", bundle)
 	}
+	if approved.ContinuationLease.Status != session.ContinuationLeaseStatusActive || approved.RemainingTurns != 2 {
+		t.Fatalf("approved continuation = %#v, want active runnable budget lease", approved)
+	}
+	if got := continuationWorkMode(approved); got != WorkModeReadOnly {
+		t.Fatalf("continuationWorkMode() = %q, want first budget lane authority %q", got, WorkModeReadOnly)
+	}
 	got, err := store.OperationState(key)
 	if err != nil {
 		t.Fatalf("OperationState() err = %v", err)
 	}
 	if got.Status != session.OperationStatusActive || got.Proposal.Status != session.ProposalStatusApproved {
 		t.Fatalf("operation = %#v, want active approved bundle proposal", got)
+	}
+	if got.PlanLease.Status != session.PlanLeaseStatusActive {
+		t.Fatalf("plan lease = %#v, want active budget while first lane runs", got.PlanLease)
 	}
 	if got.PhasePlan.Phases[0].Status != session.PlanStatusInProgress || got.PhasePlan.Phases[1].Status != session.PlanStatusPending {
 		t.Fatalf("phase plan = %#v, want only first bundled phase in_progress", got.PhasePlan)
@@ -856,8 +872,11 @@ func TestMaterializePlanLeaseApprovalDoesNotGrantCapabilities(t *testing.T) {
 			t.Fatalf("forbidden actions = %#v, want %q", cont.ActionProposal.ForbiddenActions, forbidden)
 		}
 	}
-	if !strings.Contains(cont.ActionProposal.BoundedEffect, "not a capability grant") || !strings.Contains(cont.ActionProposal.BoundedEffect, "review read_only_review 1 turn") {
-		t.Fatalf("bounded effect = %q, want explicit bounded plan lease authority", cont.ActionProposal.BoundedEffect)
+	if !strings.Contains(cont.ActionProposal.BoundedEffect, "Work inside this approved plan budget only") ||
+		!strings.Contains(cont.ActionProposal.BoundedEffect, "turn_budget=4") ||
+		!strings.Contains(cont.ActionProposal.BoundedEffect, "lane review read_only_review 1 turn") ||
+		!strings.Contains(cont.ActionProposal.BoundedEffect, "lane patch workspace_write 3 turn") {
+		t.Fatalf("bounded effect = %q, want compact bounded plan-budget authority", cont.ActionProposal.BoundedEffect)
 	}
 	sender.mu.Lock()
 	labels := []string(nil)
@@ -865,7 +884,7 @@ func TestMaterializePlanLeaseApprovalDoesNotGrantCapabilities(t *testing.T) {
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if got, want := labels, []string{"Approve plan lease", "Scope details", "Revise plan lease", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
