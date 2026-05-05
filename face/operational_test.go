@@ -5,7 +5,30 @@ package face
 import (
 	"strings"
 	"testing"
+
+	"github.com/idolum-ai/aphelion/core"
 )
+
+func TestRenderTelegramStopUsesContinuationLabel(t *testing.T) {
+	t.Parallel()
+
+	got := RenderTelegramStop(core.StopResult{
+		ContinuationRevoked: true,
+		ContinuationLabel:   "Plan: Mada's Job Agent (Phase J1)",
+	})
+	if got != "Stopped Plan: Mada's Job Agent (Phase J1)." {
+		t.Fatalf("RenderTelegramStop() = %q, want labeled stop message", got)
+	}
+}
+
+func TestRenderTelegramStopKeepsLegacyFallbackWithoutContinuationLabel(t *testing.T) {
+	t.Parallel()
+
+	got := RenderTelegramStop(core.StopResult{ContinuationRevoked: true})
+	if got != "Revoked continuation approval for this chat." {
+		t.Fatalf("RenderTelegramStop() = %q, want generic revoke message", got)
+	}
+}
 
 func TestRenderReviewDigestFormatsDurableSections(t *testing.T) {
 	out := RenderReviewDigest(ReviewDigestNotice{

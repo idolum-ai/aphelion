@@ -141,15 +141,16 @@ func RenderTelegramStatus(status core.SessionStatus, personaEffort, governorEffo
 }
 
 func RenderTelegramStop(stopped core.StopResult) string {
+	continuationClause := renderStoppedContinuationClause(stopped)
 	switch {
 	case stopped.ActiveCanceled && stopped.QueuedDropped && stopped.ContinuationRevoked:
-		return "Stopped the current turn, cleared queued work, and revoked continuation approval for this chat."
+		return "Stopped the current turn, cleared queued work, and " + continuationClause + "."
 	case stopped.ActiveCanceled && stopped.ContinuationRevoked:
-		return "Stopped the current turn and revoked continuation approval for this chat."
+		return "Stopped the current turn and " + continuationClause + "."
 	case stopped.QueuedDropped && stopped.ContinuationRevoked:
-		return "Cleared queued work and revoked continuation approval for this chat."
+		return "Cleared queued work and " + continuationClause + "."
 	case stopped.ContinuationRevoked:
-		return "Revoked continuation approval for this chat."
+		return capitalizeStopSentence(continuationClause) + "."
 	case stopped.ActiveCanceled && stopped.QueuedDropped:
 		return "Stopped the current turn and cleared queued work for this chat."
 	case stopped.ActiveCanceled:
@@ -159,6 +160,22 @@ func RenderTelegramStop(stopped core.StopResult) string {
 	default:
 		return "Continuation approval was already inactive for this chat."
 	}
+}
+
+func renderStoppedContinuationClause(stopped core.StopResult) string {
+	label := strings.TrimSpace(stopped.ContinuationLabel)
+	if label == "" {
+		return "revoked continuation approval for this chat"
+	}
+	return "stopped " + label
+}
+
+func capitalizeStopSentence(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return value
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
 }
 
 func RenderTelegramNewSession(result core.NewSessionResult) string {

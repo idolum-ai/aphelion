@@ -1114,6 +1114,225 @@ func continuationBundleButtonLabel(state session.ContinuationState) string {
 	return fmt.Sprintf("stages %d–%d", first, last)
 }
 
+func continuationUserFacingPlanLabel(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	title := continuationUserFacingPlanTitle(state)
+	phase := continuationUserFacingPhaseLabel(state)
+	if title == "" && phase == "" {
+		return ""
+	}
+	if title == "" {
+		title = phase
+		phase = ""
+	}
+	if phase != "" && !continuationTitleContainsPhase(title, phase) {
+		title += " (" + phase + ")"
+	}
+	return "Plan: " + title
+}
+
+func continuationUserFacingPlanTitle(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	texts := []string{
+		state.StageSummary,
+		state.ActionProposal.Summary,
+		state.Objective,
+		state.ActionProposal.OperationID,
+		state.DecisionID,
+		state.ContinuationLease.ProposalID,
+		state.ContinuationLease.ID,
+	}
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		texts = append(texts, phase.Summary, phase.OperationPhaseID, phase.ID)
+	}
+	if title := continuationNamedAgentPlanTitle(strings.Join(texts, "\n")); title != "" {
+		return title
+	}
+	for _, candidate := range []string{state.ActionProposal.Summary, state.Objective, state.StageSummary} {
+		if title := cleanContinuationPlanTitleCandidate(candidate); title != "" {
+			return title
+		}
+	}
+	if subject := continuationApprovalButtonSubject(state); subject != "" {
+		return subject
+	}
+	return ""
+}
+
+func continuationNamedAgentPlanTitle(text string) string {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" || !strings.Contains(lower, "agent") {
+		return ""
+	}
+	subject := ""
+	switch {
+	case strings.Contains(lower, "job") || strings.Contains(lower, "career"):
+		subject = "Job Agent"
+	case strings.Contains(lower, "telegram"):
+		subject = "Telegram Agent"
+	default:
+		return ""
+	}
+	if name := continuationHumanNameCandidate(text); name != "" {
+		return name + "'s " + subject
+	}
+	return subject
+}
+
+func continuationHumanNameCandidate(text string) string {
+	replacer := strings.NewReplacer(
+		"-", " ",
+		"_", " ",
+		":", " ",
+		"/", " ",
+		"\\", " ",
+		".", " ",
+		",", " ",
+		";", " ",
+		"(", " ",
+		")", " ",
+		"[", " ",
+		"]", " ",
+	)
+	for _, field := range strings.Fields(replacer.Replace(strings.TrimSpace(text))) {
+		name := strings.Trim(field, "'\"`")
+		name = strings.TrimSuffix(strings.TrimSuffix(name, "'s"), "’s")
+		if continuationLooksLikeHumanName(name) {
+			return name
+		}
+	}
+	return ""
+}
+
+func continuationLooksLikeHumanName(token string) bool {
+	token = strings.TrimSpace(token)
+	runes := []rune(token)
+	if len(runes) < 2 {
+		return false
+	}
+	for _, r := range runes {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	if !unicode.IsUpper(runes[0]) {
+		return false
+	}
+	allUpper := true
+	for _, r := range runes[1:] {
+		if unicode.IsLower(r) {
+			allUpper = false
+			break
+		}
+	}
+	if allUpper {
+		return false
+	}
+	return !continuationHumanNameStopWord(strings.ToLower(token))
+}
+
+func continuationHumanNameStopWord(word string) bool {
+	switch strings.TrimSpace(word) {
+	case "", "approve", "approval", "bounded", "bundle", "child", "consent", "create", "current", "execute", "fresh", "intake", "job", "later", "phase", "plan", "profile", "public", "resume", "run", "stage", "stages", "superseded", "telegram", "the", "this", "use":
+		return true
+	default:
+		return false
+	}
+}
+
+func cleanContinuationPlanTitleCandidate(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" || continuationLooksLikeSystemIdentifier(value) {
+		return ""
+	}
+	if idx := strings.IndexAny(value, "\n\r"); idx >= 0 {
+		value = strings.TrimSpace(value[:idx])
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "approve plan budget:") {
+		if idx := strings.LastIndex(lower, " for "); idx >= 0 {
+			return cleanContinuationPlanTitleCandidate(value[idx+5:])
+		}
+		return ""
+	}
+	for _, prefix := range []string{
+		"approve stage",
+		"approve stages",
+		"approve phase",
+		"approval needed",
+		"continuation approval",
+		"revoked continuation",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return ""
+		}
+	}
+	value = strings.TrimSpace(strings.TrimRight(value, "."))
+	runes := []rune(value)
+	if len(runes) > 72 {
+		value = strings.TrimSpace(string(runes[:72])) + "..."
+	}
+	return value
+}
+
+func continuationLooksLikeSystemIdentifier(value string) bool {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	if strings.Contains(lower, "lease-") || strings.Contains(lower, "aprop-") {
+		return true
+	}
+	if len(strings.Fields(value)) == 1 && len(value) > 32 && strings.ContainsAny(value, "-_") {
+		return true
+	}
+	return false
+}
+
+func continuationUserFacingPhaseLabel(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	candidates := make([]string, 0, 8)
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		candidates = append(candidates, phase.OperationPhaseID, phase.ID, phase.Summary)
+	}
+	candidates = append(candidates,
+		state.ActionProposal.OperationID,
+		state.ActionProposal.Summary,
+		state.StageSummary,
+		state.DecisionID,
+		state.ContinuationLease.ProposalID,
+		state.ActionProposal.ID,
+	)
+	for _, candidate := range candidates {
+		if token := continuationPhaseTokenFromText(candidate); token != "" {
+			return "Phase " + token
+		}
+	}
+	return ""
+}
+
+func continuationPhaseTokenFromText(raw string) string {
+	fields := continuationSubjectFields(raw)
+	for i := 0; i < len(fields); i++ {
+		field := strings.ToLower(strings.TrimSpace(fields[i]))
+		if field == "phase" && i+1 < len(fields) {
+			if token := normalizeContinuationPhaseToken(fields[i+1]); token != "" {
+				return token
+			}
+		}
+		if strings.HasPrefix(field, "phase") && len(field) > len("phase") {
+			if token := normalizeContinuationPhaseToken(field[len("phase"):]); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
+func continuationTitleContainsPhase(title string, phase string) bool {
+	title = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(title)), " "))
+	phase = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(phase)), " "))
+	return phase != "" && strings.Contains(title, phase)
+}
+
 func currentContinuationBundlePhase(bundle session.ContinuationApprovalBundle) (session.ContinuationApprovalBundlePhase, bool) {
 	bundle = session.NormalizeContinuationApprovalBundle(bundle)
 	if len(bundle.Phases) == 0 {

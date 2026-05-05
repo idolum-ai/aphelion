@@ -87,6 +87,7 @@ func (c telegramCommandControl) Stop(chatID int64) core.StopResult {
 		revoke, err := c.rt.RevokeContinuation(chatID)
 		if err == nil {
 			result.ContinuationRevoked = revoke.Revoked
+			result.ContinuationLabel = revoke.ContinuationLabel
 		}
 	}
 	c.maybeFlushMemory(chatID, "stop")
@@ -309,7 +310,7 @@ func (c telegramCommandControl) StopContinuation(chatID int64) (core.StopResult,
 	if err != nil {
 		return core.StopResult{}, err
 	}
-	return core.StopResult{ContinuationRevoked: revoke.Revoked}, nil
+	return core.StopResult{ContinuationRevoked: revoke.Revoked, ContinuationLabel: revoke.ContinuationLabel}, nil
 }
 
 func (c telegramCommandControl) TriggerContinuation(ctx context.Context, chatID int64) error {

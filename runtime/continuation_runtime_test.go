@@ -243,6 +243,65 @@ func TestContinuationApprovalButtonRowsAdaptToLeaseState(t *testing.T) {
 	}
 }
 
+func TestRevokeContinuationReturnsUserFacingPlanLabel(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9027, UserID: 0, Scope: telegramDMScopeRef(9027)}
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+		Objective:      "Create a wife-consented Telegram group child agent for job-search assistance that can later grow organically if she engages.",
+		StageSummary:   "Approve stages 33-36: Consent-first Mada intake and wife-owned profile/scoring rubric.",
+		RemainingTurns: 3,
+		ActionProposal: session.ActionProposal{
+			ID:          "aprop-bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+			OperationID: "bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+			Summary:     "Approve stages 33-36: Consent-first Mada intake and wife-owned profile/scoring rubric.",
+			Status:      session.ProposalStatusPending,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:         "lease-bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+			ProposalID: "aprop-bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+			Status:     session.ContinuationLeaseStatusPending,
+		},
+		ApprovalBundle: session.ContinuationApprovalBundle{
+			ID:             "bundle-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+			Status:         session.ContinuationLeaseStatusPending,
+			CurrentPhaseID: "phase-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+			Phases: []session.ContinuationApprovalBundlePhase{{
+				ID:               "phase-wife-telegram-job-agent-20260505-phase-j1-wife-intake-profile-after-onboarding",
+				OperationPhaseID: "phase-j1-wife-intake-profile-after-onboarding",
+				Index:            33,
+				Summary:          "Consent-first Mada intake and wife-owned profile/scoring rubric.",
+				Status:           session.ContinuationLeaseStatusPending,
+			}},
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	result, err := rt.RevokeContinuation(9027)
+	if err != nil {
+		t.Fatalf("RevokeContinuation() err = %v", err)
+	}
+	if !result.Revoked {
+		t.Fatal("Revoked = false, want true")
+	}
+	if result.ContinuationLabel != "Plan: Mada's Job Agent (Phase J1)" {
+		t.Fatalf("ContinuationLabel = %q, want human plan label", result.ContinuationLabel)
+	}
+	if strings.Contains(result.ContinuationLabel, "lease-") || strings.Contains(result.ContinuationLabel, "aprop-") {
+		t.Fatalf("ContinuationLabel = %q, want no internal IDs", result.ContinuationLabel)
+	}
+}
+
 func continuationButtonLabels(rows [][]telegram.InlineButton) []string {
 	labels := make([]string, 0)
 	for _, row := range rows {

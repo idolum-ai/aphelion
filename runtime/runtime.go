@@ -172,8 +172,9 @@ func (r *Runtime) ApproveContinuation(chatID int64, approverID int64) (session.C
 }
 
 type ContinuationRevokeResult struct {
-	State   session.ContinuationState
-	Revoked bool
+	State             session.ContinuationState
+	Revoked           bool
+	ContinuationLabel string
 }
 
 func (r *Runtime) RevokeContinuation(chatID int64) (ContinuationRevokeResult, error) {
@@ -192,7 +193,7 @@ func (r *Runtime) RevokeContinuation(chatID int64) (ContinuationRevokeResult, er
 		r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied)
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationRevoked, "continuation", "revoked", continuationExecutionPayload(state), time.Now().UTC())
 	}
-	return ContinuationRevokeResult{State: state, Revoked: revoked}, nil
+	return ContinuationRevokeResult{State: state, Revoked: revoked, ContinuationLabel: continuationUserFacingPlanLabel(state)}, nil
 }
 
 func (r *Runtime) TriggerContinuation(ctx context.Context, chatID int64) error {

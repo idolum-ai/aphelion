@@ -56,6 +56,7 @@ type StopResult struct {
 	ActiveCanceled      bool
 	QueuedDropped       bool
 	ContinuationRevoked bool
+	ContinuationLabel   string
 }
 
 type DetachResult struct {
