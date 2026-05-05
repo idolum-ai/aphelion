@@ -947,7 +947,7 @@ func TestHandleTelegramCommandAutoApproveValidationErrorRepliesWithoutFatalError
 	t.Parallel()
 
 	sender := &stubCommandSender{}
-	router := &stubCommandRouter{canRestart: true, autoApproveErr: errors.New("auto-approval duration is capped at 2h0m0s")}
+	router := &stubCommandRouter{canRestart: true, autoApproveErr: errors.New("auto-approval duration is capped at 48h0m0s")}
 	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
 		ChatID:    7,
 		SenderID:  1001,

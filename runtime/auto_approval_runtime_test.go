@@ -80,6 +80,23 @@ func TestRuntimeAutoApprovalRejectsZeroUses(t *testing.T) {
 	}
 }
 
+func TestParseOperatorAutoApprovalDurationCapAllowsFortyEightHours(t *testing.T) {
+	t.Parallel()
+
+	action, spec, err := parseOperatorAutoApprovalCommand("48h all")
+	if err != nil {
+		t.Fatalf("parseOperatorAutoApprovalCommand(48h) err = %v", err)
+	}
+	if action != "enable" || spec.Duration != 48*time.Hour {
+		t.Fatalf("action/spec = %q/%#v, want enable with 48h duration", action, spec)
+	}
+
+	_, _, err = parseOperatorAutoApprovalCommand("49h all")
+	if err == nil || !strings.Contains(err.Error(), "48h0m0s") {
+		t.Fatalf("parseOperatorAutoApprovalCommand(49h) err = %v, want 48h cap error", err)
+	}
+}
+
 func TestAutoApprovedContinuationTriggerFailureIsRecordedAndReported(t *testing.T) {
 	t.Parallel()
 

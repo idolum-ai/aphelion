@@ -16,7 +16,7 @@ import (
 const (
 	operatorAutoApprovalDefaultScope = session.OperatorAutoApprovalScopeAll
 	operatorAutoApprovalMinDuration  = time.Minute
-	operatorAutoApprovalMaxDuration  = 2 * time.Hour
+	operatorAutoApprovalMaxDuration  = 48 * time.Hour
 )
 
 type operatorAutoApprovalRequest struct {
