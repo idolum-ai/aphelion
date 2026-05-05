@@ -620,6 +620,73 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	}
 }
 
+func TestTriggerCodingContinuationAllowsCompoundWorkspaceRiskClass(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8201, UserID: 0, Scope: telegramDMScopeRef(8201)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "compound-workspace-risk",
+		Objective:      "Patch the child bot runner.",
+		StageSummary:   "Retry the bounded code/tests lease.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-compound-workspace-risk",
+			Summary:        "Retry the bounded code/tests lease.",
+			BoundedEffect:  "Inspect/edit repo code and docs, add tests, run local Go tests/build/config checks.",
+			RiskClass:      "workspace_write_code_tests_bounded_autoapprove",
+			AllowedActions: []string{"execute_bounded_proposal_once", "use_existing_authority_only", "report_evidence"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:compound-workspace-risk",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-compound-workspace-risk",
+			ProposalID:       "aprop-compound-workspace-risk",
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			AllowedActions:   []string{"execute_bounded_proposal_once", "use_existing_authority_only", "report_evidence"},
+			ForbiddenActions: []string{"deploy", "restart_service", "commit"},
+			ExpiresAt:        expiresAt,
+			PlanHash:         "sha256:compound-workspace-risk",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-compound-workspace-risk", Objective: "Patch the child bot runner.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8201); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 1 {
+		t.Fatalf("work calls = %d, want approved compound workspace risk to run", work.calls)
+	}
+	if work.lastReq.Mode != WorkModeWorkspaceWrite {
+		t.Fatalf("work mode = %q, want workspace_write", work.lastReq.Mode)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want consumed idle", got)
+	}
+}
+
 func TestTriggerCodingContinuationWarnsWhenFallingBackToNative(t *testing.T) {
 	t.Parallel()
 

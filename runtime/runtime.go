@@ -552,7 +552,8 @@ func workModeFromStructuredAuthorityList(values []string) WorkMode {
 }
 
 func workModeFromStructuredAuthority(value string) WorkMode {
-	switch normalizeWorkModeAuthorityToken(value) {
+	token := normalizeWorkModeAuthorityToken(value)
+	switch token {
 	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart":
 		return WorkModeDeploy
 	case "commit", "git_commit", "repo_history_mutation":
@@ -562,7 +563,32 @@ func workModeFromStructuredAuthority(value string) WorkMode {
 	case "read_only", "read_only_review", "status_check", "inspect_readonly_state":
 		return WorkModeReadOnly
 	default:
-		return ""
+		switch {
+		case strings.HasPrefix(token, "deploy") ||
+			strings.HasPrefix(token, "live_deploy") ||
+			strings.HasPrefix(token, "run_deploy") ||
+			strings.HasPrefix(token, "system_change") ||
+			strings.HasPrefix(token, "restart") ||
+			strings.HasPrefix(token, "service_restart"):
+			return WorkModeDeploy
+		case strings.HasPrefix(token, "commit") ||
+			strings.HasPrefix(token, "git_commit") ||
+			strings.HasPrefix(token, "repo_history_mutation"):
+			return WorkModeCommit
+		case strings.HasPrefix(token, "workspace_write") ||
+			strings.HasPrefix(token, "workspace") ||
+			strings.HasPrefix(token, "code_change") ||
+			strings.HasPrefix(token, "edit_files") ||
+			strings.HasPrefix(token, "patch") ||
+			strings.HasPrefix(token, "run_tests"):
+			return WorkModeWorkspaceWrite
+		case strings.HasPrefix(token, "read_only") ||
+			strings.HasPrefix(token, "status_check") ||
+			strings.HasPrefix(token, "inspect_readonly_state"):
+			return WorkModeReadOnly
+		default:
+			return ""
+		}
 	}
 }
 
