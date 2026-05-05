@@ -364,6 +364,15 @@ aphelion telegram-child-bot --config ~/.aphelion/aphelion.toml --agent synth --g
 
 That command may read the token and call Telegram `getMe` exactly once, but must not poll, send, or read group history.
 
+The live runner/dry-start gate has a no-send mode:
+
+```bash
+aphelion telegram-child-bot --config ~/.aphelion/aphelion.toml --agent synth --dry-start
+aphelion telegram-child-bot --config ~/.aphelion/aphelion.toml --agent synth --no-send
+```
+
+`--dry-start` constructs the runtime with no-send outbound, prints readiness, and exits without reading token contents, calling Telegram, or polling. `--no-send` is for later live polling tests: it may read the token and poll as separately approved, but routes admitted child turns through no-send delivery so no group reply can be emitted before the onboarding gate.
+
 Each gate must report:
 
 - files changed,
@@ -500,7 +509,7 @@ A polished launch means Synth is not merely reachable. It is understandable to M
 - Status: run `telegram-child-bot --status`; expect metadata-only health fields and no token read.
 - Preflight: run `telegram-child-bot --preflight`; verify config, token metadata, durable child policy/bootstrap, Gmail auth status, and no active email/web/CV grants.
 - Smoke: after separate live approval, run `--get-me-smoke`; verify Synth bot identity; no polling, outbound, or group history.
-- Dry-start: after separate approval, start runner with `respond_on=mentions`; verify health event and no outbound unless mentioned.
+- Dry-start: after separate approval, run `--dry-start` first; then use `--no-send` for live polling tests and verify no outbound even when mentioned.
 - Onboarding: Daniel approves one message; Synth posts; Daniel receives high-level health summary.
 - Intake: Mada opts in; Synth asks profile questions; no email/web until later gates.
 - First digest: only after approved profile + email/web grant + test job forwards.

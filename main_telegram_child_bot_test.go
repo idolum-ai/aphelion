@@ -116,6 +116,86 @@ func TestTelegramChildBotStatusDoesNotReadTokenOrPoll(t *testing.T) {
 	}
 }
 
+func TestTelegramChildBotDryStartDoesNotReadTokenPollOrCallTelegram(t *testing.T) {
+	t.Parallel()
+
+	fixture := writeTelegramChildBotFixture(t, "telegram_group", "active", 0o600)
+	readCalled := false
+	pollCalled := false
+	dryStartCalled := false
+	err := runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--dry-start"}, telegramChildBotDeps{
+		Stat: os.Stat,
+		ReadFile: func(string) ([]byte, error) {
+			readCalled = true
+			return nil, errors.New("token should not be read during dry-start")
+		},
+		RunPoller: func(context.Context, *telegram.Client, core.DurableAgent, telegramChildBotRoute, *config.Config, *session.SQLiteStore) error {
+			pollCalled = true
+			return errors.New("poller should not run during dry-start")
+		},
+		RunDryStart: func(_ context.Context, client *telegram.Client, agentRow core.DurableAgent, route telegramChildBotRoute, _ *config.Config, _ *session.SQLiteStore) error {
+			dryStartCalled = true
+			if client != nil {
+				t.Fatal("dry-start received telegram client; want nil so no Telegram API is possible")
+			}
+			if agentRow.AgentID != "synth" || route.AgentID != "synth" || route.ChatID != -5056905988 || route.RespondOn != "mentions" || !route.NoSend {
+				t.Fatalf("agent/route = %#v / %#v, want no-send synth route", agentRow, route)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runTelegramChildBotCommandWithDeps() err = %v", err)
+	}
+	if readCalled {
+		t.Fatal("dry-start read token file; want metadata/runtime construction only")
+	}
+	if pollCalled {
+		t.Fatal("dry-start ran poller; want no polling")
+	}
+	if !dryStartCalled {
+		t.Fatal("dry-start dependency was not invoked")
+	}
+}
+
+func TestTelegramChildBotDefaultDryStartBuildsNoSendRuntimeWithoutTokenRead(t *testing.T) {
+	t.Parallel()
+
+	fixture := writeTelegramChildBotFixture(t, "telegram_group", "active", 0o600)
+	readCalled := false
+	out, err := captureStdout(t, func() error {
+		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--dry-start"}, telegramChildBotDeps{
+			Stat: os.Stat,
+			ReadFile: func(string) ([]byte, error) {
+				readCalled = true
+				return nil, errors.New("token should not be read during dry-start")
+			},
+		})
+	})
+	if err != nil {
+		t.Fatalf("dry-start err = %v", err)
+	}
+	if readCalled {
+		t.Fatal("default dry-start read token file; want metadata/runtime construction only")
+	}
+	for _, want := range []string{
+		"action: telegram-child-bot dry-start",
+		"agent_id: synth",
+		"chat_id: -5056905988",
+		"no_send: true",
+		"polling: not_started",
+		"telegram_api: not_called",
+		"status: ready",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("dry-start output = %q, want substring %q", out, want)
+		}
+	}
+	if strings.Contains(out, "123:SECRET") || strings.Contains(out, fixture.tokenPath) {
+		t.Fatalf("dry-start output leaked token or token path: %q", out)
+	}
+}
+
 func TestTelegramChildBotGetMeSmokeUsesTelegramIdentityOnly(t *testing.T) {
 	t.Parallel()
 
@@ -243,6 +323,44 @@ func TestTelegramChildBotRunUsesFakePollerAfterReadingToken(t *testing.T) {
 	}
 	if !pollCalled {
 		t.Fatal("run did not invoke fake poller")
+	}
+}
+
+func TestTelegramChildBotNoSendRunPassesNoSendRouteToPoller(t *testing.T) {
+	t.Parallel()
+
+	fixture := writeTelegramChildBotFixture(t, "telegram_group", "active", 0o600)
+	pollCalled := false
+	err := runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--no-send"}, telegramChildBotDeps{
+		Stat: os.Stat,
+		ReadFile: func(path string) ([]byte, error) {
+			if path != fixture.tokenPath {
+				t.Fatalf("read token path = %q, want %q", path, fixture.tokenPath)
+			}
+			return []byte("123:SECRET\n"), nil
+		},
+		RunPoller: func(_ context.Context, _ *telegram.Client, agentRow core.DurableAgent, route telegramChildBotRoute, _ *config.Config, _ *session.SQLiteStore) error {
+			pollCalled = true
+			if agentRow.AgentID != "synth" || route.AgentID != "synth" || !route.NoSend {
+				t.Fatalf("agent/route = %#v / %#v, want no-send synth route", agentRow, route)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runTelegramChildBotCommandWithDeps() err = %v", err)
+	}
+	if !pollCalled {
+		t.Fatal("no-send run did not invoke fake poller")
+	}
+}
+
+func TestTelegramChildBotNoSendOutboundDropsReplies(t *testing.T) {
+	t.Parallel()
+
+	msgID, err := (telegramChildBotNoSendOutbound{}).SendMessage(context.Background(), core.OutboundMessage{ChatID: -5056905988, Text: "do not send"})
+	if err != nil || msgID != 0 {
+		t.Fatalf("no-send SendMessage() = %d, %v; want dropped reply", msgID, err)
 	}
 }
 

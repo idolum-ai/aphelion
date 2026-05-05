@@ -1126,11 +1126,11 @@ func (r *Runtime) writeDoctorIssueStatusChecks(b *strings.Builder, input doctorD
 		writeDoctorIssueCheck(b, "admin_workspace_escape_requires_approval", "unknown", "could not confirm workspace escape approval gate source evidence from working_root")
 	}
 
-	synthRunnerSourceOK := doctorSourceContainsAll(workingRoot, "main_telegram_child_bot.go", []string{"runTelegramChildBotCommandWithDeps", "validateTelegramChildBotTokenMetadata", "telegramChildBotHealthStatus", "runTelegramChildBotGetMeSmoke"})
+	synthRunnerSourceOK := doctorSourceContainsAll(workingRoot, "main_telegram_child_bot.go", []string{"runTelegramChildBotCommandWithDeps", "validateTelegramChildBotTokenMetadata", "telegramChildBotHealthStatus", "runTelegramChildBotGetMeSmoke", "runTelegramChildBotDryStart", "telegramChildBotNoSendOutbound"})
 	synthRunbookOK := doctorSourceContainsAll(workingRoot, "docs/architecture/synth-telegram-bot-subsystem-plan.md", []string{"Validation gates", "Launch runbook", "telegram-child-bot status"})
 	switch {
 	case synthRunnerSourceOK && synthRunbookOK:
-		writeDoctorIssueCheck(b, "synth_telegram_child_bot_runner", "likely_fixed", "child bot runner source includes metadata-only health/status and getMe smoke gates; runbook names validation and launch gates")
+		writeDoctorIssueCheck(b, "synth_telegram_child_bot_runner", "likely_fixed", "child bot runner source includes metadata-only health/status, no-send dry-start, and getMe smoke gates; runbook names validation and launch gates")
 	case synthRunnerSourceOK:
 		writeDoctorIssueCheck(b, "synth_telegram_child_bot_runner", "residual_risk", "child bot runner source is present, but runbook/status projection evidence was not confirmed")
 	default:

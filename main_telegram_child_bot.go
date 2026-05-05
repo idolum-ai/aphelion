@@ -32,19 +32,22 @@ type telegramChildBotRoute struct {
 	RespondOn          string
 	ReviewTargetChatID int64
 	Enabled            bool
+	NoSend             bool
 }
 
 type telegramChildBotDeps struct {
-	Stat      func(string) (os.FileInfo, error)
-	ReadFile  func(string) ([]byte, error)
-	RunPoller func(context.Context, *telegram.Client, core.DurableAgent, telegramChildBotRoute, *config.Config, *session.SQLiteStore) error
+	Stat        func(string) (os.FileInfo, error)
+	ReadFile    func(string) ([]byte, error)
+	RunPoller   func(context.Context, *telegram.Client, core.DurableAgent, telegramChildBotRoute, *config.Config, *session.SQLiteStore) error
+	RunDryStart func(context.Context, *telegram.Client, core.DurableAgent, telegramChildBotRoute, *config.Config, *session.SQLiteStore) error
 }
 
 func defaultTelegramChildBotDeps() telegramChildBotDeps {
 	return telegramChildBotDeps{
-		Stat:      os.Stat,
-		ReadFile:  os.ReadFile,
-		RunPoller: runTelegramChildBotPoller,
+		Stat:        os.Stat,
+		ReadFile:    os.ReadFile,
+		RunPoller:   runTelegramChildBotPoller,
+		RunDryStart: runTelegramChildBotDryStart,
 	}
 }
 
@@ -62,6 +65,9 @@ func runTelegramChildBotCommandWithDeps(args []string, deps telegramChildBotDeps
 	if deps.RunPoller == nil {
 		deps.RunPoller = runTelegramChildBotPoller
 	}
+	if deps.RunDryStart == nil {
+		deps.RunDryStart = runTelegramChildBotDryStart
+	}
 
 	fs := flag.NewFlagSet("telegram-child-bot", flag.ContinueOnError)
 	configFlag := fs.String("config", "", "path to config.toml")
@@ -72,6 +78,8 @@ func runTelegramChildBotCommandWithDeps(args []string, deps telegramChildBotDeps
 	reviewTargetFlag := fs.Int64("review-target-chat-id", 0, "parent review Telegram chat id")
 	preflight := fs.Bool("preflight", false, "validate config/token metadata/durable agent and exit without reading token or calling Telegram")
 	statusOnly := fs.Bool("status", false, "print child bot health/status without reading token or calling Telegram")
+	dryStart := fs.Bool("dry-start", false, "construct the runner in no-send mode and exit without polling or calling Telegram")
+	noSend := fs.Bool("no-send", false, "suppress Telegram outbound replies when processing admitted updates")
 	getMeSmoke := fs.Bool("get-me-smoke", false, "read token and call Telegram getMe once, then exit without polling or sending messages")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -84,6 +92,9 @@ func runTelegramChildBotCommandWithDeps(args []string, deps telegramChildBotDeps
 	route, err := selectTelegramChildBotRoute(cfg, *agentFlag, *tokenFileFlag, *chatIDFlag, *respondOnFlag, *reviewTargetFlag)
 	if err != nil {
 		return err
+	}
+	if *noSend || *dryStart {
+		route.NoSend = true
 	}
 	if err := validateTelegramChildBotTokenMetadata(route.TokenFile, deps.Stat); err != nil {
 		return err
@@ -116,6 +127,9 @@ func runTelegramChildBotCommandWithDeps(args []string, deps telegramChildBotDeps
 		}
 		printTelegramChildBotHealthStatus(os.Stdout, action, configPath, route, agentRow)
 		return nil
+	}
+	if *dryStart {
+		return deps.RunDryStart(context.Background(), nil, agentRow, route, cfg, store)
 	}
 
 	token, err := readTelegramChildBotToken(route.TokenFile, deps.ReadFile)
@@ -399,7 +413,7 @@ func runTelegramChildBotPoller(ctx context.Context, client *telegram.Client, age
 		}
 	}
 
-	rt, err := newTelegramChildBotRuntime(cfg, store, client)
+	rt, err := newTelegramChildBotRuntime(cfg, store, client, route.NoSend)
 	if err != nil {
 		return err
 	}
@@ -425,11 +439,41 @@ func runTelegramChildBotPoller(ctx context.Context, client *telegram.Client, age
 	fmt.Fprintf(os.Stdout, "agent_id: %s\n", route.AgentID)
 	fmt.Fprintf(os.Stdout, "chat_id: %d\n", route.ChatID)
 	fmt.Fprintf(os.Stdout, "respond_on: %s\n", route.RespondOn)
+	fmt.Fprintf(os.Stdout, "no_send: %t\n", route.NoSend)
 	fmt.Fprintf(os.Stdout, "status: running\n")
 	return poller.Run(ctx)
 }
 
-func newTelegramChildBotRuntime(cfg *config.Config, store *session.SQLiteStore, client *telegram.Client) (*aphruntime.Runtime, error) {
+func runTelegramChildBotDryStart(ctx context.Context, _ *telegram.Client, agentRow core.DurableAgent, route telegramChildBotRoute, cfg *config.Config, store *session.SQLiteStore) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if store == nil {
+		return fmt.Errorf("session store is nil")
+	}
+	route.NoSend = true
+	if _, err := newTelegramChildBotRuntime(cfg, store, nil, true); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "action: telegram-child-bot dry-start\n")
+	fmt.Fprintf(os.Stdout, "agent_id: %s\n", route.AgentID)
+	fmt.Fprintf(os.Stdout, "chat_id: %d\n", route.ChatID)
+	fmt.Fprintf(os.Stdout, "respond_on: %s\n", route.RespondOn)
+	fmt.Fprintf(os.Stdout, "durable_agent_status: %s\n", strings.TrimSpace(agentRow.Status))
+	fmt.Fprintf(os.Stdout, "no_send: true\n")
+	fmt.Fprintf(os.Stdout, "polling: not_started\n")
+	fmt.Fprintf(os.Stdout, "telegram_api: not_called\n")
+	fmt.Fprintf(os.Stdout, "status: ready\n")
+	return nil
+}
+
+type telegramChildBotNoSendOutbound struct{}
+
+func (telegramChildBotNoSendOutbound) SendMessage(context.Context, core.OutboundMessage) (int64, error) {
+	return 0, nil
+}
+
+func newTelegramChildBotRuntime(cfg *config.Config, store *session.SQLiteStore, client *telegram.Client, noSend bool) (*aphruntime.Runtime, error) {
 	if err := prepareFilesystem(cfg); err != nil {
 		return nil, err
 	}
@@ -481,7 +525,11 @@ func newTelegramChildBotRuntime(cfg *config.Config, store *session.SQLiteStore, 
 	if retrievalStore != nil {
 		tools.WithRetrievalStore(retrievalStore, cfg.OpenAI.VectorStores.DefaultStore)
 	}
-	rt, err := aphruntime.New(cfg, store, llm, agent.ToolRegistry(tools), newTelegramUIClient(client))
+	var outbound aphruntime.OutboundSender = newTelegramUIClient(client)
+	if noSend {
+		outbound = telegramChildBotNoSendOutbound{}
+	}
+	rt, err := aphruntime.New(cfg, store, llm, agent.ToolRegistry(tools), outbound)
 	if err != nil {
 		return nil, err
 	}

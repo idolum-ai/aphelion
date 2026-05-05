@@ -452,6 +452,8 @@ func runTelegramChildBotCommandWithDeps(){}
 func validateTelegramChildBotTokenMetadata(){}
 type telegramChildBotHealthStatus struct{}
 func runTelegramChildBotGetMeSmoke(){}
+func runTelegramChildBotDryStart(){}
+type telegramChildBotNoSendOutbound struct{}
 `), 0o600); err != nil {
 		t.Fatalf("write runner source: %v", err)
 	}
