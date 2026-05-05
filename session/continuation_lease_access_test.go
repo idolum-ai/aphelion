@@ -104,6 +104,7 @@ func TestContinuationLeaseClassInferenceAndBoundaries(t *testing.T) {
 		{name: "capability", risk: "capability_grant", actions: []string{"capability_access_check"}, effect: "review grant", want: ContinuationLeaseClassCapabilityGrant},
 		{name: "deploy", risk: "deploy", actions: []string{"service_restart"}, effect: "restart and verify", want: ContinuationLeaseClassDeployRestart},
 		{name: "workspace", risk: "workspace_write", actions: []string{"focused_tests"}, effect: "patch locally", want: ContinuationLeaseClassLocalWorkspace},
+		{name: "local commit", risk: "workspace_commit_then_repo_write_bounded", actions: []string{"git_commit_validated_slices"}, effect: "commit validated local slices", want: ContinuationLeaseClassLocalWorkspace},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

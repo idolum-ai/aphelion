@@ -2043,7 +2043,7 @@ func InferContinuationLeaseClass(riskClass string, allowedActions []string, boun
 		return false
 	}
 	switch {
-	case containsAny("deploy", "restart", "service_restart", "git_push", "push_remote", "git_commit", "repo_history_mutation"):
+	case containsAny("deploy", "restart", "service_restart", "git_push", "push_remote"):
 		return ContinuationLeaseClassDeployRestart
 	case containsAny("capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority"):
 		return ContinuationLeaseClassCapabilityGrant
@@ -2051,7 +2051,7 @@ func InferContinuationLeaseClass(riskClass string, allowedActions []string, boun
 		return ContinuationLeaseClassChildWake
 	case containsAny("data_access", "file_access", "read_image", "read_file", "consume_attachment", "artifact_read", "network_access"):
 		return ContinuationLeaseClassDataAccess
-	case containsAny("workspace_write", "repo_edit", "edit_files", "patch", "run_tests", "focused_tests", "git_diff_check", "read_only", "read_only_review", "status_check"):
+	case containsAny("workspace_write", "repo_edit", "edit_files", "patch", "run_tests", "focused_tests", "git_diff_check", "git_commit", "repo_history_mutation", "commit", "read_only", "read_only_review", "status_check"):
 		return ContinuationLeaseClassLocalWorkspace
 	default:
 		return ""
@@ -2097,7 +2097,7 @@ func DefaultContinuationLeaseConstraints(class ContinuationLeaseClass) map[strin
 	case ContinuationLeaseClassLocalWorkspace:
 		return map[string]string{
 			"scope":       "local workspace/repository only",
-			"history":     "commit/push require separate lease",
+			"history":     "commit requires explicit lease authority; push requires separate lease",
 			"externality": "no deploy, restart, credentials, purchases, public contact, or external accounts",
 			"validation":  "focused tests or diff checks before report",
 		}

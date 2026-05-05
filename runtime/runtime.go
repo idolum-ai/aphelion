@@ -521,7 +521,7 @@ func continuationWorkModeForbiddenByLease(state session.ContinuationState, mode 
 		return false
 	}
 	for _, forbidden := range continuationForbiddenWorkModeActions(state) {
-		forbiddenMode := workModeFromStructuredAuthority(forbidden)
+		forbiddenMode := workModeFromBroadForbiddenAuthority(forbidden)
 		forbiddenRank := workModeRank(forbiddenMode)
 		if forbiddenRank > 0 && requestedRank >= forbiddenRank {
 			return true
@@ -542,6 +542,22 @@ func continuationForbiddenWorkModeActions(state session.ContinuationState) []str
 		out = append(out, phase.ForbiddenActions...)
 	}
 	return out
+}
+
+func workModeFromBroadForbiddenAuthority(value string) WorkMode {
+	token := normalizeWorkModeAuthorityToken(value)
+	switch token {
+	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart":
+		return WorkModeDeploy
+	case "commit", "git_commit", "repo_history_mutation":
+		return WorkModeCommit
+	case "workspace_write", "workspace", "code", "code_change", "code_changes", "edit", "edit_files", "patch", "run_tests", "test", "tests":
+		return WorkModeWorkspaceWrite
+	case "read_only", "read_only_review", "status_check", "inspect_readonly_state":
+		return WorkModeReadOnly
+	default:
+		return ""
+	}
 }
 
 func workModeFromStructuredAuthorityList(values []string) WorkMode {

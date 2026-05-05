@@ -513,6 +513,86 @@ func TestTriggerContinuationBlocksWorkExecutorWhenLeaseForbidsMode(t *testing.T)
 	}
 }
 
+func TestContinuationCommitModeAllowsSpecificLiveConfigForbiddenAction(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	action := session.ActionProposal{
+		ID:             "aprop-local-commit-with-live-config-forbidden",
+		Summary:        "Commit validated local repo slices",
+		BoundedEffect:  "Review current dirty diff, run tests, commit coherent repo-only hardening, and report evidence.",
+		RiskClass:      "workspace_commit_then_repo_write_bounded",
+		AllowedActions: []string{"git_status", "git_diff", "run_go_tests", "git_commit_validated_slices", "edit_repo_code"},
+		ForbiddenActions: []string{
+			"patch_live_aphelion_toml",
+			"restart_aphelion",
+			"deploy_or_enable_systemd",
+			"git_push",
+		},
+		Status:    session.ProposalStatusApproved,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	action.PlanHash = actionProposalHash(action)
+	state := session.ContinuationState{
+		Status:            session.ContinuationStatusApproved,
+		RemainingTurns:    1,
+		ActionProposal:    action,
+		ContinuationLease: buildContinuationLease(action, 1, now),
+	}
+	state.ContinuationLease.Status = session.ContinuationLeaseStatusActive
+	state.ContinuationLease.RemainingTurns = 1
+	state.ContinuationLease.ApprovedAt = now
+	state.ContinuationLease.ApprovedBy = 1001
+
+	if state.ContinuationLease.LeaseClass != session.ContinuationLeaseClassLocalWorkspace {
+		t.Fatalf("lease class = %q, want local workspace for explicit local commit lease", state.ContinuationLease.LeaseClass)
+	}
+	mode := continuationWorkMode(state)
+	if mode != WorkModeCommit {
+		t.Fatalf("continuationWorkMode() = %q, want commit", mode)
+	}
+	decision := continuationWorkModeAccessCheck(state, mode, now)
+	if !decision.Allowed || decision.Reason != "allowed_by_structured_authority" {
+		t.Fatalf("access decision = %#v, want commit allowed by explicit structured authority", decision)
+	}
+}
+
+func TestContinuationCommitModeStillBlocksBroadCommitForbiddenAction(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	action := session.ActionProposal{
+		ID:               "aprop-local-commit-forbidden",
+		Summary:          "Commit validated local repo slices",
+		BoundedEffect:    "Review current dirty diff, run tests, commit coherent repo-only hardening, and report evidence.",
+		RiskClass:        "workspace_commit_then_repo_write_bounded",
+		AllowedActions:   []string{"git_commit_validated_slices", "edit_repo_code"},
+		ForbiddenActions: []string{"commit"},
+		Status:           session.ProposalStatusApproved,
+		ExpiresAt:        now.Add(time.Hour),
+	}
+	action.PlanHash = actionProposalHash(action)
+	state := session.ContinuationState{
+		Status:            session.ContinuationStatusApproved,
+		RemainingTurns:    1,
+		ActionProposal:    action,
+		ContinuationLease: buildContinuationLease(action, 1, now),
+	}
+	state.ContinuationLease.Status = session.ContinuationLeaseStatusActive
+	state.ContinuationLease.RemainingTurns = 1
+	state.ContinuationLease.ApprovedAt = now
+	state.ContinuationLease.ApprovedBy = 1001
+
+	mode := continuationWorkMode(state)
+	if mode != WorkModeCommit {
+		t.Fatalf("continuationWorkMode() = %q, want commit", mode)
+	}
+	decision := continuationWorkModeAccessCheck(state, mode, now)
+	if decision.Allowed || decision.Reason != "action_forbidden" {
+		t.Fatalf("access decision = %#v, want broad commit forbidden", decision)
+	}
+}
+
 func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	t.Parallel()
 
