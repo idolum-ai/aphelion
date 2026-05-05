@@ -3,8 +3,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +63,43 @@ func TestTelegramChildBotPreflightDoesNotReadTokenOrPoll(t *testing.T) {
 		t.Fatalf("preflight output leaked token: %q", out)
 	}
 }
+
+func TestTelegramChildBotGetMeSmokeUsesTelegramIdentityOnly(t *testing.T) {
+	t.Parallel()
+
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/getMe" {
+			t.Fatalf("unexpected path %s", req.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: 200,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewBufferString(`{"ok":true,"result":{"id":42,"is_bot":true,"username":"synth_bot"}}`)),
+		}, nil
+	})
+	client := telegram.NewClient("TOKEN",
+		telegram.WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		telegram.WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	out, err := captureStdout(t, func() error {
+		return runTelegramChildBotGetMeSmoke(context.Background(), client, telegramChildBotRoute{AgentID: "synth", ChatID: -5056905988}, "/tmp/config.toml")
+	})
+	if err != nil {
+		t.Fatalf("runTelegramChildBotGetMeSmoke() err = %v", err)
+	}
+	for _, want := range []string{"action: telegram-child-bot get-me-smoke", "agent_id: synth", "chat_id: -5056905988", "bot_username: synth_bot", "status: ok"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("get-me smoke output = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "TOKEN") {
+		t.Fatalf("get-me smoke output leaked token: %q", out)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestSelectTelegramChildBotRoutePreservesConfigRespondOnAll(t *testing.T) {
 	t.Parallel()

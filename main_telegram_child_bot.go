@@ -70,6 +70,7 @@ func runTelegramChildBotCommandWithDeps(args []string, deps telegramChildBotDeps
 	respondOnFlag := fs.String("respond-on", "", "group admission mode: mentions or all")
 	reviewTargetFlag := fs.Int64("review-target-chat-id", 0, "parent review Telegram chat id")
 	preflight := fs.Bool("preflight", false, "validate config/token metadata/durable agent and exit without reading token or calling Telegram")
+	getMeSmoke := fs.Bool("get-me-smoke", false, "read token and call Telegram getMe once, then exit without polling or sending messages")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -124,6 +125,9 @@ func runTelegramChildBotCommandWithDeps(args []string, deps telegramChildBotDeps
 	}
 	httpClient := &http.Client{Timeout: 90 * time.Second}
 	client := telegram.NewClient(token, telegram.WithHTTPClient(httpClient), telegram.WithPollTimeout(cfg.Telegram.PollTimeout))
+	if *getMeSmoke {
+		return runTelegramChildBotGetMeSmoke(context.Background(), client, route, configPath)
+	}
 	return deps.RunPoller(context.Background(), client, agentRow, route, cfg, store)
 }
 
@@ -287,6 +291,29 @@ func validateTelegramChildBotRouteAgainstAgent(route telegramChildBotRoute, agen
 	if strings.TrimSpace(agentRow.LivePolicy.Charter) == "" {
 		return fmt.Errorf("telegram child bot agent %q requires a live policy charter", route.AgentID)
 	}
+	return nil
+}
+
+func runTelegramChildBotGetMeSmoke(ctx context.Context, client *telegram.Client, route telegramChildBotRoute, configPath string) error {
+	if client == nil {
+		return fmt.Errorf("telegram client is unavailable")
+	}
+	getMeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	botUser, err := client.GetMe(getMeCtx)
+	if err != nil {
+		return fmt.Errorf("telegram child bot getMe failed: %w", err)
+	}
+	username := ""
+	if botUser != nil {
+		username = strings.TrimSpace(botUser.Username)
+	}
+	fmt.Fprintf(os.Stdout, "action: telegram-child-bot get-me-smoke\n")
+	fmt.Fprintf(os.Stdout, "config: %s\n", configPath)
+	fmt.Fprintf(os.Stdout, "agent_id: %s\n", route.AgentID)
+	fmt.Fprintf(os.Stdout, "chat_id: %d\n", route.ChatID)
+	fmt.Fprintf(os.Stdout, "bot_username: %s\n", username)
+	fmt.Fprintf(os.Stdout, "status: ok\n")
 	return nil
 }
 
