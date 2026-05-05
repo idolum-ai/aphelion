@@ -50,6 +50,7 @@ func inboundReplyContext(msg *Message) string {
 	if text == "" {
 		return ""
 	}
+	text = stripDeterministicCorrectionBanners(text)
 	text = strings.Join(strings.Fields(text), " ")
 	text = truncateReplyContext(text, replyContextSnippetMaxRunes)
 	if text == "" {
@@ -59,6 +60,22 @@ func inboundReplyContext(msg *Message) string {
 		return fmt.Sprintf("%s: %s", sender, text)
 	}
 	return text
+}
+
+func stripDeterministicCorrectionBanners(text string) string {
+	trimmed := strings.TrimSpace(text)
+	for strings.HasPrefix(trimmed, "I need to correct that:") {
+		if idx := strings.Index(trimmed, "\n"); idx >= 0 {
+			trimmed = strings.TrimSpace(trimmed[idx+1:])
+			continue
+		}
+		if idx := strings.Index(trimmed, ". "); idx >= 0 {
+			trimmed = strings.TrimSpace(trimmed[idx+2:])
+			continue
+		}
+		return ""
+	}
+	return trimmed
 }
 
 func firstNonEmpty(values ...string) string {

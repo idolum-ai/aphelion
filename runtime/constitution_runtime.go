@@ -4,7 +4,6 @@ package runtime
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -36,13 +35,27 @@ func (r *Runtime) applyTurnConstitution(
 		audit.RecordFinalReply(replyText, media, "")
 	}
 	trimmedReply := strings.TrimSpace(replyText)
-	trimmedReply, groundingNote := r.groundFinalReplyWithExecutionEvidence(key, trimmedReply)
-	if groundingNote != "" && audit != nil {
-		audit.RecordViolations([]ConstitutionViolation{{
-			Rule:    "execution_claim_ungrounded",
-			Surface: "final_reply",
-			Detail:  groundingNote,
-		}})
+	adjudication := r.adjudicateFinalReplyExecutionClaims(key, trimmedReply)
+	if adjudication.HasFindings() {
+		r.recordExecutionClaimAdjudication(key, adjudication, "repair_requested")
+		violations := adjudication.ConstitutionViolations()
+		if audit != nil {
+			audit.RecordViolations(violations)
+			audit.RecordExecutionClaimFindings(adjudication.Findings)
+		}
+		if repaired, ok := r.repairTurnReply(ctx, scope, channel, principalRole, userText, currentFaceModel, faceAwareness, materialFloor, floorText, trimmedReply, media, violations, audit); ok {
+			repairedAdjudication := r.adjudicateFinalReplyExecutionClaims(key, repaired)
+			if !repairedAdjudication.HasFindings() {
+				trimmedReply = strings.TrimSpace(repaired)
+				r.recordExecutionClaimAdjudication(key, repairedAdjudication.WithPrior(adjudication), "persona_repaired")
+			} else {
+				trimmedReply = neutralizeUnsupportedExecutionClaims(repaired, repairedAdjudication)
+				r.recordExecutionClaimAdjudication(key, repairedAdjudication, "fallback_neutralized")
+			}
+		} else {
+			trimmedReply = neutralizeUnsupportedExecutionClaims(trimmedReply, adjudication)
+			r.recordExecutionClaimAdjudication(key, adjudication, "fallback_neutralized")
+		}
 	}
 	if r == nil || r.constitutionGate == nil {
 		return trimmedReply
@@ -98,49 +111,116 @@ func (r *Runtime) applyTurnConstitution(
 	})
 }
 
-func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, reply string) (string, string) {
+type executionClaimAdjudication struct {
+	Findings           []ExecutionClaimFinding
+	LatestTurnSeq      int64
+	LatestStatus       string
+	LatestTerminalAt   string
+	HasToolEvidence    bool
+	HasTestEvidence    bool
+	HasDurableEvidence bool
+}
+
+func (a executionClaimAdjudication) HasFindings() bool {
+	return len(a.Findings) > 0
+}
+
+func (a executionClaimAdjudication) Note() string {
+	if len(a.Findings) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(a.Findings))
+	for _, finding := range a.Findings {
+		if detail := strings.TrimSpace(finding.Detail); detail != "" {
+			parts = append(parts, detail)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "execution claims are not grounded by TES: " + strings.Join(parts, "; ")
+}
+
+func (a executionClaimAdjudication) ConstitutionViolations() []ConstitutionViolation {
+	if len(a.Findings) == 0 {
+		return nil
+	}
+	violations := make([]ConstitutionViolation, 0, len(a.Findings))
+	for _, finding := range a.Findings {
+		detail := strings.TrimSpace(finding.RequiredBehavior)
+		if detail == "" {
+			detail = strings.TrimSpace(finding.Detail)
+		}
+		if detail == "" {
+			continue
+		}
+		violations = append(violations, ConstitutionViolation{
+			Rule:    constitutionRuleExecutionClaimUngrounded,
+			Surface: "final_reply",
+			Detail:  detail,
+		})
+	}
+	return violations
+}
+
+func (a executionClaimAdjudication) WithPrior(prior executionClaimAdjudication) executionClaimAdjudication {
+	if len(a.Findings) == 0 {
+		a.Findings = append([]ExecutionClaimFinding(nil), prior.Findings...)
+	}
+	if a.LatestTurnSeq == 0 {
+		a.LatestTurnSeq = prior.LatestTurnSeq
+	}
+	if a.LatestStatus == "" {
+		a.LatestStatus = prior.LatestStatus
+	}
+	if a.LatestTerminalAt == "" {
+		a.LatestTerminalAt = prior.LatestTerminalAt
+	}
+	a.HasToolEvidence = a.HasToolEvidence || prior.HasToolEvidence
+	a.HasTestEvidence = a.HasTestEvidence || prior.HasTestEvidence
+	a.HasDurableEvidence = a.HasDurableEvidence || prior.HasDurableEvidence
+	return a
+}
+
+func (r *Runtime) adjudicateFinalReplyExecutionClaims(key session.SessionKey, reply string) executionClaimAdjudication {
 	reply = strings.TrimSpace(reply)
+	out := executionClaimAdjudication{}
 	if r == nil || r.store == nil || reply == "" {
-		return reply, ""
+		return out
 	}
 	claims := detectExecutionClaims(reply)
 	if !claims.any() {
-		return reply, ""
+		return out
 	}
 	events, err := r.store.LatestExecutionEventsBySession(key, 300)
 	if err != nil || len(events) == 0 {
-		return reply, ""
+		return out
 	}
 
-	latestTurnStart := int64(0)
 	latestTerminal := ""
-	latestTerminalAt := ""
-	hasToolEvidence := false
-	hasTestEvidence := false
-	hasDurableEvidence := false
 	for _, event := range events {
 		eventType := strings.TrimSpace(event.EventType)
 		switch eventType {
 		case core.ExecutionEventTurnStarted:
-			if event.Seq > latestTurnStart {
-				latestTurnStart = event.Seq
+			if event.Seq > out.LatestTurnSeq {
+				out.LatestTurnSeq = event.Seq
 				latestTerminal = ""
-				latestTerminalAt = ""
-				hasToolEvidence = false
-				hasTestEvidence = false
-				hasDurableEvidence = false
+				out.LatestTerminalAt = ""
+				out.HasToolEvidence = false
+				out.HasTestEvidence = false
+				out.HasDurableEvidence = false
 			}
 		case core.ExecutionEventTurnCompleted, core.ExecutionEventTurnFailed, core.ExecutionEventTurnInterrupted:
-			if latestTurnStart == 0 || event.Seq < latestTurnStart {
+			if out.LatestTurnSeq == 0 || event.Seq < out.LatestTurnSeq {
 				continue
 			}
 			latestTerminal = eventType
-			latestTerminalAt = event.CreatedAt.UTC().Format(time.RFC3339)
+			out.LatestTerminalAt = event.CreatedAt.UTC().Format(time.RFC3339)
 		case core.ExecutionEventToolStarted, core.ExecutionEventToolSucceeded, core.ExecutionEventToolFailed:
-			if latestTurnStart == 0 || event.Seq < latestTurnStart {
+			if out.LatestTurnSeq == 0 || event.Seq < out.LatestTurnSeq {
 				continue
 			}
-			hasToolEvidence = true
+			out.HasToolEvidence = true
 			payload := executionEventPayload(event.PayloadJSON)
 			preview := strings.ToLower(strings.TrimSpace(payloadString(payload, "preview")))
 			resultPreview := strings.ToLower(strings.TrimSpace(payloadString(payload, "result_preview")))
@@ -150,7 +230,7 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 				strings.Contains(resultPreview, "go test") ||
 				strings.Contains(resultPreview, "pytest") ||
 				strings.Contains(resultPreview, "npm test") {
-				hasTestEvidence = true
+				out.HasTestEvidence = true
 			}
 		case core.ExecutionEventDurableWakeStarted,
 			core.ExecutionEventDurableWakeCompleted,
@@ -160,52 +240,170 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 			core.ExecutionEventDurablePolicyApplied,
 			core.ExecutionEventDurablePolicyApplyFailed,
 			core.ExecutionEventDurableParentAck:
-			if latestTurnStart == 0 || event.Seq < latestTurnStart {
+			if out.LatestTurnSeq == 0 || event.Seq < out.LatestTurnSeq {
 				continue
 			}
-			hasDurableEvidence = true
+			out.HasDurableEvidence = true
 		}
 	}
-	if latestTurnStart == 0 {
-		return reply, ""
+	if out.LatestTurnSeq == 0 {
+		return out
 	}
 
-	status := "in_progress"
+	out.LatestStatus = "in_progress"
 	switch latestTerminal {
+	case core.ExecutionEventTurnCompleted:
+		out.LatestStatus = "completed"
 	case core.ExecutionEventTurnFailed:
-		status = "failed"
+		out.LatestStatus = "failed"
 	case core.ExecutionEventTurnInterrupted:
-		status = "interrupted"
+		out.LatestStatus = "interrupted"
 	case "":
-		status = "in_progress"
+		out.LatestStatus = "in_progress"
 	}
-
-	reasons := make([]string, 0, 4)
 	if claims.Completion && latestTerminal != "" && latestTerminal != core.ExecutionEventTurnCompleted {
-		reasons = append(reasons, fmt.Sprintf("completion claim is not grounded (turn=%s)", status))
+		out.Findings = append(out.Findings, executionClaimFinding("completion", "completion claim is not grounded (turn="+out.LatestStatus+")", out))
 	}
-	if claims.Tool && !hasToolEvidence {
-		reasons = append(reasons, "tool-execution claim has no tool events")
+	missingTestEvidence := claims.Tests && !out.HasTestEvidence
+	if claims.Tool && !out.HasToolEvidence && !missingTestEvidence {
+		out.Findings = append(out.Findings, executionClaimFinding("tool_execution", "tool-execution claim has no tool events", out))
 	}
-	if claims.Tests && !hasTestEvidence {
-		reasons = append(reasons, "test-execution claim has no test-related tool evidence")
+	if missingTestEvidence {
+		out.Findings = append(out.Findings, executionClaimFinding("test_execution", "test-execution claim has no test-related tool evidence", out))
 	}
-	if claims.Durable && !hasDurableEvidence {
-		reasons = append(reasons, "durable-agent claim has no durable lifecycle events")
+	if claims.Durable && !out.HasDurableEvidence {
+		out.Findings = append(out.Findings, executionClaimFinding("durable_agent", "durable-agent claim has no durable lifecycle events", out))
 	}
-	if len(reasons) == 0 {
-		return reply, ""
+	return out
+}
+
+func executionClaimFinding(claimType string, detail string, adjudication executionClaimAdjudication) ExecutionClaimFinding {
+	required := "Remove or qualify this unsupported execution claim in your own voice. Do not prepend a correction banner. If the claim is about prior work, explicitly attribute it as prior evidence rather than current-turn execution."
+	switch claimType {
+	case "test_execution":
+		required = "Do not claim tests ran or passed in this turn without current-turn test tool evidence. If useful, say you reviewed prior validation instead. Do not prepend a correction banner."
+	case "tool_execution":
+		required = "Do not claim commands, tools, patches, or file edits happened in this turn without tool events. Remove or qualify the claim. Do not prepend a correction banner."
+	case "durable_agent":
+		required = "Do not claim durable-agent wake or lifecycle work happened without durable lifecycle events. Remove or qualify the claim. Do not prepend a correction banner."
+	case "completion":
+		required = "Do not claim completion when the latest turn is not completed. State only the observable state if it matters. Do not prepend a correction banner."
 	}
-	note := "execution claims are not grounded by TES: " + strings.Join(reasons, "; ")
-	prefix := fmt.Sprintf(
-		"I need to correct that: %s",
-		strings.Join(reasons, "; "),
-	)
-	if latestTerminalAt != "" {
-		prefix += " (as of " + latestTerminalAt + " UTC)"
+	return ExecutionClaimFinding{
+		ClaimType:        claimType,
+		EvidenceStatus:   "not_observed_in_current_turn",
+		Detail:           strings.TrimSpace(detail),
+		LatestTurnStatus: strings.TrimSpace(adjudication.LatestStatus),
+		LatestTerminalAt: strings.TrimSpace(adjudication.LatestTerminalAt),
+		RequiredBehavior: required,
 	}
-	prefix += "."
-	return prefix + "\n" + reply, note
+}
+
+func (r *Runtime) recordExecutionClaimAdjudication(key session.SessionKey, adjudication executionClaimAdjudication, visibleAction string) {
+	if r == nil || !adjudication.HasFindings() {
+		return
+	}
+	claimTypes := make([]string, 0, len(adjudication.Findings))
+	details := make([]string, 0, len(adjudication.Findings))
+	for _, finding := range adjudication.Findings {
+		if value := strings.TrimSpace(finding.ClaimType); value != "" {
+			claimTypes = append(claimTypes, value)
+		}
+		if value := strings.TrimSpace(finding.Detail); value != "" {
+			details = append(details, value)
+		}
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventReplyClaimAdjudicated, "reply", "adjudicated", map[string]any{
+		"claim_types":          claimTypes,
+		"details":              details,
+		"findings_count":       len(adjudication.Findings),
+		"latest_turn_seq":      adjudication.LatestTurnSeq,
+		"latest_turn_status":   strings.TrimSpace(adjudication.LatestStatus),
+		"latest_terminal_at":   strings.TrimSpace(adjudication.LatestTerminalAt),
+		"has_tool_evidence":    adjudication.HasToolEvidence,
+		"has_test_evidence":    adjudication.HasTestEvidence,
+		"has_durable_evidence": adjudication.HasDurableEvidence,
+		"visible_action":       strings.TrimSpace(visibleAction),
+	}, time.Now().UTC())
+}
+
+func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, reply string) (string, string) {
+	reply = strings.TrimSpace(reply)
+	adjudication := r.adjudicateFinalReplyExecutionClaims(key, reply)
+	return reply, adjudication.Note()
+}
+
+func neutralizeUnsupportedExecutionClaims(reply string, adjudication executionClaimAdjudication) string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" || !adjudication.HasFindings() {
+		return reply
+	}
+	paragraphs := splitReplyParagraphs(reply)
+	kept := make([]string, 0, len(paragraphs))
+	for _, paragraph := range paragraphs {
+		if paragraphHasUnsupportedExecutionClaim(paragraph, adjudication) {
+			continue
+		}
+		kept = append(kept, paragraph)
+	}
+	out := strings.TrimSpace(strings.Join(kept, "\n\n"))
+	if out != "" {
+		return out
+	}
+	return "I do not have current-turn execution evidence for that claim."
+}
+
+func splitReplyParagraphs(reply string) []string {
+	lines := strings.Split(strings.TrimSpace(reply), "\n")
+	out := make([]string, 0)
+	var current []string
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		out = append(out, strings.TrimSpace(strings.Join(current, "\n")))
+		current = nil
+	}
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			flush()
+			continue
+		}
+		current = append(current, line)
+	}
+	flush()
+	if len(out) == 0 && strings.TrimSpace(reply) != "" {
+		return []string{strings.TrimSpace(reply)}
+	}
+	return out
+}
+
+func paragraphHasUnsupportedExecutionClaim(paragraph string, adjudication executionClaimAdjudication) bool {
+	if strings.HasPrefix(strings.TrimSpace(paragraph), "I need to correct that:") {
+		return true
+	}
+	claims := detectExecutionClaims(paragraph)
+	for _, finding := range adjudication.Findings {
+		switch strings.TrimSpace(finding.ClaimType) {
+		case "completion":
+			if claims.Completion {
+				return true
+			}
+		case "tool_execution":
+			if claims.Tool {
+				return true
+			}
+		case "test_execution":
+			if claims.Tests {
+				return true
+			}
+		case "durable_agent":
+			if claims.Durable {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type executionClaimSet struct {
@@ -249,9 +447,16 @@ func detectExecutionClaims(reply string) executionClaimSet {
 	if containsPositiveClaimMarker(lower,
 		"tests passed",
 		"all tests passed",
-		"go test",
-		"pytest",
-		"npm test",
+		"validation passed",
+		"ran go test",
+		"go test passed",
+		"go test succeeded",
+		"ran pytest",
+		"pytest passed",
+		"pytest succeeded",
+		"ran npm test",
+		"npm test passed",
+		"npm test succeeded",
 	) {
 		claims.Tests = true
 		claims.Tool = true
@@ -321,6 +526,15 @@ func containsPositiveClaimMarker(text string, needles ...string) bool {
 				"avoid",
 				"without",
 				"pretend",
+				"reviewed",
+				"existing validation",
+				"prior validation",
+				"previous validation",
+				"already-present validation",
+				"validation record",
+				"pushed fixes",
+				"prior commit",
+				"previous commit",
 			) {
 				return true
 			}

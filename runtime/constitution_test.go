@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
+	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/turn"
 )
 
@@ -158,6 +161,83 @@ MEDIA: {"path":"diagram.png"}`
 	if !containsViolationRule(audit.ConstitutionViolations, constitutionRuleMediaReplyContradiction) {
 		t.Fatalf("violations = %#v, want media contradiction rule", audit.ConstitutionViolations)
 	}
+}
+
+func TestApplyTurnConstitutionRepairsUngroundedExecutionClaimWithoutBanner(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.repairReplyText = "I reviewed the existing validation record for the pushed fixes."
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9004, UserID: 0, Scope: telegramDMScopeRef(9004)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"summary":"reviewed prior work"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	auditRecorder := newTurnAuditRecorder(key, "telegram", "admin", "review the pushed fixes")
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		GlobalRoot:       cfg.Agent.PromptRoot,
+		SharedMemoryRoot: cfg.Agent.SharedMemoryRoot,
+		WorkingRoot:      cfg.Agent.ExecRoot,
+	}
+	finalText := rt.applyTurnConstitution(
+		context.Background(),
+		key,
+		scope,
+		"telegram",
+		"admin",
+		"review the pushed fixes",
+		rt.currentFaceRenderer(),
+		prompt.RuntimeAwareness{},
+		core.MaterialPacket{},
+		"",
+		"Validation passed: go test ./...",
+		nil,
+		auditRecorder,
+	)
+	if finalText != "I reviewed the existing validation record for the pushed fixes." {
+		t.Fatalf("final text = %q", finalText)
+	}
+	if strings.Contains(finalText, "I need to correct that") {
+		t.Fatalf("final text = %q, want no deterministic correction banner", finalText)
+	}
+	audit := auditRecorder.Snapshot()
+	if !audit.FaceRepairAttempted || !audit.FaceRepairApplied {
+		t.Fatalf("audit face repair = attempted:%t applied:%t, want true/true", audit.FaceRepairAttempted, audit.FaceRepairApplied)
+	}
+	if !containsViolationRule(audit.ConstitutionViolations, constitutionRuleExecutionClaimUngrounded) {
+		t.Fatalf("violations = %#v, want execution claim grounding rule", audit.ConstitutionViolations)
+	}
+	if len(audit.ExecutionClaimFindings) != 1 || audit.ExecutionClaimFindings[0].ClaimType != "test_execution" {
+		t.Fatalf("execution findings = %#v, want one test_execution finding", audit.ExecutionClaimFindings)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	assertHasEventType(t, events, core.ExecutionEventReplyClaimAdjudicated)
 }
 
 func TestHandleInboundBrokerageConvergesAfterAdaptation(t *testing.T) {
@@ -313,7 +393,7 @@ func TestHandleInboundBrokerageFallsBackWhenContractStabilizes(t *testing.T) {
 	}
 }
 
-func TestGroundFinalReplyWithExecutionEvidenceRewritesUngroundedSuccessClaim(t *testing.T) {
+func TestGroundFinalReplyWithExecutionEvidenceAdjudicatesUngroundedSuccessClaimWithoutVisibleBanner(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -347,8 +427,11 @@ func TestGroundFinalReplyWithExecutionEvidenceRewritesUngroundedSuccessClaim(t *
 	if strings.TrimSpace(note) == "" {
 		t.Fatalf("note = %q, want non-empty grounding note", note)
 	}
-	if !strings.Contains(strings.ToLower(rewritten), "completion claim is not grounded") {
-		t.Fatalf("rewritten = %q, want completion-claim grounding correction", rewritten)
+	if rewritten != "Done. Everything finished cleanly." {
+		t.Fatalf("rewritten = %q, want unchanged reply for persona repair path", rewritten)
+	}
+	if strings.Contains(rewritten, "I need to correct that") {
+		t.Fatalf("rewritten = %q, want no deterministic correction banner", rewritten)
 	}
 }
 
@@ -453,7 +536,7 @@ func TestGroundFinalReplyWithExecutionEvidenceUsesLatestEventWindow(t *testing.T
 	}
 }
 
-func TestGroundFinalReplyWithExecutionEvidenceRewritesUngroundedToolClaim(t *testing.T) {
+func TestGroundFinalReplyWithExecutionEvidenceAdjudicatesUngroundedToolClaimWithoutVisibleBanner(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -483,12 +566,19 @@ func TestGroundFinalReplyWithExecutionEvidenceRewritesUngroundedToolClaim(t *tes
 		t.Fatalf("AppendExecutionEvents() err = %v", err)
 	}
 
-	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, "I executed command-line checks and applied the patch.")
+	reply := "I executed command-line checks and applied the patch."
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, reply)
 	if strings.TrimSpace(note) == "" {
 		t.Fatalf("note = %q, want non-empty grounding note", note)
 	}
-	if !strings.Contains(strings.ToLower(rewritten), "tool-execution claim has no tool events") {
-		t.Fatalf("rewritten = %q, want tool-claim grounding correction", rewritten)
+	if !strings.Contains(strings.ToLower(note), "tool-execution claim has no tool events") {
+		t.Fatalf("note = %q, want structured grounding detail", note)
+	}
+	if rewritten != reply {
+		t.Fatalf("rewritten = %q, want unchanged reply for persona repair path", rewritten)
+	}
+	if strings.Contains(rewritten, "I need to correct that") {
+		t.Fatalf("rewritten = %q, want no deterministic correction banner", rewritten)
 	}
 }
 
@@ -526,6 +616,86 @@ func TestGroundFinalReplyWithExecutionEvidenceKeepsConceptualFeatureDiscussion(t
 	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, reply)
 	if note != "" {
 		t.Fatalf("note = %q, want no grounding note for conceptual discussion", note)
+	}
+	if rewritten != reply {
+		t.Fatalf("rewritten = %q, want unchanged reply", rewritten)
+	}
+}
+
+func TestGroundFinalReplyWithExecutionEvidenceKeepsAttributedPriorValidation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9308, UserID: 0, Scope: telegramDMScopeRef(9308)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"summary":"reviewed prior validation"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	reply := "I reviewed the existing validation record: go test ./... passed in the prior commit."
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, reply)
+	if note != "" {
+		t.Fatalf("note = %q, want no grounding note for attributed prior validation", note)
+	}
+	if rewritten != reply {
+		t.Fatalf("rewritten = %q, want unchanged reply", rewritten)
+	}
+}
+
+func TestGroundFinalReplyWithExecutionEvidenceKeepsCommandSuggestion(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9309, UserID: 0, Scope: telegramDMScopeRef(9309)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{}`,
+			CreatedAt:   now.Add(-20 * time.Second),
+		},
+		{
+			EventType:   core.ExecutionEventTurnCompleted,
+			Stage:       "turn",
+			Status:      "completed",
+			PayloadJSON: `{"summary":"answered with suggested command"}`,
+			CreatedAt:   now.Add(-10 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	reply := "Use this exact command: go test ./..."
+	rewritten, note := rt.groundFinalReplyWithExecutionEvidence(key, reply)
+	if note != "" {
+		t.Fatalf("note = %q, want no grounding note for command suggestion", note)
 	}
 	if rewritten != reply {
 		t.Fatalf("rewritten = %q, want unchanged reply", rewritten)

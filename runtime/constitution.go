@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	constitutionRuleProgressGovernorLeakage = pipeline.RuleProgressGovernorLeakage
-	constitutionRuleFinalGovernorLeakage    = pipeline.RuleFinalGovernorLeakage
-	constitutionRuleMediaReplyContradiction = pipeline.RuleMediaReplyContradiction
-	constitutionRuleMediaNeedsNarration     = pipeline.RuleMediaNeedsNarration
+	constitutionRuleProgressGovernorLeakage  = pipeline.RuleProgressGovernorLeakage
+	constitutionRuleFinalGovernorLeakage     = pipeline.RuleFinalGovernorLeakage
+	constitutionRuleMediaReplyContradiction  = pipeline.RuleMediaReplyContradiction
+	constitutionRuleMediaNeedsNarration      = pipeline.RuleMediaNeedsNarration
+	constitutionRuleExecutionClaimUngrounded = "execution_claim_ungrounded"
 )
 
 type ConstitutionViolation = pipeline.ConstitutionViolation
@@ -24,6 +25,15 @@ type TurnToolAudit struct {
 	InputPreview  string `json:"input_preview,omitempty"`
 	OutputPreview string `json:"output_preview,omitempty"`
 	Error         string `json:"error,omitempty"`
+}
+
+type ExecutionClaimFinding struct {
+	ClaimType        string `json:"claim_type"`
+	EvidenceStatus   string `json:"evidence_status"`
+	Detail           string `json:"detail,omitempty"`
+	LatestTurnStatus string `json:"latest_turn_status,omitempty"`
+	LatestTerminalAt string `json:"latest_terminal_at,omitempty"`
+	RequiredBehavior string `json:"required_behavior,omitempty"`
 }
 
 type BrokerageRoundAudit struct {
@@ -58,6 +68,7 @@ type TurnAudit struct {
 	FaceRepairAttempted    bool                    `json:"face_repair_attempted"`
 	FaceRepairApplied      bool                    `json:"face_repair_applied"`
 	ConstitutionViolations []ConstitutionViolation `json:"constitution_violations,omitempty"`
+	ExecutionClaimFindings []ExecutionClaimFinding `json:"execution_claim_findings,omitempty"`
 }
 
 type TurnConstitutionGate interface {
@@ -202,6 +213,13 @@ func (r *turnAuditRecorder) RecordViolations(violations []ConstitutionViolation)
 	r.audit.ConstitutionViolations = append(r.audit.ConstitutionViolations, violations...)
 }
 
+func (r *turnAuditRecorder) RecordExecutionClaimFindings(findings []ExecutionClaimFinding) {
+	if r == nil || len(findings) == 0 {
+		return
+	}
+	r.audit.ExecutionClaimFindings = append(r.audit.ExecutionClaimFindings, findings...)
+}
+
 func (r *turnAuditRecorder) Snapshot() TurnAudit {
 	if r == nil {
 		return TurnAudit{}
@@ -213,6 +231,7 @@ func (r *turnAuditRecorder) Snapshot() TurnAudit {
 	snapshot.ToolCalls = append([]TurnToolAudit(nil), snapshot.ToolCalls...)
 	snapshot.BrokerageRounds = append([]BrokerageRoundAudit(nil), snapshot.BrokerageRounds...)
 	snapshot.ConstitutionViolations = append([]ConstitutionViolation(nil), snapshot.ConstitutionViolations...)
+	snapshot.ExecutionClaimFindings = append([]ExecutionClaimFinding(nil), snapshot.ExecutionClaimFindings...)
 	return snapshot
 }
 
