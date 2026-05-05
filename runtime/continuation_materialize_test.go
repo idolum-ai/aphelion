@@ -412,6 +412,105 @@ func TestMaterializePhasePlanIgnoresStaleInProgressWhenCurrentPhaseIsPending(t *
 	}
 }
 
+func TestMaterializePhasePlanRecoversCurrentPhaseAfterRevokedLease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9032, UserID: 0, Scope: telegramDMScopeRef(9032)}
+	leaseID := "lease-phase-recover-current"
+	opState := session.OperationState{
+		ID:        "recover-current-phase-op",
+		Objective: "Reoffer the current phase after a bad lease revocation.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "recover-current-phase-plan",
+			CurrentPhaseID: "phase-r1",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-r1",
+					Summary:        "Commit validated local repo slices",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "workspace_commit_then_repo_write_bounded",
+					BoundedEffect:  "Run tests, commit coherent local slices, and report evidence.",
+					AllowedActions: []string{"run_go_tests", "git_commit_validated_slices"},
+					LeaseID:        leaseID,
+				},
+			},
+		},
+	}
+	opState.Proposal = session.OperationProposal{
+		ID:            operationPhaseProposalID(opState, opState.PhasePlan.Phases[0]),
+		Kind:          "workspace_commit_then_repo_write_bounded",
+		Summary:       "Commit validated local repo slices",
+		BoundedEffect: "Run tests, commit coherent local slices, and report evidence.",
+		Status:        session.ProposalStatusApproved,
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	now := time.Now().UTC()
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusRevoked,
+		StageSummary:   "Commit validated local repo slices",
+		RemainingTurns: 0,
+		ActionProposal: session.ActionProposal{
+			ID:          "aprop-" + opState.Proposal.ID,
+			OperationID: opState.Proposal.ID,
+			Summary:     "Commit validated local repo slices",
+			RiskClass:   "workspace_commit_then_repo_write_bounded",
+			Status:      session.ProposalStatusApproved,
+			ExpiresAt:   now.Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             leaseID,
+			ProposalID:     "aprop-" + opState.Proposal.ID,
+			Status:         session.ContinuationLeaseStatusRevoked,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			RevokedAt:      now,
+			ExpiresAt:      now.Add(time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9032, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want fresh prompt after revoked current-phase lease")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation = %#v, want fresh pending lease", cont)
+	}
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.PhasePlan.Phases[0].Status != session.PlanStatusPending || got.PhasePlan.Phases[0].LeaseID == "" {
+		t.Fatalf("phase = %#v, want re-materialized pending phase lease", got.PhasePlan.Phases[0])
+	}
+	if got.Proposal.Status != session.ProposalStatusPending {
+		t.Fatalf("proposal status = %q, want fresh pending proposal", got.Proposal.Status)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want fresh approval buttons", inlineCount)
+	}
+}
+
 func TestMaterializePlanningOnlyPhaseOffersPlanBudget(t *testing.T) {
 	t.Parallel()
 

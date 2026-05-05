@@ -593,6 +593,95 @@ func TestContinuationCommitModeStillBlocksBroadCommitForbiddenAction(t *testing.
 	}
 }
 
+func TestLeaseAccessDeniedResetsOperationPhaseForFreshApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8189, UserID: 0, Scope: telegramDMScopeRef(8189)}
+	opState := session.OperationState{
+		ID:        "phase-denial-recovery-op",
+		Objective: "Recover from a denied phase lease.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "phase-denial-recovery-plan",
+			CurrentPhaseID: "phase-1",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-1",
+				Summary:        "Patch the implementation",
+				Status:         session.PlanStatusInProgress,
+				AuthorityClass: "workspace_write",
+				LeaseID:        "lease-phase-denied",
+			}},
+		},
+	}
+	proposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	opState.Proposal = session.OperationProposal{
+		ID:      proposalID,
+		Kind:    "workspace_write",
+		Summary: "Patch the implementation",
+		Status:  session.ProposalStatusApproved,
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     proposalID,
+		Objective:      "Recover from a denied phase lease.",
+		StageSummary:   "Patch the implementation",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:          "aprop-" + proposalID,
+			OperationID: proposalID,
+			Summary:     "Patch the implementation",
+			RiskClass:   "workspace_write",
+			Status:      session.ProposalStatusApproved,
+			ExpiresAt:   expiresAt,
+			PlanHash:    "sha256:phase-denied",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-phase-denied",
+			ProposalID:       "aprop-" + proposalID,
+			Status:           session.ContinuationLeaseStatusActive,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			AllowedActions:   []string{"read_only"},
+			ForbiddenActions: []string{"workspace_write"},
+			ApprovedBy:       1001,
+			ApprovedAt:       expiresAt.Add(-time.Hour),
+			ExpiresAt:        expiresAt,
+			PlanHash:         "sha256:phase-denied",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuation(context.Background(), 8189); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 0 {
+		t.Fatalf("work calls = %d, want denial before executor", work.calls)
+	}
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.Status != session.OperationStatusBlocked || got.PhasePlan.Phases[0].Status != session.PlanStatusPending || got.PhasePlan.Phases[0].LeaseID != "" {
+		t.Fatalf("operation = %#v, want blocked with phase reset to pending", got)
+	}
+}
+
 func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	t.Parallel()
 

@@ -25,7 +25,10 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		return false, nil
 	}
 	opState = session.NormalizeOperationState(opState)
-	opState = operationStateWithNonCurrentInProgressPhasesCleared(opState, time.Now().UTC())
+	now := time.Now().UTC()
+	priorContinuation, priorContinuationExists, _ := r.store.ContinuationStateIfExists(key)
+	opState = operationStateWithNonCurrentInProgressPhasesCleared(opState, now)
+	opState = operationStateWithInactiveCurrentPhaseLeaseCleared(opState, priorContinuation, priorContinuationExists, now)
 	if pendingOperationPlanLeaseNeedsButton(opState.PlanLease) {
 		now := time.Now().UTC()
 		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
@@ -150,7 +153,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		return true, nil
 	}
 
-	now := time.Now().UTC()
+	now = time.Now().UTC()
 	state := continuationStateFromOperationProposal(opState, promptInput, now)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return false, fmt.Errorf("persist operation proposal continuation state: %w", err)
@@ -356,6 +359,63 @@ func operationStateWithNonCurrentInProgressPhasesCleared(opState session.Operati
 		opState.UpdatedAt = now
 	}
 	return session.NormalizeOperationState(opState)
+}
+
+func operationStateWithInactiveCurrentPhaseLeaseCleared(opState session.OperationState, cont session.ContinuationState, contExists bool, now time.Time) session.OperationState {
+	if !contExists {
+		return session.NormalizeOperationState(opState)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	cont = session.NormalizeContinuationState(cont)
+	leaseID := strings.TrimSpace(cont.ContinuationLease.ID)
+	if leaseID == "" || !continuationStateLeaseInactiveForPhaseRecovery(cont) {
+		return opState
+	}
+	currentID := strings.TrimSpace(opState.PhasePlan.CurrentPhaseID)
+	if currentID == "" {
+		return opState
+	}
+	changed := false
+	for i := range opState.PhasePlan.Phases {
+		phase := opState.PhasePlan.Phases[i]
+		if strings.TrimSpace(phase.ID) != currentID || strings.TrimSpace(phase.LeaseID) != leaseID || phase.Status != session.PlanStatusInProgress {
+			continue
+		}
+		opState.PhasePlan.Phases[i].Status = session.PlanStatusPending
+		opState.PhasePlan.Phases[i].LeaseID = ""
+		changed = true
+		break
+	}
+	if !changed {
+		return opState
+	}
+	if opState.Proposal.Status == session.ProposalStatusApproved && operationProposalMatchesContinuation(opState.Proposal, cont) {
+		opState.Proposal.Status = session.ProposalStatusSuperseded
+		opState.Proposal.UpdatedAt = now
+	}
+	opState.Status = session.OperationStatusBlocked
+	opState.Stage = firstNonEmptyContinuation(strings.TrimSpace(opState.Stage), "phase_approval_recovered_from_inactive_lease")
+	opState.PhasePlan.UpdatedAt = now
+	opState.UpdatedAt = now
+	return session.NormalizeOperationState(opState)
+}
+
+func continuationStateLeaseInactiveForPhaseRecovery(cont session.ContinuationState) bool {
+	cont = session.NormalizeContinuationState(cont)
+	switch cont.Status {
+	case session.ContinuationStatusRevoked:
+		return true
+	}
+	switch cont.ContinuationLease.Status {
+	case session.ContinuationLeaseStatusRevoked, session.ContinuationLeaseStatusExpired:
+		return true
+	default:
+		return false
+	}
 }
 
 func operationPhasePlanLeaseID(opState session.OperationState, phases []session.OperationPhase) string {

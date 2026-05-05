@@ -397,6 +397,7 @@ func (r *Runtime) blockContinuationForLeaseAccessDenied(chatID int64, state sess
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return err
 	}
+	r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied)
 	payload := continuationExecutionPayload(state)
 	payload["reason"] = "lease_action_denied"
 	payload["lease_action"] = strings.TrimSpace(decision.Action)
