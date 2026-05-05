@@ -46,6 +46,8 @@ type WorkResult struct {
 	ThreadID         string
 	TurnID           string
 	Summary          string
+	ProviderFailure  string
+	ProviderEvents   []core.ProviderEvent
 	ChangedFiles     []string
 	Commands         []string
 	CodexEvents      []session.WorkCodexEvent
@@ -253,11 +255,32 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	out := WorkResult{ExecutorName: "native", CompletionKind: "native_turn"}
 	if result != nil {
 		out.Summary = strings.TrimSpace(result.Text)
+		out.ProviderFailure = strings.TrimSpace(result.ProviderFailure)
+		out.ProviderEvents = append([]core.ProviderEvent(nil), result.ProviderEvents...)
+		if out.ProviderFailure != "" {
+			out.CompletionKind = "native_turn_provider_failed"
+			out.SideEffects = true
+		}
 	}
 	if err != nil {
 		return out, err
 	}
+	if out.ProviderFailure != "" {
+		return out, nativeWorkProviderFailureError{Failure: out.ProviderFailure}
+	}
 	return out, nil
+}
+
+type nativeWorkProviderFailureError struct {
+	Failure string
+}
+
+func (e nativeWorkProviderFailureError) Error() string {
+	failure := strings.TrimSpace(e.Failure)
+	if failure == "" {
+		return "native work turn failed because the inference backend failed"
+	}
+	return "native work turn failed because the inference backend failed: " + failure
 }
 
 type codexWorkExecutor struct {

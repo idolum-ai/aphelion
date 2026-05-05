@@ -80,6 +80,19 @@ type RestartHealthSnapshot struct {
 	StaleTurnLimit     int
 }
 
+type AutoApprovalStatusSnapshot struct {
+	Active      bool
+	LeaseID     string
+	AdminUserID int64
+	Scope       string
+	UsedCount   int
+	MaxUses     int
+	Reason      string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	ExpiresAt   time.Time
+}
+
 type ToolLifecycleStatusSnapshot struct {
 	ToolName             string
 	InstallStatus        string
@@ -180,6 +193,7 @@ type ChatStatusSnapshot struct {
 	ToolLifecycle         []ToolLifecycleStatusSnapshot
 	CapabilityRequests    []CapabilityRequestStatusSnapshot
 	CapabilityGrants      []CapabilityGrantStatusSnapshot
+	AutoApproval          *AutoApprovalStatusSnapshot
 	StaleRunningTurns     []TurnRunStatusSnapshot
 	RestartHealth         RestartHealthSnapshot
 	MissionLedger         MissionLedgerStatusSnapshot

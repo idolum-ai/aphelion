@@ -105,6 +105,14 @@ func TestRenderTelegramStatusChatIncludesTurnPhaseHiddenInputsDeliveryAndDetache
 		StaleRunningTurns: []core.TurnRunStatusSnapshot{
 			{ID: 41, ChatID: 88, Status: "running"},
 		},
+		AutoApproval: &core.AutoApprovalStatusSnapshot{
+			Active:    true,
+			Scope:     "workspace",
+			UsedCount: 1,
+			MaxUses:   3,
+			Reason:    "live test window",
+			ExpiresAt: time.Date(2026, 5, 5, 14, 0, 0, 0, time.UTC),
+		},
 	}, "medium", "high", false)
 
 	for _, needle := range []string{
@@ -113,6 +121,7 @@ func TestRenderTelegramStatusChatIncludesTurnPhaseHiddenInputsDeliveryAndDetache
 		"delivery status=delivery_failed",
 		"plan_progress completed=2 total=2 fully_executed=true",
 		"detached_work decisions=1 continuations=0 recoveries=1 stale_turns=1",
+		"auto_approval status=active scope=workspace expires_at=2026-05-05T14:00:00Z used=1/3 reason=\"live test window\"",
 		"current_signal=phase:deliver",
 	} {
 		if !strings.Contains(out, needle) {

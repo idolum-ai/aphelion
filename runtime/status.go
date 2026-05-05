@@ -65,7 +65,62 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 			lines = append(lines, line+".")
 		}
 	}
+	if auto := chatSnapshot.AutoApproval; auto != nil && auto.Active {
+		line := "Auto-approval: active"
+		if scope := strings.TrimSpace(auto.Scope); scope != "" {
+			line += " (" + scope + ")"
+		}
+		if !auto.ExpiresAt.IsZero() {
+			line += ", expires " + auto.ExpiresAt.UTC().Format(time.RFC3339)
+		}
+		if auto.MaxUses > 0 {
+			line += fmt.Sprintf(", used %d/%d", auto.UsedCount, auto.MaxUses)
+		} else {
+			line += fmt.Sprintf(", used %d", auto.UsedCount)
+		}
+		lines = append(lines, line+".")
+	}
 	return lines, nil
+}
+
+func (r *Runtime) autoApprovalStatusSnapshot(chatID int64, now time.Time) (*core.AutoApprovalStatusSnapshot, error) {
+	if r == nil || r.store == nil || chatID == 0 {
+		return nil, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	leases, err := r.store.ActiveOperatorAutoApprovalLeases(chatID, now)
+	if err != nil {
+		return nil, err
+	}
+	var selected *session.OperatorAutoApprovalLease
+	for _, lease := range leases {
+		lease = session.NormalizeOperatorAutoApprovalLease(lease)
+		if !lease.ActiveAt(now) {
+			continue
+		}
+		if selected == nil || lease.ExpiresAt.After(selected.ExpiresAt) {
+			copied := lease
+			selected = &copied
+		}
+	}
+	if selected == nil {
+		return nil, nil
+	}
+	return &core.AutoApprovalStatusSnapshot{
+		Active:      true,
+		LeaseID:     strings.TrimSpace(selected.ID),
+		AdminUserID: selected.AdminUserID,
+		Scope:       strings.TrimSpace(selected.Scope),
+		UsedCount:   selected.UsedCount,
+		MaxUses:     selected.MaxUses,
+		Reason:      strings.TrimSpace(selected.Reason),
+		CreatedAt:   selected.CreatedAt,
+		UpdatedAt:   selected.UpdatedAt,
+		ExpiresAt:   selected.ExpiresAt,
+	}, nil
 }
 
 func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnapshot) (core.ChatStatusSnapshot, error) {
@@ -164,6 +219,11 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		}
 	}
 	if r != nil && r.store != nil {
+		autoApproval, err := r.autoApprovalStatusSnapshot(chatID, system.GeneratedAt)
+		if err != nil {
+			return core.ChatStatusSnapshot{}, err
+		}
+		snapshot.AutoApproval = autoApproval
 		snapshot.MissionLedger = system.MissionLedger
 		if working, err := r.store.WorkingObjective(key); err != nil {
 			return core.ChatStatusSnapshot{}, err

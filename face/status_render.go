@@ -59,6 +59,9 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 		if detachedLine := renderDetachedWorkLine(snapshot); detachedLine != "" {
 			lines = append(lines, detachedLine)
 		}
+		if autoApprovalLine := renderAutoApprovalStatusLine(snapshot.AutoApproval); autoApprovalLine != "" {
+			lines = append(lines, autoApprovalLine)
+		}
 		lines = append(lines, renderToolLifecycleCurrentStateBlock(snapshot.ToolLifecycle, 5)...)
 		lines = append(lines, renderCapabilityRequestStateBlock(snapshot.CapabilityRequests, 5)...)
 		lines = append(lines, renderCapabilityGrantStateBlock(snapshot.CapabilityGrants, 5)...)
@@ -235,6 +238,28 @@ func renderDetachedWorkLine(snapshot core.ChatStatusSnapshot) string {
 		staleTurns,
 		reviews,
 	)
+}
+
+func renderAutoApprovalStatusLine(snapshot *core.AutoApprovalStatusSnapshot) string {
+	if snapshot == nil || !snapshot.Active {
+		return ""
+	}
+	line := "auto_approval status=active"
+	if scope := strings.TrimSpace(snapshot.Scope); scope != "" {
+		line += " scope=" + scope
+	}
+	if !snapshot.ExpiresAt.IsZero() {
+		line += " expires_at=" + formatStatusTime(snapshot.ExpiresAt)
+	}
+	if snapshot.MaxUses > 0 {
+		line += fmt.Sprintf(" used=%d/%d", snapshot.UsedCount, snapshot.MaxUses)
+	} else {
+		line += fmt.Sprintf(" used=%d", snapshot.UsedCount)
+	}
+	if reason := strings.TrimSpace(snapshot.Reason); reason != "" {
+		line += " reason=" + quoteStatusField(truncateStatusField(reason, 80))
+	}
+	return line
 }
 
 func chatSummaryState(snapshot core.ChatStatusSnapshot) string {

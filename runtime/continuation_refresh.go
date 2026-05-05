@@ -13,6 +13,10 @@ import (
 )
 
 func (r *Runtime) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
+	return r.refreshContinuationProposal(ctx, chatID, reason, "expired_callback", true)
+}
+
+func (r *Runtime) refreshContinuationProposal(ctx context.Context, chatID int64, reason string, refreshedFrom string, allowAutoApproval bool) (session.ContinuationState, bool, error) {
 	if r == nil || r.store == nil || r.outbound == nil {
 		return session.ContinuationState{}, false, fmt.Errorf("runtime continuation refresh dependencies are unavailable")
 	}
@@ -35,7 +39,7 @@ func (r *Runtime) RefreshContinuationProposal(ctx context.Context, chatID int64,
 		return session.ContinuationState{}, false, fmt.Errorf("persist refreshed continuation proposal: %w", err)
 	}
 	payload := continuationExecutionPayload(state)
-	payload["refreshed_from"] = "expired_callback"
+	payload["refreshed_from"] = firstNonEmptyContinuation(refreshedFrom, "continuation_refresh")
 	if trimmed := strings.TrimSpace(reason); trimmed != "" {
 		payload["refresh_reason"] = trimmed
 	}
@@ -44,7 +48,12 @@ func (r *Runtime) RefreshContinuationProposal(ctx context.Context, chatID int64,
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 
 	msg := core.InboundMessage{ChatID: chatID, Origin: core.InboundOriginTurnAuthorization, Text: "continuation proposal refresh"}
-	if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, r.renderContinuationPrompt(ctx, key, msg, state), "continuation_refresh"); err != nil {
+	text := r.renderContinuationPrompt(ctx, key, msg, state)
+	if allowAutoApproval {
+		if err := r.sendMaterializedContinuationApproval(ctx, key, msg, state, text, "continuation_refresh"); err != nil {
+			return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
+		}
+	} else if err := r.sendContinuationApprovalPrompt(ctx, key, msg, state, text); err != nil {
 		return state, false, fmt.Errorf("send refreshed continuation approval: %w", err)
 	}
 	return state, true, nil
@@ -94,11 +103,16 @@ func refreshedContinuationState(prior session.ContinuationState, reason string, 
 	state.ContinuationLease = buildContinuationLease(state.ActionProposal, turns, now)
 	state.PersonaIntent.UpdatedAt = now
 	state.GovernorIntent.UpdatedAt = now
-	if strings.TrimSpace(state.PersonaIntent.Rationale) == "" {
-		state.PersonaIntent.Rationale = "The previous approval prompt expired before it could be used."
-	}
-	if strings.TrimSpace(state.GovernorIntent.Rationale) == "" {
-		state.GovernorIntent.Rationale = "A fresh bounded lease is required before continuation authority can be granted."
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		state.PersonaIntent.Rationale = trimmed
+		state.GovernorIntent.Rationale = trimmed
+	} else {
+		if strings.TrimSpace(state.PersonaIntent.Rationale) == "" {
+			state.PersonaIntent.Rationale = "The previous approval prompt expired before it could be used."
+		}
+		if strings.TrimSpace(state.GovernorIntent.Rationale) == "" {
+			state.GovernorIntent.Rationale = "A fresh bounded lease is required before continuation authority can be granted."
+		}
 	}
 	state.PersonaIntent.Decision = session.ContinuationIntentDecisionContinue
 	state.GovernorIntent.Decision = session.ContinuationIntentDecisionContinue
@@ -123,8 +137,10 @@ func refreshedContinuationActionProposal(prior session.ContinuationState, decisi
 	if strings.TrimSpace(proposal.Summary) == "" {
 		proposal.Summary = firstNonEmptyContinuation(prior.StageSummary, prior.Objective, "Continue one bounded turn.")
 	}
-	if strings.TrimSpace(proposal.WhyNow) == "" {
-		proposal.WhyNow = firstNonEmptyContinuation(reason, "The prior approval prompt expired before approval.")
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		proposal.WhyNow = trimmed
+	} else if strings.TrimSpace(proposal.WhyNow) == "" {
+		proposal.WhyNow = "The prior approval prompt expired before approval."
 	}
 	if strings.TrimSpace(proposal.BoundedEffect) == "" {
 		proposal.BoundedEffect = "Resume one bounded continuation turn and report the result."

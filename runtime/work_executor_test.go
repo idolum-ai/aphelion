@@ -620,6 +620,132 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	}
 }
 
+func TestNativeWorkExecutorTreatsProviderFailureTurnAsFailed(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.interactiveDMAssembler = &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{
+		Text:            "Inference backend failed before provider fallback was applicable. This turn did not complete.",
+		ProviderFailure: "codex: stream failed: request error",
+		ProviderEvents: []core.ProviderEvent{
+			{EventType: "provider.error", Provider: "codex", Error: "stream failed", PartialToolCalls: 1},
+		},
+	}}
+
+	result, err := nativeWorkExecutor{runtime: rt}.Run(context.Background(), WorkRequest{
+		ChatID: 8189,
+		Actor:  principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+	})
+	if err == nil || !strings.Contains(err.Error(), "inference backend failed") {
+		t.Fatalf("Run() err = %v, want provider failure error", err)
+	}
+	if result.CompletionKind != "native_turn_provider_failed" || result.ProviderFailure == "" || !result.SideEffects {
+		t.Fatalf("result = %#v, want failed native turn marked with provider failure and side effects", result)
+	}
+	if len(result.ProviderEvents) != 1 || result.ProviderEvents[0].PartialToolCalls != 1 {
+		t.Fatalf("provider events = %#v, want captured provider event evidence", result.ProviderEvents)
+	}
+}
+
+func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	workErr := errors.New("codex stream failed after partial response")
+	work := &fakeWorkExecutor{name: "codex", ready: true, err: workErr}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8190, UserID: 0, Scope: telegramDMScopeRef(8190)}
+	prior := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "work-failure-retry",
+		Objective:      "Patch the work failure retry.",
+		StageSummary:   "Run bounded code work and report.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-work-failure-retry",
+			Summary:        "Patch work failure retry",
+			WhyNow:         "The prior approved step should run now.",
+			BoundedEffect:  "Edit runtime work executor files and run focused tests.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-failure-retry",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-work-failure-retry",
+			ProposalID:     "aprop-work-failure-retry",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"workspace_write", "run_tests"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:work-failure-retry",
+		},
+	}
+	if err := store.UpdateContinuationState(key, prior); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-work-failure-retry", Objective: "Patch the work failure retry.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	err = rt.TriggerContinuation(context.Background(), 8190)
+	if err == nil || !strings.Contains(err.Error(), workErr.Error()) {
+		t.Fatalf("TriggerContinuation() err = %v, want work executor failure", err)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusPending || got.ActionProposal.Status != session.ProposalStatusPending || got.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation = %#v, want fresh pending retry proposal", got)
+	}
+	if got.ActionProposal.ID == prior.ActionProposal.ID || got.ContinuationLease.ID == prior.ContinuationLease.ID {
+		t.Fatalf("fresh ids reused old proposal/lease: proposal=%q lease=%q", got.ActionProposal.ID, got.ContinuationLease.ID)
+	}
+	if got.ActionProposal.BoundedEffect != prior.ActionProposal.BoundedEffect || !strings.Contains(got.ActionProposal.WhyNow, "failed before completion") {
+		t.Fatalf("fresh proposal = %#v, want same bounded effect with failure reason", got.ActionProposal)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if !strings.Contains(op.Work.LastError, workErr.Error()) || !op.Work.LastCompletedAt.IsZero() {
+		t.Fatalf("operation work = %#v, want failure recorded without completion", op.Work)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline count = %d, want one retry approval prompt", len(sender.inline))
+	}
+	if !strings.Contains(sender.inline[0].text, "failed before completion") || !strings.Contains(sender.inline[0].text, prior.ActionProposal.BoundedEffect) {
+		t.Fatalf("inline text = %q, want retry reason and bounded effect", sender.inline[0].text)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorFailed) {
+		t.Fatalf("events = %#v, want work executor failure event", events)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
+		t.Fatalf("events = %#v, want no work executor success event", events)
+	}
+}
+
 func TestTriggerCodingContinuationAllowsCompoundWorkspaceRiskClass(t *testing.T) {
 	t.Parallel()
 

@@ -333,6 +333,7 @@ func (r *Runtime) runApprovedWorkContinuation(ctx context.Context, actor princip
 			payload["artifact_ref"] = artifact.Ref
 		}
 		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "failed", payload, time.Now().UTC())
+		r.offerWorkFailureRetry(ctx, key, chatID, err)
 		return err
 	}
 	if strings.TrimSpace(status.FallbackReason) != "" {
@@ -793,6 +794,28 @@ func renderWorkResultMessage(result WorkResult, artifact session.OperationArtifa
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
+func (r *Runtime) offerWorkFailureRetry(ctx context.Context, key session.SessionKey, chatID int64, cause error) {
+	if r == nil || cause == nil || chatID == 0 {
+		return
+	}
+	if r.isShuttingDown() || errors.Is(cause, context.Canceled) {
+		return
+	}
+	reason := "The approved work run failed before completion; approve this fresh lease to retry the same bounded action after reviewing the failure evidence."
+	if _, sent, refreshErr := r.refreshContinuationProposal(ctx, chatID, reason, "work_executor_failure", false); refreshErr != nil {
+		log.Printf("WARN refresh continuation after work failure failed chat_id=%d err=%v", chatID, refreshErr)
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "retry_offer_failed", map[string]any{
+			"reason": "work_executor_failure_retry_offer_failed",
+			"error":  trimError(refreshErr.Error()),
+		}, time.Now().UTC())
+	} else if sent {
+		r.recordExecutionEvent(key, core.ExecutionEventRecoveryIssued, "work", "retry_offered", map[string]any{
+			"reason": "work_executor_failure",
+			"error":  trimError(cause.Error()),
+		}, time.Now().UTC())
+	}
+}
+
 func appendOperationArtifact(values []session.OperationArtifact, artifact session.OperationArtifact) []session.OperationArtifact {
 	artifact.Ref = strings.TrimSpace(artifact.Ref)
 	if artifact.Ref == "" {
@@ -854,6 +877,8 @@ func workResultArtifactMarkdown(key session.SessionKey, req WorkRequest, result 
 	}
 	now = now.UTC()
 	if strings.TrimSpace(result.Summary) == "" &&
+		strings.TrimSpace(result.ProviderFailure) == "" &&
+		len(result.ProviderEvents) == 0 &&
 		len(result.ChangedFiles) == 0 &&
 		len(result.Commands) == 0 &&
 		len(result.CodexEvents) == 0 &&
@@ -880,6 +905,9 @@ func workResultArtifactMarkdown(key session.SessionKey, req WorkRequest, result 
 	}
 	if status.FallbackReason != "" {
 		fmt.Fprintf(&b, "- fallback_reason: %s\n", status.FallbackReason)
+	}
+	if result.ProviderFailure != "" {
+		fmt.Fprintf(&b, "- provider_failure: %s\n", trimError(result.ProviderFailure))
 	}
 	if cause != nil {
 		fmt.Fprintf(&b, "- error: %s\n", trimError(cause.Error()))
@@ -918,6 +946,38 @@ func workResultArtifactMarkdown(key session.SessionKey, req WorkRequest, result 
 				b.WriteString("\n```text\n")
 				b.WriteString(preview)
 				b.WriteString("\n```\n")
+			}
+		}
+	}
+	if len(result.ProviderEvents) > 0 {
+		b.WriteString("\n## Provider Events\n\n")
+		for _, event := range result.ProviderEvents {
+			parts := []string{}
+			for _, part := range []string{event.EventType, event.Provider, event.FromProvider, event.ToProvider, event.Reason, event.ResponseID} {
+				if trimmed := strings.TrimSpace(part); trimmed != "" {
+					parts = append(parts, trimmed)
+				}
+			}
+			if event.Attempt > 0 {
+				parts = append(parts, fmt.Sprintf("attempt=%d", event.Attempt))
+			}
+			if event.MaxRetries > 0 {
+				parts = append(parts, fmt.Sprintf("max_retries=%d", event.MaxRetries))
+			}
+			if event.PartialContentChars > 0 {
+				parts = append(parts, fmt.Sprintf("partial_content_chars=%d", event.PartialContentChars))
+			}
+			if event.PartialToolCalls > 0 {
+				parts = append(parts, fmt.Sprintf("partial_tool_calls=%d", event.PartialToolCalls))
+			}
+			if len(parts) == 0 && strings.TrimSpace(event.Error) == "" {
+				continue
+			}
+			if len(parts) > 0 {
+				fmt.Fprintf(&b, "- %s\n", strings.Join(parts, " | "))
+			}
+			if errText := strings.TrimSpace(event.Error); errText != "" {
+				fmt.Fprintf(&b, "  error: %s\n", trimError(errText))
 			}
 		}
 	}
@@ -971,6 +1031,7 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 		"preferred_executor":    strings.TrimSpace(status.Preferred),
 		"active_executor":       strings.TrimSpace(status.Active),
 		"fallback_reason":       strings.TrimSpace(status.FallbackReason),
+		"provider_events_count": len(result.ProviderEvents),
 		"changed_files_count":   len(result.ChangedFiles),
 		"commands_count":        len(result.Commands),
 		"codex_events_count":    len(result.CodexEvents),
@@ -984,6 +1045,9 @@ func workResultPayload(req WorkRequest, result WorkResult, status WorkExecutorSt
 	}
 	if strings.TrimSpace(result.CommitLaneStatus) != "" {
 		payload["commit_lane_status"] = strings.TrimSpace(result.CommitLaneStatus)
+	}
+	if strings.TrimSpace(result.ProviderFailure) != "" {
+		payload["provider_failure"] = trimError(result.ProviderFailure)
 	}
 	if cause != nil {
 		payload["error"] = trimError(cause.Error())

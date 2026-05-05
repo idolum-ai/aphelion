@@ -66,6 +66,38 @@ func TestRuntimeAutoApprovalCommandAndDecisionResolution(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventAutoApprovalUsed)
 }
 
+func TestRuntimeStatusSurfacesActiveAutoApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 99124, 1001, "30m workspace uses=3 live test window"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(99124, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if snapshot.AutoApproval == nil || !snapshot.AutoApproval.Active {
+		t.Fatalf("AutoApproval = %#v, want active snapshot", snapshot.AutoApproval)
+	}
+	if snapshot.AutoApproval.Scope != session.OperatorAutoApprovalScopeWorkspace || snapshot.AutoApproval.MaxUses != 3 || snapshot.AutoApproval.UsedCount != 0 {
+		t.Fatalf("AutoApproval = %#v, want workspace scope with 3-use budget", snapshot.AutoApproval)
+	}
+
+	diagnostics, err := rt.StatusDiagnostics(99124)
+	if err != nil {
+		t.Fatalf("StatusDiagnostics() err = %v", err)
+	}
+	if !strings.Contains(strings.Join(diagnostics, "\n"), "Auto-approval: active (workspace)") {
+		t.Fatalf("diagnostics = %#v, want auto-approval visibility", diagnostics)
+	}
+}
+
 func TestRuntimeAutoApprovalRejectsZeroUses(t *testing.T) {
 	t.Parallel()
 
