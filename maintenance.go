@@ -84,6 +84,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runVerifyDeployCommand(args[1:])
 	case "durable-agent":
 		return true, runDurableAgentCommand(args[1:])
+	case "telegram-child-bot", "synth-telegram":
+		return true, runTelegramChildBotCommand(args[1:])
 	case "version":
 		return true, runVersionCommand(args[1:])
 	default:

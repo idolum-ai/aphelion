@@ -1892,3 +1892,131 @@ func containsString(values []string, want string) bool {
 	}
 	return false
 }
+
+func TestLoadTelegramChildBotConfig(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[[telegram.child_bots]]
+agent_id = "synth"
+token_file = "./secrets/synth-token"
+chat_id = -5056905988
+respond_on = "mentions"
+enabled = true
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	if len(cfg.Telegram.ChildBots) != 1 {
+		t.Fatalf("child bots = %d, want 1", len(cfg.Telegram.ChildBots))
+	}
+	bot := cfg.Telegram.ChildBots[0]
+	if bot.AgentID != "synth" || bot.ChatID != -5056905988 || bot.RespondOn != "mentions" || !bot.Enabled {
+		t.Fatalf("child bot = %#v, want normalized synth route", bot)
+	}
+	wantTokenFile := filepath.Join(dir, "secrets", "synth-token")
+	if bot.TokenFile != wantTokenFile {
+		t.Fatalf("token file = %q, want %q", bot.TokenFile, wantTokenFile)
+	}
+}
+
+func TestLoadTelegramChildBotRejectsUnsafeOrDuplicateConfig(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name: "missing token file",
+			body: `[[telegram.child_bots]]
+agent_id = "synth"
+chat_id = -5056905988
+`,
+			wantErr: "telegram.child_bots[0].token_file is required",
+		},
+		{
+			name: "invalid respond_on",
+			body: `[[telegram.child_bots]]
+agent_id = "synth"
+token_file = "./token"
+chat_id = -5056905988
+respond_on = "sometimes"
+`,
+			wantErr: "telegram.child_bots[0].respond_on must be one of all|mentions",
+		},
+		{
+			name: "duplicate chat",
+			body: `[[telegram.child_bots]]
+agent_id = "synth"
+token_file = "./token-a"
+chat_id = -5056905988
+
+[[telegram.child_bots]]
+agent_id = "synth-2"
+token_file = "./token-b"
+chat_id = -5056905988
+`,
+			wantErr: "telegram.child_bots[1].chat_id duplicates child bot \"synth\"",
+		},
+		{
+			name: "duplicate durable group chat",
+			body: `[[telegram.durable_groups]]
+agent_id = "main-group"
+charter = "Help in the group."
+chat_id = -5056905988
+llm_backend = "codex"
+llm_codex_home = "./codex-home"
+
+[[telegram.child_bots]]
+agent_id = "synth"
+token_file = "./token"
+chat_id = -5056905988
+`,
+			wantErr: "telegram.child_bots[0].chat_id duplicates telegram.durable_groups route \"main-group\"",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.toml")
+			raw := `[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+` + tc.body
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			_, err := Load(configPath)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Load() err = %v, want substring %q", err, tc.wantErr)
+			}
+		})
+	}
+}
