@@ -347,6 +347,23 @@ Implementation should land in gated phases:
 7. **Mada intake**: consent/profile phase.
 8. **Email/job ranking**: later grants only.
 
+Repo-only status/preflight commands are deliberately metadata-only:
+
+```bash
+aphelion telegram-child-bot --config ~/.aphelion/aphelion.toml --agent synth --status
+aphelion telegram-child-bot --config ~/.aphelion/aphelion.toml --agent synth --preflight
+```
+
+Both commands must stop after route selection, token-file metadata checks, durable-agent lookup, live-policy presence, and bootstrap presence. They must not read token contents, call Telegram, poll updates, patch config, restart services, or send group messages. Their output should include `token_file_status`, `durable_agent_status`, `channel_kind`, `live_policy_status`, `bootstrap_status`, and the next gate (`get-me-smoke_requires_separate_live_approval`) without printing the token path or token contents.
+
+The next live command is separately gated:
+
+```bash
+aphelion telegram-child-bot --config ~/.aphelion/aphelion.toml --agent synth --get-me-smoke
+```
+
+That command may read the token and call Telegram `getMe` exactly once, but must not poll, send, or read group history.
+
 Each gate must report:
 
 - files changed,
@@ -479,8 +496,11 @@ A polished launch means Synth is not merely reachable. It is understandable to M
 
 #### 13. Launch runbook
 
-- Preflight: verify doc, build/tests, config, token metadata, durable child policy, Gmail auth status, no active email/web/CV grants.
-- Smoke: `getMe`, dry-start, health event, no outbound.
+- Repo-only check: run unit tests and inspect `/doctor` source projection; no runtime effects.
+- Status: run `telegram-child-bot --status`; expect metadata-only health fields and no token read.
+- Preflight: run `telegram-child-bot --preflight`; verify config, token metadata, durable child policy/bootstrap, Gmail auth status, and no active email/web/CV grants.
+- Smoke: after separate live approval, run `--get-me-smoke`; verify Synth bot identity; no polling, outbound, or group history.
+- Dry-start: after separate approval, start runner with `respond_on=mentions`; verify health event and no outbound unless mentioned.
 - Onboarding: Daniel approves one message; Synth posts; Daniel receives high-level health summary.
 - Intake: Mada opts in; Synth asks profile questions; no email/web until later gates.
 - First digest: only after approved profile + email/web grant + test job forwards.

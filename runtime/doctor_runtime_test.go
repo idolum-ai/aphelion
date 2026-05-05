@@ -13,6 +13,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func TestDoctorTelegramSummarySystemNoteUsesOutcomeStructure(t *testing.T) {
@@ -439,6 +440,35 @@ func TestDoctorCodexWorkMigrationReviewReportsPersistedInterfaceEvidence(t *test
 		if !strings.Contains(report, want) {
 			t.Fatalf("migration review missing %s:\n%s", want, report)
 		}
+	}
+}
+
+func TestDoctorIssueStatusChecksProjectSynthTelegramRunnerReadiness(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, _, _ := buildRuntimeFixtures(t)
+	if err := os.WriteFile(filepath.Join(cfg.Agent.ExecRoot, "main_telegram_child_bot.go"), []byte(`package main
+func runTelegramChildBotCommandWithDeps(){}
+func validateTelegramChildBotTokenMetadata(){}
+type telegramChildBotHealthStatus struct{}
+func runTelegramChildBotGetMeSmoke(){}
+`), 0o600); err != nil {
+		t.Fatalf("write runner source: %v", err)
+	}
+	docDir := filepath.Join(cfg.Agent.ExecRoot, "docs", "architecture")
+	if err := os.MkdirAll(docDir, 0o755); err != nil {
+		t.Fatalf("mkdir doc dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docDir, "synth-telegram-bot-subsystem-plan.md"), []byte("## Validation gates\n## Launch runbook\naphelion telegram-child-bot status\n"), 0o600); err != nil {
+		t.Fatalf("write runner runbook: %v", err)
+	}
+
+	rt := &Runtime{cfg: cfg}
+	var b strings.Builder
+	rt.writeDoctorIssueStatusChecks(&b, doctorDiagnosticInput{Scope: sandbox.Scope{WorkingRoot: cfg.Agent.ExecRoot}})
+	report := b.String()
+	if !strings.Contains(report, `issue=synth_telegram_child_bot_runner status=likely_fixed`) {
+		t.Fatalf("doctor issue checks = %s, want Synth runner likely_fixed", report)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -70,6 +71,7 @@ func runTelegramChildBotCommandWithDeps(args []string, deps telegramChildBotDeps
 	respondOnFlag := fs.String("respond-on", "", "group admission mode: mentions or all")
 	reviewTargetFlag := fs.Int64("review-target-chat-id", 0, "parent review Telegram chat id")
 	preflight := fs.Bool("preflight", false, "validate config/token metadata/durable agent and exit without reading token or calling Telegram")
+	statusOnly := fs.Bool("status", false, "print child bot health/status without reading token or calling Telegram")
 	getMeSmoke := fs.Bool("get-me-smoke", false, "read token and call Telegram getMe once, then exit without polling or sending messages")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -107,15 +109,12 @@ func runTelegramChildBotCommandWithDeps(args []string, deps telegramChildBotDeps
 		return err
 	}
 
-	if *preflight {
-		fmt.Fprintf(os.Stdout, "action: telegram-child-bot preflight\n")
-		fmt.Fprintf(os.Stdout, "config: %s\n", configPath)
-		fmt.Fprintf(os.Stdout, "agent_id: %s\n", route.AgentID)
-		fmt.Fprintf(os.Stdout, "chat_id: %d\n", route.ChatID)
-		fmt.Fprintf(os.Stdout, "respond_on: %s\n", route.RespondOn)
-		fmt.Fprintf(os.Stdout, "review_target_chat_id: %d\n", route.ReviewTargetChatID)
-		fmt.Fprintf(os.Stdout, "token_file_status: metadata_ok\n")
-		fmt.Fprintf(os.Stdout, "status: ok\n")
+	if *preflight || *statusOnly {
+		action := "telegram-child-bot preflight"
+		if *statusOnly {
+			action = "telegram-child-bot status"
+		}
+		printTelegramChildBotHealthStatus(os.Stdout, action, configPath, route, agentRow)
 		return nil
 	}
 
@@ -292,6 +291,67 @@ func validateTelegramChildBotRouteAgainstAgent(route telegramChildBotRoute, agen
 		return fmt.Errorf("telegram child bot agent %q requires a live policy charter", route.AgentID)
 	}
 	return nil
+}
+
+type telegramChildBotHealthStatus struct {
+	Action             string
+	ConfigPath         string
+	AgentID            string
+	ChatID             int64
+	RespondOn          string
+	ReviewTargetChatID int64
+	TokenFileStatus    string
+	DurableAgentStatus string
+	ChannelKind        string
+	LivePolicyStatus   string
+	BootstrapStatus    string
+	NextGate           string
+}
+
+func buildTelegramChildBotHealthStatus(action string, configPath string, route telegramChildBotRoute, agentRow core.DurableAgent) telegramChildBotHealthStatus {
+	policyStatus := "missing"
+	if strings.TrimSpace(agentRow.LivePolicy.Charter) != "" {
+		policyStatus = "configured"
+	}
+	bootstrapStatus := "missing"
+	if core.NormalizeNodeLLMBootstrap(agentRow.BootstrapLLM).Configured() {
+		bootstrapStatus = "configured"
+	}
+	agentStatus := strings.TrimSpace(agentRow.Status)
+	if agentStatus == "" {
+		agentStatus = "active"
+	}
+	return telegramChildBotHealthStatus{
+		Action:             strings.TrimSpace(action),
+		ConfigPath:         strings.TrimSpace(configPath),
+		AgentID:            strings.TrimSpace(route.AgentID),
+		ChatID:             route.ChatID,
+		RespondOn:          strings.TrimSpace(route.RespondOn),
+		ReviewTargetChatID: route.ReviewTargetChatID,
+		TokenFileStatus:    "metadata_ok",
+		DurableAgentStatus: agentStatus,
+		ChannelKind:        strings.TrimSpace(agentRow.ChannelKind),
+		LivePolicyStatus:   policyStatus,
+		BootstrapStatus:    bootstrapStatus,
+		NextGate:           "get-me-smoke_requires_separate_live_approval",
+	}
+}
+
+func printTelegramChildBotHealthStatus(w io.Writer, action string, configPath string, route telegramChildBotRoute, agentRow core.DurableAgent) {
+	health := buildTelegramChildBotHealthStatus(action, configPath, route, agentRow)
+	fmt.Fprintf(w, "action: %s\n", health.Action)
+	fmt.Fprintf(w, "config: %s\n", health.ConfigPath)
+	fmt.Fprintf(w, "agent_id: %s\n", health.AgentID)
+	fmt.Fprintf(w, "chat_id: %d\n", health.ChatID)
+	fmt.Fprintf(w, "respond_on: %s\n", health.RespondOn)
+	fmt.Fprintf(w, "review_target_chat_id: %d\n", health.ReviewTargetChatID)
+	fmt.Fprintf(w, "token_file_status: %s\n", health.TokenFileStatus)
+	fmt.Fprintf(w, "durable_agent_status: %s\n", health.DurableAgentStatus)
+	fmt.Fprintf(w, "channel_kind: %s\n", health.ChannelKind)
+	fmt.Fprintf(w, "live_policy_status: %s\n", health.LivePolicyStatus)
+	fmt.Fprintf(w, "bootstrap_status: %s\n", health.BootstrapStatus)
+	fmt.Fprintf(w, "next_gate: %s\n", health.NextGate)
+	fmt.Fprintf(w, "status: ok\n")
 }
 
 func runTelegramChildBotGetMeSmoke(ctx context.Context, client *telegram.Client, route telegramChildBotRoute, configPath string) error {

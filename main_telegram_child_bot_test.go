@@ -53,6 +53,11 @@ func TestTelegramChildBotPreflightDoesNotReadTokenOrPoll(t *testing.T) {
 		"chat_id: -5056905988",
 		"respond_on: mentions",
 		"token_file_status: metadata_ok",
+		"durable_agent_status: active",
+		"channel_kind: telegram_group",
+		"live_policy_status: configured",
+		"bootstrap_status: configured",
+		"next_gate: get-me-smoke_requires_separate_live_approval",
 		"status: ok",
 	} {
 		if !strings.Contains(out, want) {
@@ -61,6 +66,53 @@ func TestTelegramChildBotPreflightDoesNotReadTokenOrPoll(t *testing.T) {
 	}
 	if strings.Contains(out, "123:SECRET") {
 		t.Fatalf("preflight output leaked token: %q", out)
+	}
+}
+
+func TestTelegramChildBotStatusDoesNotReadTokenOrPoll(t *testing.T) {
+	t.Parallel()
+
+	fixture := writeTelegramChildBotFixture(t, "telegram_group", "active", 0o600)
+	readCalled := false
+	pollCalled := false
+	out, err := captureStdout(t, func() error {
+		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--status"}, telegramChildBotDeps{
+			Stat: os.Stat,
+			ReadFile: func(string) ([]byte, error) {
+				readCalled = true
+				return nil, errors.New("token should not be read during status")
+			},
+			RunPoller: func(context.Context, *telegram.Client, core.DurableAgent, telegramChildBotRoute, *config.Config, *session.SQLiteStore) error {
+				pollCalled = true
+				return errors.New("poller should not run during status")
+			},
+		})
+	})
+	if err != nil {
+		t.Fatalf("runTelegramChildBotCommandWithDeps() err = %v", err)
+	}
+	if readCalled {
+		t.Fatal("status read token file; want metadata only")
+	}
+	if pollCalled {
+		t.Fatal("status ran poller; want validation only")
+	}
+	for _, want := range []string{
+		"action: telegram-child-bot status",
+		"agent_id: synth",
+		"token_file_status: metadata_ok",
+		"durable_agent_status: active",
+		"channel_kind: telegram_group",
+		"live_policy_status: configured",
+		"bootstrap_status: configured",
+		"next_gate: get-me-smoke_requires_separate_live_approval",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("status output = %q, want substring %q", out, want)
+		}
+	}
+	if strings.Contains(out, "123:SECRET") || strings.Contains(out, fixture.tokenPath) {
+		t.Fatalf("status output leaked token or token path: %q", out)
 	}
 }
 
