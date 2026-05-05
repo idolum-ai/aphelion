@@ -1,0 +1,16 @@
+[Unit]
+Description=Aphelion Telegram Child Bot (@AGENT_ID@)
+After=network-online.target aphelion.service
+Wants=network-online.target
+PartOf=aphelion.service
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKDIR@
+ExecStart=@EXEC_PATH@ telegram-child-bot --config @CONFIG_PATH@ --agent @AGENT_ID@ @RUN_FLAGS@
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=default.target

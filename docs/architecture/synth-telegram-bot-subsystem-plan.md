@@ -401,7 +401,7 @@ Failure should emit a health/audit event to parent review target and should not 
 
 ## Rollback
 
-- Stop/disable `aphelion-synth-telegram.service`.
+- Stop/disable the child bot user service installed from `deploy/aphelion-telegram-child-bot.service`.
 - Remove or disable `[[telegram.child_bots]]` entry if added.
 - Revoke Synth Telegram token in BotFather if compromised.
 - Keep durable child `synth` state intact unless Daniel/Mada request deletion.
@@ -510,6 +510,7 @@ A polished launch means Synth is not merely reachable. It is understandable to M
 - Preflight: run `telegram-child-bot --preflight`; verify config, token metadata, durable child policy/bootstrap, Gmail auth status, and no active email/web/CV grants.
 - Smoke: after separate live approval, run `--get-me-smoke`; verify Synth bot identity; no polling, outbound, or group history.
 - Dry-start: after separate approval, run `--dry-start` first; then use `--no-send` for live polling tests and verify no outbound even when mentioned.
+- Service template: start from `deploy/aphelion-telegram-child-bot.service`; set `@RUN_FLAGS@` to `--no-send` for dry live polling and remove it only under the separate onboarding/reply gate.
 - Onboarding: Daniel approves one message; Synth posts; Daniel receives high-level health summary.
 - Intake: Mada opts in; Synth asks profile questions; no email/web until later gates.
 - First digest: only after approved profile + email/web grant + test job forwards.
