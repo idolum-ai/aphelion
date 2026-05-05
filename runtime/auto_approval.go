@@ -46,18 +46,18 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 	case "status":
 		return r.renderOperatorAutoApprovalStatus(chatID, adminUserID, now)
 	case "off":
-		count, err := r.store.RevokeOperatorAutoApprovalLeases(chatID, adminUserID, now)
+		revoked, err := r.store.RevokeOperatorAutoApprovalLeases(chatID, adminUserID, now)
 		if err != nil {
 			return "", err
 		}
-		r.recordOperatorAutoApprovalEvent(chatID, core.ExecutionEventAutoApprovalRevoked, "revoked", session.OperatorAutoApprovalLease{
-			AdminUserID: adminUserID,
-			ChatID:      chatID,
-		}, map[string]any{"revoked_count": count})
-		if count == 0 {
-			return "No active auto-approval lease was found for this chat.", nil
-		}
-		return fmt.Sprintf("Auto-approval revoked for this chat. Revoked leases: %d.", count), nil
+		r.recordOperatorAutoApprovalEvent(
+			chatID,
+			core.ExecutionEventAutoApprovalRevoked,
+			"revoked",
+			operatorAutoApprovalPrimaryLease(revoked, chatID, adminUserID),
+			operatorAutoApprovalRevokedEventPayload(revoked, now),
+		)
+		return renderOperatorAutoApprovalRevoked(revoked, now), nil
 	case "enable":
 		lease := session.OperatorAutoApprovalLease{
 			ID:          newOperatorAutoApprovalLeaseID(chatID, adminUserID, now),
@@ -381,6 +381,116 @@ func newOperatorAutoApprovalLeaseID(chatID int64, adminUserID int64, now time.Ti
 	return fmt.Sprintf("auto-%d-%d-%d", adminUserID, chatID, now.UTC().UnixNano())
 }
 
+func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
+	if len(leases) == 0 {
+		return "Auto-approval is already off for this chat."
+	}
+	active := operatorAutoApprovalActiveLeases(leases, now)
+	if len(active) > 0 {
+		return "Auto-approval is off for this chat. Cleared: " + operatorAutoApprovalGrantSummary(active) + "."
+	}
+	latest := session.NormalizeOperatorAutoApprovalLease(leases[0])
+	detail := operatorAutoApprovalClearedOldGrantDetail(leases)
+	switch {
+	case !latest.ExpiresAt.IsZero() && !latest.ExpiresAt.After(now.UTC()):
+		return "Auto-approval was already expired. I cleared the old " + operatorAutoApprovalGrantNoun(leases) + detail + "."
+	case latest.MaxUses > 0 && latest.UsedCount >= latest.MaxUses:
+		return "Auto-approval was already spent. I cleared the old " + operatorAutoApprovalGrantNoun(leases) + detail + "."
+	default:
+		return "Auto-approval is off for this chat. I cleared the old " + operatorAutoApprovalGrantNoun(leases) + detail + "."
+	}
+}
+
+func operatorAutoApprovalActiveLeases(leases []session.OperatorAutoApprovalLease, now time.Time) []session.OperatorAutoApprovalLease {
+	out := make([]session.OperatorAutoApprovalLease, 0, len(leases))
+	for _, lease := range leases {
+		lease = session.NormalizeOperatorAutoApprovalLease(lease)
+		if lease.ActiveAt(now) {
+			out = append(out, lease)
+		}
+	}
+	return out
+}
+
+func operatorAutoApprovalClearedOldGrantDetail(leases []session.OperatorAutoApprovalLease) string {
+	if len(leases) != 1 {
+		return ""
+	}
+	return ": " + operatorAutoApprovalGrantSummary(leases)
+}
+
+func operatorAutoApprovalGrantSummary(leases []session.OperatorAutoApprovalLease) string {
+	if len(leases) == 0 {
+		return "0 grants"
+	}
+	if len(leases) > 1 {
+		return fmt.Sprintf("%d grants", len(leases))
+	}
+	lease := session.NormalizeOperatorAutoApprovalLease(leases[0])
+	used := fmt.Sprintf("used %d %s", lease.UsedCount, pluralWord(lease.UsedCount, "time", "times"))
+	if lease.MaxUses > 0 {
+		used = fmt.Sprintf("used %d/%d", lease.UsedCount, lease.MaxUses)
+	}
+	return operatorAutoApprovalScopeLabel(lease.Scope) + ", " + used
+}
+
+func operatorAutoApprovalScopeLabel(scope string) string {
+	switch session.NormalizeOperatorAutoApprovalScope(scope) {
+	case session.OperatorAutoApprovalScopeWorkspace:
+		return "workspace prompts"
+	case session.OperatorAutoApprovalScopeDeploy:
+		return "deploy/restart prompts"
+	default:
+		return "all prompts"
+	}
+}
+
+func operatorAutoApprovalGrantNoun(leases []session.OperatorAutoApprovalLease) string {
+	if len(leases) == 1 {
+		return "grant"
+	}
+	return "grants"
+}
+
+func pluralWord(count int, singular string, plural string) string {
+	if count == 1 {
+		return singular
+	}
+	return plural
+}
+
+func operatorAutoApprovalPrimaryLease(leases []session.OperatorAutoApprovalLease, chatID int64, adminUserID int64) session.OperatorAutoApprovalLease {
+	if len(leases) > 0 {
+		return session.NormalizeOperatorAutoApprovalLease(leases[0])
+	}
+	return session.OperatorAutoApprovalLease{
+		AdminUserID: adminUserID,
+		ChatID:      chatID,
+	}
+}
+
+func operatorAutoApprovalRevokedEventPayload(leases []session.OperatorAutoApprovalLease, now time.Time) map[string]any {
+	ids := make([]string, 0, len(leases))
+	activeCount := 0
+	for _, lease := range leases {
+		lease = session.NormalizeOperatorAutoApprovalLease(lease)
+		if lease.ID != "" {
+			ids = append(ids, lease.ID)
+		}
+		if lease.ActiveAt(now) {
+			activeCount++
+		}
+	}
+	payload := map[string]any{
+		"revoked_count":        len(leases),
+		"revoked_active_count": activeCount,
+	}
+	if len(ids) > 0 {
+		payload["revoked_lease_ids"] = ids
+	}
+	return payload
+}
+
 func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, now time.Time) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
 	parts := []string{
@@ -422,7 +532,7 @@ func renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApproval
 	} else if lease.ExpiresAt.After(now) {
 		reason = "inactive"
 	}
-	return "Auto-approval is inactive for this chat. Last lease: " + reason + "."
+	return "Auto-approval is inactive for this chat. Last grant: " + reason + "."
 }
 
 func roundDuration(d time.Duration) string {

@@ -84,8 +84,8 @@ func TestOperatorAutoApprovalLeaseLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RevokeOperatorAutoApprovalLeases() err = %v", err)
 	}
-	if revoked != 1 {
-		t.Fatalf("revoked = %d, want 1", revoked)
+	if len(revoked) != 1 || revoked[0].ID != "auto-test" {
+		t.Fatalf("revoked = %#v, want auto-test", revoked)
 	}
 }
 

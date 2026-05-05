@@ -66,6 +66,113 @@ func TestRuntimeAutoApprovalCommandAndDecisionResolution(t *testing.T) {
 	assertHasEventType(t, events, core.ExecutionEventAutoApprovalUsed)
 }
 
+func TestRuntimeAutoApprovalOffRendersClearedGrantAndAuditsLeaseID(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 99125, 1001, "15m all live test window"); err != nil {
+		t.Fatalf("ConfigureAutoApproval(enable) err = %v", err)
+	}
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-auto-off",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99125,
+			SenderID:      1002,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "approve" {
+		t.Fatalf("auto resolution = %#v, want approve", result)
+	}
+
+	text, err := rt.ConfigureAutoApproval(context.Background(), 99125, 1001, "off")
+	if err != nil {
+		t.Fatalf("ConfigureAutoApproval(off) err = %v", err)
+	}
+	if text != "Auto-approval is off for this chat. Cleared: all prompts, used 1 time." {
+		t.Fatalf("off text = %q, want human grant summary", text)
+	}
+	if strings.Contains(strings.ToLower(text), "lease") || strings.Contains(text, "Revoked leases") {
+		t.Fatalf("off text = %q, want no operator-facing lease wording", text)
+	}
+
+	key := session.SessionKey{ChatID: 99125, UserID: 0, Scope: telegramDMScopeRef(99125)}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var revoked session.ExecutionEvent
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventAutoApprovalRevoked {
+			revoked = event
+		}
+	}
+	if revoked.ID == 0 {
+		t.Fatalf("events = %#v, want auto-approval revoked event", events)
+	}
+	payload := executionEventPayload(revoked.PayloadJSON)
+	leaseID := payloadString(payload, "lease_id")
+	if leaseID == "" {
+		t.Fatalf("revoked payload = %#v, want primary lease_id for audit", payload)
+	}
+	ids := payloadStringSlice(payload, "revoked_lease_ids")
+	if len(ids) != 1 || ids[0] != leaseID {
+		t.Fatalf("revoked_lease_ids = %#v lease_id=%q, want matching audit id", ids, leaseID)
+	}
+	if count, ok := payloadInt64(payload, "revoked_count"); !ok || count != 1 {
+		t.Fatalf("revoked_count = %d ok=%v, want 1", count, ok)
+	}
+	if count, ok := payloadInt64(payload, "revoked_active_count"); !ok || count != 1 {
+		t.Fatalf("revoked_active_count = %d ok=%v, want 1", count, ok)
+	}
+}
+
+func TestRuntimeAutoApprovalOffExplainsExpiredOldGrant(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "auto-expired-off",
+		AdminUserID: 1001,
+		ChatID:      99126,
+		Scope:       session.OperatorAutoApprovalScopeWorkspace,
+		UsedCount:   2,
+		CreatedAt:   now.Add(-2 * time.Hour),
+		ExpiresAt:   now.Add(-time.Hour),
+		UpdatedAt:   now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
+	}
+
+	text, err := rt.ConfigureAutoApproval(context.Background(), 99126, 1001, "off")
+	if err != nil {
+		t.Fatalf("ConfigureAutoApproval(off) err = %v", err)
+	}
+	if text != "Auto-approval was already expired. I cleared the old grant: workspace prompts, used 2 times." {
+		t.Fatalf("off text = %q, want expired old-grant summary", text)
+	}
+	if strings.Contains(strings.ToLower(text), "lease") || strings.Contains(text, "Revoked leases") {
+		t.Fatalf("off text = %q, want no operator-facing lease wording", text)
+	}
+}
+
 func TestRuntimeStatusSurfacesActiveAutoApproval(t *testing.T) {
 	t.Parallel()
 

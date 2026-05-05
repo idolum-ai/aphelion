@@ -164,26 +164,62 @@ func (s *SQLiteStore) IncrementOperatorAutoApprovalUse(id string, now time.Time)
 	return lease, ok, nil
 }
 
-func (s *SQLiteStore) RevokeOperatorAutoApprovalLeases(chatID int64, adminUserID int64, now time.Time) (int, error) {
+func (s *SQLiteStore) RevokeOperatorAutoApprovalLeases(chatID int64, adminUserID int64, now time.Time) ([]OperatorAutoApprovalLease, error) {
 	if chatID == 0 || adminUserID <= 0 {
-		return 0, nil
+		return nil, nil
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	res, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin revoke operator auto approval leases: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`
+		SELECT lease_id, admin_user_id, chat_id, scope, reason, max_uses, used_count,
+			created_at, expires_at, revoked_at, updated_at
+		FROM operator_auto_approvals
+		WHERE chat_id = ? AND admin_user_id = ? AND revoked_at IS NULL
+		ORDER BY updated_at DESC, created_at DESC, lease_id DESC
+	`, chatID, adminUserID)
+	if err != nil {
+		return nil, fmt.Errorf("query operator auto approval leases to revoke: %w", err)
+	}
+	leases := make([]OperatorAutoApprovalLease, 0)
+	for rows.Next() {
+		lease, err := scanOperatorAutoApprovalLease(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		leases = append(leases, lease)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close operator auto approval revoke rows: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate operator auto approval leases to revoke: %w", err)
+	}
+	if len(leases) == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit empty operator auto approval revoke: %w", err)
+		}
+		return nil, nil
+	}
+
+	if _, err := tx.Exec(`
 		UPDATE operator_auto_approvals
 		SET revoked_at = ?, updated_at = ?
 		WHERE chat_id = ? AND admin_user_id = ? AND revoked_at IS NULL
-	`, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), chatID, adminUserID)
-	if err != nil {
-		return 0, fmt.Errorf("revoke operator auto approval leases: %w", err)
+	`, now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), chatID, adminUserID); err != nil {
+		return nil, fmt.Errorf("revoke operator auto approval leases: %w", err)
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("operator auto approval revoke rows affected: %w", err)
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit operator auto approval revoke: %w", err)
 	}
-	return int(affected), nil
+	return leases, nil
 }
 
 type operatorAutoApprovalLeaseScanner interface {
