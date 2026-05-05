@@ -511,6 +511,64 @@ func TestMaterializePhasePlanRecoversCurrentPhaseAfterRevokedLease(t *testing.T)
 	}
 }
 
+func TestMaterializeMetadataPreflightPhaseUsesReadOnlyContract(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9033, UserID: 0, Scope: telegramDMScopeRef(9033)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "metadata-preflight-op",
+		Objective: "Run a metadata-only preflight.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "metadata-preflight-plan",
+			CurrentPhaseID: "phase-metadata",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-metadata",
+				Summary:        "Live-adjacent metadata preflight. Prior diagnostic mentioned workspace_write mismatch.",
+				Status:         session.PlanStatusPending,
+				AuthorityClass: session.AuthorityClassLocalSecretMetadataReadLiveConfigRead,
+				BoundedEffect:  "Inspect config route and token-file metadata only; no token contents and no Telegram network.",
+				AllowedActions: []string{"report_button_diagnosis"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9033, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want metadata phase prompt")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if mode := continuationWorkMode(cont); mode != WorkModeReadOnly {
+		t.Fatalf("continuationWorkMode() = %q, want read_only", mode)
+	}
+	if !actionListContains(cont.ContinuationLease.AllowedActions, session.AuthorityWorkActionReadOnly) {
+		t.Fatalf("lease allowed actions = %#v, want read_only", cont.ContinuationLease.AllowedActions)
+	}
+	if actionListContains(cont.ContinuationLease.AllowedActions, string(WorkModeWorkspaceWrite)) {
+		t.Fatalf("lease allowed actions = %#v, should not allow workspace_write", cont.ContinuationLease.AllowedActions)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want real approval buttons", inlineCount)
+	}
+}
+
 func TestMaterializePlanningOnlyPhaseOffersPlanBudget(t *testing.T) {
 	t.Parallel()
 
@@ -741,6 +799,67 @@ func TestMaterializePlanLeaseUsesAutoApprovalInsteadOfSuppressingPrompt(t *testi
 	}
 	if len(leases) != 1 || leases[0].UsedCount != 1 {
 		t.Fatalf("autoapproval leases = %#v, want one consumed use", leases)
+	}
+}
+
+func TestMaterializeVisibleButtonRequestBypassesAutoApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 9034, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9034, UserID: 0, Scope: telegramDMScopeRef(9034)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "visible-buttons-op",
+		Objective: "Ask for real visible approval buttons.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_approval",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "visible-buttons-plan",
+			CurrentPhaseID: "phase-visible",
+			Phases: []session.OperationPhase{{
+				ID:               "phase-visible",
+				Summary:          "Read status only",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "read_only_review",
+				RequiresApproval: true,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9034, SenderID: 1001, Text: "send me request for approval with buttons", MessageID: 1}, "send me request for approval with buttons", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want visible approval prompt")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want real buttons despite active autoapproval", inlineCount)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending {
+		t.Fatalf("continuation status = %q, want pending visible button prompt", cont.Status)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(9034, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 0 {
+		t.Fatalf("autoapproval leases = %#v, want no consumed use", leases)
 	}
 }
 

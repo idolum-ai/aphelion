@@ -615,6 +615,7 @@ func buildContinuationActionProposal(decisionID string, consensus continuationCo
 
 func applyContinuationLeaseClassBoundaries(action session.ActionProposal) session.ActionProposal {
 	action = session.NormalizeActionProposal(action)
+	action = session.ApplyAuthorityContractToActionProposal(action)
 	class := session.InferContinuationLeaseClass(action.RiskClass, action.AllowedActions, action.BoundedEffect)
 	switch class {
 	case session.ContinuationLeaseClassDataAccess:
@@ -691,7 +692,7 @@ func buildContinuationLease(proposal session.ActionProposal, turns int, now time
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	proposal = session.NormalizeActionProposal(proposal)
+	proposal = session.ApplyAuthorityContractToActionProposal(proposal)
 	if turns <= 0 {
 		turns = 1
 	}

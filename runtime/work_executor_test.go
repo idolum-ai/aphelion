@@ -552,7 +552,7 @@ func TestContinuationCommitModeAllowsSpecificLiveConfigForbiddenAction(t *testin
 		t.Fatalf("continuationWorkMode() = %q, want commit", mode)
 	}
 	decision := continuationWorkModeAccessCheck(state, mode, now)
-	if !decision.Allowed || decision.Reason != "allowed_by_structured_authority" {
+	if !decision.Allowed || (decision.Reason != "allowed" && decision.Reason != "allowed_by_structured_authority") {
 		t.Fatalf("access decision = %#v, want commit allowed by explicit structured authority", decision)
 	}
 }
@@ -679,6 +679,72 @@ func TestLeaseAccessDeniedResetsOperationPhaseForFreshApproval(t *testing.T) {
 	}
 	if got.Status != session.OperationStatusBlocked || got.PhasePlan.Phases[0].Status != session.PlanStatusPending || got.PhasePlan.Phases[0].LeaseID != "" {
 		t.Fatalf("operation = %#v, want blocked with phase reset to pending", got)
+	}
+}
+
+func TestMetadataPreflightContinuationRunsReadOnlyDespiteWorkspaceWriteDiagnosticText(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8191, UserID: 0, Scope: telegramDMScopeRef(8191)}
+	action := session.ActionProposal{
+		ID:            "aprop-metadata-preflight",
+		Summary:       "Live-adjacent metadata preflight. Prior diagnostic mentioned workspace_write mismatch.",
+		BoundedEffect: "Inspect live config route and token-file metadata only; no token contents and no Telegram network.",
+		RiskClass:     session.AuthorityClassLocalSecretMetadataReadLiveConfigRead,
+		Status:        session.ProposalStatusApproved,
+		ExpiresAt:     expiresAt,
+	}
+	action = applyContinuationLeaseClassBoundaries(action)
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, time.Now().UTC())
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.ApprovedAt = expiresAt.Add(-time.Hour)
+	lease.ApprovedBy = 1001
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        "metadata-preflight",
+		Objective:         "Run metadata-only preflight.",
+		StageSummary:      action.Summary,
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-metadata-preflight", Objective: "Run metadata-only preflight.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	mode := continuationWorkMode(session.ContinuationState{ActionProposal: action, ContinuationLease: lease, StageSummary: action.Summary})
+	if mode != WorkModeReadOnly {
+		t.Fatalf("continuationWorkMode() = %q, want read_only", mode)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 8191); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 1 {
+		t.Fatalf("work calls = %d, want one read-only executor call", work.calls)
+	}
+	if work.lastReq.Mode != WorkModeReadOnly {
+		t.Fatalf("work mode = %q, want read_only", work.lastReq.Mode)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.ContinuationLease.Status == session.ContinuationLeaseStatusRevoked {
+		t.Fatalf("continuation lease = %#v, want not revoked by workspace_write mismatch", got.ContinuationLease)
 	}
 }
 

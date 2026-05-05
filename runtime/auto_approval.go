@@ -108,6 +108,9 @@ func (r *Runtime) maybeAutoApproveContinuationOffer(ctx context.Context, key ses
 	if state.Status != session.ContinuationStatusPending || state.RemainingTurns <= 0 {
 		return false, nil
 	}
+	if inboundRequestsVisibleApprovalButtons(msg.Text) {
+		return false, nil
+	}
 	lease, ok, err := r.consumeOperatorAutoApproval(ctx, operatorAutoApprovalRequest{
 		ChatID:     key.ChatID,
 		Kind:       "continuation:" + strings.TrimSpace(source),
@@ -130,6 +133,16 @@ func (r *Runtime) maybeAutoApproveContinuationOffer(ctx context.Context, key ses
 	}
 	_ = msg
 	return true, nil
+}
+
+func inboundRequestsVisibleApprovalButtons(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" || !strings.Contains(lower, "button") {
+		return false
+	}
+	return strings.Contains(lower, "approval") ||
+		strings.Contains(lower, "approve") ||
+		strings.Contains(lower, "request")
 }
 
 func (r *Runtime) triggerAutoApprovedContinuation(ctx context.Context, key session.SessionKey, state session.ContinuationState, lease session.OperatorAutoApprovalLease) {

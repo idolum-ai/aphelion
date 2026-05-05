@@ -117,3 +117,27 @@ func TestContinuationLeaseClassInferenceAndBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthorityContractMapsLocalSecretMetadataReadToReadOnlyDataAccess(t *testing.T) {
+	contract, ok := AuthorityContractForToken(AuthorityClassLocalSecretMetadataReadLiveConfigRead)
+	if !ok {
+		t.Fatal("AuthorityContractForToken(metadata) ok = false, want true")
+	}
+	if contract.LeaseClass != ContinuationLeaseClassDataAccess || contract.WorkAction != AuthorityWorkActionReadOnly {
+		t.Fatalf("contract = %#v, want data-access/read-only", contract)
+	}
+	if got := InferContinuationLeaseClass(AuthorityClassLocalSecretMetadataReadLiveConfigRead, nil, "metadata-only config preflight"); got != ContinuationLeaseClassDataAccess {
+		t.Fatalf("InferContinuationLeaseClass() = %q, want %q", got, ContinuationLeaseClassDataAccess)
+	}
+	proposal := ApplyAuthorityContractToActionProposal(ActionProposal{
+		RiskClass:     AuthorityClassLocalSecretMetadataReadLiveConfigRead,
+		Summary:       "Metadata-only preflight; prior diagnostic mentioned workspace_write mismatch.",
+		BoundedEffect: "Inspect token-file metadata only.",
+	})
+	if !actionListMatches(proposal.AllowedActions, AuthorityWorkActionReadOnly) {
+		t.Fatalf("allowed actions = %#v, want read_only", proposal.AllowedActions)
+	}
+	if !actionListMatches(proposal.ForbiddenActions, "telegram_api_call") || !actionListMatches(proposal.ForbiddenActions, "read_token_contents") {
+		t.Fatalf("forbidden actions = %#v, want live-effect and token-content denials", proposal.ForbiddenActions)
+	}
+}

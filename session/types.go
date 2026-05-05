@@ -2029,7 +2029,9 @@ func NormalizeContinuationLeaseClass(class ContinuationLeaseClass) ContinuationL
 }
 
 func InferContinuationLeaseClass(riskClass string, allowedActions []string, boundedEffect string) ContinuationLeaseClass {
-	_ = boundedEffect
+	if contract, ok := AuthorityContractFor(riskClass, allowedActions, boundedEffect); ok && contract.LeaseClass != "" {
+		return contract.LeaseClass
+	}
 	text := normalizeEnumValue(strings.Join(append([]string{riskClass}, allowedActions...), " "))
 	if text == "" {
 		return ""

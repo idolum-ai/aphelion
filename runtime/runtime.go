@@ -571,6 +571,11 @@ func workModeFromStructuredAuthorityList(values []string) WorkMode {
 
 func workModeFromStructuredAuthority(value string) WorkMode {
 	token := normalizeWorkModeAuthorityToken(value)
+	if contract, ok := session.AuthorityContractForToken(token); ok {
+		if mode := workModeFromAuthorityContractAction(contract.WorkAction); mode != "" {
+			return mode
+		}
+	}
 	switch token {
 	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart":
 		return WorkModeDeploy
@@ -607,6 +612,21 @@ func workModeFromStructuredAuthority(value string) WorkMode {
 		default:
 			return ""
 		}
+	}
+}
+
+func workModeFromAuthorityContractAction(action string) WorkMode {
+	switch normalizeWorkModeAuthorityToken(action) {
+	case session.AuthorityWorkActionDeploy:
+		return WorkModeDeploy
+	case session.AuthorityWorkActionCommit:
+		return WorkModeCommit
+	case session.AuthorityWorkActionWorkspaceWrite:
+		return WorkModeWorkspaceWrite
+	case session.AuthorityWorkActionReadOnly:
+		return WorkModeReadOnly
+	default:
+		return ""
 	}
 }
 

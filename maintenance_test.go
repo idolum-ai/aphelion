@@ -2111,6 +2111,109 @@ func TestRepairLiveStateClosesContinuationsPlanLeasesAndPendingDecisions(t *test
 	}
 }
 
+func TestRepairLiveStateRepairsMetadataAuthorityDriftWithoutClosingLive(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	key := session.SessionKey{
+		ChatID: 9903,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "9903"},
+	}
+	leaseID := "lease-metadata-drift"
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-metadata-drift",
+		Objective: "Resume metadata-only preflight.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_approval",
+		Proposal: session.OperationProposal{
+			ID:      "phase-op-metadata-drift-phase-metadata",
+			Kind:    session.AuthorityClassLocalSecretMetadataReadLiveConfigRead,
+			Summary: "Live-adjacent metadata preflight. BLOCKED: approval button render failed; auto-approved lease was revoked after action_not_allowed/workspace_write mismatch.",
+			Status:  session.ProposalStatusApproved,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-metadata-drift",
+			CurrentPhaseID: "phase-metadata",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-metadata",
+				Summary:        "Live-adjacent metadata preflight. BLOCKED: approval button render failed; auto-approved lease was revoked after action_not_allowed/workspace_write mismatch.",
+				Status:         session.PlanStatusPending,
+				AuthorityClass: session.AuthorityClassLocalSecretMetadataReadLiveConfigRead,
+				BoundedEffect:  "No action under this phase until approval is real and visible.",
+				AllowedActions: []string{"report_button_diagnosis"},
+				LeaseID:        leaseID,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:       session.ContinuationStatusRevoked,
+		StageSummary: "Live-adjacent metadata preflight. BLOCKED: approval button render failed; auto-approved lease was revoked after action_not_allowed/workspace_write mismatch.",
+		ActionProposal: session.ActionProposal{
+			ID:        "aprop-phase-op-metadata-drift-phase-metadata",
+			RiskClass: session.AuthorityClassLocalSecretMetadataReadLiveConfigRead,
+			Summary:   "Live-adjacent metadata preflight. BLOCKED: approval button render failed; auto-approved lease was revoked after action_not_allowed/workspace_write mismatch.",
+			Status:    session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             leaseID,
+			ProposalID:     "aprop-phase-op-metadata-drift-phase-metadata",
+			Status:         session.ContinuationLeaseStatusRevoked,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	result, err := repairLiveState(context.Background(), store, "test_authority_repair", false, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("repairLiveState() err = %v", err)
+	}
+	if result.AuthorityContractsRepaired != 1 || result.ContinuationsClosed != 0 {
+		t.Fatalf("repair result = %#v, want one authority repair without broad close", result)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	phase := op.PhasePlan.Phases[0]
+	if strings.Contains(phase.Summary, "workspace_write mismatch") || phase.LeaseID != "" || phase.Status != session.PlanStatusPending {
+		t.Fatalf("phase = %#v, want cleaned pending phase without stale lease", phase)
+	}
+	if !stringSliceContains(phase.AllowedActions, session.AuthorityWorkActionReadOnly) || stringSliceContains(phase.AllowedActions, "workspace_write") {
+		t.Fatalf("allowed actions = %#v, want read_only but not workspace_write", phase.AllowedActions)
+	}
+	if !stringSliceContains(phase.ForbiddenActions, "telegram_api_call") || !stringSliceContains(phase.ForbiddenActions, "read_token_contents") {
+		t.Fatalf("forbidden actions = %#v, want metadata/live-effect denials", phase.ForbiddenActions)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ActionProposal.Status != session.ProposalStatusSuperseded || strings.Contains(cont.StageSummary, "workspace_write mismatch") {
+		t.Fatalf("continuation = %#v, want superseded cleaned prior proposal", cont)
+	}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPruneExecutionEventsForRetentionExportsThenPrunes(t *testing.T) {
 	t.Parallel()
 

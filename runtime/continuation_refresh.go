@@ -154,6 +154,7 @@ func refreshedContinuationActionProposal(prior session.ContinuationState, decisi
 	if len(proposal.ValidationPlan) == 0 {
 		proposal.ValidationPlan = []string{"consume at most the approved continuation turn", "report what changed and what evidence supports it"}
 	}
+	proposal = applyContinuationLeaseClassBoundaries(proposal)
 	proposal.PlanHash = actionProposalHash(proposal)
 	return session.NormalizeActionProposal(proposal)
 }
