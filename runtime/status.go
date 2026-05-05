@@ -80,7 +80,79 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 		}
 		lines = append(lines, line+".")
 	}
+	if stuck, ok := r.operationApprovalAffordanceDiagnostic(chatID, chatSnapshot); ok {
+		lines = append(lines, stuck)
+	}
 	return lines, nil
+}
+
+func (r *Runtime) operationApprovalAffordanceDiagnostic(chatID int64, snapshot core.ChatStatusSnapshot) (string, bool) {
+	if r == nil || r.store == nil || chatID == 0 {
+		return "", false
+	}
+	if snapshot.Continuation != nil {
+		status := strings.ToLower(strings.TrimSpace(snapshot.Continuation.Status))
+		if status == "pending" || status == "approved" {
+			return "", false
+		}
+	}
+	for _, item := range snapshot.PendingItems {
+		if item.Kind == core.PendingItemKindContinuation || item.Kind == core.PendingItemKindDecision {
+			return "", false
+		}
+	}
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	_, opState, exists, err := r.store.PlanAndOperationStateIfExists(key)
+	if err != nil || !exists {
+		return "", false
+	}
+	opState = session.NormalizeOperationState(opState)
+	if !operationStateNeedsApprovalAffordance(opState) {
+		return "", false
+	}
+	currentID := strings.TrimSpace(opState.PhasePlan.CurrentPhaseID)
+	staleCount := operationPhasePlanStaleInProgressCount(opState.PhasePlan)
+	parts := []string{"Approval affordance gap: operation has pending approval work but no pending continuation or decision."}
+	if currentID != "" {
+		parts = append(parts, "current_phase="+currentID)
+	}
+	if staleCount > 0 {
+		parts = append(parts, fmt.Sprintf("stale_in_progress_phases=%d", staleCount))
+	}
+	return strings.Join(parts, " ") + ".", true
+}
+
+func operationStateNeedsApprovalAffordance(opState session.OperationState) bool {
+	opState = session.NormalizeOperationState(opState)
+	if pendingOperationPlanLeaseNeedsButton(opState.PlanLease) || pendingOperationProposalNeedsButton(opState.Proposal) {
+		return true
+	}
+	if _, ok := operationPlanLeaseFromPhasePlan(opState, time.Now().UTC()); ok {
+		return true
+	}
+	if _, ok := nextOperationPhaseBundleForApproval(opState.PhasePlan); ok {
+		return true
+	}
+	if _, ok := nextOperationPhaseForApproval(opState.PhasePlan); ok {
+		return true
+	}
+	return false
+}
+
+func operationPhasePlanStaleInProgressCount(plan session.OperationPhasePlan) int {
+	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
+	currentID := strings.TrimSpace(plan.CurrentPhaseID)
+	if currentID == "" {
+		return 0
+	}
+	count := 0
+	for _, phase := range plan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
+		if phase.Status == session.PlanStatusInProgress && strings.TrimSpace(phase.ID) != currentID {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *Runtime) autoApprovalStatusSnapshot(chatID int64, now time.Time) (*core.AutoApprovalStatusSnapshot, error) {

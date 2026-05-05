@@ -317,6 +317,101 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	}
 }
 
+func TestMaterializePhasePlanIgnoresStaleInProgressWhenCurrentPhaseIsPending(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9028, UserID: 0, Scope: telegramDMScopeRef(9028)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "synth-remainder-op",
+		Objective: "Finish the repo-only Synth Telegram runner work.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "review_complete_plan_draft_ready_not_armed_due_autoapproval",
+		Proposal: session.OperationProposal{
+			ID:      "draft-synth-remainder",
+			Summary: "Draft repo-only Synth continuation",
+			Status:  session.ProposalStatusSuperseded,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "synth-remainder-plan",
+			Goal:           "Finish the repo-only Synth custom Telegram runner.",
+			CurrentPhaseID: "phase-r1-repo-finish",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-stale-live-route",
+					Summary:        "Old live route config phase",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "config_change_restart",
+					LeaseID:        "lease-old-live-route",
+				},
+				{
+					ID:               "phase-r1-repo-finish",
+					Summary:          "Commit current dirty safety/status slice and continue repo-only hardening",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "workspace_write",
+					BoundedEffect:    "Edit local repo files, run tests, and create local commits; stop before deploy.",
+					AllowedActions:   []string{"edit_files", "run_tests", "git_commit"},
+					ForbiddenActions: []string{"deploy", "restart_service", "read_token"},
+				},
+				{
+					ID:             "phase-r2-status-polish",
+					Summary:        "Polish doctor and status projections",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "workspace_write",
+					BoundedEffect:  "Patch local status/doctor code and tests only.",
+					AllowedActions: []string{"edit_files", "run_tests"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9028, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want approval prompt despite stale non-current in-progress phase")
+	}
+
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.RiskClass != "plan_lease" {
+		t.Fatalf("continuation = %#v, want pending plan lease", cont)
+	}
+	if len(cont.ApprovalBundle.Phases) != 2 || cont.ApprovalBundle.Phases[0].OperationPhaseID != "phase-r1-repo-finish" {
+		t.Fatalf("approval bundle = %#v, want current pending phase first and stale phase excluded", cont.ApprovalBundle)
+	}
+
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.PhasePlan.Phases[0].Status != session.PlanStatusPending || opState.PhasePlan.Phases[0].LeaseID != "" {
+		t.Fatalf("stale phase = %#v, want cleared back to pending without old lease", opState.PhasePlan.Phases[0])
+	}
+	if opState.PhasePlan.CurrentPhaseID != "phase-r1-repo-finish" {
+		t.Fatalf("CurrentPhaseID = %q, want phase-r1-repo-finish", opState.PhasePlan.CurrentPhaseID)
+	}
+
+	sender.mu.Lock()
+	inlineText := ""
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(inlineText, "Approve plan budget") || !strings.Contains(inlineText, "Commit current dirty safety/status slice") || strings.Contains(inlineText, "Old live route config phase") {
+		t.Fatalf("inline text = %q, want current repo-only plan budget without stale phase", inlineText)
+	}
+}
+
 func TestMaterializePlanningOnlyPhaseOffersPlanBudget(t *testing.T) {
 	t.Parallel()
 
@@ -380,6 +475,44 @@ func TestMaterializePlanningOnlyPhaseOffersPlanBudget(t *testing.T) {
 	}
 	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+}
+
+func TestMaterializeCompletedPhasePlanWithoutProposalAllowsContinuationFallback(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9029, UserID: 0, Scope: telegramDMScopeRef(9029)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "completed-plan-no-proposal",
+		Objective: "Allow organic continuation when the phase plan has no actionable approval.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID: "completed-plan",
+			Phases: []session.OperationPhase{
+				{ID: "phase-1", Summary: "Review", Status: session.PlanStatusCompleted, CompletedAt: time.Now().UTC()},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9029, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if materialized {
+		t.Fatal("materialized = true, want false so organic continuation fallback can run")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no materialized prompt", inlineCount)
 	}
 }
 
@@ -450,6 +583,65 @@ func TestMaterializePendingOperationProposalWhenPhasePlanHasNoPendingPhase(t *te
 	sender.mu.Unlock()
 	if !strings.Contains(inlineText, "Review the completed phase evidence and propose cleanup") {
 		t.Fatalf("inline text = %q, want ordinary proposal prompt", inlineText)
+	}
+}
+
+func TestMaterializePlanLeaseUsesAutoApprovalInsteadOfSuppressingPrompt(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 9030, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9030, UserID: 0, Scope: telegramDMScopeRef(9030)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "autoapprove-plan-lease-op",
+		Objective: "Approve a bounded plan envelope without manual buttons.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "plan_lease_proposal",
+		PlanLease: session.OperationPlanLease{
+			ID:         "autoapprove-plan-lease",
+			Summary:    "Approve bounded local review budget",
+			Status:     session.PlanLeaseStatusProposed,
+			TurnBudget: 2,
+			Lanes: []session.OperationPlanLeaseLane{
+				{ID: "review", Summary: "Review state", AuthorityClass: "read_only_review", ExpectedTurns: 2},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9030, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want auto-approved plan lease")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want autoapproval to consume without manual buttons", inlineCount)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ActionProposal.Status != session.ProposalStatusApproved || cont.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want auto-approved consumed plan lease", cont)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(9030, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 1 {
+		t.Fatalf("autoapproval leases = %#v, want one consumed use", leases)
 	}
 }
 

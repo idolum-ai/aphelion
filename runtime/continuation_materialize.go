@@ -25,6 +25,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		return false, nil
 	}
 	opState = session.NormalizeOperationState(opState)
+	opState = operationStateWithNonCurrentInProgressPhasesCleared(opState, time.Now().UTC())
 	if pendingOperationPlanLeaseNeedsButton(opState.PlanLease) {
 		now := time.Now().UTC()
 		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
@@ -135,7 +136,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	}
 	proposal := opState.Proposal
 	if !pendingOperationProposalNeedsButton(proposal) {
-		if operationPhasePlanOwnsContinuation(opState.PhasePlan) {
+		if operationPhasePlanHasBlockingInProgress(opState.PhasePlan) {
 			return true, nil
 		}
 		return false, nil
@@ -198,10 +199,8 @@ func operationPlanLeaseFromPhasePlan(opState session.OperationState, now time.Ti
 	if opState.PlanLease.Active() || len(opState.PhasePlan.Phases) == 0 {
 		return session.OperationPlanLease{}, false
 	}
-	for _, phase := range opState.PhasePlan.Phases {
-		if phase.Status == session.PlanStatusInProgress {
-			return session.OperationPlanLease{}, false
-		}
+	if operationPhasePlanHasBlockingInProgress(opState.PhasePlan) {
+		return session.OperationPlanLease{}, false
 	}
 	start := operationPhasePlanStartIndex(opState.PhasePlan)
 	pendingCount := operationPhasePlanPendingCountFrom(opState.PhasePlan, start)
@@ -209,6 +208,9 @@ func operationPlanLeaseFromPhasePlan(opState session.OperationState, now time.Ti
 	stoppedAtGate := ""
 	for i := start; i < len(opState.PhasePlan.Phases) && len(phases) < operationPlanBudgetMaxLanes; i++ {
 		phase := normalizeSingleOperationPhase(opState.PhasePlan.Phases[i])
+		if operationPhasePlanPhaseIsStaleInProgress(opState.PhasePlan, phase) {
+			continue
+		}
 		if phase.Status == session.PlanStatusCompleted {
 			continue
 		}
@@ -281,6 +283,79 @@ func operationPhasePlanPendingCountFrom(plan session.OperationPhasePlan, start i
 		}
 	}
 	return count
+}
+
+func operationPhasePlanHasBlockingInProgress(plan session.OperationPhasePlan) bool {
+	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
+	if len(plan.Phases) == 0 {
+		return false
+	}
+	currentID := strings.TrimSpace(plan.CurrentPhaseID)
+	if currentID != "" {
+		for _, phase := range plan.Phases {
+			phase = normalizeSingleOperationPhase(phase)
+			if strings.TrimSpace(phase.ID) != currentID {
+				continue
+			}
+			return phase.Status == session.PlanStatusInProgress
+		}
+	}
+	for _, phase := range plan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
+		if phase.Status == session.PlanStatusInProgress {
+			return true
+		}
+	}
+	return false
+}
+
+func operationPhasePlanPhaseIsStaleInProgress(plan session.OperationPhasePlan, phase session.OperationPhase) bool {
+	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
+	phase = normalizeSingleOperationPhase(phase)
+	currentID := strings.TrimSpace(plan.CurrentPhaseID)
+	if currentID == "" {
+		return false
+	}
+	return phase.Status == session.PlanStatusInProgress && strings.TrimSpace(phase.ID) != currentID
+}
+
+func operationStateWithNonCurrentInProgressPhasesCleared(opState session.OperationState, now time.Time) session.OperationState {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	currentID := strings.TrimSpace(opState.PhasePlan.CurrentPhaseID)
+	if currentID == "" {
+		return opState
+	}
+	currentStatus := session.PlanStatus("")
+	for _, phase := range opState.PhasePlan.Phases {
+		if strings.TrimSpace(phase.ID) == currentID {
+			currentStatus = phase.Status
+			break
+		}
+	}
+	if currentStatus == session.PlanStatusInProgress {
+		return opState
+	}
+	changed := false
+	for i := range opState.PhasePlan.Phases {
+		if strings.TrimSpace(opState.PhasePlan.Phases[i].ID) == currentID {
+			continue
+		}
+		if opState.PhasePlan.Phases[i].Status != session.PlanStatusInProgress {
+			continue
+		}
+		opState.PhasePlan.Phases[i].Status = session.PlanStatusPending
+		opState.PhasePlan.Phases[i].LeaseID = ""
+		changed = true
+	}
+	if changed {
+		opState.PhasePlan.UpdatedAt = now
+		opState.UpdatedAt = now
+	}
+	return session.NormalizeOperationState(opState)
 }
 
 func operationPhasePlanLeaseID(opState session.OperationState, phases []session.OperationPhase) string {
@@ -401,10 +476,8 @@ func nextOperationPhaseForApproval(plan session.OperationPhasePlan) (session.Ope
 	if len(plan.Phases) == 0 {
 		return session.OperationPhase{}, false
 	}
-	for _, phase := range plan.Phases {
-		if phase.Status == session.PlanStatusInProgress {
-			return session.OperationPhase{}, false
-		}
+	if operationPhasePlanHasBlockingInProgress(plan) {
+		return session.OperationPhase{}, false
 	}
 	if currentID := strings.TrimSpace(plan.CurrentPhaseID); currentID != "" {
 		for _, phase := range plan.Phases {
@@ -414,6 +487,9 @@ func nextOperationPhaseForApproval(plan session.OperationPhasePlan) (session.Ope
 		}
 	}
 	for _, phase := range plan.Phases {
+		if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
+			continue
+		}
 		if operationPhaseNeedsApproval(phase) {
 			return phase, true
 		}
@@ -428,10 +504,8 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 	if len(plan.Phases) < 2 {
 		return nil, false
 	}
-	for _, phase := range plan.Phases {
-		if phase.Status == session.PlanStatusInProgress {
-			return nil, false
-		}
+	if operationPhasePlanHasBlockingInProgress(plan) {
+		return nil, false
 	}
 	start := 0
 	if currentID := strings.TrimSpace(plan.CurrentPhaseID); currentID != "" {
@@ -445,6 +519,9 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 	bundle := make([]session.OperationPhase, 0, operationApprovalBundleMaxPhases)
 	for i := start; i < len(plan.Phases) && len(bundle) < operationApprovalBundleMaxPhases; i++ {
 		phase := normalizeSingleOperationPhase(plan.Phases[i])
+		if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
+			continue
+		}
 		if phase.Status == session.PlanStatusCompleted {
 			continue
 		}
@@ -463,6 +540,9 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 		bundle = bundle[:0]
 		for i := 0; i < len(plan.Phases) && len(bundle) < operationApprovalBundleMaxPhases; i++ {
 			phase := normalizeSingleOperationPhase(plan.Phases[i])
+			if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
+				continue
+			}
 			if phase.Status == session.PlanStatusCompleted {
 				continue
 			}

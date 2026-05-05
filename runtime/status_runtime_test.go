@@ -85,6 +85,47 @@ func TestStatusDiagnosticsReturnsEmptyWithoutSessionHistory(t *testing.T) {
 	}
 }
 
+func TestStatusDiagnosticsSurfacesApprovalAffordanceGap(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8122, UserID: 0, Scope: telegramDMScopeRef(8122)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "approval-gap-op",
+		Objective: "Show why the operator has no buttons.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "approval-gap-plan",
+			CurrentPhaseID: "phase-current",
+			Phases: []session.OperationPhase{
+				{ID: "phase-old", Summary: "Old live step", Status: session.PlanStatusInProgress, LeaseID: "lease-old"},
+				{ID: "phase-current", Summary: "Current repo-only step", Status: session.PlanStatusPending, AuthorityClass: "workspace_write", BoundedEffect: "Patch local files and run tests."},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	lines, err := rt.StatusDiagnostics(8122)
+	if err != nil {
+		t.Fatalf("StatusDiagnostics() err = %v", err)
+	}
+	text := strings.Join(lines, "\n")
+	for _, needle := range []string{
+		"Approval affordance gap",
+		"current_phase=phase-current",
+		"stale_in_progress_phases=1",
+	} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("StatusDiagnostics() = %q, want substring %q", text, needle)
+		}
+	}
+}
+
 func TestStatusDiagnosticsPrefersTurnProjectionFromExecutionEvents(t *testing.T) {
 	t.Parallel()
 
