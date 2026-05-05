@@ -943,6 +943,31 @@ func TestHandleTelegramCommandAutoApproveAdmin(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandAutoApproveValidationErrorRepliesWithoutFatalError(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{canRestart: true, autoApproveErr: errors.New("auto-approval duration is capped at 2h0m0s")}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/autoapprove 24h all",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v, want nil so poller can advance the update offset", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.autoApproveArgs != "24h all" {
+		t.Fatalf("autoApproveArgs = %q, want command args recorded", router.autoApproveArgs)
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "not applied") || !strings.Contains(sender.msgs[0].Text, "capped") {
+		t.Fatalf("messages = %#v, want validation reply", sender.msgs)
+	}
+}
+
 func TestHandleTelegramCommandAutoApproveDeniedForNonAdmin(t *testing.T) {
 	t.Parallel()
 

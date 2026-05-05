@@ -340,7 +340,9 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		}
 		configured, err := router.ConfigureAutoApproval(ctx, msg.ChatID, msg.SenderID, telegramCommandArgs(msg.Text))
 		if err != nil {
-			return true, err
+			log.Printf("WARN auto-approval command rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
+			text = renderAutoApprovalCommandError(err)
+			break
 		}
 		text = configured
 	case "stop":
@@ -391,6 +393,17 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 		return true, err
 	}
 	return true, nil
+}
+
+func renderAutoApprovalCommandError(err error) string {
+	if err == nil {
+		return "Auto-approval request was not applied."
+	}
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		return "Auto-approval request was not applied."
+	}
+	return "Auto-approval request was not applied: " + msg
 }
 
 func sendPersonaModelSelector(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {
