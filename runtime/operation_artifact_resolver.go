@@ -15,7 +15,7 @@ import (
 )
 
 func (r *Runtime) maybeHandleOperationArtifactRequest(ctx context.Context, key session.SessionKey, scope sandbox.Scope, msg core.InboundMessage) (bool, *core.TurnResult, error) {
-	if r == nil || r.store == nil || r.outbound == nil || !looksLikeOperationArtifactSendRequest(msg.Text) {
+	if r == nil || r.store == nil || r.outbound == nil || !artifactRequestAllowedForOrigin(msg) || !looksLikeOperationArtifactSendRequest(msg.Text) {
 		return false, nil, nil
 	}
 	state, err := r.store.OperationState(key)
@@ -73,6 +73,10 @@ func (r *Runtime) maybeHandleOperationArtifactRequest(ctx context.Context, key s
 		"artifact":     firstNonEmpty(artifact.Label, filepath.Base(artifact.Ref)),
 	}, time.Now().UTC())
 	return true, &core.TurnResult{Text: reply, Media: []core.Media{media}}, nil
+}
+
+func artifactRequestAllowedForOrigin(msg core.InboundMessage) bool {
+	return msg.Origin == "" || msg.Origin == core.InboundOriginUser
 }
 
 func looksLikeOperationArtifactSendRequest(text string) bool {

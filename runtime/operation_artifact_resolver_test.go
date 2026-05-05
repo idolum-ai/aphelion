@@ -70,6 +70,72 @@ func TestHandleInboundSendsLatestOperationPDFArtifactDirectly(t *testing.T) {
 	}
 }
 
+func TestHandleInboundDoesNotTreatContinuationAuthorizationAsArtifactRequest(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	expected := &core.TurnResult{Text: "continued actual work"}
+	recorder := &recordingInteractiveDMTurnAssembler{result: expected}
+	rt.interactiveDMAssembler = recorder
+
+	artifactPath := filepath.Join(cfg.Agent.ExecRoot, "memory", "work-evidence", "latest.md")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() err = %v", err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("work evidence"), 0o600); err != nil {
+		t.Fatalf("WriteFile() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8802, UserID: 0, Scope: telegramDMScopeRef(8802)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		Status: session.OperationStatusActive,
+		Artifacts: []session.OperationArtifact{
+			{Label: "Work evidence", Ref: "memory/work-evidence/latest.md"},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	text := strings.Join([]string{
+		approvedContinuationEventText,
+		"",
+		"Approved continuation lease:",
+		"proposal_id: aprop-synth-custom-telegram-remaining-plan-20260505",
+		"lease_id: lease-aprop-synth-custom-telegram-remaining-plan-20260505",
+		"approved_step: Finish the repo-only Synth custom Telegram runner work.",
+		"bounded_effect: Prepare the no-send dry-start gate, commit it if coherent, and report evidence.",
+		"risk_class: workspace_write",
+	}, "\n")
+
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:       8802,
+		ChatType:     "private",
+		SenderID:     1001,
+		SenderName:   "admin",
+		MessageID:    45,
+		Text:         text,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result != expected {
+		t.Fatalf("HandleInbound() result = %#v, want assembler result", result)
+	}
+	if !recorder.called {
+		t.Fatal("interactive assembler was not called")
+	}
+	if provider.callCount != 0 {
+		t.Fatalf("provider.callCount = %d, want stubbed assembler boundary", provider.callCount)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent = %#v, want no direct artifact send for continuation authorization", sender.sent)
+	}
+}
+
 func TestLooksLikeOperationArtifactSendRequestIgnoresReplyContext(t *testing.T) {
 	t.Parallel()
 
