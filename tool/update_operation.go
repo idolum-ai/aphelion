@@ -350,15 +350,26 @@ func parseOperationPhaseInputs(inputs []updateOperationPhaseInput) ([]session.Op
 func parseOperationPhaseInput(in updateOperationPhaseInput) (session.OperationPhase, error) {
 	inputID := strings.TrimSpace(in.ID)
 	phase := session.OperationPhase{
-		ID:               inputID,
-		Summary:          strings.TrimSpace(in.Summary),
-		AuthorityClass:   strings.TrimSpace(in.AuthorityClass),
-		WhyNow:           strings.TrimSpace(in.WhyNow),
-		BoundedEffect:    strings.TrimSpace(in.BoundedEffect),
-		AllowedActions:   append([]string(nil), in.AllowedActions...),
-		ForbiddenActions: append([]string(nil), in.ForbiddenActions...),
-		ValidationPlan:   append([]string(nil), in.ValidationPlan...),
-		LeaseID:          strings.TrimSpace(in.LeaseID),
+		ID:                 inputID,
+		Summary:            strings.TrimSpace(in.Summary),
+		AuthorityClass:     strings.TrimSpace(in.AuthorityClass),
+		WhyNow:             strings.TrimSpace(in.WhyNow),
+		BoundedEffect:      strings.TrimSpace(in.BoundedEffect),
+		AllowedActions:     append([]string(nil), in.AllowedActions...),
+		ForbiddenActions:   append([]string(nil), in.ForbiddenActions...),
+		ValidationPlan:     append([]string(nil), in.ValidationPlan...),
+		BlockedReasonCode:  strings.TrimSpace(in.BlockedReasonCode),
+		SupersedesPhaseIDs: append([]string(nil), in.SupersedesPhaseIDs...),
+		LeaseID:            strings.TrimSpace(in.LeaseID),
+	}
+	if in.RequiresConsent != nil {
+		phase.RequiresConsent = *in.RequiresConsent
+	}
+	if in.RequiresOptIn != nil {
+		phase.RequiresOptIn = *in.RequiresOptIn
+	}
+	if in.StaleAuthority != nil {
+		phase.StaleAuthority = *in.StaleAuthority
 	}
 	if strings.TrimSpace(in.Status) != "" {
 		phase.Status = session.NormalizePlanStatus(session.PlanStatus(in.Status))
@@ -414,6 +425,21 @@ func mergeOperationPhaseInput(current session.OperationPhase, in updateOperation
 	}
 	if in.ValidationPlan != nil {
 		phase.ValidationPlan = append([]string(nil), in.ValidationPlan...)
+	}
+	if blockedReasonCode := strings.TrimSpace(in.BlockedReasonCode); blockedReasonCode != "" {
+		phase.BlockedReasonCode = blockedReasonCode
+	}
+	if in.RequiresConsent != nil {
+		phase.RequiresConsent = *in.RequiresConsent
+	}
+	if in.RequiresOptIn != nil {
+		phase.RequiresOptIn = *in.RequiresOptIn
+	}
+	if in.SupersedesPhaseIDs != nil {
+		phase.SupersedesPhaseIDs = append([]string(nil), in.SupersedesPhaseIDs...)
+	}
+	if in.StaleAuthority != nil {
+		phase.StaleAuthority = *in.StaleAuthority
 	}
 	if in.RequiresApproval != nil {
 		phase.RequiresApproval = *in.RequiresApproval
@@ -871,6 +897,21 @@ func renderOperationState(header string, state session.OperationState) string {
 				}
 				if len(phase.ValidationPlan) > 0 {
 					fmt.Fprintf(&b, "    validation_plan: %s\n", strings.Join(phase.ValidationPlan, "; "))
+				}
+				if phase.BlockedReasonCode != "" {
+					fmt.Fprintf(&b, "    blocked_reason_code: %s\n", phase.BlockedReasonCode)
+				}
+				if phase.RequiresConsent {
+					b.WriteString("    requires_consent: true\n")
+				}
+				if phase.RequiresOptIn {
+					b.WriteString("    requires_opt_in: true\n")
+				}
+				if len(phase.SupersedesPhaseIDs) > 0 {
+					fmt.Fprintf(&b, "    supersedes_phase_ids: %s\n", strings.Join(phase.SupersedesPhaseIDs, ", "))
+				}
+				if phase.StaleAuthority {
+					b.WriteString("    stale_authority: true\n")
 				}
 				if phase.LeaseID != "" {
 					fmt.Fprintf(&b, "    lease_id: %s\n", phase.LeaseID)

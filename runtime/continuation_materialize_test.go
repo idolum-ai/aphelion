@@ -1253,6 +1253,43 @@ func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *test
 	}
 }
 
+func TestOperationPhaseApprovalUsesTypedGovernanceMetadata(t *testing.T) {
+	t.Parallel()
+
+	optInPhase := session.OperationPhase{
+		ID:             "phase-opt-in",
+		Summary:        "Consent-first intake",
+		Status:         session.PlanStatusPending,
+		AuthorityClass: "private_data_intake",
+		RequiresOptIn:  true,
+	}
+	if got := operationPhaseApprovalBlockedReason(optInPhase); got != "waiting for explicit opt-in" {
+		t.Fatalf("operationPhaseApprovalBlockedReason(opt-in) = %q, want explicit opt-in", got)
+	}
+
+	consentPhase := session.OperationPhase{
+		ID:                "phase-consent",
+		Summary:           "Consent-first intake",
+		Status:            session.PlanStatusPending,
+		AuthorityClass:    "private_data_intake",
+		BlockedReasonCode: "consent-required",
+	}
+	if got := operationPhaseApprovalBlockedReason(consentPhase); got != "waiting for explicit consent" {
+		t.Fatalf("operationPhaseApprovalBlockedReason(consent) = %q, want explicit consent", got)
+	}
+
+	stalePhase := session.OperationPhase{
+		ID:             "phase-old",
+		Summary:        "Prior repo finish phase",
+		Status:         session.PlanStatusPending,
+		AuthorityClass: "workspace_write",
+		StaleAuthority: true,
+	}
+	if got := operationPhaseApprovalExcludedReason(session.OperationPhasePlan{}, stalePhase); got != "superseded or stale phase" {
+		t.Fatalf("operationPhaseApprovalExcludedReason(stale) = %q, want stale exclusion", got)
+	}
+}
+
 func TestMaterializeMixedAuthorityPhasePlanSplitsToSingleDataApproval(t *testing.T) {
 	t.Parallel()
 

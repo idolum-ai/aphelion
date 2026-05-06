@@ -909,6 +909,9 @@ func operationPhaseApprovalExcludedReason(plan session.OperationPhasePlan, phase
 	if phase.Status == session.PlanStatusCompleted {
 		return "completed phase"
 	}
+	if phase.StaleAuthority || operationPhaseReasonCodeIsStaleAuthority(phase.BlockedReasonCode) {
+		return "superseded or stale phase"
+	}
 	text := operationPhaseApprovalText(phase)
 	switch {
 	case strings.Contains(text, "superseded prior"),
@@ -927,6 +930,9 @@ func operationPhaseApprovalExcludedReason(plan session.OperationPhasePlan, phase
 
 func operationPhaseApprovalBlockedReason(phase session.OperationPhase) string {
 	phase = normalizeSingleOperationPhase(phase)
+	if reason := operationPhaseTypedBlockedReason(phase); reason != "" {
+		return reason
+	}
 	text := operationPhaseApprovalText(phase)
 	switch {
 	case strings.Contains(text, "no opt in") ||
@@ -950,6 +956,52 @@ func operationPhaseApprovalBlockedReason(phase session.OperationPhase) string {
 	default:
 		return ""
 	}
+}
+
+func operationPhaseTypedBlockedReason(phase session.OperationPhase) string {
+	if phase.RequiresOptIn {
+		return "waiting for explicit opt-in"
+	}
+	if phase.RequiresConsent {
+		return "waiting for explicit consent"
+	}
+	code := normalizeOperationPhaseReasonCode(phase.BlockedReasonCode)
+	switch code {
+	case "":
+		return ""
+	case "waiting_for_opt_in", "requires_opt_in", "missing_opt_in", "no_opt_in", "opt_in_required":
+		return "waiting for explicit opt-in"
+	case "waiting_for_consent", "requires_consent", "missing_consent", "no_consent", "consent_required":
+		return "waiting for explicit consent"
+	case "blocked_on_consent", "consent_blocked":
+		return "blocked on consent"
+	case "stale_authority", "superseded", "superseded_phase", "stale_phase":
+		return ""
+	default:
+		return "blocked: " + code
+	}
+}
+
+func operationPhaseReasonCodeIsStaleAuthority(code string) bool {
+	switch normalizeOperationPhaseReasonCode(code) {
+	case "stale_authority", "superseded", "superseded_phase", "stale_phase", "old_authority", "old_lease":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeOperationPhaseReasonCode(code string) string {
+	code = strings.ToLower(strings.TrimSpace(code))
+	if code == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("-", "_", " ", "_", "/", "_", ".", "_")
+	code = replacer.Replace(code)
+	for strings.Contains(code, "__") {
+		code = strings.ReplaceAll(code, "__", "_")
+	}
+	return strings.Trim(code, "_")
 }
 
 func operationPhaseApprovalText(phase session.OperationPhase) string {

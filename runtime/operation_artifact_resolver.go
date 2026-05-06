@@ -80,35 +80,128 @@ func artifactRequestAllowedForOrigin(msg core.InboundMessage) bool {
 }
 
 func looksLikeOperationArtifactSendRequest(text string) bool {
-	lower := strings.ToLower(operationArtifactRequestUserText(text))
-	if lower == "" || !(strings.Contains(lower, "send") || strings.Contains(lower, "attach") || strings.Contains(lower, "share")) {
+	userText, replyContext := operationArtifactRequestTextParts(text)
+	normalized := operationArtifactNormalizeRequestText(userText)
+	if normalized == "" || !operationArtifactStartsWithSendRequest(normalized) {
 		return false
 	}
-	if strings.Contains(lower, "pdf") || strings.Contains(lower, "artifact") || strings.Contains(lower, "file") || strings.Contains(lower, "report") {
+	if operationArtifactRequestNamesArtifact(normalized) {
 		return true
 	}
-	fields := strings.Fields(strings.NewReplacer("?", " ", "!", " ", ".", " ", ",", " ").Replace(lower))
-	for _, field := range fields {
-		if field == "it" || field == "that" {
+	if operationArtifactShortPronounRequest(normalized) && operationArtifactReplyContextNamesArtifact(replyContext) {
+		return true
+	}
+	return false
+}
+
+func operationArtifactRequestUserText(text string) string {
+	userText, _ := operationArtifactRequestTextParts(text)
+	return userText
+}
+
+func operationArtifactRequestTextParts(text string) (string, string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", ""
+	}
+	const replyContextMarker = "\n\nReply context:\n"
+	if idx := strings.Index(text, replyContextMarker); idx >= 0 {
+		return strings.TrimSpace(text[:idx]), strings.TrimSpace(text[idx+len(replyContextMarker):])
+	}
+	if strings.HasPrefix(text, "Reply context:\n") {
+		return "", strings.TrimSpace(strings.TrimPrefix(text, "Reply context:\n"))
+	}
+	return text, ""
+}
+
+func operationArtifactNormalizeRequestText(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		"?", " ",
+		"!", " ",
+		".", " ",
+		",", " ",
+		":", " ",
+		";", " ",
+		"\n", " ",
+		"\t", " ",
+	)
+	return strings.Join(strings.Fields(replacer.Replace(text)), " ")
+}
+
+func operationArtifactStartsWithSendRequest(normalized string) bool {
+	if normalized == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"send ",
+		"attach ",
+		"share ",
+		"please send ",
+		"please attach ",
+		"please share ",
+		"can you send ",
+		"can you attach ",
+		"can you share ",
+		"could you send ",
+		"could you attach ",
+		"could you share ",
+		"would you send ",
+		"would you attach ",
+		"would you share ",
+	} {
+		if strings.HasPrefix(normalized, prefix) {
 			return true
 		}
 	}
 	return false
 }
 
-func operationArtifactRequestUserText(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
+func operationArtifactRequestNamesArtifact(normalized string) bool {
+	return operationArtifactNormalizedTextNamesArtifact(normalized)
+}
+
+func operationArtifactReplyContextNamesArtifact(replyContext string) bool {
+	return operationArtifactNormalizedTextNamesArtifact(operationArtifactNormalizeRequestText(replyContext))
+}
+
+func operationArtifactNormalizedTextNamesArtifact(normalized string) bool {
+	for _, field := range strings.Fields(normalized) {
+		switch field {
+		case "pdf", "artifact", "artifacts", "file", "files", "report", "reports", "evidence", "log", "logs":
+			return true
+		}
 	}
-	const replyContextMarker = "\n\nReply context:\n"
-	if idx := strings.Index(text, replyContextMarker); idx >= 0 {
-		return strings.TrimSpace(text[:idx])
+	return strings.Contains(normalized, ".pdf")
+}
+
+func operationArtifactShortPronounRequest(normalized string) bool {
+	fields := strings.Fields(normalized)
+	if len(fields) < 2 || len(fields) > 4 {
+		return false
 	}
-	if strings.HasPrefix(text, "Reply context:\n") {
-		return ""
+	verbIndex := 0
+	if fields[0] == "please" {
+		verbIndex = 1
 	}
-	return text
+	if verbIndex >= len(fields) {
+		return false
+	}
+	switch fields[verbIndex] {
+	case "send", "attach", "share":
+	default:
+		return false
+	}
+	for _, field := range fields[verbIndex+1:] {
+		if field == "me" || field == "the" {
+			continue
+		}
+		return field == "it" || field == "that"
+	}
+	return false
 }
 
 func latestSendableOperationArtifact(scope sandbox.Scope, artifacts []session.OperationArtifact, requestText string) (session.OperationArtifact, core.Media, bool) {

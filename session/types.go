@@ -122,18 +122,23 @@ type OperationProposal struct {
 }
 
 type OperationPhase struct {
-	ID               string     `json:"id,omitempty"`
-	Summary          string     `json:"summary,omitempty"`
-	Status           PlanStatus `json:"status,omitempty"`
-	AuthorityClass   string     `json:"authority_class,omitempty"`
-	WhyNow           string     `json:"why_now,omitempty"`
-	BoundedEffect    string     `json:"bounded_effect,omitempty"`
-	AllowedActions   []string   `json:"allowed_actions,omitempty"`
-	ForbiddenActions []string   `json:"forbidden_actions,omitempty"`
-	ValidationPlan   []string   `json:"validation_plan,omitempty"`
-	RequiresApproval bool       `json:"requires_approval,omitempty"`
-	LeaseID          string     `json:"lease_id,omitempty"`
-	CompletedAt      time.Time  `json:"completed_at,omitempty"`
+	ID                 string     `json:"id,omitempty"`
+	Summary            string     `json:"summary,omitempty"`
+	Status             PlanStatus `json:"status,omitempty"`
+	AuthorityClass     string     `json:"authority_class,omitempty"`
+	WhyNow             string     `json:"why_now,omitempty"`
+	BoundedEffect      string     `json:"bounded_effect,omitempty"`
+	AllowedActions     []string   `json:"allowed_actions,omitempty"`
+	ForbiddenActions   []string   `json:"forbidden_actions,omitempty"`
+	ValidationPlan     []string   `json:"validation_plan,omitempty"`
+	BlockedReasonCode  string     `json:"blocked_reason_code,omitempty"`
+	RequiresConsent    bool       `json:"requires_consent,omitempty"`
+	RequiresOptIn      bool       `json:"requires_opt_in,omitempty"`
+	SupersedesPhaseIDs []string   `json:"supersedes_phase_ids,omitempty"`
+	StaleAuthority     bool       `json:"stale_authority,omitempty"`
+	RequiresApproval   bool       `json:"requires_approval,omitempty"`
+	LeaseID            string     `json:"lease_id,omitempty"`
+	CompletedAt        time.Time  `json:"completed_at,omitempty"`
 }
 
 type OperationPhasePlan struct {
@@ -1378,6 +1383,8 @@ func normalizeOperationPhase(phase OperationPhase, index int) OperationPhase {
 	phase.AllowedActions = normalizeActionStringSlice(phase.AllowedActions)
 	phase.ForbiddenActions = normalizeActionStringSlice(phase.ForbiddenActions)
 	phase.ValidationPlan = normalizeActionStringSlice(phase.ValidationPlan)
+	phase.BlockedReasonCode = normalizeEnumValue(phase.BlockedReasonCode)
+	phase.SupersedesPhaseIDs = normalizeActionStringSlice(phase.SupersedesPhaseIDs)
 	phase.LeaseID = strings.TrimSpace(phase.LeaseID)
 	if !phase.CompletedAt.IsZero() {
 		phase.CompletedAt = phase.CompletedAt.UTC()
@@ -1498,6 +1505,11 @@ func (p OperationPhase) Active() bool {
 		len(p.AllowedActions) > 0 ||
 		len(p.ForbiddenActions) > 0 ||
 		len(p.ValidationPlan) > 0 ||
+		strings.TrimSpace(p.BlockedReasonCode) != "" ||
+		p.RequiresConsent ||
+		p.RequiresOptIn ||
+		len(p.SupersedesPhaseIDs) > 0 ||
+		p.StaleAuthority ||
 		strings.TrimSpace(p.LeaseID) != "" ||
 		!p.CompletedAt.IsZero()
 }

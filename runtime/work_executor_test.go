@@ -351,6 +351,22 @@ func TestContinuationWorkModeDoesNotPromoteRestartRecoverySmokeTestToDeploy(t *t
 	}
 }
 
+func TestContinuationWorkModeDoesNotGrantWorkspaceWriteFromProseOnly(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		StageSummary: "Patch prompt handling and validate it.",
+		ActionProposal: session.ActionProposal{
+			Summary:       "Patch prompt handling",
+			BoundedEffect: "Edit prompt code and run tests; stop before deploy.",
+		},
+	}
+
+	if got := continuationWorkMode(state); got == WorkModeWorkspaceWrite {
+		t.Fatalf("continuationWorkMode() = %q, want prose not to grant workspace_write", got)
+	}
+}
+
 func TestContinuationWorkModeTrustsExplicitReadOnlyRiskClassOverRestartText(t *testing.T) {
 	t.Parallel()
 

@@ -103,17 +103,22 @@ type updateOperationProposalInput struct {
 }
 
 type updateOperationPhaseInput struct {
-	ID               string   `json:"id,omitempty"`
-	Summary          string   `json:"summary,omitempty"`
-	Status           string   `json:"status,omitempty"`
-	AuthorityClass   string   `json:"authority_class,omitempty"`
-	WhyNow           string   `json:"why_now,omitempty"`
-	BoundedEffect    string   `json:"bounded_effect,omitempty"`
-	AllowedActions   []string `json:"allowed_actions,omitempty"`
-	ForbiddenActions []string `json:"forbidden_actions,omitempty"`
-	ValidationPlan   []string `json:"validation_plan,omitempty"`
-	RequiresApproval *bool    `json:"requires_approval,omitempty"`
-	LeaseID          string   `json:"lease_id,omitempty"`
+	ID                 string   `json:"id,omitempty"`
+	Summary            string   `json:"summary,omitempty"`
+	Status             string   `json:"status,omitempty"`
+	AuthorityClass     string   `json:"authority_class,omitempty"`
+	WhyNow             string   `json:"why_now,omitempty"`
+	BoundedEffect      string   `json:"bounded_effect,omitempty"`
+	AllowedActions     []string `json:"allowed_actions,omitempty"`
+	ForbiddenActions   []string `json:"forbidden_actions,omitempty"`
+	ValidationPlan     []string `json:"validation_plan,omitempty"`
+	BlockedReasonCode  string   `json:"blocked_reason_code,omitempty"`
+	RequiresConsent    *bool    `json:"requires_consent,omitempty"`
+	RequiresOptIn      *bool    `json:"requires_opt_in,omitempty"`
+	SupersedesPhaseIDs []string `json:"supersedes_phase_ids,omitempty"`
+	StaleAuthority     *bool    `json:"stale_authority,omitempty"`
+	RequiresApproval   *bool    `json:"requires_approval,omitempty"`
+	LeaseID            string   `json:"lease_id,omitempty"`
 }
 
 type updateOperationPhasePlanInput struct {
@@ -868,6 +873,11 @@ func (r *Registry) Definitions() []agent.ToolDef {
 										"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed action labels for this phase"},
 										"forbidden_actions": {"type": "array", "items": {"type": "string"}, "description": "Forbidden action labels for this phase"},
 										"validation_plan": {"type": "array", "items": {"type": "string"}, "description": "Evidence checks expected after this phase"},
+										"blocked_reason_code": {"type": "string", "description": "Typed blocker code such as waiting_for_opt_in, waiting_for_consent, blocked_on_consent, external_dependency, or stale_authority. Prefer this over prose-only blockers."},
+										"requires_consent": {"type": "boolean", "description": "True when the phase must wait for explicit consent before approval materialization."},
+										"requires_opt_in": {"type": "boolean", "description": "True when the phase must wait for explicit opt-in before approval materialization."},
+										"supersedes_phase_ids": {"type": "array", "items": {"type": "string"}, "description": "Phase ids this phase replaces or supersedes."},
+										"stale_authority": {"type": "boolean", "description": "True when this phase is stale/superseded and must not be offered or executed."},
 										"requires_approval": {"type": "boolean", "description": "Whether this phase requires a button-backed approval lease; defaults to true for active non-completed phases"}
 									},
 									"required": ["summary"]
@@ -901,6 +911,21 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						}
 					}
 				}
+			}`),
+		})
+		defs = append(defs, agent.ToolDef{
+			Name:        "operation_artifact",
+			Description: "Inspect operation artifacts and resolve a safe local artifact into a MEDIA directive for user-visible attachment. Use this only when the user explicitly asks to receive an existing operation artifact; it never sends by itself.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["list", "resolve_sendable"], "description": "List known artifacts or resolve one artifact into a final-reply MEDIA directive"},
+					"ref": {"type": "string", "description": "Exact artifact ref to resolve"},
+					"label": {"type": "string", "description": "Artifact label or label fragment to resolve"},
+					"latest": {"type": "boolean", "description": "Resolve the latest sendable artifact when no ref or label is given"},
+					"type": {"type": "string", "enum": ["any", "pdf"], "description": "Optional artifact type filter"}
+				},
+				"required": ["action"]
 			}`),
 		})
 		defs = append(defs, agent.ToolDef{
@@ -1252,6 +1277,8 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 		return r.sessionSearch(ctx, input, p, key)
 	case "update_operation":
 		return r.updateOperation(ctx, input, key)
+	case "operation_artifact":
+		return r.operationArtifact(ctx, input, scope, key)
 	case "update_plan":
 		return r.updatePlan(ctx, input, key)
 	case missionLedgerToolName:

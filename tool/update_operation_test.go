@@ -257,6 +257,67 @@ func TestUpdateOperationToolPersistsDurablePhasePlan(t *testing.T) {
 	}
 }
 
+func TestUpdateOperationToolPersistsTypedPhaseGovernanceMetadata(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"update_operation",
+		json.RawMessage(`{
+			"id":"op-consent-plan",
+			"status":"blocked",
+			"phase_plan":{
+				"id":"consent-plan",
+				"goal":"Prepare consent-first external channel work.",
+				"phases":[
+					{
+						"id":"phase-consent",
+						"summary":"Wait for explicit opt-in before external-channel intake",
+						"status":"pending",
+						"authority_class":"read_only_review",
+						"blocked_reason_code":"waiting-for-opt-in",
+						"requires_opt_in":true,
+						"requires_consent":true,
+						"supersedes_phase_ids":["phase-old"],
+						"stale_authority":true
+					}
+				]
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(update_operation phase metadata) err = %v", err)
+	}
+	for _, want := range []string{"blocked_reason_code: waiting_for_opt_in", "requires_opt_in: true", "requires_consent: true", "supersedes_phase_ids: phase-old", "stale_authority: true"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output = %q, want %q", out, want)
+		}
+	}
+
+	state, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if len(state.PhasePlan.Phases) != 1 {
+		t.Fatalf("phase count = %d, want 1", len(state.PhasePlan.Phases))
+	}
+	phase := state.PhasePlan.Phases[0]
+	if phase.BlockedReasonCode != "waiting_for_opt_in" || !phase.RequiresOptIn || !phase.RequiresConsent || !phase.StaleAuthority {
+		t.Fatalf("phase metadata = %#v, want typed blocker flags", phase)
+	}
+	if len(phase.SupersedesPhaseIDs) != 1 || phase.SupersedesPhaseIDs[0] != "phase-old" {
+		t.Fatalf("phase SupersedesPhaseIDs = %#v, want phase-old", phase.SupersedesPhaseIDs)
+	}
+}
+
 func TestUpdateOperationToolRejectsInvalidProposalStatus(t *testing.T) {
 	t.Parallel()
 

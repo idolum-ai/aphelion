@@ -89,7 +89,7 @@ func TestApplyOperationAwarenessBuildsRuntimeFindingsAndArtifacts(t *testing.T) 
 			CurrentPhaseID: "phase-2",
 			Phases: []session.OperationPhase{
 				{ID: "phase-1", Summary: "  inspect first  ", Status: session.PlanStatusCompleted, AuthorityClass: "read_only_review"},
-				{ID: "phase-2", Summary: "  patch next  ", Status: session.PlanStatusPending, AuthorityClass: "workspace_write", BoundedEffect: "  edit files and run tests  "},
+				{ID: "phase-2", Summary: "  patch next  ", Status: session.PlanStatusPending, AuthorityClass: "workspace_write", BoundedEffect: "  edit files and run tests  ", BlockedReasonCode: "waiting-for-opt-in", RequiresOptIn: true, SupersedesPhaseIDs: []string{"phase-old"}},
 			},
 		},
 		Findings: []session.OperationFinding{
@@ -138,7 +138,7 @@ func TestApplyOperationAwarenessBuildsRuntimeFindingsAndArtifacts(t *testing.T) 
 	}
 	if got, want := aw.OperationPhases, []string{
 		"[completed] phase-1: inspect first (authority: read_only_review)",
-		"[pending] phase-2: patch next (authority: workspace_write) bounded_effect: edit files and run tests",
+		"[pending] phase-2: patch next (authority: workspace_write) bounded_effect: edit files and run tests blocked_reason_code: waiting_for_opt_in requires_opt_in: true supersedes_phase_ids: phase-old",
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("OperationPhases = %#v, want %#v", got, want)
 	}

@@ -458,12 +458,6 @@ func continuationWorkMode(state session.ContinuationState) WorkMode {
 		state.StageSummary,
 	}, " "))
 	switch {
-	case strings.Contains(lower, "workspace_write") ||
-		strings.Contains(lower, "patch") ||
-		strings.Contains(lower, "edit ") ||
-		strings.Contains(lower, "code") ||
-		strings.Contains(lower, "test"):
-		return WorkModeWorkspaceWrite
 	case strings.Contains(lower, "read_only") || strings.Contains(lower, "status_check"):
 		return WorkModeReadOnly
 	default:

@@ -97,6 +97,21 @@ func ApplyOperationAwareness(aw prompt.RuntimeAwareness, state session.Operation
 		if effect := strings.TrimSpace(phase.BoundedEffect); effect != "" {
 			line += " bounded_effect: " + effect
 		}
+		if code := strings.TrimSpace(phase.BlockedReasonCode); code != "" {
+			line += " blocked_reason_code: " + code
+		}
+		if phase.RequiresConsent {
+			line += " requires_consent: true"
+		}
+		if phase.RequiresOptIn {
+			line += " requires_opt_in: true"
+		}
+		if len(phase.SupersedesPhaseIDs) > 0 {
+			line += " supersedes_phase_ids: " + strings.Join(phase.SupersedesPhaseIDs, ", ")
+		}
+		if phase.StaleAuthority {
+			line += " stale_authority: true"
+		}
 		aw.OperationPhases = append(aw.OperationPhases, line)
 	}
 	aw.OperationFindings = aw.OperationFindings[:0]

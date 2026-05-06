@@ -32,6 +32,7 @@ type ToolCapabilities struct {
 	Exec                bool
 	UpdatePlan          bool
 	UpdateOperation     bool
+	OperationArtifact   bool
 	CapabilityRequest   bool
 	CapabilityAuthority bool
 	DurableAgent        bool
@@ -41,6 +42,7 @@ func (c ToolCapabilities) Empty() bool {
 	return !c.Exec &&
 		!c.UpdatePlan &&
 		!c.UpdateOperation &&
+		!c.OperationArtifact &&
 		!c.CapabilityRequest &&
 		!c.CapabilityAuthority &&
 		!c.DurableAgent
@@ -856,6 +858,7 @@ func renderOperationalDisciplineBlock(capabilities ToolCapabilities) string {
 		"## Operational Discipline",
 		"Treat open-ended work as an operation with durable state rather than a one-turn improvisation.",
 		"Use update_operation to keep the objective, current stage, proposal state, durable phase_plan, findings, and artifacts current when those details materially shape execution or delivery.",
+		"For phase blockers and supersession, prefer typed fields such as blocked_reason_code, requires_consent, requires_opt_in, supersedes_phase_ids, and stale_authority instead of encoding gates only in prose.",
 		"Operate autonomously between gates. When the next move materially expands capability, external effect, privacy scope, or irreversible risk, surface a bounded proposal instead of silently pushing through.",
 	}, "\n")
 }
@@ -888,6 +891,9 @@ func appendToolDisciplineBlocks(parts []agent.SystemBlock, toolCaps ToolCapabili
 	if operations := renderOperationalDisciplineBlock(toolCaps); operations != "" {
 		parts = append(parts, agent.SystemBlock{Text: operations})
 	}
+	if artifacts := renderOperationArtifactDeliveryBlock(toolCaps); artifacts != "" {
+		parts = append(parts, agent.SystemBlock{Text: artifacts})
+	}
 	if delegation := renderCapabilityDelegationDisciplineBlock(toolCaps); delegation != "" {
 		parts = append(parts, agent.SystemBlock{Text: delegation})
 	}
@@ -912,6 +918,19 @@ func renderConfirmationDisciplineBlock(capabilities ToolCapabilities) string {
 		"Ask for confirmation when authority genuinely depends on it, when intent is materially ambiguous, or when a destructive or irreversible action is next.",
 		"Do not ask for confirmation as a politeness reflex when the next move is already obvious.",
 		"When runtime proposal gating blocks execution, treat that as a real operational boundary rather than a stylistic suggestion.",
+	}, "\n")
+}
+
+func renderOperationArtifactDeliveryBlock(capabilities ToolCapabilities) string {
+	if !capabilities.OperationArtifact {
+		return ""
+	}
+	return strings.Join([]string{
+		"## Operation Artifact Delivery",
+		"Operation artifacts are durable state, not ambient conversational intent.",
+		"When the user explicitly asks to receive an existing operation artifact, call operation_artifact with action=resolve_sendable and include the returned MEDIA directive in the final reply.",
+		"If the user only mentions sharing later, references an artifact ambiguously, or is continuing ordinary conversation, do not send an artifact; answer the turn normally or ask a concise clarification.",
+		"Do not invent artifact paths or attach files without operation_artifact evidence that the path is sendable inside the active sandbox.",
 	}, "\n")
 }
 
@@ -952,6 +971,8 @@ func ToolCapabilitiesFromDefs(defs []agent.ToolDef) ToolCapabilities {
 			out.UpdatePlan = true
 		case "update_operation":
 			out.UpdateOperation = true
+		case "operation_artifact":
+			out.OperationArtifact = true
 		case "capability_request":
 			out.CapabilityRequest = true
 		case "capability_authority":
@@ -969,6 +990,7 @@ func toolCapabilitiesFromManifest(manifest string) ToolCapabilities {
 		Exec:                manifestHasTool(names, "exec"),
 		UpdatePlan:          manifestHasTool(names, "update_plan"),
 		UpdateOperation:     manifestHasTool(names, "update_operation"),
+		OperationArtifact:   manifestHasTool(names, "operation_artifact"),
 		CapabilityRequest:   manifestHasTool(names, "capability_request"),
 		CapabilityAuthority: manifestHasTool(names, "capability_authority"),
 		DurableAgent:        manifestHasTool(names, "durable_agent"),

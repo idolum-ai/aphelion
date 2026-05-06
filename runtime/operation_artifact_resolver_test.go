@@ -136,6 +136,61 @@ func TestHandleInboundDoesNotTreatContinuationAuthorizationAsArtifactRequest(t *
 	}
 }
 
+func TestHandleInboundDoesNotTreatConversationalShareLaterAsArtifactRequest(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	expected := &core.TurnResult{Text: "normal conversational reply"}
+	recorder := &recordingInteractiveDMTurnAssembler{result: expected}
+	rt.interactiveDMAssembler = recorder
+
+	artifactPath := filepath.Join(cfg.Agent.ExecRoot, "memory", "work-evidence", "latest.md")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() err = %v", err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("work evidence"), 0o600); err != nil {
+		t.Fatalf("WriteFile() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8803, UserID: 0, Scope: telegramDMScopeRef(8803)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		Status: session.OperationStatusActive,
+		Artifacts: []session.OperationArtifact{
+			{Label: "Work evidence", Ref: "memory/work-evidence/latest.md"},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	text := "I read another article called the encore of abraxas that reveals some of it, I should share it later.\n\nReply context:\nidolum_bot: Work evidence available."
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     8803,
+		ChatType:   "private",
+		SenderID:   1001,
+		SenderName: "admin",
+		MessageID:  46,
+		Text:       text,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if result != expected {
+		t.Fatalf("HandleInbound() result = %#v, want assembler result", result)
+	}
+	if !recorder.called {
+		t.Fatal("interactive assembler was not called")
+	}
+	if provider.callCount != 0 {
+		t.Fatalf("provider.callCount = %d, want stubbed assembler boundary", provider.callCount)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 0 {
+		t.Fatalf("sent = %#v, want no direct artifact send for conversational share-later text", sender.sent)
+	}
+}
+
 func TestLooksLikeOperationArtifactSendRequestIgnoresReplyContext(t *testing.T) {
 	t.Parallel()
 
@@ -152,9 +207,26 @@ func TestLooksLikeOperationArtifactSendRequestStillUsesUserText(t *testing.T) {
 		"send it\n\nReply context:\nidolum_bot: Proposal denial bugfix validation log.",
 		"please attach the file",
 		"share that report",
+		"can you send me the work evidence",
 	} {
 		if !looksLikeOperationArtifactSendRequest(text) {
 			t.Fatalf("looksLikeOperationArtifactSendRequest(%q) = false, want true", text)
+		}
+	}
+}
+
+func TestLooksLikeOperationArtifactSendRequestRejectsNarrativeOrAmbiguousPronouns(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{
+		"I should share it later",
+		"I should share that report later",
+		"we can send it later",
+		"send it",
+		"attach that",
+	} {
+		if looksLikeOperationArtifactSendRequest(text) {
+			t.Fatalf("looksLikeOperationArtifactSendRequest(%q) = true, want false", text)
 		}
 	}
 }

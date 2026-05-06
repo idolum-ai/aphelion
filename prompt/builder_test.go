@@ -251,6 +251,27 @@ func TestBuildGovernorPromptAddsGeneratedMediaDeliveryWhenExecIsAvailable(t *tes
 	}
 }
 
+func TestBuildGovernorPromptAddsOperationArtifactDeliveryWhenToolAvailable(t *testing.T) {
+	t.Parallel()
+
+	got := BuildGovernorPrompt(GovernorRequest{
+		ToolManifest: "tools:\n- operation_artifact: resolve operation artifacts",
+	})
+
+	if !strings.Contains(got, "## Operation Artifact Delivery") {
+		t.Fatalf("prompt missing operation artifact delivery block: %q", got)
+	}
+	if !strings.Contains(got, "durable state, not ambient conversational intent") {
+		t.Fatalf("prompt missing artifact intent boundary: %q", got)
+	}
+	if !strings.Contains(got, "call operation_artifact with action=resolve_sendable") {
+		t.Fatalf("prompt missing structured artifact delivery guidance: %q", got)
+	}
+	if !strings.Contains(got, "only mentions sharing later") {
+		t.Fatalf("prompt missing share-later guard: %q", got)
+	}
+}
+
 func TestBuildGovernorPromptAddsCapabilityDelegationWhenToolsAvailable(t *testing.T) {
 	t.Parallel()
 
@@ -282,9 +303,10 @@ func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testin
 
 	got := BuildGovernorPrompt(GovernorRequest{
 		ToolCapabilities: ToolCapabilities{
-			Exec:            true,
-			UpdatePlan:      true,
-			UpdateOperation: true,
+			Exec:              true,
+			UpdatePlan:        true,
+			UpdateOperation:   true,
+			OperationArtifact: true,
 		},
 	})
 
@@ -294,6 +316,9 @@ func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testin
 	if !strings.Contains(got, "## Operational Discipline") {
 		t.Fatalf("prompt missing operational discipline from capability flags: %q", got)
 	}
+	if !strings.Contains(got, "blocked_reason_code, requires_consent, requires_opt_in") {
+		t.Fatalf("prompt missing typed phase metadata guidance: %q", got)
+	}
 	if !strings.Contains(got, "## Confirmation Discipline") {
 		t.Fatalf("prompt missing confirmation discipline from capability flags: %q", got)
 	}
@@ -302,6 +327,9 @@ func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testin
 	}
 	if !strings.Contains(got, "## Generated Media Delivery") {
 		t.Fatalf("prompt missing generated media delivery from capability flags: %q", got)
+	}
+	if !strings.Contains(got, "## Operation Artifact Delivery") {
+		t.Fatalf("prompt missing operation artifact delivery from capability flags: %q", got)
 	}
 }
 
