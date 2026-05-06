@@ -940,6 +940,15 @@ func continuationOperatorCardLines(state session.ContinuationState) []string {
 		"Lease class: " + session.ContinuationLeaseClassLabel(class),
 		"Boundary: " + session.ContinuationLeaseClassBoundary(class),
 	}
+	if adjudication := continuationProposalRiskAdjudication(state); len(adjudication.Findings) > 0 {
+		for _, finding := range adjudication.Findings {
+			finding = core.NormalizeRuntimeFinding(finding)
+			if finding.Kind == "" {
+				continue
+			}
+			lines = append(lines, "Risk note: "+continuationProposalRiskFindingLabel(finding.Kind))
+		}
+	}
 	constraints := lease.Constraints
 	if len(constraints) == 0 {
 		constraints = session.DefaultContinuationLeaseConstraints(class)
@@ -962,6 +971,19 @@ func continuationOperatorCardLines(state session.ContinuationState) []string {
 		}
 	}
 	return lines
+}
+
+func continuationProposalRiskFindingLabel(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "may_delete":
+		return "may delete"
+	case "may_restart_or_deploy":
+		return "may restart/deploy"
+	case "may_external_effect":
+		return "may affect external systems"
+	default:
+		return strings.ReplaceAll(strings.TrimSpace(kind), "_", " ")
+	}
 }
 
 func renderContinuationPromptFallback(state session.ContinuationState) string {

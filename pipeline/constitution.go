@@ -91,6 +91,7 @@ func BuildRepairContract(base RepairContract, violations []ConstitutionViolation
 	contract.Candidate = strings.TrimSpace(contract.Candidate)
 	contract.FloorText = strings.TrimSpace(contract.FloorText)
 	contract.Violations = notes
+	contract.Adjudications = core.NormalizeRuntimeAdjudications(contract.Adjudications)
 	if contract.MediaCount < 0 {
 		contract.MediaCount = 0
 	}

@@ -59,6 +59,7 @@ type FaceRequest struct {
 	CandidateReply    string
 	RepairNotes       []string
 	ContextNotes      []string
+	Adjudications     []core.RuntimeAdjudication
 	PriorProposal     string
 	BrokerageFeedback string
 	StableFiles       []workspace.LoadedFile
@@ -336,6 +337,20 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 				continue
 			}
 			lines = append(lines, "- "+note)
+		}
+		if len(lines) > 2 {
+			parts = append(parts, agent.SystemBlock{Text: strings.Join(lines, "\n")})
+		}
+	}
+	if len(req.Adjudications) > 0 {
+		lines := []string{
+			"## Runtime Facts",
+			"These are structured runtime facts, not required prose. Use them to avoid unsupported claims. Mention them only when that genuinely helps the user.",
+		}
+		for _, adjudication := range core.NormalizeRuntimeAdjudications(req.Adjudications) {
+			if line := renderRuntimeAdjudicationFact(adjudication); line != "" {
+				lines = append(lines, "- "+line)
+			}
 		}
 		if len(lines) > 2 {
 			parts = append(parts, agent.SystemBlock{Text: strings.Join(lines, "\n")})
@@ -1042,6 +1057,56 @@ func markLastStableCacheBreakpoint(blocks []agent.SystemBlock) {
 		blocks[i].CacheBreakpoint = true
 		return
 	}
+}
+
+func renderRuntimeAdjudicationFact(adjudication core.RuntimeAdjudication) string {
+	adjudication = core.NormalizeRuntimeAdjudication(adjudication)
+	if adjudication.Kind == "" && len(adjudication.Findings) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 6)
+	if adjudication.Kind != "" {
+		parts = append(parts, "kind="+adjudication.Kind)
+	}
+	if adjudication.Surface != "" {
+		parts = append(parts, "surface="+adjudication.Surface)
+	}
+	if adjudication.VisibleAction != "" {
+		parts = append(parts, "visible_action="+adjudication.VisibleAction)
+	}
+	if adjudication.OperatorLabel != "" {
+		parts = append(parts, fmt.Sprintf("label=%q", adjudication.OperatorLabel))
+	}
+	if len(adjudication.Findings) > 0 {
+		findingParts := make([]string, 0, len(adjudication.Findings))
+		for _, finding := range adjudication.Findings {
+			finding = core.NormalizeRuntimeFinding(finding)
+			findingPart := firstNonEmptyPrompt(finding.Kind, finding.ClaimType)
+			if finding.Detail != "" {
+				findingPart += ":" + finding.Detail
+			}
+			if findingPart != "" {
+				findingParts = append(findingParts, findingPart)
+			}
+		}
+		if len(findingParts) > 0 {
+			parts = append(parts, fmt.Sprintf("findings=%q", strings.Join(findingParts, "; ")))
+		}
+	}
+	if len(adjudication.EvidenceRefs) > 0 {
+		parts = append(parts, fmt.Sprintf("evidence_refs=%q", strings.Join(adjudication.EvidenceRefs, ", ")))
+	}
+	return strings.Join(parts, " ")
+}
+
+func firstNonEmptyPrompt(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func renderFileSection(title string, files []workspace.LoadedFile) string {

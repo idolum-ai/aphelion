@@ -18,6 +18,46 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
+func TestContinuationOperatorCardUsesMayDeleteRiskNote(t *testing.T) {
+	t.Parallel()
+
+	lines := continuationOperatorCardLines(session.ContinuationState{
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-cleanup",
+			Summary:        "Clean generated files.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"delete_generated_files"},
+			BoundedEffect:  "Remove generated files under tmp only.",
+		},
+		ContinuationLease: session.ContinuationLease{LeaseClass: session.ContinuationLeaseClassLocalWorkspace},
+	})
+	text := strings.Join(lines, "\n")
+	if !strings.Contains(text, "Risk note: may delete") {
+		t.Fatalf("operator card = %q, want may delete risk note", text)
+	}
+	if strings.Contains(strings.ToLower(text), "destructive") {
+		t.Fatalf("operator card = %q, want no destructive label", text)
+	}
+}
+
+func TestContinuationOperatorCardDoesNotMayDeleteNegatedReview(t *testing.T) {
+	t.Parallel()
+
+	lines := continuationOperatorCardLines(session.ContinuationState{
+		ActionProposal: session.ActionProposal{
+			ID:            "aprop-review",
+			Summary:       "Review deletion handling.",
+			RiskClass:     "read_only_review",
+			BoundedEffect: "Review the migration plan without deleting data or changing files.",
+		},
+		ContinuationLease: session.ContinuationLease{LeaseClass: session.ContinuationLeaseClassLocalWorkspace},
+	})
+	text := strings.Join(lines, "\n")
+	if strings.Contains(text, "Risk note: may delete") {
+		t.Fatalf("operator card = %q, want no may delete note for negated read-only review", text)
+	}
+}
+
 func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	t.Parallel()
 

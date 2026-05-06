@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,7 +44,7 @@ func (r *Runtime) applyTurnConstitution(
 			audit.RecordViolations(violations)
 			audit.RecordExecutionClaimFindings(adjudication.Findings)
 		}
-		if repaired, ok := r.repairTurnReply(ctx, scope, channel, principalRole, userText, currentFaceModel, faceAwareness, materialFloor, floorText, trimmedReply, media, violations, audit); ok {
+		if repaired, ok := r.repairTurnReply(ctx, scope, channel, principalRole, userText, currentFaceModel, faceAwareness, materialFloor, floorText, trimmedReply, media, violations, []core.RuntimeAdjudication{adjudication.RuntimeAdjudication("repair_requested")}, audit); ok {
 			repairedAdjudication := r.adjudicateFinalReplyExecutionClaims(key, repaired)
 			if !repairedAdjudication.HasFindings() {
 				trimmedReply = strings.TrimSpace(repaired)
@@ -100,6 +101,7 @@ func (r *Runtime) applyTurnConstitution(
 				candidateText,
 				candidateMedia,
 				violations,
+				nil,
 				audit,
 			)
 		},
@@ -180,6 +182,24 @@ func (a executionClaimAdjudication) WithPrior(prior executionClaimAdjudication) 
 	a.HasTestEvidence = a.HasTestEvidence || prior.HasTestEvidence
 	a.HasDurableEvidence = a.HasDurableEvidence || prior.HasDurableEvidence
 	return a
+}
+
+func (a executionClaimAdjudication) RuntimeAdjudication(visibleAction string) core.RuntimeAdjudication {
+	a = a.WithPrior(executionClaimAdjudication{})
+	evidenceRefs := make([]string, 0, 1)
+	if a.LatestTurnSeq > 0 {
+		evidenceRefs = append(evidenceRefs, "tes:turn_seq:"+strconv.FormatInt(a.LatestTurnSeq, 10))
+	}
+	return core.NormalizeRuntimeAdjudication(core.RuntimeAdjudication{
+		Kind:          "execution_claim",
+		Surface:       "final_reply",
+		SubjectID:     "latest_turn",
+		OperatorLabel: executionClaimOperatorLabel(visibleAction),
+		Findings:      append([]core.RuntimeFinding(nil), a.Findings...),
+		EvidenceRefs:  evidenceRefs,
+		VisibleAction: visibleAction,
+		CreatedAt:     time.Now().UTC(),
+	})
 }
 
 func (r *Runtime) adjudicateFinalReplyExecutionClaims(key session.SessionKey, reply string) executionClaimAdjudication {
@@ -290,6 +310,7 @@ func executionClaimFinding(claimType string, detail string, adjudication executi
 		required = "Do not claim completion when the latest turn is not completed. State only the observable state if it matters. Do not prepend a correction banner."
 	}
 	return ExecutionClaimFinding{
+		Kind:             claimType,
 		ClaimType:        claimType,
 		EvidenceStatus:   "not_observed_in_current_turn",
 		Detail:           strings.TrimSpace(detail),
@@ -299,10 +320,24 @@ func executionClaimFinding(claimType string, detail string, adjudication executi
 	}
 }
 
+func executionClaimOperatorLabel(visibleAction string) string {
+	switch strings.TrimSpace(visibleAction) {
+	case "repair_requested":
+		return "Reply claim needs repair"
+	case "persona_repaired":
+		return "Reply claim repaired"
+	case "fallback_neutralized":
+		return "Reply claim neutralized"
+	default:
+		return "Reply claim adjudicated"
+	}
+}
+
 func (r *Runtime) recordExecutionClaimAdjudication(key session.SessionKey, adjudication executionClaimAdjudication, visibleAction string) {
 	if r == nil || !adjudication.HasFindings() {
 		return
 	}
+	runtimeAdjudication := adjudication.RuntimeAdjudication(visibleAction)
 	claimTypes := make([]string, 0, len(adjudication.Findings))
 	details := make([]string, 0, len(adjudication.Findings))
 	for _, finding := range adjudication.Findings {
@@ -314,6 +349,12 @@ func (r *Runtime) recordExecutionClaimAdjudication(key session.SessionKey, adjud
 		}
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventReplyClaimAdjudicated, "reply", "adjudicated", map[string]any{
+		"adjudication_kind":    runtimeAdjudication.Kind,
+		"surface":              runtimeAdjudication.Surface,
+		"subject_id":           runtimeAdjudication.SubjectID,
+		"operator_label":       runtimeAdjudication.OperatorLabel,
+		"findings":             runtimeAdjudication.Findings,
+		"evidence_refs":        runtimeAdjudication.EvidenceRefs,
 		"claim_types":          claimTypes,
 		"details":              details,
 		"findings_count":       len(adjudication.Findings),
@@ -585,6 +626,7 @@ func (r *Runtime) repairTurnReply(
 	replyText string,
 	media []core.Media,
 	violations []ConstitutionViolation,
+	adjudications []core.RuntimeAdjudication,
 	audit *turnAuditRecorder,
 ) (string, bool) {
 	if r == nil || r.faceBackend == face.BackendFloorFallback || currentFaceModel == nil {
@@ -603,8 +645,9 @@ func (r *Runtime) repairTurnReply(
 			Packet: materialFloor,
 			Text:   floorText,
 		},
-		Runtime:    faceAwareness,
-		MediaCount: len(media),
+		Runtime:       faceAwareness,
+		Adjudications: adjudications,
+		MediaCount:    len(media),
 	}, violations)
 	if !ok {
 		return "", false
@@ -621,6 +664,7 @@ func (r *Runtime) repairTurnReply(
 		LatestUserInput: contract.UserText,
 		CandidateReply:  contract.Candidate,
 		RepairNotes:     contract.Violations,
+		Adjudications:   contract.Adjudications,
 		Runtime:         contract.Runtime,
 	})
 	if err != nil {

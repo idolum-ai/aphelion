@@ -83,6 +83,9 @@ func (r *Runtime) StatusDiagnostics(chatID int64) ([]string, error) {
 	if stuck, ok := r.operationApprovalAffordanceDiagnostic(chatID, chatSnapshot); ok {
 		lines = append(lines, stuck)
 	}
+	if len(chatSnapshot.RecentAdjudications) > 0 {
+		lines = append(lines, statusAdjudicationDiagnosticLine(chatSnapshot.RecentAdjudications[0]))
+	}
 	return lines, nil
 }
 
@@ -234,6 +237,7 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 			return core.ChatStatusSnapshot{}, eventsErr
 		}
 		snapshot.RecentExecution = summarizeExecutionEvents(events, 12)
+		snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(events, 6)
 		if latestFromEvents, ok := latestTurnSnapshotForChatFromExecutionEvents(events, chatID); ok {
 			copied := latestFromEvents
 			snapshot.LatestTurnRun = &copied
@@ -360,6 +364,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		return core.SystemStatusSnapshot{}, err
 	}
 	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
+	snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(recentEvents, 12)
 	activeByChat, queueByChat := liveRouterSignalsFromExecutionEvents(recentEvents)
 	snapshot.ActiveTurnsByChat = activeByChat
 	snapshot.QueueDepthByChat = queueByChat
@@ -1334,8 +1339,157 @@ func summarizeExecutionEvents(events []session.ExecutionEvent, limit int) []core
 	return out
 }
 
+func statusAdjudicationsFromExecutionEvents(events []session.ExecutionEvent, limit int) []core.AdjudicationStatusSnapshot {
+	if len(events) == 0 || limit == 0 {
+		return nil
+	}
+	if limit < 0 {
+		limit = len(events)
+	}
+	ordered := append([]session.ExecutionEvent(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool { return executionEventBefore(ordered[i], ordered[j]) })
+	out := make([]core.AdjudicationStatusSnapshot, 0, minStatusInt(limit, len(ordered)))
+	for i := len(ordered) - 1; i >= 0; i-- {
+		event := ordered[i]
+		if strings.TrimSpace(event.EventType) != core.ExecutionEventReplyClaimAdjudicated {
+			continue
+		}
+		adjudication, ok := runtimeAdjudicationFromExecutionEvent(event)
+		if !ok {
+			continue
+		}
+		out = append(out, core.AdjudicationStatusSnapshot{
+			SessionID:     strings.TrimSpace(event.SessionID),
+			ChatID:        event.ChatID,
+			Seq:           event.Seq,
+			Kind:          adjudication.Kind,
+			Surface:       adjudication.Surface,
+			SubjectID:     adjudication.SubjectID,
+			OperatorLabel: adjudication.OperatorLabel,
+			VisibleAction: adjudication.VisibleAction,
+			Findings:      append([]core.RuntimeFinding(nil), adjudication.Findings...),
+			EvidenceRefs:  append([]string(nil), adjudication.EvidenceRefs...),
+			CreatedAt:     event.CreatedAt,
+		})
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func runtimeAdjudicationFromExecutionEvent(event session.ExecutionEvent) (core.RuntimeAdjudication, bool) {
+	payload := executionEventPayload(event.PayloadJSON)
+	if len(payload) == 0 {
+		return core.RuntimeAdjudication{}, false
+	}
+	findings := payloadRuntimeFindings(payload, "findings")
+	if len(findings) == 0 {
+		claimTypes := payloadStringSlice(payload, "claim_types")
+		details := payloadStringSlice(payload, "details")
+		for i, claimType := range claimTypes {
+			detail := ""
+			if i < len(details) {
+				detail = details[i]
+			}
+			findings = append(findings, core.RuntimeFinding{
+				Kind:           claimType,
+				ClaimType:      claimType,
+				EvidenceStatus: "not_observed_in_current_turn",
+				Detail:         detail,
+			})
+		}
+	}
+	adjudication := core.NormalizeRuntimeAdjudication(core.RuntimeAdjudication{
+		Kind:          firstNonEmpty(payloadString(payload, "adjudication_kind"), "execution_claim"),
+		Surface:       firstNonEmpty(payloadString(payload, "surface"), "final_reply"),
+		SubjectID:     firstNonEmpty(payloadString(payload, "subject_id"), "latest_turn"),
+		OperatorLabel: firstNonEmpty(payloadString(payload, "operator_label"), executionClaimOperatorLabel(payloadString(payload, "visible_action"))),
+		Findings:      findings,
+		EvidenceRefs:  payloadStringSlice(payload, "evidence_refs"),
+		VisibleAction: payloadString(payload, "visible_action"),
+		CreatedAt:     event.CreatedAt,
+	})
+	if adjudication.Kind == "" && len(adjudication.Findings) == 0 {
+		return core.RuntimeAdjudication{}, false
+	}
+	return adjudication, true
+}
+
+func payloadRuntimeFindings(payload map[string]any, key string) []core.RuntimeFinding {
+	if len(payload) == 0 {
+		return nil
+	}
+	raw, ok := payload[strings.TrimSpace(key)]
+	if !ok || raw == nil {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]core.RuntimeFinding, 0, len(items))
+	for _, item := range items {
+		rawFinding, err := json.Marshal(item)
+		if err != nil {
+			continue
+		}
+		var finding core.RuntimeFinding
+		if err := json.Unmarshal(rawFinding, &finding); err != nil {
+			continue
+		}
+		finding = core.NormalizeRuntimeFinding(finding)
+		if finding.Kind == "" && finding.Detail == "" {
+			continue
+		}
+		out = append(out, finding)
+	}
+	return out
+}
+
+func statusAdjudicationDiagnosticLine(adjudication core.AdjudicationStatusSnapshot) string {
+	label := firstNonEmpty(strings.TrimSpace(adjudication.OperatorLabel), "Runtime adjudication")
+	action := strings.TrimSpace(adjudication.VisibleAction)
+	detail := ""
+	if len(adjudication.Findings) > 0 {
+		finding := core.NormalizeRuntimeFinding(adjudication.Findings[0])
+		detail = firstNonEmpty(finding.Detail, finding.RequiredBehavior, finding.Kind)
+	}
+	parts := []string{"Runtime adjudication: " + label}
+	if action != "" {
+		parts = append(parts, "action="+action)
+	}
+	if detail != "" {
+		parts = append(parts, "detail="+strconv.Quote(truncateStatusDiagnostic(detail, 180)))
+	}
+	return strings.Join(parts, " ") + "."
+}
+
 func summarizeExecutionEventPayload(eventType string, eventStatus string, payload map[string]any) string {
 	switch strings.TrimSpace(eventType) {
+	case core.ExecutionEventReplyClaimAdjudicated:
+		label := firstNonEmpty(payloadString(payload, "operator_label"), executionClaimOperatorLabel(payloadString(payload, "visible_action")))
+		action := strings.TrimSpace(payloadString(payload, "visible_action"))
+		parts := make([]string, 0, 3)
+		if label != "" {
+			parts = append(parts, "label="+label)
+		}
+		if action != "" {
+			parts = append(parts, "action="+action)
+		}
+		claimTypes := payloadStringSlice(payload, "claim_types")
+		if len(claimTypes) == 0 {
+			for _, finding := range payloadRuntimeFindings(payload, "findings") {
+				finding = core.NormalizeRuntimeFinding(finding)
+				if finding.Kind != "" {
+					claimTypes = append(claimTypes, finding.Kind)
+				}
+			}
+		}
+		if len(claimTypes) > 0 {
+			parts = append(parts, "findings="+strings.Join(claimTypes, ","))
+		}
+		return strings.Join(parts, " ")
 	case core.ExecutionEventToolRegistered:
 		registered := strings.TrimSpace(eventStatus) == "enabled"
 		if value, ok := payloadBool(payload, "registered"); ok {

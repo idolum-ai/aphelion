@@ -27,14 +27,7 @@ type TurnToolAudit struct {
 	Error         string `json:"error,omitempty"`
 }
 
-type ExecutionClaimFinding struct {
-	ClaimType        string `json:"claim_type"`
-	EvidenceStatus   string `json:"evidence_status"`
-	Detail           string `json:"detail,omitempty"`
-	LatestTurnStatus string `json:"latest_turn_status,omitempty"`
-	LatestTerminalAt string `json:"latest_terminal_at,omitempty"`
-	RequiredBehavior string `json:"required_behavior,omitempty"`
-}
+type ExecutionClaimFinding = core.RuntimeFinding
 
 type BrokerageRoundAudit struct {
 	Round                      int      `json:"round"`

@@ -77,6 +77,7 @@ type RepairContract struct {
 	Material      FloorMaterial
 	Runtime       prompt.RuntimeAwareness
 	Violations    []string
+	Adjudications []core.RuntimeAdjudication
 	MediaCount    int
 }
 

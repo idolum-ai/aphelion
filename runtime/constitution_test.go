@@ -233,6 +233,21 @@ func TestApplyTurnConstitutionRepairsUngroundedExecutionClaimWithoutBanner(t *te
 	if len(audit.ExecutionClaimFindings) != 1 || audit.ExecutionClaimFindings[0].ClaimType != "test_execution" {
 		t.Fatalf("execution findings = %#v, want one test_execution finding", audit.ExecutionClaimFindings)
 	}
+	provider.mu.Lock()
+	seenFaceSystem := append([]string(nil), provider.seenFaceSystem...)
+	provider.mu.Unlock()
+	if len(seenFaceSystem) == 0 {
+		t.Fatal("expected repair face prompt to be recorded")
+	}
+	repairPrompt := seenFaceSystem[len(seenFaceSystem)-1]
+	for _, want := range []string{"## Runtime Facts", "execution_claim", "test_execution", "not required prose"} {
+		if !strings.Contains(repairPrompt, want) {
+			t.Fatalf("repair prompt missing %q:\n%s", want, repairPrompt)
+		}
+	}
+	if strings.Contains(repairPrompt, "I need to correct that") {
+		t.Fatalf("repair prompt leaked deterministic correction banner:\n%s", repairPrompt)
+	}
 	events, err := store.ExecutionEventsBySession(key, 0, 100)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)

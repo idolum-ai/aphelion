@@ -474,6 +474,42 @@ type telegramChildBotNoSendOutbound struct{}
 	}
 }
 
+func TestDoctorRuntimeAdjudicationsSummarizesStructuredEvents(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9401, UserID: 0, Scope: telegramDMScopeRef(9401)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType: core.ExecutionEventReplyClaimAdjudicated,
+		Stage:     "reply",
+		Status:    "adjudicated",
+		PayloadJSON: `{
+			"adjudication_kind":"execution_claim",
+			"surface":"final_reply",
+			"operator_label":"Reply claim repaired",
+			"visible_action":"persona_repaired",
+			"findings":[{"kind":"test_execution","claim_type":"test_execution","detail":"test-execution claim has no test-related tool evidence"}]
+		}`,
+		CreatedAt: now,
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	var b strings.Builder
+	rt.writeDoctorRuntimeAdjudications(context.Background(), &b, key, now)
+	report := b.String()
+	for _, want := range []string{"kind=execution_claim", "action=persona_repaired", "Reply claim repaired", "test_execution", "test-execution claim"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("doctor adjudications = %q, want %q", report, want)
+		}
+	}
+}
+
 func TestStartDoctorRejectsNonAdmin(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

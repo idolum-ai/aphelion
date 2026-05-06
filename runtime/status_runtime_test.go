@@ -870,6 +870,61 @@ func TestChatStatusSnapshotIncludesRecentExecutionTimeline(t *testing.T) {
 	}
 }
 
+func TestStatusSurfacesRuntimeAdjudications(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 90211, UserID: 0, Scope: telegramDMScopeRef(90211)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType: core.ExecutionEventReplyClaimAdjudicated,
+		Stage:     "reply",
+		Status:    "adjudicated",
+		PayloadJSON: `{
+			"adjudication_kind":"execution_claim",
+			"surface":"final_reply",
+			"subject_id":"latest_turn",
+			"operator_label":"Reply claim repaired",
+			"visible_action":"persona_repaired",
+			"findings":[{"kind":"test_execution","claim_type":"test_execution","evidence_status":"not_observed_in_current_turn","detail":"test-execution claim has no test-related tool evidence"}],
+			"evidence_refs":["tes:turn_seq:12"]
+		}`,
+		CreatedAt: now,
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents(adjudication) err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(90211, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.RecentAdjudications) != 1 {
+		t.Fatalf("RecentAdjudications len = %d, want 1", len(snapshot.RecentAdjudications))
+	}
+	if got := snapshot.RecentAdjudications[0].Findings[0].Kind; got != "test_execution" {
+		t.Fatalf("adjudication finding kind = %q, want test_execution", got)
+	}
+	if len(snapshot.RecentExecution) == 0 || !strings.Contains(snapshot.RecentExecution[0].Summary, "action=persona_repaired") {
+		t.Fatalf("RecentExecution = %#v, want adjudication summary", snapshot.RecentExecution)
+	}
+
+	lines, err := rt.StatusDiagnostics(90211)
+	if err != nil {
+		t.Fatalf("StatusDiagnostics() err = %v", err)
+	}
+	text := strings.Join(lines, "\n")
+	for _, want := range []string{"Runtime adjudication", "Reply claim repaired", "persona_repaired", "test-execution claim"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("StatusDiagnostics() = %q, want %q", text, want)
+		}
+	}
+}
+
 func TestChatStatusSnapshotSummarizesToolInstallEvents(t *testing.T) {
 	t.Parallel()
 

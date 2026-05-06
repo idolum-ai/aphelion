@@ -716,6 +716,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Execution Events")
 	r.writeDoctorExecutionEvents(ctx, &b, input.Key, now)
 
+	writeDoctorSection(&b, "Runtime Adjudications")
+	r.writeDoctorRuntimeAdjudications(ctx, &b, input.Key, now)
+
 	writeDoctorSection(&b, "Turn Runs")
 	r.writeDoctorTurnRuns(ctx, &b, now)
 
@@ -1211,6 +1214,47 @@ func (r *Runtime) writeDoctorExecutionEvents(ctx context.Context, b *strings.Bui
 	} else {
 		writeDoctorLine(b, "recent_system_events:")
 		writeDoctorEvents(b, recentEvents, 25)
+	}
+	_ = ctx
+}
+
+func (r *Runtime) writeDoctorRuntimeAdjudications(ctx context.Context, b *strings.Builder, key session.SessionKey, now time.Time) {
+	if r == nil || r.store == nil {
+		return
+	}
+	chatEvents, err := r.store.ExecutionEventsByChat(key.ChatID, now.Add(-24*time.Hour), 120)
+	if err != nil {
+		writeDoctorLine(b, "adjudications_error="+strconv.Quote(err.Error()))
+		return
+	}
+	adjudications := statusAdjudicationsFromExecutionEvents(chatEvents, 8)
+	if len(adjudications) == 0 {
+		writeDoctorLine(b, "- none")
+		return
+	}
+	for _, adjudication := range adjudications {
+		findingKinds := make([]string, 0, len(adjudication.Findings))
+		details := make([]string, 0, len(adjudication.Findings))
+		for _, finding := range adjudication.Findings {
+			finding = core.NormalizeRuntimeFinding(finding)
+			if finding.Kind != "" {
+				findingKinds = append(findingKinds, finding.Kind)
+			}
+			if finding.Detail != "" {
+				details = append(details, finding.Detail)
+			}
+		}
+		writeDoctorLine(b, fmt.Sprintf("- time=%s chat_id=%d seq=%d kind=%s surface=%s action=%s label=%q findings=%q detail=%q",
+			adjudication.CreatedAt.UTC().Format(time.RFC3339),
+			adjudication.ChatID,
+			adjudication.Seq,
+			strings.TrimSpace(adjudication.Kind),
+			strings.TrimSpace(adjudication.Surface),
+			strings.TrimSpace(adjudication.VisibleAction),
+			strings.TrimSpace(adjudication.OperatorLabel),
+			strings.Join(findingKinds, ","),
+			truncatePreview(strings.Join(details, "; "), 260),
+		))
 	}
 	_ = ctx
 }

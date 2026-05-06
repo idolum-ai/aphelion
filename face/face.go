@@ -36,6 +36,7 @@ type RenderRequest struct {
 	CandidateReply  string
 	RepairNotes     []string
 	ContextNotes    []string
+	Adjudications   []core.RuntimeAdjudication
 	Runtime         prompt.RuntimeAwareness
 }
 

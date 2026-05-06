@@ -43,6 +43,20 @@ type ExecutionEventSummary struct {
 	CreatedAt time.Time
 }
 
+type AdjudicationStatusSnapshot struct {
+	SessionID     string
+	ChatID        int64
+	Seq           int64
+	Kind          string
+	Surface       string
+	SubjectID     string
+	OperatorLabel string
+	VisibleAction string
+	Findings      []RuntimeFinding
+	EvidenceRefs  []string
+	CreatedAt     time.Time
+}
+
 type TurnRunStatusSnapshot struct {
 	ID                    int64
 	ChatID                int64
@@ -190,6 +204,7 @@ type ChatStatusSnapshot struct {
 	Continuation          *ContinuationStatusSnapshot
 	LatestTurnRun         *TurnRunStatusSnapshot
 	RecentExecution       []ExecutionEventSummary
+	RecentAdjudications   []AdjudicationStatusSnapshot
 	ToolLifecycle         []ToolLifecycleStatusSnapshot
 	CapabilityRequests    []CapabilityRequestStatusSnapshot
 	CapabilityGrants      []CapabilityGrantStatusSnapshot
@@ -218,6 +233,7 @@ type SystemStatusSnapshot struct {
 	Continuations        []ContinuationStatusSnapshot
 	LatestTurnRunsByChat map[int64]TurnRunStatusSnapshot
 	RecentExecution      []ExecutionEventSummary
+	RecentAdjudications  []AdjudicationStatusSnapshot
 	StaleRunningTurns    []TurnRunStatusSnapshot
 	HotChats             []ChatStatusRollup
 	RestartHealth        RestartHealthSnapshot

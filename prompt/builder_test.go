@@ -432,6 +432,40 @@ func TestBuildFacePromptOmitsToolDefinitions(t *testing.T) {
 	}
 }
 
+func TestBuildFacePromptIncludesRuntimeFactsForAdjudications(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		Mode: "repair",
+		Adjudications: []core.RuntimeAdjudication{{
+			Kind:          "execution_claim",
+			Surface:       "final_reply",
+			OperatorLabel: "Reply claim repaired",
+			VisibleAction: "repair_requested",
+			Findings: []core.RuntimeFinding{{
+				Kind:           "test_execution",
+				ClaimType:      "test_execution",
+				EvidenceStatus: "not_observed_in_current_turn",
+				Detail:         "test-execution claim has no test-related tool evidence",
+			}},
+			EvidenceRefs: []string{"tes:turn_seq:12"},
+		}},
+	})
+
+	for _, want := range []string{
+		"## Runtime Facts",
+		"structured runtime facts, not required prose",
+		"kind=execution_claim",
+		"visible_action=repair_requested",
+		"test_execution:test-execution claim has no test-related tool evidence",
+		"tes:turn_seq:12",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("face prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestBuildFacePromptIncludesGPT55OutcomeStructure(t *testing.T) {
 	t.Parallel()
 
