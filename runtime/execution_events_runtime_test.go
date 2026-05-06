@@ -133,6 +133,33 @@ func TestRuntimeWarnsProviderFailoverInOneLine(t *testing.T) {
 	}
 }
 
+func TestRuntimeWarnsProviderFailoverQuotaInOneLine(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 99105, UserID: 0, Scope: telegramDMScopeRef(99105)}
+	rt.warnProviderFailovers(context.Background(), key, []core.ProviderEvent{{
+		EventType:    core.ExecutionEventProviderFailoverEngaged,
+		FromProvider: "openai:gpt-5.5",
+		ToProvider:   "anthropic",
+		Error:        `openai: status 429: {"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","code":"insufficient_quota"}}`,
+	}})
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent len = %d, want 1", len(sender.sent))
+	}
+	if got := sender.sent[0].Text; got != "Provider fallback: openai:gpt-5.5 quota exceeded; trying anthropic." || strings.Contains(got, "\n") {
+		t.Fatalf("warning = %q, want one-line quota fallback warning", got)
+	}
+}
+
 func TestRuntimeRecordsTelegramCallbackErrorEvent(t *testing.T) {
 	t.Parallel()
 

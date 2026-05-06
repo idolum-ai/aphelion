@@ -78,7 +78,7 @@ func (r *Runtime) warnProviderFailovers(ctx context.Context, key session.Session
 		}
 		from := firstRuntimeWorkNonEmpty(event.FromProvider, event.Provider, "primary provider")
 		to := firstRuntimeWorkNonEmpty(event.ToProvider, "next provider")
-		line := fmt.Sprintf("Provider fallback: %s failed; trying %s.", from, to)
+		line := providerFailoverWarningLine(from, to, event)
 		if _, ok := seen[line]; ok {
 			continue
 		}
@@ -86,6 +86,41 @@ func (r *Runtime) warnProviderFailovers(ctx context.Context, key session.Session
 		if _, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: key.ChatID, Text: line}); err != nil {
 			return
 		}
+	}
+}
+
+func providerFailoverWarningLine(from string, to string, event core.ProviderEvent) string {
+	from = firstRuntimeWorkNonEmpty(from, event.FromProvider, event.Provider, "primary provider")
+	to = firstRuntimeWorkNonEmpty(to, event.ToProvider, "next provider")
+	if reason := providerFailureOperatorReason(event); reason != "" {
+		return fmt.Sprintf("Provider fallback: %s %s; trying %s.", from, reason, to)
+	}
+	return fmt.Sprintf("Provider fallback: %s failed; trying %s.", from, to)
+}
+
+func providerFailureOperatorReason(event core.ProviderEvent) string {
+	for _, value := range []string{event.Reason, event.Error} {
+		reason := providerFailureOperatorReasonText(value)
+		if reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+func providerFailureOperatorReasonText(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	switch {
+	case strings.Contains(value, "insufficient_quota") ||
+		strings.Contains(value, "exceeded your current quota") ||
+		strings.Contains(value, "billing details") ||
+		strings.Contains(value, "quota exceeded"):
+		return "quota exceeded"
+	default:
+		return ""
 	}
 }
 
