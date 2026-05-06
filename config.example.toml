@@ -22,8 +22,6 @@ auto_vision_photos = true
 auto_vision_documents = true
 extract_pdf_text = true
 max_pdf_bytes = "8MB"
-ambiguous_buttons = true
-ambiguous_button_timeout = "30s"
 
 [tailscale]
 enabled = false

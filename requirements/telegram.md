@@ -1078,10 +1078,9 @@ func isTextFile(mime string, name string) bool {
 
 ### Voice messages
 
-Voice can use the existing transcription-first runtime path from `voice.md`, or
-when `telegram.media.ambiguous_buttons = true`, first show a Telegram callback
-workflow for transcribe/analyze/agent-decide/skip. Timeout defaults to
-agent-decide so the previous automatic path remains the fallback.
+Voice/audio messages are routed through the runtime's automatic media handling
+without a processing-choice callback prompt. The only audio-specific callback
+button is the separate retention action to keep audio permanently.
 
 ### Deferred media classes
 
@@ -1093,69 +1092,13 @@ The following remain intentionally deferred in Aphelion:
 
 Unsupported inbound media should surface as a clear bounded note rather than being silently dropped when practical.
 
-### Voice messages → User chooses
+### Voice/audio/video → Agent decides
 
-Voice messages are ambiguous — could be speech to transcribe, a melody to analyze, or ambient audio. Show the user options:
-
-```
-User sends a voice message (15s, OGG/Opus)
-
-Aphelion replies with inline keyboard:
-
-"🎤 Voice message received (15s). How should I process it?"
-
-[ 📝 Transcribe ]  [ 🎵 Analyze audio ]
-[ 🤖 Let agent decide ]  [ ❌ Skip ]
-```
-
-**Button actions:**
-- **📝 Transcribe** → Send to Whisper API, include transcript as text: `[Voice message, 15s]\nTranscript here`
-- **🎵 Analyze audio** → Send to Gemini (supports audio input natively) with prompt "Describe this audio"
-- **🤖 Let agent decide** → Download the file, tell the agent it has a voice message and let it choose tools
-- **❌ Skip** → Include only metadata: `[Voice message, 15s, skipped]`
-
-```go
-func (h *MediaHandler) OnVoiceMessage(ctx context.Context, msg *core.InboundMessage, voice *Voice) {
-    kbMsgID := h.sender.SendInlineKeyboard(ctx, msg.ChatID,
-        fmt.Sprintf("🎤 Voice message received (%ds). How should I process it?", voice.Duration),
-        []InlineButton{
-            {Text: "📝 Transcribe", CallbackData: fmt.Sprintf("media:voice:transcribe:%s", voice.FileID)},
-            {Text: "🎵 Analyze audio", CallbackData: fmt.Sprintf("media:voice:analyze:%s", voice.FileID)},
-            {Text: "🤖 Let agent decide", CallbackData: fmt.Sprintf("media:voice:agent:%s", voice.FileID)},
-            {Text: "❌ Skip", CallbackData: fmt.Sprintf("media:voice:skip:%s", voice.FileID)},
-        },
-        &msg.MessageID,
-    )
-    
-    // Auto-timeout: default to "Let agent decide" after 30s
-}
-```
-
-### Video → User chooses
-
-Same pattern as voice:
-
-```
-"🎬 Video received (30s, 1920x1080). How should I process it?"
-
-[ 🖼 Extract frames ]  [ 🎵 Analyze audio track ]
-[ 🤖 Let agent decide ]  [ ❌ Skip ]
-```
-
-**Button actions:**
-- **🖼 Extract frames** → Use ffmpeg to extract keyframes, pass as vision input
-- **🎵 Analyze audio track** → Extract audio, send to Gemini or transcribe
-- **🤖 Let agent decide** → Download, let agent choose
-- **❌ Skip** → Metadata only: `[Video attached: 30s, 1920x1080]`
-
-### Audio files → User chooses
-
-```
-"🎶 Audio file received (song.mp3, 3:42). How should I process it?"
-
-[ 📝 Transcribe ]  [ 🎵 Analyze music ]
-[ 🤖 Let agent decide ]  [ ❌ Skip ]
-```
+Voice, audio, and video should route without a processing-choice inline keyboard.
+The runtime records the media handling as agent-decide and lets the normal
+persona/governor path determine whether to transcribe, analyze, inspect metadata,
+or merely keep a reference. Audio may still show the separate retention button:
+`Keep audio permanently`.
 
 ### Stickers → Auto-process (unambiguous)
 
@@ -1225,13 +1168,8 @@ max_pdf_bytes = "8MB"              # Bound local PDF extraction work
 - **TestProcessDocumentPDF**: PDF → returned as document content block.
 - **TestProcessDocumentImage**: .png sent as document → processed as image.
 - **TestProcessDocumentBinary**: .zip → metadata-only text block.
-- **TestVoiceShowsButtons**: Voice message → inline keyboard with 4 options.
-- **TestVoiceTranscribe**: Tap Transcribe → Whisper called, transcript as text block.
-- **TestVoiceAnalyze**: Tap Analyze → sent to Gemini, analysis as text block.
-- **TestVoiceSkip**: Tap Skip → metadata-only text block.
-- **TestVoiceTimeout**: No tap → defaults to "Let agent decide".
-- **TestVideoShowsButtons**: Video → inline keyboard with 4 options.
-- **TestAudioShowsButtons**: Audio file → inline keyboard with 4 options.
+- **TestVoiceAgentDecideWithoutProcessingButtons**: Voice message → routed immediately with agent-decide metadata and no media-processing keyboard.
+- **TestAudioKeepPermanentButton**: Audio message → separate durable-retention button remains available.
 - **TestProcessSticker**: Sticker with emoji → auto-processed, description text block.
 - **TestFileTooLarge**: 25MB file → error, not downloaded.
 - **TestMultiContentMessage**: Photo + caption → multi-block user message (image + text).

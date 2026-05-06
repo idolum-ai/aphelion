@@ -19,7 +19,6 @@ const (
 	KindStopWord          Kind = "stop_word"
 	KindProposalApproval  Kind = "proposal_approval"
 	KindArtifactRetention Kind = "artifact_retention"
-	KindMediaProcessing   Kind = "media_processing"
 	KindMemoryDelegation  Kind = "memory_delegation"
 	KindSnapshotRestore   Kind = "snapshot_restore"
 )

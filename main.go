@@ -814,14 +814,7 @@ func run() error {
 		return fmt.Errorf("load pending decisions: %w", err)
 	}
 	cancelDecisionLoad()
-	mediaButtonTimeout := defaultMediaProcessingTimeout
-	if raw := strings.TrimSpace(cfg.Telegram.Media.AmbiguousButtonTimeout); raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
-			mediaButtonTimeout = parsed
-		}
-	}
-	decisionHandler := newTelegramDecisionHandler(tgOutbound, router, decisionBroker, store, rt).
-		WithMediaProcessingButtons(cfg.Telegram.Media.AmbiguousButtons, mediaButtonTimeout)
+	decisionHandler := newTelegramDecisionHandler(tgOutbound, router, decisionBroker, store, rt)
 	tools.WithExecApprover(newTelegramExecApprover(tgOutbound, decisionBroker))
 	tools.WithDurableMemoryDelegationApprover(newTelegramDurableMemoryDelegationApprover(tgOutbound, decisionBroker))
 	tools.WithDurableSnapshotRestoreApprover(newTelegramDurableSnapshotRestoreApprover(tgOutbound, decisionBroker))
