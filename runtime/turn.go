@@ -256,7 +256,7 @@ func ReviewEventInlineRowsExpanded(event session.ReviewEvent, expanded bool) [][
 	}
 	if ReviewEventDetailsExpandable(event) {
 		action := core.ReviewEventActionExpand
-		label := "Expand details"
+		label := "Details"
 		if expanded {
 			action = core.ReviewEventActionHide
 			label = "Hide details"
@@ -359,9 +359,9 @@ func FormatReviewEventCompactMessage(event session.ReviewEvent) string {
 		}
 	}
 	if next := reviewEventCompactNextAction(meta); next != "" {
-		lines = append(lines, "", "**Needs attention**", "- "+truncateReviewEventText(next, 220))
+		lines = append(lines, "", "**"+reviewEventCompactNextActionHeading(meta)+"**", "- "+truncateReviewEventText(next, 220))
 	}
-	lines = append(lines, "", "Use Expand details to inspect the full child update.")
+	lines = append(lines, "", "Details has the full child update.")
 	return truncateReviewEventBlock(strings.Join(lines, "\n"), 1800)
 }
 
@@ -414,6 +414,9 @@ func parseReviewEventArtifactMetadata(event session.ReviewEvent) (reviewEventArt
 }
 
 func reviewEventCompactTitle(event session.ReviewEvent, meta reviewEventArtifactMetadata) string {
+	if title := strings.TrimSpace(meta.Metadata["operator_title"]); title != "" {
+		return title
+	}
 	agent := strings.TrimSpace(meta.AgentID)
 	if agent == "" {
 		agent = formattedReviewEventAgent(event)
@@ -458,6 +461,9 @@ func reviewEventHumanChannel(channel string) string {
 }
 
 func reviewEventCompactStatus(_ session.ReviewEvent, meta reviewEventArtifactMetadata) string {
+	if status := strings.TrimSpace(meta.Metadata["operator_status"]); status != "" {
+		return reviewEventOutcomeStatusLabel(status)
+	}
 	status := firstReviewEventOutcomeStatus(meta)
 	if status == "" {
 		return "UPDATE"
@@ -504,6 +510,8 @@ func reviewEventOutcomeStatusLabel(status string) string {
 	switch status {
 	case "wake_completed", "completed", "complete", "success", "succeeded", "ok":
 		return "COMPLETED"
+	case "paused", "pause", "suppressed", "backoff":
+		return "PAUSED"
 	case "wake_blocked", "blocked", "blocker", "refused", "unavailable":
 		return "BLOCKED"
 	case "failed", "failure", "error":
@@ -528,6 +536,9 @@ func parsePositiveReviewEventCount(raw string) int {
 }
 
 func reviewEventCompactSummary(event session.ReviewEvent, meta reviewEventArtifactMetadata) string {
+	if summary := strings.TrimSpace(meta.Metadata["operator_summary"]); summary != "" {
+		return normalizeReviewEventWhitespace(summary)
+	}
 	if summary := strings.TrimSpace(meta.Summary); summary != "" {
 		return normalizeReviewEventWhitespace(summary)
 	}
@@ -542,21 +553,41 @@ func reviewEventCompactSummary(event session.ReviewEvent, meta reviewEventArtifa
 
 func reviewEventCompactPoints(meta reviewEventArtifactMetadata) []string {
 	points := make([]string, 0, 3)
+	seen := map[string]struct{}{}
+	add := func(point string) {
+		if len(points) >= 3 {
+			return
+		}
+		point = normalizeReviewEventWhitespace(point)
+		if point == "" {
+			return
+		}
+		key := strings.ToLower(point)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		points = append(points, point)
+	}
+	if point := meta.Metadata["operator_point"]; point != "" {
+		add(point)
+	}
 	for _, action := range meta.LocalActions {
 		if len(points) >= 3 {
 			break
 		}
-		if action = normalizeReviewEventWhitespace(action); action != "" {
-			points = append(points, action)
-		}
+		add(action)
 	}
 	if len(points) < 3 {
 		for _, risk := range meta.RiskFlags {
 			if len(points) >= 3 {
 				break
 			}
+			if !reviewEventCompactRiskVisible(meta, risk) {
+				continue
+			}
 			if risk = normalizeReviewEventWhitespace(risk); risk != "" {
-				points = append(points, "risk: "+risk)
+				add("risk: " + risk)
 			}
 		}
 	}
@@ -564,6 +595,9 @@ func reviewEventCompactPoints(meta reviewEventArtifactMetadata) []string {
 }
 
 func reviewEventCompactNextAction(meta reviewEventArtifactMetadata) string {
+	if next := normalizeReviewEventWhitespace(meta.Metadata["operator_next_action"]); next != "" {
+		return next
+	}
 	for _, question := range meta.Questions {
 		if question = normalizeReviewEventWhitespace(question); question != "" {
 			return question
@@ -573,6 +607,29 @@ func reviewEventCompactNextAction(meta reviewEventArtifactMetadata) string {
 		return errText
 	}
 	return ""
+}
+
+func reviewEventCompactNextActionHeading(meta reviewEventArtifactMetadata) string {
+	switch strings.TrimSpace(meta.Metadata["operator_action"]) {
+	case "no_action_unless_work_item", "no_action_needed":
+		return "No action needed"
+	default:
+		return "Needs attention"
+	}
+}
+
+func reviewEventCompactRiskVisible(meta reviewEventArtifactMetadata, risk string) bool {
+	risk = strings.ToLower(strings.TrimSpace(risk))
+	if risk == "" {
+		return false
+	}
+	channel := strings.ToLower(strings.TrimSpace(meta.Metadata["channel_kind"]))
+	switch risk {
+	case "external_channel", "adapter_dispatch":
+		return channel != "external_channel"
+	default:
+		return true
+	}
 }
 
 func normalizeReviewEventWhitespace(s string) string {

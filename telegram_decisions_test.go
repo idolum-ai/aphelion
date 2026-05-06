@@ -1802,11 +1802,11 @@ func TestHandleReviewEventCallbackExpandAndHideIsReadOnly(t *testing.T) {
 	if len(sender.edits) != 2 {
 		t.Fatalf("edits after hide = %d, want 2", len(sender.edits))
 	}
-	if !strings.Contains(sender.edits[1].text, "Use Expand details") || strings.Contains(sender.edits[1].text, "**Metadata**") {
+	if !strings.Contains(sender.edits[1].text, "Details has the full child update.") || strings.Contains(sender.edits[1].text, "**Metadata**") {
 		t.Fatalf("hidden text = %q, want compact summary", sender.edits[1].text)
 	}
-	if len(sender.edits[1].rows) != 1 || sender.edits[1].rows[0][0].Text != "Expand details" {
-		t.Fatalf("hidden rows = %#v, want Expand details", sender.edits[1].rows)
+	if len(sender.edits[1].rows) != 1 || sender.edits[1].rows[0][0].Text != "Details" {
+		t.Fatalf("hidden rows = %#v, want Details", sender.edits[1].rows)
 	}
 	after, err := store.ReviewEventByID(eventID)
 	if err != nil {

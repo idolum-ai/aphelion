@@ -802,6 +802,15 @@ func TestPollDurableWakeAgentsBacksOffExpiredGrantChildRuntimeBlock(t *testing.T
 	if cont.ExternalChannel.BackoffUntil.Before(now.Add(29 * time.Minute)) {
 		t.Fatalf("backoff_until = %v, want recorded backoff", cont.ExternalChannel.BackoffUntil)
 	}
+	sender.mu.Lock()
+	compact := ""
+	if len(sender.inline) > 0 {
+		compact = sender.inline[len(sender.inline)-1].text
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(compact, "PAUSED") || strings.Contains(compact, "capg-image2") || strings.Contains(compact, "child_runtime_blocked") || strings.Contains(compact, "risk: adapter_dispatch") {
+		t.Fatalf("compact review = %q, want paused operator summary without raw runtime details", compact)
+	}
 
 	if err := rt.pollDurableWakeAgents(context.Background(), now.Add(time.Minute)); err != nil {
 		t.Fatalf("pollDurableWakeAgents(backoff) err = %v, want quiet skip", err)

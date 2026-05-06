@@ -42,7 +42,8 @@ func (r *Runtime) recordDurableWakeChildRuntimeBlock(agent core.DurableAgent, ca
 	if r == nil || r.store == nil || cause == nil {
 		return false, nil
 	}
-	if !durableWakeChildRuntimeBlockedError(cause) {
+	block, ok := classifyDurableWakeChildRuntimeBlockError(cause)
+	if !ok {
 		return false, nil
 	}
 	external := agent.ChannelConfig.ExternalConfig()
@@ -78,8 +79,13 @@ func (r *Runtime) recordDurableWakeChildRuntimeBlock(agent core.DurableAgent, ca
 		return true, err
 	}
 	artifact := genericExternalChannelReviewArtifact(agent, adapterName, "", now, "wake_blocked", cause.Error())
-	artifact.LocalActions = []string{"Child runtime wake blocked by capability/grant state; recorded backoff/suppression instead of retrying noisily."}
-	artifact.Questions = []string{"Only renew or create the required grant when there is a concrete parent/user work item."}
+	if block.Reason == "grant_expired" {
+		artifact.LocalActions = []string{"Backoff is recorded; no retry loop is running."}
+		artifact.Questions = []string{"Renew the grant only if there is a concrete parent/user work item."}
+	} else {
+		artifact.LocalActions = []string{"Child runtime wake blocked by capability/grant state; recorded backoff/suppression instead of retrying noisily."}
+		artifact.Questions = []string{"Only renew or create the required grant when there is a concrete parent/user work item."}
+	}
 	if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact); err != nil {
 		return true, fmt.Errorf("queue child-runtime blocked wake review artifact: %w", err)
 	}
@@ -87,9 +93,6 @@ func (r *Runtime) recordDurableWakeChildRuntimeBlock(agent core.DurableAgent, ca
 }
 
 func durableWakeChildRuntimeBlockedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	text := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(text, "child_runtime_blocked:") || strings.Contains(text, "grant_expired")
+	_, ok := classifyDurableWakeChildRuntimeBlockError(err)
+	return ok
 }

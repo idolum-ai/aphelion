@@ -90,6 +90,34 @@ func TestGenericExternalChannelWakeAdapterRecordsBlockedWhenChildReportsMissingM
 	}
 }
 
+func TestGenericExternalChannelReviewArtifactGrantExpiredIsOperatorReadable(t *testing.T) {
+	t.Parallel()
+
+	agent := genericExternalChannelTestAgent("console")
+	agent.ChannelConfig.External.Adapter = "codex_app_server"
+	artifact := genericExternalChannelReviewArtifact(agent, "codex_app_server", "", time.Date(2026, 5, 6, 3, 14, 45, 0, time.UTC), "wake_blocked", "child_runtime_blocked: grant_expired grant_id=capg-console-codex-app-server-readonly-heartbeat-20260505T0040Z")
+
+	if artifact.Summary != "Console wake paused: Codex app-server heartbeat grant expired." {
+		t.Fatalf("summary = %q, want operator-readable pause", artifact.Summary)
+	}
+	for key, want := range map[string]string{
+		"operator_title":             "Console wake paused",
+		"operator_status":            "paused",
+		"operator_summary":           "The Codex app-server heartbeat grant expired, so Console did not wake.",
+		"operator_action":            "no_action_unless_work_item",
+		"child_runtime_block_reason": "grant_expired",
+		"grant_id":                   "capg-console-codex-app-server-readonly-heartbeat-20260505T0040Z",
+		"grant_label":                "Codex app-server heartbeat grant",
+	} {
+		if got := artifact.Metadata[key]; got != want {
+			t.Fatalf("metadata[%s] = %q, want %q", key, got, want)
+		}
+	}
+	if strings.Contains(artifact.Summary, "wake wake_blocked") || strings.Contains(artifact.Summary, "child_runtime_blocked") || strings.Contains(artifact.Summary, "capg-console") {
+		t.Fatalf("summary = %q, want no raw runtime detail", artifact.Summary)
+	}
+}
+
 func TestGenericExternalChannelWakeAdapterRecordsSuccessOnlyWhenChildReportsCompleted(t *testing.T) {
 	t.Parallel()
 

@@ -243,6 +243,7 @@ func genericExternalChannelReviewArtifact(agent core.DurableAgent, adapterName s
 	if strings.TrimSpace(errorText) != "" {
 		metadata["external_channel_error"] = truncateRunes(errorText, 900)
 	}
+	applyChildRuntimeBlockOperatorMetadata(metadata, agent, adapterName, errorText)
 	return core.DurableReviewArtifact{
 		AgentID:       strings.TrimSpace(agent.AgentID),
 		Summary:       genericExternalChannelReviewSummary(agent, adapterName, turnSummary, status, errorText),
@@ -289,8 +290,13 @@ func extractGenericExternalChannelStatusLine(text string, key string) string {
 }
 
 func genericExternalChannelReviewSummary(agent core.DurableAgent, adapterName string, turnSummary string, status string, errorText string) string {
+	if block, ok := classifyDurableWakeChildRuntimeBlockErrorText(errorText); ok && block.Reason == "grant_expired" {
+		agentName := durableAgentDisplayName(agent.AgentID)
+		grantLabel := childRuntimeGrantLabel(block, adapterName)
+		return fmt.Sprintf("%s wake paused: %s expired.", agentName, grantLabel)
+	}
 	parts := []string{
-		fmt.Sprintf("External-channel wake %s from child %s via adapter %s.", strings.TrimSpace(status), strings.TrimSpace(agent.AgentID), strings.TrimSpace(adapterName)),
+		fmt.Sprintf("External-channel wake %s from child %s via adapter %s.", externalChannelReviewStatusPhrase(status), strings.TrimSpace(agent.AgentID), strings.TrimSpace(adapterName)),
 	}
 	if trimmed := strings.TrimSpace(turnSummary); trimmed != "" {
 		parts = append(parts, truncateRunes(trimmed, 900))
@@ -299,6 +305,154 @@ func genericExternalChannelReviewSummary(agent core.DurableAgent, adapterName st
 		parts = append(parts, "Error: "+truncateRunes(strings.TrimSpace(errorText), 300))
 	}
 	return strings.Join(parts, " ")
+}
+
+func externalChannelReviewStatusPhrase(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	status = strings.ReplaceAll(status, "-", "_")
+	switch status {
+	case "wake_completed", "completed", "complete", "success", "succeeded", "ok":
+		return "completed"
+	case "wake_blocked", "blocked", "blocker", "refused", "unavailable":
+		return "blocked"
+	default:
+		if status == "" {
+			return "updated"
+		}
+		return strings.ReplaceAll(status, "_", " ")
+	}
+}
+
+func applyChildRuntimeBlockOperatorMetadata(metadata map[string]string, agent core.DurableAgent, adapterName string, errorText string) {
+	if metadata == nil {
+		return
+	}
+	block, ok := classifyDurableWakeChildRuntimeBlockErrorText(errorText)
+	if !ok {
+		return
+	}
+	metadata["child_runtime_block_reason"] = block.Reason
+	if block.GrantID != "" {
+		metadata["grant_id"] = block.GrantID
+	}
+	grantLabel := childRuntimeGrantLabel(block, adapterName)
+	if grantLabel != "" {
+		metadata["grant_label"] = grantLabel
+	}
+	agentName := durableAgentDisplayName(agent.AgentID)
+	switch block.Reason {
+	case "grant_expired":
+		metadata["operator_status"] = "paused"
+		metadata["operator_title"] = agentName + " wake paused"
+		metadata["operator_summary"] = fmt.Sprintf("The %s expired, so %s did not wake.", grantLabel, agentName)
+		metadata["operator_point"] = "Backoff is recorded; no retry loop is running."
+		metadata["operator_action"] = "no_action_unless_work_item"
+		metadata["operator_next_action"] = fmt.Sprintf("Renew the grant only if %s has a concrete parent/user work item.", agentName)
+	default:
+		metadata["operator_title"] = agentName + " wake blocked"
+		metadata["operator_summary"] = fmt.Sprintf("%s did not wake because the child runtime blocked access.", agentName)
+	}
+}
+
+type durableWakeChildRuntimeBlock struct {
+	Reason  string
+	GrantID string
+}
+
+func classifyDurableWakeChildRuntimeBlockError(err error) (durableWakeChildRuntimeBlock, bool) {
+	if err == nil {
+		return durableWakeChildRuntimeBlock{}, false
+	}
+	return classifyDurableWakeChildRuntimeBlockErrorText(err.Error())
+}
+
+func classifyDurableWakeChildRuntimeBlockErrorText(raw string) (durableWakeChildRuntimeBlock, bool) {
+	text := strings.ToLower(strings.TrimSpace(raw))
+	if text == "" {
+		return durableWakeChildRuntimeBlock{}, false
+	}
+	if !strings.Contains(text, "child_runtime_blocked:") && !strings.Contains(text, "grant_expired") {
+		return durableWakeChildRuntimeBlock{}, false
+	}
+	block := durableWakeChildRuntimeBlock{GrantID: extractChildRuntimeBlockGrantID(raw)}
+	switch {
+	case strings.Contains(text, "grant_expired"):
+		block.Reason = "grant_expired"
+	case strings.Contains(text, "grant_revoked"):
+		block.Reason = "grant_revoked"
+	case strings.Contains(text, "grant_policy_hash_mismatch"):
+		block.Reason = "grant_policy_hash_mismatch"
+	case strings.Contains(text, "grant_stale"):
+		block.Reason = "grant_stale"
+	case strings.Contains(text, "grant_missing"), strings.Contains(text, "grant_not_found"):
+		block.Reason = "grant_missing"
+	default:
+		block.Reason = "child_runtime_blocked"
+	}
+	return block, true
+}
+
+func extractChildRuntimeBlockGrantID(raw string) string {
+	for _, field := range strings.Fields(strings.TrimSpace(raw)) {
+		field = strings.Trim(field, " ,.;")
+		if value, ok := strings.CutPrefix(field, "grant_id="); ok {
+			return strings.Trim(value, " ,.;")
+		}
+	}
+	return ""
+}
+
+func durableAgentDisplayName(agentID string) string {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return "Child"
+	}
+	parts := strings.FieldsFunc(agentID, func(r rune) bool { return r == '-' || r == '_' || r == '.' })
+	if len(parts) == 0 {
+		return agentID
+	}
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		switch strings.ToLower(part) {
+		case "id":
+			parts[i] = "ID"
+		case "api":
+			parts[i] = "API"
+		default:
+			runes := []rune(strings.ToLower(part))
+			if len(runes) > 0 {
+				runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+			}
+			parts[i] = string(runes)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func childRuntimeGrantLabel(block durableWakeChildRuntimeBlock, adapterName string) string {
+	adapter := externalChannelAdapterDisplayName(adapterName)
+	if adapter == "" {
+		adapter = "child runtime"
+	}
+	if strings.Contains(strings.ToLower(block.GrantID), "heartbeat") {
+		return adapter + " heartbeat grant"
+	}
+	return adapter + " grant"
+}
+
+func externalChannelAdapterDisplayName(adapterName string) string {
+	adapterName = strings.ToLower(strings.TrimSpace(adapterName))
+	switch adapterName {
+	case "codex_app_server":
+		return "Codex app-server"
+	case "codex_image_generation":
+		return "Codex image-generation"
+	default:
+		return strings.ReplaceAll(adapterName, "_", " ")
+	}
 }
 
 func encodeGenericExternalChannelState(runtimeState core.DurableAgentExternalChannelRuntimeState, adapterName string) *core.DurableAgentExternalChannelRuntimeState {

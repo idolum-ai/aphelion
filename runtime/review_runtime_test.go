@@ -323,6 +323,36 @@ func TestReviewEventCompactStatusExplicitBlockedMetadata(t *testing.T) {
 	}
 }
 
+func TestReviewEventCompactGrantExpiredPauseIsOperatorReadable(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		SourceRole:   "durable_agent",
+		SourceScope:  session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "console", DurableAgentID: "console"},
+		Summary:      "durable_agent=console channel=external_channel interval=2026-05-06T03:14:45Z\nsummary: Console wake paused: Codex app-server heartbeat grant expired.\nlocal: Backoff is recorded; no retry loop is running.\nquestions: Renew the grant only if there is a concrete parent/user work item.\nrisks: external_channel; adapter_dispatch",
+		MetadataJSON: `{"agent_id":"console","summary":"Console wake paused: Codex app-server heartbeat grant expired.","interval_label":"2026-05-06T03:14:45Z","local_actions":["Backoff is recorded; no retry loop is running."],"questions":["Renew the grant only if there is a concrete parent/user work item."],"risk_flags":["external_channel","adapter_dispatch"],"metadata":{"channel_kind":"external_channel","channel_adapter":"codex_app_server","external_channel_status":"wake_blocked","operator_status":"paused","operator_title":"Console wake paused","operator_summary":"The Codex app-server heartbeat grant expired, so Console did not wake.","operator_point":"Backoff is recorded; no retry loop is running.","operator_action":"no_action_unless_work_item","operator_next_action":"Renew the grant only if Console has a concrete parent/user work item.","child_runtime_block_reason":"grant_expired","grant_id":"capg-console-codex-app-server-readonly-heartbeat-20260505T0040Z","grant_label":"Codex app-server heartbeat grant","external_channel_error":"child_runtime_blocked: grant_expired grant_id=capg-console-codex-app-server-readonly-heartbeat-20260505T0040Z"}}`,
+	}
+
+	compact := FormatReviewEventCompactMessage(event)
+	for _, want := range []string{"**Console wake paused**", "PAUSED", "The Codex app-server heartbeat grant expired, so Console did not wake.", "Backoff is recorded; no retry loop is running.", "**No action needed**", "Renew the grant only if Console has a concrete parent/user work item."} {
+		if !strings.Contains(compact, want) {
+			t.Fatalf("compact text = %q, want %q", compact, want)
+		}
+	}
+	for _, notWant := range []string{"capg-console", "child_runtime_blocked", "risk: external_channel", "risk: adapter_dispatch", "**Needs attention**", "wake wake_blocked"} {
+		if strings.Contains(compact, notWant) {
+			t.Fatalf("compact text = %q, did not want %q", compact, notWant)
+		}
+	}
+
+	details := FormatReviewEventDetailsMessage(event)
+	for _, want := range []string{"grant_id: capg-console-codex-app-server-readonly-heartbeat-20260505T0040Z", "external_channel_error: child_runtime_blocked: grant_expired"} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details text = %q, want diagnostic detail %q", details, want)
+		}
+	}
+}
+
 func TestHandleInboundDeliversDurableReviewEventCompactWithExpandButton(t *testing.T) {
 	t.Parallel()
 
@@ -353,7 +383,7 @@ func TestHandleInboundDeliversDurableReviewEventCompactWithExpandButton(t *testi
 		t.Fatalf("inline len = %d, want compact child review delivered with inline keyboard", len(sender.inline))
 	}
 	text := sender.inline[0].text
-	if !strings.Contains(text, "**Review: image2**") || !strings.Contains(text, "**Status**") || !strings.Contains(text, "COMPLETED") || !strings.Contains(text, "Use Expand details") {
+	if !strings.Contains(text, "**Review: image2**") || !strings.Contains(text, "**Status**") || !strings.Contains(text, "COMPLETED") || !strings.Contains(text, "Details has the full child update.") {
 		t.Fatalf("compact text = %q, want readable child update summary", text)
 	}
 	if strings.Contains(text, "**Metadata**") {
@@ -363,7 +393,7 @@ func TestHandleInboundDeliversDurableReviewEventCompactWithExpandButton(t *testi
 		t.Fatalf("rows = %#v, want single expand row", sender.inline[0].rows)
 	}
 	button := sender.inline[0].rows[0][0]
-	if button.Text != "Expand details" || button.CallbackData != core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionExpand) {
+	if button.Text != "Details" || button.CallbackData != core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionExpand) {
 		t.Fatalf("button = %#v, want expand callback for review event %d", button, eventID)
 	}
 }
