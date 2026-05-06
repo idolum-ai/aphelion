@@ -122,10 +122,75 @@ func TestRenderTelegramStatusChatIncludesTurnPhaseHiddenInputsDeliveryAndDetache
 		"plan_progress completed=2 total=2 fully_executed=true",
 		"detached_work decisions=1 continuations=0 recoveries=1 stale_turns=1",
 		"auto_approval status=active scope=workspace expires_at=2026-05-05T14:00:00Z used=1/3 reason=\"live test window\"",
-		"current_signal=phase:deliver",
+		"current_signal=recovery:stale_turn",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderTelegramStatusChat() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
+func TestRenderTelegramStatusChatSummaryStateNeedsRecoveryForStaleTESRun(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	out := RenderTelegramStatusChat(core.ChatStatusSnapshot{
+		GeneratedAt:   now,
+		ChatID:        7,
+		ActiveTurnIDs: []uint64{42},
+		LatestTurnRun: &core.TurnRunStatusSnapshot{
+			Status:         "running",
+			Kind:           "interactive",
+			LastActivityAt: now.Add(-2 * time.Hour),
+			LastToolName:   "exec",
+		},
+		RestartHealth: core.RestartHealthSnapshot{
+			StaleTurnThreshold: 3 * time.Minute,
+		},
+	}, "medium", "high", false)
+
+	if !strings.Contains(out, "summary state=needs_recovery") {
+		t.Fatalf("RenderTelegramStatusChat() = %q, want needs_recovery state", out)
+	}
+	if !strings.Contains(out, "current_signal=recovery:stale_active_turn") {
+		t.Fatalf("RenderTelegramStatusChat() = %q, want stale active turn signal", out)
+	}
+}
+
+func TestRenderTelegramStatusChatOperatorCardSeparatesBacklogAndRevokedContinuation(t *testing.T) {
+	t.Parallel()
+
+	out := RenderTelegramStatusChatOperatorCard(core.ChatStatusSnapshot{
+		GeneratedAt: time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC),
+		ChatID:      7,
+		Continuation: &core.ContinuationStatusSnapshot{
+			Status:           "revoked",
+			RemainingTurns:   3,
+			PersonaIntent:    "continue",
+			GovernorIntent:   "continue",
+			GovernorRatified: true,
+			Source:           "operational_current_state_store:continuation_state_json",
+		},
+		PendingItems: []core.PendingItem{
+			{Kind: core.PendingItemKindMission, ChatID: 7, ID: "mission-1", Summary: "status=candidate title=Mission Control"},
+			{Kind: core.PendingItemKindDecision, ChatID: 7, ID: "decision-1", Summary: "kind=proposal_approval"},
+		},
+	}, "gpt", "xhigh", false)
+
+	for _, needle := range []string{
+		"status: blocked",
+		"continuation: stopped",
+		"needs_attention:",
+		"- approval needed",
+		"backlog: 1 candidate mission(s)",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusChatOperatorCard() = %q, want substring %q", out, needle)
+		}
+	}
+	for _, forbidden := range []string{"remaining_turns", "persona_intent", "governor_intent", "source="} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("RenderTelegramStatusChatOperatorCard() = %q, should not contain %q", out, forbidden)
 		}
 	}
 }

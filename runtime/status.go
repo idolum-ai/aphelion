@@ -366,6 +366,11 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 	snapshot.RecentExecution = summarizeExecutionEvents(recentEvents, 20)
 	snapshot.RecentAdjudications = statusAdjudicationsFromExecutionEvents(recentEvents, 12)
 	activeByChat, queueByChat := liveRouterSignalsFromExecutionEvents(recentEvents)
+	latestFromEvents := latestTurnSnapshotsByChatFromExecutionEvents(recentEvents)
+	tesStaleRunningTurns := staleRunningTurnSnapshotsFromExecutionEvents(latestFromEvents, now, snapshot.RestartHealth.StaleTurnThreshold)
+	for _, stale := range tesStaleRunningTurns {
+		delete(activeByChat, stale.ChatID)
+	}
 	snapshot.ActiveTurnsByChat = activeByChat
 	snapshot.QueueDepthByChat = queueByChat
 	for chatID, ids := range cloneActiveTurnMap(router.ActiveTurnsByChat) {
@@ -396,7 +401,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 			Summary: fmt.Sprintf("queue_depth=%d", depth),
 		})
 	}
-	for chatID, run := range latestTurnSnapshotsByChatFromExecutionEvents(recentEvents) {
+	for chatID, run := range latestFromEvents {
 		snapshot.LatestTurnRunsByChat[chatID] = run
 	}
 
@@ -608,6 +613,24 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 			SourceSurface: "turn_runs",
 		})
 	}
+	for _, stale := range tesStaleRunningTurns {
+		if staleTurnSnapshotCovered(snapshot.StaleRunningTurns, stale) {
+			continue
+		}
+		snapshot.StaleRunningTurns = append(snapshot.StaleRunningTurns, stale)
+		snapshot.PendingItems = append(snapshot.PendingItems, core.PendingItem{
+			Kind:          core.PendingItemKindStaleTurn,
+			ChatID:        stale.ChatID,
+			ID:            tesStaleTurnItemID(stale),
+			Summary:       fmt.Sprintf("source=tes status=%s last_activity=%s", firstNonEmptyStatus(strings.TrimSpace(stale.Status), "running"), stale.LastActivityAt.UTC().Format(time.RFC3339)),
+			Age:           statusAge(now, stale.LastActivityAt, stale.StartedAt),
+			CreatedAt:     stale.StartedAt,
+			UpdatedAt:     stale.LastActivityAt,
+			Stale:         true,
+			SourceClass:   "canonical",
+			SourceSurface: "execution_events.turn",
+		})
+	}
 
 	if health, err := r.store.MissionLedgerHealth(now); err != nil {
 		return core.SystemStatusSnapshot{}, err
@@ -688,6 +711,51 @@ func (r *Runtime) staleRunningTurnRuns(now time.Time) ([]session.TurnRun, error)
 		limit = 50
 	}
 	return r.staleTurnSweep(cutoff, limit)
+}
+
+func staleRunningTurnSnapshotsFromExecutionEvents(latest map[int64]core.TurnRunStatusSnapshot, now time.Time, threshold time.Duration) []core.TurnRunStatusSnapshot {
+	if threshold <= 0 || now.IsZero() || len(latest) == 0 {
+		return nil
+	}
+	out := make([]core.TurnRunStatusSnapshot, 0, len(latest))
+	for _, run := range latest {
+		if run.ChatID == 0 || !strings.EqualFold(strings.TrimSpace(run.Status), string(session.TurnRunStatusRunning)) {
+			continue
+		}
+		if run.LastActivityAt.IsZero() || !now.After(run.LastActivityAt.Add(threshold)) {
+			continue
+		}
+		if strings.TrimSpace(run.Source) == "" {
+			run.Source = "canonical:execution_events.turn"
+		}
+		out = append(out, run)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ChatID == out[j].ChatID {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].ChatID < out[j].ChatID
+	})
+	return out
+}
+
+func staleTurnSnapshotCovered(existing []core.TurnRunStatusSnapshot, candidate core.TurnRunStatusSnapshot) bool {
+	for _, row := range existing {
+		if candidate.ID > 0 && row.ID == candidate.ID {
+			return true
+		}
+		if candidate.ChatID != 0 && row.ChatID == candidate.ChatID {
+			return true
+		}
+	}
+	return false
+}
+
+func tesStaleTurnItemID(run core.TurnRunStatusSnapshot) string {
+	if run.ID > 0 {
+		return fmt.Sprintf("stale:tes:%d", run.ID)
+	}
+	return fmt.Sprintf("stale:tes:chat:%d", run.ChatID)
 }
 
 func (r *Runtime) restartHealthSnapshot() core.RestartHealthSnapshot {
@@ -923,6 +991,9 @@ func buildHotChatRollups(snapshot core.SystemStatusSnapshot) []core.ChatStatusRo
 		rollup.QueueDepth = depth
 	}
 	for _, pending := range snapshot.PendingItems {
+		if pending.Kind == core.PendingItemKindMission {
+			continue
+		}
 		rollup := ensure(pending.ChatID)
 		rollup.PendingCount++
 	}

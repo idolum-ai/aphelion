@@ -54,19 +54,25 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 		if err != nil {
 			return "", nil, err
 		}
-		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
+		rawText := face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
+		summary := statusReadableSummaryText(ctx, router, view, rawText)
+		text = renderStatusChatOperatorView(chat, personaEffort, governorEffort, false, summary)
 	case statusViewPending:
 		chat, err := router.StatusChat(currentChatID)
 		if err != nil {
 			return "", nil, err
 		}
-		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, true)
+		rawText := face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, true)
+		summary := statusReadableSummaryText(ctx, router, view, rawText)
+		text = renderStatusChatOperatorView(chat, personaEffort, governorEffort, true, summary)
 	case statusViewChatTarget:
 		chat, err := router.StatusChat(targetChatID)
 		if err != nil {
 			return "", nil, err
 		}
-		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
+		rawText := face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
+		summary := statusReadableSummaryText(ctx, router, view, rawText)
+		text = renderStatusChatOperatorView(chat, personaEffort, governorEffort, false, summary)
 	case statusViewSystem:
 		if !isAdmin {
 			return "", nil, fmt.Errorf("admin status view denied")
@@ -115,13 +121,26 @@ func renderStatusView(ctx context.Context, router commandRouter, currentChatID i
 			return "", nil, err
 		}
 		view = statusViewChat
-		text = face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
+		rawText := face.RenderTelegramStatusChat(chat, personaEffort, governorEffort, false)
+		summary := statusReadableSummaryText(ctx, router, view, rawText)
+		text = renderStatusChatOperatorView(chat, personaEffort, governorEffort, false, summary)
 	}
-	summary := statusReadableSummaryText(ctx, router, view, text)
-	text = renderReadableStatusView(view, text, summary)
+	if view != statusViewChat && view != statusViewPending && view != statusViewChatTarget {
+		summary := statusReadableSummaryText(ctx, router, view, text)
+		text = renderReadableStatusView(view, text, summary)
+	}
 	text = humanizeTelegramTelemetryText(text)
 	rows := statusKeyboardRows(view, currentChatID, targetChatID, isAdmin, systemStatus, systemLoaded)
 	return text, rows, nil
+}
+
+func renderStatusChatOperatorView(chat core.ChatStatusSnapshot, personaEffort string, governorEffort string, pendingOnly bool, quickRead string) string {
+	text := strings.TrimSpace(face.RenderTelegramStatusChatOperatorCard(chat, personaEffort, governorEffort, pendingOnly))
+	quickRead = strings.TrimSpace(quickRead)
+	if quickRead == "" {
+		return text
+	}
+	return "quick_read " + quickRead + "\n\n" + text
 }
 
 func appendStatusReadableSummary(ctx context.Context, router commandRouter, view statusView, text string) string {
@@ -499,8 +518,10 @@ func composeStatusReadableSummary(view statusView, statusText string) string {
 	case statusViewChat, statusViewPending, statusViewChatTarget:
 		state := firstNonEmptyStatusSummary(statusSummaryStateToken(statusText), "unknown")
 		pendingValue := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "pending_items"), "0")
+		actionValue := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "action_items"), pendingValue)
+		backlogValue := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "backlog_items"), "0")
 		signal := firstNonEmptyStatusSummary(statusCurrentSignal(statusText), "unknown")
-		return fmt.Sprintf("Chat is %s; pending items=%s; signal=%s.", state, pendingValue, signal)
+		return fmt.Sprintf("Chat is %s; action items=%s; backlog items=%s; signal=%s.", statusSummaryStateDisplay(state), actionValue, backlogValue, signal)
 	case statusViewSystem:
 		active := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "active_turns"), "0")
 		queued := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "queued_chats"), "0")
@@ -517,6 +538,15 @@ func composeStatusReadableSummary(view statusView, statusText string) string {
 		return fmt.Sprintf("Durables total=%s; active=%s; degraded=%s; inactive=%s.", total, active, degraded, inactive)
 	default:
 		return ""
+	}
+}
+
+func statusSummaryStateDisplay(state string) string {
+	switch strings.TrimSpace(state) {
+	case "needs_recovery":
+		return "needs recovery"
+	default:
+		return strings.TrimSpace(state)
 	}
 }
 
@@ -603,10 +633,13 @@ func detectSummaryStateWord(summary string) string {
 	if lower == "" {
 		return ""
 	}
-	for _, state := range []string{"idle", "working", "blocked", "queued", "failed", "interrupted"} {
+	for _, state := range []string{"needs_recovery", "idle", "working", "blocked", "queued", "failed", "interrupted"} {
 		if strings.Contains(lower, state) {
 			return state
 		}
+	}
+	if strings.Contains(lower, "needs recovery") {
+		return "needs_recovery"
 	}
 	return ""
 }

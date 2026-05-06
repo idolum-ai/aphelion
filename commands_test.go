@@ -1505,11 +1505,11 @@ func TestHandleTelegramCommandStatusShowsBlockedOperationSignal(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "Summary: State: blocked") {
-		t.Fatalf("status text = %q, want blocked summary state", got)
+	if got := sender.inline[0].text; !strings.Contains(got, "Status: blocked") {
+		t.Fatalf("status text = %q, want blocked status", got)
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "Current Signal: operation:blocked:approval_wait") {
-		t.Fatalf("status text = %q, want blocked operation signal", got)
+	if got := sender.inline[0].text; !strings.Contains(got, "Why: Waiting for admin review") {
+		t.Fatalf("status text = %q, want blocked operation reason", got)
 	}
 }
 
@@ -1557,9 +1557,9 @@ func TestHandleTelegramCommandStatusUsesReadableCardInsteadOfRawDump(t *testing.
 	}
 	text := sender.inline[0].text
 	for _, needle := range []string{
-		"Current:",
-		"Operation: Status: blocked Stage: approval_wait",
-		"Plan Step: Status: in_progress Step: \"Await admin approval\"",
+		"Status: blocked",
+		"Why: Waiting for admin review",
+		"Now: Await admin approval",
 		"Details: /debug has the full execution trace and source attribution.",
 	} {
 		if !strings.Contains(text, needle) {

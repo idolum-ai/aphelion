@@ -646,6 +646,38 @@ func TestSystemStatusSnapshotSurfacesCandidateMissionsAsPendingItems(t *testing.
 	t.Fatalf("PendingItems missing candidate mission %s: %#v", mission.ID, snapshot.PendingItems)
 }
 
+func TestSystemStatusSnapshotDoesNotRankBacklogOnlyChatsAsHot(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := store.UpsertMission(session.MissionState{
+		ID:                "mission-backlog-only",
+		Title:             "Backlog only mission",
+		Objective:         "Stay visible as backlog without making the chat urgent.",
+		Scope:             "principal",
+		Owner:             "telegram:1001",
+		Status:            session.MissionStatusCandidate,
+		NextAllowedAction: "Wait for explicit review.",
+	}, "telegram:1001", "candidate"); err != nil {
+		t.Fatalf("UpsertMission() err = %v", err)
+	}
+
+	snapshot, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	if !pendingKindInItems(snapshot.PendingItems, core.PendingItemKindMission) {
+		t.Fatalf("PendingItems = %#v, want mission backlog still present in raw snapshot", snapshot.PendingItems)
+	}
+	if got := len(snapshot.HotChats); got != 0 {
+		t.Fatalf("HotChats len = %d, want backlog-only chat excluded from hot ranking: %#v", got, snapshot.HotChats)
+	}
+}
+
 func TestSystemStatusSnapshotIncludesPendingReviewQueueItems(t *testing.T) {
 	t.Parallel()
 
@@ -815,6 +847,66 @@ func TestSystemStatusSnapshotDerivesRecoveryPendingFromExecutionEvents(t *testin
 	}
 	if pendingRecoveryByID(snapshot.PendingItems, "recovery:startup") {
 		t.Fatalf("PendingItems still contains startup recovery item after completion: %#v", snapshot.PendingItems)
+	}
+}
+
+func TestSystemStatusSnapshotTreatsStaleTESRunningTurnAsRecovery(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.staleTurnThreshold = time.Minute
+
+	key := session.SessionKey{ChatID: 9122, UserID: 0, Scope: telegramDMScopeRef(9122)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_id":77,"run_kind":"interactive","request_text":"inspect old commit"}`,
+			CreatedAt:   now.Add(-2 * time.Hour),
+		},
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "running",
+			PayloadJSON: `{"tool":"exec"}`,
+			CreatedAt:   now.Add(-119 * time.Minute),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(stale turn) err = %v", err)
+	}
+
+	system, err := rt.SystemStatusSnapshot(core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("SystemStatusSnapshot() err = %v", err)
+	}
+	if got := system.ActiveTurnCount; got != 0 {
+		t.Fatalf("ActiveTurnCount = %d, want stale TES turn excluded from active count", got)
+	}
+	if got := len(system.StaleRunningTurns); got != 1 {
+		t.Fatalf("StaleRunningTurns len = %d, want TES stale turn", got)
+	}
+	if !pendingItemByID(system.PendingItems, "stale:tes:77") {
+		t.Fatalf("PendingItems = %#v, want TES stale turn pending item", system.PendingItems)
+	}
+
+	chat, err := rt.ChatStatusSnapshot(9122, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(chat.ActiveTurnIDs) != 0 {
+		t.Fatalf("ActiveTurnIDs = %#v, want stale TES turn excluded", chat.ActiveTurnIDs)
+	}
+	if len(chat.StaleRunningTurns) != 1 {
+		t.Fatalf("chat stale turns = %#v, want TES stale turn", chat.StaleRunningTurns)
+	}
+	if chat.LatestTurnRun == nil || chat.LatestTurnRun.Status != string(session.TurnRunStatusRunning) {
+		t.Fatalf("LatestTurnRun = %#v, want running TES latest for debug evidence", chat.LatestTurnRun)
 	}
 }
 
@@ -2033,12 +2125,31 @@ func pendingKindCount(items []core.PendingItem, kind core.PendingItemKind) int {
 	return count
 }
 
+func pendingKindInItems(items []core.PendingItem, kind core.PendingItemKind) bool {
+	for _, item := range items {
+		if item.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func pendingRecoveryByID(items []core.PendingItem, id string) bool {
 	id = strings.TrimSpace(id)
 	for _, item := range items {
 		if item.Kind != core.PendingItemKindRecovery {
 			continue
 		}
+		if strings.TrimSpace(item.ID) == id {
+			return true
+		}
+	}
+	return false
+}
+
+func pendingItemByID(items []core.PendingItem, id string) bool {
+	id = strings.TrimSpace(id)
+	for _, item := range items {
 		if strings.TrimSpace(item.ID) == id {
 			return true
 		}

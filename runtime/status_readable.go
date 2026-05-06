@@ -211,8 +211,8 @@ func statusReadableSummaryMessages(view string, statusText string) []agent.Messa
 			Content: strings.Join([]string{
 				"You summarize Aphelion Telegram status diagnostics for an operator.",
 				"Return exactly one plain-text paragraph under 320 characters.",
-				"Describe current state first: blocked, working, queued, or idle when present.",
-				"Then mention the most important pending action.",
+				"Describe current state first: needs recovery, blocked, working, queued, failed, interrupted, or idle when present.",
+				"Then mention the most important action item. Treat backlog items as non-urgent backlog, not pending operator action.",
 				"Do not invent details. Do not use markdown or bullet points.",
 			}, "\n"),
 		},
