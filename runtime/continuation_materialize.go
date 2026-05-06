@@ -186,8 +186,55 @@ func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key 
 }
 
 func (r *Runtime) repairInvalidPendingPhaseApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, state session.ContinuationState, now time.Time) (session.OperationState, bool) {
-	if r == nil || r.store == nil {
+	repairedOpState, repaired, err := r.repairInvalidPendingPhaseApprovalState(ctx, key, msg.ChatID, opState, state, now, true, "materialization_repair")
+	if err != nil {
 		return session.NormalizeOperationState(opState), false
+	}
+	return repairedOpState, repaired
+}
+
+func (r *Runtime) repairInvalidPendingContinuationApprovals(ctx context.Context, now time.Time) (int, error) {
+	if r == nil || r.store == nil {
+		return 0, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	records, err := r.store.ContinuationStates()
+	if err != nil {
+		return 0, fmt.Errorf("load continuation states for approval repair: %w", err)
+	}
+	repaired := 0
+	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return repaired, err
+		}
+		state := session.NormalizeContinuationState(record.State)
+		if state.Status != session.ContinuationStatusPending {
+			continue
+		}
+		opState, err := r.store.OperationState(record.Key)
+		if err != nil {
+			return repaired, fmt.Errorf("load operation state chat_id=%d: %w", record.Key.ChatID, err)
+		}
+		_, ok, err := r.repairInvalidPendingPhaseApprovalState(ctx, record.Key, record.Key.ChatID, opState, state, now, true, "startup_repair")
+		if err != nil {
+			return repaired, err
+		}
+		if ok {
+			repaired++
+		}
+	}
+	return repaired, nil
+}
+
+func (r *Runtime) repairInvalidPendingPhaseApprovalState(ctx context.Context, key session.SessionKey, chatID int64, opState session.OperationState, state session.ContinuationState, now time.Time, notify bool, surface string) (session.OperationState, bool, error) {
+	if r == nil || r.store == nil {
+		return session.NormalizeOperationState(opState), false, nil
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -196,11 +243,11 @@ func (r *Runtime) repairInvalidPendingPhaseApproval(ctx context.Context, key ses
 	opState = session.NormalizeOperationState(opState)
 	state = session.NormalizeContinuationState(state)
 	if state.Status != session.ContinuationStatusPending {
-		return opState, false
+		return opState, false, nil
 	}
 	reason := continuationApprovalBundleInvalidReason(opState.PhasePlan, state.ApprovalBundle)
 	if reason == "" {
-		return opState, false
+		return opState, false, nil
 	}
 	state.Status = session.ContinuationStatusRevoked
 	state.ActionProposal.Status = session.ProposalStatusSuperseded
@@ -212,14 +259,22 @@ func (r *Runtime) repairInvalidPendingPhaseApproval(ctx context.Context, key ses
 	}
 	state.ApprovalBundle.UpdatedAt = now
 	state.UpdatedAt = now
-	_ = r.store.UpdateContinuationState(key, state)
+	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return opState, false, fmt.Errorf("revoke invalid pending continuation chat_id=%d: %w", key.ChatID, err)
+	}
 
 	opState = operationStateWithInvalidApprovalCleared(opState, state, now)
-	_ = r.store.UpdateOperationState(key, opState)
+	if err := r.store.UpdateOperationState(key, opState); err != nil {
+		return opState, false, fmt.Errorf("clear invalid pending operation approval chat_id=%d: %w", key.ChatID, err)
+	}
 
+	surface = strings.TrimSpace(surface)
+	if surface == "" {
+		surface = "materialization_repair"
+	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationAdjudicated, "continuation", "adjudicated", map[string]any{
 		"adjudication_kind": "continuation_approval",
-		"surface":           "materialization_repair",
+		"surface":           surface,
 		"subject_id":        strings.TrimSpace(state.DecisionID),
 		"operator_label":    "Invalid continuation approval repaired",
 		"visible_action":    "repair_invalid_pending_approval",
@@ -231,13 +286,13 @@ func (r *Runtime) repairInvalidPendingPhaseApproval(ctx context.Context, key ses
 			RequiredBehavior: "Do not execute old approval buttons; re-adjudicate the next eligible action.",
 		}},
 	}, now)
-	if r.outbound != nil && msg.ChatID != 0 {
+	if notify && r.outbound != nil && chatID != 0 {
 		_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{
-			ChatID: msg.ChatID,
+			ChatID: chatID,
 			Text:   "Stopped stale approval.\n\nI will create a fresh narrower proposal for the next eligible action.",
 		})
 	}
-	return opState, true
+	return opState, true, nil
 }
 
 func operationStateWithInvalidApprovalCleared(opState session.OperationState, state session.ContinuationState, now time.Time) session.OperationState {

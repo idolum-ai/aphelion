@@ -54,6 +54,16 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 			"interrupted_count": len(interrupted),
 		}, time.Now().UTC())
 	}
+	repairedApprovals, err := r.repairInvalidPendingContinuationApprovals(ctx, now)
+	if err != nil {
+		return fmt.Errorf("repair invalid pending continuation approvals: %w", err)
+	}
+	if repairedApprovals > 0 {
+		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
+			"invalid_pending_approvals_repaired": repairedApprovals,
+			"phase":                              "continuation_approval_repair",
+		}, time.Now().UTC())
+	}
 
 	runs, err := r.store.PendingRecoveryTurnRuns(maxStartupRecoveryRuns)
 	if err != nil {
@@ -62,6 +72,9 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if len(runs) == 0 {
 		resumeResult, resumeErr := r.resumeRestartParkedContinuations(ctx, now)
 		memoryNote := "continuity loaded; no recovery rows pending"
+		if repairedApprovals > 0 {
+			memoryNote += fmt.Sprintf("; invalid pending approvals repaired=%d", repairedApprovals)
+		}
 		if summary := resumeResult.summary(); summary != "" {
 			memoryNote += "; " + summary
 		}

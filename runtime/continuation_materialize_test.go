@@ -1388,6 +1388,85 @@ func TestMaterializeRepairsInvalidPendingMixedAuthorityBundle(t *testing.T) {
 	}
 }
 
+func TestStartupRepairRevokesInvalidPendingApprovalBundles(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9026, UserID: 0, Scope: telegramDMScopeRef(9026)}
+	opState := session.OperationState{
+		ID:        "startup-repair-invalid-bundle-op",
+		Objective: "Repair invalid live continuation bundle during startup.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "startup-repair-invalid-bundle-plan",
+			Goal: "Repair invalid approvals.",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-private-profile",
+					Summary:        "Collect approved profile preferences",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "private_data_intake",
+					BoundedEffect:  "Process only wife-provided preferences after approval.",
+				},
+				{
+					ID:             "phase-repo-fix",
+					Summary:        "Patch the local runner",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "workspace_commit_then_repo_write_bounded",
+					BoundedEffect:  "Edit, test, and commit the validated local slice.",
+				},
+			},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	state := continuationStateFromOperationPhaseBundle(opState, opState.PhasePlan.Phases, "continue", time.Now().UTC())
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	repaired, err := rt.repairInvalidPendingContinuationApprovals(context.Background(), time.Now().UTC())
+	if err != nil {
+		t.Fatalf("repairInvalidPendingContinuationApprovals() err = %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1", repaired)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusRevoked || cont.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked {
+		t.Fatalf("continuation = %#v, want revoked invalid pending approval", cont)
+	}
+	opState, err = store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	for _, phase := range opState.PhasePlan.Phases {
+		if strings.TrimSpace(phase.LeaseID) != "" {
+			t.Fatalf("phase = %#v, want invalid lease ids cleared", phase)
+		}
+	}
+
+	sender.mu.Lock()
+	sentCount := len(sender.sent)
+	sentText := ""
+	if sentCount > 0 {
+		sentText = sender.sent[0].Text
+	}
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if sentCount != 1 || inlineCount != 0 || !strings.Contains(sentText, "Stopped stale approval") {
+		t.Fatalf("sender sent=%d inline=%d text=%q, want concise repair notice without buttons", sentCount, inlineCount, sentText)
+	}
+}
+
 func TestRenderOperationPhaseBundlePromptIsConciseAndHidesRawLeaseDetails(t *testing.T) {
 	t.Parallel()
 
