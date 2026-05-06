@@ -135,7 +135,7 @@ func TestRenderReviewDigestKeepsSimpleReviewCompact(t *testing.T) {
 	}
 }
 
-func TestRenderRestartAwakeFormatsEvidenceAndBoundary(t *testing.T) {
+func TestRenderRestartAwakeFormatsOperatorCard(t *testing.T) {
 	out := RenderRestartAwake(RestartAwakeNotice{
 		StartedAtUTC:      "2026-05-01T14:29:56Z",
 		InterruptedCount:  0,
@@ -145,15 +145,102 @@ func TestRenderRestartAwakeFormatsEvidenceAndBoundary(t *testing.T) {
 		MemoryNote:        "continuity loaded",
 	})
 	for _, needle := range []string{
-		"Restart awake signal.",
-		"started_at_utc: 2026-05-01T14:29:56Z",
-		"startup_recovery: no interrupted turns pending",
-		"mission_control: candidates=4 active=1 pending_handoffs=2",
-		"memory: continuity loaded",
-		"next: use /status or /debug; parked leases are re-offered or resumed when available",
+		"Awake after restart",
+		"14:29 UTC",
+		"No interrupted work needed recovery.",
+		"Continuity is loaded.",
+		"Mission control: 4 candidates, 1 active, 2 handoffs pending.",
+		"Needs attention: review 2 pending handoffs.",
 	} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("RenderRestartAwake() = %q, want substring %q", out, needle)
+		}
+	}
+	for _, raw := range []string{
+		"started_at_utc",
+		"startup_recovery",
+		"pending_handoffs",
+		"mission_control:",
+		"memory:",
+		"use /status or /debug",
+	} {
+		if strings.Contains(out, raw) {
+			t.Fatalf("RenderRestartAwake() = %q, want no raw field %q", out, raw)
+		}
+	}
+}
+
+func TestRenderRestartAwakeHealthyRestartNeedsNoAction(t *testing.T) {
+	out := RenderRestartAwake(RestartAwakeNotice{
+		StartedAtUTC:      "2026-05-01T14:29:56Z",
+		InterruptedCount:  0,
+		CandidateMissions: 1,
+		ActiveMissions:    0,
+		PendingHandoffs:   0,
+		MemoryNote:        "continuity loaded; no recovery rows pending",
+	})
+	for _, needle := range []string{
+		"Awake after restart",
+		"14:29 UTC",
+		"No interrupted work needed recovery.",
+		"Continuity is loaded.",
+		"Mission control: 1 candidate, none active.",
+		"No action needed.",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderRestartAwake() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
+func TestRenderRestartAwakeInterruptedRecoveryIsReadable(t *testing.T) {
+	complete := RenderRestartAwake(RestartAwakeNotice{
+		InterruptedCount: 2,
+		RecoveredCount:   2,
+	})
+	if !strings.Contains(complete, "Recovered 2 interrupted turns.") {
+		t.Fatalf("RenderRestartAwake() = %q, want complete recovery summary", complete)
+	}
+	if !strings.Contains(complete, "No action needed.") {
+		t.Fatalf("RenderRestartAwake() = %q, want no action needed for complete recovery", complete)
+	}
+
+	partial := RenderRestartAwake(RestartAwakeNotice{
+		InterruptedCount: 3,
+		RecoveredCount:   2,
+	})
+	for _, needle := range []string{
+		"Recovered 2 of 3 interrupted turns.",
+		"Needs attention: startup recovery was incomplete.",
+	} {
+		if !strings.Contains(partial, needle) {
+			t.Fatalf("RenderRestartAwake() = %q, want substring %q", partial, needle)
+		}
+	}
+}
+
+func TestRenderRestartAwakeMemoryNoteRepairsAndParkedApprovals(t *testing.T) {
+	out := RenderRestartAwake(RestartAwakeNotice{
+		MemoryNote: "continuity loaded; no recovery rows pending; invalid pending approvals repaired=2; parked_continuations: reoffered=1 approved_reoffered=2 expired_reoffered=1 failed=1",
+	})
+	for _, needle := range []string{
+		"Continuity is loaded.",
+		"Repaired 2 stale approvals.",
+		"Re-offered 4 parked approvals.",
+		"Could not re-offer 1 parked approval.",
+		"Needs attention: parked approval resume had failures.",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderRestartAwake() = %q, want substring %q", out, needle)
+		}
+	}
+	for _, raw := range []string{
+		"invalid pending approvals repaired",
+		"parked_continuations",
+		"approved_reoffered",
+	} {
+		if strings.Contains(out, raw) {
+			t.Fatalf("RenderRestartAwake() = %q, want no raw memory detail %q", out, raw)
 		}
 	}
 }

@@ -59,14 +59,25 @@ func TestStartupRecoverySendsAwakeSignalWhenNoInterruptedRuns(t *testing.T) {
 		t.Fatalf("awake chat id = %d, want admin 1001", got.ChatID)
 	}
 	for _, needle := range []string{
-		"Restart awake signal.",
-		"started_at_utc: 2026-05-01T14:29:56Z",
-		"startup_recovery: no interrupted turns pending",
-		"mission_control: candidates=1 active=0 pending_handoffs=0",
-		"next: use /status or /debug; parked leases are re-offered or resumed when available",
+		"Awake after restart",
+		"14:29 UTC",
+		"No interrupted work needed recovery.",
+		"Continuity is loaded.",
+		"Mission control: 1 candidate, none active.",
+		"No action needed.",
 	} {
 		if !strings.Contains(got.Text, needle) {
 			t.Fatalf("awake text = %q, want substring %q", got.Text, needle)
+		}
+	}
+	for _, raw := range []string{
+		"started_at_utc",
+		"startup_recovery",
+		"pending_handoffs",
+		"next: use /status or /debug",
+	} {
+		if strings.Contains(got.Text, raw) {
+			t.Fatalf("awake text = %q, want no raw field %q", got.Text, raw)
 		}
 	}
 }
