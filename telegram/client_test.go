@@ -1259,6 +1259,60 @@ func TestSendMessageAutoFormatsMarkdownSubset(t *testing.T) {
 	}
 }
 
+func TestSendMessageAutoFormatsLineMarkdownForTelegram(t *testing.T) {
+	var requestBody map[string]interface{}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(data, &requestBody); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			resp := sendMessageResponse{Ok: true}
+			resp.Result.MessageID = 127
+			return encodeJSONResponse(t, resp), nil
+		},
+	}
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	text := strings.Join([]string{
+		"### 1. Ecological perception",
+		"",
+		"> What behavior does this discontinuity make available?",
+		"",
+		"---",
+		"",
+		"Read [docs](https://core.telegram.org/bots/api#formatting-options).",
+	}, "\n")
+	_, err := client.SendMessage(context.Background(), core.OutboundMessage{
+		ChatID: 5,
+		Text:   text,
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() err = %v", err)
+	}
+	if requestBody["parse_mode"] != ParseModeHTML {
+		t.Fatalf("parse_mode = %v, want %s", requestBody["parse_mode"], ParseModeHTML)
+	}
+	got, _ := requestBody["text"].(string)
+	for _, want := range []string{
+		"<b>1. Ecological perception</b>",
+		"<blockquote>What behavior does this discontinuity make available?</blockquote>",
+		`<a href="https://core.telegram.org/bots/api#formatting-options">docs</a>`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("text = %q, want substring %q", got, want)
+		}
+	}
+	if strings.Contains(got, "###") || strings.Contains(got, "---") {
+		t.Fatalf("text = %q, still contains raw structural Markdown", got)
+	}
+}
+
 func TestSendMessageFallsBackToPlainTextOnParseError(t *testing.T) {
 	call := 0
 	var bodies []map[string]interface{}
