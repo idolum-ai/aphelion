@@ -50,6 +50,8 @@ func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffe
 		return mustAuthorityContract("child_wake"), true
 	case containsAny("local_secret_metadata_read", "secret_metadata_read", "live_config_read", "config_metadata_read", "token_file_metadata", "metadata_read"):
 		return mustAuthorityContract(AuthorityClassLocalSecretMetadataReadLiveConfigRead), true
+	case containsAny("private_data_intake", "wife_profile", "cv_ingestion", "email_read", "mailbox_read", "external_account_email_read", "external_account", "public_web_read", "job_processing", "job_ranking", "job_scouting"):
+		return mustAuthorityContract("private_data_intake"), true
 	case containsAny("data_access", "file_access", "read_image", "read_file", "consume_attachment", "artifact_read", "network_access"):
 		return mustAuthorityContract("data_access"), true
 	case containsAny("git_commit", "repo_history_mutation", "commit"):
@@ -125,6 +127,35 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 				"verify no data was consumed before approval",
 			},
 			AutoApprovalAllowed:    true,
+			RequiresInlineApproval: true,
+		}, true
+	case "private_data_intake", "wife_profile", "profile_scoring_rubric", "cv_ingestion", "email_read", "mailbox_read", "external_account_email_read", "external_account_email_read_public_web_read", "external_account", "public_web_read", "job_processing", "job_ranking", "job_scouting":
+		return AuthorityContract{
+			Key:        "private_data_intake",
+			LeaseClass: ContinuationLeaseClassDataAccess,
+			WorkAction: AuthorityWorkActionReadOnly,
+			AllowedActions: []string{
+				AuthorityWorkActionReadOnly,
+				"request_data_access",
+				"read_approved_resource",
+				"process_approved_private_data",
+				"report_data_access_result",
+			},
+			ForbiddenActions: []string{
+				"silent_data_ingestion",
+				"read_unapproved_resource",
+				"external_account_access_without_grant",
+				"email_read_without_grant",
+				"cv_ingestion_without_consent",
+				"public_contact",
+				"application_submission",
+			},
+			ValidationPlan: []string{
+				"verify explicit opt-in or resource descriptor before data intake",
+				"record resource descriptor, transform, retention, and access result",
+				"stop before external account access or public contact unless separately granted",
+			},
+			AutoApprovalAllowed:    false,
 			RequiresInlineApproval: true,
 		}, true
 	case "read_only", "read_only_review", "status_check", "inspect_readonly_state":

@@ -510,6 +510,42 @@ func TestDoctorRuntimeAdjudicationsSummarizesStructuredEvents(t *testing.T) {
 	}
 }
 
+func TestDoctorRuntimeAdjudicationsIncludesContinuationApprovals(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9402, UserID: 0, Scope: telegramDMScopeRef(9402)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType: core.ExecutionEventContinuationAdjudicated,
+		Stage:     "continuation",
+		Status:    "adjudicated",
+		PayloadJSON: `{
+			"adjudication_kind":"continuation_approval",
+			"surface":"phase_materialization",
+			"operator_label":"Continuation approval blocked",
+			"visible_action":"blocked_status",
+			"findings":[{"kind":"approval_blocked","claim_type":"approval_blocked","detail":"waiting for explicit opt-in"}]
+		}`,
+		CreatedAt: now,
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	var b strings.Builder
+	rt.writeDoctorRuntimeAdjudications(context.Background(), &b, key, now)
+	report := b.String()
+	for _, want := range []string{"kind=continuation_approval", "action=blocked_status", "Continuation approval blocked", "approval_blocked", "waiting for explicit opt-in"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("doctor adjudications = %q, want %q", report, want)
+		}
+	}
+}
+
 func TestStartDoctorRejectsNonAdmin(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, err := New(cfg, store, provider, nil, sender)

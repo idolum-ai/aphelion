@@ -135,9 +135,14 @@ func TestMaterializeOperationProposalShowsDataAccessLeaseClassCard(t *testing.T)
 		inlineText = sender.inline[0].text
 	}
 	sender.mu.Unlock()
-	for _, want := range []string{"Operator card:", "Lease class: data access", "no silent broad ingestion", "Constraint: resource=", "Constraint: retention="} {
+	for _, want := range []string{"Approval needed: Read one generated image artifact", "Scope:", "Read artifact://image2/field-of-attention.png once"} {
 		if !strings.Contains(inlineText, want) {
 			t.Fatalf("inline text = %q, want %q", inlineText, want)
+		}
+	}
+	for _, notWant := range []string{"Operator card:", "Constraint: resource=", "Use the buttons"} {
+		if strings.Contains(inlineText, notWant) {
+			t.Fatalf("inline text = %q, did not want verbose contract fragment %q", inlineText, notWant)
 		}
 	}
 }
@@ -1165,6 +1170,262 @@ func TestMaterializeDurablePhasePlanBundlesConsecutiveSafePhases(t *testing.T) {
 	}
 	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+}
+
+func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9023, UserID: 0, Scope: telegramDMScopeRef(9023)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "mada-intake-op",
+		Objective: "Help Mada with a consent-first job agent.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "mada-intake-plan",
+			Goal: "Consent-first Mada intake and profile scoring.",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-33-mada-intake",
+					Summary:        "Consent-first Mada intake and wife-owned profile/scoring rubric.",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "private_data_intake",
+					WhyNow:         "Blocked: Daniel reported Mada is not available today, and no Mada opt-in has been observed. Wait for her explicit opt-in on a later turn.",
+					BoundedEffect:  "Ask approved preference questions and process wife-provided CV/preferences only after onboarding/opt-in.",
+				},
+				{
+					ID:             "phase-34-email-ranking",
+					Summary:        "Later email-forward/job-ranking and bounded public job scouting after profile approval.",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "external_account_email_read_public_web_read",
+					BoundedEffect:  "Read only synth@idolum.ai job-forwarding mailbox after profile approval.",
+				},
+				{
+					ID:             "phase-36-stale-repo-finish",
+					Summary:        "Superseded prior R1 repo-only finish phase after commit-denial failure.",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "workspace_commit_then_repo_write_bounded",
+					BoundedEffect:  "No authority from this stale phase should be used.",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9023, SenderID: 1001, Text: "continue", MessageID: 55}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want blocked status handled")
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	sentText := ""
+	if sentCount > 0 {
+		sentText = sender.sent[sentCount-1].Text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no approval buttons for blocked opt-in phase", inlineCount)
+	}
+	if sentCount != 1 || !strings.Contains(sentText, "Blocked: Consent-first Mada intake") || !strings.Contains(sentText, "explicit opt-in") {
+		t.Fatalf("sent text = %q, want concise blocked status", sentText)
+	}
+	if strings.Contains(sentText, "Approval needed") || strings.Contains(sentText, "Use the buttons") {
+		t.Fatalf("sent text = %q, want no approval ritual", sentText)
+	}
+
+	events, err := store.ExecutionEventsByChat(9023, time.Now().Add(-time.Hour), 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsByChat() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventContinuationAdjudicated) {
+		t.Fatalf("events = %#v, want continuation approval adjudication", events)
+	}
+}
+
+func TestMaterializeMixedAuthorityPhasePlanSplitsToSingleDataApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9024, UserID: 0, Scope: telegramDMScopeRef(9024)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "mixed-authority-op",
+		Objective: "Handle data intake before repo work.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "mixed-authority-plan",
+			Goal: "Keep data and repo authority separate.",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-private-profile",
+					Summary:        "Collect approved profile preferences",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "private_data_intake",
+					BoundedEffect:  "Process only wife-provided preferences after approval.",
+				},
+				{
+					ID:             "phase-repo-fix",
+					Summary:        "Patch the local runner",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "workspace_commit_then_repo_write_bounded",
+					BoundedEffect:  "Edit, test, and commit the validated local slice.",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9024, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want single data approval")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.RemainingTurns != 1 || len(cont.ApprovalBundle.Phases) != 0 {
+		t.Fatalf("continuation = %#v, want single phase approval without mixed bundle", cont)
+	}
+	if cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassDataAccess {
+		t.Fatalf("lease class = %q, want data_access", cont.ContinuationLease.LeaseClass)
+	}
+
+	sender.mu.Lock()
+	inlineText := ""
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(inlineText, "Approval needed: Collect approved profile preferences") || strings.Contains(inlineText, "Patch the local runner") {
+		t.Fatalf("inline text = %q, want only first data phase surfaced", inlineText)
+	}
+	if strings.Contains(inlineText, "phase-private-profile") || strings.Contains(inlineText, "Use the buttons") || strings.Contains(inlineText, "Operator card:") {
+		t.Fatalf("inline text = %q, want no raw ids or verbose operator card", inlineText)
+	}
+}
+
+func TestMaterializeRepairsInvalidPendingMixedAuthorityBundle(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9025, UserID: 0, Scope: telegramDMScopeRef(9025)}
+	opState := session.OperationState{
+		ID:        "repair-invalid-bundle-op",
+		Objective: "Repair invalid live continuation bundle.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "repair-invalid-bundle-plan",
+			Goal: "Repair invalid approvals.",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-private-profile",
+					Summary:        "Collect approved profile preferences",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "private_data_intake",
+					BoundedEffect:  "Process only wife-provided preferences after approval.",
+				},
+				{
+					ID:             "phase-repo-fix",
+					Summary:        "Patch the local runner",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "workspace_commit_then_repo_write_bounded",
+					BoundedEffect:  "Edit, test, and commit the validated local slice.",
+				},
+			},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	state := continuationStateFromOperationPhaseBundle(opState, opState.PhasePlan.Phases, "continue", time.Now().UTC())
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9025, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want repaired invalid bundle and fresh proposal")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassDataAccess || cont.RemainingTurns != 1 {
+		t.Fatalf("continuation = %#v, want fresh single data approval after repair", cont)
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	sender.mu.Unlock()
+	if inlineCount != 1 || sentCount != 1 {
+		t.Fatalf("sender inline=%d sent=%d, want one repair notice and one fresh approval", inlineCount, sentCount)
+	}
+}
+
+func TestRenderOperationPhaseBundlePromptIsConciseAndHidesRawLeaseDetails(t *testing.T) {
+	t.Parallel()
+
+	opState := session.OperationState{
+		ID:        "bundle-render-op",
+		Objective: "Improve continuation cards.",
+		PhasePlan: session.OperationPhasePlan{
+			ID: "bundle-render-plan",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "phase-raw-internal-id-a",
+					Summary:          "Inspect approval rendering",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "read_only_review",
+					BoundedEffect:    "Review only continuation prompt rendering.",
+					ForbiddenActions: []string{"deploy", "restart_service"},
+				},
+				{
+					ID:             "phase-raw-internal-id-b",
+					Summary:        "Patch approval rendering",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "workspace_write",
+					BoundedEffect:  "Edit local renderer and focused tests.",
+				},
+			},
+		},
+	}
+	state := continuationStateFromOperationPhaseBundle(opState, opState.PhasePlan.Phases, "continue", time.Now().UTC())
+	text := renderOperationProposalMaterializedPromptFallback(state)
+	for _, want := range []string{"Approval needed: Inspect approval rendering", "Scope:", "Included:", "Approve 2 bounded turns?"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text = %q, want %q", text, want)
+		}
+	}
+	for _, notWant := range []string{"Bundle phases:", "Operator card:", "Use the buttons", "phase-raw-internal-id", "lease-", "aprop-"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("text = %q, did not want raw/verbose fragment %q", text, notWant)
+		}
 	}
 }
 

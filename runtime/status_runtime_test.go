@@ -925,6 +925,49 @@ func TestStatusSurfacesRuntimeAdjudications(t *testing.T) {
 	}
 }
 
+func TestStatusSurfacesContinuationApprovalAdjudications(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 90212, UserID: 0, Scope: telegramDMScopeRef(90212)}
+	now := time.Now().UTC()
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{{
+		EventType: core.ExecutionEventContinuationAdjudicated,
+		Stage:     "continuation",
+		Status:    "adjudicated",
+		PayloadJSON: `{
+			"adjudication_kind":"continuation_approval",
+			"surface":"materialization_repair",
+			"subject_id":"bundle-mada",
+			"operator_label":"Invalid continuation approval repaired",
+			"visible_action":"repair_invalid_pending_approval",
+			"findings":[{"kind":"invalid_pending_approval","claim_type":"invalid_pending_approval","evidence_status":"detected_from_phase_contract","detail":"mixed authority classes require separate approvals"}]
+		}`,
+		CreatedAt: now,
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents(adjudication) err = %v", err)
+	}
+
+	snapshot, err := rt.ChatStatusSnapshot(90212, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if len(snapshot.RecentAdjudications) != 1 {
+		t.Fatalf("RecentAdjudications len = %d, want 1", len(snapshot.RecentAdjudications))
+	}
+	if got := snapshot.RecentAdjudications[0].Kind; got != "continuation_approval" {
+		t.Fatalf("adjudication kind = %q, want continuation_approval", got)
+	}
+	if got := snapshot.RecentAdjudications[0].Findings[0].Kind; got != "invalid_pending_approval" {
+		t.Fatalf("adjudication finding kind = %q, want invalid_pending_approval", got)
+	}
+}
+
 func TestChatStatusSnapshotSummarizesToolInstallEvents(t *testing.T) {
 	t.Parallel()
 

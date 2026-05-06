@@ -29,6 +29,13 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	priorContinuation, priorContinuationExists, _ := r.store.ContinuationStateIfExists(key)
 	opState = operationStateWithNonCurrentInProgressPhasesCleared(opState, now)
 	opState = operationStateWithInactiveCurrentPhaseLeaseCleared(opState, priorContinuation, priorContinuationExists, now)
+	if priorContinuationExists {
+		var repaired bool
+		opState, repaired = r.repairInvalidPendingPhaseApproval(ctx, key, msg, opState, priorContinuation, now)
+		if repaired {
+			priorContinuation, priorContinuationExists, _ = r.store.ContinuationStateIfExists(key)
+		}
+	}
 	if pendingOperationPlanLeaseNeedsButton(opState.PlanLease) {
 		now := time.Now().UTC()
 		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
@@ -109,6 +116,10 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	}
 	if phase, ok := nextOperationPhaseForApproval(opState.PhasePlan); ok {
 		now := time.Now().UTC()
+		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {
+			r.recordAndSendBlockedOperationPhaseApproval(ctx, key, msg, opState, phase, reason, now)
+			return true, nil
+		}
 		if operationPhaseIsPlanningOnlyApproval(phase) {
 			r.recordPlanningOnlyOperationPhaseBlocked(key, opState, phase, now)
 			return true, nil
@@ -174,6 +185,161 @@ func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key 
 	return r.sendContinuationApprovalPrompt(ctx, key, msg, state, text)
 }
 
+func (r *Runtime) repairInvalidPendingPhaseApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, state session.ContinuationState, now time.Time) (session.OperationState, bool) {
+	if r == nil || r.store == nil {
+		return session.NormalizeOperationState(opState), false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending {
+		return opState, false
+	}
+	reason := continuationApprovalBundleInvalidReason(opState.PhasePlan, state.ApprovalBundle)
+	if reason == "" {
+		return opState, false
+	}
+	state.Status = session.ContinuationStatusRevoked
+	state.ActionProposal.Status = session.ProposalStatusSuperseded
+	state.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+	state.ContinuationLease.UpdatedAt = now
+	state.ApprovalBundle.Status = session.ContinuationLeaseStatusRevoked
+	for i := range state.ApprovalBundle.Phases {
+		state.ApprovalBundle.Phases[i].Status = session.ContinuationLeaseStatusRevoked
+	}
+	state.ApprovalBundle.UpdatedAt = now
+	state.UpdatedAt = now
+	_ = r.store.UpdateContinuationState(key, state)
+
+	opState = operationStateWithInvalidApprovalCleared(opState, state, now)
+	_ = r.store.UpdateOperationState(key, opState)
+
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationAdjudicated, "continuation", "adjudicated", map[string]any{
+		"adjudication_kind": "continuation_approval",
+		"surface":           "materialization_repair",
+		"subject_id":        strings.TrimSpace(state.DecisionID),
+		"operator_label":    "Invalid continuation approval repaired",
+		"visible_action":    "repair_invalid_pending_approval",
+		"decision":          "revoked_invalid_pending_approval",
+		"findings": []core.RuntimeFinding{{
+			Kind:             "invalid_pending_approval",
+			EvidenceStatus:   "detected_from_phase_contract",
+			Detail:           reason,
+			RequiredBehavior: "Do not execute old approval buttons; re-adjudicate the next eligible action.",
+		}},
+	}, now)
+	if r.outbound != nil && msg.ChatID != 0 {
+		_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{
+			ChatID: msg.ChatID,
+			Text:   "Stopped stale approval.\n\nI will create a fresh narrower proposal for the next eligible action.",
+		})
+	}
+	return opState, true
+}
+
+func operationStateWithInvalidApprovalCleared(opState session.OperationState, state session.ContinuationState, now time.Time) session.OperationState {
+	opState = session.NormalizeOperationState(opState)
+	state = session.NormalizeContinuationState(state)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	actionOpID := strings.TrimSpace(state.ActionProposal.OperationID)
+	actionID := strings.TrimPrefix(strings.TrimSpace(state.ActionProposal.ID), "aprop-")
+	decisionID := strings.TrimSpace(state.DecisionID)
+	leaseID := strings.TrimSpace(state.ContinuationLease.ID)
+	if opState.Proposal.Status == session.ProposalStatusPending {
+		proposalID := strings.TrimSpace(opState.Proposal.ID)
+		if proposalID != "" && (proposalID == actionOpID || proposalID == actionID || proposalID == decisionID) {
+			opState.Proposal.Status = session.ProposalStatusSuperseded
+			opState.Proposal.UpdatedAt = now
+		}
+	}
+	if opState.PlanLease.Status == session.PlanLeaseStatusProposed || opState.PlanLease.Status == session.PlanLeaseStatusActive || opState.PlanLease.Status == session.PlanLeaseStatusApproved {
+		planID := strings.TrimSpace(opState.PlanLease.ID)
+		if planID != "" && (planID == actionOpID || planID == actionID || planID == decisionID) {
+			opState.PlanLease.Status = session.PlanLeaseStatusRevoked
+			opState.PlanLease.UpdatedAt = now
+		}
+	}
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	bundleIDs := make(map[string]struct{}, len(bundle.Phases))
+	for _, phase := range bundle.Phases {
+		if id := strings.TrimSpace(phase.OperationPhaseID); id != "" {
+			bundleIDs[id] = struct{}{}
+		}
+	}
+	for i := range opState.PhasePlan.Phases {
+		phaseID := strings.TrimSpace(opState.PhasePlan.Phases[i].ID)
+		_, inBundle := bundleIDs[phaseID]
+		leaseMatches := leaseID != "" && strings.TrimSpace(opState.PhasePlan.Phases[i].LeaseID) == leaseID
+		if !inBundle && !leaseMatches {
+			continue
+		}
+		if opState.PhasePlan.Phases[i].Status == session.PlanStatusInProgress {
+			opState.PhasePlan.Phases[i].Status = session.PlanStatusPending
+		}
+		opState.PhasePlan.Phases[i].LeaseID = ""
+	}
+	opState.Status = session.OperationStatusBlocked
+	opState.Stage = "phase_approval_adjudicated"
+	opState.PhasePlan.UpdatedAt = now
+	opState.UpdatedAt = now
+	return session.NormalizeOperationState(opState)
+}
+
+func continuationApprovalBundleInvalidReason(plan session.OperationPhasePlan, bundle session.ContinuationApprovalBundle) string {
+	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
+	bundle = session.NormalizeContinuationApprovalBundle(bundle)
+	if len(bundle.Phases) == 0 {
+		return ""
+	}
+	phaseByID := make(map[string]session.OperationPhase, len(plan.Phases))
+	for _, phase := range plan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
+		if id := strings.TrimSpace(phase.ID); id != "" {
+			phaseByID[id] = phase
+		}
+	}
+	family := ""
+	for _, bundlePhase := range bundle.Phases {
+		phaseID := strings.TrimSpace(bundlePhase.OperationPhaseID)
+		phase, ok := phaseByID[phaseID]
+		if !ok {
+			phase = session.OperationPhase{
+				ID:               phaseID,
+				Summary:          bundlePhase.Summary,
+				AuthorityClass:   bundlePhase.AuthorityClass,
+				WhyNow:           bundlePhase.WhyNow,
+				BoundedEffect:    bundlePhase.BoundedEffect,
+				AllowedActions:   append([]string(nil), bundlePhase.AllowedActions...),
+				ForbiddenActions: append([]string(nil), bundlePhase.ForbiddenActions...),
+				ValidationPlan:   append([]string(nil), bundlePhase.ValidationPlan...),
+				Status:           session.PlanStatusPending,
+			}
+		}
+		if reason := operationPhaseApprovalExcludedReason(plan, phase); reason != "" {
+			return reason
+		}
+		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {
+			return reason
+		}
+		phaseFamily := operationPhaseApprovalFamily(phase)
+		if family == "" {
+			family = phaseFamily
+		} else if family != phaseFamily {
+			return "mixed authority classes require separate approvals"
+		}
+		if operationPhaseRequiresFreshApprovalGate(phase) && len(bundle.Phases) > 1 {
+			return "fresh approval gate cannot be bundled"
+		}
+	}
+	return ""
+}
+
 func pendingOperationProposalNeedsButton(proposal session.OperationProposal) bool {
 	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
 	return proposal.Active() && proposal.Status == session.ProposalStatusPending && strings.TrimSpace(proposal.ID) != "" && strings.TrimSpace(proposal.Summary) != ""
@@ -214,11 +380,18 @@ func operationPlanLeaseFromPhasePlan(opState session.OperationState, now time.Ti
 		if operationPhasePlanPhaseIsStaleInProgress(opState.PhasePlan, phase) {
 			continue
 		}
+		if operationPhaseApprovalExcludedReason(opState.PhasePlan, phase) != "" {
+			continue
+		}
 		if phase.Status == session.PlanStatusCompleted {
 			continue
 		}
 		if !operationPhaseNeedsApproval(phase) {
 			continue
+		}
+		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {
+			stoppedAtGate = reason
+			break
 		}
 		if operationPhaseRequiresFreshApprovalGate(phase) {
 			stoppedAtGate = operationPhaseStopGateLabel(phase)
@@ -541,13 +714,18 @@ func nextOperationPhaseForApproval(plan session.OperationPhasePlan) (session.Ope
 	}
 	if currentID := strings.TrimSpace(plan.CurrentPhaseID); currentID != "" {
 		for _, phase := range plan.Phases {
-			if strings.TrimSpace(phase.ID) == currentID && operationPhaseNeedsApproval(phase) {
+			phase = normalizeSingleOperationPhase(phase)
+			if strings.TrimSpace(phase.ID) == currentID && operationPhaseNeedsApproval(phase) && operationPhaseApprovalExcludedReason(plan, phase) == "" {
 				return phase, true
 			}
 		}
 	}
 	for _, phase := range plan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
 		if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
+			continue
+		}
+		if operationPhaseApprovalExcludedReason(plan, phase) != "" {
 			continue
 		}
 		if operationPhaseNeedsApproval(phase) {
@@ -582,16 +760,25 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 		if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
 			continue
 		}
+		if operationPhaseApprovalExcludedReason(plan, phase) != "" {
+			continue
+		}
 		if phase.Status == session.PlanStatusCompleted {
 			continue
 		}
 		if !operationPhaseNeedsApproval(phase) {
 			break
 		}
+		if operationPhaseApprovalBlockedReason(phase) != "" {
+			break
+		}
 		if operationPhaseIsPlanningOnlyApproval(phase) {
 			break
 		}
 		if operationPhaseRequiresFreshApprovalGate(phase) {
+			break
+		}
+		if !operationPhaseBundleCanAdd(bundle, phase) {
 			break
 		}
 		bundle = append(bundle, phase)
@@ -603,13 +790,19 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 			if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
 				continue
 			}
+			if operationPhaseApprovalExcludedReason(plan, phase) != "" {
+				continue
+			}
 			if phase.Status == session.PlanStatusCompleted {
 				continue
 			}
-			if !operationPhaseNeedsApproval(phase) || operationPhaseRequiresFreshApprovalGate(phase) {
+			if !operationPhaseNeedsApproval(phase) || operationPhaseApprovalBlockedReason(phase) != "" || operationPhaseRequiresFreshApprovalGate(phase) {
 				break
 			}
 			if operationPhaseIsPlanningOnlyApproval(phase) {
+				break
+			}
+			if !operationPhaseBundleCanAdd(bundle, phase) {
 				break
 			}
 			bundle = append(bundle, phase)
@@ -621,8 +814,109 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 	return bundle, true
 }
 
+func operationPhaseBundleCanAdd(bundle []session.OperationPhase, phase session.OperationPhase) bool {
+	phase = normalizeSingleOperationPhase(phase)
+	if len(bundle) == 0 {
+		return true
+	}
+	want := operationPhaseApprovalFamily(bundle[0])
+	got := operationPhaseApprovalFamily(phase)
+	if want == "" || got == "" {
+		return want == got
+	}
+	return want == got
+}
+
+func operationPhaseApprovalFamily(phase session.OperationPhase) string {
+	phase = normalizeSingleOperationPhase(phase)
+	class := session.InferContinuationLeaseClass(phase.AuthorityClass, phase.AllowedActions, phase.BoundedEffect)
+	switch class {
+	case session.ContinuationLeaseClassLocalWorkspace:
+		return "local_workspace"
+	case session.ContinuationLeaseClassDataAccess:
+		return "data_access"
+	case session.ContinuationLeaseClassChildWake:
+		return "child_wake"
+	case session.ContinuationLeaseClassCapabilityGrant:
+		return "capability_grant"
+	case session.ContinuationLeaseClassDeployRestart:
+		return "deploy_restart"
+	default:
+		return ""
+	}
+}
+
+func operationPhaseApprovalExcludedReason(plan session.OperationPhasePlan, phase session.OperationPhase) string {
+	phase = normalizeSingleOperationPhase(phase)
+	if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
+		return "stale non-current in-progress phase"
+	}
+	if phase.Status == session.PlanStatusCompleted {
+		return "completed phase"
+	}
+	text := operationPhaseApprovalText(phase)
+	switch {
+	case strings.Contains(text, "superseded prior"),
+		strings.Contains(text, "superseded phase"),
+		strings.Contains(text, "stale phase"),
+		strings.Contains(text, "old lease"),
+		strings.Contains(text, "old authority"),
+		strings.Contains(text, "no authority from this stale phase"),
+		strings.Contains(text, "must not be used"),
+		strings.Contains(text, "should not be used"):
+		return "superseded or stale phase"
+	default:
+		return ""
+	}
+}
+
+func operationPhaseApprovalBlockedReason(phase session.OperationPhase) string {
+	phase = normalizeSingleOperationPhase(phase)
+	text := operationPhaseApprovalText(phase)
+	switch {
+	case strings.Contains(text, "no opt in") ||
+		strings.Contains(text, "no opt-in") ||
+		strings.Contains(text, "not opted in") ||
+		strings.Contains(text, "missing opt in") ||
+		strings.Contains(text, "missing opt-in"):
+		return "waiting for explicit opt-in"
+	case strings.Contains(text, "wait for her explicit opt in") ||
+		strings.Contains(text, "wait for her explicit opt-in") ||
+		strings.Contains(text, "wait for explicit opt in") ||
+		strings.Contains(text, "wait for explicit opt-in"):
+		return "waiting for explicit opt-in"
+	case strings.Contains(text, "blocked:") && (strings.Contains(text, "consent") || strings.Contains(text, "opt in") || strings.Contains(text, "opt-in")):
+		return "blocked on consent"
+	case strings.Contains(text, "no consent") ||
+		strings.Contains(text, "without consent") ||
+		strings.Contains(text, "consent has not been observed") ||
+		strings.Contains(text, "consent not observed"):
+		return "waiting for explicit consent"
+	default:
+		return ""
+	}
+}
+
+func operationPhaseApprovalText(phase session.OperationPhase) string {
+	phase = normalizeSingleOperationPhase(phase)
+	parts := []string{
+		phase.ID,
+		phase.Summary,
+		phase.AuthorityClass,
+		phase.WhyNow,
+		phase.BoundedEffect,
+	}
+	parts = append(parts, phase.AllowedActions...)
+	parts = append(parts, phase.ForbiddenActions...)
+	parts = append(parts, phase.ValidationPlan...)
+	return strings.ToLower(strings.TrimSpace(strings.Join(parts, " ")))
+}
+
 func operationPhaseRequiresFreshApprovalGate(phase session.OperationPhase) bool {
 	phase = normalizeSingleOperationPhase(phase)
+	if class := session.InferContinuationLeaseClass(phase.AuthorityClass, phase.AllowedActions, phase.BoundedEffect); class != "" && class != session.ContinuationLeaseClassLocalWorkspace {
+		return true
+	}
 	values := []string{phase.AuthorityClass}
 	values = append(values, phase.AllowedActions...)
 	for _, value := range values {
@@ -757,6 +1051,81 @@ func (r *Runtime) recordPlanningOnlyOperationPhaseBlocked(key session.SessionKey
 		"phase_summary":  strings.TrimSpace(phase.Summary),
 		"operation_id":   strings.TrimSpace(opState.ID),
 	}, now)
+}
+
+func (r *Runtime) recordAndSendBlockedOperationPhaseApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, opState session.OperationState, phase session.OperationPhase, reason string, now time.Time) {
+	if r == nil {
+		return
+	}
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "approval is blocked"
+	}
+	payload := map[string]any{
+		"adjudication_kind": "continuation_approval",
+		"surface":           "phase_materialization",
+		"subject_id":        strings.TrimSpace(phase.ID),
+		"operator_label":    "Continuation approval blocked",
+		"visible_action":    "blocked_status",
+		"phase_plan_id":     strings.TrimSpace(opState.PhasePlan.ID),
+		"phase_id":          strings.TrimSpace(phase.ID),
+		"phase_summary":     strings.TrimSpace(phase.Summary),
+		"operation_id":      strings.TrimSpace(opState.ID),
+		"decision":          "blocked",
+		"findings": []core.RuntimeFinding{{
+			Kind:             "approval_blocked",
+			EvidenceStatus:   "declared_by_phase_contract",
+			Detail:           reason,
+			RequiredBehavior: "Do not show approval buttons until a fresh eligible proposal exists.",
+		}},
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationAdjudicated, "continuation", "adjudicated", payload, now)
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", map[string]any{
+		"blocked_reason": reason,
+		"phase_plan_id":  strings.TrimSpace(opState.PhasePlan.ID),
+		"phase_id":       strings.TrimSpace(phase.ID),
+		"phase_summary":  strings.TrimSpace(phase.Summary),
+		"operation_id":   strings.TrimSpace(opState.ID),
+	}, now)
+	if r.outbound == nil || msg.ChatID == 0 {
+		return
+	}
+	replyTo := msg.MessageID
+	var replyToPtr *int64
+	if replyTo != 0 {
+		replyToPtr = &replyTo
+	}
+	_, _ = r.outbound.SendMessage(ctx, core.OutboundMessage{
+		ChatID:  msg.ChatID,
+		Text:    renderOperationPhaseApprovalBlockedStatus(opState, phase, reason),
+		ReplyTo: replyToPtr,
+	})
+}
+
+func renderOperationPhaseApprovalBlockedStatus(opState session.OperationState, phase session.OperationPhase, reason string) string {
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	title := firstNonEmptyContinuation(phase.Summary, opState.PhasePlan.Goal, opState.Objective, "Next phase")
+	lines := []string{"Blocked: " + truncatePreview(title, 96)}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		lines = append(lines, "", "Why now:", truncatePreview(reason, 180))
+	}
+	if next := operationBlockedApprovalNextStep(reason); next != "" {
+		lines = append(lines, "", "Next:", next)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func operationBlockedApprovalNextStep(reason string) string {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(lower, "opt-in"), strings.Contains(lower, "opt in"), strings.Contains(lower, "consent"):
+		return "Wait for explicit opt-in/consent, then create a fresh narrower proposal."
+	default:
+		return "Create a fresh narrower proposal before continuing."
+	}
 }
 
 func operationPhasePlanOwnsContinuation(plan session.OperationPhasePlan) bool {
@@ -1753,39 +2122,133 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 		return renderPlanBudgetPromptFallback(state)
 	}
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
-	lines := []string{"Approval needed."}
-	if summary := strings.TrimSpace(proposal.Summary); summary != "" {
-		lines = append(lines, "", "Lease:", summary)
+	title := continuationApprovalPromptTitle(state)
+	if title == "" {
+		title = "bounded continuation"
 	}
-	if why := strings.TrimSpace(proposal.WhyNow); why != "" {
+	lines := []string{"Approval needed: " + title}
+	if why := continuationPromptCompactLine(proposal.WhyNow, 220); why != "" {
 		lines = append(lines, "", "Why now:", why)
 	}
-	if effect := strings.TrimSpace(proposal.BoundedEffect); effect != "" {
-		lines = append(lines, "", "Bounded effect:", effect)
+	if scope := continuationApprovalPromptScope(state); scope != "" {
+		lines = append(lines, "", "Scope:", scope)
 	}
-	if card := continuationOperatorCardLines(state); len(card) > 0 {
-		lines = append(lines, "", "Operator card:")
-		lines = append(lines, card...)
-	}
-	if continuationActionIsPlanLeaseApproval(state) {
-		lines = append(lines, "", "Plan lease authority:", "Bounded plan envelope only; approval does not grant capabilities or automatically start work.")
-	}
-	if bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle); len(bundle.Phases) > 0 {
-		lines = append(lines, "", "Bundle phases:")
-		for _, phase := range bundle.Phases {
-			label := fmt.Sprintf("%d", phase.Index)
-			if summary := strings.TrimSpace(phase.Summary); summary != "" {
-				label += ". " + summary
-			}
-			if authority := strings.TrimSpace(phase.AuthorityClass); authority != "" {
-				label += " [" + authority + "]"
-			}
-			lines = append(lines, "- "+label)
+	if included := continuationApprovalPromptIncludedLines(state); len(included) > 0 {
+		lines = append(lines, "", "Included:")
+		for _, line := range included {
+			lines = append(lines, "- "+line)
 		}
 	}
-	lines = append(lines, "", fmt.Sprintf("Approve %d bounded turn(s)?", state.RemainingTurns))
-	lines = append(lines, "", "Use the buttons instead of typing approval when possible.")
+	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
+		lines = append(lines, "", "Stops:", strings.Join(stops, ", "))
+	}
+	if state.RemainingTurns > 0 {
+		turnLabel := "turn"
+		if state.RemainingTurns != 1 {
+			turnLabel = "turns"
+		}
+		lines = append(lines, "", fmt.Sprintf("Approve %d bounded %s?", state.RemainingTurns, turnLabel))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func continuationApprovalPromptTitle(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		if summary := continuationPromptCompactLine(phase.Summary, 96); summary != "" {
+			return summary
+		}
+	}
+	for _, candidate := range []string{state.ActionProposal.Summary, state.StageSummary, state.Objective} {
+		candidate = strings.TrimSpace(candidate)
+		if idx := strings.Index(candidate, ":"); strings.HasPrefix(strings.ToLower(candidate), "approve stages ") && idx >= 0 && idx+1 < len(candidate) {
+			candidate = strings.TrimSpace(candidate[idx+1:])
+		}
+		if title := continuationPromptCompactLine(candidate, 96); title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+func continuationApprovalPromptScope(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		if scope := continuationPromptCompactLine(phase.BoundedEffect, 240); scope != "" {
+			return scope
+		}
+	}
+	if scope := continuationPromptCompactLine(state.ActionProposal.BoundedEffect, 260); scope != "" {
+		return scope
+	}
+	return continuationPromptCompactLine(state.GovernorIntent.Constraints, 260)
+}
+
+func continuationApprovalPromptIncludedLines(state session.ContinuationState) []string {
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	if len(bundle.Phases) < 2 {
+		return nil
+	}
+	lines := make([]string, 0, minStatusInt(len(bundle.Phases), 4))
+	for _, phase := range bundle.Phases {
+		summary := continuationPromptCompactLine(phase.Summary, 110)
+		if summary == "" {
+			continue
+		}
+		if phase.Index > 0 {
+			summary = fmt.Sprintf("phase %d: %s", phase.Index, summary)
+		}
+		lines = append(lines, summary)
+		if len(lines) >= 4 {
+			break
+		}
+	}
+	return lines
+}
+
+func continuationApprovalPromptStops(state session.ContinuationState) []string {
+	state = session.NormalizeContinuationState(state)
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 4)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		value = planBudgetHumanStop(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	for _, value := range state.ActionProposal.ForbiddenActions {
+		add(value)
+	}
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		for _, value := range phase.ForbiddenActions {
+			add(value)
+		}
+	}
+	if len(out) == 0 {
+		out = []string{"anything outside scope", "hard gates"}
+	}
+	out = prioritizePlanBudgetStops(out)
+	if len(out) > 4 {
+		out = out[:4]
+	}
+	return out
+}
+
+func continuationPromptCompactLine(value string, limit int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if value == "" {
+		return ""
+	}
+	return truncatePreview(value, limit)
 }
 
 func renderPlanBudgetPromptFallback(state session.ContinuationState) string {

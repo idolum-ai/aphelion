@@ -105,6 +105,8 @@ func TestContinuationLeaseClassInferenceAndBoundaries(t *testing.T) {
 		{name: "deploy", risk: "deploy", actions: []string{"service_restart"}, effect: "restart and verify", want: ContinuationLeaseClassDeployRestart},
 		{name: "workspace", risk: "workspace_write", actions: []string{"focused_tests"}, effect: "patch locally", want: ContinuationLeaseClassLocalWorkspace},
 		{name: "local commit", risk: "workspace_commit_then_repo_write_bounded", actions: []string{"git_commit_validated_slices"}, effect: "commit validated local slices", want: ContinuationLeaseClassLocalWorkspace},
+		{name: "private data intake", risk: "private_data_intake", actions: nil, effect: "process wife-provided preferences after opt-in", want: ContinuationLeaseClassDataAccess},
+		{name: "email and public web read", risk: "external_account_email_read_public_web_read", actions: nil, effect: "read job-forwarding mailbox and public job links after profile approval", want: ContinuationLeaseClassDataAccess},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

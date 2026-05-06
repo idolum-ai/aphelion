@@ -1351,7 +1351,8 @@ func statusAdjudicationsFromExecutionEvents(events []session.ExecutionEvent, lim
 	out := make([]core.AdjudicationStatusSnapshot, 0, minStatusInt(limit, len(ordered)))
 	for i := len(ordered) - 1; i >= 0; i-- {
 		event := ordered[i]
-		if strings.TrimSpace(event.EventType) != core.ExecutionEventReplyClaimAdjudicated {
+		eventType := strings.TrimSpace(event.EventType)
+		if eventType != core.ExecutionEventReplyClaimAdjudicated && eventType != core.ExecutionEventContinuationAdjudicated {
 			continue
 		}
 		adjudication, ok := runtimeAdjudicationFromExecutionEvent(event)
