@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,8 @@ const (
 	defaultMemoryDelegationTimeout  = defaultUserApprovalTimeout
 	defaultSnapshotRestoreTimeout   = defaultUserApprovalTimeout
 )
+
+const ordinaryMediaApprovalMaxSizeBytes = 20 * 1024 * 1024
 
 type telegramDecisionSender interface {
 	SendInlineKeyboard(ctx context.Context, chatID int64, text string, rows [][]telegram.InlineButton, replyTo *int64) (int64, error)
@@ -63,8 +66,8 @@ type telegramDecisionMessageStopRouter interface {
 	StopForMessage(msg core.InboundMessage) core.StopResult
 }
 
-type telegramAudioRetentionKeeper interface {
-	KeepAudioArtifactsPermanently(ctx context.Context, msg core.InboundMessage) error
+type telegramPermanentArtifactKeeper interface {
+	KeepTelegramArtifactsPermanently(ctx context.Context, msg core.InboundMessage) error
 }
 
 func editDecisionMessageClearingInlineKeyboard(ctx context.Context, sender telegramDecisionSender, chatID int64, messageID int64, text string) error {
@@ -79,7 +82,7 @@ type telegramDecisionHandler struct {
 	router                   telegramDecisionRouter
 	broker                   *decision.Broker
 	store                    *session.SQLiteStore
-	audioRetentionKeeper     telegramAudioRetentionKeeper
+	artifactRetentionKeeper  telegramPermanentArtifactKeeper
 	interruptTimeout         time.Duration
 	stopWordTimeout          time.Duration
 	artifactRetentionTimeout time.Duration
@@ -103,8 +106,8 @@ type telegramDurableSnapshotRestoreApprover struct {
 	timeout time.Duration
 }
 
-func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker, store *session.SQLiteStore, keepers ...telegramAudioRetentionKeeper) *telegramDecisionHandler {
-	var keeper telegramAudioRetentionKeeper
+func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDecisionRouter, broker *decision.Broker, store *session.SQLiteStore, keepers ...telegramPermanentArtifactKeeper) *telegramDecisionHandler {
+	var keeper telegramPermanentArtifactKeeper
 	if len(keepers) > 0 {
 		keeper = keepers[0]
 	}
@@ -113,7 +116,7 @@ func newTelegramDecisionHandler(sender telegramDecisionSender, router telegramDe
 		router:                   router,
 		broker:                   broker,
 		store:                    store,
-		audioRetentionKeeper:     keeper,
+		artifactRetentionKeeper:  keeper,
 		interruptTimeout:         defaultInterruptTimeout,
 		stopWordTimeout:          defaultStopWordTimeout,
 		artifactRetentionTimeout: defaultArtifactRetentionTimeout,
@@ -441,12 +444,16 @@ func (h *telegramDecisionHandler) HandleArtifactRetentionMessage(ctx context.Con
 	if h == nil || h.sender == nil || h.router == nil || h.broker == nil {
 		return false, nil
 	}
-	if hasOnlyAudioArtifactRetentionCandidates(msg) {
-		return h.handleAudioArtifactRetentionMessage(ctx, msg)
-	}
 	if !hasArtifactRetentionCandidates(msg) {
 		return false, nil
 	}
+	if hasArtifactRetentionApprovalCandidates(msg) {
+		return h.handleBlockingArtifactRetentionMessage(ctx, msg)
+	}
+	return h.handleImmediateMediaArtifactMessage(ctx, msg)
+}
+
+func (h *telegramDecisionHandler) handleBlockingArtifactRetentionMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
 	ownerKey := decision.OwnerKey(msg.ChatID, msg.SenderID)
 	if ownerKey == "" {
 		return false, fmt.Errorf("artifact retention owner key is required")
@@ -542,66 +549,127 @@ func (h *telegramDecisionHandler) resumePendingArtifactRetention(ctx context.Con
 	return nil
 }
 
-func (h *telegramDecisionHandler) handleAudioArtifactRetentionMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
+func (h *telegramDecisionHandler) handleImmediateMediaArtifactMessage(ctx context.Context, msg core.InboundMessage) (bool, error) {
 	updated := markMediaProcessingAgentDecision(msg)
 	updated = applyArtifactRetentionChoice(updated, "session")
 	storedForKeep := false
-	if h.store != nil {
-		if raw, err := json.Marshal(msg); err == nil {
+	if h.store != nil && h.artifactRetentionKeeper != nil && hasPermanentArtifactKeepCandidates(msg) {
+		if ownerKey := decision.OwnerKey(msg.ChatID, msg.SenderID); ownerKey != "" {
+			raw, err := json.Marshal(msg)
+			if err != nil {
+				return true, fmt.Errorf("marshal pending permanent artifact message: %w", err)
+			}
 			err = h.store.UpsertPendingArtifactRetention(session.PendingArtifactRetentionRecord{
-				OwnerKey:           decision.OwnerKey(msg.ChatID, msg.SenderID),
+				OwnerKey:           ownerKey,
 				ChatID:             msg.ChatID,
 				SenderID:           msg.SenderID,
 				InboundMessageJSON: string(raw),
 			})
 			storedForKeep = err == nil
+			if err != nil {
+				return true, err
+			}
 		}
 	}
-	if storedForKeep && h.audioRetentionKeeper != nil {
-		_ = h.sendAudioRetentionOffer(ctx, msg)
+	if storedForKeep {
+		_ = h.sendPermanentArtifactRetentionOffer(ctx, msg)
 	}
 	h.router.Route(ctx, updated)
 	return true, nil
 }
 
-func (h *telegramDecisionHandler) sendAudioRetentionOffer(ctx context.Context, msg core.InboundMessage) error {
+func (h *telegramDecisionHandler) sendPermanentArtifactRetentionOffer(ctx context.Context, msg core.InboundMessage) error {
 	if h == nil || h.sender == nil {
 		return nil
 	}
-	text := "Audio is available while we work with it. I won't keep it permanently unless you ask."
+	subject := permanentArtifactKeepSubject(msg)
+	text := subject.Sentence + " is available while we work with it. I won't keep it beyond that unless you ask."
 	rows := [][]telegram.InlineButton{{{
-		Text:         "Keep audio permanently",
-		CallbackData: encodeAudioKeepCallbackData(msg.MessageID),
+		Text:         subject.Button,
+		CallbackData: encodePermanentArtifactKeepCallbackData(msg.MessageID),
 	}}}
 	_, err := h.sender.SendInlineKeyboard(ctx, msg.ChatID, text, rows, replyToMessageID(msg.MessageID))
 	return err
 }
 
-func hasOnlyAudioArtifactRetentionCandidates(msg core.InboundMessage) bool {
-	if strings.TrimSpace(msg.DurableAgentID) != "" {
-		return false
-	}
-	seenAudio := false
+type permanentArtifactKeepCopy struct {
+	Sentence     string
+	Button       string
+	Unavailable  string
+	Stale        string
+	Failed       string
+	Confirmation string
+}
+
+func permanentArtifactKeepSubject(msg core.InboundMessage) permanentArtifactKeepCopy {
+	counts := map[string]int{}
 	for _, raw := range msg.Artifacts {
 		artifact := core.NormalizeArtifact(raw)
-		if strings.TrimSpace(artifact.Channel) != "telegram" {
-			continue
+		if artifactRetentionCandidate(artifact) && !artifactNeedsRetentionApproval(artifact) {
+			counts[artifact.Kind]++
 		}
-		if strings.TrimSpace(artifact.RemoteID) == "" && len(artifact.Data) == 0 {
-			continue
-		}
-		if artifact.Kind == "structured" {
-			continue
-		}
-		if strings.TrimSpace(artifact.Metadata["aphelion_retention_choice"]) != "" {
-			continue
-		}
-		if artifact.Kind != "audio" {
-			return false
-		}
-		seenAudio = true
 	}
-	return seenAudio
+	total := 0
+	for _, count := range counts {
+		total += count
+	}
+	if total == 1 {
+		switch {
+		case counts["audio"] == 1:
+			return permanentArtifactKeepCopy{
+				Sentence:     "Audio",
+				Button:       "Keep audio permanently",
+				Unavailable:  "That audio is no longer available to save from this button.",
+				Stale:        "That audio button is stale.",
+				Failed:       "I couldn't save that audio permanently.",
+				Confirmation: "Audio saved permanently.",
+			}
+		case counts["image"] == 1:
+			return permanentArtifactKeepCopy{
+				Sentence:     "Image",
+				Button:       "Keep image permanently",
+				Unavailable:  "That image is no longer available to save from this button.",
+				Stale:        "That image button is stale.",
+				Failed:       "I couldn't save that image permanently.",
+				Confirmation: "Image saved permanently.",
+			}
+		case counts["video"] == 1:
+			return permanentArtifactKeepCopy{
+				Sentence:     "Video",
+				Button:       "Keep video locally",
+				Unavailable:  "That video is no longer available to save from this button.",
+				Stale:        "That video button is stale.",
+				Failed:       "I couldn't save that video locally.",
+				Confirmation: "Video saved locally.",
+			}
+		case counts["sticker"] == 1:
+			return permanentArtifactKeepCopy{
+				Sentence:     "Sticker",
+				Button:       "Keep sticker locally",
+				Unavailable:  "That sticker is no longer available to save from this button.",
+				Stale:        "That sticker button is stale.",
+				Failed:       "I couldn't save that sticker locally.",
+				Confirmation: "Sticker saved locally.",
+			}
+		case counts["document"] == 1:
+			return permanentArtifactKeepCopy{
+				Sentence:     "File",
+				Button:       "Keep file locally",
+				Unavailable:  "That file is no longer available to save from this button.",
+				Stale:        "That file button is stale.",
+				Failed:       "I couldn't save that file locally.",
+				Confirmation: "File saved locally.",
+			}
+		}
+	}
+	return permanentArtifactKeepCopy{
+		Sentence:     "Media",
+		Button:       "Keep media permanently",
+		Unavailable:  "That media is no longer available to save from this button.",
+		Stale:        "That media button is stale.",
+		Failed:       "I couldn't save that media permanently.",
+		Confirmation: "Media saved permanently.",
+	}
 }
 
 func hasArtifactRetentionCandidates(msg core.InboundMessage) bool {
@@ -609,22 +677,136 @@ func hasArtifactRetentionCandidates(msg core.InboundMessage) bool {
 		return false
 	}
 	for _, raw := range msg.Artifacts {
+		if artifactRetentionCandidate(core.NormalizeArtifact(raw)) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArtifactRetentionApprovalCandidates(msg core.InboundMessage) bool {
+	if strings.TrimSpace(msg.DurableAgentID) != "" {
+		return false
+	}
+	for _, raw := range msg.Artifacts {
 		artifact := core.NormalizeArtifact(raw)
-		if strings.TrimSpace(artifact.Channel) != "telegram" {
-			continue
+		if artifactRetentionCandidate(artifact) && artifactNeedsRetentionApproval(artifact) {
+			return true
 		}
-		if strings.TrimSpace(artifact.RemoteID) == "" && len(artifact.Data) == 0 {
-			continue
+	}
+	return false
+}
+
+func hasPermanentArtifactKeepCandidates(msg core.InboundMessage) bool {
+	if strings.TrimSpace(msg.DurableAgentID) != "" {
+		return false
+	}
+	for _, raw := range msg.Artifacts {
+		artifact := core.NormalizeArtifact(raw)
+		if artifactRetentionCandidate(artifact) && !artifactNeedsRetentionApproval(artifact) {
+			return true
 		}
-		if artifact.Kind == "structured" {
-			continue
-		}
-		if strings.TrimSpace(artifact.Metadata["aphelion_retention_choice"]) != "" {
-			continue
-		}
+	}
+	return false
+}
+
+func artifactRetentionCandidate(artifact core.Artifact) bool {
+	artifact = core.NormalizeArtifact(artifact)
+	if strings.TrimSpace(artifact.Channel) != "telegram" {
+		return false
+	}
+	if strings.TrimSpace(artifact.RemoteID) == "" && len(artifact.Data) == 0 {
+		return false
+	}
+	if artifact.Kind == "structured" {
+		return false
+	}
+	return strings.TrimSpace(artifact.Metadata["aphelion_retention_choice"]) == ""
+}
+
+func artifactNeedsRetentionApproval(artifact core.Artifact) bool {
+	artifact = core.NormalizeArtifact(artifact)
+	if artifact.Kind == "archive" || artifact.HasCapability("quarantine_for_review") {
+		return true
+	}
+	if artifact.SizeBytes > ordinaryMediaApprovalMaxSizeBytes {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(artifact.Filename)))
+	text := strings.ToLower(strings.Join([]string{
+		artifact.Filename,
+		artifact.MimeType,
+		artifact.SourceType,
+		artifact.Subtype,
+	}, " "))
+	if artifactLooksLikeArchive(ext, text) || artifactLooksLikeExecutable(ext, text) || artifactLooksLikeSecret(ext, text) {
+		return true
+	}
+	if artifact.Kind == "document" && artifact.Subtype == "" && !ordinaryDocumentArtifact(ext, text) {
 		return true
 	}
 	return false
+}
+
+func artifactLooksLikeArchive(ext string, text string) bool {
+	switch ext {
+	case ".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".rar", ".7z":
+		return true
+	}
+	return strings.Contains(text, "application/zip") ||
+		strings.Contains(text, "application/x-tar") ||
+		strings.Contains(text, "application/x-7z") ||
+		strings.Contains(text, "application/x-rar")
+}
+
+func artifactLooksLikeExecutable(ext string, text string) bool {
+	switch ext {
+	case ".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm", ".apk", ".app", ".bat", ".cmd", ".ps1", ".scr", ".com", ".bin", ".so", ".dll":
+		return true
+	}
+	return strings.Contains(text, "application/x-msdownload") ||
+		strings.Contains(text, "application/x-executable") ||
+		strings.Contains(text, "application/vnd.android.package-archive")
+}
+
+func artifactLooksLikeSecret(ext string, text string) bool {
+	switch ext {
+	case ".pem", ".p12", ".pfx", ".key":
+		return true
+	}
+	for _, marker := range []string{
+		".env",
+		"id_rsa",
+		"id_dsa",
+		"id_ecdsa",
+		"id_ed25519",
+		"private_key",
+		"credential",
+		"credentials",
+		"secret",
+		"token",
+		"oauth",
+		"password",
+		"passwd",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func ordinaryDocumentArtifact(ext string, text string) bool {
+	switch ext {
+	case ".pdf", ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".yaml", ".yml", ".toml", ".xml", ".log", ".rtf", ".doc", ".docx", ".odt", ".xls", ".xlsx", ".ods", ".ppt", ".pptx", ".odp":
+		return true
+	}
+	return strings.HasPrefix(text, "text/") ||
+		strings.Contains(text, "application/pdf") ||
+		strings.Contains(text, "application/json") ||
+		strings.Contains(text, "application/xml") ||
+		strings.Contains(text, "officedocument") ||
+		strings.Contains(text, "opendocument")
 }
 
 func formatArtifactRetentionDetails(msg core.InboundMessage) string {
@@ -840,8 +1022,8 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 	if eventID, action, ok := core.DecodeReviewEventCallbackData(cb.Data); ok {
 		return h.handleReviewEventCallback(ctx, cb, eventID, action)
 	}
-	if messageID, ok := decodeAudioKeepCallbackData(cb.Data); ok {
-		return h.handleAudioKeepCallback(ctx, cb, messageID)
+	if messageID, ok := decodePermanentArtifactKeepCallbackData(cb.Data); ok {
+		return h.handlePermanentArtifactKeepCallback(ctx, cb, messageID)
 	}
 	id, choice, ok := decision.DecodeCallbackData(cb.Data)
 	if !ok {
@@ -911,53 +1093,61 @@ func (h *telegramDecisionHandler) HandleCallbackQuery(ctx context.Context, cb te
 	return nil
 }
 
-func encodeAudioKeepCallbackData(messageID int64) string {
-	return "audio_keep:" + strconv.FormatInt(messageID, 10)
+func encodePermanentArtifactKeepCallbackData(messageID int64) string {
+	return "media_keep:" + strconv.FormatInt(messageID, 10)
 }
 
-func decodeAudioKeepCallbackData(data string) (int64, bool) {
+func decodePermanentArtifactKeepCallbackData(data string) (int64, bool) {
 	trimmed := strings.TrimSpace(data)
-	if !strings.HasPrefix(trimmed, "audio_keep:") {
+	prefix := ""
+	for _, candidate := range []string{"media_keep:", "audio_keep:"} {
+		if strings.HasPrefix(trimmed, candidate) {
+			prefix = candidate
+			break
+		}
+	}
+	if prefix == "" {
 		return 0, false
 	}
-	id, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(trimmed, "audio_keep:")), 10, 64)
+	id, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(trimmed, prefix)), 10, 64)
 	if err != nil || id <= 0 {
 		return 0, false
 	}
 	return id, true
 }
 
-func (h *telegramDecisionHandler) handleAudioKeepCallback(ctx context.Context, cb telegram.CallbackQuery, sourceMessageID int64) error {
+func (h *telegramDecisionHandler) handlePermanentArtifactKeepCallback(ctx context.Context, cb telegram.CallbackQuery, sourceMessageID int64) error {
 	chatID := callbackChatID(cb)
 	senderID := callbackSenderID(cb)
-	if chatID == 0 || senderID == 0 || h == nil || h.store == nil || h.audioRetentionKeeper == nil {
-		return h.answerAudioKeepCallback(ctx, cb, "I can't save that audio from this prompt.")
+	if chatID == 0 || senderID == 0 || h == nil || h.store == nil || h.artifactRetentionKeeper == nil {
+		return h.answerPermanentArtifactKeepCallback(ctx, cb, "I can't save that media from this prompt.")
 	}
 	record, err := h.store.PendingArtifactRetention(decision.OwnerKey(chatID, senderID))
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return h.answerAudioKeepCallback(ctx, cb, "That audio is no longer available to save from this button.")
+			return h.answerPermanentArtifactKeepCallback(ctx, cb, "That media is no longer available to save from this button.")
 		}
 		return err
 	}
 	var msg core.InboundMessage
 	if err := json.Unmarshal([]byte(record.InboundMessageJSON), &msg); err != nil {
-		return fmt.Errorf("decode pending audio retention message: %w", err)
+		return fmt.Errorf("decode pending permanent artifact message: %w", err)
 	}
+	subject := permanentArtifactKeepSubject(msg)
 	if sourceMessageID != 0 && msg.MessageID != 0 && msg.MessageID != sourceMessageID {
-		return h.answerAudioKeepCallback(ctx, cb, "That audio button is stale.")
+		return h.answerPermanentArtifactKeepCallback(ctx, cb, subject.Stale)
 	}
-	if err := h.audioRetentionKeeper.KeepAudioArtifactsPermanently(ctx, msg); err != nil {
-		return h.answerAudioKeepCallback(ctx, cb, "I couldn't save that audio permanently.")
+	if err := h.artifactRetentionKeeper.KeepTelegramArtifactsPermanently(ctx, msg); err != nil {
+		return h.answerPermanentArtifactKeepCallback(ctx, cb, subject.Failed)
 	}
 	_ = h.store.DeletePendingArtifactRetention(decision.OwnerKey(chatID, senderID))
 	if cb.Message != nil && cb.Message.MessageID != 0 {
-		_ = editDecisionMessageClearingInlineKeyboard(ctx, h.sender, chatID, cb.Message.MessageID, "Audio saved permanently.")
+		_ = editDecisionMessageClearingInlineKeyboard(ctx, h.sender, chatID, cb.Message.MessageID, subject.Confirmation)
 	}
-	return h.answerAudioKeepCallback(ctx, cb, "Saved.")
+	return h.answerPermanentArtifactKeepCallback(ctx, cb, "Saved.")
 }
 
-func (h *telegramDecisionHandler) answerAudioKeepCallback(ctx context.Context, cb telegram.CallbackQuery, text string) error {
+func (h *telegramDecisionHandler) answerPermanentArtifactKeepCallback(ctx context.Context, cb telegram.CallbackQuery, text string) error {
 	if h == nil || h.sender == nil {
 		return nil
 	}

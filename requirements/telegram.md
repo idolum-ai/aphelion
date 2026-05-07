@@ -1078,9 +1078,10 @@ func isTextFile(mime string, name string) bool {
 
 ### Voice messages
 
-Voice/audio messages are routed through the runtime's automatic media handling
-without a processing-choice callback prompt. The only audio-specific callback
-button is the separate retention action to keep audio permanently.
+Ordinary Telegram media messages are routed through the runtime's automatic
+media handling without a blocking processing-choice or retention callback
+prompt. Non-blocking keep buttons may still be offered for the operator to keep
+media permanently/locally.
 
 ### Deferred media classes
 
@@ -1097,8 +1098,8 @@ Unsupported inbound media should surface as a clear bounded note rather than bei
 Voice, audio, and video should route without a processing-choice inline keyboard.
 The runtime records the media handling as agent-decide and lets the normal
 persona/governor path determine whether to transcribe, analyze, inspect metadata,
-or merely keep a reference. Audio may still show the separate retention button:
-`Keep audio permanently`.
+or merely keep a reference. Voice/audio may still show the separate retention
+button: `Keep audio permanently`.
 
 ### Stickers → Auto-process (unambiguous)
 

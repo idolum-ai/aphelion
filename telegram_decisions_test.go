@@ -80,12 +80,12 @@ func (s *decisionTestSender) AnswerCallbackQuery(_ context.Context, id string, t
 	return s.answerErr
 }
 
-type decisionTestAudioKeeper struct {
+type decisionTestArtifactKeeper struct {
 	messages []core.InboundMessage
 	err      error
 }
 
-func (k *decisionTestAudioKeeper) KeepAudioArtifactsPermanently(_ context.Context, msg core.InboundMessage) error {
+func (k *decisionTestArtifactKeeper) KeepTelegramArtifactsPermanently(_ context.Context, msg core.InboundMessage) error {
 	k.messages = append(k.messages, msg)
 	return k.err
 }
@@ -1088,7 +1088,7 @@ func TestHandleArtifactRetentionMessageAudioDefaultsToSessionAndOffersPermanentK
 		t.Fatalf("NewSQLiteStore() err = %v", err)
 	}
 	defer store.Close()
-	keeper := &decisionTestAudioKeeper{}
+	keeper := &decisionTestArtifactKeeper{}
 	handler := newTelegramDecisionHandler(sender, router, broker, store, keeper)
 
 	msg := core.InboundMessage{
@@ -1153,7 +1153,7 @@ func TestHandleAudioMessageAlwaysUsesAgentDecisionAndOnlyOffersPermanentKeep(t *
 		t.Fatalf("NewSQLiteStore() err = %v", err)
 	}
 	defer store.Close()
-	keeper := &decisionTestAudioKeeper{}
+	keeper := &decisionTestArtifactKeeper{}
 	handler := newTelegramDecisionHandler(sender, router, broker, store, keeper)
 
 	msg := core.InboundMessage{
@@ -1216,7 +1216,7 @@ func TestHandleAudioKeepCallbackSavesWithoutReroutingTurn(t *testing.T) {
 		t.Fatalf("NewSQLiteStore() err = %v", err)
 	}
 	defer store.Close()
-	keeper := &decisionTestAudioKeeper{}
+	keeper := &decisionTestArtifactKeeper{}
 	handler := newTelegramDecisionHandler(sender, router, broker, store, keeper)
 
 	msg := core.InboundMessage{
@@ -1269,6 +1269,179 @@ func TestHandleAudioKeepCallbackSavesWithoutReroutingTurn(t *testing.T) {
 	}
 }
 
+func TestHandleImageMessageRoutesImmediatelyAndOffersPermanentKeep(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	router := &decisionTestRouter{}
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	keeper := &decisionTestArtifactKeeper{}
+	handler := newTelegramDecisionHandler(sender, router, broker, store, keeper)
+
+	msg := core.InboundMessage{
+		ChatID:    7,
+		SenderID:  42,
+		MessageID: 100,
+		Artifacts: []core.Artifact{{
+			ID:         "photo-1",
+			Channel:    "telegram",
+			RemoteID:   "photo-file",
+			Kind:       "image",
+			SourceType: "photo",
+			Filename:   "photo.jpg",
+			MimeType:   "image/jpeg",
+		}},
+	}
+
+	handled, err := handler.HandleArtifactRetentionMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleArtifactRetentionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want immediate image route", router.routed)
+	}
+	artifact := router.routed[0].Artifacts[0]
+	if got := artifact.Metadata["aphelion_retention_choice"]; got != "session" {
+		t.Fatalf("retention choice = %q, want session", got)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one non-blocking image keep prompt", sender.inline)
+	}
+	if strings.Contains(sender.inline[0].text, "How should I retain") {
+		t.Fatalf("inline text = %q, should not be blocking retention selector", sender.inline[0].text)
+	}
+	if got := sender.inline[0].rows[0][0].Text; got != "Keep image permanently" {
+		t.Fatalf("button = %q, want Keep image permanently", got)
+	}
+}
+
+func TestHandleMixedAudioImageRoutesImmediatelyAndMarksAgentDecision(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	router := &decisionTestRouter{}
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	keeper := &decisionTestArtifactKeeper{}
+	handler := newTelegramDecisionHandler(sender, router, broker, store, keeper)
+
+	msg := core.InboundMessage{
+		ChatID:    7,
+		SenderID:  42,
+		MessageID: 101,
+		Artifacts: []core.Artifact{
+			{
+				ID:         "voice-1",
+				Channel:    "telegram",
+				RemoteID:   "voice-file",
+				Kind:       "audio",
+				SourceType: "voice",
+				Subtype:    "voice_note",
+				Filename:   "voice.ogg",
+				MimeType:   "audio/ogg",
+			},
+			{
+				ID:         "photo-1",
+				Channel:    "telegram",
+				RemoteID:   "photo-file",
+				Kind:       "image",
+				SourceType: "photo",
+				Filename:   "photo.jpg",
+				MimeType:   "image/jpeg",
+			},
+		},
+	}
+
+	handled, err := handler.HandleArtifactRetentionMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleArtifactRetentionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want immediate mixed-media route", router.routed)
+	}
+	routedArtifacts := router.routed[0].Artifacts
+	if got := routedArtifacts[0].Metadata[core.ArtifactMetadataMediaProcessingChoice]; got != "agent" {
+		t.Fatalf("audio media processing choice = %q, want agent", got)
+	}
+	for i, artifact := range routedArtifacts {
+		if got := artifact.Metadata["aphelion_retention_choice"]; got != "session" {
+			t.Fatalf("artifact %d retention choice = %q, want session", i, got)
+		}
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one non-blocking media keep prompt", sender.inline)
+	}
+	if got := sender.inline[0].rows[0][0].Text; got != "Keep media permanently" {
+		t.Fatalf("button = %q, want Keep media permanently", got)
+	}
+}
+
+func TestHandleTextDocumentRoutesImmediatelyWithoutBlockingSelector(t *testing.T) {
+	t.Parallel()
+
+	sender := &decisionTestSender{}
+	broker := newTelegramDecisionBroker(sender)
+	router := &decisionTestRouter{}
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	keeper := &decisionTestArtifactKeeper{}
+	handler := newTelegramDecisionHandler(sender, router, broker, store, keeper)
+
+	msg := core.InboundMessage{
+		ChatID:    7,
+		SenderID:  42,
+		MessageID: 102,
+		Artifacts: []core.Artifact{{
+			ID:         "doc-1",
+			Channel:    "telegram",
+			RemoteID:   "file-1",
+			Kind:       "document",
+			SourceType: "document",
+			Subtype:    "text",
+			Filename:   "notes.txt",
+			MimeType:   "text/plain",
+		}},
+	}
+
+	handled, err := handler.HandleArtifactRetentionMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("HandleArtifactRetentionMessage() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(router.routed) != 1 {
+		t.Fatalf("routed = %#v, want immediate text-document route", router.routed)
+	}
+	if len(sender.inline) != 1 {
+		t.Fatalf("inline = %#v, want one non-blocking file keep prompt", sender.inline)
+	}
+	if strings.Contains(sender.inline[0].text, "How should I retain") {
+		t.Fatalf("inline text = %q, should not be blocking retention selector", sender.inline[0].text)
+	}
+	if got := sender.inline[0].rows[0][0].Text; got != "Keep file locally" {
+		t.Fatalf("button = %q, want Keep file locally", got)
+	}
+}
+
 func TestHandleArtifactRetentionMessagePromptsAndRoutesChosenPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -1303,8 +1476,8 @@ func TestHandleArtifactRetentionMessagePromptsAndRoutesChosenPolicy(t *testing.T
 			RemoteID:   "file-1",
 			Kind:       "document",
 			SourceType: "document",
-			Filename:   "notes.txt",
-			MimeType:   "text/plain",
+			Filename:   "bundle.zip",
+			MimeType:   "application/zip",
 		}},
 	}
 
@@ -1360,8 +1533,8 @@ func TestHandleArtifactRetentionMessageTimeoutDefaultsToSession(t *testing.T) {
 			RemoteID:   "file-2",
 			Kind:       "document",
 			SourceType: "document",
-			Filename:   "notes.txt",
-			MimeType:   "text/plain",
+			Filename:   "bundle.zip",
+			MimeType:   "application/zip",
 		}},
 	}
 
@@ -1444,8 +1617,8 @@ func TestTelegramPollerArtifactRetentionCallbackStarvesBehindBlockingMessageHand
 						"document": map[string]any{
 							"file_id":        "file-1",
 							"file_unique_id": "file-1u",
-							"file_name":      "notes.txt",
-							"mime_type":      "text/plain",
+							"file_name":      "bundle.zip",
+							"mime_type":      "application/zip",
 							"file_size":      12,
 						},
 					},
