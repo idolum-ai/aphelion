@@ -1253,6 +1253,98 @@ func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *test
 	}
 }
 
+func TestMaterializeEscalatedOperatorPhaseShowsManualApprovalDespiteAutoApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 9024, 1001, "15m all live auth-status check"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9024, UserID: 0, Scope: telegramDMScopeRef(9024)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "email-child-credential-recovery-20260507",
+		Objective: "Recover whether the child email credentials are usable without reading mailbox contents.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "email-child-credential-recovery-plan",
+			Goal: "Check bounded auth status before any private email work.",
+			Phases: []session.OperationPhase{{
+				ID:                "phase-e1b-readonly-auth-status-check",
+				Summary:           "Check whether existing gog_cli credentials/profile can authenticate without reading mailbox contents.",
+				Status:            session.PlanStatusPending,
+				AuthorityClass:    "read_only_auth_status_check",
+				WhyNow:            "The governor is concerned about external account state and needs explicit operator approval before touching auth status.",
+				BoundedEffect:     "Run one minimal status or identity check; report nonsecret exit code and auth validity only.",
+				AllowedActions:    []string{"run_gog_cli_auth_status_or_identity_check", "inspect_nonsecret_exit_code_and_error", "report_auth_validity"},
+				ForbiddenActions:  []string{"read_or_print_secret_values", "read_mailbox_contents", "run_gog_cli_mail_query", "start_oauth_flow", "copy_restore_delete_or_write_credentials", "mutate_google_account", "edit_config", "deploy", "restart"},
+				BlockedReasonCode: "waiting_for_explicit_approval",
+				RequiresConsent:   true,
+				RequiresOptIn:     true,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9024, SenderID: 1001, Text: "continue", MessageID: 56}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want escalated approval prompt")
+	}
+
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusPending {
+		t.Fatalf("continuation status = %q, want pending", state.Status)
+	}
+	if state.ActionProposal.AutoApproveEligible == nil || *state.ActionProposal.AutoApproveEligible {
+		t.Fatalf("autoapprove_eligible = %#v, want explicit false", state.ActionProposal.AutoApproveEligible)
+	}
+	if state.ActionProposal.RiskClass != "external_account_auth_status" {
+		t.Fatalf("risk class = %q, want external_account_auth_status", state.ActionProposal.RiskClass)
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	inlineText := ""
+	var labels []string
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+		labels = continuationButtonLabels(sender.inline[inlineCount-1].rows)
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || sentCount != 0 {
+		t.Fatalf("inline=%d sent=%d text=%q, want one manual approval prompt and no blocked notice", inlineCount, sentCount, inlineText)
+	}
+	for _, want := range []string{"Escalated approval needed", "Why elevated:", "Will do:", "Auto-approval: not used", "Approve once?"} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want %q", inlineText, want)
+		}
+	}
+	if strings.Contains(inlineText, "Blocked:") || strings.Contains(inlineText, "Approval needed.") {
+		t.Fatalf("inline text = %q, want escalated approval card, not blocked/legacy approval text", inlineText)
+	}
+	if got, want := labels, []string{"Approve once", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(9024, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 0 {
+		t.Fatalf("autoapproval leases = %#v, want one unused lease", leases)
+	}
+}
+
 func TestOperationPhaseApprovalUsesTypedGovernanceMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -1276,6 +1368,37 @@ func TestOperationPhaseApprovalUsesTypedGovernanceMetadata(t *testing.T) {
 	}
 	if got := operationPhaseApprovalBlockedReason(consentPhase); got != "waiting for explicit consent" {
 		t.Fatalf("operationPhaseApprovalBlockedReason(consent) = %q, want explicit consent", got)
+	}
+
+	escalatedPhase := session.OperationPhase{
+		ID:                "phase-e1b-readonly-auth-status-check",
+		Summary:           "Check whether existing gog_cli credentials/profile can authenticate without reading mailbox contents.",
+		Status:            session.PlanStatusPending,
+		AuthorityClass:    "read_only_auth_status_check",
+		AllowedActions:    []string{"run_gog_cli_auth_status_or_identity_check"},
+		ForbiddenActions:  []string{"read_mailbox_contents", "run_gog_cli_mail_query", "start_oauth_flow"},
+		BlockedReasonCode: "waiting_for_explicit_approval",
+		RequiresOptIn:     true,
+		RequiresConsent:   true,
+	}
+	if got := operationPhaseApprovalBlockedReason(escalatedPhase); got != "" {
+		t.Fatalf("operationPhaseApprovalBlockedReason(escalated auth status) = %q, want materializable approval", got)
+	}
+	gate := operationPhaseApprovalGate(escalatedPhase)
+	if gate.Level != operationGateLevelEscalatedOperatorApproval || gate.AutoApproveEligible {
+		t.Fatalf("operationPhaseApprovalGate(escalated auth status) = %#v, want escalated/manual gate", gate)
+	}
+
+	privateDataPhase := session.OperationPhase{
+		ID:             "phase-private-intake",
+		Summary:        "Consent-first private intake",
+		Status:         session.PlanStatusPending,
+		AuthorityClass: "private_data_intake",
+		GateLevel:      "escalated_operator_approval",
+		RequiresOptIn:  true,
+	}
+	if got := operationPhaseApprovalBlockedReason(privateDataPhase); got != "waiting for explicit opt-in" {
+		t.Fatalf("operationPhaseApprovalBlockedReason(private explicit escalated) = %q, want hard opt-in block", got)
 	}
 
 	stalePhase := session.OperationPhase{

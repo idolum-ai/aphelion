@@ -858,7 +858,8 @@ func renderOperationalDisciplineBlock(capabilities ToolCapabilities) string {
 		"## Operational Discipline",
 		"Treat open-ended work as an operation with durable state rather than a one-turn improvisation.",
 		"Use update_operation to keep the objective, current stage, proposal state, durable phase_plan, findings, and artifacts current when those details materially shape execution or delivery.",
-		"For phase blockers and supersession, prefer typed fields such as blocked_reason_code, requires_consent, requires_opt_in, supersedes_phase_ids, and stale_authority instead of encoding gates only in prose.",
+		"For phase blockers and supersession, prefer typed fields such as gate_level, gate_reason_code, approval_subject, autoapprove_eligible, blocked_reason_code, requires_consent, requires_opt_in, supersedes_phase_ids, and stale_authority instead of encoding gates only in prose.",
+		"Use gate_level=escalated_operator_approval with autoapprove_eligible=false for bounded sensitive operator-owned checks such as external-account auth status, credential metadata, or capability grant review; reserve hard_consent_block/requires_opt_in/requires_consent for third-party opt-in or private-content gates.",
 		"Operate autonomously between gates. When the next move materially expands capability, external effect, privacy scope, or irreversible risk, surface a bounded proposal instead of silently pushing through.",
 	}, "\n")
 }

@@ -929,57 +929,11 @@ func operationPhaseApprovalExcludedReason(plan session.OperationPhasePlan, phase
 }
 
 func operationPhaseApprovalBlockedReason(phase session.OperationPhase) string {
-	phase = normalizeSingleOperationPhase(phase)
-	if reason := operationPhaseTypedBlockedReason(phase); reason != "" {
-		return reason
+	gate := operationPhaseApprovalGate(phase)
+	if gate.Level == operationGateLevelHardConsentBlock {
+		return strings.TrimSpace(gate.BlockedReason)
 	}
-	text := operationPhaseApprovalText(phase)
-	switch {
-	case strings.Contains(text, "no opt in") ||
-		strings.Contains(text, "no opt-in") ||
-		strings.Contains(text, "not opted in") ||
-		strings.Contains(text, "missing opt in") ||
-		strings.Contains(text, "missing opt-in"):
-		return "waiting for explicit opt-in"
-	case strings.Contains(text, "wait for her explicit opt in") ||
-		strings.Contains(text, "wait for her explicit opt-in") ||
-		strings.Contains(text, "wait for explicit opt in") ||
-		strings.Contains(text, "wait for explicit opt-in"):
-		return "waiting for explicit opt-in"
-	case strings.Contains(text, "blocked:") && (strings.Contains(text, "consent") || strings.Contains(text, "opt in") || strings.Contains(text, "opt-in")):
-		return "blocked on consent"
-	case strings.Contains(text, "no consent") ||
-		strings.Contains(text, "without consent") ||
-		strings.Contains(text, "consent has not been observed") ||
-		strings.Contains(text, "consent not observed"):
-		return "waiting for explicit consent"
-	default:
-		return ""
-	}
-}
-
-func operationPhaseTypedBlockedReason(phase session.OperationPhase) string {
-	if phase.RequiresOptIn {
-		return "waiting for explicit opt-in"
-	}
-	if phase.RequiresConsent {
-		return "waiting for explicit consent"
-	}
-	code := normalizeOperationPhaseReasonCode(phase.BlockedReasonCode)
-	switch code {
-	case "":
-		return ""
-	case "waiting_for_opt_in", "requires_opt_in", "missing_opt_in", "no_opt_in", "opt_in_required":
-		return "waiting for explicit opt-in"
-	case "waiting_for_consent", "requires_consent", "missing_consent", "no_consent", "consent_required":
-		return "waiting for explicit consent"
-	case "blocked_on_consent", "consent_blocked":
-		return "blocked on consent"
-	case "stale_authority", "superseded", "superseded_phase", "stale_phase":
-		return ""
-	default:
-		return "blocked: " + code
-	}
+	return ""
 }
 
 func operationPhaseReasonCodeIsStaleAuthority(code string) bool {
@@ -1021,6 +975,9 @@ func operationPhaseApprovalText(phase session.OperationPhase) string {
 
 func operationPhaseRequiresFreshApprovalGate(phase session.OperationPhase) bool {
 	phase = normalizeSingleOperationPhase(phase)
+	if operationPhaseApprovalGate(phase).Level == operationGateLevelEscalatedOperatorApproval {
+		return true
+	}
 	if class := session.InferContinuationLeaseClass(phase.AuthorityClass, phase.AllowedActions, phase.BoundedEffect); class != "" && class != session.ContinuationLeaseClassLocalWorkspace {
 		return true
 	}
@@ -1745,6 +1702,7 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	now = now.UTC()
 	opState = session.NormalizeOperationState(opState)
 	phase = normalizeSingleOperationPhase(phase)
+	gate := operationPhaseApprovalGate(phase)
 	decisionID := operationPhaseProposalID(opState, phase)
 	if decisionID == "" {
 		decisionID = newContinuationDecisionID()
@@ -1753,6 +1711,10 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	nextStep := firstNonEmptyContinuation(phase.Summary, phase.BoundedEffect, opState.Stage, "Take the next approved phase, then report evidence.")
 	boundedEffect := firstNonEmptyContinuation(phase.BoundedEffect, "Execute this phase only, update the durable phase plan, and stop after the evidence report.")
 	whyNow := firstNonEmptyContinuation(phase.WhyNow, "This durable phase plan has a pending phase that needs explicit approval before execution.")
+	personaRationale := "A durable phase-plan lease is ready for button-backed approval."
+	if gate.Level == operationGateLevelEscalatedOperatorApproval {
+		personaRationale = "An escalated operator approval is required before this sensitive bounded phase can run."
+	}
 	state := session.ContinuationState{
 		Kind:           session.TurnAuthorizationKindContinuation,
 		Status:         session.ContinuationStatusPending,
@@ -1762,7 +1724,7 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 		RemainingTurns: 1,
 		PersonaIntent: session.ContinuationIntent{
 			Decision:   session.ContinuationIntentDecisionContinue,
-			Rationale:  "A durable phase-plan lease is ready for button-backed approval.",
+			Rationale:  personaRationale,
 			NextStep:   nextStep,
 			Confidence: "high",
 			UpdatedAt:  now,
@@ -1778,13 +1740,17 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 		},
 		UpdatedAt: now,
 	}
+	riskClass := firstNonEmptyContinuation(phase.AuthorityClass, "continuation")
+	if gate.Level == operationGateLevelEscalatedOperatorApproval && gate.ReasonCode != "" {
+		riskClass = gate.ReasonCode
+	}
 	action := session.ActionProposal{
 		ID:               "aprop-" + decisionID,
 		OperationID:      decisionID,
 		Summary:          nextStep,
 		WhyNow:           whyNow,
 		BoundedEffect:    boundedEffect,
-		RiskClass:        firstNonEmptyContinuation(phase.AuthorityClass, "continuation"),
+		RiskClass:        riskClass,
 		AllowedActions:   append([]string(nil), phase.AllowedActions...),
 		ForbiddenActions: append([]string(nil), phase.ForbiddenActions...),
 		ValidationPlan:   append([]string(nil), phase.ValidationPlan...),
@@ -1792,6 +1758,10 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 		Status:           session.ProposalStatusPending,
 		CreatedAt:        now,
 		UpdatedAt:        now,
+	}
+	if gate.Level == operationGateLevelEscalatedOperatorApproval || phase.AutoApproveEligible != nil {
+		value := gate.AutoApproveEligible
+		action.AutoApproveEligible = &value
 	}
 	if len(action.AllowedActions) == 0 {
 		action.AllowedActions = []string{"execute_phase_once", "use_existing_authority_only", "update_operation_phase_plan", "report_evidence"}
@@ -2228,6 +2198,9 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 	if continuationActionIsPlanLeaseApproval(state) {
 		return renderPlanBudgetPromptFallback(state)
 	}
+	if continuationRequiresEscalatedOperatorApproval(state) {
+		return renderEscalatedOperatorApprovalPromptFallback(state)
+	}
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
 	title := continuationApprovalPromptTitle(state)
 	if title == "" {
@@ -2257,6 +2230,70 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 		lines = append(lines, "", fmt.Sprintf("Approve %d bounded %s?", state.RemainingTurns, turnLabel))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func continuationRequiresEscalatedOperatorApproval(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	return state.ActionProposal.AutoApproveEligible != nil && !*state.ActionProposal.AutoApproveEligible
+}
+
+func renderEscalatedOperatorApprovalPromptFallback(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	proposal := session.NormalizeActionProposal(state.ActionProposal)
+	title := continuationApprovalPromptTitle(state)
+	if title == "" {
+		title = "sensitive bounded action"
+	}
+	lines := []string{"Escalated approval needed: " + title}
+	if why := continuationPromptCompactLine(firstNonEmptyContinuation(proposal.WhyNow, state.GovernorIntent.Rationale), 220); why != "" {
+		lines = append(lines, "", "Why elevated:", why)
+	}
+	if scope := continuationApprovalPromptScope(state); scope != "" {
+		lines = append(lines, "", "Will do:", scope)
+	}
+	if included := continuationEscalatedApprovalAllowedLines(state); len(included) > 0 {
+		lines = append(lines, "", "Allowed:")
+		for _, line := range included {
+			lines = append(lines, "- "+line)
+		}
+	}
+	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
+		lines = append(lines, "", "Will not:", strings.Join(stops, ", "))
+	}
+	lines = append(lines, "", "Auto-approval: not used for this elevated gate.")
+	lines = append(lines, "", "Approve once?")
+	return strings.Join(lines, "\n")
+}
+
+func continuationEscalatedApprovalAllowedLines(state session.ContinuationState) []string {
+	state = session.NormalizeContinuationState(state)
+	values := append([]string(nil), state.ActionProposal.AllowedActions...)
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		values = append(values, phase.AllowedActions...)
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 4)
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		value = strings.ReplaceAll(value, "_", " ")
+		value = strings.ReplaceAll(value, "-", " ")
+		value = continuationPromptCompactLine(value, 96)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+		if len(out) >= 4 {
+			break
+		}
+	}
+	return out
 }
 
 func continuationApprovalPromptTitle(state session.ContinuationState) string {

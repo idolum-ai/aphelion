@@ -316,7 +316,8 @@ func TestBuildGovernorPromptAddsDisciplineFromExplicitToolCapabilities(t *testin
 	if !strings.Contains(got, "## Operational Discipline") {
 		t.Fatalf("prompt missing operational discipline from capability flags: %q", got)
 	}
-	if !strings.Contains(got, "blocked_reason_code, requires_consent, requires_opt_in") {
+	if !strings.Contains(got, "gate_level, gate_reason_code, approval_subject, autoapprove_eligible") ||
+		!strings.Contains(got, "hard_consent_block/requires_opt_in/requires_consent") {
 		t.Fatalf("prompt missing typed phase metadata guidance: %q", got)
 	}
 	if !strings.Contains(got, "## Confirmation Discipline") {

@@ -108,6 +108,9 @@ func (r *Runtime) maybeAutoApproveContinuationOffer(ctx context.Context, key ses
 	if state.Status != session.ContinuationStatusPending || state.RemainingTurns <= 0 {
 		return false, nil
 	}
+	if state.ActionProposal.AutoApproveEligible != nil && !*state.ActionProposal.AutoApproveEligible {
+		return false, nil
+	}
 	if inboundRequestsVisibleApprovalButtons(msg.Text) {
 		return false, nil
 	}

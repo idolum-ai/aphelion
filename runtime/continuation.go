@@ -1081,7 +1081,10 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 	if state.Status == session.ContinuationStatusPending {
 		approveLabel := "Approve & run"
 		reviseLabel := "Revise proposal"
-		if continuationButtonStateIsPlanLease(state) {
+		if continuationRequiresEscalatedOperatorApproval(state) {
+			approveLabel = "Approve once"
+			reviseLabel = "Narrow scope"
+		} else if continuationButtonStateIsPlanLease(state) {
 			approveLabel = "Approve plan budget"
 			reviseLabel = "Narrow scope"
 		} else if label := continuationBundleButtonLabel(state); label != "" {

@@ -283,6 +283,10 @@ func TestUpdateOperationToolPersistsTypedPhaseGovernanceMetadata(t *testing.T) {
 						"summary":"Wait for explicit opt-in before external-channel intake",
 						"status":"pending",
 						"authority_class":"read_only_review",
+						"gate_level":"escalated-operator-approval",
+						"gate_reason_code":"external-account-auth-status",
+						"approval_subject":"operator",
+						"autoapprove_eligible":false,
 						"blocked_reason_code":"waiting-for-opt-in",
 						"requires_opt_in":true,
 						"requires_consent":true,
@@ -296,7 +300,7 @@ func TestUpdateOperationToolPersistsTypedPhaseGovernanceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(update_operation phase metadata) err = %v", err)
 	}
-	for _, want := range []string{"blocked_reason_code: waiting_for_opt_in", "requires_opt_in: true", "requires_consent: true", "supersedes_phase_ids: phase-old", "stale_authority: true"} {
+	for _, want := range []string{"gate_level: escalated_operator_approval", "gate_reason_code: external_account_auth_status", "approval_subject: operator", "autoapprove_eligible: false", "blocked_reason_code: waiting_for_opt_in", "requires_opt_in: true", "requires_consent: true", "supersedes_phase_ids: phase-old", "stale_authority: true"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output = %q, want %q", out, want)
 		}
@@ -310,7 +314,15 @@ func TestUpdateOperationToolPersistsTypedPhaseGovernanceMetadata(t *testing.T) {
 		t.Fatalf("phase count = %d, want 1", len(state.PhasePlan.Phases))
 	}
 	phase := state.PhasePlan.Phases[0]
-	if phase.BlockedReasonCode != "waiting_for_opt_in" || !phase.RequiresOptIn || !phase.RequiresConsent || !phase.StaleAuthority {
+	if phase.GateLevel != "escalated_operator_approval" ||
+		phase.GateReasonCode != "external_account_auth_status" ||
+		phase.ApprovalSubject != "operator" ||
+		phase.AutoApproveEligible == nil ||
+		*phase.AutoApproveEligible ||
+		phase.BlockedReasonCode != "waiting_for_opt_in" ||
+		!phase.RequiresOptIn ||
+		!phase.RequiresConsent ||
+		!phase.StaleAuthority {
 		t.Fatalf("phase metadata = %#v, want typed blocker flags", phase)
 	}
 	if len(phase.SupersedesPhaseIDs) != 1 || phase.SupersedesPhaseIDs[0] != "phase-old" {

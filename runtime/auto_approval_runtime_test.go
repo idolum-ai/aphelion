@@ -361,3 +361,68 @@ func TestRuntimeAutoApprovesPendingPlanLeaseContinuation(t *testing.T) {
 		t.Fatalf("continuation state = %#v, want approved consumed plan lease", got)
 	}
 }
+
+func TestRuntimeAutoApprovalSkipsManualOnlyContinuation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 99127, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 99127, UserID: 0, Scope: telegramDMScopeRef(99127)}
+	now := time.Now().UTC()
+	manualOnly := false
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-manual-only",
+		RemainingTurns: 1,
+		StageSummary:   "Check auth status only.",
+		ActionProposal: session.ActionProposal{
+			ID:                  "aprop-manual-only",
+			RiskClass:           "external_account_auth_status",
+			Summary:             "Check auth status only.",
+			BoundedEffect:       "Run one nonsecret auth status check.",
+			AutoApproveEligible: &manualOnly,
+			Status:              session.ProposalStatusPending,
+			ExpiresAt:           now.Add(30 * time.Minute),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-manual-only",
+			ProposalID:     "aprop-manual-only",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(30 * time.Minute),
+			LeaseClass:     session.ContinuationLeaseClassDataAccess,
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	approved, err := rt.maybeAutoApproveContinuationOffer(context.Background(), key, core.InboundMessage{ChatID: 99127}, state, "manual_only")
+	if err != nil {
+		t.Fatalf("maybeAutoApproveContinuationOffer() err = %v", err)
+	}
+	if approved {
+		t.Fatal("maybeAutoApproveContinuationOffer() approved = true, want manual-only skip")
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99127, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 0 {
+		t.Fatalf("autoapproval leases = %#v, want one unused lease", leases)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusPending || got.ActionProposal.Status != session.ProposalStatusPending {
+		t.Fatalf("continuation state = %#v, want still pending", got)
+	}
+}

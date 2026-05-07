@@ -103,22 +103,26 @@ type updateOperationProposalInput struct {
 }
 
 type updateOperationPhaseInput struct {
-	ID                 string   `json:"id,omitempty"`
-	Summary            string   `json:"summary,omitempty"`
-	Status             string   `json:"status,omitempty"`
-	AuthorityClass     string   `json:"authority_class,omitempty"`
-	WhyNow             string   `json:"why_now,omitempty"`
-	BoundedEffect      string   `json:"bounded_effect,omitempty"`
-	AllowedActions     []string `json:"allowed_actions,omitempty"`
-	ForbiddenActions   []string `json:"forbidden_actions,omitempty"`
-	ValidationPlan     []string `json:"validation_plan,omitempty"`
-	BlockedReasonCode  string   `json:"blocked_reason_code,omitempty"`
-	RequiresConsent    *bool    `json:"requires_consent,omitempty"`
-	RequiresOptIn      *bool    `json:"requires_opt_in,omitempty"`
-	SupersedesPhaseIDs []string `json:"supersedes_phase_ids,omitempty"`
-	StaleAuthority     *bool    `json:"stale_authority,omitempty"`
-	RequiresApproval   *bool    `json:"requires_approval,omitempty"`
-	LeaseID            string   `json:"lease_id,omitempty"`
+	ID                  string   `json:"id,omitempty"`
+	Summary             string   `json:"summary,omitempty"`
+	Status              string   `json:"status,omitempty"`
+	AuthorityClass      string   `json:"authority_class,omitempty"`
+	WhyNow              string   `json:"why_now,omitempty"`
+	BoundedEffect       string   `json:"bounded_effect,omitempty"`
+	AllowedActions      []string `json:"allowed_actions,omitempty"`
+	ForbiddenActions    []string `json:"forbidden_actions,omitempty"`
+	ValidationPlan      []string `json:"validation_plan,omitempty"`
+	GateLevel           string   `json:"gate_level,omitempty"`
+	GateReasonCode      string   `json:"gate_reason_code,omitempty"`
+	ApprovalSubject     string   `json:"approval_subject,omitempty"`
+	AutoApproveEligible *bool    `json:"autoapprove_eligible,omitempty"`
+	BlockedReasonCode   string   `json:"blocked_reason_code,omitempty"`
+	RequiresConsent     *bool    `json:"requires_consent,omitempty"`
+	RequiresOptIn       *bool    `json:"requires_opt_in,omitempty"`
+	SupersedesPhaseIDs  []string `json:"supersedes_phase_ids,omitempty"`
+	StaleAuthority      *bool    `json:"stale_authority,omitempty"`
+	RequiresApproval    *bool    `json:"requires_approval,omitempty"`
+	LeaseID             string   `json:"lease_id,omitempty"`
 }
 
 type updateOperationPhasePlanInput struct {
@@ -873,6 +877,10 @@ func (r *Registry) Definitions() []agent.ToolDef {
 										"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed action labels for this phase"},
 										"forbidden_actions": {"type": "array", "items": {"type": "string"}, "description": "Forbidden action labels for this phase"},
 										"validation_plan": {"type": "array", "items": {"type": "string"}, "description": "Evidence checks expected after this phase"},
+										"gate_level": {"type": "string", "enum": ["normal_approval", "escalated_operator_approval", "hard_consent_block"], "description": "Typed approval gate. Use escalated_operator_approval for bounded sensitive operator approvals such as external-account auth status checks; use hard_consent_block only for third-party opt-in/private-content gates that operator auto-approval must not bypass."},
+										"gate_reason_code": {"type": "string", "description": "Typed gate reason such as external_account_auth_status, credential_metadata_check, credential_recovery, mailbox_content, third_party_opt_in, or capability_grant."},
+										"approval_subject": {"type": "string", "description": "Who can satisfy this gate: operator, third_party, or resource_owner."},
+										"autoapprove_eligible": {"type": "boolean", "description": "Whether operator auto-approval may consume this phase. Sensitive escalated gates should set false."},
 										"blocked_reason_code": {"type": "string", "description": "Typed blocker code such as waiting_for_opt_in, waiting_for_consent, blocked_on_consent, external_dependency, or stale_authority. Prefer this over prose-only blockers."},
 										"requires_consent": {"type": "boolean", "description": "True when the phase must wait for explicit consent before approval materialization."},
 										"requires_opt_in": {"type": "boolean", "description": "True when the phase must wait for explicit opt-in before approval materialization."},

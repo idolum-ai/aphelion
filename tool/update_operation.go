@@ -358,9 +358,16 @@ func parseOperationPhaseInput(in updateOperationPhaseInput) (session.OperationPh
 		AllowedActions:     append([]string(nil), in.AllowedActions...),
 		ForbiddenActions:   append([]string(nil), in.ForbiddenActions...),
 		ValidationPlan:     append([]string(nil), in.ValidationPlan...),
+		GateLevel:          strings.TrimSpace(in.GateLevel),
+		GateReasonCode:     strings.TrimSpace(in.GateReasonCode),
+		ApprovalSubject:    strings.TrimSpace(in.ApprovalSubject),
 		BlockedReasonCode:  strings.TrimSpace(in.BlockedReasonCode),
 		SupersedesPhaseIDs: append([]string(nil), in.SupersedesPhaseIDs...),
 		LeaseID:            strings.TrimSpace(in.LeaseID),
+	}
+	if in.AutoApproveEligible != nil {
+		value := *in.AutoApproveEligible
+		phase.AutoApproveEligible = &value
 	}
 	if in.RequiresConsent != nil {
 		phase.RequiresConsent = *in.RequiresConsent
@@ -425,6 +432,19 @@ func mergeOperationPhaseInput(current session.OperationPhase, in updateOperation
 	}
 	if in.ValidationPlan != nil {
 		phase.ValidationPlan = append([]string(nil), in.ValidationPlan...)
+	}
+	if gateLevel := strings.TrimSpace(in.GateLevel); gateLevel != "" {
+		phase.GateLevel = gateLevel
+	}
+	if gateReasonCode := strings.TrimSpace(in.GateReasonCode); gateReasonCode != "" {
+		phase.GateReasonCode = gateReasonCode
+	}
+	if approvalSubject := strings.TrimSpace(in.ApprovalSubject); approvalSubject != "" {
+		phase.ApprovalSubject = approvalSubject
+	}
+	if in.AutoApproveEligible != nil {
+		value := *in.AutoApproveEligible
+		phase.AutoApproveEligible = &value
 	}
 	if blockedReasonCode := strings.TrimSpace(in.BlockedReasonCode); blockedReasonCode != "" {
 		phase.BlockedReasonCode = blockedReasonCode
@@ -897,6 +917,18 @@ func renderOperationState(header string, state session.OperationState) string {
 				}
 				if len(phase.ValidationPlan) > 0 {
 					fmt.Fprintf(&b, "    validation_plan: %s\n", strings.Join(phase.ValidationPlan, "; "))
+				}
+				if phase.GateLevel != "" {
+					fmt.Fprintf(&b, "    gate_level: %s\n", phase.GateLevel)
+				}
+				if phase.GateReasonCode != "" {
+					fmt.Fprintf(&b, "    gate_reason_code: %s\n", phase.GateReasonCode)
+				}
+				if phase.ApprovalSubject != "" {
+					fmt.Fprintf(&b, "    approval_subject: %s\n", phase.ApprovalSubject)
+				}
+				if phase.AutoApproveEligible != nil {
+					fmt.Fprintf(&b, "    autoapprove_eligible: %t\n", *phase.AutoApproveEligible)
 				}
 				if phase.BlockedReasonCode != "" {
 					fmt.Fprintf(&b, "    blocked_reason_code: %s\n", phase.BlockedReasonCode)

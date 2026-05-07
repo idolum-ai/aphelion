@@ -122,23 +122,27 @@ type OperationProposal struct {
 }
 
 type OperationPhase struct {
-	ID                 string     `json:"id,omitempty"`
-	Summary            string     `json:"summary,omitempty"`
-	Status             PlanStatus `json:"status,omitempty"`
-	AuthorityClass     string     `json:"authority_class,omitempty"`
-	WhyNow             string     `json:"why_now,omitempty"`
-	BoundedEffect      string     `json:"bounded_effect,omitempty"`
-	AllowedActions     []string   `json:"allowed_actions,omitempty"`
-	ForbiddenActions   []string   `json:"forbidden_actions,omitempty"`
-	ValidationPlan     []string   `json:"validation_plan,omitempty"`
-	BlockedReasonCode  string     `json:"blocked_reason_code,omitempty"`
-	RequiresConsent    bool       `json:"requires_consent,omitempty"`
-	RequiresOptIn      bool       `json:"requires_opt_in,omitempty"`
-	SupersedesPhaseIDs []string   `json:"supersedes_phase_ids,omitempty"`
-	StaleAuthority     bool       `json:"stale_authority,omitempty"`
-	RequiresApproval   bool       `json:"requires_approval,omitempty"`
-	LeaseID            string     `json:"lease_id,omitempty"`
-	CompletedAt        time.Time  `json:"completed_at,omitempty"`
+	ID                  string     `json:"id,omitempty"`
+	Summary             string     `json:"summary,omitempty"`
+	Status              PlanStatus `json:"status,omitempty"`
+	AuthorityClass      string     `json:"authority_class,omitempty"`
+	WhyNow              string     `json:"why_now,omitempty"`
+	BoundedEffect       string     `json:"bounded_effect,omitempty"`
+	AllowedActions      []string   `json:"allowed_actions,omitempty"`
+	ForbiddenActions    []string   `json:"forbidden_actions,omitempty"`
+	ValidationPlan      []string   `json:"validation_plan,omitempty"`
+	GateLevel           string     `json:"gate_level,omitempty"`
+	GateReasonCode      string     `json:"gate_reason_code,omitempty"`
+	ApprovalSubject     string     `json:"approval_subject,omitempty"`
+	AutoApproveEligible *bool      `json:"autoapprove_eligible,omitempty"`
+	BlockedReasonCode   string     `json:"blocked_reason_code,omitempty"`
+	RequiresConsent     bool       `json:"requires_consent,omitempty"`
+	RequiresOptIn       bool       `json:"requires_opt_in,omitempty"`
+	SupersedesPhaseIDs  []string   `json:"supersedes_phase_ids,omitempty"`
+	StaleAuthority      bool       `json:"stale_authority,omitempty"`
+	RequiresApproval    bool       `json:"requires_approval,omitempty"`
+	LeaseID             string     `json:"lease_id,omitempty"`
+	CompletedAt         time.Time  `json:"completed_at,omitempty"`
 }
 
 type OperationPhasePlan struct {
@@ -150,21 +154,22 @@ type OperationPhasePlan struct {
 }
 
 type ActionProposal struct {
-	ID               string         `json:"id,omitempty"`
-	OperationID      string         `json:"operation_id,omitempty"`
-	MissionID        string         `json:"mission_id,omitempty"`
-	Summary          string         `json:"summary,omitempty"`
-	WhyNow           string         `json:"why_now,omitempty"`
-	BoundedEffect    string         `json:"bounded_effect,omitempty"`
-	RiskClass        string         `json:"risk_class,omitempty"`
-	AllowedActions   []string       `json:"allowed_actions,omitempty"`
-	ForbiddenActions []string       `json:"forbidden_actions,omitempty"`
-	ValidationPlan   []string       `json:"validation_plan,omitempty"`
-	ExpiresAt        time.Time      `json:"expires_at,omitempty"`
-	PlanHash         string         `json:"plan_hash,omitempty"`
-	Status           ProposalStatus `json:"status,omitempty"`
-	CreatedAt        time.Time      `json:"created_at,omitempty"`
-	UpdatedAt        time.Time      `json:"updated_at,omitempty"`
+	ID                  string         `json:"id,omitempty"`
+	OperationID         string         `json:"operation_id,omitempty"`
+	MissionID           string         `json:"mission_id,omitempty"`
+	Summary             string         `json:"summary,omitempty"`
+	WhyNow              string         `json:"why_now,omitempty"`
+	BoundedEffect       string         `json:"bounded_effect,omitempty"`
+	RiskClass           string         `json:"risk_class,omitempty"`
+	AllowedActions      []string       `json:"allowed_actions,omitempty"`
+	ForbiddenActions    []string       `json:"forbidden_actions,omitempty"`
+	ValidationPlan      []string       `json:"validation_plan,omitempty"`
+	AutoApproveEligible *bool          `json:"autoapprove_eligible,omitempty"`
+	ExpiresAt           time.Time      `json:"expires_at,omitempty"`
+	PlanHash            string         `json:"plan_hash,omitempty"`
+	Status              ProposalStatus `json:"status,omitempty"`
+	CreatedAt           time.Time      `json:"created_at,omitempty"`
+	UpdatedAt           time.Time      `json:"updated_at,omitempty"`
 }
 
 type ContinuationLeaseStatus string
@@ -1383,6 +1388,9 @@ func normalizeOperationPhase(phase OperationPhase, index int) OperationPhase {
 	phase.AllowedActions = normalizeActionStringSlice(phase.AllowedActions)
 	phase.ForbiddenActions = normalizeActionStringSlice(phase.ForbiddenActions)
 	phase.ValidationPlan = normalizeActionStringSlice(phase.ValidationPlan)
+	phase.GateLevel = normalizeEnumValue(phase.GateLevel)
+	phase.GateReasonCode = normalizeEnumValue(phase.GateReasonCode)
+	phase.ApprovalSubject = normalizeEnumValue(phase.ApprovalSubject)
 	phase.BlockedReasonCode = normalizeEnumValue(phase.BlockedReasonCode)
 	phase.SupersedesPhaseIDs = normalizeActionStringSlice(phase.SupersedesPhaseIDs)
 	phase.LeaseID = strings.TrimSpace(phase.LeaseID)
@@ -1505,6 +1513,10 @@ func (p OperationPhase) Active() bool {
 		len(p.AllowedActions) > 0 ||
 		len(p.ForbiddenActions) > 0 ||
 		len(p.ValidationPlan) > 0 ||
+		strings.TrimSpace(p.GateLevel) != "" ||
+		strings.TrimSpace(p.GateReasonCode) != "" ||
+		strings.TrimSpace(p.ApprovalSubject) != "" ||
+		p.AutoApproveEligible != nil ||
 		strings.TrimSpace(p.BlockedReasonCode) != "" ||
 		p.RequiresConsent ||
 		p.RequiresOptIn ||
@@ -2021,6 +2033,7 @@ func (p ActionProposal) Active() bool {
 		len(p.AllowedActions) > 0 ||
 		len(p.ForbiddenActions) > 0 ||
 		len(p.ValidationPlan) > 0 ||
+		p.AutoApproveEligible != nil ||
 		!p.ExpiresAt.IsZero() ||
 		strings.TrimSpace(p.PlanHash) != "" ||
 		strings.TrimSpace(string(p.Status)) != ""
