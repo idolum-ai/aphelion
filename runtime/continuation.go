@@ -73,6 +73,10 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		HandshakeBlockedReason: consensus.BlockedReason,
 		UpdatedAt:              time.Now().UTC(),
 	}
+	quietClose := !consensus.eligible() && continuationConsensusShouldCloseQuietly(consensus)
+	if quietClose {
+		state.HandshakeBlockedReason = ""
+	}
 	if consensus.eligible() {
 		state.Status = session.ContinuationStatusPending
 		state.DecisionID = newContinuationDecisionID()
@@ -87,6 +91,13 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 		payload := continuationExecutionPayload(state)
 		payload["reason"] = strings.TrimSpace(consensus.BlockedReason)
 		notify := shouldNotifyContinuationBlocked(priorState, priorExists, consensus)
+		if quietClose {
+			payload["reason"] = "operation_completed"
+			payload["user_visible"] = false
+			payload["prior_active"] = priorExists && session.NormalizeContinuationState(priorState).Active()
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "closed", payload, time.Now().UTC())
+			return nil
+		}
 		payload["user_visible"] = notify
 		payload["prior_active"] = priorExists && session.NormalizeContinuationState(priorState).Active()
 		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", payload, time.Now().UTC())
@@ -139,8 +150,16 @@ func shouldNotifyContinuationBlocked(priorState session.ContinuationState, prior
 	if consensus.eligible() || !priorExists {
 		return false
 	}
+	if continuationConsensusShouldCloseQuietly(consensus) {
+		return false
+	}
 	priorState = session.NormalizeContinuationState(priorState)
 	return priorState.Status == session.ContinuationStatusPending || priorState.Status == session.ContinuationStatusApproved
+}
+
+func continuationConsensusShouldCloseQuietly(consensus continuationConsensus) bool {
+	opState := session.NormalizeOperationState(consensus.OperationState)
+	return opState.Status == session.OperationStatusCompleted
 }
 
 func (r *Runtime) buildContinuationConsensus(key session.SessionKey, result *turn.Result) continuationConsensus {

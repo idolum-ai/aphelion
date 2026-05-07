@@ -28,7 +28,11 @@ type operationPhaseGate struct {
 func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate {
 	phase = normalizeSingleOperationPhase(phase)
 	explicitLevel := normalizeOperationGateLevel(phase.GateLevel)
-	if explicitLevel == operationGateLevelEscalatedOperatorApproval && operationPhaseHasThirdPartyPrivateDataGate(phase) && operationPhaseHardBlockedReason(phase) != "" {
+	hardReason := operationPhaseHardBlockedReason(phase)
+	if explicitLevel == operationGateLevelEscalatedOperatorApproval &&
+		operationPhaseHasThirdPartyPrivateDataGate(phase) &&
+		hardReason != "" &&
+		!operationPhaseHardBlockCanBeSatisfiedByOperator(phase, hardReason) {
 		explicitLevel = operationGateLevelHardConsentBlock
 	}
 	if explicitLevel != "" {
@@ -45,7 +49,7 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 			gate.AutoApproveEligible = false
 		}
 		if explicitLevel == operationGateLevelHardConsentBlock {
-			gate.BlockedReason = operationPhaseHardBlockedReason(phase)
+			gate.BlockedReason = hardReason
 			if gate.BlockedReason == "" {
 				gate.BlockedReason = "waiting for explicit consent"
 			}
@@ -64,12 +68,24 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 		}
 		return gate
 	}
-	if reason := operationPhaseHardBlockedReason(phase); reason != "" {
+	if hardReason != "" {
+		if operationPhaseHardBlockCanBeSatisfiedByOperator(phase, hardReason) {
+			gate := operationPhaseGate{
+				Level:               operationGateLevelEscalatedOperatorApproval,
+				ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, normalizeOperationPhaseReasonCode(phase.BlockedReasonCode), inferOperationGateReasonCode(phase), "operator_consent"),
+				ApprovalSubject:     firstNonEmptyContinuation(phase.ApprovalSubject, operationGateSubjectOperator),
+				AutoApproveEligible: false,
+			}
+			if phase.AutoApproveEligible != nil {
+				gate.AutoApproveEligible = *phase.AutoApproveEligible
+			}
+			return gate
+		}
 		return operationPhaseGate{
 			Level:               operationGateLevelHardConsentBlock,
 			ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, normalizeOperationPhaseReasonCode(phase.BlockedReasonCode), inferOperationGateReasonCode(phase)),
 			ApprovalSubject:     firstNonEmptyContinuation(phase.ApprovalSubject, "third_party"),
-			BlockedReason:       reason,
+			BlockedReason:       hardReason,
 			AutoApproveEligible: false,
 		}
 	}
@@ -83,6 +99,26 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 		gate.AutoApproveEligible = *phase.AutoApproveEligible
 	}
 	return gate
+}
+
+func operationPhaseHardBlockCanBeSatisfiedByOperator(phase session.OperationPhase, reason string) bool {
+	reason = normalizeOperationPhaseReasonCode(reason)
+	if reason == "" || strings.Contains(reason, "opt_in") {
+		return false
+	}
+	if !strings.Contains(reason, "consent") {
+		return false
+	}
+	return operationPhaseApprovalSubjectIsOperatorControlled(phase.ApprovalSubject)
+}
+
+func operationPhaseApprovalSubjectIsOperatorControlled(subject string) bool {
+	switch normalizeOperationPhaseReasonCode(subject) {
+	case operationGateSubjectOperator, "admin", "administrator", "resource_owner", "owner", "self", "current_user", "principal":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeOperationGateLevel(level string) string {

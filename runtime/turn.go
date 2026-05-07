@@ -51,6 +51,9 @@ func (r *Runtime) handleInteractiveInbound(ctx context.Context, msg core.Inbound
 		}
 		actor = resolved
 	}
+	if handled, result, err := r.maybeHandleTypedContinuationApproval(ctx, msg, actor); handled {
+		return result, err
+	}
 	stopTyping := r.startChatActionLoop(ctx, msg.ChatID, "typing")
 	defer stopTyping()
 	defer r.clearChatTurnPhase(msg.ChatID)

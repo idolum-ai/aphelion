@@ -1028,6 +1028,80 @@ func TestHandleInboundDoesNotSendContinuationBlockedNoticeWithoutPriorActiveCont
 	}
 }
 
+func TestHandleInboundClosesCompletedOperationContinuationQuietly(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "done"
+	provider.faceReplyText = "The bounded work is complete."
+	provider.repairReplyText = "I can't continue yet because Aphelion did not ratify this continuation request."
+	provider.proposalReplyText = testPersonaContinuationProposal(
+		session.ContinuationIntentDecisionContinue,
+		"I can continue after one more approval.",
+	)
+	provider.planningReplyText = testGovernorContinuationRatification(
+		session.ContinuationIntentDecisionContinue,
+		"Governor rationale exists but ratification is withheld.",
+		false,
+	)
+
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8117, UserID: 0, Scope: telegramDMScopeRef(8117)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "prior-pending-completed",
+		RemainingTurns: 1,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "completed-operation",
+		Objective: "Finish the bounded phase.",
+		Status:    session.OperationStatusCompleted,
+		Stage:     "completed",
+		Summary:   "All approved work completed.",
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8117, SenderID: 1001, SenderName: "admin", Text: "nice", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	sentCount := len(sender.sent)
+	lastText := ""
+	if sentCount > 0 {
+		lastText = sender.sent[sentCount-1].Text
+	}
+	sender.mu.Unlock()
+	if sentCount != 1 || lastText != "The bounded work is complete." {
+		t.Fatalf("sent count/text = %d/%q, want only main reply", sentCount, lastText)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.HandshakeBlockedReason != "" {
+		t.Fatalf("continuation = %#v, want quiet idle close without blocked reason", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationBlocked {
+			t.Fatalf("events = %#v, want no blocked event after completed operation close", events)
+		}
+	}
+}
+
 func TestApproveContinuationPersistsApproverIdentity(t *testing.T) {
 	t.Parallel()
 
@@ -1112,6 +1186,77 @@ func TestApproveContinuationActivatesContinuationLease(t *testing.T) {
 	}
 	if state.ContinuationLease.ApprovedBy != 1002 || state.ContinuationLease.ApprovedAt.IsZero() {
 		t.Fatalf("lease approval = by %d at %v, want recorded approver", state.ContinuationLease.ApprovedBy, state.ContinuationLease.ApprovedAt)
+	}
+}
+
+func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	recorder := &recordingInteractiveDMTurnAssembler{result: &core.TurnResult{Text: "continued"}}
+	rt.interactiveDMAssembler = recorder
+
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8116, UserID: 0, Scope: telegramDMScopeRef(8116)}
+	action := session.ActionProposal{
+		ID:            "aprop-typed-approval",
+		Summary:       "Run the approved typed continuation.",
+		BoundedEffect: "Run one bounded follow-up and report evidence.",
+		Status:        session.ProposalStatusPending,
+		ExpiresAt:     now.Add(time.Hour),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusPending,
+		DecisionID:        "typed-approval",
+		Objective:         "Continue a pending plan.",
+		StageSummary:      "Run the approved typed continuation.",
+		RemainingTurns:    1,
+		ActionProposal:    action,
+		ContinuationLease: buildContinuationLease(action, 1, now),
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID: 8116, SenderID: 1001, SenderName: "admin", Text: "approved", MessageID: 1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if !recorder.called {
+		t.Fatal("interactive assembler not called for approved continuation")
+	}
+	if recorder.input.Msg.Origin != core.InboundOriginTurnAuthorization {
+		t.Fatalf("origin = %q, want turn authorization", recorder.input.Msg.Origin)
+	}
+	if recorder.input.Msg.Text == "approved" || !strings.Contains(recorder.input.Msg.Text, "approved_step: Run the approved typed continuation") {
+		t.Fatalf("continuation text = %q, want machine-authored approved step", recorder.input.Msg.Text)
+	}
+	if recorder.input.Actor.Role != principal.RoleAdmin {
+		t.Fatalf("actor role = %q, want admin", recorder.input.Actor.Role)
+	}
+
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusIdle || got.RemainingTurns != 0 || got.ApprovedBy != 0 || got.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want idle state with consumed lease after typed approval", got)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventContinuationApproved) || !hasExecutionEvent(events, core.ExecutionEventContinuationConsumed) {
+		t.Fatalf("events = %#v, want approved and consumed events", events)
 	}
 }
 

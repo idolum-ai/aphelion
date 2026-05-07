@@ -1345,6 +1345,102 @@ func TestMaterializeEscalatedOperatorPhaseShowsManualApprovalDespiteAutoApproval
 	}
 }
 
+func TestMaterializeResourceOwnerMailboxConsentShowsManualApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 9029, 1001, "15m all"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9029, UserID: 0, Scope: telegramDMScopeRef(9029)}
+	manualOnly := false
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "email-child-mailbox-smoke-20260507",
+		Objective: "Check one configured mailbox query without surfacing message contents.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "email-child-mailbox-smoke-plan",
+			Goal: "Run a bounded resource-owner mailbox smoke after explicit approval.",
+			Phases: []session.OperationPhase{{
+				ID:                  "phase-e2b-readonly-mailbox-smoke",
+				Summary:             "Run one read-only mailbox smoke for host@idolum.ai.",
+				Status:              session.PlanStatusPending,
+				AuthorityClass:      "read_only_mailbox_smoke",
+				WhyNow:              "The operator needs proof that configured gog_cli access can query the inbox label without exposing content.",
+				BoundedEffect:       "Run one configured label:inbox query with max=1; suppress contents and report only exit code and parseability.",
+				AllowedActions:      []string{"run_configured_gog_cli_mail_query_once", "suppress_mailbox_contents", "report_exit_code_and_parseability"},
+				ForbiddenActions:    []string{"print_mailbox_contents", "read_or_print_secret_values", "start_oauth_flow", "mutate_google_account", "deploy", "restart"},
+				GateLevel:           "escalated_operator_approval",
+				GateReasonCode:      "mailbox_content",
+				ApprovalSubject:     "resource_owner",
+				AutoApproveEligible: &manualOnly,
+				BlockedReasonCode:   "waiting_for_explicit_approval",
+				RequiresConsent:     true,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9029, SenderID: 1001, Text: "continue", MessageID: 57}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want resource-owner mailbox approval prompt")
+	}
+
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if state.Status != session.ContinuationStatusPending {
+		t.Fatalf("continuation status = %q, want pending", state.Status)
+	}
+	if state.ActionProposal.AutoApproveEligible == nil || *state.ActionProposal.AutoApproveEligible {
+		t.Fatalf("autoapprove_eligible = %#v, want explicit false", state.ActionProposal.AutoApproveEligible)
+	}
+	if state.ActionProposal.RiskClass != "mailbox_content" {
+		t.Fatalf("risk class = %q, want mailbox_content", state.ActionProposal.RiskClass)
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	inlineText := ""
+	var labels []string
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+		labels = continuationButtonLabels(sender.inline[inlineCount-1].rows)
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || sentCount != 0 {
+		t.Fatalf("inline=%d sent=%d text=%q, want one manual approval prompt and no blocked notice", inlineCount, sentCount, inlineText)
+	}
+	for _, want := range []string{"Escalated approval needed", "Why elevated:", "Will do:", "Auto-approval: not used", "Approve once?"} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want %q", inlineText, want)
+		}
+	}
+	if strings.Contains(inlineText, "Blocked:") || strings.Contains(inlineText, "explicit consent") {
+		t.Fatalf("inline text = %q, want approval prompt, not consent block", inlineText)
+	}
+	if got, want := labels, []string{"Approve once", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(9029, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].UsedCount != 0 {
+		t.Fatalf("autoapproval leases = %#v, want one unused lease", leases)
+	}
+}
+
 func TestOperationPhaseApprovalUsesTypedGovernanceMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -1387,6 +1483,32 @@ func TestOperationPhaseApprovalUsesTypedGovernanceMetadata(t *testing.T) {
 	gate := operationPhaseApprovalGate(escalatedPhase)
 	if gate.Level != operationGateLevelEscalatedOperatorApproval || gate.AutoApproveEligible {
 		t.Fatalf("operationPhaseApprovalGate(escalated auth status) = %#v, want escalated/manual gate", gate)
+	}
+
+	resourceOwnerConsentPhase := session.OperationPhase{
+		ID:              "phase-e2b-readonly-mailbox-smoke",
+		Summary:         "Run one read-only mailbox smoke.",
+		Status:          session.PlanStatusPending,
+		AuthorityClass:  "read_only_mailbox_smoke",
+		GateLevel:       "escalated_operator_approval",
+		GateReasonCode:  "mailbox_content",
+		ApprovalSubject: "resource_owner",
+		RequiresConsent: true,
+	}
+	if got := operationPhaseApprovalBlockedReason(resourceOwnerConsentPhase); got != "" {
+		t.Fatalf("operationPhaseApprovalBlockedReason(resource-owner consent) = %q, want materializable approval", got)
+	}
+	gate = operationPhaseApprovalGate(resourceOwnerConsentPhase)
+	if gate.Level != operationGateLevelEscalatedOperatorApproval || gate.AutoApproveEligible || gate.ApprovalSubject != "resource_owner" {
+		t.Fatalf("operationPhaseApprovalGate(resource-owner consent) = %#v, want manual resource-owner gate", gate)
+	}
+
+	thirdPartyConsentPhase := resourceOwnerConsentPhase
+	thirdPartyConsentPhase.ID = "phase-wife-private-intake"
+	thirdPartyConsentPhase.AuthorityClass = "private_data_intake"
+	thirdPartyConsentPhase.ApprovalSubject = "third_party"
+	if got := operationPhaseApprovalBlockedReason(thirdPartyConsentPhase); got != "waiting for explicit consent" {
+		t.Fatalf("operationPhaseApprovalBlockedReason(third-party consent) = %q, want hard consent block", got)
 	}
 
 	privateDataPhase := session.OperationPhase{
