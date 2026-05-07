@@ -300,7 +300,7 @@ func (r *Runtime) groundContinuationBlockedNoticeWithExecutionEvidence(
 	if r == nil || r.store == nil {
 		return candidate, ""
 	}
-	events, err := r.store.ExecutionEventsBySession(key, 0, 300)
+	events, err := r.store.LatestExecutionEventsBySession(key, 300)
 	if err != nil || len(events) == 0 {
 		return fallback, "continuation evidence is unavailable; " + continuationOperationalStateNote
 	}
@@ -495,7 +495,7 @@ func (r *Runtime) groundContinuationPromptWithExecutionEvidence(
 	if decisionID == "" {
 		return fallback, "continuation decision id is missing"
 	}
-	events, err := r.store.ExecutionEventsBySession(key, 0, 300)
+	events, err := r.store.LatestExecutionEventsBySession(key, 300)
 	if err != nil || len(events) == 0 {
 		return fallback, "continuation evidence is unavailable; " + continuationOperationalStateNote
 	}
@@ -987,35 +987,30 @@ func continuationProposalRiskFindingLabel(kind string) string {
 }
 
 func renderContinuationPromptFallback(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
 	lines := []string{"I can continue from here."}
 	reasons := make([]string, 0, 2)
 	if reason := strings.TrimSpace(state.PersonaIntent.Rationale); reason != "" {
-		reasons = append(reasons, reason)
+		reasons = appendUniqueContinuationLine(reasons, reason)
 	}
 	if reason := strings.TrimSpace(state.GovernorIntent.Rationale); reason != "" {
-		reasons = append(reasons, reason)
+		reasons = appendUniqueContinuationLine(reasons, reason)
 	}
 	if len(reasons) > 0 {
 		lines = append(lines, "", "Why continuing makes sense:", strings.Join(reasons, " "))
 	}
-	if constraints := strings.TrimSpace(state.GovernorIntent.Constraints); constraints != "" {
-		lines = append(lines, "", "Boundaries:", constraints)
-	}
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
+	constraints := strings.TrimSpace(state.GovernorIntent.Constraints)
+	effect := ""
 	if proposal.Active() {
-		if effect := strings.TrimSpace(proposal.BoundedEffect); effect != "" {
-			lines = append(lines, "", "Bounded effect:", effect)
-		}
-		if len(proposal.AllowedActions) > 0 {
-			lines = append(lines, "", "Allowed actions:", strings.Join(proposal.AllowedActions, ", "))
-		}
-		if len(proposal.ForbiddenActions) > 0 {
-			lines = append(lines, "", "Forbidden actions:", strings.Join(proposal.ForbiddenActions, ", "))
-		}
+		effect = strings.TrimSpace(proposal.BoundedEffect)
 	}
-	if card := continuationOperatorCardLines(state); len(card) > 0 {
-		lines = append(lines, "", "Operator card:")
-		lines = append(lines, card...)
+	scope := firstNonEmptyContinuation(constraints, effect)
+	if scope != "" {
+		lines = append(lines, "", "Scope:", scope)
+	}
+	if effect != "" && constraints != "" && !continuationTextEqual(effect, constraints) {
+		lines = append(lines, "", "Bounded effect:", effect)
 	}
 	if objective := strings.TrimSpace(state.Objective); objective != "" {
 		lines = append(lines, "", "Objective:", objective)
@@ -1025,6 +1020,25 @@ func renderContinuationPromptFallback(state session.ContinuationState) string {
 	}
 	lines = append(lines, "", fmt.Sprintf("Should I continue for %d more turn(s)?", state.RemainingTurns))
 	return strings.Join(lines, "\n")
+}
+
+func appendUniqueContinuationLine(lines []string, line string) []string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return lines
+	}
+	for _, existing := range lines {
+		if continuationTextEqual(existing, line) {
+			return lines
+		}
+	}
+	return append(lines, line)
+}
+
+func continuationTextEqual(left string, right string) bool {
+	left = strings.Join(strings.Fields(strings.TrimSpace(left)), " ")
+	right = strings.Join(strings.Fields(strings.TrimSpace(right)), " ")
+	return strings.EqualFold(left, right)
 }
 
 func continuationCallbackID(state session.ContinuationState) string {

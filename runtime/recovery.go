@@ -64,6 +64,16 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 			"phase":                              "continuation_approval_repair",
 		}, time.Now().UTC())
 	}
+	repairedAuthority, err := r.repairContinuationAuthorityContradictions(ctx, now)
+	if err != nil {
+		return fmt.Errorf("repair continuation authority contradictions: %w", err)
+	}
+	if repairedAuthority > 0 {
+		r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryDetected, "recovery", "detected", map[string]any{
+			"continuation_authority_repaired": repairedAuthority,
+			"phase":                           "continuation_authority_repair",
+		}, time.Now().UTC())
+	}
 
 	runs, err := r.store.PendingRecoveryTurnRuns(maxStartupRecoveryRuns)
 	if err != nil {
@@ -74,6 +84,9 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 		memoryNote := "continuity loaded; no recovery rows pending"
 		if repairedApprovals > 0 {
 			memoryNote += fmt.Sprintf("; invalid pending approvals repaired=%d", repairedApprovals)
+		}
+		if repairedAuthority > 0 {
+			memoryNote += fmt.Sprintf("; continuation authority repaired=%d", repairedAuthority)
 		}
 		if summary := resumeResult.summary(); summary != "" {
 			memoryNote += "; " + summary

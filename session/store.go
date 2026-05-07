@@ -1122,6 +1122,7 @@ func (s *SQLiteStore) ContinuationStates() ([]ContinuationStateRecord, error) {
 			ID:             nullToString(scopeID),
 			DurableAgentID: nullToString(durableAgentID),
 		})
+		record.RawJSON = strings.TrimSpace(continuationRaw.String)
 		record.State = decodeContinuationState(continuationRaw.String)
 		record.State = NormalizeContinuationState(record.State)
 		switch record.State.Status {

@@ -390,6 +390,69 @@ func TestContinuationWorkModeTrustsExplicitReadOnlyRiskClassOverRestartText(t *t
 	}
 }
 
+func TestContinuationWorkModeDoesNotPromoteChildInspectionNegatedDeployText(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		StageSummary: "Inspect idolum-email child adapter environment/path metadata.",
+		ActionProposal: session.ActionProposal{
+			RiskClass: "read_only_child_adapter_environment_inspection",
+			Summary:   "Inspect child adapter metadata",
+			BoundedEffect: "Read local non-secret child state, adapter config, execution events, binary path metadata, and sanitized command metadata. " +
+				"No mailbox content/query, OAuth, file mutation, credential exposure, config edits, deploy, or restart.",
+			AllowedActions: []string{
+				"inspect_durable_agent_state",
+				"inspect_external_channel_adapter_state",
+				"inspect_execution_events_for_gog_cli_command",
+				"inspect_binary_path_metadata",
+				"inspect_nonsecret_environment_metadata",
+				"report_mismatch_and_repair_options",
+			},
+			ForbiddenActions: []string{
+				"read_mailbox_contents",
+				"deploy",
+				"restart",
+			},
+		},
+	}
+
+	if got := continuationWorkMode(state); got == WorkModeDeploy {
+		t.Fatalf("continuationWorkMode() = %q, want not deploy for negated deploy text", got)
+	}
+}
+
+func TestContinuationWorkModeDoesNotPromoteCredentialRecoveryNegatedDeployText(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		StageSummary: "Repair child-scoped gog_cli credential materialization.",
+		ActionProposal: session.ActionProposal{
+			RiskClass: "credential_recovery",
+			Summary:   "Repair child-scoped gog_cli credential materialization",
+			BoundedEffect: "May create or adjust a child-scoped gogcli config/keyring materialization, wrapper/env, or grant contract. " +
+				"No mailbox content/label/inbox/message query, no OAuth, no account mutation, no public/external contact, no email actions, no deploy/restart unless separately approved.",
+			AllowedActions: []string{
+				"create_child_scoped_gogcli_materialization_if_approved",
+				"copy_or_bind_existing_host_gogcli_credentials_without_printing_values",
+				"adjust_child_gog_cli_wrapper_or_grant_contract_if_needed",
+				"run_child_sandbox_gog_cli_auth_status_only",
+				"report_repair_evidence",
+			},
+			ForbiddenActions: []string{
+				"read_or_print_secret_values",
+				"run_gog_cli_mail_query",
+				"read_mailbox_contents",
+				"deploy",
+				"restart",
+			},
+		},
+	}
+
+	if got := continuationWorkMode(state); got == WorkModeDeploy {
+		t.Fatalf("continuationWorkMode() = %q, want not deploy for credential-recovery negated deploy text", got)
+	}
+}
+
 func TestContinuationWorkModeClassifiesExplicitRestartActionAsDeploy(t *testing.T) {
 	t.Parallel()
 

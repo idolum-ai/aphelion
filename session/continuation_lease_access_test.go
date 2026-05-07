@@ -120,6 +120,72 @@ func TestContinuationLeaseClassInferenceAndBoundaries(t *testing.T) {
 	}
 }
 
+func TestAuthorityInferenceIgnoresNegatedDeployInReadOnlyChildInspection(t *testing.T) {
+	proposal := ApplyAuthorityContractToActionProposal(ActionProposal{
+		RiskClass: "read_only_child_adapter_environment_inspection",
+		AllowedActions: []string{
+			"inspect_durable_agent_state",
+			"inspect_external_channel_adapter_state",
+			"inspect_execution_events_for_gog_cli_command",
+			"inspect_binary_path_metadata",
+			"inspect_nonsecret_environment_metadata",
+			"report_mismatch_and_repair_options",
+		},
+		ForbiddenActions: []string{
+			"read_or_print_secret_values",
+			"read_mailbox_contents",
+			"run_gog_cli_mail_query",
+			"edit_config",
+			"deploy",
+			"restart",
+		},
+		BoundedEffect: "Read local non-secret child state, adapter config, execution events, binary path metadata, and sanitized command metadata. No mailbox content/query, OAuth, file mutation, credential exposure, config edits, deploy, or restart.",
+	})
+
+	if actionListMatches(proposal.AllowedActions, "deploy") || actionListMatches(proposal.AllowedActions, "restart") {
+		t.Fatalf("allowed actions = %#v, want no deploy/restart injected from negated prose", proposal.AllowedActions)
+	}
+	if !actionListMatches(proposal.ForbiddenActions, "deploy") || !actionListMatches(proposal.ForbiddenActions, "restart") {
+		t.Fatalf("forbidden actions = %#v, want deploy/restart preserved as forbiddens", proposal.ForbiddenActions)
+	}
+	if got := InferContinuationLeaseClass(proposal.RiskClass, proposal.AllowedActions, proposal.BoundedEffect); got == ContinuationLeaseClassDeployRestart {
+		t.Fatalf("InferContinuationLeaseClass() = %q, want non-deploy class", got)
+	}
+}
+
+func TestAuthorityInferenceIgnoresNegatedDeployInCredentialRecovery(t *testing.T) {
+	proposal := ApplyAuthorityContractToActionProposal(ActionProposal{
+		RiskClass: "credential_recovery",
+		AllowedActions: []string{
+			"create_child_scoped_gogcli_materialization_if_approved",
+			"copy_or_bind_existing_host_gogcli_credentials_without_printing_values",
+			"adjust_child_gog_cli_wrapper_or_grant_contract_if_needed",
+			"run_child_sandbox_gog_cli_auth_status_only",
+			"report_repair_evidence",
+		},
+		ForbiddenActions: []string{
+			"read_or_print_secret_values",
+			"run_gog_cli_mail_query",
+			"read_mailbox_contents",
+			"read_gmail_labels_or_messages",
+			"start_oauth_flow",
+			"mutate_google_account",
+			"send_email",
+			"archive_delete_or_modify_email",
+			"deploy",
+			"restart",
+		},
+		BoundedEffect: "May create or adjust a child-scoped gogcli config/keyring materialization, wrapper/env, or grant contract so only intended host credentials are accessible to idolum-email. May run one non-mailbox auth/config status smoke. No mailbox content/label/inbox/message query, no OAuth, no account mutation, no public/external contact, no email actions, no deploy/restart unless separately approved.",
+	})
+
+	if actionListMatches(proposal.AllowedActions, "deploy") || actionListMatches(proposal.AllowedActions, "restart") {
+		t.Fatalf("allowed actions = %#v, want no deploy/restart injected from negated credential-recovery prose", proposal.AllowedActions)
+	}
+	if got := InferContinuationLeaseClass(proposal.RiskClass, proposal.AllowedActions, proposal.BoundedEffect); got == ContinuationLeaseClassDeployRestart {
+		t.Fatalf("InferContinuationLeaseClass() = %q, want non-deploy class", got)
+	}
+}
+
 func TestAuthorityContractMapsLocalSecretMetadataReadToReadOnlyDataAccess(t *testing.T) {
 	contract, ok := AuthorityContractForToken(AuthorityClassLocalSecretMetadataReadLiveConfigRead)
 	if !ok {

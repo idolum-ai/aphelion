@@ -29,13 +29,21 @@ func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffe
 	if contract, ok := AuthorityContractForToken(riskClass); ok {
 		return contract, true
 	}
-	text := normalizeEnumValue(strings.Join(append(append([]string{}, allowedActions...), riskClass, boundedEffect), " "))
+	structuredText := normalizeAuthorityMatchText(strings.Join(append([]string{riskClass}, allowedActions...), " "))
+	if contract, ok := authorityContractForNormalizedText(structuredText); ok {
+		return contract, true
+	}
+	effectText := positiveAuthorityEffectText(boundedEffect)
+	return authorityContractForNormalizedText(effectText)
+}
+
+func authorityContractForNormalizedText(text string) (AuthorityContract, bool) {
 	if text == "" {
 		return AuthorityContract{}, false
 	}
 	containsAny := func(values ...string) bool {
 		for _, value := range values {
-			if strings.Contains(text, normalizeEnumValue(value)) {
+			if strings.Contains(text, normalizeAuthorityMatchText(value)) {
 				return true
 			}
 		}
@@ -63,6 +71,76 @@ func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffe
 	default:
 		return AuthorityContract{}, false
 	}
+}
+
+func positiveAuthorityEffectText(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(text, func(r rune) bool {
+		switch r {
+		case '.', ';', '\n', '\r':
+			return true
+		default:
+			return false
+		}
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		normalized := normalizeAuthorityMatchText(part)
+		if normalized == "" || authorityEffectClauseIsNegative(normalized) {
+			continue
+		}
+		out = append(out, normalized)
+	}
+	return strings.Join(out, " ")
+}
+
+func authorityEffectClauseIsNegative(text string) bool {
+	if text == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"no_",
+		"not_",
+		"without_",
+		"do_not_",
+		"dont_",
+		"never_",
+		"forbidden",
+		"forbid",
+		"stop_before",
+		"unless_separately_approved",
+		"requires_separate",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAuthorityMatchText(text string) string {
+	text = normalizeEnumValue(text)
+	replacer := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		",", "_",
+		":", "_",
+		"(", "_",
+		")", "_",
+		"[", "_",
+		"]", "_",
+		"{", "_",
+		"}", "_",
+		"|", "_",
+	)
+	text = replacer.Replace(text)
+	for strings.Contains(text, "__") {
+		text = strings.ReplaceAll(text, "__", "_")
+	}
+	return strings.Trim(text, "_")
 }
 
 func AuthorityContractForToken(token string) (AuthorityContract, bool) {
@@ -306,7 +384,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 }
 
 func ApplyAuthorityContractToActionProposal(proposal ActionProposal) ActionProposal {
-	proposal = NormalizeActionProposal(proposal)
+	proposal = SanitizeActionProposalAuthority(NormalizeActionProposal(proposal))
 	contract, ok := AuthorityContractFor(proposal.RiskClass, proposal.AllowedActions, proposal.BoundedEffect)
 	if !ok {
 		return proposal
@@ -314,7 +392,7 @@ func ApplyAuthorityContractToActionProposal(proposal ActionProposal) ActionPropo
 	proposal.AllowedActions = append(proposal.AllowedActions, contract.AllowedActions...)
 	proposal.ForbiddenActions = append(proposal.ForbiddenActions, contract.ForbiddenActions...)
 	proposal.ValidationPlan = append(proposal.ValidationPlan, contract.ValidationPlan...)
-	return NormalizeActionProposal(proposal)
+	return SanitizeActionProposalAuthority(NormalizeActionProposal(proposal))
 }
 
 func mustAuthorityContract(token string) AuthorityContract {

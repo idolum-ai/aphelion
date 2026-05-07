@@ -58,6 +58,95 @@ func TestContinuationOperatorCardDoesNotMayDeleteNegatedReview(t *testing.T) {
 	}
 }
 
+func TestRenderContinuationPromptFallbackDedupesAndKeepsCompact(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-live",
+		RemainingTurns: 1,
+		Objective:      "Diagnose and recover the blocked email child credentials.",
+		StageSummary:   "Inspect child adapter metadata.",
+		PersonaIntent: session.ContinuationIntent{
+			Decision:  session.ContinuationIntentDecisionContinue,
+			Rationale: "expired approval callback",
+		},
+		GovernorIntent: session.ContinuationIntent{
+			Decision:    session.ContinuationIntentDecisionContinue,
+			Rationale:   "expired approval callback",
+			Constraints: "Read local non-secret metadata only. No deploy or restart.",
+			Ratified:    true,
+		},
+		ActionProposal: session.ActionProposal{
+			ID:               "aprop-live",
+			Summary:          "Inspect child adapter metadata.",
+			BoundedEffect:    "Read local non-secret metadata only. No deploy or restart.",
+			AllowedActions:   []string{"inspect_durable_agent_state", "deploy"},
+			ForbiddenActions: []string{"deploy", "restart"},
+			Status:           session.ProposalStatusPending,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-live",
+			ProposalID:       "aprop-live",
+			Status:           session.ContinuationLeaseStatusPending,
+			MaxTurns:         1,
+			RemainingTurns:   1,
+			LeaseClass:       session.ContinuationLeaseClassDeployRestart,
+			AllowedActions:   []string{"inspect_durable_agent_state", "deploy"},
+			ForbiddenActions: []string{"deploy", "restart"},
+		},
+	}
+
+	text := renderContinuationPromptFallback(state)
+	if strings.Count(text, "expired approval callback") != 1 {
+		t.Fatalf("fallback = %q, want deduped rationale", text)
+	}
+	for _, notWant := range []string{"Allowed actions:", "Forbidden actions:", "Operator card:", "Lease class:"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("fallback = %q, want no raw %q block", text, notWant)
+		}
+	}
+	if !strings.Contains(text, "Should I continue for 1 more turn") {
+		t.Fatalf("fallback = %q, want continuation question", text)
+	}
+}
+
+func TestRawContinuationAuthorityRepairDetectsPersistedDeployContradiction(t *testing.T) {
+	t.Parallel()
+
+	raw := `{
+		"status":"revoked",
+		"action_proposal":{
+			"allowed_actions":["inspect_durable_agent_state","deploy","prepare_release_handoff"],
+			"forbidden_actions":["deploy","restart"]
+		},
+		"continuation_lease":{
+			"lease_class":"deploy_restart",
+			"allowed_actions":["deploy","prepare_release_handoff"],
+			"forbidden_actions":["deploy","restart"]
+		}
+	}`
+	if !rawContinuationStateAuthorityNeedsSanitization(raw, session.ContinuationState{}) {
+		t.Fatal("rawContinuationStateAuthorityNeedsSanitization() = false, want persisted deploy contradiction detected")
+	}
+
+	clean := `{
+		"status":"pending",
+		"action_proposal":{
+			"allowed_actions":["inspect_durable_agent_state"],
+			"forbidden_actions":["deploy","restart"]
+		},
+		"continuation_lease":{
+			"lease_class":"local_workspace",
+			"allowed_actions":["inspect_durable_agent_state"],
+			"forbidden_actions":["deploy","restart"]
+		}
+	}`
+	if rawContinuationStateAuthorityNeedsSanitization(clean, session.ContinuationState{}) {
+		t.Fatal("rawContinuationStateAuthorityNeedsSanitization() = true, want clean read-only state ignored")
+	}
+}
+
 func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	t.Parallel()
 
@@ -507,6 +596,55 @@ func TestGroundContinuationPromptWithExecutionEvidenceFallsBackAfterRevocation(t
 	}
 	if !strings.Contains(note, "latest=continuation.revoked") {
 		t.Fatalf("grounding note = %q, want revoked latest-event explanation", note)
+	}
+}
+
+func TestGroundContinuationPromptUsesLatestEventsInLongSession(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 81920, UserID: 0, Scope: telegramDMScopeRef(81920)}
+	now := time.Now().UTC()
+	for i := 0; i < 350; i++ {
+		if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+			EventType:   core.ExecutionEventTurnStarted,
+			Stage:       "turn",
+			Status:      "running",
+			PayloadJSON: `{"run_id":1}`,
+			CreatedAt:   now.Add(time.Duration(i) * time.Millisecond),
+		}); err != nil {
+			t.Fatalf("AppendExecutionEvent(%d) err = %v", i, err)
+		}
+	}
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventContinuationOffered,
+		Stage:       "continuation",
+		Status:      "pending",
+		PayloadJSON: `{"decision_id":"continuation-latest","remaining_turns":1}`,
+		CreatedAt:   now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(continuation) err = %v", err)
+	}
+
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "continuation-latest",
+		RemainingTurns: 1,
+		Objective:      "Keep the refactor bounded.",
+		StageSummary:   "Write focused tests first.",
+	}
+	candidate := "I can continue from here.\n\nShould I continue for 1 more turn(s)?"
+	grounded, note := rt.groundContinuationPromptWithExecutionEvidence(key, state, candidate)
+	if grounded != candidate {
+		t.Fatalf("grounded prompt = %q note=%q, want candidate grounded by latest continuation event", grounded, note)
+	}
+	if note != "" {
+		t.Fatalf("grounding note = %q, want empty", note)
 	}
 }
 
@@ -1125,6 +1263,80 @@ func TestRefreshContinuationProposalCreatesFreshLeaseForSameBoundedAction(t *tes
 	}
 	if !hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
 		t.Fatalf("events = %#v, want continuation offered event", events)
+	}
+}
+
+func TestRefreshContinuationProposalSanitizesLiveNegatedDeployAuthority(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+	key := session.SessionKey{ChatID: 81100, UserID: 0, Scope: telegramDMScopeRef(81100)}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	prior := session.ContinuationState{
+		Status:         session.ContinuationStatusIdle,
+		Objective:      "Diagnose and recover the blocked idolum-email credentials without mailbox access.",
+		StageSummary:   "Repair child-scoped gog_cli credential materialization, then run only a non-mailbox auth-status smoke.",
+		RemainingTurns: 0,
+		ActionProposal: session.ActionProposal{
+			ID:        "aprop-live-corrupt",
+			Summary:   "Repair child-scoped gog_cli credential materialization",
+			RiskClass: "credential_recovery",
+			BoundedEffect: "May create or adjust a child-scoped gogcli config/keyring materialization, wrapper/env, or grant contract. " +
+				"No mailbox content/label/inbox/message query, no OAuth, no account mutation, no public/external contact, no email actions, no deploy/restart unless separately approved.",
+			AllowedActions: []string{
+				"create_child_scoped_gogcli_materialization_if_approved",
+				"copy_or_bind_existing_host_gogcli_credentials_without_printing_values",
+				"adjust_child_gog_cli_wrapper_or_grant_contract_if_needed",
+				"run_child_sandbox_gog_cli_auth_status_only",
+				"report_repair_evidence",
+				"deploy",
+				"prepare_release_handoff",
+			},
+			ForbiddenActions: []string{
+				"read_or_print_secret_values",
+				"run_gog_cli_mail_query",
+				"read_mailbox_contents",
+				"deploy",
+				"restart",
+			},
+			Status:    session.ProposalStatusExpired,
+			ExpiresAt: expiredAt,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:               "lease-live-corrupt",
+			ProposalID:       "aprop-live-corrupt",
+			Status:           session.ContinuationLeaseStatusExpired,
+			MaxTurns:         1,
+			RemainingTurns:   0,
+			LeaseClass:       session.ContinuationLeaseClassDeployRestart,
+			AllowedActions:   []string{"deploy", "prepare_release_handoff"},
+			ForbiddenActions: []string{"deploy", "restart"},
+			ExpiresAt:        expiredAt,
+		},
+	}
+	if err := store.UpdateContinuationState(key, prior); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	state, sent, err := rt.RefreshContinuationProposal(context.Background(), 81100, "expired approval callback")
+	if err != nil {
+		t.Fatalf("RefreshContinuationProposal() err = %v", err)
+	}
+	if !sent {
+		t.Fatal("sent = false, want fresh prompt")
+	}
+	if actionListContains(state.ActionProposal.AllowedActions, "deploy") ||
+		actionListContains(state.ContinuationLease.AllowedActions, "deploy") ||
+		state.ContinuationLease.LeaseClass == session.ContinuationLeaseClassDeployRestart {
+		t.Fatalf("refreshed state = %#v, want deploy authority stripped from negated credential recovery", state)
+	}
+	if !actionListContains(state.ActionProposal.ForbiddenActions, "deploy") || !actionListContains(state.ActionProposal.ForbiddenActions, "restart") {
+		t.Fatalf("forbidden actions = %#v, want deploy/restart preserved", state.ActionProposal.ForbiddenActions)
 	}
 }
 

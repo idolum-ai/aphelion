@@ -986,6 +986,7 @@ type PendingBusyDecisionRecord struct {
 type ContinuationStateRecord struct {
 	Key       SessionKey
 	State     ContinuationState
+	RawJSON   string
 	UpdatedAt time.Time
 }
 
@@ -1208,6 +1209,7 @@ func NormalizeOperationPlanLease(lease OperationPlanLease) OperationPlanLease {
 	}
 	lease.AllowedActions = normalizeActionStringSlice(lease.AllowedActions)
 	lease.ForbiddenActions = normalizeActionStringSlice(lease.ForbiddenActions)
+	lease.AllowedActions = sanitizeAllowedActionsAgainstForbidden(lease.AllowedActions, lease.ForbiddenActions)
 	lease.ValidationGates = normalizeActionStringSlice(lease.ValidationGates)
 	lease.ExitConditions = normalizeActionStringSlice(lease.ExitConditions)
 	lease.HardInterrupts = normalizeActionStringSlice(lease.HardInterrupts)
@@ -1254,6 +1256,7 @@ func normalizeOperationPlanLeaseLanes(values []OperationPlanLeaseLane) []Operati
 		}
 		lane.AllowedActions = normalizeActionStringSlice(lane.AllowedActions)
 		lane.ForbiddenActions = normalizeActionStringSlice(lane.ForbiddenActions)
+		lane.AllowedActions = sanitizeAllowedActionsAgainstForbidden(lane.AllowedActions, lane.ForbiddenActions)
 		if !lane.Active() {
 			continue
 		}
@@ -1387,6 +1390,7 @@ func normalizeOperationPhase(phase OperationPhase, index int) OperationPhase {
 	phase.BoundedEffect = strings.TrimSpace(phase.BoundedEffect)
 	phase.AllowedActions = normalizeActionStringSlice(phase.AllowedActions)
 	phase.ForbiddenActions = normalizeActionStringSlice(phase.ForbiddenActions)
+	phase.AllowedActions = sanitizeAllowedActionsAgainstForbidden(phase.AllowedActions, phase.ForbiddenActions)
 	phase.ValidationPlan = normalizeActionStringSlice(phase.ValidationPlan)
 	phase.GateLevel = normalizeEnumValue(phase.GateLevel)
 	phase.GateReasonCode = normalizeEnumValue(phase.GateReasonCode)
@@ -2262,6 +2266,135 @@ func actionListMatches(values []string, action string) bool {
 	return false
 }
 
+func SanitizeActionProposalAuthority(proposal ActionProposal) ActionProposal {
+	proposal.AllowedActions = sanitizeAllowedActionsAgainstForbidden(proposal.AllowedActions, proposal.ForbiddenActions)
+	return proposal
+}
+
+func ContinuationStateAuthorityNeedsSanitization(state ContinuationState) bool {
+	return actionAuthorityHasContradiction(state.ActionProposal.AllowedActions, state.ActionProposal.ForbiddenActions) ||
+		actionAuthorityHasContradiction(state.ContinuationLease.AllowedActions, state.ContinuationLease.ForbiddenActions) ||
+		continuationLeaseClassContradictedByActions(state.ContinuationLease.LeaseClass, sanitizeAllowedActionsAgainstForbidden(state.ContinuationLease.AllowedActions, state.ContinuationLease.ForbiddenActions), state.ContinuationLease.ForbiddenActions)
+}
+
+func actionAuthorityHasContradiction(allowedActions []string, forbiddenActions []string) bool {
+	allowed := normalizeActionStringSlice(allowedActions)
+	forbidden := normalizeActionStringSlice(forbiddenActions)
+	if len(allowed) == 0 || len(forbidden) == 0 {
+		return false
+	}
+	forbiddenExact := make(map[string]struct{}, len(forbidden))
+	for _, action := range forbidden {
+		if normalized := normalizeAuthorityMatchText(action); normalized != "" {
+			forbiddenExact[normalized] = struct{}{}
+		}
+	}
+	broadDeployRestartForbidden := authorityForbiddenIncludesDeployRestart(forbidden)
+	for _, action := range allowed {
+		normalized := normalizeAuthorityMatchText(action)
+		if normalized == "" {
+			continue
+		}
+		if _, forbidden := forbiddenExact[normalized]; forbidden {
+			return true
+		}
+		if broadDeployRestartForbidden && authorityActionIsDeployRestartGrant(normalized) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeAllowedActionsAgainstForbidden(allowedActions []string, forbiddenActions []string) []string {
+	allowed := normalizeActionStringSlice(allowedActions)
+	if len(allowed) == 0 {
+		return nil
+	}
+	forbidden := normalizeActionStringSlice(forbiddenActions)
+	if len(forbidden) == 0 {
+		return allowed
+	}
+	forbiddenExact := make(map[string]struct{}, len(forbidden))
+	for _, action := range forbidden {
+		if normalized := normalizeAuthorityMatchText(action); normalized != "" {
+			forbiddenExact[normalized] = struct{}{}
+		}
+	}
+	broadDeployRestartForbidden := authorityForbiddenIncludesDeployRestart(forbidden)
+	out := make([]string, 0, len(allowed))
+	for _, action := range allowed {
+		normalized := normalizeAuthorityMatchText(action)
+		if normalized == "" {
+			continue
+		}
+		if _, forbidden := forbiddenExact[normalized]; forbidden {
+			continue
+		}
+		if broadDeployRestartForbidden && authorityActionIsDeployRestartGrant(normalized) {
+			continue
+		}
+		out = append(out, action)
+	}
+	return normalizeActionStringSlice(out)
+}
+
+func authorityForbiddenIncludesDeployRestart(actions []string) bool {
+	for _, action := range actions {
+		switch normalizeAuthorityMatchText(action) {
+		case "deploy",
+			"restart",
+			"restart_service",
+			"service_restart",
+			"deploy_restart",
+			"restart_deploy",
+			"deploy_or_restart",
+			"restart_or_deploy",
+			"deploy_or_enable_systemd",
+			"deploy_or_enable_service",
+			"deploy_service_restart",
+			"restart_or_service_restart":
+			return true
+		}
+	}
+	return false
+}
+
+func authorityActionIsDeployRestartGrant(action string) bool {
+	switch normalizeAuthorityMatchText(action) {
+	case "deploy",
+		"restart",
+		"restart_service",
+		"service_restart",
+		"live_deploy",
+		"run_deploy",
+		"system_change",
+		"git_push",
+		"push_remote",
+		"prepare_release_handoff",
+		"run_explicit_release_step",
+		"post_restart_verification",
+		"report_release_result":
+		return true
+	default:
+		return false
+	}
+}
+
+func continuationAllowedSupportsDeployRestart(actions []string) bool {
+	for _, action := range actions {
+		if authorityActionIsDeployRestartGrant(action) {
+			return true
+		}
+	}
+	return false
+}
+
+func continuationLeaseClassContradictedByActions(class ContinuationLeaseClass, allowedActions []string, forbiddenActions []string) bool {
+	return NormalizeContinuationLeaseClass(class) == ContinuationLeaseClassDeployRestart &&
+		authorityForbiddenIncludesDeployRestart(forbiddenActions) &&
+		!continuationAllowedSupportsDeployRestart(allowedActions)
+}
+
 func NormalizeActionProposal(proposal ActionProposal) ActionProposal {
 	proposal.ID = strings.TrimSpace(proposal.ID)
 	proposal.OperationID = strings.TrimSpace(proposal.OperationID)
@@ -2272,6 +2405,7 @@ func NormalizeActionProposal(proposal ActionProposal) ActionProposal {
 	proposal.RiskClass = normalizeEnumValue(proposal.RiskClass)
 	proposal.AllowedActions = normalizeActionStringSlice(proposal.AllowedActions)
 	proposal.ForbiddenActions = normalizeActionStringSlice(proposal.ForbiddenActions)
+	proposal.AllowedActions = sanitizeAllowedActionsAgainstForbidden(proposal.AllowedActions, proposal.ForbiddenActions)
 	proposal.ValidationPlan = normalizeActionStringSlice(proposal.ValidationPlan)
 	proposal.PlanHash = strings.TrimSpace(proposal.PlanHash)
 	proposal.Status = NormalizeProposalStatus(proposal.Status)
@@ -2391,6 +2525,7 @@ func NormalizeContinuationApprovalBundlePhase(phase ContinuationApprovalBundlePh
 	phase.BoundedEffect = strings.TrimSpace(phase.BoundedEffect)
 	phase.AllowedActions = normalizeActionStringSlice(phase.AllowedActions)
 	phase.ForbiddenActions = normalizeActionStringSlice(phase.ForbiddenActions)
+	phase.AllowedActions = sanitizeAllowedActionsAgainstForbidden(phase.AllowedActions, phase.ForbiddenActions)
 	phase.ValidationPlan = normalizeActionStringSlice(phase.ValidationPlan)
 	phase.Status = NormalizeContinuationLeaseStatus(phase.Status)
 	if phase.Index < 0 {
@@ -2433,7 +2568,12 @@ func NormalizeContinuationLease(lease ContinuationLease) ContinuationLease {
 	lease.LeaseClass = NormalizeContinuationLeaseClass(lease.LeaseClass)
 	lease.AllowedActions = normalizeActionStringSlice(lease.AllowedActions)
 	lease.ForbiddenActions = normalizeActionStringSlice(lease.ForbiddenActions)
+	lease.AllowedActions = sanitizeAllowedActionsAgainstForbidden(lease.AllowedActions, lease.ForbiddenActions)
 	lease.ValidationPlan = normalizeActionStringSlice(lease.ValidationPlan)
+	if continuationLeaseClassContradictedByActions(lease.LeaseClass, lease.AllowedActions, lease.ForbiddenActions) {
+		lease.LeaseClass = ""
+		lease.Constraints = nil
+	}
 	if lease.LeaseClass == "" {
 		lease.LeaseClass = InferContinuationLeaseClass("", lease.AllowedActions, "")
 	}
