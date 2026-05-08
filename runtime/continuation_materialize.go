@@ -88,7 +88,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 		return true, nil
 	}
-	if bundle, ok := nextOperationPhaseBundleForApproval(opState.PhasePlan); ok {
+	if bundle, ok := nextOperationPhaseBundleForApproval(opState); ok {
 		now := time.Now().UTC()
 		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
 		priorState = session.NormalizeContinuationState(priorState)
@@ -114,7 +114,7 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 		}
 		return true, nil
 	}
-	if phase, ok := nextOperationPhaseForApproval(opState.PhasePlan); ok {
+	if phase, ok := nextOperationPhaseForApproval(opState); ok {
 		now := time.Now().UTC()
 		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {
 			r.recordAndSendBlockedOperationPhaseApproval(ctx, key, msg, opState, phase, reason, now)
@@ -414,6 +414,15 @@ func pendingOperationPlanLeaseNeedsButton(lease session.OperationPlanLease) bool
 
 const operationPlanBudgetMaxLanes = 6
 
+type operationPhaseApprovalKind string
+
+const (
+	operationPhaseApprovalNone       operationPhaseApprovalKind = "none"
+	operationPhaseApprovalPlanBudget operationPhaseApprovalKind = "plan_budget"
+	operationPhaseApprovalFresh      operationPhaseApprovalKind = "fresh"
+	operationPhaseApprovalBlocked    operationPhaseApprovalKind = "blocked"
+)
+
 func operationPlanLeaseFromPhasePlan(opState session.OperationState, now time.Time) (session.OperationPlanLease, bool) {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -427,9 +436,10 @@ func operationPlanLeaseFromPhasePlan(opState session.OperationState, now time.Ti
 		return session.OperationPlanLease{}, false
 	}
 	start := operationPhasePlanStartIndex(opState.PhasePlan)
-	pendingCount := operationPhasePlanPendingCountFrom(opState.PhasePlan, start)
+	pendingCount := operationPhasePlanBudgetLaneCountFrom(opState.PhasePlan, start)
 	phases := make([]session.OperationPhase, 0, operationPlanBudgetMaxLanes)
 	stoppedAtGate := ""
+phaseLoop:
 	for i := start; i < len(opState.PhasePlan.Phases) && len(phases) < operationPlanBudgetMaxLanes; i++ {
 		phase := normalizeSingleOperationPhase(opState.PhasePlan.Phases[i])
 		if operationPhasePlanPhaseIsStaleInProgress(opState.PhasePlan, phase) {
@@ -441,23 +451,27 @@ func operationPlanLeaseFromPhasePlan(opState session.OperationState, now time.Ti
 		if phase.Status == session.PlanStatusCompleted {
 			continue
 		}
-		if !operationPhaseNeedsApproval(phase) {
+		switch operationPhaseApprovalKindFor(phase) {
+		case operationPhaseApprovalNone:
 			continue
-		}
-		if reason := operationPhaseApprovalBlockedReason(phase); reason != "" {
+		case operationPhaseApprovalBlocked:
+			reason := operationPhaseApprovalBlockedReason(phase)
+			if reason == "" {
+				reason = "blocked before plan budget"
+			}
 			stoppedAtGate = reason
-			break
-		}
-		if operationPhaseRequiresFreshApprovalGate(phase) {
+			break phaseLoop
+		case operationPhaseApprovalFresh:
 			stoppedAtGate = operationPhaseStopGateLabel(phase)
-			break
+			break phaseLoop
+		case operationPhaseApprovalPlanBudget:
+			phases = append(phases, phase)
 		}
-		phases = append(phases, phase)
 	}
 	if len(phases) == 0 {
 		return session.OperationPlanLease{}, false
 	}
-	if pendingCount < 2 && !operationPhaseIsPlanningOnlyApproval(phases[0]) {
+	if pendingCount < 2 && stoppedAtGate == "" && !phases[0].RequiresApproval {
 		return session.OperationPlanLease{}, false
 	}
 	lease := session.OperationPlanLease{
@@ -502,14 +516,14 @@ func operationPhasePlanStartIndex(plan session.OperationPhasePlan) int {
 	return 0
 }
 
-func operationPhasePlanPendingCountFrom(plan session.OperationPhasePlan, start int) int {
+func operationPhasePlanBudgetLaneCountFrom(plan session.OperationPhasePlan, start int) int {
 	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
 	if start < 0 {
 		start = 0
 	}
 	count := 0
 	for i := start; i < len(plan.Phases); i++ {
-		if operationPhaseNeedsApproval(plan.Phases[i]) {
+		if operationPhaseApprovalKindFor(plan.Phases[i]) == operationPhaseApprovalPlanBudget {
 			count++
 		}
 	}
@@ -759,8 +773,9 @@ func operationPlanLeaseMatchesContinuation(lease session.OperationPlanLease, sta
 		strings.TrimSpace(state.ContinuationLease.ID) == "lease-"+operationPlanLeaseProposalID(lease)
 }
 
-func nextOperationPhaseForApproval(plan session.OperationPhasePlan) (session.OperationPhase, bool) {
-	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
+func nextOperationPhaseForApproval(opState session.OperationState) (session.OperationPhase, bool) {
+	opState = session.NormalizeOperationState(opState)
+	plan := opState.PhasePlan
 	if len(plan.Phases) == 0 {
 		return session.OperationPhase{}, false
 	}
@@ -770,7 +785,7 @@ func nextOperationPhaseForApproval(plan session.OperationPhasePlan) (session.Ope
 	if currentID := strings.TrimSpace(plan.CurrentPhaseID); currentID != "" {
 		for _, phase := range plan.Phases {
 			phase = normalizeSingleOperationPhase(phase)
-			if strings.TrimSpace(phase.ID) == currentID && operationPhaseNeedsApproval(phase) && operationPhaseApprovalExcludedReason(plan, phase) == "" {
+			if strings.TrimSpace(phase.ID) == currentID && operationPhaseNeedsStandaloneApproval(opState, phase) {
 				return phase, true
 			}
 		}
@@ -780,10 +795,7 @@ func nextOperationPhaseForApproval(plan session.OperationPhasePlan) (session.Ope
 		if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
 			continue
 		}
-		if operationPhaseApprovalExcludedReason(plan, phase) != "" {
-			continue
-		}
-		if operationPhaseNeedsApproval(phase) {
+		if operationPhaseNeedsStandaloneApproval(opState, phase) {
 			return phase, true
 		}
 	}
@@ -792,8 +804,9 @@ func nextOperationPhaseForApproval(plan session.OperationPhasePlan) (session.Ope
 
 const operationApprovalBundleMaxPhases = 3
 
-func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]session.OperationPhase, bool) {
-	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
+func nextOperationPhaseBundleForApproval(opState session.OperationState) ([]session.OperationPhase, bool) {
+	opState = session.NormalizeOperationState(opState)
+	plan := opState.PhasePlan
 	if len(plan.Phases) < 2 {
 		return nil, false
 	}
@@ -821,16 +834,10 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 		if phase.Status == session.PlanStatusCompleted {
 			continue
 		}
-		if !operationPhaseNeedsApproval(phase) {
+		if operationPhaseApprovalKindFor(phase) != operationPhaseApprovalPlanBudget {
 			break
 		}
-		if operationPhaseApprovalBlockedReason(phase) != "" {
-			break
-		}
-		if operationPhaseIsPlanningOnlyApproval(phase) {
-			break
-		}
-		if operationPhaseRequiresFreshApprovalGate(phase) {
+		if operationPlanLeaseCoversPhaseAsBudget(opState.PlanLease, phase) {
 			break
 		}
 		if !operationPhaseBundleCanAdd(bundle, phase) {
@@ -851,10 +858,10 @@ func nextOperationPhaseBundleForApproval(plan session.OperationPhasePlan) ([]ses
 			if phase.Status == session.PlanStatusCompleted {
 				continue
 			}
-			if !operationPhaseNeedsApproval(phase) || operationPhaseApprovalBlockedReason(phase) != "" || operationPhaseRequiresFreshApprovalGate(phase) {
+			if operationPhaseApprovalKindFor(phase) != operationPhaseApprovalPlanBudget {
 				break
 			}
-			if operationPhaseIsPlanningOnlyApproval(phase) {
+			if operationPlanLeaseCoversPhaseAsBudget(opState.PlanLease, phase) {
 				break
 			}
 			if !operationPhaseBundleCanAdd(bundle, phase) {
@@ -906,6 +913,9 @@ func operationPhaseApprovalExcludedReason(plan session.OperationPhasePlan, phase
 	if operationPhasePlanPhaseIsStaleInProgress(plan, phase) {
 		return "stale non-current in-progress phase"
 	}
+	if operationPhaseSupersededByPlan(plan, phase) {
+		return "superseded by newer phase"
+	}
 	if phase.Status == session.PlanStatusCompleted {
 		return "completed phase"
 	}
@@ -926,6 +936,26 @@ func operationPhaseApprovalExcludedReason(plan session.OperationPhasePlan, phase
 	default:
 		return ""
 	}
+}
+
+func operationPhaseSupersededByPlan(plan session.OperationPhasePlan, phase session.OperationPhase) bool {
+	plan = session.NormalizeOperationState(session.OperationState{PhasePlan: plan}).PhasePlan
+	phaseID := strings.TrimSpace(phase.ID)
+	if phaseID == "" {
+		return false
+	}
+	for _, candidate := range plan.Phases {
+		candidate = normalizeSingleOperationPhase(candidate)
+		if strings.TrimSpace(candidate.ID) == phaseID {
+			continue
+		}
+		for _, supersededID := range candidate.SupersedesPhaseIDs {
+			if strings.TrimSpace(supersededID) == phaseID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func operationPhaseApprovalBlockedReason(phase session.OperationPhase) string {
@@ -981,15 +1011,37 @@ func operationPhaseRequiresFreshApprovalGate(phase session.OperationPhase) bool 
 	if class := session.InferContinuationLeaseClass(phase.AuthorityClass, phase.AllowedActions, phase.BoundedEffect); class != "" && class != session.ContinuationLeaseClassLocalWorkspace {
 		return true
 	}
-	values := []string{phase.AuthorityClass}
+	values := []string{phase.AuthorityClass, phase.GateReasonCode, phase.BlockedReasonCode}
 	values = append(values, phase.AllowedActions...)
 	for _, value := range values {
-		value = strings.ToLower(strings.TrimSpace(value))
+		value = normalizeOperationPhaseReasonCode(value)
 		switch value {
-		case "deploy", "live_deploy", "run_deploy", "restart", "restart_service", "service_restart", "system_change", "policy_apply", "grant_or_revoke_capability", "capability_grant", "capability_revoke", "mailbox_access", "mailbox_mutation", "credential_access", "read_credentials_or_tokens", "external_account_action", "external_effect", "purchase", "spend", "public_contact", "public_posting", "communication":
+		case "deploy", "live_deploy", "run_deploy", "restart", "restart_service", "service_restart", "system_change", "policy_apply",
+			"grant_or_revoke_capability", "capability_grant", "capability_revoke",
+			"mailbox_access", "mailbox_mutation", "mailbox_read", "email_read", "external_account_email_read", "external_account_email_read_public_web_read",
+			"credential_access", "credential_metadata", "credential_metadata_check", "read_credentials_or_tokens", "token_health_check",
+			"external_account_action", "external_account", "external_account_auth_status", "read_only_auth_status_check",
+			"public_account_content_read", "public_profile_metadata_read", "public_web_read", "network_access", "data_access",
+			"private_data_intake", "wife_profile", "cv_ingestion", "job_processing", "job_ranking", "job_scouting",
+			"purchase", "spend", "public_contact", "public_posting", "communication",
+			"commit", "git_commit", "repo_history_mutation", "workspace_commit_then_repo_write_bounded", "push", "git_push", "push_remote":
 			return true
 		}
-		if strings.Contains(value, "credential") || strings.Contains(value, "token") || strings.Contains(value, "mailbox") || strings.Contains(value, "policy") || strings.Contains(value, "grant") || strings.Contains(value, "purchase") || strings.Contains(value, "spend") || strings.Contains(value, "public_contact") {
+		if strings.Contains(value, "credential") ||
+			strings.Contains(value, "token") ||
+			strings.Contains(value, "mailbox") ||
+			strings.Contains(value, "external_account") ||
+			strings.Contains(value, "capability") ||
+			strings.Contains(value, "grant") ||
+			strings.Contains(value, "deploy") ||
+			strings.Contains(value, "restart") ||
+			strings.Contains(value, "commit") ||
+			strings.Contains(value, "push") ||
+			strings.Contains(value, "purchase") ||
+			strings.Contains(value, "spend") ||
+			strings.Contains(value, "public_contact") ||
+			strings.Contains(value, "public_post") ||
+			strings.Contains(value, "private_data") {
 			return true
 		}
 	}
@@ -998,7 +1050,7 @@ func operationPhaseRequiresFreshApprovalGate(phase session.OperationPhase) bool 
 
 func operationPhaseIsPlanningOnlyApproval(phase session.OperationPhase) bool {
 	phase = normalizeSingleOperationPhase(phase)
-	if !operationPhaseNeedsApproval(phase) {
+	if !operationPhaseHasPlanMaterial(phase) {
 		return false
 	}
 	if len(phase.AllowedActions) > 0 {
@@ -1212,23 +1264,84 @@ func operationProposalBelongsToPhasePlan(opState session.OperationState, proposa
 	return false
 }
 
-func operationPhaseNeedsApproval(phase session.OperationPhase) bool {
+func operationPhaseApprovalKindFor(phase session.OperationPhase) operationPhaseApprovalKind {
 	phase = normalizeSingleOperationPhase(phase)
-	if !phase.Active() {
-		return false
+	if !phase.Active() || phase.Status != session.PlanStatusPending {
+		return operationPhaseApprovalNone
 	}
-	if phase.Status != session.PlanStatusPending {
-		return false
+	if operationPhaseApprovalBlockedReason(phase) != "" {
+		return operationPhaseApprovalBlocked
+	}
+	if operationPhaseRequiresFreshApprovalGate(phase) {
+		return operationPhaseApprovalFresh
 	}
 	if phase.RequiresApproval {
-		return true
+		return operationPhaseApprovalPlanBudget
 	}
+	if operationPhaseHasPlanMaterial(phase) {
+		return operationPhaseApprovalPlanBudget
+	}
+	return operationPhaseApprovalNone
+}
+
+func operationPhaseNeedsStandaloneApproval(opState session.OperationState, phase session.OperationPhase) bool {
+	opState = session.NormalizeOperationState(opState)
+	phase = normalizeSingleOperationPhase(phase)
+	if operationPhaseApprovalExcludedReason(opState.PhasePlan, phase) != "" {
+		return false
+	}
+	switch operationPhaseApprovalKindFor(phase) {
+	case operationPhaseApprovalBlocked, operationPhaseApprovalFresh:
+		return true
+	case operationPhaseApprovalPlanBudget:
+		return false
+	default:
+		return false
+	}
+}
+
+func operationPlanLeaseCoversPhaseAsBudget(lease session.OperationPlanLease, phase session.OperationPhase) bool {
+	lease = session.NormalizeOperationPlanLease(lease)
+	phase = normalizeSingleOperationPhase(phase)
+	switch lease.Status {
+	case session.PlanLeaseStatusActive, session.PlanLeaseStatusApproved:
+	default:
+		return false
+	}
+	phaseID := strings.TrimSpace(phase.ID)
+	if phaseID == "" {
+		return false
+	}
+	for _, coveredID := range lease.CoveredPhaseIDs {
+		if strings.TrimSpace(coveredID) == phaseID {
+			return true
+		}
+	}
+	for _, lane := range lease.Lanes {
+		if strings.TrimSpace(lane.ID) == phaseID {
+			return true
+		}
+	}
+	return false
+}
+
+func operationPhaseHasPlanMaterial(phase session.OperationPhase) bool {
+	phase = normalizeSingleOperationPhase(phase)
 	return strings.TrimSpace(phase.Summary) != "" ||
 		strings.TrimSpace(phase.AuthorityClass) != "" ||
 		strings.TrimSpace(phase.BoundedEffect) != "" ||
 		len(phase.AllowedActions) > 0 ||
 		len(phase.ForbiddenActions) > 0 ||
 		len(phase.ValidationPlan) > 0
+}
+
+func operationPhaseNeedsApproval(phase session.OperationPhase) bool {
+	switch operationPhaseApprovalKindFor(phase) {
+	case operationPhaseApprovalBlocked, operationPhaseApprovalFresh:
+		return true
+	default:
+		return false
+	}
 }
 
 func operationPhaseMatchesContinuation(opState session.OperationState, phase session.OperationPhase, state session.ContinuationState) bool {

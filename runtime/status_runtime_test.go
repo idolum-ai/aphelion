@@ -103,7 +103,7 @@ func TestStatusDiagnosticsSurfacesApprovalAffordanceGap(t *testing.T) {
 			CurrentPhaseID: "phase-current",
 			Phases: []session.OperationPhase{
 				{ID: "phase-old", Summary: "Old live step", Status: session.PlanStatusInProgress, LeaseID: "lease-old"},
-				{ID: "phase-current", Summary: "Current repo-only step", Status: session.PlanStatusPending, AuthorityClass: "workspace_write", BoundedEffect: "Patch local files and run tests."},
+				{ID: "phase-current", Summary: "Current repo-only step", Status: session.PlanStatusPending, AuthorityClass: "workspace_write", BoundedEffect: "Patch local files and run tests.", RequiresApproval: true},
 			},
 		},
 	}); err != nil {

@@ -263,6 +263,7 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 					BoundedEffect:    "Edit local files and run tests; stop before deploy.",
 					AllowedActions:   []string{"edit_files", "run_tests"},
 					ForbiddenActions: []string{"deploy", "restart_service"},
+					RequiresApproval: true,
 				},
 			},
 		},
@@ -285,22 +286,22 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	if cont.Status != session.ContinuationStatusPending || cont.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
 		t.Fatalf("continuation = %#v, want pending lease", cont)
 	}
-	if cont.ActionProposal.Summary != "Implement the local inbox bridge" || cont.ActionProposal.RiskClass != "workspace_write" {
-		t.Fatalf("action proposal = %#v, want next pending phase action", cont.ActionProposal)
+	if cont.ActionProposal.RiskClass != "plan_lease" || !strings.Contains(cont.ActionProposal.Summary, "Approve plan budget") {
+		t.Fatalf("action proposal = %#v, want next pending phase plan budget", cont.ActionProposal)
 	}
-	if cont.ActionProposal.BoundedEffect != "Edit local files and run tests; stop before deploy." {
-		t.Fatalf("bounded effect = %q", cont.ActionProposal.BoundedEffect)
+	if len(cont.ApprovalBundle.Phases) != 1 || cont.ApprovalBundle.Phases[0].OperationPhaseID != "phase-2-implementation" {
+		t.Fatalf("approval bundle = %#v, want next pending phase budget lane", cont.ApprovalBundle)
 	}
 	if cont.ContinuationLease.MaxTurns != 1 || cont.ContinuationLease.RemainingTurns != 1 {
-		t.Fatalf("lease = %#v, want one-turn phase lease", cont.ContinuationLease)
+		t.Fatalf("lease = %#v, want one-turn plan budget lease", cont.ContinuationLease)
 	}
 
 	opState, err := store.OperationState(key)
 	if err != nil {
 		t.Fatalf("OperationState() err = %v", err)
 	}
-	if opState.Proposal.Status != session.ProposalStatusPending || opState.Proposal.Summary != "Implement the local inbox bridge" {
-		t.Fatalf("operation proposal = %#v, want synthetic pending phase proposal", opState.Proposal)
+	if opState.Proposal.Status != session.ProposalStatusPending || !strings.Contains(opState.Proposal.Summary, "Approve plan budget") {
+		t.Fatalf("operation proposal = %#v, want synthetic pending plan budget proposal", opState.Proposal)
 	}
 	if opState.PhasePlan.CurrentPhaseID != "phase-2-implementation" || opState.PhasePlan.Phases[1].LeaseID != cont.ContinuationLease.ID {
 		t.Fatalf("phase plan = %#v, want current phase linked to lease", opState.PhasePlan)
@@ -317,7 +318,7 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	if !strings.Contains(inlineText, "Implement the local inbox bridge") || strings.Contains(inlineText, "Do the whole thing in one step") {
 		t.Fatalf("inline text = %q, want next phase without stale proposal", inlineText)
 	}
-	if got, want := labels, []string{"Approve Phase 2 implementation", "Scope details", "Revise Phase 2 implementation", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
@@ -388,11 +389,11 @@ func TestMaterializePhasePlanIgnoresStaleInProgressWhenCurrentPhaseIsPending(t *
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.RiskClass != "plan_lease" {
-		t.Fatalf("continuation = %#v, want pending plan lease", cont)
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.RiskClass != "workspace_write" {
+		t.Fatalf("continuation = %#v, want pending explicit commit phase lease", cont)
 	}
-	if len(cont.ApprovalBundle.Phases) != 2 || cont.ApprovalBundle.Phases[0].OperationPhaseID != "phase-r1-repo-finish" {
-		t.Fatalf("approval bundle = %#v, want current pending phase first and stale phase excluded", cont.ApprovalBundle)
+	if cont.ActionProposal.Summary != "Commit current dirty safety/status slice and continue repo-only hardening" || len(cont.ApprovalBundle.Phases) != 0 {
+		t.Fatalf("continuation = %#v, want current commit phase only and stale phase excluded", cont)
 	}
 
 	opState, err := store.OperationState(key)
@@ -412,8 +413,8 @@ func TestMaterializePhasePlanIgnoresStaleInProgressWhenCurrentPhaseIsPending(t *
 		inlineText = sender.inline[0].text
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Approve plan budget") || !strings.Contains(inlineText, "Commit current dirty safety/status slice") || strings.Contains(inlineText, "Old live route config phase") {
-		t.Fatalf("inline text = %q, want current repo-only plan budget without stale phase", inlineText)
+	if !strings.Contains(inlineText, "Commit current dirty safety/status slice") || strings.Contains(inlineText, "Old live route config phase") {
+		t.Fatalf("inline text = %q, want current commit phase without stale phase", inlineText)
 	}
 }
 
@@ -1002,11 +1003,12 @@ func TestApproveDurablePhasePlanLeaseMarksPhaseInProgress(t *testing.T) {
 		PhasePlan: session.OperationPhasePlan{
 			ID: "phase-plan-approve",
 			Phases: []session.OperationPhase{{
-				ID:             "phase-1",
-				Summary:        "Patch the operation planner",
-				Status:         session.PlanStatusPending,
-				AuthorityClass: "workspace_write",
-				BoundedEffect:  "Edit files and run tests.",
+				ID:               "phase-1",
+				Summary:          "Patch the operation planner",
+				Status:           session.PlanStatusPending,
+				AuthorityClass:   "workspace_write",
+				BoundedEffect:    "Edit files and run tests.",
+				RequiresApproval: true,
 			}},
 		},
 	}); err != nil {
@@ -1035,6 +1037,197 @@ func TestApproveDurablePhasePlanLeaseMarksPhaseInProgress(t *testing.T) {
 	}
 	if got.PhasePlan.CurrentPhaseID != "phase-1" {
 		t.Fatalf("CurrentPhaseID = %q, want phase-1", got.PhasePlan.CurrentPhaseID)
+	}
+}
+
+func TestMaterializeSingleLocalDesignPhaseDoesNotRaiseApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9035, UserID: 0, Scope: telegramDMScopeRef(9035)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "single-local-design-op",
+		Objective: "Draft one local design note without external effects.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID: "single-local-design-plan",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-design",
+				Summary:        "Draft local child-agent design artifact",
+				Status:         session.PlanStatusPending,
+				AuthorityClass: "read_only_review",
+				BoundedEffect:  "Inspect local notes and write a local design artifact only.",
+				AllowedActions: []string{"inspect_local_notes", "draft_contract"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9035, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if materialized {
+		t.Fatal("materialized = true, want no approval prompt for one local design lane")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	sender.mu.Unlock()
+	if inlineCount != 0 || sentCount != 0 {
+		t.Fatalf("inline=%d sent=%d, want no approval/status ritual", inlineCount, sentCount)
+	}
+}
+
+func TestMaterializeSingleLocalReportPhaseDoesNotRaiseApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9036, UserID: 0, Scope: telegramDMScopeRef(9036)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "single-local-report-op",
+		Objective: "Write a local lifecycle report.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID: "single-local-report-plan",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-report",
+				Summary:        "Map local lifecycle evidence and write report",
+				Status:         session.PlanStatusPending,
+				AuthorityClass: "workspace_write",
+				BoundedEffect:  "Read local state and write a local report artifact; no external account or restart.",
+				AllowedActions: []string{"inspect_local_state", "write_report_artifact"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9036, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if materialized {
+		t.Fatal("materialized = true, want no approval prompt for one local report lane")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	sender.mu.Unlock()
+	if inlineCount != 0 || sentCount != 0 {
+		t.Fatalf("inline=%d sent=%d, want no approval/status ritual", inlineCount, sentCount)
+	}
+}
+
+func TestMaterializePublicReadPhaseStillRaisesFreshApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9037, UserID: 0, Scope: telegramDMScopeRef(9037)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "public-read-op",
+		Objective: "Run one public account metadata read.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID: "public-read-plan",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-public-read",
+				Summary:        "Read public profile metadata once",
+				Status:         session.PlanStatusPending,
+				AuthorityClass: "public_account_content_read",
+				BoundedEffect:  "Invoke exactly one public profile metadata read for idolumai.",
+				AllowedActions: []string{"public_profile_metadata_read"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9037, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want public read approval prompt")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.RiskClass != "public_account_content_read" {
+		t.Fatalf("continuation = %#v, want pending public read approval", cont)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want approval buttons", inlineCount)
+	}
+}
+
+func TestMaterializeSupersededPhaseIsStructurallySuppressed(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9038, UserID: 0, Scope: telegramDMScopeRef(9038)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "superseded-phase-op",
+		Objective: "Avoid stale duplicate approvals.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "superseded-phase-plan",
+			CurrentPhaseID: "phase-old",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-old",
+					Summary:        "Verify old app-only bearer readiness",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "external_account_auth_status",
+					BoundedEffect:  "Old readiness check that should no longer be used.",
+				},
+				{
+					ID:                 "phase-new",
+					Summary:            "Use newer completed bearer readiness evidence",
+					Status:             session.PlanStatusCompleted,
+					AuthorityClass:     "external_account_auth_status",
+					SupersedesPhaseIDs: []string{"phase-old"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9038, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if materialized {
+		t.Fatal("materialized = true, want superseded phase suppressed")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sentCount := len(sender.sent)
+	sender.mu.Unlock()
+	if inlineCount != 0 || sentCount != 0 {
+		t.Fatalf("inline=%d sent=%d, want no stale duplicate prompt", inlineCount, sentCount)
 	}
 }
 

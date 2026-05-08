@@ -133,10 +133,10 @@ func operationStateNeedsApprovalAffordance(opState session.OperationState) bool 
 	if _, ok := operationPlanLeaseFromPhasePlan(opState, time.Now().UTC()); ok {
 		return true
 	}
-	if _, ok := nextOperationPhaseBundleForApproval(opState.PhasePlan); ok {
+	if _, ok := nextOperationPhaseBundleForApproval(opState); ok {
 		return true
 	}
-	if _, ok := nextOperationPhaseForApproval(opState.PhasePlan); ok {
+	if _, ok := nextOperationPhaseForApproval(opState); ok {
 		return true
 	}
 	return false
