@@ -317,6 +317,7 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		}
 		snapshot.CapabilityRequests = capabilityRequests
 		snapshot.CapabilityGrants = capabilityGrants
+		snapshot.ExternalToolInvocationReadiness = r.externalToolInvocationReadinessStatusSnapshot(snapshot.ToolLifecycle, capabilityGrants)
 	}
 	return snapshot, nil
 }
@@ -1945,24 +1946,34 @@ func (r *Runtime) capabilityStatusSnapshot(limit int) ([]core.CapabilityRequestS
 	grantRows := make([]core.CapabilityGrantStatusSnapshot, 0, len(grants))
 	for _, grant := range grants {
 		grant = session.NormalizeCapabilityGrant(grant)
+		material, materialOK, materialErr := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints)
+		materialMissing := ""
+		if materialErr != nil {
+			materialMissing = "invalid_child_runtime_contract: " + materialErr.Error()
+		} else if materialOK {
+			materialMissing = firstMissingChildRuntimeMaterial(material)
+		}
 		grantRows = append(grantRows, core.CapabilityGrantStatusSnapshot{
-			GrantID:           grant.GrantID,
-			RequestID:         grant.RequestID,
-			Kind:              strings.TrimSpace(string(grant.Kind)),
-			TargetResource:    strings.TrimSpace(grant.TargetResource),
-			Status:            strings.TrimSpace(string(grant.Status)),
-			GrantedTo:         strings.TrimSpace(grant.GrantedTo),
-			GrantedBy:         strings.TrimSpace(grant.GrantedBy),
-			AllowedActions:    append([]string{}, grant.AllowedActions...),
-			AnchorFingerprint: strings.TrimSpace(grant.AnchorFingerprint),
-			DriftSource:       strings.TrimSpace(string(grant.DriftSource)),
-			StaleReason:       strings.TrimSpace(grant.StaleReason),
-			InvocationCount:   grant.InvocationCount,
-			FailureCount:      grant.FailureCount,
-			GrantedAt:         grant.GrantedAt,
-			ExpiresAt:         grant.ExpiresAt,
-			RevokedAt:         grant.RevokedAt,
-			LastInvokedAt:     grant.LastInvokedAt,
+			GrantID:                grant.GrantID,
+			RequestID:              grant.RequestID,
+			Kind:                   strings.TrimSpace(string(grant.Kind)),
+			TargetResource:         strings.TrimSpace(grant.TargetResource),
+			Status:                 strings.TrimSpace(string(grant.Status)),
+			GrantedTo:              strings.TrimSpace(grant.GrantedTo),
+			GrantedBy:              strings.TrimSpace(grant.GrantedBy),
+			AllowedActions:         append([]string{}, grant.AllowedActions...),
+			AnchorFingerprint:      strings.TrimSpace(grant.AnchorFingerprint),
+			DriftSource:            strings.TrimSpace(string(grant.DriftSource)),
+			StaleReason:            strings.TrimSpace(grant.StaleReason),
+			ToolInvocationScope:    capabilityGrantToolInvocationScopeSummaryForStatus(grant),
+			ChildRuntimePresent:    materialOK,
+			RuntimeMaterialMissing: materialMissing,
+			InvocationCount:        grant.InvocationCount,
+			FailureCount:           grant.FailureCount,
+			GrantedAt:              grant.GrantedAt,
+			ExpiresAt:              grant.ExpiresAt,
+			RevokedAt:              grant.RevokedAt,
+			LastInvokedAt:          grant.LastInvokedAt,
 		})
 	}
 	return requestRows, grantRows, nil

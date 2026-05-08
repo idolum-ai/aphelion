@@ -458,7 +458,7 @@ func TestCapabilityGrantRendersFirstClassChildRuntimeContract(t *testing.T) {
 		TargetResource: "mail-reader",
 		Purpose:        "read mailbox through negotiated child runtime",
 		ReviewStatus:   session.CapabilityReviewStatusApproved,
-		Contract:       `{"child_runtime":{"executable":"mail-reader","readonly_paths":["/srv/mail/config"],"env_from_parent":["MAIL_TOKEN"]}}`,
+		Contract:       `{"child_runtime":{"executable":"mail-reader","readonly_paths":["/srv/mail/config"],"secret_binds":[{"source":"/srv/mail/.secret.env","target":"/run/secrets/mail.env"}],"env_from_parent":["MAIL_TOKEN"]}}`,
 	})
 	if err != nil {
 		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
@@ -467,7 +467,7 @@ func TestCapabilityGrantRendersFirstClassChildRuntimeContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capabilityAuthorityGrantSet() err = %v", err)
 	}
-	if !strings.Contains(out, "child_runtime: present") || !strings.Contains(out, "child_runtime_executable: mail-reader") || !strings.Contains(out, "child_runtime_env_from_parent: MAIL_TOKEN") {
+	if !strings.Contains(out, "child_runtime: present") || !strings.Contains(out, "child_runtime_executable: mail-reader") || !strings.Contains(out, "child_runtime_secret_binds: 1") || !strings.Contains(out, "child_runtime_env_from_parent: MAIL_TOKEN") {
 		t.Fatalf("grant output = %q, want child_runtime contract rendered", out)
 	}
 }
@@ -510,5 +510,54 @@ func TestCapabilityRejectsLegacyRuntimeMaterializationInput(t *testing.T) {
 	}`))
 	if err == nil || !strings.Contains(err.Error(), "child_runtime") || !strings.Contains(err.Error(), "migration-only") {
 		t.Fatalf("request_submit err = %v, want child_runtime-only rejection", err)
+	}
+}
+
+func TestCapabilityGrantSetRendersToolInvocationScope(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	scopeJSON := json.RawMessage(`{"tool_invocation":{"actions":{"public_profile_metadata_read":{"selectors":{"username":["idolumai"]}}}}}`)
+	requestOut, err := registry.capabilityRequestSubmit(capabilityInput{
+		RequestID:      "cap-x-profile-scope",
+		Kind:           "tool",
+		TargetResource: "x_idolumai_readonly",
+		RequestedFor:   "telegram:1001",
+		Purpose:        "bounded exact X profile metadata read",
+		Constraints:    scopeJSON,
+	}, actor, key)
+	if err != nil {
+		t.Fatalf("capabilityRequestSubmit() err = %v", err)
+	}
+	if !strings.Contains(requestOut, "tool_invocation_scope: public_profile_metadata_read[username]") {
+		t.Fatalf("request_submit output = %q, want rendered tool invocation scope", requestOut)
+	}
+	request, ok, err := store.CapabilityRequest("cap-x-profile-scope")
+	if err != nil {
+		t.Fatalf("CapabilityRequest() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("CapabilityRequest() ok = false, want stored request")
+	}
+	request.ReviewStatus = session.CapabilityReviewStatusApproved
+	request, err = store.UpsertCapabilityRequest(request)
+	if err != nil {
+		t.Fatalf("UpsertCapabilityRequest(approved) err = %v", err)
+	}
+	out, err := registry.capabilityAuthorityGrantSet(context.Background(), capabilityInput{RequestID: request.RequestID, GrantID: "capg-x-profile-scope-render", Principal: "telegram:1001"}, actor, key)
+	if err != nil {
+		t.Fatalf("capabilityAuthorityGrantSet() err = %v", err)
+	}
+	if !strings.Contains(out, "tool_invocation_scope: public_profile_metadata_read[username]") {
+		t.Fatalf("grant_set output = %q, want rendered tool invocation scope", out)
+	}
+	grant, ok, err := store.CapabilityGrant("capg-x-profile-scope-render")
+	if err != nil {
+		t.Fatalf("CapabilityGrant(%q) err = %v", "capg-x-profile-scope-render", err)
+	}
+	if !ok || !strings.Contains(grant.Constraints, "tool_invocation") {
+		t.Fatalf("stored grant = %#v ok=%t, want tool_invocation constraints", grant, ok)
 	}
 }

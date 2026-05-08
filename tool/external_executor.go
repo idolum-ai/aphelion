@@ -16,7 +16,13 @@ import (
 
 type ExternalToolExecutor interface {
 	Supports(manifest ExternalToolManifest) bool
-	Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, runner *sandbox.Runner, maxOutputBytes int) (string, error)
+	Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, runner *sandbox.Runner, maxOutputBytes int, access ExternalToolExecutionAccess) (string, error)
+}
+
+type ExternalToolExecutionAccess struct {
+	ExtraReadonlyPaths []string
+	ExtraReadonlyBinds []sandbox.BindPath
+	ExtraEnv           map[string]string
 }
 
 type defaultExternalToolExecutor struct{}
@@ -29,7 +35,7 @@ func (defaultExternalToolExecutor) Supports(manifest ExternalToolManifest) bool 
 	return validateExternalProcessPolicy(manifest) == nil
 }
 
-func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, runner *sandbox.Runner, maxOutputBytes int) (string, error) {
+func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest ExternalToolManifest, input json.RawMessage, scope sandbox.Scope, runner *sandbox.Runner, maxOutputBytes int, access ExternalToolExecutionAccess) (string, error) {
 	manifest = NormalizeExternalToolManifest(manifest)
 	if err := validateExternalToolManifest(manifest); err != nil {
 		return "", err
@@ -63,7 +69,7 @@ func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest Externa
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	stdout, stderr, err := runExternalProcessCommand(runCtx, scope, runner, manifest.Execution.Entry, workdir, input)
+	stdout, stderr, err := runExternalProcessCommand(runCtx, scope, runner, manifest.Execution.Entry, workdir, input, access)
 	if err != nil {
 		return "", fmt.Errorf("external tool %q execution failed: %s", manifest.Name, renderOutput(stdout, stderr, maxOutputBytes))
 	}
@@ -80,19 +86,28 @@ func (defaultExternalToolExecutor) Execute(ctx context.Context, manifest Externa
 	return string(output), nil
 }
 
-func runExternalProcessCommand(ctx context.Context, scope sandbox.Scope, runner *sandbox.Runner, command string, workdir string, stdin []byte) (string, string, error) {
+func runExternalProcessCommand(ctx context.Context, scope sandbox.Scope, runner *sandbox.Runner, command string, workdir string, stdin []byte, access ExternalToolExecutionAccess) (string, string, error) {
 	if runner != nil && strings.TrimSpace(string(scope.Principal.Role)) != "" {
 		res, err := runner.Run(ctx, sandbox.ExecRequest{
-			Scope:   scope,
-			Command: command,
-			Workdir: workdir,
-			Stdin:   stdin,
+			Scope:              scope,
+			Command:            command,
+			Workdir:            workdir,
+			Stdin:              stdin,
+			ExtraReadonlyPaths: access.ExtraReadonlyPaths,
+			ExtraReadonlyBinds: access.ExtraReadonlyBinds,
+			ExtraEnv:           access.ExtraEnv,
 		})
 		return res.Stdout, res.Stderr, err
 	}
 
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	cmd.Dir = workdir
+	if len(access.ExtraEnv) > 0 {
+		cmd.Env = append([]string(nil), cmd.Environ()...)
+		for key, value := range access.ExtraEnv {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+	}
 	if len(stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}

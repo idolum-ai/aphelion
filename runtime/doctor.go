@@ -734,6 +734,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Design Principle Health")
 	r.writeDoctorDesignPrincipleHealth(&b, input)
 
+	writeDoctorSection(&b, "External Tool Invocation Readiness")
+	r.writeDoctorExternalToolInvocationReadiness(&b, input)
+
 	writeDoctorSection(&b, "Execution Events")
 	r.writeDoctorExecutionEvents(ctx, &b, input.Key, now)
 
@@ -1825,4 +1828,46 @@ func redactDoctorText(text string) string {
 		out = re.ReplaceAllString(out, `${1}<redacted>${2}`)
 	}
 	return out
+}
+
+func (r *Runtime) writeDoctorExternalToolInvocationReadiness(b *strings.Builder, input doctorDiagnosticInput) {
+	if r == nil || r.store == nil {
+		writeDoctorLine(b, "external_tool_invocation_readiness: unavailable")
+		return
+	}
+	tools, err := r.toolLifecycleStatusSnapshot(20)
+	if err != nil {
+		writeDoctorLine(b, "external_tool_invocation_readiness_error="+strconv.Quote("tool lifecycle: "+err.Error()))
+		return
+	}
+	_, grants, err := r.capabilityStatusSnapshot(20)
+	if err != nil {
+		writeDoctorLine(b, "external_tool_invocation_readiness_error="+strconv.Quote("capability grants: "+err.Error()))
+		return
+	}
+	rows := r.externalToolInvocationReadinessStatusSnapshot(tools, grants)
+	if len(rows) == 0 {
+		writeDoctorLine(b, "external_tool_invocation_readiness: none")
+		return
+	}
+	for _, row := range rows {
+		status := "blocked"
+		if row.Ready || strings.EqualFold(strings.TrimSpace(row.Status), "ready") {
+			status = "ready"
+		}
+		selector := strings.TrimSpace(row.SelectorName)
+		if selector == "" {
+			selector = "-"
+		}
+		writeDoctorLine(b, fmt.Sprintf("- tool=%s child=%s action=%s selector=%s status=%s why=%q next_repair=%q",
+			firstNonEmpty(strings.TrimSpace(row.ToolName), "-"),
+			firstNonEmpty(strings.TrimSpace(row.ChildPrincipal), "-"),
+			firstNonEmpty(strings.TrimSpace(row.Action), "-"),
+			selector,
+			status,
+			truncatePreview(strings.TrimSpace(row.Why), 180),
+			truncatePreview(strings.TrimSpace(row.NextRepairAction), 160),
+		))
+	}
+	_ = input
 }

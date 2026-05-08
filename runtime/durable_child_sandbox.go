@@ -153,6 +153,9 @@ func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.Capa
 	for _, bind := range material.ReadonlyBinds {
 		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
 	}
+	for _, bind := range material.SecretBinds {
+		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
+	}
 	for _, name := range material.EnvFromParent {
 		if err := a.inheritEnv(strings.TrimSpace(name)); err != nil {
 			return fmt.Errorf("materialize capability grant %s environment: %w", strings.TrimSpace(grant.GrantID), err)

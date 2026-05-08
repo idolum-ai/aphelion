@@ -17,6 +17,7 @@ type ChildRuntimeContract struct {
 	Executable     string             `json:"executable,omitempty"`
 	ReadonlyPaths  []string           `json:"readonly_paths,omitempty"`
 	ReadonlyBinds  []ChildRuntimeBind `json:"readonly_binds,omitempty"`
+	SecretBinds    []ChildRuntimeBind `json:"secret_binds,omitempty"`
 	EnvFromParent  []string           `json:"env_from_parent,omitempty"`
 	Environment    []string           `json:"environment,omitempty"` // legacy alias for env_from_parent.
 	CapabilityNote string             `json:"capability_note,omitempty"`
@@ -32,12 +33,18 @@ var childRuntimeEnvNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 func NormalizeChildRuntimeContract(contract ChildRuntimeContract) ChildRuntimeContract {
 	contract.Executable = strings.TrimSpace(contract.Executable)
 	contract.ReadonlyPaths = normalizeUniqueStrings(contract.ReadonlyPaths)
+	contract.ReadonlyBinds = normalizeChildRuntimeBinds(contract.ReadonlyBinds)
+	contract.SecretBinds = normalizeChildRuntimeBinds(contract.SecretBinds)
 	contract.EnvFromParent = normalizeUniqueStrings(append(contract.EnvFromParent, contract.Environment...))
 	contract.Environment = nil
 	contract.CapabilityNote = strings.TrimSpace(contract.CapabilityNote)
-	binds := make([]ChildRuntimeBind, 0, len(contract.ReadonlyBinds))
+	return contract
+}
+
+func normalizeChildRuntimeBinds(values []ChildRuntimeBind) []ChildRuntimeBind {
+	binds := make([]ChildRuntimeBind, 0, len(values))
 	seen := map[string]struct{}{}
-	for _, bind := range contract.ReadonlyBinds {
+	for _, bind := range values {
 		bind.Source = strings.TrimSpace(bind.Source)
 		bind.Target = strings.TrimSpace(bind.Target)
 		if bind.Source == "" || bind.Target == "" {
@@ -50,13 +57,12 @@ func NormalizeChildRuntimeContract(contract ChildRuntimeContract) ChildRuntimeCo
 		seen[key] = struct{}{}
 		binds = append(binds, bind)
 	}
-	contract.ReadonlyBinds = binds
-	return contract
+	return binds
 }
 
 func (c ChildRuntimeContract) Active() bool {
 	c = NormalizeChildRuntimeContract(c)
-	return c.Executable != "" || len(c.ReadonlyPaths) > 0 || len(c.ReadonlyBinds) > 0 || len(c.EnvFromParent) > 0 || c.CapabilityNote != ""
+	return c.Executable != "" || len(c.ReadonlyPaths) > 0 || len(c.ReadonlyBinds) > 0 || len(c.SecretBinds) > 0 || len(c.EnvFromParent) > 0 || c.CapabilityNote != ""
 }
 
 func ValidateChildRuntimeContract(contract ChildRuntimeContract) error {
@@ -72,6 +78,11 @@ func ValidateChildRuntimeContract(contract ChildRuntimeContract) error {
 	for _, bind := range contract.ReadonlyBinds {
 		if !filepath.IsAbs(bind.Source) || !filepath.IsAbs(bind.Target) {
 			return fmt.Errorf("child_runtime readonly bind source and target must be absolute")
+		}
+	}
+	for _, bind := range contract.SecretBinds {
+		if !filepath.IsAbs(bind.Source) || !filepath.IsAbs(bind.Target) {
+			return fmt.Errorf("child_runtime secret bind source and target must be absolute")
 		}
 	}
 	for _, name := range contract.EnvFromParent {
@@ -90,6 +101,7 @@ func MergeChildRuntimeContract(existing ChildRuntimeContract, next ChildRuntimeC
 	}
 	existing.ReadonlyPaths = append(existing.ReadonlyPaths, next.ReadonlyPaths...)
 	existing.ReadonlyBinds = append(existing.ReadonlyBinds, next.ReadonlyBinds...)
+	existing.SecretBinds = append(existing.SecretBinds, next.SecretBinds...)
 	existing.EnvFromParent = append(existing.EnvFromParent, next.EnvFromParent...)
 	if strings.TrimSpace(next.CapabilityNote) != "" {
 		existing.CapabilityNote = strings.TrimSpace(next.CapabilityNote)

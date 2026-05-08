@@ -114,6 +114,9 @@ func (r *Registry) capabilityRequestSubmit(in capabilityInput, actor principal.P
 	if err := validateCapabilityChildRuntimeContract(contract, constraints); err != nil {
 		return "", err
 	}
+	if err := validateCapabilityToolInvocationScopeJSON(contract, constraints); err != nil {
+		return "", err
+	}
 	requester := toolAuthorityPrincipalDisplay(actor)
 	requestedFor := canonicalDurableAgentPrincipalIfKnown(r.store, firstNonEmpty(strings.TrimSpace(in.RequestedFor), requester))
 	record, err := r.store.UpsertCapabilityRequest(session.CapabilityRequest{
@@ -383,6 +386,9 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 		return "", err
 	}
 	if err := validateCapabilityChildRuntimeContract(contract, constraints); err != nil {
+		return "", err
+	}
+	if err := validateCapabilityToolInvocationScopeJSON(contract, constraints); err != nil {
 		return "", err
 	}
 	status := session.NormalizeCapabilityGrantStatus(session.CapabilityGrantStatus(in.GrantStatus))
@@ -907,6 +913,9 @@ func renderCapabilityChildRuntime(b *strings.Builder, contract string, constrain
 	if len(material.ReadonlyBinds) > 0 {
 		fmt.Fprintf(b, "child_runtime_readonly_binds: %d\n", len(material.ReadonlyBinds))
 	}
+	if len(material.SecretBinds) > 0 {
+		fmt.Fprintf(b, "child_runtime_secret_binds: %d\n", len(material.SecretBinds))
+	}
 	if len(material.EnvFromParent) > 0 {
 		fmt.Fprintf(b, "child_runtime_env_from_parent: %s\n", strings.Join(material.EnvFromParent, ","))
 	}
@@ -966,6 +975,9 @@ func renderCapabilityRequestWithReviewEvent(header string, record session.Capabi
 	}
 	if record.Constraints != "" {
 		fmt.Fprintf(&b, "constraints: %s\n", record.Constraints)
+	}
+	if summary, ok := capabilityToolInvocationScopeSummary(session.CapabilityGrant{Contract: record.Contract, Constraints: record.Constraints, GrantID: record.RequestID}); ok {
+		fmt.Fprintf(&b, "tool_invocation_scope: %s\n", summary)
 	}
 	if reviewEventID > 0 {
 		fmt.Fprintf(&b, "review_event_id: %d\n", reviewEventID)
@@ -1077,6 +1089,9 @@ func renderCapabilityGrantWithUpdate(header string, grant session.CapabilityGran
 		fmt.Fprintf(&b, "counters: invocations=%d failures=%d\n", grant.InvocationCount, grant.FailureCount)
 	}
 	renderCapabilityChildRuntime(&b, grant.Contract, grant.Constraints)
+	if summary, ok := capabilityToolInvocationScopeSummary(grant); ok {
+		fmt.Fprintf(&b, "tool_invocation_scope: %s\n", summary)
+	}
 	if update != nil {
 		b.WriteString("capability_update_plan: present\n")
 		fmt.Fprintf(&b, "policy_update_applied: %t\n", update.PolicyUpdateApplied)

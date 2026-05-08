@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -140,5 +141,91 @@ func TestToolAuthorityRegisterRejectsNonAuthorityManagedKnownTool(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), "not an authority-managed runtime tool") {
 		t.Fatalf("err = %v, want non-authority-managed rejection", err)
+	}
+}
+
+func TestExternalToolGrantToolInvocationScopeBlocksSelectorBeforeExecution(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	script := filepath.Join(registry.workspace, "run.py")
+	if err := os.WriteFile(script, []byte(`#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+payload=json.load(sys.stdin)
+with pathlib.Path('executions.jsonl').open('a', encoding='utf-8') as f:
+    f.write(json.dumps(payload, sort_keys=True)+'\n')
+print(json.dumps({'summary':'ok','action':payload.get('action'),'username':payload.get('username')}, sort_keys=True))
+`), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.py) err = %v", err)
+	}
+	manifest := ExternalToolManifest{
+		Name:      "x_idolumai_readonly",
+		Owner:     "idolum-x",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.py"},
+		IO: ExternalToolManifestIO{
+			InputSchema:  json.RawMessage(`{"type":"object","properties":{"action":{"type":"string"},"username":{"type":"string"}},"required":["action"]}`),
+			OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"},"action":{"type":"string"},"username":{"type":"string"}},"required":["summary"]}`),
+		},
+	}
+	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest}); err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	seedVerifiedExternalToolLifecycle(t, registry, store, manifest, sandbox.Scope{WorkingRoot: registry.workspace})
+	if _, err := store.UpsertRegisteredTool(session.RegisteredTool{ToolName: manifest.Name, ImplementationRef: "external:" + manifest.Name, Registered: true}); err != nil {
+		t.Fatalf("UpsertRegisteredTool() err = %v", err)
+	}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:           "idolum-x",
+		ChannelKind:       "external_channel",
+		Status:            "active",
+		LocalStorageRoots: []string{registry.workspace, filepath.Join(registry.workspace, "memory")},
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-x-profile-scope",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "durable_agent:idolum-x",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: manifest.Name,
+		AllowedActions: []string{"invoke"},
+		Constraints:    `{"tool_invocation":{"actions":{"public_profile_metadata_read":{"selectors":{"username":["idolumai"]}}}}}`,
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	actor := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-x"}
+	key := session.SessionKey{}
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"idolumai"}`))
+	if err != nil {
+		t.Fatalf("allowed scoped invoke err = %v", err)
+	}
+	if !strings.Contains(out, `"summary": "ok"`) && !strings.Contains(out, `"summary":"ok"`) {
+		t.Fatalf("allowed scoped invoke output = %q, want script output", out)
+	}
+	_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"other"}`))
+	if err == nil || !strings.Contains(err.Error(), "selector") || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("blocked scoped invoke err = %v, want selector not allowed", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(registry.workspace, "executions.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile(executions.jsonl) err = %v", err)
+	}
+	if got := strings.Count(string(raw), "public_profile_metadata_read"); got != 1 {
+		t.Fatalf("executions log = %q, want exactly one external execution", string(raw))
+	}
+	grant, ok, err := store.CapabilityGrant("capg-x-profile-scope")
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok || grant.InvocationCount != 2 || grant.FailureCount != 1 {
+		t.Fatalf("grant counters = %#v ok=%t, want allowed + blocked attempt recorded", grant, ok)
 	}
 }

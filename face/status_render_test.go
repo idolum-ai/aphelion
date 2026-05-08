@@ -489,3 +489,31 @@ func TestRenderTelegramStatusChatIncludesCapabilityDelegationState(t *testing.T)
 		}
 	}
 }
+
+func TestRenderTelegramStatusChatIncludesCompactExternalToolReadiness(t *testing.T) {
+	t.Parallel()
+
+	out := RenderTelegramStatusChat(core.ChatStatusSnapshot{
+		ChatID: 47,
+		ExternalToolInvocationReadiness: []core.ExternalToolInvocationReadinessSnapshot{{
+			ToolName:         "x_idolumai_readonly",
+			ChildPrincipal:   "durable_agent:idolum-x",
+			Action:           "public_profile_metadata_read",
+			SelectorName:     "username",
+			Status:           "blocked",
+			Why:              `runtime material missing: env_from_parent "APHELION_E2_MISSING_ENV"`,
+			NextRepairAction: "provide or correct the named child_runtime material",
+		}},
+	}, "medium", "high", false)
+
+	for _, needle := range []string{
+		"external_tool_invocation_readiness source=projection:tool_lifecycle+capability_grants",
+		"tool=x_idolumai_readonly child=durable_agent:idolum-x action=public_profile_metadata_read selector=username status=blocked",
+		`why="runtime material missing: env_from_parent 'APHELION_E2_MISSING_ENV'"`,
+		`next_repair="provide or correct the named child_runtime material"`,
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusChat() = %q, want substring %q", out, needle)
+		}
+	}
+}

@@ -3,12 +3,18 @@
 package tool
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func (r *Registry) authorityManagedTool(name string) bool {
@@ -38,40 +44,53 @@ func (r *Registry) toolAuthorityAccessAllowed(toolName string, p principal.Princ
 	return allowedByGrant, nil
 }
 
-func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal) error {
+func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal, input json.RawMessage) (session.CapabilityGrant, bool, error) {
 	name = strings.TrimSpace(name)
 	if !r.authorityManagedTool(name) {
-		return nil
+		return session.CapabilityGrant{}, false, nil
 	}
 	if r.store == nil {
-		return fmt.Errorf("%s requires transcript store", name)
+		return session.CapabilityGrant{}, false, fmt.Errorf("%s requires transcript store", name)
 	}
 	registered, ok, err := r.store.RegisteredTool(name)
 	if err != nil {
-		return err
+		return session.CapabilityGrant{}, false, err
 	}
 	if !ok || !registered.Registered {
-		return fmt.Errorf("tool %q is not registered", name)
+		return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not registered", name)
 	}
 	if len(toolAuthorityPrincipalKeys(p)) == 0 {
-		return fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+		return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
 	}
 	grant, allowedByGrant, err := r.capabilityGrantAllowsAuthorityToolAccess(name, p)
 	if err != nil {
-		return err
+		return session.CapabilityGrant{}, false, err
 	}
 	if allowedByGrant {
+		principalID := toolAuthorityPrincipalDisplay(p)
+		if err := validateCapabilityToolInvocationInput(grant, input); err != nil {
+			if _, recordErr := r.store.RecordCapabilityInvocation(session.CapabilityInvocation{
+				GrantID:   grant.GrantID,
+				Principal: principalID,
+				Action:    "invoke",
+				Status:    "blocked",
+				ErrorText: err.Error(),
+			}); recordErr != nil {
+				return session.CapabilityGrant{}, false, recordErr
+			}
+			return session.CapabilityGrant{}, false, err
+		}
 		if _, err := r.store.RecordCapabilityInvocation(session.CapabilityInvocation{
 			GrantID:   grant.GrantID,
-			Principal: toolAuthorityPrincipalDisplay(p),
+			Principal: principalID,
 			Action:    "invoke",
 			Status:    "allowed",
 		}); err != nil {
-			return err
+			return session.CapabilityGrant{}, false, err
 		}
-		return nil
+		return grant, true, nil
 	}
-	return fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+	return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
 }
 
 func (r *Registry) capabilityGrantAllowsAuthorityToolAccess(toolName string, p principal.Principal) (session.CapabilityGrant, bool, error) {
@@ -151,4 +170,144 @@ func toolAuthorityPrincipalDisplay(p principal.Principal) string {
 		return "unknown"
 	}
 	return role
+}
+
+func externalToolExecutionAccessFromGrant(p principal.Principal, grant session.CapabilityGrant) (ExternalToolExecutionAccess, error) {
+	if p.Role != principal.RoleDurableAgent {
+		return ExternalToolExecutionAccess{}, nil
+	}
+	material, ok, err := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints)
+	if err != nil {
+		return ExternalToolExecutionAccess{}, fmt.Errorf("external tool child_runtime contract: %w", err)
+	}
+	if !ok {
+		return ExternalToolExecutionAccess{}, nil
+	}
+	access := ExternalToolExecutionAccess{ExtraReadonlyPaths: append([]string(nil), material.ReadonlyPaths...)}
+	for _, path := range material.ReadonlyPaths {
+		if err := ensureChildRuntimePathExists("readonly_path", path); err != nil {
+			return ExternalToolExecutionAccess{}, fmt.Errorf("materialize capability grant %s child_runtime: %w", strings.TrimSpace(grant.GrantID), err)
+		}
+	}
+	if executable := strings.TrimSpace(material.Executable); executable != "" {
+		path, err := resolveChildRuntimeExecutableForTool(executable)
+		if err != nil {
+			return ExternalToolExecutionAccess{}, fmt.Errorf("materialize capability grant %s executable %q: %w", strings.TrimSpace(grant.GrantID), executable, err)
+		}
+		access.ExtraReadonlyBinds = append(access.ExtraReadonlyBinds, sandbox.BindPath{Source: path, Target: filepath.ToSlash(filepath.Join("/usr/local/bin", filepath.Base(path)))})
+	}
+	for _, bind := range material.ReadonlyBinds {
+		if err := ensureChildRuntimeBindSourceExists("readonly_bind", bind.Source); err != nil {
+			return ExternalToolExecutionAccess{}, fmt.Errorf("materialize capability grant %s child_runtime: %w", strings.TrimSpace(grant.GrantID), err)
+		}
+		access.ExtraReadonlyBinds = append(access.ExtraReadonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
+	}
+	for _, bind := range material.SecretBinds {
+		if err := ensureChildRuntimeBindSourceExists("secret_bind", bind.Source); err != nil {
+			return ExternalToolExecutionAccess{}, fmt.Errorf("materialize capability grant %s child_runtime: %w", strings.TrimSpace(grant.GrantID), err)
+		}
+		access.ExtraReadonlyBinds = append(access.ExtraReadonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
+	}
+	for _, name := range material.EnvFromParent {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if err := core.ValidateChildRuntimeContract(core.ChildRuntimeContract{EnvFromParent: []string{name}}); err != nil {
+			return ExternalToolExecutionAccess{}, err
+		}
+		value, ok := os.LookupEnv(name)
+		if !ok {
+			return ExternalToolExecutionAccess{}, fmt.Errorf("materialize capability grant %s child_runtime: env_from_parent %q is not set", strings.TrimSpace(grant.GrantID), name)
+		}
+		if access.ExtraEnv == nil {
+			access.ExtraEnv = map[string]string{}
+		}
+		access.ExtraEnv[name] = value
+	}
+	access.ExtraReadonlyPaths = compactStringSetForTool(access.ExtraReadonlyPaths)
+	access.ExtraReadonlyBinds = compactBindSetForTool(access.ExtraReadonlyBinds)
+	return access, nil
+}
+
+func ensureChildRuntimePathExists(kind string, path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("%s %q: %w", kind, path, err)
+	}
+	return nil
+}
+
+func ensureChildRuntimeBindSourceExists(kind string, source string) error {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return nil
+	}
+	if _, err := os.Stat(source); err != nil {
+		return fmt.Errorf("%s source %q: %w", kind, source, err)
+	}
+	return nil
+}
+
+func resolveChildRuntimeExecutableForTool(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("empty executable")
+	}
+	if strings.Contains(value, "/") {
+		cleaned := filepath.Clean(value)
+		if !filepath.IsAbs(cleaned) {
+			return "", fmt.Errorf("executable path must be absolute")
+		}
+		if info, err := os.Stat(cleaned); err != nil {
+			return "", err
+		} else if info.IsDir() {
+			return "", fmt.Errorf("executable path is a directory")
+		}
+		return cleaned, nil
+	}
+	path, err := exec.LookPath(value)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func compactStringSetForTool(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func compactBindSetForTool(values []sandbox.BindPath) []sandbox.BindPath {
+	out := make([]sandbox.BindPath, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, bind := range values {
+		bind.Source = strings.TrimSpace(bind.Source)
+		bind.Target = strings.TrimSpace(bind.Target)
+		if bind.Source == "" || bind.Target == "" {
+			continue
+		}
+		key := bind.Source + "\x00" + bind.Target
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, bind)
+	}
+	return out
 }

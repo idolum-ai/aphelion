@@ -65,6 +65,7 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 			lines = append(lines, autoApprovalLine)
 		}
 		lines = append(lines, renderToolLifecycleCurrentStateBlock(snapshot.ToolLifecycle, 5)...)
+		lines = append(lines, renderExternalToolInvocationReadinessBlock(snapshot.ExternalToolInvocationReadiness, 5)...)
 		lines = append(lines, renderCapabilityRequestStateBlock(snapshot.CapabilityRequests, 5)...)
 		lines = append(lines, renderCapabilityGrantStateBlock(snapshot.CapabilityGrants, 5)...)
 		lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 3)...)
@@ -934,6 +935,46 @@ func renderToolLifecycleCurrentStateBlock(rows []core.ToolLifecycleStatusSnapsho
 	return lines
 }
 
+func renderExternalToolInvocationReadinessBlock(rows []core.ExternalToolInvocationReadinessSnapshot, maxRows int) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	if maxRows <= 0 {
+		maxRows = 5
+	}
+	lines := []string{"external_tool_invocation_readiness source=projection:tool_lifecycle+capability_grants"}
+	limit := len(rows)
+	if limit > maxRows {
+		limit = maxRows
+	}
+	for i := 0; i < limit; i++ {
+		row := rows[i]
+		state := "blocked"
+		if row.Ready || strings.EqualFold(strings.TrimSpace(row.Status), "ready") {
+			state = "ready"
+		}
+		selector := "-"
+		if strings.TrimSpace(row.SelectorName) != "" {
+			selector = strings.TrimSpace(row.SelectorName)
+			if strings.TrimSpace(row.SelectorValue) != "" {
+				selector += "=" + strings.TrimSpace(row.SelectorValue)
+			}
+		}
+		line := fmt.Sprintf(
+			"- tool=%s child=%s action=%s selector=%s status=%s why=%s next_repair=%s",
+			firstNonEmpty(strings.TrimSpace(row.ToolName), "-"),
+			firstNonEmpty(strings.TrimSpace(row.ChildPrincipal), "-"),
+			firstNonEmpty(strings.TrimSpace(row.Action), "-"),
+			selector,
+			state,
+			quoteStatusField(truncateStatusField(firstNonEmpty(strings.TrimSpace(row.Why), "-"), 140)),
+			quoteStatusField(truncateStatusField(firstNonEmpty(strings.TrimSpace(row.NextRepairAction), "-"), 120)),
+		)
+		lines = append(lines, line)
+	}
+	return lines
+}
+
 func renderCapabilityRequestStateBlock(rows []core.CapabilityRequestStatusSnapshot, maxRows int) []string {
 	if len(rows) == 0 {
 		return nil
@@ -992,6 +1033,15 @@ func renderCapabilityGrantStateBlock(rows []core.CapabilityGrantStatusSnapshot, 
 		}
 		if fingerprint := shortFingerprint(row.AnchorFingerprint); fingerprint != "" {
 			line += " anchor=" + fingerprint
+		}
+		if scope := strings.TrimSpace(row.ToolInvocationScope); scope != "" {
+			line += " tool_invocation_scope=" + scope
+		}
+		if row.ChildRuntimePresent {
+			line += " child_runtime=present"
+		}
+		if missing := strings.TrimSpace(row.RuntimeMaterialMissing); missing != "" {
+			line += " runtime_missing=" + quoteStatusField(truncateStatusField(missing, 120))
 		}
 		if row.InvocationCount > 0 || row.FailureCount > 0 {
 			line += fmt.Sprintf(" counters=invocations:%d,failures:%d", row.InvocationCount, row.FailureCount)

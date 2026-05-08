@@ -1275,7 +1275,8 @@ func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.
 }
 
 func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
-	if err := r.requireAuthorityToolAccess(name, p); err != nil {
+	authorityGrant, authorityManaged, err := r.requireAuthorityToolAccess(name, p, input)
+	if err != nil {
 		return "", err
 	}
 
@@ -1326,7 +1327,15 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 				if err := r.ensureExternalToolFresh(manifest, scope); err != nil {
 					return "", err
 				}
-				return r.externalExecutor.Execute(ctx, manifest, input, scope, r.runner, r.maxOutputBytes)
+				access := ExternalToolExecutionAccess{}
+				if authorityManaged {
+					var err error
+					access, err = externalToolExecutionAccessFromGrant(p, authorityGrant)
+					if err != nil {
+						return "", err
+					}
+				}
+				return r.externalExecutor.Execute(ctx, manifest, input, scope, r.runner, r.maxOutputBytes, access)
 			}
 			if err := validateExternalProcessPolicy(manifest); err != nil {
 				return "", err

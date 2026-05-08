@@ -149,23 +149,39 @@ type CapabilityRequestStatusSnapshot struct {
 }
 
 type CapabilityGrantStatusSnapshot struct {
-	GrantID           string
-	RequestID         string
-	Kind              string
-	TargetResource    string
-	Status            string
-	GrantedTo         string
-	GrantedBy         string
-	AllowedActions    []string
-	AnchorFingerprint string
-	DriftSource       string
-	StaleReason       string
-	InvocationCount   int
-	FailureCount      int
-	GrantedAt         time.Time
-	ExpiresAt         time.Time
-	RevokedAt         time.Time
-	LastInvokedAt     time.Time
+	GrantID                string
+	RequestID              string
+	Kind                   string
+	TargetResource         string
+	Status                 string
+	GrantedTo              string
+	GrantedBy              string
+	AllowedActions         []string
+	AnchorFingerprint      string
+	DriftSource            string
+	StaleReason            string
+	ToolInvocationScope    string
+	ChildRuntimePresent    bool
+	RuntimeMaterialMissing string
+	InvocationCount        int
+	FailureCount           int
+	GrantedAt              time.Time
+	ExpiresAt              time.Time
+	RevokedAt              time.Time
+	LastInvokedAt          time.Time
+}
+
+type ExternalToolInvocationReadinessSnapshot struct {
+	GeneratedAt      time.Time
+	ToolName         string
+	ChildPrincipal   string
+	Action           string
+	SelectorName     string
+	SelectorValue    string
+	Ready            bool
+	Status           string
+	Why              string
+	NextRepairAction string
 }
 
 type MissionLedgerStatusSnapshot struct {
@@ -181,37 +197,38 @@ type MissionLedgerStatusSnapshot struct {
 }
 
 type ChatStatusSnapshot struct {
-	GeneratedAt           time.Time
-	ChatID                int64
-	ActiveTurnIDs         []uint64
-	QueueDepth            int
-	TurnPhase             string
-	TurnPhaseSummary      string
-	TurnPhaseUpdatedAt    time.Time
-	OperationStatus       string
-	OperationStage        string
-	OperationSummary      string
-	PlanStepStatus        string
-	PlanStep              string
-	PlanCompletedSteps    int
-	PlanTotalSteps        int
-	PlanFullyExecuted     bool
-	HiddenInputCategories []string
-	HiddenInputSummary    string
-	DeliveryStatus        string
-	DeliverySummary       string
-	PendingItems          []PendingItem
-	Continuation          *ContinuationStatusSnapshot
-	LatestTurnRun         *TurnRunStatusSnapshot
-	RecentExecution       []ExecutionEventSummary
-	RecentAdjudications   []AdjudicationStatusSnapshot
-	ToolLifecycle         []ToolLifecycleStatusSnapshot
-	CapabilityRequests    []CapabilityRequestStatusSnapshot
-	CapabilityGrants      []CapabilityGrantStatusSnapshot
-	AutoApproval          *AutoApprovalStatusSnapshot
-	StaleRunningTurns     []TurnRunStatusSnapshot
-	RestartHealth         RestartHealthSnapshot
-	MissionLedger         MissionLedgerStatusSnapshot
+	GeneratedAt                     time.Time
+	ChatID                          int64
+	ActiveTurnIDs                   []uint64
+	QueueDepth                      int
+	TurnPhase                       string
+	TurnPhaseSummary                string
+	TurnPhaseUpdatedAt              time.Time
+	OperationStatus                 string
+	OperationStage                  string
+	OperationSummary                string
+	PlanStepStatus                  string
+	PlanStep                        string
+	PlanCompletedSteps              int
+	PlanTotalSteps                  int
+	PlanFullyExecuted               bool
+	HiddenInputCategories           []string
+	HiddenInputSummary              string
+	DeliveryStatus                  string
+	DeliverySummary                 string
+	PendingItems                    []PendingItem
+	Continuation                    *ContinuationStatusSnapshot
+	LatestTurnRun                   *TurnRunStatusSnapshot
+	RecentExecution                 []ExecutionEventSummary
+	RecentAdjudications             []AdjudicationStatusSnapshot
+	ToolLifecycle                   []ToolLifecycleStatusSnapshot
+	CapabilityRequests              []CapabilityRequestStatusSnapshot
+	CapabilityGrants                []CapabilityGrantStatusSnapshot
+	ExternalToolInvocationReadiness []ExternalToolInvocationReadinessSnapshot
+	AutoApproval                    *AutoApprovalStatusSnapshot
+	StaleRunningTurns               []TurnRunStatusSnapshot
+	RestartHealth                   RestartHealthSnapshot
+	MissionLedger                   MissionLedgerStatusSnapshot
 }
 
 type ChatStatusRollup struct {

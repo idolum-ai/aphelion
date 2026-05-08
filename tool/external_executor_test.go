@@ -172,3 +172,67 @@ func TestExternalProcessExecutorRejectsInvalidOutputAgainstSchema(t *testing.T) 
 		t.Fatalf("err = %v, want output-schema rejection", err)
 	}
 }
+
+func TestExternalToolExecutionAccessMaterializesChildRuntimeTypesDistinctly(t *testing.T) {
+	tmp := t.TempDir()
+	readonlyPath := filepath.Join(tmp, "readonly")
+	if err := os.MkdirAll(readonlyPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(readonly) err = %v", err)
+	}
+	readonlyFile := filepath.Join(tmp, "config.json")
+	if err := os.WriteFile(readonlyFile, []byte(`{}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(readonlyFile) err = %v", err)
+	}
+	secretFile := filepath.Join(tmp, "x.env")
+	if err := os.WriteFile(secretFile, []byte("X_BEARER_TOKEN=not-asserted\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(secretFile) err = %v", err)
+	}
+	t.Setenv("APHELION_E2_TEST_TOKEN", "present")
+
+	access, err := externalToolExecutionAccessFromGrant(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-x"}, session.CapabilityGrant{
+		GrantID: "capg-runtime-material",
+		Contract: `{"child_runtime":{
+			"readonly_paths":["` + readonlyPath + `"],
+			"readonly_binds":[{"source":"` + readonlyFile + `","target":"/app/config.json"}],
+			"secret_binds":[{"source":"` + secretFile + `","target":"/home/child/.aphelion/secrets/x.env"}],
+			"env_from_parent":["APHELION_E2_TEST_TOKEN"]
+		}}`,
+	})
+	if err != nil {
+		t.Fatalf("externalToolExecutionAccessFromGrant() err = %v", err)
+	}
+	if len(access.ExtraReadonlyPaths) != 1 || access.ExtraReadonlyPaths[0] != readonlyPath {
+		t.Fatalf("ExtraReadonlyPaths = %#v, want readonly path", access.ExtraReadonlyPaths)
+	}
+	if len(access.ExtraReadonlyBinds) != 2 {
+		t.Fatalf("ExtraReadonlyBinds = %#v, want readonly bind + secret bind", access.ExtraReadonlyBinds)
+	}
+	if access.ExtraReadonlyBinds[0].Source != readonlyFile || access.ExtraReadonlyBinds[0].Target != "/app/config.json" {
+		t.Fatalf("readonly bind = %#v, want typed readonly bind first", access.ExtraReadonlyBinds[0])
+	}
+	if access.ExtraReadonlyBinds[1].Source != secretFile || access.ExtraReadonlyBinds[1].Target != "/home/child/.aphelion/secrets/x.env" {
+		t.Fatalf("secret bind = %#v, want typed secret file bind", access.ExtraReadonlyBinds[1])
+	}
+	if got := access.ExtraEnv["APHELION_E2_TEST_TOKEN"]; got != "present" {
+		t.Fatalf("ExtraEnv = %#v, want env_from_parent materialized separately", access.ExtraEnv)
+	}
+}
+
+func TestExternalToolExecutionAccessReportsExactMissingRuntimeMaterial(t *testing.T) {
+	missingSecret := filepath.Join(t.TempDir(), "missing.env")
+	_, err := externalToolExecutionAccessFromGrant(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-x"}, session.CapabilityGrant{
+		GrantID:  "capg-missing-secret",
+		Contract: `{"child_runtime":{"secret_binds":[{"source":"` + missingSecret + `","target":"/run/secrets/x.env"}]}}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "capg-missing-secret") || !strings.Contains(err.Error(), "secret_bind source") || !strings.Contains(err.Error(), missingSecret) {
+		t.Fatalf("missing secret err = %v, want exact secret_bind source", err)
+	}
+
+	_, err = externalToolExecutionAccessFromGrant(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-x"}, session.CapabilityGrant{
+		GrantID:  "capg-missing-env",
+		Contract: `{"child_runtime":{"env_from_parent":["APHELION_E2_MISSING_ENV"]}}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "capg-missing-env") || !strings.Contains(err.Error(), `env_from_parent "APHELION_E2_MISSING_ENV" is not set`) {
+		t.Fatalf("missing env err = %v, want exact env_from_parent name", err)
+	}
+}
