@@ -52,7 +52,7 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 	if err != nil {
 		return 0, fmt.Errorf("prepare durable review artifact: %w", err)
 	}
-	summary := buildReviewSummary(agent, artifact, defaultReviewSummaryMaxChars)
+	summary := BuildReviewSummary(agent, artifact, defaultReviewSummaryMaxChars)
 	metadataJSON, err := marshalArtifactMetadata(artifact)
 	if err != nil {
 		return 0, fmt.Errorf("queue durable review artifact metadata: %w", err)
@@ -136,7 +136,7 @@ func sourceScope(agent core.DurableAgent) session.ScopeRef {
 	})
 }
 
-func buildReviewSummary(agent core.DurableAgent, artifact core.DurableReviewArtifact, maxChars int) string {
+func BuildReviewSummary(agent core.DurableAgent, artifact core.DurableReviewArtifact, maxChars int) string {
 	parts := []string{
 		fmt.Sprintf("durable_agent=%s", strings.TrimSpace(agent.AgentID)),
 	}

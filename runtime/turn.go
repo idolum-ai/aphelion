@@ -364,7 +364,7 @@ func FormatReviewEventCompactMessage(event session.ReviewEvent) string {
 	if next := reviewEventCompactNextAction(meta); next != "" {
 		lines = append(lines, "", "**"+reviewEventCompactNextActionHeading(meta)+"**", "- "+truncateReviewEventText(next, 220))
 	}
-	lines = append(lines, "", "Details has the full child update.")
+	lines = append(lines, "", reviewEventCompactFooter(meta))
 	return truncateReviewEventBlock(strings.Join(lines, "\n"), 1800)
 }
 
@@ -401,7 +401,7 @@ func FormatReviewEventDetailsMessage(event session.ReviewEvent) string {
 			}
 		}
 	}
-	lines = append(lines, "", "Use Hide details to return to the compact summary.")
+	lines = append(lines, "", reviewEventDetailsFooter(meta))
 	return truncateReviewEventBlock(strings.Join(lines, "\n"), 3900)
 }
 
@@ -552,6 +552,42 @@ func reviewEventCompactSummary(event session.ReviewEvent, meta reviewEventArtifa
 		}
 	}
 	return normalizeReviewEventWhitespace(event.Summary)
+}
+
+func reviewEventCompactFooter(meta reviewEventArtifactMetadata) string {
+	if reviewEventHasRedactions(meta) {
+		return "Details shows the safe review record; raw child text is stored locally because it may contain sensitive material."
+	}
+	return "Details has the full child update."
+}
+
+func reviewEventDetailsFooter(meta reviewEventArtifactMetadata) string {
+	if reviewEventHasRedactions(meta) {
+		return "Use Hide details to return to the compact summary. Raw redacted text is stored only in the local forensic sidecar."
+	}
+	return "Use Hide details to return to the compact summary."
+}
+
+func reviewEventHasRedactions(meta reviewEventArtifactMetadata) bool {
+	if strings.TrimSpace(meta.Metadata["redacted_fields"]) != "" {
+		return true
+	}
+	for _, value := range []string{meta.Summary, meta.Metadata["operator_summary"]} {
+		if strings.Contains(value, "[REDACTED:") {
+			return true
+		}
+	}
+	for _, action := range meta.LocalActions {
+		if strings.Contains(action, "[REDACTED:") {
+			return true
+		}
+	}
+	for _, question := range meta.Questions {
+		if strings.Contains(question, "[REDACTED:") {
+			return true
+		}
+	}
+	return false
 }
 
 func reviewEventCompactPoints(meta reviewEventArtifactMetadata) []string {

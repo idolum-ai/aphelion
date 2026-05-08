@@ -353,6 +353,51 @@ func TestReviewEventCompactGrantExpiredPauseIsOperatorReadable(t *testing.T) {
 	}
 }
 
+func TestReviewEventCompactUsesSafeSummaryForRedactedChildSummary(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		SourceRole:   "durable_agent",
+		SourceScope:  session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "idolum-email", DurableAgentID: "idolum-email"},
+		Summary:      "durable_agent=idolum-email channel=email interval=2026-05-08T02:50:01Z\nsummary: [REDACTED: summary]\nrisks: external_channel",
+		MetadataJSON: `{"agent_id":"idolum-email","summary":"[REDACTED: summary]","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"artifact_refs":["forensic://durable-agent/idolum-email/example.json"],"metadata":{"channel_kind":"email","external_channel_status":"wake_blocked","operator_summary":"Email wake blocked: gog_cli keyring backend requires an interactive passphrase prompt; no TTY is available.","redacted_fields":"summary","redaction_action":"quarantined_fields","redaction_source":"deterministic","redaction_reason":"concrete_secret_value"}}`,
+	}
+
+	compact := FormatReviewEventCompactMessage(event)
+	for _, want := range []string{"**Email child review**", "BLOCKED", "Email wake blocked: gog_cli keyring backend requires an interactive passphrase prompt", "Details shows the safe review record"} {
+		if !strings.Contains(compact, want) {
+			t.Fatalf("compact text = %q, want %q", compact, want)
+		}
+	}
+	if strings.Contains(compact, "Details has the full child update.") {
+		t.Fatalf("compact text = %q, must not claim details has full child update for redacted raw text", compact)
+	}
+
+	details := FormatReviewEventDetailsMessage(event)
+	if !strings.Contains(details, "Raw redacted text is stored only in the local forensic sidecar.") {
+		t.Fatalf("details text = %q, want local forensic sidecar footer", details)
+	}
+}
+
+func TestReviewEventCompactKeepsFullUpdateFooterWithoutRedactions(t *testing.T) {
+	t.Parallel()
+
+	event := session.ReviewEvent{
+		SourceRole:   "durable_agent",
+		SourceScope:  session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "idolum-email", DurableAgentID: "idolum-email"},
+		Summary:      "durable_agent=idolum-email channel=email interval=2026-05-08T02:50:01Z\nsummary: Email wake blocked because gog_cli needs a passphrase prompt and no TTY is available.\nrisks: external_channel",
+		MetadataJSON: `{"agent_id":"idolum-email","summary":"Email wake blocked because gog_cli needs a passphrase prompt and no TTY is available.","interval_label":"2026-05-08T02:50:01Z","risk_flags":["external_channel"],"metadata":{"channel_kind":"email","external_channel_status":"wake_blocked","redaction_action":"none","redaction_reason":"secret_concept_without_value"}}`,
+	}
+
+	compact := FormatReviewEventCompactMessage(event)
+	if !strings.Contains(compact, "Details has the full child update.") {
+		t.Fatalf("compact text = %q, want normal full-update footer", compact)
+	}
+	if strings.Contains(compact, "safe review record") {
+		t.Fatalf("compact text = %q, did not want redaction footer", compact)
+	}
+}
+
 func TestHandleInboundDeliversDurableReviewEventCompactWithExpandButton(t *testing.T) {
 	t.Parallel()
 

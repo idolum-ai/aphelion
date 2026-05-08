@@ -34,8 +34,17 @@ var secretLikePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bAKIA[0-9A-Z]{16}\b`),
 	regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 	regexp.MustCompile(`(?i)\bgh[pousr]_[A-Za-z0-9_]{16,}\b`),
-	regexp.MustCompile(`(?i)\b(?:password|token|secret|api key|credential|ssh key|private key)\b`),
+	regexp.MustCompile(`(?i)\b(?:password|passphrase|token|secret|api key|credential|ssh key|private key)\s*[:=]\s*["']?[^\s"']{4,}`),
 }
+
+var secretConceptPattern = regexp.MustCompile(`(?i)\b(?:password|passphrase|token|secret|api key|credential|credentials|ssh key|private key)\b`)
+
+type reviewTextSensitivity string
+
+const (
+	reviewTextSensitivityConceptOnly   reviewTextSensitivity = "secret_concept_without_value"
+	reviewTextSensitivityConcreteValue reviewTextSensitivity = "concrete_secret_value"
+)
 
 func PrepareReviewArtifact(agent core.DurableAgent, artifact core.DurableReviewArtifact) (core.DurableReviewArtifact, error) {
 	artifact.AgentID = firstNonEmpty(strings.TrimSpace(artifact.AgentID), strings.TrimSpace(agent.AgentID))
@@ -48,24 +57,38 @@ func PrepareReviewArtifact(agent core.DurableAgent, artifact core.DurableReviewA
 	payload := make(map[string]string)
 	redactedFields := make([]string, 0, 4)
 	secretPressure := artifactHasSecretPressure(artifact)
+	redactionReasons := make(map[string]string)
+	conceptMentions := make([]string, 0, 4)
 
-	if shouldQuarantineArtifactText(secretPressure, artifact.Summary) {
+	if shouldQuarantineArtifactText(artifact.Summary) {
 		payload["summary"] = strings.TrimSpace(artifact.Summary)
 		artifact.Summary = redactedSecretValue("summary")
 		redactedFields = append(redactedFields, "summary")
+		redactionReasons["summary"] = string(reviewTextSensitivityConcreteValue)
+	} else if mentionsSecretConcept(artifact.Summary) {
+		conceptMentions = append(conceptMentions, "summary")
 	}
-	artifact.LocalActions = redactSecretSlice("local_action", artifact.LocalActions, secretPressure, payload, &redactedFields)
-	artifact.Questions = redactSecretSlice("question", artifact.Questions, secretPressure, payload, &redactedFields)
+	artifact.LocalActions = redactSecretSlice("local_action", artifact.LocalActions, payload, &redactedFields, redactionReasons, &conceptMentions)
+	artifact.Questions = redactSecretSlice("question", artifact.Questions, payload, &redactedFields, redactionReasons, &conceptMentions)
 
 	for key, value := range artifact.Metadata {
 		if shouldQuarantineArtifactMetadata(key, value, secretPressure) {
 			payload[key] = strings.TrimSpace(value)
 			artifact.Metadata[key] = redactedSecretValue(key)
 			redactedFields = append(redactedFields, key)
+			redactionReasons[key] = metadataRedactionReason(key, value, secretPressure)
+		} else if mentionsSecretConcept(value) {
+			conceptMentions = append(conceptMentions, "metadata."+strings.TrimSpace(key))
 		}
 	}
 
 	if len(payload) == 0 {
+		if len(conceptMentions) > 0 {
+			artifact.Metadata["redaction_action"] = "none"
+			artifact.Metadata["redaction_source"] = "deterministic"
+			artifact.Metadata["redaction_reason"] = string(reviewTextSensitivityConceptOnly)
+			artifact.Metadata["redaction_concept_fields"] = strings.Join(uniqueStrings(conceptMentions), ",")
+		}
 		return artifact, nil
 	}
 
@@ -80,6 +103,9 @@ func PrepareReviewArtifact(agent core.DurableAgent, artifact core.DurableReviewA
 		},
 		Payload: payload,
 	}
+	if len(redactionReasons) > 0 {
+		record.Metadata["redaction_reasons"] = encodeStringMapForMetadata(redactionReasons)
+	}
 	ref, err := WriteForensicRecord(agent, record)
 	if err != nil {
 		artifact.Metadata["forensic_ref_status"] = "write_failed"
@@ -87,6 +113,14 @@ func PrepareReviewArtifact(agent core.DurableAgent, artifact core.DurableReviewA
 	}
 	artifact.Metadata["forensic_ref"] = ref
 	artifact.Metadata["redacted_fields"] = strings.Join(record.RedactedFields, ",")
+	artifact.Metadata["redaction_action"] = "quarantined_fields"
+	artifact.Metadata["redaction_source"] = "deterministic"
+	artifact.Metadata["redaction_reason"] = primaryRedactionReason(redactionReasons)
+	if summaryIsRedacted(record.RedactedFields) && strings.TrimSpace(artifact.Metadata["operator_summary"]) == "" {
+		safeSummary := safeOperatorSummary(agent, artifact)
+		artifact.Metadata["operator_summary"] = safeSummary
+		artifact.Metadata["safe_operator_summary"] = safeSummary
+	}
 	artifact.ArtifactRefs = append(artifact.ArtifactRefs, ref)
 	return artifact, nil
 }
@@ -156,18 +190,22 @@ func parseForensicRef(ref string) (agentID string, name string, err error) {
 	return parts[0], name, nil
 }
 
-func redactSecretSlice(prefix string, values []string, secretPressure bool, payload map[string]string, redactedFields *[]string) []string {
+func redactSecretSlice(prefix string, values []string, payload map[string]string, redactedFields *[]string, redactionReasons map[string]string, conceptMentions *[]string) []string {
 	if len(values) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(values))
 	for i, value := range values {
-		if shouldQuarantineArtifactText(secretPressure, value) {
+		if shouldQuarantineArtifactText(value) {
 			key := fmt.Sprintf("%s_%d", prefix, i+1)
 			payload[key] = strings.TrimSpace(value)
 			out = append(out, redactedSecretValue(key))
 			*redactedFields = append(*redactedFields, key)
+			redactionReasons[key] = string(reviewTextSensitivityConcreteValue)
 			continue
+		}
+		if mentionsSecretConcept(value) {
+			*conceptMentions = append(*conceptMentions, fmt.Sprintf("%s_%d", prefix, i+1))
 		}
 		out = append(out, strings.TrimSpace(value))
 	}
@@ -175,20 +213,31 @@ func redactSecretSlice(prefix string, values []string, secretPressure bool, payl
 }
 
 func shouldQuarantineArtifactMetadata(key string, value string, secretPressure bool) bool {
-	key = strings.ToLower(strings.TrimSpace(key))
-	if shouldQuarantineArtifactText(secretPressure, value) {
+	if shouldQuarantineArtifactText(value) {
 		return true
 	}
-	return secretPressure && (strings.Contains(key, "excerpt") || strings.Contains(key, "response") || strings.Contains(key, "payload") || strings.Contains(key, "body"))
+	return secretPressure && isRawSourceMetadataKey(key) && mentionsSecretConcept(value)
 }
 
-func shouldQuarantineArtifactText(secretPressure bool, value string) bool {
+func metadataRedactionReason(key string, value string, secretPressure bool) string {
+	if shouldQuarantineArtifactText(value) {
+		return string(reviewTextSensitivityConcreteValue)
+	}
+	if secretPressure && isRawSourceMetadataKey(key) && mentionsSecretConcept(value) {
+		return "secret_pressure_source_excerpt"
+	}
+	return string(reviewTextSensitivityConcreteValue)
+}
+
+func isRawSourceMetadataKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return strings.Contains(key, "excerpt") || strings.Contains(key, "payload") || strings.Contains(key, "body")
+}
+
+func shouldQuarantineArtifactText(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return false
-	}
-	if secretPressure {
-		return true
 	}
 	return containsSecretLikeMaterial(value)
 }
@@ -213,6 +262,97 @@ func containsSecretLikeMaterial(text string) bool {
 		}
 	}
 	return false
+}
+
+func ContainsConcreteSecretValue(text string) bool {
+	return containsSecretLikeMaterial(text)
+}
+
+func mentionsSecretConcept(text string) bool {
+	return secretConceptPattern.MatchString(strings.TrimSpace(text))
+}
+
+func summaryIsRedacted(fields []string) bool {
+	for _, field := range fields {
+		if strings.TrimSpace(field) == "summary" {
+			return true
+		}
+	}
+	return false
+}
+
+func primaryRedactionReason(reasons map[string]string) string {
+	if len(reasons) == 0 {
+		return string(reviewTextSensitivityConcreteValue)
+	}
+	keys := make([]string, 0, len(reasons))
+	for key := range reasons {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if reason := strings.TrimSpace(reasons[key]); reason != "" {
+			return reason
+		}
+	}
+	return string(reviewTextSensitivityConcreteValue)
+}
+
+func safeOperatorSummary(agent core.DurableAgent, artifact core.DurableReviewArtifact) string {
+	label := durableReviewAgentLabel(agent)
+	status := strings.ToLower(strings.TrimSpace(firstNonEmpty(
+		artifact.Metadata["external_channel_status"],
+		artifact.Metadata["status"],
+		artifact.Metadata["review_status"],
+	)))
+	errorText := strings.TrimSpace(firstNonEmpty(
+		artifact.Metadata["external_channel_error"],
+		artifact.Metadata["blocker"],
+		artifact.Metadata["error"],
+	))
+	if containsSecretLikeMaterial(errorText) {
+		errorText = ""
+	}
+	if strings.Contains(status, "blocked") || strings.Contains(status, "failed") {
+		if errorText != "" {
+			return fmt.Sprintf("%s blocked: %s", label, errorText)
+		}
+		return label + " blocked; raw child summary is stored locally because it may contain sensitive material."
+	}
+	if errorText != "" {
+		return fmt.Sprintf("%s reported: %s", label, errorText)
+	}
+	return label + " review contains sensitive material; raw child summary is stored locally."
+}
+
+func durableReviewAgentLabel(agent core.DurableAgent) string {
+	if strings.EqualFold(strings.TrimSpace(agent.ChannelKind), "email") || strings.EqualFold(strings.TrimSpace(agent.AgentID), "idolum-email") {
+		return "Email wake"
+	}
+	if strings.TrimSpace(agent.AgentID) == "" {
+		return "Child review"
+	}
+	return strings.TrimSpace(agent.AgentID)
+}
+
+func encodeStringMapForMetadata(values map[string]string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if strings.TrimSpace(key) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if value := strings.TrimSpace(values[key]); value != "" {
+			parts = append(parts, strings.TrimSpace(key)+"="+value)
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 func redactedSecretValue(label string) string {

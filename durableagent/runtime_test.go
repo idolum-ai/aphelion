@@ -209,8 +209,152 @@ func TestQueueReviewArtifactRedactsSecretLikeMetadataIntoForensicSidecar(t *test
 	if record.Payload["source_excerpt"] != "Use this password: super-secret-123 and keep it forever." {
 		t.Fatalf("forensic source_excerpt = %q, want preserved raw secret-bearing excerpt", record.Payload["source_excerpt"])
 	}
+	if _, ok := record.Payload["summary"]; ok {
+		t.Fatalf("forensic payload unexpectedly redacted summary: %#v", record.Payload)
+	}
 	if !strings.Contains(payload.Metadata["source_excerpt"], "[REDACTED") {
 		t.Fatalf("source_excerpt metadata = %q, want redacted marker", payload.Metadata["source_excerpt"])
+	}
+	if strings.Contains(events[0].MetadataJSON, "[REDACTED: summary]") {
+		t.Fatalf("MetadataJSON = %q, summary should not redact credential concept mention", events[0].MetadataJSON)
+	}
+	if payload.Metadata["redacted_fields"] != "source_excerpt" {
+		t.Fatalf("redacted_fields = %q, want source_excerpt only", payload.Metadata["redacted_fields"])
+	}
+}
+
+func TestQueueReviewArtifactDoesNotRedactCredentialConceptSummary(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	rt := NewRuntime(store)
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		BootstrapLLM:       testDurableAgentBootstrapLLM(),
+		Status:             "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	artifact := core.DurableReviewArtifact{
+		AgentID:       agent.AgentID,
+		Summary:       "What matters: gog_cli keyring backend requires an interactive passphrase prompt; no TTY is available, so no mailbox credential was read.",
+		IntervalLabel: "2026-05-08T02:50:01Z",
+		LocalActions:  []string{"External-channel wake blocked; recorded explicit failure/backoff instead of success."},
+		RiskFlags:     []string{"external_channel", "adapter_dispatch"},
+		Metadata: map[string]string{
+			"channel_kind":            "email",
+			"external_channel_status": "wake_blocked",
+			"external_channel_error":  "gog_cli keyring backend requires an interactive passphrase prompt; no TTY is available.",
+		},
+	}
+	if _, err := rt.QueueReviewArtifact(agent, artifact); err != nil {
+		t.Fatalf("QueueReviewArtifact() err = %v", err)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending len = %d, want 1", len(events))
+	}
+	if strings.Contains(events[0].MetadataJSON, "[REDACTED: summary]") || strings.Contains(events[0].Summary, "[REDACTED: summary]") {
+		t.Fatalf("event redacted safe credential concept summary: summary=%q metadata=%q", events[0].Summary, events[0].MetadataJSON)
+	}
+	if strings.Contains(events[0].MetadataJSON, "forensic://") {
+		t.Fatalf("MetadataJSON = %q, did not want forensic sidecar for concept-only summary", events[0].MetadataJSON)
+	}
+	if !strings.Contains(events[0].MetadataJSON, `"redaction_action":"none"`) || !strings.Contains(events[0].MetadataJSON, `"redaction_reason":"secret_concept_without_value"`) {
+		t.Fatalf("MetadataJSON = %q, want typed no-redaction decision for credential concept mention", events[0].MetadataJSON)
+	}
+}
+
+func TestQueueReviewArtifactRedactsConcreteSecretValueInSummary(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	workspaceRoot, memoryRoot := DefaultLocalRoots(filepath.Join(t.TempDir(), "sessions.db"), "idolum-email")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspaceRoot) err = %v", err)
+	}
+	if err := os.MkdirAll(memoryRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(memoryRoot) err = %v", err)
+	}
+
+	rt := NewRuntime(store)
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "email",
+		BootstrapLLM:       testDurableAgentBootstrapLLM(),
+		LocalStorageRoots:  []string{workspaceRoot, memoryRoot},
+		Status:             "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+
+	rawSummary := "Email wake blocked after a child reported token: sk-testSECRETabcdef123456 in adapter output."
+	artifact := core.DurableReviewArtifact{
+		AgentID:       agent.AgentID,
+		Summary:       rawSummary,
+		IntervalLabel: "2026-05-08T02:50:01Z",
+		Metadata: map[string]string{
+			"channel_kind":            "email",
+			"external_channel_status": "wake_blocked",
+			"external_channel_error":  "adapter output contained a concrete token value",
+		},
+	}
+	if _, err := rt.QueueReviewArtifact(agent, artifact); err != nil {
+		t.Fatalf("QueueReviewArtifact() err = %v", err)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending len = %d, want 1", len(events))
+	}
+	if strings.Contains(events[0].MetadataJSON, "sk-testSECRET") || strings.Contains(events[0].Summary, "sk-testSECRET") {
+		t.Fatalf("event leaked concrete secret summary: summary=%q metadata=%q", events[0].Summary, events[0].MetadataJSON)
+	}
+
+	var payload struct {
+		Summary  string            `json:"summary"`
+		Metadata map[string]string `json:"metadata"`
+	}
+	if err := json.Unmarshal([]byte(events[0].MetadataJSON), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(metadata) err = %v", err)
+	}
+	if payload.Summary != "[REDACTED: summary]" {
+		t.Fatalf("metadata summary = %q, want redacted marker", payload.Summary)
+	}
+	if payload.Metadata["operator_summary"] == "" || strings.Contains(payload.Metadata["operator_summary"], "sk-testSECRET") {
+		t.Fatalf("operator_summary = %q, want safe synthetic summary", payload.Metadata["operator_summary"])
+	}
+	if payload.Metadata["safe_operator_summary"] != payload.Metadata["operator_summary"] {
+		t.Fatalf("safe_operator_summary = %q, want %q", payload.Metadata["safe_operator_summary"], payload.Metadata["operator_summary"])
+	}
+	ref := payload.Metadata["forensic_ref"]
+	record, err := ReadForensicRecord(agent, ref)
+	if err != nil {
+		t.Fatalf("ReadForensicRecord() err = %v", err)
+	}
+	if record.Payload["summary"] != rawSummary {
+		t.Fatalf("forensic summary = %q, want raw summary", record.Payload["summary"])
 	}
 }
 

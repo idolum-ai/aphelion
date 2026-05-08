@@ -157,6 +157,44 @@ func TestReviewEventsPendingOrderingAndFiltering(t *testing.T) {
 	}
 }
 
+func TestReviewEventsWithRedactedSummaryAndUpdateProjection(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	id, err := store.InsertReviewEvent(ReviewEvent{
+		SourceChatID:      10,
+		SourceUserID:      0,
+		SourceRole:        "durable_agent",
+		TargetAdminChatID: 700,
+		Summary:           "summary: [REDACTED: summary]",
+		MetadataJSON:      `{"summary":"[REDACTED: summary]","metadata":{"redacted_fields":"summary"}}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+
+	events, err := store.ReviewEventsWithRedactedSummary(10)
+	if err != nil {
+		t.Fatalf("ReviewEventsWithRedactedSummary() err = %v", err)
+	}
+	if len(events) != 1 || events[0].ID != id {
+		t.Fatalf("redacted events = %#v, want event %d", events, id)
+	}
+
+	if err := store.UpdateReviewEventProjection(id, "summary: repaired", `{"summary":"repaired"}`); err != nil {
+		t.Fatalf("UpdateReviewEventProjection() err = %v", err)
+	}
+	updated, err := store.ReviewEventByID(id)
+	if err != nil {
+		t.Fatalf("ReviewEventByID() err = %v", err)
+	}
+	if updated.Summary != "summary: repaired" || updated.MetadataJSON != `{"summary":"repaired"}` {
+		t.Fatalf("updated event = %#v, want repaired projection", updated)
+	}
+}
+
 func TestReviewEventsLimitAndMarkDelivered(t *testing.T) {
 	t.Parallel()
 
