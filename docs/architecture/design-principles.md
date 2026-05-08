@@ -20,6 +20,7 @@ authority.
 - Continuity, not productivity theater.
 - Authority before capability.
 - Compile contracts; interpret ambiguity.
+- Short paths to truth.
 
 ## Principles
 
@@ -140,6 +141,22 @@ verbose ritual text, or implementation noise.
 Operator-facing names should be human scale. Raw IDs can remain in details,
 debug surfaces, and canonical records.
 
+### Short paths to truth
+
+Debugging should require as few hops as possible. When something fails, the
+operator and maintainer should be able to move from the visible symptom to the
+responsible contract, event, code path, local artifact, and next repair action
+without guessing which subsystem owns the truth.
+
+Every operator-facing failure should carry or point to a compact chain of
+evidence: what happened, what state was read or written, where the canonical
+record lives, which projection rendered it, and what command or surface can
+inspect the deeper detail.
+
+The system should avoid "you might find it somewhere in logs, DB rows, sidecars,
+Telegram messages, or memory files" as an implicit debugging model. If multiple
+surfaces are necessary, the first surface should name the next one explicitly.
+
 ### Minimal stack, strong substrate
 
 Aphelion should prefer a simple Linux service, Go binary, SQLite/session state,
@@ -163,4 +180,5 @@ When adding or changing behavior:
 - Prefer narrow tools and leases over ambient capability.
 - Prefer stable service behavior over theatrical caution.
 - Prefer emergency stop/ask/escalate paths over brittle edge-case matching.
+- Prefer one-hop debug affordances over scattered forensic scavenging.
 - Prefer testable invariants over prompt-only expectations.
