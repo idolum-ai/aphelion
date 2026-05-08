@@ -100,9 +100,18 @@ func TestCapabilityGrantWakeFailureMarksGrantFailedAndReports(t *testing.T) {
 	if !ok || failed.Status != session.CapabilityGrantStatusFailed || !strings.Contains(failed.StaleReason, "wake substrate unavailable") {
 		t.Fatalf("failed grant = %#v ok=%t, want failed with stale reason", failed, ok)
 	}
-	sender.mu.Lock()
-	defer sender.mu.Unlock()
-	if len(sender.sent) == 0 || !strings.Contains(sender.sent[len(sender.sent)-1].Text, "request a fresh grant") {
-		t.Fatalf("sent operational notices = %#v, want fresh-grant warning", sender.sent)
+	deadline := time.After(time.Second)
+	for {
+		sender.mu.Lock()
+		sent := append([]core.OutboundMessage(nil), sender.sent...)
+		sender.mu.Unlock()
+		if len(sent) > 0 && strings.Contains(sent[len(sent)-1].Text, "request a fresh grant") {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("sent operational notices = %#v, want fresh-grant warning", sent)
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }

@@ -1342,7 +1342,6 @@ func New(
 		expireIdle:               store.ExpireIdle,
 		staleTurnThreshold:       defaultStaleTurnThreshold,
 		staleTurnLimit:           defaultStaleTurnLimit,
-		staleTurnSweep:           store.StaleRunningTurnRuns,
 		interruptRunningTurnRuns: store.InterruptRunningTurnRuns,
 		tailnetBackend:           tailnetBackend,
 		modelProviderCache:       make(map[string]agent.Provider),
@@ -1368,6 +1367,10 @@ func New(
 			native.runtime = rt
 			rt.workExecutor.executors["native"] = native
 		}
+	}
+	rt.staleTurnSweep = func(activityCutoff time.Time, limit int) ([]session.TurnRun, error) {
+		unmatchedToolCutoff := time.Now().UTC().Add(-rt.unmatchedToolStaleThreshold())
+		return store.StaleRunningTurnRunsWithUnmatchedToolCutoff(activityCutoff, unmatchedToolCutoff, limit)
 	}
 	rt.interactiveDMAssembler = newInteractiveDMTurnAssembler(rt)
 	return rt, nil

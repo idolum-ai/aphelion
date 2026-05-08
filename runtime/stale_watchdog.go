@@ -14,6 +14,7 @@ import (
 const (
 	defaultStaleTurnThreshold = 3 * time.Minute
 	defaultStaleTurnLimit     = 8
+	defaultUnmatchedToolGrace = 30 * time.Second
 )
 
 func (r *Runtime) SetStaleTurnWatchdogHook(hook func(runs []session.TurnRun)) {
@@ -89,4 +90,21 @@ func staleTurnWatchdogCadence(threshold time.Duration) time.Duration {
 		return 2 * time.Minute
 	}
 	return cadence
+}
+
+func (r *Runtime) unmatchedToolStaleThreshold() time.Duration {
+	if r == nil {
+		return defaultStaleTurnThreshold
+	}
+	threshold := r.staleTurnThreshold
+	if threshold <= 0 {
+		threshold = defaultStaleTurnThreshold
+	}
+	if r.cfg != nil && r.cfg.Agent.ToolTimeout > 0 {
+		toolThreshold := time.Duration(r.cfg.Agent.ToolTimeout)*time.Second + defaultUnmatchedToolGrace
+		if toolThreshold > threshold {
+			threshold = toolThreshold
+		}
+	}
+	return threshold
 }

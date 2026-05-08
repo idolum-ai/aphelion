@@ -137,7 +137,7 @@ func (r *Runtime) recordCapabilityGrantWakeFailure(ctx context.Context, key sess
 			"error":      trimError(cause.Error()),
 		}, time.Now().UTC())
 	}
-	r.reportOperationalIssue(ctx, "capability_grant_wake", fmt.Errorf("grant_id=%s agent_id=%s wake failed; repair the durable agent runtime and request a fresh grant: %w", strings.TrimSpace(grant.GrantID), agentID, cause))
+	r.reportOperationalIssueAsync("capability_grant_wake", fmt.Errorf("grant_id=%s agent_id=%s wake failed; repair the durable agent runtime and request a fresh grant: %w", strings.TrimSpace(grant.GrantID), agentID, cause))
 }
 
 func (r *Runtime) markCapabilityGrantWakeFailed(grant session.CapabilityGrant, cause error) error {

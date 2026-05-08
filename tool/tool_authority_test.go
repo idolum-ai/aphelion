@@ -46,6 +46,26 @@ func TestDefinitionsIncludeToolAuthorityWhenStoreConfigured(t *testing.T) {
 	}
 }
 
+func TestToolAuthorityDefinitionDoesNotAdvertiseDeprecatedInlineProbeFields(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	var raw json.RawMessage
+	for _, def := range registry.Definitions() {
+		if def.Name == "tool_authority" {
+			raw = def.Parameters
+			break
+		}
+	}
+	if len(raw) == 0 {
+		t.Fatal("tool_authority definition not found")
+	}
+	if strings.Contains(string(raw), "probe_status") || strings.Contains(string(raw), "probe_output") {
+		t.Fatalf("tool_authority schema advertises deprecated inline probe fields: %s", string(raw))
+	}
+}
+
 func TestToolAuthorityRegisterAndGrantAccessFlow(t *testing.T) {
 	t.Parallel()
 

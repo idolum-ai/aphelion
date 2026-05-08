@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -391,6 +392,9 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 	if status == "" {
 		status = session.CapabilityGrantStatusActive
 	}
+	if err := r.validateCapabilityGrantTarget(grantedTo, status); err != nil {
+		return "", err
+	}
 	now := time.Now().UTC()
 	expiresAt := time.Time{}
 	if in.ExpiresInSeconds > 0 {
@@ -485,9 +489,29 @@ func (r *Registry) capabilityAuthorityGrantSet(ctx context.Context, in capabilit
 		}
 	}
 	if grant.Status == session.CapabilityGrantStatusActive && r.capabilityGrantObserver != nil {
-		r.capabilityGrantObserver(ctx, key, grant)
+		r.notifyCapabilityGrantObserver(key, grant)
 	}
 	return renderCapabilityGrantWithUpdate("[CAPABILITY_GRANT]", grant, updateResult), nil
+}
+
+func (r *Registry) validateCapabilityGrantTarget(grantedTo string, status session.CapabilityGrantStatus) error {
+	if status != session.CapabilityGrantStatusActive {
+		return nil
+	}
+	agentID, ok := core.DurableAgentIDFromPrincipal(grantedTo)
+	if !ok {
+		return nil
+	}
+	if r == nil || r.store == nil {
+		return fmt.Errorf("capability_authority grant_set cannot validate durable agent %q without transcript store", agentID)
+	}
+	if _, err := r.store.DurableAgent(agentID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("capability_authority grant_set target durable agent %q does not exist; create or repair the durable agent before granting active capability", agentID)
+		}
+		return fmt.Errorf("load durable agent %q for grant_set: %w", agentID, err)
+	}
+	return nil
 }
 
 func (r *Registry) capabilityAuthorityGrantShow(in capabilityInput, actor principal.Principal) (string, error) {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
@@ -168,10 +169,58 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	}
 }
 
+func TestCapabilityGrantSetRejectsMissingDurableAgentTarget(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-missing-child",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "durable_agent:missing-child",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "x_idolumai_readonly",
+		Purpose:        "grant a child tool that cannot be woken",
+		ReviewStatus:   session.CapabilityReviewStatusApproved,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
+		"action":"grant_set",
+		"request_id":"cap-missing-child",
+		"grant_id":"capg-missing-child",
+		"principal":"durable_agent:missing-child",
+		"allowed_actions":["invoke"]
+	}`))
+	if err == nil || !strings.Contains(err.Error(), `target durable agent "missing-child" does not exist`) {
+		t.Fatalf("grant_set err = %v, want missing durable agent preflight", err)
+	}
+	if _, ok, err := store.CapabilityGrant("capg-missing-child"); err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	} else if ok {
+		t.Fatal("capg-missing-child was stored despite missing durable target")
+	}
+}
+
 func TestCapabilityGrantSetNotifiesActiveGrantObserver(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	key := adminSessionKey()
 	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:     "child-alpha",
+		ChannelKind: "manual_channel",
+		WakeupMode:  "manual",
+		Status:      "active",
+		BootstrapLLM: core.NodeLLMBootstrap{
+			Backend:         "codex",
+			CodexAuthSource: "codex_cli",
+			CodexHome:       "/tmp/codex-home",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
 
 	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
 		RequestID:      "cap-observed",
@@ -184,12 +233,12 @@ func TestCapabilityGrantSetNotifiesActiveGrantObserver(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
 	}
-	var observed []session.CapabilityGrant
+	observed := make(chan session.CapabilityGrant, 1)
 	registry.WithCapabilityGrantObserver(func(_ context.Context, observedKey session.SessionKey, grant session.CapabilityGrant) {
 		if observedKey.ChatID != key.ChatID {
 			t.Fatalf("observer key chat_id = %d, want %d", observedKey.ChatID, key.ChatID)
 		}
-		observed = append(observed, grant)
+		observed <- grant
 	})
 
 	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
@@ -205,11 +254,59 @@ func TestCapabilityGrantSetNotifiesActiveGrantObserver(t *testing.T) {
 	if !strings.Contains(out, "status: active") {
 		t.Fatalf("grant_set output = %q, want active", out)
 	}
-	if len(observed) != 1 {
-		t.Fatalf("observer calls = %d, want 1", len(observed))
+	var grant session.CapabilityGrant
+	select {
+	case grant = <-observed:
+	case <-time.After(time.Second):
+		t.Fatal("observer was not called")
 	}
-	if observed[0].GrantID != "capg-observed" || observed[0].GrantedTo != "durable_agent:child-alpha" || observed[0].Status != session.CapabilityGrantStatusActive {
-		t.Fatalf("observed grant = %#v, want active capg-observed", observed[0])
+	if grant.GrantID != "capg-observed" || grant.GrantedTo != "durable_agent:child-alpha" || grant.Status != session.CapabilityGrantStatusActive {
+		t.Fatalf("observed grant = %#v, want active capg-observed", grant)
+	}
+}
+
+func TestCapabilityGrantSetDoesNotBlockOnObserver(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-blocking-observer",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "codex",
+		Purpose:        "prove observer side effects do not hold the tool open",
+		ReviewStatus:   session.CapabilityReviewStatusApproved,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	block := make(chan struct{})
+	registry.WithCapabilityGrantObserver(func(context.Context, session.SessionKey, session.CapabilityGrant) {
+		<-block
+	})
+	defer close(block)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
+			"action":"grant_set",
+			"request_id":"cap-blocking-observer",
+			"grant_id":"capg-blocking-observer",
+			"principal":"telegram:1001",
+			"allowed_actions":["invoke"]
+		}`))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("grant_set err = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("grant_set blocked on capability grant observer")
 	}
 }
 

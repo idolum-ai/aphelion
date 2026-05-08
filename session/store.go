@@ -3953,8 +3953,15 @@ func (s *SQLiteStore) InterruptRunningTurnRuns() ([]TurnRun, error) {
 }
 
 func (s *SQLiteStore) StaleRunningTurnRuns(cutoff time.Time, limit int) ([]TurnRun, error) {
-	if cutoff.IsZero() {
+	return s.StaleRunningTurnRunsWithUnmatchedToolCutoff(cutoff, cutoff, limit)
+}
+
+func (s *SQLiteStore) StaleRunningTurnRunsWithUnmatchedToolCutoff(activityCutoff time.Time, unmatchedToolCutoff time.Time, limit int) ([]TurnRun, error) {
+	if activityCutoff.IsZero() {
 		return nil, fmt.Errorf("stale turn run cutoff is required")
+	}
+	if unmatchedToolCutoff.IsZero() {
+		unmatchedToolCutoff = activityCutoff
 	}
 	if limit <= 0 {
 		limit = 20
@@ -3962,14 +3969,41 @@ func (s *SQLiteStore) StaleRunningTurnRuns(cutoff time.Time, limit int) ([]TurnR
 
 	rows, err := s.db.Query(`
 		SELECT
-			id, session_id, chat_id, user_id, scope_kind, scope_id, durable_agent_id, kind, status, request_text, started_at, completed_at,
-			last_activity_at, last_tool_name, last_tool_preview, tool_calls_started, tool_calls_finished, last_tool_result_preview, last_tool_error,
-			progress_message_id, error_text, recovery_summary, recovery_logged_at
-		FROM turn_runs
-		WHERE status = ? AND last_activity_at <= ?
-		ORDER BY last_activity_at ASC, id ASC
+			tr.id, tr.session_id, tr.chat_id, tr.user_id, tr.scope_kind, tr.scope_id, tr.durable_agent_id, tr.kind, tr.status, tr.request_text, tr.started_at, tr.completed_at,
+			tr.last_activity_at, tr.last_tool_name, tr.last_tool_preview, tr.tool_calls_started, tr.tool_calls_finished, tr.last_tool_result_preview, tr.last_tool_error,
+			tr.progress_message_id, tr.error_text, tr.recovery_summary, tr.recovery_logged_at
+		FROM turn_runs tr
+		WHERE tr.status = ?
+			AND (
+				tr.last_activity_at <= ?
+				OR EXISTS (
+					SELECT 1
+					FROM execution_events started
+					WHERE started.session_id = tr.session_id
+						AND started.event_type = ?
+						AND CAST(json_extract(started.payload_json, '$.run_id') AS INTEGER) = tr.id
+						AND started.created_at <= ?
+						AND NOT EXISTS (
+							SELECT 1
+							FROM execution_events finished
+							WHERE finished.session_id = tr.session_id
+								AND finished.event_type IN (?, ?)
+								AND CAST(json_extract(finished.payload_json, '$.run_id') AS INTEGER) = tr.id
+								AND finished.created_at >= started.created_at
+						)
+				)
+			)
+		ORDER BY tr.last_activity_at ASC, tr.id ASC
 		LIMIT ?
-	`, string(TurnRunStatusRunning), cutoff.UTC().Format(time.RFC3339Nano), limit)
+	`,
+		string(TurnRunStatusRunning),
+		activityCutoff.UTC().Format(time.RFC3339Nano),
+		core.ExecutionEventToolStarted,
+		unmatchedToolCutoff.UTC().Format(time.RFC3339Nano),
+		core.ExecutionEventToolSucceeded,
+		core.ExecutionEventToolFailed,
+		limit,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("query stale running turn runs: %w", err)
 	}

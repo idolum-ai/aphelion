@@ -26,7 +26,10 @@ import (
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
-const defaultMaxOutputBytes = 32 * 1024
+const (
+	defaultMaxOutputBytes          = 32 * 1024
+	capabilityGrantObserverTimeout = 10 * time.Second
+)
 
 type Registry struct {
 	workspace                       string
@@ -444,6 +447,18 @@ func (r *Registry) WithCapabilityGrantObserver(observer func(context.Context, se
 		r.capabilityGrantObserver = observer
 	}
 	return r
+}
+
+func (r *Registry) notifyCapabilityGrantObserver(key session.SessionKey, grant session.CapabilityGrant) {
+	if r == nil || r.capabilityGrantObserver == nil {
+		return
+	}
+	observer := r.capabilityGrantObserver
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), capabilityGrantObserverTimeout)
+		defer cancel()
+		observer(ctx, key, grant)
+	}()
 }
 
 func (r *Registry) WithCodexImageGenerationProvider(provider agent.Provider) *Registry {
@@ -1025,8 +1040,6 @@ func (r *Registry) Definitions() []agent.ToolDef {
 					"status": {"type": "string", "enum": ["pending", "installed", "verified", "failed", "stale"], "description": "Install/probe lifecycle status for install_set or install_list filtering"},
 					"installer": {"type": "string", "description": "Who installed or provisioned the external tool"},
 					"install_ref": {"type": "string", "description": "Reference to the install artifact, path, image, or package set"},
-					"probe_status": {"type": "string", "enum": ["passed", "failed"], "description": "Deprecated for install_set; use probe_run so probe evidence is runtime-authored"},
-					"probe_output": {"type": "string", "description": "Deprecated for install_set; use probe_run so probe evidence is runtime-authored"},
 					"limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Optional list limit"}
 				},
 				"required": ["action"]

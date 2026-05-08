@@ -2375,6 +2375,102 @@ func TestStaleRunningTurnRuns(t *testing.T) {
 	}
 }
 
+func TestStaleRunningTurnRunsDetectsUnmatchedToolStartDespiteHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1905, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1905"}}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, TurnRunKindInteractive, "stuck tool run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.NoteTurnRunToolStart(run.ID, "capability_authority", `{"action":"grant_set"}`); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+	old := time.Now().UTC().Add(-10 * time.Minute)
+	if _, err := store.AppendExecutionEvent(key, ExecutionEventInput{
+		EventType:   core.ExecutionEventToolStarted,
+		Stage:       "tool",
+		Status:      "started",
+		PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"capability_authority"}`, run.ID),
+		CreatedAt:   old,
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(tool.started) err = %v", err)
+	}
+	if err := store.TouchTurnRunActivity(run.ID); err != nil {
+		t.Fatalf("TouchTurnRunActivity() err = %v", err)
+	}
+
+	activityCutoff := time.Now().UTC().Add(-5 * time.Minute)
+	toolCutoff := time.Now().UTC().Add(-5 * time.Minute)
+	runs, err := store.StaleRunningTurnRunsWithUnmatchedToolCutoff(activityCutoff, toolCutoff, 10)
+	if err != nil {
+		t.Fatalf("StaleRunningTurnRunsWithUnmatchedToolCutoff() err = %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != run.ID {
+		t.Fatalf("stale runs = %#v, want run %d despite fresh heartbeat", runs, run.ID)
+	}
+}
+
+func TestStaleRunningTurnRunsIgnoresMatchedToolStartWithFreshHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1906, UserID: 0, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1906"}}
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	run, err := store.BeginTurnRun(key, TurnRunKindInteractive, "matched tool run")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	if err := store.NoteTurnRunToolStart(run.ID, "capability_authority", `{"action":"grant_set"}`); err != nil {
+		t.Fatalf("NoteTurnRunToolStart() err = %v", err)
+	}
+	if err := store.NoteTurnRunToolFinish(run.ID, "[CAPABILITY_GRANT]", ""); err != nil {
+		t.Fatalf("NoteTurnRunToolFinish() err = %v", err)
+	}
+	old := time.Now().UTC().Add(-10 * time.Minute)
+	if _, err := store.AppendExecutionEvents(key, []ExecutionEventInput{
+		{
+			EventType:   core.ExecutionEventToolStarted,
+			Stage:       "tool",
+			Status:      "started",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"capability_authority"}`, run.ID),
+			CreatedAt:   old,
+		},
+		{
+			EventType:   core.ExecutionEventToolSucceeded,
+			Stage:       "tool",
+			Status:      "succeeded",
+			PayloadJSON: fmt.Sprintf(`{"run_id":%d,"tool":"capability_authority"}`, run.ID),
+			CreatedAt:   old.Add(time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents(tool lifecycle) err = %v", err)
+	}
+	if err := store.TouchTurnRunActivity(run.ID); err != nil {
+		t.Fatalf("TouchTurnRunActivity() err = %v", err)
+	}
+
+	activityCutoff := time.Now().UTC().Add(-5 * time.Minute)
+	toolCutoff := time.Now().UTC().Add(-5 * time.Minute)
+	runs, err := store.StaleRunningTurnRunsWithUnmatchedToolCutoff(activityCutoff, toolCutoff, 10)
+	if err != nil {
+		t.Fatalf("StaleRunningTurnRunsWithUnmatchedToolCutoff() err = %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("stale runs = %#v, want none for matched tool lifecycle", runs)
+	}
+}
+
 func TestTouchTurnRunActivity(t *testing.T) {
 	t.Parallel()
 
