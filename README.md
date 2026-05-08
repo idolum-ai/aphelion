@@ -1,15 +1,18 @@
 # Aphelion
 
-A minimal, focused agent runtime for personal AI assistants.
+A minimal, governed outpost for personal agents.
 
 ## Philosophy
 
 - **Only what we need.** No plugin marketplace, no multi-channel support, no enterprise features.
+- **Outpost, not platform.** Aphelion is designed to stay small, durable, and useful at distance.
+- **Radio link, not omnichannel.** Telegram is the primary control link, not one adapter among dozens.
 - **Linux only.** No macOS/Windows compat. Single target, no conditionals.
 - **Anonymizable by design.** Provider-visible identity should be configurable or absent; current gaps are tracked in [docs/promises.md](docs/promises.md).
 - **Go.** Single Linux binary, with a static release target separate from the normal developer build. Goroutines for concurrency. Deploy = `scp` or the bundled service scripts.
 - **Anthropic-first caching.** Structured cache breakpoints exist; config-backed cache TTL policy is tracked in [docs/promises.md](docs/promises.md).
 - **File-based memory.** Workspace files are the source of truth. Vector search optional.
+- **Authority before capability.** The system should know what it is allowed to do before it tries to become more capable.
 
 ## Target Stack
 
@@ -18,6 +21,53 @@ A minimal, focused agent runtime for personal AI assistants.
 - **Tools now:** exec, scoped native file/search/fetch tools, curated memory, session recall, optional OpenAI storage tools
 - **Voice:** ElevenLabs TTS
 - **Automation:** heartbeat, cron
+
+## Positioning
+
+Aphelion is named for distance: an outpost at Earth's aphelion. It is for the
+moments when you are far from the machine, far from the original moment of
+intent, or far from a clean trust boundary, but still need a small agent runtime
+that can remember, ask, act, stop, recover, and report clearly.
+
+It is not a programming-only agent, a generic assistant, an IDE, a marketplace,
+or a broad channel platform. Its job is live authority management for personal
+agents: turn intent into typed, auditable, revocable, resumable leases, then keep
+work coherent across Telegram, provider failures, approvals, restarts, durable
+children, and deploys.
+
+The "distance" Aphelion is designed for can be literal or operational:
+
+- distance from a laptop or IDE
+- distance across time, via continuations and memory
+- distance across trust boundaries, via leases and consent
+- distance across unstable provider/runtime conditions
+- distance between persona reasoning and deterministic authority
+- distance between intention and action
+
+Telegram is the radio link to the outpost. `/status`, `/doctor`, leases,
+restart recovery, durable children, TES, and scoped tools are the instruments,
+logs, airlocks, and checklists.
+
+Design shorthand:
+
+- Outpost, not platform.
+- Radio link, not omnichannel.
+- Ledger, not vibes.
+- Small service, not marketplace.
+- Continuity, not productivity theater.
+- Authority before capability.
+
+Nearby projects such as Codex, Hermes, and OpenClaw are useful references, but
+Aphelion's direction is not to absorb their breadth. Codex is strongest as a
+local coding agent, Hermes as a self-improving skill/routine system, and
+OpenClaw as a local-first multi-channel assistant. Aphelion's concrete edge is
+legible authority over live personal-agent action.
+
+The architectural center for this direction is the
+[Agent Authority Ledger](docs/architecture/agent-authority-ledger.md): proposals,
+leases, consent subjects, authority scopes, auto-approval budgets, capability
+grants, and execution evidence. User-facing text and buttons should render that
+ledger, not become the source of authority themselves.
 
 ## Architecture
 

@@ -52,6 +52,7 @@ These invariants are normative for architecture and requirements alignment:
 - [mission-ledger-roadmap.md](mission-ledger-roadmap.md): draft plan for durable missions, self-summon as review, and bounded self-continuation without hidden authority.
 - [organic-agent-owned-tools-proposal.md](organic-agent-owned-tools-proposal.md): draft proposal for moving from core-embedded domain tools toward agent-owned external tools with governed install and attestation.
 - [tailscale-agent-substrate-project.md](tailscale-agent-substrate-project.md): draft project plan for making Tailscale/tsnet a first-class private network substrate for Aphelion and durable children.
+- [agent-authority-ledger.md](agent-authority-ledger.md): draft architecture spec for typed proposals, leases, consent subjects, authority budgets, and evidence-backed operational authority.
 
 Treat this section as design-direction input. It is not a normative implementation
 contract until explicitly promoted into the normative map above.
