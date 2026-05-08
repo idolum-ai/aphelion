@@ -19,6 +19,7 @@ authority.
 - Small service, not marketplace.
 - Continuity, not productivity theater.
 - Authority before capability.
+- Compile contracts; interpret ambiguity.
 
 ## Principles
 
@@ -66,6 +67,25 @@ as the source of permission.
 If the persona or governor needs authority, they should create or consume a
 structured contract. If they choose to say nothing, the logs and state should
 still remain coherent.
+
+### Compile contracts; interpret ambiguity
+
+Do not use brittle string matching as an authority layer, intent detector, or
+safety classifier. It has no real understanding of edge cases and tends to fail
+exactly where operator trust matters most.
+
+Closed contracts should be parsed and checked deterministically: JSON fields,
+enum values, typed records, IDs, scopes, timestamps, leases, grants, and TES
+events either compile against the expected shape or they do not.
+
+Open language should be interpreted by a layer that can disambiguate, ask for
+context, and return typed claims or proposed actions. The runtime can then
+validate those claims against contracts and evidence.
+
+Unknown edge cases are expected. The answer is not to pretend every phrase can
+be exhaustively matched; the answer is to preserve enough structure, evidence,
+fallbacks, and emergency protocols that the system can stop, ask, recover, or
+escalate cleanly when interpretation is uncertain.
 
 ### Bounded action
 
@@ -134,11 +154,13 @@ duplication, or support a concrete governed workflow.
 When adding or changing behavior:
 
 - Prefer typed records over interpreting prose.
+- Prefer exact parsing for closed contracts and LLM interpretation for open
+  language.
 - Prefer projections over duplicate truth stores.
 - Prefer recovery paths over irreversible failure states.
 - Prefer explicit consent subjects over broad approval wording.
 - Prefer concise operator text backed by detailed evidence.
 - Prefer narrow tools and leases over ambient capability.
 - Prefer stable service behavior over theatrical caution.
+- Prefer emergency stop/ask/escalate paths over brittle edge-case matching.
 - Prefer testable invariants over prompt-only expectations.
-
