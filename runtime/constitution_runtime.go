@@ -420,9 +420,6 @@ func splitReplyParagraphs(reply string) []string {
 }
 
 func paragraphHasUnsupportedExecutionClaim(paragraph string, adjudication executionClaimAdjudication) bool {
-	if strings.HasPrefix(strings.TrimSpace(paragraph), "I need to correct that:") {
-		return true
-	}
 	claims := detectExecutionClaims(paragraph)
 	for _, finding := range adjudication.Findings {
 		switch strings.TrimSpace(finding.ClaimType) {

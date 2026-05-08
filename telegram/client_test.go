@@ -339,7 +339,7 @@ func TestNormalizeMessageIncludesReplyContextAndReplyTo(t *testing.T) {
 	}
 }
 
-func TestNormalizeMessageStripsDeterministicCorrectionBannerFromReplyContext(t *testing.T) {
+func TestNormalizeMessageKeepsReplyContextLiteralText(t *testing.T) {
 	now := time.Now().Unix()
 	msg := &Message{
 		MessageID: 33,
@@ -350,7 +350,7 @@ func TestNormalizeMessageStripsDeterministicCorrectionBannerFromReplyContext(t *
 		ReplyToMessage: &Message{
 			MessageID: 32,
 			From:      &User{ID: 9, Username: "idolum"},
-			Text:      "I need to correct that: test-execution claim has no test-related tool evidence (as of 2026-05-05T17:28:03Z UTC).\nPlan: Synth Telegram Runner (R1)",
+			Text:      "Legacy correction note.\nPlan: Synth Telegram Runner (R1)",
 		},
 	}
 
@@ -358,11 +358,8 @@ func TestNormalizeMessageStripsDeterministicCorrectionBannerFromReplyContext(t *
 	if got == nil {
 		t.Fatal("expected message to be normalized")
 	}
-	if strings.Contains(got.Text, "I need to correct that") || strings.Contains(got.Text, "test-execution claim") {
-		t.Fatalf("text = %q, want correction banner stripped from reply context", got.Text)
-	}
-	if !strings.Contains(got.Text, "idolum: Plan: Synth Telegram Runner (R1)") {
-		t.Fatalf("text = %q, want remaining reply context content", got.Text)
+	if !strings.Contains(got.Text, "idolum: Legacy correction note. Plan: Synth Telegram Runner (R1)") {
+		t.Fatalf("text = %q, want literal reply context content", got.Text)
 	}
 }
 

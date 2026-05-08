@@ -474,6 +474,95 @@ type telegramChildBotNoSendOutbound struct{}
 	}
 }
 
+func TestDoctorDesignPrincipleHealthSurfacesTrackedDebt(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, _, _ := buildRuntimeFixtures(t)
+	writeDoctorDesignPrincipleFixture(t, cfg.Agent.ExecRoot, true)
+	writeDoctorFixtureFile(t, cfg.Agent.ExecRoot, "runtime/operation_phase_gate.go", `package runtime
+import "strings"
+func gate(text string) bool { return strings.Contains(text, "consent") }
+`)
+
+	rt := &Runtime{}
+	var b strings.Builder
+	rt.writeDoctorDesignPrincipleHealth(&b, doctorDiagnosticInput{Scope: sandbox.Scope{WorkingRoot: cfg.Agent.ExecRoot}})
+	report := b.String()
+	for _, want := range []string{
+		`issue=design_principles_doc status=likely_fixed`,
+		`issue=principle_debt_ledger status=likely_fixed`,
+		`path=runtime/operation_phase_gate.go status=tracked`,
+		`issue=high_risk_string_debt_tracked status=likely_fixed`,
+		`issue=short_debug_path_contract status=residual_risk`,
+		`design_principle_next="standardize debug breadcrumbs`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("design principle health = %s, want %s", report, want)
+		}
+	}
+}
+
+func TestDoctorDesignPrincipleHealthFlagsUntrackedDebt(t *testing.T) {
+	t.Parallel()
+
+	cfg, _, _, _ := buildRuntimeFixtures(t)
+	writeDoctorDesignPrincipleFixture(t, cfg.Agent.ExecRoot, false)
+	writeDoctorFixtureFile(t, cfg.Agent.ExecRoot, "runtime/operation_phase_gate.go", `package runtime
+import "strings"
+func gate(text string) bool { return strings.Contains(text, "consent") }
+`)
+
+	rt := &Runtime{}
+	var b strings.Builder
+	rt.writeDoctorDesignPrincipleHealth(&b, doctorDiagnosticInput{Scope: sandbox.Scope{WorkingRoot: cfg.Agent.ExecRoot}})
+	report := b.String()
+	for _, want := range []string{
+		`path=runtime/operation_phase_gate.go status=untracked`,
+		`issue=high_risk_string_debt_tracked status=active`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("design principle health = %s, want %s", report, want)
+		}
+	}
+}
+
+func writeDoctorDesignPrincipleFixture(t *testing.T, root string, trackDebt bool) {
+	t.Helper()
+	writeDoctorFixtureFile(t, root, "docs/architecture/design-principles.md", `# Aphelion Design Principles
+
+### Text is presentation, not authority
+### Compile contracts; interpret ambiguity
+### Short paths to truth
+`)
+	debtPath := ""
+	if trackDebt {
+		debtPath = "- `runtime/operation_phase_gate.go`\n"
+	}
+	writeDoctorFixtureFile(t, root, "docs/architecture/principle-debt.md", `# Aphelion Principle Debt Ledger
+
+## Active Debt
+
+### DP-test
+
+- Exit gate: replace text inference with typed contracts.
+- Debug breadcrumbs: trace_id canonical_record projection inspect_command code_owner next_repair_action.
+
+## Machine-Checked Paths
+
+`+debtPath)
+}
+
+func writeDoctorFixtureFile(t *testing.T, root string, rel string, body string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func TestDoctorRuntimeAdjudicationsSummarizesStructuredEvents(t *testing.T) {
 	t.Parallel()
 

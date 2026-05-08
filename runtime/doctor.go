@@ -86,6 +86,24 @@ type doctorArtifactManifestEntry struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+var doctorDesignPrincipleHighRiskPaths = []string{
+	"session/authority_contract.go",
+	"runtime/constitution_runtime.go",
+	"runtime/continuation_materialize.go",
+	"runtime/operation_phase_gate.go",
+	"runtime/goal_continuation.go",
+	"runtime/external_channel_wake.go",
+	"runtime/continuation.go",
+	"runtime/status.go",
+}
+
+var doctorDesignPrincipleHighRiskNeedles = []string{
+	"strings.Contains",
+	"strings.HasPrefix",
+	"strings.CutPrefix",
+	"regexp.MustCompile",
+}
+
 func (r *Runtime) StartDoctor(ctx context.Context, msg core.InboundMessage) error {
 	if r == nil {
 		return fmt.Errorf("runtime is unavailable")
@@ -713,6 +731,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Known Issue Status Checks")
 	r.writeDoctorIssueStatusChecks(&b, input)
 
+	writeDoctorSection(&b, "Design Principle Health")
+	r.writeDoctorDesignPrincipleHealth(&b, input)
+
 	writeDoctorSection(&b, "Execution Events")
 	r.writeDoctorExecutionEvents(ctx, &b, input.Key, now)
 
@@ -1139,6 +1160,87 @@ func (r *Runtime) writeDoctorIssueStatusChecks(b *strings.Builder, input doctorD
 	default:
 		writeDoctorIssueCheck(b, "synth_telegram_child_bot_runner", "unknown", "could not confirm Synth child bot runner source evidence from working_root")
 	}
+}
+
+func (r *Runtime) writeDoctorDesignPrincipleHealth(b *strings.Builder, input doctorDiagnosticInput) {
+	workingRoot := strings.TrimSpace(input.Scope.WorkingRoot)
+	writeDoctorLine(b, "classification_contract: design-principle health is advisory evidence, not runtime authority.")
+
+	principlesOK := doctorSourceContainsAll(workingRoot, "docs/architecture/design-principles.md", []string{
+		"Text is presentation, not authority",
+		"Compile contracts; interpret ambiguity",
+		"Short paths to truth",
+	})
+	if principlesOK {
+		writeDoctorIssueCheck(b, "design_principles_doc", "likely_fixed", "design-principles.md names text/presentation boundaries, compiled contracts, interpreted ambiguity, and short debug paths")
+	} else {
+		writeDoctorIssueCheck(b, "design_principles_doc", "active", "could not confirm required design-principle text from docs/architecture/design-principles.md")
+	}
+
+	debtOK := doctorSourceContainsAll(workingRoot, "docs/architecture/principle-debt.md", []string{
+		"## Active Debt",
+		"## Machine-Checked Paths",
+		"Exit gate",
+	})
+	if debtOK {
+		writeDoctorIssueCheck(b, "principle_debt_ledger", "likely_fixed", "principle-debt.md exists with active debt, machine-checked paths, and exit gates")
+	} else {
+		writeDoctorIssueCheck(b, "principle_debt_ledger", "active", "could not confirm principle-debt.md with active debt and exit gates")
+	}
+
+	type trackedDebtPath struct {
+		Path    string
+		Tracked bool
+	}
+	var debtPaths []trackedDebtPath
+	for _, path := range doctorDesignPrincipleHighRiskPaths {
+		path = filepath.ToSlash(strings.TrimSpace(path))
+		if path == "" || !doctorSourceContainsAny(workingRoot, path, doctorDesignPrincipleHighRiskNeedles) {
+			continue
+		}
+		debtPaths = append(debtPaths, trackedDebtPath{
+			Path:    path,
+			Tracked: debtOK && doctorSourceContainsAll(workingRoot, "docs/architecture/principle-debt.md", []string{"`" + path + "`"}),
+		})
+	}
+
+	untracked := 0
+	if len(debtPaths) == 0 {
+		writeDoctorIssueCheck(b, "high_risk_string_debt_tracked", "likely_fixed", "no machine-checked high-risk string-heavy principle debt paths were detected")
+	} else {
+		writeDoctorLine(b, "principle_debt_high_risk_string_paths:")
+		for _, debt := range debtPaths {
+			status := "tracked"
+			if !debt.Tracked {
+				status = "untracked"
+				untracked++
+			}
+			writeDoctorLine(b, fmt.Sprintf("- path=%s status=%s inspect=%q",
+				debt.Path,
+				status,
+				"rg -n 'strings\\.(Contains|HasPrefix|CutPrefix)|regexp\\.MustCompile' "+debt.Path,
+			))
+		}
+		if untracked == 0 {
+			writeDoctorIssueCheck(b, "high_risk_string_debt_tracked", "likely_fixed", fmt.Sprintf("%d high-risk string-heavy surfaces are explicitly listed in principle-debt.md", len(debtPaths)))
+		} else {
+			writeDoctorIssueCheck(b, "high_risk_string_debt_tracked", "active", fmt.Sprintf("%d high-risk string-heavy surfaces are not listed in principle-debt.md", untracked))
+		}
+	}
+
+	debugBreadcrumbsOK := doctorSourceContainsAll(workingRoot, "docs/architecture/principle-debt.md", []string{
+		"trace_id",
+		"canonical_record",
+		"inspect_command",
+		"code_owner",
+	})
+	if debugBreadcrumbsOK {
+		writeDoctorIssueCheck(b, "short_debug_path_contract", "residual_risk", "principle-debt.md names the standard debug breadcrumb schema, but not every operator surface emits it yet")
+	} else {
+		writeDoctorIssueCheck(b, "short_debug_path_contract", "active", "standard debug breadcrumb schema was not confirmed in principle-debt.md")
+	}
+	writeDoctorKV(b, "design_principle_next", "standardize debug breadcrumbs on blocked/failure/proposal surfaces: trace_id canonical_record projection inspect_command code_owner next_repair_action")
+	_ = r
 }
 
 func writeDoctorIssueCheck(b *strings.Builder, issue string, status string, evidence string) {
@@ -1575,6 +1677,25 @@ func doctorSourceContainsAll(root string, rel string, needles []string) bool {
 		}
 	}
 	return true
+}
+
+func doctorSourceContainsAny(root string, rel string, needles []string) bool {
+	root = strings.TrimSpace(root)
+	rel = filepath.Clean(filepath.FromSlash(strings.TrimSpace(rel)))
+	if root == "" || rel == "" || rel == "." || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		return false
+	}
+	text := string(data)
+	for _, needle := range needles {
+		if strings.TrimSpace(needle) != "" && strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func doctorSourceMatches(root string, dirs []string, needles []string, includeTests bool, limit int) []string {

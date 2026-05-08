@@ -357,6 +357,7 @@ func TestReviewEventCompactUsesSafeSummaryForRedactedChildSummary(t *testing.T) 
 	t.Parallel()
 
 	event := session.ReviewEvent{
+		ID:           77,
 		SourceRole:   "durable_agent",
 		SourceScope:  session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "idolum-email", DurableAgentID: "idolum-email"},
 		Summary:      "durable_agent=idolum-email channel=email interval=2026-05-08T02:50:01Z\nsummary: [REDACTED: summary]\nrisks: external_channel",
@@ -376,6 +377,18 @@ func TestReviewEventCompactUsesSafeSummaryForRedactedChildSummary(t *testing.T) 
 	details := FormatReviewEventDetailsMessage(event)
 	if !strings.Contains(details, "Raw redacted text is stored only in the local forensic sidecar.") {
 		t.Fatalf("details text = %q, want local forensic sidecar footer", details)
+	}
+	for _, want := range []string{
+		"**Debug**",
+		"trace_id: review_event:77",
+		"canonical_record: review_events id=77",
+		"projection: runtime.FormatReviewEventDetailsMessage",
+		"inspect_command: aphelion durable-agent forensic --agent idolum-email --ref forensic://durable-agent/idolum-email/example.json show",
+		"code_owner: runtime/turn.go",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details text = %q, want debug breadcrumb %q", details, want)
+		}
 	}
 }
 

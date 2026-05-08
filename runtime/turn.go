@@ -401,6 +401,10 @@ func FormatReviewEventDetailsMessage(event session.ReviewEvent) string {
 			}
 		}
 	}
+	if debug := reviewEventDebugBreadcrumbLines(event, meta, ok); len(debug) > 0 {
+		lines = append(lines, "", "**Debug**")
+		lines = append(lines, debug...)
+	}
 	lines = append(lines, "", reviewEventDetailsFooter(meta))
 	return truncateReviewEventBlock(strings.Join(lines, "\n"), 3900)
 }
@@ -414,6 +418,59 @@ func parseReviewEventArtifactMetadata(event session.ReviewEvent) (reviewEventArt
 		return reviewEventArtifactMetadata{}, false
 	}
 	return meta, true
+}
+
+func reviewEventDebugBreadcrumbLines(event session.ReviewEvent, meta reviewEventArtifactMetadata, metaOK bool) []string {
+	lines := make([]string, 0, 5)
+	traceID := "review_event"
+	if event.ID > 0 {
+		traceID = fmt.Sprintf("review_event:%d", event.ID)
+	}
+	lines = append(lines, "- trace_id: "+traceID)
+	if event.ID > 0 {
+		lines = append(lines, fmt.Sprintf("- canonical_record: review_events id=%d", event.ID))
+	} else {
+		lines = append(lines, "- canonical_record: review_events")
+	}
+	lines = append(lines, "- projection: runtime.FormatReviewEventDetailsMessage")
+	if metaOK {
+		if command := reviewEventInspectCommand(meta); command != "" {
+			lines = append(lines, "- inspect_command: "+command)
+		}
+	}
+	lines = append(lines, "- code_owner: runtime/turn.go")
+	return lines
+}
+
+func reviewEventInspectCommand(meta reviewEventArtifactMetadata) string {
+	agentID := strings.TrimSpace(meta.AgentID)
+	ref := strings.TrimSpace(meta.Metadata["forensic_ref"])
+	if ref == "" {
+		for _, artifactRef := range meta.ArtifactRefs {
+			artifactRef = strings.TrimSpace(artifactRef)
+			if strings.HasPrefix(artifactRef, "forensic://") {
+				ref = artifactRef
+				break
+			}
+		}
+	}
+	if agentID == "" || ref == "" {
+		return ""
+	}
+	return fmt.Sprintf("aphelion durable-agent forensic --agent %s --ref %s show", shellQuoteDebugToken(agentID), shellQuoteDebugToken(ref))
+}
+
+func shellQuoteDebugToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "''"
+	}
+	if strings.IndexFunc(value, func(r rune) bool {
+		return !(r == '-' || r == '_' || r == '.' || r == '/' || r == ':' || (r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z'))
+	}) < 0 {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func reviewEventCompactTitle(event session.ReviewEvent, meta reviewEventArtifactMetadata) string {
