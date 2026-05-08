@@ -87,6 +87,7 @@ Telegram transport
 
 Details:
 
+- [docs/architecture/design-principles.md](docs/architecture/design-principles.md)
 - [docs/architecture/README.md](docs/architecture/README.md)
 - [runtime/README.md](runtime/README.md)
 - [turn/README.md](turn/README.md)
