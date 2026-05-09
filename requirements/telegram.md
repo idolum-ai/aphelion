@@ -1415,7 +1415,7 @@ interrupt_timeout = "30s"         # Auto-queue after this timeout
 
 ## Stop Words — Confirmation, Not Assumption
 
-OpenClaw silently aborts agent turns on trigger words like "wait", "stop", "cancel". This is fragile — "wait" often means "hold on, I'm adding more" not "abort everything."
+Some systems silently abort agent turns on trigger words like "wait", "stop", "cancel". This is fragile — "wait" often means "hold on, I'm adding more" not "abort everything."
 
 Aphelion never silently acts on ambiguous intent. Instead, we show a confirmation button.
 
