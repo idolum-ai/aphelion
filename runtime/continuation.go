@@ -1161,6 +1161,10 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 	}
 }
 
+func ContinuationApprovalButtonRows(state session.ContinuationState) [][]telegram.InlineButton {
+	return continuationApprovalButtonRows(state)
+}
+
 func continuationBundleButtonLabel(state session.ContinuationState) string {
 	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
 	if len(bundle.Phases) < 2 {

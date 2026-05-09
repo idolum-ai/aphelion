@@ -4038,6 +4038,63 @@ func TestHandleTelegramCommandCallbackContinuationApproveLease(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandCallbackContinuationDetailsKeepsPendingPlanButtons(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-plan-details",
+		Objective:      "Finish the governed onboarding plan.",
+		StageSummary:   "Approve the bounded plan budget.",
+		RemainingTurns: 3,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-plan-details",
+			RiskClass:      "plan_lease",
+			Summary:        "Approve three bounded setup steps.",
+			AllowedActions: []string{"approve_operation_plan_lease"},
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-plan-details",
+			ProposalID:     "aprop-plan-details",
+			Status:         session.ContinuationLeaseStatusPending,
+			AllowedActions: []string{"approve_operation_plan_lease"},
+		},
+	}
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{continuationState: state}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-plan-details",
+		Data:    encodeContinuationCallbackData("aprop-plan-details", continuationActionStatusOnly),
+		Message: &telegram.Message{MessageID: 393, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.editClear) != 0 {
+		t.Fatalf("editClear = %#v, want no keyboard-clearing edit for details", sender.editClear)
+	}
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline = %#v, want details edit with buttons retained", sender.editInline)
+	}
+	if !strings.Contains(sender.editInline[0].text, "Budget remaining: 3 turn(s)") || !strings.Contains(sender.editInline[0].text, "This details view does not change permissions.") {
+		t.Fatalf("details text = %q, want expanded plan details", sender.editInline[0].text)
+	}
+	var labels []string
+	for _, row := range sender.editInline[0].rows {
+		for _, button := range row {
+			labels = append(labels, button.Text)
+		}
+	}
+	for _, want := range []string{"Start plan", "Details", "Change plan", "Pause", "Stop"} {
+		if !slices.Contains(labels, want) {
+			t.Fatalf("retained labels = %#v, missing %q", labels, want)
+		}
+	}
+}
+
 func TestHandleTelegramCommandCallbackContinuationApproveDoesNotWaitForTrigger(t *testing.T) {
 	t.Parallel()
 
@@ -4105,14 +4162,28 @@ func TestHandleTelegramCommandCallbackContinuationStatusOnlyDoesNotMutateOrTrigg
 	if router.approveContinuationInput != 0 || router.triggerContinuationInput != 0 || router.stopContinuationInput != 0 {
 		t.Fatalf("router mutated approve/trigger/stop = %d/%d/%d, want 0/0/0", router.approveContinuationInput, router.triggerContinuationInput, router.stopContinuationInput)
 	}
-	if len(sender.editClear) != 1 {
-		t.Fatalf("editClear = %#v, want status-only no-authority text", sender.editClear)
+	if len(sender.editClear) != 0 {
+		t.Fatalf("editClear = %#v, want status-only details to retain buttons", sender.editClear)
 	}
-	if !strings.Contains(sender.editClear[0].text, "Lease scope details") ||
-		!strings.Contains(sender.editClear[0].text, "Bounded effect: Inspect local state and report only.") ||
-		!strings.Contains(sender.editClear[0].text, "Forbidden actions: edit_files, deploy") ||
-		!strings.Contains(sender.editClear[0].text, "No new authority was granted") {
-		t.Fatalf("editClear = %#v, want detailed scope no-authority text", sender.editClear)
+	if len(sender.editInline) != 1 {
+		t.Fatalf("editInline = %#v, want status-only no-authority text with buttons", sender.editInline)
+	}
+	if !strings.Contains(sender.editInline[0].text, "Lease scope details") ||
+		!strings.Contains(sender.editInline[0].text, "Bounded effect: Inspect local state and report only.") ||
+		!strings.Contains(sender.editInline[0].text, "Forbidden actions: edit_files, deploy") ||
+		!strings.Contains(sender.editInline[0].text, "No new authority was granted") {
+		t.Fatalf("editInline = %#v, want detailed scope no-authority text", sender.editInline)
+	}
+	var labels []string
+	for _, row := range sender.editInline[0].rows {
+		for _, button := range row {
+			labels = append(labels, button.Text)
+		}
+	}
+	for _, want := range []string{"Start", "Details", "Change", "Pause", "Stop"} {
+		if !slices.Contains(labels, want) {
+			t.Fatalf("retained labels = %#v, missing %q", labels, want)
+		}
 	}
 }
 

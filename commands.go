@@ -12,6 +12,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/face"
+	runtimepkg "github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -120,6 +121,20 @@ func editContinuationCallbackMessage(ctx context.Context, sender commandCallback
 		return
 	}
 	if err := editCallbackMessageClearingInlineKeyboard(ctx, sender, chatID, messageID, text); err != nil {
+		recordTelegramCallbackError(router, chatID, callbackKind+".edit", err)
+		log.Printf("WARN continuation callback message update failed chat_id=%d message_id=%d kind=%s err=%v", chatID, messageID, strings.TrimSpace(callbackKind), err)
+	}
+}
+
+func editContinuationCallbackMessageWithInlineKeyboard(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string, rows [][]telegram.InlineButton) {
+	if messageID == 0 {
+		return
+	}
+	if len(rows) == 0 {
+		editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, callbackKind, text)
+		return
+	}
+	if err := sender.EditMessageTextWithInlineKeyboard(ctx, chatID, messageID, text, "", rows); err != nil {
 		recordTelegramCallbackError(router, chatID, callbackKind+".edit", err)
 		log.Printf("WARN continuation callback message update failed chat_id=%d message_id=%d kind=%s err=%v", chatID, messageID, strings.TrimSpace(callbackKind), err)
 	}
@@ -776,7 +791,7 @@ func handleTelegramCommandCallback(ctx context.Context, sender commandCallbackSe
 		case continuationActionStatusOnly:
 			answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.status", "")
 			text = renderContinuationDecision(state, action)
-			editContinuationCallbackMessage(ctx, sender, router, chatID, messageID, "continuation.status", text)
+			editContinuationCallbackMessageWithInlineKeyboard(ctx, sender, router, chatID, messageID, "continuation.status", text, runtimepkg.ContinuationApprovalButtonRows(state))
 			return true, nil
 		default:
 			return true, nil
