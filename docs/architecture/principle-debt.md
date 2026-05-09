@@ -91,16 +91,20 @@ Status values:
 ### DP-005: Large operational surfaces make ownership harder to inspect
 
 - Principle: `Short paths to truth`; `Minimal stack, strong substrate`
-- Status: `active`
+- Status: `migrating`
 - Surface: root command/Telegram composition files, `runtime/*`,
   `session/store.go`
 - Why it exists: The stack is intentionally small, but composition, operational
   repair, runtime shell behavior, and persistence records have accumulated in
-  large surfaces. That increases the number of local hops required to debug
-  ownership and repair behavior.
+  large surfaces. A first structural pass split SQLite storage by durable record
+  family and split continuation/status runtime helpers by concern, but root
+  composition and several operational files still need smaller ownership cuts.
 - Exit gate: Split broad files by command, record, or runtime concern only when
   the boundary is durable and behavior-preserving. Guard the stable package
-  direction with machine checks instead of introducing one-off packages.
+  direction with machine checks instead of introducing one-off packages. Retire
+  this debt when the remaining root/runtime/session hotspots are below their
+  structural taste caps and the caps have stayed green through normal feature
+  work.
 
 ## Contained Exceptions
 
@@ -158,6 +162,9 @@ listed here until they are retired:
 New authority, consent, continuation, wake, or goal-inference code that uses
 string matching must either avoid the pattern or add a debt entry with an exit
 gate in the same change.
+
+`make taste` guards DP-005's largest structural hotspots so behavior-preserving
+splits do not quietly grow back into broad files.
 
 The same check now rejects retired prose-authority helper symbols
 (`positiveAuthorityEffectText`, `bounded_effect_positive_clause`,
