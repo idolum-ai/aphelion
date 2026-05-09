@@ -26,7 +26,7 @@ func TestTelegramChildBotPreflightDoesNotReadTokenOrPoll(t *testing.T) {
 	readCalled := false
 	pollCalled := false
 	out, err := captureStdout(t, func() error {
-		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--preflight"}, telegramChildBotDeps{
+		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "sample-child", "--preflight"}, telegramChildBotDeps{
 			Stat: os.Stat,
 			ReadFile: func(string) ([]byte, error) {
 				readCalled = true
@@ -49,8 +49,8 @@ func TestTelegramChildBotPreflightDoesNotReadTokenOrPoll(t *testing.T) {
 	}
 	for _, want := range []string{
 		"action: telegram-child-bot preflight",
-		"agent_id: synth",
-		"chat_id: -5056905988",
+		"agent_id: sample-child",
+		"chat_id: -1001234567890",
 		"respond_on: mentions",
 		"token_file_status: metadata_ok",
 		"durable_agent_status: active",
@@ -76,7 +76,7 @@ func TestTelegramChildBotStatusDoesNotReadTokenOrPoll(t *testing.T) {
 	readCalled := false
 	pollCalled := false
 	out, err := captureStdout(t, func() error {
-		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--status"}, telegramChildBotDeps{
+		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "sample-child", "--status"}, telegramChildBotDeps{
 			Stat: os.Stat,
 			ReadFile: func(string) ([]byte, error) {
 				readCalled = true
@@ -99,7 +99,7 @@ func TestTelegramChildBotStatusDoesNotReadTokenOrPoll(t *testing.T) {
 	}
 	for _, want := range []string{
 		"action: telegram-child-bot status",
-		"agent_id: synth",
+		"agent_id: sample-child",
 		"token_file_status: metadata_ok",
 		"durable_agent_status: active",
 		"channel_kind: telegram_group",
@@ -123,7 +123,7 @@ func TestTelegramChildBotDryStartDoesNotReadTokenPollOrCallTelegram(t *testing.T
 	readCalled := false
 	pollCalled := false
 	dryStartCalled := false
-	err := runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--dry-start"}, telegramChildBotDeps{
+	err := runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "sample-child", "--dry-start"}, telegramChildBotDeps{
 		Stat: os.Stat,
 		ReadFile: func(string) ([]byte, error) {
 			readCalled = true
@@ -138,8 +138,8 @@ func TestTelegramChildBotDryStartDoesNotReadTokenPollOrCallTelegram(t *testing.T
 			if client != nil {
 				t.Fatal("dry-start received telegram client; want nil so no Telegram API is possible")
 			}
-			if agentRow.AgentID != "synth" || route.AgentID != "synth" || route.ChatID != -5056905988 || route.RespondOn != "mentions" || !route.NoSend {
-				t.Fatalf("agent/route = %#v / %#v, want no-send synth route", agentRow, route)
+			if agentRow.AgentID != "sample-child" || route.AgentID != "sample-child" || route.ChatID != -1001234567890 || route.RespondOn != "mentions" || !route.NoSend {
+				t.Fatalf("agent/route = %#v / %#v, want no-send sample child route", agentRow, route)
 			}
 			return nil
 		},
@@ -164,7 +164,7 @@ func TestTelegramChildBotDefaultDryStartBuildsNoSendRuntimeWithoutTokenRead(t *t
 	fixture := writeTelegramChildBotFixture(t, "telegram_group", "active", 0o600)
 	readCalled := false
 	out, err := captureStdout(t, func() error {
-		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--dry-start"}, telegramChildBotDeps{
+		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "sample-child", "--dry-start"}, telegramChildBotDeps{
 			Stat: os.Stat,
 			ReadFile: func(string) ([]byte, error) {
 				readCalled = true
@@ -180,8 +180,8 @@ func TestTelegramChildBotDefaultDryStartBuildsNoSendRuntimeWithoutTokenRead(t *t
 	}
 	for _, want := range []string{
 		"action: telegram-child-bot dry-start",
-		"agent_id: synth",
-		"chat_id: -5056905988",
+		"agent_id: sample-child",
+		"chat_id: -1001234567890",
 		"no_send: true",
 		"polling: not_started",
 		"telegram_api: not_called",
@@ -206,7 +206,7 @@ func TestTelegramChildBotGetMeSmokeUsesTelegramIdentityOnly(t *testing.T) {
 		return &http.Response{
 			StatusCode: 200,
 			Header:     make(http.Header),
-			Body:       io.NopCloser(bytes.NewBufferString(`{"ok":true,"result":{"id":42,"is_bot":true,"username":"synth_bot"}}`)),
+			Body:       io.NopCloser(bytes.NewBufferString(`{"ok":true,"result":{"id":42,"is_bot":true,"username":"sample_child_bot"}}`)),
 		}, nil
 	})
 	client := telegram.NewClient("TOKEN",
@@ -214,12 +214,12 @@ func TestTelegramChildBotGetMeSmokeUsesTelegramIdentityOnly(t *testing.T) {
 		telegram.WithHTTPClient(&http.Client{Transport: transport}),
 	)
 	out, err := captureStdout(t, func() error {
-		return runTelegramChildBotGetMeSmoke(context.Background(), client, telegramChildBotRoute{AgentID: "synth", ChatID: -5056905988}, "/tmp/config.toml")
+		return runTelegramChildBotGetMeSmoke(context.Background(), client, telegramChildBotRoute{AgentID: "sample-child", ChatID: -1001234567890}, "/tmp/config.toml")
 	})
 	if err != nil {
 		t.Fatalf("runTelegramChildBotGetMeSmoke() err = %v", err)
 	}
-	for _, want := range []string{"action: telegram-child-bot get-me-smoke", "agent_id: synth", "chat_id: -5056905988", "bot_username: synth_bot", "status: ok"} {
+	for _, want := range []string{"action: telegram-child-bot get-me-smoke", "agent_id: sample-child", "chat_id: -1001234567890", "bot_username: sample_child_bot", "status: ok"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("get-me smoke output = %q, want %q", out, want)
 		}
@@ -238,13 +238,13 @@ func TestSelectTelegramChildBotRoutePreservesConfigRespondOnAll(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Telegram.ChildBots = []config.TelegramChildBotConfig{{
-		AgentID:   "synth",
-		TokenFile: "/tmp/synth-token",
-		ChatID:    -5056905988,
+		AgentID:   "sample-child",
+		TokenFile: "/tmp/sample-child-token",
+		ChatID:    -1001234567890,
 		RespondOn: "all",
 		Enabled:   true,
 	}}
-	route, err := selectTelegramChildBotRoute(cfg, "synth", "", 0, "", 0)
+	route, err := selectTelegramChildBotRoute(cfg, "sample-child", "", 0, "", 0)
 	if err != nil {
 		t.Fatalf("selectTelegramChildBotRoute() err = %v", err)
 	}
@@ -258,7 +258,7 @@ func TestTelegramChildBotPreflightFailsClosedOnWeakTokenPermissions(t *testing.T
 
 	fixture := writeTelegramChildBotFixture(t, "telegram_group", "active", 0o644)
 	_, err := captureStdout(t, func() error {
-		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--preflight"}, telegramChildBotDeps{Stat: os.Stat})
+		return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "sample-child", "--preflight"}, telegramChildBotDeps{Stat: os.Stat})
 	})
 	if err == nil || !strings.Contains(err.Error(), "permissions must not grant group/other access") {
 		t.Fatalf("preflight err = %v, want fail-closed permission error", err)
@@ -283,7 +283,7 @@ func TestTelegramChildBotPreflightFailsClosedOnWrongAgentState(t *testing.T) {
 			t.Parallel()
 			fixture := writeTelegramChildBotFixture(t, tc.channelKind, tc.status, 0o600)
 			_, err := captureStdout(t, func() error {
-				return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--preflight"}, telegramChildBotDeps{Stat: os.Stat})
+				return runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "sample-child", "--preflight"}, telegramChildBotDeps{Stat: os.Stat})
 			})
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("preflight err = %v, want substring %q", err, tc.wantErr)
@@ -298,7 +298,7 @@ func TestTelegramChildBotRunUsesFakePollerAfterReadingToken(t *testing.T) {
 	fixture := writeTelegramChildBotFixture(t, "telegram_group", "active", 0o600)
 	readCalled := false
 	pollCalled := false
-	err := runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth"}, telegramChildBotDeps{
+	err := runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "sample-child"}, telegramChildBotDeps{
 		Stat: os.Stat,
 		ReadFile: func(path string) ([]byte, error) {
 			readCalled = true
@@ -309,8 +309,8 @@ func TestTelegramChildBotRunUsesFakePollerAfterReadingToken(t *testing.T) {
 		},
 		RunPoller: func(_ context.Context, _ *telegram.Client, agentRow core.DurableAgent, route telegramChildBotRoute, _ *config.Config, _ *session.SQLiteStore) error {
 			pollCalled = true
-			if agentRow.AgentID != "synth" || route.AgentID != "synth" || route.ChatID != -5056905988 || route.RespondOn != "mentions" {
-				t.Fatalf("agent/route = %#v / %#v, want synth route", agentRow, route)
+			if agentRow.AgentID != "sample-child" || route.AgentID != "sample-child" || route.ChatID != -1001234567890 || route.RespondOn != "mentions" {
+				t.Fatalf("agent/route = %#v / %#v, want sample child route", agentRow, route)
 			}
 			return nil
 		},
@@ -331,7 +331,7 @@ func TestTelegramChildBotNoSendRunPassesNoSendRouteToPoller(t *testing.T) {
 
 	fixture := writeTelegramChildBotFixture(t, "telegram_group", "active", 0o600)
 	pollCalled := false
-	err := runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "synth", "--no-send"}, telegramChildBotDeps{
+	err := runTelegramChildBotCommandWithDeps([]string{"--config", fixture.configPath, "--agent", "sample-child", "--no-send"}, telegramChildBotDeps{
 		Stat: os.Stat,
 		ReadFile: func(path string) ([]byte, error) {
 			if path != fixture.tokenPath {
@@ -341,8 +341,8 @@ func TestTelegramChildBotNoSendRunPassesNoSendRouteToPoller(t *testing.T) {
 		},
 		RunPoller: func(_ context.Context, _ *telegram.Client, agentRow core.DurableAgent, route telegramChildBotRoute, _ *config.Config, _ *session.SQLiteStore) error {
 			pollCalled = true
-			if agentRow.AgentID != "synth" || route.AgentID != "synth" || !route.NoSend {
-				t.Fatalf("agent/route = %#v / %#v, want no-send synth route", agentRow, route)
+			if agentRow.AgentID != "sample-child" || route.AgentID != "sample-child" || !route.NoSend {
+				t.Fatalf("agent/route = %#v / %#v, want no-send sample child route", agentRow, route)
 			}
 			return nil
 		},
@@ -358,7 +358,7 @@ func TestTelegramChildBotNoSendRunPassesNoSendRouteToPoller(t *testing.T) {
 func TestTelegramChildBotNoSendOutboundDropsReplies(t *testing.T) {
 	t.Parallel()
 
-	msgID, err := (telegramChildBotNoSendOutbound{}).SendMessage(context.Background(), core.OutboundMessage{ChatID: -5056905988, Text: "do not send"})
+	msgID, err := (telegramChildBotNoSendOutbound{}).SendMessage(context.Background(), core.OutboundMessage{ChatID: -1001234567890, Text: "do not send"})
 	if err != nil || msgID != 0 {
 		t.Fatalf("no-send SendMessage() = %d, %v; want dropped reply", msgID, err)
 	}
@@ -372,7 +372,7 @@ type telegramChildBotFixture struct {
 func writeTelegramChildBotFixture(t *testing.T, channelKind string, status string, tokenMode os.FileMode) telegramChildBotFixture {
 	t.Helper()
 	dir := t.TempDir()
-	tokenPath := filepath.Join(dir, "synth-token")
+	tokenPath := filepath.Join(dir, "sample-child-token")
 	if err := os.WriteFile(tokenPath, []byte("123:SECRET\n"), tokenMode); err != nil {
 		t.Fatalf("write token: %v", err)
 	}
@@ -385,9 +385,9 @@ func writeTelegramChildBotFixture(t *testing.T, channelKind string, status strin
 bot_token = "main-bot-token"
 
 [[telegram.child_bots]]
-agent_id = "synth"
+agent_id = "sample-child"
 token_file = "` + strings.ReplaceAll(tokenPath, `\`, `\\`) + `"
-chat_id = -5056905988
+chat_id = -1001234567890
 respond_on = "mentions"
 enabled = true
 
@@ -409,7 +409,7 @@ db_path = "` + strings.ReplaceAll(dbPath, `\`, `\\`) + `"
 	}
 	defer store.Close()
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:            "synth",
+		AgentID:            "sample-child",
 		ParentScopeKind:    string(session.ScopeKindHeartbeat),
 		ParentScopeID:      "admin-house",
 		ReviewTargetChatID: 123,

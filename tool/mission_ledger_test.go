@@ -97,12 +97,12 @@ func TestMissionLedgerToolProposeCandidateQueuesReviewOnlyCard(t *testing.T) {
 
 	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, missionLedgerToolName, json.RawMessage(`{
 		"action":"propose_candidate",
-		"mission_id":"mission-ralph-loops",
-		"title":"Ralph loops",
-		"objective":"Track recurring Ralph loop patterns in Mission Control.",
-		"why_proposed":"Daniel asked when we can get into the Ralph loops.",
+		"mission_id":"mission-recurring-loops",
+		"title":"Recurring loops",
+		"objective":"Track recurring recurring loop patterns in Mission Control.",
+		"why_proposed":"Daniel asked when we can get into the Recurring loops.",
 		"not_included":["no execution","no self-continuation"],
-		"next_allowed_action":"Ask Daniel for the first Ralph loop anchor."
+		"next_allowed_action":"Ask Daniel for the first recurring loop anchor."
 	}`))
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(propose_candidate) err = %v", err)
@@ -128,7 +128,7 @@ func TestMissionLedgerToolProposeCandidateQueuesReviewOnlyCard(t *testing.T) {
 	if !ok {
 		t.Fatalf("metadata = %q, want mission control proposal", events[0].MetadataJSON)
 	}
-	if proposal.MissionID != "mission-ralph-loops" || proposal.Owner != "telegram:1001" || proposal.Scope != "telegram_dm" {
+	if proposal.MissionID != "mission-recurring-loops" || proposal.Owner != "telegram:1001" || proposal.Scope != "telegram_dm" {
 		t.Fatalf("proposal = %#v, want owner/scope/id populated", proposal)
 	}
 }

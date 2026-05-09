@@ -1158,7 +1158,7 @@ func (r *Runtime) writeDoctorIssueStatusChecks(b *strings.Builder, input doctorD
 	}
 
 	childBotRunnerSourceOK := doctorSourceContainsAll(workingRoot, "main_telegram_child_bot.go", []string{"runTelegramChildBotCommandWithDeps", "validateTelegramChildBotTokenMetadata", "telegramChildBotHealthStatus", "runTelegramChildBotGetMeSmoke", "runTelegramChildBotDryStart", "telegramChildBotNoSendOutbound"})
-	childBotRunbookOK := doctorSourceContainsAll(workingRoot, "docs/architecture/synth-telegram-bot-subsystem-plan.md", []string{"generic but narrow", "telegram-child-bot"})
+	childBotRunbookOK := doctorSourceContainsAll(workingRoot, "docs/architecture/telegram-child-bot-runbook.md", []string{"generic but narrow", "telegram-child-bot"})
 	switch {
 	case childBotRunnerSourceOK && childBotRunbookOK:
 		writeDoctorIssueCheck(b, "telegram_child_bot_runner", "likely_fixed", "generic child bot runner source includes metadata-only health/status, no-send dry-start, and getMe smoke gates")

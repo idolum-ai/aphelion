@@ -62,7 +62,7 @@ without a fresh user message, inside bounded constraints.
 
 Example:
 
-> Nocturne may run once nightly, local/private only, no network, one artifact,
+> A nightly reflection mission may run once nightly, local/private only, no network, one artifact,
 > morning trace, fixed runtime budget.
 
 A mission can be the reason continuation is offered. It is not itself the grant.
@@ -752,7 +752,7 @@ No self-summon. No continuation. No autonomy.
 
 ### PR 7 — Bounded Self-Continuation
 
-- Enable exactly one pilot recurring mission first, likely Nocturne.
+- Enable exactly one pilot recurring mission first, likely a nightly reflection.
 - Require explicit authority contract, active grants, budget, cadence, and
   handoff/result coverage.
 - Route through existing continuation state.
@@ -825,9 +825,9 @@ No self-summon. No continuation. No autonomy.
 
 ## First Pilot
 
-Use Nocturne as the first self-continuation pilot only after PRs 1-6 land.
+Use a nightly reflection as the first self-continuation pilot only after PRs 1-6 land.
 
-Why Nocturne:
+Why this pilot:
 
 - already conceptually recurring
 - local/private by design

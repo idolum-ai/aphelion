@@ -441,7 +441,7 @@ func visibleRecurrenceSummaryNamesThread(summary string) bool {
 		strings.Contains(lower, "mission") ||
 		strings.Contains(lower, "lighthouse") ||
 		strings.Contains(lower, "proton") ||
-		strings.Contains(lower, "ralph")
+		strings.Contains(lower, "recurring")
 }
 
 func runtimeAwarenessHasAnyHiddenCategory(aw prompt.RuntimeAwareness, categories ...string) bool {

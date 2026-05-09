@@ -2183,7 +2183,7 @@ func actionProposalFromOperationProposal(opState session.OperationState, proposa
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	actionProposal = applyOrganicRalphSandbox(actionProposal, opState, proposal)
+	actionProposal = applyOrganicProposalSandbox(actionProposal, opState, proposal)
 	actionProposal = applyGoalContinuationSandbox(actionProposal, opState, proposal)
 	actionProposal = applyContinuationLeaseClassBoundaries(actionProposal)
 	actionProposal.PlanHash = actionProposalHash(actionProposal)

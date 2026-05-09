@@ -12,7 +12,7 @@ import (
 	"github.com/idolum-ai/aphelion/turn"
 )
 
-func TestHandleInboundInfersOrganicRalphProposalAndMaterializesButtons(t *testing.T) {
+func TestHandleInboundInfersOrganicProposalProposalAndMaterializesButtons(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -20,17 +20,17 @@ func TestHandleInboundInfersOrganicRalphProposalAndMaterializesButtons(t *testin
 	provider.faceReplyText = "I think this wants a button-backed lease."
 	provider.proposalReplyText = strings.Join([]string{
 		"This wants to become a bounded continuation proposal.",
-		"ORGANIC_RALPH_SCHEMA_VERSION: 1",
-		"ORGANIC_RALPH_PROPOSAL: yes",
-		"ORGANIC_RALPH_KIND: read_only_review",
-		"ORGANIC_RALPH_SUMMARY: Inspect Ralph insertion points",
-		"ORGANIC_RALPH_WHY_NOW: Daniel asked to finish the Ralph loop organically.",
-		"ORGANIC_RALPH_BOUNDED_EFFECT: Inspect local runtime paths and report the design; no code or deploy; stop after evidence.",
-		"ORGANIC_RALPH_CONFIDENCE: high",
+		"ORGANIC_PROPOSAL_SCHEMA_VERSION: 1",
+		"ORGANIC_PROPOSAL_PROPOSAL: yes",
+		"ORGANIC_PROPOSAL_KIND: read_only_review",
+		"ORGANIC_PROPOSAL_SUMMARY: Inspect proposal insertion points",
+		"ORGANIC_PROPOSAL_WHY_NOW: Daniel asked to finish the recurring loop organically.",
+		"ORGANIC_PROPOSAL_BOUNDED_EFFECT: Inspect local runtime paths and report the design; no code or deploy; stop after evidence.",
+		"ORGANIC_PROPOSAL_CONFIDENCE: high",
 		"CONTINUATION_SCHEMA_VERSION: 1",
 		"CONTINUATION_INTENT: hold",
 		"CONTINUATION_RATIONALE: Ask for button confirmation first.",
-		"CONTINUATION_NEXT_STEP: Inspect Ralph insertion points.",
+		"CONTINUATION_NEXT_STEP: Inspect proposal insertion points.",
 		"CONTINUATION_CONFIDENCE: high",
 	}, "\n")
 	rt, err := New(cfg, store, provider, nil, sender)
@@ -39,7 +39,7 @@ func TestHandleInboundInfersOrganicRalphProposalAndMaterializesButtons(t *testin
 	}
 
 	key := session.SessionKey{ChatID: 9021, UserID: 0, Scope: telegramDMScopeRef(9021)}
-	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{ChatID: 9021, SenderID: 1001, SenderName: "admin", Text: "let's finish the Ralph loop organically", MessageID: 77})
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{ChatID: 9021, SenderID: 1001, SenderName: "admin", Text: "let's finish the recurring loop organically", MessageID: 77})
 	if err != nil {
 		t.Fatalf("HandleInbound() err = %v", err)
 	}
@@ -49,7 +49,7 @@ func TestHandleInboundInfersOrganicRalphProposalAndMaterializesButtons(t *testin
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1 organic proposal approval", len(sender.inline))
 	}
-	if !strings.Contains(sender.inline[0].text, "Approval:") || !strings.Contains(sender.inline[0].text, "Inspect Ralph insertion points") {
+	if !strings.Contains(sender.inline[0].text, "Approval:") || !strings.Contains(sender.inline[0].text, "Inspect proposal insertion points") {
 		t.Fatalf("inline text = %q, want materialized organic proposal", sender.inline[0].text)
 	}
 	if got := sender.inline[0].rows[0][0].CallbackData; got == "" || len(got) > core.TelegramCallbackDataMaxBytes {
@@ -63,8 +63,8 @@ func TestHandleInboundInfersOrganicRalphProposalAndMaterializesButtons(t *testin
 	if opState.Status != session.OperationStatusBlocked || opState.Proposal.Status != session.ProposalStatusPending {
 		t.Fatalf("operation state = %#v, want blocked with pending proposal", opState)
 	}
-	if opState.Proposal.Kind != "read_only_review" || opState.Proposal.Summary != "Inspect Ralph insertion points" {
-		t.Fatalf("proposal = %#v, want read_only_review Inspect Ralph insertion points", opState.Proposal)
+	if opState.Proposal.Kind != "read_only_review" || opState.Proposal.Summary != "Inspect proposal insertion points" {
+		t.Fatalf("proposal = %#v, want read_only_review Inspect proposal insertion points", opState.Proposal)
 	}
 	if !strings.Contains(opState.Proposal.BoundedEffect, "stop after evidence") {
 		t.Fatalf("bounded effect = %q, want stop/report condition", opState.Proposal.BoundedEffect)
@@ -76,15 +76,15 @@ func TestHandleInboundInfersOrganicRalphProposalAndMaterializesButtons(t *testin
 	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != opState.Proposal.ID {
 		t.Fatalf("continuation = %#v, want pending linked to operation proposal %q", cont, opState.Proposal.ID)
 	}
-	if !actionListContains(cont.ActionProposal.AllowedActions, organicRalphSandboxAction) {
-		t.Fatalf("allowed actions = %#v, want Organic Ralph sandbox action", cont.ActionProposal.AllowedActions)
+	if !actionListContains(cont.ActionProposal.AllowedActions, organicProposalSandboxAction) {
+		t.Fatalf("allowed actions = %#v, want Organic proposal sandbox action", cont.ActionProposal.AllowedActions)
 	}
 	if !actionListContains(cont.ActionProposal.ForbiddenActions, "edit_files") || !actionListContains(cont.ActionProposal.ForbiddenActions, "network_access_without_separate_grant") {
 		t.Fatalf("forbidden actions = %#v, want read-only sandbox boundaries", cont.ActionProposal.ForbiddenActions)
 	}
 }
 
-func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.T) {
+func TestOrganicProposalInfersProposalFromPersistedStateWithoutContract(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -96,7 +96,7 @@ func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.
 	if err := store.UpdatePlanState(key, session.PlanState{
 		Explanation: "Finish the callback recovery work.",
 		Steps: []session.PlanStep{{
-			Step:   "Patch Organic Ralph fallback inference and prove it with tests",
+			Step:   "Patch Organic proposal fallback inference and prove it with tests",
 			Status: session.PlanStatusInProgress,
 		}},
 	}); err != nil {
@@ -104,7 +104,7 @@ func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.
 	}
 	if err := store.UpdateOperationState(key, session.OperationState{
 		ID:        "organic-state-fallback",
-		Objective: "Deliver the intended Organic Ralph loop.",
+		Objective: "Deliver the intended Organic proposal loop.",
 		Status:    session.OperationStatusBlocked,
 		Stage:     "awaiting_button_backed_lease",
 		Summary:   "The plan has one bounded next implementation step but no explicit face contract.",
@@ -126,13 +126,13 @@ func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.
 	if opState.Proposal.Status != session.ProposalStatusPending {
 		t.Fatalf("proposal status = %q, want pending", opState.Proposal.Status)
 	}
-	if opState.Proposal.Kind != "system_change" || !strings.Contains(opState.Proposal.Summary, "Patch Organic Ralph fallback") {
+	if opState.Proposal.Kind != "system_change" || !strings.Contains(opState.Proposal.Summary, "Patch Organic proposal fallback") {
 		t.Fatalf("proposal = %#v, want system_change patch proposal from plan state", opState.Proposal)
 	}
 	if len(opState.Findings) != 1 {
 		t.Fatalf("findings = %#v, want one inference finding", opState.Findings)
 	}
-	if !strings.Contains(opState.Findings[0].Basis, "plan state") || strings.Contains(opState.Findings[0].Basis, "ORGANIC_RALPH") {
+	if !strings.Contains(opState.Findings[0].Basis, "plan state") || strings.Contains(opState.Findings[0].Basis, "ORGANIC_PROPOSAL") {
 		t.Fatalf("finding basis = %q, want persisted plan-state inference basis", opState.Findings[0].Basis)
 	}
 
@@ -153,7 +153,7 @@ func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if !actionListContains(cont.ActionProposal.AllowedActions, organicRalphSandboxAction) || !actionListContains(cont.ActionProposal.AllowedActions, organicRalphSandboxWriteBoundary) {
+	if !actionListContains(cont.ActionProposal.AllowedActions, organicProposalSandboxAction) || !actionListContains(cont.ActionProposal.AllowedActions, organicProposalSandboxWriteBoundary) {
 		t.Fatalf("allowed actions = %#v, want approved_user sandbox write boundary", cont.ActionProposal.AllowedActions)
 	}
 	for _, want := range []string{"commit_without_separate_approval", "deploy", "restart_service", "push_remote", "network_access_without_separate_grant"} {
@@ -161,7 +161,7 @@ func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.
 			t.Fatalf("forbidden actions = %#v, want %q", cont.ActionProposal.ForbiddenActions, want)
 		}
 	}
-	if !actionListContains(cont.ContinuationLease.AllowedActions, organicRalphSandboxAction) || !actionListContains(cont.ContinuationLease.ForbiddenActions, "deploy") {
+	if !actionListContains(cont.ContinuationLease.AllowedActions, organicProposalSandboxAction) || !actionListContains(cont.ContinuationLease.ForbiddenActions, "deploy") {
 		t.Fatalf("lease sandbox actions = allowed %#v forbidden %#v, want sandbox copied into lease", cont.ContinuationLease.AllowedActions, cont.ContinuationLease.ForbiddenActions)
 	}
 	if !strings.Contains(cont.ActionProposal.BoundedEffect, "Sandbox boundary") || !strings.Contains(cont.ActionProposal.BoundedEffect, "approved_user isolated") {
@@ -189,7 +189,7 @@ func TestOrganicRalphInfersProposalFromPersistedStateWithoutContract(t *testing.
 	}
 }
 
-func TestOrganicRalphInferenceSkipsCommandsTurnAuthorizationAndLowConfidence(t *testing.T) {
+func TestOrganicProposalInferenceSkipsCommandsTurnAuthorizationAndLowConfidence(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -199,13 +199,13 @@ func TestOrganicRalphInferenceSkipsCommandsTurnAuthorizationAndLowConfidence(t *
 	}
 	key := session.SessionKey{ChatID: 9022, UserID: 0, Scope: telegramDMScopeRef(9022)}
 	result := &turn.Result{ProposalNote: strings.Join([]string{
-		"ORGANIC_RALPH_SCHEMA_VERSION: 1",
-		"ORGANIC_RALPH_PROPOSAL: yes",
-		"ORGANIC_RALPH_KIND: read_only_review",
-		"ORGANIC_RALPH_SUMMARY: Inspect something",
-		"ORGANIC_RALPH_WHY_NOW: It may matter.",
-		"ORGANIC_RALPH_BOUNDED_EFFECT: Inspect only and report; stop after evidence.",
-		"ORGANIC_RALPH_CONFIDENCE: medium",
+		"ORGANIC_PROPOSAL_SCHEMA_VERSION: 1",
+		"ORGANIC_PROPOSAL_PROPOSAL: yes",
+		"ORGANIC_PROPOSAL_KIND: read_only_review",
+		"ORGANIC_PROPOSAL_SUMMARY: Inspect something",
+		"ORGANIC_PROPOSAL_WHY_NOW: It may matter.",
+		"ORGANIC_PROPOSAL_BOUNDED_EFFECT: Inspect only and report; stop after evidence.",
+		"ORGANIC_PROPOSAL_CONFIDENCE: medium",
 	}, "\n")}
 	for _, msg := range []core.InboundMessage{
 		{ChatID: 9022, SenderID: 1001, Text: "/mission list", MessageID: 1},
@@ -235,7 +235,7 @@ func TestOrganicRalphInferenceSkipsCommandsTurnAuthorizationAndLowConfidence(t *
 	}
 }
 
-func TestOrganicRalphDoesNotInferWithoutContractOrState(t *testing.T) {
+func TestOrganicProposalDoesNotInferWithoutContractOrState(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -253,7 +253,7 @@ func TestOrganicRalphDoesNotInferWithoutContractOrState(t *testing.T) {
 	}
 }
 
-func TestOrganicRalphInferenceSkipsWhenContinuationOrPendingProposalExists(t *testing.T) {
+func TestOrganicProposalInferenceSkipsWhenContinuationOrPendingProposalExists(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -265,7 +265,7 @@ func TestOrganicRalphInferenceSkipsWhenContinuationOrPendingProposalExists(t *te
 	if err := store.UpdateContinuationState(key, session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "already", RemainingTurns: 1}); err != nil {
 		t.Fatalf("UpdateContinuationState() err = %v", err)
 	}
-	result := &turn.Result{ProposalNote: organicRalphHighConfidenceTestContract()}
+	result := &turn.Result{ProposalNote: organicProposalHighConfidenceTestContract()}
 	inferred, err := rt.maybeInferOrganicOperationProposal(context.Background(), key, core.InboundMessage{ChatID: 9023, SenderID: 1001, Text: "go", MessageID: 1}, "go", result)
 	if err != nil {
 		t.Fatalf("maybeInferOrganicOperationProposal() err = %v", err)
@@ -287,19 +287,19 @@ func TestOrganicRalphInferenceSkipsWhenContinuationOrPendingProposalExists(t *te
 	}
 }
 
-func organicRalphHighConfidenceTestContract() string {
+func organicProposalHighConfidenceTestContract() string {
 	return strings.Join([]string{
-		"ORGANIC_RALPH_SCHEMA_VERSION: 1",
-		"ORGANIC_RALPH_PROPOSAL: yes",
-		"ORGANIC_RALPH_KIND: read_only_review",
-		"ORGANIC_RALPH_SUMMARY: Inspect one path",
-		"ORGANIC_RALPH_WHY_NOW: The conversation implies one bounded next step.",
-		"ORGANIC_RALPH_BOUNDED_EFFECT: Inspect only and report evidence; stop after report.",
-		"ORGANIC_RALPH_CONFIDENCE: high",
+		"ORGANIC_PROPOSAL_SCHEMA_VERSION: 1",
+		"ORGANIC_PROPOSAL_PROPOSAL: yes",
+		"ORGANIC_PROPOSAL_KIND: read_only_review",
+		"ORGANIC_PROPOSAL_SUMMARY: Inspect one path",
+		"ORGANIC_PROPOSAL_WHY_NOW: The conversation implies one bounded next step.",
+		"ORGANIC_PROPOSAL_BOUNDED_EFFECT: Inspect only and report evidence; stop after report.",
+		"ORGANIC_PROPOSAL_CONFIDENCE: high",
 	}, "\n")
 }
 
-func TestOrganicRalphExpiredOperationProposalIsStaleEvidenceNotBlocker(t *testing.T) {
+func TestOrganicProposalExpiredOperationProposalIsStaleEvidenceNotBlocker(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -309,13 +309,13 @@ func TestOrganicRalphExpiredOperationProposalIsStaleEvidenceNotBlocker(t *testin
 	}
 	key := session.SessionKey{ChatID: 9027, UserID: 0, Scope: telegramDMScopeRef(9027)}
 	if err := store.UpdateOperationState(key, session.OperationState{
-		ID:        "clean-organic-ralph-regression",
-		Objective: "Clean live-test Organic Ralph v1 inference from ordinary conversation without a manually pre-written OperationProposal.",
+		ID:        "clean-organic-proposal-regression",
+		Objective: "Clean live-test Organic proposal v1 inference from ordinary conversation without a manually pre-written OperationProposal.",
 		Status:    session.OperationStatusBlocked,
 		Stage:     "awaiting_ordinary_prompt",
-		Summary:   "Inspect whether Organic Ralph can infer a harmless status-check proposal from this conversation and stop after evidence.",
+		Summary:   "Inspect whether Organic proposal can infer a harmless status-check proposal from this conversation and stop after evidence.",
 		Proposal: session.OperationProposal{
-			ID:      "stale-organic-ralph-live-test",
+			ID:      "stale-organic-proposal-live-test",
 			Summary: "Expired prior live-test proposal",
 			Status:  session.ProposalStatusExpired,
 		},
@@ -340,12 +340,12 @@ func TestOrganicRalphExpiredOperationProposalIsStaleEvidenceNotBlocker(t *testin
 	if strings.Contains(opState.Proposal.Summary, "awaiting_ordinary_prompt") {
 		t.Fatalf("proposal summary = %q, want semantic summary not internal stage", opState.Proposal.Summary)
 	}
-	if !strings.Contains(opState.Proposal.Summary, "Inspect whether Organic Ralph") {
+	if !strings.Contains(opState.Proposal.Summary, "Inspect whether Organic proposal") {
 		t.Fatalf("proposal summary = %q, want operation summary semantic fallback", opState.Proposal.Summary)
 	}
 }
 
-func TestOrganicRalphDoesNotInferOnlyInternalStageLabel(t *testing.T) {
+func TestOrganicProposalDoesNotInferOnlyInternalStageLabel(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)

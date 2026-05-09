@@ -1,0 +1,11 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Project false positives"
+paths = [
+  '''^third_party/go-sqlite3/''',
+]
+regexes = [
+  '''sk-testSECRETabcdef123456''',
+]

@@ -188,9 +188,9 @@ use a compact deterministic alias when a human-readable proposal id would make
 the compact id is transport-only and resolves by comparing against the aliases of
 persisted ids.
 
-## Organic Ralph sandbox leases
+## Organic proposal sandbox leases
 
-Organic Ralph may infer a bounded proposal from plan, operation, or continuation
+Organic proposal inference may infer a bounded proposal from plan, operation, or continuation
 state even when the face model did not emit the explicit proposal contract. That
 inference is allowed to create `system_change` proposals, but materialization
 adds a sandbox contract before the button can approve execution:
@@ -205,4 +205,4 @@ adds a sandbox contract before the button can approve execution:
   `approved_user` isolated profile even if the approving human is an admin.
 
 The approval still records the original approver. The sandbox role is only the
-execution principal for that bounded Organic Ralph continuation.
+execution principal for that bounded organic proposal continuation.

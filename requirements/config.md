@@ -64,8 +64,8 @@ max_pdf_bytes = "8MB"
 # They require an explicit child-local LLM bootstrap and do not inherit the parent's governor credentials.
 [[telegram.durable_groups]]
 chat_id = -1001234567890
-agent_id = "family-group"
-charter = "Help locally in the family group without widening standing role or authority."
+agent_id = "research-group"
+charter = "Help locally in the group without widening standing role or authority."
 respond_on = "mentions"         # "mentions" | "all"
 review_target_chat_id = 123456789
 
@@ -83,7 +83,7 @@ llm_max_tokens = 64000
 # Codex child bootstrap
 # llm_backend = "codex"
 # llm_codex_auth_source = "codex_cli"  # "auto" | "codex_cli"
-# llm_codex_home = "/srv/family-group/.codex"
+# llm_codex_home = "/srv/research-group/.codex"
 # llm_codex_base_url = "https://chatgpt.com/backend-api"
 
 # ─── Providers ───

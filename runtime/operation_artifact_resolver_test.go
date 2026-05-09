@@ -100,8 +100,8 @@ func TestHandleInboundDoesNotTreatContinuationAuthorizationAsArtifactRequest(t *
 		approvedContinuationEventText,
 		"",
 		"Approved work:",
-		"Plan: Synth custom Telegram runner",
-		"Next: Finish the repo-only Synth custom Telegram runner work.",
+		"Plan: custom child Telegram runner",
+		"Next: Finish the repo-only custom child Telegram runner work.",
 		"Scope: Prepare the no-send dry-start gate, commit it if coherent, and report evidence.",
 	}, "\n")
 

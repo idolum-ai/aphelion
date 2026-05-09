@@ -295,7 +295,7 @@ File paths should be rendered literally and consistently, for example:
 
 - `requirements/language.md`
 - `~/secrets/.env`
-- `/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion`
+- `/home/user/src/aphelion`
 
 Do not paraphrase paths when precision matters.
 

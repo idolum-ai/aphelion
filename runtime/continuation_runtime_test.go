@@ -1590,7 +1590,7 @@ func TestTriggerContinuationRunsAsApprovedUser(t *testing.T) {
 	}
 }
 
-func TestTriggerSandboxedOrganicRalphContinuationDowngradesAdminToApprovedUserSandbox(t *testing.T) {
+func TestTriggerSandboxedOrganicProposalContinuationDowngradesAdminToApprovedUserSandbox(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -1606,30 +1606,30 @@ func TestTriggerSandboxedOrganicRalphContinuationDowngradesAdminToApprovedUserSa
 	if err := store.UpdateContinuationState(key, session.ContinuationState{
 		Kind:           session.TurnAuthorizationKindContinuation,
 		Status:         session.ContinuationStatusApproved,
-		DecisionID:     "organic-ralph-sandbox",
-		Objective:      "Run one Organic Ralph system-change step.",
+		DecisionID:     "organic-proposal-sandbox",
+		Objective:      "Run one Organic proposal system-change step.",
 		StageSummary:   "Patch one local file and report evidence.",
 		RemainingTurns: 1,
 		ApprovedBy:     1001,
 		ActionProposal: session.ActionProposal{
-			ID:             "aprop-organic-ralph-sandbox",
+			ID:             "aprop-organic-proposal-sandbox",
 			Summary:        "Patch one local file",
 			RiskClass:      "system_change",
-			AllowedActions: []string{organicRalphSandboxAction, organicRalphSandboxWriteBoundary},
+			AllowedActions: []string{organicProposalSandboxAction, organicProposalSandboxWriteBoundary},
 			Status:         session.ProposalStatusApproved,
 			ExpiresAt:      expiresAt,
-			PlanHash:       "sha256:organic-ralph-sandbox",
+			PlanHash:       "sha256:organic-proposal-sandbox",
 		},
 		ContinuationLease: session.ContinuationLease{
-			ID:               "lease-organic-ralph-sandbox",
-			ProposalID:       "aprop-organic-ralph-sandbox",
+			ID:               "lease-organic-proposal-sandbox",
+			ProposalID:       "aprop-organic-proposal-sandbox",
 			Status:           session.ContinuationLeaseStatusActive,
 			MaxTurns:         1,
 			RemainingTurns:   1,
-			AllowedActions:   []string{organicRalphSandboxAction, organicRalphSandboxWriteBoundary},
+			AllowedActions:   []string{organicProposalSandboxAction, organicProposalSandboxWriteBoundary},
 			ForbiddenActions: []string{"deploy"},
 			ExpiresAt:        expiresAt,
-			PlanHash:         "sha256:organic-ralph-sandbox",
+			PlanHash:         "sha256:organic-proposal-sandbox",
 		},
 	}); err != nil {
 		t.Fatalf("UpdateContinuationState() err = %v", err)
@@ -1671,7 +1671,7 @@ func TestTriggerSandboxedOrganicRalphContinuationDowngradesAdminToApprovedUserSa
 	if payloadString(payload, "execution_principal_role") != string(principal.RoleApprovedUser) {
 		t.Fatalf("execution role payload = %q, want approved_user", payloadString(payload, "execution_principal_role"))
 	}
-	if payloadString(payload, "sandbox_profile") != organicRalphSandboxProfile || payloadString(payload, "sandboxed_from_role") != string(principal.RoleAdmin) {
+	if payloadString(payload, "sandbox_profile") != organicProposalSandboxProfile || payloadString(payload, "sandboxed_from_role") != string(principal.RoleAdmin) {
 		t.Fatalf("sandbox payload = profile %q from %q, want approved_user_isolated from admin", payloadString(payload, "sandbox_profile"), payloadString(payload, "sandboxed_from_role"))
 	}
 }

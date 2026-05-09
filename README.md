@@ -2,6 +2,8 @@
 
 A minimal, governed outpost for personal agents.
 
+License: Apache-2.0.
+
 ## Philosophy
 
 - **Only what we need.** No plugin marketplace, no multi-channel support, no enterprise features.
@@ -173,7 +175,7 @@ Recommended root layout for this repo:
 ```toml
 [agent]
 prompt_root = "~/.aphelion/agent"
-exec_root = "/home/sadasant_gmail_com/code/github.com/idolum-ai/aphelion"
+exec_root = "/home/user/src/aphelion"
 shared_memory_root = "~/.aphelion/agent"
 user_workspace_root = "~/.aphelion/state/isolated/workspaces"
 user_memory_root = "~/.aphelion/state/isolated/memory"
@@ -272,7 +274,7 @@ Inspect durable-agent inventory and health:
 
 ```bash
 ./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
-./bin/aphelion durable-agent health --config ~/.aphelion/aphelion.toml --agent family-group
+./bin/aphelion durable-agent health --config ~/.aphelion/aphelion.toml --agent research-group
 ```
 
 Configure a durable Telegram group agent:

@@ -376,7 +376,7 @@ func TestNormalizeMessageKeepsReplyContextLiteralText(t *testing.T) {
 		ReplyToMessage: &Message{
 			MessageID: 32,
 			From:      &User{ID: 9, Username: "idolum"},
-			Text:      "Legacy correction note.\nPlan: Synth Telegram Runner (R1)",
+			Text:      "Legacy correction note.\nPlan: Child Telegram Runner (R1)",
 		},
 	}
 
@@ -384,7 +384,7 @@ func TestNormalizeMessageKeepsReplyContextLiteralText(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected message to be normalized")
 	}
-	if !strings.Contains(got.Text, "idolum: Legacy correction note. Plan: Synth Telegram Runner (R1)") {
+	if !strings.Contains(got.Text, "idolum: Legacy correction note. Plan: Child Telegram Runner (R1)") {
 		t.Fatalf("text = %q, want literal reply context content", got.Text)
 	}
 }

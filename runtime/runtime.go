@@ -264,7 +264,7 @@ func (r *Runtime) runApprovedContinuationNative(ctx context.Context, actor princ
 	payload["approved_by_user"] = approvedBy
 	payload["execution_principal_role"] = string(executionActor.Role)
 	if sandboxRequired {
-		payload["sandbox_profile"] = organicRalphSandboxProfile
+		payload["sandbox_profile"] = organicProposalSandboxProfile
 	}
 	if executionActor.Role != actor.Role {
 		payload["sandboxed_from_role"] = string(actor.Role)

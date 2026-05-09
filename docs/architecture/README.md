@@ -44,6 +44,7 @@ These invariants are normative for architecture and requirements alignment:
 - [transparent-execution-sequence.md](transparent-execution-sequence.md): canonical execution timeline and projection/fallback precedence.
 - [coordinator-boundary-audit.md](coordinator-boundary-audit.md): adapter-boundary readout and wrapper decisions.
 - [external-tools-pilot.md](external-tools-pilot.md): current external-tool lifecycle, execution-mode semantics, and bundled `browse_page` pilot.
+- [telegram-child-bot-runbook.md](telegram-child-bot-runbook.md): generic Telegram child-bot runner boundary and operational checks.
 - [capability-delegation-lane.md](capability-delegation-lane.md): general request/review/grant lane for tools, devices, accounts, purchases, public web, and emergent permissions.
 - [migration-appendix.md](migration-appendix.md): refactor closeout and present-vs-intended reference.
 - [diagrams/README.md](diagrams/README.md): canonical diagram assets.

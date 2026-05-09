@@ -10,18 +10,18 @@ import (
 )
 
 const (
-	organicRalphSandboxAction        = "execute_in_approved_user_sandbox"
-	organicRalphSandboxProfile       = "approved_user_isolated"
-	organicRalphSandboxWriteBoundary = "write_user_workspace_memory_tmp"
+	organicProposalSandboxAction        = "execute_in_approved_user_sandbox"
+	organicProposalSandboxProfile       = "approved_user_isolated"
+	organicProposalSandboxWriteBoundary = "write_user_workspace_memory_tmp"
 )
 
-func applyOrganicRalphSandbox(action session.ActionProposal, opState session.OperationState, proposal session.OperationProposal) session.ActionProposal {
-	if !organicRalphOperationProposal(opState, proposal) {
+func applyOrganicProposalSandbox(action session.ActionProposal, opState session.OperationState, proposal session.OperationProposal) session.ActionProposal {
+	if !organicProposalOperationProposal(opState, proposal) {
 		return action
 	}
 
 	action.AllowedActions = append(action.AllowedActions,
-		organicRalphSandboxAction,
+		organicProposalSandboxAction,
 		"report_evidence",
 	)
 	action.ForbiddenActions = append(action.ForbiddenActions,
@@ -36,9 +36,9 @@ func applyOrganicRalphSandbox(action session.ActionProposal, opState session.Ope
 		"keep network denied unless a separate capability grant explicitly allows it",
 	)
 
-	if organicRalphProposalIsSystemChange(action, proposal) {
+	if organicProposalIsSystemChange(action, proposal) {
 		action.AllowedActions = append(action.AllowedActions,
-			organicRalphSandboxWriteBoundary,
+			organicProposalSandboxWriteBoundary,
 			"run_tests_in_sandbox",
 		)
 		action.ForbiddenActions = append(action.ForbiddenActions,
@@ -51,7 +51,7 @@ func applyOrganicRalphSandbox(action session.ActionProposal, opState session.Ope
 			"treat prompt root and shared memory as read-only; write only user workspace, user memory, or tmp",
 			"report diff, tests, and residual risk before requesting commit, deploy, restart, or push",
 		)
-		action.BoundedEffect = appendOrganicRalphSandboxBoundedEffect(action.BoundedEffect, "Sandbox boundary: execute as approved_user isolated; writes limited to user workspace, user memory, or tmp; no network, secrets, commit, deploy, restart, or push without separate approval.")
+		action.BoundedEffect = appendOrganicProposalSandboxBoundedEffect(action.BoundedEffect, "Sandbox boundary: execute as approved_user isolated; writes limited to user workspace, user memory, or tmp; no network, secrets, commit, deploy, restart, or push without separate approval.")
 		return session.NormalizeActionProposal(action)
 	}
 
@@ -69,7 +69,7 @@ func applyOrganicRalphSandbox(action session.ActionProposal, opState session.Ope
 	action.ValidationPlan = append(action.ValidationPlan,
 		"keep the action read-only and report evidence before requesting any write lease",
 	)
-	action.BoundedEffect = appendOrganicRalphSandboxBoundedEffect(action.BoundedEffect, "Sandbox boundary: execute as approved_user isolated read-only review; no edits, network, commit, deploy, restart, or push without separate approval.")
+	action.BoundedEffect = appendOrganicProposalSandboxBoundedEffect(action.BoundedEffect, "Sandbox boundary: execute as approved_user isolated read-only review; no edits, network, commit, deploy, restart, or push without separate approval.")
 	return session.NormalizeActionProposal(action)
 }
 
@@ -98,20 +98,20 @@ func applyGoalContinuationSandbox(action session.ActionProposal, opState session
 		"keep the next-phase lease read-only",
 		"report the broader phased plan and exactly one safe next live smoke test before requesting any execution lease",
 	)
-	action.BoundedEffect = appendOrganicRalphSandboxBoundedEffect(action.BoundedEffect, "Sandbox boundary: read-only next-phase planning only; no edits, secrets, credentials, external account actions, commit, deploy, restart, or push without a separate lease.")
+	action.BoundedEffect = appendOrganicProposalSandboxBoundedEffect(action.BoundedEffect, "Sandbox boundary: read-only next-phase planning only; no edits, secrets, credentials, external account actions, commit, deploy, restart, or push without a separate lease.")
 	return session.NormalizeActionProposal(action)
 }
 
-func organicRalphOperationProposal(opState session.OperationState, proposal session.OperationProposal) bool {
+func organicProposalOperationProposal(opState session.OperationState, proposal session.OperationProposal) bool {
 	opState = session.NormalizeOperationState(opState)
 	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
-	if strings.HasPrefix(strings.TrimSpace(opState.ID), "organic-ralph-") {
+	if strings.HasPrefix(strings.TrimSpace(opState.ID), "organic-proposal-") {
 		return true
 	}
 	if strings.TrimSpace(opState.Stage) == "organic_proposal" {
 		return true
 	}
-	return strings.HasPrefix(strings.TrimSpace(proposal.ID), "organic-ralph-")
+	return strings.HasPrefix(strings.TrimSpace(proposal.ID), "organic-proposal-")
 }
 
 func goalContinuationOperationProposal(opState session.OperationState, proposal session.OperationProposal) bool {
@@ -126,15 +126,15 @@ func goalContinuationOperationProposal(opState session.OperationState, proposal 
 	return strings.HasPrefix(strings.TrimSpace(proposal.ID), goalContinuationIDPrefix)
 }
 
-func organicRalphProposalIsSystemChange(action session.ActionProposal, proposal session.OperationProposal) bool {
-	kind := normalizeOrganicRalphSandboxKind(firstNonEmptyContinuation(action.RiskClass, proposal.Kind))
+func organicProposalIsSystemChange(action session.ActionProposal, proposal session.OperationProposal) bool {
+	kind := normalizeOrganicProposalSandboxKind(firstNonEmptyContinuation(action.RiskClass, proposal.Kind))
 	switch kind {
 	case "system_change":
 		return true
 	case "read_only_review", "status_check":
 		return false
 	}
-	inferred := organicRalphKindFromStateText(strings.Join([]string{
+	inferred := organicProposalKindFromStateText(strings.Join([]string{
 		action.Summary,
 		action.WhyNow,
 		action.BoundedEffect,
@@ -145,14 +145,14 @@ func organicRalphProposalIsSystemChange(action session.ActionProposal, proposal 
 	return inferred == "system_change"
 }
 
-func normalizeOrganicRalphSandboxKind(kind string) string {
+func normalizeOrganicProposalSandboxKind(kind string) string {
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	kind = strings.ReplaceAll(kind, "-", "_")
 	kind = strings.ReplaceAll(kind, " ", "_")
 	return kind
 }
 
-func appendOrganicRalphSandboxBoundedEffect(effect string, note string) string {
+func appendOrganicProposalSandboxBoundedEffect(effect string, note string) string {
 	effect = strings.TrimSpace(effect)
 	note = strings.TrimSpace(note)
 	if note == "" {
@@ -180,8 +180,8 @@ func continuationExecutionActor(actor principal.Principal, state session.Continu
 
 func continuationRequiresApprovedUserSandbox(state session.ContinuationState) bool {
 	state = session.NormalizeContinuationState(state)
-	return actionListContains(state.ActionProposal.AllowedActions, organicRalphSandboxAction) ||
-		actionListContains(state.ContinuationLease.AllowedActions, organicRalphSandboxAction)
+	return actionListContains(state.ActionProposal.AllowedActions, organicProposalSandboxAction) ||
+		actionListContains(state.ContinuationLease.AllowedActions, organicProposalSandboxAction)
 }
 
 func actionListContains(values []string, want string) bool {

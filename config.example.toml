@@ -271,7 +271,7 @@ window_end = "07:00"
 timezone = ""
 artifact_dir = "memory/nocturne"
 prompt = ""
-confirmation = "Nocturne happened"
+confirmation = "Nightly reflection complete"
 
 [voice]
 mode = "off"

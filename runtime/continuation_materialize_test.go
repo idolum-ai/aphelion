@@ -391,18 +391,18 @@ func TestMaterializePhasePlanIgnoresStaleInProgressWhenCurrentPhaseIsPending(t *
 	}
 	key := session.SessionKey{ChatID: 9028, UserID: 0, Scope: telegramDMScopeRef(9028)}
 	if err := store.UpdateOperationState(key, session.OperationState{
-		ID:        "synth-remainder-op",
-		Objective: "Finish the repo-only Synth Telegram runner work.",
+		ID:        "child-remainder-op",
+		Objective: "Finish the repo-only child Telegram runner work.",
 		Status:    session.OperationStatusBlocked,
 		Stage:     "review_complete_plan_draft_ready_not_armed_due_autoapproval",
 		Proposal: session.OperationProposal{
-			ID:      "draft-synth-remainder",
-			Summary: "Draft repo-only Synth continuation",
+			ID:      "draft-child-remainder",
+			Summary: "Draft repo-only child continuation",
 			Status:  session.ProposalStatusSuperseded,
 		},
 		PhasePlan: session.OperationPhasePlan{
-			ID:             "synth-remainder-plan",
-			Goal:           "Finish the repo-only Synth custom Telegram runner.",
+			ID:             "child-remainder-plan",
+			Goal:           "Finish the repo-only custom child Telegram runner.",
 			CurrentPhaseID: "phase-r1-repo-finish",
 			Phases: []session.OperationPhase{
 				{
@@ -1459,7 +1459,7 @@ func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *test
 					Summary:        "Later email-forward/job-ranking and bounded public job scouting after profile approval.",
 					Status:         session.PlanStatusPending,
 					AuthorityClass: "external_account_email_read_public_web_read",
-					BoundedEffect:  "Read only synth@idolum.ai job-forwarding mailbox after profile approval.",
+					BoundedEffect:  "Read only child@example.invalid job-forwarding mailbox after profile approval.",
 				},
 				{
 					ID:             "phase-36-stale-repo-finish",

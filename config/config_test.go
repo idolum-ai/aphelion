@@ -1901,9 +1901,9 @@ func TestLoadTelegramChildBotConfig(t *testing.T) {
 bot_token = "tg-test"
 
 [[telegram.child_bots]]
-agent_id = "synth"
-token_file = "./secrets/synth-token"
-chat_id = -5056905988
+agent_id = "sample-child"
+token_file = "./secrets/sample-child-token"
+chat_id = -1001234567890
 respond_on = "mentions"
 enabled = true
 
@@ -1925,10 +1925,10 @@ api_key = "sk-ant-test"
 		t.Fatalf("child bots = %d, want 1", len(cfg.Telegram.ChildBots))
 	}
 	bot := cfg.Telegram.ChildBots[0]
-	if bot.AgentID != "synth" || bot.ChatID != -5056905988 || bot.RespondOn != "mentions" || !bot.Enabled {
-		t.Fatalf("child bot = %#v, want normalized synth route", bot)
+	if bot.AgentID != "sample-child" || bot.ChatID != -1001234567890 || bot.RespondOn != "mentions" || !bot.Enabled {
+		t.Fatalf("child bot = %#v, want normalized sample child route", bot)
 	}
-	wantTokenFile := filepath.Join(dir, "secrets", "synth-token")
+	wantTokenFile := filepath.Join(dir, "secrets", "sample-child-token")
 	if bot.TokenFile != wantTokenFile {
 		t.Fatalf("token file = %q, want %q", bot.TokenFile, wantTokenFile)
 	}
@@ -1945,17 +1945,17 @@ func TestLoadTelegramChildBotRejectsUnsafeOrDuplicateConfig(t *testing.T) {
 		{
 			name: "missing token file",
 			body: `[[telegram.child_bots]]
-agent_id = "synth"
-chat_id = -5056905988
+agent_id = "sample-child"
+chat_id = -1001234567890
 `,
 			wantErr: "telegram.child_bots[0].token_file is required",
 		},
 		{
 			name: "invalid respond_on",
 			body: `[[telegram.child_bots]]
-agent_id = "synth"
+agent_id = "sample-child"
 token_file = "./token"
-chat_id = -5056905988
+chat_id = -1001234567890
 respond_on = "sometimes"
 `,
 			wantErr: "telegram.child_bots[0].respond_on must be one of all|mentions",
@@ -1963,30 +1963,30 @@ respond_on = "sometimes"
 		{
 			name: "duplicate chat",
 			body: `[[telegram.child_bots]]
-agent_id = "synth"
+agent_id = "sample-child"
 token_file = "./token-a"
-chat_id = -5056905988
+chat_id = -1001234567890
 
 [[telegram.child_bots]]
-agent_id = "synth-2"
+agent_id = "sample-child-2"
 token_file = "./token-b"
-chat_id = -5056905988
+chat_id = -1001234567890
 `,
-			wantErr: "telegram.child_bots[1].chat_id duplicates child bot \"synth\"",
+			wantErr: "telegram.child_bots[1].chat_id duplicates child bot \"sample-child\"",
 		},
 		{
 			name: "duplicate durable group chat",
 			body: `[[telegram.durable_groups]]
 agent_id = "main-group"
 charter = "Help in the group."
-chat_id = -5056905988
+chat_id = -1001234567890
 llm_backend = "codex"
 llm_codex_home = "./codex-home"
 
 [[telegram.child_bots]]
-agent_id = "synth"
+agent_id = "sample-child"
 token_file = "./token"
-chat_id = -5056905988
+chat_id = -1001234567890
 `,
 			wantErr: "telegram.child_bots[0].chat_id duplicates telegram.durable_groups route \"main-group\"",
 		},

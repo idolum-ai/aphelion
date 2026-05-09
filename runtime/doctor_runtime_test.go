@@ -461,7 +461,7 @@ type telegramChildBotNoSendOutbound struct{}
 	if err := os.MkdirAll(docDir, 0o755); err != nil {
 		t.Fatalf("mkdir doc dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(docDir, "synth-telegram-bot-subsystem-plan.md"), []byte("Implement a generic but narrow telegram-child-bot command.\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(docDir, "telegram-child-bot-runbook.md"), []byte("Implement a generic but narrow telegram-child-bot command.\n"), 0o600); err != nil {
 		t.Fatalf("write runner runbook: %v", err)
 	}
 

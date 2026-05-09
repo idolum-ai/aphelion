@@ -15,9 +15,9 @@ import (
 	"github.com/idolum-ai/aphelion/turn"
 )
 
-const organicRalphProposalSchemaVersion = "1"
+const organicProposalSchemaVersion = "1"
 
-type organicRalphProposalCandidate struct {
+type organicProposalCandidate struct {
 	ID            string
 	Kind          string
 	Summary       string
@@ -49,10 +49,10 @@ func (r *Runtime) maybeInferOrganicOperationProposal(ctx context.Context, key se
 	if pendingOperationProposalNeedsButton(opState.Proposal) || opState.Proposal.Status == session.ProposalStatusApproved {
 		return false, nil
 	}
-	candidate, basis, ok := organicRalphProposalCandidateFromResult(result)
+	candidate, basis, ok := organicProposalCandidateFromResult(result)
 	if !ok {
 		var inferErr error
-		candidate, basis, ok, inferErr = r.inferOrganicRalphProposalCandidateFromState(key, msg, promptInput, result, opState)
+		candidate, basis, ok, inferErr = r.inferOrganicProposalProposalCandidateFromState(key, msg, promptInput, result, opState)
 		if inferErr != nil {
 			return false, inferErr
 		}
@@ -66,7 +66,7 @@ func (r *Runtime) maybeInferOrganicOperationProposal(ctx context.Context, key se
 	now := time.Now().UTC()
 	proposalID := candidate.ID
 	if proposalID == "" {
-		proposalID = organicRalphProposalID(candidate, msg)
+		proposalID = organicProposalID(candidate, msg)
 	}
 	proposal := session.OperationProposal{
 		ID:            proposalID,
@@ -78,14 +78,14 @@ func (r *Runtime) maybeInferOrganicOperationProposal(ctx context.Context, key se
 		UpdatedAt:     now,
 	}
 	state := session.OperationState{
-		ID:        "organic-ralph-" + strings.TrimPrefix(proposalID, "organic-ralph-"),
+		ID:        "organic-proposal-" + strings.TrimPrefix(proposalID, "organic-proposal-"),
 		Objective: candidate.Summary,
 		Status:    session.OperationStatusBlocked,
 		Stage:     "organic_proposal",
-		Summary:   "Organic Ralph inferred one bounded next-step proposal from ordinary conversation.",
+		Summary:   "Organic proposal inferred one bounded next-step proposal from ordinary conversation.",
 		Proposal:  proposal,
 		Findings: []session.OperationFinding{{
-			Claim:      "Organic Ralph inferred exactly one high-confidence bounded next lease from ordinary conversation.",
+			Claim:      "Organic proposal inferred exactly one high-confidence bounded next lease from ordinary conversation.",
 			Confidence: session.FindingConfidenceHigh,
 			Basis:      basis,
 		}},
@@ -96,36 +96,36 @@ func (r *Runtime) maybeInferOrganicOperationProposal(ctx context.Context, key se
 		UpdatedAt: now,
 	}
 	if err := r.store.UpdateOperationState(key, state); err != nil {
-		return false, fmt.Errorf("persist organic ralph operation proposal: %w", err)
+		return false, fmt.Errorf("persist organic operation proposal: %w", err)
 	}
 	return true, nil
 }
 
-func organicRalphProposalCandidateFromResult(result *turn.Result) (organicRalphProposalCandidate, string, bool) {
-	candidate, ok := parseOrganicRalphProposalContract(resultProposalNote(result))
+func organicProposalCandidateFromResult(result *turn.Result) (organicProposalCandidate, string, bool) {
+	candidate, ok := parseOrganicProposalContract(resultProposalNote(result))
 	if !ok {
-		return organicRalphProposalCandidate{}, "", false
+		return organicProposalCandidate{}, "", false
 	}
-	return candidate, "Face proposal contract carried ORGANIC_RALPH_PROPOSAL=yes, confidence=high, summary, why_now, and bounded_effect.", true
+	return candidate, "Face proposal contract carried ORGANIC_PROPOSAL_PROPOSAL=yes, confidence=high, summary, why_now, and bounded_effect.", true
 }
 
-func (r *Runtime) inferOrganicRalphProposalCandidateFromState(
+func (r *Runtime) inferOrganicProposalProposalCandidateFromState(
 	key session.SessionKey,
 	msg core.InboundMessage,
 	promptInput string,
 	result *turn.Result,
 	opState session.OperationState,
-) (organicRalphProposalCandidate, string, bool, error) {
+) (organicProposalCandidate, string, bool, error) {
 	if r == nil || r.store == nil {
-		return organicRalphProposalCandidate{}, "", false, nil
+		return organicProposalCandidate{}, "", false, nil
 	}
 	opState = session.NormalizeOperationState(opState)
 	if terminalOperationProposalBlocksStateInference(opState.Proposal) {
-		return organicRalphProposalCandidate{}, "", false, nil
+		return organicProposalCandidate{}, "", false, nil
 	}
 	planState, _ := r.store.PlanState(key)
 	planState = session.NormalizePlanState(planState)
-	if result != nil && organicRalphPlanStateHasConcreteStep(result.PlanState) {
+	if result != nil && organicProposalPlanStateHasConcreteStep(result.PlanState) {
 		planState = session.NormalizePlanState(result.PlanState)
 	}
 	if result != nil && result.OperationState.Active() && !pendingOperationProposalNeedsButton(result.OperationState.Proposal) {
@@ -136,13 +136,13 @@ func (r *Runtime) inferOrganicRalphProposalCandidateFromState(
 	}
 	priorContinuation, priorContinuationExists, err := r.store.ContinuationStateIfExists(key)
 	if err != nil {
-		return organicRalphProposalCandidate{}, "", false, err
+		return organicProposalCandidate{}, "", false, err
 	}
 	priorContinuation = session.NormalizeContinuationState(priorContinuation)
 
-	nextStep, source := organicRalphStateNextStep(planState, opState, priorContinuation, priorContinuationExists)
+	nextStep, source := organicProposalStateNextStep(planState, opState, priorContinuation, priorContinuationExists)
 	if nextStep == "" {
-		return organicRalphProposalCandidate{}, "", false, nil
+		return organicProposalCandidate{}, "", false, nil
 	}
 	objective := firstNonEmptyContinuation(
 		opState.Objective,
@@ -159,11 +159,11 @@ func (r *Runtime) inferOrganicRalphProposalCandidateFromState(
 	)
 	summary := clampContinuationText(nextStep, 120)
 	boundedEffect := firstNonEmptyContinuation(
-		organicRalphProposalBoundedEffectForStateInference(opState.Proposal),
-		organicRalphBoundedEffectFromState(nextStep),
+		organicProposalBoundedEffectForStateInference(opState.Proposal),
+		organicProposalBoundedEffectFromState(nextStep),
 	)
-	kind := organicRalphKindFromStateText(strings.Join([]string{summary, objective, boundedEffect}, "\n"))
-	candidate := organicRalphProposalCandidate{
+	kind := organicProposalKindFromStateText(strings.Join([]string{summary, objective, boundedEffect}, "\n"))
+	candidate := organicProposalCandidate{
 		Kind:          kind,
 		Summary:       summary,
 		WhyNow:        clampContinuationText(whyNow, 220),
@@ -187,7 +187,7 @@ func terminalOperationProposalBlocksStateInference(proposal session.OperationPro
 	}
 }
 
-func organicRalphProposalFieldsForStateInference(proposal session.OperationProposal) (summary string, boundedEffect string) {
+func organicProposalFieldsForStateInference(proposal session.OperationProposal) (summary string, boundedEffect string) {
 	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
 	if !proposal.Active() {
 		return "", ""
@@ -200,22 +200,22 @@ func organicRalphProposalFieldsForStateInference(proposal session.OperationPropo
 	}
 }
 
-func organicRalphProposalBoundedEffectForStateInference(proposal session.OperationProposal) string {
-	_, boundedEffect := organicRalphProposalFieldsForStateInference(proposal)
+func organicProposalBoundedEffectForStateInference(proposal session.OperationProposal) string {
+	_, boundedEffect := organicProposalFieldsForStateInference(proposal)
 	return boundedEffect
 }
 
-func organicRalphStateNextStep(planState session.PlanState, opState session.OperationState, priorContinuation session.ContinuationState, priorContinuationExists bool) (string, string) {
+func organicProposalStateNextStep(planState session.PlanState, opState session.OperationState, priorContinuation session.ContinuationState, priorContinuationExists bool) (string, string) {
 	planState = session.NormalizePlanState(planState)
 	opState = session.NormalizeOperationState(opState)
 	priorContinuation = session.NormalizeContinuationState(priorContinuation)
 	for _, step := range planState.Steps {
-		if (step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending) && organicRalphConcreteStateStep(step.Step) {
+		if (step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending) && organicProposalConcreteStateStep(step.Step) {
 			return step.Step, "plan state"
 		}
 	}
 	if opState.Status == session.OperationStatusBlocked || opState.Status == session.OperationStatusActive {
-		proposalSummary, proposalBoundedEffect := organicRalphProposalFieldsForStateInference(opState.Proposal)
+		proposalSummary, proposalBoundedEffect := organicProposalFieldsForStateInference(opState.Proposal)
 		for _, text := range []string{
 			proposalSummary,
 			proposalBoundedEffect,
@@ -223,7 +223,7 @@ func organicRalphStateNextStep(planState session.PlanState, opState session.Oper
 			opState.Objective,
 			opState.Stage,
 		} {
-			if organicRalphConcreteStateStep(text) {
+			if organicProposalConcreteStateStep(text) {
 				return strings.TrimSpace(text), "operation state"
 			}
 		}
@@ -235,7 +235,7 @@ func organicRalphStateNextStep(planState session.PlanState, opState session.Oper
 			priorContinuation.ActionProposal.Summary,
 			priorContinuation.ActionProposal.BoundedEffect,
 		} {
-			if organicRalphConcreteStateStep(text) {
+			if organicProposalConcreteStateStep(text) {
 				return strings.TrimSpace(text), "continuation state"
 			}
 		}
@@ -243,7 +243,7 @@ func organicRalphStateNextStep(planState session.PlanState, opState session.Oper
 	return "", ""
 }
 
-func organicRalphConcreteStateStep(step string) bool {
+func organicProposalConcreteStateStep(step string) bool {
 	trimmed := strings.TrimSpace(step)
 	if trimmed == "" {
 		return false
@@ -281,17 +281,17 @@ func organicRalphConcreteStateStep(step string) bool {
 	return true
 }
 
-func organicRalphPlanStateHasConcreteStep(state session.PlanState) bool {
+func organicProposalPlanStateHasConcreteStep(state session.PlanState) bool {
 	state = session.NormalizePlanState(state)
 	for _, step := range state.Steps {
-		if (step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending) && organicRalphConcreteStateStep(step.Step) {
+		if (step.Status == session.PlanStatusInProgress || step.Status == session.PlanStatusPending) && organicProposalConcreteStateStep(step.Step) {
 			return true
 		}
 	}
 	return false
 }
 
-func organicRalphBoundedEffectFromState(nextStep string) string {
+func organicProposalBoundedEffectFromState(nextStep string) string {
 	nextStep = strings.TrimSpace(nextStep)
 	if nextStep == "" {
 		nextStep = "the current bounded next step"
@@ -299,7 +299,7 @@ func organicRalphBoundedEffectFromState(nextStep string) string {
 	return "Work only on: " + nextStep + "; use existing authority only; report evidence and stop."
 }
 
-func organicRalphKindFromStateText(text string) string {
+func organicProposalKindFromStateText(text string) string {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	switch {
 	case strings.Contains(lower, "status") || strings.Contains(lower, "doctor") || strings.Contains(lower, "health"):
@@ -320,8 +320,8 @@ func resultProposalNote(result *turn.Result) string {
 	return strings.TrimSpace(result.ProposalNote)
 }
 
-func parseOrganicRalphProposalContract(raw string) (organicRalphProposalCandidate, bool) {
-	candidate := organicRalphProposalCandidate{}
+func parseOrganicProposalContract(raw string) (organicProposalCandidate, bool) {
+	candidate := organicProposalCandidate{}
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return candidate, false
@@ -334,41 +334,41 @@ func parseOrganicRalphProposalContract(raw string) (organicRalphProposalCandidat
 			continue
 		}
 		switch key {
-		case "ORGANIC_RALPH_SCHEMA_VERSION", "ORGANIC_RALPH_SCHEMA":
-			schemaOK = strings.TrimSpace(value) == organicRalphProposalSchemaVersion
-		case "ORGANIC_RALPH_PROPOSAL":
+		case "ORGANIC_PROPOSAL_SCHEMA_VERSION", "ORGANIC_PROPOSAL_SCHEMA":
+			schemaOK = strings.TrimSpace(value) == organicProposalSchemaVersion
+		case "ORGANIC_PROPOSAL_PROPOSAL":
 			proposalOK = parseBoolish(value)
-		case "ORGANIC_RALPH_ID":
-			candidate.ID = sanitizeOrganicRalphID(value)
-		case "ORGANIC_RALPH_KIND":
+		case "ORGANIC_PROPOSAL_ID":
+			candidate.ID = sanitizeOrganicProposalID(value)
+		case "ORGANIC_PROPOSAL_KIND":
 			candidate.Kind = strings.TrimSpace(value)
-		case "ORGANIC_RALPH_SUMMARY":
+		case "ORGANIC_PROPOSAL_SUMMARY":
 			candidate.Summary = strings.TrimSpace(value)
-		case "ORGANIC_RALPH_WHY_NOW":
+		case "ORGANIC_PROPOSAL_WHY_NOW":
 			candidate.WhyNow = strings.TrimSpace(value)
-		case "ORGANIC_RALPH_BOUNDED_EFFECT":
+		case "ORGANIC_PROPOSAL_BOUNDED_EFFECT":
 			candidate.BoundedEffect = strings.TrimSpace(value)
-		case "ORGANIC_RALPH_CONFIDENCE":
+		case "ORGANIC_PROPOSAL_CONFIDENCE":
 			candidate.Confidence = strings.ToLower(strings.TrimSpace(value))
 		}
 	}
 	if !schemaOK || !proposalOK {
-		return organicRalphProposalCandidate{}, false
+		return organicProposalCandidate{}, false
 	}
 	return candidate, true
 }
 
-func (c organicRalphProposalCandidate) ready() bool {
+func (c organicProposalCandidate) ready() bool {
 	if strings.ToLower(strings.TrimSpace(c.Confidence)) != "high" {
 		return false
 	}
 	if strings.TrimSpace(c.Summary) == "" || strings.TrimSpace(c.WhyNow) == "" || strings.TrimSpace(c.BoundedEffect) == "" {
 		return false
 	}
-	return organicRalphHasStopCondition(c.BoundedEffect)
+	return organicProposalHasStopCondition(c.BoundedEffect)
 }
 
-func organicRalphHasStopCondition(text string) bool {
+func organicProposalHasStopCondition(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	if lower == "" {
 		return false
@@ -381,7 +381,7 @@ func organicRalphHasStopCondition(text string) bool {
 	return false
 }
 
-func (c organicRalphProposalCandidate) requiresSeparateCapability() bool {
+func (c organicProposalCandidate) requiresSeparateCapability() bool {
 	kind := strings.ToLower(strings.TrimSpace(c.Kind))
 	if kind == "" || kind == "read_only_review" || kind == "status_check" || kind == "system_change" || kind == "organic_lease" {
 		// system_change is allowed as a proposal only; execution still needs the button-backed lease.
@@ -397,13 +397,13 @@ func (c organicRalphProposalCandidate) requiresSeparateCapability() bool {
 	return false
 }
 
-func organicRalphProposalID(candidate organicRalphProposalCandidate, msg core.InboundMessage) string {
+func organicProposalID(candidate organicProposalCandidate, msg core.InboundMessage) string {
 	raw := strings.Join([]string{candidate.Summary, candidate.WhyNow, candidate.BoundedEffect, fmt.Sprintf("%d", msg.MessageID)}, "\n")
 	sum := sha256.Sum256([]byte(raw))
-	return "organic-ralph-" + hex.EncodeToString(sum[:6])
+	return "organic-proposal-" + hex.EncodeToString(sum[:6])
 }
 
-func sanitizeOrganicRalphID(raw string) string {
+func sanitizeOrganicProposalID(raw string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(raw))
 	if trimmed == "" {
 		return ""
