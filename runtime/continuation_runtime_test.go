@@ -1259,8 +1259,13 @@ func TestHandleInboundTypedApprovalConsumesPendingContinuation(t *testing.T) {
 	if recorder.input.Msg.Origin != core.InboundOriginTurnAuthorization {
 		t.Fatalf("origin = %q, want turn authorization", recorder.input.Msg.Origin)
 	}
-	if recorder.input.Msg.Text == "approved" || !strings.Contains(recorder.input.Msg.Text, "approved_step: Run the approved typed continuation") {
+	if recorder.input.Msg.Text == "approved" || !strings.Contains(recorder.input.Msg.Text, "Next: Run the approved typed continuation") {
 		t.Fatalf("continuation text = %q, want machine-authored approved step", recorder.input.Msg.Text)
+	}
+	for _, notWant := range []string{"approved_step:", "proposal_id:", "lease_id:", "risk_class:"} {
+		if strings.Contains(recorder.input.Msg.Text, notWant) {
+			t.Fatalf("continuation text = %q, did not want internal fragment %q", recorder.input.Msg.Text, notWant)
+		}
 	}
 	if recorder.input.Actor.Role != principal.RoleAdmin {
 		t.Fatalf("actor role = %q, want admin", recorder.input.Actor.Role)
@@ -1738,14 +1743,17 @@ func TestTriggerContinuationUsesMachineAuthoredContinuationEventText(t *testing.
 	}
 	for _, want := range []string{
 		approvedContinuationEventText,
-		"proposal_id: aprop-phase-4b-rebundled-email-proof",
-		"operation_id: phase-4b-rebundled-email-proof",
-		"lease_id: lease-phase-4b-rebundled-email-proof",
-		"approved_step: Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
-		"bounded_effect: Inspect current email due/backoff state, run at most one bounded read-only proof, then report.",
+		"Approved work:",
+		"Next: Bundled Phase 4B: one bounded idolum-email read-only adapter proof",
+		"Scope: Inspect current email due/backoff state, run at most one bounded read-only proof, then report.",
 	} {
 		if !strings.Contains(last.Content, want) {
 			t.Fatalf("last content = %q, want substring %q", last.Content, want)
+		}
+	}
+	for _, notWant := range []string{"proposal_id:", "operation_id:", "lease_id:", "risk_class:", "aprop-", "lease-phase-4b"} {
+		if strings.Contains(last.Content, notWant) {
+			t.Fatalf("last content = %q, did not want internal fragment %q", last.Content, notWant)
 		}
 	}
 }

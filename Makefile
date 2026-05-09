@@ -6,7 +6,7 @@ STATIC_BIN ?= $(BIN_DIR)/$(APP)-static
 STATIC_TAGS ?= netgo osusergo sqlite_omit_load_extension
 STATIC_LDFLAGS ?= -linkmode external -extldflags "-static"
 
-.PHONY: build build-static run test check-config init install-user-service restart-user-service logs-user-service update install-release update-release paths gc docs-architecture design-principles deadcode check-live-fixtures
+.PHONY: build build-static run test check-config init install-user-service restart-user-service logs-user-service update install-release update-release paths gc docs-architecture architecture design-principles deadcode check-live-fixtures
 
 build:
 	mkdir -p $(BIN_DIR)
@@ -39,6 +39,9 @@ docs-architecture:
 	./scripts/check-architecture-docs.sh
 	./scripts/check-design-principles.sh
 	./scripts/check-no-live-child-fixtures.sh
+
+architecture: docs-architecture
+	go test . -run TestArchitectureImportBoundaries -count=1
 
 design-principles:
 	./scripts/check-design-principles.sh

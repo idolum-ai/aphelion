@@ -314,7 +314,7 @@ func TestStartupRecoveryProposesConfirmationForLatestInterruptedAdminDMTurn(t *t
 	if inlineCount != 1 {
 		t.Fatalf("inline count = %d, want 1 restart recovery confirmation prompt", inlineCount)
 	}
-	for _, want := range []string{"Restart", "confirm", "verify persisted state", "continue the deploy interruption policy"} {
+	for _, want := range []string{"resume interrupted work", "verify persisted state", "continue the deploy interruption policy"} {
 		if !strings.Contains(strings.ToLower(inlineText), strings.ToLower(want)) {
 			t.Fatalf("inline text = %q, want substring %q", inlineText, want)
 		}

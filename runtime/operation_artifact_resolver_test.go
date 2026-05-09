@@ -99,12 +99,10 @@ func TestHandleInboundDoesNotTreatContinuationAuthorizationAsArtifactRequest(t *
 	text := strings.Join([]string{
 		approvedContinuationEventText,
 		"",
-		"Approved continuation lease:",
-		"proposal_id: aprop-synth-custom-telegram-remaining-plan-20260505",
-		"lease_id: lease-aprop-synth-custom-telegram-remaining-plan-20260505",
-		"approved_step: Finish the repo-only Synth custom Telegram runner work.",
-		"bounded_effect: Prepare the no-send dry-start gate, commit it if coherent, and report evidence.",
-		"risk_class: workspace_write",
+		"Approved work:",
+		"Plan: Synth custom Telegram runner",
+		"Next: Finish the repo-only Synth custom Telegram runner work.",
+		"Scope: Prepare the no-send dry-start gate, commit it if coherent, and report evidence.",
 	}, "\n")
 
 	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{

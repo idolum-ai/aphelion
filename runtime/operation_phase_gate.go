@@ -154,7 +154,7 @@ func operationPhaseHardBlockedReason(phase session.OperationPhase) string {
 	case "waiting_for_explicit_approval", "explicit_approval_required", "approval_required":
 		return ""
 	default:
-		return "blocked: " + code
+		return "waiting for a clearer approval boundary"
 	}
 	return ""
 }

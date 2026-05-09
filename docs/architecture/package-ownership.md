@@ -2,6 +2,24 @@
 
 ![Package map](diagrams/01-package-map.svg)
 
+## Root Package
+
+The root package is the single-binary composition surface.
+
+- Owns CLI command dispatch, install/deploy entrypoints, and process startup.
+- Owns Telegram UI glue that adapts transport callbacks into runtime or decision
+  APIs.
+- May import `runtime` and assemble concrete dependencies.
+- Should avoid owning durable domain behavior once a stable lower-level owner
+  exists.
+
+Code anchors:
+
+- [`main.go`](../../main.go)
+- [`commands.go`](../../commands.go)
+- [`maintenance.go`](../../maintenance.go)
+- [`telegram_decisions.go`](../../telegram_decisions.go)
+
 ## Runtime
 
 `runtime` is the house shell.
@@ -56,10 +74,21 @@ Code anchors:
 
 ## Boundary Guards
 
-- [`turn/dependency_guard_test.go`](../../turn/dependency_guard_test.go) enforces that `turn` does not depend on `runtime`.
+- [`architecture_import_guard_test.go`](../../architecture_import_guard_test.go) enforces stable import boundaries between composition, runtime, turn, pipeline, transport, storage, and tool packages.
 - [`runtime/architecture_invariants_runtime_test.go`](../../runtime/architecture_invariants_runtime_test.go) pins floor/scene and persist-before-deliver behavior.
 - [`runtime/interactive_like_assembly_test.go`](../../runtime/interactive_like_assembly_test.go) defends shared interactive-like assembly behavior across DM and durable-group species.
 - [`runtime/maintenance_assembly_boundary_runtime_test.go`](../../runtime/maintenance_assembly_boundary_runtime_test.go) defends maintenance-family assembly boundary behavior across heartbeat, cron, and startup recovery species.
+
+## Storage, Transport, and Tools
+
+- `session` owns durable storage records and persistence APIs. It should not
+  import orchestration packages.
+- `telegram` owns Telegram wire/client behavior. It should not import runtime,
+  turn, or pipeline orchestration.
+- `tool` owns bounded tool implementations and sandbox integration. It should
+  not import runtime, turn, or pipeline orchestration.
+- `durableagent` owns child-agent substrate, enrollment, policy, and forensics.
+  It may depend on storage contracts, but not on runtime orchestration.
 
 Related requirements:
 

@@ -1585,73 +1585,68 @@ func continuationSubjectStopWord(word string) bool {
 
 func approvedContinuationEventTextForState(state session.ContinuationState) string {
 	state = session.NormalizeContinuationState(state)
-	lines := []string{approvedContinuationEventText}
-	fields := []struct {
-		name  string
-		value string
-	}{
-		{name: "proposal_id", value: state.ActionProposal.ID},
-		{name: "operation_id", value: state.ActionProposal.OperationID},
-		{name: "lease_id", value: state.ContinuationLease.ID},
-		{name: "approved_step", value: firstNonEmptyContinuation(state.StageSummary, state.ActionProposal.Summary)},
-		{name: "bounded_effect", value: state.ActionProposal.BoundedEffect},
-		{name: "risk_class", value: state.ActionProposal.RiskClass},
+	lines := []string{approvedContinuationEventText, "", "Approved work:"}
+	if label := continuationUserFacingPlanLabel(state); label != "" {
+		lines = append(lines, label)
 	}
-	appended := false
-	for _, field := range fields {
-		value := strings.TrimSpace(field.value)
-		if value == "" {
-			continue
-		}
-		if !appended {
-			lines = append(lines, "", "Approved continuation lease:")
-			appended = true
-		}
-		lines = append(lines, field.name+": "+value)
+	if next := continuationApprovedNextStepLine(state); next != "" {
+		lines = append(lines, "Next: "+next)
 	}
-	if bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle); bundle.Active() {
-		if !appended {
-			lines = append(lines, "", "Approved continuation lease:")
-			appended = true
-		}
-		lines = append(lines, "bundle_id: "+strings.TrimSpace(bundle.ID))
-		lines = append(lines, fmt.Sprintf("bundle_phase_count: %d", len(bundle.Phases)))
-		if phase, ok := currentContinuationBundlePhase(bundle); ok {
-			lines = append(lines, "bundle_phase_id: "+strings.TrimSpace(phase.ID))
-			lines = append(lines, "bundle_operation_phase_id: "+strings.TrimSpace(phase.OperationPhaseID))
-			lines = append(lines, fmt.Sprintf("bundle_phase_index: %d", phase.Index))
-			if authority := strings.TrimSpace(phase.AuthorityClass); authority != "" {
-				lines = append(lines, "bundle_phase_authority_class: "+authority)
-			}
-			if effect := strings.TrimSpace(phase.BoundedEffect); effect != "" {
-				lines = append(lines, "bundle_phase_bounded_effect: "+effect)
-			}
-		}
-		if len(bundle.Phases) > 0 {
-			parts := make([]string, 0, len(bundle.Phases))
-			for _, phase := range bundle.Phases {
-				label := fmt.Sprintf("%d", phase.Index)
-				if summary := strings.TrimSpace(phase.Summary); summary != "" {
-					label += ":" + summary
-				}
-				parts = append(parts, label)
-			}
-			lines = append(lines, "bundle_phases: "+strings.Join(parts, " | "))
-		}
+	if scope := continuationApprovedScopeLine(state); scope != "" {
+		lines = append(lines, "Scope: "+scope)
+	}
+	if state.RemainingTurns > 0 {
+		lines = append(lines, fmt.Sprintf("Budget: up to %d %s.", state.RemainingTurns, continuationTurnWord(state.RemainingTurns)))
+	}
+	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
+		lines = append(lines, "Stops before: "+strings.Join(stops, ", ")+".")
 	}
 	if continuationActionIsPlanLeaseApproval(state) {
-		if !appended {
-			lines = append(lines, "", "Approved continuation lease:")
-			appended = true
-		}
-		lines = append(lines, "plan_lease_authority: bounded_plan_envelope_not_capability_grant")
 		if state.ApprovalBundle.Active() {
-			lines = append(lines, "plan_lease_activation: runnable_budget_lane")
+			lines = append(lines, "This approval covers the named plan budget only.")
 		} else {
-			lines = append(lines, "plan_lease_activation: approval_record_only")
+			lines = append(lines, "This records the plan budget approval; execution still stops at hard gates.")
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func continuationApprovedNextStepLine(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	candidates := []string{state.StageSummary, state.ActionProposal.Summary}
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		candidates = append([]string{phase.Summary}, candidates...)
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || continuationLooksLikeSystemIdentifier(candidate) {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(candidate), "approve ") {
+			if idx := strings.Index(candidate, ":"); idx >= 0 && idx+1 < len(candidate) {
+				candidate = strings.TrimSpace(candidate[idx+1:])
+			}
+		}
+		if line := continuationPromptCompactLine(candidate, 180); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func continuationApprovedScopeLine(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		if scope := continuationPromptCompactLine(phase.BoundedEffect, 220); scope != "" {
+			return scope
+		}
+	}
+	for _, candidate := range []string{state.ActionProposal.BoundedEffect, state.GovernorIntent.Constraints} {
+		if scope := continuationPromptCompactLine(candidate, 240); scope != "" {
+			return scope
+		}
+	}
+	return ""
 }
 
 func newContinuationDecisionID() string {

@@ -11,7 +11,15 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,13 +33,13 @@ jobs:
 
       - name: Package tarball
         run: |
-          tar -czf "aphelion-linux-amd64.tar.gz" -C dist aphelion
+          tar -czf "aphelion-linux-${{ matrix.arch }}.tar.gz" -C dist aphelion
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aphelion-linux-amd64
-          path: aphelion-linux-amd64.tar.gz
+          name: aphelion-linux-${{ matrix.arch }}
+          path: aphelion-linux-${{ matrix.arch }}.tar.gz
 
   release:
     needs: build
@@ -45,8 +53,11 @@ jobs:
         run: |
           mkdir -p release
           find dist -name '*.tar.gz' -exec cp {} release/ \;
+          (cd release && sha256sum *.tar.gz > checksums.txt)
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.tar.gz
+          files: |
+            release/*.tar.gz
+            release/checksums.txt

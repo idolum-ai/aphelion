@@ -88,17 +88,19 @@ Status values:
   surfaces: `trace_id`, `canonical_record`, `projection`, `inspect_command`,
   `code_owner`, and `next_repair_action`.
 
-### DP-005: Large operational files make ownership harder to inspect
+### DP-005: Large operational surfaces make ownership harder to inspect
 
 - Principle: `Short paths to truth`; `Minimal stack, strong substrate`
 - Status: `active`
-- Surface: `session/store.go`, `maintenance.go`
-- Why it exists: The stack is intentionally small, but several record families
-  and maintenance commands live in broad files. That increases the number of
-  local hops required to debug persistence and repair behavior.
-- Exit gate: Split by record family and command family without changing storage
-  semantics. Each split should preserve current tests and add package-level
-  ownership notes where the new boundary is not obvious.
+- Surface: root command/Telegram composition files, `runtime/*`,
+  `session/store.go`
+- Why it exists: The stack is intentionally small, but composition, operational
+  repair, runtime shell behavior, and persistence records have accumulated in
+  large surfaces. That increases the number of local hops required to debug
+  ownership and repair behavior.
+- Exit gate: Split broad files by command, record, or runtime concern only when
+  the boundary is durable and behavior-preserving. Guard the stable package
+  direction with machine checks instead of introducing one-off packages.
 
 ## Contained Exceptions
 

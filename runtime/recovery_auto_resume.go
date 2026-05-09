@@ -119,11 +119,11 @@ func startupRecoveryResumeContinuationState(run session.TurnRun, actor principal
 	lastResult := truncatePreview(strings.TrimSpace(run.LastToolResultPreview), 260)
 	lastErr := truncatePreview(strings.TrimSpace(run.LastToolError), 260)
 
-	summary := "Confirm restart recovery resume for interrupted turn"
+	summary := "Resume interrupted work"
 	if requestPreview != "" {
-		summary = "Confirm restart recovery resume: " + truncatePreview(requestPreview, 120)
+		summary = "Resume interrupted work: " + truncatePreview(requestPreview, 120)
 	}
-	whyParts := []string{"Restart recovery preserved an interrupted turn, but restart boundaries require fresh user confirmation before execution resumes."}
+	whyParts := []string{"The service restarted while this was running, so I need one confirmation before continuing."}
 	if lastTool != "" {
 		whyParts = append(whyParts, "Last tool: "+lastTool+".")
 	}
@@ -133,7 +133,7 @@ func startupRecoveryResumeContinuationState(run session.TurnRun, actor principal
 	if lastErr != "" {
 		whyParts = append(whyParts, "Last error: "+lastErr)
 	}
-	boundedEffect := "Run one bounded restart-recovery turn: first verify persisted state, including git/service/operation state when relevant; continue only still-needed work from the interrupted request; do not repeat destructive or external actions unless current evidence proves they are still needed and already within the prior user request; report evidence and stop."
+	boundedEffect := "Verify persisted state, continue only still-needed work from the interrupted request, do not repeat destructive or external actions without current evidence, report evidence, and stop."
 
 	action := session.ActionProposal{
 		ID:               "aprop-" + decisionID,
@@ -154,19 +154,19 @@ func startupRecoveryResumeContinuationState(run session.TurnRun, actor principal
 		Kind:           session.TurnAuthorizationKindContinuation,
 		Status:         session.ContinuationStatusPending,
 		DecisionID:     decisionID,
-		Objective:      firstNonEmptyContinuation("Recover interrupted turn after restart", requestPreview),
+		Objective:      firstNonEmptyContinuation(requestPreview, "Recover interrupted turn after restart"),
 		StageSummary:   summary,
 		RemainingTurns: 1,
 		PersonaIntent: session.ContinuationIntent{
 			Decision:   session.ContinuationIntentDecisionContinue,
-			Rationale:  "Restart recovery preserved an edge, but it should resume only after explicit confirmation.",
+			Rationale:  "The interrupted work can resume after a short safety check.",
 			NextStep:   "Verify persisted state, then resume only still-needed bounded work.",
 			Confidence: "high",
 			UpdatedAt:  now,
 		},
 		GovernorIntent: session.ContinuationIntent{
 			Decision:    session.ContinuationIntentDecisionContinue,
-			Rationale:   "Restart happened after the original request; preserved intent is not execution authority until the user confirms.",
+			Rationale:   "Restart happened after the original request; confirm once before continuing the preserved work.",
 			NextStep:    "Verify persisted state, then continue only still-needed bounded work.",
 			Constraints: boundedEffect,
 			Confidence:  "high",

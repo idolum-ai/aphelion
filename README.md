@@ -125,6 +125,26 @@ Current promise gaps and accepted implementation targets are tracked in
 
 ## Run
 
+Fast path for a Telegram admin on Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/idolum-ai/aphelion/main/scripts/install-release.sh | bash
+~/.local/bin/aphelion quickstart --detect-admin --install-service
+```
+
+For headless setup, pass the minimum values explicitly:
+
+```bash
+APHELION_TELEGRAM_BOT_TOKEN=123:abc \
+OPENAI_API_KEY=sk-... \
+~/.local/bin/aphelion quickstart --admin-user-id 123456789 --provider openai --install-service
+```
+
+`quickstart` writes `~/.aphelion/aphelion.toml` with mode `0600`, validates it,
+and refuses to replace an existing config unless `--force` is passed. Plain
+`quickstart` only writes the config; `--install-service` also runs the deploy
+phase: config check, `init`, user service install/restart, and `verify-deploy`.
+
 Config file default:
 
 `~/.aphelion/aphelion.toml`
@@ -317,6 +337,12 @@ Install the latest GitHub Release binary:
 
 ```bash
 make install-release
+```
+
+Direct release install without a source checkout:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/idolum-ai/aphelion/main/scripts/install-release.sh | bash
 ```
 
 Update a release-installed binary and restart the user service:

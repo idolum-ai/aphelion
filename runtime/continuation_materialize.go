@@ -508,9 +508,9 @@ phaseLoop:
 		TurnBudget:       operationPhasePlanLeaseTurnBudget(phases),
 		CoveredPhaseIDs:  operationPhaseIDs(phases),
 		Lanes:            operationPlanLeaseLanesFromPhases(phases),
-		AllowedActions:   []string{"execute_plan_budget_lanes", "use_existing_authority_only", "update_operation_phase_plan", "report_evidence"},
-		ForbiddenActions: []string{"work_outside_plan_budget", "silent_escalation", "skip_stop_gate"},
-		ValidationGates:  []string{"report evidence after each turn", "stop if the next action is outside the disclosed plan budget"},
+		AllowedActions:   []string{"execute_plan_budget_lanes", "use_existing_authority_only", "update_operation_phase_plan", "report_milestone_evidence"},
+		ForbiddenActions: []string{"work_outside_plan_budget", "silent_escalation", "skip_stop_gate", "credentials_or_tokens", "external_send_or_contact", "archive_delete_or_mutate_source_data", "deploy_restart_without_explicit_approval"},
+		ValidationGates:  []string{"report evidence at meaningful milestones and completion", "stop if the next action is outside the disclosed plan budget"},
 		ExitConditions:   []string{"turn budget is spent", "covered phases are complete", "a stop condition appears", "operator pauses or revokes"},
 		ExpiresAt:        now.Add(12 * time.Hour),
 		CreatedAt:        now,
@@ -827,7 +827,7 @@ func nextOperationPhaseForApproval(opState session.OperationState) (session.Oper
 	return session.OperationPhase{}, false
 }
 
-const operationApprovalBundleMaxPhases = 3
+const operationApprovalBundleMaxPhases = 6
 
 func nextOperationPhaseBundleForApproval(opState session.OperationState) ([]session.OperationPhase, bool) {
 	opState = session.NormalizeOperationState(opState)
@@ -1264,25 +1264,76 @@ func renderOperationPhaseApprovalBlockedStatus(opState session.OperationState, p
 	opState = session.NormalizeOperationState(opState)
 	phase = normalizeSingleOperationPhase(phase)
 	title := firstNonEmptyContinuation(phase.Summary, opState.PhasePlan.Goal, opState.Objective, "Next phase")
-	lines := []string{"Blocked: " + truncatePreview(title, 96)}
-	if reason = strings.TrimSpace(reason); reason != "" {
-		lines = append(lines, "", "Why now:", truncatePreview(reason, 180))
+	lines := []string{"I can't continue that step yet.", "", "Plan: " + truncatePreview(title, 96)}
+	if explanation := operationBlockedApprovalExplanation(phase, reason); explanation != "" {
+		lines = append(lines, "", "Reason:", explanation)
 	}
-	if next := operationBlockedApprovalNextStep(reason); next != "" {
+	if next := operationBlockedApprovalNextStep(phase, reason); next != "" {
 		lines = append(lines, "", "Next:", next)
 	}
-	lines = append(lines, "", "Details: /debug")
+	lines = append(lines, "", "Use /status for the current state.")
 	return strings.Join(lines, "\n")
 }
 
-func operationBlockedApprovalNextStep(reason string) string {
-	lower := strings.ToLower(strings.TrimSpace(reason))
-	switch {
-	case strings.Contains(lower, "opt-in"), strings.Contains(lower, "opt in"), strings.Contains(lower, "consent"):
-		return "Wait for explicit opt-in/consent, then create a fresh narrower proposal."
+type operationBlockedApprovalKind string
+
+const (
+	operationBlockedApprovalUnknown operationBlockedApprovalKind = ""
+	operationBlockedApprovalOptIn   operationBlockedApprovalKind = "opt_in"
+	operationBlockedApprovalConsent operationBlockedApprovalKind = "consent"
+)
+
+func operationBlockedApprovalExplanation(phase session.OperationPhase, reason string) string {
+	switch operationBlockedApprovalKindFor(phase, reason) {
+	case operationBlockedApprovalOptIn:
+		return "The person who owns this data has not opted in yet."
+	case operationBlockedApprovalConsent:
+		return "This needs explicit consent from the right person before I can touch it."
 	default:
-		return "Create a fresh narrower proposal before continuing."
+		if strings.TrimSpace(reason) != "" && !operationBlockedReasonLooksInternal(reason) {
+			return truncatePreview(strings.TrimSpace(reason), 180)
+		}
+		return "The current proposal does not give a clear enough boundary for this step."
 	}
+}
+
+func operationBlockedApprovalNextStep(phase session.OperationPhase, reason string) string {
+	switch operationBlockedApprovalKindFor(phase, reason) {
+	case operationBlockedApprovalOptIn:
+		return "Get explicit opt-in from the resource owner, then ask me to continue."
+	case operationBlockedApprovalConsent:
+		return "Get explicit consent from the resource owner, then approve a narrower step."
+	default:
+		return "Send a narrower request that names the resource, action, and stopping point."
+	}
+}
+
+func operationBlockedApprovalKindFor(phase session.OperationPhase, reason string) operationBlockedApprovalKind {
+	phase = normalizeSingleOperationPhase(phase)
+	if phase.RequiresOptIn || operationPhaseReasonCodeRequiresOptIn(phase.BlockedReasonCode) || operationPhaseReasonCodeRequiresOptIn(phase.GateReasonCode) {
+		return operationBlockedApprovalOptIn
+	}
+	if phase.RequiresConsent || operationPhaseReasonCodeRequiresConsent(phase.BlockedReasonCode) || operationPhaseReasonCodeRequiresConsent(phase.GateReasonCode) {
+		return operationBlockedApprovalConsent
+	}
+	switch strings.TrimSpace(strings.ToLower(reason)) {
+	case "waiting for explicit opt-in", "waiting for explicit opt in":
+		return operationBlockedApprovalOptIn
+	case "waiting for explicit consent", "blocked on consent":
+		return operationBlockedApprovalConsent
+	default:
+		return operationBlockedApprovalUnknown
+	}
+}
+
+func operationBlockedReasonLooksInternal(reason string) bool {
+	reason = strings.TrimSpace(strings.ToLower(reason))
+	return reason == "" ||
+		strings.Contains(reason, "_") ||
+		strings.Contains(reason, "blocked:") ||
+		strings.Contains(reason, "phase") ||
+		strings.Contains(reason, "lease") ||
+		strings.Contains(reason, "proposal")
 }
 
 func operationPhasePlanOwnsContinuation(plan session.OperationPhasePlan) bool {
@@ -1555,9 +1606,9 @@ func continuationStateFromOperationPhaseBundle(opState session.OperationState, p
 		WhyNow:           whyNow,
 		BoundedEffect:    boundedEffect,
 		RiskClass:        strongestPhaseAuthorityClass(bundlePhases),
-		AllowedActions:   []string{"execute_approved_bundle_phases_sequentially", "use_existing_authority_only", "update_operation_phase_plan", "report_evidence_after_each_phase"},
-		ForbiddenActions: []string{"expand_authority_without_new_approval", "execute_phase_outside_bundle", "skip_stop_gate", "silent_continuation_past_report"},
-		ValidationPlan:   []string{"execute only named bundle phases", "preserve per-phase provenance", "stop when a hard gate or out-of-bundle phase is reached"},
+		AllowedActions:   []string{"execute_approved_bundle_phases_sequentially", "use_existing_authority_only", "update_operation_phase_plan", "report_milestone_evidence"},
+		ForbiddenActions: []string{"expand_authority_without_new_approval", "execute_phase_outside_bundle", "skip_stop_gate", "credentials_or_tokens", "external_send_or_contact", "archive_delete_or_mutate_source_data", "deploy_restart_without_explicit_approval"},
+		ValidationPlan:   []string{"execute only named bundle phases", "preserve per-phase provenance", "report evidence at meaningful milestones and completion", "stop when a hard gate or out-of-bundle phase is reached"},
 		ExpiresAt:        now.Add(continuationLeaseDefaultTTL),
 		Status:           session.ProposalStatusPending,
 		CreatedAt:        now,
@@ -1937,7 +1988,7 @@ func operationPlanLeaseValidationPlan(lease session.OperationPlanLease) []string
 		"verify every leased lane declares authority_class and expected_turns",
 		"stop and ask for a separate grant at any hard interrupt",
 		"do not treat plan approval as tool, capability, deploy, or restart authority",
-		"record evidence digest before proposing follow-up lease",
+		"record milestone evidence before proposing follow-up authority",
 	}
 	plan = append(plan, lease.ValidationGates...)
 	plan = append(plan, lease.ExitConditions...)
@@ -2849,8 +2900,8 @@ func planBudgetStopLines(state session.ContinuationState) []string {
 		stops = []string{"anything outside scope", "hard gates", "deploy/restart", "policy or permission changes", "mailbox access or mutation"}
 	}
 	stops = prioritizePlanBudgetStops(stops)
-	if len(stops) > 5 {
-		stops = stops[:5]
+	if len(stops) > 6 {
+		stops = stops[:6]
 	}
 	return stops
 }
@@ -2863,9 +2914,11 @@ func prioritizePlanBudgetStops(stops []string) []string {
 		"anything outside scope",
 		"hard gates",
 		"deploy/restart",
+		"credentials/tokens",
+		"external send/contact",
+		"archive/delete",
 		"policy or permission changes",
 		"mailbox access or mutation",
-		"credentials/tokens",
 		"external account/effect",
 		"spend",
 		"public contact/posting",
@@ -2907,6 +2960,10 @@ func planBudgetHumanStop(value string) string {
 		return "mailbox access or mutation"
 	case strings.Contains(value, "deploy") || strings.Contains(value, "restart"):
 		return "deploy/restart"
+	case strings.Contains(value, "archive") || strings.Contains(value, "delete") || strings.Contains(value, "mutate source"):
+		return "archive/delete"
+	case strings.Contains(value, "send") || strings.Contains(value, "contact"):
+		return "external send/contact"
 	case strings.Contains(value, "hard interrupt"):
 		return "hard gates"
 	case strings.Contains(value, "lane") || strings.Contains(value, "outside") || strings.Contains(value, "scope") || strings.Contains(value, "budget"):

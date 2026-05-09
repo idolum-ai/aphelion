@@ -1,0 +1,47 @@
+name: Workflow Sanity
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
+      - "scripts/**"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh
+
+      - name: Check workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@latest
+
+      - name: Check workflow tabs
+        run: |
+          if grep -R -n $'\t' .github/workflows; then
+            echo "Workflow files must not contain tabs." >&2
+            exit 1
+          fi
+
+      - name: Check merge conflict markers
+        run: |
+          if git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- .github/workflows scripts; then
+            echo "Merge conflict marker found." >&2
+            exit 1
+          fi
