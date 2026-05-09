@@ -280,6 +280,9 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 	if agentID == "" {
 		return "", fmt.Errorf("durable_agent agent_id is required for create")
 	}
+	if err := core.ValidateDurableAgentID(agentID); err != nil {
+		return "", fmt.Errorf("durable_agent create: %w", err)
+	}
 	channelKind := normalizeDurableAgentChannelKind(in.ChannelKind)
 	if channelKind == "" {
 		return "", fmt.Errorf("durable_agent channel_kind is required for create")

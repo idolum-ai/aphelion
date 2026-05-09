@@ -48,15 +48,12 @@ func (r *Registry) putDurableAgentArtifact(in durableAgentInput) (string, error)
 		return "", err
 	}
 	artifactRoot := filepath.Join(memoryRoot, "artifacts")
-	targetPath, err := durableAgentArtifactTargetPath(artifactRoot, rel)
+	artifactRoot, err = safeDirectoryUnderRootNoSymlink(memoryRoot, "artifacts")
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-		return "", fmt.Errorf("create durable agent artifact directory: %w", err)
-	}
 	content := []byte(in.Artifact.Content)
-	if err := os.WriteFile(targetPath, content, 0o644); err != nil {
+	if _, err := safeWriteFileUnderRootNoSymlink(memoryRoot, filepath.ToSlash(filepath.Join("artifacts", rel)), content, 0o644); err != nil {
 		return "", fmt.Errorf("write durable agent artifact: %w", err)
 	}
 
@@ -76,7 +73,7 @@ func (r *Registry) putDurableAgentArtifact(in durableAgentInput) (string, error)
 		SHA256:    hash,
 		UpdatedAt: now,
 	}, now)
-	if err := writeDurableAgentArtifactManifest(artifactRoot, manifest); err != nil {
+	if err := writeDurableAgentArtifactManifest(memoryRoot, manifest); err != nil {
 		return "", err
 	}
 
@@ -89,6 +86,10 @@ func (r *Registry) listDurableAgentArtifacts(in durableAgentInput) (string, erro
 		return "", err
 	}
 	artifactRoot := filepath.Join(memoryRoot, "artifacts")
+	artifactRoot, err = safeDirectoryUnderRootNoSymlink(memoryRoot, "artifacts")
+	if err != nil {
+		return "", err
+	}
 	manifest, err := loadDurableAgentArtifactManifest(artifactRoot, agent.AgentID)
 	if err != nil {
 		return "", err
@@ -109,6 +110,10 @@ func (r *Registry) showDurableAgentArtifact(in durableAgentInput) (string, error
 		return "", err
 	}
 	artifactRoot := filepath.Join(memoryRoot, "artifacts")
+	artifactRoot, err = safeDirectoryUnderRootNoSymlink(memoryRoot, "artifacts")
+	if err != nil {
+		return "", err
+	}
 	targetPath, err := durableAgentArtifactTargetPath(artifactRoot, rel)
 	if err != nil {
 		return "", err
@@ -220,8 +225,8 @@ func upsertDurableAgentArtifactManifestEntry(manifest durableAgentArtifactManife
 	return manifest
 }
 
-func writeDurableAgentArtifactManifest(artifactRoot string, manifest durableAgentArtifactManifest) error {
-	if err := os.MkdirAll(artifactRoot, 0o755); err != nil {
+func writeDurableAgentArtifactManifest(memoryRoot string, manifest durableAgentArtifactManifest) error {
+	if _, err := safeDirectoryUnderRootNoSymlink(memoryRoot, "artifacts"); err != nil {
 		return fmt.Errorf("create durable agent artifact root: %w", err)
 	}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
@@ -229,7 +234,7 @@ func writeDurableAgentArtifactManifest(artifactRoot string, manifest durableAgen
 		return fmt.Errorf("encode durable agent artifact manifest: %w", err)
 	}
 	raw = append(raw, '\n')
-	if err := os.WriteFile(filepath.Join(artifactRoot, durableAgentArtifactManifestFile), raw, 0o644); err != nil {
+	if _, err := safeWriteFileUnderRootNoSymlink(memoryRoot, filepath.ToSlash(filepath.Join("artifacts", durableAgentArtifactManifestFile)), raw, 0o644); err != nil {
 		return fmt.Errorf("write durable agent artifact manifest: %w", err)
 	}
 	return nil

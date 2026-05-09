@@ -117,6 +117,7 @@ func TestBuildGovernorPromptIncludesGoalContinuityContractWhenOperationActive(t 
 		"## Goal Continuity Contract",
 		"A contract, architecture note, read-only review, or tiny probe is usually phase one",
 		"advance the next phase in phase_plan instead of marking the whole goal completed",
+		"final standalone deploy/restart phase that commits intended changes, builds, installs the user service, restarts Aphelion, and verifies deployment",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("governor prompt missing %q: %q", want, got)

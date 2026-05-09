@@ -675,7 +675,11 @@ func (c *Client) DownloadFileChecked(ctx context.Context, fileID string, maxByte
 	if resp.StatusCode != http.StatusOK {
 		return nil, telegramHTTPError("downloadFile", resp)
 	}
-	data, err := io.ReadAll(resp.Body)
+	reader := io.Reader(resp.Body)
+	if maxBytes > 0 {
+		reader = io.LimitReader(resp.Body, maxBytes+1)
+	}
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("read downloaded file: %w", err)
 	}

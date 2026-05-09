@@ -133,31 +133,33 @@ ContinuationLease.
 
 ## Continuation controls v2
 
-Continuation prompts now use explicit lease-control buttons instead of a single
-ambiguous `Continue` button:
+Continuation prompts now use short explicit lease-control buttons instead of a
+single ambiguous `Continue` button. Newly rendered Telegram labels are:
 
-- `Approve lease`: approve the pending ContinuationLease exactly as written and
-  trigger the bounded continuation.
-- `Continue once`: same approval path, phrased as one immediate bounded step;
-  the one-turn lease is consumed before the continuation turn runs.
-- `Ask edit`: revoke/park the pending continuation prompt and ask for a revised
+- `Start`: approve the pending ContinuationLease exactly as written and trigger
+  the bounded continuation.
+- `Details`: render the current continuation edge without mutating state.
+- `Change`: revoke/park the pending continuation prompt and ask for a revised
   lease. It does not trigger continuation.
-- `Stop / park`: revoke/park the pending or approved continuation prompt.
-- `Resume edge`: for post-boundary recovery, resume only if a lease is already
-  approved and has remaining turns; otherwise it reports that approval is still
-  needed.
-- `Ask next lease`: show the current edge and ask for the next explicit lease;
-  it does not approve or trigger work.
-- `Status only`: render the current continuation edge without mutating state.
+- `Pause`: revoke/park the pending or approved continuation prompt.
 - `Stop`: revoke continuation approval using the existing stop/revoke path.
+- `Run`: for post-boundary recovery, resume only if a lease is already approved
+  and has remaining turns; otherwise it reports that approval is still needed.
+- `Refresh`: show the current edge and ask for the next explicit lease after an
+  expired prompt; it does not approve or trigger work.
 
 Compatibility note: legacy callback actions `continue` / `approve` still decode
-as approval, but newly rendered prompts use the v2 labels above.
+as approval, and the longer v2 callback action names still decode to the same
+semantic actions, but newly rendered prompts use the compact labels above.
 
 Authority rule: status and edit buttons must not grant execution authority.
-Only `Approve lease`, `Continue once`, or legacy `approve` can activate the
-lease, and activation still uses the persisted proposal/lease identity rather
-than freeform text or a boop.
+Only `Start` or legacy approval actions can activate the lease, and activation
+still uses the persisted proposal/lease identity rather than freeform text.
+
+Deploy/restart remains a standalone hard gate. A deploy lease may cover commit,
+build, install, restart, and post-restart verification only when those actions
+are named in the proposal body and approved as a deploy/restart phase; ordinary
+plan leases stop before deploy/restart authority.
 
 ## Operation-proposal lease materialization
 
@@ -168,8 +170,8 @@ button transport is available. After the visible reply is delivered, a pending
 
 - `ActionProposal.OperationID` points back to the operation proposal id.
 - `ContinuationLease` carries a one-turn pending lease with the proposal hash.
-- Telegram receives the continuation-control buttons (`Approve lease`,
-  `Continue once`, `Ask edit`, `Stop / park`, plus the edge/status controls).
+- Telegram receives the compact continuation-control buttons (`Start`,
+  `Details`, `Change`, `Pause`, `Stop`, with `Run`/`Refresh` on edge states).
 - Approving the continuation also marks the matching operation proposal
   approved; revoking/parking the pending lease marks it denied so the same ask
   is not re-offered endlessly.

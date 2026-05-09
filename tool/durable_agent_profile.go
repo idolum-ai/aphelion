@@ -44,7 +44,8 @@ func syncDurableAgentProfileFiles(agent core.DurableAgent, store *session.SQLite
 		return durableAgentProfileSync{}, err
 	}
 	profileRoot := filepath.Join(memoryRoot, "profile")
-	if err := os.MkdirAll(profileRoot, 0o755); err != nil {
+	profileRoot, err = safeDirectoryUnderRootNoSymlink(memoryRoot, "profile")
+	if err != nil {
 		return durableAgentProfileSync{}, fmt.Errorf("create durable agent profile root: %w", err)
 	}
 	files := durableAgentManagedProfileFiles(agent, store)
@@ -55,9 +56,8 @@ func syncDurableAgentProfileFiles(agent core.DurableAgent, store *session.SQLite
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		path := filepath.Join(profileRoot, filepath.FromSlash(name))
 		content := durableAgentManagedProfileHeader(agent, name) + strings.TrimSpace(files[name]) + "\n"
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		if _, err := safeWriteFileUnderRootNoSymlink(memoryRoot, filepath.ToSlash(filepath.Join("profile", name)), []byte(content), 0o600); err != nil {
 			return durableAgentProfileSync{}, fmt.Errorf("write durable agent profile file %s: %w", name, err)
 		}
 		written = append(written, filepath.ToSlash(filepath.Join("profile", name)))
@@ -69,7 +69,7 @@ func syncDurableAgentProfileFiles(agent core.DurableAgent, store *session.SQLite
 			childFiles = append(childFiles, strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(entry.Path)), "profile/"))
 		}
 	}
-	if err := writeDurableAgentProfileManifest(profileRoot, durableAgentProfileManifest{
+	if err := writeDurableAgentProfileManifest(memoryRoot, durableAgentProfileManifest{
 		AgentID:    strings.TrimSpace(agent.AgentID),
 		PolicyHash: strings.TrimSpace(agent.PolicyHash),
 		UpdatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
@@ -334,13 +334,16 @@ func durableAgentProfileManifestEntries(parentManaged []string, childAuthored []
 	return entries
 }
 
-func writeDurableAgentProfileManifest(profileRoot string, manifest durableAgentProfileManifest) error {
+func writeDurableAgentProfileManifest(memoryRoot string, manifest durableAgentProfileManifest) error {
+	if _, err := safeDirectoryUnderRootNoSymlink(memoryRoot, "profile"); err != nil {
+		return fmt.Errorf("create durable agent profile root: %w", err)
+	}
 	manifest = normalizeDurableAgentProfileManifest(manifest)
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode durable agent profile manifest: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(profileRoot, "PROFILE.json"), append(raw, '\n'), 0o600); err != nil {
+	if _, err := safeWriteFileUnderRootNoSymlink(memoryRoot, filepath.ToSlash(filepath.Join("profile", "PROFILE.json")), append(raw, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write durable agent profile manifest: %w", err)
 	}
 	return nil
@@ -400,12 +403,9 @@ func applyDurableAgentProfileEdit(agent core.DurableAgent, store *session.SQLite
 		return durableAgentProfileSync{}, err
 	}
 	profileRoot := filepath.Join(memoryRoot, "profile")
-	if err := os.MkdirAll(profileRoot, 0o755); err != nil {
+	profileRoot, err = safeDirectoryUnderRootNoSymlink(memoryRoot, "profile")
+	if err != nil {
 		return durableAgentProfileSync{}, fmt.Errorf("create durable agent profile root: %w", err)
-	}
-	path := filepath.Join(profileRoot, filepath.FromSlash(targetFile))
-	if rel, err := filepath.Rel(profileRoot, path); err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-		return durableAgentProfileSync{}, fmt.Errorf("profile_edit target_file escapes profile root")
 	}
 	header := strings.Join([]string{
 		"<!-- profile_ownership: child_authored -->",
@@ -414,7 +414,7 @@ func applyDurableAgentProfileEdit(agent core.DurableAgent, store *session.SQLite
 		"<!-- reason: " + strings.TrimSpace(reason) + " -->",
 		"",
 	}, "\n")
-	if err := os.WriteFile(path, []byte(header+strings.TrimSpace(content)+"\n"), 0o600); err != nil {
+	if _, err := safeWriteFileUnderRootNoSymlink(memoryRoot, filepath.ToSlash(filepath.Join("profile", targetFile)), []byte(header+strings.TrimSpace(content)+"\n"), 0o600); err != nil {
 		return durableAgentProfileSync{}, fmt.Errorf("write durable agent profile edit: %w", err)
 	}
 	manifest := loadDurableAgentProfileManifest(profileRoot)
@@ -422,7 +422,7 @@ func applyDurableAgentProfileEdit(agent core.DurableAgent, store *session.SQLite
 	manifest.PolicyHash = strings.TrimSpace(agent.PolicyHash)
 	manifest.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	manifest.Files = append(manifest.Files, durableAgentProfileManifestEntry{Path: filepath.ToSlash(filepath.Join("profile", targetFile)), Ownership: "child_authored", Source: "admin_approved_profile_edit"})
-	if err := writeDurableAgentProfileManifest(profileRoot, manifest); err != nil {
+	if err := writeDurableAgentProfileManifest(memoryRoot, manifest); err != nil {
 		return durableAgentProfileSync{}, err
 	}
 	return durableAgentProfileSync{Root: profileRoot, Written: []string{filepath.ToSlash(filepath.Join("profile", targetFile)), "profile/PROFILE.json"}}, nil

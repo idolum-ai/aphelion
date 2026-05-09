@@ -28,6 +28,32 @@ func (t testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.roundTrip(req)
 }
 
+type failAfterReadCloser struct {
+	data   []byte
+	limit  int
+	offset int
+}
+
+func (r *failAfterReadCloser) Read(p []byte) (int, error) {
+	if r.offset >= len(r.data) {
+		return 0, io.EOF
+	}
+	remainingAllowed := r.limit - r.offset
+	if remainingAllowed <= 0 {
+		return 0, errors.New("read past configured test limit")
+	}
+	n := copy(p, r.data[r.offset:])
+	if n > remainingAllowed {
+		n = remainingAllowed
+	}
+	r.offset += n
+	return n, nil
+}
+
+func (r *failAfterReadCloser) Close() error {
+	return nil
+}
+
 func encodeJSONResponse(t *testing.T, v interface{}) *http.Response {
 	t.Helper()
 	data, err := json.Marshal(v)
@@ -1760,6 +1786,45 @@ func TestDownloadFileCheckedHonorsGetFileSize(t *testing.T) {
 
 	if _, err := client.DownloadFileChecked(context.Background(), "file123", 20); err == nil {
 		t.Fatal("expected size-limit error")
+	}
+}
+
+func TestDownloadFileCheckedBoundsDownloadRead(t *testing.T) {
+	body := &failAfterReadCloser{data: []byte(strings.Repeat("x", 25)), limit: 21}
+	transport := testTransport{
+		roundTrip: func(req *http.Request) (*http.Response, error) {
+			switch req.URL.String() {
+			case "https://api.telegram.org/botTOKEN/getFile":
+				return encodeJSONResponse(t, getFileResponse{
+					Ok: true,
+					Result: struct {
+						FilePath string `json:"file_path"`
+						FileSize int64  `json:"file_size"`
+					}{FilePath: "docs/file.pdf", FileSize: 0},
+				}), nil
+			case "https://api.telegram.org/file/botTOKEN/docs/file.pdf":
+				return &http.Response{StatusCode: http.StatusOK, Body: body}, nil
+			default:
+				t.Fatalf("unexpected url %s", req.URL.String())
+				return nil, nil
+			}
+		},
+	}
+
+	client := NewClient("TOKEN",
+		WithBaseURL("https://api.telegram.org/botTOKEN/"),
+		WithHTTPClient(&http.Client{Transport: transport}),
+	)
+
+	_, err := client.DownloadFileChecked(context.Background(), "file123", 20)
+	if err == nil {
+		t.Fatal("DownloadFileChecked() err = nil, want size-limit error")
+	}
+	if !strings.Contains(err.Error(), "downloaded file exceeds configured size limit") {
+		t.Fatalf("DownloadFileChecked() err = %v, want downloaded size-limit context", err)
+	}
+	if body.offset != 21 {
+		t.Fatalf("download body read %d bytes, want max+1", body.offset)
 	}
 }
 

@@ -4342,6 +4342,9 @@ func upsertDurableAgentExec(exec sqlExecer, agent core.DurableAgent) (core.Durab
 	if agent.AgentID == "" {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent: agent_id is required")
 	}
+	if err := core.ValidateDurableAgentID(agent.AgentID); err != nil {
+		return core.DurableAgent{}, fmt.Errorf("upsert durable agent: %w", err)
+	}
 	agent.ChannelKind = strings.TrimSpace(agent.ChannelKind)
 	if agent.ChannelKind == "" {
 		return core.DurableAgent{}, fmt.Errorf("upsert durable agent: channel_kind is required")

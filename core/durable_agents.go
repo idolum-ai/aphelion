@@ -800,6 +800,11 @@ func NormalizeDurableAgentRemoteBootstrap(bootstrap DurableAgentRemoteBootstrap)
 
 func ValidateDurableAgentRemoteBootstrap(bootstrap DurableAgentRemoteBootstrap) error {
 	bootstrap = NormalizeDurableAgentRemoteBootstrap(bootstrap)
+	if bootstrap.AgentID != "" {
+		if err := ValidateDurableAgentID(bootstrap.AgentID); err != nil {
+			return err
+		}
+	}
 	switch {
 	case bootstrap.AgentID == "":
 		return fmt.Errorf("durable agent remote bootstrap agent_id is required")

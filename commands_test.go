@@ -4088,7 +4088,7 @@ func TestHandleTelegramCommandCallbackContinuationDetailsKeepsPendingPlanButtons
 			labels = append(labels, button.Text)
 		}
 	}
-	for _, want := range []string{"Start plan", "Details", "Change plan", "Pause", "Stop"} {
+	for _, want := range []string{"Start", "Details", "Change", "Pause", "Stop"} {
 		if !slices.Contains(labels, want) {
 			t.Fatalf("retained labels = %#v, missing %q", labels, want)
 		}

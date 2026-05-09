@@ -70,6 +70,12 @@ func (r *Runtime) pollDurableAgentWakeViaChild(ctx context.Context, agent core.D
 	} else if suppressed {
 		return nil
 	}
+	if err := r.preflightDurableWakeAgent(agent, now); err != nil {
+		if handled, handleErr := r.recordDurableWakeChildRuntimeBlock(agent, err, now); handled {
+			return handleErr
+		}
+		return err
+	}
 	scope, err := r.scopeForDurableAgent(agent)
 	if err != nil {
 		return err

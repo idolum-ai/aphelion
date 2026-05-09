@@ -695,6 +695,13 @@ func applyContinuationLeaseClassBoundaries(action session.ActionProposal) sessio
 		)
 	case session.ContinuationLeaseClassDeployRestart:
 		action.AllowedActions = append(action.AllowedActions,
+			"git_status",
+			"review_intended_diff",
+			"git_commit_intended_changes",
+			"make_build",
+			"install_user_service",
+			"restart_aphelion_service",
+			"run_verify_deploy",
 			"prepare_release_handoff",
 			"run_explicit_release_step",
 			"post_restart_verification",
@@ -706,8 +713,13 @@ func applyContinuationLeaseClassBoundaries(action session.ActionProposal) sessio
 			"unbounded_restart_loop",
 			"skip_post_deploy_verification",
 			"push_or_commit_outside_release_lease",
+			"commit_unrelated_changes",
+			"skip_build_or_tests_before_restart",
 		)
 		action.ValidationPlan = append(action.ValidationPlan,
+			"review git status and intended diff before staging",
+			"commit only intended repo changes and record the commit hash",
+			"build, install the user service, restart aphelion, and run verify-deploy",
 			"record pre-action git/service state, handoff, post-action status, journal/smoke evidence, and rollback/residual risk",
 		)
 	}
@@ -1091,7 +1103,7 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 	if continuationButtonStateExpired(state) {
 		return [][]telegram.InlineButton{
 			{
-				{Text: "Refresh lease", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskNextLease)},
+				{Text: "Refresh", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskNextLease)},
 				{Text: "Status", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
 			},
 			{
@@ -1110,7 +1122,7 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 	if state.Status == session.ContinuationStatusApproved && state.RemainingTurns > 0 {
 		return [][]telegram.InlineButton{
 			{
-				{Text: "Run now", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionResumeEdge)},
+				{Text: "Run", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionResumeEdge)},
 				{Text: "Status", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
 			},
 			{
@@ -1120,32 +1132,13 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 		}
 	}
 	if state.Status == session.ContinuationStatusPending {
-		approveLabel := "Start"
-		reviseLabel := "Change"
-		if continuationButtonStateIsPlanLease(state) {
-			approveLabel = "Start plan"
-			reviseLabel = "Change plan"
-		} else if continuationRequiresEscalatedOperatorApproval(state) {
-			approveLabel = "Approve once"
-			reviseLabel = "Change scope"
-		} else if label := continuationBundleButtonLabel(state); label != "" {
-			approveLabel = "Start " + label
-			reviseLabel = "Change " + label
-		} else if continuationButtonStateIsPhasePlan(state) {
-			approveLabel = "Start step"
-			reviseLabel = "Change step"
-			if subject := continuationApprovalButtonSubject(state); subject != "" {
-				approveLabel = "Start " + subject
-				reviseLabel = "Change " + subject
-			}
-		}
 		return [][]telegram.InlineButton{
 			{
-				{Text: approveLabel, CallbackData: encodeContinuationCallbackData(decisionID, continuationActionApproveLease)},
+				{Text: "Start", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionApproveLease)},
 				{Text: "Details", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
 			},
 			{
-				{Text: reviseLabel, CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskEdit)},
+				{Text: "Change", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskEdit)},
 				{Text: "Pause", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
 			},
 			{

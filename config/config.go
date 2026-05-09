@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/idolum-ai/aphelion/core"
 )
 
 type Config struct {
@@ -1822,7 +1823,7 @@ func validateTelegramChildBots(cfg *Config) error {
 			return fmt.Errorf("telegram.child_bots[%d].agent_id is required", i)
 		}
 		if !isSafeDurableAgentID(agentID) {
-			return fmt.Errorf("telegram.child_bots[%d].agent_id must contain only a-z, 0-9, ., _, or -", i)
+			return fmt.Errorf("telegram.child_bots[%d].agent_id must contain only letters, digits, _, or -", i)
 		}
 		if strings.TrimSpace(bot.TokenFile) == "" {
 			return fmt.Errorf("telegram.child_bots[%d].token_file is required", i)
@@ -1878,7 +1879,7 @@ func validateTelegramDurableGroups(cfg *Config) error {
 			return fmt.Errorf("telegram.durable_groups[%d].agent_id is required", i)
 		}
 		if !isSafeDurableAgentID(agentID) {
-			return fmt.Errorf("telegram.durable_groups[%d].agent_id must contain only a-z, 0-9, ., _, or -", i)
+			return fmt.Errorf("telegram.durable_groups[%d].agent_id must contain only letters, digits, _, or -", i)
 		}
 		if existing, ok := seenAgents[agentID]; ok {
 			return fmt.Errorf("telegram.durable_groups[%d].agent_id duplicates chat_id %d", i, existing)
@@ -2037,19 +2038,7 @@ func normalizeTelegramDurableGroupCodexAuthSource(raw string) string {
 }
 
 func isSafeDurableAgentID(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= '0' && r <= '9':
-		case r == '.', r == '_', r == '-':
-		default:
-			return false
-		}
-	}
-	return true
+	return core.ValidateDurableAgentID(value) == nil
 }
 
 func defaultHomePath(parts ...string) string {

@@ -1020,7 +1020,7 @@ func operationPhaseRequiresFreshApprovalGate(phase session.OperationPhase) bool 
 	for _, value := range values {
 		value = normalizeOperationPhaseReasonCode(value)
 		switch value {
-		case "deploy", "live_deploy", "run_deploy", "restart", "restart_service", "service_restart", "system_change", "policy_apply",
+		case "deploy", "live_deploy", "run_deploy", "restart", "restart_service", "service_restart", "systemctl_restart", "park_restart", "install_user_service", "make_install_user_service", "reinstall", "system_change", "policy_apply",
 			"grant_or_revoke_capability", "capability_grant", "capability_revoke",
 			"mailbox_access", "mailbox_mutation", "mailbox_read", "email_read", "external_account_email_read", "external_account_email_read_public_web_read",
 			"credential_access", "credential_metadata", "credential_metadata_check", "read_credentials_or_tokens", "token_health_check",
@@ -1039,6 +1039,9 @@ func operationPhaseRequiresFreshApprovalGate(phase session.OperationPhase) bool 
 			strings.Contains(value, "grant") ||
 			strings.Contains(value, "deploy") ||
 			strings.Contains(value, "restart") ||
+			strings.Contains(value, "systemctl") ||
+			strings.Contains(value, "install_user_service") ||
+			strings.Contains(value, "reinstall") ||
 			strings.Contains(value, "commit") ||
 			strings.Contains(value, "push") ||
 			strings.Contains(value, "purchase") ||
@@ -1347,6 +1350,11 @@ func operationPhasePlanBudgetHardStopReason(phase session.OperationPhase) string
 		"restart":                     "deploy/restart",
 		"restart_service":             "deploy/restart",
 		"service_restart":             "deploy/restart",
+		"systemctl_restart":           "deploy/restart",
+		"park_restart":                "deploy/restart",
+		"install_user_service":        "deploy/restart",
+		"make_install_user_service":   "deploy/restart",
+		"reinstall":                   "deploy/restart",
 		"system_change":               "system change",
 		"policy_apply":                "policy or permission change",
 		"grant_or_revoke_capability":  "policy or permission change",
@@ -1393,6 +1401,9 @@ func operationPhasePlanBudgetHardStopReason(phase session.OperationPhase) string
 		{"public contact", "public contact"},
 		{"public posting", "public posting"},
 		{"git push", "remote push"},
+		{"systemctl", "deploy/restart"},
+		{"install-user-service", "deploy/restart"},
+		{"install user service", "deploy/restart"},
 		{"purchase", "purchase/spend"},
 		{"spend", "purchase/spend"},
 	}
@@ -1965,9 +1976,18 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	nextStep := firstNonEmptyContinuation(phase.Summary, phase.BoundedEffect, opState.Stage, "Take the next approved phase, then report evidence.")
 	boundedEffect := firstNonEmptyContinuation(phase.BoundedEffect, "Execute this phase only, update the durable phase plan, and stop after the evidence report.")
 	whyNow := firstNonEmptyContinuation(phase.WhyNow, "This durable phase plan has a pending phase that needs explicit approval before execution.")
+	deployPhase := operationPhaseIsDeployRestartPhase(phase)
+	if deployPhase {
+		nextStep = firstNonEmptyContinuation(phase.Summary, "Commit, build, install, restart, and verify Aphelion.")
+		boundedEffect = deployPhaseBoundedEffect(boundedEffect)
+		whyNow = firstNonEmptyContinuation(phase.WhyNow, "Deploy/restart authority is a hard gate and needs explicit operator approval.")
+	}
 	personaRationale := "A durable phase-plan lease is ready for button-backed approval."
 	if gate.Level == operationGateLevelEscalatedOperatorApproval {
 		personaRationale = "An escalated operator approval is required before this sensitive bounded phase can run."
+	}
+	if deployPhase {
+		personaRationale = "A deploy/restart phase requires explicit operator approval before it can run."
 	}
 	state := session.ContinuationState{
 		Kind:           session.TurnAuthorizationKindContinuation,
@@ -1998,6 +2018,9 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	if gate.Level == operationGateLevelEscalatedOperatorApproval && gate.ReasonCode != "" {
 		riskClass = gate.ReasonCode
 	}
+	if deployPhase && riskClass == "continuation" {
+		riskClass = "deploy"
+	}
 	action := session.ActionProposal{
 		ID:               "aprop-" + decisionID,
 		OperationID:      decisionID,
@@ -2017,6 +2040,11 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 		value := gate.AutoApproveEligible
 		action.AutoApproveEligible = &value
 	}
+	if deployPhase {
+		action = applyDeployPhaseContract(action)
+		value := false
+		action.AutoApproveEligible = &value
+	}
 	if len(action.AllowedActions) == 0 {
 		action.AllowedActions = []string{"execute_phase_once", "use_existing_authority_only", "update_operation_phase_plan", "report_evidence"}
 	}
@@ -2031,6 +2059,66 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	state.ActionProposal = session.NormalizeActionProposal(action)
 	state.ContinuationLease = buildContinuationLease(state.ActionProposal, 1, now)
 	return session.NormalizeContinuationState(state)
+}
+
+func operationPhaseIsDeployRestartPhase(phase session.OperationPhase) bool {
+	phase = normalizeSingleOperationPhase(phase)
+	if session.InferContinuationLeaseClass(phase.AuthorityClass, phase.AllowedActions, phase.BoundedEffect) == session.ContinuationLeaseClassDeployRestart {
+		return true
+	}
+	return operationPhasePlanBudgetHardStopReason(phase) == "deploy/restart"
+}
+
+func deployPhaseBoundedEffect(current string) string {
+	current = strings.TrimSpace(current)
+	required := "Commit only intended repo changes, build Aphelion, install the user service, restart aphelion, and run verify-deploy; stop before push or unrelated changes."
+	lower := strings.ToLower(current)
+	if strings.Contains(lower, "commit") &&
+		strings.Contains(lower, "build") &&
+		strings.Contains(lower, "install") &&
+		strings.Contains(lower, "restart") &&
+		(strings.Contains(lower, "verify-deploy") || strings.Contains(lower, "verify deploy")) {
+		return current
+	}
+	if current == "" {
+		return required
+	}
+	return current + " " + required
+}
+
+func applyDeployPhaseContract(action session.ActionProposal) session.ActionProposal {
+	action = session.NormalizeActionProposal(action)
+	if strings.TrimSpace(action.RiskClass) == "" || strings.TrimSpace(action.RiskClass) == "continuation" {
+		action.RiskClass = "deploy"
+	}
+	action.AllowedActions = append(action.AllowedActions,
+		"git_status",
+		"review_intended_diff",
+		"git_commit_intended_changes",
+		"make_build",
+		"install_user_service",
+		"restart_aphelion_service",
+		"run_verify_deploy",
+		"prepare_release_handoff",
+		"post_restart_verification",
+		"report_release_result",
+	)
+	action.ForbiddenActions = append(action.ForbiddenActions,
+		"commit_unrelated_changes",
+		"push_remote",
+		"deploy_without_handoff",
+		"restart_without_recovery_artifact",
+		"skip_build_or_tests_before_restart",
+		"skip_post_deploy_verification",
+		"unbounded_restart_loop",
+	)
+	action.ValidationPlan = append(action.ValidationPlan,
+		"record pre-deploy git status and intended diff",
+		"run go test ./..., go vet ./..., and git diff --check before commit",
+		"commit only intended changes and record the commit hash",
+		"run make build, make install-user-service, and verify-deploy after restart",
+	)
+	return session.NormalizeActionProposal(action)
 }
 
 func actionProposalFromOperationProposal(opState session.OperationState, proposal session.OperationProposal, decisionID string, now time.Time) session.ActionProposal {
@@ -2182,6 +2270,9 @@ func operationStateWithMaterializedPhaseLease(opState session.OperationState, ph
 	for i := range opState.PhasePlan.Phases {
 		if strings.TrimSpace(opState.PhasePlan.Phases[i].ID) != phaseID {
 			continue
+		}
+		if operationPhaseIsDeployRestartPhase(opState.PhasePlan.Phases[i]) {
+			opState.Stage = "deploy_approval"
 		}
 		opState.PhasePlan.Phases[i].LeaseID = strings.TrimSpace(state.ContinuationLease.ID)
 		if opState.PhasePlan.Phases[i].Status == "" {

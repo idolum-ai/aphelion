@@ -243,8 +243,14 @@ Behavior:
 
 When a turn offers continuation approval, an inline prompt is shown with:
 
+- `Start`
+- `Details`
+- `Change`
+- `Pause`
 - `Stop`
-- `Continue`
+
+Telegram button labels stay short because the chat surface is narrow. Scope,
+phase names, and stop conditions belong in the prompt body, not in button text.
 
 Offer conditions:
 
@@ -266,6 +272,9 @@ Offer conditions:
 - Prompt text is rendered as one first-person system voice (Haiku/face render when available, deterministic fallback otherwise), not as a split `Persona`/`Governor` dialogue block.
 - Prompt delivery is TES-grounded: the displayed continuation prompt must match a live continuation decision event (`continuation.offered`) for the same `decision_id`; otherwise prompt text falls back to deterministic copy.
 - When handshake fails, continuation state is persisted as idle with an explicit blocked reason and a first-person blocked notice is sent in chat (persona-rendered with deterministic fallback).
+- Deploy/restart work is not bundled into ordinary development approvals. A
+  deploy prompt must ask for a fresh standalone lease whose body names commit,
+  build, install, restart, and post-restart verification.
 
 ### Runtime decision prompts
 

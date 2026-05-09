@@ -819,3 +819,69 @@ func TestPollDurableWakeAgentsBacksOffExpiredGrantChildRuntimeBlock(t *testing.T
 		t.Fatalf("childRuns after suppressed retry = %d, want 1", childRuns)
 	}
 }
+
+func TestPollDurableWakeAgentsPreflightsGogCLIMaterialBeforeChildWake(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "unused because preflight blocks before child wake"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	agent := core.DurableAgent{
+		AgentID:            "idolum-email",
+		ParentScopeKind:    "telegram_dm",
+		ParentScopeID:      "1001",
+		ReviewTargetChatID: 1001,
+		ChannelKind:        "external_channel",
+		ChannelConfig: core.DurableAgentChannelConfig{External: &core.DurableAgentExternalChannelConfig{
+			Address:      "local://mailbox",
+			Adapter:      gogCLIAdapterName,
+			Query:        "label:inbox",
+			PollInterval: "30m",
+		}},
+		LivePolicy: core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Charter:            "Poll the external channel only when grants and material are ready.",
+			CapabilityEnvelope: []string{"external_channel_poll", "blocker_report"},
+			OutboundMode:       "draft_only",
+			DriftPolicy:        "admin_review",
+		}),
+		BootstrapLLM: durableGroupTestBootstrapLLM(),
+		WakeupMode:   "poll",
+		Status:       "active",
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	rt.durableWakeAdapters = []durableWakeIngressAdapter{newGenericExternalChannelWakeAdapter()}
+	childRuns := 0
+	rt.durableWakeChild = inlineDurableWakeChildExecutor{run: func(_ context.Context, _ sandbox.Scope, _ core.DurableAgent, _ time.Time) error {
+		childRuns++
+		return nil
+	}}
+
+	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	if err := rt.pollDurableWakeAgents(context.Background(), now); err != nil {
+		t.Fatalf("pollDurableWakeAgents() err = %v, want preflight block recorded without hard failure", err)
+	}
+	if childRuns != 0 {
+		t.Fatalf("childRuns = %d, want preflight to block before child wake", childRuns)
+	}
+	cont := loadExternalChannelContinuity(t, store, "idolum-email")
+	if cont.ExternalChannel == nil {
+		t.Fatal("ExternalChannel = nil, want preflight wake_blocked state")
+	}
+	if cont.ExternalChannel.LastStatus != "wake_blocked" || !strings.Contains(cont.ExternalChannel.LastError, "child_runtime_blocked") || !strings.Contains(cont.ExternalChannel.LastError, "gog_cli") {
+		t.Fatalf("external channel state = %#v, want gog_cli preflight blocker", cont.ExternalChannel)
+	}
+	sender.mu.Lock()
+	compact := ""
+	if len(sender.inline) > 0 {
+		compact = sender.inline[len(sender.inline)-1].text
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(compact, "BLOCKED") || strings.Contains(compact, "label:inbox") {
+		t.Fatalf("compact review = %q, want blocked operator summary without query leak", compact)
+	}
+}

@@ -345,6 +345,8 @@ func TestContinuationApprovalButtonRowsAdaptToLeaseState(t *testing.T) {
 	}
 	if got, want := continuationButtonLabels(continuationApprovalButtonRows(pending)), []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("pending labels = %#v, want %#v", got, want)
+	} else {
+		assertContinuationButtonLabelsShort(t, got)
 	}
 
 	phase := pending
@@ -356,15 +358,19 @@ func TestContinuationApprovalButtonRowsAdaptToLeaseState(t *testing.T) {
 		AllowedActions: []string{"execute_phase_once", "update_operation_phase_plan"},
 	}
 	phase.ContinuationLease = session.ContinuationLease{ID: "lease-phase-4b-rebundled-email-proof", ProposalID: "aprop-phase-4b-rebundled-email-proof", Status: session.ContinuationLeaseStatusPending}
-	if got, want := continuationButtonLabels(continuationApprovalButtonRows(phase)), []string{"Start Phase 4B email proof", "Details", "Change Phase 4B email proof", "Pause", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(phase)), []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("phase labels = %#v, want %#v", got, want)
+	} else {
+		assertContinuationButtonLabelsShort(t, got)
 	}
 
 	approved := pending
 	approved.Status = session.ContinuationStatusApproved
 	approved.ContinuationLease.Status = session.ContinuationLeaseStatusActive
-	if got, want := continuationButtonLabels(continuationApprovalButtonRows(approved)), []string{"Run now", "Status", "Pause", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(approved)), []string{"Run", "Status", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("approved labels = %#v, want %#v", got, want)
+	} else {
+		assertContinuationButtonLabelsShort(t, got)
 	}
 
 	expired := pending
@@ -372,8 +378,10 @@ func TestContinuationApprovalButtonRowsAdaptToLeaseState(t *testing.T) {
 	expired.RemainingTurns = 0
 	expired.ActionProposal.Status = session.ProposalStatusExpired
 	expired.ContinuationLease.Status = session.ContinuationLeaseStatusExpired
-	if got, want := continuationButtonLabels(continuationApprovalButtonRows(expired)), []string{"Refresh lease", "Status", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(expired)), []string{"Refresh", "Status", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("expired labels = %#v, want %#v", got, want)
+	} else {
+		assertContinuationButtonLabelsShort(t, got)
 	}
 }
 
@@ -444,6 +452,15 @@ func continuationButtonLabels(rows [][]telegram.InlineButton) []string {
 		}
 	}
 	return labels
+}
+
+func assertContinuationButtonLabelsShort(t *testing.T, labels []string) {
+	t.Helper()
+	for _, label := range labels {
+		if words := strings.Fields(label); len(words) > 2 {
+			t.Fatalf("button label %q has %d words, want at most 2", label, len(words))
+		}
+	}
 }
 
 func equalStringSlices(a, b []string) bool {

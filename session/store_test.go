@@ -1622,6 +1622,25 @@ func TestDurableAgentRegistryAndStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDurableAgentRegistryRejectsInvalidAgentID(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:     "../escape",
+		ChannelKind: "external_channel",
+		Status:      "active",
+	})
+	if err == nil {
+		t.Fatal("UpsertDurableAgent() err = nil, want invalid agent id error")
+	}
+	if !strings.Contains(err.Error(), "path separators") {
+		t.Fatalf("UpsertDurableAgent() err = %v, want path separator context", err)
+	}
+}
+
 func TestDurableAgentExternalChannelConfigRoundTrip(t *testing.T) {
 	t.Parallel()
 

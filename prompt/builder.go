@@ -623,6 +623,7 @@ func renderGoalContinuityContractBlock(aw RuntimeAwareness) string {
 		"A contract, architecture note, read-only review, or tiny probe is usually phase one, not completion of the durable goal.",
 		"If the first phase is complete but the broader goal remains, keep operation state active or blocked and advance the next phase in phase_plan instead of marking the whole goal completed.",
 		"Prefer a broader phased plan plus one next safe live test over a single isolated test when privacy, credentials, agents, or external accounts are involved.",
+		"When the user asks to ship live service changes, include a final standalone deploy/restart phase that commits intended changes, builds, installs the user service, restarts Aphelion, and verifies deployment after a fresh approval.",
 	}, "\n")
 }
 

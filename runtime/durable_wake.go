@@ -150,6 +150,12 @@ func (r *Runtime) runDurableAgentChildWakeLoaded(ctx context.Context, agent core
 			strings.TrimSpace(agent.ChannelKind),
 		)
 	}
+	if err := r.preflightDurableWakeAgent(agent, now.UTC()); err != nil {
+		if handled, handleErr := r.recordDurableWakeChildRuntimeBlock(agent, err, now.UTC()); handled {
+			return handleErr
+		}
+		return err
+	}
 	plan, err := adapter.Prepare(ctx, r, agent, now.UTC())
 	if err != nil {
 		return fmt.Errorf("prepare durable wake via %s: %w", strings.TrimSpace(adapter.Name()), err)

@@ -78,6 +78,24 @@ func TestToolDefinitionsAvoidProviderVisibleProjectName(t *testing.T) {
 	}
 }
 
+func TestDurableAgentCreateRejectsPathLikeAgentID(t *testing.T) {
+	registry, _ := newDurableAgentToolRegistry(t)
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"create","agent_id":"../escape","channel_kind":"external_channel"}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(create) err = nil, want invalid agent id error")
+	}
+	if !strings.Contains(err.Error(), "path separators") {
+		t.Fatalf("ExecuteForSessionPrincipal(create) err = %v, want path separator context", err)
+	}
+}
+
 func TestDurableAgentToolDefinitionIncludesWizardSurface(t *testing.T) {
 	t.Parallel()
 
@@ -2324,6 +2342,57 @@ func TestDurableAgentArtifactPutRejectsEscapingPath(t *testing.T) {
 	}
 }
 
+func TestDurableAgentArtifactPutRejectsSymlinkTarget(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	childMemory := filepath.Join(t.TempDir(), "child", "memory")
+	agent := core.DurableAgent{
+		AgentID:           "artifact-child",
+		ChannelKind:       "headless",
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "child", "workspace"), childMemory},
+		Status:            "active",
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "codex", CodexAuthSource: "codex_cli", CodexHome: "/tmp/codex-home"},
+	}
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	artifactDir := filepath.Join(childMemory, "artifacts", "schemas")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(artifactDir) err = %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.schema.json")
+	if err := os.Symlink(outside, filepath.Join(artifactDir, "console_status.schema.json")); err != nil {
+		t.Fatalf("Symlink() err = %v", err)
+	}
+	input, err := json.Marshal(durableAgentInput{
+		Action:  "artifact_put",
+		AgentID: "artifact-child",
+		Artifact: &durableAgentArtifactInput{
+			Path:    "schemas/console_status.schema.json",
+			Content: "{\n  \"type\": \"object\"\n}\n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() err = %v", err)
+	}
+
+	_, err = registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		adminSessionKey(),
+		"durable_agent",
+		input,
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(artifact_put) err = nil, want symlink rejection")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("err = %v, want symlink context", err)
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("outside target stat err = %v, want not created", err)
+	}
+}
+
 func TestDurableAgentDefinitionIncludesArtifactActions(t *testing.T) {
 	registry, _ := newDurableAgentToolRegistry(t)
 	var durableDef string
@@ -2615,5 +2684,44 @@ func TestDurableAgentProfileApplyWritesChildAuthoredManifestEntry(t *testing.T) 
 	}
 	if !strings.Contains(string(raw), "profile_ownership: child_authored") || !strings.Contains(string(raw), "Curious scout") {
 		t.Fatalf("persona.md = %q, want child-authored profile content", string(raw))
+	}
+}
+
+func TestDurableAgentProfileApplyRejectsSymlinkTarget(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	memoryRoot := filepath.Join(t.TempDir(), "memory")
+	if err := store.UpsertDurableAgent(core.DurableAgent{
+		AgentID:           "script-scout",
+		ChannelKind:       "external_channel",
+		Status:            "active",
+		PolicyHash:        "policy-hash-1",
+		BootstrapLLM:      core.NodeLLMBootstrap{Backend: "native", NativeProvider: "openrouter", APIKey: "sk-test", Model: "test-model"},
+		LocalStorageRoots: []string{filepath.Join(t.TempDir(), "workspace"), memoryRoot},
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	profileRoot := filepath.Join(memoryRoot, "profile")
+	if err := os.MkdirAll(profileRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(profileRoot) err = %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside-persona.md")
+	if err := os.Symlink(outside, filepath.Join(profileRoot, "persona.md")); err != nil {
+		t.Fatalf("Symlink() err = %v", err)
+	}
+
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	_, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminSessionKey(), "durable_agent", json.RawMessage(`{
+		"action":"profile_apply",
+		"agent_id":"script-scout",
+		"profile_edit":{"target_file":"persona.md","content":"Curious scout.","reason":"seed scout voice"}
+	}`))
+	if err == nil {
+		t.Fatal("profile_apply err = nil, want symlink rejection")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("profile_apply err = %v, want symlink context", err)
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Fatalf("outside target stat err = %v, want not created", err)
 	}
 }
