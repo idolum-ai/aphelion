@@ -180,7 +180,7 @@ func TestCapabilityGrantSetRejectsMissingDurableAgentTarget(t *testing.T) {
 		RequestedBy:    "telegram:1001",
 		RequestedFor:   "durable_agent:missing-child",
 		Kind:           session.CapabilityKindTool,
-		TargetResource: "x_idolumai_readonly",
+		TargetResource: "public-feed-readonly",
 		Purpose:        "grant a child tool that cannot be woken",
 		ReviewStatus:   session.CapabilityReviewStatusApproved,
 	}); err != nil {
@@ -519,11 +519,11 @@ func TestCapabilityGrantSetRendersToolInvocationScope(t *testing.T) {
 	registry, store := newDurableAgentToolRegistry(t)
 	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
 	key := adminSessionKey()
-	scopeJSON := json.RawMessage(`{"tool_invocation":{"actions":{"public_profile_metadata_read":{"selectors":{"username":["idolumai"]}}}}}`)
+	scopeJSON := json.RawMessage(`{"tool_invocation":{"actions":{"public_profile_metadata_read":{"selectors":{"username":["example_handle"]}}}}}`)
 	requestOut, err := registry.capabilityRequestSubmit(capabilityInput{
 		RequestID:      "cap-x-profile-scope",
 		Kind:           "tool",
-		TargetResource: "x_idolumai_readonly",
+		TargetResource: "public-feed-readonly",
 		RequestedFor:   "telegram:1001",
 		Purpose:        "bounded exact X profile metadata read",
 		Constraints:    scopeJSON,

@@ -164,8 +164,8 @@ print(json.dumps({'summary':'ok','action':payload.get('action'),'username':paylo
 		t.Fatalf("WriteFile(run.py) err = %v", err)
 	}
 	manifest := ExternalToolManifest{
-		Name:      "x_idolumai_readonly",
-		Owner:     "idolum-x",
+		Name:      "public-feed-readonly",
+		Owner:     "child-public-feed",
 		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.py"},
 		IO: ExternalToolManifestIO{
 			InputSchema:  json.RawMessage(`{"type":"object","properties":{"action":{"type":"string"},"username":{"type":"string"}},"required":["action"]}`),
@@ -180,7 +180,7 @@ print(json.dumps({'summary':'ok','action':payload.get('action'),'username':paylo
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
 	if err := store.UpsertDurableAgent(core.DurableAgent{
-		AgentID:           "idolum-x",
+		AgentID:           "child-public-feed",
 		ChannelKind:       "external_channel",
 		Status:            "active",
 		LocalStorageRoots: []string{registry.workspace, filepath.Join(registry.workspace, "memory")},
@@ -190,19 +190,19 @@ print(json.dumps({'summary':'ok','action':payload.get('action'),'username':paylo
 	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
 		GrantID:        "capg-x-profile-scope",
 		GrantedBy:      "telegram:1001",
-		GrantedTo:      "durable_agent:idolum-x",
+		GrantedTo:      "durable_agent:child-public-feed",
 		Kind:           session.CapabilityKindTool,
 		TargetResource: manifest.Name,
 		AllowedActions: []string{"invoke"},
-		Constraints:    `{"tool_invocation":{"actions":{"public_profile_metadata_read":{"selectors":{"username":["idolumai"]}}}}}`,
+		Constraints:    `{"tool_invocation":{"actions":{"public_profile_metadata_read":{"selectors":{"username":["example_handle"]}}}}}`,
 		Status:         session.CapabilityGrantStatusActive,
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
 	}
 
-	actor := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-x"}
+	actor := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-public-feed"}
 	key := session.SessionKey{}
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"idolumai"}`))
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"example_handle"}`))
 	if err != nil {
 		t.Fatalf("allowed scoped invoke err = %v", err)
 	}

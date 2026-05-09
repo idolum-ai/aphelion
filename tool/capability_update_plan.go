@@ -100,7 +100,8 @@ func capabilityUpdatePlanHasOperationalContent(plan capabilityUpdatePlanInput) b
 }
 
 func durableAgentPolicyPatchInputIsZero(patch durableAgentPolicyPatchInput) bool {
-	return strings.TrimSpace(patch.Charter) == "" &&
+	return strings.TrimSpace(patch.Mode) == "" &&
+		strings.TrimSpace(patch.Charter) == "" &&
 		strings.TrimSpace(patch.Autonomy) == "" &&
 		strings.TrimSpace(patch.Visibility) == "" &&
 		strings.TrimSpace(patch.SharedContext) == "" &&
@@ -129,6 +130,9 @@ func mergeCapabilityUpdatePlan(existing capabilityUpdatePlanInput, next capabili
 		patch := durableAgentPolicyPatchInput{}
 		if existing.PolicyPatch != nil {
 			patch = *existing.PolicyPatch
+		}
+		if next.PolicyPatch.Mode != "" {
+			patch.Mode = next.PolicyPatch.Mode
 		}
 		if next.PolicyPatch.Charter != "" {
 			patch.Charter = next.PolicyPatch.Charter

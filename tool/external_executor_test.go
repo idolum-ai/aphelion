@@ -189,7 +189,7 @@ func TestExternalToolExecutionAccessMaterializesChildRuntimeTypesDistinctly(t *t
 	}
 	t.Setenv("APHELION_E2_TEST_TOKEN", "present")
 
-	access, err := externalToolExecutionAccessFromGrant(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-x"}, session.CapabilityGrant{
+	access, err := externalToolExecutionAccessFromGrant(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-public-feed"}, session.CapabilityGrant{
 		GrantID: "capg-runtime-material",
 		Contract: `{"child_runtime":{
 			"readonly_paths":["` + readonlyPath + `"],
@@ -220,7 +220,7 @@ func TestExternalToolExecutionAccessMaterializesChildRuntimeTypesDistinctly(t *t
 
 func TestExternalToolExecutionAccessReportsExactMissingRuntimeMaterial(t *testing.T) {
 	missingSecret := filepath.Join(t.TempDir(), "missing.env")
-	_, err := externalToolExecutionAccessFromGrant(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-x"}, session.CapabilityGrant{
+	_, err := externalToolExecutionAccessFromGrant(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-public-feed"}, session.CapabilityGrant{
 		GrantID:  "capg-missing-secret",
 		Contract: `{"child_runtime":{"secret_binds":[{"source":"` + missingSecret + `","target":"/run/secrets/x.env"}]}}`,
 	})
@@ -228,7 +228,7 @@ func TestExternalToolExecutionAccessReportsExactMissingRuntimeMaterial(t *testin
 		t.Fatalf("missing secret err = %v, want exact secret_bind source", err)
 	}
 
-	_, err = externalToolExecutionAccessFromGrant(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "idolum-x"}, session.CapabilityGrant{
+	_, err = externalToolExecutionAccessFromGrant(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-public-feed"}, session.CapabilityGrant{
 		GrantID:  "capg-missing-env",
 		Contract: `{"child_runtime":{"env_from_parent":["APHELION_E2_MISSING_ENV"]}}`,
 	})

@@ -184,6 +184,8 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 	if err := applyDurableAgentPolicyPatch(&policy, patch); err != nil {
 		return "", err
 	}
+	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(policy)
+	policy = agent.LivePolicy
 
 	reason := strings.TrimSpace(in.Reason)
 	if reason == "" && in.ReviewEventID > 0 {
@@ -192,6 +194,20 @@ func (r *Registry) applyDurableAgentPolicy(in durableAgentInput) (string, error)
 	updated, update, err := r.store.ApplyDurableAgentLivePolicy(agent.AgentID, policy, in.ReviewEventID, reason)
 	if err != nil {
 		return "", err
+	}
+	if updated != nil {
+		beforeWakeup := strings.TrimSpace(updated.WakeupMode)
+		applyDurableAgentModeRuntimeDefaults(updated)
+		if strings.TrimSpace(updated.WakeupMode) != beforeWakeup {
+			if err := r.store.UpsertDurableAgent(*updated); err != nil {
+				return "", err
+			}
+			refreshed, err := r.store.DurableAgent(updated.AgentID)
+			if err != nil {
+				return "", err
+			}
+			updated = refreshed
+		}
 	}
 	if _, err := syncDurableAgentProfileFiles(*updated, r.store); err != nil {
 		return "", err
@@ -307,6 +323,7 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 	patch := effectiveDurableAgentPolicyPatchFromInput(in)
 	policy := agent.LivePolicy
 	if strings.TrimSpace(policy.Charter) == "" &&
+		strings.TrimSpace(policy.Mode) == "" &&
 		len(policy.CapabilityEnvelope) == 0 &&
 		strings.TrimSpace(policy.OutboundMode) == "" &&
 		strings.TrimSpace(policy.DriftPolicy) == "" &&
@@ -319,6 +336,7 @@ func (r *Registry) createDurableAgent(in durableAgentInput, key session.SessionK
 		return "", err
 	}
 	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(policy)
+	applyDurableAgentModeRuntimeDefaults(&agent)
 
 	channelConfig, err := mergeDurableAgentChannelConfig(agent.ChannelConfig, in.ChannelConfig)
 	if err != nil {
@@ -1717,6 +1735,7 @@ func seedDurableAgentWizardFromAgent(agent core.DurableAgent, inheritedBootstrap
 		SchemaVersion: 1,
 		ChannelKind:   strings.TrimSpace(agent.ChannelKind),
 		Answers: core.DurableAgentSetupWizardAnswers{
+			Mode:             durableAgentModeFromPolicy(agent.LivePolicy),
 			BootstrapProfile: bootstrapProfile,
 			BootstrapModel:   bootstrapModel,
 			Charter:          strings.TrimSpace(agent.LivePolicy.Charter),
@@ -1744,6 +1763,9 @@ func seedDurableAgentWizardFromAgent(agent core.DurableAgent, inheritedBootstrap
 func mergeDurableAgentWizardAnswers(current core.DurableAgentSetupWizardAnswers, patch durableAgentWizardAnswersInput) core.DurableAgentSetupWizardAnswers {
 	current = core.NormalizeDurableAgentSetupWizardAnswers(current)
 	previousProfile := strings.TrimSpace(current.BootstrapProfile)
+	if strings.TrimSpace(patch.Mode) != "" {
+		current.Mode = core.NormalizeDurableAgentMode(patch.Mode)
+	}
 	if strings.TrimSpace(patch.Address) != "" {
 		current.Address = strings.TrimSpace(patch.Address)
 	}
@@ -1819,6 +1841,7 @@ func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.Dura
 	agent.WakeupMode = wakeupMode
 
 	patch := effectiveDurableAgentPolicyPatch{
+		Mode:        strings.TrimSpace(answers.Mode),
 		Charter:     strings.TrimSpace(answers.Charter),
 		Autonomy:    strings.TrimSpace(answers.Autonomy),
 		DriftPolicy: strings.TrimSpace(answers.DriftPolicy),
@@ -1829,6 +1852,7 @@ func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.Dura
 	}
 	policy := agent.LivePolicy
 	if strings.TrimSpace(policy.Charter) == "" &&
+		strings.TrimSpace(policy.Mode) == "" &&
 		len(policy.CapabilityEnvelope) == 0 &&
 		strings.TrimSpace(policy.OutboundMode) == "" &&
 		strings.TrimSpace(policy.DriftPolicy) == "" &&
@@ -1841,6 +1865,7 @@ func applyDurableWizardAnswersToAgent(agent core.DurableAgent, answers core.Dura
 		return core.DurableAgent{}, err
 	}
 	agent.LivePolicy = core.NormalizeDurableAgentLivePolicy(policy)
+	applyDurableAgentModeRuntimeDefaults(&agent)
 
 	channelConfig := core.NormalizeDurableAgentChannelConfig(agent.ChannelConfig)
 	external := channelConfig.ExternalConfig()
@@ -1899,11 +1924,14 @@ func durableAgentWizardMissingAnswers(agent core.DurableAgent, wizard core.Durab
 	answers := core.NormalizeDurableAgentSetupWizardAnswers(wizard.Answers)
 	effectiveBootstrap := durableAgentWizardEffectiveBootstrapForAnswers(agent, answers, inheritedBootstrap)
 	missing := make([]string, 0, len(durableAgentWizardStepOrder))
-	if strings.TrimSpace(answers.Address) == "" {
-		missing = append(missing, "address")
-	}
-	if strings.TrimSpace(answers.Adapter) == "" {
-		missing = append(missing, "adapter")
+	childMode := durableAgentWizardMode(agent, answers)
+	if childMode == "external" || childMode == "live" {
+		if strings.TrimSpace(answers.Address) == "" {
+			missing = append(missing, "address")
+		}
+		if strings.TrimSpace(answers.Adapter) == "" {
+			missing = append(missing, "adapter")
+		}
 	}
 	if strings.TrimSpace(answers.BootstrapProfile) == "" {
 		missing = append(missing, "bootstrap_profile")
@@ -1915,25 +1943,27 @@ func durableAgentWizardMissingAnswers(agent core.DurableAgent, wizard core.Durab
 	if strings.TrimSpace(answers.Autonomy) == "" {
 		missing = append(missing, "autonomy")
 	}
-	if len(answers.SurfaceRules) == 0 {
-		missing = append(missing, "surface_rules")
-	}
-	if answers.SummarizePDFs == nil {
-		missing = append(missing, "summarize_pdfs")
-	}
-	if strings.TrimSpace(answers.SynthesisCadence) == "" {
-		missing = append(missing, "synthesis_cadence")
-	}
-	mode := normalizeDurableChannelWakeupMode(answers.WakeupMode)
-	if mode == "" {
-		missing = append(missing, "wakeup_mode")
-	} else if durableChannelWakeupModeIncludesPoll(mode) && strings.TrimSpace(answers.PollInterval) == "" {
-		missing = append(missing, "poll_interval")
+	if childMode == "external" || childMode == "live" {
+		if len(answers.SurfaceRules) == 0 {
+			missing = append(missing, "surface_rules")
+		}
+		if answers.SummarizePDFs == nil {
+			missing = append(missing, "summarize_pdfs")
+		}
+		if strings.TrimSpace(answers.SynthesisCadence) == "" {
+			missing = append(missing, "synthesis_cadence")
+		}
+		mode := normalizeDurableChannelWakeupMode(answers.WakeupMode)
+		if mode == "" {
+			missing = append(missing, "wakeup_mode")
+		} else if durableChannelWakeupModeIncludesPoll(mode) && strings.TrimSpace(answers.PollInterval) == "" {
+			missing = append(missing, "poll_interval")
+		}
 	}
 	if len(answers.Capabilities) == 0 {
 		missing = append(missing, "capabilities")
 	}
-	if len(answers.NeverRetain) == 0 {
+	if (childMode == "external" || childMode == "live") && len(answers.NeverRetain) == 0 {
 		missing = append(missing, "never_retain")
 	}
 	if strings.TrimSpace(answers.Charter) == "" {
@@ -2101,6 +2131,8 @@ func durableAgentWizardBootstrapFallbackSummary(bootstrap core.NodeLLMBootstrap)
 
 func normalizeDurableChannelWakeupMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "manual", "none", "off":
+		return "manual"
 	case "poll":
 		return "poll"
 	case "push":
@@ -2149,6 +2181,7 @@ func renderDurableAgentWizardShow(agent core.DurableAgent, wizard core.DurableAg
 	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
 	fmt.Fprintf(&b, "channel_kind: %s\n", channelKind)
 	fmt.Fprintf(&b, "channel_profile: %s\n", durableAgentWizardDisplayChannelKind(channelKind))
+	fmt.Fprintf(&b, "mode: %s\n", durableAgentWizardMode(agent, wizard.Answers))
 	fmt.Fprintf(&b, "wizard_status: %s\n", firstNonEmpty(strings.TrimSpace(wizard.Status), "in_progress"))
 	fmt.Fprintf(&b, "current_step: %s\n", firstNonEmpty(strings.TrimSpace(wizard.CurrentStep), "-"))
 	fmt.Fprintf(&b, "missing: %s\n", firstNonEmpty(strings.Join(wizard.Missing, ","), "-"))
@@ -2183,6 +2216,7 @@ func renderDurableAgentWizardFinalize(agent core.DurableAgent, wizard core.Durab
 	fmt.Fprintf(&b, "agent_id: %s\n", strings.TrimSpace(agent.AgentID))
 	fmt.Fprintf(&b, "channel_kind: %s\n", channelKind)
 	fmt.Fprintf(&b, "channel_profile: %s\n", durableAgentWizardDisplayChannelKind(channelKind))
+	fmt.Fprintf(&b, "mode: %s\n", durableAgentModeFromPolicy(agent.LivePolicy))
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "draft"))
 	fmt.Fprintf(&b, "wizard_status: %s\n", firstNonEmpty(strings.TrimSpace(wizard.Status), "finalized"))
 	fmt.Fprintf(&b, "bootstrap_profile: %s\n", profile)
@@ -2274,6 +2308,7 @@ func renderDurableAgentPolicy(agent core.DurableAgent, updates []session.Durable
 	fmt.Fprintf(&b, "channel_kind: %s\n", channelKind)
 	fmt.Fprintf(&b, "channel_profile: %s\n", durableAgentWizardDisplayChannelKind(channelKind))
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "active"))
+	fmt.Fprintf(&b, "mode: %s\n", durableAgentModeFromPolicy(agent.LivePolicy))
 	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
 	fmt.Fprintf(&b, "policy_version: %d\n", agent.PolicyVersion)
 	fmt.Fprintf(&b, "policy_hash: %s\n", agent.PolicyHash)
@@ -2336,6 +2371,7 @@ func renderDurableAgentPolicyApply(agent core.DurableAgent, update *session.Dura
 	b.WriteString("changed: true\n")
 	fmt.Fprintf(&b, "policy_version: %d\n", agent.PolicyVersion)
 	fmt.Fprintf(&b, "policy_hash: %s\n", agent.PolicyHash)
+	fmt.Fprintf(&b, "mode: %s\n", durableAgentModeFromPolicy(agent.LivePolicy))
 	fmt.Fprintf(&b, "autonomy: %s\n", durableAgentAutonomyFromPolicy(agent.LivePolicy))
 	fmt.Fprintf(&b, "visibility: %s\n", durableAgentVisibilityFromPolicy(agent.LivePolicy))
 	fmt.Fprintf(&b, "shared_context: %s\n", durableAgentSharedContextFromPolicy(agent.LivePolicy))
@@ -2423,6 +2459,7 @@ func renderDurableAgentLifecycle(action string, agent core.DurableAgent) string 
 	fmt.Fprintf(&b, "channel_profile: %s\n", durableAgentWizardDisplayChannelKind(channelKind))
 	fmt.Fprintf(&b, "status: %s\n", firstNonEmpty(strings.TrimSpace(agent.Status), "active"))
 	fmt.Fprintf(&b, "review_target_chat_id: %d\n", agent.ReviewTargetChatID)
+	fmt.Fprintf(&b, "mode: %s\n", durableAgentModeFromPolicy(agent.LivePolicy))
 	fmt.Fprintf(&b, "wakeup_mode: %s\n", strings.TrimSpace(agent.WakeupMode))
 	fmt.Fprintf(&b, "outbound_mode: %s\n", strings.TrimSpace(agent.LivePolicy.OutboundMode))
 	fmt.Fprintf(&b, "allowed_telegram_user_ids: %s\n", formatDurableAgentTelegramUserIDs(agent.AllowedTelegramUserIDs))
@@ -2910,6 +2947,7 @@ func durableAgentIDOptions(agents []core.DurableAgent) []string {
 }
 
 type effectiveDurableAgentPolicyPatch struct {
+	Mode                      string
 	Charter                   string
 	Autonomy                  string
 	Visibility                string
@@ -2932,6 +2970,7 @@ func effectiveDurableAgentPolicyPatchFromInput(in durableAgentInput) effectiveDu
 	patch := effectiveDurableAgentPolicyPatch{}
 
 	if in.PolicyPatch != nil {
+		patch.Mode = core.NormalizeDurableAgentMode(in.PolicyPatch.Mode)
 		patch.Charter = strings.TrimSpace(in.PolicyPatch.Charter)
 		patch.Autonomy = strings.TrimSpace(in.PolicyPatch.Autonomy)
 		patch.Visibility = strings.TrimSpace(in.PolicyPatch.Visibility)
@@ -2944,6 +2983,9 @@ func effectiveDurableAgentPolicyPatchFromInput(in durableAgentInput) effectiveDu
 	}
 	if patch.Charter == "" {
 		patch.Charter = strings.TrimSpace(in.Charter)
+	}
+	if patch.Mode == "" {
+		patch.Mode = core.NormalizeDurableAgentMode(in.Mode)
 	}
 	if patch.Autonomy == "" {
 		patch.Autonomy = strings.TrimSpace(in.Autonomy)
@@ -2993,6 +3035,10 @@ func effectiveDurableAgentPolicyPatchFromInput(in durableAgentInput) effectiveDu
 func applyDurableAgentPolicyPatch(policy *core.DurableAgentLivePolicy, patch effectiveDurableAgentPolicyPatch) error {
 	if policy == nil {
 		return nil
+	}
+	if patch.Mode != "" {
+		policy.Mode = patch.Mode
+		applyDurableAgentModePolicyDefaults(policy)
 	}
 	if patch.Charter != "" {
 		policy.Charter = patch.Charter
@@ -3126,6 +3172,7 @@ func defaultDurableAgentLivePolicy(channelKind string, charter string) core.Dura
 	switch normalizeDurableAgentChannelKind(channelKind) {
 	case "external_channel":
 		return core.NormalizeDurableAgentLivePolicy(core.DurableAgentLivePolicy{
+			Mode:                      "external",
 			Charter:                   strings.TrimSpace(charter),
 			CapabilityEnvelope:        []string{"read_channel", "bounded_review_artifact", "summarize_pdf"},
 			OutboundMode:              "read_only",
@@ -3136,6 +3183,77 @@ func defaultDurableAgentLivePolicy(channelKind string, charter string) core.Dura
 		})
 	default:
 		return core.DefaultTelegramGroupLivePolicy(charter)
+	}
+}
+
+func durableAgentModeFromPolicy(policy core.DurableAgentLivePolicy) string {
+	mode := core.NormalizeDurableAgentMode(policy.Mode)
+	if mode == "" {
+		return "live"
+	}
+	return mode
+}
+
+func durableAgentWizardMode(agent core.DurableAgent, answers core.DurableAgentSetupWizardAnswers) string {
+	if mode := core.NormalizeDurableAgentMode(answers.Mode); mode != "" {
+		return mode
+	}
+	if mode := durableAgentModeFromPolicy(agent.LivePolicy); mode != "" {
+		return mode
+	}
+	switch normalizeDurableAgentChannelKind(agent.ChannelKind) {
+	case "external_channel":
+		return "external"
+	default:
+		return "live"
+	}
+}
+
+func applyDurableAgentModePolicyDefaults(policy *core.DurableAgentLivePolicy) {
+	if policy == nil {
+		return
+	}
+	switch core.NormalizeDurableAgentMode(policy.Mode) {
+	case "sketch":
+		policy.OutboundMode = "draft_only"
+		policy.PublicSurfaceMode = "none"
+		policy.SharedInferenceReuse = "disabled"
+		policy.SharedInferenceReuseScope = "public_prefix_only"
+		policy.CapabilityEnvelope = []string{"bounded_review_artifact"}
+	case "local":
+		policy.OutboundMode = "draft_only"
+		policy.PublicSurfaceMode = "none"
+		policy.SharedInferenceReuse = "disabled"
+		policy.SharedInferenceReuseScope = "public_prefix_only"
+		policy.CapabilityEnvelope = []string{"local_workspace", "bounded_review_artifact"}
+	case "external":
+		if strings.TrimSpace(policy.OutboundMode) == "" {
+			policy.OutboundMode = "read_only"
+		}
+		if strings.TrimSpace(policy.PublicSurfaceMode) == "" {
+			policy.PublicSurfaceMode = "explicit_parent_relay_only"
+		}
+		if strings.TrimSpace(policy.SharedInferenceReuse) == "" {
+			policy.SharedInferenceReuse = "disabled"
+		}
+		if strings.TrimSpace(policy.SharedInferenceReuseScope) == "" {
+			policy.SharedInferenceReuseScope = "public_prefix_only"
+		}
+		if len(policy.CapabilityEnvelope) == 0 {
+			policy.CapabilityEnvelope = []string{"read_channel", "bounded_review_artifact"}
+		}
+	}
+}
+
+func applyDurableAgentModeRuntimeDefaults(agent *core.DurableAgent) {
+	if agent == nil {
+		return
+	}
+	switch durableAgentModeFromPolicy(agent.LivePolicy) {
+	case "sketch", "local":
+		if strings.TrimSpace(agent.WakeupMode) == "" || normalizeDurableChannelWakeupMode(agent.WakeupMode) == "poll" {
+			agent.WakeupMode = "manual"
+		}
 	}
 }
 
@@ -3219,6 +3337,10 @@ func mergeDurableAgentExternalChannelConfig(dst *core.DurableAgentExternalChanne
 }
 
 func validateDurableAgentActivation(agent core.DurableAgent) error {
+	switch durableAgentModeFromPolicy(agent.LivePolicy) {
+	case "sketch", "local":
+		return nil
+	}
 	switch normalizeDurableAgentChannelKind(agent.ChannelKind) {
 	case "external_channel":
 		external := agent.ChannelConfig.ExternalConfig()

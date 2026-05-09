@@ -13,7 +13,7 @@ import (
 
 func TestExternalToolInvocationReadinessShowsReadyOnlyWhenAllProofsPass(t *testing.T) {
 	tools := []core.ToolLifecycleStatusSnapshot{{
-		ToolName:      "x_idolumai_readonly",
+		ToolName:      "public-feed-readonly",
 		InstallStatus: string(session.ToolInstallStatusVerified),
 		ProbeStatus:   string(session.ToolProbeStatusPassed),
 		AuditStatus:   string(session.ToolAuditStatusPassed),
@@ -21,15 +21,15 @@ func TestExternalToolInvocationReadinessShowsReadyOnlyWhenAllProofsPass(t *testi
 	grants := []core.CapabilityGrantStatusSnapshot{{
 		GrantID:             "capg-x-ready",
 		Kind:                string(session.CapabilityKindTool),
-		TargetResource:      "x_idolumai_readonly",
+		TargetResource:      "public-feed-readonly",
 		Status:              string(session.CapabilityGrantStatusActive),
-		GrantedTo:           "durable_agent:idolum-x",
+		GrantedTo:           "durable_agent:child-public-feed",
 		AllowedActions:      []string{"invoke"},
 		ToolInvocationScope: "public_profile_metadata_read[username]",
 		ChildRuntimePresent: true,
 	}}
 
-	row := externalToolInvocationReadinessFromSnapshots("x_idolumai_readonly", "durable_agent:idolum-x", "public_profile_metadata_read", "username", "idolumai", tools, grants)
+	row := externalToolInvocationReadinessFromSnapshots("public-feed-readonly", "durable_agent:child-public-feed", "public_profile_metadata_read", "username", "example", tools, grants)
 	if !row.Ready || row.Status != "ready" || row.NextRepairAction != "none" {
 		t.Fatalf("readiness = %#v, want ready with no repair", row)
 	}
@@ -40,7 +40,7 @@ func TestExternalToolInvocationReadinessShowsReadyOnlyWhenAllProofsPass(t *testi
 
 func TestExternalToolInvocationReadinessNamesExactMissingMaterial(t *testing.T) {
 	tools := []core.ToolLifecycleStatusSnapshot{{
-		ToolName:      "x_idolumai_readonly",
+		ToolName:      "public-feed-readonly",
 		InstallStatus: string(session.ToolInstallStatusVerified),
 		ProbeStatus:   string(session.ToolProbeStatusPassed),
 		AuditStatus:   string(session.ToolAuditStatusPassed),
@@ -48,16 +48,16 @@ func TestExternalToolInvocationReadinessNamesExactMissingMaterial(t *testing.T) 
 	grants := []core.CapabilityGrantStatusSnapshot{{
 		GrantID:                "capg-x-blocked",
 		Kind:                   string(session.CapabilityKindTool),
-		TargetResource:         "x_idolumai_readonly",
+		TargetResource:         "public-feed-readonly",
 		Status:                 string(session.CapabilityGrantStatusActive),
-		GrantedTo:              "durable_agent:idolum-x",
+		GrantedTo:              "durable_agent:child-public-feed",
 		AllowedActions:         []string{"invoke"},
 		ToolInvocationScope:    "public_profile_metadata_read[username]",
 		ChildRuntimePresent:    true,
 		RuntimeMaterialMissing: `env_from_parent "APHELION_E2_MISSING_ENV"`,
 	}}
 
-	row := externalToolInvocationReadinessFromSnapshots("x_idolumai_readonly", "durable_agent:idolum-x", "public_profile_metadata_read", "username", "idolumai", tools, grants)
+	row := externalToolInvocationReadinessFromSnapshots("public-feed-readonly", "durable_agent:child-public-feed", "public_profile_metadata_read", "username", "example", tools, grants)
 	if row.Ready || row.Status != "blocked" {
 		t.Fatalf("readiness = %#v, want blocked", row)
 	}
@@ -83,18 +83,18 @@ func TestFirstMissingChildRuntimeMaterialDistinguishesSecretBindAndEnv(t *testin
 }
 
 func TestExternalToolInvocationReadinessBlocksWrongActionSelector(t *testing.T) {
-	tools := []core.ToolLifecycleStatusSnapshot{{ToolName: "x_idolumai_readonly", InstallStatus: "verified", ProbeStatus: "passed", AuditStatus: "passed"}}
+	tools := []core.ToolLifecycleStatusSnapshot{{ToolName: "public-feed-readonly", InstallStatus: "verified", ProbeStatus: "passed", AuditStatus: "passed"}}
 	grants := []core.CapabilityGrantStatusSnapshot{{
 		GrantID:             "capg-x-scope",
 		Kind:                "tool",
-		TargetResource:      "x_idolumai_readonly",
+		TargetResource:      "public-feed-readonly",
 		Status:              "active",
-		GrantedTo:           "durable_agent:idolum-x",
+		GrantedTo:           "durable_agent:child-public-feed",
 		AllowedActions:      []string{"invoke"},
 		ToolInvocationScope: "public_profile_metadata_read[username]",
 		ChildRuntimePresent: true,
 	}}
-	row := externalToolInvocationReadinessFromSnapshots("x_idolumai_readonly", "durable_agent:idolum-x", "read_timeline", "username", "idolumai", tools, grants)
+	row := externalToolInvocationReadinessFromSnapshots("public-feed-readonly", "durable_agent:child-public-feed", "read_timeline", "username", "example", tools, grants)
 	if row.Ready || !strings.Contains(row.Why, "does not allow action/selector") {
 		t.Fatalf("readiness = %#v, want wrong action/selector blocked", row)
 	}

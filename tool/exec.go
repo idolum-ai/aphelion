@@ -261,6 +261,7 @@ type openAIVectorStoreInput struct {
 }
 
 type durableAgentPolicyPatchInput struct {
+	Mode          string   `json:"mode,omitempty"`
 	Charter       string   `json:"charter,omitempty"`
 	Autonomy      string   `json:"autonomy,omitempty"`
 	Visibility    string   `json:"visibility,omitempty"`
@@ -281,6 +282,7 @@ type durableAgentPolicyOverridesInput struct {
 }
 
 type durableAgentWizardAnswersInput struct {
+	Mode             string   `json:"mode,omitempty"`
 	Address          string   `json:"address,omitempty"`
 	Account          string   `json:"account,omitempty"`
 	Adapter          string   `json:"adapter,omitempty"`
@@ -387,6 +389,7 @@ type durableAgentInput struct {
 	BootstrapLLM              *core.NodeLLMBootstrap              `json:"bootstrap_llm,omitempty"`
 	PolicyPatch               *durableAgentPolicyPatchInput       `json:"policy_patch,omitempty"`
 	PolicyOverrides           *durableAgentPolicyOverridesInput   `json:"policy_overrides,omitempty"`
+	Mode                      string                              `json:"mode,omitempty"`
 	Charter                   string                              `json:"charter,omitempty"`
 	Autonomy                  string                              `json:"autonomy,omitempty"`
 	Visibility                string                              `json:"visibility,omitempty"`
@@ -1063,8 +1066,9 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						"policy_patch": {
 							"type": "object",
 							"description": "Optional conversational policy patch for policy_apply/create. Prefer this surface.",
-							"properties": {
-								"charter": {"type": "string", "description": "Optional charter text"},
+								"properties": {
+									"mode": {"type": "string", "enum": ["sketch", "local", "external", "live"], "description": "Child footprint. sketch keeps an idea/prototype record; local gives a local-only child; external adds read-only adapter setup; live allows the child to operate on a live channel within policy."},
+									"charter": {"type": "string", "description": "Optional charter text"},
 								"autonomy": {"type": "string", "description": "High-level autonomy posture: observe_only, local_drafts, review_before_reply, or reply_within_charter"},
 								"visibility": {"type": "string", "description": "Visibility posture: private, parent_relay_only, or public_channel"},
 								"shared_context": {"type": "string", "description": "Inference-sharing posture: isolated or public_only"},
@@ -1085,8 +1089,9 @@ func (r *Registry) Definitions() []agent.ToolDef {
 								"tailnet_tags": {"type": "array", "items": {"type": "string"}, "description": "Declared Tailscale tags for the child identity"},
 								"tailnet_surface_policy": {"type": "string", "description": "Declared private tailnet surface policy. Supported: private_status, private_services, none"}
 							}
-						},
-						"charter": {"type": "string", "description": "Legacy top-level charter override (prefer policy_patch.charter)"},
+							},
+							"mode": {"type": "string", "enum": ["sketch", "local", "external", "live"], "description": "Legacy top-level child footprint (prefer policy_patch.mode)"},
+							"charter": {"type": "string", "description": "Legacy top-level charter override (prefer policy_patch.charter)"},
 						"autonomy": {"type": "string", "description": "Legacy top-level autonomy (prefer policy_patch.autonomy)"},
 						"visibility": {"type": "string", "description": "Legacy top-level visibility (prefer policy_patch.visibility)"},
 						"shared_context": {"type": "string", "description": "Legacy top-level shared_context (prefer policy_patch.shared_context)"},
@@ -1103,8 +1108,9 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						"wizard_answers": {
 							"type": "object",
 							"description": "Wizard answer patch for wizard_answer (generic durable child setup).",
-							"properties": {
-								"address": {"type": "string"},
+								"properties": {
+									"mode": {"type": "string", "enum": ["sketch", "local", "external", "live"]},
+									"address": {"type": "string"},
 								"account": {"type": "string"},
 								"adapter": {"type": "string"},
 								"query": {"type": "string"},

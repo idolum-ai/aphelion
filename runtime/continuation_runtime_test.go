@@ -237,7 +237,7 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 		sender.inline[0].rows[1][0].Text, sender.inline[0].rows[1][1].Text,
 		sender.inline[0].rows[2][0].Text,
 	}
-	wantLabels := []string{"Approve & run", "Scope details", "Revise proposal", "Park", "Stop"}
+	wantLabels := []string{"Start", "Details", "Change", "Pause", "Stop"}
 	for i, want := range wantLabels {
 		if labels[i] != want {
 			t.Fatalf("button labels = %#v, want %#v", labels, wantLabels)
@@ -338,7 +338,7 @@ func TestContinuationApprovalButtonRowsAdaptToLeaseState(t *testing.T) {
 			Status:     session.ContinuationLeaseStatusPending,
 		},
 	}
-	if got, want := continuationButtonLabels(continuationApprovalButtonRows(pending)), []string{"Approve & run", "Scope details", "Revise proposal", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(pending)), []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("pending labels = %#v, want %#v", got, want)
 	}
 
@@ -351,14 +351,14 @@ func TestContinuationApprovalButtonRowsAdaptToLeaseState(t *testing.T) {
 		AllowedActions: []string{"execute_phase_once", "update_operation_phase_plan"},
 	}
 	phase.ContinuationLease = session.ContinuationLease{ID: "lease-phase-4b-rebundled-email-proof", ProposalID: "aprop-phase-4b-rebundled-email-proof", Status: session.ContinuationLeaseStatusPending}
-	if got, want := continuationButtonLabels(continuationApprovalButtonRows(phase)), []string{"Approve Phase 4B email proof", "Scope details", "Revise Phase 4B email proof", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(phase)), []string{"Start Phase 4B email proof", "Details", "Change Phase 4B email proof", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("phase labels = %#v, want %#v", got, want)
 	}
 
 	approved := pending
 	approved.Status = session.ContinuationStatusApproved
 	approved.ContinuationLease.Status = session.ContinuationLeaseStatusActive
-	if got, want := continuationButtonLabels(continuationApprovalButtonRows(approved)), []string{"Run now", "Status", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := continuationButtonLabels(continuationApprovalButtonRows(approved)), []string{"Run now", "Status", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("approved labels = %#v, want %#v", got, want)
 	}
 

@@ -462,6 +462,10 @@ phaseLoop:
 			stoppedAtGate = reason
 			break phaseLoop
 		case operationPhaseApprovalFresh:
+			if operationPhaseFreshGateCanJoinPlanBudget(phase) {
+				phases = append(phases, phase)
+				continue
+			}
 			stoppedAtGate = operationPhaseStopGateLabel(phase)
 			break phaseLoop
 		case operationPhaseApprovalPlanBudget:
@@ -523,7 +527,7 @@ func operationPhasePlanBudgetLaneCountFrom(plan session.OperationPhasePlan, star
 	}
 	count := 0
 	for i := start; i < len(plan.Phases); i++ {
-		if operationPhaseApprovalKindFor(plan.Phases[i]) == operationPhaseApprovalPlanBudget {
+		if operationPhaseEligibleForPlanBudget(plan.Phases[i]) {
 			count++
 		}
 	}
@@ -834,7 +838,7 @@ func nextOperationPhaseBundleForApproval(opState session.OperationState) ([]sess
 		if phase.Status == session.PlanStatusCompleted {
 			continue
 		}
-		if operationPhaseApprovalKindFor(phase) != operationPhaseApprovalPlanBudget {
+		if !operationPhaseEligibleForPlanBudget(phase) {
 			break
 		}
 		if operationPlanLeaseCoversPhaseAsBudget(opState.PlanLease, phase) {
@@ -858,7 +862,7 @@ func nextOperationPhaseBundleForApproval(opState session.OperationState) ([]sess
 			if phase.Status == session.PlanStatusCompleted {
 				continue
 			}
-			if operationPhaseApprovalKindFor(phase) != operationPhaseApprovalPlanBudget {
+			if !operationPhaseEligibleForPlanBudget(phase) {
 				break
 			}
 			if operationPlanLeaseCoversPhaseAsBudget(opState.PlanLease, phase) {
@@ -1284,6 +1288,107 @@ func operationPhaseApprovalKindFor(phase session.OperationPhase) operationPhaseA
 	return operationPhaseApprovalNone
 }
 
+func operationPhaseEligibleForPlanBudget(phase session.OperationPhase) bool {
+	switch operationPhaseApprovalKindFor(phase) {
+	case operationPhaseApprovalPlanBudget:
+		return true
+	case operationPhaseApprovalFresh:
+		return operationPhaseFreshGateCanJoinPlanBudget(phase)
+	default:
+		return false
+	}
+}
+
+func operationPhaseFreshGateCanJoinPlanBudget(phase session.OperationPhase) bool {
+	phase = normalizeSingleOperationPhase(phase)
+	if operationPhaseApprovalBlockedReason(phase) != "" {
+		return false
+	}
+	if operationPhasePlanBudgetHardStopReason(phase) != "" {
+		return false
+	}
+	gate := operationPhaseApprovalGate(phase)
+	if gate.Level == operationGateLevelEscalatedOperatorApproval {
+		return true
+	}
+	class := session.InferContinuationLeaseClass(phase.AuthorityClass, phase.AllowedActions, phase.BoundedEffect)
+	switch class {
+	case session.ContinuationLeaseClassLocalWorkspace, session.ContinuationLeaseClassDataAccess, session.ContinuationLeaseClassChildWake:
+		return true
+	default:
+		return false
+	}
+}
+
+func operationPhasePlanBudgetHardStopReason(phase session.OperationPhase) string {
+	phase = normalizeSingleOperationPhase(phase)
+	values := []string{phase.AuthorityClass, phase.GateReasonCode, phase.BlockedReasonCode}
+	values = append(values, phase.AllowedActions...)
+	text := operationPhaseApprovalText(phase)
+	hardCodes := map[string]string{
+		"deploy":                      "deploy/restart",
+		"live_deploy":                 "deploy/restart",
+		"run_deploy":                  "deploy/restart",
+		"restart":                     "deploy/restart",
+		"restart_service":             "deploy/restart",
+		"service_restart":             "deploy/restart",
+		"system_change":               "system change",
+		"policy_apply":                "policy or permission change",
+		"grant_or_revoke_capability":  "policy or permission change",
+		"capability_grant":            "policy or permission change",
+		"capability_revoke":           "policy or permission change",
+		"mailbox_access":              "mailbox access",
+		"mailbox_mutation":            "mailbox mutation",
+		"mailbox_read":                "mailbox read",
+		"email_read":                  "mailbox read",
+		"external_account_email_read": "mailbox read",
+		"external_account_email_read_public_web_read": "mailbox read",
+		"credential_access":                           "credential access",
+		"read_credentials_or_tokens":                  "credential access",
+		"external_account_action":                     "external account action",
+		"private_data_intake":                         "private data intake",
+		"wife_profile":                                "private data intake",
+		"cv_ingestion":                                "private data intake",
+		"job_processing":                              "private data intake",
+		"job_ranking":                                 "private data intake",
+		"job_scouting":                                "private data intake",
+		"purchase":                                    "purchase/spend",
+		"spend":                                       "purchase/spend",
+		"public_contact":                              "public contact",
+		"public_posting":                              "public posting",
+		"communication":                               "communication",
+		"push":                                        "remote push",
+		"git_push":                                    "remote push",
+		"push_remote":                                 "remote push",
+	}
+	for _, value := range values {
+		code := normalizeOperationPhaseReasonCode(value)
+		if label, ok := hardCodes[code]; ok {
+			return label
+		}
+	}
+	hardFragments := []struct {
+		fragment string
+		label    string
+	}{
+		{"read_credentials_or_tokens", "credential access"},
+		{"credential value", "credential access"},
+		{"secret value", "credential access"},
+		{"send email", "communication"},
+		{"public contact", "public contact"},
+		{"public posting", "public posting"},
+		{"git push", "remote push"},
+		{"purchase", "purchase/spend"},
+		{"spend", "purchase/spend"},
+	}
+	for _, item := range hardFragments {
+		if strings.Contains(text, item.fragment) {
+			return item.label
+		}
+	}
+	return ""
+}
+
 func operationPhaseNeedsStandaloneApproval(opState session.OperationState, phase session.OperationPhase) bool {
 	opState = session.NormalizeOperationState(opState)
 	phase = normalizeSingleOperationPhase(phase)
@@ -1291,7 +1396,12 @@ func operationPhaseNeedsStandaloneApproval(opState session.OperationState, phase
 		return false
 	}
 	switch operationPhaseApprovalKindFor(phase) {
-	case operationPhaseApprovalBlocked, operationPhaseApprovalFresh:
+	case operationPhaseApprovalBlocked:
+		return true
+	case operationPhaseApprovalFresh:
+		if operationPlanLeaseCoversPhaseAsBudget(opState.PlanLease, phase) && operationPhaseFreshGateCanJoinPlanBudget(phase) {
+			return false
+		}
 		return true
 	case operationPhaseApprovalPlanBudget:
 		return false
@@ -1685,10 +1795,26 @@ func continuationStateFromOperationPlanLease(opState session.OperationState, lea
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
+	if operationPlanLeaseContainsEscalatedLane(opState, lease) {
+		value := false
+		action.AutoApproveEligible = &value
+	}
 	action.PlanHash = actionProposalHash(action)
 	state.ActionProposal = session.NormalizeActionProposal(action)
 	state.ContinuationLease = buildContinuationLease(state.ActionProposal, turns, now)
 	return session.NormalizeContinuationState(state)
+}
+
+func operationPlanLeaseContainsEscalatedLane(opState session.OperationState, lease session.OperationPlanLease) bool {
+	for _, phase := range operationPlanLeasePhasesFromOperation(opState, lease) {
+		if operationPhaseApprovalGate(phase).Level == operationGateLevelEscalatedOperatorApproval {
+			return true
+		}
+		if operationPhaseApprovalKindFor(phase) == operationPhaseApprovalFresh && operationPhaseFreshGateCanJoinPlanBudget(phase) {
+			return true
+		}
+	}
+	return false
 }
 
 func operationPlanLeasePhasesFromOperation(opState session.OperationState, lease session.OperationPlanLease) []session.OperationPhase {
@@ -1709,7 +1835,7 @@ func operationPlanLeasePhasesFromOperation(opState session.OperationState, lease
 		if _, ok := covered[strings.TrimSpace(phase.ID)]; !ok {
 			continue
 		}
-		if operationPhaseRequiresFreshApprovalGate(phase) {
+		if operationPhaseRequiresFreshApprovalGate(phase) && !operationPhaseFreshGateCanJoinPlanBudget(phase) {
 			continue
 		}
 		out = append(out, phase)
@@ -2319,7 +2445,7 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 	if title == "" {
 		title = "bounded continuation"
 	}
-	lines := []string{"Approval needed: " + title}
+	lines := []string{"Approval: " + title}
 	if why := continuationPromptCompactLine(proposal.WhyNow, 220); why != "" {
 		lines = append(lines, "", "Why now:", why)
 	}
@@ -2327,13 +2453,13 @@ func renderOperationProposalMaterializedPromptFallback(state session.Continuatio
 		lines = append(lines, "", "Scope:", scope)
 	}
 	if included := continuationApprovalPromptIncludedLines(state); len(included) > 0 {
-		lines = append(lines, "", "Included:")
+		lines = append(lines, "", "This covers:")
 		for _, line := range included {
 			lines = append(lines, "- "+line)
 		}
 	}
 	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
-		lines = append(lines, "", "Stops:", strings.Join(stops, ", "))
+		lines = append(lines, "", "Stops before:", strings.Join(stops, ", "))
 	}
 	if state.RemainingTurns > 0 {
 		turnLabel := "turn"
@@ -2357,24 +2483,23 @@ func renderEscalatedOperatorApprovalPromptFallback(state session.ContinuationSta
 	if title == "" {
 		title = "sensitive bounded action"
 	}
-	lines := []string{"Escalated approval needed: " + title}
+	lines := []string{"Approval: " + title}
 	if why := continuationPromptCompactLine(firstNonEmptyContinuation(proposal.WhyNow, state.GovernorIntent.Rationale), 220); why != "" {
-		lines = append(lines, "", "Why elevated:", why)
+		lines = append(lines, "", "Why I'm asking:", why)
 	}
 	if scope := continuationApprovalPromptScope(state); scope != "" {
-		lines = append(lines, "", "Will do:", scope)
+		lines = append(lines, "", "I'll do:", scope)
 	}
 	if included := continuationEscalatedApprovalAllowedLines(state); len(included) > 0 {
-		lines = append(lines, "", "Allowed:")
+		lines = append(lines, "", "This can use:")
 		for _, line := range included {
 			lines = append(lines, "- "+line)
 		}
 	}
 	if stops := continuationApprovalPromptStops(state); len(stops) > 0 {
-		lines = append(lines, "", "Will not:", strings.Join(stops, ", "))
+		lines = append(lines, "", "Stops before:", strings.Join(stops, ", "))
 	}
-	lines = append(lines, "", "Auto-approval: not used for this elevated gate.")
-	lines = append(lines, "", "Approve once?")
+	lines = append(lines, "", "Approve this step?")
 	return strings.Join(lines, "\n")
 }
 
@@ -2511,28 +2636,62 @@ func continuationPromptCompactLine(value string, limit int) string {
 func renderPlanBudgetPromptFallback(state session.ContinuationState) string {
 	state = session.NormalizeContinuationState(state)
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
-	lines := []string{"Approve plan budget"}
-	if goal := firstNonEmptyContinuation(state.Objective, proposal.Summary); goal != "" {
-		lines = append(lines, "", "Goal: "+goal)
+	title := planBudgetPromptTitle(state, proposal)
+	lines := []string{"Plan: " + title}
+	if goal := firstNonEmptyContinuation(state.Objective, proposal.Summary); goal != "" && goal != title {
+		lines = append(lines, "", "Goal: "+continuationPromptCompactLine(goal, 220))
 	}
 	if state.RemainingTurns > 0 {
-		lines = append(lines, fmt.Sprintf("Budget: up to %d turn(s)", state.RemainingTurns))
+		lines = append(lines, fmt.Sprintf("Budget: up to %d %s", state.RemainingTurns, continuationTurnWord(state.RemainingTurns)))
 	}
 	if included := planBudgetIncludedLines(state); len(included) > 0 {
-		lines = append(lines, "", "Included:")
+		lines = append(lines, "", "I'll do:")
 		for _, line := range included {
 			lines = append(lines, "- "+line)
 		}
 	}
 	if stops := planBudgetStopLines(state); len(stops) > 0 {
-		lines = append(lines, "", "Stops for: "+strings.Join(stops, ", "))
+		lines = append(lines, "", "Stops before: "+strings.Join(stops, ", "))
 	}
 	if first := planBudgetFirstStep(state); first != "" {
 		lines = append(lines, "", "First step: "+first)
 	}
-	lines = append(lines, "", "Approving this budget does not change tool, account, mailbox, deploy, or policy permissions.")
-	lines = append(lines, "Anything outside the disclosed budget needs a fresh approval.")
+	lines = append(lines, "", "Anything outside this plan needs a fresh approval.")
 	return strings.Join(lines, "\n")
+}
+
+func planBudgetPromptTitle(state session.ContinuationState, proposal session.ActionProposal) string {
+	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
+	if len(bundle.Phases) > 0 {
+		if summary := continuationPromptCompactLine(bundle.Phases[0].Summary, 120); summary != "" {
+			return summary
+		}
+	}
+	for _, candidate := range []string{state.Objective, proposal.Summary, state.StageSummary} {
+		candidate = strings.TrimSpace(candidate)
+		lower := strings.ToLower(candidate)
+		switch {
+		case strings.HasPrefix(lower, "approve plan budget:"):
+			if idx := strings.Index(candidate, " for "); idx >= 0 && idx+5 < len(candidate) {
+				candidate = strings.TrimSpace(candidate[idx+5:])
+			} else if idx := strings.Index(candidate, ":"); idx >= 0 && idx+1 < len(candidate) {
+				candidate = strings.TrimSpace(candidate[idx+1:])
+			}
+		case lower == "approve plan budget":
+			candidate = ""
+		}
+		if title := continuationPromptCompactLine(candidate, 120); title != "" {
+			return title
+		}
+	}
+	return "bounded work"
+}
+
+func continuationTurnWord(turns int) string {
+	if turns == 1 {
+		return "turn"
+	}
+	return "turns"
 }
 
 func planBudgetIncludedLines(state session.ContinuationState) []string {
@@ -2542,16 +2701,44 @@ func planBudgetIncludedLines(state session.ContinuationState) []string {
 	}
 	lines := make([]string, 0, len(bundle.Phases))
 	for _, phase := range bundle.Phases {
-		label := fmt.Sprintf("phase %d", phase.Index)
+		label := fmt.Sprintf("Step %d", phase.Index)
 		if summary := strings.TrimSpace(phase.Summary); summary != "" {
 			label += ": " + summary
 		}
 		if authority := strings.TrimSpace(phase.AuthorityClass); authority != "" {
-			label += " [" + authority + "]"
+			if human := planBudgetHumanAuthority(authority); human != "" {
+				label += " (" + human + ")"
+			}
 		}
 		lines = append(lines, label)
 	}
 	return lines
+}
+
+func planBudgetHumanAuthority(authority string) string {
+	switch normalizeOperationPhaseReasonCode(authority) {
+	case "read_only_review":
+		return "read-only"
+	case "workspace_write":
+		return "local workspace"
+	case "workspace_commit_then_repo_write_bounded", "git_commit", "commit":
+		return "local commit"
+	case "public_web_read", "public_profile_metadata_read", "public_account_content_read":
+		return "public read"
+	case "external_account_auth_status", "read_only_auth_status_check", "credential_metadata", "token_health_check":
+		return "account status only"
+	case "private_data_intake":
+		return "private data"
+	case "child_wake":
+		return "child wake"
+	case "capability_grant":
+		return "permission change"
+	case "deploy", "restart", "system_change":
+		return "release action"
+	default:
+		authority = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(authority, "_", " "), "-", " "))
+		return continuationPromptCompactLine(authority, 64)
+	}
 }
 
 func planBudgetStopLines(state session.ContinuationState) []string {

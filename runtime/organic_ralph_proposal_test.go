@@ -49,7 +49,7 @@ func TestHandleInboundInfersOrganicRalphProposalAndMaterializesButtons(t *testin
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1 organic proposal approval", len(sender.inline))
 	}
-	if !strings.Contains(sender.inline[0].text, "Approval needed") || !strings.Contains(sender.inline[0].text, "Inspect Ralph insertion points") {
+	if !strings.Contains(sender.inline[0].text, "Approval:") || !strings.Contains(sender.inline[0].text, "Inspect Ralph insertion points") {
 		t.Fatalf("inline text = %q, want materialized organic proposal", sender.inline[0].text)
 	}
 	if got := sender.inline[0].rows[0][0].CallbackData; got == "" || len(got) > core.TelegramCallbackDataMaxBytes {

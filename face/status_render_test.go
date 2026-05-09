@@ -496,8 +496,8 @@ func TestRenderTelegramStatusChatIncludesCompactExternalToolReadiness(t *testing
 	out := RenderTelegramStatusChat(core.ChatStatusSnapshot{
 		ChatID: 47,
 		ExternalToolInvocationReadiness: []core.ExternalToolInvocationReadinessSnapshot{{
-			ToolName:         "x_idolumai_readonly",
-			ChildPrincipal:   "durable_agent:idolum-x",
+			ToolName:         "public-feed-readonly",
+			ChildPrincipal:   "durable_agent:child-public-feed",
 			Action:           "public_profile_metadata_read",
 			SelectorName:     "username",
 			Status:           "blocked",
@@ -508,7 +508,7 @@ func TestRenderTelegramStatusChatIncludesCompactExternalToolReadiness(t *testing
 
 	for _, needle := range []string{
 		"external_tool_invocation_readiness source=projection:tool_lifecycle+capability_grants",
-		"tool=x_idolumai_readonly child=durable_agent:idolum-x action=public_profile_metadata_read selector=username status=blocked",
+		"tool=public-feed-readonly child=durable_agent:child-public-feed action=public_profile_metadata_read selector=username status=blocked",
 		`why="runtime material missing: env_from_parent 'APHELION_E2_MISSING_ENV'"`,
 		`next_repair="provide or correct the named child_runtime material"`,
 	} {

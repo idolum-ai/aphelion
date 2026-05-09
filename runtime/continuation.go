@@ -1106,39 +1106,39 @@ func continuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 				{Text: "Status", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
 			},
 			{
-				{Text: "Park", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
+				{Text: "Pause", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
 				{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
 			},
 		}
 	}
 	if state.Status == session.ContinuationStatusPending {
-		approveLabel := "Approve & run"
-		reviseLabel := "Revise proposal"
-		if continuationRequiresEscalatedOperatorApproval(state) {
+		approveLabel := "Start"
+		reviseLabel := "Change"
+		if continuationButtonStateIsPlanLease(state) {
+			approveLabel = "Start plan"
+			reviseLabel = "Change plan"
+		} else if continuationRequiresEscalatedOperatorApproval(state) {
 			approveLabel = "Approve once"
-			reviseLabel = "Narrow scope"
-		} else if continuationButtonStateIsPlanLease(state) {
-			approveLabel = "Approve plan budget"
-			reviseLabel = "Narrow scope"
+			reviseLabel = "Change scope"
 		} else if label := continuationBundleButtonLabel(state); label != "" {
-			approveLabel = "Approve " + label
-			reviseLabel = "Revise " + label
+			approveLabel = "Start " + label
+			reviseLabel = "Change " + label
 		} else if continuationButtonStateIsPhasePlan(state) {
-			approveLabel = "Approve phase"
-			reviseLabel = "Revise phase"
+			approveLabel = "Start step"
+			reviseLabel = "Change step"
 			if subject := continuationApprovalButtonSubject(state); subject != "" {
-				approveLabel = "Approve " + subject
-				reviseLabel = "Revise " + subject
+				approveLabel = "Start " + subject
+				reviseLabel = "Change " + subject
 			}
 		}
 		return [][]telegram.InlineButton{
 			{
 				{Text: approveLabel, CallbackData: encodeContinuationCallbackData(decisionID, continuationActionApproveLease)},
-				{Text: "Scope details", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
+				{Text: "Details", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStatusOnly)},
 			},
 			{
 				{Text: reviseLabel, CallbackData: encodeContinuationCallbackData(decisionID, continuationActionAskEdit)},
-				{Text: "Park", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
+				{Text: "Pause", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStopPark)},
 			},
 			{
 				{Text: "Stop", CallbackData: encodeContinuationCallbackData(decisionID, continuationActionStop)},
@@ -1167,9 +1167,9 @@ func continuationBundleButtonLabel(state session.ContinuationState) string {
 		last = len(bundle.Phases)
 	}
 	if first == last {
-		return fmt.Sprintf("stage %d", first)
+		return fmt.Sprintf("step %d", first)
 	}
-	return fmt.Sprintf("stages %d–%d", first, last)
+	return fmt.Sprintf("steps %d-%d", first, last)
 }
 
 func continuationUserFacingPlanLabel(state session.ContinuationState) string {

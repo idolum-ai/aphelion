@@ -54,14 +54,14 @@ func TestHandleInboundMaterializesPendingOperationProposalAsButtonBackedLease(t 
 		t.Fatalf("inline count = %d, want 1 button-backed lease prompt", len(sender.inline))
 	}
 	text := sender.inline[0].text
-	if !strings.Contains(text, "Approval needed") || !strings.Contains(text, "Materialize assistant-authored leases as buttons") || !strings.Contains(text, "Inspect and patch locally") {
+	if !strings.Contains(text, "Approval:") || !strings.Contains(text, "Materialize assistant-authored leases as buttons") || !strings.Contains(text, "Inspect and patch locally") {
 		t.Fatalf("inline text = %q, want materialized operation proposal details", text)
 	}
 	labels := []string{
 		sender.inline[0].rows[0][0].Text, sender.inline[0].rows[0][1].Text,
 		sender.inline[0].rows[1][0].Text, sender.inline[0].rows[1][1].Text,
 	}
-	wantLabels := []string{"Approve & run", "Scope details", "Revise proposal", "Park"}
+	wantLabels := []string{"Start", "Details", "Change", "Pause"}
 	for i, want := range wantLabels {
 		if labels[i] != want {
 			t.Fatalf("labels = %#v, want prefix %#v", labels, wantLabels)
@@ -135,7 +135,7 @@ func TestMaterializeOperationProposalShowsDataAccessLeaseClassCard(t *testing.T)
 		inlineText = sender.inline[0].text
 	}
 	sender.mu.Unlock()
-	for _, want := range []string{"Approval needed: Read one generated image artifact", "Scope:", "Read artifact://image2/field-of-attention.png once"} {
+	for _, want := range []string{"Approval: Read one generated image artifact", "Scope:", "Read artifact://image2/field-of-attention.png once"} {
 		if !strings.Contains(inlineText, want) {
 			t.Fatalf("inline text = %q, want %q", inlineText, want)
 		}
@@ -318,7 +318,7 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	if !strings.Contains(inlineText, "Implement the local inbox bridge") || strings.Contains(inlineText, "Do the whole thing in one step") {
 		t.Fatalf("inline text = %q, want next phase without stale proposal", inlineText)
 	}
-	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Start plan", "Details", "Change plan", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
@@ -389,11 +389,13 @@ func TestMaterializePhasePlanIgnoresStaleInProgressWhenCurrentPhaseIsPending(t *
 	if err != nil {
 		t.Fatalf("ContinuationState() err = %v", err)
 	}
-	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.RiskClass != "workspace_write" {
-		t.Fatalf("continuation = %#v, want pending explicit commit phase lease", cont)
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.RiskClass != "plan_lease" {
+		t.Fatalf("continuation = %#v, want pending multi-step plan lease", cont)
 	}
-	if cont.ActionProposal.Summary != "Commit current dirty safety/status slice and continue repo-only hardening" || len(cont.ApprovalBundle.Phases) != 0 {
-		t.Fatalf("continuation = %#v, want current commit phase only and stale phase excluded", cont)
+	if len(cont.ApprovalBundle.Phases) != 2 ||
+		cont.ApprovalBundle.Phases[0].OperationPhaseID != "phase-r1-repo-finish" ||
+		cont.ApprovalBundle.Phases[1].OperationPhaseID != "phase-r2-status-polish" {
+		t.Fatalf("continuation = %#v, want current and next repo phases bundled with stale phase excluded", cont)
 	}
 
 	opState, err := store.OperationState(key)
@@ -633,10 +635,10 @@ func TestMaterializePlanningOnlyPhaseOffersPlanBudget(t *testing.T) {
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Approve plan budget") || !strings.Contains(inlineText, "Included:") || strings.Contains(inlineText, "Allowed actions:") {
+	if !strings.Contains(inlineText, "Plan:") || !strings.Contains(inlineText, "I'll do:") || strings.Contains(inlineText, "Allowed actions:") {
 		t.Fatalf("inline text = %q, want compact plan budget prompt", inlineText)
 	}
-	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Start plan", "Details", "Change plan", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
@@ -1148,7 +1150,7 @@ func TestMaterializePublicReadPhaseStillRaisesFreshApproval(t *testing.T) {
 				Summary:        "Read public profile metadata once",
 				Status:         session.PlanStatusPending,
 				AuthorityClass: "public_account_content_read",
-				BoundedEffect:  "Invoke exactly one public profile metadata read for idolumai.",
+				BoundedEffect:  "Invoke exactly one public profile metadata read for example_handle.",
 				AllowedActions: []string{"public_profile_metadata_read"},
 			}},
 		},
@@ -1358,10 +1360,10 @@ func TestMaterializeDurablePhasePlanBundlesConsecutiveSafePhases(t *testing.T) {
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Approve plan budget") || !strings.Contains(inlineText, "Included:") || !strings.Contains(inlineText, "Design the bundle contract") || !strings.Contains(inlineText, "Implement bundled approvals") {
+	if !strings.Contains(inlineText, "Plan:") || !strings.Contains(inlineText, "I'll do:") || !strings.Contains(inlineText, "Design the bundle contract") || !strings.Contains(inlineText, "Implement bundled approvals") {
 		t.Fatalf("inline text = %q, want compact plan budget details", inlineText)
 	}
-	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Start plan", "Details", "Change plan", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
@@ -1518,7 +1520,7 @@ func TestMaterializeEscalatedOperatorPhaseShowsManualApprovalDespiteAutoApproval
 	if inlineCount != 1 || sentCount != 0 {
 		t.Fatalf("inline=%d sent=%d text=%q, want one manual approval prompt and no blocked notice", inlineCount, sentCount, inlineText)
 	}
-	for _, want := range []string{"Escalated approval needed", "Why elevated:", "Will do:", "Auto-approval: not used", "Approve once?"} {
+	for _, want := range []string{"Approval:", "Why I'm asking:", "I'll do:", "Approve this step?"} {
 		if !strings.Contains(inlineText, want) {
 			t.Fatalf("inline text = %q, want %q", inlineText, want)
 		}
@@ -1526,7 +1528,7 @@ func TestMaterializeEscalatedOperatorPhaseShowsManualApprovalDespiteAutoApproval
 	if strings.Contains(inlineText, "Blocked:") || strings.Contains(inlineText, "Approval needed.") {
 		t.Fatalf("inline text = %q, want escalated approval card, not blocked/legacy approval text", inlineText)
 	}
-	if got, want := labels, []string{"Approve once", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Approve once", "Details", "Change scope", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 	leases, err := store.ActiveOperatorAutoApprovalLeases(9024, time.Now().UTC())
@@ -1614,7 +1616,7 @@ func TestMaterializeResourceOwnerMailboxConsentShowsManualApproval(t *testing.T)
 	if inlineCount != 1 || sentCount != 0 {
 		t.Fatalf("inline=%d sent=%d text=%q, want one manual approval prompt and no blocked notice", inlineCount, sentCount, inlineText)
 	}
-	for _, want := range []string{"Escalated approval needed", "Why elevated:", "Will do:", "Auto-approval: not used", "Approve once?"} {
+	for _, want := range []string{"Approval:", "Why I'm asking:", "I'll do:", "Approve this step?"} {
 		if !strings.Contains(inlineText, want) {
 			t.Fatalf("inline text = %q, want %q", inlineText, want)
 		}
@@ -1622,7 +1624,7 @@ func TestMaterializeResourceOwnerMailboxConsentShowsManualApproval(t *testing.T)
 	if strings.Contains(inlineText, "Blocked:") || strings.Contains(inlineText, "explicit consent") {
 		t.Fatalf("inline text = %q, want approval prompt, not consent block", inlineText)
 	}
-	if got, want := labels, []string{"Approve once", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Approve once", "Details", "Change scope", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 	leases, err := store.ActiveOperatorAutoApprovalLeases(9029, time.Now().UTC())
@@ -1789,7 +1791,7 @@ func TestMaterializeMixedAuthorityPhasePlanSplitsToSingleDataApproval(t *testing
 		inlineText = sender.inline[0].text
 	}
 	sender.mu.Unlock()
-	if !strings.Contains(inlineText, "Approval needed: Collect approved profile preferences") || strings.Contains(inlineText, "Patch the local runner") {
+	if !strings.Contains(inlineText, "Approval: Collect approved profile preferences") || strings.Contains(inlineText, "Patch the local runner") {
 		t.Fatalf("inline text = %q, want only first data phase surfaced", inlineText)
 	}
 	if strings.Contains(inlineText, "phase-private-profile") || strings.Contains(inlineText, "Use the buttons") || strings.Contains(inlineText, "Operator card:") {
@@ -1971,7 +1973,7 @@ func TestRenderOperationPhaseBundlePromptIsConciseAndHidesRawLeaseDetails(t *tes
 	}
 	state := continuationStateFromOperationPhaseBundle(opState, opState.PhasePlan.Phases, "continue", time.Now().UTC())
 	text := renderOperationProposalMaterializedPromptFallback(state)
-	for _, want := range []string{"Approval needed: Inspect approval rendering", "Scope:", "Included:", "Approve 2 bounded turns?"} {
+	for _, want := range []string{"Approval: Inspect approval rendering", "Scope:", "This covers:", "Approve 2 bounded turns?"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text = %q, want %q", text, want)
 		}
@@ -2043,7 +2045,81 @@ func TestMaterializeDurablePhasePlanBundleStopsBeforeHardEscalationGate(t *testi
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Start plan", "Details", "Change plan", "Pause", "Stop"}; !equalStringSlices(got, want) {
+		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+}
+
+func TestMaterializePlanBudgetCanDiscloseEscalatedReadOnlyLane(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9042, UserID: 0, Scope: telegramDMScopeRef(9042)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "escalated-read-plan-op",
+		Objective: "Diagnose external adapter state, then patch local reporting.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "escalated-read-plan",
+			Goal: "Diagnose external adapter readiness.",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-auth-status",
+					Summary:        "Check nonsecret adapter auth status",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "external_account_auth_status",
+					GateLevel:      operationGateLevelEscalatedOperatorApproval,
+					GateReasonCode: "external_account_auth_status",
+					BoundedEffect:  "Inspect nonsecret adapter status only; do not read mailbox content.",
+					AllowedActions: []string{"inspect_nonsecret_environment_metadata", "report_auth_validity"},
+				},
+				{
+					ID:             "phase-local-reporting",
+					Summary:        "Patch local status reporting",
+					Status:         session.PlanStatusPending,
+					AuthorityClass: "workspace_write",
+					BoundedEffect:  "Edit local status rendering and tests only.",
+					AllowedActions: []string{"edit_files", "run_tests"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9042, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want disclosed plan-budget approval")
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.ActionProposal.RiskClass != "plan_lease" || len(cont.ApprovalBundle.Phases) != 2 || cont.RemainingTurns != 2 {
+		t.Fatalf("continuation = %#v, want two-lane plan lease", cont)
+	}
+	if cont.ActionProposal.AutoApproveEligible == nil || *cont.ActionProposal.AutoApproveEligible {
+		t.Fatalf("autoapprove_eligible = %#v, want explicit manual approval for escalated lane", cont.ActionProposal.AutoApproveEligible)
+	}
+	sender.mu.Lock()
+	inlineText := ""
+	labels := []string(nil)
+	if len(sender.inline) > 0 {
+		inlineText = sender.inline[0].text
+		labels = continuationButtonLabels(sender.inline[0].rows)
+	}
+	sender.mu.Unlock()
+	if !strings.Contains(inlineText, "Plan: Check nonsecret adapter auth status") || !strings.Contains(inlineText, "Step 1: Check nonsecret adapter auth status") || !strings.Contains(inlineText, "Step 2: Patch local status reporting") {
+		t.Fatalf("inline text = %q, want disclosed multi-step plan", inlineText)
+	}
+	if got, want := labels, []string{"Start plan", "Details", "Change plan", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }
@@ -2168,7 +2244,7 @@ func TestMaterializePlanLeaseApprovalDoesNotGrantCapabilities(t *testing.T) {
 		labels = continuationButtonLabels(sender.inline[0].rows)
 	}
 	sender.mu.Unlock()
-	if got, want := labels, []string{"Approve plan budget", "Scope details", "Narrow scope", "Park", "Stop"}; !equalStringSlices(got, want) {
+	if got, want := labels, []string{"Start plan", "Details", "Change plan", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
 	}
 }

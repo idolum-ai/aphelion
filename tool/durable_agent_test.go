@@ -61,6 +61,9 @@ func TestDurableAgentToolDefinitionIncludesPolicyPatchSurface(t *testing.T) {
 	if !strings.Contains(durableDefJSON, `"policy_overrides"`) {
 		t.Fatalf("durable_agent definition missing policy_overrides field: %s", durableDefJSON)
 	}
+	if !strings.Contains(durableDefJSON, `"mode"`) || !strings.Contains(durableDefJSON, `"sketch"`) {
+		t.Fatalf("durable_agent definition missing lightweight mode surface: %s", durableDefJSON)
+	}
 }
 
 func TestToolDefinitionsAvoidProviderVisibleProjectName(t *testing.T) {
@@ -1141,6 +1144,59 @@ func TestDurableAgentToolPolicyApplyAcceptsStructuredPolicyPatch(t *testing.T) {
 	}
 	if updated.LivePolicy.TailnetMode != "tsnet" || updated.LivePolicy.TailnetHostname != "family-helper" || updated.LivePolicy.TailnetSurfacePolicy != "private_status" {
 		t.Fatalf("updated tailnet declaration = %#v, want family helper declaration", updated.LivePolicy)
+	}
+}
+
+func TestDurableAgentToolSupportsSketchModeWithoutExternalChannelConfig(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	createOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{
+			"action":"create",
+			"agent_id":"child-sketch",
+			"channel_kind":"external_channel",
+			"policy_patch":{
+				"mode":"sketch",
+				"charter":"Explore a possible child shape before provisioning any adapter."
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(create sketch child) err = %v", err)
+	}
+	if !strings.Contains(createOut, "mode: sketch") || !strings.Contains(createOut, "wakeup_mode: manual") {
+		t.Fatalf("create output = %q, want lightweight sketch summary", createOut)
+	}
+	activateOut, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		adminSessionKey(),
+		"durable_agent",
+		json.RawMessage(`{"action":"activate","agent_id":"child-sketch"}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(activate sketch child) err = %v", err)
+	}
+	if !strings.Contains(activateOut, "status: active") || !strings.Contains(activateOut, "mode: sketch") {
+		t.Fatalf("activate output = %q, want active sketch child", activateOut)
+	}
+	agent, err := store.DurableAgent("child-sketch")
+	if err != nil {
+		t.Fatalf("DurableAgent(child-sketch) err = %v", err)
+	}
+	if agent.LivePolicy.Mode != "sketch" || agent.WakeupMode != "manual" {
+		t.Fatalf("agent mode/wakeup = %q/%q, want sketch/manual", agent.LivePolicy.Mode, agent.WakeupMode)
+	}
+	if len(agent.LivePolicy.CapabilityEnvelope) != 1 || agent.LivePolicy.CapabilityEnvelope[0] != "bounded_review_artifact" {
+		t.Fatalf("capabilities = %#v, want minimal sketch envelope", agent.LivePolicy.CapabilityEnvelope)
+	}
+	if external := agent.ChannelConfig.ExternalConfig(); external != nil {
+		t.Fatalf("external config = %#v, want no adapter config for sketch child", external)
 	}
 }
 

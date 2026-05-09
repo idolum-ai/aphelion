@@ -8,6 +8,7 @@ but they remain subordinate to parent governance and policy boundaries.
 ## Live Shape
 
 - Parent runtime owns durable-agent registry and wake loops.
+- Durable child creation supports progressive modes: `sketch` for a parent-side idea/prototype record, `local` for local workspace and memory without an external adapter, `external` for read-only adapter-backed observation, and `live` for channel-facing operation within policy.
 - Child execution stays scoped by charter, tool scope, and live policy.
 - Upward communication is through bounded review artifacts and summaries.
 - Telegram relay turns can target a child inline from DM using `agent:<agent_id> ...` and execute in child scope.

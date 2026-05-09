@@ -13,6 +13,7 @@ import (
 )
 
 type DurableAgentLivePolicy struct {
+	Mode                      string   `json:"mode,omitempty"`
 	Charter                   string   `json:"charter,omitempty"`
 	CapabilityEnvelope        []string `json:"capability_envelope,omitempty"`
 	OutboundMode              string   `json:"outbound_mode,omitempty"`
@@ -210,6 +211,7 @@ type DurableAgentSetupWizardState struct {
 }
 
 type DurableAgentSetupWizardAnswers struct {
+	Mode             string   `json:"mode,omitempty"`
 	Address          string   `json:"address,omitempty"`
 	Account          string   `json:"account,omitempty"`
 	Adapter          string   `json:"adapter,omitempty"`
@@ -466,6 +468,7 @@ const (
 
 func DefaultTelegramGroupLivePolicy(charter string) DurableAgentLivePolicy {
 	return NormalizeDurableAgentLivePolicy(DurableAgentLivePolicy{
+		Mode:                      "live",
 		Charter:                   strings.TrimSpace(charter),
 		CapabilityEnvelope:        []string{"group_reply", "bounded_review_artifact"},
 		OutboundMode:              "reply_with_policy_authorization",
@@ -503,6 +506,10 @@ func DefaultDurableAgentBootstrapCeiling(channelKind string, policy DurableAgent
 }
 
 func NormalizeDurableAgentLivePolicy(policy DurableAgentLivePolicy) DurableAgentLivePolicy {
+	policy.Mode = NormalizeDurableAgentMode(policy.Mode)
+	if policy.Mode == "" {
+		policy.Mode = "live"
+	}
 	policy.Charter = strings.TrimSpace(policy.Charter)
 	policy.OutboundMode = normalizeDurableAgentPolicyMode(policy.OutboundMode)
 	policy.DriftPolicy = strings.TrimSpace(policy.DriftPolicy)
@@ -602,6 +609,23 @@ func NormalizeDurableAgentAllowedTelegramUserIDs(values []int64) []int64 {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
+}
+
+func NormalizeDurableAgentMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ""
+	case "live", "full", "autonomous":
+		return "live"
+	case "sketch", "idea", "proposal":
+		return "sketch"
+	case "local", "local_only", "local-only", "draft", "drafts":
+		return "local"
+	case "external", "external_channel", "external-channel", "observe", "observer":
+		return "external"
+	default:
+		return "live"
+	}
 }
 
 func (cfg DurableAgentChannelConfig) IsZero() bool {
@@ -1457,6 +1481,7 @@ func normalizeDurableAgentSetupWizardStatus(value string) string {
 }
 
 func normalizeDurableAgentSetupWizardAnswers(answers DurableAgentSetupWizardAnswers) DurableAgentSetupWizardAnswers {
+	answers.Mode = NormalizeDurableAgentMode(answers.Mode)
 	answers.Address = strings.TrimSpace(answers.Address)
 	answers.Account = strings.TrimSpace(answers.Account)
 	answers.Adapter = normalizeDurableAgentChannelAdapter(answers.Adapter)
@@ -1489,7 +1514,8 @@ func normalizeDurableAgentConversationRole(value string) string {
 }
 
 func durableAgentSetupWizardAnswersZero(answers DurableAgentSetupWizardAnswers) bool {
-	return answers.Address == "" &&
+	return answers.Mode == "" &&
+		answers.Address == "" &&
 		answers.Account == "" &&
 		answers.Adapter == "" &&
 		answers.Query == "" &&
