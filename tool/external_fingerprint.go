@@ -57,14 +57,6 @@ type externalToolContainerIdentity struct {
 	Healthcheck ExternalToolManifestContainerHealth `json:"healthcheck,omitempty"`
 }
 
-func externalToolFingerprint(manifest ExternalToolManifest, workingRoot string) (string, error) {
-	fingerprint, err := externalToolFingerprints(manifest, workingRoot, "")
-	if err != nil {
-		return "", err
-	}
-	return fingerprint.Aggregate, nil
-}
-
 func externalToolFingerprints(manifest ExternalToolManifest, workingRoot string, installRef string) (externalToolFingerprintSet, error) {
 	manifest = NormalizeExternalToolManifest(manifest)
 	if err := validateExternalToolManifest(manifest); err != nil {

@@ -1102,15 +1102,6 @@ func decodeWorkingObjective(raw string) WorkingObjective {
 	return NormalizeWorkingObjective(objective)
 }
 
-func encodeWorkingObjective(w WorkingObjective) string {
-	w = NormalizeWorkingObjective(w)
-	raw, err := json.Marshal(w)
-	if err != nil {
-		return "{}"
-	}
-	return string(raw)
-}
-
 func normalizeMissionEvidence(evidence []MissionEvidenceItem) []MissionEvidenceItem {
 	out := make([]MissionEvidenceItem, 0, len(evidence))
 	seen := map[string]struct{}{}

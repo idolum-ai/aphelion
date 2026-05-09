@@ -177,10 +177,6 @@ func orderedFaceProviderNames(cfg *config.Config) []string {
 	return config.EffectiveProviderChain(cfg)
 }
 
-func resolveFaceProviderName(cfg *config.Config) string {
-	return config.EffectiveNativeProvider(cfg)
-}
-
 func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string, httpClient *http.Client) (agent.Provider, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "anthropic":

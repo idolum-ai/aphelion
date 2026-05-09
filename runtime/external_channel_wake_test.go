@@ -80,8 +80,8 @@ func TestGenericExternalChannelWakeAdapterRecordsBlockedWhenChildReportsMissingM
 	if !strings.Contains(joined, "generic external_channel adapter dispatcher") || !strings.Contains(joined, "did not execute channel-specific work") {
 		t.Fatalf("governor context = %q, want generic dispatcher boundary", joined)
 	}
-	if !strings.Contains(joined, "EXTERNAL_CHANNEL_STATUS") {
-		t.Fatalf("governor context = %q, want explicit completion/blocker status contract", joined)
+	if !strings.Contains(joined, "EXTERNAL_CHANNEL_OUTCOME") || !strings.Contains(joined, genericExternalChannelWakeOutcomeSchema) {
+		t.Fatalf("governor context = %q, want typed completion/blocker outcome contract", joined)
 	}
 	for _, forbidden := range []string{"gmail", "gog", "recruiter", "job"} {
 		if strings.Contains(strings.ToLower(joined), forbidden) {
@@ -124,7 +124,7 @@ func TestGenericExternalChannelWakeAdapterRecordsSuccessOnlyWhenChildReportsComp
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = strings.Join([]string{
 		"Adapter-local read-only poll completed; no relevant items found.",
-		"EXTERNAL_CHANNEL_STATUS: completed",
+		`EXTERNAL_CHANNEL_OUTCOME: {"schema_version":"aphelion.external_channel_wake.v1","status":"completed","reason_code":"poll_completed","adapter":"child_adapter","agent_id":"child-success","evidence_refs":["conversation://durable-agent/child-success"]}`,
 	}, "\n")
 	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
@@ -165,6 +165,26 @@ func TestGenericExternalChannelWakeAdapterRecordsSuccessOnlyWhenChildReportsComp
 	}
 	if !strings.Contains(events[0].Summary, "External-channel wake completed") || !strings.Contains(events[0].Summary, "reported authorized adapter-local work completed") {
 		t.Fatalf("review summary = %q, want completion local action", events[0].Summary)
+	}
+	if !strings.Contains(events[0].MetadataJSON, `"wake_outcome_source":"typed_outcome"`) {
+		t.Fatalf("metadata = %q, want typed wake outcome source", events[0].MetadataJSON)
+	}
+}
+
+func TestGenericExternalChannelWakeOutcomePrefersTypedContract(t *testing.T) {
+	t.Parallel()
+
+	outcome := genericExternalChannelWakeOutcomeFromSummary(strings.Join([]string{
+		"Adapter blocked before touching the external channel.",
+		`EXTERNAL_CHANNEL_OUTCOME: {"schema_version":"aphelion.external_channel_wake.v1","status":"blocked","reason_code":"grant_missing","adapter":"child_adapter","agent_id":"child-alpha","grant_id":"capg-child-alpha","error":"child runtime grant missing","evidence_refs":["grant://capg-child-alpha"]}`,
+		"EXTERNAL_CHANNEL_STATUS: completed",
+	}, "\n"))
+
+	if outcome.Completed || outcome.Status != "wake_blocked" || outcome.Source != "typed_outcome" {
+		t.Fatalf("outcome = %#v, want typed blocked outcome to override legacy line", outcome)
+	}
+	if outcome.ReasonCode != "grant_missing" || outcome.GrantID != "capg-child-alpha" || len(outcome.EvidenceRefs) != 1 {
+		t.Fatalf("outcome = %#v, want typed reason, grant, and evidence refs", outcome)
 	}
 }
 

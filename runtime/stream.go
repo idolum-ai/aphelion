@@ -114,13 +114,6 @@ func (s *streamEditor) Abort(ctx context.Context) {
 	}
 }
 
-func (s *streamEditor) Started() bool {
-	if s == nil {
-		return false
-	}
-	return s.messageID != 0 || s.buffer.Len() > 0
-}
-
 func (s *streamEditor) flush(ctx context.Context, done bool) error {
 	text := s.buffer.String()
 	if !done {

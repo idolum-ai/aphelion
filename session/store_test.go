@@ -2605,6 +2605,26 @@ func TestContinuationStateIfExistsDoesNotCreateSession(t *testing.T) {
 	}
 }
 
+func TestContinuationStateIfExistsRejectsInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 2592, UserID: 0}
+	if err := store.UpdateContinuationState(key, ContinuationState{Status: ContinuationStatusPending, DecisionID: "decision-invalid-json", RemainingTurns: 1}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE sessions SET continuation_state_json = ? WHERE session_id = ?`, "{", SessionIDForKey(key)); err != nil {
+		t.Fatalf("corrupt continuation state: %v", err)
+	}
+
+	_, exists, err := store.ContinuationStateIfExists(key)
+	if err == nil || !exists || !strings.Contains(err.Error(), "decode continuation state") {
+		t.Fatalf("ContinuationStateIfExists() exists=%v err=%v, want decode error on existing row", exists, err)
+	}
+}
+
 func TestPlanAndOperationStateIfExistsDoesNotCreateSession(t *testing.T) {
 	t.Parallel()
 

@@ -83,6 +83,19 @@ for phrase in "I need to correct that" "Sending Work evidence" "Operator card:" 
   fi
 done
 
+for symbol in "positiveAuthorityEffectText" "bounded_effect_positive_clause" "operationPhaseApprovalText" "inferOperationGateReasonCode" "operationPhaseIsEscalatedOperatorApproval"; do
+  if rg -nF "$symbol" runtime session --glob '!**/*_test.go' >/dev/null; then
+    echo "runtime source contains retired prose-authority classifier: $symbol" >&2
+    rg -nF "$symbol" runtime session --glob '!**/*_test.go' >&2
+    exit 1
+  fi
+done
+
+if ! rg -qF "EXTERNAL_CHANNEL_OUTCOME" runtime/external_channel_wake.go; then
+  echo "external channel wakes must request a typed wake outcome contract" >&2
+  exit 1
+fi
+
 if ! rg -qF "writeDoctorDesignPrincipleHealth" runtime/doctor.go; then
   echo "/doctor must surface design-principle health" >&2
   exit 1

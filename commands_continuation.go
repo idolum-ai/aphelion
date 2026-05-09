@@ -128,15 +128,6 @@ func continuationCallbackIDMatchesState(state session.ContinuationState, decisio
 	return false
 }
 
-func continuationActionApprovesLease(action string) bool {
-	switch normalizeContinuationCallbackAction(action) {
-	case continuationActionApprove, continuationActionApproveLease, continuationActionContinueOnce:
-		return true
-	default:
-		return false
-	}
-}
-
 func renderContinuationDecision(state session.ContinuationState, action string) string {
 	state = session.NormalizeContinuationState(state)
 	switch normalizeContinuationCallbackAction(action) {

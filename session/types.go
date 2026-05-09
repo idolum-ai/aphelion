@@ -2058,35 +2058,11 @@ func NormalizeContinuationLeaseClass(class ContinuationLeaseClass) ContinuationL
 }
 
 func InferContinuationLeaseClass(riskClass string, allowedActions []string, boundedEffect string) ContinuationLeaseClass {
-	if contract, ok := AuthorityContractFor(riskClass, allowedActions, boundedEffect); ok && contract.LeaseClass != "" {
+	_ = boundedEffect
+	if contract, ok := AuthorityContractFor(riskClass, allowedActions, ""); ok && contract.LeaseClass != "" {
 		return contract.LeaseClass
 	}
-	text := normalizeEnumValue(strings.Join(append([]string{riskClass}, allowedActions...), " "))
-	if text == "" {
-		return ""
-	}
-	containsAny := func(values ...string) bool {
-		for _, value := range values {
-			if strings.Contains(text, normalizeEnumValue(value)) {
-				return true
-			}
-		}
-		return false
-	}
-	switch {
-	case containsAny("deploy", "restart", "service_restart", "git_push", "push_remote"):
-		return ContinuationLeaseClassDeployRestart
-	case containsAny("capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority"):
-		return ContinuationLeaseClassCapabilityGrant
-	case containsAny("child_wake", "durable_child_wake", "selected_child_wake", "durable_agent_wake"):
-		return ContinuationLeaseClassChildWake
-	case containsAny("data_access", "file_access", "read_image", "read_file", "consume_attachment", "artifact_read", "network_access", "private_data_intake", "wife_profile", "cv_ingestion", "email_read", "mailbox_read", "external_account_email_read", "external_account", "public_web_read", "job_processing", "job_ranking", "job_scouting"):
-		return ContinuationLeaseClassDataAccess
-	case containsAny("workspace_write", "repo_edit", "edit_files", "patch", "run_tests", "focused_tests", "git_diff_check", "git_commit", "repo_history_mutation", "commit", "read_only", "read_only_review", "status_check"):
-		return ContinuationLeaseClassLocalWorkspace
-	default:
-		return ""
-	}
+	return ""
 }
 
 func ContinuationLeaseClassLabel(class ContinuationLeaseClass) string {

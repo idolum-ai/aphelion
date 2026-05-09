@@ -163,10 +163,6 @@ func (a Archetype) Summary() ArchetypeSummary {
 	}
 }
 
-func RequiredArchetypeFiles() []string {
-	return append([]string(nil), requiredArchetypeFiles...)
-}
-
 func cleanArchetypeName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {

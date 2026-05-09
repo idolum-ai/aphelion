@@ -34,7 +34,10 @@ func (r *Runtime) maybeInferOrganicOperationProposal(ctx context.Context, key se
 	if strings.HasPrefix(strings.TrimSpace(msg.Text), "/") {
 		return false, nil
 	}
-	priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
+	priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return false, fmt.Errorf("read prior continuation state: %w", err)
+	}
 	if priorExists && session.NormalizeContinuationState(priorState).Active() {
 		return false, nil
 	}

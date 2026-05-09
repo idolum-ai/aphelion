@@ -91,8 +91,3 @@ func (r *Runtime) recordDurableWakeChildRuntimeBlock(agent core.DurableAgent, ca
 	}
 	return true, nil
 }
-
-func durableWakeChildRuntimeBlockedError(err error) bool {
-	_, ok := classifyDurableWakeChildRuntimeBlockError(err)
-	return ok
-}

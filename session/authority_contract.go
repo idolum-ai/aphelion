@@ -30,10 +30,11 @@ type AuthorityContract struct {
 }
 
 func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffect string) (AuthorityContract, bool) {
+	_ = boundedEffect
 	if contract, ok := AuthorityContractForToken(riskClass); ok {
 		return contract, true
 	}
-	claim, ok := AuthorityInterpretationClaimFor(riskClass, allowedActions, boundedEffect)
+	claim, ok := AuthorityInterpretationClaimFor(riskClass, allowedActions, "")
 	if !ok {
 		return AuthorityContract{}, false
 	}
@@ -41,14 +42,12 @@ func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffe
 }
 
 func AuthorityInterpretationClaimFor(riskClass string, allowedActions []string, boundedEffect string) (core.InterpretationClaim, bool) {
+	_ = boundedEffect
 	if contract, ok := AuthorityContractForToken(riskClass); ok {
 		return authorityInterpretationClaim(contract.Key, "risk_class"), true
 	}
 	if key := authorityClassFromStructuredValues(append([]string{riskClass}, allowedActions...)); key != "" {
 		return authorityInterpretationClaim(key, "structured_authority_fields"), true
-	}
-	if key := authorityClassFromStructuredValues([]string{positiveAuthorityEffectText(boundedEffect)}); key != "" {
-		return authorityInterpretationClaim(key, "bounded_effect_positive_clause"), true
 	}
 	return core.InterpretationClaim{}, false
 }
@@ -82,8 +81,8 @@ type authorityClassificationGroup struct {
 
 func authorityClassificationPriority() []authorityClassificationGroup {
 	return []authorityClassificationGroup{
-		{Key: "deploy", Tokens: []string{"deploy", "live_deploy", "run_deploy", "system_change", "restart", "service_restart", "git_push", "push_remote"}},
-		{Key: "capability_grant", Tokens: []string{"capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority"}},
+		{Key: "deploy", Tokens: []string{"deploy", "live_deploy", "run_deploy", "system_change", "restart", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy", "git_push", "push_remote"}},
+		{Key: "capability_grant", Tokens: []string{"capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority", "capability_access_check", "grant_or_revoke_capability", "capability_revoke"}},
 		{Key: "child_wake", Tokens: []string{"child_wake", "durable_child_wake", "selected_child_wake", "durable_agent_wake"}},
 		{Key: AuthorityClassLocalSecretMetadataReadLiveConfigRead, Tokens: []string{
 			AuthorityClassLocalSecretMetadataReadLiveConfigRead,
@@ -99,6 +98,11 @@ func authorityClassificationPriority() []authorityClassificationGroup {
 			"wife_profile",
 			"profile_scoring_rubric",
 			"cv_ingestion",
+			"mailbox_content",
+			"read_mailbox_contents",
+			"run_gog_cli_mail_query",
+			"run_configured_gog_cli_mail_query_once",
+			"read_only_mailbox_smoke",
 			"email_read",
 			"mailbox_read",
 			"external_account_email_read",
@@ -109,9 +113,9 @@ func authorityClassificationPriority() []authorityClassificationGroup {
 			"job_ranking",
 			"job_scouting",
 		}},
-		{Key: "data_access", Tokens: []string{"data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access"}},
-		{Key: "commit", Tokens: []string{"commit", "git_commit", "repo_history_mutation", "workspace_commit", "workspace_commit_then_repo_write_bounded"}},
-		{Key: "workspace_write", Tokens: []string{"workspace_write", "repo_edit", "edit_files", "patch", "run_tests", "focused_tests", "git_diff_check"}},
+		{Key: "data_access", Tokens: []string{"data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check", "run_gog_cli_auth_status_or_identity_check"}},
+		{Key: "commit", Tokens: []string{"commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation", "workspace_commit", "workspace_commit_then_repo_write_bounded"}},
+		{Key: "workspace_write", Tokens: []string{"workspace_write", "workspace", "code", "code_change", "code_changes", "repo_edit", "edit", "edit_files", "patch", "run_tests", "test", "tests", "focused_tests", "git_diff_check"}},
 		{Key: "read_only_review", Tokens: []string{"read_only", "read_only_review", "status_check", "inspect_readonly_state", "read_only_child_adapter_environment_inspection"}},
 	}
 }
@@ -131,74 +135,7 @@ func authorityStructuredTokens(value string) []string {
 	if normalized == "" {
 		return nil
 	}
-	parts := strings.FieldsFunc(normalized, func(r rune) bool {
-		return r == '_' || r == '-' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
-	})
-	tokens := []string{normalized}
-	for i := 0; i+1 < len(parts); i++ {
-		left := strings.TrimSpace(parts[i])
-		right := strings.TrimSpace(parts[i+1])
-		if left != "" && right != "" {
-			tokens = append(tokens, left+"_"+right)
-		}
-	}
-	for i := 0; i+2 < len(parts); i++ {
-		a := strings.TrimSpace(parts[i])
-		b := strings.TrimSpace(parts[i+1])
-		c := strings.TrimSpace(parts[i+2])
-		if a != "" && b != "" && c != "" {
-			tokens = append(tokens, a+"_"+b+"_"+c)
-		}
-	}
-	return tokens
-}
-
-func positiveAuthorityEffectText(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	parts := strings.FieldsFunc(text, func(r rune) bool {
-		switch r {
-		case '.', ';', '\n', '\r':
-			return true
-		default:
-			return false
-		}
-	})
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		normalized := normalizeAuthorityMatchText(part)
-		if normalized == "" || authorityEffectClauseIsNegative(normalized) {
-			continue
-		}
-		out = append(out, normalized)
-	}
-	return strings.Join(out, " ")
-}
-
-func authorityEffectClauseIsNegative(text string) bool {
-	if text == "" {
-		return false
-	}
-	for _, marker := range []string{
-		"no_",
-		"not_",
-		"without_",
-		"do_not_",
-		"dont_",
-		"never_",
-		"forbidden",
-		"forbid",
-		"stop_before",
-		"unless_separately_approved",
-		"requires_separate",
-	} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	return []string{normalized}
 }
 
 func normalizeAuthorityMatchText(text string) string {
@@ -262,7 +199,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			AutoApprovalAllowed:    true,
 			RequiresInlineApproval: true,
 		}, true
-	case "data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access":
+	case "data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check":
 		return AuthorityContract{
 			Key:        "data_access",
 			LeaseClass: ContinuationLeaseClassDataAccess,
@@ -287,7 +224,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			AutoApprovalAllowed:    true,
 			RequiresInlineApproval: true,
 		}, true
-	case "private_data_intake", "wife_profile", "profile_scoring_rubric", "cv_ingestion", "email_read", "mailbox_read", "external_account_email_read", "external_account_email_read_public_web_read", "external_account", "public_web_read", "job_processing", "job_ranking", "job_scouting":
+	case "private_data_intake", "wife_profile", "profile_scoring_rubric", "cv_ingestion", "mailbox_content", "read_mailbox_contents", "run_gog_cli_mail_query", "run_configured_gog_cli_mail_query_once", "read_only_mailbox_smoke", "email_read", "mailbox_read", "external_account_email_read", "external_account_email_read_public_web_read", "external_account", "public_web_read", "job_processing", "job_ranking", "job_scouting":
 		return AuthorityContract{
 			Key:        "private_data_intake",
 			LeaseClass: ContinuationLeaseClassDataAccess,
@@ -366,7 +303,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			AutoApprovalAllowed:    true,
 			RequiresInlineApproval: true,
 		}, true
-	case "commit", "git_commit", "repo_history_mutation":
+	case "commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation":
 		return AuthorityContract{
 			Key:        "commit",
 			LeaseClass: ContinuationLeaseClassLocalWorkspace,
@@ -391,7 +328,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 			AutoApprovalAllowed:    true,
 			RequiresInlineApproval: true,
 		}, true
-	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart":
+	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy":
 		return AuthorityContract{
 			Key:        "deploy",
 			LeaseClass: ContinuationLeaseClassDeployRestart,
@@ -485,12 +422,4 @@ func ApplyAuthorityContractToActionProposal(proposal ActionProposal) ActionPropo
 	proposal.ForbiddenActions = append(proposal.ForbiddenActions, contract.ForbiddenActions...)
 	proposal.ValidationPlan = append(proposal.ValidationPlan, contract.ValidationPlan...)
 	return SanitizeActionProposalAuthority(NormalizeActionProposal(proposal))
-}
-
-func mustAuthorityContract(token string) AuthorityContract {
-	contract, ok := AuthorityContractForToken(token)
-	if !ok {
-		return AuthorityContract{}
-	}
-	return contract
 }

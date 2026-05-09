@@ -234,16 +234,6 @@ func proposalForCommandSegment(segment string) (session.OperationProposal, strin
 	return session.OperationProposal{}, ""
 }
 
-func commandContainsGitCommit(command string) bool {
-	fields := shellishFields(command)
-	for i, field := range fields {
-		if trimShellishToken(field) == "git" && gitArgsContainCommit(fields[i+1:]) {
-			return true
-		}
-	}
-	return false
-}
-
 func gitArgsContainCommit(args []string) bool {
 	for i := 0; i < len(args); i++ {
 		token := trimShellishToken(args[i])
@@ -278,10 +268,6 @@ func gitGlobalOptionHasInlineValue(token string) bool {
 		strings.HasPrefix(token, "--work-tree=") ||
 		strings.HasPrefix(token, "--namespace=") ||
 		strings.HasPrefix(token, "--exec-path=")
-}
-
-func shellishFields(command string) []string {
-	return shellTokenTexts(shellishTokens(strings.Join(shellishCommandSegments(command), " ")))
 }
 
 func trimShellishToken(token string) string {

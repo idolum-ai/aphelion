@@ -227,37 +227,6 @@ func (r *Runtime) recordExecutionEvent(
 	}
 }
 
-func (r *Runtime) recordInboundExecutionEvent(
-	msg core.InboundMessage,
-	eventType string,
-	stage string,
-	status string,
-	payload map[string]any,
-) {
-	key := executionKeyForInbound(msg)
-	r.recordExecutionEvent(key, eventType, stage, status, payload, time.Now().UTC())
-}
-
-func executionKeyForInbound(msg core.InboundMessage) session.SessionKey {
-	scope := session.ScopeRef{}
-	if agentID := strings.TrimSpace(msg.DurableAgentID); agentID != "" {
-		scope = session.ScopeRef{
-			Kind:           session.ScopeKindDurableAgent,
-			ID:             agentID,
-			DurableAgentID: agentID,
-		}
-	} else if msg.ChatID != 0 && isGroupLikeChatType(msg.ChatType) {
-		scope = telegramGroupScopeRef(msg.ChatID)
-	} else if msg.ChatID != 0 {
-		scope = telegramDMScopeRef(msg.ChatID)
-	}
-	return session.SessionKey{
-		ChatID: msg.ChatID,
-		UserID: 0,
-		Scope:  scope,
-	}
-}
-
 func isGroupLikeChatType(chatType string) bool {
 	switch strings.ToLower(strings.TrimSpace(chatType)) {
 	case "group", "supergroup", "channel", "telegram_group":

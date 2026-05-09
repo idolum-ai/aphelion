@@ -2,11 +2,7 @@
 
 package runtime
 
-import (
-	"strings"
-
-	"github.com/idolum-ai/aphelion/session"
-)
+import "github.com/idolum-ai/aphelion/session"
 
 const (
 	operationGateLevelNormalApproval            = "normal_approval"
@@ -38,7 +34,7 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 	if explicitLevel != "" {
 		gate := operationPhaseGate{
 			Level:               explicitLevel,
-			ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, inferOperationGateReasonCode(phase), normalizeOperationPhaseReasonCode(phase.BlockedReasonCode)),
+			ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, operationPhaseStructuredGateReasonCode(phase), normalizeOperationPhaseReasonCode(phase.BlockedReasonCode)),
 			ApprovalSubject:     firstNonEmptyContinuation(phase.ApprovalSubject, operationGateSubjectOperator),
 			AutoApproveEligible: explicitLevel == operationGateLevelNormalApproval,
 			Explicit:            true,
@@ -56,11 +52,11 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 		}
 		return gate
 	}
-	if operationPhaseIsEscalatedOperatorApproval(phase) {
+	if operationPhaseHasTypedManualApprovalGate(phase) {
 		gate := operationPhaseGate{
 			Level:               operationGateLevelEscalatedOperatorApproval,
-			ReasonCode:          inferOperationGateReasonCode(phase),
-			ApprovalSubject:     operationGateSubjectOperator,
+			ReasonCode:          operationPhaseStructuredGateReasonCode(phase),
+			ApprovalSubject:     firstNonEmptyContinuation(phase.ApprovalSubject, operationGateSubjectOperator),
 			AutoApproveEligible: false,
 		}
 		if phase.AutoApproveEligible != nil {
@@ -72,7 +68,7 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 		if operationPhaseHardBlockCanBeSatisfiedByOperator(phase, hardReason) {
 			gate := operationPhaseGate{
 				Level:               operationGateLevelEscalatedOperatorApproval,
-				ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, normalizeOperationPhaseReasonCode(phase.BlockedReasonCode), inferOperationGateReasonCode(phase), "operator_consent"),
+				ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, normalizeOperationPhaseReasonCode(phase.BlockedReasonCode), operationPhaseStructuredGateReasonCode(phase), "operator_consent"),
 				ApprovalSubject:     firstNonEmptyContinuation(phase.ApprovalSubject, operationGateSubjectOperator),
 				AutoApproveEligible: false,
 			}
@@ -83,7 +79,7 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 		}
 		return operationPhaseGate{
 			Level:               operationGateLevelHardConsentBlock,
-			ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, normalizeOperationPhaseReasonCode(phase.BlockedReasonCode), inferOperationGateReasonCode(phase)),
+			ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, normalizeOperationPhaseReasonCode(phase.BlockedReasonCode), operationPhaseStructuredGateReasonCode(phase)),
 			ApprovalSubject:     firstNonEmptyContinuation(phase.ApprovalSubject, "third_party"),
 			BlockedReason:       hardReason,
 			AutoApproveEligible: false,
@@ -91,7 +87,7 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 	}
 	gate := operationPhaseGate{
 		Level:               operationGateLevelNormalApproval,
-		ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, inferOperationGateReasonCode(phase)),
+		ReasonCode:          firstNonEmptyContinuation(phase.GateReasonCode, operationPhaseStructuredGateReasonCode(phase)),
 		ApprovalSubject:     firstNonEmptyContinuation(phase.ApprovalSubject, operationGateSubjectOperator),
 		AutoApproveEligible: true,
 	}
@@ -103,10 +99,10 @@ func operationPhaseApprovalGate(phase session.OperationPhase) operationPhaseGate
 
 func operationPhaseHardBlockCanBeSatisfiedByOperator(phase session.OperationPhase, reason string) bool {
 	reason = normalizeOperationPhaseReasonCode(reason)
-	if reason == "" || strings.Contains(reason, "opt_in") {
+	if reason == "" || operationPhaseReasonCodeRequiresOptIn(reason) {
 		return false
 	}
-	if !strings.Contains(reason, "consent") {
+	if !operationPhaseReasonCodeRequiresConsent(reason) {
 		return false
 	}
 	return operationPhaseApprovalSubjectIsOperatorControlled(phase.ApprovalSubject)
@@ -160,111 +156,156 @@ func operationPhaseHardBlockedReason(phase session.OperationPhase) string {
 	default:
 		return "blocked: " + code
 	}
-	text := operationPhaseApprovalText(phase)
-	switch {
-	case strings.Contains(text, "no opt in") ||
-		strings.Contains(text, "no opt-in") ||
-		strings.Contains(text, "not opted in") ||
-		strings.Contains(text, "missing opt in") ||
-		strings.Contains(text, "missing opt-in"):
-		return "waiting for explicit opt-in"
-	case strings.Contains(text, "wait for her explicit opt in") ||
-		strings.Contains(text, "wait for her explicit opt-in") ||
-		strings.Contains(text, "wait for explicit opt in") ||
-		strings.Contains(text, "wait for explicit opt-in"):
-		return "waiting for explicit opt-in"
-	case strings.Contains(text, "blocked:") && (strings.Contains(text, "consent") || strings.Contains(text, "opt in") || strings.Contains(text, "opt-in")):
-		return "blocked on consent"
-	case strings.Contains(text, "no consent") ||
-		strings.Contains(text, "without consent") ||
-		strings.Contains(text, "consent has not been observed") ||
-		strings.Contains(text, "consent not observed"):
-		return "waiting for explicit consent"
-	default:
-		return ""
-	}
+	return ""
 }
 
-func operationPhaseIsEscalatedOperatorApproval(phase session.OperationPhase) bool {
+func operationPhaseHasTypedManualApprovalGate(phase session.OperationPhase) bool {
 	phase = normalizeSingleOperationPhase(phase)
-	positiveParts := []string{
-		phase.ID,
-		phase.Summary,
-		phase.AuthorityClass,
-		phase.WhyNow,
-		phase.BoundedEffect,
-		phase.BlockedReasonCode,
-		phase.GateReasonCode,
-	}
-	positiveParts = append(positiveParts, phase.AllowedActions...)
-	positiveParts = append(positiveParts, phase.ValidationPlan...)
-	text := normalizeOperationPhaseReasonCode(strings.Join(positiveParts, " "))
-	containsAny := func(values ...string) bool {
-		for _, value := range values {
-			if strings.Contains(text, normalizeOperationPhaseReasonCode(value)) {
-				return true
-			}
-		}
+	reason := operationPhaseStructuredGateReasonCode(phase)
+	if reason == "" {
 		return false
 	}
-	if operationPhaseHasThirdPartyPrivateDataGate(phase) ||
-		containsAny("wife_owned_profile", "wife_provided_cv", "process_wife_provided", "cv_preferences", "private_data_intake") {
+	if operationPhaseHasThirdPartyPrivateDataGate(phase) && !operationPhaseApprovalSubjectIsOperatorControlled(phase.ApprovalSubject) {
 		return false
 	}
-	return containsAny(
-		"external_account_auth_status",
-		"read_only_auth_status_check",
-		"auth_status_check",
-		"identity_check",
-		"credential_state_inspection",
-		"credential_metadata",
-		"token_health_check",
-		"gog_cli_auth_status",
-		"run_gog_cli_auth_status_or_identity_check",
-		"capability_grant",
-		"capability_revoke",
-		"grant_or_revoke_capability",
-	)
+	if phase.RequiresApproval {
+		return true
+	}
+	switch normalizeOperationPhaseReasonCode(phase.BlockedReasonCode) {
+	case "waiting_for_explicit_approval", "explicit_approval_required", "approval_required":
+		return operationPhaseReasonCodeIsManualGate(reason)
+	default:
+		return (phase.RequiresConsent || phase.RequiresOptIn) && operationPhaseReasonCodeIsManualGate(reason)
+	}
 }
 
 func operationPhaseHasThirdPartyPrivateDataGate(phase session.OperationPhase) bool {
 	phase = normalizeSingleOperationPhase(phase)
-	authorityText := normalizeOperationPhaseReasonCode(strings.Join([]string{
-		phase.AuthorityClass,
-		phase.GateReasonCode,
-	}, " "))
-	if strings.Contains(authorityText, "private_data_intake") ||
-		strings.Contains(authorityText, "external_account_email_read_public_web_read") ||
-		strings.Contains(authorityText, "mailbox_content") ||
-		strings.Contains(authorityText, "wife_profile") ||
-		strings.Contains(authorityText, "cv_ingestion") {
-		return true
-	}
-	allowedText := normalizeOperationPhaseReasonCode(strings.Join(phase.AllowedActions, " "))
-	return strings.Contains(allowedText, "read_mailbox_contents") ||
-		strings.Contains(allowedText, "run_gog_cli_mail_query") ||
-		strings.Contains(allowedText, "private_data_intake") ||
-		strings.Contains(allowedText, "wife_profile") ||
-		strings.Contains(allowedText, "cv_ingestion")
+	return operationPhaseHasStructuredCode(phase,
+		"private_data_intake",
+		"external_account_email_read_public_web_read",
+		"mailbox_content",
+		"mailbox_read",
+		"email_read",
+		"external_account_email_read",
+		"wife_profile",
+		"profile_scoring_rubric",
+		"cv_ingestion",
+		"job_processing",
+		"job_ranking",
+		"job_scouting",
+		"read_mailbox_contents",
+		"run_gog_cli_mail_query",
+		"run_configured_gog_cli_mail_query_once",
+		"read_only_mailbox_smoke",
+	)
 }
 
-func inferOperationGateReasonCode(phase session.OperationPhase) string {
+func operationPhaseStructuredGateReasonCode(phase session.OperationPhase) string {
 	phase = normalizeSingleOperationPhase(phase)
-	text := normalizeOperationPhaseReasonCode(operationPhaseApprovalText(phase))
-	switch {
-	case strings.Contains(text, "gog_cli") && (strings.Contains(text, "auth") || strings.Contains(text, "identity")):
-		return "external_account_auth_status"
-	case strings.Contains(text, "credential") && strings.Contains(text, "metadata"):
-		return "credential_metadata_check"
-	case strings.Contains(text, "credential") || strings.Contains(text, "token"):
-		return "credential_state_check"
-	case strings.Contains(text, "capability_grant") || strings.Contains(text, "grant_capability"):
-		return "capability_grant"
-	case strings.Contains(text, "mailbox_content") || strings.Contains(text, "read_mailbox_contents"):
-		return "mailbox_content"
-	case strings.Contains(text, "opt_in") || strings.Contains(text, "consent"):
-		return "third_party_opt_in"
-	default:
-		return ""
+	if code := normalizeOperationPhaseReasonCode(phase.GateReasonCode); code != "" {
+		return code
 	}
+	if code := normalizeOperationPhaseReasonCode(phase.BlockedReasonCode); code != "" && !operationPhaseReasonCodeIsGenericApproval(code) {
+		return code
+	}
+	for _, code := range operationPhaseStructuredCodes(phase) {
+		switch code {
+		case "external_account_auth_status", "read_only_auth_status_check", "run_gog_cli_auth_status_or_identity_check":
+			return "external_account_auth_status"
+		case "credential_state_check", "credential_state_inspection", "credential_access", "read_credentials_or_tokens", "token_health_check":
+			return "credential_state_check"
+		case "credential_metadata", "credential_metadata_check", "inspect_token_file_metadata", "inspect_secret_path_metadata":
+			return "credential_metadata_check"
+		case "capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority", "grant_or_revoke_capability", "capability_revoke", "capability_access_check":
+			return "capability_grant"
+		case "mailbox_content", "mailbox_read", "email_read", "external_account_email_read", "read_mailbox_contents", "run_gog_cli_mail_query", "run_configured_gog_cli_mail_query_once", "read_only_mailbox_smoke":
+			return "mailbox_content"
+		case "private_data_intake", "wife_profile", "profile_scoring_rubric", "cv_ingestion":
+			return "third_party_opt_in"
+		}
+	}
+	return ""
+}
+
+func operationPhaseReasonCodeIsGenericApproval(code string) bool {
+	switch normalizeOperationPhaseReasonCode(code) {
+	case "waiting_for_explicit_approval", "explicit_approval_required", "approval_required":
+		return true
+	default:
+		return false
+	}
+}
+
+func operationPhaseReasonCodeRequiresOptIn(code string) bool {
+	switch normalizeOperationPhaseReasonCode(code) {
+	case "waiting_for_explicit_opt_in", "waiting_for_opt_in", "requires_opt_in", "missing_opt_in", "no_opt_in", "opt_in_required", "third_party_opt_in":
+		return true
+	default:
+		return false
+	}
+}
+
+func operationPhaseReasonCodeRequiresConsent(code string) bool {
+	switch normalizeOperationPhaseReasonCode(code) {
+	case "waiting_for_explicit_consent", "waiting_for_consent", "requires_consent", "missing_consent", "no_consent", "consent_required", "blocked_on_consent", "consent_blocked", "operator_consent":
+		return true
+	default:
+		return false
+	}
+}
+
+func operationPhaseReasonCodeIsManualGate(code string) bool {
+	switch normalizeOperationPhaseReasonCode(code) {
+	case "external_account_auth_status",
+		"credential_metadata_check",
+		"credential_state_check",
+		"capability_grant",
+		"operator_consent":
+		return true
+	default:
+		return false
+	}
+}
+
+func operationPhaseHasStructuredCode(phase session.OperationPhase, codes ...string) bool {
+	if len(codes) == 0 {
+		return false
+	}
+	want := make(map[string]struct{}, len(codes))
+	for _, code := range codes {
+		if normalized := normalizeOperationPhaseReasonCode(code); normalized != "" {
+			want[normalized] = struct{}{}
+		}
+	}
+	for _, code := range operationPhaseStructuredCodes(phase) {
+		if _, ok := want[code]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func operationPhaseStructuredCodes(phase session.OperationPhase) []string {
+	phase = normalizeSingleOperationPhase(phase)
+	values := []string{
+		phase.AuthorityClass,
+		phase.GateReasonCode,
+		phase.BlockedReasonCode,
+	}
+	values = append(values, phase.AllowedActions...)
+	codes := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		code := normalizeOperationPhaseReasonCode(value)
+		if code == "" {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		codes = append(codes, code)
+	}
+	return codes
 }

@@ -57,7 +57,10 @@ func (r *Runtime) offerContinuationApproval(ctx context.Context, key session.Ses
 	if r == nil || r.outbound == nil || r.store == nil {
 		return nil
 	}
-	priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
+	priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("read prior continuation state: %w", err)
+	}
 
 	consensus := r.buildContinuationConsensus(key, result)
 	objective, nextStep := summarizeContinuationPlan(consensus.PlanState, consensus.OperationState, promptInput)
@@ -1158,25 +1161,6 @@ func ContinuationApprovalButtonRows(state session.ContinuationState) [][]telegra
 	return continuationApprovalButtonRows(state)
 }
 
-func continuationBundleButtonLabel(state session.ContinuationState) string {
-	bundle := session.NormalizeContinuationApprovalBundle(state.ApprovalBundle)
-	if len(bundle.Phases) < 2 {
-		return ""
-	}
-	first := bundle.Phases[0].Index
-	last := bundle.Phases[len(bundle.Phases)-1].Index
-	if first <= 0 {
-		first = 1
-	}
-	if last <= 0 {
-		last = len(bundle.Phases)
-	}
-	if first == last {
-		return fmt.Sprintf("step %d", first)
-	}
-	return fmt.Sprintf("steps %d-%d", first, last)
-}
-
 func continuationUserFacingPlanLabel(state session.ContinuationState) string {
 	state = session.NormalizeContinuationState(state)
 	title := continuationUserFacingPlanTitle(state)
@@ -1475,17 +1459,6 @@ func continuationActionIsPlanLeaseApproval(state session.ContinuationState) bool
 	return strings.TrimSpace(state.ActionProposal.RiskClass) == "plan_lease" ||
 		actionListContains(state.ActionProposal.AllowedActions, "approve_operation_plan_lease") ||
 		actionListContains(state.ContinuationLease.AllowedActions, "approve_operation_plan_lease")
-}
-
-func continuationButtonStateIsPhasePlan(state session.ContinuationState) bool {
-	state = session.NormalizeContinuationState(state)
-	if strings.HasPrefix(strings.TrimSpace(state.ActionProposal.OperationID), "phase-") {
-		return true
-	}
-	return actionListContains(state.ActionProposal.AllowedActions, "update_operation_phase_plan") ||
-		actionListContains(state.ContinuationLease.AllowedActions, "update_operation_phase_plan") ||
-		actionListContains(state.ActionProposal.AllowedActions, "execute_phase_once") ||
-		actionListContains(state.ContinuationLease.AllowedActions, "execute_phase_once")
 }
 
 func continuationApprovalButtonSubject(state session.ContinuationState) string {

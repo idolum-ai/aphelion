@@ -33,28 +33,35 @@ Status values:
 ### DP-001: Open-language authority classifiers
 
 - Principle: `Text is presentation, not authority`; `Compile contracts; interpret ambiguity`
-- Status: `active`
+- Status: `migrating`
 - Surface: `session/authority_contract.go`, `runtime/constitution_runtime.go`,
   `runtime/continuation_materialize.go`, `runtime/operation_phase_gate.go`,
   `runtime/goal_continuation.go`
-- Why it exists: Older continuation and operation flows still infer authority,
-  planning-only work, consent blocks, and goal-continuation eligibility from
-  normalized text.
+- Why it exists: Continuation authority no longer reads `bounded_effect` prose,
+  and operation-phase gates now compile from typed fields plus exact structured
+  enum compatibility. Older constitution, goal-continuation, and a few
+  compatibility surfaces still infer claims from normalized text.
 - Exit gate: Add an interpretation-to-contract lane that returns typed claims
   such as `intent`, `authority_class`, `consent_subject`, `risk`,
   `missing_context`, and `confidence`; runtime must validate those claims
-  against leases, grants, operation state, and TES.
+  against leases, grants, operation state, and TES. Retire the remaining
+  normalized-text compatibility once those typed claims cover legacy turns.
 
 ### DP-002: External-channel wake status lines
 
 - Principle: `Ledger, not vibes`; `Compile contracts; interpret ambiguity`
-- Status: `active`
+- Status: `migrating`
 - Surface: `runtime/external_channel_wake.go`
-- Why it exists: Child wake completion is still recovered from textual status
-  lines such as `EXTERNAL_CHANNEL_STATUS`.
+- Why it exists: Child wake completion now prefers a typed
+  `EXTERNAL_CHANNEL_OUTCOME` JSON contract with schema, enum status, reason
+  code, adapter, child ID, grant ID, and evidence refs. Legacy
+  `EXTERNAL_CHANNEL_STATUS` lines remain as a compatibility fallback for older
+  child replies.
 - Exit gate: Durable child wakes must emit a typed wake-outcome artifact with
   enum status, reason code, grant ID, adapter, child ID, and evidence refs. Text
-  can summarize that artifact but must not be the completion contract.
+  can summarize that artifact but must not be the completion contract. Remove
+  legacy status-line fallback after all live children have emitted typed
+  outcomes through at least one maintenance cycle.
 
 ### DP-003: Human plan labels inferred from prose
 
@@ -149,3 +156,9 @@ listed here until they are retired:
 New authority, consent, continuation, wake, or goal-inference code that uses
 string matching must either avoid the pattern or add a debt entry with an exit
 gate in the same change.
+
+The same check now rejects retired prose-authority helper symbols
+(`positiveAuthorityEffectText`, `bounded_effect_positive_clause`,
+`operationPhaseApprovalText`, `inferOperationGateReasonCode`, and
+`operationPhaseIsEscalatedOperatorApproval`) so they cannot be reintroduced as
+authority paths.

@@ -4,12 +4,14 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestHandleInboundMaterializesPendingOperationProposalAsButtonBackedLease(t *testing.T) {
@@ -80,6 +82,62 @@ func TestHandleInboundMaterializesPendingOperationProposalAsButtonBackedLease(t 
 	}
 	if state.ActionProposal.BoundedEffect != "Inspect and patch locally; stop before commit/deploy/restart." {
 		t.Fatalf("bounded effect = %q", state.ActionProposal.BoundedEffect)
+	}
+}
+
+func TestMaterializePendingOperationProposalFailsClosedOnUnreadableContinuationState(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.replyText = "I need approval before I cross this boundary."
+	provider.faceReplyText = "Approve this lease with the buttons."
+	provider.proposalReplyText = testPersonaContinuationProposal(session.ContinuationIntentDecisionHold, "")
+	provider.planningReplyText = testGovernorContinuationRatification(session.ContinuationIntentDecisionHold, "Hold until explicit approval.", false)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 9012, UserID: 0, Scope: telegramDMScopeRef(9012)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "fail-closed-continuation-read",
+		Objective: "Do not materialize approval prompts when current approval state is unreadable.",
+		Status:    session.OperationStatusBlocked,
+		Proposal: session.OperationProposal{
+			ID:            "proposal-fail-closed",
+			Kind:          "system_change",
+			Summary:       "Fail closed on unreadable approval state",
+			WhyNow:        "Duplicate approval prompts are unsafe when the existing state cannot be read.",
+			BoundedEffect: "Inspect local state and stop before commit/deploy/restart.",
+			Status:        session.ProposalStatusPending,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{Status: session.ContinuationStatusPending, DecisionID: "broken-current-state", RemainingTurns: 1}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	db, err := sql.Open("sqlite3", store.DBPath())
+	if err != nil {
+		t.Fatalf("sql.Open() err = %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE sessions SET continuation_state_json = ? WHERE session_id = ?`, "{", session.SessionIDForKey(key)); err != nil {
+		t.Fatalf("corrupt continuation state: %v", err)
+	}
+
+	if _, exists, err := store.ContinuationStateIfExists(key); err == nil || !exists || !strings.Contains(err.Error(), "decode continuation state") {
+		t.Fatalf("ContinuationStateIfExists() exists=%v err=%v, want decode error before materialization", exists, err)
+	}
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: 9012, SenderID: 1001, SenderName: "admin", Text: "go get it", MessageID: 1}, "go get it", nil)
+	if err == nil || !strings.Contains(err.Error(), "read prior continuation state") {
+		t.Fatalf("materializePendingOperationProposalApproval() materialized=%v err=%v, want fail-closed continuation read error", materialized, err)
+	}
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.inline) != 0 {
+		t.Fatalf("inline count = %d, want no approval prompt when continuation state is unreadable", len(sender.inline))
 	}
 }
 
@@ -1386,12 +1444,15 @@ func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *test
 			Goal: "Consent-first Mada intake and profile scoring.",
 			Phases: []session.OperationPhase{
 				{
-					ID:             "phase-33-mada-intake",
-					Summary:        "Consent-first Mada intake and wife-owned profile/scoring rubric.",
-					Status:         session.PlanStatusPending,
-					AuthorityClass: "private_data_intake",
-					WhyNow:         "Blocked: Daniel reported Mada is not available today, and no Mada opt-in has been observed. Wait for her explicit opt-in on a later turn.",
-					BoundedEffect:  "Ask approved preference questions and process wife-provided CV/preferences only after onboarding/opt-in.",
+					ID:                "phase-33-mada-intake",
+					Summary:           "Consent-first Mada intake and wife-owned profile/scoring rubric.",
+					Status:            session.PlanStatusPending,
+					AuthorityClass:    "private_data_intake",
+					WhyNow:            "Blocked: Daniel reported Mada is not available today, and no Mada opt-in has been observed. Wait for her explicit opt-in on a later turn.",
+					BoundedEffect:     "Ask approved preference questions and process wife-provided CV/preferences only after onboarding/opt-in.",
+					ApprovalSubject:   "third_party",
+					BlockedReasonCode: "requires_opt_in",
+					RequiresOptIn:     true,
 				},
 				{
 					ID:             "phase-34-email-ranking",

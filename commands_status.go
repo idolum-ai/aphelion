@@ -143,14 +143,6 @@ func renderStatusChatOperatorView(chat core.ChatStatusSnapshot, personaEffort st
 	return "quick_read " + quickRead + "\n\n" + text
 }
 
-func appendStatusReadableSummary(ctx context.Context, router commandRouter, view statusView, text string) string {
-	summary := statusReadableSummaryText(ctx, router, view, text)
-	if summary == "" {
-		return text
-	}
-	return "quick_read " + summary + "\n\n" + text
-}
-
 func statusReadableSummaryText(ctx context.Context, router commandRouter, view statusView, text string) string {
 	if router == nil || !statusViewSupportsReadableSummary(view) {
 		return ""
@@ -464,21 +456,6 @@ func groundStatusReadableSummary(view statusView, summary string, statusText str
 	}
 	_ = view
 	return summary
-}
-
-func appendStatusSourceAttribution(view statusView, text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return text
-	}
-	if strings.Contains(strings.ToLower(text), "source_attribution:") {
-		return text
-	}
-	block := renderStatusSourceAttribution(view)
-	if block == "" {
-		return text
-	}
-	return text + "\n" + block
 }
 
 func renderStatusSourceAttribution(view statusView) string {

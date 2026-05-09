@@ -227,6 +227,20 @@ func TestAuthorityInterpretationClaimUsesStructuredFieldsBeforeProse(t *testing.
 	}
 }
 
+func TestAuthorityInterpretationClaimDoesNotClassifyFromBoundedEffectProse(t *testing.T) {
+	claim, ok := AuthorityInterpretationClaimFor(
+		"",
+		nil,
+		"Deploy and restart the live service after pushing the branch.",
+	)
+	if ok {
+		t.Fatalf("AuthorityInterpretationClaimFor() = %#v, want no claim from bounded_effect prose", claim)
+	}
+	if got := InferContinuationLeaseClass("", nil, "Deploy and restart the live service."); got != "" {
+		t.Fatalf("InferContinuationLeaseClass() = %q, want no lease class from bounded_effect prose", got)
+	}
+}
+
 func TestAuthorityInterpretationClaimTreatsCompoundCommitAsLocalAuthority(t *testing.T) {
 	claim, ok := AuthorityInterpretationClaimFor(
 		"workspace_commit_then_repo_write_bounded",

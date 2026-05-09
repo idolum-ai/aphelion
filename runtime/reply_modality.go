@@ -50,17 +50,6 @@ func (r *Runtime) applyReplyModalityAwareness(aw prompt.RuntimeAwareness, prepar
 	return aw
 }
 
-func replyWithVoiceAfterModalityDirective(defaultVoice bool, modality string) bool {
-	switch strings.ToLower(strings.TrimSpace(modality)) {
-	case replyModalityText:
-		return false
-	case replyModalityVoice:
-		return true
-	default:
-		return defaultVoice
-	}
-}
-
 func extractReplyModalityDirective(text string) (string, string) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(text, "\n")

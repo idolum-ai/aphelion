@@ -118,29 +118,6 @@ func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminComman
 	return strings.Join(lines, "\n")
 }
 
-func RenderTelegramStatus(status core.SessionStatus, personaEffort, governorEffort string) string {
-	state := "idle"
-	if status.Active {
-		state = "working"
-	}
-	lines := []string{fmt.Sprintf("Current state: %s.", state)}
-	if status.Queued {
-		lines = append(lines, "Queued follow-up messages are waiting behind the current turn.")
-	}
-	for _, diagnostic := range status.Diagnostics {
-		diagnostic = strings.TrimSpace(diagnostic)
-		if diagnostic == "" {
-			continue
-		}
-		lines = append(lines, diagnostic)
-	}
-	lines = append(lines,
-		fmt.Sprintf("Persona effort: %s.", strings.TrimSpace(personaEffort)),
-		fmt.Sprintf("System effort: %s.", strings.TrimSpace(governorEffort)),
-	)
-	return strings.Join(lines, "\n")
-}
-
 func RenderTelegramStop(stopped core.StopResult) string {
 	continuationClause := renderStoppedContinuationClause(stopped)
 	switch {

@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +18,8 @@ import (
 const genericExternalChannelWakeAdapterName = "external_channel"
 const genericExternalChannelWakeChannel = "external_channel"
 const genericExternalChannelPollCommandName = "external_channel.poll_due"
+const genericExternalChannelWakeOutcomeMarker = "EXTERNAL_CHANNEL_OUTCOME"
+const genericExternalChannelWakeOutcomeSchema = "aphelion.external_channel_wake.v1"
 
 type genericExternalChannelWakeAdapter struct{}
 
@@ -114,8 +117,8 @@ func (genericExternalChannelWakeAdapter) Prepare(_ context.Context, rt *Runtime,
 				"Use only this child's charter, policy, and explicitly available tools/grants to perform or decline the adapter-local work.",
 				"If the needed adapter/tool/runtime material is unavailable, say what is blocked and what exact grant/materialization is missing.",
 				"Do not claim external-channel reads, writes, sends, deletes, archive actions, or attachment/body access unless actually performed by an authorized child-local tool this turn.",
-				"Finish with EXTERNAL_CHANNEL_STATUS: completed only if authorized adapter-local work actually completed.",
-				"Finish with EXTERNAL_CHANNEL_STATUS: blocked if work could not run, was refused, or material/grants were missing; include EXTERNAL_CHANNEL_ERROR: with the blocker.",
+				"Finish with exactly one typed outcome line shaped like: EXTERNAL_CHANNEL_OUTCOME: {\"schema_version\":\"aphelion.external_channel_wake.v1\",\"status\":\"blocked\",\"reason_code\":\"missing_grant\",\"adapter\":\"" + adapterName + "\",\"agent_id\":\"" + strings.TrimSpace(agent.AgentID) + "\",\"error\":\"...\",\"evidence_refs\":[]}.",
+				"Set status to exactly completed only if authorized adapter-local work actually completed; otherwise set status to exactly blocked.",
 			}
 			if charter := strings.TrimSpace(policy.Charter); charter != "" {
 				lines = append(lines, "Charter: "+charter)
@@ -147,8 +150,7 @@ func genericExternalChannelWakePrompt(agent core.DurableAgent, external core.Dur
 		"Scheduled at: " + now.UTC().Format(time.RFC3339),
 		"Handle this as a child-local adapter command within the current charter and grants.",
 		"If the adapter/tool/runtime grant is missing, report the blocker instead of improvising parent authority.",
-		"End with EXTERNAL_CHANNEL_STATUS: completed only after authorized adapter-local work actually completed.",
-		"End with EXTERNAL_CHANNEL_STATUS: blocked and EXTERNAL_CHANNEL_ERROR: <reason> if blocked.",
+		"End with one typed outcome line shaped like: EXTERNAL_CHANNEL_OUTCOME: {\"schema_version\":\"aphelion.external_channel_wake.v1\",\"status\":\"blocked\",\"reason_code\":\"missing_grant\",\"adapter\":\"" + strings.TrimSpace(external.Adapter) + "\",\"agent_id\":\"" + strings.TrimSpace(agent.AgentID) + "\",\"error\":\"...\",\"evidence_refs\":[]}. Set status to exactly completed only after authorized adapter-local work actually completed; otherwise set status to exactly blocked.",
 	}
 	if query := strings.TrimSpace(external.Query); query != "" {
 		lines = append(lines, "Configured query/selector: "+query)
@@ -165,7 +167,7 @@ func finalizeGenericExternalChannelWake(rt *Runtime, agent core.DurableAgent, ad
 	}
 	outcome := genericExternalChannelWakeOutcomeFromSummary(turnSummary)
 	if !outcome.Completed {
-		return finalizeGenericExternalChannelWakeFailure(rt, agent, adapterName, turnSummary, errors.New(outcome.Error), now)
+		return finalizeGenericExternalChannelWakeFailureWithOutcome(rt, agent, adapterName, turnSummary, errors.New(outcome.Error), outcome, now)
 	}
 	state, continuity, err := loadDurableAgentContinuityFromStore(rt.store, agent.AgentID)
 	if err != nil {
@@ -187,7 +189,7 @@ func finalizeGenericExternalChannelWake(rt *Runtime, agent core.DurableAgent, ad
 	if err := rt.store.SaveDurableAgentState(*state); err != nil {
 		return err
 	}
-	artifact := genericExternalChannelReviewArtifact(agent, adapterName, turnSummary, now, "wake_completed", "")
+	artifact := genericExternalChannelReviewArtifactWithOutcome(agent, adapterName, turnSummary, now, "wake_completed", "", outcome)
 	artifact.LocalActions = []string{"External-channel wake completed after child reported authorized adapter-local work completed."}
 	if _, err := durableagent.NewRuntime(rt.store).QueueReviewArtifact(agent, artifact); err != nil {
 		return fmt.Errorf("queue external channel wake review artifact: %w", err)
@@ -196,6 +198,20 @@ func finalizeGenericExternalChannelWake(rt *Runtime, agent core.DurableAgent, ad
 }
 
 func finalizeGenericExternalChannelWakeFailure(rt *Runtime, agent core.DurableAgent, adapterName string, turnSummary string, cause error, now time.Time) error {
+	outcome := genericExternalChannelWakeOutcome{
+		Completed:  false,
+		Status:     "wake_blocked",
+		Error:      errorText(cause),
+		Source:     "runtime_error",
+		Schema:     genericExternalChannelWakeOutcomeSchema,
+		Adapter:    strings.TrimSpace(adapterName),
+		AgentID:    strings.TrimSpace(agent.AgentID),
+		ReasonCode: "runtime_error",
+	}
+	return finalizeGenericExternalChannelWakeFailureWithOutcome(rt, agent, adapterName, turnSummary, cause, outcome, now)
+}
+
+func finalizeGenericExternalChannelWakeFailureWithOutcome(rt *Runtime, agent core.DurableAgent, adapterName string, turnSummary string, cause error, outcome genericExternalChannelWakeOutcome, now time.Time) error {
 	if rt == nil || rt.store == nil {
 		return nil
 	}
@@ -222,7 +238,13 @@ func finalizeGenericExternalChannelWakeFailure(rt *Runtime, agent core.DurableAg
 	if err := rt.store.SaveDurableAgentState(*state); err != nil {
 		return err
 	}
-	artifact := genericExternalChannelReviewArtifact(agent, adapterName, turnSummary, now, "wake_blocked", cause.Error())
+	if strings.TrimSpace(outcome.Error) == "" {
+		outcome.Error = cause.Error()
+	}
+	if strings.TrimSpace(outcome.Status) == "" {
+		outcome.Status = "wake_blocked"
+	}
+	artifact := genericExternalChannelReviewArtifactWithOutcome(agent, adapterName, turnSummary, now, "wake_blocked", cause.Error(), outcome)
 	artifact.LocalActions = []string{"External-channel wake blocked; recorded explicit failure/backoff instead of success."}
 	if _, err := durableagent.NewRuntime(rt.store).QueueReviewArtifact(agent, artifact); err != nil {
 		return fmt.Errorf("queue external channel wake failure review artifact: %w", err)
@@ -231,6 +253,18 @@ func finalizeGenericExternalChannelWakeFailure(rt *Runtime, agent core.DurableAg
 }
 
 func genericExternalChannelReviewArtifact(agent core.DurableAgent, adapterName string, turnSummary string, now time.Time, status string, errorText string) core.DurableReviewArtifact {
+	return genericExternalChannelReviewArtifactWithOutcome(agent, adapterName, turnSummary, now, status, errorText, genericExternalChannelWakeOutcome{
+		Status:     status,
+		Error:      errorText,
+		Source:     "runtime",
+		Schema:     genericExternalChannelWakeOutcomeSchema,
+		Adapter:    strings.TrimSpace(adapterName),
+		AgentID:    strings.TrimSpace(agent.AgentID),
+		ReasonCode: "",
+	})
+}
+
+func genericExternalChannelReviewArtifactWithOutcome(agent core.DurableAgent, adapterName string, turnSummary string, now time.Time, status string, errorText string, outcome genericExternalChannelWakeOutcome) core.DurableReviewArtifact {
 	metadata := map[string]string{
 		"channel_kind":            strings.TrimSpace(agent.ChannelKind),
 		"channel_adapter":         adapterName,
@@ -239,6 +273,24 @@ func genericExternalChannelReviewArtifact(agent core.DurableAgent, adapterName s
 		"external_channel_status": status,
 		"status":                  status,
 		"status_source":           "external_channel_status",
+		"wake_outcome_schema":     firstNonEmpty(outcome.Schema, genericExternalChannelWakeOutcomeSchema),
+		"wake_outcome_source":     firstNonEmpty(outcome.Source, "runtime"),
+		"wake_outcome_status":     firstNonEmpty(outcome.Status, status),
+	}
+	if strings.TrimSpace(outcome.ReasonCode) != "" {
+		metadata["wake_outcome_reason_code"] = strings.TrimSpace(outcome.ReasonCode)
+	}
+	if strings.TrimSpace(outcome.Adapter) != "" {
+		metadata["wake_outcome_adapter"] = strings.TrimSpace(outcome.Adapter)
+	}
+	if strings.TrimSpace(outcome.AgentID) != "" {
+		metadata["wake_outcome_agent_id"] = strings.TrimSpace(outcome.AgentID)
+	}
+	if strings.TrimSpace(outcome.GrantID) != "" {
+		metadata["grant_id"] = strings.TrimSpace(outcome.GrantID)
+	}
+	if len(outcome.EvidenceRefs) > 0 {
+		metadata["wake_outcome_evidence_refs"] = strings.Join(outcome.EvidenceRefs, ",")
 	}
 	if strings.TrimSpace(errorText) != "" {
 		metadata["external_channel_error"] = truncateRunes(errorText, 900)
@@ -254,25 +306,120 @@ func genericExternalChannelReviewArtifact(agent core.DurableAgent, adapterName s
 }
 
 type genericExternalChannelWakeOutcome struct {
-	Completed bool
-	Status    string
-	Error     string
+	Completed    bool
+	Status       string
+	ReasonCode   string
+	Error        string
+	Adapter      string
+	AgentID      string
+	GrantID      string
+	EvidenceRefs []string
+	Schema       string
+	Source       string
+}
+
+type genericExternalChannelWakeOutcomeContract struct {
+	SchemaVersion string   `json:"schema_version"`
+	Status        string   `json:"status"`
+	ReasonCode    string   `json:"reason_code,omitempty"`
+	Adapter       string   `json:"adapter,omitempty"`
+	AgentID       string   `json:"agent_id,omitempty"`
+	GrantID       string   `json:"grant_id,omitempty"`
+	Error         string   `json:"error,omitempty"`
+	EvidenceRefs  []string `json:"evidence_refs,omitempty"`
 }
 
 func genericExternalChannelWakeOutcomeFromSummary(turnSummary string) genericExternalChannelWakeOutcome {
+	if contract, ok := extractGenericExternalChannelOutcomeContract(turnSummary); ok {
+		outcome := genericExternalChannelWakeOutcome{
+			Status:       normalizeExternalChannelWakeOutcomeStatus(contract.Status),
+			ReasonCode:   normalizeExternalChannelWakeOutcomeReason(contract.ReasonCode),
+			Error:        strings.TrimSpace(contract.Error),
+			Adapter:      strings.TrimSpace(contract.Adapter),
+			AgentID:      strings.TrimSpace(contract.AgentID),
+			GrantID:      strings.TrimSpace(contract.GrantID),
+			EvidenceRefs: normalizeExternalChannelWakeEvidenceRefs(contract.EvidenceRefs),
+			Schema:       firstNonEmpty(strings.TrimSpace(contract.SchemaVersion), genericExternalChannelWakeOutcomeSchema),
+			Source:       "typed_outcome",
+		}
+		switch outcome.Status {
+		case "wake_completed":
+			outcome.Completed = true
+			return outcome
+		case "wake_blocked":
+			if outcome.Error == "" {
+				outcome.Error = firstNonEmpty(outcome.ReasonCode, "external channel child reported blocked status")
+			}
+			return outcome
+		default:
+			outcome.Status = "wake_blocked"
+			outcome.ReasonCode = firstNonEmpty(outcome.ReasonCode, "invalid_typed_outcome_status")
+			outcome.Error = "external channel typed outcome status missing or invalid; not marking poll as successful"
+			return outcome
+		}
+	}
 	status := strings.ToLower(strings.TrimSpace(extractGenericExternalChannelStatusLine(turnSummary, "EXTERNAL_CHANNEL_STATUS")))
 	errorText := strings.TrimSpace(extractGenericExternalChannelStatusLine(turnSummary, "EXTERNAL_CHANNEL_ERROR"))
 	switch status {
 	case "completed", "complete", "ok", "success", "wake_completed":
-		return genericExternalChannelWakeOutcome{Completed: true, Status: "wake_completed"}
+		return genericExternalChannelWakeOutcome{Completed: true, Status: "wake_completed", Schema: genericExternalChannelWakeOutcomeSchema, Source: "legacy_status_line"}
 	case "blocked", "blocker", "failed", "failure", "error", "unavailable", "wake_blocked":
 		if errorText == "" {
 			errorText = "external channel child reported blocked status"
 		}
-		return genericExternalChannelWakeOutcome{Completed: false, Status: "wake_blocked", Error: errorText}
+		return genericExternalChannelWakeOutcome{Completed: false, Status: "wake_blocked", ReasonCode: "legacy_blocked", Error: errorText, Schema: genericExternalChannelWakeOutcomeSchema, Source: "legacy_status_line"}
 	default:
-		return genericExternalChannelWakeOutcome{Completed: false, Status: "wake_blocked", Error: "external channel completion status missing; not marking poll as successful"}
+		return genericExternalChannelWakeOutcome{Completed: false, Status: "wake_blocked", ReasonCode: "missing_outcome", Error: "external channel completion status missing; not marking poll as successful", Schema: genericExternalChannelWakeOutcomeSchema, Source: "missing_outcome"}
 	}
+}
+
+func extractGenericExternalChannelOutcomeContract(text string) (genericExternalChannelWakeOutcomeContract, bool) {
+	raw := extractGenericExternalChannelStatusLine(text, genericExternalChannelWakeOutcomeMarker)
+	if raw == "" {
+		return genericExternalChannelWakeOutcomeContract{}, false
+	}
+	var contract genericExternalChannelWakeOutcomeContract
+	if err := json.Unmarshal([]byte(raw), &contract); err != nil {
+		return genericExternalChannelWakeOutcomeContract{
+			SchemaVersion: genericExternalChannelWakeOutcomeSchema,
+			Status:        "blocked",
+			ReasonCode:    "invalid_typed_outcome_json",
+			Error:         "external channel typed outcome JSON was invalid",
+		}, true
+	}
+	return contract, true
+}
+
+func normalizeExternalChannelWakeOutcomeStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "complete", "ok", "success", "wake_completed":
+		return "wake_completed"
+	case "blocked", "blocker", "failed", "failure", "error", "unavailable", "wake_blocked":
+		return "wake_blocked"
+	default:
+		return ""
+	}
+}
+
+func normalizeExternalChannelWakeOutcomeReason(reason string) string {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	replacer := strings.NewReplacer("-", "_", " ", "_", "/", "_", ".", "_")
+	reason = replacer.Replace(reason)
+	for strings.Contains(reason, "__") {
+		reason = strings.ReplaceAll(reason, "__", "_")
+	}
+	return strings.Trim(reason, "_")
+}
+
+func normalizeExternalChannelWakeEvidenceRefs(refs []string) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref != "" {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 func extractGenericExternalChannelStatusLine(text string, key string) string {

@@ -151,17 +151,6 @@ func (r *Runtime) loadDurableTelegramAgent(agentID string) (*core.DurableAgent, 
 	return registered, nil
 }
 
-func (r *Runtime) loadDurableTelegramGroupAgent(agentID string) (*core.DurableAgent, error) {
-	registered, err := r.loadDurableTelegramAgent(agentID)
-	if err != nil {
-		return nil, err
-	}
-	if durableTelegramChannel(registered.ChannelKind) != durableTelegramChannelGroup {
-		return nil, fmt.Errorf("durable agent %q is not a telegram_group agent", strings.TrimSpace(agentID))
-	}
-	return registered, nil
-}
-
 func (r *Runtime) runDurableTelegramGroupTurn(ctx context.Context, msg core.InboundMessage, registered core.DurableAgent, scope sandbox.Scope, opts durableGroupRunOptions) (*DurableGroupChildResult, error) {
 	if len(registered.LocalStorageRoots) == 0 {
 		registered.LocalStorageRoots = []string{scope.WorkingRoot, scope.SharedMemoryRoot}

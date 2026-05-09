@@ -930,13 +930,6 @@ func isOpenAIModelUnavailableError(err error) bool {
 	return strings.Contains(msg, "model") && (strings.Contains(msg, "not found") || strings.Contains(msg, "does not exist") || strings.Contains(msg, "unavailable"))
 }
 
-func nextFailoverEntryName(entries []failoverEntry, idx int) string {
-	if idx+1 < 0 || idx+1 >= len(entries) {
-		return ""
-	}
-	return entries[idx+1].name
-}
-
 func providerFamilyName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if idx := strings.Index(name, ":"); idx >= 0 {

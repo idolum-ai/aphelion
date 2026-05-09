@@ -64,6 +64,18 @@ type externalChannelAdapterWakeStatus struct {
 	BackoffUntil time.Time
 }
 
+type externalChannelAdapterReadinessChecker func(core.DurableAgent, time.Time) externalChannelAdapterReadiness
+
+func (r *Runtime) externalChannelAdapterReadinessChecker(adapterName string) (externalChannelAdapterReadinessChecker, bool) {
+	adapterName = strings.ToLower(strings.TrimSpace(adapterName))
+	switch adapterName {
+	case gogCLIAdapterName:
+		return r.gogCLIReadinessForAgent, true
+	default:
+		return nil, false
+	}
+}
+
 func (r *Runtime) writeDoctorExternalChannelAdapterReadiness(b *strings.Builder, input doctorDiagnosticInput) {
 	writeDoctorLine(b, "classification_contract: external-channel adapter readiness is metadata-only; no mailbox query, OAuth flow, token/passphrase value, or live account call is performed.")
 	if r == nil || r.store == nil {
@@ -120,10 +132,14 @@ func (r *Runtime) externalChannelAdapterReadinessSnapshots(now time.Time) ([]ext
 	rows := make([]externalChannelAdapterReadiness, 0, len(agents))
 	for _, agent := range agents {
 		external := agent.ChannelConfig.ExternalConfig()
-		if external == nil || !strings.EqualFold(strings.TrimSpace(external.Adapter), gogCLIAdapterName) {
+		if external == nil {
 			continue
 		}
-		rows = append(rows, r.gogCLIReadinessForAgent(agent, now))
+		checker, ok := r.externalChannelAdapterReadinessChecker(externalChannelAdapter(agent))
+		if !ok {
+			continue
+		}
+		rows = append(rows, checker(agent, now))
 	}
 	return rows, nil
 }
@@ -274,7 +290,7 @@ func rowWithLastWake(r *Runtime, row externalChannelAdapterReadiness, agent core
 		return row
 	}
 	runtimeState := continuity.ExternalChannel
-	if runtimeState == nil || !strings.EqualFold(strings.TrimSpace(runtimeState.Adapter), gogCLIAdapterName) {
+	if runtimeState == nil || !strings.EqualFold(strings.TrimSpace(runtimeState.Adapter), strings.TrimSpace(row.Adapter)) {
 		return row
 	}
 	row.LastWake = &externalChannelAdapterWakeStatus{

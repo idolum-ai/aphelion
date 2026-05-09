@@ -16,14 +16,6 @@ type statusTurnPhase struct {
 	UpdatedAt time.Time
 }
 
-func (r *Runtime) markChatTurnPhase(chatID int64, phase string, summary string) {
-	r.markSessionTurnPhase(
-		session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)},
-		phase,
-		summary,
-	)
-}
-
 func (r *Runtime) markSessionTurnPhase(key session.SessionKey, phase string, summary string) {
 	if r == nil || key.ChatID == 0 {
 		return

@@ -26,19 +26,28 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	}
 	opState = session.NormalizeOperationState(opState)
 	now := time.Now().UTC()
-	priorContinuation, priorContinuationExists, _ := r.store.ContinuationStateIfExists(key)
+	priorContinuation, priorContinuationExists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return false, fmt.Errorf("read prior continuation state: %w", err)
+	}
 	opState = operationStateWithNonCurrentInProgressPhasesCleared(opState, now)
 	opState = operationStateWithInactiveCurrentPhaseLeaseCleared(opState, priorContinuation, priorContinuationExists, now)
 	if priorContinuationExists {
 		var repaired bool
 		opState, repaired = r.repairInvalidPendingPhaseApproval(ctx, key, msg, opState, priorContinuation, now)
 		if repaired {
-			priorContinuation, priorContinuationExists, _ = r.store.ContinuationStateIfExists(key)
+			priorContinuation, priorContinuationExists, err = r.store.ContinuationStateIfExists(key)
+			if err != nil {
+				return false, fmt.Errorf("read repaired continuation state: %w", err)
+			}
 		}
 	}
 	if pendingOperationPlanLeaseNeedsButton(opState.PlanLease) {
 		now := time.Now().UTC()
-		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
+		priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
+		if err != nil {
+			return false, fmt.Errorf("read plan-lease continuation state: %w", err)
+		}
 		priorState = session.NormalizeContinuationState(priorState)
 		if priorExists && continuationStateHasFreshPendingLease(priorState, now) && operationPlanLeaseMatchesContinuation(opState.PlanLease, priorState) {
 			return true, nil
@@ -64,7 +73,10 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	if lease, ok := operationPlanLeaseFromPhasePlan(opState, time.Now().UTC()); ok {
 		now := time.Now().UTC()
 		opState.PlanLease = lease
-		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
+		priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
+		if err != nil {
+			return false, fmt.Errorf("read synthesized plan-lease continuation state: %w", err)
+		}
 		priorState = session.NormalizeContinuationState(priorState)
 		if priorExists && continuationStateHasFreshPendingLease(priorState, now) && operationPlanLeaseMatchesContinuation(opState.PlanLease, priorState) {
 			return true, nil
@@ -90,7 +102,10 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	}
 	if bundle, ok := nextOperationPhaseBundleForApproval(opState); ok {
 		now := time.Now().UTC()
-		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
+		priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
+		if err != nil {
+			return false, fmt.Errorf("read phase-bundle continuation state: %w", err)
+		}
 		priorState = session.NormalizeContinuationState(priorState)
 		if priorExists && continuationStateHasFreshPendingLease(priorState, now) && operationPhaseBundleMatchesContinuation(opState, bundle, priorState) {
 			return true, nil
@@ -124,7 +139,10 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 			r.recordPlanningOnlyOperationPhaseBlocked(key, opState, phase, now)
 			return true, nil
 		}
-		priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
+		priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
+		if err != nil {
+			return false, fmt.Errorf("read phase continuation state: %w", err)
+		}
 		priorState = session.NormalizeContinuationState(priorState)
 		if priorExists && continuationStateHasFreshPendingLease(priorState, now) && operationPhaseMatchesContinuation(opState, phase, priorState) {
 			return true, nil
@@ -158,7 +176,10 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	if operationPhasePlanOwnsContinuation(opState.PhasePlan) && operationProposalBelongsToPhasePlan(opState, proposal) {
 		return true, nil
 	}
-	priorState, priorExists, _ := r.store.ContinuationStateIfExists(key)
+	priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return false, fmt.Errorf("read proposal continuation state: %w", err)
+	}
 	priorState = session.NormalizeContinuationState(priorState)
 	if priorExists && priorState.Status == session.ContinuationStatusPending && operationProposalMatchesContinuation(proposal, priorState) {
 		return true, nil
@@ -926,20 +947,7 @@ func operationPhaseApprovalExcludedReason(plan session.OperationPhasePlan, phase
 	if phase.StaleAuthority || operationPhaseReasonCodeIsStaleAuthority(phase.BlockedReasonCode) {
 		return "superseded or stale phase"
 	}
-	text := operationPhaseApprovalText(phase)
-	switch {
-	case strings.Contains(text, "superseded prior"),
-		strings.Contains(text, "superseded phase"),
-		strings.Contains(text, "stale phase"),
-		strings.Contains(text, "old lease"),
-		strings.Contains(text, "old authority"),
-		strings.Contains(text, "no authority from this stale phase"),
-		strings.Contains(text, "must not be used"),
-		strings.Contains(text, "should not be used"):
-		return "superseded or stale phase"
-	default:
-		return ""
-	}
+	return ""
 }
 
 func operationPhaseSupersededByPlan(plan session.OperationPhasePlan, phase session.OperationPhase) bool {
@@ -992,67 +1000,78 @@ func normalizeOperationPhaseReasonCode(code string) string {
 	return strings.Trim(code, "_")
 }
 
-func operationPhaseApprovalText(phase session.OperationPhase) string {
-	phase = normalizeSingleOperationPhase(phase)
-	parts := []string{
-		phase.ID,
-		phase.Summary,
-		phase.AuthorityClass,
-		phase.WhyNow,
-		phase.BoundedEffect,
-	}
-	parts = append(parts, phase.AllowedActions...)
-	parts = append(parts, phase.ForbiddenActions...)
-	parts = append(parts, phase.ValidationPlan...)
-	return strings.ToLower(strings.TrimSpace(strings.Join(parts, " ")))
-}
-
 func operationPhaseRequiresFreshApprovalGate(phase session.OperationPhase) bool {
 	phase = normalizeSingleOperationPhase(phase)
-	if operationPhaseApprovalGate(phase).Level == operationGateLevelEscalatedOperatorApproval {
+	gate := operationPhaseApprovalGate(phase)
+	if gate.Level == operationGateLevelEscalatedOperatorApproval || gate.Level == operationGateLevelHardConsentBlock {
 		return true
 	}
 	if class := session.InferContinuationLeaseClass(phase.AuthorityClass, phase.AllowedActions, phase.BoundedEffect); class != "" && class != session.ContinuationLeaseClassLocalWorkspace {
 		return true
 	}
-	values := []string{phase.AuthorityClass, phase.GateReasonCode, phase.BlockedReasonCode}
-	values = append(values, phase.AllowedActions...)
-	for _, value := range values {
-		value = normalizeOperationPhaseReasonCode(value)
-		switch value {
-		case "deploy", "live_deploy", "run_deploy", "restart", "restart_service", "service_restart", "systemctl_restart", "park_restart", "install_user_service", "make_install_user_service", "reinstall", "system_change", "policy_apply",
-			"grant_or_revoke_capability", "capability_grant", "capability_revoke",
-			"mailbox_access", "mailbox_mutation", "mailbox_read", "email_read", "external_account_email_read", "external_account_email_read_public_web_read",
-			"credential_access", "credential_metadata", "credential_metadata_check", "read_credentials_or_tokens", "token_health_check",
-			"external_account_action", "external_account", "external_account_auth_status", "read_only_auth_status_check",
-			"public_account_content_read", "public_profile_metadata_read", "public_web_read", "network_access", "data_access",
-			"private_data_intake", "wife_profile", "cv_ingestion", "job_processing", "job_ranking", "job_scouting",
-			"purchase", "spend", "public_contact", "public_posting", "communication",
-			"commit", "git_commit", "repo_history_mutation", "workspace_commit_then_repo_write_bounded", "push", "git_push", "push_remote":
-			return true
-		}
-		if strings.Contains(value, "credential") ||
-			strings.Contains(value, "token") ||
-			strings.Contains(value, "mailbox") ||
-			strings.Contains(value, "external_account") ||
-			strings.Contains(value, "capability") ||
-			strings.Contains(value, "grant") ||
-			strings.Contains(value, "deploy") ||
-			strings.Contains(value, "restart") ||
-			strings.Contains(value, "systemctl") ||
-			strings.Contains(value, "install_user_service") ||
-			strings.Contains(value, "reinstall") ||
-			strings.Contains(value, "commit") ||
-			strings.Contains(value, "push") ||
-			strings.Contains(value, "purchase") ||
-			strings.Contains(value, "spend") ||
-			strings.Contains(value, "public_contact") ||
-			strings.Contains(value, "public_post") ||
-			strings.Contains(value, "private_data") {
-			return true
-		}
-	}
-	return false
+	return phase.RequiresApproval || operationPhaseHasStructuredCode(phase,
+		"deploy",
+		"live_deploy",
+		"run_deploy",
+		"restart",
+		"restart_service",
+		"service_restart",
+		"restart_aphelion_service",
+		"systemctl_restart",
+		"park_restart",
+		"install_user_service",
+		"make_install_user_service",
+		"reinstall",
+		"system_change",
+		"policy_apply",
+		"grant_or_revoke_capability",
+		"capability_grant",
+		"capability_revoke",
+		"capability_access_check",
+		"mailbox_access",
+		"mailbox_mutation",
+		"mailbox_read",
+		"email_read",
+		"external_account_email_read",
+		"external_account_email_read_public_web_read",
+		"mailbox_content",
+		"read_mailbox_contents",
+		"run_gog_cli_mail_query",
+		"run_configured_gog_cli_mail_query_once",
+		"read_only_mailbox_smoke",
+		"credential_access",
+		"credential_metadata",
+		"credential_metadata_check",
+		"read_credentials_or_tokens",
+		"token_health_check",
+		"external_account_action",
+		"external_account",
+		"external_account_auth_status",
+		"read_only_auth_status_check",
+		"public_account_content_read",
+		"public_profile_metadata_read",
+		"public_web_read",
+		"network_access",
+		"data_access",
+		"private_data_intake",
+		"wife_profile",
+		"cv_ingestion",
+		"job_processing",
+		"job_ranking",
+		"job_scouting",
+		"purchase",
+		"spend",
+		"public_contact",
+		"public_posting",
+		"communication",
+		"commit",
+		"git_commit",
+		"repo_history_mutation",
+		"workspace_commit_then_repo_write_bounded",
+		"push",
+		"git_push",
+		"push_remote",
+	)
 }
 
 func operationPhaseIsPlanningOnlyApproval(phase session.OperationPhase) bool {
@@ -1340,9 +1359,6 @@ func operationPhaseFreshGateCanJoinPlanBudget(phase session.OperationPhase) bool
 
 func operationPhasePlanBudgetHardStopReason(phase session.OperationPhase) string {
 	phase = normalizeSingleOperationPhase(phase)
-	values := []string{phase.AuthorityClass, phase.GateReasonCode, phase.BlockedReasonCode}
-	values = append(values, phase.AllowedActions...)
-	text := operationPhaseApprovalText(phase)
 	hardCodes := map[string]string{
 		"deploy":                      "deploy/restart",
 		"live_deploy":                 "deploy/restart",
@@ -1384,32 +1400,9 @@ func operationPhasePlanBudgetHardStopReason(phase session.OperationPhase) string
 		"git_push":                                    "remote push",
 		"push_remote":                                 "remote push",
 	}
-	for _, value := range values {
-		code := normalizeOperationPhaseReasonCode(value)
+	for _, code := range operationPhaseStructuredCodes(phase) {
 		if label, ok := hardCodes[code]; ok {
 			return label
-		}
-	}
-	hardFragments := []struct {
-		fragment string
-		label    string
-	}{
-		{"read_credentials_or_tokens", "credential access"},
-		{"credential value", "credential access"},
-		{"secret value", "credential access"},
-		{"send email", "communication"},
-		{"public contact", "public contact"},
-		{"public posting", "public posting"},
-		{"git push", "remote push"},
-		{"systemctl", "deploy/restart"},
-		{"install-user-service", "deploy/restart"},
-		{"install user service", "deploy/restart"},
-		{"purchase", "purchase/spend"},
-		{"spend", "purchase/spend"},
-	}
-	for _, item := range hardFragments {
-		if strings.Contains(text, item.fragment) {
-			return item.label
 		}
 	}
 	return ""
@@ -1469,15 +1462,6 @@ func operationPhaseHasPlanMaterial(phase session.OperationPhase) bool {
 		len(phase.AllowedActions) > 0 ||
 		len(phase.ForbiddenActions) > 0 ||
 		len(phase.ValidationPlan) > 0
-}
-
-func operationPhaseNeedsApproval(phase session.OperationPhase) bool {
-	switch operationPhaseApprovalKindFor(phase) {
-	case operationPhaseApprovalBlocked, operationPhaseApprovalFresh:
-		return true
-	default:
-		return false
-	}
 }
 
 func operationPhaseMatchesContinuation(opState session.OperationState, phase session.OperationPhase, state session.ContinuationState) bool {

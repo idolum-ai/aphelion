@@ -1038,7 +1038,11 @@ func (s *SQLiteStore) ContinuationStateIfExists(key SessionKey) (ContinuationSta
 	if err != nil {
 		return ContinuationState{}, false, fmt.Errorf("load continuation state: %w", err)
 	}
-	return decodeContinuationState(raw.String), true, nil
+	state, decodeErr := decodeContinuationStateStrict(raw.String)
+	if decodeErr != nil {
+		return ContinuationState{}, true, fmt.Errorf("decode continuation state: %w", decodeErr)
+	}
+	return state, true, nil
 }
 
 func (s *SQLiteStore) PlanAndOperationStateIfExists(key SessionKey) (PlanState, OperationState, bool, error) {
@@ -6537,13 +6541,6 @@ func nullableString(v string) any {
 	return v
 }
 
-func defaultJSONString(raw string, fallback string) string {
-	if strings.TrimSpace(raw) == "" {
-		return fallback
-	}
-	return raw
-}
-
 func marshalStringSlice(values []string) ([]byte, error) {
 	if len(values) == 0 {
 		return []byte("[]"), nil
@@ -7326,15 +7323,23 @@ func encodeContinuationState(state ContinuationState) string {
 }
 
 func decodeContinuationState(raw string) ContinuationState {
+	state, err := decodeContinuationStateStrict(raw)
+	if err != nil {
+		return ContinuationState{}
+	}
+	return state
+}
+
+func decodeContinuationStateStrict(raw string) (ContinuationState, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return ContinuationState{}
+		return ContinuationState{}, nil
 	}
 	var state ContinuationState
 	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return ContinuationState{}
+		return ContinuationState{}, err
 	}
-	return NormalizeContinuationState(state)
+	return NormalizeContinuationState(state), nil
 }
 
 func parseRenderedPlanState(raw string) (PlanState, bool) {

@@ -13,18 +13,6 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-type asyncRecordingInteractiveDMTurnAssembler struct {
-	ch     chan interactiveDMTurnAssemblyInput
-	done   chan struct{}
-	result *core.TurnResult
-}
-
-func (a *asyncRecordingInteractiveDMTurnAssembler) Run(_ context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
-	defer close(a.done)
-	a.ch <- input
-	return a.result, nil
-}
-
 func TestStartupRecoverySendsAwakeSignalWhenNoInterruptedRuns(t *testing.T) {
 	t.Parallel()
 
