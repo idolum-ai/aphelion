@@ -54,6 +54,7 @@ high_risk_paths=(
   "runtime/continuation_materialize.go"
   "runtime/operation_phase_gate.go"
   "runtime/goal_continuation.go"
+  "runtime/media_intent.go"
   "runtime/external_channel_wake.go"
   "runtime/continuation.go"
   "runtime/status.go"
@@ -74,7 +75,7 @@ for path in "${high_risk_paths[@]}"; do
   fi
 done
 
-for phrase in "I need to correct that" "Sending Work evidence"; do
+for phrase in "I need to correct that" "Sending Work evidence" "Operator card:" "Use the buttons" "Approval needed." "Lease class:"; do
   if rg -nF "$phrase" runtime session core durableagent tool telegram --glob '!**/*_test.go' >/dev/null; then
     echo "runtime source contains forbidden magic operator phrase: $phrase" >&2
     rg -nF "$phrase" runtime session core durableagent tool telegram --glob '!**/*_test.go' >&2

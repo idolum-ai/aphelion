@@ -72,6 +72,27 @@ func TestCodexAppServerWakeAdapterStoresHeartbeatAndThreadState(t *testing.T) {
 	}
 }
 
+func TestCodexAppServerStatusPromptUsesGenericChildEnvelope(t *testing.T) {
+	t.Parallel()
+
+	prompt := codexAppServerStatusPrompt(core.DurableAgent{AgentID: "console"}, time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC))
+	for _, want := range []string{
+		`"kind": "durable_child_status"`,
+		`"agent_id": "console"`,
+		`"schema_version": "durable_child_status.v1"`,
+		`"display_name": "console"`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want %q", prompt, want)
+		}
+	}
+	for _, notWant := range []string{"Lighthouse", "lighthouse.status.v1"} {
+		if strings.Contains(prompt, notWant) {
+			t.Fatalf("prompt = %q, did not want child-specific fixture %q", prompt, notWant)
+		}
+	}
+}
+
 func TestCodexAppServerClientRaisesWebsocketReadLimit(t *testing.T) {
 	t.Parallel()
 

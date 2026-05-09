@@ -2,7 +2,11 @@
 
 package session
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/idolum-ai/aphelion/core"
+)
 
 const (
 	AuthorityWorkActionReadOnly       = "read_only"
@@ -29,48 +33,124 @@ func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffe
 	if contract, ok := AuthorityContractForToken(riskClass); ok {
 		return contract, true
 	}
-	structuredText := normalizeAuthorityMatchText(strings.Join(append([]string{riskClass}, allowedActions...), " "))
-	if contract, ok := authorityContractForNormalizedText(structuredText); ok {
-		return contract, true
+	claim, ok := AuthorityInterpretationClaimFor(riskClass, allowedActions, boundedEffect)
+	if !ok {
+		return AuthorityContract{}, false
 	}
-	effectText := positiveAuthorityEffectText(boundedEffect)
-	return authorityContractForNormalizedText(effectText)
+	return AuthorityContractForToken(claim.AuthorityClass)
 }
 
-func authorityContractForNormalizedText(text string) (AuthorityContract, bool) {
-	if text == "" {
-		return AuthorityContract{}, false
+func AuthorityInterpretationClaimFor(riskClass string, allowedActions []string, boundedEffect string) (core.InterpretationClaim, bool) {
+	if contract, ok := AuthorityContractForToken(riskClass); ok {
+		return authorityInterpretationClaim(contract.Key, "risk_class"), true
 	}
-	containsAny := func(values ...string) bool {
-		for _, value := range values {
-			if strings.Contains(text, normalizeAuthorityMatchText(value)) {
-				return true
+	if key := authorityClassFromStructuredValues(append([]string{riskClass}, allowedActions...)); key != "" {
+		return authorityInterpretationClaim(key, "structured_authority_fields"), true
+	}
+	if key := authorityClassFromStructuredValues([]string{positiveAuthorityEffectText(boundedEffect)}); key != "" {
+		return authorityInterpretationClaim(key, "bounded_effect_positive_clause"), true
+	}
+	return core.InterpretationClaim{}, false
+}
+
+func authorityInterpretationClaim(authorityClass string, source string) core.InterpretationClaim {
+	return core.NormalizeInterpretationClaim(core.InterpretationClaim{
+		Intent:             "authority_classification",
+		AuthorityClass:     strings.TrimSpace(authorityClass),
+		Confidence:         "high",
+		Source:             source,
+		ProposedNextAction: "validate_against_authority_contract",
+	})
+}
+
+func authorityClassFromStructuredValues(values []string) string {
+	tokens := authorityStructuredTokenSet(values)
+	for _, group := range authorityClassificationPriority() {
+		for _, token := range group.Tokens {
+			if _, ok := tokens[token]; ok {
+				return group.Key
 			}
 		}
-		return false
 	}
-	switch {
-	case containsAny("deploy", "restart", "service_restart", "git_push", "push_remote"):
-		return mustAuthorityContract("deploy"), true
-	case containsAny("capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority"):
-		return mustAuthorityContract("capability_grant"), true
-	case containsAny("child_wake", "durable_child_wake", "selected_child_wake", "durable_agent_wake"):
-		return mustAuthorityContract("child_wake"), true
-	case containsAny("local_secret_metadata_read", "secret_metadata_read", "live_config_read", "config_metadata_read", "token_file_metadata", "metadata_read"):
-		return mustAuthorityContract(AuthorityClassLocalSecretMetadataReadLiveConfigRead), true
-	case containsAny("private_data_intake", "wife_profile", "cv_ingestion", "email_read", "mailbox_read", "external_account_email_read", "external_account", "public_web_read", "job_processing", "job_ranking", "job_scouting"):
-		return mustAuthorityContract("private_data_intake"), true
-	case containsAny("data_access", "file_access", "read_image", "read_file", "consume_attachment", "artifact_read", "network_access"):
-		return mustAuthorityContract("data_access"), true
-	case containsAny("git_commit", "repo_history_mutation", "commit"):
-		return mustAuthorityContract("commit"), true
-	case containsAny("workspace_write", "repo_edit", "edit_files", "patch", "run_tests", "focused_tests", "git_diff_check"):
-		return mustAuthorityContract("workspace_write"), true
-	case containsAny("read_only", "read_only_review", "status_check", "inspect_readonly_state"):
-		return mustAuthorityContract("read_only_review"), true
-	default:
-		return AuthorityContract{}, false
+	return ""
+}
+
+type authorityClassificationGroup struct {
+	Key    string
+	Tokens []string
+}
+
+func authorityClassificationPriority() []authorityClassificationGroup {
+	return []authorityClassificationGroup{
+		{Key: "deploy", Tokens: []string{"deploy", "live_deploy", "run_deploy", "system_change", "restart", "service_restart", "git_push", "push_remote"}},
+		{Key: "capability_grant", Tokens: []string{"capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority"}},
+		{Key: "child_wake", Tokens: []string{"child_wake", "durable_child_wake", "selected_child_wake", "durable_agent_wake"}},
+		{Key: AuthorityClassLocalSecretMetadataReadLiveConfigRead, Tokens: []string{
+			AuthorityClassLocalSecretMetadataReadLiveConfigRead,
+			"local_secret_metadata_read",
+			"secret_metadata_read",
+			"live_config_read",
+			"config_metadata_read",
+			"token_file_metadata",
+			"metadata_read",
+		}},
+		{Key: "private_data_intake", Tokens: []string{
+			"private_data_intake",
+			"wife_profile",
+			"profile_scoring_rubric",
+			"cv_ingestion",
+			"email_read",
+			"mailbox_read",
+			"external_account_email_read",
+			"external_account_email_read_public_web_read",
+			"external_account",
+			"public_web_read",
+			"job_processing",
+			"job_ranking",
+			"job_scouting",
+		}},
+		{Key: "data_access", Tokens: []string{"data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access"}},
+		{Key: "commit", Tokens: []string{"commit", "git_commit", "repo_history_mutation", "workspace_commit", "workspace_commit_then_repo_write_bounded"}},
+		{Key: "workspace_write", Tokens: []string{"workspace_write", "repo_edit", "edit_files", "patch", "run_tests", "focused_tests", "git_diff_check"}},
+		{Key: "read_only_review", Tokens: []string{"read_only", "read_only_review", "status_check", "inspect_readonly_state", "read_only_child_adapter_environment_inspection"}},
 	}
+}
+
+func authorityStructuredTokenSet(values []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, value := range values {
+		for _, token := range authorityStructuredTokens(value) {
+			out[token] = struct{}{}
+		}
+	}
+	return out
+}
+
+func authorityStructuredTokens(value string) []string {
+	normalized := normalizeAuthorityMatchText(value)
+	if normalized == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(normalized, func(r rune) bool {
+		return r == '_' || r == '-' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+	tokens := []string{normalized}
+	for i := 0; i+1 < len(parts); i++ {
+		left := strings.TrimSpace(parts[i])
+		right := strings.TrimSpace(parts[i+1])
+		if left != "" && right != "" {
+			tokens = append(tokens, left+"_"+right)
+		}
+	}
+	for i := 0; i+2 < len(parts); i++ {
+		a := strings.TrimSpace(parts[i])
+		b := strings.TrimSpace(parts[i+1])
+		c := strings.TrimSpace(parts[i+2])
+		if a != "" && b != "" && c != "" {
+			tokens = append(tokens, a+"_"+b+"_"+c)
+		}
+	}
+	return tokens
 }
 
 func positiveAuthorityEffectText(text string) string {

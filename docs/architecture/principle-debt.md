@@ -118,6 +118,19 @@ Status values:
   that returns typed claim candidates with confidence and spans; runtime should
   validate those candidates against TES before repair.
 
+### DP-008: Media intent still has lexical fallback
+
+- Principle: `Text is presentation, not authority`; `Compile contracts; interpret ambiguity`
+- Status: `migrating`
+- Surface: `runtime/media_intent.go`
+- Why it exists: audio/text reply routing now records a typed
+  `InterpretationClaim` in floor metadata, but the initial same-turn and
+  next-audio intent detector still accepts a narrow lexical fallback for legacy
+  operator phrasing.
+- Exit gate: Move media-artifact intent into the shared open-language
+  interpretation lane so the runtime consumes only typed claims plus artifact
+  capabilities; keep lexical matching only for closed command syntax, if any.
+
 ## Machine-Checked Paths
 
 `make design-principles` requires these high-risk string-heavy surfaces to remain
@@ -128,6 +141,7 @@ listed here until they are retired:
 - `runtime/continuation_materialize.go`
 - `runtime/operation_phase_gate.go`
 - `runtime/goal_continuation.go`
+- `runtime/media_intent.go`
 - `runtime/external_channel_wake.go`
 - `runtime/continuation.go`
 - `runtime/status.go`

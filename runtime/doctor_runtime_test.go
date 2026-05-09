@@ -443,7 +443,7 @@ func TestDoctorCodexWorkMigrationReviewReportsPersistedInterfaceEvidence(t *test
 	}
 }
 
-func TestDoctorIssueStatusChecksProjectSynthTelegramRunnerReadiness(t *testing.T) {
+func TestDoctorIssueStatusChecksGenericTelegramChildBotRunnerReadiness(t *testing.T) {
 	t.Parallel()
 
 	cfg, _, _, _ := buildRuntimeFixtures(t)
@@ -461,7 +461,7 @@ type telegramChildBotNoSendOutbound struct{}
 	if err := os.MkdirAll(docDir, 0o755); err != nil {
 		t.Fatalf("mkdir doc dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(docDir, "synth-telegram-bot-subsystem-plan.md"), []byte("## Validation gates\n## Launch runbook\naphelion telegram-child-bot status\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(docDir, "synth-telegram-bot-subsystem-plan.md"), []byte("Implement a generic but narrow telegram-child-bot command.\n"), 0o600); err != nil {
 		t.Fatalf("write runner runbook: %v", err)
 	}
 
@@ -469,8 +469,8 @@ type telegramChildBotNoSendOutbound struct{}
 	var b strings.Builder
 	rt.writeDoctorIssueStatusChecks(&b, doctorDiagnosticInput{Scope: sandbox.Scope{WorkingRoot: cfg.Agent.ExecRoot}})
 	report := b.String()
-	if !strings.Contains(report, `issue=synth_telegram_child_bot_runner status=likely_fixed`) {
-		t.Fatalf("doctor issue checks = %s, want Synth runner likely_fixed", report)
+	if !strings.Contains(report, `issue=telegram_child_bot_runner status=likely_fixed`) {
+		t.Fatalf("doctor issue checks = %s, want generic child bot runner likely_fixed", report)
 	}
 }
 

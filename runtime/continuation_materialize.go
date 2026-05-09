@@ -1194,6 +1194,13 @@ func (r *Runtime) recordAndSendBlockedOperationPhaseApproval(ctx context.Context
 		"phase_summary":     strings.TrimSpace(phase.Summary),
 		"operation_id":      strings.TrimSpace(opState.ID),
 		"decision":          "blocked",
+		"debug_breadcrumb": core.ContinuationDebugBreadcrumb(
+			key.ChatID,
+			strings.TrimSpace(phase.ID),
+			"runtime.renderOperationPhaseApprovalBlockedStatus",
+			"runtime/continuation_materialize.go",
+			"inspect /debug for phase plan, continuation state, and TES adjudication events",
+		),
 		"findings": []core.RuntimeFinding{{
 			Kind:             "approval_blocked",
 			EvidenceStatus:   "declared_by_phase_contract",
@@ -1208,6 +1215,13 @@ func (r *Runtime) recordAndSendBlockedOperationPhaseApproval(ctx context.Context
 		"phase_id":       strings.TrimSpace(phase.ID),
 		"phase_summary":  strings.TrimSpace(phase.Summary),
 		"operation_id":   strings.TrimSpace(opState.ID),
+		"debug_breadcrumb": core.ContinuationDebugBreadcrumb(
+			key.ChatID,
+			strings.TrimSpace(phase.ID),
+			"runtime.renderOperationPhaseApprovalBlockedStatus",
+			"runtime/continuation_materialize.go",
+			"inspect /debug for phase plan, continuation state, and TES blocked events",
+		),
 	}, now)
 	if r.outbound == nil || msg.ChatID == 0 {
 		return
@@ -1235,6 +1249,7 @@ func renderOperationPhaseApprovalBlockedStatus(opState session.OperationState, p
 	if next := operationBlockedApprovalNextStep(reason); next != "" {
 		lines = append(lines, "", "Next:", next)
 	}
+	lines = append(lines, "", "Details: /debug")
 	return strings.Join(lines, "\n")
 }
 

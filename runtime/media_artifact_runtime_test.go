@@ -145,6 +145,11 @@ func TestHandleInboundStoresPendingAudioTranscriptionIntent(t *testing.T) {
 	if !strings.Contains(sess.LastFloorMetadata, "next audio should be transcribed and answered in text") {
 		t.Fatalf("LastFloorMetadata = %q, want next-audio transcription summary", sess.LastFloorMetadata)
 	}
+	if !strings.Contains(sess.LastFloorMetadata, `"claim"`) ||
+		!strings.Contains(sess.LastFloorMetadata, `"intent":"pending_media_intent"`) ||
+		!strings.Contains(sess.LastFloorMetadata, `"proposed_next_action":"transcribe_and_reply_text"`) {
+		t.Fatalf("LastFloorMetadata = %q, want typed media intent claim", sess.LastFloorMetadata)
+	}
 }
 
 func TestHandleInboundPendingAudioTranscriptionIntentForcesTextReply(t *testing.T) {
@@ -213,6 +218,10 @@ func TestHandleInboundPendingAudioTranscriptionIntentForcesTextReply(t *testing.
 	}
 	if strings.Contains(sess.LastFloorMetadata, `"category":"pending_media_intent"`) {
 		t.Fatalf("LastFloorMetadata = %q, pending media intent should be consumed", sess.LastFloorMetadata)
+	}
+	if !strings.Contains(sess.LastFloorMetadata, `"intent":"consumed_pending_media_intent"`) ||
+		!strings.Contains(sess.LastFloorMetadata, `"scope":"current_audio"`) {
+		t.Fatalf("LastFloorMetadata = %q, want typed consumed media intent claim", sess.LastFloorMetadata)
 	}
 	if len(sess.Messages) < 4 || !strings.Contains(sess.Messages[2].Content, "transcribed hello") {
 		t.Fatalf("session messages = %#v, want transcript in second user turn", sess.Messages)

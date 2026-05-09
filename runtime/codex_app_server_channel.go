@@ -715,6 +715,8 @@ func codexAppServerStatusPrompt(agent core.DurableAgent, now time.Time) string {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	agentID := strings.TrimSpace(agent.AgentID)
+	displayName := codexAppServerDisplayName(agent)
 	return strings.TrimSpace(fmt.Sprintf(`Produce a single JSON object and nothing else.
 
 Rules:
@@ -730,15 +732,15 @@ Rules:
 - Process entries must include process names only, not command lines or paths.
 
 Return this exact generic envelope shape. Include payload_hash only if you can compute the exact sha256 of the compact JSON payload; otherwise omit payload_hash:
-{
-  "kind": "durable_child_status",
-  "agent_id": "%s",
-  "schema_version": "lighthouse.status.v1",
-  "generated_at": "%s",
-  "capability_posture": "read_only",
-  "payload": {
-    "display_name": "Lighthouse",
-    "mode": "read_only",
+	{
+	  "kind": "durable_child_status",
+	  "agent_id": %s,
+	  "schema_version": "durable_child_status.v1",
+	  "generated_at": "%s",
+	  "capability_posture": "read_only",
+	  "payload": {
+	    "display_name": %s,
+	    "mode": "read_only",
     "machine": {
       "hostname": "...",
       "os": "macOS",
@@ -765,8 +767,23 @@ Return this exact generic envelope shape. Include payload_hash only if you can c
       "no_messages": true,
       "no_full_command_line_inspection": true
     }
-  }
-}`, strings.TrimSpace(agent.AgentID), now.UTC().Format(time.RFC3339)))
+	  }
+	}`, jsonString(agentID), now.UTC().Format(time.RFC3339), jsonString(displayName)))
+}
+
+func codexAppServerDisplayName(agent core.DurableAgent) string {
+	if value := strings.TrimSpace(agent.AgentID); value != "" {
+		return value
+	}
+	return "durable child"
+}
+
+func jsonString(value string) string {
+	raw, err := json.Marshal(strings.TrimSpace(value))
+	if err != nil {
+		return `""`
+	}
+	return string(raw)
 }
 
 func recordCodexAppServerFailure(store *session.SQLiteStore, state *core.DurableAgentState, continuity core.DurableAgentContinuityState, runtimeState core.DurableAgentExternalChannelRuntimeState, memoryRoot string, agent core.DurableAgent, result codexAppServerResult, cause error, now time.Time) error {

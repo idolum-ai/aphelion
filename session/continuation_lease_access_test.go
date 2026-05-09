@@ -209,3 +209,41 @@ func TestAuthorityContractMapsLocalSecretMetadataReadToReadOnlyDataAccess(t *tes
 		t.Fatalf("forbidden actions = %#v, want live-effect and token-content denials", proposal.ForbiddenActions)
 	}
 }
+
+func TestAuthorityInterpretationClaimUsesStructuredFieldsBeforeProse(t *testing.T) {
+	claim, ok := AuthorityInterpretationClaimFor(
+		"read_only_child_adapter_environment_inspection",
+		[]string{"inspect_durable_agent_state", "inspect_nonsecret_environment_metadata"},
+		"Read local non-secret child state only. No deploy or restart.",
+	)
+	if !ok {
+		t.Fatal("AuthorityInterpretationClaimFor() ok = false, want read-only claim")
+	}
+	if claim.Intent != "authority_classification" || claim.AuthorityClass != "read_only_review" {
+		t.Fatalf("claim = %#v, want read_only_review authority classification", claim)
+	}
+	if claim.Source != "structured_authority_fields" {
+		t.Fatalf("claim.Source = %q, want structured_authority_fields", claim.Source)
+	}
+}
+
+func TestAuthorityInterpretationClaimTreatsCompoundCommitAsLocalAuthority(t *testing.T) {
+	claim, ok := AuthorityInterpretationClaimFor(
+		"workspace_commit_then_repo_write_bounded",
+		[]string{"git_commit_validated_slices"},
+		"Commit the validated local slice; do not push, deploy, or restart.",
+	)
+	if !ok {
+		t.Fatal("AuthorityInterpretationClaimFor() ok = false, want commit claim")
+	}
+	if claim.AuthorityClass != "commit" {
+		t.Fatalf("claim.AuthorityClass = %q, want commit", claim.AuthorityClass)
+	}
+	contract, ok := AuthorityContractFor("workspace_commit_then_repo_write_bounded", []string{"git_commit_validated_slices"}, "")
+	if !ok {
+		t.Fatal("AuthorityContractFor(compound commit) ok = false, want contract")
+	}
+	if contract.LeaseClass != ContinuationLeaseClassLocalWorkspace || contract.WorkAction != AuthorityWorkActionCommit {
+		t.Fatalf("contract = %#v, want local workspace commit authority", contract)
+	}
+}

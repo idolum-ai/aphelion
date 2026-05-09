@@ -1432,7 +1432,7 @@ func TestMaterializeBlockedConsentPhaseSendsStatusWithoutApprovalButtons(t *test
 	if inlineCount != 0 {
 		t.Fatalf("inline count = %d, want no approval buttons for blocked opt-in phase", inlineCount)
 	}
-	if sentCount != 1 || !strings.Contains(sentText, "Blocked: Consent-first Mada intake") || !strings.Contains(sentText, "explicit opt-in") {
+	if sentCount != 1 || !strings.Contains(sentText, "Blocked: Consent-first Mada intake") || !strings.Contains(sentText, "explicit opt-in") || !strings.Contains(sentText, "Details: /debug") {
 		t.Fatalf("sent text = %q, want concise blocked status", sentText)
 	}
 	if strings.Contains(sentText, "Approval needed") || strings.Contains(sentText, "Use the buttons") {

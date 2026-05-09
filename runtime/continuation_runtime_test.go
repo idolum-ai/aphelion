@@ -319,6 +319,11 @@ func TestHandleInboundOffersContinuationApprovalUI(t *testing.T) {
 	if !ok || remainingTurns != 1 {
 		t.Fatalf("offered payload remaining_turns = %d (ok=%v), want 1", remainingTurns, ok)
 	}
+	if !strings.Contains(offered.PayloadJSON, `"debug_breadcrumb"`) ||
+		!strings.Contains(offered.PayloadJSON, `"canonical_record"`) ||
+		!strings.Contains(offered.PayloadJSON, `"inspect_command"`) {
+		t.Fatalf("offered payload = %s, want debug breadcrumb", offered.PayloadJSON)
+	}
 	if payloadString(payload, "state_source") != "continuation_state" {
 		t.Fatalf("offered payload state_source = %q, want continuation_state", payloadString(payload, "state_source"))
 	}

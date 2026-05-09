@@ -3,8 +3,9 @@
 package core
 
 type HiddenInput struct {
-	Category string `json:"category"`
-	Summary  string `json:"summary"`
+	Category string               `json:"category"`
+	Summary  string               `json:"summary"`
+	Claim    *InterpretationClaim `json:"claim,omitempty"`
 }
 
 type ArtifactReference struct {

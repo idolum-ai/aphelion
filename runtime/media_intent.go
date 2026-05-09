@@ -27,7 +27,7 @@ func applyMediaIntentPolicy(priorFloorMetadata string, msg core.InboundMessage, 
 	currentTranscription := textRequestsAudioTranscription(msg.Text)
 
 	if textRequestsPendingAudioTranscription(msg.Text) && !hasAudio {
-		appendPreparedHiddenInput(prepared, hiddenInputPendingMediaIntent, "next audio should be transcribed and answered in text")
+		appendPreparedHiddenInput(prepared, hiddenInputPendingMediaIntent, "next audio should be transcribed and answered in text", mediaIntentClaim(hiddenInputPendingMediaIntent, "next_audio", "transcribe_and_reply_text"))
 		return
 	}
 
@@ -37,14 +37,14 @@ func applyMediaIntentPolicy(priorFloorMetadata string, msg core.InboundMessage, 
 	switch {
 	case pendingTranscription:
 		prepared.PreferredReplyModality = replyModalityText
-		appendPreparedHiddenInput(prepared, hiddenInputConsumedMediaIntent, "pending next-audio transcription intent consumed; answer this audio turn in text")
+		appendPreparedHiddenInput(prepared, hiddenInputConsumedMediaIntent, "pending next-audio transcription intent consumed; answer this audio turn in text", mediaIntentClaim(hiddenInputConsumedMediaIntent, "current_audio", "transcribe_and_reply_text"))
 	case currentTranscription:
 		prepared.PreferredReplyModality = replyModalityText
-		appendPreparedHiddenInput(prepared, hiddenInputMediaReplyModality, "audio transcription intent requests a text reply for this turn")
+		appendPreparedHiddenInput(prepared, hiddenInputMediaReplyModality, "audio transcription intent requests a text reply for this turn", mediaIntentClaim(hiddenInputMediaReplyModality, "current_audio", "transcribe_and_reply_text"))
 	}
 }
 
-func appendPreparedHiddenInput(prepared *pipeline.TurnPrepareContract, category string, summary string) {
+func appendPreparedHiddenInput(prepared *pipeline.TurnPrepareContract, category string, summary string, claim core.InterpretationClaim) {
 	category = strings.TrimSpace(category)
 	summary = strings.TrimSpace(summary)
 	if prepared == nil || category == "" || summary == "" {
@@ -55,9 +55,11 @@ func appendPreparedHiddenInput(prepared *pipeline.TurnPrepareContract, category 
 			return
 		}
 	}
+	normalizedClaim := core.NormalizeInterpretationClaim(claim)
 	prepared.ArtifactDecisionInputs = append(prepared.ArtifactDecisionInputs, core.HiddenInput{
 		Category: category,
 		Summary:  summary,
+		Claim:    &normalizedClaim,
 	})
 }
 
@@ -83,6 +85,14 @@ func floorHasPendingAudioTranscriptionIntent(priorFloorMetadata string) bool {
 	for _, input := range floor.HiddenInputs {
 		if strings.TrimSpace(input.Category) != hiddenInputPendingMediaIntent {
 			continue
+		}
+		if input.Claim != nil {
+			claim := core.NormalizeInterpretationClaim(*input.Claim)
+			if claim.Intent == hiddenInputPendingMediaIntent &&
+				claim.Scope == "next_audio" &&
+				claim.ProposedNextAction == "transcribe_and_reply_text" {
+				return true
+			}
 		}
 		summary := normalizeMediaIntentText(input.Summary)
 		if strings.Contains(summary, "next audio") && strings.Contains(summary, "transcrib") && strings.Contains(summary, "text") {
@@ -148,4 +158,15 @@ func normalizeMediaIntentText(text string) string {
 	)
 	normalized = replacer.Replace(normalized)
 	return " " + strings.Join(strings.Fields(normalized), " ") + " "
+}
+
+func mediaIntentClaim(intent string, scope string, nextAction string) core.InterpretationClaim {
+	return core.NormalizeInterpretationClaim(core.InterpretationClaim{
+		Intent:             strings.TrimSpace(intent),
+		Scope:              strings.TrimSpace(scope),
+		Risk:               []string{"media_artifact"},
+		Confidence:         "high",
+		Source:             "operator_media_instruction",
+		ProposedNextAction: strings.TrimSpace(nextAction),
+	})
 }

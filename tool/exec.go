@@ -866,7 +866,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						"description": "Optional current or most recent proposal gate",
 						"properties": {
 							"id": {"type": "string", "description": "Optional stable proposal id"},
-							"kind": {"type": "string", "description": "Proposal kind such as capability_acquisition or destructive_mutation"},
+								"kind": {"type": "string", "description": "Proposal kind such as capability_acquisition, possible_delete_command, or service_interruption_command"},
 							"summary": {"type": "string", "description": "Short proposal summary"},
 							"why_now": {"type": "string", "description": "Why this proposal is needed now"},
 							"bounded_effect": {"type": "string", "description": "What will happen if approved"},

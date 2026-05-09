@@ -30,6 +30,7 @@ const (
 type hiddenInput struct {
 	Category string
 	Summary  string
+	Claim    *core.InterpretationClaim
 }
 
 type hiddenInputSet struct {
@@ -37,6 +38,10 @@ type hiddenInputSet struct {
 }
 
 func (s *hiddenInputSet) add(category string, summary string) {
+	s.addWithClaim(category, summary, nil)
+}
+
+func (s *hiddenInputSet) addWithClaim(category string, summary string, claim *core.InterpretationClaim) {
 	category = strings.TrimSpace(category)
 	summary = strings.TrimSpace(summary)
 	if category == "" || summary == "" {
@@ -47,11 +52,18 @@ func (s *hiddenInputSet) add(category string, summary string) {
 			return
 		}
 	}
-	s.Inputs = append(s.Inputs, hiddenInput{Category: category, Summary: summary})
+	var normalized *core.InterpretationClaim
+	if claim != nil {
+		value := core.NormalizeInterpretationClaim(*claim)
+		if value.Active() {
+			normalized = &value
+		}
+	}
+	s.Inputs = append(s.Inputs, hiddenInput{Category: category, Summary: summary, Claim: normalized})
 }
 
 func (s *hiddenInputSet) addCore(input core.HiddenInput) {
-	s.add(input.Category, input.Summary)
+	s.addWithClaim(input.Category, input.Summary, input.Claim)
 }
 
 func (s *hiddenInputSet) addCoreAll(inputs []core.HiddenInput) {
@@ -117,6 +129,7 @@ func (s hiddenInputSet) Metadata() core.FloorMetadata {
 		metadata.HiddenInputs = append(metadata.HiddenInputs, core.HiddenInput{
 			Category: input.Category,
 			Summary:  input.Summary,
+			Claim:    input.Claim,
 		})
 	}
 	return metadata

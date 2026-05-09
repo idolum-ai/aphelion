@@ -556,12 +556,20 @@ func (r *Runtime) groundContinuationPromptWithExecutionEvidence(
 }
 
 func continuationExecutionPayload(state session.ContinuationState) map[string]any {
+	state = session.NormalizeContinuationState(state)
 	payload := map[string]any{
 		"decision_id":     strings.TrimSpace(state.DecisionID),
 		"objective":       strings.TrimSpace(state.Objective),
 		"stage_summary":   strings.TrimSpace(state.StageSummary),
 		"remaining_turns": state.RemainingTurns,
 		"state_source":    "continuation_state",
+		"debug_breadcrumb": core.ContinuationDebugBreadcrumb(
+			0,
+			state.DecisionID,
+			"runtime.continuation",
+			"runtime/continuation.go",
+			"inspect /debug for continuation state and TES events",
+		),
 	}
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
 	if proposal.Active() {
@@ -956,7 +964,7 @@ func continuationOperatorCardLines(state session.ContinuationState) []string {
 		class = session.InferContinuationLeaseClass(state.ActionProposal.RiskClass, state.ActionProposal.AllowedActions, state.ActionProposal.BoundedEffect)
 	}
 	lines := []string{
-		"Lease class: " + session.ContinuationLeaseClassLabel(class),
+		"Scope: " + session.ContinuationLeaseClassLabel(class),
 		"Boundary: " + session.ContinuationLeaseClassBoundary(class),
 	}
 	if adjudication := continuationProposalRiskAdjudication(state); len(adjudication.Findings) > 0 {

@@ -421,25 +421,25 @@ func parseReviewEventArtifactMetadata(event session.ReviewEvent) (reviewEventArt
 }
 
 func reviewEventDebugBreadcrumbLines(event session.ReviewEvent, meta reviewEventArtifactMetadata, metaOK bool) []string {
-	lines := make([]string, 0, 5)
 	traceID := "review_event"
 	if event.ID > 0 {
 		traceID = fmt.Sprintf("review_event:%d", event.ID)
 	}
-	lines = append(lines, "- trace_id: "+traceID)
+	canonical := "review_events"
 	if event.ID > 0 {
-		lines = append(lines, fmt.Sprintf("- canonical_record: review_events id=%d", event.ID))
-	} else {
-		lines = append(lines, "- canonical_record: review_events")
+		canonical = fmt.Sprintf("review_events id=%d", event.ID)
 	}
-	lines = append(lines, "- projection: runtime.FormatReviewEventDetailsMessage")
+	inspectCommand := ""
 	if metaOK {
-		if command := reviewEventInspectCommand(meta); command != "" {
-			lines = append(lines, "- inspect_command: "+command)
-		}
+		inspectCommand = reviewEventInspectCommand(meta)
 	}
-	lines = append(lines, "- code_owner: runtime/turn.go")
-	return lines
+	return core.DebugBreadcrumbLines(core.DebugBreadcrumb{
+		TraceID:         traceID,
+		CanonicalRecord: canonical,
+		Projection:      "runtime.FormatReviewEventDetailsMessage",
+		InspectCommand:  inspectCommand,
+		CodeOwner:       "runtime/turn.go",
+	})
 }
 
 func reviewEventInspectCommand(meta reviewEventArtifactMetadata) string {
@@ -481,9 +481,10 @@ func reviewEventCompactTitle(event session.ReviewEvent, meta reviewEventArtifact
 	if agent == "" {
 		agent = formattedReviewEventAgent(event)
 	}
-	switch strings.ToLower(agent) {
-	case "idolum-email":
+	if strings.EqualFold(strings.TrimSpace(meta.Metadata["channel_kind"]), "email") {
 		return "Email child review"
+	}
+	switch strings.ToLower(agent) {
 	case "idolum-daily-review":
 		return "Daily review"
 	case "":

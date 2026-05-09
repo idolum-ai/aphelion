@@ -92,6 +92,7 @@ var doctorDesignPrincipleHighRiskPaths = []string{
 	"runtime/continuation_materialize.go",
 	"runtime/operation_phase_gate.go",
 	"runtime/goal_continuation.go",
+	"runtime/media_intent.go",
 	"runtime/external_channel_wake.go",
 	"runtime/continuation.go",
 	"runtime/status.go",
@@ -1153,15 +1154,15 @@ func (r *Runtime) writeDoctorIssueStatusChecks(b *strings.Builder, input doctorD
 		writeDoctorIssueCheck(b, "admin_workspace_escape_requires_approval", "unknown", "could not confirm workspace escape approval gate source evidence from working_root")
 	}
 
-	synthRunnerSourceOK := doctorSourceContainsAll(workingRoot, "main_telegram_child_bot.go", []string{"runTelegramChildBotCommandWithDeps", "validateTelegramChildBotTokenMetadata", "telegramChildBotHealthStatus", "runTelegramChildBotGetMeSmoke", "runTelegramChildBotDryStart", "telegramChildBotNoSendOutbound"})
-	synthRunbookOK := doctorSourceContainsAll(workingRoot, "docs/architecture/synth-telegram-bot-subsystem-plan.md", []string{"Validation gates", "Launch runbook", "telegram-child-bot status"})
+	childBotRunnerSourceOK := doctorSourceContainsAll(workingRoot, "main_telegram_child_bot.go", []string{"runTelegramChildBotCommandWithDeps", "validateTelegramChildBotTokenMetadata", "telegramChildBotHealthStatus", "runTelegramChildBotGetMeSmoke", "runTelegramChildBotDryStart", "telegramChildBotNoSendOutbound"})
+	childBotRunbookOK := doctorSourceContainsAll(workingRoot, "docs/architecture/synth-telegram-bot-subsystem-plan.md", []string{"generic but narrow", "telegram-child-bot"})
 	switch {
-	case synthRunnerSourceOK && synthRunbookOK:
-		writeDoctorIssueCheck(b, "synth_telegram_child_bot_runner", "likely_fixed", "child bot runner source includes metadata-only health/status, no-send dry-start, and getMe smoke gates; runbook names validation and launch gates")
-	case synthRunnerSourceOK:
-		writeDoctorIssueCheck(b, "synth_telegram_child_bot_runner", "residual_risk", "child bot runner source is present, but runbook/status projection evidence was not confirmed")
+	case childBotRunnerSourceOK && childBotRunbookOK:
+		writeDoctorIssueCheck(b, "telegram_child_bot_runner", "likely_fixed", "generic child bot runner source includes metadata-only health/status, no-send dry-start, and getMe smoke gates")
+	case childBotRunnerSourceOK:
+		writeDoctorIssueCheck(b, "telegram_child_bot_runner", "residual_risk", "generic child bot runner source is present, but runbook/status projection evidence was not confirmed")
 	default:
-		writeDoctorIssueCheck(b, "synth_telegram_child_bot_runner", "unknown", "could not confirm Synth child bot runner source evidence from working_root")
+		writeDoctorIssueCheck(b, "telegram_child_bot_runner", "unknown", "could not confirm generic child bot runner source evidence from working_root")
 	}
 }
 
