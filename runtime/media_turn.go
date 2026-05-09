@@ -126,7 +126,13 @@ func (r *Runtime) prepareInboundTurn(ctx context.Context, scope sandbox.Scope, m
 
 	prepared.UserText = strings.TrimSpace(prepared.UserText)
 	prepared.LedgerText = summarizeInboundForLedger(prepared.LedgerText, msg.Artifacts)
-	applyMediaIntentPolicy("", msg, &prepared)
+	currentClaims := r.interpretCurrentTurnClaims(ctx, interpretationRequest{
+		Surface:  "inbound_media_instruction",
+		Text:     msg.Text,
+		HasAudio: inboundMessageHasAudio(msg) || prepared.InboundWasVoice,
+		HasMedia: len(msg.Artifacts) > 0,
+	})
+	applyMediaIntentPolicy("", msg, &prepared, currentClaims)
 	return prepared, nil
 }
 

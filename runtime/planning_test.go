@@ -21,7 +21,10 @@ type updatePlanToolProvider struct {
 	callCount int
 }
 
-func (p *updatePlanToolProvider) Complete(_ context.Context, _ []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+func (p *updatePlanToolProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if resp, ok := fakeInterpretationResponse(messages, "", core.TokenUsage{}); ok {
+		return resp, nil
+	}
 	p.callCount++
 	if p.callCount == 1 {
 		for _, def := range tools {

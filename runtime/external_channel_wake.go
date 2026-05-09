@@ -358,19 +358,7 @@ func genericExternalChannelWakeOutcomeFromSummary(turnSummary string) genericExt
 			return outcome
 		}
 	}
-	status := strings.ToLower(strings.TrimSpace(extractGenericExternalChannelStatusLine(turnSummary, "EXTERNAL_CHANNEL_STATUS")))
-	errorText := strings.TrimSpace(extractGenericExternalChannelStatusLine(turnSummary, "EXTERNAL_CHANNEL_ERROR"))
-	switch status {
-	case "completed", "complete", "ok", "success", "wake_completed":
-		return genericExternalChannelWakeOutcome{Completed: true, Status: "wake_completed", Schema: genericExternalChannelWakeOutcomeSchema, Source: "legacy_status_line"}
-	case "blocked", "blocker", "failed", "failure", "error", "unavailable", "wake_blocked":
-		if errorText == "" {
-			errorText = "external channel child reported blocked status"
-		}
-		return genericExternalChannelWakeOutcome{Completed: false, Status: "wake_blocked", ReasonCode: "legacy_blocked", Error: errorText, Schema: genericExternalChannelWakeOutcomeSchema, Source: "legacy_status_line"}
-	default:
-		return genericExternalChannelWakeOutcome{Completed: false, Status: "wake_blocked", ReasonCode: "missing_outcome", Error: "external channel completion status missing; not marking poll as successful", Schema: genericExternalChannelWakeOutcomeSchema, Source: "missing_outcome"}
-	}
+	return genericExternalChannelWakeOutcome{Completed: false, Status: "wake_blocked", ReasonCode: "missing_outcome", Error: "external channel typed outcome missing; not marking poll as successful", Schema: genericExternalChannelWakeOutcomeSchema, Source: "missing_outcome"}
 }
 
 func extractGenericExternalChannelOutcomeContract(text string) (genericExternalChannelWakeOutcomeContract, bool) {

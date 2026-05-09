@@ -36,7 +36,7 @@ func (r *Runtime) applyTurnConstitution(
 		audit.RecordFinalReply(replyText, media, "")
 	}
 	trimmedReply := strings.TrimSpace(replyText)
-	adjudication := r.adjudicateFinalReplyExecutionClaims(key, trimmedReply)
+	adjudication := r.adjudicateFinalReplyExecutionClaimsWithContext(ctx, key, trimmedReply)
 	if adjudication.HasFindings() {
 		r.recordExecutionClaimAdjudication(key, adjudication, "repair_requested")
 		violations := adjudication.ConstitutionViolations()
@@ -45,7 +45,7 @@ func (r *Runtime) applyTurnConstitution(
 			audit.RecordExecutionClaimFindings(adjudication.Findings)
 		}
 		if repaired, ok := r.repairTurnReply(ctx, scope, channel, principalRole, userText, currentFaceModel, faceAwareness, materialFloor, floorText, trimmedReply, media, violations, []core.RuntimeAdjudication{adjudication.RuntimeAdjudication("repair_requested")}, audit); ok {
-			repairedAdjudication := r.adjudicateFinalReplyExecutionClaims(key, repaired)
+			repairedAdjudication := r.adjudicateFinalReplyExecutionClaimsWithContext(ctx, key, repaired)
 			if !repairedAdjudication.HasFindings() {
 				trimmedReply = strings.TrimSpace(repaired)
 				r.recordExecutionClaimAdjudication(key, repairedAdjudication.WithPrior(adjudication), "persona_repaired")
@@ -207,16 +207,20 @@ func (a executionClaimAdjudication) RuntimeAdjudication(visibleAction string) co
 }
 
 func (r *Runtime) adjudicateFinalReplyExecutionClaims(key session.SessionKey, reply string) executionClaimAdjudication {
+	return r.adjudicateFinalReplyExecutionClaimsWithContext(context.Background(), key, reply)
+}
+
+func (r *Runtime) adjudicateFinalReplyExecutionClaimsWithContext(ctx context.Context, key session.SessionKey, reply string) executionClaimAdjudication {
 	reply = strings.TrimSpace(reply)
 	out := executionClaimAdjudication{}
 	if r == nil || r.store == nil || reply == "" {
 		return out
 	}
-	claims := detectExecutionClaims(reply)
-	if !claims.any() {
+	claims := r.interpretFinalReplyExecutionClaims(ctx, reply)
+	if len(claims) == 0 {
 		return out
 	}
-	out.Interpretation = executionClaimInterpretationClaims(claims)
+	out.Interpretation = claims
 	events, err := r.store.LatestExecutionEventsBySession(key, 300)
 	if err != nil || len(events) == 0 {
 		return out
@@ -286,17 +290,17 @@ func (r *Runtime) adjudicateFinalReplyExecutionClaims(key session.SessionKey, re
 	case "":
 		out.LatestStatus = "in_progress"
 	}
-	if claims.Completion && latestTerminal != "" && latestTerminal != core.ExecutionEventTurnCompleted {
+	if executionClaimsInclude(claims, "completion") && latestTerminal != "" && latestTerminal != core.ExecutionEventTurnCompleted {
 		out.Findings = append(out.Findings, executionClaimFinding("completion", "completion claim is not grounded (turn="+out.LatestStatus+")", out))
 	}
-	missingTestEvidence := claims.Tests && !out.HasTestEvidence
-	if claims.Tool && !out.HasToolEvidence && !missingTestEvidence {
+	missingTestEvidence := executionClaimsInclude(claims, "test_execution") && !out.HasTestEvidence
+	if executionClaimsInclude(claims, "tool_execution") && !out.HasToolEvidence && !missingTestEvidence {
 		out.Findings = append(out.Findings, executionClaimFinding("tool_execution", "tool-execution claim has no tool events", out))
 	}
 	if missingTestEvidence {
 		out.Findings = append(out.Findings, executionClaimFinding("test_execution", "test-execution claim has no test-related tool evidence", out))
 	}
-	if claims.Durable && !out.HasDurableEvidence {
+	if executionClaimsInclude(claims, "durable_agent") && !out.HasDurableEvidence {
 		out.Findings = append(out.Findings, executionClaimFinding("durable_agent", "durable-agent claim has no durable lifecycle events", out))
 	}
 	return out
@@ -385,262 +389,69 @@ func neutralizeUnsupportedExecutionClaims(reply string, adjudication executionCl
 	if reply == "" || !adjudication.HasFindings() {
 		return reply
 	}
-	paragraphs := splitReplyParagraphs(reply)
-	kept := make([]string, 0, len(paragraphs))
-	for _, paragraph := range paragraphs {
-		if paragraphHasUnsupportedExecutionClaim(paragraph, adjudication) {
-			continue
-		}
-		kept = append(kept, paragraph)
-	}
-	out := strings.TrimSpace(strings.Join(kept, "\n\n"))
-	if out != "" {
-		return out
-	}
 	return "I do not have current-turn execution evidence for that claim."
 }
 
-func splitReplyParagraphs(reply string) []string {
-	lines := strings.Split(strings.TrimSpace(reply), "\n")
-	out := make([]string, 0)
-	var current []string
-	flush := func() {
-		if len(current) == 0 {
-			return
-		}
-		out = append(out, strings.TrimSpace(strings.Join(current, "\n")))
-		current = nil
+func (r *Runtime) interpretFinalReplyExecutionClaims(ctx context.Context, reply string) []core.InterpretationClaim {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return nil
 	}
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			flush()
+	claims := r.interpretCurrentTurnClaims(ctx, interpretationRequest{
+		Surface: "final_reply",
+		Text:    reply,
+	})
+	out := make([]core.InterpretationClaim, 0, len(claims))
+	for _, claim := range interpretationClaimsWithIntent(claims, "reply_execution_claim") {
+		if claim.Scope != "" && claim.Scope != "final_reply" {
 			continue
 		}
-		current = append(current, line)
-	}
-	flush()
-	if len(out) == 0 && strings.TrimSpace(reply) != "" {
-		return []string{strings.TrimSpace(reply)}
+		filteredRisk := executionClaimRisks(claim.Risk)
+		if len(filteredRisk) == 0 {
+			continue
+		}
+		claim.Scope = "final_reply"
+		claim.Risk = filteredRisk
+		claim.ProposedNextAction = firstNonEmpty(claim.ProposedNextAction, "validate_against_tes")
+		out = append(out, core.NormalizeInterpretationClaim(claim))
 	}
 	return out
 }
 
-func paragraphHasUnsupportedExecutionClaim(paragraph string, adjudication executionClaimAdjudication) bool {
-	claims := detectExecutionClaims(paragraph)
-	for _, finding := range adjudication.Findings {
-		switch strings.TrimSpace(finding.ClaimType) {
-		case "completion":
-			if claims.Completion {
-				return true
-			}
-		case "tool_execution":
-			if claims.Tool {
-				return true
-			}
-		case "test_execution":
-			if claims.Tests {
-				return true
-			}
-		case "durable_agent":
-			if claims.Durable {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-type executionClaimSet struct {
-	Completion bool
-	Tool       bool
-	Tests      bool
-	Durable    bool
-}
-
-func (c executionClaimSet) any() bool {
-	return c.Completion || c.Tool || c.Tests || c.Durable
-}
-
-func executionClaimInterpretationClaims(claims executionClaimSet) []core.InterpretationClaim {
-	out := make([]core.InterpretationClaim, 0, 4)
-	appendClaim := func(claimType string) {
-		out = append(out, core.NormalizeInterpretationClaim(core.InterpretationClaim{
-			Intent:             "reply_execution_claim",
-			Scope:              "final_reply",
-			Risk:               []string{claimType},
-			Confidence:         "medium",
-			Source:             "lexical_safety_scanner",
-			ProposedNextAction: "validate_against_tes",
-		}))
-	}
-	if claims.Completion {
-		appendClaim("completion")
-	}
-	if claims.Tool {
-		appendClaim("tool_execution")
-	}
-	if claims.Tests {
-		appendClaim("test_execution")
-	}
-	if claims.Durable {
-		appendClaim("durable_agent")
-	}
-	return out
-}
-
-func detectExecutionClaims(reply string) executionClaimSet {
-	lower := strings.ToLower(strings.TrimSpace(reply))
-	if lower == "" {
-		return executionClaimSet{}
-	}
-	claims := executionClaimSet{}
-	if containsPositiveClaimMarker(lower,
-		"done",
-		"completed",
-		"all set",
-		"finished",
-		"successfully",
-	) {
-		claims.Completion = true
-	}
-	if containsPositiveClaimMarker(lower,
-		"ran ",
-		"executed ",
-		"used the tool",
-		"called the tool",
-		"executed command",
-		"ran command",
-		"applied the patch",
-		"updated the files",
-	) {
-		claims.Tool = true
-	}
-	if containsPositiveClaimMarker(lower,
-		"tests passed",
-		"all tests passed",
-		"validation passed",
-		"ran go test",
-		"go test passed",
-		"go test succeeded",
-		"ran pytest",
-		"pytest passed",
-		"pytest succeeded",
-		"ran npm test",
-		"npm test passed",
-		"npm test succeeded",
-	) {
-		claims.Tests = true
-		claims.Tool = true
-	}
-	if containsPositiveClaimMarker(lower,
-		"woke durable agent",
-		"woke durable child",
-		"durable wake completed",
-		"durable child completed",
-		"child processed parent guidance",
-		"processed pending parent guidance",
-	) {
-		claims.Durable = true
-	}
-	return claims
-}
-
-func containsAnyClaimMarker(text string, needles ...string) bool {
-	for _, needle := range needles {
-		needle = strings.TrimSpace(needle)
-		if needle == "" {
-			continue
-		}
-		if strings.Contains(text, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsPositiveClaimMarker(text string, needles ...string) bool {
-	for _, needle := range needles {
-		needle = strings.TrimSpace(strings.ToLower(needle))
-		if needle == "" {
-			continue
-		}
-		searchFrom := 0
-		for {
-			idx := strings.Index(text[searchFrom:], needle)
-			if idx < 0 {
-				break
-			}
-			idx += searchFrom
-			if !claimMarkerHasBoundaries(text, idx, needle) {
-				searchFrom = idx + len(needle)
-				if searchFrom >= len(text) {
-					break
-				}
+func executionClaimRisks(risks []string) []string {
+	out := make([]string, 0, len(risks))
+	seen := map[string]struct{}{}
+	for _, risk := range risks {
+		risk = strings.TrimSpace(risk)
+		switch risk {
+		case "completion", "tool_execution", "test_execution", "durable_agent":
+			if _, ok := seen[risk]; ok {
 				continue
 			}
-			start := idx - 32
-			if start < 0 {
-				start = 0
-			}
-			prefix := strings.TrimSpace(text[start:idx])
-			if !containsAnyClaimMarker(prefix,
-				" not ",
-				"not",
-				"did not",
-				"didn't",
-				"won't",
-				"wouldn't",
-				"can't",
-				"cannot",
-				"never",
-				"no ",
-				"avoid",
-				"without",
-				"pretend",
-				"reviewed",
-				"existing validation",
-				"prior validation",
-				"previous validation",
-				"already-present validation",
-				"validation record",
-				"pushed fixes",
-				"prior commit",
-				"previous commit",
-			) {
+			seen[risk] = struct{}{}
+			out = append(out, risk)
+		}
+	}
+	return out
+}
+
+func executionClaimsInclude(claims []core.InterpretationClaim, risk string) bool {
+	risk = strings.TrimSpace(risk)
+	if risk == "" {
+		return false
+	}
+	for _, claim := range claims {
+		claim = core.NormalizeInterpretationClaim(claim)
+		if claim.Intent != "reply_execution_claim" {
+			continue
+		}
+		for _, candidate := range claim.Risk {
+			if candidate == risk {
 				return true
-			}
-			searchFrom = idx + len(needle)
-			if searchFrom >= len(text) {
-				break
 			}
 		}
 	}
 	return false
-}
-
-func claimMarkerHasBoundaries(text string, idx int, marker string) bool {
-	if idx < 0 || marker == "" {
-		return false
-	}
-	end := idx + len(marker)
-	if end > len(text) {
-		return false
-	}
-	if markerBoundaryRequired(marker[0]) && idx > 0 && isClaimWordByte(text[idx-1]) {
-		return false
-	}
-	if markerBoundaryRequired(marker[len(marker)-1]) && end < len(text) && isClaimWordByte(text[end]) {
-		return false
-	}
-	return true
-}
-
-func markerBoundaryRequired(ch byte) bool {
-	return isClaimWordByte(ch)
-}
-
-func isClaimWordByte(ch byte) bool {
-	return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_'
 }
 
 func (r *Runtime) repairTurnReply(

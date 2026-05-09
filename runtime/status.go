@@ -354,6 +354,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 				Summary: fmt.Sprintf("queue_depth=%d", depth),
 			})
 		}
+		attachPendingItemDebugBreadcrumbs(snapshot.PendingItems)
 		sortPendingItems(snapshot.PendingItems)
 		snapshot.HotChats = buildHotChatRollups(snapshot)
 		return snapshot, nil
@@ -678,6 +679,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		}
 		return snapshot.StaleRunningTurns[i].ChatID < snapshot.StaleRunningTurns[j].ChatID
 	})
+	attachPendingItemDebugBreadcrumbs(snapshot.PendingItems)
 	sortPendingItems(snapshot.PendingItems)
 	snapshot.HotChats = buildHotChatRollups(snapshot)
 	if r.cfg != nil && r.cfg.Tailscale.Enabled {

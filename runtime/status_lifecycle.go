@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,6 +91,67 @@ func sortPendingItems(items []core.PendingItem) {
 		}
 		return a.Summary < b.Summary
 	})
+}
+
+func attachPendingItemDebugBreadcrumbs(items []core.PendingItem) {
+	for i := range items {
+		if items[i].DebugBreadcrumb.Active() {
+			items[i].DebugBreadcrumb = core.NormalizeDebugBreadcrumb(items[i].DebugBreadcrumb)
+			continue
+		}
+		items[i].DebugBreadcrumb = pendingItemDebugBreadcrumb(items[i])
+	}
+}
+
+func pendingItemDebugBreadcrumb(item core.PendingItem) core.DebugBreadcrumb {
+	id := strings.TrimSpace(item.ID)
+	traceID := strings.TrimSpace(string(item.Kind))
+	if item.ChatID != 0 {
+		traceID += ":" + strconv.FormatInt(item.ChatID, 10)
+	}
+	if id != "" {
+		traceID += ":" + id
+	}
+	canonical := strings.TrimSpace(item.SourceSurface)
+	if canonical == "" {
+		canonical = "status.pending_items"
+	}
+	if item.SourceClass != "" {
+		canonical = strings.TrimSpace(item.SourceClass) + ":" + canonical
+	}
+	inspect := "/debug"
+	if item.ChatID != 0 {
+		inspect = "/debug " + strconv.FormatInt(item.ChatID, 10)
+	}
+	return core.NormalizeDebugBreadcrumb(core.DebugBreadcrumb{
+		TraceID:          traceID,
+		CanonicalRecord:  canonical,
+		Projection:       "status.pending_items",
+		InspectCommand:   inspect,
+		CodeOwner:        "runtime/status.go",
+		NextRepairAction: pendingItemNextRepairAction(item.Kind),
+	})
+}
+
+func pendingItemNextRepairAction(kind core.PendingItemKind) string {
+	switch kind {
+	case core.PendingItemKindDecision:
+		return "open the pending decision and approve, reject, or let it expire"
+	case core.PendingItemKindContinuation:
+		return "inspect continuation state and approve, stop, or refresh the lease"
+	case core.PendingItemKindReview:
+		return "open the pending review event and deliver or resolve it"
+	case core.PendingItemKindRecovery:
+		return "inspect recovery events and resume or close the interrupted turn"
+	case core.PendingItemKindStaleTurn:
+		return "inspect the stale turn and interrupt, recover, or mark terminal"
+	case core.PendingItemKindQueue:
+		return "inspect router queue depth and drain blocked chat work"
+	case core.PendingItemKindMission:
+		return "inspect mission ledger and activate, park, or close the candidate"
+	default:
+		return "inspect the canonical record and choose the next bounded repair"
+	}
 }
 
 func buildHotChatRollups(snapshot core.SystemStatusSnapshot) []core.ChatStatusRollup {

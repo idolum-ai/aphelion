@@ -18,15 +18,15 @@ const (
 	replyModalityText = "text"
 )
 
-func applyMediaIntentPolicy(priorFloorMetadata string, msg core.InboundMessage, prepared *pipeline.TurnPrepareContract) {
+func applyMediaIntentPolicy(priorFloorMetadata string, msg core.InboundMessage, prepared *pipeline.TurnPrepareContract, currentClaims []core.InterpretationClaim) {
 	if prepared == nil {
 		return
 	}
 	hasAudio := inboundMessageHasAudio(msg) || prepared.InboundWasVoice
 	pendingTranscription := floorHasPendingAudioTranscriptionIntent(priorFloorMetadata)
-	currentTranscription := textRequestsAudioTranscription(msg.Text)
+	currentTranscription := currentClaimsRequestAudioTranscription(currentClaims)
 
-	if textRequestsPendingAudioTranscription(msg.Text) && !hasAudio {
+	if currentClaimsRequestPendingAudioTranscription(currentClaims) && !hasAudio {
 		appendPreparedHiddenInput(prepared, hiddenInputPendingMediaIntent, "next audio should be transcribed and answered in text", mediaIntentClaim(hiddenInputPendingMediaIntent, "next_audio", "transcribe_and_reply_text"))
 		return
 	}
@@ -98,64 +98,6 @@ func floorHasPendingAudioTranscriptionIntent(priorFloorMetadata string) bool {
 	return false
 }
 
-func textRequestsPendingAudioTranscription(text string) bool {
-	normalized := normalizeMediaIntentText(text)
-	if normalized == "" || !containsTranscriptionTerm(normalized) || !containsAudioTerm(normalized) {
-		return false
-	}
-	return strings.Contains(normalized, " next ") ||
-		strings.Contains(normalized, " following ") ||
-		strings.Contains(normalized, " upcoming ") ||
-		strings.Contains(normalized, " subsequent ")
-}
-
-func textRequestsAudioTranscription(text string) bool {
-	return containsTranscriptionTerm(normalizeMediaIntentText(text))
-}
-
-func containsTranscriptionTerm(text string) bool {
-	return strings.Contains(text, " transcrib") ||
-		strings.Contains(text, " transcript") ||
-		strings.Contains(text, " transcription") ||
-		strings.Contains(text, " speech to text ") ||
-		strings.Contains(text, " write down ")
-}
-
-func containsAudioTerm(text string) bool {
-	return strings.Contains(text, " audio ") ||
-		strings.Contains(text, " voice ") ||
-		strings.Contains(text, " voice note ") ||
-		strings.Contains(text, " voice memo ") ||
-		strings.Contains(text, " recording ") ||
-		strings.Contains(text, " spoken ") ||
-		strings.Contains(text, " speech ")
-}
-
-func normalizeMediaIntentText(text string) string {
-	normalized := strings.ToLower(strings.TrimSpace(text))
-	if normalized == "" {
-		return ""
-	}
-	replacer := strings.NewReplacer(
-		"\n", " ",
-		"\t", " ",
-		".", " ",
-		",", " ",
-		"!", " ",
-		"?", " ",
-		":", " ",
-		";", " ",
-		"(", " ",
-		")", " ",
-		"[", " ",
-		"]", " ",
-		"{", " ",
-		"}", " ",
-	)
-	normalized = replacer.Replace(normalized)
-	return " " + strings.Join(strings.Fields(normalized), " ") + " "
-}
-
 func mediaIntentClaim(intent string, scope string, nextAction string) core.InterpretationClaim {
 	return core.NormalizeInterpretationClaim(core.InterpretationClaim{
 		Intent:             strings.TrimSpace(intent),
@@ -165,4 +107,22 @@ func mediaIntentClaim(intent string, scope string, nextAction string) core.Inter
 		Source:             "operator_media_instruction",
 		ProposedNextAction: strings.TrimSpace(nextAction),
 	})
+}
+
+func currentClaimsRequestPendingAudioTranscription(claims []core.InterpretationClaim) bool {
+	for _, claim := range interpretationClaimsWithIntent(claims, hiddenInputPendingMediaIntent) {
+		if claim.Scope == "next_audio" && claim.ProposedNextAction == "transcribe_and_reply_text" {
+			return true
+		}
+	}
+	return false
+}
+
+func currentClaimsRequestAudioTranscription(claims []core.InterpretationClaim) bool {
+	for _, claim := range interpretationClaimsWithIntent(claims, hiddenInputMediaReplyModality) {
+		if claim.Scope == "current_audio" && claim.ProposedNextAction == "transcribe_and_reply_text" {
+			return true
+		}
+	}
+	return false
 }

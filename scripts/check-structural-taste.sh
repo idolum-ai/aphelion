@@ -26,14 +26,14 @@ check_max_lines() {
 
 # DP-005 debt surfaces. These caps are intentionally generous enough to avoid
 # churn, but tight enough to catch growth back into pre-split broad files.
-check_max_lines "session/store.go" 1200
-check_max_lines "runtime/continuation.go" 400
-check_max_lines "runtime/continuation_materialize.go" 500
-check_max_lines "runtime/status.go" 1000
-check_max_lines "telegram_decisions.go" 2200
-check_max_lines "commands.go" 1300
-check_max_lines "maintenance_durable_agent.go" 1300
-check_max_lines "quickstart.go" 1000
+check_max_lines "session/store.go" 850
+check_max_lines "runtime/continuation.go" 140
+check_max_lines "runtime/continuation_materialize.go" 260
+check_max_lines "runtime/status.go" 760
+check_max_lines "telegram_decisions.go" 2000
+check_max_lines "commands.go" 1150
+check_max_lines "maintenance_durable_agent.go" 1125
+check_max_lines "quickstart.go" 925
 
 while IFS= read -r file; do
   check_max_lines "$file" 1800

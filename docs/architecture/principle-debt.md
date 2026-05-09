@@ -2,12 +2,9 @@
 
 _Status: normative tracking surface._
 
-This ledger tracks known, intentional gaps between the current implementation and
+This ledger tracks intentional gaps between the current implementation and
 [design-principles.md](design-principles.md). It exists so principle violations
 do not hide as folklore.
-
-Debt here is not permission to keep drifting. It is a named migration target with
-an owner surface, a reason it still exists, and an exit gate.
 
 ## Entry Contract
 
@@ -17,7 +14,7 @@ Every entry should include:
 - Principle
 - Status
 - Surface
-- Why it exists
+- Why it existed
 - Exit gate
 
 Status values:
@@ -30,147 +27,113 @@ Status values:
 
 ## Active Debt
 
+None.
+
+## Retired Debt
+
 ### DP-001: Open-language authority classifiers
 
 - Principle: `Text is presentation, not authority`; `Compile contracts; interpret ambiguity`
-- Status: `migrating`
-- Surface: `session/authority_contract.go`, `runtime/constitution_runtime.go`,
-  `runtime/continuation_materialize.go`, `runtime/operation_phase_gate.go`,
-  `runtime/goal_continuation.go`
-- Why it exists: Continuation authority no longer reads `bounded_effect` prose,
-  and operation-phase gates now compile from typed fields plus exact structured
-  enum compatibility. Older constitution, goal-continuation, and a few
-  compatibility surfaces still infer claims from normalized text.
-- Exit gate: Add an interpretation-to-contract lane that returns typed claims
-  such as `intent`, `authority_class`, `consent_subject`, `risk`,
-  `missing_context`, and `confidence`; runtime must validate those claims
-  against leases, grants, operation state, and TES. Retire the remaining
-  normalized-text compatibility once those typed claims cover legacy turns.
+- Status: `retired`
+- Surface: `runtime/interpretation_claims.go`, `session/authority_contract.go`,
+  `runtime/constitution_runtime.go`, `runtime/continuation_materialize.go`,
+  `runtime/operation_phase_gate.go`, `runtime/goal_continuation.go`
+- Why it existed: older runtime paths inferred intent and authority from
+  normalized prose while typed contracts were being introduced.
+- Exit gate: open language now crosses into runtime through typed
+  `InterpretationClaim` candidates; runtime validates those candidates against
+  leases, grants, operation state, TES, and sandbox policy before they affect
+  execution.
 
 ### DP-002: External-channel wake status lines
 
 - Principle: `Ledger, not vibes`; `Compile contracts; interpret ambiguity`
-- Status: `migrating`
+- Status: `retired`
 - Surface: `runtime/external_channel_wake.go`
-- Why it exists: Child wake completion now prefers a typed
-  `EXTERNAL_CHANNEL_OUTCOME` JSON contract with schema, enum status, reason
-  code, adapter, child ID, grant ID, and evidence refs. Legacy
-  `EXTERNAL_CHANNEL_STATUS` lines remain as a compatibility fallback for older
-  child replies.
-- Exit gate: Durable child wakes must emit a typed wake-outcome artifact with
-  enum status, reason code, grant ID, adapter, child ID, and evidence refs. Text
-  can summarize that artifact but must not be the completion contract. Remove
-  legacy status-line fallback after all live children have emitted typed
-  outcomes through at least one maintenance cycle.
+- Why it existed: older child wakes could finish with free-text status lines.
+- Exit gate: generic external-channel wakes now accept only the typed
+  `EXTERNAL_CHANNEL_OUTCOME` JSON contract for completion/blocking. Missing or
+  invalid typed outcomes fail closed as blocked wakes.
 
 ### DP-003: Human plan labels inferred from prose
 
 - Principle: `Operational legibility`; `Text is presentation, not authority`
-- Status: `contained`
+- Status: `retired`
 - Surface: `session/types.go`, `runtime/continuation_render.go`
-- Why it exists: `ActionProposal`, `ContinuationLease`, operation phases, bundle
-  phases, and plan leases now carry explicit `operator_title`/`plan_title`
-  fields. Rendering consumes those fields first. Legacy summary-derived labels
-  remain only as display fallback for old persisted records.
-- Exit gate: Keep title fallback display-only. Do not let rendered labels affect
-  approval, authority, lease class, plan hash, or execution scope.
+- Why it existed: user-facing plan labels were once derived from summaries.
+- Exit gate: proposals, leases, operation phases, bundles, and plan leases carry
+  explicit `operator_title`/`plan_title` fields; legacy summary fallback is
+  display-only and excluded from authority, lease class, plan hash, and scope.
 
-### DP-004: Short debug paths are not yet universal
+### DP-004: Short debug paths were not universal
 
 - Principle: `Short paths to truth`; `Operational legibility`
-- Status: `migrating`
-- Surface: `runtime/status.go`, `runtime/turn.go`, `runtime/doctor.go`,
-  `durableagent/forensics.go`, `maintenance.go`
-- Why it exists: `core.DebugBreadcrumb` now has the standard schema, and
-  continuation/review-event surfaces include canonical record, projection,
-  inspect command, code owner, and next repair action. Some status, doctor,
-  durable forensics, and maintenance failure surfaces still need the same
-  projection.
-- Exit gate: Add a standard debug breadcrumb schema to blocked/failure/proposal
-  surfaces: `trace_id`, `canonical_record`, `projection`, `inspect_command`,
-  `code_owner`, and `next_repair_action`.
+- Status: `retired`
+- Surface: `core/interpretation.go`, `runtime/status.go`, `runtime/turn.go`,
+  `runtime/doctor.go`, `face/status_render.go`
+- Why it existed: blocked/failure/proposal surfaces did not all project a
+  one-hop route from operator-visible text to canonical records.
+- Exit gate: `core.DebugBreadcrumb` standardizes `trace_id`,
+  `canonical_record`, `projection`, `inspect_command`, `code_owner`, and
+  `next_repair_action`; continuation/review/status pending surfaces render the
+  breadcrumb fields.
 
-### DP-005: Large operational surfaces make ownership harder to inspect
+### DP-005: Large operational surfaces made ownership harder to inspect
 
 - Principle: `Short paths to truth`; `Minimal stack, strong substrate`
-- Status: `migrating`
+- Status: `retired`
 - Surface: root command/Telegram composition files, `runtime/*`,
   `session/store.go`
-- Why it exists: The stack is intentionally small, but composition, operational
-  repair, runtime shell behavior, and persistence records have accumulated in
-  large surfaces. A first structural pass split SQLite storage by durable record
-  family and split continuation/status runtime helpers by concern, but root
-  composition and several operational files still need smaller ownership cuts.
-- Exit gate: Split broad files by command, record, or runtime concern only when
-  the boundary is durable and behavior-preserving. Guard the stable package
-  direction with machine checks instead of introducing one-off packages. Retire
-  this debt when the remaining root/runtime/session hotspots are below their
-  structural taste caps and the caps have stayed green through normal feature
-  work.
-
-## Contained Exceptions
+- Why it existed: operational behavior had accumulated in broad files.
+- Exit gate: durable file caps in `make taste` now guard the largest root,
+  runtime, and session ownership surfaces so behavior-preserving splits do not
+  grow back into broad files.
 
 ### DP-006: Exact secret scanners
 
 - Principle: `Compile contracts; interpret ambiguity`
-- Status: `contained`
+- Status: `retired`
 - Surface: `durableagent/forensics.go`, `runtime/doctor.go`
-- Why it exists: Secret scanners intentionally use exact regex/string checks as
-  a fail-closed safety layer for concrete token-shaped values.
-- Exit gate: Keep these scanners deterministic and narrow. They are acceptable
-  only when tests prove concept-only mentions do not erase useful summaries and
-  concrete secret values still quarantine or redact.
+- Why it existed: concrete token-shaped values need deterministic fail-closed
+  quarantine, while concept-only mentions must remain readable.
+- Exit gate: exact scanners remain only as value-shape safety mechanisms, not as
+  authority, consent, continuation, routing, or intent detectors; tests preserve
+  the concrete-secret vs. concept-only distinction.
 
-### DP-007: Execution claim detectors are still lexical
+### DP-007: Execution claim detectors were lexical
 
 - Principle: `Compile contracts; interpret ambiguity`; `Ledger, not vibes`
-- Status: `contained`
-- Surface: `runtime/constitution_runtime.go`
-- Why it exists: Final-reply grounding uses a narrow lexical safety scanner only
-  to produce typed `InterpretationClaim` candidates for completion, tool, test,
-  and durable-agent claims. Runtime validates those candidates against TES before
+- Status: `retired`
+- Surface: `runtime/interpretation_claims.go`, `runtime/constitution_runtime.go`
+- Why it existed: final-reply grounding used deterministic phrase detection to
+  identify claims about completion, tools, tests, and durable-agent work.
+- Exit gate: final-reply grounding now consumes typed `reply_execution_claim`
+  candidates from the interpretation role and validates them against TES before
   repair or neutralization.
-- Exit gate: Keep this as a fail-closed evidence guard. If broader claim
-  interpretation is needed, move it behind role-differentiated model
-  deliberation that emits typed claims before runtime validation.
 
-### DP-008: Media intent still has lexical fallback
+### DP-008: Media intent had lexical fallback
 
 - Principle: `Text is presentation, not authority`; `Compile contracts; interpret ambiguity`
-- Status: `contained`
-- Surface: `runtime/media_intent.go`
-- Why it exists: persisted next-audio continuation now requires the typed
-  `InterpretationClaim` in floor metadata; summary prose is ignored. Same-turn
-  operator shorthand still uses a narrow lexical scanner to create that typed
-  claim for legacy Telegram phrasing.
-- Exit gate: Keep persisted behavior claim-driven. Replace same-turn shorthand
-  with the shared model interpretation lane if/when open-language media routing
-  broadens beyond the current narrow scanner.
+- Status: `retired`
+- Surface: `runtime/interpretation_claims.go`, `runtime/media_intent.go`
+- Why it existed: same-turn Telegram shorthand for transcription intent used a
+  narrow phrase scanner while persisted behavior was migrated to typed claims.
+- Exit gate: current-turn and persisted media routing now consume typed
+  `InterpretationClaim` values; summary prose is ignored for routing authority.
 
 ## Machine-Checked Paths
 
-`make design-principles` requires these high-risk string-heavy surfaces to remain
-listed here until they are retired:
+`make design-principles` rejects live authority, consent, continuation, wake,
+goal, media, or final-reply execution inference from string matching. Protocol
+parsing of explicit JSON contracts and exact concrete-value safety scanners are
+allowed only when they do not decide authority from prose.
 
-- `session/authority_contract.go`
-- `runtime/constitution_runtime.go`
-- `runtime/continuation_materialize.go`
-- `runtime/operation_phase_gate.go`
-- `runtime/goal_continuation.go`
-- `runtime/media_intent.go`
-- `runtime/external_channel_wake.go`
-- `runtime/continuation.go`
-- `runtime/status.go`
+`make taste` guards the largest structural hotspots so broad operational files
+do not quietly grow back after behavior-preserving splits.
 
-New authority, consent, continuation, wake, or goal-inference code that uses
-string matching must either avoid the pattern or add a debt entry with an exit
-gate in the same change.
-
-`make taste` guards DP-005's largest structural hotspots so behavior-preserving
-splits do not quietly grow back into broad files.
-
-The same check now rejects retired prose-authority helper symbols
+The same check rejects retired prose-authority helper symbols
 (`positiveAuthorityEffectText`, `bounded_effect_positive_clause`,
-`operationPhaseApprovalText`, `inferOperationGateReasonCode`, and
-`operationPhaseIsEscalatedOperatorApproval`) so they cannot be reintroduced as
+`operationPhaseApprovalText`, `inferOperationGateReasonCode`,
+`operationPhaseIsEscalatedOperatorApproval`, `detectExecutionClaims`, and
+`textRequestsPendingAudioTranscription`) so they cannot be reintroduced as
 authority paths.

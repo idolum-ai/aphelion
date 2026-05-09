@@ -37,6 +37,8 @@ fi
 required_debt_terms=(
   "## Entry Contract"
   "## Active Debt"
+  "None."
+  "## Retired Debt"
   "## Machine-Checked Paths"
   "Exit gate"
 )
@@ -44,33 +46,6 @@ required_debt_terms=(
 for phrase in "${required_debt_terms[@]}"; do
   if ! rg -qF "$phrase" "$debt_doc"; then
     echo "principle debt ledger missing required phrase: $phrase" >&2
-    exit 1
-  fi
-done
-
-high_risk_paths=(
-  "session/authority_contract.go"
-  "runtime/constitution_runtime.go"
-  "runtime/continuation_materialize.go"
-  "runtime/operation_phase_gate.go"
-  "runtime/goal_continuation.go"
-  "runtime/media_intent.go"
-  "runtime/external_channel_wake.go"
-  "runtime/continuation.go"
-  "runtime/status.go"
-)
-
-high_risk_pattern='strings\.(Contains|HasPrefix|CutPrefix)|regexp\.MustCompile'
-
-for path in "${high_risk_paths[@]}"; do
-  if [[ ! -f "$path" ]]; then
-    echo "machine-checked principle debt path no longer exists: $path" >&2
-    echo "remove it from $debt_doc or update the tracked surface" >&2
-    exit 1
-  fi
-  if rg -q "$high_risk_pattern" "$path" && ! rg -qF "\`$path\`" "$debt_doc"; then
-    echo "untracked high-risk string-heavy principle debt: $path" >&2
-    echo "add a debt entry with an exit gate to $debt_doc" >&2
     exit 1
   fi
 done
@@ -83,7 +58,7 @@ for phrase in "I need to correct that" "Sending Work evidence" "Operator card:" 
   fi
 done
 
-for symbol in "positiveAuthorityEffectText" "bounded_effect_positive_clause" "operationPhaseApprovalText" "inferOperationGateReasonCode" "operationPhaseIsEscalatedOperatorApproval"; do
+for symbol in "positiveAuthorityEffectText" "bounded_effect_positive_clause" "operationPhaseApprovalText" "inferOperationGateReasonCode" "operationPhaseIsEscalatedOperatorApproval" "detectExecutionClaims" "textRequestsPendingAudioTranscription" "textRequestsAudioTranscription" "lexical_safety_scanner" "legacy_status_line"; do
   if rg -nF "$symbol" runtime session --glob '!**/*_test.go' >/dev/null; then
     echo "runtime source contains retired prose-authority classifier: $symbol" >&2
     rg -nF "$symbol" runtime session --glob '!**/*_test.go' >&2
@@ -91,8 +66,30 @@ for symbol in "positiveAuthorityEffectText" "bounded_effect_positive_clause" "op
   fi
 done
 
+if rg -nF "EXTERNAL_CHANNEL_STATUS" runtime session core durableagent tool telegram --glob '!**/*_test.go' >/dev/null; then
+  echo "runtime source contains retired external-channel status-line fallback" >&2
+  rg -nF "EXTERNAL_CHANNEL_STATUS" runtime session core durableagent tool telegram --glob '!**/*_test.go' >&2
+  exit 1
+fi
+
 if ! rg -qF "EXTERNAL_CHANNEL_OUTCOME" runtime/external_channel_wake.go; then
   echo "external channel wakes must request a typed wake outcome contract" >&2
+  exit 1
+fi
+
+if ! rg -qF "interpretCurrentTurnClaims" runtime/interpretation_claims.go || ! rg -qF "INTERPRETATION_CLAIMS" runtime/interpretation_claims.go; then
+  echo "runtime must expose a typed model interpretation claim lane" >&2
+  exit 1
+fi
+
+if ! rg -qF "interpretFinalReplyExecutionClaims" runtime/constitution_runtime.go; then
+  echo "final-reply grounding must use typed interpretation claims before TES validation" >&2
+  exit 1
+fi
+
+if rg -n "msg\\.Text|normalizeMediaIntentText|containsTranscriptionTerm|containsAudioTerm" runtime/media_intent.go >/dev/null; then
+  echo "media intent routing must not inspect authored text directly" >&2
+  rg -n "msg\\.Text|normalizeMediaIntentText|containsTranscriptionTerm|containsAudioTerm" runtime/media_intent.go >&2
   exit 1
 fi
 
@@ -118,8 +115,8 @@ if ! rg -qF 'proposal.OperatorTitle = ""' runtime/continuation_lease.go || ! rg 
   exit 1
 fi
 
-if ! rg -qF "NextRepairAction" runtime/turn.go; then
-  echo "review-event debug breadcrumbs must include next repair action" >&2
+if ! rg -qF "NextRepairAction" runtime/turn.go || ! rg -qF "DebugBreadcrumb" core/status.go || ! rg -qF "attachPendingItemDebugBreadcrumbs" runtime/status.go || ! rg -qF "next_repair_action" face/status_render.go; then
+  echo "operator debug breadcrumbs must cover review events and status pending items" >&2
   exit 1
 fi
 

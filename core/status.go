@@ -17,16 +17,17 @@ const (
 )
 
 type PendingItem struct {
-	Kind          PendingItemKind
-	ChatID        int64
-	ID            string
-	Summary       string
-	Age           time.Duration
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	Stale         bool
-	SourceClass   string
-	SourceSurface string
+	Kind            PendingItemKind
+	ChatID          int64
+	ID              string
+	Summary         string
+	Age             time.Duration
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	Stale           bool
+	SourceClass     string
+	SourceSurface   string
+	DebugBreadcrumb DebugBreadcrumb
 }
 
 type ExecutionEventSummary struct {

@@ -221,7 +221,10 @@ type durableWakeExecRequestingProvider struct {
 	requested      bool
 }
 
-func (p *durableWakeExecRequestingProvider) Complete(_ context.Context, _ []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+func (p *durableWakeExecRequestingProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if resp, ok := fakeInterpretationResponse(messages, "", core.TokenUsage{}); ok {
+		return resp, nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

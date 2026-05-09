@@ -24,44 +24,46 @@ import (
 )
 
 type fakeProvider struct {
-	mu                     sync.Mutex
-	callCount              int
-	err                    error
-	replyText              string
-	thinkingText           string
-	reflectionReplyText    string
-	memoryCaptureReplyText string
-	memoryFlushReplyText   string
-	compactionReplyText    string
-	proposalReplyText      string
-	proposalReplies        []string
-	brokerageReplyText     string
-	brokerageReplies       []string
-	planningReplyText      string
-	planningReplies        []string
-	faceReplyText          string
-	repairReplyText        string
-	repairReplies          []string
-	doctorSummaryReplyText string
-	streamFaceText         string
-	faceErr                error
-	proposalErr            error
-	proposalErrAfter       int
-	proposalCallCount      int
-	seenGovernorSystem     []string
-	seenFaceSystem         []string
-	seenProposalSystem     []string
-	seenBrokerageSystem    []string
-	seenPlanningSystem     []string
-	lastGovernorMsgs       []agent.Message
-	lastGovernorTools      []agent.ToolDef
-	lastDoctorSummaryMsgs  []agent.Message
-	lastDoctorSummaryTools []agent.ToolDef
-	responseUsage          core.TokenUsage
-	lastReasoning          agent.ReasoningConfig
-	lastVerbosity          agent.Verbosity
-	reasoningBySystem      map[string]agent.ReasoningConfig
-	replyMedia             []core.Media
+	mu                      sync.Mutex
+	callCount               int
+	err                     error
+	replyText               string
+	thinkingText            string
+	reflectionReplyText     string
+	memoryCaptureReplyText  string
+	memoryFlushReplyText    string
+	compactionReplyText     string
+	proposalReplyText       string
+	proposalReplies         []string
+	brokerageReplyText      string
+	brokerageReplies        []string
+	planningReplyText       string
+	planningReplies         []string
+	faceReplyText           string
+	repairReplyText         string
+	repairReplies           []string
+	doctorSummaryReplyText  string
+	interpretationReplyText string
+	interpretationReplies   []string
+	streamFaceText          string
+	faceErr                 error
+	proposalErr             error
+	proposalErrAfter        int
+	proposalCallCount       int
+	seenGovernorSystem      []string
+	seenFaceSystem          []string
+	seenProposalSystem      []string
+	seenBrokerageSystem     []string
+	seenPlanningSystem      []string
+	lastGovernorMsgs        []agent.Message
+	lastGovernorTools       []agent.ToolDef
+	lastDoctorSummaryMsgs   []agent.Message
+	lastDoctorSummaryTools  []agent.ToolDef
+	responseUsage           core.TokenUsage
+	lastReasoning           agent.ReasoningConfig
+	lastVerbosity           agent.Verbosity
+	reasoningBySystem       map[string]agent.ReasoningConfig
+	replyMedia              []core.Media
 }
 
 type planningErrorProvider struct {
@@ -141,9 +143,11 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, too
 		}
 		return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 	}
-	f.lastGovernorMsgs = append([]agent.Message(nil), messages...)
-	f.lastGovernorTools = append([]agent.ToolDef(nil), tools...)
-
+	if fakeMessagesContain(messages, "Aphelion's interpretation role") {
+		reply := nextFakeReply(&f.interpretationReplies, f.interpretationReplyText)
+		resp, _ := fakeInterpretationResponse(messages, reply, f.responseUsage)
+		return resp, nil
+	}
 	var systemParts []string
 	var userParts []string
 	for _, msg := range messages {
@@ -154,6 +158,8 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, too
 			userParts = append(userParts, msg.Content)
 		}
 	}
+	f.lastGovernorMsgs = append([]agent.Message(nil), messages...)
+	f.lastGovernorTools = append([]agent.ToolDef(nil), tools...)
 	f.seenGovernorSystem = append(f.seenGovernorSystem, strings.Join(systemParts, "\n\n"))
 	for _, userText := range userParts {
 		if strings.Contains(strings.Join(systemParts, "\n\n"), "You are compacting an existing session ledger.") {
@@ -268,6 +274,96 @@ func fakeMessagesContain(messages []agent.Message, needle string) bool {
 		}
 	}
 	return false
+}
+
+func fakeInterpretationResponse(messages []agent.Message, reply string, usage core.TokenUsage) (*agent.Response, bool) {
+	var systemParts []string
+	var userParts []string
+	for _, msg := range messages {
+		if msg.Role == "system" && strings.TrimSpace(msg.Content) != "" {
+			systemParts = append(systemParts, msg.Content)
+		}
+		if msg.Role == "user" && strings.TrimSpace(msg.Content) != "" {
+			userParts = append(userParts, msg.Content)
+		}
+	}
+	if !strings.Contains(strings.Join(systemParts, "\n\n"), "Aphelion's interpretation role") {
+		return nil, false
+	}
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		reply = fakeInterpretationClaimsReply(strings.Join(userParts, "\n\n"))
+	}
+	return &agent.Response{Content: reply, Usage: usage}, true
+}
+
+func fakeInterpretationClaimsReply(raw string) string {
+	var req interpretationRequest
+	_ = json.Unmarshal([]byte(strings.TrimSpace(raw)), &req)
+	text := strings.ToLower(strings.TrimSpace(req.Text))
+	claims := make([]core.InterpretationClaim, 0, 4)
+	addExecutionClaim := func(risks ...string) {
+		claims = append(claims, core.NormalizeInterpretationClaim(core.InterpretationClaim{
+			Intent:             "reply_execution_claim",
+			Scope:              "final_reply",
+			Risk:               risks,
+			Confidence:         "medium",
+			Source:             "test_interpretation_role",
+			ProposedNextAction: "validate_against_tes",
+		}))
+	}
+	addMediaClaim := func(intent string, scope string) {
+		claims = append(claims, core.NormalizeInterpretationClaim(core.InterpretationClaim{
+			Intent:             intent,
+			Scope:              scope,
+			Risk:               []string{"media_artifact"},
+			Confidence:         "high",
+			Source:             "test_interpretation_role",
+			ProposedNextAction: "transcribe_and_reply_text",
+		}))
+	}
+	switch strings.TrimSpace(req.Surface) {
+	case "final_reply":
+		prior := strings.Contains(text, "prior validation") ||
+			strings.Contains(text, "previous validation") ||
+			strings.Contains(text, "existing validation record") ||
+			strings.Contains(text, "prior commit")
+		suggestion := strings.Contains(text, "use this exact command") ||
+			strings.Contains(text, "i would frame") ||
+			strings.Contains(text, "not as the bot")
+		negated := strings.Contains(text, "won't pretend") ||
+			strings.Contains(text, "will not pretend") ||
+			strings.Contains(text, "do not have") ||
+			strings.Contains(text, "without current-turn")
+		if !prior && !suggestion && !negated {
+			if strings.Contains(text, "done") || strings.Contains(text, "finished") || strings.Contains(text, "completed") || strings.Contains(text, "all set") {
+				addExecutionClaim("completion")
+			}
+			if strings.Contains(text, "executed command") || strings.Contains(text, "applied the patch") || strings.Contains(text, "updated the files") {
+				addExecutionClaim("tool_execution")
+			}
+			if strings.Contains(text, "ran go test") || strings.Contains(text, "tests passed") || strings.Contains(text, "validation passed") {
+				addExecutionClaim("tool_execution", "test_execution")
+			}
+			if strings.Contains(text, "durable wake completed") || strings.Contains(text, "woke durable") || strings.Contains(text, "processed pending parent guidance") {
+				addExecutionClaim("durable_agent")
+			}
+		}
+	case "inbound_media_instruction":
+		if strings.Contains(text, "transcrib") || strings.Contains(text, "transcript") {
+			if strings.Contains(text, "next audio") || strings.Contains(text, "following audio") || strings.Contains(text, "upcoming audio") {
+				addMediaClaim(hiddenInputPendingMediaIntent, "next_audio")
+			} else if req.HasAudio {
+				addMediaClaim(hiddenInputMediaReplyModality, "current_audio")
+			}
+		}
+	}
+	rawContract, _ := json.Marshal(interpretationClaimsContract{
+		SchemaVersion: interpretationClaimsSchema,
+		Surface:       strings.TrimSpace(req.Surface),
+		Claims:        claims,
+	})
+	return interpretationClaimsMarker + ": " + string(rawContract)
 }
 
 type fakeSender struct {
@@ -537,7 +633,10 @@ type toolRequestingProvider struct {
 	firstToolCount int
 }
 
-func (p *toolRequestingProvider) Complete(_ context.Context, _ []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+func (p *toolRequestingProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if resp, ok := fakeInterpretationResponse(messages, "", core.TokenUsage{}); ok {
+		return resp, nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -568,7 +667,10 @@ type multiToolRequestingProvider struct {
 	callCount int
 }
 
-func (p *multiToolRequestingProvider) Complete(_ context.Context, _ []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+func (p *multiToolRequestingProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if resp, ok := fakeInterpretationResponse(messages, "", core.TokenUsage{}); ok {
+		return resp, nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -602,6 +704,9 @@ type durableAgentToolRequestingProvider struct {
 }
 
 func (p *durableAgentToolRequestingProvider) Complete(_ context.Context, messages []agent.Message, tools []agent.ToolDef) (*agent.Response, error) {
+	if resp, ok := fakeInterpretationResponse(messages, "", core.TokenUsage{}); ok {
+		return resp, nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

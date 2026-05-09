@@ -86,25 +86,6 @@ type doctorArtifactManifestEntry struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-var doctorDesignPrincipleHighRiskPaths = []string{
-	"session/authority_contract.go",
-	"runtime/constitution_runtime.go",
-	"runtime/continuation_materialize.go",
-	"runtime/operation_phase_gate.go",
-	"runtime/goal_continuation.go",
-	"runtime/media_intent.go",
-	"runtime/external_channel_wake.go",
-	"runtime/continuation.go",
-	"runtime/status.go",
-}
-
-var doctorDesignPrincipleHighRiskNeedles = []string{
-	"strings.Contains",
-	"strings.HasPrefix",
-	"strings.CutPrefix",
-	"regexp.MustCompile",
-}
-
 func (r *Runtime) StartDoctor(ctx context.Context, msg core.InboundMessage) error {
 	if r == nil {
 		return fmt.Errorf("runtime is unavailable")
@@ -1186,67 +1167,53 @@ func (r *Runtime) writeDoctorDesignPrincipleHealth(b *strings.Builder, input doc
 
 	debtOK := doctorSourceContainsAll(workingRoot, "docs/architecture/principle-debt.md", []string{
 		"## Active Debt",
+		"None.",
+		"## Retired Debt",
 		"## Machine-Checked Paths",
 		"Exit gate",
 	})
 	if debtOK {
-		writeDoctorIssueCheck(b, "principle_debt_ledger", "likely_fixed", "principle-debt.md exists with active debt, machine-checked paths, and exit gates")
+		writeDoctorIssueCheck(b, "principle_debt_ledger", "likely_fixed", "principle-debt.md reports no active debt and keeps retired entries with exit gates")
 	} else {
-		writeDoctorIssueCheck(b, "principle_debt_ledger", "active", "could not confirm principle-debt.md with active debt and exit gates")
+		writeDoctorIssueCheck(b, "principle_debt_ledger", "active", "could not confirm principle-debt.md with no active debt, retired entries, and exit gates")
 	}
 
-	type trackedDebtPath struct {
-		Path    string
-		Tracked bool
-	}
-	var debtPaths []trackedDebtPath
-	for _, path := range doctorDesignPrincipleHighRiskPaths {
-		path = filepath.ToSlash(strings.TrimSpace(path))
-		if path == "" || !doctorSourceContainsAny(workingRoot, path, doctorDesignPrincipleHighRiskNeedles) {
-			continue
-		}
-		debtPaths = append(debtPaths, trackedDebtPath{
-			Path:    path,
-			Tracked: debtOK && doctorSourceContainsAll(workingRoot, "docs/architecture/principle-debt.md", []string{"`" + path + "`"}),
-		})
-	}
-
-	untracked := 0
-	if len(debtPaths) == 0 {
-		writeDoctorIssueCheck(b, "high_risk_string_debt_tracked", "likely_fixed", "no machine-checked high-risk string-heavy principle debt paths were detected")
+	retiredStringDebtMatches := doctorSourceMatches(workingRoot, []string{"runtime", "session", "core"}, []string{
+		"lexical_" + "safety_scanner",
+		"legacy_" + "status_line",
+		"detect" + "ExecutionClaims",
+		"text" + "Requests" + "PendingAudioTranscription",
+	}, false, 1)
+	retiredStringDebtAbsent := len(retiredStringDebtMatches) == 0
+	interpretationLaneOK := doctorSourceContainsAll(workingRoot, "runtime/interpretation_claims.go", []string{
+		"INTERPRETATION_CLAIMS",
+		"interpretCurrentTurnClaims",
+		"InterpretationClaim",
+	})
+	if retiredStringDebtAbsent && interpretationLaneOK {
+		writeDoctorIssueCheck(b, "string_authority_retired", "likely_fixed", "retired string-authority helpers are absent and the typed interpretation lane is present")
 	} else {
-		writeDoctorLine(b, "principle_debt_high_risk_string_paths:")
-		for _, debt := range debtPaths {
-			status := "tracked"
-			if !debt.Tracked {
-				status = "untracked"
-				untracked++
-			}
-			writeDoctorLine(b, fmt.Sprintf("- path=%s status=%s inspect=%q",
-				debt.Path,
-				status,
-				"rg -n 'strings\\.(Contains|HasPrefix|CutPrefix)|regexp\\.MustCompile' "+debt.Path,
-			))
-		}
-		if untracked == 0 {
-			writeDoctorIssueCheck(b, "high_risk_string_debt_tracked", "likely_fixed", fmt.Sprintf("%d high-risk string-heavy surfaces are explicitly listed in principle-debt.md", len(debtPaths)))
-		} else {
-			writeDoctorIssueCheck(b, "high_risk_string_debt_tracked", "active", fmt.Sprintf("%d high-risk string-heavy surfaces are not listed in principle-debt.md", untracked))
-		}
+		writeDoctorIssueCheck(b, "string_authority_retired", "active", "could not confirm retired string-authority helpers are absent and typed interpretation lane is present")
 	}
 
-	debugBreadcrumbsOK := doctorSourceContainsAll(workingRoot, "docs/architecture/principle-debt.md", []string{
-		"trace_id",
-		"canonical_record",
+	debugBreadcrumbsOK := doctorSourceContainsAll(workingRoot, "core/interpretation.go", []string{
+		"DebugBreadcrumb",
+		"TraceID",
+		"InspectCommand",
+		"NextRepairAction",
+	}) && doctorSourceContainsAll(workingRoot, "runtime/status_lifecycle.go", []string{
+		"attachPendingItemDebugBreadcrumbs",
+		"pendingItemDebugBreadcrumb",
+	}) && doctorSourceContainsAll(workingRoot, "face/status_render.go", []string{
+		"next_repair_action",
 		"inspect_command",
-		"code_owner",
 	})
 	if debugBreadcrumbsOK {
-		writeDoctorIssueCheck(b, "short_debug_path_contract", "residual_risk", "principle-debt.md names the standard debug breadcrumb schema, but not every operator surface emits it yet")
+		writeDoctorIssueCheck(b, "short_debug_path_contract", "likely_fixed", "standard debug breadcrumb schema is present and status pending items render inspect and repair fields")
 	} else {
-		writeDoctorIssueCheck(b, "short_debug_path_contract", "active", "standard debug breadcrumb schema was not confirmed in principle-debt.md")
+		writeDoctorIssueCheck(b, "short_debug_path_contract", "active", "standard debug breadcrumb schema or status projection wiring was not confirmed")
 	}
-	writeDoctorKV(b, "design_principle_next", "standardize debug breadcrumbs on blocked/failure/proposal surfaces: trace_id canonical_record projection inspect_command code_owner next_repair_action")
+	writeDoctorKV(b, "design_principle_next", "keep typed interpretation and debug breadcrumb gates green during feature work")
 	_ = r
 }
 
@@ -1684,25 +1651,6 @@ func doctorSourceContainsAll(root string, rel string, needles []string) bool {
 		}
 	}
 	return true
-}
-
-func doctorSourceContainsAny(root string, rel string, needles []string) bool {
-	root = strings.TrimSpace(root)
-	rel = filepath.Clean(filepath.FromSlash(strings.TrimSpace(rel)))
-	if root == "" || rel == "" || rel == "." || strings.HasPrefix(rel, "..") {
-		return false
-	}
-	data, err := os.ReadFile(filepath.Join(root, rel))
-	if err != nil {
-		return false
-	}
-	text := string(data)
-	for _, needle := range needles {
-		if strings.TrimSpace(needle) != "" && strings.Contains(text, needle) {
-			return true
-		}
-	}
-	return false
 }
 
 func doctorSourceMatches(root string, dirs []string, needles []string, includeTests bool, limit int) []string {

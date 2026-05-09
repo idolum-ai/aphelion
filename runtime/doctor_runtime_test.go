@@ -581,15 +581,11 @@ func TestDoctorExternalChannelAdapterReadinessProjectsGogCLIContract(t *testing.
 	}
 }
 
-func TestDoctorDesignPrincipleHealthSurfacesTrackedDebt(t *testing.T) {
+func TestDoctorDesignPrincipleHealthSurfacesRetiredDebtGates(t *testing.T) {
 	t.Parallel()
 
 	cfg, _, _, _ := buildRuntimeFixtures(t)
 	writeDoctorDesignPrincipleFixture(t, cfg.Agent.ExecRoot, true)
-	writeDoctorFixtureFile(t, cfg.Agent.ExecRoot, "runtime/operation_phase_gate.go", `package runtime
-import "strings"
-func gate(text string) bool { return strings.Contains(text, "consent") }
-`)
 
 	rt := &Runtime{}
 	var b strings.Builder
@@ -598,10 +594,9 @@ func gate(text string) bool { return strings.Contains(text, "consent") }
 	for _, want := range []string{
 		`issue=design_principles_doc status=likely_fixed`,
 		`issue=principle_debt_ledger status=likely_fixed`,
-		`path=runtime/operation_phase_gate.go status=tracked`,
-		`issue=high_risk_string_debt_tracked status=likely_fixed`,
-		`issue=short_debug_path_contract status=residual_risk`,
-		`design_principle_next="standardize debug breadcrumbs`,
+		`issue=string_authority_retired status=likely_fixed`,
+		`issue=short_debug_path_contract status=likely_fixed`,
+		`design_principle_next="keep typed interpretation`,
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("design principle health = %s, want %s", report, want)
@@ -609,23 +604,20 @@ func gate(text string) bool { return strings.Contains(text, "consent") }
 	}
 }
 
-func TestDoctorDesignPrincipleHealthFlagsUntrackedDebt(t *testing.T) {
+func TestDoctorDesignPrincipleHealthFlagsMissingRetirementEvidence(t *testing.T) {
 	t.Parallel()
 
 	cfg, _, _, _ := buildRuntimeFixtures(t)
 	writeDoctorDesignPrincipleFixture(t, cfg.Agent.ExecRoot, false)
-	writeDoctorFixtureFile(t, cfg.Agent.ExecRoot, "runtime/operation_phase_gate.go", `package runtime
-import "strings"
-func gate(text string) bool { return strings.Contains(text, "consent") }
-`)
 
 	rt := &Runtime{}
 	var b strings.Builder
 	rt.writeDoctorDesignPrincipleHealth(&b, doctorDiagnosticInput{Scope: sandbox.Scope{WorkingRoot: cfg.Agent.ExecRoot}})
 	report := b.String()
 	for _, want := range []string{
-		`path=runtime/operation_phase_gate.go status=untracked`,
-		`issue=high_risk_string_debt_tracked status=active`,
+		`issue=principle_debt_ledger status=active`,
+		`issue=string_authority_retired status=active`,
+		`issue=short_debug_path_contract status=active`,
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("design principle health = %s, want %s", report, want)
@@ -641,22 +633,36 @@ func writeDoctorDesignPrincipleFixture(t *testing.T, root string, trackDebt bool
 ### Compile contracts; interpret ambiguity
 ### Short paths to truth
 `)
-	debtPath := ""
 	if trackDebt {
-		debtPath = "- `runtime/operation_phase_gate.go`\n"
+		writeDoctorFixtureFile(t, root, "runtime/interpretation_claims.go", `package runtime
+const interpretationClaimsMarker = "INTERPRETATION_CLAIMS"
+func interpretCurrentTurnClaims() {}
+type InterpretationClaim struct{}
+`)
+		writeDoctorFixtureFile(t, root, "core/interpretation.go", `package core
+type DebugBreadcrumb struct{ TraceID string; InspectCommand string; NextRepairAction string }
+`)
+		writeDoctorFixtureFile(t, root, "runtime/status_lifecycle.go", `package runtime
+func attachPendingItemDebugBreadcrumbs() {}
+func pendingItemDebugBreadcrumb() {}
+`)
+		writeDoctorFixtureFile(t, root, "face/status_render.go", `package face
+const _ = "next_repair_action inspect_command"
+`)
 	}
 	writeDoctorFixtureFile(t, root, "docs/architecture/principle-debt.md", `# Aphelion Principle Debt Ledger
 
 ## Active Debt
 
-### DP-test
+`+map[bool]string{true: "None.", false: "### DP-test"}[trackDebt]+`
+
+## Retired Debt
 
 - Exit gate: replace text inference with typed contracts.
 - Debug breadcrumbs: trace_id canonical_record projection inspect_command code_owner next_repair_action.
 
 ## Machine-Checked Paths
-
-`+debtPath)
+`)
 }
 
 func writeDoctorFixtureFile(t *testing.T, root string, rel string, body string) {

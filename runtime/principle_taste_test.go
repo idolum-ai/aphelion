@@ -113,7 +113,7 @@ func TestExecutionClaimAdjudicationCarriesTypedInterpretationClaims(t *testing.T
 		t.Fatal("Interpretation claims empty, want typed claim candidates")
 	}
 	claim := core.NormalizeInterpretationClaim(adjudication.Interpretation[0])
-	if claim.Intent != "reply_execution_claim" || claim.Scope != "final_reply" || claim.Source != "lexical_safety_scanner" {
-		t.Fatalf("interpretation claim = %#v, want typed final-reply claim from contained safety scanner", claim)
+	if claim.Intent != "reply_execution_claim" || claim.Scope != "final_reply" || claim.Source != "test_interpretation_role" {
+		t.Fatalf("interpretation claim = %#v, want typed final-reply claim from interpretation role", claim)
 	}
 }

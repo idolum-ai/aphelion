@@ -1302,6 +1302,17 @@ func renderPendingItemBlock(items []core.PendingItem, max int) []string {
 		if sourceSurface := strings.TrimSpace(item.SourceSurface); sourceSurface != "" {
 			line += " source_surface=" + sourceSurface
 		}
+		if crumb := core.NormalizeDebugBreadcrumb(item.DebugBreadcrumb); crumb.Active() {
+			if traceID := strings.TrimSpace(crumb.TraceID); traceID != "" {
+				line += " trace_id=" + quoteStatusField(traceID)
+			}
+			if inspect := strings.TrimSpace(crumb.InspectCommand); inspect != "" {
+				line += " inspect_command=" + quoteStatusField(inspect)
+			}
+			if repair := strings.TrimSpace(crumb.NextRepairAction); repair != "" {
+				line += " next_repair_action=" + quoteStatusField(truncateStatusField(repair, 120))
+			}
+		}
 		if summary := strings.TrimSpace(item.Summary); summary != "" {
 			line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
 		}
