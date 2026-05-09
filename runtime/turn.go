@@ -433,13 +433,29 @@ func reviewEventDebugBreadcrumbLines(event session.ReviewEvent, meta reviewEvent
 	if metaOK {
 		inspectCommand = reviewEventInspectCommand(meta)
 	}
+	if strings.TrimSpace(inspectCommand) == "" {
+		inspectCommand = "/debug"
+	}
 	return core.DebugBreadcrumbLines(core.DebugBreadcrumb{
-		TraceID:         traceID,
-		CanonicalRecord: canonical,
-		Projection:      "runtime.FormatReviewEventDetailsMessage",
-		InspectCommand:  inspectCommand,
-		CodeOwner:       "runtime/turn.go",
+		TraceID:          traceID,
+		CanonicalRecord:  canonical,
+		Projection:       "runtime.FormatReviewEventDetailsMessage",
+		InspectCommand:   inspectCommand,
+		CodeOwner:        "runtime/turn.go",
+		NextRepairAction: reviewEventNextRepairAction(meta, metaOK),
 	})
+}
+
+func reviewEventNextRepairAction(meta reviewEventArtifactMetadata, metaOK bool) string {
+	if metaOK {
+		if next := strings.TrimSpace(meta.Metadata["operator_next_action"]); next != "" {
+			return next
+		}
+		if status := strings.TrimSpace(meta.Metadata["operator_status"]); status != "" {
+			return "inspect the review event details and act only if the operator status requires it"
+		}
+	}
+	return "inspect the review event details and the canonical review_events row before taking repair action"
 }
 
 func reviewEventInspectCommand(meta reviewEventArtifactMetadata) string {

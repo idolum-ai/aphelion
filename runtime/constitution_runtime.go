@@ -115,6 +115,7 @@ func (r *Runtime) applyTurnConstitution(
 
 type executionClaimAdjudication struct {
 	Findings           []ExecutionClaimFinding
+	Interpretation     []core.InterpretationClaim
 	LatestTurnSeq      int64
 	LatestStatus       string
 	LatestTerminalAt   string
@@ -169,6 +170,9 @@ func (a executionClaimAdjudication) WithPrior(prior executionClaimAdjudication) 
 	if len(a.Findings) == 0 {
 		a.Findings = append([]ExecutionClaimFinding(nil), prior.Findings...)
 	}
+	if len(a.Interpretation) == 0 {
+		a.Interpretation = append([]core.InterpretationClaim(nil), prior.Interpretation...)
+	}
 	if a.LatestTurnSeq == 0 {
 		a.LatestTurnSeq = prior.LatestTurnSeq
 	}
@@ -212,6 +216,7 @@ func (r *Runtime) adjudicateFinalReplyExecutionClaims(key session.SessionKey, re
 	if !claims.any() {
 		return out
 	}
+	out.Interpretation = executionClaimInterpretationClaims(claims)
 	events, err := r.store.LatestExecutionEventsBySession(key, 300)
 	if err != nil || len(events) == 0 {
 		return out
@@ -349,22 +354,23 @@ func (r *Runtime) recordExecutionClaimAdjudication(key session.SessionKey, adjud
 		}
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventReplyClaimAdjudicated, "reply", "adjudicated", map[string]any{
-		"adjudication_kind":    runtimeAdjudication.Kind,
-		"surface":              runtimeAdjudication.Surface,
-		"subject_id":           runtimeAdjudication.SubjectID,
-		"operator_label":       runtimeAdjudication.OperatorLabel,
-		"findings":             runtimeAdjudication.Findings,
-		"evidence_refs":        runtimeAdjudication.EvidenceRefs,
-		"claim_types":          claimTypes,
-		"details":              details,
-		"findings_count":       len(adjudication.Findings),
-		"latest_turn_seq":      adjudication.LatestTurnSeq,
-		"latest_turn_status":   strings.TrimSpace(adjudication.LatestStatus),
-		"latest_terminal_at":   strings.TrimSpace(adjudication.LatestTerminalAt),
-		"has_tool_evidence":    adjudication.HasToolEvidence,
-		"has_test_evidence":    adjudication.HasTestEvidence,
-		"has_durable_evidence": adjudication.HasDurableEvidence,
-		"visible_action":       strings.TrimSpace(visibleAction),
+		"adjudication_kind":     runtimeAdjudication.Kind,
+		"surface":               runtimeAdjudication.Surface,
+		"subject_id":            runtimeAdjudication.SubjectID,
+		"operator_label":        runtimeAdjudication.OperatorLabel,
+		"findings":              runtimeAdjudication.Findings,
+		"evidence_refs":         runtimeAdjudication.EvidenceRefs,
+		"claim_types":           claimTypes,
+		"interpretation_claims": adjudication.Interpretation,
+		"details":               details,
+		"findings_count":        len(adjudication.Findings),
+		"latest_turn_seq":       adjudication.LatestTurnSeq,
+		"latest_turn_status":    strings.TrimSpace(adjudication.LatestStatus),
+		"latest_terminal_at":    strings.TrimSpace(adjudication.LatestTerminalAt),
+		"has_tool_evidence":     adjudication.HasToolEvidence,
+		"has_test_evidence":     adjudication.HasTestEvidence,
+		"has_durable_evidence":  adjudication.HasDurableEvidence,
+		"visible_action":        strings.TrimSpace(visibleAction),
 	}, time.Now().UTC())
 }
 
@@ -453,6 +459,33 @@ type executionClaimSet struct {
 
 func (c executionClaimSet) any() bool {
 	return c.Completion || c.Tool || c.Tests || c.Durable
+}
+
+func executionClaimInterpretationClaims(claims executionClaimSet) []core.InterpretationClaim {
+	out := make([]core.InterpretationClaim, 0, 4)
+	appendClaim := func(claimType string) {
+		out = append(out, core.NormalizeInterpretationClaim(core.InterpretationClaim{
+			Intent:             "reply_execution_claim",
+			Scope:              "final_reply",
+			Risk:               []string{claimType},
+			Confidence:         "medium",
+			Source:             "lexical_safety_scanner",
+			ProposedNextAction: "validate_against_tes",
+		}))
+	}
+	if claims.Completion {
+		appendClaim("completion")
+	}
+	if claims.Tool {
+		appendClaim("tool_execution")
+	}
+	if claims.Tests {
+		appendClaim("test_execution")
+	}
+	if claims.Durable {
+		appendClaim("durable_agent")
+	}
+	return out
 }
 
 func detectExecutionClaims(reply string) executionClaimSet {

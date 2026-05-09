@@ -66,24 +66,26 @@ Status values:
 ### DP-003: Human plan labels inferred from prose
 
 - Principle: `Operational legibility`; `Text is presentation, not authority`
-- Status: `active`
-- Surface: `runtime/continuation.go`
-- Why it exists: Operator-facing labels improved, but some fallback labels still
-  infer names and plan titles from summaries.
-- Exit gate: `ActionProposal`, `ContinuationLease`, and operation phases should
-  carry explicit `operator_title` or `plan_title` fields. Label fallback should
-  become display-only and never influence authority.
+- Status: `contained`
+- Surface: `session/types.go`, `runtime/continuation_render.go`
+- Why it exists: `ActionProposal`, `ContinuationLease`, operation phases, bundle
+  phases, and plan leases now carry explicit `operator_title`/`plan_title`
+  fields. Rendering consumes those fields first. Legacy summary-derived labels
+  remain only as display fallback for old persisted records.
+- Exit gate: Keep title fallback display-only. Do not let rendered labels affect
+  approval, authority, lease class, plan hash, or execution scope.
 
 ### DP-004: Short debug paths are not yet universal
 
 - Principle: `Short paths to truth`; `Operational legibility`
-- Status: `active`
+- Status: `migrating`
 - Surface: `runtime/status.go`, `runtime/turn.go`, `runtime/doctor.go`,
   `durableagent/forensics.go`, `maintenance.go`
-- Why it exists: Status, review cards, forensic sidecars, TES, logs, and repair
-  commands exist, but not every operator-facing failure carries the same compact
-  chain from symptom to canonical record, projection, inspect command, and code
-  owner.
+- Why it exists: `core.DebugBreadcrumb` now has the standard schema, and
+  continuation/review-event surfaces include canonical record, projection,
+  inspect command, code owner, and next repair action. Some status, doctor,
+  durable forensics, and maintenance failure surfaces still need the same
+  projection.
 - Exit gate: Add a standard debug breadcrumb schema to blocked/failure/proposal
   surfaces: `trace_id`, `canonical_record`, `projection`, `inspect_command`,
   `code_owner`, and `next_repair_action`.
@@ -122,27 +124,28 @@ Status values:
 ### DP-007: Execution claim detectors are still lexical
 
 - Principle: `Compile contracts; interpret ambiguity`; `Ledger, not vibes`
-- Status: `active`
+- Status: `contained`
 - Surface: `runtime/constitution_runtime.go`
-- Why it exists: Final-reply grounding detects unsupported completion, tool,
-  test, and durable-agent claims from text markers before comparing them to TES
-  evidence.
-- Exit gate: Move open-language claim detection into an interpretation contract
-  that returns typed claim candidates with confidence and spans; runtime should
-  validate those candidates against TES before repair.
+- Why it exists: Final-reply grounding uses a narrow lexical safety scanner only
+  to produce typed `InterpretationClaim` candidates for completion, tool, test,
+  and durable-agent claims. Runtime validates those candidates against TES before
+  repair or neutralization.
+- Exit gate: Keep this as a fail-closed evidence guard. If broader claim
+  interpretation is needed, move it behind role-differentiated model
+  deliberation that emits typed claims before runtime validation.
 
 ### DP-008: Media intent still has lexical fallback
 
 - Principle: `Text is presentation, not authority`; `Compile contracts; interpret ambiguity`
-- Status: `migrating`
+- Status: `contained`
 - Surface: `runtime/media_intent.go`
-- Why it exists: audio/text reply routing now records a typed
-  `InterpretationClaim` in floor metadata, but the initial same-turn and
-  next-audio intent detector still accepts a narrow lexical fallback for legacy
-  operator phrasing.
-- Exit gate: Move media-artifact intent into the shared open-language
-  interpretation lane so the runtime consumes only typed claims plus artifact
-  capabilities; keep lexical matching only for closed command syntax, if any.
+- Why it exists: persisted next-audio continuation now requires the typed
+  `InterpretationClaim` in floor metadata; summary prose is ignored. Same-turn
+  operator shorthand still uses a narrow lexical scanner to create that typed
+  claim for legacy Telegram phrasing.
+- Exit gate: Keep persisted behavior claim-driven. Replace same-turn shorthand
+  with the shared model interpretation lane if/when open-language media routing
+  broadens beyond the current narrow scanner.
 
 ## Machine-Checked Paths
 

@@ -85,6 +85,8 @@ phaseLoop:
 	}
 	lease := session.OperationPlanLease{
 		ID:               operationPhasePlanLeaseID(opState, phases),
+		OperatorTitle:    continuationPlanTitleFromText(operationPhasePlanLeaseSummary(opState, phases)),
+		PlanTitle:        continuationPlanTitleFromText(firstNonEmptyContinuation(opState.PhasePlan.Goal, opState.Objective, opState.Summary)),
 		Summary:          operationPhasePlanLeaseSummary(opState, phases),
 		Objective:        firstNonEmptyContinuation(opState.Objective, opState.PhasePlan.Goal, opState.Summary, "Continue the approved operation plan."),
 		OperationID:      strings.TrimSpace(opState.ID),
@@ -344,6 +346,8 @@ func operationPlanLeaseLanesFromPhases(phases []session.OperationPhase) []sessio
 		phase = normalizeSingleOperationPhase(phase)
 		lanes = append(lanes, session.OperationPlanLeaseLane{
 			ID:               strings.TrimSpace(phase.ID),
+			OperatorTitle:    firstNonEmptyContinuation(phase.OperatorTitle, phase.PlanTitle, continuationPlanTitleFromText(phase.Summary)),
+			PlanTitle:        firstNonEmptyContinuation(phase.PlanTitle, phase.OperatorTitle, continuationPlanTitleFromText(phase.Summary)),
 			Summary:          strings.TrimSpace(phase.Summary),
 			AuthorityClass:   strings.TrimSpace(phase.AuthorityClass),
 			ExpectedTurns:    1,

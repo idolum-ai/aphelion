@@ -97,6 +97,8 @@ func (r *Runtime) maybeInferGoalContinuationProposal(ctx context.Context, key se
 	state.Proposal = session.OperationProposal{
 		ID:            proposalID,
 		Kind:          "read_only_review",
+		OperatorTitle: continuationPlanTitleFromText(candidate.Summary),
+		PlanTitle:     continuationPlanTitleFromText(candidate.Objective),
 		Summary:       candidate.Summary,
 		WhyNow:        candidate.WhyNow,
 		BoundedEffect: candidate.BoundedEffect,

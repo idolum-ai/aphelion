@@ -3,6 +3,7 @@
 package session
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -62,6 +63,38 @@ func TestContinuationLeaseActionAccessAndPersistence(t *testing.T) {
 	persistedForbidden := CheckContinuationLeaseAction(reloaded.ContinuationLease, "restart", now)
 	if persistedForbidden.Allowed || persistedForbidden.Reason != "action_forbidden" {
 		t.Fatalf("persisted forbidden decision = %#v, want restart forbidden", persistedForbidden)
+	}
+}
+
+func TestContinuationOperatorTitleFieldsAreJSONCompatible(t *testing.T) {
+	action := NormalizeActionProposal(ActionProposal{
+		ID:            "aprop-title",
+		OperatorTitle: "  Human plan title  ",
+		PlanTitle:     "  Canonical plan title  ",
+		Summary:       "Do the bounded step.",
+	})
+	if action.OperatorTitle != "Human plan title" || action.PlanTitle != "Canonical plan title" {
+		t.Fatalf("action titles = %q/%q, want trimmed titles", action.OperatorTitle, action.PlanTitle)
+	}
+	raw, err := json.Marshal(action)
+	if err != nil {
+		t.Fatalf("marshal action: %v", err)
+	}
+	var decoded ActionProposal
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal action: %v", err)
+	}
+	if decoded.OperatorTitle != "Human plan title" || decoded.PlanTitle != "Canonical plan title" {
+		t.Fatalf("decoded titles = %q/%q, want persisted titles", decoded.OperatorTitle, decoded.PlanTitle)
+	}
+
+	var legacy ActionProposal
+	if err := json.Unmarshal([]byte(`{"id":"aprop-legacy","summary":"Legacy summary"}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy action: %v", err)
+	}
+	legacy = NormalizeActionProposal(legacy)
+	if legacy.OperatorTitle != "" || legacy.PlanTitle != "" || legacy.Summary != "Legacy summary" {
+		t.Fatalf("legacy action = %#v, want title fields optional", legacy)
 	}
 }
 

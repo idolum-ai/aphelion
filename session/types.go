@@ -114,6 +114,8 @@ const (
 type OperationProposal struct {
 	ID            string         `json:"id,omitempty"`
 	Kind          string         `json:"kind,omitempty"`
+	OperatorTitle string         `json:"operator_title,omitempty"`
+	PlanTitle     string         `json:"plan_title,omitempty"`
 	Summary       string         `json:"summary,omitempty"`
 	WhyNow        string         `json:"why_now,omitempty"`
 	BoundedEffect string         `json:"bounded_effect,omitempty"`
@@ -123,6 +125,8 @@ type OperationProposal struct {
 
 type OperationPhase struct {
 	ID                  string     `json:"id,omitempty"`
+	OperatorTitle       string     `json:"operator_title,omitempty"`
+	PlanTitle           string     `json:"plan_title,omitempty"`
 	Summary             string     `json:"summary,omitempty"`
 	Status              PlanStatus `json:"status,omitempty"`
 	AuthorityClass      string     `json:"authority_class,omitempty"`
@@ -157,6 +161,8 @@ type ActionProposal struct {
 	ID                  string         `json:"id,omitempty"`
 	OperationID         string         `json:"operation_id,omitempty"`
 	MissionID           string         `json:"mission_id,omitempty"`
+	OperatorTitle       string         `json:"operator_title,omitempty"`
+	PlanTitle           string         `json:"plan_title,omitempty"`
 	Summary             string         `json:"summary,omitempty"`
 	WhyNow              string         `json:"why_now,omitempty"`
 	BoundedEffect       string         `json:"bounded_effect,omitempty"`
@@ -196,6 +202,8 @@ type ContinuationLease struct {
 	ID               string                  `json:"id,omitempty"`
 	ProposalID       string                  `json:"proposal_id,omitempty"`
 	MissionID        string                  `json:"mission_id,omitempty"`
+	OperatorTitle    string                  `json:"operator_title,omitempty"`
+	PlanTitle        string                  `json:"plan_title,omitempty"`
 	Status           ContinuationLeaseStatus `json:"status,omitempty"`
 	MaxTurns         int                     `json:"max_turns,omitempty"`
 	RemainingTurns   int                     `json:"remaining_turns,omitempty"`
@@ -218,6 +226,8 @@ type ContinuationApprovalBundlePhase struct {
 	ID               string                  `json:"id,omitempty"`
 	OperationPhaseID string                  `json:"operation_phase_id,omitempty"`
 	Index            int                     `json:"index,omitempty"`
+	OperatorTitle    string                  `json:"operator_title,omitempty"`
+	PlanTitle        string                  `json:"plan_title,omitempty"`
 	Summary          string                  `json:"summary,omitempty"`
 	AuthorityClass   string                  `json:"authority_class,omitempty"`
 	WhyNow           string                  `json:"why_now,omitempty"`
@@ -267,6 +277,8 @@ const (
 
 type OperationPlanLeaseLane struct {
 	ID               string   `json:"id,omitempty"`
+	OperatorTitle    string   `json:"operator_title,omitempty"`
+	PlanTitle        string   `json:"plan_title,omitempty"`
 	Summary          string   `json:"summary,omitempty"`
 	AuthorityClass   string   `json:"authority_class,omitempty"`
 	ExpectedTurns    int      `json:"expected_turns,omitempty"`
@@ -289,6 +301,8 @@ type OperationPlanLeaseEvidenceDigest struct {
 
 type OperationPlanLease struct {
 	ID                   string                           `json:"id,omitempty"`
+	OperatorTitle        string                           `json:"operator_title,omitempty"`
+	PlanTitle            string                           `json:"plan_title,omitempty"`
 	Summary              string                           `json:"summary,omitempty"`
 	Objective            string                           `json:"objective,omitempty"`
 	MissionID            string                           `json:"mission_id,omitempty"`
@@ -1180,6 +1194,8 @@ func NormalizePlanLeaseStatus(status PlanLeaseStatus) PlanLeaseStatus {
 
 func NormalizeOperationPlanLease(lease OperationPlanLease) OperationPlanLease {
 	lease.ID = strings.TrimSpace(lease.ID)
+	lease.OperatorTitle = strings.TrimSpace(lease.OperatorTitle)
+	lease.PlanTitle = strings.TrimSpace(lease.PlanTitle)
 	lease.Summary = strings.TrimSpace(lease.Summary)
 	lease.Objective = strings.TrimSpace(lease.Objective)
 	lease.MissionID = strings.TrimSpace(lease.MissionID)
@@ -1249,6 +1265,8 @@ func normalizeOperationPlanLeaseLanes(values []OperationPlanLeaseLane) []Operati
 	seen := make(map[string]struct{}, len(values))
 	for index, lane := range values {
 		lane.ID = strings.TrimSpace(lane.ID)
+		lane.OperatorTitle = strings.TrimSpace(lane.OperatorTitle)
+		lane.PlanTitle = strings.TrimSpace(lane.PlanTitle)
 		lane.Summary = strings.TrimSpace(lane.Summary)
 		lane.AuthorityClass = normalizeEnumValue(lane.AuthorityClass)
 		if lane.ExpectedTurns < 0 {
@@ -1383,6 +1401,8 @@ func normalizeOperationPhasePlan(plan OperationPhasePlan) OperationPhasePlan {
 func normalizeOperationPhase(phase OperationPhase, index int) OperationPhase {
 	_ = index
 	phase.ID = strings.TrimSpace(phase.ID)
+	phase.OperatorTitle = strings.TrimSpace(phase.OperatorTitle)
+	phase.PlanTitle = strings.TrimSpace(phase.PlanTitle)
 	phase.Summary = strings.TrimSpace(phase.Summary)
 	phase.Status = NormalizePlanStatus(phase.Status)
 	phase.AuthorityClass = normalizeEnumValue(phase.AuthorityClass)
@@ -1509,6 +1529,8 @@ func (p OperationPhasePlan) Active() bool {
 
 func (p OperationPhase) Active() bool {
 	return strings.TrimSpace(p.ID) != "" ||
+		strings.TrimSpace(p.OperatorTitle) != "" ||
+		strings.TrimSpace(p.PlanTitle) != "" ||
 		strings.TrimSpace(p.Summary) != "" ||
 		strings.TrimSpace(string(p.Status)) != "" ||
 		strings.TrimSpace(p.AuthorityClass) != "" ||
@@ -1532,6 +1554,8 @@ func (p OperationPhase) Active() bool {
 
 func (l OperationPlanLease) Active() bool {
 	return strings.TrimSpace(l.ID) != "" ||
+		strings.TrimSpace(l.OperatorTitle) != "" ||
+		strings.TrimSpace(l.PlanTitle) != "" ||
 		strings.TrimSpace(l.Summary) != "" ||
 		strings.TrimSpace(l.Objective) != "" ||
 		strings.TrimSpace(l.MissionID) != "" ||
@@ -1555,6 +1579,8 @@ func (l OperationPlanLease) Active() bool {
 
 func (l OperationPlanLeaseLane) Active() bool {
 	return strings.TrimSpace(l.ID) != "" ||
+		strings.TrimSpace(l.OperatorTitle) != "" ||
+		strings.TrimSpace(l.PlanTitle) != "" ||
 		strings.TrimSpace(l.Summary) != "" ||
 		strings.TrimSpace(l.AuthorityClass) != "" ||
 		l.ExpectedTurns > 0 ||
@@ -2020,6 +2046,8 @@ func (s TurnAuthorizationState) Active() bool {
 func (p OperationProposal) Active() bool {
 	return strings.TrimSpace(p.ID) != "" ||
 		strings.TrimSpace(p.Kind) != "" ||
+		strings.TrimSpace(p.OperatorTitle) != "" ||
+		strings.TrimSpace(p.PlanTitle) != "" ||
 		strings.TrimSpace(p.Summary) != "" ||
 		strings.TrimSpace(p.WhyNow) != "" ||
 		strings.TrimSpace(p.BoundedEffect) != "" ||
@@ -2030,6 +2058,8 @@ func (p ActionProposal) Active() bool {
 	return strings.TrimSpace(p.ID) != "" ||
 		strings.TrimSpace(p.OperationID) != "" ||
 		strings.TrimSpace(p.MissionID) != "" ||
+		strings.TrimSpace(p.OperatorTitle) != "" ||
+		strings.TrimSpace(p.PlanTitle) != "" ||
 		strings.TrimSpace(p.Summary) != "" ||
 		strings.TrimSpace(p.WhyNow) != "" ||
 		strings.TrimSpace(p.BoundedEffect) != "" ||
@@ -2375,6 +2405,8 @@ func NormalizeActionProposal(proposal ActionProposal) ActionProposal {
 	proposal.ID = strings.TrimSpace(proposal.ID)
 	proposal.OperationID = strings.TrimSpace(proposal.OperationID)
 	proposal.MissionID = strings.TrimSpace(proposal.MissionID)
+	proposal.OperatorTitle = strings.TrimSpace(proposal.OperatorTitle)
+	proposal.PlanTitle = strings.TrimSpace(proposal.PlanTitle)
 	proposal.Summary = strings.TrimSpace(proposal.Summary)
 	proposal.WhyNow = strings.TrimSpace(proposal.WhyNow)
 	proposal.BoundedEffect = strings.TrimSpace(proposal.BoundedEffect)
@@ -2495,6 +2527,8 @@ func NormalizeContinuationApprovalBundle(bundle ContinuationApprovalBundle) Cont
 func NormalizeContinuationApprovalBundlePhase(phase ContinuationApprovalBundlePhase) ContinuationApprovalBundlePhase {
 	phase.ID = strings.TrimSpace(phase.ID)
 	phase.OperationPhaseID = strings.TrimSpace(phase.OperationPhaseID)
+	phase.OperatorTitle = strings.TrimSpace(phase.OperatorTitle)
+	phase.PlanTitle = strings.TrimSpace(phase.PlanTitle)
 	phase.Summary = strings.TrimSpace(phase.Summary)
 	phase.AuthorityClass = normalizeEnumValue(phase.AuthorityClass)
 	phase.WhyNow = strings.TrimSpace(phase.WhyNow)
@@ -2526,6 +2560,8 @@ func (p ContinuationApprovalBundlePhase) Active() bool {
 	return strings.TrimSpace(p.ID) != "" ||
 		strings.TrimSpace(p.OperationPhaseID) != "" ||
 		p.Index > 0 ||
+		strings.TrimSpace(p.OperatorTitle) != "" ||
+		strings.TrimSpace(p.PlanTitle) != "" ||
 		strings.TrimSpace(p.Summary) != "" ||
 		strings.TrimSpace(p.AuthorityClass) != "" ||
 		strings.TrimSpace(p.WhyNow) != "" ||
@@ -2540,6 +2576,8 @@ func NormalizeContinuationLease(lease ContinuationLease) ContinuationLease {
 	lease.ID = strings.TrimSpace(lease.ID)
 	lease.ProposalID = strings.TrimSpace(lease.ProposalID)
 	lease.MissionID = strings.TrimSpace(lease.MissionID)
+	lease.OperatorTitle = strings.TrimSpace(lease.OperatorTitle)
+	lease.PlanTitle = strings.TrimSpace(lease.PlanTitle)
 	lease.Status = NormalizeContinuationLeaseStatus(lease.Status)
 	lease.LeaseClass = NormalizeContinuationLeaseClass(lease.LeaseClass)
 	lease.AllowedActions = normalizeActionStringSlice(lease.AllowedActions)
@@ -2631,6 +2669,8 @@ func NormalizeFindingConfidence(confidence FindingConfidence) FindingConfidence 
 func normalizeOperationProposal(proposal OperationProposal) OperationProposal {
 	proposal.ID = strings.TrimSpace(proposal.ID)
 	proposal.Kind = normalizeOperationStage(proposal.Kind)
+	proposal.OperatorTitle = strings.TrimSpace(proposal.OperatorTitle)
+	proposal.PlanTitle = strings.TrimSpace(proposal.PlanTitle)
 	proposal.Summary = strings.TrimSpace(proposal.Summary)
 	proposal.WhyNow = strings.TrimSpace(proposal.WhyNow)
 	proposal.BoundedEffect = strings.TrimSpace(proposal.BoundedEffect)

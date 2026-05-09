@@ -530,6 +530,19 @@ func continuationUserFacingPlanLabel(state session.ContinuationState) string {
 
 func continuationUserFacingPlanTitle(state session.ContinuationState) string {
 	state = session.NormalizeContinuationState(state)
+	if title := firstNonEmptyContinuation(
+		state.ActionProposal.OperatorTitle,
+		state.ActionProposal.PlanTitle,
+		state.ContinuationLease.OperatorTitle,
+		state.ContinuationLease.PlanTitle,
+	); title != "" {
+		return continuationPlanTitleFromText(title)
+	}
+	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
+		if title := firstNonEmptyContinuation(phase.OperatorTitle, phase.PlanTitle); title != "" {
+			return continuationPlanTitleFromText(title)
+		}
+	}
 	texts := []string{
 		state.StageSummary,
 		state.ActionProposal.Summary,
@@ -554,6 +567,10 @@ func continuationUserFacingPlanTitle(state session.ContinuationState) string {
 		return subject
 	}
 	return ""
+}
+
+func continuationPlanTitleFromText(text string) string {
+	return cleanContinuationPlanTitleCandidate(text)
 }
 
 func continuationNamedAgentPlanTitle(text string) string {

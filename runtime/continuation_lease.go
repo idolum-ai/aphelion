@@ -82,6 +82,8 @@ func buildContinuationActionProposal(decisionID string, consensus continuationCo
 	actionProposal := session.ActionProposal{
 		ID:               "aprop-" + strings.TrimSpace(decisionID),
 		OperationID:      strings.TrimSpace(op.ID),
+		OperatorTitle:    firstNonEmptyContinuation(proposal.OperatorTitle, proposal.PlanTitle, continuationPlanTitleFromText(proposal.Summary), continuationPlanTitleFromText(nextStep), continuationPlanTitleFromText(objective)),
+		PlanTitle:        firstNonEmptyContinuation(proposal.PlanTitle, proposal.OperatorTitle, continuationPlanTitleFromText(proposal.Summary), continuationPlanTitleFromText(nextStep), continuationPlanTitleFromText(objective)),
 		Summary:          firstNonEmptyContinuation(proposal.Summary, nextStep, objective),
 		WhyNow:           firstNonEmptyContinuation(proposal.WhyNow, consensus.GovernorIntent.Rationale, consensus.PersonaIntent.Rationale),
 		BoundedEffect:    firstNonEmptyContinuation(proposal.BoundedEffect, consensus.GovernorIntent.Constraints, "Resume one bounded continuation turn and report the result."),
@@ -199,6 +201,8 @@ func buildContinuationLease(proposal session.ActionProposal, turns int, now time
 		ID:               "lease-" + strings.TrimPrefix(strings.TrimSpace(proposal.ID), "aprop-"),
 		ProposalID:       strings.TrimSpace(proposal.ID),
 		MissionID:        strings.TrimSpace(proposal.MissionID),
+		OperatorTitle:    firstNonEmptyContinuation(proposal.OperatorTitle, proposal.PlanTitle),
+		PlanTitle:        firstNonEmptyContinuation(proposal.PlanTitle, proposal.OperatorTitle),
 		Status:           session.ContinuationLeaseStatusPending,
 		MaxTurns:         turns,
 		RemainingTurns:   turns,
@@ -217,6 +221,8 @@ func buildContinuationLease(proposal session.ActionProposal, turns int, now time
 
 func actionProposalHash(proposal session.ActionProposal) string {
 	proposal.PlanHash = ""
+	proposal.OperatorTitle = ""
+	proposal.PlanTitle = ""
 	proposal.CreatedAt = time.Time{}
 	proposal.UpdatedAt = time.Time{}
 	raw, err := json.Marshal(proposal)

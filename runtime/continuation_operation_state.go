@@ -69,6 +69,8 @@ func continuationStateFromOperationPhaseBundle(opState session.OperationState, p
 	action := session.ActionProposal{
 		ID:               "aprop-" + bundleID,
 		OperationID:      bundleID,
+		OperatorTitle:    continuationPlanTitleFromText(nextStep),
+		PlanTitle:        continuationPlanTitleFromText(firstNonEmptyContinuation(opState.PhasePlan.Goal, objective, nextStep)),
 		Summary:          nextStep,
 		WhyNow:           whyNow,
 		BoundedEffect:    boundedEffect,
@@ -108,6 +110,8 @@ func continuationApprovalBundlePhasesFromOperation(opState session.OperationStat
 			ID:               id,
 			OperationPhaseID: strings.TrimSpace(phase.ID),
 			Index:            phaseIndex,
+			OperatorTitle:    firstNonEmptyContinuation(phase.OperatorTitle, phase.PlanTitle, continuationPlanTitleFromText(phase.Summary)),
+			PlanTitle:        firstNonEmptyContinuation(phase.PlanTitle, phase.OperatorTitle, continuationPlanTitleFromText(phase.Summary)),
 			Summary:          strings.TrimSpace(phase.Summary),
 			AuthorityClass:   strings.TrimSpace(phase.AuthorityClass),
 			WhyNow:           strings.TrimSpace(phase.WhyNow),
@@ -311,6 +315,8 @@ func continuationStateFromOperationPlanLease(opState session.OperationState, lea
 		ID:               "aprop-" + decisionID,
 		OperationID:      strings.TrimSpace(lease.ID),
 		MissionID:        strings.TrimSpace(lease.MissionID),
+		OperatorTitle:    firstNonEmptyContinuation(lease.OperatorTitle, lease.PlanTitle, continuationPlanTitleFromText(nextStep), continuationPlanTitleFromText(objective)),
+		PlanTitle:        firstNonEmptyContinuation(lease.PlanTitle, lease.OperatorTitle, continuationPlanTitleFromText(objective), continuationPlanTitleFromText(nextStep)),
 		Summary:          nextStep,
 		WhyNow:           whyNow,
 		BoundedEffect:    boundedEffect,
@@ -526,6 +532,8 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	action := session.ActionProposal{
 		ID:               "aprop-" + decisionID,
 		OperationID:      decisionID,
+		OperatorTitle:    firstNonEmptyContinuation(phase.OperatorTitle, phase.PlanTitle, continuationPlanTitleFromText(nextStep), continuationPlanTitleFromText(objective)),
+		PlanTitle:        firstNonEmptyContinuation(phase.PlanTitle, phase.OperatorTitle, continuationPlanTitleFromText(objective), continuationPlanTitleFromText(nextStep)),
 		Summary:          nextStep,
 		WhyNow:           whyNow,
 		BoundedEffect:    boundedEffect,
@@ -638,6 +646,8 @@ func actionProposalFromOperationProposal(opState session.OperationState, proposa
 	actionProposal := session.ActionProposal{
 		ID:               actionID,
 		OperationID:      proposalID,
+		OperatorTitle:    firstNonEmptyContinuation(proposal.OperatorTitle, proposal.PlanTitle, continuationPlanTitleFromText(proposal.Summary), continuationPlanTitleFromText(opState.Objective)),
+		PlanTitle:        firstNonEmptyContinuation(proposal.PlanTitle, proposal.OperatorTitle, continuationPlanTitleFromText(opState.Objective), continuationPlanTitleFromText(proposal.Summary)),
 		Summary:          firstNonEmptyContinuation(proposal.Summary, opState.Stage, opState.Objective),
 		WhyNow:           firstNonEmptyContinuation(proposal.WhyNow, "This pending lease requires explicit approval."),
 		BoundedEffect:    firstNonEmptyContinuation(proposal.BoundedEffect, "Execute one bounded step under the pending lease, then report evidence."),
@@ -673,6 +683,8 @@ func operationStateWithMaterializedPhaseBundleLease(opState session.OperationSta
 	opState.Proposal = session.OperationProposal{
 		ID:            strings.TrimSpace(state.ActionProposal.OperationID),
 		Kind:          strings.TrimSpace(state.ActionProposal.RiskClass),
+		OperatorTitle: strings.TrimSpace(state.ActionProposal.OperatorTitle),
+		PlanTitle:     strings.TrimSpace(state.ActionProposal.PlanTitle),
 		Summary:       strings.TrimSpace(state.ActionProposal.Summary),
 		WhyNow:        strings.TrimSpace(state.ActionProposal.WhyNow),
 		BoundedEffect: strings.TrimSpace(state.ActionProposal.BoundedEffect),
@@ -713,6 +725,8 @@ func operationStateWithMaterializedPlanLease(opState session.OperationState, sta
 	opState.Proposal = session.OperationProposal{
 		ID:            strings.TrimSpace(state.ActionProposal.OperationID),
 		Kind:          strings.TrimSpace(state.ActionProposal.RiskClass),
+		OperatorTitle: strings.TrimSpace(state.ActionProposal.OperatorTitle),
+		PlanTitle:     strings.TrimSpace(state.ActionProposal.PlanTitle),
 		Summary:       strings.TrimSpace(state.ActionProposal.Summary),
 		WhyNow:        strings.TrimSpace(state.ActionProposal.WhyNow),
 		BoundedEffect: strings.TrimSpace(state.ActionProposal.BoundedEffect),
@@ -763,6 +777,8 @@ func operationStateWithMaterializedPhaseLease(opState session.OperationState, ph
 	opState.Proposal = session.OperationProposal{
 		ID:            strings.TrimSpace(state.ActionProposal.OperationID),
 		Kind:          strings.TrimSpace(state.ActionProposal.RiskClass),
+		OperatorTitle: strings.TrimSpace(state.ActionProposal.OperatorTitle),
+		PlanTitle:     strings.TrimSpace(state.ActionProposal.PlanTitle),
 		Summary:       strings.TrimSpace(state.ActionProposal.Summary),
 		WhyNow:        strings.TrimSpace(state.ActionProposal.WhyNow),
 		BoundedEffect: strings.TrimSpace(state.ActionProposal.BoundedEffect),

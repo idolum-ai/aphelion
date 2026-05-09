@@ -101,4 +101,26 @@ if ! rg -qF "writeDoctorDesignPrincipleHealth" runtime/doctor.go; then
   exit 1
 fi
 
+for symbol in "OperatorTitle" "PlanTitle"; do
+  if ! rg -qF "$symbol" session/types.go; then
+    echo "session state must carry explicit operator/plan title fields: $symbol" >&2
+    exit 1
+  fi
+done
+
+if ! rg -qF '"interpretation_claims"' runtime/constitution_runtime.go; then
+  echo "final-reply claim adjudication must persist typed interpretation claims" >&2
+  exit 1
+fi
+
+if ! rg -qF 'proposal.OperatorTitle = ""' runtime/continuation_lease.go || ! rg -qF 'proposal.PlanTitle = ""' runtime/continuation_lease.go; then
+  echo "action proposal hashes must ignore presentation title fields" >&2
+  exit 1
+fi
+
+if ! rg -qF "NextRepairAction" runtime/turn.go; then
+  echo "review-event debug breadcrumbs must include next repair action" >&2
+  exit 1
+fi
+
 echo "design principles check passed"

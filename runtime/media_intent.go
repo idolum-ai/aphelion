@@ -94,10 +94,6 @@ func floorHasPendingAudioTranscriptionIntent(priorFloorMetadata string) bool {
 				return true
 			}
 		}
-		summary := normalizeMediaIntentText(input.Summary)
-		if strings.Contains(summary, "next audio") && strings.Contains(summary, "transcrib") && strings.Contains(summary, "text") {
-			return true
-		}
 	}
 	return false
 }
