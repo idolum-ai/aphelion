@@ -738,6 +738,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "External Tool Invocation Readiness")
 	r.writeDoctorExternalToolInvocationReadiness(&b, input)
 
+	writeDoctorSection(&b, "External Channel Adapter Readiness")
+	r.writeDoctorExternalChannelAdapterReadiness(&b, input)
+
 	writeDoctorSection(&b, "Execution Events")
 	r.writeDoctorExecutionEvents(ctx, &b, input.Key, now)
 
