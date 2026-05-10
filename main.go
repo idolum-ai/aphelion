@@ -797,6 +797,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer rt.BeginShutdown()
 	tools.WithCapabilityGrantObserver(rt.HandleCapabilityGrantActivated)
 
 	if cfg.Voice.Mode != "" && cfg.Voice.Mode != "off" {
@@ -878,10 +879,6 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		<-ctx.Done()
-		rt.BeginShutdown()
-	}()
 	if err := startDurableAgentControlPlane(ctx, durableAgentControlPlaneServer(cfg, store)); err != nil {
 		return err
 	}

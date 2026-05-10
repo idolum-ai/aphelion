@@ -20,6 +20,10 @@ func (r *Runtime) BeginShutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if _, err := r.ParkActiveWorkForRestart(ctx, restartParkSourceShutdown); err != nil {
+		if r.expectedShutdownNoise(ctx, err) {
+			log.Printf("INFO suppressing expected shutdown restart parking failure err=%v", err)
+			return
+		}
 		log.Printf("WARN restart parking failed during shutdown: %v", err)
 	}
 }

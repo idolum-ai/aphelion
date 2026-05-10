@@ -3,8 +3,12 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/idolum-ai/aphelion/core"
@@ -22,6 +26,37 @@ func TestExpectedShutdownNoiseRequiresRuntimeShutdown(t *testing.T) {
 	rt.BeginShutdown()
 	if !rt.expectedShutdownNoise(context.Background(), err) {
 		t.Fatal("expectedShutdownNoise after shutdown = false, want true")
+	}
+}
+
+func TestBeginShutdownSuppressesClosedStoreParkingWarning(t *testing.T) {
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	rt := &Runtime{store: store}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	previousFlags := log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(previousOutput)
+		log.SetFlags(previousFlags)
+	}()
+
+	rt.BeginShutdown()
+
+	got := logs.String()
+	if strings.Contains(got, "WARN restart parking failed during shutdown") {
+		t.Fatalf("logs = %q, want closed-store shutdown parking noise suppressed", got)
+	}
+	if !strings.Contains(got, "INFO suppressing expected shutdown restart parking failure") {
+		t.Fatalf("logs = %q, want explicit shutdown parking suppression evidence", got)
 	}
 }
 
