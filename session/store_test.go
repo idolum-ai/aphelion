@@ -3777,6 +3777,72 @@ func TestMigrateCapabilityKindSystemChangeConstraint(t *testing.T) {
 	}
 }
 
+func TestMigrateCapabilityInvocationsAddsAuthorityColumnsBeforeIndexes(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "legacy-capability-invocations.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open seed db err = %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+		`INSERT INTO schema_version(version) VALUES (41)`,
+		`CREATE TABLE capability_invocations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			grant_id TEXT NOT NULL,
+			principal TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			_ = db.Close()
+			t.Fatalf("seed db stmt err = %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close seed db err = %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(migrated) err = %v", err)
+	}
+	defer store.Close()
+
+	for _, column := range []string{
+		"session_id",
+		"turn_run_id",
+		"continuation_lease_id",
+		"operation_plan_lease_id",
+		"authority_source",
+	} {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('capability_invocations') WHERE name = ?`, column).Scan(&count); err != nil {
+			t.Fatalf("query migrated capability_invocations.%s err = %v", column, err)
+		}
+		if count != 1 {
+			t.Fatalf("capability_invocations.%s count = %d, want 1", column, count)
+		}
+	}
+
+	for _, indexName := range []string{
+		"idx_capability_invocations_authority_session",
+		"idx_capability_invocations_lease",
+	} {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?`, indexName).Scan(&count); err != nil {
+			t.Fatalf("query migrated index %s err = %v", indexName, err)
+		}
+		if count != 1 {
+			t.Fatalf("index %s count = %d, want 1", indexName, count)
+		}
+	}
+}
+
 func TestMigrateDurableChildAuthorityCanonicalizesPrincipalsAndChildRuntime(t *testing.T) {
 	t.Parallel()
 

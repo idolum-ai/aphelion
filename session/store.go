@@ -278,8 +278,6 @@ func (s *SQLiteStore) init() error {
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_grant ON capability_invocations(grant_id, created_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_authority_session ON capability_invocations(session_id, created_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_lease ON capability_invocations(continuation_lease_id, operation_plan_lease_id, created_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS tool_install_records (
 			tool_name TEXT PRIMARY KEY,
 			installer TEXT NOT NULL DEFAULT '',
