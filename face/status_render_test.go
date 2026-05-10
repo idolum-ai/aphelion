@@ -389,6 +389,35 @@ func TestRenderTelegramStatusSystemIncludesTailnetSummary(t *testing.T) {
 	}
 }
 
+func TestRenderTelegramStatusSystemIncludesSandboxReadiness(t *testing.T) {
+	t.Parallel()
+
+	out := RenderTelegramStatusSystem(core.SystemStatusSnapshot{
+		Sandbox: core.SandboxReadinessSnapshot{
+			Issues: []core.SandboxReadinessIssue{{
+				Role:             "approved_user",
+				Mode:             "isolated",
+				Network:          "allowlist",
+				Code:             "sandbox_network_allowlist_unenforced",
+				Severity:         "warning",
+				Summary:          "approved_user requests a sandbox network allowlist, but this runner only enforces deny or host networking.",
+				NextRepairAction: "Use network=deny for a hard network block.",
+			}},
+		},
+	}, "opus", "high")
+	for _, needle := range []string{
+		"sandbox_readiness:",
+		"role=approved_user",
+		"code=sandbox_network_allowlist_unenforced",
+		"severity=warning",
+		"next=\"Use network=deny",
+	} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("RenderTelegramStatusSystem() = %q, want substring %q", out, needle)
+		}
+	}
+}
+
 func TestRenderTelegramStatusDurablesShowsEmptyState(t *testing.T) {
 	t.Parallel()
 

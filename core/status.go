@@ -185,6 +185,21 @@ type ExternalToolInvocationReadinessSnapshot struct {
 	NextRepairAction string
 }
 
+type SandboxReadinessIssue struct {
+	Role             string
+	Mode             string
+	Network          string
+	Code             string
+	Severity         string
+	Summary          string
+	NextRepairAction string
+}
+
+type SandboxReadinessSnapshot struct {
+	GeneratedAt time.Time
+	Issues      []SandboxReadinessIssue
+}
+
 type MissionLedgerStatusSnapshot struct {
 	ActiveCount                  int
 	CandidateCount               int
@@ -257,6 +272,7 @@ type SystemStatusSnapshot struct {
 	RestartHealth        RestartHealthSnapshot
 	Tailnet              *TailnetStatusSnapshot
 	Autonomy             AutonomyStatusSnapshot
+	Sandbox              SandboxReadinessSnapshot
 	MissionLedger        MissionLedgerStatusSnapshot
 }
 

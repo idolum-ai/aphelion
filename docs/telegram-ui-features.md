@@ -105,6 +105,7 @@ Chat-scoped status now reports live work telemetry, not only router occupancy:
 - `hidden_inputs` categories plus provenance summary carried in floor metadata.
 - `delivery` state that distinguishes in-flight, delivered, persisted-without-delivery, and delivery-failure paths.
 - `detached_work` counters for pending decisions/continuations/recovery/stale-turn work.
+- `sandbox_readiness` warnings when an execution profile cannot currently enforce its configured isolation or network policy.
 - `current_signal` as a compact one-line machine signal (phase/tool/queue/blocked source).
 
 Durables status (`Durables` button, admin-only):
@@ -132,6 +133,7 @@ It is intended for operational diagnosis when `/status` is too compressed.
 - admin users additionally receive:
   - full `Status Scope: system`
   - `Debug System:` (pending-kind counters + latest turn rollups per chat)
+  - sandbox readiness warnings when present
   - full `Status Scope: durables`
 - output is chunked when needed to fit Telegram message size limits
 

@@ -548,6 +548,37 @@ func TestDoctorAutonomyStatusReportsLegacyLeaseBlockedByConfig(t *testing.T) {
 	}
 }
 
+func TestDoctorSandboxReadinessReportsOperatorVisibleWarnings(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Sandbox.Profiles.Admin.Mode = "trusted"
+	cfg.Sandbox.Profiles.Admin.Network = "deny"
+	cfg.Sandbox.Profiles.ApprovedUser.Mode = "trusted"
+	cfg.Sandbox.Profiles.ApprovedUser.Network = "allowlist"
+	cfg.Sandbox.Profiles.DurableAgent.Mode = "trusted"
+	cfg.Sandbox.Profiles.DurableAgent.Network = "allowlist"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	var b strings.Builder
+	rt.writeDoctorSandboxReadiness(&b, time.Now().UTC())
+	report := b.String()
+	for _, want := range []string{
+		`sandbox_readiness_issue_count="2"`,
+		`code="trusted_network_policy_unenforced"`,
+		`role="admin"`,
+		`code="non_admin_trusted_sandbox"`,
+		`role="approved_user"`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("sandbox doctor report missing %s:\n%s", want, report)
+		}
+	}
+}
+
 func TestDoctorIssueStatusChecksGenericTelegramChildBotRunnerReadiness(t *testing.T) {
 	t.Parallel()
 

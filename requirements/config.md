@@ -351,6 +351,11 @@ hidden_paths = [
 ]
 network = "deny"               # "deny" | "allowlist"
 
+# `allowlist` is currently policy intent for future per-destination controls.
+# The live runner enforces `deny`; isolated `allowlist` profiles are reported
+# as readiness warnings in startup/check-config logs, `/status`, and `/doctor`
+# until that policy is machine-enforced.
+
 # ─── Automation ───
 [heartbeat]
 enabled = true

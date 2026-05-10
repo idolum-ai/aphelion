@@ -676,6 +676,7 @@ func run() error {
 		return &configStartupError{Path: configPath, Err: err}
 	}
 	logConfigWarnings(configPath, cfg)
+	logSandboxReadinessWarnings(configPath, cfg)
 
 	if err := prepareFilesystem(cfg); err != nil {
 		return &configStartupError{Path: configPath, Err: err}
@@ -947,6 +948,25 @@ func logConfigWarnings(configPath string, cfg *config.Config) {
 	}
 	for _, warning := range cfg.Warnings() {
 		log.Printf("WARN config ignored_key path=%s key=%s message=%s", configPath, strings.TrimSpace(warning.Path), strings.TrimSpace(warning.Message))
+	}
+}
+
+func logSandboxReadinessWarnings(configPath string, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	for _, issue := range runtime.SandboxReadinessSnapshot(cfg).Issues {
+		log.Printf(
+			"WARN sandbox readiness path=%s role=%s mode=%s network=%s code=%s severity=%s summary=%s next_repair=%s",
+			configPath,
+			strings.TrimSpace(issue.Role),
+			strings.TrimSpace(issue.Mode),
+			strings.TrimSpace(issue.Network),
+			strings.TrimSpace(issue.Code),
+			strings.TrimSpace(issue.Severity),
+			strings.TrimSpace(issue.Summary),
+			strings.TrimSpace(issue.NextRepairAction),
+		)
 	}
 }
 

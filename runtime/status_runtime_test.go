@@ -440,6 +440,9 @@ func TestSystemStatusSnapshotBuildsAdminViewAndHotChats(t *testing.T) {
 	if snapshot.Autonomy.DefaultMode != "ask_first" || snapshot.Autonomy.Ceiling != "leased" || !snapshot.Autonomy.AllowLiveOverrides {
 		t.Fatalf("Autonomy = %#v, want default config-owned ask_first policy with leased override ceiling", snapshot.Autonomy)
 	}
+	if snapshot.Sandbox.GeneratedAt.IsZero() {
+		t.Fatalf("Sandbox readiness snapshot missing generated_at: %#v", snapshot.Sandbox)
+	}
 }
 
 func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testing.T) {

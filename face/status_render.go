@@ -807,6 +807,7 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 	lines = append(lines, renderCapabilityLifecycleBlock(snapshot.RecentExecution, 5)...)
 	lines = append(lines, renderPendingItemBlock(snapshot.PendingItems, 20)...)
 	lines = append(lines, renderAutonomyStatusBlock(snapshot.Autonomy)...)
+	lines = append(lines, renderSandboxReadinessBlock(snapshot.Sandbox)...)
 	lines = append(lines, renderTailnetStatusBlock(snapshot.Tailnet)...)
 	lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
 	lines = append(lines, fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)))
@@ -849,6 +850,39 @@ func renderAutonomyStatusBlock(snapshot core.AutonomyStatusSnapshot) []string {
 			overrideLine += " expires_at=" + snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339)
 		}
 		lines = append(lines, overrideLine)
+	}
+	return lines
+}
+
+func renderSandboxReadinessBlock(snapshot core.SandboxReadinessSnapshot) []string {
+	if len(snapshot.Issues) == 0 {
+		return nil
+	}
+	lines := []string{"sandbox_readiness:"}
+	limit := len(snapshot.Issues)
+	if limit > 4 {
+		limit = 4
+	}
+	for i := 0; i < limit; i++ {
+		issue := snapshot.Issues[i]
+		line := fmt.Sprintf(
+			"- role=%s code=%s severity=%s mode=%s network=%s",
+			strings.TrimSpace(issue.Role),
+			strings.TrimSpace(issue.Code),
+			strings.TrimSpace(issue.Severity),
+			strings.TrimSpace(issue.Mode),
+			strings.TrimSpace(issue.Network),
+		)
+		if summary := strings.TrimSpace(issue.Summary); summary != "" {
+			line += " summary=" + quoteStatusField(truncateStatusField(summary, 120))
+		}
+		if repair := strings.TrimSpace(issue.NextRepairAction); repair != "" {
+			line += " next=" + quoteStatusField(truncateStatusField(repair, 120))
+		}
+		lines = append(lines, line)
+	}
+	if len(snapshot.Issues) > limit {
+		lines = append(lines, fmt.Sprintf("- omitted=%d", len(snapshot.Issues)-limit))
 	}
 	return lines
 }

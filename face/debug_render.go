@@ -124,6 +124,7 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 
 	if len(snapshot.LatestTurnRunsByChat) == 0 {
 		lines = append(lines, "latest_turns=none")
+		lines = append(lines, renderSandboxReadinessBlock(snapshot.Sandbox)...)
 		lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 20)...)
 		return strings.Join(lines, "\n")
 	}
@@ -164,6 +165,7 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 		lines = append(lines, fmt.Sprintf("- omitted=%d", len(chatIDs)-max))
 	}
 	lines = append(lines, renderSystemSourceAttributionBlock()...)
+	lines = append(lines, renderSandboxReadinessBlock(snapshot.Sandbox)...)
 	lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 20)...)
 	return strings.Join(lines, "\n")
 }

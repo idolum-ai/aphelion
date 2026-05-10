@@ -206,6 +206,10 @@ Network access should be specified per profile.
 - explicit allowlist is acceptable when needed
 - firewall and namespace policies should be machine-enforced, not prompt-described
 
+Until per-destination allowlists are implemented, `allowlist` must be surfaced
+as a readiness warning rather than silently implied as enforced isolation.
+`network=deny` is the currently enforced isolated-network policy.
+
 ## Sandbox Backends
 
 Aphelion should preserve a stable sandbox contract while allowing stronger backends later.

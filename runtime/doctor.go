@@ -697,6 +697,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Autonomy")
 	r.writeDoctorAutonomyStatus(&b, input.Key, input.Message.SenderID, now)
 
+	writeDoctorSection(&b, "Sandbox Readiness")
+	r.writeDoctorSandboxReadiness(&b, now)
+
 	writeDoctorSection(&b, "Current Session")
 	writeDoctorSessionSummary(&b, input.Session)
 	writeDoctorRecentMessages(&b, input.Session, doctorMessageLimit)
@@ -870,6 +873,30 @@ func (r *Runtime) writeDoctorAutonomyStatus(b *strings.Builder, key session.Sess
 		}
 	}
 	writeDoctorKV(b, "autonomy_expiry_status", expiryStatus)
+}
+
+func (r *Runtime) writeDoctorSandboxReadiness(b *strings.Builder, now time.Time) {
+	if r == nil || r.cfg == nil {
+		writeDoctorLine(b, "sandbox_readiness: unavailable")
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	snapshot := r.sandboxReadinessSnapshot(now)
+	writeDoctorKV(b, "sandbox_readiness_issue_count", strconv.Itoa(len(snapshot.Issues)))
+	for _, issue := range snapshot.Issues {
+		writeDoctorLine(b, fmt.Sprintf(
+			"sandbox_readiness_issue role=%s mode=%s network=%s code=%s severity=%s summary=%s next_repair=%s",
+			strconv.Quote(strings.TrimSpace(issue.Role)),
+			strconv.Quote(strings.TrimSpace(issue.Mode)),
+			strconv.Quote(strings.TrimSpace(issue.Network)),
+			strconv.Quote(strings.TrimSpace(issue.Code)),
+			strconv.Quote(strings.TrimSpace(issue.Severity)),
+			strconv.Quote(strings.TrimSpace(issue.Summary)),
+			strconv.Quote(strings.TrimSpace(issue.NextRepairAction)),
+		))
+	}
 }
 
 func (r *Runtime) writeDoctorCodexWorkMigrationReview(ctx context.Context, b *strings.Builder, input doctorDiagnosticInput) {
