@@ -18,6 +18,30 @@ func TestRunVersionCommandText(t *testing.T) {
 		t.Fatalf("runVersionCommand() err = %v", err)
 	}
 	for _, want := range []string{
+		"Aphelion Version",
+		"Status:",
+		"Why:",
+		"Next:",
+		"Details:",
+		"Evidence:",
+		"VCS revision:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("runVersionCommand() output missing %q in %q", want, out)
+		}
+	}
+}
+
+func TestRunVersionCommandKV(t *testing.T) {
+	t.Parallel()
+
+	out, err := captureStdout(t, func() error {
+		return runVersionCommand([]string{"--format=kv"})
+	})
+	if err != nil {
+		t.Fatalf("runVersionCommand(--format=kv) err = %v", err)
+	}
+	for _, want := range []string{
 		"name: aphelion",
 		"module:",
 		"version:",
@@ -27,7 +51,7 @@ func TestRunVersionCommandText(t *testing.T) {
 		"vcs_modified:",
 	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("runVersionCommand() output missing %q in %q", want, out)
+			t.Fatalf("runVersionCommand(--format=kv) output missing %q in %q", want, out)
 		}
 	}
 }

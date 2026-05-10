@@ -23,6 +23,6 @@ for _ in {1..10}; do
   sleep 1
 done
 systemctl --user is-active --quiet aphelion
-"${exec_path}" verify-deploy --config "${config_path}"
+"${exec_path}" verify-deploy --config "${config_path}" --format=kv
 
 echo "Updated, restarted, and verified release binary at ${exec_path} using ${config_path}"

@@ -216,6 +216,7 @@ type toolAuthorityInput struct {
 	InstallRef        string `json:"install_ref,omitempty"`
 	ProbeStatus       string `json:"probe_status,omitempty"`
 	ProbeOutput       string `json:"probe_output,omitempty"`
+	Rationale         string `json:"rationale,omitempty"`
 	Limit             int    `json:"limit,omitempty"`
 }
 

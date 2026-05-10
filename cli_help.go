@@ -35,7 +35,7 @@ var cliCommandGroups = []struct {
 		"import-audit", "import-semantic", "import-codex-sessions",
 	}},
 	{Title: "Governed control", Commands: []string{
-		"authority", "durable-agent", "telegram-child-bot",
+		"authority", "durable-agent", "tailnet", "telegram-child-bot",
 	}},
 }
 
@@ -63,6 +63,7 @@ func renderTopLevelHelp(note string) string {
 	lines = append(lines, "  aphelion --config ~/.aphelion/aphelion.toml")
 	lines = append(lines, "  aphelion quickstart --detect-admin --install-service")
 	lines = append(lines, "  aphelion durable-agent list --config ~/.aphelion/aphelion.toml")
+	lines = append(lines, "  aphelion tailnet surfaces --config ~/.aphelion/aphelion.toml")
 	return strings.Join(lines, "\n")
 }
 

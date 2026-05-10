@@ -697,7 +697,7 @@ func installQuickstartUserService(ctx context.Context, opts quickstartServiceOpt
 	if err := waitForAphelionUserService(runCtx, runner); err != nil {
 		return quickstartServiceResult{}, err
 	}
-	if err := runner(runCtx, execPath, "verify-deploy", "--config", opts.ConfigPath); err != nil {
+	if err := runner(runCtx, execPath, "verify-deploy", "--config", opts.ConfigPath, "--format=kv"); err != nil {
 		return quickstartServiceResult{}, fmt.Errorf("verify deploy: %w", err)
 	}
 	return quickstartServiceResult{

@@ -236,7 +236,7 @@ func TestRunQuickstartInstallServiceUsesDeploySequence(t *testing.T) {
 		"systemctl --user is-active --quiet aphelion",
 		"systemctl --user enable --now aphelion",
 		"systemctl --user is-active --quiet aphelion",
-		execPath + " verify-deploy --config " + configPath,
+		execPath + " verify-deploy --config " + configPath + " --format=kv",
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)

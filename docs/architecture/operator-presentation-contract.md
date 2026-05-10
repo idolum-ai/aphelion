@@ -17,5 +17,9 @@ Dense records are still allowed when clearly labeled as debug or evidence:
 `/debug`, logs, machine-readable Tailnet/status mirrors, forensic records, and
 explicit evidence sections may expose raw identifiers or enum-heavy state.
 
+`/status` and default CLI commands should render operator panels by default.
+Stable automation callers must opt into structured output: use `--format=kv` for
+key/value script contracts and `--format=json` or `--json` for JSON contracts.
+
 The goal is to keep the outpost legible without turning Aphelion into a broader
 dashboard or platform. Operator control remains Telegram and CLI.

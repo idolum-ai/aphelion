@@ -15,6 +15,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/runtime"
 	"github.com/idolum-ai/aphelion/session"
@@ -105,8 +106,13 @@ func runVerifyDeployCommand(args []string) error {
 	keepSession := fs.Bool("keep-session", false, "retain the synthetic verification session even on success")
 	keepFailedSession := fs.Bool("keep-failed-session", true, "retain the synthetic verification session on failure")
 	durableChildren := fs.String("durable-children", verifyDeployDurableChildrenRequired, "durable child wake probe mode: required, warn, or off")
+	formatFlag := fs.String("format", commandOutputHuman, "output format: human, kv, json")
 	jsonOut := fs.Bool("json", false, "emit a JSON report")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	format, err := normalizeCommandOutputFormat(*formatFlag, *jsonOut)
+	if err != nil {
 		return err
 	}
 
@@ -124,7 +130,7 @@ func runVerifyDeployCommand(args []string) error {
 		KeepFailedSession: *keepFailedSession,
 		DurableChildren:   *durableChildren,
 	})
-	if renderErr := renderDeployVerificationReport(os.Stdout, report, *jsonOut); renderErr != nil {
+	if renderErr := renderDeployVerificationReport(os.Stdout, report, format); renderErr != nil {
 		return renderErr
 	}
 	if verifyErr != nil {
@@ -490,16 +496,24 @@ func verifyDeployDurableChildren(ctx context.Context, store *session.SQLiteStore
 	return fmt.Sprintf("active durable children: %d; wake probe ok", len(active)), nil
 }
 
-func renderDeployVerificationReport(w io.Writer, report deployVerificationReport, asJSON bool) error {
-	if asJSON {
+func renderDeployVerificationReport(w io.Writer, report deployVerificationReport, format string) error {
+	switch format {
+	case commandOutputJSON:
 		raw, err := json.MarshalIndent(report, "", "  ")
 		if err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(w, "%s\n", raw)
 		return err
+	case commandOutputKV:
+		return renderDeployVerificationReportKV(w, report)
+	default:
+		_, err := fmt.Fprintln(w, renderDeployVerificationReportHuman(report))
+		return err
 	}
+}
 
+func renderDeployVerificationReportKV(w io.Writer, report deployVerificationReport) error {
 	if _, err := fmt.Fprintf(w, "action: verify-deploy\nstatus: %s\nblessed: %t\nprobe_chat_id: %d\nprobe_session_id: %s\n",
 		report.Status,
 		report.Blessed,
@@ -527,6 +541,39 @@ func renderDeployVerificationReport(w io.Writer, report deployVerificationReport
 		}
 	}
 	return nil
+}
+
+func renderDeployVerificationReportHuman(report deployVerificationReport) string {
+	status := firstNonEmpty(strings.TrimSpace(report.Status), "unknown")
+	why := "The release probes check runtime boot, governed reply, persistence, rollback evidence, and durable-child wake readiness."
+	next := "Keep the service running and retain this commit as the rollback point."
+	if status != "passed" {
+		next = "Inspect the failed probe, repair or roll back, then rerun verify-deploy."
+	}
+	if diagnosis := strings.TrimSpace(report.Diagnosis); diagnosis != "" {
+		why = diagnosis
+	}
+	details := []string{
+		fmt.Sprintf("Blessed: %t", report.Blessed),
+		fmt.Sprintf("Probe chat: %d", report.ProbeChatID),
+		"Probe session: " + firstNonEmpty(strings.TrimSpace(report.ProbeSessionID), "-"),
+	}
+	evidence := []string{"Source: verify-deploy synthetic runtime probes."}
+	for _, probe := range report.Probes {
+		line := fmt.Sprintf("%s: %s (%dms)", probe.Name, probe.Status, probe.DurationMS)
+		if detail := strings.TrimSpace(probe.Detail); detail != "" {
+			line += " " + detail
+		}
+		evidence = append(evidence, line)
+	}
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:    "Deploy Verification",
+		State:    status,
+		Why:      why,
+		Next:     next,
+		Details:  details,
+		Evidence: evidence,
+	})
 }
 
 func diagnoseDeployFailure(probe string, detail string) string {

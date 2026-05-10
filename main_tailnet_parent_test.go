@@ -96,7 +96,7 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	}
 }
 
-func TestTailnetPrivateHTTPHandlerRevokeRequiresConfirmationHeader(t *testing.T) {
+func TestTailnetPrivateHTTPHandlerRejectsMutationRoutes(t *testing.T) {
 	t.Parallel()
 
 	router := &stubCommandRouter{
@@ -112,25 +112,14 @@ func TestTailnetPrivateHTTPHandlerRevokeRequiresConfirmationHeader(t *testing.T)
 	req := httptest.NewRequest(http.MethodPost, "/tailnet/surfaces/parent:tsnet_http:status/revoke", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusPreconditionRequired {
-		t.Fatalf("unconfirmed revoke status = %d body=%q, want 428", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("private revoke status = %d body=%q, want 405", rec.Code, rec.Body.String())
 	}
 	if router.revokeTailnetSurfaceID != "" {
-		t.Fatalf("revokeTailnetSurfaceID = %q, want no revoke without confirmation", router.revokeTailnetSurfaceID)
+		t.Fatalf("revokeTailnetSurfaceID = %q, want no mutation from private mirror", router.revokeTailnetSurfaceID)
 	}
-
-	req = httptest.NewRequest(http.MethodPost, "/tailnet/surfaces/parent:tsnet_http:status/revoke", nil)
-	req.Header.Set("X-Aphelion-Confirm", "revoke")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("confirmed revoke status = %d body=%q, want 200", rec.Code, rec.Body.String())
-	}
-	if router.revokeTailnetSurfaceSenderID != 1001 || router.revokeTailnetSurfaceID != "parent:tsnet_http:status" {
-		t.Fatalf("revoke call sender=%d surface=%q, want admin surface revoke", router.revokeTailnetSurfaceSenderID, router.revokeTailnetSurfaceID)
-	}
-	if !strings.Contains(rec.Body.String(), `"revoked"`) {
-		t.Fatalf("confirmed revoke body = %q, want revoked payload", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "read-only mirrors") {
+		t.Fatalf("private revoke body = %q, want read-only mirror explanation", rec.Body.String())
 	}
 }
 

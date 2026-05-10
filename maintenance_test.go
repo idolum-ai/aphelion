@@ -2446,7 +2446,7 @@ func TestRunVerifyDeployCommandPrintsFailureReport(t *testing.T) {
 	}
 
 	out, err := captureStdout(t, func() error {
-		return runVerifyDeployCommand([]string{"--config", cfgPath})
+		return runVerifyDeployCommand([]string{"--config", cfgPath, "--format=kv"})
 	})
 	if err == nil {
 		t.Fatal("runVerifyDeployCommand() err = nil, want failure")

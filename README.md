@@ -229,6 +229,7 @@ CLI help is grouped by operator task:
 ./bin/aphelion --help
 ./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
 ./bin/aphelion verify-deploy --config ~/.aphelion/aphelion.toml
+./bin/aphelion verify-deploy --config ~/.aphelion/aphelion.toml --format=kv
 ```
 
 Build a proven static binary:
@@ -296,6 +297,7 @@ Inspect durable-agent inventory and health:
 ```bash
 ./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
 ./bin/aphelion durable-agent health --config ~/.aphelion/aphelion.toml --agent research-group
+./bin/aphelion tailnet surfaces --config ~/.aphelion/aphelion.toml
 ```
 
 Configure a durable Telegram group agent:
@@ -424,7 +426,9 @@ systemctl --user restart aphelion
 
 `verify-deploy` is the post-restart gate. It runs a small synthetic turn through
 the live governed reply path, checks one tool path, and confirms persistence.
-If it fails, the deploy should be treated as failed.
+The default output is a human operator panel; release scripts use
+`--format=kv` as their stable automation contract. If it fails, the deploy
+should be treated as failed.
 
 ## Background Service
 

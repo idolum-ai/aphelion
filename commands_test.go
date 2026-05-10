@@ -1318,8 +1318,8 @@ func TestHandleTelegramCommandStatus(t *testing.T) {
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline count = %d, want 1", len(sender.inline))
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "Status Scope: chat") {
-		t.Fatalf("status text = %q, want chat scope status", got)
+	if got := sender.inline[0].text; !strings.Contains(got, "Status: working") || strings.Contains(got, "Status Scope: chat") {
+		t.Fatalf("status text = %q, want human chat status without raw scope", got)
 	}
 	foundThisChat := false
 	foundPending := false
@@ -1582,8 +1582,8 @@ func TestHandleTelegramCommandStatusIncludesReadableSummary(t *testing.T) {
 	if got := sender.inline[0].text; !strings.Contains(got, "Quick Read: Chat 7 is idle right now; no blocking pending items.") {
 		t.Fatalf("status text = %q, want readable quick summary", got)
 	}
-	if got := sender.inline[0].text; !strings.Contains(got, "Status Scope: chat") {
-		t.Fatalf("status text = %q, want machine status body", got)
+	if got := sender.inline[0].text; !strings.Contains(got, "Status: idle") || strings.Contains(got, "Status Scope: chat") {
+		t.Fatalf("status text = %q, want human status body without raw scope", got)
 	}
 }
 
@@ -2956,8 +2956,8 @@ func TestHandleTelegramCommandCallbackStatusSystemForAdmin(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
 	}
-	if got := sender.editInline[0].text; !strings.Contains(got, "Status Scope: system") {
-		t.Fatalf("system status text = %q, want system scope", got)
+	if got := sender.editInline[0].text; !strings.Contains(got, "System Status") || strings.Contains(got, "Status Scope: system") {
+		t.Fatalf("system status text = %q, want human system status without raw scope", got)
 	}
 }
 
@@ -3004,8 +3004,8 @@ func TestHandleTelegramCommandCallbackStatusDurablesForAdmin(t *testing.T) {
 	if len(sender.editInline) != 1 {
 		t.Fatalf("editInline count = %d, want 1", len(sender.editInline))
 	}
-	if got := sender.editInline[0].text; !strings.Contains(got, "Status Scope: durables") {
-		t.Fatalf("durables status text = %q, want durables scope", got)
+	if got := sender.editInline[0].text; !strings.Contains(got, "Durable Agents") || strings.Contains(got, "Status Scope: durables") {
+		t.Fatalf("durables status text = %q, want human durable status without raw scope", got)
 	}
 }
 

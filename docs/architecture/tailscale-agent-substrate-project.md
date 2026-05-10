@@ -217,6 +217,8 @@ becomes a private network participant.
 Aphelion may expose tailnet-only machine endpoints for durable-child control,
 health, and policy protocols. These endpoints are not operator surfaces.
 Operators inspect and control them through Telegram and CLI projections.
+Tailnet-private JSON endpoints that mirror status, doctor, and surface state are
+read-only; revocation and other mutations stay on the explicit operator path.
 
 How it works:
 

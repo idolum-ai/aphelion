@@ -560,6 +560,8 @@ const (
 	ToolDriftSourceAuditFailure      ToolDriftSource = "audit_failure"
 	ToolDriftSourceProbeFailure      ToolDriftSource = "probe_failure"
 	ToolDriftSourcePolicyViolation   ToolDriftSource = "policy_violation"
+	ToolDriftSourceRollback          ToolDriftSource = "rollback"
+	ToolDriftSourceRemoval           ToolDriftSource = "removal"
 )
 
 type ToolInstallRecord struct {

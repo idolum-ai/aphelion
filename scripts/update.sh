@@ -25,6 +25,6 @@ for _ in {1..10}; do
   sleep 1
 done
 systemctl --user is-active --quiet aphelion
-"${repo_root}/bin/aphelion" verify-deploy --config "${config_path}"
+"${repo_root}/bin/aphelion" verify-deploy --config "${config_path}" --format=kv
 
 echo "Updated, restarted, and verified aphelion using ${config_path}"

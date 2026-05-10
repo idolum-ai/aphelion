@@ -37,6 +37,8 @@ const (
 	ExecutionEventToolRegistered            = "tool.registered"
 	ExecutionEventToolInstallUpdated        = "tool.install.updated"
 	ExecutionEventToolAuditUpdated          = "tool.audit.updated"
+	ExecutionEventToolRollbackApplied       = "tool.rollback.applied"
+	ExecutionEventToolRemovalApplied        = "tool.removal.applied"
 	ExecutionEventCapabilityRequestCreated  = "capability.request.created"
 	ExecutionEventCapabilityReviewed        = "capability.reviewed"
 	ExecutionEventCapabilityGrantChanged    = "capability.grant.changed"

@@ -110,13 +110,12 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 }
 
 func RenderTelegramStatusChatOperatorCard(snapshot core.ChatStatusSnapshot, personaEffort string, governorEffort string, pendingOnly bool) string {
-	lines := []string{
-		fmt.Sprintf("status_scope=chat chat_id=%d generated_at=%s", snapshot.ChatID, formatStatusTime(snapshot.GeneratedAt)),
-	}
+	lines := []string{"Chat Status"}
 	if pendingOnly {
 		lines = append(lines, renderOperatorAttentionLines(snapshot, true)...)
 		lines = append(lines, renderOperatorBacklogLines(snapshot, true)...)
 		lines = append(lines, renderOperatorRuntimeLine(personaEffort, governorEffort))
+		lines = append(lines, "details: /debug has the full execution trace and source attribution.")
 		return strings.Join(compactStatusLines(lines), "\n")
 	}
 

@@ -140,7 +140,7 @@ func renderStatusChatOperatorView(chat core.ChatStatusSnapshot, personaEffort st
 	if quickRead == "" {
 		return text
 	}
-	return "quick_read " + quickRead + "\n\n" + text
+	return "Quick Read: " + quickRead + "\n\n" + text
 }
 
 func statusReadableSummaryText(ctx context.Context, router commandRouter, view statusView, text string) string {
@@ -157,35 +157,154 @@ func statusReadableSummaryText(ctx context.Context, router commandRouter, view s
 
 func renderReadableStatusView(view statusView, rawText string, quickRead string) string {
 	rawText = strings.TrimSpace(rawText)
-	lines := make([]string, 0, 16)
-	if quickRead = strings.TrimSpace(quickRead); quickRead != "" {
-		lines = append(lines, "quick_read "+quickRead, "")
-	}
-	if scope := statusRawLine(rawText, "status_scope="); scope != "" {
-		lines = append(lines, scope)
-	}
-	if summary := statusRawLine(rawText, "summary "); summary != "" {
-		lines = append(lines, summary)
-	}
-
+	details := make([]string, 0, 16)
 	switch view {
 	case statusViewChat, statusViewPending, statusViewChatTarget:
-		lines = append(lines, renderReadableChatStatusLines(rawText, view == statusViewPending)...)
+		details = append(details, renderReadableChatStatusLines(rawText, view == statusViewPending)...)
 	case statusViewSystem:
-		lines = append(lines, renderReadableSystemStatusLines(rawText)...)
+		details = append(details, renderReadableSystemStatusLines(rawText)...)
 	case statusViewHotChats:
-		lines = append(lines, renderReadableHotChatsStatusLines(rawText)...)
+		details = append(details, renderReadableHotChatsStatusLines(rawText)...)
 	case statusViewFindChat:
-		lines = append(lines, renderReadableFindChatStatusLines(rawText)...)
+		details = append(details, renderReadableFindChatStatusLines(rawText)...)
 	case statusViewDurables:
-		lines = append(lines, renderReadableDurablesStatusLines(rawText)...)
+		details = append(details, renderReadableDurablesStatusLines(rawText)...)
 	default:
-		lines = append(lines, renderReadableGenericStatusLines(rawText)...)
+		details = append(details, renderReadableGenericStatusLines(rawText)...)
 	}
 	if hint := statusDetailsHint(view); hint != "" {
-		lines = append(lines, "", hint)
+		details = append(details, hint)
 	}
-	return strings.Join(compactStatusDisplayLines(lines), "\n")
+	panel := face.RenderOperatorPanel(face.OperatorPanel{
+		Title:    statusViewTitle(view),
+		State:    statusViewState(view, rawText),
+		Why:      statusViewWhy(view, rawText),
+		Next:     statusViewNext(view, rawText),
+		Details:  details,
+		Evidence: statusViewEvidence(view),
+	})
+	quickRead = strings.TrimSpace(quickRead)
+	if quickRead == "" {
+		return panel
+	}
+	return "Quick Read: " + quickRead + "\n\n" + panel
+}
+
+func statusViewTitle(view statusView) string {
+	switch view {
+	case statusViewSystem:
+		return "System Status"
+	case statusViewHotChats:
+		return "Hot Chats"
+	case statusViewFindChat:
+		return "Find Chat"
+	case statusViewDurables:
+		return "Durable Agents"
+	case statusViewPending:
+		return "Pending Status"
+	case statusViewChatTarget:
+		return "Chat Status"
+	default:
+		return "Chat Status"
+	}
+}
+
+func statusViewState(view statusView, rawText string) string {
+	switch view {
+	case statusViewSystem:
+		active, _ := parseStatusSummaryIntToken(rawText, "active_turns")
+		queued, _ := parseStatusSummaryIntToken(rawText, "queued_chats")
+		pending, _ := parseStatusSummaryIntToken(rawText, "pending_items")
+		stale, _ := parseStatusSummaryIntToken(rawText, "stale_running")
+		switch {
+		case stale > 0:
+			return "needs recovery"
+		case pending > 0:
+			return "needs attention"
+		case active > 0:
+			return "working"
+		case queued > 0:
+			return "queued"
+		default:
+			return "idle"
+		}
+	case statusViewHotChats:
+		if hot, ok := parseStatusSummaryIntToken(rawText, "hot_chats"); ok && hot > 0 {
+			return fmt.Sprintf("%d active or pending chat(s)", hot)
+		}
+		return "none"
+	case statusViewFindChat:
+		if strings.Contains(rawText, "No active or pending chats") {
+			return "none"
+		}
+		return "ready"
+	case statusViewDurables:
+		degraded, _ := parseStatusSummaryIntToken(rawText, "degraded")
+		active, _ := parseStatusSummaryIntToken(rawText, "active")
+		total, _ := parseStatusSummaryIntToken(rawText, "total")
+		switch {
+		case degraded > 0:
+			return fmt.Sprintf("%d degraded durable agent(s)", degraded)
+		case total == 0:
+			return "none"
+		case active > 0:
+			return fmt.Sprintf("%d active durable agent(s)", active)
+		default:
+			return "idle"
+		}
+	default:
+		return statusSummaryStateDisplay(firstNonEmptyStatusSummary(statusSummaryStateToken(rawText), "unknown"))
+	}
+}
+
+func statusViewWhy(view statusView, rawText string) string {
+	switch view {
+	case statusViewSystem:
+		pending := firstNonEmptyStatusSummary(statusSummaryToken(rawText, "pending_items"), "0")
+		active := firstNonEmptyStatusSummary(statusSummaryToken(rawText, "active_turns"), "0")
+		queued := firstNonEmptyStatusSummary(statusSummaryToken(rawText, "queued_chats"), "0")
+		return fmt.Sprintf("system projection has %s active turn(s), %s queued chat(s), and %s pending item(s)", active, queued, pending)
+	case statusViewHotChats:
+		return "these chats have active work, queue depth, or pending operator items"
+	case statusViewFindChat:
+		return "admin chat drilldown starts from currently active or pending chats"
+	case statusViewDurables:
+		return "durable children are subordinate runtimes and need visible policy, wake, grant, and enrollment posture"
+	default:
+		return "chat status is a projection over typed runtime state and TES-backed evidence"
+	}
+}
+
+func statusViewNext(view statusView, rawText string) string {
+	switch view {
+	case statusViewSystem:
+		if pending, ok := parseStatusSummaryIntToken(rawText, "pending_items"); ok && pending > 0 {
+			return "open pending items or run /doctor for repair guidance"
+		}
+		return "use /debug for raw execution evidence or /doctor for a read-only diagnosis"
+	case statusViewHotChats:
+		return "select Find Chat to inspect one chat, or open /debug for raw evidence"
+	case statusViewFindChat:
+		return "choose a chat button to inspect that chat's status"
+	case statusViewDurables:
+		if degraded, ok := parseStatusSummaryIntToken(rawText, "degraded"); ok && degraded > 0 {
+			return "inspect the degraded child with durable-agent health or run /doctor"
+		}
+		return "refresh after child wake, policy, grant, or Tailnet changes"
+	default:
+		return "use /debug for raw execution evidence or /doctor for a read-only diagnosis"
+	}
+}
+
+func statusViewEvidence(view statusView) []string {
+	switch view {
+	case statusViewDurables:
+		return []string{"Source: durable-agent registry, runtime state, policy state, and TES projections."}
+	case statusViewSystem, statusViewHotChats, statusViewFindChat:
+		return []string{"Source: system status projection with TES-preferred runtime evidence."}
+	default:
+		return []string{"Source: chat status projection with TES-preferred runtime evidence."}
+	}
 }
 
 func renderReadableChatStatusLines(rawText string, pendingOnly bool) []string {
@@ -292,7 +411,7 @@ func renderReadableGenericStatusLines(rawText string) []string {
 func statusDetailsHint(view statusView) string {
 	switch view {
 	case statusViewChat, statusViewPending, statusViewChatTarget, statusViewSystem, statusViewHotChats, statusViewDurables:
-		return "details: /debug has the full execution trace and source attribution."
+		return "Use /debug for the full execution trace and source attribution."
 	default:
 		return ""
 	}
@@ -498,21 +617,21 @@ func composeStatusReadableSummary(view statusView, statusText string) string {
 		actionValue := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "action_items"), pendingValue)
 		backlogValue := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "backlog_items"), "0")
 		signal := firstNonEmptyStatusSummary(statusCurrentSignal(statusText), "unknown")
-		return fmt.Sprintf("Chat is %s; action items=%s; backlog items=%s; signal=%s.", statusSummaryStateDisplay(state), actionValue, backlogValue, signal)
+		return fmt.Sprintf("Chat is %s; action items %s; backlog items %s; signal %s.", statusSummaryStateDisplay(state), actionValue, backlogValue, signal)
 	case statusViewSystem:
 		active := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "active_turns"), "0")
 		queued := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "queued_chats"), "0")
 		pending := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "pending_items"), "0")
-		return fmt.Sprintf("System has active turns=%s; queued chats=%s; pending items=%s.", active, queued, pending)
+		return fmt.Sprintf("System has %s active turn(s), %s queued chat(s), and %s pending item(s).", active, queued, pending)
 	case statusViewHotChats:
 		hot := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "hot_chats"), "0")
-		return fmt.Sprintf("Hot chats listed=%s.", hot)
+		return fmt.Sprintf("Hot chats listed: %s.", hot)
 	case statusViewDurables:
 		total := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "total"), "0")
 		active := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "active"), "0")
 		degraded := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "degraded"), "0")
 		inactive := firstNonEmptyStatusSummary(statusSummaryToken(statusText, "inactive"), "0")
-		return fmt.Sprintf("Durables total=%s; active=%s; degraded=%s; inactive=%s.", total, active, degraded, inactive)
+		return fmt.Sprintf("Durables total %s; active %s; degraded %s; inactive %s.", total, active, degraded, inactive)
 	default:
 		return ""
 	}

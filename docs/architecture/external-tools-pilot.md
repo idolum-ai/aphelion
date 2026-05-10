@@ -79,15 +79,21 @@ The canonical drift anchors are:
 Verified tools automatically become `stale` when any anchor moves. Drift reasons
 are typed as `install_ref_changed`, `manifest_drift`, `workspace_drift`,
 `container_drift`, `missing_baseline`, `fingerprint_error`,
-`policy_violation`, `audit_failure`, or `probe_failure`. Stale tools cannot be
-registered, listed as callable for a principal, or invoked until
-re-audited, re-probed, and re-verified.
+`policy_violation`, `audit_failure`, `probe_failure`, `rollback`, or `removal`.
+Stale tools cannot be registered, listed as callable for a principal, or invoked
+until re-audited, re-probed, and re-verified.
 
 Tenants and agents use `capability_request` with `kind=tool` for proposal
 creation. Operators use `capability_authority` for parent/admin review and
 admin grants, and `tool_authority` for tool install, audit, verification, and
 registration. This keeps request attribution visible without handing lifecycle
 authority to the requester.
+
+Operators also use `tool_authority` `rollback` and `uninstall` actions to retire
+manifest-backed tools. These actions optionally run manifest-declared rollback or
+uninstall commands, disable the registered tool, revoke active tool capability
+grants, mark install evidence stale, and persist TES events for rollback/removal,
+registration change, grant revocation, and install-state change.
 
 ## Execution Modes
 

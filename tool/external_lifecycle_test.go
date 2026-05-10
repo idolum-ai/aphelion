@@ -68,6 +68,74 @@ func TestExternalToolAuthorityEndToEndLifecycleFlow(t *testing.T) {
 	}
 }
 
+func TestExternalToolAuthorityRollbackAndUninstallRetireExecutionSurface(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	installExternalLifecycleFixture(t, registry, "browse_page")
+	key := adminSessionKey()
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+
+	verifyExternalLifecycleFixture(t, registry, actor, key)
+	if _, err := executeToolAuthorityJSON(t, registry, actor, key, `{"action":"register","tool_name":"browse_page","implementation_ref":"external:browse_page"}`); err != nil {
+		t.Fatalf("register err = %v", err)
+	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`)); err != nil {
+		t.Fatalf("browse_page before rollback err = %v", err)
+	}
+
+	rollbackOut, err := executeToolAuthorityJSON(t, registry, actor, key, `{"action":"rollback","tool_name":"browse_page","rationale":"retire fixture install before replacement"}`)
+	if err != nil {
+		t.Fatalf("rollback err = %v", err)
+	}
+	for _, needle := range []string{"[TOOL_ROLLBACK]", "status: stale", "drift_source: rollback", "registration_disabled: true", "revoked_capability_grants: 1", "command_output: stdout:", "rollback ok"} {
+		if !strings.Contains(rollbackOut, needle) {
+			t.Fatalf("rollback output = %q, want %q", rollbackOut, needle)
+		}
+	}
+	registered, ok, err := store.RegisteredTool("browse_page")
+	if err != nil || !ok || registered.Registered {
+		t.Fatalf("RegisteredTool after rollback = %#v ok=%t err=%v, want disabled", registered, ok, err)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindTool, "browse_page", "telegram:1001", "invoke"); err != nil || ok {
+		t.Fatalf("ActiveCapabilityGrant after rollback ok=%t err=%v, want revoked", ok, err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`)); err == nil || !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("browse_page after rollback err = %v, want registration gate", err)
+	}
+
+	verifyExternalLifecycleFixture(t, registry, actor, key)
+	if _, err := executeToolAuthorityJSON(t, registry, actor, key, `{"action":"register","tool_name":"browse_page","implementation_ref":"external:browse_page"}`); err != nil {
+		t.Fatalf("register after rollback err = %v", err)
+	}
+	grantToolInvoke(t, store, "browse_page", "telegram:1001")
+	uninstallOut, err := executeToolAuthorityJSON(t, registry, actor, key, `{"action":"uninstall","tool_name":"browse_page","rationale":"operator removed external fixture"}`)
+	if err != nil {
+		t.Fatalf("uninstall err = %v", err)
+	}
+	for _, needle := range []string{"[TOOL_UNINSTALL]", "status: stale", "drift_source: removal", "registration_disabled: true", "revoked_capability_grants: 1", "command_output: stdout:", "uninstall ok"} {
+		if !strings.Contains(uninstallOut, needle) {
+			t.Fatalf("uninstall output = %q, want %q", uninstallOut, needle)
+		}
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, eventType := range []string{
+		core.ExecutionEventToolRollbackApplied,
+		core.ExecutionEventToolRemovalApplied,
+		core.ExecutionEventToolRegistered,
+		core.ExecutionEventCapabilityGrantChanged,
+	} {
+		if !executionEventTypeExists(events, eventType) {
+			t.Fatalf("missing %s event after rollback/uninstall", eventType)
+		}
+	}
+}
+
 func TestExternalToolTenantCapabilityRequestCarriesThroughToInvocation(t *testing.T) {
 	t.Parallel()
 
@@ -262,6 +330,20 @@ echo '{"summary":"ok","installed":true}'
 `), 0o755); err != nil {
 		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(registry.workspace, "rollback.sh"), []byte(`#!/usr/bin/env bash
+set -euo pipefail
+rm -f .browse_page_installed
+echo 'rollback ok'
+`), 0o755); err != nil {
+		t.Fatalf("WriteFile(rollback.sh) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(registry.workspace, "uninstall.sh"), []byte(`#!/usr/bin/env bash
+set -euo pipefail
+rm -f .browse_page_installed
+echo 'uninstall ok'
+`), 0o755); err != nil {
+		t.Fatalf("WriteFile(uninstall.sh) err = %v", err)
+	}
 	if _, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
 		Name:      toolName,
 		Owner:     "child-alpha",
@@ -272,6 +354,12 @@ echo '{"summary":"ok","installed":true}'
 		},
 		Install: ExternalToolManifestInstall{Command: []string{"./install.sh"}},
 		Probe:   ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
+		Rollback: ExternalToolManifestRollback{
+			Command: []string{"./rollback.sh"},
+		},
+		Uninstall: ExternalToolManifestUninstall{
+			Command: []string{"./uninstall.sh"},
+		},
 		Constraints: ExternalToolManifestConstraints{
 			Network: "none",
 		},

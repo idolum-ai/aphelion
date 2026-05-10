@@ -39,7 +39,7 @@ for _ in {1..10}; do
   sleep 1
 done
 systemctl --user is-active --quiet aphelion
-"${exec_path}" verify-deploy --config "${config_path}"
+"${exec_path}" verify-deploy --config "${config_path}" --format=kv
 
 echo "Installed, started, and verified user service at ${service_path}"
 echo "Manage with: systemctl --user status aphelion"

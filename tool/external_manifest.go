@@ -25,6 +25,8 @@ type ExternalToolManifest struct {
 	Install     ExternalToolManifestInstall     `json:"install,omitempty"`
 	Audit       ExternalToolManifestAudit       `json:"audit,omitempty"`
 	Probe       ExternalToolManifestProbe       `json:"probe,omitempty"`
+	Rollback    ExternalToolManifestRollback    `json:"rollback,omitempty"`
+	Uninstall   ExternalToolManifestUninstall   `json:"uninstall,omitempty"`
 	Provenance  ExternalToolManifestProvenance  `json:"provenance,omitempty"`
 }
 
@@ -49,6 +51,14 @@ type ExternalToolManifestConstraints struct {
 }
 
 type ExternalToolManifestInstall struct {
+	Command []string `json:"command,omitempty"`
+}
+
+type ExternalToolManifestRollback struct {
+	Command []string `json:"command,omitempty"`
+}
+
+type ExternalToolManifestUninstall struct {
 	Command []string `json:"command,omitempty"`
 }
 
@@ -107,6 +117,12 @@ func NormalizeExternalToolManifest(m ExternalToolManifest) ExternalToolManifest 
 	}
 	if len(m.Probe.Command) > 0 {
 		m.Probe.Command = normalizeStringList(m.Probe.Command)
+	}
+	if len(m.Rollback.Command) > 0 {
+		m.Rollback.Command = normalizeStringList(m.Rollback.Command)
+	}
+	if len(m.Uninstall.Command) > 0 {
+		m.Uninstall.Command = normalizeStringList(m.Uninstall.Command)
 	}
 	if len(m.Container.Healthcheck.Command) > 0 {
 		m.Container.Healthcheck.Command = normalizeStringList(m.Container.Healthcheck.Command)

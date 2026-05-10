@@ -10,6 +10,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"github.com/idolum-ai/aphelion/face"
 )
 
 type versionInfo struct {
@@ -24,6 +26,7 @@ type versionInfo struct {
 
 func runVersionCommand(args []string) error {
 	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	formatFlag := fs.String("format", commandOutputHuman, "output format: human, kv, json")
 	jsonOutput := fs.Bool("json", false, "print version metadata as JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -31,23 +34,58 @@ func runVersionCommand(args []string) error {
 	if extra, ok := firstPositionalArg(fs.Args()); ok {
 		return fmt.Errorf("unknown argument %q for version", extra)
 	}
+	format, err := normalizeCommandOutputFormat(*formatFlag, *jsonOutput)
+	if err != nil {
+		return err
+	}
 
 	info := readVersionInfo()
-	if *jsonOutput {
+	switch format {
+	case commandOutputJSON:
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetEscapeHTML(false)
 		enc.SetIndent("", "  ")
 		return enc.Encode(info)
+	case commandOutputKV:
+		renderVersionKV(os.Stdout, info)
+		return nil
+	default:
+		fmt.Fprintln(os.Stdout, renderVersionHuman(info))
+		return nil
 	}
+}
 
-	fmt.Fprintf(os.Stdout, "name: %s\n", info.Name)
-	fmt.Fprintf(os.Stdout, "module: %s\n", firstNonEmpty(info.Module, "unknown"))
-	fmt.Fprintf(os.Stdout, "version: %s\n", firstNonEmpty(info.Version, "unknown"))
-	fmt.Fprintf(os.Stdout, "go_version: %s\n", firstNonEmpty(info.GoVersion, "unknown"))
-	fmt.Fprintf(os.Stdout, "vcs_revision: %s\n", firstNonEmpty(info.VCSRevision, "unknown"))
-	fmt.Fprintf(os.Stdout, "vcs_time: %s\n", firstNonEmpty(info.VCSTime, "unknown"))
-	fmt.Fprintf(os.Stdout, "vcs_modified: %s\n", firstNonEmpty(info.VCSModified, "unknown"))
-	return nil
+func renderVersionKV(out *os.File, info versionInfo) {
+	fmt.Fprintf(out, "name: %s\n", info.Name)
+	fmt.Fprintf(out, "module: %s\n", firstNonEmpty(info.Module, "unknown"))
+	fmt.Fprintf(out, "version: %s\n", firstNonEmpty(info.Version, "unknown"))
+	fmt.Fprintf(out, "go_version: %s\n", firstNonEmpty(info.GoVersion, "unknown"))
+	fmt.Fprintf(out, "vcs_revision: %s\n", firstNonEmpty(info.VCSRevision, "unknown"))
+	fmt.Fprintf(out, "vcs_time: %s\n", firstNonEmpty(info.VCSTime, "unknown"))
+	fmt.Fprintf(out, "vcs_modified: %s\n", firstNonEmpty(info.VCSModified, "unknown"))
+}
+
+func renderVersionHuman(info versionInfo) string {
+	state := "available"
+	if strings.EqualFold(strings.TrimSpace(info.VCSModified), "true") {
+		state = "modified checkout"
+	}
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title: "Aphelion Version",
+		State: state,
+		Why:   "This is the binary and source revision metadata used for release and rollback checks.",
+		Next:  "Use --format=json for machine reads or compare the revision before deploy/rollback.",
+		Details: []string{
+			"Module: " + firstNonEmpty(info.Module, "unknown"),
+			"Version: " + firstNonEmpty(info.Version, "unknown"),
+			"Go: " + firstNonEmpty(info.GoVersion, "unknown"),
+		},
+		Evidence: []string{
+			"VCS revision: " + firstNonEmpty(info.VCSRevision, "unknown"),
+			"VCS time: " + firstNonEmpty(info.VCSTime, "unknown"),
+			"VCS modified: " + firstNonEmpty(info.VCSModified, "unknown"),
+		},
+	})
 }
 
 func readVersionInfo() versionInfo {
