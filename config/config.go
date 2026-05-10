@@ -880,6 +880,18 @@ func (cfg *Config) WarningSummary() string {
 	return strings.Join(parts, "; ")
 }
 
+func EffectiveUserAgent(cfg *Config, defaultUserAgent string) string {
+	if cfg != nil {
+		if trimmed := strings.TrimSpace(cfg.Identity.UserAgent); trimmed != "" {
+			return trimmed
+		}
+		if cfg.Identity.AnonymousProfile {
+			return ""
+		}
+	}
+	return strings.TrimSpace(defaultUserAgent)
+}
+
 func configWarningsFromMetadata(md toml.MetaData) []ConfigWarning {
 	undecoded := md.Undecoded()
 	if len(undecoded) == 0 {

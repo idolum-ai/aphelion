@@ -45,6 +45,7 @@ type Registry struct {
 	filePurpose                     string
 	retrievalStore                  memstore.RetrievalStore
 	defaultStore                    string
+	nativeFetchUserAgent            string
 	semantic                        *memstore.SemanticEngine
 	durableAgentBootstrapLLM        core.NodeLLMBootstrap
 	externalManifests               []ExternalToolManifest
@@ -421,10 +422,11 @@ type durableAgentInput struct {
 
 func NewRegistry(workspace string, timeout time.Duration) *Registry {
 	return &Registry{
-		workspace:        workspace,
-		timeout:          timeout,
-		maxOutputBytes:   defaultMaxOutputBytes,
-		externalExecutor: defaultExternalToolExecutor{},
+		workspace:            workspace,
+		timeout:              timeout,
+		maxOutputBytes:       defaultMaxOutputBytes,
+		nativeFetchUserAgent: DefaultNativeFetchUserAgent,
+		externalExecutor:     defaultExternalToolExecutor{},
 	}
 }
 
@@ -437,6 +439,13 @@ func NewRegistryWithSandbox(workspace string, timeout time.Duration, resolver *s
 
 func (r *Registry) WithRunner(runner *sandbox.Runner) *Registry {
 	r.runner = runner
+	return r
+}
+
+func (r *Registry) WithUserAgent(userAgent string) *Registry {
+	if r != nil {
+		r.nativeFetchUserAgent = strings.TrimSpace(userAgent)
+	}
 	return r
 }
 

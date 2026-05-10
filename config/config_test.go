@@ -257,6 +257,23 @@ func TestIdentityAnonymousProfileUsesGenericDefaults(t *testing.T) {
 	}
 }
 
+func TestEffectiveUserAgentHonorsAnonymousProfile(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	if got := EffectiveUserAgent(&cfg, "aphelion-fetch-url/1"); got != "aphelion-fetch-url/1" {
+		t.Fatalf("EffectiveUserAgent default = %q, want configured default", got)
+	}
+	cfg.Identity.AnonymousProfile = true
+	if got := EffectiveUserAgent(&cfg, "aphelion-fetch-url/1"); got != "" {
+		t.Fatalf("EffectiveUserAgent anonymous = %q, want empty", got)
+	}
+	cfg.Identity.UserAgent = "custom-agent/1"
+	if got := EffectiveUserAgent(&cfg, "aphelion-fetch-url/1"); got != "custom-agent/1" {
+		t.Fatalf("EffectiveUserAgent configured = %q, want custom-agent/1", got)
+	}
+}
+
 func TestLoadParsesDurableAgentControlPlane(t *testing.T) {
 	t.Parallel()
 

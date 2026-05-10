@@ -34,6 +34,8 @@ const (
 	maxNativeSearchLimit        = 100
 	defaultNativeSearchMaxBytes = 128 * 1024
 	maxNativeSearchMaxBytes     = 512 * 1024
+
+	DefaultNativeFetchUserAgent = "aphelion-fetch-url/1"
 )
 
 type readFileInput struct {
@@ -344,7 +346,9 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 	if err != nil {
 		return "", fmt.Errorf("fetch_url create request: %w", err)
 	}
-	req.Header.Set("User-Agent", "aphelion-fetch-url/1")
+	if userAgent := strings.TrimSpace(r.nativeFetchUserAgent); userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
 	res, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch_url request: %w", err)

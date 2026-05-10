@@ -47,8 +47,9 @@ precedence.
 # These strings appear in HTTP headers.
 # Set them to whatever you want, or leave blank.
 [identity]
-user_agent = ""          # HTTP User-Agent. Empty = Go default ("Go-http-client/2.0")
+user_agent = ""          # HTTP User-Agent. Empty = generic Go default; anonymous_profile suppresses Aphelion-specific defaults.
 project_name = ""        # Never sent to providers. Used only in local logs.
+anonymous_profile = false # Use generic local names and outbound defaults unless explicit names/user_agent are set.
 
 # ─── Telegram ───
 [telegram]

@@ -197,6 +197,41 @@ func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	}
 }
 
+func TestFetchURLUsesConfiguredUserAgent(t *testing.T) {
+	t.Parallel()
+
+	seen := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	workspace := t.TempDir()
+	admin := principal.Principal{Role: principal.RoleAdmin}
+	adminScope := sandbox.Scope{
+		Principal:   admin,
+		Profile:     sandbox.DefaultProfiles().Admin,
+		GlobalRoot:  workspace,
+		WorkingRoot: workspace,
+	}
+	registry := NewRegistry(workspace, 2*time.Second).WithUserAgent("custom-fetch/1")
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`"}`), adminScope, admin, session.SessionKey{}); err != nil {
+		t.Fatalf("fetch_url custom user-agent err = %v", err)
+	}
+	if got := <-seen; got != "custom-fetch/1" {
+		t.Fatalf("User-Agent = %q, want custom-fetch/1", got)
+	}
+
+	registry.WithUserAgent("")
+	if _, err := registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`"}`), adminScope, admin, session.SessionKey{}); err != nil {
+		t.Fatalf("fetch_url anonymous user-agent err = %v", err)
+	}
+	if got := <-seen; strings.Contains(strings.ToLower(got), "aphelion") || got == "custom-fetch/1" {
+		t.Fatalf("User-Agent = %q, want anonymous override without Aphelion/custom identity", got)
+	}
+}
+
 func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 	t.Parallel()
 

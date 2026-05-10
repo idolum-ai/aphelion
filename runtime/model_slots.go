@@ -428,7 +428,7 @@ func buildSingleProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConf
 			MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
 			Transport:  resolvedTransport,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case core.ModelProviderAnthropic:
 		return providerpkg.NewAnthropic(providerpkg.AnthropicOptions{
@@ -438,7 +438,7 @@ func buildSingleProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConf
 			CacheStrategy: cfg.Providers.Anthropic.CacheStrategy,
 			CacheTTL:      cfg.Providers.Anthropic.CacheTTL,
 			HTTPClient:    httpClient,
-			UserAgent:     cfg.Identity.UserAgent,
+			UserAgent:     config.EffectiveUserAgent(cfg, ""),
 		})
 	case core.ModelProviderOpenRouter:
 		return providerpkg.NewOpenRouter(providerpkg.OpenRouterOptions{
@@ -447,7 +447,7 @@ func buildSingleProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConf
 			Model:      model,
 			MaxTokens:  cfg.Providers.OpenRouter.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case core.ModelProviderGemini:
 		return providerpkg.NewGemini(providerpkg.GeminiOptions{
@@ -456,7 +456,7 @@ func buildSingleProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConf
 			Model:      model,
 			MaxTokens:  cfg.Providers.Gemini.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case core.ModelProviderOllama:
 		return providerpkg.NewOllama(providerpkg.OllamaOptions{
@@ -464,7 +464,7 @@ func buildSingleProviderForModelSlot(cfg *config.Config, slot core.ModelSlotConf
 			Model:      model,
 			MaxTokens:  cfg.Providers.Ollama.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case core.ModelProviderCodex:
 		local := *cfg

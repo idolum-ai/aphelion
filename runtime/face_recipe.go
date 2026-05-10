@@ -140,7 +140,7 @@ func buildNamedFaceProviderEntries(name string, cfg *config.Config, personaModel
 				Model:      model,
 				MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
 				HTTPClient: httpClient,
-				UserAgent:  cfg.Identity.UserAgent,
+				UserAgent:  config.EffectiveUserAgent(cfg, ""),
 			})
 			if err != nil {
 				return nil, err
@@ -194,7 +194,7 @@ func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string
 			CacheStrategy: cfg.Providers.Anthropic.CacheStrategy,
 			CacheTTL:      cfg.Providers.Anthropic.CacheTTL,
 			HTTPClient:    httpClient,
-			UserAgent:     cfg.Identity.UserAgent,
+			UserAgent:     config.EffectiveUserAgent(cfg, ""),
 		})
 	case "openai":
 		if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {
@@ -210,7 +210,7 @@ func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string
 			Model:      model,
 			MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "openrouter":
 		if strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) == "" {
@@ -226,7 +226,7 @@ func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string
 			Model:      model,
 			MaxTokens:  cfg.Providers.OpenRouter.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "gemini":
 		if strings.TrimSpace(cfg.Providers.Gemini.APIKey) == "" {
@@ -242,7 +242,7 @@ func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string
 			Model:      model,
 			MaxTokens:  cfg.Providers.Gemini.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "ollama":
 		model := strings.TrimSpace(cfg.Providers.Ollama.Model)
@@ -254,7 +254,7 @@ func buildNamedFaceProvider(name string, cfg *config.Config, personaModel string
 			Model:      model,
 			MaxTokens:  cfg.Providers.Ollama.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "":
 		return nil, nil

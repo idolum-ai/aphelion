@@ -494,6 +494,7 @@ func newTelegramChildBotRuntime(cfg *config.Config, store *session.SQLiteStore, 
 		return nil, err
 	}
 	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).
+		WithUserAgent(config.EffectiveUserAgent(cfg, tool.DefaultNativeFetchUserAgent)).
 		WithSessionStore(store).
 		WithDurableAgentPrincipalFallback().
 		WithDurableAgentBootstrapLLM(defaultDurableAgentBootstrapFromConfig(cfg))

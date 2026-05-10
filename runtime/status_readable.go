@@ -137,7 +137,7 @@ func buildNamedStatusReadableProvider(name string, cfg *config.Config, httpClien
 			CacheStrategy: cfg.Providers.Anthropic.CacheStrategy,
 			CacheTTL:      cfg.Providers.Anthropic.CacheTTL,
 			HTTPClient:    httpClient,
-			UserAgent:     cfg.Identity.UserAgent,
+			UserAgent:     config.EffectiveUserAgent(cfg, ""),
 		})
 	case "openai":
 		if strings.TrimSpace(cfg.Providers.OpenAI.APIKey) == "" {
@@ -153,7 +153,7 @@ func buildNamedStatusReadableProvider(name string, cfg *config.Config, httpClien
 			Model:      model,
 			MaxTokens:  512,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "openrouter":
 		if strings.TrimSpace(cfg.Providers.OpenRouter.APIKey) == "" {
@@ -165,7 +165,7 @@ func buildNamedStatusReadableProvider(name string, cfg *config.Config, httpClien
 			Model:      statusReadableModelOpenRouter,
 			MaxTokens:  512,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "gemini":
 		if strings.TrimSpace(cfg.Providers.Gemini.APIKey) == "" {
@@ -181,7 +181,7 @@ func buildNamedStatusReadableProvider(name string, cfg *config.Config, httpClien
 			Model:      model,
 			MaxTokens:  512,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "ollama":
 		model := strings.TrimSpace(cfg.Providers.Ollama.Model)
@@ -193,7 +193,7 @@ func buildNamedStatusReadableProvider(name string, cfg *config.Config, httpClien
 			Model:      model,
 			MaxTokens:  512,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	default:
 		return nil, nil

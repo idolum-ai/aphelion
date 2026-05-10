@@ -718,7 +718,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).WithSessionStore(store)
+	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).
+		WithUserAgent(config.EffectiveUserAgent(cfg, tool.DefaultNativeFetchUserAgent)).
+		WithSessionStore(store)
 	if manifestDir := strings.TrimSpace(cfg.Tools.ExternalManifestDir); manifestDir != "" {
 		if _, err := tools.WithExternalToolManifestDir(manifestDir); err != nil {
 			return fmt.Errorf("load external tool manifests: %w", err)
@@ -780,7 +782,7 @@ func run() error {
 			APIKey:     cfg.Voice.OpenAIAPIKey,
 			BaseURL:    cfg.Voice.OpenAIBaseURL,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 		if err != nil {
 			return err
@@ -1047,7 +1049,7 @@ func buildNamedProviderEntries(name string, cfg *config.Config, httpClient *http
 				Model:      model,
 				MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
 				HTTPClient: httpClient,
-				UserAgent:  cfg.Identity.UserAgent,
+				UserAgent:  config.EffectiveUserAgent(cfg, ""),
 			})
 			if err != nil {
 				return nil, err
@@ -1095,7 +1097,7 @@ func buildOpenAIPlatformServices(cfg *config.Config, httpClient *http.Client) (m
 		APIKey:     cfg.Providers.OpenAI.APIKey,
 		BaseURL:    cfg.Providers.OpenAI.BaseURL,
 		HTTPClient: httpClient,
-		UserAgent:  cfg.Identity.UserAgent,
+		UserAgent:  config.EffectiveUserAgent(cfg, ""),
 	})
 	if err != nil {
 		return nil, nil, err
@@ -1132,7 +1134,7 @@ func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client
 			CacheStrategy: cfg.Providers.Anthropic.CacheStrategy,
 			CacheTTL:      cfg.Providers.Anthropic.CacheTTL,
 			HTTPClient:    httpClient,
-			UserAgent:     cfg.Identity.UserAgent,
+			UserAgent:     config.EffectiveUserAgent(cfg, ""),
 		})
 	case "openai":
 		return provider.NewOpenAI(provider.OpenAIOptions{
@@ -1141,7 +1143,7 @@ func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client
 			Model:      cfg.Providers.OpenAI.Model,
 			MaxTokens:  cfg.Providers.OpenAI.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "openrouter":
 		return provider.NewOpenRouter(provider.OpenRouterOptions{
@@ -1150,7 +1152,7 @@ func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client
 			Model:      cfg.Providers.OpenRouter.Model,
 			MaxTokens:  cfg.Providers.OpenRouter.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "gemini":
 		return provider.NewGemini(provider.GeminiOptions{
@@ -1159,7 +1161,7 @@ func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client
 			Model:      cfg.Providers.Gemini.Model,
 			MaxTokens:  cfg.Providers.Gemini.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "ollama":
 		return provider.NewOllama(provider.OllamaOptions{
@@ -1167,7 +1169,7 @@ func buildNamedProvider(name string, cfg *config.Config, httpClient *http.Client
 			Model:      cfg.Providers.Ollama.Model,
 			MaxTokens:  cfg.Providers.Ollama.MaxTokens,
 			HTTPClient: httpClient,
-			UserAgent:  cfg.Identity.UserAgent,
+			UserAgent:  config.EffectiveUserAgent(cfg, ""),
 		})
 	case "":
 		return nil, nil

@@ -454,6 +454,7 @@ func newDurableAgentWakeRuntimeForCommand(cfg *config.Config) (durableAgentWakeR
 		return nil, nil, err
 	}
 	tools := tool.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Duration(cfg.Agent.ToolTimeout)*time.Second, sandboxResolver).
+		WithUserAgent(config.EffectiveUserAgent(cfg, tool.DefaultNativeFetchUserAgent)).
 		WithSessionStore(store).
 		WithDurableAgentPrincipalFallback().
 		WithDurableAgentBootstrapLLM(defaultDurableAgentBootstrapFromConfig(cfg))
