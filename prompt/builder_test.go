@@ -117,7 +117,7 @@ func TestBuildGovernorPromptIncludesGoalContinuityContractWhenOperationActive(t 
 		"## Goal Continuity Contract",
 		"A contract, architecture note, read-only review, or tiny probe is usually phase one",
 		"advance the next phase in phase_plan instead of marking the whole goal completed",
-		"final standalone deploy/restart phase that commits intended changes, builds, installs the user service, restarts Aphelion, and verifies deployment",
+		"final standalone deploy/restart phase that commits intended changes, builds, installs the user service, restarts the service, and verifies deployment",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("governor prompt missing %q: %q", want, got)
@@ -536,6 +536,31 @@ func TestBuildFacePromptIncludesGPT55OutcomeStructure(t *testing.T) {
 		if !strings.Contains(proposal, want) {
 			t.Fatalf("proposal face prompt missing %q: %q", want, proposal)
 		}
+	}
+}
+
+func TestBuildFacePromptUsesConfiguredFaceNameInIdentityGuidance(t *testing.T) {
+	t.Parallel()
+
+	got := BuildFacePrompt(FaceRequest{
+		GovernorName:    "System",
+		FaceName:        "Assistant",
+		Channel:         "telegram",
+		FloorText:       "done",
+		LatestUserInput: "what happened?",
+	})
+
+	for _, want := range []string{
+		"The reply feels owned by Assistant",
+		"Let Assistant have a point of view",
+		"relationships may influence Assistant without defining Assistant",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("face prompt missing configured face name text %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "Idolum") || strings.Contains(got, "Aphelion") {
+		t.Fatalf("face prompt contains default branded name despite configured generic identity: %q", got)
 	}
 }
 

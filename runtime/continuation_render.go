@@ -81,6 +81,7 @@ func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, key sessi
 	if renderer == nil {
 		return fallback
 	}
+	faceName := r.faceName()
 	workspaceRoot := ""
 	if r.cfg != nil {
 		workspaceRoot = strings.TrimSpace(r.cfg.Agent.PromptRoot)
@@ -88,7 +89,7 @@ func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, key sessi
 
 	rendered, err := renderer.Render(ctx, face.RenderRequest{
 		GovernorName:    governorName,
-		FaceName:        r.faceName(),
+		FaceName:        faceName,
 		Channel:         "telegram",
 		Mode:            "repair",
 		PrincipalRole:   "approved_user",
@@ -97,7 +98,7 @@ func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, key sessi
 		LatestUserInput: strings.TrimSpace(msg.Text),
 		CandidateReply:  fallback,
 		RepairNotes: []string{
-			"Keep this in first person as Idolum.",
+			continuationFaceRepairIdentityNote(faceName),
 			"Explain why continuation is unavailable right now.",
 		},
 		Runtime: prompt.RuntimeAwareness{
@@ -212,6 +213,7 @@ func (r *Runtime) renderContinuationPrompt(ctx context.Context, key session.Sess
 	if renderer == nil {
 		return fallback
 	}
+	faceName := r.faceName()
 	workspaceRoot := ""
 	if r.cfg != nil {
 		workspaceRoot = strings.TrimSpace(r.cfg.Agent.PromptRoot)
@@ -219,7 +221,7 @@ func (r *Runtime) renderContinuationPrompt(ctx context.Context, key session.Sess
 
 	rendered, err := renderer.Render(ctx, face.RenderRequest{
 		GovernorName:    r.governorName(),
-		FaceName:        r.faceName(),
+		FaceName:        faceName,
 		Channel:         "telegram",
 		Mode:            "repair",
 		PrincipalRole:   "approved_user",
@@ -228,7 +230,7 @@ func (r *Runtime) renderContinuationPrompt(ctx context.Context, key session.Sess
 		LatestUserInput: strings.TrimSpace(msg.Text),
 		CandidateReply:  fallback,
 		RepairNotes: []string{
-			"Keep this in first person as Idolum.",
+			continuationFaceRepairIdentityNote(faceName),
 			"Frame continuation as one coherent system thought, not a dialogue between internal roles.",
 			"Do not use labels like Persona intent, Persona rationale, Governor intent, or Governor rationale.",
 			"Keep the boundaries, objective, and next step explicit.",
@@ -262,6 +264,14 @@ func (r *Runtime) renderContinuationPrompt(ctx context.Context, key session.Sess
 		log.Printf("WARN continuation prompt grounding fallback chat_id=%d decision_id=%s note=%s", key.ChatID, strings.TrimSpace(state.DecisionID), note)
 	}
 	return grounded
+}
+
+func continuationFaceRepairIdentityNote(faceName string) string {
+	faceName = strings.TrimSpace(faceName)
+	if faceName == "" {
+		faceName = face.DefaultFaceName
+	}
+	return fmt.Sprintf("Keep this in first person as %s.", faceName)
 }
 
 func (r *Runtime) groundContinuationPromptWithExecutionEvidence(

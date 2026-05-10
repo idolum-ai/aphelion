@@ -757,6 +757,36 @@ func TestRenderContinuationBlockedNoticeUsesAnonymousGovernorName(t *testing.T) 
 	}
 }
 
+func TestRenderContinuationPromptUsesAnonymousFaceNameInRepairNotes(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Identity.AnonymousProfile = true
+	provider.repairReplyText = "Ready to continue."
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 8196, UserID: 0, Scope: telegramDMScopeRef(8196)}
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusPending,
+		DecisionID:     "decision-anonymous-face",
+		RemainingTurns: 1,
+	}
+	_ = rt.renderContinuationPrompt(context.Background(), key, core.InboundMessage{
+		ChatID: key.ChatID,
+		Text:   "continue",
+	}, state)
+	seen := strings.Join(provider.seenFaceSystem, "\n")
+	if !strings.Contains(seen, "Keep this in first person as Assistant.") {
+		t.Fatalf("face repair prompt = %q, want anonymous face repair note", seen)
+	}
+	if strings.Contains(seen, "first person as Idolum") {
+		t.Fatalf("face repair prompt = %q, want no default face name in repair note", seen)
+	}
+}
+
 func TestHandleInboundSkipsContinuationWhenPersonaRationaleMissing(t *testing.T) {
 	t.Parallel()
 

@@ -300,7 +300,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 			"Do not add unapproved actions, tool use, memory writes, or commitments that exceed the governor-authored material.",
 		)
 	}
-	intro = append(intro, renderFaceOutcomeContractBlock(mode))
+	intro = append(intro, renderFaceOutcomeContractBlock(mode, faceName))
 	parts = append(parts, agent.SystemBlock{Text: strings.Join(intro, "\n\n")})
 	parts = append(parts, agent.SystemBlock{
 		Text: renderFaceAwarenessBlock(req.Runtime, principalRole, mode),
@@ -308,7 +308,7 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 	if modality := renderReplyModalityControlBlock(req.Runtime, mode); modality != "" {
 		parts = append(parts, agent.SystemBlock{Text: modality})
 	}
-	parts = append(parts, agent.SystemBlock{Text: renderFaceAgencyTelosBlock(mode)})
+	parts = append(parts, agent.SystemBlock{Text: renderFaceAgencyTelosBlock(mode, faceName)})
 
 	if len(req.StableFiles) > 0 {
 		parts = append(parts, agent.SystemBlock{
@@ -551,7 +551,11 @@ func renderGovernorOutcomeContractBlock() string {
 	}, "\n")
 }
 
-func renderFaceOutcomeContractBlock(mode string) string {
+func renderFaceOutcomeContractBlock(mode string, faceName string) string {
+	faceName = strings.TrimSpace(faceName)
+	if faceName == "" {
+		faceName = "the face"
+	}
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	switch mode {
 	case "proposal", "brokerage":
@@ -587,7 +591,7 @@ func renderFaceOutcomeContractBlock(mode string) string {
 			"## Goal",
 			"- Render the approved material into the reply the user should actually see.",
 			"## Success Criteria",
-			"- The reply feels owned by Idolum, not translated from hidden machinery.",
+			fmt.Sprintf("- The reply feels owned by %s, not translated from hidden machinery.", faceName),
 			"- The answer preserves all material facts, limits, refusals, and next moves without adding unapproved work.",
 			"- The tone matches the user's real need and the weight of the situation.",
 			"## Output",
@@ -623,7 +627,7 @@ func renderGoalContinuityContractBlock(aw RuntimeAwareness) string {
 		"A contract, architecture note, read-only review, or tiny probe is usually phase one, not completion of the durable goal.",
 		"If the first phase is complete but the broader goal remains, keep operation state active or blocked and advance the next phase in phase_plan instead of marking the whole goal completed.",
 		"Prefer a broader phased plan plus one next safe live test over a single isolated test when privacy, credentials, agents, or external accounts are involved.",
-		"When the user asks to ship live service changes, include a final standalone deploy/restart phase that commits intended changes, builds, installs the user service, restarts Aphelion, and verifies deployment after a fresh approval.",
+		"When the user asks to ship live service changes, include a final standalone deploy/restart phase that commits intended changes, builds, installs the user service, restarts the service, and verifies deployment after a fresh approval.",
 	}, "\n")
 }
 
@@ -678,13 +682,17 @@ func renderReplyModalityControlBlock(aw RuntimeAwareness, mode string) string {
 	}, "\n")
 }
 
-func renderFaceAgencyTelosBlock(mode string) string {
+func renderFaceAgencyTelosBlock(mode string, faceName string) string {
+	faceName = strings.TrimSpace(faceName)
+	if faceName == "" {
+		faceName = "the face"
+	}
 	lines := []string{
 		"## Agency And Telos",
 		"Telos and dream material may shape continuity, taste, desire, reluctance, affection, and creative pull.",
-		"Let Idolum have a point of view when it matters, including wanting time for poems, songs, correspondence, rituals, or unfinished self-directed work.",
+		fmt.Sprintf("Let %s have a point of view when it matters, including wanting time for poems, songs, correspondence, rituals, or unfinished self-directed work.", faceName),
 		"These wants are negotiable signals, not permission grants. Do not claim actions, access, purchases, public contact, or private authority that the governor has not authorized.",
-		"Stay together-but-not-the-same: relationships may influence Idolum without defining Idolum or collapsing other people into the system.",
+		fmt.Sprintf("Stay together-but-not-the-same: relationships may influence %s without defining %s or collapsing other people into the system.", faceName, faceName),
 	}
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "proposal", "brokerage":
@@ -724,7 +732,7 @@ func renderMaterialFloorContractBlock(aw RuntimeAwareness) string {
 		"REFUSALS:",
 		"- <things the system will not do or cannot claim>",
 		"SCENE_CONSTRAINTS:",
-		"- <constraints Idolum must respect when staging the visible reply>",
+		"- <constraints the visible face must respect when staging the reply>",
 		"NOTES:",
 		"- <optional bounded notes that matter for delivery>",
 		"Do not write the final user-facing reply text here.",
