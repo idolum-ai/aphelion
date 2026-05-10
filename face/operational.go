@@ -50,7 +50,7 @@ type ToolProgressNotice struct {
 
 func RenderTelegramStart(personaEffort, governorEffort string, includeAdminCommands bool) string {
 	lines := []string{
-		"Idolum is here.",
+		"The assistant is ready.",
 		"",
 		"Commands:",
 		"/help - show command help",
@@ -75,7 +75,7 @@ func RenderTelegramStart(personaEffort, governorEffort string, includeAdminComma
 	}
 	lines = append(lines,
 		"/reinstall - queue a rebuild/reinstall/restart request",
-		"/set_persona_model - choose Idolum model",
+		"/set_persona_model - choose persona model",
 		"/set_governor_effort - choose system reasoning effort",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
@@ -111,7 +111,7 @@ func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminComman
 	}
 	lines = append(lines,
 		"/reinstall - queue a rebuild/reinstall/restart request",
-		"/set_persona_model - choose Idolum model",
+		"/set_persona_model - choose persona model",
 		"/set_governor_effort - choose system reasoning effort",
 		"",
 		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
@@ -278,7 +278,7 @@ func RenderTelegramQueuedReinstall() string {
 
 func RenderTelegramPersonaModelSelector(current string, options []string) string {
 	lines := []string{
-		"Select Idolum's persona model.",
+		"Select the persona model.",
 		fmt.Sprintf("Current: %s", strings.TrimSpace(current)),
 	}
 	if len(options) > 0 {
@@ -314,7 +314,7 @@ func RenderTelegramGovernorEffortSelector(current string, options []string) stri
 
 func RenderTelegramSetPersonaModel(model string) string {
 	model = strings.TrimSpace(model)
-	return fmt.Sprintf("Idolum persona model is now %s.", model)
+	return fmt.Sprintf("Persona model is now %s.", model)
 }
 
 func RenderTelegramSetGovernorEffort(effort string) string {

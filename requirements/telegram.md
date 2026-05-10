@@ -453,7 +453,7 @@ Default behavior should set `detach_pending_on_restart` to enabled.
 
 ### `/set_persona_model`
 
-Show an inline selector for Idolum's persona model.
+Show an inline selector for the face persona model.
 
 Current selector options:
 

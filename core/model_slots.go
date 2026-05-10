@@ -225,7 +225,7 @@ func ValidateModelSlotConfig(cfg ModelSlotConfig, usesTools bool) ModelValidatio
 		return result
 	}
 	if normalized.Provider == ModelProviderOpenRouter && normalized.Effort != "" && normalized.Effort != "none" {
-		result.Warnings = append(result.Warnings, "openrouter may ignore Aphelion effort depending on the routed model")
+		result.Warnings = append(result.Warnings, "openrouter may ignore configured effort depending on the routed model")
 	}
 	result.Valid = true
 	return result

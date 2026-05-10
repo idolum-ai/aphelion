@@ -180,7 +180,7 @@ func applyContinuationLeaseClassBoundaries(action session.ActionProposal) sessio
 		action.ValidationPlan = append(action.ValidationPlan,
 			"review git status and intended diff before staging",
 			"commit only intended repo changes and record the commit hash",
-			"build, install the user service, restart aphelion, and run verify-deploy",
+			"build, install the user service, restart the user service, and run verify-deploy",
 			"record pre-action git/service state, handoff, post-action status, journal/smoke evidence, and rollback/residual risk",
 		)
 	}

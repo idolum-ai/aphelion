@@ -9,7 +9,7 @@ For the first serious voice path, the intended stack is:
 - **speech-to-text**: Whisper / OpenAI transcription
 - **text-to-speech**: ElevenLabs
 
-Voice is a channel behavior layered on top of the governor/Idolum split:
+Voice is a channel behavior layered on top of the governor/face split:
 
 - the governor decides what to say
 - `Idolum` renders the wording

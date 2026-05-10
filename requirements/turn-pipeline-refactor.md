@@ -36,7 +36,7 @@ That makes several things harder than they should be:
 ## Guiding Rules
 
 1. Keep one public persona.
-   Idolum remains the public face. Aphelion remains the judgment layer. Do not
+   The configured face remains the public persona. The harness remains the judgment layer. Do not
    create separate user-facing stacks or alternate visible selves.
 
 2. Refactor by ownership, not by theme words.

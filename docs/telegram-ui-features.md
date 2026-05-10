@@ -51,7 +51,7 @@ Current command surface:
 - `/reinstall`
   - Queues a rebuild/reinstall/restart request as normal routed work.
 - `/set_persona_model`
-  - Opens inline model selector buttons for Idolum.
+  - Opens inline model selector buttons for the persona.
 - `/set_governor_effort`
   - Opens inline effort selector buttons for system reasoning.
 

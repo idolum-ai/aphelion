@@ -141,6 +141,7 @@ type turnCoordinatorExecuteInput struct {
 	Channel               string
 	PrincipalRole         string
 	GovernorName          string
+	FaceName              string
 	RequestFaceNote       func(ctx context.Context, mode string, awareness prompt.RuntimeAwareness, priorProposal string, feedback string) (string, core.TokenUsage, error)
 	ExtraSystemMessages   []agent.Message
 	RunErrPrefix          string
@@ -284,7 +285,7 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		turnInput = append(turnInput, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
 	}
 	turnInput = append(turnInput, extraSystemMessages...)
-	if advisory := brokerageContextForGovernor(brokerage); advisory != "" {
+	if advisory := brokerageContextForGovernor(input.FaceName, brokerage); advisory != "" {
 		turnInput = append(turnInput, agent.Message{Role: "system", Content: advisory})
 	}
 	turnInput = append(turnInput, history...)

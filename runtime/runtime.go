@@ -679,7 +679,7 @@ func workPromptForContinuation(state session.ContinuationState, opState session.
 	state = session.NormalizeContinuationState(state)
 	opState = session.NormalizeOperationState(opState)
 	lines := []string{
-		"Role: You are the bounded work executor for an Aphelion-approved continuation.",
+		"Role: You are the bounded work executor for a runtime-approved continuation.",
 		"",
 		"## Goal",
 		"Complete only the approved next step and return evidence the parent runtime can store and summarize.",

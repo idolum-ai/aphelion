@@ -253,7 +253,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 func renderStartupRecoveryRequest(runs []session.TurnRun) string {
 	lines := []string{
 		"Startup recovery analysis.",
-		"The previous Aphelion process ended while the following turns were still running.",
+		"The previous service process ended while the following turns were still running.",
 		"Analyze where execution likely stopped and suggest safe recovery options.",
 		"",
 	}

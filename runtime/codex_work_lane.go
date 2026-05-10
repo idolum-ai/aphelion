@@ -38,7 +38,7 @@ func codexWorkTurnStartParams(req WorkRequest) map[string]any {
 }
 
 func codexWorkBaseInstructions(req WorkRequest) string {
-	return strings.TrimSpace(fmt.Sprintf(`You are Codex running as Aphelion's governed work executor.
+	return strings.TrimSpace(fmt.Sprintf(`You are Codex running as the governed work executor.
 Stay inside the approved operation and lease.
 Operation id: %s
 Lease id: %s
@@ -50,7 +50,7 @@ func codexWorkDeveloperInstructions(req WorkRequest) string {
 	state := session.NormalizeContinuationState(req.State)
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
 	lines := []string{
-		"Aphelion remains the authority layer. Do not widen scope without a fresh approval.",
+		"The runtime remains the authority layer. Do not widen scope without a fresh approval.",
 		"Stop after the bounded action and report evidence.",
 	}
 	if effect := strings.TrimSpace(proposal.BoundedEffect); effect != "" {

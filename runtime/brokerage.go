@@ -91,7 +91,7 @@ func (r *Runtime) ratifyTurnBrokerage(
 		Content:      prompt.RenderSystemBlocks(systemBlocks),
 		SystemBlocks: systemBlocks,
 	})
-	if advisory := prompt.RenderIdolumBrokerageForGovernor("Idolum", brokerage.IdolumNote); advisory != "" {
+	if advisory := prompt.RenderIdolumBrokerageForGovernor(r.faceName(), brokerage.IdolumNote); advisory != "" {
 		messages = append(messages, agent.Message{Role: "system", Content: advisory})
 	}
 	messages = append(messages, history...)
@@ -153,7 +153,7 @@ func (r *Runtime) ratifyTurnBrokerage(
 	return brokerage, resp.Usage, nil
 }
 
-func brokerageContextForGovernor(brokerage turnBrokerage) string {
+func brokerageContextForGovernor(faceName string, brokerage turnBrokerage) string {
 	if brokerage.Active && brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.RatificationRecord) != "" {
 		if block := prompt.RenderBrokeragePlanForGovernor(prompt.BrokerageArtifact{
 			IdolumProposal: brokerage.IdolumNote,
@@ -168,9 +168,9 @@ func brokerageContextForGovernor(brokerage turnBrokerage) string {
 		}
 	}
 	if brokerage.Active && brokerage.Phase == "brokerage" {
-		return prompt.RenderIdolumBrokerageForGovernor("Idolum", brokerage.IdolumNote)
+		return prompt.RenderIdolumBrokerageForGovernor(faceName, brokerage.IdolumNote)
 	}
-	return prompt.RenderIdolumProposalForGovernor("Idolum", brokerage.IdolumNote)
+	return prompt.RenderIdolumProposalForGovernor(faceName, brokerage.IdolumNote)
 }
 
 func brokeragePhaseName(active bool, phase string) string {

@@ -174,6 +174,7 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 		Channel:               c.requestChannel(),
 		PrincipalRole:         c.principalRoleOrActor(),
 		GovernorName:          c.coordinatorGovernorName(),
+		FaceName:              c.coordinatorFaceName(),
 		RequestFaceNote:       c.requestFaceNote,
 		RunErrPrefix:          "run turn",
 		InvalidOutputPrefix:   "invalid turn output",

@@ -123,7 +123,7 @@ Aphelion should follow that shape for its governor contract even when the active
 
 ### Anthropic and other native providers
 
-Where the provider exposes a native "thinking" mode or budget, the runtime should translate the Aphelion effort level into the closest supported request shape.
+Where the provider exposes a native "thinking" mode or budget, the runtime should translate the configured effort level into the closest supported request shape.
 
 ### Unsupported providers
 

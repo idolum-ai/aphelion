@@ -128,6 +128,14 @@ goal, media, or final-reply execution inference from string matching. Protocol
 parsing of explicit JSON contracts and exact concrete-value safety scanners are
 allowed only when they do not decide authority from prose.
 
+The remaining exact string checks are intentionally non-authoritative: command
+and callback tokens, explicit provider/transport enums, parsed contract markers,
+concrete secret-shape scanners, display compactors, test fakes, and deploy
+verification markers. Any new path that converts open-language prose into
+authority, consent, routing, continuation, or execution facts must go through a
+deliberating interpretation role that returns typed claims for runtime
+validation.
+
 `make taste` guards the largest structural hotspots so broad operational files
 do not quietly grow back after behavior-preserving splits.
 

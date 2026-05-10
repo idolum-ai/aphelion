@@ -2139,7 +2139,7 @@ func TestMaterializeDeployPhaseUsesStandaloneCommitBuildInstallRestartLease(t *t
 					Summary:        "Deploy the validated runtime",
 					Status:         session.PlanStatusPending,
 					AuthorityClass: "deploy",
-					BoundedEffect:  "Commit the intended repo changes, build, install, restart aphelion, and run verify-deploy.",
+					BoundedEffect:  "Commit the intended repo changes, build, install, restart the user service, and run verify-deploy.",
 					AllowedActions: []string{"git_commit_intended_changes", "make_build", "install_user_service", "restart_aphelion_service", "run_verify_deploy"},
 				},
 			},

@@ -173,6 +173,7 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		Channel:               c.requestChannel(),
 		PrincipalRole:         c.principalRoleOrLiveRole(),
 		GovernorName:          c.coordinatorGovernorName(),
+		FaceName:              c.coordinatorFaceName(),
 		RequestFaceNote:       c.requestFaceNote,
 		ExtraSystemMessages: []agent.Message{
 			{Role: "system", Content: c.governorContext()},

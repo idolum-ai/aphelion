@@ -208,7 +208,7 @@ func classifyCommandIssue(command string, err error, output string) core.Tailnet
 		if errors.Is(err, exec.ErrNotFound) || strings.Contains(strings.ToLower(err.Error()), "executable file not found") {
 			code = "cli_unavailable"
 			severity = "error"
-			summary = "tailscale CLI is not available to Aphelion."
+			summary = "tailscale CLI is not available to the runtime."
 		} else if errors.Is(err, context.DeadlineExceeded) {
 			code = "command_timeout"
 			severity = "error"

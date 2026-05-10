@@ -270,7 +270,7 @@ func continuationStateFromOperationPlanLease(opState session.OperationState, lea
 	objective := firstNonEmptyContinuation(lease.Objective, opState.Objective, opState.Summary, lease.Summary, summarizeContinuationFallback(promptInput))
 	nextStep := firstNonEmptyContinuation(lease.Summary, lease.Objective, "Approve a bounded plan lease.")
 	boundedEffect := operationPlanLeaseBoundedEffect(lease)
-	whyNow := "This broad plan needs a button-backed bounded envelope before Aphelion can execute multiple leased lanes."
+	whyNow := "This broad plan needs a button-backed bounded envelope before the runtime can execute multiple leased lanes."
 	if opState.Stage != "" {
 		whyNow = "Operation stage " + strings.TrimSpace(opState.Stage) + " requires a button-backed bounded plan lease."
 	}
@@ -486,7 +486,7 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 	whyNow := firstNonEmptyContinuation(phase.WhyNow, "This durable phase plan has a pending phase that needs explicit approval before execution.")
 	deployPhase := operationPhaseIsDeployRestartPhase(phase)
 	if deployPhase {
-		nextStep = firstNonEmptyContinuation(phase.Summary, "Commit, build, install, restart, and verify Aphelion.")
+		nextStep = firstNonEmptyContinuation(phase.Summary, "Commit, build, install, restart, and verify the service.")
 		boundedEffect = deployPhaseBoundedEffect(boundedEffect)
 		whyNow = firstNonEmptyContinuation(phase.WhyNow, "Deploy/restart authority is a hard gate and needs explicit operator approval.")
 	}
@@ -581,7 +581,7 @@ func operationPhaseIsDeployRestartPhase(phase session.OperationPhase) bool {
 
 func deployPhaseBoundedEffect(current string) string {
 	current = strings.TrimSpace(current)
-	required := "Commit only intended repo changes, build Aphelion, install the user service, restart aphelion, and run verify-deploy; stop before push or unrelated changes."
+	required := "Commit only intended repo changes, build the binary, install the user service, restart the user service, and run verify-deploy; stop before push or unrelated changes."
 	lower := strings.ToLower(current)
 	if strings.Contains(lower, "commit") &&
 		strings.Contains(lower, "build") &&

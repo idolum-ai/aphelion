@@ -49,7 +49,7 @@ func durableAgentProfileContext(scope sandbox.Scope, agent core.DurableAgent) st
 	remaining := durableAgentProfileMaxChars
 	sections := []string{
 		"External durable child profile files.",
-		"These files are parent/child-managed runtime material, not Aphelion harness source.",
+		"These files are parent/child-managed runtime material, not parent harness source.",
 		"Durable agent id: " + strings.TrimSpace(agent.AgentID),
 	}
 	for _, path := range files {

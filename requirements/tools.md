@@ -51,7 +51,7 @@ So the intended synthesis is:
 
 - OpenClaw-style layered runtime enforcement
 - Hermes-style registry clarity
-- Idolum (System)/Idolum and principal/isolation boundaries inside the Aphelion harness
+- governor/face and principal/isolation boundaries inside the service harness
 
 ## Philosophy
 

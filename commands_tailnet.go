@@ -158,7 +158,7 @@ func renderTailnetRevokeConfirmation(surfaceID string) (string, [][]telegram.Inl
 		"Revoke tailnet surface?",
 		"Surface: " + surfaceID,
 		"",
-		"This marks the owned surface revoked in Aphelion's registry and writes an audit event. If a live listener still observes it, /status and /doctor will report that drift.",
+		"This marks the owned surface revoked in the local registry and writes an audit event. If a live listener still observes it, /status and /doctor will report that drift.",
 	}
 	rows := [][]telegram.InlineButton{{
 		{Text: "Cancel", CallbackData: encodeTailnetRevokeCallbackData(tailnetRevokeCallbackCancel, surfaceID)},

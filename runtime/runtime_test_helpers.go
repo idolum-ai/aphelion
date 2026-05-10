@@ -143,7 +143,7 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, too
 		}
 		return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 	}
-	if fakeMessagesContain(messages, "Aphelion's interpretation role") {
+	if fakeMessagesContain(messages, "runtime interpretation role") {
 		reply := nextFakeReply(&f.interpretationReplies, f.interpretationReplyText)
 		resp, _ := fakeInterpretationResponse(messages, reply, f.responseUsage)
 		return resp, nil
@@ -287,7 +287,7 @@ func fakeInterpretationResponse(messages []agent.Message, reply string, usage co
 			userParts = append(userParts, msg.Content)
 		}
 	}
-	if !strings.Contains(strings.Join(systemParts, "\n\n"), "Aphelion's interpretation role") {
+	if !strings.Contains(strings.Join(systemParts, "\n\n"), "runtime interpretation role") {
 		return nil, false
 	}
 	reply = strings.TrimSpace(reply)

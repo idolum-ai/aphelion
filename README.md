@@ -396,7 +396,7 @@ systemctl --user restart aphelion
 ```
 
 `verify-deploy` is the post-restart gate. It runs a small synthetic turn through
-the live governor/Idolum path, checks one tool path, and confirms persistence.
+the live governed reply path, checks one tool path, and confirms persistence.
 If it fails, the deploy should be treated as failed.
 
 ## Background Service

@@ -1855,7 +1855,7 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 
 	deployVerificationRuntimeBuilder = func(cfg *config.Config, store *session.SQLiteStore) (builtDeployVerificationRuntime, error) {
 		sender := &deployVerificationSender{}
-		reply := "DEPLOYMENT VERIFIED: Idolum is here and ready."
+		reply := "DEPLOYMENT VERIFIED: the service is ready."
 		runner := deployTurnRunnerFunc(func(ctx context.Context, msg core.InboundMessage) (*core.TurnResult, error) {
 			key := session.SessionKey{ChatID: msg.ChatID, UserID: 0}
 			sess, err := store.Load(key)
@@ -1947,7 +1947,7 @@ func TestVerifyDeploymentSuccessRunsGoldenPathAndCleansProbeSession(t *testing.T
 func TestVerifyDeploymentFailsRequiredDurableChildWake(t *testing.T) {
 	cfg := newVerifyDeployTestConfig(t)
 	installSuccessfulDeployVerificationBuilder(t,
-		"DEPLOYMENT VERIFIED: Idolum is here and ready.",
+		"DEPLOYMENT VERIFIED: the service is ready.",
 		func(store *session.SQLiteStore) error {
 			return store.UpsertDurableAgent(core.DurableAgent{
 				AgentID:     "paper-scout",
@@ -1982,7 +1982,7 @@ func TestVerifyDeploymentFailsRequiredDurableChildWake(t *testing.T) {
 func TestVerifyDeploymentWarnsDurableChildWake(t *testing.T) {
 	cfg := newVerifyDeployTestConfig(t)
 	installSuccessfulDeployVerificationBuilder(t,
-		"DEPLOYMENT VERIFIED: Idolum is here and ready.",
+		"DEPLOYMENT VERIFIED: the service is ready.",
 		func(store *session.SQLiteStore) error {
 			return store.UpsertDurableAgent(core.DurableAgent{
 				AgentID:     "paper-scout",

@@ -48,7 +48,7 @@ func (r *Runtime) interpretCurrentTurnClaims(ctx context.Context, req interpreta
 		{
 			Role: "system",
 			Content: strings.Join([]string{
-				"You are Aphelion's interpretation role.",
+				"You are the runtime interpretation role.",
 				"Deliberate only about what typed interpretation claims are present in the supplied surface.",
 				"Do not grant authority and do not decide execution. Runtime validators will check claims against leases, grants, operation state, TES, and sandbox policy.",
 				"Return exactly one line: " + interpretationClaimsMarker + `: {"schema_version":"` + interpretationClaimsSchema + `","surface":"...","claims":[...]}`,
