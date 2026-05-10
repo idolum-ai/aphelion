@@ -686,7 +686,7 @@ func TestGroundContinuationBlockedNoticeWithExecutionEvidenceFallsBackWithoutBlo
 	}
 	candidate := "I can't continue right now."
 	grounded, note := rt.groundContinuationBlockedNoticeWithExecutionEvidence(key, state, candidate)
-	if grounded != renderContinuationBlockedFallback(state) {
+	if grounded != renderContinuationBlockedFallback(state, rt.governorName()) {
 		t.Fatalf("grounded blocked notice = %q, want deterministic fallback without TES evidence", grounded)
 	}
 	if !strings.Contains(note, "continuation evidence is unavailable") {
@@ -721,11 +721,39 @@ func TestGroundContinuationBlockedNoticeWithExecutionEvidenceFallsBackWhenLatest
 
 	candidate := "I can't continue right now."
 	grounded, note := rt.groundContinuationBlockedNoticeWithExecutionEvidence(key, state, candidate)
-	if grounded != renderContinuationBlockedFallback(state) {
+	if grounded != renderContinuationBlockedFallback(state, rt.governorName()) {
 		t.Fatalf("grounded blocked notice = %q, want deterministic fallback when latest event is not blocked", grounded)
 	}
 	if !strings.Contains(note, "latest=continuation.offered") {
 		t.Fatalf("grounding note = %q, want latest continuation event explanation", note)
+	}
+}
+
+func TestRenderContinuationBlockedNoticeUsesAnonymousGovernorName(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Identity.AnonymousProfile = true
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+
+	key := session.SessionKey{ChatID: 8195, UserID: 0, Scope: telegramDMScopeRef(8195)}
+	state := session.ContinuationState{
+		Status:                 session.ContinuationStatusIdle,
+		HandshakeBlockedReason: "governor_not_ratified",
+	}
+	got := rt.renderContinuationBlockedNotice(context.Background(), key, core.InboundMessage{
+		ChatID: key.ChatID,
+		Text:   "continue",
+	}, state)
+	if !strings.Contains(got, "System did not ratify") {
+		t.Fatalf("blocked notice = %q, want anonymous governor name", got)
+	}
+	if strings.Contains(got, "Idolum") {
+		t.Fatalf("blocked notice = %q, want no branded governor name in anonymous profile", got)
 	}
 }
 

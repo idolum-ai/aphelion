@@ -66,7 +66,11 @@ func (r *Runtime) sendContinuationBlockedNotice(ctx context.Context, key session
 }
 
 func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState) string {
-	fallback := renderContinuationBlockedFallback(state)
+	governorName := prompt.DefaultGovernorName
+	if r != nil {
+		governorName = r.governorName()
+	}
+	fallback := renderContinuationBlockedFallback(state, governorName)
 	if r == nil {
 		return fallback
 	}
@@ -83,7 +87,7 @@ func (r *Runtime) renderContinuationBlockedNotice(ctx context.Context, key sessi
 	}
 
 	rendered, err := renderer.Render(ctx, face.RenderRequest{
-		GovernorName:    r.governorName(),
+		GovernorName:    governorName,
 		FaceName:        r.faceName(),
 		Channel:         "telegram",
 		Mode:            "repair",
@@ -127,7 +131,11 @@ func (r *Runtime) groundContinuationBlockedNoticeWithExecutionEvidence(
 	candidate string,
 ) (string, string) {
 	candidate = strings.TrimSpace(candidate)
-	fallback := renderContinuationBlockedFallback(state)
+	governorName := prompt.DefaultGovernorName
+	if r != nil {
+		governorName = r.governorName()
+	}
+	fallback := renderContinuationBlockedFallback(state, governorName)
 	if candidate == "" {
 		return fallback, "rendered continuation blocked notice is empty"
 	}
@@ -159,8 +167,9 @@ func (r *Runtime) groundContinuationBlockedNoticeWithExecutionEvidence(
 	return candidate, ""
 }
 
-func renderContinuationBlockedFallback(state session.ContinuationState) string {
+func renderContinuationBlockedFallback(state session.ContinuationState, governorName string) string {
 	reason := strings.TrimSpace(state.HandshakeBlockedReason)
+	governorName = continuationBlockedFallbackGovernorName(governorName)
 	switch reason {
 	case "persona_intent_missing":
 		return "I can't continue yet because I did not publish a continuation intent for this turn."
@@ -169,16 +178,26 @@ func renderContinuationBlockedFallback(state session.ContinuationState) string {
 	case "persona_not_willing":
 		return "I can't continue yet because I chose to hold this thread instead of auto-continuing."
 	case "governor_intent_missing":
-		return fmt.Sprintf("I can't continue yet because %s did not publish a continuation intent for this turn.", prompt.DefaultGovernorName)
+		return fmt.Sprintf("I can't continue yet because %s did not publish a continuation intent for this turn.", governorName)
 	case "governor_rationale_missing":
-		return fmt.Sprintf("I can't continue yet because %s did not provide a continuation rationale.", prompt.DefaultGovernorName)
+		return fmt.Sprintf("I can't continue yet because %s did not provide a continuation rationale.", governorName)
 	case "governor_not_ratified":
-		return fmt.Sprintf("I can't continue yet because %s did not ratify continuation for this turn.", prompt.DefaultGovernorName)
+		return fmt.Sprintf("I can't continue yet because %s did not ratify continuation for this turn.", governorName)
 	case "governor_not_willing":
-		return fmt.Sprintf("I can't continue yet because %s explicitly held continuation for this turn.", prompt.DefaultGovernorName)
+		return fmt.Sprintf("I can't continue yet because %s explicitly held continuation for this turn.", governorName)
 	default:
 		return "I can't continue this thread yet because the continuation handshake is still blocked."
 	}
+}
+
+func continuationBlockedFallbackGovernorName(governorName string) string {
+	if trimmed := strings.TrimSpace(governorName); trimmed != "" {
+		return trimmed
+	}
+	if trimmed := strings.TrimSpace(prompt.DefaultGovernorName); trimmed != "" {
+		return trimmed
+	}
+	return "System"
 }
 
 func (r *Runtime) renderContinuationPrompt(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState) string {
