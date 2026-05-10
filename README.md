@@ -6,7 +6,7 @@ License: Apache-2.0.
 
 ## Philosophy
 
-- **Only what we need.** No plugin marketplace, no multi-channel support, no enterprise features.
+- **Only what we need.** No plugin marketplace, no omnichannel product surface, no enterprise features.
 - **Outpost, not platform.** Aphelion is designed to stay small, durable, and useful at distance.
 - **Radio link, not omnichannel.** Telegram is the primary control link, not one adapter among dozens.
 - **Linux only.** No macOS/Windows compat. Single target, no conditionals.
@@ -46,9 +46,12 @@ The "distance" Aphelion is designed for can be literal or operational:
 - distance between persona reasoning and deterministic authority
 - distance between intention and action
 
-Telegram is the radio link to the outpost. `/status`, `/doctor`, leases,
-restart recovery, durable children, TES, and scoped tools are the instruments,
-logs, airlocks, and checklists.
+Telegram is the radio link to the outpost. CLI commands are the maintenance and
+deployment surface. Future channels such as WhatsApp should be ordinary
+compiled-in code changes behind a small transport boundary, not plugins or a
+new operator console. `/status`, `/doctor`, leases, restart recovery, durable
+children, TES, and scoped tools are the instruments, logs, airlocks, and
+checklists.
 
 Design shorthand:
 

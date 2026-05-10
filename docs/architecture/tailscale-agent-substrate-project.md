@@ -76,7 +76,7 @@ questions:
 - If the service restarts or is reinstalled, can the expected tailnet identity
   and child surfaces be recovered safely?
 - Can an admin inspect, approve, revoke, or repair tailnet surfaces from
-  Telegram and from a private tailnet UI?
+  Telegram and CLI commands?
 
 ## Current Checkpoint
 
@@ -212,20 +212,20 @@ How it works:
 This is the root of the project: Aphelion stops being only a local process and
 becomes a private network participant.
 
-#### 2. Private admin control plane
+#### 2. Private machine control plane
 
-Aphelion exposes a tailnet-only web control surface for status, doctor reports,
-decisions, logs, artifacts, and agent health.
+Aphelion may expose tailnet-only machine endpoints for durable-child control,
+health, and policy protocols. These endpoints are not operator surfaces.
+Operators inspect and control them through Telegram and CLI projections.
 
 How it works:
 
-- The control plane binds to the parent `tsnet` listener, not a public socket.
-- Tailscale identity is used as request evidence.
-- Aphelion still checks local admin admission before showing privileged actions.
+- The control protocol binds to the parent `tsnet` listener, not a public socket.
+- Tailscale identity is request evidence, never standalone authority.
+- Aphelion checks grants, leases, and local policy before acting.
 - Sensitive actions still use Aphelion decisions and approval records.
-
-Telegram remains the interruptible command lane; the private web UI becomes the
-high-bandwidth inspection lane.
+- Status, diagnosis, artifacts, and approvals are rendered through Telegram and
+  CLI commands only.
 
 #### 3. Durable child as a tailnet node
 
@@ -449,33 +449,32 @@ How it works:
 This creates a path for durable children to collaborate without turning every
 interaction into a Telegram-style review relay.
 
-#### 7. Private artifact surface
+#### 7. Private artifact references
 
 Reports, PDFs, logs, generated files, child artifacts, and review bundles can be
-browsed privately over the tailnet.
+referenced across the tailnet without creating an operator browser surface.
 
 How it works:
 
-- Artifact references already tracked by Aphelion get private URLs.
-- The private UI reads from allowed workspace and memory roots.
+- Artifact references already tracked by Aphelion get private machine handles
+  when internal child protocols need them.
 - Access control checks the requesting admin and artifact retention policy.
-- Telegram can send a compact summary plus tailnet link instead of forcing
-  long text or large files through chat.
+- Telegram can send compact summaries and attachment affordances; CLI can export
+  or inspect artifacts by ID.
 
-This solves the repeated Telegram bottleneck: some outputs are better inspected
-as private web artifacts.
+This keeps Telegram concise without adding a separate dashboard or browser lane.
 
-#### 8. Private live work surface
+#### 8. Tailnet-backed work telemetry
 
 Long-running Aphelion work can stream progress, logs, intermediate files, and
-child execution state over a private tailnet page.
+child execution state over internal tailnet protocols.
 
 How it works:
 
-- The existing progress/TES stream feeds a server-sent-events or websocket
-  endpoint on the private UI.
+- The existing progress/TES stream feeds bounded machine-readable control-plane
+  events when an internal child protocol needs them.
 - Telegram receives milestone summaries and interrupt controls.
-- The private UI shows full step detail, active tools, logs, and produced
+- CLI commands can inspect full step detail, active tools, logs, and produced
   artifacts.
 - Stop/reassess controls remain governed by the same decision/control records.
 
@@ -504,7 +503,7 @@ tailnet device.
 How it works:
 
 - Approval policy can require `telegram_admin && trusted_tailnet_device`.
-- Telegram approval may be paired with a tailnet UI confirmation for high-risk
+- Telegram approval may require supporting trusted-device evidence for high-risk
   actions.
 - Device posture can become one signal in the approval record.
 - Failed posture or unknown device identity downgrades the action to
@@ -586,7 +585,8 @@ How it works:
 
 - An experiment request creates an ephemeral child profile and tailnet surface.
 - The node gets bounded tags, TTL, storage roots, and explicit teardown.
-- The experiment can expose private reports or metrics to the parent UI.
+- The experiment can report private metrics to parent review artifacts,
+  Telegram summaries, and CLI diagnostics.
 - Expiry revokes the surface and archives the evidence.
 
 This gives experiments a real network identity without promoting them into
@@ -710,7 +710,7 @@ This lets agents reach internal resources without granting broad network access.
 | Tool sandbox | Tailnet reachability | Tool network egress can be constrained to named tailnet services and tags. |
 | Remote execution | Tailscale SSH | SSH is a governed remote execution tool with TES audit and approval gates. |
 | Review artifacts | Tailnet webhooks/logs | Tailscale events become child/parent review material and `/doctor` evidence. |
-| Admin UI | `tsnet`, Serve, `tsidp` | Private web status, approvals, logs, and doctor reports are reachable only on the tailnet. |
+| Operator controls | Telegram and CLI over tailnet-aware state | Status, approvals, logs, and doctor reports remain Telegram/CLI projections. |
 | Public share | Funnel | Public exposure is a high-risk, TTL-bound approval with rollback. |
 | Reinstall recovery | Auth keys, node state, tags | Aphelion verifies expected tailnet identity before resuming private surfaces. |
 | Tool installation | App connectors, subnet routers | Network paths to internal/cloud/SaaS resources are declared and governed. |
@@ -735,19 +735,19 @@ The long-term shape has four layers:
      runtime nodes.
    - Each surface has explicit owner, retention, grants, and teardown rules.
 
-4. **Private control plane**
-   - Tailnet-only HTTP endpoints for status, doctor, approvals, child reports,
-     artifact inspection, and service health.
-   - Telegram remains the default admin command surface, but the tailnet UI
-     becomes the richer local control surface.
+4. **Internal control plane**
+   - Tailnet-only machine endpoints for child reports, policy exchange, and
+     service health.
+   - Telegram and CLI remain the only operator surfaces for status, doctor,
+     approvals, artifact inspection, and recovery.
 
 ```mermaid
 flowchart LR
     Admin[Admin device\nTailscale user identity] -->|Telegram| TG[Telegram ingress]
-    Admin -->|MagicDNS / HTTPS| UI[Aphelion private UI\naphelion-admin.tailnet]
+    Admin -->|CLI over local shell/SSH| CLI[Aphelion CLI]
 
     TG --> Parent[Parent Aphelion]
-    UI --> Parent
+    CLI --> Parent
 
     Parent --> TES[(TES execution_events)]
     Parent --> Store[(sessions.db\nmemory\npolicy state)]
@@ -782,8 +782,8 @@ Examples:
   query production dashboards.
 - A remote command may be reachable through Tailscale SSH, but still require an
   Aphelion destructive-change approval.
-- A private admin UI request may arrive from a valid tailnet user, but still
-  require an admitted Aphelion admin principal.
+- An internal control-plane request may arrive from a valid tailnet user, but
+  still require an admitted Aphelion admin principal for privileged effects.
 
 ### Truth Classes
 
@@ -1018,40 +1018,33 @@ The parent should compare four states:
 
 If they diverge, `/doctor` and Telegram should say which layer is wrong.
 
-## Private Control Plane
+## Internal Control Plane
 
-The private control plane is a tailnet-only HTTP service owned by parent
-Aphelion.
+The internal control plane is a tailnet-only machine service owned by parent
+Aphelion. It exists for child-parent protocol traffic, not for operator use.
 
-Fast endpoints:
+Candidate machine endpoints:
 
 ```text
-GET  /status
-GET  /doctor/latest
-POST /doctor/run
-GET  /tailnet
-GET  /tailnet/nodes
-GET  /tailnet/surfaces
-GET  /tailnet/grants
-GET  /agents
-GET  /agents/{id}
-POST /decisions/{id}/approve
-POST /decisions/{id}/deny
-POST /tailnet/surfaces/{id}/revoke
+POST /child/enroll
+POST /child/policy/ack
+POST /child/report
+POST /child/artifact
+POST /child/health
+POST /child/control
 ```
 
 Authentication options, in order:
 
 1. Tailnet-only listener with `tsnet`.
 2. Tailscale identity headers via Serve when applicable.
-3. Optional `tsidp` OIDC for stronger web sessions.
-4. Aphelion session/decision tokens for sensitive actions.
+3. Signed Aphelion control envelopes with replay protection.
+4. Aphelion grants, leases, and bootstrap ceilings for sensitive actions.
 
-The private UI should not replace Telegram initially. It should complement it:
-Telegram remains the interruptible admin lane; the tailnet UI is for richer
-inspection and durable operation.
+Operator status, doctor reports, approval, revocation, and repair remain
+Telegram and CLI projections over the same canonical records.
 
-## UI Surfaces
+## Operator Surfaces
 
 ### Telegram
 
@@ -1073,7 +1066,6 @@ Inline controls:
 - Revoke surface
 - Run netcheck
 - Ping node
-- Open private UI link
 
 Telegram warnings:
 
@@ -1118,23 +1110,11 @@ Add tailnet diagnosis:
 - recent tailnet drift events
 - recommended fixes
 
-### Private Web UI
-
-First useful screens:
-
-- Overview
-- Agents and tailnet identities
-- Tailnet surfaces
-- Grant bindings
-- Recent tailnet events
-- Decisions needing approval
-- Doctor report
-
 ## Incremental Delivery Plan
 
 This is the practical implementation order. The critical spine is:
 
-> read-only awareness -> parent `tsnet` node -> private UI -> surface registry
+> read-only awareness -> parent `tsnet` node -> surface registry
 > -> child `tsnet` node -> private RPC -> grant bindings -> policy/drift/mutations
 
 Each step should be shippable, testable, and useful on its own.
@@ -1216,15 +1196,14 @@ service.
 
 Build:
 
-- minimal HTTP mux on the parent `tsnet` listener.
-- `GET /healthz`.
-- `GET /status`.
-- `GET /tailnet`.
-- Telegram `/tailnet` link to the MagicDNS URL when available.
+- minimal internal health endpoint on the parent `tsnet` listener.
+- `GET /healthz` for machine health only.
+- CLI and Telegram diagnostics for status and tailnet state.
+- MagicDNS URL diagnostics when available.
 
 Tests:
 
-- HTTP handler tests without real Tailscale.
+- internal health handler tests without real Tailscale.
 - authorization defaults: health can be shallow, status requires admin identity
   or local configured allowance.
 
@@ -1235,7 +1214,7 @@ Deliverable: Aphelion can track which private network surfaces it owns.
 Build:
 
 - `tailnet_surfaces` table.
-- parent private UI surface record.
+- parent internal control-plane health surface record.
 - lifecycle events for declared, active, degraded, revoked.
 - `/tailnet surfaces`.
 - revoke/disable path for owned surfaces.
@@ -1246,25 +1225,25 @@ Tests:
 - status projection tests.
 - revoke idempotency tests.
 
-### 7. Private Admin UI MVP
+### 7. CLI And Telegram Tailnet Projections
 
-Deliverable: Telegram stays concise while rich inspection moves to the private
-UI.
+Deliverable: Telegram stays concise while rich inspection remains available
+through CLI projections.
 
 Build:
 
-- minimal HTML UI over parent `tsnet`.
-- pages for overview, status, doctor latest, active turns, pending decisions,
-  and tailnet surfaces.
-- action buttons that call existing decision/control paths.
+- CLI commands for overview, status, doctor latest, active turns, pending
+  decisions, and tailnet surfaces.
+- compact Telegram summaries and inline controls that call existing
+  decision/control paths.
 - no public exposure.
 
 Tests:
 
-- handler tests.
+- CLI output tests.
 - authorization tests.
-- decision button tests.
-- UI smoke tests using the fake backend.
+- Telegram decision button tests.
+- projection smoke tests using the fake backend.
 
 ### 8. Durable Child Tailnet Declarations
 
@@ -1341,31 +1320,33 @@ Tests:
 - unauthorized caller is rejected.
 - RPC failure is surfaced as child health degradation.
 
-### 12. Private Artifact Browser
+### 12. Private Artifact Inspection
 
-Deliverable: large outputs stop fighting Telegram format and size limits.
+Deliverable: large outputs remain inspectable without adding a browser surface.
 
 Build:
 
-- artifact index page.
-- generated reports/PDF/logs links.
+- CLI artifact inspection/export commands.
+- generated reports/PDF/logs references.
 - retention and authority checks.
-- Telegram summaries can link to tailnet artifact URLs.
+- Telegram summaries can include compact artifact handles and attachment
+  affordances.
 
 Tests:
 
 - path confinement tests.
 - retention policy tests.
-- private URL rendering tests.
+- CLI artifact inspection tests.
 
-### 13. Live Work Stream
+### 13. Live Work Telemetry
 
-Deliverable: long-running work is inspectable without spamming chat.
+Deliverable: long-running work is inspectable through CLI and summarized in
+Telegram without spamming chat.
 
 Build:
 
-- server-sent-events or websocket feed from TES/progress events.
-- active turn page.
+- bounded telemetry projection from TES/progress events.
+- active turn CLI projection.
 - tool event, progress, final result, and artifact updates.
 - Telegram sends milestone summaries and keeps stop/reassess controls.
 
@@ -1377,8 +1358,8 @@ Tests:
 
 ### 14. Tailnet-aware Principal Evidence
 
-Deliverable: Aphelion can say that a private UI request came from a known
-tailnet user/device while still enforcing Aphelion admission.
+Deliverable: Aphelion can say that an internal control-plane request came from
+a known tailnet user/device while still enforcing Aphelion admission.
 
 Build:
 
@@ -1402,7 +1383,7 @@ Build:
 
 - approval policy extension.
 - decision record includes tailnet identity evidence.
-- UI/Telegram copy for "requires trusted device."
+- Telegram/CLI copy for "requires trusted device."
 - downgrade/escalation behavior when the trusted device signal is absent.
 
 Tests:
@@ -1439,7 +1420,7 @@ Build:
 - Tailscale policy read parser.
 - desired-policy projection from grant bindings.
 - human-readable diff.
-- Telegram/private UI review surface.
+- Telegram/CLI review surface.
 
 Tests:
 
@@ -1519,8 +1500,8 @@ Tests:
 
 "Feature complete" here means: the parent can run as a private tailnet service,
 durable children can receive tailnet identities, grants can be declared and
-diagnosed, and the operator can control the system from Telegram and the private
-tailnet UI.
+diagnosed, and the operator can control the system from Telegram and CLI
+commands.
 
 ### Milestone 0: Read-only Tailnet Awareness
 
@@ -1575,9 +1556,9 @@ Why first:
 
 - Low risk.
 - Gives diagnostics before mutations.
-- Establishes data model and UI vocabulary.
+- Establishes data model and projection vocabulary.
 
-### Milestone 1: Parent `tsnet` Node And Private Status UI
+### Milestone 1: Parent `tsnet` Node And CLI/Telegram Status
 
 Goal: Aphelion becomes a tailnet node inside the Go process.
 
@@ -1586,14 +1567,14 @@ Build:
 - `tailnet.TSNetServer` wrapper
 - state directory under `~/.aphelion/state/tailnet/parent`
 - parent hostname config
-- tailnet-only HTTP mux
-- `GET /status`, `GET /doctor/latest`, `GET /tailnet`
-- Telegram link to MagicDNS URL when available
+- tailnet-only internal control listener for machine protocols
+- CLI and Telegram status/doctor/tailnet projections
+- MagicDNS URL diagnostics when available
 
 Tests:
 
 - fake `tsnet` server lifecycle tests
-- HTTP handler tests without real Tailscale
+- internal control listener tests without real Tailscale
 - startup/recovery tests for state directory reuse
 
 Verification gates:
@@ -1605,8 +1586,8 @@ Verification gates:
 - Identity gate: configured hostname, observed MagicDNS name, and persisted
   state match after restart; mismatches are surfaced in `/status`, `/doctor`,
   and Telegram.
-- Private reachability gate: a tailnet-only `GET /healthz` or `GET /status`
-  smoke test succeeds when integration tests are explicitly enabled.
+- Private reachability gate: a tailnet-only internal health smoke test succeeds
+  when integration tests are explicitly enabled.
 - Auth-key safety gate: missing or expired auth-key material blocks startup of
   the parent node gracefully and never falls back to public exposure.
 
@@ -1632,7 +1613,7 @@ Goal: Aphelion can declare and track network surfaces.
 Build:
 
 - `tailnet_surfaces` table
-- parent surface record for private UI
+- parent surface record for internal control-plane health
 - surface lifecycle events in TES
 - `/tailnet surfaces`
 - revoke flow
@@ -1738,7 +1719,7 @@ Why sixth:
 - grant binding normalization
 - risk classification
 - Telegram renderers
-- private HTTP handlers
+- internal control handlers
 - child profile tailnet files
 - recovery reconciliation
 
@@ -1754,7 +1735,7 @@ Integration cases:
 
 - parent `tsnet` starts with a test hostname
 - MagicDNS name resolves
-- private HTTP endpoint returns status
+- internal control endpoint returns health
 - fake child starts and exposes a local test endpoint
 - `tailscale ping` succeeds between test nodes
 
@@ -1783,7 +1764,7 @@ provisioned.
 
 Defaults:
 
-- parent private UI disabled until configured
+- parent internal control listener disabled until configured
 - child tailnet nodes disabled until configured or approved
 - Serve disabled by default
 - Funnel disabled by default
@@ -1796,7 +1777,7 @@ Required approval classes:
 
 | Action | Approval |
 | --- | --- |
-| Start parent private UI | admin approval or config ratification |
+| Start parent internal control listener | admin approval or config ratification |
 | Start child tsnet node | parent/admin approval |
 | Apply Tailscale policy | admin approval |
 | Enable Serve | admin approval unless pre-ratified |
@@ -1824,10 +1805,10 @@ The setup wizard should produce a report like:
 Tailnet setup ready.
 - parent node: aphelion-admin
 - mode: tsnet
-- private UI: disabled
+- internal control listener: disabled
 - child nodes: disabled by default
 - policy writes: propose only
-- next: approve starting the parent private UI
+- next: approve starting the parent internal control listener
 ```
 
 ## Storyboards
@@ -1884,14 +1865,14 @@ Fastest useful order:
 3. Done: add read-only CLI backend.
 4. Done: add `/status`, `/doctor`, and `/tailnet` read-only projections.
 5. Done: add parent `tsnet` node behind config.
-6. Done: add private status UI.
+6. Done: add CLI/Telegram status projections.
 7. Done: add `tailnet_surfaces` table.
 8. Done: add child tailnet profile fields and declaration sync.
 9. Next: materialize one declared child `tsnet` node with private status only.
 10. Add grant binding and policy projection.
 11. Add approval-gated mutations.
 12. Add Tailscale webhook ingestion.
-13. Add richer private UI.
+13. Add richer Telegram and CLI projections.
 
 ## Open Questions
 
@@ -1903,8 +1884,8 @@ Fastest useful order:
 - Should tailnet identity participate in principal resolution before or after
   Telegram/admin admission?
 - How should child tailnet state be backed up without leaking auth material?
-- Should the private UI use Tailscale identity headers, `tsidp`, Aphelion
-  session tokens, or a layered combination?
+- Should internal control-plane requests use only signed Aphelion envelopes, or
+  also include Tailscale identity headers as supporting evidence?
 
 ## References
 

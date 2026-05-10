@@ -325,7 +325,10 @@ aphelion/
 
 - **No plugin system.** Add it to the codebase or don't.
 - **No multi-node.** Single binary, single machine.
-- **No multi-channel.** Telegram only.
+- **No channel sprawl.** Telegram is the primary control link and CLI is the
+  maintenance surface. Future channels such as WhatsApp must be compiled-in code
+  changes behind a small transport boundary, not plugins or an omnichannel
+  product surface.
 - **No cross-platform.** Linux only. `//go:build linux` on the whole project.
 - **No web dashboard.** Telegram is the UI. Logs go to stderr/journald.
 - **No provider SDKs in the native path.** Direct HTTP. We own every byte on the wire. Codex-backed governor support is a separate governor concern, not a reason to distort the native provider interface.

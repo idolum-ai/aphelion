@@ -759,7 +759,7 @@ Not all of this must be implemented immediately. But the spec should reserve the
 - backup/restore tooling
 - DB integrity tooling
 - structured log/event export
-- richer operator dashboards
+- richer Telegram and CLI operator projections
 
 ## Decisions
 

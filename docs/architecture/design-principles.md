@@ -39,7 +39,9 @@ Telegram is the primary control link to the outpost. It should feel like a clear
 operator channel for live work, approvals, status, recovery, and evidence.
 
 Other adapters may exist when they serve a concrete governed use case, but the
-architecture should not drift into channel abstraction for its own sake.
+architecture should not drift into channel abstraction for its own sake. New
+channels should be compiled-in code changes behind a small transport boundary,
+not plugins, marketplaces, or a second operator surface.
 
 ### Authority before capability
 

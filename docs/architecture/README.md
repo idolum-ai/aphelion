@@ -35,6 +35,7 @@ These invariants are normative for architecture and requirements alignment:
 
 - [design-principles.md](design-principles.md): project-level design principles for Aphelion as a minimal governed outpost.
 - [principle-debt.md](principle-debt.md): named implementation gaps against the design principles, with exit gates.
+- [done-done-roadmap.md](done-done-roadmap.md): normative convergence plan for finishing requirements, roadmaps, release discipline, and validation without adding operator surfaces beyond Telegram and CLI.
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
 - [turn-lifecycle.md](turn-lifecycle.md): stage order across interactive, maintenance, and durable-child turns.
 - [action-proposal-continuation-lease.md](action-proposal-continuation-lease.md): typed bounded action proposals and consumable continuation leases.

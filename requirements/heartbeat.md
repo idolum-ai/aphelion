@@ -31,7 +31,7 @@ Heartbeat is one of Aphelion's mechanisms for **reflective proactivity**.
 
 - provider-specific heartbeat cost optimization
 - heartbeat-triggered subagent spawning
-- richer maintenance dashboards
+- richer Telegram and CLI maintenance projections
 - per-principal heartbeat policies beyond admin-focused defaults
 
 ## Core Model
