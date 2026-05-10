@@ -38,6 +38,138 @@ func TestDoctorTelegramSummarySystemNoteUsesOutcomeStructure(t *testing.T) {
 	}
 }
 
+func TestDoctorAuthorityProjectionReportsConsistencyFindings(t *testing.T) {
+	cfg, store, _, _ := buildRuntimeFixtures(t)
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 99150, UserID: 0, Scope: telegramDMScopeRef(99150)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:     session.ContinuationStatusPending,
+		DecisionID: "missing-decision",
+		ActionProposal: session.ActionProposal{
+			ID:        "proposal-missing-decision",
+			Status:    session.ProposalStatusPending,
+			ExpiresAt: now.Add(10 * time.Minute),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-expired",
+			ProposalID:     "different-proposal",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       2,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(-time.Minute),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "auto-authority",
+		AdminUserID: 1001,
+		ChatID:      99150,
+		Scope:       session.OperatorAutoApprovalScopeWorkspace,
+		CreatedAt:   now.Add(-time.Minute),
+		ExpiresAt:   now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-expired-runtime",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "sample_tool",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       "{}",
+		Constraints:    "{}",
+		ExpiresAt:      now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	rt := &Runtime{cfg: cfg, store: store}
+	var b strings.Builder
+	rt.writeDoctorAuthorityProjection(&b, now)
+	report := b.String()
+	for _, want := range []string{
+		`authority_projection_status="needs_attention"`,
+		`authority_autoapproval_active_leases="1"`,
+		`code="active_capability_grant_expired"`,
+		`code="child_runtime_contract_missing"`,
+		`code="continuation_lease_proposal_mismatch"`,
+		`code="expired_continuation_lease"`,
+		`code="pending_proposal_missing_decision"`,
+		`next_repair="expire, refresh, or revoke the capability grant before the next child/tool wake"`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("authority projection report missing %q:\n%s", want, report)
+		}
+	}
+}
+
+func TestDoctorAuthorityProjectionHealthyWhenRecordsConsistent(t *testing.T) {
+	cfg, store, _, _ := buildRuntimeFixtures(t)
+	now := time.Date(2026, 5, 10, 13, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 99151, UserID: 0, Scope: telegramDMScopeRef(99151)}
+	if err := store.UpsertPendingDecision(session.PendingDecisionRecord{
+		ID:          "decision-present",
+		OwnerKey:    session.SessionIDForKey(key),
+		Kind:        "continuation",
+		ChatID:      99151,
+		SenderID:    1001,
+		Prompt:      "Approve continuation?",
+		ChoicesJSON: `[{"id":"continue","label":"Continue"}]`,
+		CreatedAt:   now.Add(-time.Minute),
+		UpdatedAt:   now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertPendingDecision() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:     session.ContinuationStatusPending,
+		DecisionID: "decision-present",
+		ActionProposal: session.ActionProposal{
+			ID:        "proposal-present",
+			Status:    session.ProposalStatusPending,
+			ExpiresAt: now.Add(10 * time.Minute),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-present",
+			ProposalID:     "proposal-present",
+			Status:         session.ContinuationLeaseStatusPending,
+			MaxTurns:       2,
+			RemainingTurns: 2,
+			ExpiresAt:      now.Add(10 * time.Minute),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-valid-runtime",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "sample_tool",
+		GrantedTo:      core.DurableAgentPrincipal("child-beta"),
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract:       `{"child_runtime":{"readonly_paths":["` + t.TempDir() + `"]}}`,
+		Constraints:    "{}",
+		ExpiresAt:      now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	rt := &Runtime{cfg: cfg, store: store}
+	var b strings.Builder
+	rt.writeDoctorAuthorityProjection(&b, now)
+	report := b.String()
+	for _, want := range []string{
+		`authority_projection_status="healthy"`,
+		`authority_finding_count="0"`,
+		"authority_findings:\n- none",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("authority projection report missing %q:\n%s", want, report)
+		}
+	}
+}
+
 func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "State of Things\nRuntime is diagnosable.\n\nRecommendations\nKeep /doctor read-only."

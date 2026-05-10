@@ -65,6 +65,13 @@ func TestOperatorAutoApprovalLeaseLifecycle(t *testing.T) {
 	if len(active) != 1 || active[0].ID != "auto-test" {
 		t.Fatalf("active leases = %#v, want auto-test", active)
 	}
+	listed, err := store.OperatorAutoApprovalLeases(10, now.Add(time.Minute), true)
+	if err != nil {
+		t.Fatalf("OperatorAutoApprovalLeases(activeOnly) err = %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != "auto-test" {
+		t.Fatalf("listed active leases = %#v, want auto-test", listed)
+	}
 	used, ok, err := store.IncrementOperatorAutoApprovalUse("auto-test", now.Add(2*time.Minute))
 	if err != nil || !ok {
 		t.Fatalf("IncrementOperatorAutoApprovalUse() = lease:%#v ok:%v err:%v, want ok", used, ok, err)
@@ -78,6 +85,13 @@ func TestOperatorAutoApprovalLeaseLifecycle(t *testing.T) {
 	}
 	if len(active) != 0 {
 		t.Fatalf("active leases after use = %#v, want none", active)
+	}
+	allListed, err := store.OperatorAutoApprovalLeases(10, now.Add(3*time.Minute), false)
+	if err != nil {
+		t.Fatalf("OperatorAutoApprovalLeases(all) err = %v", err)
+	}
+	if len(allListed) != 1 || allListed[0].ID != "auto-test" || allListed[0].UsedCount != 1 {
+		t.Fatalf("all listed leases = %#v, want exhausted auto-test", allListed)
 	}
 
 	revoked, err := store.RevokeOperatorAutoApprovalLeases(7001, 1001, now.Add(4*time.Minute))

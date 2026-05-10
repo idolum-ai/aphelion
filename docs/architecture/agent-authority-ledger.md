@@ -675,18 +675,24 @@ These are expected migration targets, not accusations against the current code.
 
 ### Phase 2: Ledger Projection Layer
 
-- Add a read model that projects current authority state from existing
-  continuation, plan, capability, mission, auto-approval, and TES sources.
+- Initial slice implemented in `runtime/authority_projection.go`: `/doctor`
+  now projects current continuation, operation plan lease, pending decision,
+  auto-approval lease, and capability grant state from existing stores.
 - Use that projection for `/status`, `/debug`, `/doctor`, startup recovery, and
-  proposal rendering.
+  proposal rendering. `/doctor` is first; the other projections remain planned.
 - Mark any compatibility fallback source in the projection.
 
 ### Phase 3: Consistency Checks
 
-- Add doctor checks for:
-  - active lease without active proposal
-  - expired lease still consumable
+- Implemented `/doctor` authority projection checks:
+  - expired continuation or operation plan lease still consumable
   - pending proposal with missing decision surface
+  - continuation lease pointing at a different action proposal
+  - active capability grant after expiry or revocation
+  - active stale capability grant
+  - durable-agent grant with invalid or missing `child_runtime` material
+- Remaining checks:
+  - active lease without active proposal
   - auto-approval applied outside scope
   - capability grant used without turn lease where required
   - blocked phase with no escalation proposal

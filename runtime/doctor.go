@@ -697,6 +697,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Autonomy")
 	r.writeDoctorAutonomyStatus(&b, input.Key, input.Message.SenderID, now)
 
+	writeDoctorSection(&b, "Authority Projection")
+	r.writeDoctorAuthorityProjection(&b, now)
+
 	writeDoctorSection(&b, "Sandbox Readiness")
 	r.writeDoctorSandboxReadiness(&b, now)
 

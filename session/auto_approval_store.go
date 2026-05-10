@@ -109,6 +109,51 @@ func (s *SQLiteStore) ActiveOperatorAutoApprovalLeases(chatID int64, now time.Ti
 	return out, nil
 }
 
+func (s *SQLiteStore) OperatorAutoApprovalLeases(limit int, now time.Time, activeOnly bool) ([]OperatorAutoApprovalLease, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	query := `
+		SELECT lease_id, admin_user_id, chat_id, scope, reason, max_uses, used_count,
+			created_at, expires_at, revoked_at, updated_at
+		FROM operator_auto_approvals
+	`
+	args := make([]any, 0, 2)
+	if activeOnly {
+		query += `
+			WHERE revoked_at IS NULL
+				AND expires_at > ?
+				AND (max_uses <= 0 OR used_count < max_uses)
+		`
+		args = append(args, now.UTC().Format(time.RFC3339Nano))
+	}
+	query += `
+		ORDER BY updated_at DESC, created_at DESC, lease_id DESC
+		LIMIT ?
+	`
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query operator auto approvals: %w", err)
+	}
+	defer rows.Close()
+	out := make([]OperatorAutoApprovalLease, 0, limit)
+	for rows.Next() {
+		lease, err := scanOperatorAutoApprovalLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, lease)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate operator auto approvals: %w", err)
+	}
+	return out, nil
+}
+
 func (s *SQLiteStore) LatestOperatorAutoApprovalLease(chatID int64, adminUserID int64) (OperatorAutoApprovalLease, bool, error) {
 	if chatID == 0 || adminUserID <= 0 {
 		return OperatorAutoApprovalLease{}, false, nil
