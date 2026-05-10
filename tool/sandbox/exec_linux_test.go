@@ -181,6 +181,29 @@ func TestRunnerPlanRejectsHiddenPathShadowingWritableRoot(t *testing.T) {
 	}
 }
 
+func TestRunnerPlanRejectsIsolatedNetworkAllowlistWithoutBackend(t *testing.T) {
+	t.Parallel()
+
+	scope := buildScope(t, principal.RoleApprovedUser)
+	scope.Profile.Network = NetworkAllowlist
+
+	runner := NewRunnerWithLookPath(func(string) (string, error) {
+		return "/usr/bin/bwrap", nil
+	})
+
+	_, err := runner.Plan(ExecRequest{
+		Scope:   scope,
+		Command: "curl https://example.com",
+		Workdir: scope.WorkingRoot,
+	})
+	if err == nil {
+		t.Fatal("Plan() err = nil, want unavailable network allowlist rejection")
+	}
+	if !strings.Contains(err.Error(), "network allowlist enforcement is unavailable") {
+		t.Fatalf("err = %v, want network allowlist enforcement rejection", err)
+	}
+}
+
 func TestRunnerPlanForDurableAgentIncludesBubblewrapAndChildRoots(t *testing.T) {
 	t.Parallel()
 

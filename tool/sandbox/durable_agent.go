@@ -52,7 +52,9 @@ func durableAgentNetworkPolicy(value string) NetworkPolicy {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "deny", "restricted", "disabled":
 		return NetworkDeny
-	default:
+	case "allowlist":
 		return NetworkAllowlist
+	default:
+		return NetworkDeny
 	}
 }

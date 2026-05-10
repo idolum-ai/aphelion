@@ -327,6 +327,9 @@ func (r *Registry) fetchURL(ctx context.Context, input json.RawMessage, scope sa
 	if scope.Profile.Network == sandbox.NetworkDeny {
 		return "", fmt.Errorf("fetch_url denied by sandbox network policy")
 	}
+	if scope.Profile.Mode == sandbox.ModeIsolated && scope.Profile.Network == sandbox.NetworkAllowlist {
+		return "", fmt.Errorf("fetch_url denied because isolated sandbox network allowlist enforcement is unavailable")
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("fetch_url parse url: %w", err)

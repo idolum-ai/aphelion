@@ -175,6 +175,7 @@ func (r *Runtime) buildTurnCoordinatorGovernorPrompt(input turnCoordinatorExecut
 		ToolCapabilities: toolCapabilities(input.Tools),
 		Workspace:        input.PromptContext,
 		Runtime:          governorAwareness,
+		CacheStrategy:    r.promptCacheStrategyForExecution(input.Exec),
 	}
 	systemBlocks := prompt.BuildGovernorPromptBlocks(governorPrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
@@ -183,6 +184,16 @@ func (r *Runtime) buildTurnCoordinatorGovernorPrompt(input turnCoordinatorExecut
 		SystemBlocks:      systemBlocks,
 		SystemPrompt:      systemPrompt,
 	}
+}
+
+func (r *Runtime) promptCacheStrategyForExecution(exec pipeline.TurnExecutionContract) string {
+	if r == nil || r.cfg == nil {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(exec.ProviderName), "anthropic") {
+		return r.cfg.Providers.Anthropic.CacheStrategy
+	}
+	return ""
 }
 
 func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordinatorExecuteInput) (turnCoordinatorExecuteOutput, error) {

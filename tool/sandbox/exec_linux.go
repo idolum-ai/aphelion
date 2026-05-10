@@ -140,6 +140,9 @@ func (r *Runner) Plan(req ExecRequest) (ExecutionPlan, error) {
 		if bwrapPath == "" {
 			return ExecutionPlan{}, fmt.Errorf("bubblewrap is required for isolated execution")
 		}
+		if req.Scope.Profile.Network == NetworkAllowlist {
+			return ExecutionPlan{}, fmt.Errorf("sandbox network allowlist enforcement is unavailable for isolated execution; use network=deny or a trusted admin profile until per-destination enforcement exists")
+		}
 		args, err := buildBwrapArgs(req.Scope, workdir, command, req.ExtraWritablePaths, req.ExtraReadonlyPaths, req.ExtraReadonlyBinds, req.ExtraEnv)
 		if err != nil {
 			return ExecutionPlan{}, err

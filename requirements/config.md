@@ -4,13 +4,19 @@
 
 Aphelion's config is a single TOML file that controls the entire runtime. Every identifiable string — project name, user-agent headers, system prompt markers — is either configurable or absent. The goal: no provider can fingerprint the harness from the traffic it sees.
 
-The schema is intentionally broader than the first runnable surface. Aphelion is a system tool, not a narrowly productized bot, so the config must preserve architectural headroom for alternate providers, stronger sandboxing, transport tuning, and operational policies before every knob is wired. The rule is: the architecture should have a natural home for these knobs early, while implementation can land in stages.
+The live schema is the TOML shape accepted by `config.Config` and represented
+by `config.example.toml`; that example is load-tested with no ignored-key
+warnings. This requirements file also preserves future configuration homes so
+the design does not collapse around the first working path. Keys shown outside
+the live schema are future design notes: if an operator puts them in today's
+config, startup/check-config, `/status`, and `/doctor` must surface ignored-key
+warnings rather than imply active behavior.
 
 This spec therefore distinguishes between:
 
-- **Schema breadth**: the configuration surface we intentionally reserve so the design does not collapse around the first working path.
+- **Live schema**: keys accepted by `config.Config` and covered by `config.example.toml`.
 - **Implemented behavior**: the subset currently honored by the runtime.
-- **Future knobs**: sections that may parse before they are enforced, but must never silently misrepresent active behavior.
+- **Future knobs**: design-reserved keys that may appear here before they are wired, but must never silently misrepresent active behavior.
 
 ## Config File
 
@@ -352,10 +358,10 @@ hidden_paths = [
 ]
 network = "deny"               # "deny" | "allowlist"
 
-# `allowlist` is currently policy intent for future per-destination controls.
-# The live runner enforces `deny`; isolated `allowlist` profiles are reported
-# as readiness warnings in startup/check-config logs, `/status`, and `/doctor`
-# until that policy is machine-enforced.
+# `allowlist` is reserved for future per-destination controls. The live runner
+# enforces `deny`; isolated `allowlist` profiles are reported as readiness
+# warnings and refused for process/fetch execution until that policy is
+# machine-enforced.
 
 # ─── Automation ───
 [heartbeat]

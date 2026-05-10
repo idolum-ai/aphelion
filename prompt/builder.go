@@ -15,6 +15,8 @@ import (
 const (
 	DefaultGovernorName    = "Idolum (System)"
 	DefaultGovernorBackend = "native"
+
+	defaultCacheAwareDynamicLookback = 6
 )
 
 type GovernorRequest struct {
@@ -26,6 +28,8 @@ type GovernorRequest struct {
 	ToolCapabilities ToolCapabilities
 	Workspace        *workspace.PromptContext
 	Runtime          RuntimeAwareness
+	CacheStrategy    string
+	CacheLookback    int
 }
 
 type ToolCapabilities struct {
@@ -67,6 +71,8 @@ type FaceRequest struct {
 	StableFiles       []workspace.LoadedFile
 	DynamicFiles      []workspace.LoadedFile
 	Runtime           RuntimeAwareness
+	CacheStrategy     string
+	CacheLookback     int
 }
 
 type BrokerageArtifact struct {
@@ -162,11 +168,15 @@ func BuildGovernorPromptBlocks(req GovernorRequest) []agent.SystemBlock {
 	}
 
 	if len(dynamic) > 0 {
+		shapedDynamic, omittedDynamic := shapeDynamicFilesForPromptCache(dynamic, req.CacheStrategy, req.CacheLookback)
 		lines := []string{
 			"## Dynamic Workspace Files",
 			"These files are reloaded every turn and belong after the stable prompt prefix.",
 		}
-		lines = append(lines, renderFiles(dynamic)...)
+		if omitted := renderCacheLookbackOmissions(omittedDynamic); omitted != "" {
+			lines = append(lines, omitted)
+		}
+		lines = append(lines, renderFiles(shapedDynamic)...)
 		markLastStableCacheBreakpoint(parts)
 		parts = append(parts, agent.SystemBlock{
 			Text: strings.Join(lines, "\n\n"),
@@ -316,11 +326,15 @@ func BuildFacePromptBlocks(req FaceRequest) []agent.SystemBlock {
 		})
 	}
 	if len(req.DynamicFiles) > 0 {
+		shapedDynamic, omittedDynamic := shapeDynamicFilesForPromptCache(req.DynamicFiles, req.CacheStrategy, req.CacheLookback)
 		lines := []string{
 			"## Dynamic Face Files",
 			"These files are face-only drift monitors and may change between turns.",
 		}
-		lines = append(lines, renderFiles(req.DynamicFiles)...)
+		if omitted := renderCacheLookbackOmissions(omittedDynamic); omitted != "" {
+			lines = append(lines, omitted)
+		}
+		lines = append(lines, renderFiles(shapedDynamic)...)
 		markLastStableCacheBreakpoint(parts)
 		parts = append(parts, agent.SystemBlock{
 			Text: strings.Join(lines, "\n\n"),
@@ -1090,6 +1104,91 @@ func markLastStableCacheBreakpoint(blocks []agent.SystemBlock) {
 		blocks[i].CacheBreakpoint = true
 		return
 	}
+}
+
+func shapeDynamicFilesForPromptCache(files []workspace.LoadedFile, strategy string, lookback int) ([]workspace.LoadedFile, []string) {
+	if len(files) == 0 || !cacheAwarePromptLookbackEnabled(strategy) {
+		return files, nil
+	}
+	if lookback <= 0 {
+		lookback = defaultCacheAwareDynamicLookback
+	}
+	if len(files) <= lookback {
+		return files, nil
+	}
+
+	required := make([]workspace.LoadedFile, 0, 3)
+	candidates := make([]workspace.LoadedFile, 0, len(files))
+	for _, file := range files {
+		if cacheLookbackAlwaysKeep(file.Path) {
+			required = append(required, file)
+			continue
+		}
+		candidates = append(candidates, file)
+	}
+	if len(candidates) <= lookback {
+		return files, nil
+	}
+
+	keepStart := len(candidates) - lookback
+	keepByPath := make(map[string]struct{}, len(required)+lookback)
+	for _, file := range required {
+		keepByPath[normalizePromptCachePath(file.Path)] = struct{}{}
+	}
+	for _, file := range candidates[keepStart:] {
+		keepByPath[normalizePromptCachePath(file.Path)] = struct{}{}
+	}
+
+	kept := make([]workspace.LoadedFile, 0, len(keepByPath))
+	omitted := make([]string, 0, len(candidates)-lookback)
+	for _, file := range files {
+		path := normalizePromptCachePath(file.Path)
+		if _, ok := keepByPath[path]; ok {
+			kept = append(kept, file)
+			continue
+		}
+		omitted = append(omitted, strings.TrimSpace(file.Path))
+	}
+	return kept, omitted
+}
+
+func cacheAwarePromptLookbackEnabled(strategy string) bool {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "auto", "hybrid":
+		return true
+	default:
+		return false
+	}
+}
+
+func cacheLookbackAlwaysKeep(path string) bool {
+	switch normalizePromptCachePath(path) {
+	case "memory.md", "heartbeat.md", "skills.md":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizePromptCachePath(path string) string {
+	return filepath.ToSlash(strings.ToLower(strings.TrimSpace(path)))
+}
+
+func renderCacheLookbackOmissions(omitted []string) string {
+	if len(omitted) == 0 {
+		return ""
+	}
+	paths := make([]string, 0, len(omitted))
+	for _, path := range omitted {
+		path = strings.TrimSpace(path)
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	return "Cache-aware lookback omitted older dynamic files this turn: " + strings.Join(paths, ", ")
 }
 
 func renderRuntimeAdjudicationFact(adjudication core.RuntimeAdjudication) string {

@@ -203,12 +203,13 @@ Network access should be specified per profile.
 ### v0.5
 
 - approved-user execution should default to `deny`
-- explicit allowlist is acceptable when needed
+- explicit allowlist is acceptable only after a backend can enforce destinations
 - firewall and namespace policies should be machine-enforced, not prompt-described
 
-Until per-destination allowlists are implemented, `allowlist` must be surfaced
-as a readiness warning rather than silently implied as enforced isolation.
-`network=deny` is the currently enforced isolated-network policy.
+Until per-destination allowlists are implemented, isolated `allowlist` must be
+surfaced as a readiness warning and refused by process/fetch execution rather
+than silently implied as enforced isolation. `network=deny` is the currently
+enforced isolated-network policy.
 
 ## Sandbox Backends
 

@@ -195,6 +195,15 @@ func TestFetchURLHonorsNetworkPolicy(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "network policy") {
 		t.Fatalf("fetch_url denied err = %v, want network-policy rejection", err)
 	}
+
+	allowlistProfile := sandbox.DefaultProfiles().ApprovedUser
+	allowlistProfile.Network = sandbox.NetworkAllowlist
+	allowlistScope := deniedScope
+	allowlistScope.Profile = allowlistProfile
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "fetch_url", json.RawMessage(`{"url":"`+server.URL+`"}`), allowlistScope, approved, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "allowlist enforcement is unavailable") {
+		t.Fatalf("fetch_url allowlist err = %v, want unavailable-enforcement rejection", err)
+	}
 }
 
 func TestFetchURLUsesConfiguredUserAgent(t *testing.T) {

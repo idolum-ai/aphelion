@@ -63,9 +63,10 @@ func (cp *ControlPlane) PolicySnapshot(agentID string) (core.DurableAgentPolicyS
 }
 
 func (cp *ControlPlane) AcceptPolicyAcknowledgement(envelope core.DurableAgentControlEnvelope, ack core.DurableAgentPolicyAcknowledgement, now time.Time) error {
-	if err := cp.AcceptEnvelope(envelope, now); err != nil {
-		return err
+	if cp == nil || cp.store == nil {
+		return fmt.Errorf("durable agent control plane store is nil")
 	}
+	envelope = core.NormalizeDurableAgentControlEnvelope(envelope)
 	ack = core.NormalizeDurableAgentPolicyAcknowledgement(ack)
 	if ack.AgentID == "" {
 		ack.AgentID = strings.TrimSpace(envelope.AgentID)
@@ -75,6 +76,27 @@ func (cp *ControlPlane) AcceptPolicyAcknowledgement(envelope core.DurableAgentCo
 	}
 	if ack.AcknowledgedVersion <= 0 || ack.AcknowledgedHash == "" {
 		return fmt.Errorf("durable agent policy acknowledgement must include acknowledged version and hash")
+	}
+	agent, err := cp.store.DurableAgent(ack.AgentID)
+	if err != nil {
+		return err
+	}
+	if ack.AcknowledgedVersion != agent.PolicyVersion || strings.TrimSpace(ack.AcknowledgedHash) != strings.TrimSpace(agent.PolicyHash) {
+		return fmt.Errorf("stale durable agent policy acknowledgement for %s: acknowledged version/hash %d/%s does not match current %d/%s",
+			ack.AgentID,
+			ack.AcknowledgedVersion,
+			strings.TrimSpace(ack.AcknowledgedHash),
+			agent.PolicyVersion,
+			strings.TrimSpace(agent.PolicyHash),
+		)
+	}
+	if ack.AppliedVersion > 0 || strings.TrimSpace(ack.AppliedHash) != "" {
+		if ack.AppliedVersion != ack.AcknowledgedVersion || strings.TrimSpace(ack.AppliedHash) != strings.TrimSpace(ack.AcknowledgedHash) {
+			return fmt.Errorf("durable agent policy acknowledgement applied version/hash must match acknowledged version/hash")
+		}
+	}
+	if err := cp.AcceptEnvelope(envelope, now); err != nil {
+		return err
 	}
 	now = normalizeControlPlaneTime(now)
 	if ack.AcknowledgedAt.IsZero() {

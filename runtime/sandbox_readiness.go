@@ -79,8 +79,8 @@ func sandboxReadinessSnapshotFromConfig(cfg *config.Config, now time.Time, runne
 				Network:          network,
 				Code:             "sandbox_network_allowlist_unenforced",
 				Severity:         "warning",
-				Summary:          fmt.Sprintf("%s requests a sandbox network allowlist, but this runner only enforces deny or host networking.", role),
-				NextRepairAction: "Use network=deny for a hard network block until per-destination allowlists are implemented.",
+				Summary:          fmt.Sprintf("%s requests a sandbox network allowlist, but isolated per-destination enforcement is unavailable and execution will be refused.", role),
+				NextRepairAction: "Use network=deny for isolated execution, or run as a trusted admin profile only when host networking is intended.",
 			})
 		}
 		if profile.Mode == sandbox.ModeTrusted && role != "admin" {

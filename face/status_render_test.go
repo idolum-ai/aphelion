@@ -427,8 +427,8 @@ func TestRenderTelegramStatusSystemIncludesSandboxReadiness(t *testing.T) {
 				Network:          "allowlist",
 				Code:             "sandbox_network_allowlist_unenforced",
 				Severity:         "warning",
-				Summary:          "approved_user requests a sandbox network allowlist, but this runner only enforces deny or host networking.",
-				NextRepairAction: "Use network=deny for a hard network block.",
+				Summary:          "approved_user requests a sandbox network allowlist, but isolated per-destination enforcement is unavailable and execution will be refused.",
+				NextRepairAction: "Use network=deny for isolated execution.",
 			}},
 		},
 	}, "opus", "high")

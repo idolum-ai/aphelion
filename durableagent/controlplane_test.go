@@ -129,6 +129,75 @@ func TestRemotePolicyAcknowledgementCarriesAppliedVersion(t *testing.T) {
 	}
 }
 
+func TestRemotePolicyAcknowledgementRejectsStalePolicyVersion(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	agent := testRemoteDurableAgent()
+	if err := store.UpsertDurableAgent(agent); err != nil {
+		t.Fatalf("UpsertDurableAgent() err = %v", err)
+	}
+	initial, err := store.DurableAgent(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgent(initial) err = %v", err)
+	}
+	if _, _, err := store.ApplyDurableAgentLivePolicy(agent.AgentID, core.DurableAgentLivePolicy{
+		Charter:            "Narrowed policy that supersedes the initial child snapshot.",
+		CapabilityEnvelope: []string{"bounded_review_artifact"},
+		OutboundMode:       "draft_only",
+		DriftPolicy:        "admin_review",
+	}, 0, "supersede remote policy before stale ack"); err != nil {
+		t.Fatalf("ApplyDurableAgentLivePolicy() err = %v", err)
+	}
+	if err := store.UpsertDurableAgentRemoteEnrollment(core.DurableAgentRemoteEnrollment{
+		AgentID:          agent.AgentID,
+		ParentControlURL: "https://house.example/control",
+		KeyFingerprint:   "child-key-fp",
+		Status:           "active",
+		ProtocolVersion:  core.DefaultDurableAgentControlProtocolVersion,
+	}); err != nil {
+		t.Fatalf("UpsertDurableAgentRemoteEnrollment() err = %v", err)
+	}
+
+	cp := NewControlPlane(store, 10*time.Minute)
+	now := time.Now().UTC()
+	envelope := core.DurableAgentControlEnvelope{
+		ProtocolVersion: core.DefaultDurableAgentControlProtocolVersion,
+		AgentID:         agent.AgentID,
+		ParentAgentID:   "house",
+		MessageKind:     core.DurableAgentControlMessagePolicyAck,
+		MessageID:       "stale-ack-1",
+		Sequence:        1,
+		Timestamp:       now,
+		Signature:       "signed-envelope",
+	}
+	err = cp.AcceptPolicyAcknowledgement(envelope, core.DurableAgentPolicyAcknowledgement{
+		AgentID:             agent.AgentID,
+		AcknowledgedVersion: initial.PolicyVersion,
+		AcknowledgedHash:    initial.PolicyHash,
+		AppliedVersion:      initial.PolicyVersion,
+		AppliedHash:         initial.PolicyHash,
+		Status:              "applied",
+		AcknowledgedAt:      now,
+	}, now)
+	if err == nil {
+		t.Fatal("AcceptPolicyAcknowledgement() err = nil, want stale policy rejection")
+	}
+	if !strings.Contains(err.Error(), "stale durable agent policy acknowledgement") {
+		t.Fatalf("AcceptPolicyAcknowledgement() err = %v, want stale policy rejection", err)
+	}
+
+	enrollment, err := store.DurableAgentRemoteEnrollment(agent.AgentID)
+	if err != nil {
+		t.Fatalf("DurableAgentRemoteEnrollment() err = %v", err)
+	}
+	if enrollment.LastSequence != 0 {
+		t.Fatalf("LastSequence = %d, want stale acknowledgement rejected before sequence acceptance", enrollment.LastSequence)
+	}
+}
+
 func TestRemotePolicyPollReturnsCurrentPolicySnapshot(t *testing.T) {
 	t.Parallel()
 

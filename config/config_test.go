@@ -236,6 +236,21 @@ workspace = "./workspace"
 	}
 }
 
+func TestLoadConfigExampleIsLiveSchema(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(filepath.Join("..", "config.example.toml"))
+	if err != nil {
+		t.Fatalf("Load(config.example.toml) err = %v", err)
+	}
+	if summary := cfg.WarningSummary(); summary != "" {
+		t.Fatalf("config.example.toml warning summary = %q, want no ignored live-example keys", summary)
+	}
+	if cfg.Sandbox.Profiles.ApprovedUser.Network != "deny" || cfg.Sandbox.Profiles.DurableAgent.Network != "deny" {
+		t.Fatalf("config.example sandbox networks = approved:%q durable:%q, want deny/deny", cfg.Sandbox.Profiles.ApprovedUser.Network, cfg.Sandbox.Profiles.DurableAgent.Network)
+	}
+}
+
 func TestIdentityAnonymousProfileUsesGenericDefaults(t *testing.T) {
 	t.Parallel()
 

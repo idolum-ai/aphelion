@@ -409,6 +409,55 @@ func TestBuildGovernorPromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 	}
 }
 
+func TestBuildGovernorPromptCacheAwareLookbackShapesDynamicFiles(t *testing.T) {
+	t.Parallel()
+
+	req := GovernorRequest{
+		CacheStrategy: "hybrid",
+		CacheLookback: 2,
+		Workspace: &workspace.PromptContext{
+			Stable: []workspace.LoadedFile{
+				{Path: "SOUL.md", Content: "stable authority"},
+			},
+			Dynamic: []workspace.LoadedFile{
+				{Path: "MEMORY.md", Content: "required continuity"},
+				{Path: "memory/old.md", Content: "old dynamic"},
+				{Path: "memory/middle.md", Content: "middle dynamic"},
+				{Path: "memory/recent.md", Content: "recent dynamic"},
+				{Path: "memory/latest.md", Content: "latest dynamic"},
+			},
+		},
+	}
+	got := BuildGovernorPrompt(req)
+
+	for _, want := range []string{
+		"## Authority",
+		"## Runtime Awareness",
+		"required continuity",
+		"recent dynamic",
+		"latest dynamic",
+		"Cache-aware lookback omitted older dynamic files this turn: memory/old.md, memory/middle.md",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("cache-aware prompt missing %q: %q", want, got)
+		}
+	}
+	for _, omitted := range []string{"old dynamic", "middle dynamic"} {
+		if strings.Contains(got, omitted) {
+			t.Fatalf("cache-aware prompt includes omitted content %q: %q", omitted, got)
+		}
+	}
+
+	unshaped := BuildGovernorPrompt(GovernorRequest{
+		CacheStrategy: "off",
+		CacheLookback: 2,
+		Workspace:     req.Workspace,
+	})
+	if !strings.Contains(unshaped, "old dynamic") || !strings.Contains(unshaped, "middle dynamic") {
+		t.Fatalf("cache off should preserve full dynamic prompt: %q", unshaped)
+	}
+}
+
 func TestBuildGovernorPromptIncludesMaterialFloorContractForInteractiveSceneTurn(t *testing.T) {
 	t.Parallel()
 
