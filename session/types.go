@@ -516,13 +516,6 @@ type AuthorityUseRef struct {
 	AuthoritySource      string `json:"authority_source,omitempty"`
 }
 
-func (r AuthorityUseRef) Active() bool {
-	r = NormalizeAuthorityUseRef(r)
-	return r.TurnRunID > 0 ||
-		r.ContinuationLeaseID != "" ||
-		r.OperationPlanLeaseID != ""
-}
-
 type RegisteredTool struct {
 	ToolName          string    `json:"tool_name"`
 	ImplementationRef string    `json:"implementation_ref,omitempty"`
