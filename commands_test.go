@@ -838,6 +838,19 @@ func TestDefaultTelegramCommandsIncludeMemory(t *testing.T) {
 	}
 }
 
+func TestDefaultTelegramCommandsAvoidBrandedDescriptions(t *testing.T) {
+	t.Parallel()
+
+	for _, cmd := range defaultTelegramCommands {
+		lower := strings.ToLower(cmd.Description)
+		for _, forbidden := range []string{"aphelion", "idolum"} {
+			if strings.Contains(lower, forbidden) {
+				t.Fatalf("command %q description = %q, want no branded runtime name", cmd.Command, cmd.Description)
+			}
+		}
+	}
+}
+
 func TestDefaultTelegramCommandsIncludeMission(t *testing.T) {
 	t.Parallel()
 
