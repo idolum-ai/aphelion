@@ -1099,7 +1099,7 @@ Voice, audio, and video should route without a processing-choice inline keyboard
 The runtime records the media handling as agent-decide and lets the normal
 persona/governor path determine whether to transcribe, analyze, inspect metadata,
 or merely keep a reference. Voice/audio may still show the separate retention
-button: `Keep audio permanently`.
+button: `Keep audio`.
 
 ### Stickers → Auto-process (unambiguous)
 
@@ -1260,23 +1260,23 @@ When a user sends a message while the agent is mid-turn (tools running, LLM stre
    
    "I'm still working on the previous request. What would you like to do?"
    
-   [ 🛑 Stop & reassess ]  [ ⏳ Let it finish ]
+   [ Stop ]  [ Finish ]
 
-3a. User taps "Stop & reassess":
+3a. User taps "Stop":
     - Cancel the current turn's context (ctx.Cancel())
     - Agent turn exits cleanly (context cancellation is already handled)
     - Delete the inline keyboard message
     - Route the new message as a fresh turn
     - The new message includes context: "[Previous request was interrupted. Last tool output: ...]"
 
-3b. User taps "Let it finish":
+3b. User taps "Finish":
     - Queue the new message
     - Edit the keyboard message to: "Got it — I'll process your message next. ⏳"
     - After current turn completes, compact queued messages into one follow-up input and process that as the next turn
     - During compaction, keep only artifacts from the newest queued message; drop older queued artifacts
 
 3c. No tap (timeout 30s):
-    - Default to "Let it finish" (queue the message)
+    - Default to "Finish" (queue the message)
     - Edit keyboard message to: "Queued your message — processing after current task."
 ```
 
@@ -1293,8 +1293,8 @@ func (h *InterruptHandler) OnMessageWhileBusy(ctx context.Context, msg core.Inbo
     kbMsgID := h.sender.SendInlineKeyboard(ctx, msg.ChatID, 
         "I'm still working on the previous request. What would you like to do?",
         []InlineButton{
-            {Text: "🛑 Stop & reassess", CallbackData: "interrupt:stop"},
-            {Text: "⏳ Let it finish", CallbackData: "interrupt:queue"},
+            {Text: "Stop", CallbackData: "interrupt:stop"},
+            {Text: "Finish", CallbackData: "interrupt:queue"},
         },
         &msg.MessageID, // Reply to the user's new message
     )
@@ -1408,7 +1408,7 @@ interrupt_timeout = "30s"         # Auto-queue after this timeout
 ### Tests
 
 - **TestInterruptStop**: User sends message while busy → taps Stop → current turn cancelled, new message processed.
-- **TestInterruptQueue**: User sends message while busy → taps Let it finish → message queued, then included in the next compacted follow-up turn.
+- **TestInterruptQueue**: User sends message while busy → taps Finish → message queued, then included in the next compacted follow-up turn.
 - **TestInterruptTimeout**: No tap → message auto-queued after 30s.
 - **TestInterruptKeyboardSent**: Message while busy → inline keyboard reply sent to user.
 - **TestInterruptCallbackAck**: Callback query → answerCallbackQuery sent (Telegram requires this).
@@ -1430,7 +1430,7 @@ Aphelion never silently acts on ambiguous intent. Instead, we show a confirmatio
    
    "🛑 Stop the current task?"
    
-   [ Yes, stop ]  [ No, keep going ]
+   [ Yes, stop ]  [ Keep going ]
    
    (And the user's message is preserved — it might contain follow-up context)
 
@@ -1441,7 +1441,7 @@ Aphelion never silently acts on ambiguous intent. Instead, we show a confirmatio
     - If the user's message had additional content ("wait, actually do X instead"),
       route the full message as a new turn
 
-3b. User taps "No, keep going":
+3b. User taps "Keep going":
     - Queue the user's message for after the current turn
     - Edit keyboard to "Got it — I'll process your message next. ⏳"
 

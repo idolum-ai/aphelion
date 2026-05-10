@@ -78,7 +78,7 @@ func renderDurableAgentsCommand(agents []core.DurableAgentStatusSnapshot) (strin
 		}
 		lines = append(lines, fmt.Sprintf("- %s (%s)", agentID, strings.Join(parts, " | ")))
 		rows = append(rows, []telegram.InlineButton{
-			{Text: "Start Chat: " + agentID, CallbackData: encodeDurableAgentsStartCallbackData(agentID)},
+			{Text: "Chat", CallbackData: encodeDurableAgentsStartCallbackData(agentID)},
 		})
 	}
 	rows = append(rows, []telegram.InlineButton{

@@ -878,12 +878,12 @@ The system can now propose new Mission Control candidates through the
 `mission_ledger` tool action `propose_candidate`. The action queues a review
 card with buttons:
 
-- `Add to Mission Control`
+- `Add mission`
 - `Ask edit`
 - `Park`
 - `Reject`
 
-`Add to Mission Control` creates a candidate mission only. It does not activate,
+`Add mission` creates a candidate mission only. It does not activate,
 pin, self-continue, run tools, or grant additional authority. The card is a
 Mission Control intake gate; execution still requires a later ActionProposal or
 ContinuationLease.

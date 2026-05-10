@@ -1365,6 +1365,9 @@ func TestHandleTelegramCommandAgentsShowsButtons(t *testing.T) {
 	foundRefresh := false
 	for _, row := range sender.inline[0].rows {
 		for _, button := range row {
+			if words := strings.Fields(button.Text); len(words) > 2 {
+				t.Fatalf("button label %q has %d words, want at most 2", button.Text, len(words))
+			}
 			if strings.Contains(button.CallbackData, "agents:start:idolum-daily-review") {
 				foundStart = true
 			}
@@ -3765,7 +3768,7 @@ func TestDurableWizardInlineRowsFromTextBootstrapModel(t *testing.T) {
 	foundSonnet := false
 	for _, row := range rows {
 		for _, button := range row {
-			if strings.EqualFold(button.Text, "Keep parent model") {
+			if strings.EqualFold(button.Text, "Parent model") {
 				foundKeepParent = true
 			}
 			if strings.EqualFold(button.Text, "Sonnet 4.6") {
@@ -3788,6 +3791,31 @@ func TestDurableWizardInlineRowsFromTextReady(t *testing.T) {
 	}
 	if len(rows[0]) != 2 || rows[0][0].Text != "Cancel" || rows[0][1].Text != "Finalize" {
 		t.Fatalf("row = %#v, want [Cancel|Finalize]", rows[0])
+	}
+}
+
+func TestDurableWizardChoiceLabelsStayCompact(t *testing.T) {
+	t.Parallel()
+
+	steps := []string{
+		"bootstrap_profile",
+		"bootstrap_model",
+		"autonomy",
+		"surface_rules",
+		"summarize_pdfs",
+		"synthesis_cadence",
+		"wakeup_mode",
+		"poll_interval",
+		"capabilities",
+		"never_retain",
+		"charter",
+	}
+	for _, step := range steps {
+		for _, choice := range durableWizardChoicesForStep(step, durableWizardCard{}) {
+			if words := strings.Fields(choice.Label); len(words) > 2 {
+				t.Fatalf("%s button label %q has %d words, want at most 2", step, choice.Label, len(words))
+			}
+		}
 	}
 }
 

@@ -295,7 +295,7 @@ func durableWizardChoicesForStep(step string, card durableWizardCard) []durableW
 		}
 	case "bootstrap_model":
 		return []durableWizardChoice{
-			{Key: "keep_parent_model", Label: "Keep parent model"},
+			{Key: "keep_parent_model", Label: "Parent model"},
 			{Key: "claude-sonnet-4-6", Label: "Sonnet 4.6"},
 			{Key: "claude-opus-4-6", Label: "Opus 4.6"},
 		}
@@ -303,8 +303,8 @@ func durableWizardChoicesForStep(step string, card durableWizardCard) []durableW
 		return []durableWizardChoice{
 			{Key: "observe_only", Label: "Observe only"},
 			{Key: "local_drafts", Label: "Local drafts"},
-			{Key: "review_before_reply", Label: "Review before reply"},
-			{Key: "reply_within_charter", Label: "Reply in charter"},
+			{Key: "review_before_reply", Label: "Review first"},
+			{Key: "reply_within_charter", Label: "Charter reply"},
 		}
 	case "surface_rules":
 		return []durableWizardChoice{
@@ -314,7 +314,7 @@ func durableWizardChoicesForStep(step string, card durableWizardCard) []durableW
 	case "summarize_pdfs":
 		return []durableWizardChoice{
 			{Key: "yes", Label: "Summarize PDFs"},
-			{Key: "no", Label: "No PDF summary"},
+			{Key: "no", Label: "No PDFs"},
 		}
 	case "synthesis_cadence":
 		return []durableWizardChoice{
@@ -326,7 +326,7 @@ func durableWizardChoicesForStep(step string, card durableWizardCard) []durableW
 		return []durableWizardChoice{
 			{Key: "poll", Label: "Poll"},
 			{Key: "push", Label: "Push"},
-			{Key: "poll_or_push", Label: "Poll or push"},
+			{Key: "poll_or_push", Label: "Either"},
 		}
 	case "poll_interval":
 		return []durableWizardChoice{
@@ -337,7 +337,7 @@ func durableWizardChoicesForStep(step string, card durableWizardCard) []durableW
 	case "capabilities":
 		return []durableWizardChoice{
 			{Key: "read_core", Label: "Read-only core"},
-			{Key: "read_classify", Label: "Read + classify"},
+			{Key: "read_classify", Label: "Classify"},
 		}
 	case "never_retain":
 		return []durableWizardChoice{

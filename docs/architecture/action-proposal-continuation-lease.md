@@ -121,7 +121,7 @@ in the ledger.
 
 Buttons:
 
-- `Add to Mission Control`: create a candidate mission with default review-only
+- `Add mission`: create a candidate mission with default review-only
   authority.
 - `Ask edit`: request a revised proposal; no mission is created.
 - `Park`: leave the idea untracked for now; no mission is created.

@@ -250,7 +250,7 @@ func ReviewEventInlineRowsExpanded(event session.ReviewEvent, expanded bool) [][
 	rows := [][]telegram.InlineButton{}
 	if _, ok := core.MissionControlProposalFromMetadataJSON(event.MetadataJSON); ok {
 		return [][]telegram.InlineButton{{
-			{Text: "Add to Mission Control", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionMissionAdd)},
+			{Text: "Add mission", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionMissionAdd)},
 			{Text: "Ask edit", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionMissionAskEdit)},
 		}, {
 			{Text: "Park", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionMissionPark)},

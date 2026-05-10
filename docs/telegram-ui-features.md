@@ -18,7 +18,7 @@ Current command surface:
   - Admin users get system and durable-agent sections in the expanded view.
 - `/agents`
   - Admin-only durable-agent launcher.
-  - Lists durable agents with inline `Start Chat` buttons.
+  - Lists durable agents with inline `Chat` buttons.
   - Starts a background parent-child conversation kickoff for the selected durable agent.
 - `/memory`
   - Opens memory review with inline controls across session history and semantic memory views.
@@ -292,18 +292,18 @@ Offer conditions:
 Decision prompts are shown with inline buttons. Depending on context, users can see:
 
 - Busy interruption:
-  - `🛑 Stop & reassess`
-  - `⏳ Let it finish`
+  - `Stop`
+  - `Finish`
 - Stop-word confirmation:
   - `Yes, stop`
-  - `No, keep going`
+  - `Keep going`
 - Proposal approval:
   - `Deny`
   - `Approve`
   - plus optional `Expand details` when summarized details are available.
 - Artifact retention:
-  - `This turn only`
-  - `Keep for session`
+  - `Turn only`
+  - `Session`
   - `Save locally`
 
 ### Deliberation thinking card controls
@@ -326,7 +326,7 @@ When a turn enters long-running deliberation/tool execution, Telegram shows one 
 - Non-admin access to admin-only status views is denied via callback acknowledgement.
 - Deliberation control callbacks are run-id scoped; stale controls are ignored with a stale notice.
 - Durable-agent launcher callbacks are admin-only and run-id agnostic:
-  - `Start Chat: <agent_id>` triggers a background durable `conversation_send` kickoff.
+  - `Chat` triggers a background durable `conversation_send` kickoff for the selected agent.
   - `Refresh` reloads the durable-agent list in place.
 
 ## Operational UI Signals

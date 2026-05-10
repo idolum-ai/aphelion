@@ -34,7 +34,13 @@ func TestMissionControlProposalReviewEventRendersButtons(t *testing.T) {
 	if len(rows) != 2 || len(rows[0]) != 2 || len(rows[1]) != 2 {
 		t.Fatalf("rows = %#v, want two rows with four mission proposal buttons", rows)
 	}
-	if rows[0][0].Text != "Add to Mission Control" || rows[0][1].Text != "Ask edit" || rows[1][0].Text != "Park" || rows[1][1].Text != "Reject" {
-		t.Fatalf("rows = %#v, want Add/Ask edit/Park/Reject", rows)
+	labels := []string{rows[0][0].Text, rows[0][1].Text, rows[1][0].Text, rows[1][1].Text}
+	if want := []string{"Add mission", "Ask edit", "Park", "Reject"}; !equalStringSlices(labels, want) {
+		t.Fatalf("rows = %#v, want Add mission/Ask edit/Park/Reject", rows)
+	}
+	for _, label := range labels {
+		if words := strings.Fields(label); len(words) > 2 {
+			t.Fatalf("button label %q has %d words, want at most 2", label, len(words))
+		}
 	}
 }

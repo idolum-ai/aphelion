@@ -1134,8 +1134,8 @@ func TestHandleArtifactRetentionMessageAudioDefaultsToSessionAndOffersPermanentK
 		t.Fatalf("rows = %#v, want one keep-permanent button", sender.inline[0].rows)
 	}
 	button := sender.inline[0].rows[0][0]
-	if button.Text != "Keep audio permanently" {
-		t.Fatalf("button text = %q, want Keep audio permanently", button.Text)
+	if button.Text != "Keep audio" {
+		t.Fatalf("button text = %q, want Keep audio", button.Text)
 	}
 	if strings.Contains(button.CallbackData, "decision:") {
 		t.Fatalf("callback data = %q, should use non-blocking audio keep lane", button.CallbackData)
@@ -1195,8 +1195,8 @@ func TestHandleAudioMessageAlwaysUsesAgentDecisionAndOnlyOffersPermanentKeep(t *
 	if len(sender.inline[0].rows) != 1 || len(sender.inline[0].rows[0]) != 1 {
 		t.Fatalf("rows = %#v, want one keep-permanent button", sender.inline[0].rows)
 	}
-	if got := sender.inline[0].rows[0][0].Text; got != "Keep audio permanently" {
-		t.Fatalf("button = %q, want Keep audio permanently", got)
+	if got := sender.inline[0].rows[0][0].Text; got != "Keep audio" {
+		t.Fatalf("button = %q, want Keep audio", got)
 	}
 	for _, label := range []string{"Transcribe", "Analyze audio", "Agent decide", "Skip"} {
 		if hasInlineButton(sender.inline[0].rows, label) {
@@ -1318,8 +1318,8 @@ func TestHandleImageMessageRoutesImmediatelyAndOffersPermanentKeep(t *testing.T)
 	if strings.Contains(sender.inline[0].text, "How should I retain") {
 		t.Fatalf("inline text = %q, should not be blocking retention selector", sender.inline[0].text)
 	}
-	if got := sender.inline[0].rows[0][0].Text; got != "Keep image permanently" {
-		t.Fatalf("button = %q, want Keep image permanently", got)
+	if got := sender.inline[0].rows[0][0].Text; got != "Keep image" {
+		t.Fatalf("button = %q, want Keep image", got)
 	}
 }
 
@@ -1386,8 +1386,111 @@ func TestHandleMixedAudioImageRoutesImmediatelyAndMarksAgentDecision(t *testing.
 	if len(sender.inline) != 1 {
 		t.Fatalf("inline = %#v, want one non-blocking media keep prompt", sender.inline)
 	}
-	if got := sender.inline[0].rows[0][0].Text; got != "Keep media permanently" {
-		t.Fatalf("button = %q, want Keep media permanently", got)
+	if got := sender.inline[0].rows[0][0].Text; got != "Keep media" {
+		t.Fatalf("button = %q, want Keep media", got)
+	}
+}
+
+func TestPermanentArtifactKeepSubjectButtonsStayCompact(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		artifacts []core.Artifact
+		want      string
+	}{
+		{
+			name: "audio",
+			artifacts: []core.Artifact{{
+				Channel:  "telegram",
+				RemoteID: "audio-file",
+				Kind:     "audio",
+			}},
+			want: "Keep audio",
+		},
+		{
+			name: "image",
+			artifacts: []core.Artifact{{
+				Channel:  "telegram",
+				RemoteID: "image-file",
+				Kind:     "image",
+			}},
+			want: "Keep image",
+		},
+		{
+			name: "video",
+			artifacts: []core.Artifact{{
+				Channel:  "telegram",
+				RemoteID: "video-file",
+				Kind:     "video",
+			}},
+			want: "Keep video",
+		},
+		{
+			name: "sticker",
+			artifacts: []core.Artifact{{
+				Channel:  "telegram",
+				RemoteID: "sticker-file",
+				Kind:     "sticker",
+			}},
+			want: "Keep sticker",
+		},
+		{
+			name: "file",
+			artifacts: []core.Artifact{{
+				Channel:    "telegram",
+				RemoteID:   "doc-file",
+				Kind:       "document",
+				Subtype:    "text",
+				Filename:   "notes.txt",
+				SourceType: "document",
+			}},
+			want: "Keep file",
+		},
+		{
+			name: "mixed",
+			artifacts: []core.Artifact{{
+				Channel:  "telegram",
+				RemoteID: "audio-file",
+				Kind:     "audio",
+			}, {
+				Channel:  "telegram",
+				RemoteID: "image-file",
+				Kind:     "image",
+			}},
+			want: "Keep media",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := permanentArtifactKeepSubject(core.InboundMessage{Artifacts: tt.artifacts}).Button
+			if got != tt.want {
+				t.Fatalf("button = %q, want %q", got, tt.want)
+			}
+			if words := strings.Fields(got); len(words) > 2 {
+				t.Fatalf("button label %q has %d words, want at most 2", got, len(words))
+			}
+		})
+	}
+}
+
+func TestDecisionButtonLabelsStayCompact(t *testing.T) {
+	t.Parallel()
+
+	labels := []string{
+		stopChoiceLabel("please interrupt"),
+		queueChoiceLabel("please interrupt"),
+		stopChoiceLabel("wait"),
+		queueChoiceLabel("wait"),
+	}
+	for _, choice := range artifactRetentionChoices() {
+		labels = append(labels, choice.Label)
+	}
+	for _, label := range labels {
+		if words := strings.Fields(label); len(words) > 2 {
+			t.Fatalf("button label %q has %d words, want at most 2", label, len(words))
+		}
 	}
 }
 
@@ -1437,8 +1540,8 @@ func TestHandleTextDocumentRoutesImmediatelyWithoutBlockingSelector(t *testing.T
 	if strings.Contains(sender.inline[0].text, "How should I retain") {
 		t.Fatalf("inline text = %q, should not be blocking retention selector", sender.inline[0].text)
 	}
-	if got := sender.inline[0].rows[0][0].Text; got != "Keep file locally" {
-		t.Fatalf("button = %q, want Keep file locally", got)
+	if got := sender.inline[0].rows[0][0].Text; got != "Keep file" {
+		t.Fatalf("button = %q, want Keep file", got)
 	}
 }
 

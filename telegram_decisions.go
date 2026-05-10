@@ -466,7 +466,7 @@ func (h *telegramDecisionHandler) handleBlockingArtifactRetentionMessage(ctx con
 			MessageID:     msg.MessageID,
 			Prompt:        "How should I retain this inbound file?",
 			Details:       formatArtifactRetentionDetails(msg),
-			Choices:       []decision.Choice{{ID: "turn", Label: "This turn only"}, {ID: "session", Label: "Keep for session"}, {ID: "local", Label: "Save locally"}},
+			Choices:       artifactRetentionChoices(),
 			DefaultChoice: "session",
 			Timeout:       h.artifactRetentionTimeout,
 		})
@@ -500,11 +500,19 @@ func (h *telegramDecisionHandler) handleBlockingArtifactRetentionMessage(ctx con
 		MessageID:     msg.MessageID,
 		Prompt:        "How should I retain this inbound file?",
 		Details:       formatArtifactRetentionDetails(msg),
-		Choices:       []decision.Choice{{ID: "turn", Label: "This turn only"}, {ID: "session", Label: "Keep for session"}, {ID: "local", Label: "Save locally"}},
+		Choices:       artifactRetentionChoices(),
 		DefaultChoice: "session",
 		Timeout:       h.artifactRetentionTimeout,
 	})
 	return true, nil
+}
+
+func artifactRetentionChoices() []decision.Choice {
+	return []decision.Choice{
+		{ID: "turn", Label: "Turn only"},
+		{ID: "session", Label: "Session"},
+		{ID: "local", Label: "Save locally"},
+	}
 }
 
 func (h *telegramDecisionHandler) awaitArtifactRetentionDecision(ctx context.Context, ownerKey string, req decision.Request) {
@@ -618,7 +626,7 @@ func permanentArtifactKeepSubject(msg core.InboundMessage) permanentArtifactKeep
 		case counts["audio"] == 1:
 			return permanentArtifactKeepCopy{
 				Sentence:     "Audio",
-				Button:       "Keep audio permanently",
+				Button:       "Keep audio",
 				Unavailable:  "That audio is no longer available to save from this button.",
 				Stale:        "That audio button is stale.",
 				Failed:       "I couldn't save that audio permanently.",
@@ -627,7 +635,7 @@ func permanentArtifactKeepSubject(msg core.InboundMessage) permanentArtifactKeep
 		case counts["image"] == 1:
 			return permanentArtifactKeepCopy{
 				Sentence:     "Image",
-				Button:       "Keep image permanently",
+				Button:       "Keep image",
 				Unavailable:  "That image is no longer available to save from this button.",
 				Stale:        "That image button is stale.",
 				Failed:       "I couldn't save that image permanently.",
@@ -636,7 +644,7 @@ func permanentArtifactKeepSubject(msg core.InboundMessage) permanentArtifactKeep
 		case counts["video"] == 1:
 			return permanentArtifactKeepCopy{
 				Sentence:     "Video",
-				Button:       "Keep video locally",
+				Button:       "Keep video",
 				Unavailable:  "That video is no longer available to save from this button.",
 				Stale:        "That video button is stale.",
 				Failed:       "I couldn't save that video locally.",
@@ -645,7 +653,7 @@ func permanentArtifactKeepSubject(msg core.InboundMessage) permanentArtifactKeep
 		case counts["sticker"] == 1:
 			return permanentArtifactKeepCopy{
 				Sentence:     "Sticker",
-				Button:       "Keep sticker locally",
+				Button:       "Keep sticker",
 				Unavailable:  "That sticker is no longer available to save from this button.",
 				Stale:        "That sticker button is stale.",
 				Failed:       "I couldn't save that sticker locally.",
@@ -654,7 +662,7 @@ func permanentArtifactKeepSubject(msg core.InboundMessage) permanentArtifactKeep
 		case counts["document"] == 1:
 			return permanentArtifactKeepCopy{
 				Sentence:     "File",
-				Button:       "Keep file locally",
+				Button:       "Keep file",
 				Unavailable:  "That file is no longer available to save from this button.",
 				Stale:        "That file button is stale.",
 				Failed:       "I couldn't save that file locally.",
@@ -664,7 +672,7 @@ func permanentArtifactKeepSubject(msg core.InboundMessage) permanentArtifactKeep
 	}
 	return permanentArtifactKeepCopy{
 		Sentence:     "Media",
-		Button:       "Keep media permanently",
+		Button:       "Keep media",
 		Unavailable:  "That media is no longer available to save from this button.",
 		Stale:        "That media button is stale.",
 		Failed:       "I couldn't save that media permanently.",
@@ -1620,14 +1628,14 @@ func stopChoiceLabel(text string) string {
 	if isStopWord(text) {
 		return "Yes, stop"
 	}
-	return "🛑 Stop & reassess"
+	return "Stop"
 }
 
 func queueChoiceLabel(text string) string {
 	if isStopWord(text) {
-		return "No, keep going"
+		return "Keep going"
 	}
-	return "⏳ Let it finish"
+	return "Finish"
 }
 
 func renderPendingDecisionSummary(pending decision.PendingDecision) string {
