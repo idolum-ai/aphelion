@@ -332,6 +332,13 @@ reviewable child runtime material:
 ./bin/aphelion repair-capability-grants --config ~/.aphelion/aphelion.toml --apply
 ```
 
+Inspect authority projection health and preview typed repairs:
+
+```bash
+./bin/aphelion authority doctor --config ~/.aphelion/aphelion.toml
+./bin/aphelion authority repair --config ~/.aphelion/aphelion.toml
+```
+
 `make install-user-service`, `make update`, and `make update-release` also run
 `aphelion init` automatically. Missing starter files are created under
 `agent.prompt_root`, but existing files are never overwritten.

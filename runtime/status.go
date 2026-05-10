@@ -211,6 +211,7 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 		ChatID:        chatID,
 		QueueDepth:    system.QueueDepthByChat[chatID],
 		RestartHealth: system.RestartHealth,
+		Authority:     authorityStatusSnapshotForChat(system.Authority, chatID),
 	}
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
 	if ids := system.ActiveTurnsByChat[chatID]; len(ids) > 0 {
@@ -324,6 +325,35 @@ func (r *Runtime) ChatStatusSnapshot(chatID int64, router core.RouterStatusSnaps
 	return snapshot, nil
 }
 
+func authorityStatusSnapshotForChat(snapshot core.AuthorityStatusSnapshot, chatID int64) core.AuthorityStatusSnapshot {
+	if chatID == 0 || len(snapshot.Findings) == 0 {
+		return snapshot
+	}
+	out := snapshot
+	out.Findings = make([]core.AuthorityFindingSnapshot, 0, len(snapshot.Findings))
+	out.FindingCount = 0
+	out.ErrorCount = 0
+	out.WarningCount = 0
+	for _, finding := range snapshot.Findings {
+		if finding.ChatID != 0 && finding.ChatID != chatID {
+			continue
+		}
+		out.Findings = append(out.Findings, finding)
+		out.FindingCount++
+		switch strings.ToLower(strings.TrimSpace(finding.Severity)) {
+		case "error":
+			out.ErrorCount++
+		case "warning":
+			out.WarningCount++
+		}
+	}
+	out.Status = "healthy"
+	if out.FindingCount > 0 || out.TruncatedCapabilitySet {
+		out.Status = "needs_attention"
+	}
+	return out
+}
+
 func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.SystemStatusSnapshot, error) {
 	now := time.Now().UTC()
 	snapshot := core.SystemStatusSnapshot{
@@ -364,6 +394,12 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		snapshot.HotChats = buildHotChatRollups(snapshot)
 		return snapshot, nil
 	}
+
+	authority, err := r.AuthorityStatusSnapshot(now)
+	if err != nil {
+		return core.SystemStatusSnapshot{}, err
+	}
+	snapshot.Authority = authority
 
 	recentEvents, err := r.store.ExecutionEventsRecent(500)
 	if err != nil {

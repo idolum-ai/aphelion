@@ -52,6 +52,9 @@ func RenderTelegramStatusChat(snapshot core.ChatStatusSnapshot, personaEffort st
 		if missionLine := renderMissionLedgerStatusLine(snapshot.MissionLedger); missionLine != "" {
 			lines = append(lines, missionLine)
 		}
+		if authorityLine := renderAuthorityStatusLine(snapshot.Authority); authorityLine != "" {
+			lines = append(lines, authorityLine)
+		}
 		if hiddenInputLine := renderHiddenInputStatusLine(snapshot); hiddenInputLine != "" {
 			lines = append(lines, hiddenInputLine)
 		}
@@ -133,6 +136,9 @@ func RenderTelegramStatusChatOperatorCard(snapshot core.ChatStatusSnapshot, pers
 	}
 	if auto := operatorAutoApprovalLine(snapshot.AutoApproval); auto != "" {
 		lines = append(lines, auto)
+	}
+	if authority := operatorAuthorityLine(snapshot.Authority); authority != "" {
+		lines = append(lines, authority)
 	}
 	lines = append(lines, renderOperatorAttentionLines(snapshot, false)...)
 	lines = append(lines, operatorQueueLine(snapshot))
@@ -522,6 +528,38 @@ func renderMissionLedgerStatusLine(snapshot core.MissionLedgerStatusSnapshot) st
 	return line
 }
 
+func renderAuthorityStatusLine(snapshot core.AuthorityStatusSnapshot) string {
+	status := strings.TrimSpace(snapshot.Status)
+	if status == "" && snapshot.GeneratedAt.IsZero() && snapshot.FindingCount == 0 {
+		return ""
+	}
+	if status == "" {
+		status = "healthy"
+	}
+	line := fmt.Sprintf("authority status=%s findings=%d errors=%d warnings=%d active_leases=%d active_plan_leases=%d active_grants=%d", status, snapshot.FindingCount, snapshot.ErrorCount, snapshot.WarningCount, snapshot.ActiveLeases, snapshot.ActivePlanLeases, snapshot.CapabilityGrants)
+	if len(snapshot.Findings) > 0 {
+		first := snapshot.Findings[0]
+		line += " first_code=" + strings.TrimSpace(first.Code)
+		if first.ChatID != 0 {
+			line += fmt.Sprintf(" first_chat_id=%d", first.ChatID)
+		}
+		if repair := strings.TrimSpace(first.RepairAction); repair != "" {
+			line += " repair_action=" + repair
+		}
+	}
+	return line
+}
+
+func operatorAuthorityLine(snapshot core.AuthorityStatusSnapshot) string {
+	if strings.TrimSpace(snapshot.Status) == "" && snapshot.FindingCount == 0 {
+		return ""
+	}
+	if strings.TrimSpace(snapshot.Status) == "healthy" && snapshot.FindingCount == 0 {
+		return "authority: healthy"
+	}
+	return fmt.Sprintf("authority: needs attention (%d finding(s), %d error(s)); /debug has source and repair details.", snapshot.FindingCount, snapshot.ErrorCount)
+}
+
 func renderHiddenInputStatusLine(snapshot core.ChatStatusSnapshot) string {
 	categories := snapshot.HiddenInputCategories
 	summary := strings.TrimSpace(snapshot.HiddenInputSummary)
@@ -774,6 +812,9 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 		fmt.Sprintf("status_scope=system generated_at=%s", formatStatusTime(snapshot.GeneratedAt)),
 		fmt.Sprintf("summary active_turns=%d active_chats=%d queued_chats=%d pending_items=%d continuations=%d stale_running=%d", snapshot.ActiveTurnCount, len(snapshot.ActiveChatIDs), len(snapshot.QueueDepthByChat), len(snapshot.PendingItems), len(snapshot.Continuations), len(snapshot.StaleRunningTurns)),
 		fmt.Sprintf("active_chat_ids=%s", formatInt64List(snapshot.ActiveChatIDs)),
+	}
+	if authorityLine := renderAuthorityStatusLine(snapshot.Authority); authorityLine != "" {
+		lines = append(lines, authorityLine)
 	}
 	if len(snapshot.QueueDepthByChat) > 0 {
 		queueKeys := make([]int64, 0, len(snapshot.QueueDepthByChat))

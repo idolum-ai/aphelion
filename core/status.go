@@ -30,6 +30,37 @@ type PendingItem struct {
 	DebugBreadcrumb DebugBreadcrumb
 }
 
+type AuthorityFindingSnapshot struct {
+	Code             string
+	Severity         string
+	SourceKind       string
+	SourceID         string
+	SessionID        string
+	ChatID           int64
+	Detail           string
+	NextRepairAction string
+	RepairAction     string
+	Repairable       bool
+}
+
+type AuthorityStatusSnapshot struct {
+	GeneratedAt            time.Time
+	Status                 string
+	ContinuationRecords    int
+	OperationRecords       int
+	PendingDecisions       int
+	AutoApprovalLeases     int
+	CapabilityGrants       int
+	ActiveProposals        int
+	ActiveLeases           int
+	ActivePlanLeases       int
+	FindingCount           int
+	ErrorCount             int
+	WarningCount           int
+	Findings               []AuthorityFindingSnapshot
+	TruncatedCapabilitySet bool
+}
+
 type ExecutionEventSummary struct {
 	SessionID string
 	ChatID    int64
@@ -245,6 +276,7 @@ type ChatStatusSnapshot struct {
 	StaleRunningTurns               []TurnRunStatusSnapshot
 	RestartHealth                   RestartHealthSnapshot
 	MissionLedger                   MissionLedgerStatusSnapshot
+	Authority                       AuthorityStatusSnapshot
 }
 
 type ChatStatusRollup struct {
@@ -274,6 +306,7 @@ type SystemStatusSnapshot struct {
 	Autonomy             AutonomyStatusSnapshot
 	Sandbox              SandboxReadinessSnapshot
 	MissionLedger        MissionLedgerStatusSnapshot
+	Authority            AuthorityStatusSnapshot
 }
 
 type AutonomyStatusSnapshot struct {

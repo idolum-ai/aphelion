@@ -675,11 +675,12 @@ These are expected migration targets, not accusations against the current code.
 
 ### Phase 2: Ledger Projection Layer
 
-- Initial slice implemented in `runtime/authority_projection.go`: `/doctor`
-  now projects current continuation, operation plan lease, pending decision,
-  auto-approval lease, and capability grant state from existing stores.
+- Implemented in `runtime/authority_projection.go`: `/doctor`, `/status`,
+  `/debug`, and CLI `authority doctor` / `authority repair` now project current
+  continuation, operation plan lease, pending decision, auto-approval lease, and
+  capability grant state from existing stores.
 - Use that projection for `/status`, `/debug`, `/doctor`, startup recovery, and
-  proposal rendering. `/doctor` is first; the other projections remain planned.
+  proposal rendering. Startup recovery and proposal rendering remain planned.
 - Mark any compatibility fallback source in the projection.
 
 ### Phase 3: Consistency Checks
@@ -691,12 +692,15 @@ These are expected migration targets, not accusations against the current code.
   - active capability grant after expiry or revocation
   - active stale capability grant
   - durable-agent grant with invalid or missing `child_runtime` material
-- Remaining checks:
   - active lease without active proposal
   - auto-approval applied outside scope
-  - capability grant used without turn lease where required
   - blocked phase with no escalation proposal
   - parked lease not considered during startup recovery
+- Implemented compatibility warning:
+  - active durable grant has invocation counters but no turn-lease evidence in
+    the grant record
+- Remaining checks:
+  - hard enforcement that every grant use records the consuming turn lease
 
 ### Phase 4: Normalize States
 

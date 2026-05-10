@@ -170,6 +170,91 @@ func TestDoctorAuthorityProjectionHealthyWhenRecordsConsistent(t *testing.T) {
 	}
 }
 
+func TestAuthorityProjectionReportsRemainingRoadmapChecks(t *testing.T) {
+	cfg, store, _, _ := buildRuntimeFixtures(t)
+	now := time.Date(2026, 5, 10, 14, 0, 0, 0, time.UTC)
+	rt := &Runtime{cfg: cfg, store: store}
+
+	leaseKey := session.SessionKey{ChatID: 99152, UserID: 0, Scope: telegramDMScopeRef(99152)}
+	if err := store.UpdateContinuationState(leaseKey, session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		ParkedAt:       now.Add(-5 * time.Minute),
+		ParkedReason:   "deploy_restart",
+		RemainingTurns: 1,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-without-proposal",
+			Status:         session.ContinuationLeaseStatusActive,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(time.Hour),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	blockedKey := session.SessionKey{ChatID: 99153, UserID: 0, Scope: telegramDMScopeRef(99153)}
+	if err := store.UpdateOperationState(blockedKey, session.OperationState{
+		ID:     "op-blocked-no-escalation",
+		Status: session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+			ID:                "phase-blocked",
+			Status:            session.PlanStatusInProgress,
+			BlockedReasonCode: "needs_external_authority",
+		}}},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if _, err := store.AppendExecutionEvents(leaseKey, []session.ExecutionEventInput{{
+		EventType:   core.ExecutionEventAutoApprovalUsed,
+		Stage:       "auto_approval",
+		Status:      "used",
+		PayloadJSON: `{"lease_id":"auto-scope-mismatch","scope":"workspace","work_mode":"deploy"}`,
+		CreatedAt:   now.Add(-time.Minute),
+	}}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:         "capg-invoked-without-request",
+		Kind:            session.CapabilityKindTool,
+		TargetResource:  "sample_tool",
+		GrantedTo:       core.DurableAgentPrincipal("child-gamma"),
+		AllowedActions:  []string{"invoke"},
+		Status:          session.CapabilityGrantStatusActive,
+		Contract:        `{"child_runtime":{"readonly_paths":["` + t.TempDir() + `"]}}`,
+		Constraints:     "{}",
+		ExpiresAt:       now.Add(time.Hour),
+		InvocationCount: 1,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	snapshot, err := rt.AuthorityStatusSnapshot(now)
+	if err != nil {
+		t.Fatalf("AuthorityStatusSnapshot() err = %v", err)
+	}
+	for _, want := range []string{
+		"active_continuation_lease_missing_proposal",
+		"parked_lease_needs_recovery_review",
+		"blocked_phase_missing_escalation",
+		"auto_approval_used_outside_scope",
+		"capability_grant_invocation_missing_turn_lease_evidence",
+	} {
+		if !authoritySnapshotHasFinding(snapshot, want) {
+			t.Fatalf("authority findings = %#v, want %s", snapshot.Findings, want)
+		}
+	}
+}
+
+func authoritySnapshotHasFinding(snapshot core.AuthorityStatusSnapshot, code string) bool {
+	for _, finding := range snapshot.Findings {
+		if strings.TrimSpace(finding.Code) == code {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	provider.replyText = "State of Things\nRuntime is diagnosable.\n\nRecommendations\nKeep /doctor read-only."

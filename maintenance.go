@@ -34,6 +34,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return false, nil
 	}
 	switch args[0] {
+	case "authority":
+		return true, runAuthorityCommand(args[1:])
 	case "quickstart":
 		return true, runQuickstartCommand(args[1:])
 	case "init":

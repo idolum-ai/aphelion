@@ -1220,6 +1220,63 @@ func TestRunRepairCapabilityGrantsCommandRequiresApplyForMutation(t *testing.T) 
 	}
 }
 
+func TestRunAuthorityCommandsReportRepairPreview(t *testing.T) {
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 77710, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "77710"}}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status: session.ContinuationStatusApproved,
+		ActionProposal: session.ActionProposal{
+			ID:        "proposal-authority-cli",
+			Status:    session.ProposalStatusApproved,
+			ExpiresAt: now.Add(time.Hour),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-authority-cli",
+			ProposalID:     "proposal-authority-cli",
+			Status:         session.ContinuationLeaseStatusActive,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(-time.Minute),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	store.Close()
+
+	doctorOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"doctor", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(doctor) err = %v", err)
+	}
+	for _, needle := range []string{"action: authority-doctor", "status: needs_attention", "code=expired_continuation_lease"} {
+		if !strings.Contains(doctorOut, needle) {
+			t.Fatalf("doctor output = %q, want %q", doctorOut, needle)
+		}
+	}
+
+	repairOut, err := captureStdout(t, func() error {
+		return runAuthorityCommand([]string{"repair", "--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runAuthorityCommand(repair) err = %v", err)
+	}
+	for _, needle := range []string{"action: authority-repair", "dry_run: true", "repair_action=expire_continuation_lease", "repairable=true"} {
+		if !strings.Contains(repairOut, needle) {
+			t.Fatalf("repair output = %q, want %q", repairOut, needle)
+		}
+	}
+}
+
 type fakeDurableAgentWakeRuntime struct {
 	agentID string
 	now     time.Time

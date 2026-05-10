@@ -29,6 +29,33 @@ func TestRenderTelegramStatusChatSummaryStateQueued(t *testing.T) {
 	}
 }
 
+func TestRenderTelegramStatusIncludesAuthorityProjection(t *testing.T) {
+	t.Parallel()
+
+	authority := core.AuthorityStatusSnapshot{
+		Status:       "needs_attention",
+		FindingCount: 1,
+		ErrorCount:   1,
+		Findings: []core.AuthorityFindingSnapshot{{
+			Code:         "expired_continuation_lease",
+			Severity:     "error",
+			SourceKind:   "continuation_lease",
+			SourceID:     "lease-1",
+			ChatID:       7,
+			RepairAction: "expire_continuation_lease",
+		}},
+	}
+	chat := RenderTelegramStatusChat(core.ChatStatusSnapshot{ChatID: 7, Authority: authority}, "medium", "high", false)
+	if !strings.Contains(chat, "authority status=needs_attention findings=1 errors=1 warnings=0") ||
+		!strings.Contains(chat, "first_code=expired_continuation_lease") {
+		t.Fatalf("RenderTelegramStatusChat() = %q, want authority projection", chat)
+	}
+	system := RenderTelegramStatusSystem(core.SystemStatusSnapshot{Authority: authority}, "medium", "high")
+	if !strings.Contains(system, "authority status=needs_attention findings=1 errors=1 warnings=0") {
+		t.Fatalf("RenderTelegramStatusSystem() = %q, want authority projection", system)
+	}
+}
+
 func TestRenderTelegramStatusChatSummaryStateInterrupted(t *testing.T) {
 	t.Parallel()
 

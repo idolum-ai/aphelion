@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -35,10 +36,35 @@ type authorityProjectionFinding struct {
 	ChatID           int64
 	Detail           string
 	NextRepairAction string
+	RepairAction     string
+	Repairable       bool
 }
 
 func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error) {
 	if r == nil || r.store == nil {
+		return authorityProjection{}, fmt.Errorf("authority projection store is unavailable")
+	}
+	return authorityProjectionFromStore(r.store, now)
+}
+
+func (r *Runtime) AuthorityStatusSnapshot(now time.Time) (core.AuthorityStatusSnapshot, error) {
+	projection, err := r.authorityProjection(now)
+	if err != nil {
+		return core.AuthorityStatusSnapshot{}, err
+	}
+	return projection.snapshot(), nil
+}
+
+func AuthorityStatusSnapshotFromStore(store *session.SQLiteStore, now time.Time) (core.AuthorityStatusSnapshot, error) {
+	projection, err := authorityProjectionFromStore(store, now)
+	if err != nil {
+		return core.AuthorityStatusSnapshot{}, err
+	}
+	return projection.snapshot(), nil
+}
+
+func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (authorityProjection, error) {
+	if store == nil {
 		return authorityProjection{}, fmt.Errorf("authority projection store is unavailable")
 	}
 	if now.IsZero() {
@@ -46,26 +72,30 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 	}
 	now = now.UTC()
 
-	continuations, err := r.store.ContinuationStates()
+	continuations, err := store.ContinuationStates()
 	if err != nil {
 		return authorityProjection{}, fmt.Errorf("load continuation states: %w", err)
 	}
-	operations, err := r.store.OperationStates()
+	operations, err := store.OperationStates()
 	if err != nil {
 		return authorityProjection{}, fmt.Errorf("load operation states: %w", err)
 	}
-	pendingDecisions, err := r.store.PendingDecisions()
+	pendingDecisions, err := store.PendingDecisions()
 	if err != nil {
 		return authorityProjection{}, fmt.Errorf("load pending decisions: %w", err)
 	}
-	autoApprovalLeases, err := r.store.OperatorAutoApprovalLeases(200, now, true)
+	autoApprovalLeases, err := store.OperatorAutoApprovalLeases(200, now, true)
 	if err != nil {
 		return authorityProjection{}, fmt.Errorf("load operator auto-approval leases: %w", err)
 	}
 	const capabilityProjectionLimit = 1000
-	capabilityGrants, err := r.store.CapabilityGrants(capabilityProjectionLimit, session.CapabilityGrantStatusActive, "", "")
+	capabilityGrants, err := store.CapabilityGrants(capabilityProjectionLimit, session.CapabilityGrantStatusActive, "", "")
 	if err != nil {
 		return authorityProjection{}, fmt.Errorf("load active capability grants: %w", err)
+	}
+	autoApprovalEvents, err := store.ExecutionEventsByTypes([]string{core.ExecutionEventAutoApprovalUsed}, now.Add(-30*24*time.Hour), 1000)
+	if err != nil {
+		return authorityProjection{}, fmt.Errorf("load auto-approval use events: %w", err)
 	}
 
 	projection := authorityProjection{
@@ -95,6 +125,19 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 		if authorityContinuationLeaseOpen(state.ContinuationLease, now) {
 			projection.ActiveLeases++
 		}
+		if authorityContinuationLeaseOpen(state.ContinuationLease, now) && !authorityProposalOpen(state.ActionProposal, now) {
+			projection.addFinding(authorityProjectionFinding{
+				Code:             "active_continuation_lease_missing_proposal",
+				Severity:         "error",
+				SourceKind:       "continuation_lease",
+				SourceID:         firstNonEmpty(state.ContinuationLease.ID, sessionID),
+				SessionID:        sessionID,
+				ChatID:           record.Key.ChatID,
+				Detail:           "open continuation lease has no active action proposal projection",
+				NextRepairAction: "re-offer the continuation or revoke the orphaned lease before executing more work",
+				RepairAction:     "reoffer_continuation",
+			})
+		}
 		if authorityPendingContinuationMissingDecision(state, decisionByID) {
 			projection.addFinding(authorityProjectionFinding{
 				Code:             "pending_proposal_missing_decision",
@@ -105,6 +148,7 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 				ChatID:           record.Key.ChatID,
 				Detail:           "pending continuation references a decision that is not in the pending decision store",
 				NextRepairAction: "re-offer or revoke the pending continuation before executing more work",
+				RepairAction:     "reoffer_or_revoke_continuation",
 			})
 		}
 		if authorityContinuationLeaseExpiredButConsumable(state.ContinuationLease, now) {
@@ -117,6 +161,8 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 				ChatID:           record.Key.ChatID,
 				Detail:           "continuation lease still has turn budget after its expiry time",
 				NextRepairAction: "expire, refresh, or revoke the lease before continuing",
+				RepairAction:     "expire_continuation_lease",
+				Repairable:       true,
 			})
 		}
 		if authorityContinuationLeaseProposalMismatch(state) {
@@ -129,6 +175,20 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 				ChatID:           record.Key.ChatID,
 				Detail:           "continuation lease points at a different proposal than the current action proposal",
 				NextRepairAction: "resynchronize the continuation authority record or re-offer the approval",
+				RepairAction:     "reoffer_continuation",
+			})
+		}
+		if authorityParkedContinuationNeedsRecoveryReview(state) {
+			projection.addFinding(authorityProjectionFinding{
+				Code:             "parked_lease_needs_recovery_review",
+				Severity:         "warning",
+				SourceKind:       "continuation_lease",
+				SourceID:         firstNonEmpty(state.ContinuationLease.ID, sessionID),
+				SessionID:        sessionID,
+				ChatID:           record.Key.ChatID,
+				Detail:           "parked continuation still has authority budget and needs explicit recovery review",
+				NextRepairAction: "recover, re-offer, or revoke the parked lease before startup recovery continues it",
+				RepairAction:     "recover_or_reoffer_parked_lease",
 			})
 		}
 	}
@@ -150,6 +210,21 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 				ChatID:           record.Key.ChatID,
 				Detail:           "operation plan lease still has turn budget after its expiry time",
 				NextRepairAction: "expire, refresh, or revoke the operation plan lease before continuing",
+				RepairAction:     "expire_operation_plan_lease",
+				Repairable:       true,
+			})
+		}
+		if authorityOperationBlockedWithoutEscalation(state, lease, now) {
+			projection.addFinding(authorityProjectionFinding{
+				Code:             "blocked_phase_missing_escalation",
+				Severity:         "warning",
+				SourceKind:       "operation",
+				SourceID:         firstNonEmpty(state.ID, sessionID),
+				SessionID:        sessionID,
+				ChatID:           record.Key.ChatID,
+				Detail:           "blocked operation phase has no pending proposal or active plan lease to resolve it",
+				NextRepairAction: "create a bounded escalation proposal or mark the phase stopped with evidence",
+				RepairAction:     "create_escalation_proposal",
 			})
 		}
 	}
@@ -164,6 +239,8 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 				SourceID:         grant.GrantID,
 				Detail:           "capability grant is marked active after its expiry time",
 				NextRepairAction: "expire, refresh, or revoke the capability grant before the next child/tool wake",
+				RepairAction:     "expire_capability_grant",
+				Repairable:       true,
 			})
 		}
 		if !grant.RevokedAt.IsZero() {
@@ -174,6 +251,8 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 				SourceID:         grant.GrantID,
 				Detail:           "capability grant is marked active while also carrying revoked_at",
 				NextRepairAction: "move the grant to revoked or issue a fresh grant with a clean lifecycle",
+				RepairAction:     "revoke_capability_grant",
+				Repairable:       true,
 			})
 		}
 		if strings.TrimSpace(grant.StaleReason) != "" {
@@ -184,6 +263,18 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 				SourceID:         grant.GrantID,
 				Detail:           "capability grant is active while also carrying stale reason: " + strings.TrimSpace(grant.StaleReason),
 				NextRepairAction: "review the drift reason and refresh or revoke the grant",
+				RepairAction:     "refresh_or_revoke_capability_grant",
+			})
+		}
+		if authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant) {
+			projection.addFinding(authorityProjectionFinding{
+				Code:             "capability_grant_invocation_missing_turn_lease_evidence",
+				Severity:         "warning",
+				SourceKind:       "capability_grant",
+				SourceID:         grant.GrantID,
+				Detail:           "capability grant has invocation counters but no turn-level lease evidence in the grant record",
+				NextRepairAction: "inspect capability invocations and ensure future grant use records the consuming turn lease",
+				RepairAction:     "inspect_capability_invocations",
 			})
 		}
 		if authorityGrantRequiresChildRuntime(grant) {
@@ -196,6 +287,7 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 					SourceID:         grant.GrantID,
 					Detail:           "capability grant child_runtime contract is invalid: " + materialErr.Error(),
 					NextRepairAction: "replace the grant with validated child runtime material",
+					RepairAction:     "refresh_capability_grant",
 				})
 			} else if !ok {
 				projection.addFinding(authorityProjectionFinding{
@@ -205,13 +297,63 @@ func (r *Runtime) authorityProjection(now time.Time) (authorityProjection, error
 					SourceID:         grant.GrantID,
 					Detail:           "durable-agent capability grant has no child_runtime material",
 					NextRepairAction: "issue a grant with explicit child runtime material or narrow the grant so it does not require materialization",
+					RepairAction:     "refresh_capability_grant",
 				})
 			}
 		}
 	}
 
+	for _, event := range autoApprovalEvents {
+		if finding, ok := authorityAutoApprovalUsedOutsideScopeFinding(event); ok {
+			projection.addFinding(finding)
+		}
+	}
+
 	projection.sortFindings()
 	return projection, nil
+}
+
+func (p authorityProjection) snapshot() core.AuthorityStatusSnapshot {
+	status := "healthy"
+	if len(p.Findings) > 0 || p.TruncatedCapabilitySet {
+		status = "needs_attention"
+	}
+	out := core.AuthorityStatusSnapshot{
+		GeneratedAt:            p.GeneratedAt,
+		Status:                 status,
+		ContinuationRecords:    p.ContinuationRecords,
+		OperationRecords:       p.OperationRecords,
+		PendingDecisions:       p.PendingDecisions,
+		AutoApprovalLeases:     p.AutoApprovalLeases,
+		CapabilityGrants:       p.CapabilityGrants,
+		ActiveProposals:        p.ActiveProposals,
+		ActiveLeases:           p.ActiveLeases,
+		ActivePlanLeases:       p.ActivePlanLeases,
+		FindingCount:           len(p.Findings),
+		Findings:               make([]core.AuthorityFindingSnapshot, 0, len(p.Findings)),
+		TruncatedCapabilitySet: p.TruncatedCapabilitySet,
+	}
+	for _, finding := range p.Findings {
+		switch strings.ToLower(strings.TrimSpace(finding.Severity)) {
+		case "error":
+			out.ErrorCount++
+		case "warning":
+			out.WarningCount++
+		}
+		out.Findings = append(out.Findings, core.AuthorityFindingSnapshot{
+			Code:             finding.Code,
+			Severity:         finding.Severity,
+			SourceKind:       finding.SourceKind,
+			SourceID:         finding.SourceID,
+			SessionID:        finding.SessionID,
+			ChatID:           finding.ChatID,
+			Detail:           finding.Detail,
+			NextRepairAction: finding.NextRepairAction,
+			RepairAction:     finding.RepairAction,
+			Repairable:       finding.Repairable,
+		})
+	}
+	return out
 }
 
 func (r *Runtime) writeDoctorAuthorityProjection(b *strings.Builder, now time.Time) {
@@ -261,6 +403,12 @@ func (r *Runtime) writeDoctorAuthorityProjection(b *strings.Builder, now time.Ti
 		if finding.NextRepairAction != "" {
 			parts = append(parts, "next_repair="+quoteDoctorToken(finding.NextRepairAction))
 		}
+		if finding.RepairAction != "" {
+			parts = append(parts, "repair_action="+quoteDoctorToken(finding.RepairAction))
+		}
+		if finding.Repairable {
+			parts = append(parts, "repairable=true")
+		}
 		writeDoctorLine(b, "- "+strings.Join(parts, " "))
 	}
 }
@@ -280,6 +428,7 @@ func (p *authorityProjection) addFinding(finding authorityProjectionFinding) {
 	finding.SessionID = strings.TrimSpace(finding.SessionID)
 	finding.Detail = strings.TrimSpace(finding.Detail)
 	finding.NextRepairAction = strings.TrimSpace(finding.NextRepairAction)
+	finding.RepairAction = strings.TrimSpace(finding.RepairAction)
 	if finding.Code == "" || finding.Severity == "" {
 		return
 	}
@@ -401,6 +550,17 @@ func authorityContinuationLeaseProposalMismatch(state session.ContinuationState)
 	return proposalID != leaseProposalID
 }
 
+func authorityParkedContinuationNeedsRecoveryReview(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	if state.ParkedAt.IsZero() {
+		return false
+	}
+	if state.Status == session.ContinuationStatusRevoked || state.ContinuationLease.Status == session.ContinuationLeaseStatusRevoked {
+		return false
+	}
+	return state.RemainingTurns > 0 || state.ContinuationLease.RemainingTurns > 0
+}
+
 func authorityPlanLeaseExpiredButConsumable(lease session.OperationPlanLease, now time.Time) bool {
 	lease = session.NormalizeOperationPlanLease(lease)
 	if lease.ExpiresAt.IsZero() || lease.ExpiresAt.After(now.UTC()) {
@@ -414,9 +574,40 @@ func authorityPlanLeaseExpiredButConsumable(lease session.OperationPlanLease, no
 	return lease.RemainingTurns > 0
 }
 
+func authorityOperationBlockedWithoutEscalation(state session.OperationState, lease session.OperationPlanLease, now time.Time) bool {
+	state = session.NormalizeOperationState(state)
+	if state.Status != session.OperationStatusBlocked && !authorityPhasePlanHasBlockedPhase(state.PhasePlan) {
+		return false
+	}
+	if state.Proposal.Active() && (state.Proposal.Status == "" || state.Proposal.Status == session.ProposalStatusPending) {
+		return false
+	}
+	return !authorityPlanLeaseOpen(lease, now)
+}
+
+func authorityPhasePlanHasBlockedPhase(plan session.OperationPhasePlan) bool {
+	for _, phase := range plan.Phases {
+		if strings.TrimSpace(phase.BlockedReasonCode) != "" || phase.StaleAuthority {
+			return true
+		}
+	}
+	return false
+}
+
 func authorityCapabilityGrantExpired(grant session.CapabilityGrant, now time.Time) bool {
 	grant = session.NormalizeCapabilityGrant(grant)
 	return grant.Status == session.CapabilityGrantStatusActive && !grant.ExpiresAt.IsZero() && !grant.ExpiresAt.After(now.UTC())
+}
+
+func authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant session.CapabilityGrant) bool {
+	grant = session.NormalizeCapabilityGrant(grant)
+	if grant.InvocationCount <= 0 {
+		return false
+	}
+	if !authorityGrantRequiresChildRuntime(grant) {
+		return false
+	}
+	return strings.TrimSpace(grant.RequestID) == ""
 }
 
 func authorityGrantRequiresChildRuntime(grant session.CapabilityGrant) bool {
@@ -434,6 +625,56 @@ func authorityGrantRequiresChildRuntime(grant session.CapabilityGrant) bool {
 		session.CapabilityKindFileAccess,
 		session.CapabilityKindNetworkAccess:
 		return true
+	default:
+		return false
+	}
+}
+
+func authorityAutoApprovalUsedOutsideScopeFinding(event session.ExecutionEvent) (authorityProjectionFinding, bool) {
+	if event.EventType != core.ExecutionEventAutoApprovalUsed {
+		return authorityProjectionFinding{}, false
+	}
+	var payload struct {
+		LeaseID     string `json:"lease_id"`
+		Scope       string `json:"scope"`
+		RequestKind string `json:"request_kind"`
+		DecisionID  string `json:"decision_id"`
+		ProposalID  string `json:"proposal_id"`
+		WorkMode    string `json:"work_mode"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(event.PayloadJSON)), &payload); err != nil {
+		return authorityProjectionFinding{}, false
+	}
+	if !authorityAutoApprovalScopeAllowsWorkMode(payload.Scope, payload.WorkMode) {
+		return authorityProjectionFinding{
+			Code:             "auto_approval_used_outside_scope",
+			Severity:         "error",
+			SourceKind:       "auto_approval_lease",
+			SourceID:         strings.TrimSpace(payload.LeaseID),
+			SessionID:        strings.TrimSpace(event.SessionID),
+			ChatID:           event.ChatID,
+			Detail:           "auto-approval use event records work_mode outside the lease scope",
+			NextRepairAction: "revoke the lease and inspect the linked decision or proposal before continuing",
+			RepairAction:     "revoke_auto_approval_lease",
+			Repairable:       true,
+		}, true
+	}
+	return authorityProjectionFinding{}, false
+}
+
+func authorityAutoApprovalScopeAllowsWorkMode(scope string, workMode string) bool {
+	scope = session.NormalizeOperatorAutoApprovalScope(scope)
+	workMode = strings.TrimSpace(workMode)
+	if workMode == "" {
+		return true
+	}
+	switch scope {
+	case session.OperatorAutoApprovalScopeAll:
+		return true
+	case session.OperatorAutoApprovalScopeWorkspace:
+		return workMode == string(WorkModeReadOnly) || workMode == string(WorkModeWorkspaceWrite)
+	case session.OperatorAutoApprovalScopeDeploy:
+		return workMode == string(WorkModeDeploy) || workMode == string(WorkModeCommit)
 	default:
 		return false
 	}

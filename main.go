@@ -663,7 +663,7 @@ func run() error {
 		return err
 	}
 	if extra, ok := firstPositionalArg(flags.Args()); ok {
-		return fmt.Errorf("unknown command %q (known maintenance commands: quickstart|init|paths|park-restart|repair-live-state|repair-capability-grants|repair-review-redactions|gc|forget|reset|import-audit|import-semantic|import-codex-sessions|migrate-memory|verify-deploy|durable-agent|telegram-child-bot|version)", extra)
+		return fmt.Errorf("unknown command %q (known maintenance commands: authority|quickstart|init|paths|park-restart|repair-live-state|repair-capability-grants|repair-review-redactions|gc|forget|reset|import-audit|import-semantic|import-codex-sessions|migrate-memory|verify-deploy|durable-agent|telegram-child-bot|version)", extra)
 	}
 
 	configPath, err := config.ResolveConfigPath(*configPathFlag)

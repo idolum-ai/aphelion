@@ -43,6 +43,7 @@ func renderTelegramDebugChatDetails(snapshot core.ChatStatusSnapshot) string {
 	latest := snapshot.LatestTurnRun
 	if latest == nil {
 		lines = append(lines, "latest_turn=none")
+		lines = append(lines, renderAuthorityDebugBlock(snapshot.Authority, 8)...)
 		lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 12)...)
 		return strings.Join(lines, "\n")
 	}
@@ -82,6 +83,7 @@ func renderTelegramDebugChatDetails(snapshot core.ChatStatusSnapshot) string {
 	if stale := len(snapshot.StaleRunningTurns); stale > 0 {
 		lines = append(lines, fmt.Sprintf("stale_turns=%d", stale))
 	}
+	lines = append(lines, renderAuthorityDebugBlock(snapshot.Authority, 8)...)
 	lines = append(lines, renderChatSourceAttributionBlock()...)
 	lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 12)...)
 	return strings.Join(lines, "\n")
@@ -124,6 +126,7 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 
 	if len(snapshot.LatestTurnRunsByChat) == 0 {
 		lines = append(lines, "latest_turns=none")
+		lines = append(lines, renderAuthorityDebugBlock(snapshot.Authority, 20)...)
 		lines = append(lines, renderSandboxReadinessBlock(snapshot.Sandbox)...)
 		lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 20)...)
 		return strings.Join(lines, "\n")
@@ -165,9 +168,54 @@ func renderTelegramDebugSystemDetails(snapshot core.SystemStatusSnapshot) string
 		lines = append(lines, fmt.Sprintf("- omitted=%d", len(chatIDs)-max))
 	}
 	lines = append(lines, renderSystemSourceAttributionBlock()...)
+	lines = append(lines, renderAuthorityDebugBlock(snapshot.Authority, 20)...)
 	lines = append(lines, renderSandboxReadinessBlock(snapshot.Sandbox)...)
 	lines = append(lines, renderExecutionTimelineBlock(snapshot.RecentExecution, 20)...)
 	return strings.Join(lines, "\n")
+}
+
+func renderAuthorityDebugBlock(snapshot core.AuthorityStatusSnapshot, limit int) []string {
+	lines := []string{"authority_projection:"}
+	status := strings.TrimSpace(snapshot.Status)
+	if status == "" {
+		status = "healthy"
+	}
+	lines = append(lines, fmt.Sprintf("status=%s findings=%d errors=%d warnings=%d generated_at=%s", status, snapshot.FindingCount, snapshot.ErrorCount, snapshot.WarningCount, formatStatusTime(snapshot.GeneratedAt)))
+	if len(snapshot.Findings) == 0 {
+		lines = append(lines, "- none")
+		return lines
+	}
+	max := len(snapshot.Findings)
+	if limit > 0 && max > limit {
+		max = limit
+	}
+	for i := 0; i < max; i++ {
+		finding := snapshot.Findings[i]
+		line := fmt.Sprintf("- code=%s severity=%s source=%s:%s", strings.TrimSpace(finding.Code), strings.TrimSpace(finding.Severity), strings.TrimSpace(finding.SourceKind), strings.TrimSpace(finding.SourceID))
+		if finding.ChatID != 0 {
+			line += fmt.Sprintf(" chat_id=%d", finding.ChatID)
+		}
+		if sessionID := strings.TrimSpace(finding.SessionID); sessionID != "" {
+			line += " session_id=" + quoteStatusField(sessionID)
+		}
+		if repair := strings.TrimSpace(finding.RepairAction); repair != "" {
+			line += " repair_action=" + repair
+		}
+		if finding.Repairable {
+			line += " repairable=true"
+		}
+		if detail := strings.TrimSpace(finding.Detail); detail != "" {
+			line += " detail=" + quoteStatusField(truncateStatusField(detail, 160))
+		}
+		if next := strings.TrimSpace(finding.NextRepairAction); next != "" {
+			line += " next_repair=" + quoteStatusField(truncateStatusField(next, 160))
+		}
+		lines = append(lines, line)
+	}
+	if len(snapshot.Findings) > max {
+		lines = append(lines, fmt.Sprintf("- omitted=%d", len(snapshot.Findings)-max))
+	}
+	return lines
 }
 
 func renderTelegramDebugDurablesDetails(_ core.DurableAgentsStatusSnapshot) string {
@@ -238,6 +286,7 @@ func renderSystemSourceAttributionBlock() []string {
 		"- field=latest_turns class=projection preferred=canonical:execution_events.turn fallback=compatibility_fallback:turn_runs",
 		"- field=pending_decisions class=projection preferred=operational_current_state_store:pending_decisions fallback=canonical:execution_events.decision",
 		"- field=pending_continuations class=projection preferred=operational_current_state_store:continuation_state_json fallback=canonical:execution_events.continuation",
+		"- field=authority_projection class=projection preferred=typed_authority_records fallback=none",
 	}
 }
 
