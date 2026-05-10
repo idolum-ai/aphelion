@@ -370,6 +370,9 @@ func (c *Client) EditMessageTextWithInlineKeyboard(ctx context.Context, chatID i
 	if len(rows) == 0 {
 		return errors.New("inline keyboard rows are required")
 	}
+	if err := validateInlineKeyboardRows(rows); err != nil {
+		return err
+	}
 	text = truncateTelegramText(text, telegramTextChunkLimit)
 	formatted := prepareFormattedText(text, parseMode)
 	body := map[string]interface{}{
@@ -428,6 +431,9 @@ func (c *Client) SendInlineKeyboard(ctx context.Context, chatID int64, text stri
 	if len(rows) == 0 {
 		return 0, errors.New("inline keyboard rows are required")
 	}
+	if err := validateInlineKeyboardRows(rows); err != nil {
+		return 0, err
+	}
 
 	chunks := splitTelegramTextChunks(text, telegramTextChunkLimit)
 	if len(chunks) == 0 {
@@ -454,6 +460,21 @@ func (c *Client) SendInlineKeyboard(ctx context.Context, chatID int64, text stri
 		}
 	}
 	return firstMessageID, nil
+}
+
+func validateInlineKeyboardRows(rows [][]InlineButton) error {
+	for rowIndex, row := range rows {
+		for buttonIndex, button := range row {
+			text := strings.TrimSpace(button.Text)
+			if text == "" {
+				return fmt.Errorf("inline button label is required at row %d button %d", rowIndex, buttonIndex)
+			}
+			if words := strings.Fields(text); len(words) > 2 {
+				return fmt.Errorf("inline button label %q has %d words; Telegram labels must use at most 2 words", text, len(words))
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Client) sendInlineKeyboardChunk(ctx context.Context, chatID int64, text string, rows [][]InlineButton, replyTo *int64) (int64, error) {

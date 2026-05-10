@@ -330,6 +330,10 @@ Binary decision prompts should keep a stable side language:
 
 This includes continuation approval and durable decision prompts, so users do not need to relearn button-side meaning between flows.
 
+Inline button labels must stay compact for Telegram surfaces: non-empty and at
+most two words. Put scope, phase, and safety detail in the surrounding message,
+not the button label.
+
 ### `/start`
 
 Show a short intro and the command list.

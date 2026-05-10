@@ -72,6 +72,10 @@ Binary decision prompts follow one consistent side rule:
 
 Non-binary selectors (for example `/status` navigation and model/effort pickers) are ordered by navigation intent or option list order, not by positive/negative polarity.
 
+Inline button labels are delivery-validated at the Telegram client boundary:
+labels must be non-empty and use at most two words. Longer explanations belong
+in the prompt body.
+
 ### `/status` controls
 
 Always visible:

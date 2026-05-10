@@ -603,6 +603,18 @@ func TestSendInlineKeyboardPayloadSupportsURLButtons(t *testing.T) {
 	}
 }
 
+func TestSendInlineKeyboardRejectsLongButtonLabels(t *testing.T) {
+	client := NewClient("TOKEN")
+	_, err := client.SendInlineKeyboard(context.Background(), 5, "Choose", [][]InlineButton{
+		{
+			{Text: "Approve this action", CallbackData: "decision:1:approve"},
+		},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "at most 2 words") {
+		t.Fatalf("SendInlineKeyboard() err = %v, want compact button-label rejection", err)
+	}
+}
+
 func TestSendInlineKeyboardSplitsLongTextIntoFollowUpMessages(t *testing.T) {
 	var bodies []map[string]interface{}
 	transport := testTransport{
@@ -1172,6 +1184,18 @@ func TestEditMessageTextWithInlineKeyboardPayload(t *testing.T) {
 	rows, ok := replyMarkup["inline_keyboard"].([]interface{})
 	if !ok || len(rows) != 1 {
 		t.Fatalf("inline_keyboard = %#v, want one row", replyMarkup["inline_keyboard"])
+	}
+}
+
+func TestEditMessageTextWithInlineKeyboardRejectsLongButtonLabels(t *testing.T) {
+	client := NewClient("TOKEN")
+	err := client.EditMessageTextWithInlineKeyboard(context.Background(), 5, 42, "Status", "", [][]InlineButton{
+		{
+			{Text: "Open full status", CallbackData: "status:system"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "at most 2 words") {
+		t.Fatalf("EditMessageTextWithInlineKeyboard() err = %v, want compact button-label rejection", err)
 	}
 }
 
