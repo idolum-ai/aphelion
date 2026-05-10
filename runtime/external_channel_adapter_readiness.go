@@ -308,51 +308,81 @@ func rowWithLastWake(r *Runtime, row externalChannelAdapterReadiness, agent core
 }
 
 func selectGogCLIToolGrant(grants []session.CapabilityGrant, principalID string) (session.CapabilityGrant, core.ChildRuntimeContract, bool, string) {
+	var firstBlocked session.CapabilityGrant
+	firstEvidence := ""
+	rememberBlocked := func(grant session.CapabilityGrant, evidence string) {
+		if strings.TrimSpace(firstEvidence) != "" {
+			return
+		}
+		firstBlocked = grant
+		firstEvidence = strings.TrimSpace(evidence)
+	}
 	for _, grant := range grants {
 		grant = session.NormalizeCapabilityGrant(grant)
 		if strings.TrimSpace(grant.GrantedTo) != principalID || grant.Kind != session.CapabilityKindTool || !strings.EqualFold(strings.TrimSpace(grant.TargetResource), gogCLIAdapterName) {
 			continue
 		}
 		if grant.Status != session.CapabilityGrantStatusActive || !grant.RevokedAt.IsZero() || (!grant.ExpiresAt.IsZero() && !grant.ExpiresAt.After(time.Now().UTC())) || strings.TrimSpace(grant.StaleReason) != "" {
-			return grant, core.ChildRuntimeContract{}, false, fmt.Sprintf("grant=%s status=%s stale=%s", grant.GrantID, grant.Status, strings.TrimSpace(grant.StaleReason))
+			rememberBlocked(grant, fmt.Sprintf("grant=%s status=%s stale=%s", grant.GrantID, grant.Status, strings.TrimSpace(grant.StaleReason)))
+			continue
 		}
 		material, ok, err := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints)
 		if err != nil {
-			return grant, core.ChildRuntimeContract{}, false, "invalid child_runtime contract: " + err.Error()
+			rememberBlocked(grant, "invalid child_runtime contract: "+err.Error())
+			continue
 		}
 		if !ok {
-			return grant, core.ChildRuntimeContract{}, false, "active tool grant has no child_runtime material"
+			rememberBlocked(grant, "active tool grant has no child_runtime material")
+			continue
 		}
 		if !containsReadinessString(grant.AllowedActions, "invoke") && !containsReadinessString(grant.AllowedActions, "connection_test") {
-			return grant, material, false, "active tool grant does not allow invoke or connection_test"
+			rememberBlocked(grant, "active tool grant does not allow invoke or connection_test")
+			continue
 		}
 		if !containsReadinessString(material.EnvFromParent, gogCLIRequiredSecretEnvName) {
-			return grant, material, false, "child_runtime env_from_parent does not include " + gogCLIRequiredSecretEnvName
+			rememberBlocked(grant, "child_runtime env_from_parent does not include "+gogCLIRequiredSecretEnvName)
+			continue
 		}
 		return grant, material, true, fmt.Sprintf("grant=%s child_runtime=present env_from_parent=%s", grant.GrantID, gogCLIRequiredSecretEnvName)
 	}
-	return session.CapabilityGrant{}, core.ChildRuntimeContract{}, false, ""
+	return firstBlocked, core.ChildRuntimeContract{}, false, firstEvidence
 }
 
 func selectGogCLIAccountGrant(grants []session.CapabilityGrant, principalID string) (session.CapabilityGrant, core.ChildRuntimeContract, bool, string) {
+	var firstBlocked session.CapabilityGrant
+	firstEvidence := ""
+	rememberBlocked := func(grant session.CapabilityGrant, evidence string) {
+		if strings.TrimSpace(firstEvidence) != "" {
+			return
+		}
+		firstBlocked = grant
+		firstEvidence = strings.TrimSpace(evidence)
+	}
 	for _, grant := range grants {
 		grant = session.NormalizeCapabilityGrant(grant)
 		if strings.TrimSpace(grant.GrantedTo) != principalID || grant.Kind != session.CapabilityKindExternalAccount || !strings.HasPrefix(strings.TrimSpace(grant.TargetResource), gogCLIAdapterName+":") {
 			continue
 		}
 		if grant.Status != session.CapabilityGrantStatusActive || !grant.RevokedAt.IsZero() || (!grant.ExpiresAt.IsZero() && !grant.ExpiresAt.After(time.Now().UTC())) || strings.TrimSpace(grant.StaleReason) != "" {
-			return grant, core.ChildRuntimeContract{}, false, fmt.Sprintf("grant=%s status=%s stale=%s", grant.GrantID, grant.Status, strings.TrimSpace(grant.StaleReason))
+			rememberBlocked(grant, fmt.Sprintf("grant=%s status=%s stale=%s", grant.GrantID, grant.Status, strings.TrimSpace(grant.StaleReason)))
+			continue
 		}
 		material, ok, err := core.ExtractChildRuntimeContract(grant.Contract, grant.Constraints)
 		if err != nil {
-			return grant, core.ChildRuntimeContract{}, false, "invalid child_runtime contract: " + err.Error()
+			rememberBlocked(grant, "invalid child_runtime contract: "+err.Error())
+			continue
 		}
 		if !ok || (len(material.ReadonlyPaths) == 0 && len(material.ReadonlyBinds) == 0 && len(material.SecretBinds) == 0) {
-			return grant, material, false, "active external-account grant has no read-only config material"
+			rememberBlocked(grant, "active external-account grant has no read-only config material")
+			continue
+		}
+		if !containsReadinessString(grant.AllowedActions, "read") && !containsReadinessString(grant.AllowedActions, "connection_test") {
+			rememberBlocked(grant, "active external-account grant does not allow read or connection_test")
+			continue
 		}
 		return grant, material, true, fmt.Sprintf("grant=%s child_runtime=config_material_present", grant.GrantID)
 	}
-	return session.CapabilityGrant{}, core.ChildRuntimeContract{}, false, ""
+	return firstBlocked, core.ChildRuntimeContract{}, false, firstEvidence
 }
 
 func gogCLIToolMaterialBindsExecutable(material core.ChildRuntimeContract) bool {
