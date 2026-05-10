@@ -58,6 +58,9 @@ func TestRunQuickstartWritesMinimalValidConfig(t *testing.T) {
 	if cfg.Providers.Default != "openai" || cfg.Providers.OpenAI.APIKey != "openai-key" {
 		t.Fatalf("provider config = default %q openai key %q", cfg.Providers.Default, cfg.Providers.OpenAI.APIKey)
 	}
+	if cfg.Autonomy.DefaultMode != "ask_first" || cfg.Autonomy.Ceiling != "ask_first" || cfg.Autonomy.AllowLiveOverrides {
+		t.Fatalf("autonomy config = %#v, want explicit ask_first defaults", cfg.Autonomy)
+	}
 	if !strings.Contains(out.String(), "service_installed: false") {
 		t.Fatalf("output = %q, want service_installed false", out.String())
 	}

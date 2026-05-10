@@ -437,6 +437,9 @@ func TestSystemStatusSnapshotBuildsAdminViewAndHotChats(t *testing.T) {
 	if len(snapshot.Continuations) == 0 {
 		t.Fatalf("Continuations = %#v, want approved continuation", snapshot.Continuations)
 	}
+	if snapshot.Autonomy.DefaultMode != "ask_first" || snapshot.Autonomy.Ceiling != "ask_first" || snapshot.Autonomy.AllowLiveOverrides {
+		t.Fatalf("Autonomy = %#v, want default config-owned ask_first policy", snapshot.Autonomy)
+	}
 }
 
 func TestSystemStatusSnapshotPrefersOperationalPendingDecisionsOverTES(t *testing.T) {

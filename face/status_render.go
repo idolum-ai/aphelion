@@ -806,10 +806,43 @@ func RenderTelegramStatusSystem(snapshot core.SystemStatusSnapshot, personaEffor
 	lines = append(lines, renderToolAuthorityLifecycleBlock(snapshot.RecentExecution, 5)...)
 	lines = append(lines, renderCapabilityLifecycleBlock(snapshot.RecentExecution, 5)...)
 	lines = append(lines, renderPendingItemBlock(snapshot.PendingItems, 20)...)
+	lines = append(lines, renderAutonomyStatusBlock(snapshot.Autonomy)...)
 	lines = append(lines, renderTailnetStatusBlock(snapshot.Tailnet)...)
 	lines = append(lines, fmt.Sprintf("watchdog triggered=%t stale_threshold=%s stale_limit=%d", snapshot.RestartHealth.WatchdogTriggered, snapshot.RestartHealth.StaleTurnThreshold, snapshot.RestartHealth.StaleTurnLimit))
 	lines = append(lines, fmt.Sprintf("effort persona=%s governor=%s", strings.TrimSpace(personaEffort), strings.TrimSpace(governorEffort)))
 	return strings.Join(lines, "\n")
+}
+
+func renderAutonomyStatusBlock(snapshot core.AutonomyStatusSnapshot) []string {
+	if strings.TrimSpace(snapshot.DefaultMode) == "" && strings.TrimSpace(snapshot.Ceiling) == "" {
+		return nil
+	}
+	duration := snapshot.MaxOverrideDuration
+	if duration < 0 {
+		duration = 0
+	}
+	line := fmt.Sprintf(
+		"- default=%s ceiling=%s live_overrides=%t max_override=%s",
+		firstNonEmpty(strings.TrimSpace(snapshot.DefaultMode), "ask_first"),
+		firstNonEmpty(strings.TrimSpace(snapshot.Ceiling), "ask_first"),
+		snapshot.AllowLiveOverrides,
+		duration.Truncate(time.Second).String(),
+	)
+	if source := strings.TrimSpace(snapshot.Source); source != "" {
+		line += " source=" + source
+	}
+	if behavior := strings.TrimSpace(snapshot.AuthorityBehavior); behavior != "" {
+		line += " behavior=" + quoteStatusField(truncateStatusField(behavior, 120))
+	}
+	lines := []string{"autonomy:", line}
+	if override := strings.TrimSpace(snapshot.ActiveOverrideMode); override != "" {
+		overrideLine := "  active_override=" + override
+		if !snapshot.ActiveOverrideExpiry.IsZero() {
+			overrideLine += " expires_at=" + snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339)
+		}
+		lines = append(lines, overrideLine)
+	}
+	return lines
 }
 
 func renderTailnetStatusBlock(snapshot *core.TailnetStatusSnapshot) []string {

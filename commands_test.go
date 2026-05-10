@@ -118,6 +118,7 @@ type stubCommandRouter struct {
 	status                       core.SessionStatus
 	statusChat                   core.ChatStatusSnapshot
 	statusSystem                 core.SystemStatusSnapshot
+	autonomyStatus               core.AutonomyStatusSnapshot
 	statusDurables               core.DurableAgentsStatusSnapshot
 	statusReadableSummary        string
 	tailnetStatus                core.TailnetStatusSnapshot
@@ -134,6 +135,7 @@ type stubCommandRouter struct {
 	revokeTailnetSurfaceErr      error
 	statusChatErr                error
 	statusSystemErr              error
+	autonomyStatusErr            error
 	statusDurablesErr            error
 	stop                         core.StopResult
 	stopInput                    int64
@@ -313,6 +315,23 @@ func (s stubCommandRouter) StatusSystem(senderID int64) (core.SystemStatusSnapsh
 		return core.SystemStatusSnapshot{}, s.statusSystemErr
 	}
 	return s.statusSystem, nil
+}
+
+func (s stubCommandRouter) AutonomyStatus(senderID int64) (core.AutonomyStatusSnapshot, error) {
+	_ = senderID
+	if s.autonomyStatusErr != nil {
+		return core.AutonomyStatusSnapshot{}, s.autonomyStatusErr
+	}
+	if strings.TrimSpace(s.autonomyStatus.DefaultMode) != "" || strings.TrimSpace(s.autonomyStatus.Ceiling) != "" {
+		return s.autonomyStatus, nil
+	}
+	return core.AutonomyStatusSnapshot{
+		DefaultMode:         "ask_first",
+		Ceiling:             "ask_first",
+		MaxOverrideDuration: 4 * time.Hour,
+		Source:              "test",
+		AuthorityBehavior:   "existing proposal and approval flows",
+	}, nil
 }
 
 func (s stubCommandRouter) StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error) {
@@ -915,6 +934,79 @@ func TestDefaultTelegramCommandsIncludeAutoApprove(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("defaultTelegramCommands = %#v, want /autoapprove command entry", defaultTelegramCommands)
+	}
+}
+
+func TestDefaultTelegramCommandsIncludeAutonomy(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "autonomy" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /autonomy command entry", defaultTelegramCommands)
+	}
+}
+
+func TestHandleTelegramCommandAutonomyAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		canRestart: true,
+		autonomyStatus: core.AutonomyStatusSnapshot{
+			DefaultMode:         "ask_first",
+			Ceiling:             "leased",
+			AllowLiveOverrides:  true,
+			MaxOverrideDuration: 2 * time.Hour,
+			Source:              "config",
+			AuthorityBehavior:   "existing proposal and approval flows",
+		},
+	}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/autonomy",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("messages = %#v, want one autonomy response", sender.msgs)
+	}
+	for _, want := range []string{"Autonomy policy", "Default: Ask first", "Ceiling: Leased", "Live changes: enabled", "Authority behavior: existing proposal and approval flows."} {
+		if !strings.Contains(sender.msgs[0].Text, want) {
+			t.Fatalf("autonomy response = %q, want %q", sender.msgs[0].Text, want)
+		}
+	}
+}
+
+func TestHandleTelegramCommandAutonomyDeniedForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{canRestart: false}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:   7,
+		SenderID: 1002,
+		Text:     "/autonomy",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(strings.ToLower(sender.msgs[0].Text), "admin only") {
+		t.Fatalf("messages = %#v, want admin-only response", sender.msgs)
 	}
 }
 

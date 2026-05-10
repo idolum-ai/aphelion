@@ -28,6 +28,12 @@ Current command surface:
   - Shows the current working objective and the caller-owned Mission Ledger entries.
   - Supports manual `list`, `show`, `create`, `pin`, `unpin`, `activate`, `pause`, `block`, `complete`, `archive`, `summon`, and admin `health` actions.
   - Self-summon is review-only; Mission Ledger state does not grant self-continuation or new capabilities.
+- `/autonomy`
+  - Admin-only policy report.
+  - Shows the configured default mode, ceiling, live-override setting, maximum override duration, and active override state.
+  - Does not grant authority by itself; live behavior still follows proposal and approval flows.
+- `/autoapprove`
+  - Admin-only short lease for eligible approval prompts.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
   - When `memory.aggressive.flush_on_session_boundary` is enabled, it also runs a bounded memory flush first.
@@ -49,8 +55,8 @@ Current command surface:
 Visibility notes:
 
 - `/start` and `/help` are role-aware.
-  - Admin users see `/restart`.
-  - Non-admin users do not see `/restart`.
+  - Admin users see `/autonomy`, `/autoapprove`, and `/restart`.
+  - Non-admin users do not see those admin commands.
 
 ## Inline Buttons
 

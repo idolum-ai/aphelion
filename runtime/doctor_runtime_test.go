@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/pipeline"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
@@ -439,6 +440,35 @@ func TestDoctorCodexWorkMigrationReviewReportsPersistedInterfaceEvidence(t *test
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("migration review missing %s:\n%s", want, report)
+		}
+	}
+}
+
+func TestDoctorRuntimeConfigReportsAutonomyPolicy(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultMode = "review_only"
+	cfg.Autonomy.Ceiling = "leased"
+	cfg.Autonomy.AllowLiveOverrides = true
+	cfg.Autonomy.MaxOverrideDuration = "2h"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	var b strings.Builder
+	rt.writeDoctorRuntimeConfig(&b, pipeline.TurnExecutionContract{}, sandbox.Scope{})
+	report := b.String()
+	for _, want := range []string{
+		`autonomy_default_mode="review_only"`,
+		`autonomy_ceiling="leased"`,
+		`autonomy_live_overrides="true"`,
+		`autonomy_max_override_duration="2h0m0s"`,
+		`autonomy_authority_behavior="existing proposal and approval flows"`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("runtime config report missing %s:\n%s", want, report)
 		}
 	}
 }

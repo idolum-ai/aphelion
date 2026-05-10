@@ -123,7 +123,7 @@ Runnable v0:
 - Heartbeat and config-driven cron
 - Default daily-review durable child (`idolum-daily-review`) that wakes daily, stages yesterday's transcript into child-local files, and opens a scheduled child-to-parent check-in
 - Telegram voice transcription + optional TTS replies
-- Telegram slash commands: `/start`, `/help`, `/status`, `/debug`, `/doctor`, `/agents`, `/memory`, `/model`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
+- Telegram slash commands: `/start`, `/help`, `/status`, `/debug`, `/doctor`, `/agents`, `/memory`, `/mission`, `/model`, `/autonomy`, `/autoapprove`, `/stop`, `/new`, `/detach`, `/restart`, `/reinstall`, `/set_persona_model`, `/set_governor_effort`
 
 Current promise gaps and accepted implementation targets are tracked in
 [docs/promises.md](docs/promises.md).
@@ -272,6 +272,9 @@ Inspect effective paths and loaded prompt files:
 ```bash
 make paths
 ```
+
+`paths` also prints the configured autonomy default, ceiling, and live-override
+duration so CLI and Telegram operators see the same policy.
 
 Inspect durable-agent inventory and health:
 

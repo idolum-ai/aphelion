@@ -256,7 +256,21 @@ type SystemStatusSnapshot struct {
 	HotChats             []ChatStatusRollup
 	RestartHealth        RestartHealthSnapshot
 	Tailnet              *TailnetStatusSnapshot
+	Autonomy             AutonomyStatusSnapshot
 	MissionLedger        MissionLedgerStatusSnapshot
+}
+
+type AutonomyStatusSnapshot struct {
+	GeneratedAt          time.Time
+	DefaultMode          string
+	Ceiling              string
+	AllowLiveOverrides   bool
+	MaxOverrideDuration  time.Duration
+	ActiveOverrideMode   string
+	ActiveOverrideActor  string
+	ActiveOverrideExpiry time.Time
+	Source               string
+	AuthorityBehavior    string
 }
 
 type TailnetStatusSnapshot struct {

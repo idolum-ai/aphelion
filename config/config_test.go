@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadMinimalConfig(t *testing.T) {
@@ -76,6 +77,9 @@ external_manifest_dir = "./external-tools"
 	}
 	if cfg.Work.Executor != "auto" || !reflect.DeepEqual(cfg.Work.AutoOrder, []string{"native", "codex"}) {
 		t.Fatalf("work executor defaults = %#v, want auto native->codex", cfg.Work)
+	}
+	if cfg.Autonomy.DefaultMode != "ask_first" || cfg.Autonomy.Ceiling != "ask_first" || cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "4h" {
+		t.Fatalf("autonomy defaults = %#v, want ask_first ceiling with live overrides disabled", cfg.Autonomy)
 	}
 	if cfg.Governor.NativeProvider != "anthropic" || cfg.Providers.Default != "anthropic" {
 		t.Fatalf("provider heuristic = governor:%q default:%q, want anthropic/anthropic", cfg.Governor.NativeProvider, cfg.Providers.Default)
@@ -373,6 +377,78 @@ cert_file = "/tmp/cert.pem"
 	}
 }
 
+func TestLoadRejectsAutonomyDefaultAboveCeiling(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+workspace = "./workspace"
+
+[autonomy]
+default_mode = "mission"
+ceiling = "ask_first"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want autonomy precedence validation error")
+	}
+	if !strings.Contains(err.Error(), "autonomy.default_mode must not exceed autonomy.ceiling") {
+		t.Fatalf("Load() err = %v, want autonomy ceiling validation", err)
+	}
+}
+
+func TestLoadRejectsLongLiveAutonomyOverrideDuration(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	raw := `
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers.anthropic]
+api_key = "sk-ant-test"
+
+[agent]
+workspace = "./workspace"
+
+[autonomy]
+default_mode = "ask_first"
+ceiling = "leased"
+allow_live_overrides = true
+max_override_duration = "25h"
+`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("Load() err = nil, want live autonomy override duration validation error")
+	}
+	if !strings.Contains(err.Error(), "autonomy.max_override_duration must be <= 24h") {
+		t.Fatalf("Load() err = %v, want autonomy max duration validation", err)
+	}
+}
+
 func TestLoadParsesMultilineArrays(t *testing.T) {
 	t.Parallel()
 
@@ -518,6 +594,12 @@ purpose = "assistants"
 [openai.vector_stores]
 enabled = true
 default_store = "vs_default"
+
+[autonomy]
+default_mode = "review-only"
+ceiling = "leased"
+allow_live_overrides = true
+max_override_duration = "3h"
 
 [sessions]
 db_path = "~/tmp/sessions.db"
@@ -689,6 +771,13 @@ elevenlabs_voice_id = "voice-123"
 	}
 	if !cfg.OpenAI.VectorStores.Enabled || cfg.OpenAI.VectorStores.DefaultStore != "vs_default" {
 		t.Fatalf("openai.vector_stores = %#v, want enabled/vs_default", cfg.OpenAI.VectorStores)
+	}
+	if cfg.Autonomy.DefaultMode != "review_only" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "3h" {
+		t.Fatalf("autonomy = %#v, want normalized review_only/leased with live overrides", cfg.Autonomy)
+	}
+	policy := EffectiveAutonomyPolicy(cfg)
+	if policy.DefaultMode != "review_only" || policy.Ceiling != "leased" || !policy.AllowLiveOverrides || policy.MaxOverrideDuration != 3*time.Hour {
+		t.Fatalf("EffectiveAutonomyPolicy = %#v, want parsed policy", policy)
 	}
 	if cfg.Agent.MaxIterations != 77 || cfg.Agent.ToolTimeout != 9 {
 		t.Fatalf("agent limits = %d/%d, want 77/9", cfg.Agent.MaxIterations, cfg.Agent.ToolTimeout)

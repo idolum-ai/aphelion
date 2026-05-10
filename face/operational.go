@@ -68,6 +68,7 @@ func RenderTelegramStart(personaEffort, governorEffort string, includeAdminComma
 	}
 	if includeAdminCommands {
 		lines = append(lines,
+			"/autonomy - show autonomy policy",
 			"/autoapprove - temporarily auto-approve admin approval prompts",
 			"/restart - force an immediate gateway restart",
 		)
@@ -103,6 +104,7 @@ func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminComman
 	}
 	if includeAdminCommands {
 		lines = append(lines,
+			"/autonomy - show autonomy policy",
 			"/autoapprove - temporarily auto-approve admin approval prompts",
 			"/restart - force an immediate gateway restart",
 		)
@@ -116,6 +118,56 @@ func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminComman
 		fmt.Sprintf("Current system effort: %s", strings.TrimSpace(governorEffort)),
 	)
 	return strings.Join(lines, "\n")
+}
+
+func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
+	liveChanges := "disabled"
+	if snapshot.AllowLiveOverrides {
+		liveChanges = "enabled"
+	}
+	activeOverride := "none"
+	if mode := strings.TrimSpace(snapshot.ActiveOverrideMode); mode != "" {
+		activeOverride = autonomyModeLabel(mode)
+		if !snapshot.ActiveOverrideExpiry.IsZero() {
+			activeOverride += " until " + snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339)
+		}
+	}
+	behavior := strings.TrimSpace(snapshot.AuthorityBehavior)
+	if behavior == "" {
+		behavior = "existing proposal and approval flows"
+	}
+	return strings.Join([]string{
+		"Autonomy policy",
+		"",
+		"Default: " + autonomyModeLabel(snapshot.DefaultMode),
+		"Ceiling: " + autonomyModeLabel(snapshot.Ceiling),
+		"Live changes: " + liveChanges,
+		"Maximum live change: " + snapshot.MaxOverrideDuration.Truncate(time.Second).String(),
+		"Active override: " + activeOverride,
+		"",
+		"Authority behavior: " + behavior + ".",
+		"This report does not grant new authority by itself.",
+	}, "\n")
+}
+
+func autonomyModeLabel(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "off":
+		return "Off"
+	case "review_only":
+		return "Review only"
+	case "ask_first":
+		return "Ask first"
+	case "leased":
+		return "Leased"
+	case "mission":
+		return "Mission"
+	default:
+		if strings.TrimSpace(mode) == "" {
+			return "Ask first"
+		}
+		return strings.TrimSpace(mode)
+	}
 }
 
 func RenderTelegramStop(stopped core.StopResult) string {

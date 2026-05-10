@@ -228,6 +228,25 @@ func (c telegramCommandControl) StatusSystem(senderID int64) (core.SystemStatusS
 	return c.rt.SystemStatusSnapshot(routerSnapshot)
 }
 
+func (c telegramCommandControl) AutonomyStatus(senderID int64) (core.AutonomyStatusSnapshot, error) {
+	if !c.CanRestart(senderID) {
+		return core.AutonomyStatusSnapshot{}, fmt.Errorf("autonomy policy view denied")
+	}
+	if c.rt == nil {
+		policy := config.EffectiveAutonomyPolicy(nil)
+		return core.AutonomyStatusSnapshot{
+			GeneratedAt:         time.Now().UTC(),
+			DefaultMode:         policy.DefaultMode,
+			Ceiling:             policy.Ceiling,
+			AllowLiveOverrides:  policy.AllowLiveOverrides,
+			MaxOverrideDuration: policy.MaxOverrideDuration,
+			Source:              "default",
+			AuthorityBehavior:   "existing proposal and approval flows",
+		}, nil
+	}
+	return c.rt.AutonomyStatusSnapshot(), nil
+}
+
 func (c telegramCommandControl) StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error) {
 	if !c.CanRestart(senderID) {
 		return core.DurableAgentsStatusSnapshot{}, fmt.Errorf("status view denied")

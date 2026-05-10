@@ -23,6 +23,7 @@ type Config struct {
 	Providers     ProvidersConfig     `toml:"providers"`
 	OpenAI        OpenAIConfig        `toml:"openai"`
 	Work          WorkConfig          `toml:"work"`
+	Autonomy      AutonomyConfig      `toml:"autonomy"`
 	Sessions      SessionsConfig      `toml:"sessions"`
 	Agent         AgentConfig         `toml:"agent"`
 	Tools         ToolsConfig         `toml:"tools"`
@@ -224,6 +225,20 @@ type WorkConfig struct {
 	Executor  string          `toml:"executor"`
 	AutoOrder []string        `toml:"auto_order"`
 	Codex     WorkCodexConfig `toml:"codex"`
+}
+
+type AutonomyConfig struct {
+	DefaultMode         string `toml:"default_mode"`
+	Ceiling             string `toml:"ceiling"`
+	AllowLiveOverrides  bool   `toml:"allow_live_overrides"`
+	MaxOverrideDuration string `toml:"max_override_duration"`
+}
+
+type AutonomyPolicy struct {
+	DefaultMode         string
+	Ceiling             string
+	AllowLiveOverrides  bool
+	MaxOverrideDuration time.Duration
 }
 
 type WorkCodexConfig struct {
@@ -549,6 +564,12 @@ func Default() Config {
 			Executor:  "auto",
 			AutoOrder: []string{"native", "codex"},
 		},
+		Autonomy: AutonomyConfig{
+			DefaultMode:         "ask_first",
+			Ceiling:             "ask_first",
+			AllowLiveOverrides:  false,
+			MaxOverrideDuration: "4h",
+		},
 		Sessions: SessionsConfig{
 			DBPath:             "~/.aphelion/state/sessions.db",
 			IdleExpiry:         "24h",
@@ -761,6 +782,11 @@ func Load(path string) (*Config, error) {
 		cfg.Work.AutoOrder = []string{"native", "codex"}
 	}
 	cfg.Work.Codex.AppServerAddress = strings.TrimSpace(cfg.Work.Codex.AppServerAddress)
+	cfg.Autonomy.DefaultMode = NormalizeAutonomyMode(cfg.Autonomy.DefaultMode)
+	cfg.Autonomy.Ceiling = NormalizeAutonomyMode(cfg.Autonomy.Ceiling)
+	if strings.TrimSpace(cfg.Autonomy.MaxOverrideDuration) == "" {
+		cfg.Autonomy.MaxOverrideDuration = "4h"
+	}
 	cfg.Sandbox.Profiles.Admin = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.Admin)
 	cfg.Sandbox.Profiles.ApprovedUser = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.ApprovedUser)
 	cfg.Sandbox.Profiles.DurableAgent = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.DurableAgent)
@@ -1067,6 +1093,61 @@ func normalizeWorkExecutorList(values []string) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+func NormalizeAutonomyMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "":
+		return "ask_first"
+	case "review", "review-only", "review_only":
+		return "review_only"
+	case "ask", "ask-first", "ask_first":
+		return "ask_first"
+	case "lease", "leased":
+		return "leased"
+	case "mission", "mission_owned", "mission-owned":
+		return "mission"
+	case "off":
+		return "off"
+	default:
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
+}
+
+func AutonomyModeRank(mode string) (int, bool) {
+	switch NormalizeAutonomyMode(mode) {
+	case "off":
+		return 0, true
+	case "review_only":
+		return 1, true
+	case "ask_first":
+		return 2, true
+	case "leased":
+		return 3, true
+	case "mission":
+		return 4, true
+	default:
+		return 0, false
+	}
+}
+
+func EffectiveAutonomyPolicy(cfg *Config) AutonomyPolicy {
+	policy := AutonomyPolicy{
+		DefaultMode:         "ask_first",
+		Ceiling:             "ask_first",
+		AllowLiveOverrides:  false,
+		MaxOverrideDuration: 4 * time.Hour,
+	}
+	if cfg == nil {
+		return policy
+	}
+	policy.DefaultMode = NormalizeAutonomyMode(cfg.Autonomy.DefaultMode)
+	policy.Ceiling = NormalizeAutonomyMode(cfg.Autonomy.Ceiling)
+	policy.AllowLiveOverrides = cfg.Autonomy.AllowLiveOverrides
+	if parsed, err := time.ParseDuration(strings.TrimSpace(cfg.Autonomy.MaxOverrideDuration)); err == nil && parsed > 0 {
+		policy.MaxOverrideDuration = parsed
+	}
+	return policy
 }
 
 func normalizeSandboxProfileConfig(profile SandboxProfileConfig) SandboxProfileConfig {
@@ -1430,6 +1511,9 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("work.auto_order[%d] must be one of codex|native", i)
 		}
 	}
+	if err := validateAutonomyConfig(cfg.Autonomy); err != nil {
+		return err
+	}
 	if err := validateSandboxProfileConfig("sandbox.profiles.admin", cfg.Sandbox.Profiles.Admin); err != nil {
 		return err
 	}
@@ -1643,6 +1727,33 @@ func validateMemoryWritePolicy(policy MemoryWritePolicyConfig) error {
 		default:
 			return fmt.Errorf("%s must be apply or propose", name)
 		}
+	}
+	return nil
+}
+
+func validateAutonomyConfig(policy AutonomyConfig) error {
+	defaultMode := NormalizeAutonomyMode(policy.DefaultMode)
+	ceiling := NormalizeAutonomyMode(policy.Ceiling)
+	defaultRank, ok := AutonomyModeRank(defaultMode)
+	if !ok {
+		return fmt.Errorf("autonomy.default_mode must be one of off|review_only|ask_first|leased|mission")
+	}
+	ceilingRank, ok := AutonomyModeRank(ceiling)
+	if !ok {
+		return fmt.Errorf("autonomy.ceiling must be one of off|review_only|ask_first|leased|mission")
+	}
+	if defaultRank > ceilingRank {
+		return fmt.Errorf("autonomy.default_mode must not exceed autonomy.ceiling")
+	}
+	duration, err := time.ParseDuration(strings.TrimSpace(policy.MaxOverrideDuration))
+	if err != nil {
+		return fmt.Errorf("autonomy.max_override_duration must be a valid duration: %w", err)
+	}
+	if duration <= 0 {
+		return fmt.Errorf("autonomy.max_override_duration must be > 0")
+	}
+	if policy.AllowLiveOverrides && duration > 24*time.Hour {
+		return fmt.Errorf("autonomy.max_override_duration must be <= 24h when live overrides are enabled")
 	}
 	return nil
 }

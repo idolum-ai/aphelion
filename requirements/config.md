@@ -32,6 +32,13 @@ The default operator experience should favor semantic, readable progress over ra
 
 Implementation is staged. A minimal daemon only needs the small subset required to boot, authenticate, admit DM principals, route DM turns, and manage prompt context. The wider schema remains part of the contract so later hardening does not require redesigning config layout or ownership boundaries.
 
+Autonomy is a config-owned policy, not a prompt convention. `default_mode` and
+`ceiling` use `off`, `review_only`, `ask_first`, `leased`, or `mission`; the
+configured default must not exceed the ceiling. In the current runtime this
+policy is validated and projected through CLI, `/autonomy`, `/status`, and
+`/doctor` while live authority still follows existing proposal and approval
+flows.
+
 ```toml
 # ─── Identity ───
 # These strings appear in HTTP headers.
@@ -293,6 +300,12 @@ idle_expiry = "24h"           # Expire sessions after this much inactivity
 [principals.telegram]
 admin_user_ids = [123456789]
 # exactly one admin user is supported
+
+[autonomy]
+default_mode = "ask_first"
+ceiling = "ask_first"
+allow_live_overrides = false
+max_override_duration = "4h"
 
 # Deferred after v0:
 # Context management thresholds — push close to the provider's actual limit.

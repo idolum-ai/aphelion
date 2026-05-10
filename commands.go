@@ -42,6 +42,7 @@ type commandRouter interface {
 	Status(chatID int64) core.SessionStatus
 	StatusChat(chatID int64) (core.ChatStatusSnapshot, error)
 	StatusSystem(senderID int64) (core.SystemStatusSnapshot, error)
+	AutonomyStatus(senderID int64) (core.AutonomyStatusSnapshot, error)
 	StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error)
 	StatusReadableSummary(ctx context.Context, view string, statusText string) string
 	TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error)
@@ -178,6 +179,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "memory", Description: "Review memory and set focus"},
 	{Command: "mission", Description: "Show and manage the Mission Ledger"},
 	{Command: "model", Description: "Show and change model slots"},
+	{Command: "autonomy", Description: "Show autonomy policy"},
 	{Command: "autoapprove", Description: "Temporarily auto-approve admin approval prompts"},
 	{Command: "stop", Description: "Stop current work in this chat"},
 	{Command: "new", Description: "Start a fresh chat session context"},
@@ -348,6 +350,16 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			break
 		}
 		return handleTelegramModelCommand(ctx, sender, router, msg)
+	case "autonomy":
+		if !isAdmin {
+			text = "Autonomy policy is admin only."
+			break
+		}
+		snapshot, err := router.AutonomyStatus(msg.SenderID)
+		if err != nil {
+			return true, err
+		}
+		text = face.RenderTelegramAutonomyStatus(snapshot)
 	case "autoapprove":
 		if !isAdmin {
 			text = "Auto-approval controls are admin only."

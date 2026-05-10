@@ -5,6 +5,7 @@ package face
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 )
@@ -27,6 +28,29 @@ func TestRenderTelegramStopKeepsLegacyFallbackWithoutContinuationLabel(t *testin
 	got := RenderTelegramStop(core.StopResult{ContinuationRevoked: true})
 	if got != "Revoked continuation approval for this chat." {
 		t.Fatalf("RenderTelegramStop() = %q, want generic revoke message", got)
+	}
+}
+
+func TestRenderTelegramAutonomyStatusUsesNaturalLabels(t *testing.T) {
+	t.Parallel()
+
+	out := RenderTelegramAutonomyStatus(core.AutonomyStatusSnapshot{
+		DefaultMode:         "ask_first",
+		Ceiling:             "leased",
+		AllowLiveOverrides:  true,
+		MaxOverrideDuration: 2 * time.Hour,
+		AuthorityBehavior:   "existing proposal and approval flows",
+	})
+	for _, want := range []string{
+		"Autonomy policy",
+		"Default: Ask first",
+		"Ceiling: Leased",
+		"Live changes: enabled",
+		"Authority behavior: existing proposal and approval flows.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("RenderTelegramAutonomyStatus() = %q, want %q", out, want)
+		}
 	}
 }
 

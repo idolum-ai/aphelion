@@ -151,6 +151,15 @@ auto_order = ["native", "codex"]
 # Leave empty to make auto mode fall back to native execution.
 app_server_address = ""
 
+[autonomy]
+# Config owns the standing autonomy ceiling. Live authority behavior still runs
+# through proposals, leases, approvals, and grants; this section does not grant
+# new authority by itself.
+default_mode = "ask_first"
+ceiling = "ask_first"
+allow_live_overrides = false
+max_override_duration = "4h"
+
 [sessions]
 db_path = "~/.aphelion/state/sessions.db"
 idle_expiry = "24h"

@@ -466,6 +466,33 @@ func TestRunInitCommandImportsCodexSessions(t *testing.T) {
 	}
 }
 
+func TestRunPathsCommandPrintsAutonomyPolicy(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	if err := runInitCommand([]string{"--config", cfgPath}); err != nil {
+		t.Fatalf("runInitCommand() err = %v", err)
+	}
+
+	out, err := captureStdout(t, func() error {
+		return runPathsCommand([]string{"--config", cfgPath})
+	})
+	if err != nil {
+		t.Fatalf("runPathsCommand() err = %v", err)
+	}
+	for _, want := range []string{
+		"autonomy_default_mode: ask_first",
+		"autonomy_ceiling: ask_first",
+		"autonomy_live_overrides: false",
+		"autonomy_max_override_duration: 4h0m0s",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("paths output = %q, want %q", out, want)
+		}
+	}
+}
+
 func TestDurableAgentReconcileRepairsActiveChildAndQueuesGrowthPrompt(t *testing.T) {
 	t.Parallel()
 

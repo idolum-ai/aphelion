@@ -333,6 +333,7 @@ func (r *Runtime) SystemStatusSnapshot(router core.RouterStatusSnapshot) (core.S
 		StaleRunningTurns:    make([]core.TurnRunStatusSnapshot, 0, 8),
 		HotChats:             make([]core.ChatStatusRollup, 0, 8),
 		RestartHealth:        r.restartHealthSnapshot(),
+		Autonomy:             r.AutonomyStatusSnapshot(),
 	}
 
 	if r == nil || r.store == nil {
