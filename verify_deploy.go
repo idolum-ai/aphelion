@@ -267,7 +267,7 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 			return "", err
 		}
 		if result == nil || strings.TrimSpace(result.Text) == "" {
-			return "", fmt.Errorf("golden path returned an empty governor result")
+			return "", fmt.Errorf("golden path returned an empty runtime result")
 		}
 
 		last, ok := built.Sender.Last()
@@ -534,7 +534,7 @@ func diagnoseDeployFailure(probe string, detail string) string {
 	case "boot":
 		return "deployment verification failed during runtime startup: " + detail
 	case "golden_path":
-		return "deployment verification failed on the live governor/Idolum golden path: " + detail
+		return "deployment verification failed on the live governed reply path: " + detail
 	case "persistence":
 		return "deployment verification failed after the live turn ran, while checking persisted session state: " + detail
 	default:

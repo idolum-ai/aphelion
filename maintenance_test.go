@@ -2110,7 +2110,7 @@ func TestRunVerifyDeployCommandPrintsFailureReport(t *testing.T) {
 			Blessed:        false,
 			ProbeChatID:    -9100000001,
 			ProbeSessionID: "telegram_dm:-9100000001",
-			Diagnosis:      "deployment verification failed on the live governor/Idolum golden path: no outbound reply",
+			Diagnosis:      "deployment verification failed on the live governed reply path: no outbound reply",
 			Probes: []deployProbeResult{
 				{Name: "boot", Status: deployProbeStatusPass, DurationMS: 12, Detail: "runtime initialized"},
 				{Name: "golden_path", Status: deployProbeStatusFail, DurationMS: 18, Detail: "no outbound reply"},
