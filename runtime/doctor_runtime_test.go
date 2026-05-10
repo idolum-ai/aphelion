@@ -170,6 +170,67 @@ func TestDoctorAuthorityProjectionHealthyWhenRecordsConsistent(t *testing.T) {
 	}
 }
 
+func TestDoctorMissionLedgerShowsHandoffAndResultEvidence(t *testing.T) {
+	cfg, store, _, _ := buildRuntimeFixtures(t)
+	now := time.Date(2026, 5, 10, 13, 30, 0, 0, time.UTC)
+	mission, err := store.UpsertMission(session.MissionState{
+		ID:        "mission-release-proof",
+		Title:     "Release proof",
+		Objective: "Track release restart evidence.",
+		Scope:     "system",
+		Owner:     "aphelion",
+		Status:    session.MissionStatusActive,
+	}, "test", "create")
+	if err != nil {
+		t.Fatalf("UpsertMission() err = %v", err)
+	}
+	if _, err := store.CreateMissionHandoff(session.MissionHandoff{
+		ID:               "handoff-release-restart",
+		MissionID:        mission.ID,
+		OperationID:      "op-release",
+		PlannedAction:    "restart aphelion.service",
+		RecoveryQuestion: "Did restart verification pass?",
+	}); err != nil {
+		t.Fatalf("CreateMissionHandoff() err = %v", err)
+	}
+	if _, err := store.CreateMissionHandoff(session.MissionHandoff{
+		ID:            "handoff-build",
+		MissionID:     mission.ID,
+		OperationID:   "op-release",
+		PlannedAction: "build release artifact",
+	}); err != nil {
+		t.Fatalf("CreateMissionHandoff(build) err = %v", err)
+	}
+	if _, err := store.RecordMissionResult(session.MissionResult{
+		HandoffID:     "handoff-build",
+		MissionID:     mission.ID,
+		OperationID:   "op-release",
+		Status:        "completed",
+		Summary:       "build artifact verified",
+		RemainingRisk: "restart still pending",
+	}); err != nil {
+		t.Fatalf("RecordMissionResult() err = %v", err)
+	}
+
+	rt := &Runtime{cfg: cfg, store: store}
+	var b strings.Builder
+	rt.writeDoctorMissionLedger(&b, session.SessionKey{ChatID: 1001, Scope: telegramDMScopeRef(1001)}, now)
+	report := b.String()
+	for _, want := range []string{
+		`mission_pending_handoffs="1"`,
+		"pending_mission_handoffs:",
+		`id=handoff-release-restart`,
+		`action="restart aphelion.service"`,
+		"recent_mission_results:",
+		`handoff_id=handoff-build`,
+		`summary="build artifact verified"`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("mission ledger report missing %q:\n%s", want, report)
+		}
+	}
+}
+
 func TestAuthorityProjectionReportsRemainingRoadmapChecks(t *testing.T) {
 	cfg, store, _, _ := buildRuntimeFixtures(t)
 	now := time.Date(2026, 5, 10, 14, 0, 0, 0, time.UTC)

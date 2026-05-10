@@ -20,6 +20,11 @@ import (
 
 const maxStartupRecoveryRuns = 20
 
+type startupRecoveryMissionEvidence struct {
+	PendingHandoffs []session.MissionHandoff
+	RecentResults   []session.MissionResult
+}
+
 func (r *Runtime) StartStartupRecovery(ctx context.Context, logger func(string, ...any)) {
 	if r == nil {
 		return
@@ -79,9 +84,19 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err != nil {
 		return fmt.Errorf("load pending recovery turn runs: %w", err)
 	}
+	missionEvidence, err := r.startupRecoveryMissionEvidence()
+	if err != nil {
+		return fmt.Errorf("load mission recovery evidence: %w", err)
+	}
 	if len(runs) == 0 {
 		resumeResult, resumeErr := r.resumeRestartParkedContinuations(ctx, now)
 		memoryNote := "continuity loaded; no recovery rows pending"
+		if len(missionEvidence.PendingHandoffs) > 0 {
+			memoryNote += fmt.Sprintf("; mission handoffs pending=%d", len(missionEvidence.PendingHandoffs))
+		}
+		if len(missionEvidence.RecentResults) > 0 {
+			memoryNote += fmt.Sprintf("; mission results recorded=%d", len(missionEvidence.RecentResults))
+		}
 		if repairedApprovals > 0 {
 			memoryNote += fmt.Sprintf("; invalid pending approvals repaired=%d", repairedApprovals)
 		}
@@ -136,7 +151,7 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	if err != nil {
 		return fmt.Errorf("load recovery prompt context: %w", err)
 	}
-	requestText := renderStartupRecoveryRequest(runs)
+	requestText := renderStartupRecoveryRequest(runs, missionEvidence)
 	r.recordExecutionEvent(maintenanceKey, core.ExecutionEventRecoveryIssued, "recovery", "issued", map[string]any{
 		"pending_count": len(runs),
 		"request_text":  truncatePreview(strings.TrimSpace(requestText), 220),
@@ -250,12 +265,31 @@ func (r *Runtime) runStartupRecoveryOnce(ctx context.Context, now time.Time) (er
 	return nil
 }
 
-func renderStartupRecoveryRequest(runs []session.TurnRun) string {
+func (r *Runtime) startupRecoveryMissionEvidence() (startupRecoveryMissionEvidence, error) {
+	if r == nil || r.store == nil {
+		return startupRecoveryMissionEvidence{}, nil
+	}
+	handoffs, err := r.store.MissionHandoffs(session.MissionHandoffFilter{Status: "pending", Limit: 5})
+	if err != nil {
+		return startupRecoveryMissionEvidence{}, err
+	}
+	results, err := r.store.MissionResults(5)
+	if err != nil {
+		return startupRecoveryMissionEvidence{}, err
+	}
+	return startupRecoveryMissionEvidence{PendingHandoffs: handoffs, RecentResults: results}, nil
+}
+
+func renderStartupRecoveryRequest(runs []session.TurnRun, evidence ...startupRecoveryMissionEvidence) string {
 	lines := []string{
 		"Startup recovery analysis.",
 		"The previous service process ended while the following turns were still running.",
 		"Analyze where execution likely stopped and suggest safe recovery options.",
 		"",
+	}
+
+	if len(evidence) > 0 {
+		lines = appendStartupRecoveryMissionEvidence(lines, evidence[0])
 	}
 
 	for _, run := range runs {
@@ -294,6 +328,39 @@ func renderStartupRecoveryRequest(runs []session.TurnRun) string {
 
 	lines = append(lines, "Return a concise recovery note. The runtime will persist it into the maintenance ledger and recovered turn rows.")
 	return strings.Join(lines, "\n")
+}
+
+func appendStartupRecoveryMissionEvidence(lines []string, evidence startupRecoveryMissionEvidence) []string {
+	if len(evidence.PendingHandoffs) == 0 && len(evidence.RecentResults) == 0 {
+		return lines
+	}
+	lines = append(lines, "Mission handoff/result evidence:")
+	if len(evidence.PendingHandoffs) > 0 {
+		lines = append(lines, "pending_handoffs:")
+		for _, handoff := range evidence.PendingHandoffs {
+			lines = append(lines, fmt.Sprintf("  - handoff_id=%s mission_id=%s operation_id=%s status=%s", handoff.ID, handoff.MissionID, handoff.OperationID, handoff.Status))
+			lines = append(lines, "    planned_action="+strconv.Quote(truncatePreview(handoff.PlannedAction, 180)))
+			lines = append(lines, "    recovery_question="+strconv.Quote(truncatePreview(handoff.RecoveryQuestion, 180)))
+			if strings.TrimSpace(handoff.ExpectedEvidenceJSON) != "" {
+				lines = append(lines, "    expected_evidence="+truncatePreview(handoff.ExpectedEvidenceJSON, 220))
+			}
+		}
+	}
+	if len(evidence.RecentResults) > 0 {
+		lines = append(lines, "recent_results:")
+		for _, result := range evidence.RecentResults {
+			lines = append(lines, fmt.Sprintf("  - result_id=%s handoff_id=%s mission_id=%s operation_id=%s status=%s", result.ID, result.HandoffID, result.MissionID, result.OperationID, result.Status))
+			lines = append(lines, "    summary="+strconv.Quote(truncatePreview(result.Summary, 180)))
+			if strings.TrimSpace(result.EvidenceRefsJSON) != "" {
+				lines = append(lines, "    evidence_refs="+truncatePreview(result.EvidenceRefsJSON, 220))
+			}
+			if strings.TrimSpace(result.RemainingRisk) != "" {
+				lines = append(lines, "    remaining_risk="+strconv.Quote(truncatePreview(result.RemainingRisk, 180)))
+			}
+		}
+	}
+	lines = append(lines, "")
+	return lines
 }
 
 func (r *Runtime) flushRecoveryRunMemory(ctx context.Context, runs []session.TurnRun, reason string) {

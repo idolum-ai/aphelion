@@ -146,6 +146,13 @@ type MissionFilter struct {
 	Limit  int
 }
 
+type MissionHandoffFilter struct {
+	MissionID   string
+	OperationID string
+	Status      string
+	Limit       int
+}
+
 type MissionLedgerHealth struct {
 	ActiveCount                  int
 	CandidateCount               int
@@ -676,6 +683,58 @@ func (s *SQLiteStore) CreateMissionHandoff(h MissionHandoff) (MissionHandoff, er
 	return h, nil
 }
 
+func (s *SQLiteStore) MissionHandoffs(filter MissionHandoffFilter) ([]MissionHandoff, error) {
+	if s == nil {
+		return nil, fmt.Errorf("store is nil")
+	}
+	if filter.Limit <= 0 || filter.Limit > 100 {
+		filter.Limit = 20
+	}
+	filter.MissionID = strings.TrimSpace(filter.MissionID)
+	filter.OperationID = strings.TrimSpace(filter.OperationID)
+	filter.Status = strings.TrimSpace(filter.Status)
+	query := `
+		SELECT id, mission_id, operation_id, planned_action, expected_evidence_json, recovery_question, status, created_at, updated_at
+		FROM mission_handoffs
+	`
+	args := make([]any, 0, 4)
+	clauses := make([]string, 0, 3)
+	if filter.MissionID != "" {
+		clauses = append(clauses, "mission_id = ?")
+		args = append(args, filter.MissionID)
+	}
+	if filter.OperationID != "" {
+		clauses = append(clauses, "operation_id = ?")
+		args = append(args, filter.OperationID)
+	}
+	if filter.Status != "" {
+		clauses = append(clauses, "status = ?")
+		args = append(args, filter.Status)
+	}
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	query += ` ORDER BY updated_at DESC, created_at DESC, id ASC LIMIT ?`
+	args = append(args, filter.Limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query mission handoffs: %w", err)
+	}
+	defer rows.Close()
+	out := make([]MissionHandoff, 0, filter.Limit)
+	for rows.Next() {
+		handoff, err := scanMissionHandoff(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, handoff)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate mission handoffs: %w", err)
+	}
+	return out, nil
+}
+
 func (s *SQLiteStore) RecordMissionResult(result MissionResult) (MissionResult, error) {
 	if s == nil {
 		return MissionResult{}, fmt.Errorf("store is nil")
@@ -717,6 +776,37 @@ func (s *SQLiteStore) RecordMissionResult(result MissionResult) (MissionResult, 
 		return MissionResult{}, fmt.Errorf("commit mission result tx: %w", err)
 	}
 	return result, nil
+}
+
+func (s *SQLiteStore) MissionResults(limit int) ([]MissionResult, error) {
+	if s == nil {
+		return nil, fmt.Errorf("store is nil")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.db.Query(`
+		SELECT id, handoff_id, mission_id, operation_id, status, evidence_refs_json, summary, remaining_risk, recorded_at
+		FROM mission_results
+		ORDER BY recorded_at DESC, id ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query mission results: %w", err)
+	}
+	defer rows.Close()
+	out := make([]MissionResult, 0, limit)
+	for rows.Next() {
+		result, err := scanMissionResult(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, result)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate mission results: %w", err)
+	}
+	return out, nil
 }
 
 func (s *SQLiteStore) MissionLedgerHealth(now time.Time) (MissionLedgerHealth, error) {
@@ -977,6 +1067,56 @@ func scanMissionEvent(scanner missionScanner) (MissionEvent, error) {
 	}
 	event.CreatedAt = mustParseSQLiteTime(rawTime)
 	return event, nil
+}
+
+func scanMissionHandoff(scanner missionScanner) (MissionHandoff, error) {
+	var handoff MissionHandoff
+	var missionID, operationID, expectedRaw sql.NullString
+	var createdRaw, updatedRaw string
+	if err := scanner.Scan(
+		&handoff.ID,
+		&missionID,
+		&operationID,
+		&handoff.PlannedAction,
+		&expectedRaw,
+		&handoff.RecoveryQuestion,
+		&handoff.Status,
+		&createdRaw,
+		&updatedRaw,
+	); err != nil {
+		return MissionHandoff{}, err
+	}
+	handoff.MissionID = nullToString(missionID)
+	handoff.OperationID = nullToString(operationID)
+	handoff.ExpectedEvidenceJSON = nullToString(expectedRaw)
+	handoff.CreatedAt = mustParseSQLiteTime(createdRaw)
+	handoff.UpdatedAt = mustParseSQLiteTime(updatedRaw)
+	return handoff, nil
+}
+
+func scanMissionResult(scanner missionScanner) (MissionResult, error) {
+	var result MissionResult
+	var missionID, operationID, evidenceRaw, remainingRisk sql.NullString
+	var recordedRaw string
+	if err := scanner.Scan(
+		&result.ID,
+		&result.HandoffID,
+		&missionID,
+		&operationID,
+		&result.Status,
+		&evidenceRaw,
+		&result.Summary,
+		&remainingRisk,
+		&recordedRaw,
+	); err != nil {
+		return MissionResult{}, err
+	}
+	result.MissionID = nullToString(missionID)
+	result.OperationID = nullToString(operationID)
+	result.EvidenceRefsJSON = nullToString(evidenceRaw)
+	result.RemainingRisk = nullToString(remainingRisk)
+	result.RecordedAt = mustParseSQLiteTime(recordedRaw)
+	return result, nil
 }
 
 func appendMissionEventTx(tx *sql.Tx, event MissionEvent) error {

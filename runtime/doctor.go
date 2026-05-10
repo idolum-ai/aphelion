@@ -1067,6 +1067,30 @@ func (r *Runtime) writeDoctorMissionLedger(b *strings.Builder, key session.Sessi
 	if working, err := r.store.WorkingObjective(key); err == nil && strings.TrimSpace(working.Objective) != "" {
 		writeDoctorKV(b, "working_objective", truncatePreview(working.Objective, 400))
 	}
+	handoffs, err := r.store.MissionHandoffs(session.MissionHandoffFilter{Status: "pending", Limit: 5})
+	if err != nil {
+		writeDoctorLine(b, "mission_handoff_error="+strconv.Quote(err.Error()))
+	} else {
+		writeDoctorLine(b, "pending_mission_handoffs:")
+		if len(handoffs) == 0 {
+			writeDoctorLine(b, "- none")
+		}
+		for _, handoff := range handoffs {
+			writeDoctorLine(b, fmt.Sprintf("- id=%s mission_id=%s operation_id=%s action=%q question=%q", handoff.ID, handoff.MissionID, handoff.OperationID, truncatePreview(handoff.PlannedAction, 120), truncatePreview(handoff.RecoveryQuestion, 120)))
+		}
+	}
+	results, err := r.store.MissionResults(5)
+	if err != nil {
+		writeDoctorLine(b, "mission_result_error="+strconv.Quote(err.Error()))
+	} else {
+		writeDoctorLine(b, "recent_mission_results:")
+		if len(results) == 0 {
+			writeDoctorLine(b, "- none")
+		}
+		for _, result := range results {
+			writeDoctorLine(b, fmt.Sprintf("- id=%s handoff_id=%s mission_id=%s operation_id=%s status=%s summary=%q", result.ID, result.HandoffID, result.MissionID, result.OperationID, result.Status, truncatePreview(result.Summary, 120)))
+		}
+	}
 	missions, err := r.store.Missions(session.MissionFilter{Limit: 12})
 	if err != nil {
 		writeDoctorLine(b, "mission_list_error="+strconv.Quote(err.Error()))

@@ -643,6 +643,14 @@ only then compatibility fallback. If evidence is missing, recovery says unknown.
 This is required before broad self-continuation. Otherwise the system can appear
 to remember outcomes that it only inferred from interrupted chat.
 
+Current implementation status:
+
+- `mission_handoffs` and `mission_results` exist in SQLite.
+- `mission_ledger` can create handoffs and record results.
+- startup recovery includes pending handoffs and recent results before
+  interrupted-turn facts.
+- `/doctor` renders pending handoff details and recent mission results.
+
 ## Proposal and Capability Integration
 
 Pinning and self-continuation are different gates.

@@ -167,6 +167,13 @@ func TestMissionHandoffAndResultUpdateHealth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMissionHandoff() err = %v", err)
 	}
+	handoffs, err := store.MissionHandoffs(MissionHandoffFilter{Status: "pending", Limit: 5})
+	if err != nil {
+		t.Fatalf("MissionHandoffs() err = %v", err)
+	}
+	if len(handoffs) != 1 || handoffs[0].ID != handoff.ID || handoffs[0].PlannedAction != "restart service" {
+		t.Fatalf("MissionHandoffs() = %#v, want pending restart handoff", handoffs)
+	}
 	health, err := store.MissionLedgerHealth(time.Now().UTC())
 	if err != nil {
 		t.Fatalf("MissionLedgerHealth() err = %v", err)
@@ -174,8 +181,15 @@ func TestMissionHandoffAndResultUpdateHealth(t *testing.T) {
 	if health.PendingHandoffCount != 1 {
 		t.Fatalf("health = %#v, want pending handoff", health)
 	}
-	if _, err := store.RecordMissionResult(MissionResult{HandoffID: handoff.ID, MissionID: mission.ID, Status: "completed", Summary: "restart verified"}); err != nil {
+	if _, err := store.RecordMissionResult(MissionResult{HandoffID: handoff.ID, MissionID: mission.ID, Status: "completed", Summary: "restart verified", EvidenceRefsJSON: `["tes:restart"]`}); err != nil {
 		t.Fatalf("RecordMissionResult() err = %v", err)
+	}
+	results, err := store.MissionResults(5)
+	if err != nil {
+		t.Fatalf("MissionResults() err = %v", err)
+	}
+	if len(results) != 1 || results[0].HandoffID != handoff.ID || results[0].EvidenceRefsJSON != `["tes:restart"]` {
+		t.Fatalf("MissionResults() = %#v, want recorded restart result", results)
 	}
 	health, err = store.MissionLedgerHealth(time.Now().UTC())
 	if err != nil {
