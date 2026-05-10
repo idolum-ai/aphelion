@@ -127,6 +127,11 @@ type stubCommandRouter struct {
 	tailnetSurfaces              []core.TailnetSurfaceStatus
 	tailnetSurfacesErr           error
 	tailnetSurfacesSenderID      int64
+	latestDoctorReport           session.DoctorReportRecord
+	latestDoctorReportOK         bool
+	latestDoctorReportErr        error
+	latestDoctorReportChatID     int64
+	latestDoctorReportSenderID   int64
 	revokeTailnetSurfaceSenderID int64
 	revokeTailnetSurfaceID       string
 	revokeTailnetSurfaceReason   string
@@ -526,6 +531,16 @@ func (s *stubCommandRouter) QueueDoctor(ctx context.Context, msg core.InboundMes
 	s.queuedDoctorMsg = &copied
 	_ = ctx
 	return s.queueDoctorErr
+}
+
+func (s *stubCommandRouter) LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error) {
+	_ = ctx
+	s.latestDoctorReportChatID = chatID
+	s.latestDoctorReportSenderID = senderID
+	if s.latestDoctorReportErr != nil {
+		return session.DoctorReportRecord{}, false, s.latestDoctorReportErr
+	}
+	return s.latestDoctorReport, s.latestDoctorReportOK, nil
 }
 
 func (s *stubCommandRouter) Restart(chatID int64) error {

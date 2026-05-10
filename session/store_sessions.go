@@ -482,6 +482,61 @@ func (s *SQLiteStore) StatusStateIfExists(key SessionKey) (SessionStatusState, b
 	}, true, nil
 }
 
+func (s *SQLiteStore) LatestDoctorReport(key SessionKey) (DoctorReportRecord, bool, error) {
+	sessionID := SessionIDForKey(key)
+	var (
+		record       DoctorReportRecord
+		floorRaw     sql.NullString
+		floorMetaRaw sql.NullString
+		createdAtRaw string
+	)
+	err := s.db.QueryRow(`
+		SELECT
+			a.session_id,
+			a.chat_id,
+			a.user_id,
+			a.turn_index,
+			a.content,
+			a.floor_content,
+			a.floor_metadata,
+			a.created_at
+		FROM messages a
+		JOIN messages u
+			ON u.session_id = a.session_id
+			AND u.turn_index = a.turn_index
+			AND u.role = 'user'
+			AND u.content = '/doctor'
+		WHERE a.session_id = ?
+			AND a.role = 'assistant'
+			AND a.compacted = 0
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT 1
+	`, sessionID).Scan(
+		&record.SessionID,
+		&record.ChatID,
+		&record.UserID,
+		&record.TurnIndex,
+		&record.FullReport,
+		&floorRaw,
+		&floorMetaRaw,
+		&createdAtRaw,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DoctorReportRecord{}, false, nil
+	}
+	if err != nil {
+		return DoctorReportRecord{}, false, fmt.Errorf("load latest doctor report: %w", err)
+	}
+	record.TelegramReport = strings.TrimSpace(floorRaw.String)
+	record.FloorMetadata = strings.TrimSpace(floorMetaRaw.String)
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return DoctorReportRecord{}, false, fmt.Errorf("parse latest doctor report created_at: %w", err)
+	}
+	record.CreatedAt = createdAt
+	return record, true, nil
+}
+
 func (s *SQLiteStore) ContinuationStates() ([]ContinuationStateRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT

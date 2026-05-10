@@ -54,6 +54,7 @@ type commandRouter interface {
 	TriggerContinuation(ctx context.Context, chatID int64) error
 	QueueReinstall(ctx context.Context, msg core.InboundMessage) error
 	QueueDoctor(ctx context.Context, msg core.InboundMessage) error
+	LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error)
 	ConfigureAutoApproval(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	ConfigureAutonomy(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	CurrentEfforts() (persona string, governor string)

@@ -1234,6 +1234,10 @@ Build:
 
 - CLI commands for overview, status, doctor latest, active turns, pending
   decisions, and tailnet surfaces.
+- Tailnet-private JSON projections for health, tailnet state, status, owned
+  surfaces, and the latest persisted `/doctor` report. These are
+  machine-readable mirrors of Telegram/CLI state, not a separate operator
+  dashboard.
 - compact Telegram summaries and inline controls that call existing
   decision/control paths.
 - no public exposure.
@@ -1818,11 +1822,11 @@ Tailnet setup ready.
 The admin is away from the machine. Aphelion is connected to the tailnet as
 `aphelion-admin`.
 
-1. Admin opens `https://aphelion-admin.<tailnet>/doctor`.
-2. Tailnet identity proves the request came from a known admin device.
-3. Aphelion still checks local admin admission.
-4. The admin clicks "Run doctor."
-5. The report is written to session history and also visible in Telegram.
+1. Admin runs `/doctor` from Telegram or the CLI.
+2. The report is written to session history and also visible in Telegram.
+3. Tailnet-private health clients may read `/doctor/latest` as JSON for the
+   latest persisted report after local admin admission is checked by the
+   parent service configuration.
 
 ### 2. Child Requests Private Service Access
 
@@ -1865,7 +1869,8 @@ Fastest useful order:
 3. Done: add read-only CLI backend.
 4. Done: add `/status`, `/doctor`, and `/tailnet` read-only projections.
 5. Done: add parent `tsnet` node behind config.
-6. Done: add CLI/Telegram status projections.
+6. Done: add CLI/Telegram status projections and Tailnet-private latest doctor
+   JSON.
 7. Done: add `tailnet_surfaces` table.
 8. Done: add child tailnet profile fields and declaration sync.
 9. Next: materialize one declared child `tsnet` node with private status only.

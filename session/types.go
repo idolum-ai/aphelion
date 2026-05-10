@@ -1031,6 +1031,17 @@ type SessionStatusState struct {
 	OutboundCountAtTurn int
 }
 
+type DoctorReportRecord struct {
+	SessionID      string    `json:"session_id"`
+	ChatID         int64     `json:"chat_id"`
+	UserID         int64     `json:"user_id"`
+	TurnIndex      int       `json:"turn_index"`
+	FullReport     string    `json:"full_report"`
+	TelegramReport string    `json:"telegram_report"`
+	FloorMetadata  string    `json:"floor_metadata,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 // Message is one persisted conversation message.
 type Message struct {
 	ID                int64

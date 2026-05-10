@@ -430,6 +430,16 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 	if assistantMsg.Role != "assistant" || !strings.Contains(assistantMsg.Content, "Runtime is diagnosable") {
 		t.Fatalf("assistant doctor message = %#v, want persisted report", assistantMsg)
 	}
+	latest, ok, err := rt.LatestDoctorReport(context.Background(), 1001, 1001)
+	if err != nil {
+		t.Fatalf("LatestDoctorReport() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("LatestDoctorReport() ok = false, want persisted report")
+	}
+	if latest.FullReport != assistantMsg.Content || latest.TelegramReport != assistantMsg.FloorContent || latest.TurnIndex != assistantMsg.TurnIndex {
+		t.Fatalf("LatestDoctorReport() = %#v, want persisted assistant doctor message", latest)
+	}
 
 	var userPrompt string
 	provider.mu.Lock()

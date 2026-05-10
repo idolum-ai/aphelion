@@ -2783,6 +2783,79 @@ func TestStatusStateIfExistsReturnsPersistedStateAndOutboundCount(t *testing.T) 
 	}
 }
 
+func TestLatestDoctorReportReturnsMostRecentSyntheticDoctorTurn(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1911, UserID: 0}
+	sess, err := store.Load(key)
+	if err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	firstAt := time.Date(2026, 5, 10, 6, 0, 0, 0, time.UTC)
+	secondAt := firstAt.Add(time.Hour)
+	sess.TurnCount = 1
+	if err := store.Save(sess, []Message{
+		{Role: "user", Content: "/doctor", TurnIndex: 1, CreatedAt: firstAt},
+		{Role: "assistant", Content: "old full report", FloorContent: "old telegram report", FloorMetadata: "doctor_full_report_chars=15", TurnIndex: 1, CreatedAt: firstAt},
+	}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(first doctor) err = %v", err)
+	}
+	sess.TurnCount = 2
+	if err := store.Save(sess, []Message{
+		{Role: "user", Content: "ordinary turn", TurnIndex: 2, CreatedAt: firstAt.Add(30 * time.Minute)},
+		{Role: "assistant", Content: "ordinary report", TurnIndex: 2, CreatedAt: firstAt.Add(30 * time.Minute)},
+	}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(ordinary turn) err = %v", err)
+	}
+	sess.TurnCount = 3
+	if err := store.Save(sess, []Message{
+		{Role: "user", Content: "/doctor", TurnIndex: 3, CreatedAt: secondAt},
+		{Role: "assistant", Content: "new full report", FloorContent: "new telegram report", FloorMetadata: "doctor_full_report_chars=15", TurnIndex: 3, CreatedAt: secondAt},
+	}, core.TokenUsage{}); err != nil {
+		t.Fatalf("Save(second doctor) err = %v", err)
+	}
+
+	report, ok, err := store.LatestDoctorReport(key)
+	if err != nil {
+		t.Fatalf("LatestDoctorReport() err = %v", err)
+	}
+	if !ok {
+		t.Fatal("LatestDoctorReport() ok = false, want true")
+	}
+	if report.FullReport != "new full report" || report.TelegramReport != "new telegram report" || report.TurnIndex != 3 {
+		t.Fatalf("LatestDoctorReport() = %#v, want newest doctor report", report)
+	}
+	if !report.CreatedAt.Equal(secondAt) {
+		t.Fatalf("CreatedAt = %s, want %s", report.CreatedAt, secondAt)
+	}
+}
+
+func TestLatestDoctorReportDoesNotCreateSession(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	key := SessionKey{ChatID: 1912, UserID: 0}
+	report, ok, err := store.LatestDoctorReport(key)
+	if err != nil {
+		t.Fatalf("LatestDoctorReport() err = %v", err)
+	}
+	if ok {
+		t.Fatalf("LatestDoctorReport() = %#v, ok=true; want no report", report)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(1) FROM sessions WHERE session_id = ?`, SessionIDForKey(key)).Scan(&count); err != nil {
+		t.Fatalf("query sessions count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("sessions row count = %d, want 0", count)
+	}
+}
+
 func TestCompleteTurnRun(t *testing.T) {
 	t.Parallel()
 

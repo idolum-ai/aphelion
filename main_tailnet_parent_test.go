@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tailnet"
 )
 
@@ -49,6 +51,15 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 			SurfaceID: "parent:tsnet_http:status",
 			Status:    "active",
 		}},
+		latestDoctorReport: session.DoctorReportRecord{
+			SessionID:      "telegram_dm:1001",
+			ChatID:         1001,
+			TurnIndex:      7,
+			FullReport:     "State of Things\nRuntime is diagnosable.",
+			TelegramReport: "State of Things\nRuntime is diagnosable.",
+			CreatedAt:      time.Date(2026, 5, 10, 7, 0, 0, 0, time.UTC),
+		},
+		latestDoctorReportOK: true,
 		statusSystem: core.SystemStatusSnapshot{
 			ActiveTurnCount: 1,
 		},
@@ -73,6 +84,15 @@ func TestTailnetPrivateHTTPHandlerServesHealthTailnetAndStatus(t *testing.T) {
 	}
 	if router.tailnetSurfacesSenderID != 1001 {
 		t.Fatalf("tailnet surfaces sender = %d, want admin id", router.tailnetSurfacesSenderID)
+	}
+	if router.latestDoctorReportChatID != 1001 || router.latestDoctorReportSenderID != 1001 {
+		t.Fatalf("doctor latest lookup = (%d,%d), want configured admin chat/sender", router.latestDoctorReportChatID, router.latestDoctorReportSenderID)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/doctor/latest", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `"available":true`) || !strings.Contains(rec.Body.String(), `"full_report":"State of Things`) {
+		t.Fatalf("doctor latest body = %q, want latest report payload", rec.Body.String())
 	}
 }
 

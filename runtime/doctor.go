@@ -105,6 +105,26 @@ func (r *Runtime) StartDoctor(ctx context.Context, msg core.InboundMessage) erro
 	return nil
 }
 
+func (r *Runtime) LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error) {
+	_ = ctx
+	if r == nil || r.store == nil {
+		return session.DoctorReportRecord{}, false, fmt.Errorf("runtime doctor dependencies are unavailable")
+	}
+	actor, err := r.resolveDoctorAdmin(core.InboundMessage{
+		ChatID:   chatID,
+		SenderID: senderID,
+		ChatType: "private",
+	})
+	if err != nil {
+		return session.DoctorReportRecord{}, false, err
+	}
+	if actor.Role != principal.RoleAdmin {
+		return session.DoctorReportRecord{}, false, ErrPrincipalDenied
+	}
+	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	return r.store.LatestDoctorReport(key)
+}
+
 func (r *Runtime) runDoctorOnce(ctx context.Context, msg core.InboundMessage, now time.Time) (err error) {
 	if r == nil || r.store == nil || r.provider == nil || r.outbound == nil {
 		return fmt.Errorf("runtime doctor dependencies are unavailable")

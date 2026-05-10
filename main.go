@@ -597,6 +597,13 @@ func (c telegramCommandControl) MissionCommand(ctx context.Context, chatID int64
 	return c.rt.MissionCommand(ctx, chatID, senderID, args)
 }
 
+func (c telegramCommandControl) LatestDoctorReport(ctx context.Context, chatID int64, senderID int64) (session.DoctorReportRecord, bool, error) {
+	if c.rt == nil {
+		return session.DoctorReportRecord{}, false, fmt.Errorf("Doctor report storage is unavailable.")
+	}
+	return c.rt.LatestDoctorReport(ctx, chatID, senderID)
+}
+
 func (c telegramCommandControl) MissionActionProposal(ctx context.Context, chatID int64, senderID int64, missionID string) (session.ActionProposal, error) {
 	if c.rt == nil {
 		return session.ActionProposal{}, fmt.Errorf("Mission Ledger is unavailable.")
