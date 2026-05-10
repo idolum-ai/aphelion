@@ -56,7 +56,8 @@ func TestCodexImageGenerationInvokesBuiltInAndWritesArtifact(t *testing.T) {
 	p := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"}
 	grantToolInvoke(t, store, codexImageGenerationToolName, "durable_agent:child-alpha")
 
-	out, err := registry.executeWithScopeAndPrincipal(context.Background(), codexImageGenerationToolName, json.RawMessage(`{"prompt":"make a slide"}`), sandbox.Scope{WorkingRoot: registry.workspace, SharedMemoryRoot: registry.workspace}, p, session.SessionKey{})
+	key := adminSessionKey()
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), codexImageGenerationToolName, json.RawMessage(`{"prompt":"make a slide"}`), sandbox.Scope{WorkingRoot: registry.workspace, SharedMemoryRoot: registry.workspace}, p, key)
 	if err != nil {
 		t.Fatalf("codex_image_generation err = %v output=%s", err, out)
 	}
@@ -76,6 +77,13 @@ func TestCodexImageGenerationInvokesBuiltInAndWritesArtifact(t *testing.T) {
 	}
 	if grant.InvocationCount == 0 {
 		t.Fatalf("InvocationCount = 0, want recorded invocation")
+	}
+	invocations, err := store.CapabilityInvocationsByGrant(grant.GrantID, 1)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant() err = %v", err)
+	}
+	if len(invocations) != 1 || invocations[0].ContinuationLeaseID == "" {
+		t.Fatalf("codex_image_generation invocation refs = %#v, want continuation lease evidence", invocations)
 	}
 }
 

@@ -453,9 +453,25 @@ func (s *SQLiteStore) RecordCapabilityInvocation(invocation CapabilityInvocation
 	}
 	defer func() { _ = tx.Rollback() }()
 	res, err := tx.Exec(`
-		INSERT INTO capability_invocations(grant_id, principal, action, status, error_text, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, invocation.GrantID, invocation.Principal, invocation.Action, invocation.Status, invocation.ErrorText, createdAt.Format(time.RFC3339Nano))
+		INSERT INTO capability_invocations(
+			grant_id, principal, action, status, error_text,
+			session_id, turn_run_id, continuation_lease_id, operation_plan_lease_id, authority_source,
+			created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		invocation.GrantID,
+		invocation.Principal,
+		invocation.Action,
+		invocation.Status,
+		invocation.ErrorText,
+		invocation.SessionID,
+		invocation.TurnRunID,
+		invocation.ContinuationLeaseID,
+		invocation.OperationPlanLeaseID,
+		invocation.AuthoritySource,
+		createdAt.Format(time.RFC3339Nano),
+	)
 	if err != nil {
 		return CapabilityInvocation{}, fmt.Errorf("record capability invocation: %w", err)
 	}
@@ -483,6 +499,49 @@ func (s *SQLiteStore) RecordCapabilityInvocation(invocation CapabilityInvocation
 	invocation.InvocationID = id
 	invocation.CreatedAt = createdAt
 	return invocation, nil
+}
+
+func (s *SQLiteStore) CapabilityInvocations(limit int) ([]CapabilityInvocation, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 500
+	}
+	rows, err := s.db.Query(`
+		SELECT id, grant_id, principal, action, status, error_text,
+			session_id, turn_run_id, continuation_lease_id, operation_plan_lease_id, authority_source,
+			created_at
+		FROM capability_invocations
+		ORDER BY created_at DESC, id DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query capability invocations: %w", err)
+	}
+	defer rows.Close()
+	return scanCapabilityInvocationRows(rows)
+}
+
+func (s *SQLiteStore) CapabilityInvocationsByGrant(grantID string, limit int) ([]CapabilityInvocation, error) {
+	grantID = strings.TrimSpace(grantID)
+	if grantID == "" {
+		return nil, fmt.Errorf("capability invocation grant_id is required")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`
+		SELECT id, grant_id, principal, action, status, error_text,
+			session_id, turn_run_id, continuation_lease_id, operation_plan_lease_id, authority_source,
+			created_at
+		FROM capability_invocations
+		WHERE grant_id = ?
+		ORDER BY created_at DESC, id DESC
+		LIMIT ?
+	`, grantID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query capability invocations for grant %q: %w", grantID, err)
+	}
+	defer rows.Close()
+	return scanCapabilityInvocationRows(rows)
 }
 
 func capabilityGrantAllowsAction(grant CapabilityGrant, action string) bool {
@@ -545,6 +604,64 @@ func scanCapabilityRequest(scanner interface{ Scan(dest ...any) error }) (Capabi
 	request.CreatedAt = createdAt
 	request.UpdatedAt = updatedAt
 	return NormalizeCapabilityRequest(request), nil
+}
+
+func scanCapabilityInvocationRows(rows *sql.Rows) ([]CapabilityInvocation, error) {
+	invocations := []CapabilityInvocation{}
+	for rows.Next() {
+		invocation, err := scanCapabilityInvocation(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan capability invocation: %w", err)
+		}
+		invocations = append(invocations, invocation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate capability invocations: %w", err)
+	}
+	return invocations, nil
+}
+
+func scanCapabilityInvocation(scanner interface{ Scan(dest ...any) error }) (CapabilityInvocation, error) {
+	var (
+		invocation  CapabilityInvocation
+		createdRaw  string
+		statusRaw   string
+		actionRaw   string
+		sourceRaw   string
+		errorText   string
+		sessionID   string
+		leaseID     string
+		planLeaseID string
+	)
+	if err := scanner.Scan(
+		&invocation.InvocationID,
+		&invocation.GrantID,
+		&invocation.Principal,
+		&actionRaw,
+		&statusRaw,
+		&errorText,
+		&sessionID,
+		&invocation.TurnRunID,
+		&leaseID,
+		&planLeaseID,
+		&sourceRaw,
+		&createdRaw,
+	); err != nil {
+		return CapabilityInvocation{}, err
+	}
+	createdAt, err := parseSQLiteTime(createdRaw)
+	if err != nil {
+		return CapabilityInvocation{}, fmt.Errorf("parse capability invocation created_at: %w", err)
+	}
+	invocation.Action = actionRaw
+	invocation.Status = statusRaw
+	invocation.ErrorText = errorText
+	invocation.SessionID = sessionID
+	invocation.ContinuationLeaseID = leaseID
+	invocation.OperationPlanLeaseID = planLeaseID
+	invocation.AuthoritySource = sourceRaw
+	invocation.CreatedAt = createdAt
+	return NormalizeCapabilityInvocation(invocation), nil
 }
 
 func scanCapabilityReview(scanner interface{ Scan(dest ...any) error }) (CapabilityReview, error) {

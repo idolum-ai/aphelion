@@ -201,7 +201,8 @@ print(json.dumps({'summary':'ok','action':payload.get('action'),'username':paylo
 	}
 
 	actor := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-public-feed"}
-	key := session.SessionKey{}
+	key := adminSessionKey()
+	grantAuthorityUseLease(t, store, key)
 	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"example_handle"}`))
 	if err != nil {
 		t.Fatalf("allowed scoped invoke err = %v", err)

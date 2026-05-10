@@ -49,27 +49,32 @@ func (r *Registry) codexImageGenerationAccessAllowed(p principal.Principal) (boo
 	return ok, err
 }
 
-func (r *Registry) requireCodexImageGenerationAccess(p principal.Principal) (session.CapabilityGrant, error) {
+func (r *Registry) requireCodexImageGenerationAccess(p principal.Principal, key session.SessionKey) (session.CapabilityGrant, session.AuthorityUseRef, error) {
 	if r == nil || r.store == nil {
-		return session.CapabilityGrant{}, fmt.Errorf("%s requires transcript store", codexImageGenerationToolName)
+		return session.CapabilityGrant{}, session.AuthorityUseRef{}, fmt.Errorf("%s requires transcript store", codexImageGenerationToolName)
 	}
 	if r.codexImageGenerationProvider == nil {
-		return session.CapabilityGrant{}, fmt.Errorf("%s provider is not configured", codexImageGenerationToolName)
+		return session.CapabilityGrant{}, session.AuthorityUseRef{}, fmt.Errorf("%s provider is not configured", codexImageGenerationToolName)
 	}
 	grant, ok, err := r.capabilityGrantAllowsAuthorityToolAccess(codexImageGenerationToolName, p)
 	if err != nil {
-		return session.CapabilityGrant{}, err
+		return session.CapabilityGrant{}, session.AuthorityUseRef{}, err
 	}
 	if !ok {
-		return session.CapabilityGrant{}, fmt.Errorf("tool %q is not granted to principal %q", codexImageGenerationToolName, toolAuthorityPrincipalDisplay(p))
+		return session.CapabilityGrant{}, session.AuthorityUseRef{}, fmt.Errorf("tool %q is not granted to principal %q", codexImageGenerationToolName, toolAuthorityPrincipalDisplay(p))
 	}
-	return grant, nil
+	useRef, err := r.authorityUseRefForGrant(codexImageGenerationToolName, key)
+	if err != nil {
+		_ = r.recordCodexImageGenerationInvocation(grant, p, useRef, "blocked", err.Error())
+		return grant, useRef, err
+	}
+	return grant, useRef, nil
 }
 
-func (r *Registry) codexImageGeneration(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal) (string, error) {
-	grant, err := r.requireCodexImageGenerationAccess(p)
+func (r *Registry) codexImageGeneration(ctx context.Context, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
+	grant, useRef, err := r.requireCodexImageGenerationAccess(p, key)
 	if err != nil {
-		return codexImageGenerationBlocker("blocked", err.Error(), ""), err
+		return codexImageGenerationBlocker("blocked", err.Error(), grant.GrantID), err
 	}
 	var in codexImageGenerationInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -87,7 +92,7 @@ func (r *Registry) codexImageGeneration(ctx context.Context, input json.RawMessa
 	tools := []agent.ToolDef{{Name: "image_generation", Parameters: codexImageGenerationBuiltinParams(outputFormat)}}
 	resp, err := r.codexImageGenerationProvider.Complete(ctx, messages, tools)
 	if err != nil {
-		_ = r.recordCodexImageGenerationInvocation(grant, p, "failed", err.Error())
+		_ = r.recordCodexImageGenerationInvocation(grant, p, useRef, "failed", err.Error())
 		return codexImageGenerationBlocker("blocked", err.Error(), grant.GrantID), err
 	}
 	if len(resp.Media) == 0 {
@@ -95,15 +100,15 @@ func (r *Registry) codexImageGeneration(ctx context.Context, input json.RawMessa
 		if strings.TrimSpace(resp.Content) != "" {
 			reason += ": " + strings.TrimSpace(resp.Content)
 		}
-		_ = r.recordCodexImageGenerationInvocation(grant, p, "failed", reason)
+		_ = r.recordCodexImageGenerationInvocation(grant, p, useRef, "failed", reason)
 		return codexImageGenerationBlocker("blocked", reason, grant.GrantID), fmt.Errorf("%s", reason)
 	}
 	artifacts, err := materializeCodexImageGenerationMedia(scope, resp.Media)
 	if err != nil {
-		_ = r.recordCodexImageGenerationInvocation(grant, p, "failed", err.Error())
+		_ = r.recordCodexImageGenerationInvocation(grant, p, useRef, "failed", err.Error())
 		return codexImageGenerationBlocker("blocked", err.Error(), grant.GrantID), err
 	}
-	_ = r.recordCodexImageGenerationInvocation(grant, p, "completed", "")
+	_ = r.recordCodexImageGenerationInvocation(grant, p, useRef, "completed", "")
 	return renderCodexImageGenerationResult(artifacts, grant.GrantID, resp.Content), nil
 }
 
@@ -225,16 +230,16 @@ func codexImageGenerationBlocker(status string, reason string, grantID string) s
 	return string(raw)
 }
 
-func (r *Registry) recordCodexImageGenerationInvocation(grant session.CapabilityGrant, p principal.Principal, status string, errText string) error {
+func (r *Registry) recordCodexImageGenerationInvocation(grant session.CapabilityGrant, p principal.Principal, ref session.AuthorityUseRef, status string, errText string) error {
 	if r == nil || r.store == nil || strings.TrimSpace(grant.GrantID) == "" {
 		return nil
 	}
-	_, err := r.store.RecordCapabilityInvocation(session.CapabilityInvocation{
+	_, err := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
 		GrantID:   grant.GrantID,
 		Principal: toolAuthorityPrincipalDisplay(p),
 		Action:    "invoke",
 		Status:    strings.TrimSpace(status),
 		ErrorText: strings.TrimSpace(errText),
-	})
+	}, ref))
 	return err
 }

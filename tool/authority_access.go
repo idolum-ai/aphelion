@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
@@ -44,7 +45,7 @@ func (r *Registry) toolAuthorityAccessAllowed(toolName string, p principal.Princ
 	return allowedByGrant, nil
 }
 
-func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal, input json.RawMessage) (session.CapabilityGrant, bool, error) {
+func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal, key session.SessionKey, input json.RawMessage) (session.CapabilityGrant, bool, error) {
 	name = strings.TrimSpace(name)
 	if !r.authorityManagedTool(name) {
 		return session.CapabilityGrant{}, false, nil
@@ -68,29 +69,108 @@ func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal
 	}
 	if allowedByGrant {
 		principalID := toolAuthorityPrincipalDisplay(p)
+		useRef, useRefErr := r.authorityUseRefForGrant(name, key)
+		if useRefErr != nil {
+			if _, recordErr := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
+				GrantID:   grant.GrantID,
+				Principal: principalID,
+				Action:    "invoke",
+				Status:    "blocked",
+				ErrorText: useRefErr.Error(),
+			}, useRef)); recordErr != nil {
+				return session.CapabilityGrant{}, false, recordErr
+			}
+			return session.CapabilityGrant{}, false, useRefErr
+		}
 		if err := validateCapabilityToolInvocationInput(grant, input); err != nil {
-			if _, recordErr := r.store.RecordCapabilityInvocation(session.CapabilityInvocation{
+			if _, recordErr := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
 				GrantID:   grant.GrantID,
 				Principal: principalID,
 				Action:    "invoke",
 				Status:    "blocked",
 				ErrorText: err.Error(),
-			}); recordErr != nil {
+			}, useRef)); recordErr != nil {
 				return session.CapabilityGrant{}, false, recordErr
 			}
 			return session.CapabilityGrant{}, false, err
 		}
-		if _, err := r.store.RecordCapabilityInvocation(session.CapabilityInvocation{
+		if _, err := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
 			GrantID:   grant.GrantID,
 			Principal: principalID,
 			Action:    "invoke",
 			Status:    "allowed",
-		}); err != nil {
+		}, useRef)); err != nil {
 			return session.CapabilityGrant{}, false, err
 		}
 		return grant, true, nil
 	}
 	return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+}
+
+func capabilityInvocationWithAuthorityUseRef(invocation session.CapabilityInvocation, ref session.AuthorityUseRef) session.CapabilityInvocation {
+	ref = session.NormalizeAuthorityUseRef(ref)
+	invocation.SessionID = ref.SessionID
+	invocation.TurnRunID = ref.TurnRunID
+	invocation.ContinuationLeaseID = ref.ContinuationLeaseID
+	invocation.OperationPlanLeaseID = ref.OperationPlanLeaseID
+	invocation.AuthoritySource = ref.AuthoritySource
+	return invocation
+}
+
+func (r *Registry) authorityUseRefForGrant(toolName string, key session.SessionKey) (session.AuthorityUseRef, error) {
+	ref := session.AuthorityUseRef{}
+	if !toolSessionKeyHasIdentity(key) {
+		return ref, fmt.Errorf("tool %q requires active turn lease evidence", strings.TrimSpace(toolName))
+	}
+	ref.SessionID = session.SessionIDForKey(key)
+	now := time.Now().UTC()
+	sources := []string{}
+
+	if state, exists, err := r.store.ContinuationStateIfExists(key); err != nil {
+		return ref, fmt.Errorf("load continuation lease evidence: %w", err)
+	} else if exists {
+		lease := session.NormalizeContinuationLease(state.ContinuationLease)
+		if lease.ActiveAt(now) && strings.TrimSpace(lease.ID) != "" {
+			ref.ContinuationLeaseID = lease.ID
+			sources = append(sources, "continuation_lease")
+		}
+	}
+
+	if _, operation, exists, err := r.store.PlanAndOperationStateIfExists(key); err != nil {
+		return ref, fmt.Errorf("load operation plan lease evidence: %w", err)
+	} else if exists {
+		lease := session.NormalizeOperationPlanLease(operation.PlanLease)
+		if operationPlanLeaseUsableForGrantUse(lease, now) {
+			ref.OperationPlanLeaseID = lease.ID
+			sources = append(sources, "operation_plan_lease")
+		}
+	}
+
+	if len(sources) == 0 {
+		return ref, fmt.Errorf("tool %q requires active continuation or operation plan lease evidence", strings.TrimSpace(toolName))
+	}
+	ref.AuthoritySource = strings.Join(sources, "+")
+	return session.NormalizeAuthorityUseRef(ref), nil
+}
+
+func operationPlanLeaseUsableForGrantUse(lease session.OperationPlanLease, now time.Time) bool {
+	lease = session.NormalizeOperationPlanLease(lease)
+	if strings.TrimSpace(lease.ID) == "" || lease.RemainingTurns <= 0 {
+		return false
+	}
+	if !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now.UTC()) {
+		return false
+	}
+	switch lease.Status {
+	case session.PlanLeaseStatusApproved, session.PlanLeaseStatusActive:
+		return true
+	default:
+		return false
+	}
+}
+
+func toolSessionKeyHasIdentity(key session.SessionKey) bool {
+	return key.ChatID != 0 || key.UserID != 0 || !key.Scope.IsZero()
 }
 
 func (r *Registry) capabilityGrantAllowsAuthorityToolAccess(toolName string, p principal.Principal) (session.CapabilityGrant, bool, error) {

@@ -1290,7 +1290,7 @@ func (r *Registry) executeWithRoot(ctx context.Context, name string, input json.
 }
 
 func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string, input json.RawMessage, scope sandbox.Scope, p principal.Principal, key session.SessionKey) (string, error) {
-	authorityGrant, authorityManaged, err := r.requireAuthorityToolAccess(name, p, input)
+	authorityGrant, authorityManaged, err := r.requireAuthorityToolAccess(name, p, key, input)
 	if err != nil {
 		return "", err
 	}
@@ -1335,7 +1335,7 @@ func (r *Registry) executeWithScopeAndPrincipal(ctx context.Context, name string
 	case "durable_agent":
 		return r.durableAgent(ctx, input, p, key, scope)
 	case codexImageGenerationToolName:
-		return r.codexImageGeneration(ctx, input, scope, p)
+		return r.codexImageGeneration(ctx, input, scope, p, key)
 	default:
 		if manifest, ok := r.externalManifestByName(name); ok {
 			if r.externalExecutor != nil && r.externalExecutor.Supports(manifest) {

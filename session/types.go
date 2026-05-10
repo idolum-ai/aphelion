@@ -494,13 +494,33 @@ type CapabilityGrant struct {
 }
 
 type CapabilityInvocation struct {
-	InvocationID int64     `json:"invocation_id,omitempty"`
-	GrantID      string    `json:"grant_id"`
-	Principal    string    `json:"principal,omitempty"`
-	Action       string    `json:"action,omitempty"`
-	Status       string    `json:"status,omitempty"`
-	ErrorText    string    `json:"error_text,omitempty"`
-	CreatedAt    time.Time `json:"created_at,omitempty"`
+	InvocationID         int64     `json:"invocation_id,omitempty"`
+	GrantID              string    `json:"grant_id"`
+	Principal            string    `json:"principal,omitempty"`
+	Action               string    `json:"action,omitempty"`
+	Status               string    `json:"status,omitempty"`
+	ErrorText            string    `json:"error_text,omitempty"`
+	SessionID            string    `json:"session_id,omitempty"`
+	TurnRunID            int64     `json:"turn_run_id,omitempty"`
+	ContinuationLeaseID  string    `json:"continuation_lease_id,omitempty"`
+	OperationPlanLeaseID string    `json:"operation_plan_lease_id,omitempty"`
+	AuthoritySource      string    `json:"authority_source,omitempty"`
+	CreatedAt            time.Time `json:"created_at,omitempty"`
+}
+
+type AuthorityUseRef struct {
+	SessionID            string `json:"session_id,omitempty"`
+	TurnRunID            int64  `json:"turn_run_id,omitempty"`
+	ContinuationLeaseID  string `json:"continuation_lease_id,omitempty"`
+	OperationPlanLeaseID string `json:"operation_plan_lease_id,omitempty"`
+	AuthoritySource      string `json:"authority_source,omitempty"`
+}
+
+func (r AuthorityUseRef) Active() bool {
+	r = NormalizeAuthorityUseRef(r)
+	return r.TurnRunID > 0 ||
+		r.ContinuationLeaseID != "" ||
+		r.OperationPlanLeaseID != ""
 }
 
 type RegisteredTool struct {
@@ -1854,10 +1874,33 @@ func NormalizeCapabilityInvocation(invocation CapabilityInvocation) CapabilityIn
 	invocation.Action = normalizeEnumValue(invocation.Action)
 	invocation.Status = normalizeEnumValue(invocation.Status)
 	invocation.ErrorText = strings.TrimSpace(invocation.ErrorText)
+	ref := NormalizeAuthorityUseRef(AuthorityUseRef{
+		SessionID:            invocation.SessionID,
+		TurnRunID:            invocation.TurnRunID,
+		ContinuationLeaseID:  invocation.ContinuationLeaseID,
+		OperationPlanLeaseID: invocation.OperationPlanLeaseID,
+		AuthoritySource:      invocation.AuthoritySource,
+	})
+	invocation.SessionID = ref.SessionID
+	invocation.TurnRunID = ref.TurnRunID
+	invocation.ContinuationLeaseID = ref.ContinuationLeaseID
+	invocation.OperationPlanLeaseID = ref.OperationPlanLeaseID
+	invocation.AuthoritySource = ref.AuthoritySource
 	if invocation.CreatedAt.IsZero() && invocation.GrantID != "" {
 		invocation.CreatedAt = time.Now().UTC()
 	}
 	return invocation
+}
+
+func NormalizeAuthorityUseRef(ref AuthorityUseRef) AuthorityUseRef {
+	ref.SessionID = strings.TrimSpace(ref.SessionID)
+	if ref.TurnRunID < 0 {
+		ref.TurnRunID = 0
+	}
+	ref.ContinuationLeaseID = strings.TrimSpace(ref.ContinuationLeaseID)
+	ref.OperationPlanLeaseID = strings.TrimSpace(ref.OperationPlanLeaseID)
+	ref.AuthoritySource = normalizeEnumValue(ref.AuthoritySource)
+	return ref
 }
 
 func NormalizeRegisteredTool(tool RegisteredTool) RegisteredTool {

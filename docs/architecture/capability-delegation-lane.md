@@ -57,7 +57,9 @@ The source of truth is SQLite session state:
 - `capability_grants`: granted principal, kind, target resource, allowed
   actions, contract, constraints, policy hash/fingerprint, status, stale reason,
   and counters.
-- `capability_invocations`: invocation-level audit trail for grant use.
+- `capability_invocations`: invocation-level audit trail for grant use,
+  including the session and continuation or operation-plan lease that made this
+  turn authorized.
 
 `capability_update_plan` is not a separate authority surface. It is an optional
 contract field on a request or grant. Current durable-child plans support:

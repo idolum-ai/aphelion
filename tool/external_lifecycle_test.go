@@ -71,7 +71,7 @@ func TestExternalToolAuthorityEndToEndLifecycleFlow(t *testing.T) {
 func TestExternalToolTenantCapabilityRequestCarriesThroughToInvocation(t *testing.T) {
 	t.Parallel()
 
-	registry, _ := newDurableAgentToolRegistry(t)
+	registry, store := newDurableAgentToolRegistry(t)
 	installExternalLifecycleFixture(t, registry, "browse_page")
 	adminKey := adminSessionKey()
 	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
@@ -111,6 +111,7 @@ func TestExternalToolTenantCapabilityRequestCarriesThroughToInvocation(t *testin
 	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminKey, "capability_authority", json.RawMessage(`{"action":"grant_set","request_id":"cap-tenant-browse","grant_id":"capg-tenant-browse","allowed_actions":["invoke"],"grant_status":"active","principal":"telegram:2002"}`)); err != nil {
 		t.Fatalf("capability_authority grant_set err = %v", err)
 	}
+	grantAuthorityUseLease(t, store, tenantKey)
 
 	tenantScope, err := registry.sandbox.Resolve(tenant)
 	if err != nil {

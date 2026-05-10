@@ -425,6 +425,7 @@ func TestCapabilityGrantEnablesRegisteredToolWithoutLegacyExposure(t *testing.T)
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
 	}
+	grantAuthorityUseLease(t, store, adminSessionKey())
 
 	defs := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
 	if !toolDefExists(defs, "browse_page") {

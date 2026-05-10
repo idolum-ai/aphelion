@@ -120,4 +120,25 @@ func grantToolInvoke(t *testing.T, store *session.SQLiteStore, toolName string, 
 	}); err != nil {
 		t.Fatalf("UpsertCapabilityGrant(%s/%s) err = %v", toolName, principal, err)
 	}
+	grantAuthorityUseLease(t, store, adminSessionKey())
+}
+
+func grantAuthorityUseLease(t *testing.T, store *session.SQLiteStore, key session.SessionKey) {
+	t.Helper()
+
+	now := time.Now().UTC()
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		RemainingTurns: 1,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-authority-use-" + session.SessionIDForKey(key),
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ExpiresAt:      now.Add(time.Hour),
+			ApprovedAt:     now,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState(authority use lease) err = %v", err)
+	}
 }

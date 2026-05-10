@@ -231,6 +231,10 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 
 	for _, grant := range capabilityGrants {
 		grant = session.NormalizeCapabilityGrant(grant)
+		invocations, err := store.CapabilityInvocationsByGrant(grant.GrantID, 20)
+		if err != nil {
+			return authorityProjection{}, fmt.Errorf("load capability invocations for grant %q: %w", grant.GrantID, err)
+		}
 		if authorityCapabilityGrantExpired(grant, now) {
 			projection.addFinding(authorityProjectionFinding{
 				Code:             "active_capability_grant_expired",
@@ -266,13 +270,13 @@ func authorityProjectionFromStore(store *session.SQLiteStore, now time.Time) (au
 				RepairAction:     "refresh_or_revoke_capability_grant",
 			})
 		}
-		if authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant) {
+		if authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant, invocations) {
 			projection.addFinding(authorityProjectionFinding{
 				Code:             "capability_grant_invocation_missing_turn_lease_evidence",
 				Severity:         "warning",
 				SourceKind:       "capability_grant",
 				SourceID:         grant.GrantID,
-				Detail:           "capability grant has invocation counters but no turn-level lease evidence in the grant record",
+				Detail:           "capability grant has invocation evidence without continuation or operation plan lease reference",
 				NextRepairAction: "inspect capability invocations and ensure future grant use records the consuming turn lease",
 				RepairAction:     "inspect_capability_invocations",
 			})
@@ -599,7 +603,7 @@ func authorityCapabilityGrantExpired(grant session.CapabilityGrant, now time.Tim
 	return grant.Status == session.CapabilityGrantStatusActive && !grant.ExpiresAt.IsZero() && !grant.ExpiresAt.After(now.UTC())
 }
 
-func authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant session.CapabilityGrant) bool {
+func authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant session.CapabilityGrant, invocations []session.CapabilityInvocation) bool {
 	grant = session.NormalizeCapabilityGrant(grant)
 	if grant.InvocationCount <= 0 {
 		return false
@@ -607,7 +611,16 @@ func authorityCapabilityGrantUsedWithoutTurnLeaseEvidence(grant session.Capabili
 	if !authorityGrantRequiresChildRuntime(grant) {
 		return false
 	}
-	return strings.TrimSpace(grant.RequestID) == ""
+	if len(invocations) == 0 {
+		return true
+	}
+	for _, invocation := range invocations {
+		invocation = session.NormalizeCapabilityInvocation(invocation)
+		if strings.TrimSpace(invocation.ContinuationLeaseID) == "" && strings.TrimSpace(invocation.OperationPlanLeaseID) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func authorityGrantRequiresChildRuntime(grant session.CapabilityGrant) bool {

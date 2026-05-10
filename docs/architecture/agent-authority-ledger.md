@@ -419,6 +419,11 @@ A turn may need both. For example, a child may have an active `external_account`
 grant, but the current turn still needs a bounded lease to use it for a specific
 purpose.
 
+Every runtime grant invocation should write an `AuthorityUseRef` with the
+session and active continuation or operation-plan lease that authorized the
+turn. The grant says a principal may use a capability; the lease says this turn
+may spend that standing capability on the current bounded objective.
+
 ### AuthorityEvent
 
 An `AuthorityEvent` is the append-only fact that something happened to proposal,
@@ -696,11 +701,13 @@ These are expected migration targets, not accusations against the current code.
   - auto-approval applied outside scope
   - blocked phase with no escalation proposal
   - parked lease not considered during startup recovery
-- Implemented compatibility warning:
-  - active durable grant has invocation counters but no turn-lease evidence in
-    the grant record
-- Remaining checks:
-  - hard enforcement that every grant use records the consuming turn lease
+- Implemented grant-use enforcement:
+  - active durable grant invocation rows must carry continuation or operation
+    plan lease evidence
+  - authority-managed tools and `codex_image_generation` block grant use when no
+    active turn lease evidence exists
+  - legacy invocation counters without evidence remain visible as compatibility
+    warnings
 
 ### Phase 4: Normalize States
 

@@ -367,6 +367,9 @@ func applyMigrations(tx *sql.Tx) error {
 	if err := ensureMissionLedgerTables(tx); err != nil {
 		return err
 	}
+	if err := ensureCapabilityInvocationAuthorityUseColumns(tx); err != nil {
+		return err
+	}
 	if currentVersion >= schemaVersion {
 		return nil
 	}
@@ -374,6 +377,32 @@ func applyMigrations(tx *sql.Tx) error {
 	for version := currentVersion + 1; version <= schemaVersion; version++ {
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, version); err != nil {
 			return fmt.Errorf("insert schema version %d: %w", version, err)
+		}
+	}
+	return nil
+}
+
+func ensureCapabilityInvocationAuthorityUseColumns(tx *sql.Tx) error {
+	for _, column := range []struct {
+		name string
+		typ  string
+	}{
+		{"session_id", "TEXT NOT NULL DEFAULT ''"},
+		{"turn_run_id", "INTEGER NOT NULL DEFAULT 0"},
+		{"continuation_lease_id", "TEXT NOT NULL DEFAULT ''"},
+		{"operation_plan_lease_id", "TEXT NOT NULL DEFAULT ''"},
+		{"authority_source", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureTableColumn(tx, "capability_invocations", column.name, column.typ); err != nil {
+			return fmt.Errorf("ensure capability_invocations.%s: %w", column.name, err)
+		}
+	}
+	for _, stmt := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_authority_session ON capability_invocations(session_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_lease ON capability_invocations(continuation_lease_id, operation_plan_lease_id, created_at DESC)`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("ensure capability invocation authority index: %w", err)
 		}
 	}
 	return nil

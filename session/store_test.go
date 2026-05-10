@@ -3581,8 +3581,25 @@ func TestSQLiteStoreCapabilityRequestReviewGrantInvocationRoundTrip(t *testing.T
 		t.Fatalf("ActiveCapabilityGrant(refund) ok=%t err=%v, want false nil", ok, err)
 	}
 
-	if _, err := store.RecordCapabilityInvocation(CapabilityInvocation{GrantID: "capg-1", Principal: "child-agent", Action: "order", Status: "failed", ErrorText: "declined"}); err != nil {
+	if _, err := store.RecordCapabilityInvocation(CapabilityInvocation{
+		GrantID:              "capg-1",
+		Principal:            "child-agent",
+		Action:               "order",
+		Status:               "failed",
+		ErrorText:            "declined",
+		SessionID:            "telegram_dm:1001",
+		ContinuationLeaseID:  "lease-capability-use",
+		OperationPlanLeaseID: "plan-lease-capability-use",
+		AuthoritySource:      "continuation_lease",
+	}); err != nil {
 		t.Fatalf("RecordCapabilityInvocation() err = %v", err)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant("capg-1", 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant() err = %v", err)
+	}
+	if len(invocations) != 1 || invocations[0].ContinuationLeaseID != "lease-capability-use" || invocations[0].OperationPlanLeaseID != "plan-lease-capability-use" || invocations[0].AuthoritySource != "continuation_lease" {
+		t.Fatalf("CapabilityInvocationsByGrant() = %#v, want authority use refs", invocations)
 	}
 	grant, ok, err = store.CapabilityGrant("capg-1")
 	if err != nil {
