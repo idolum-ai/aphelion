@@ -170,3 +170,107 @@ func TestSynthesizedPlanBudgetUsesMilestoneEvidenceAndHardStops(t *testing.T) {
 		}
 	}
 }
+
+func TestDeployApprovalProjectionDoesNotRenderBroadDeployRestartStop(t *testing.T) {
+	t.Parallel()
+
+	autoApprove := false
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		Objective:      "Deploy the pushed runtime repair.",
+		StageSummary:   "Build/install, restart Aphelion, and verify the pushed repair live.",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			Summary:       "Build/install, restart Aphelion, and verify the pushed repair live.",
+			BoundedEffect: "Build/install via existing deploy path, restart Aphelion, inspect service status/recent logs, verify deployed repair evidence.",
+			RiskClass:     "deploy",
+			AllowedActions: []string{
+				"make_build",
+				"install_user_service",
+				"restart_aphelion_service",
+				"run_verify_deploy",
+			},
+			ForbiddenActions: []string{
+				"deploy_without_handoff",
+				"restart_without_recovery_artifact",
+				"skip_build_or_tests_before_restart",
+				"skip_post_deploy_verification",
+				"unbounded_restart_loop",
+				"credentials_or_tokens",
+				"archive_delete_or_mutate_source_data",
+			},
+			AutoApproveEligible: &autoApprove,
+		},
+		ContinuationLease: session.ContinuationLease{
+			Status:     session.ContinuationLeaseStatusActive,
+			LeaseClass: session.ContinuationLeaseClassDeployRestart,
+			MaxTurns:   1,
+			AllowedActions: []string{
+				"make_build",
+				"install_user_service",
+				"restart_aphelion_service",
+				"run_verify_deploy",
+			},
+			ForbiddenActions: []string{
+				"deploy_without_handoff",
+				"restart_without_recovery_artifact",
+				"skip_post_deploy_verification",
+			},
+		},
+	}
+
+	for name, text := range map[string]string{
+		"approval prompt": renderOperationProposalMaterializedPromptFallback(state),
+		"approved event":  approvedContinuationEventTextForState(state),
+	} {
+		stopLine := stopTextForProjection(text)
+		if stopLine == "" {
+			t.Fatalf("%s text = %q, want Stops before line", name, text)
+		}
+		if strings.Contains(stopLine, "deploy/restart") {
+			t.Fatalf("%s stop line = %q, did not want broad deploy/restart stop for deploy lease", name, stopLine)
+		}
+		for _, want := range []string{"release without handoff", "restart without recovery artifact", "credentials/tokens", "archive/delete"} {
+			if !strings.Contains(stopLine, want) {
+				t.Fatalf("%s stop line = %q, want %q", name, stopLine, want)
+			}
+		}
+	}
+}
+
+func TestReadOnlyApprovalProjectionStillRendersDeployRestartStop(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		StageSummary:   "Inspect local status.",
+		RemainingTurns: 1,
+		ActionProposal: session.ActionProposal{
+			Summary:          "Inspect local status.",
+			BoundedEffect:    "Read local status only.",
+			RiskClass:        "read_only_review",
+			AllowedActions:   []string{"read_only"},
+			ForbiddenActions: []string{"deploy_restart_without_explicit_approval", "credentials_or_tokens"},
+		},
+		ContinuationLease: session.ContinuationLease{Status: session.ContinuationLeaseStatusActive, MaxTurns: 1},
+	}
+	text := approvedContinuationEventTextForState(state)
+	stopLine := stopTextForProjection(text)
+	if !strings.Contains(stopLine, "deploy/restart") {
+		t.Fatalf("stop line = %q, want broad deploy/restart stop for non-deploy lease; text=%q", stopLine, text)
+	}
+}
+
+func stopTextForProjection(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "Stops before") {
+			continue
+		}
+		if strings.TrimSpace(line) == "Stops before:" && i+1 < len(lines) {
+			return strings.TrimSpace(lines[i+1])
+		}
+		return line
+	}
+	return ""
+}

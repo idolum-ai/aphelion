@@ -4486,3 +4486,53 @@ func TestHandleTelegramCommandCallbackContinuationAskEditParksWithoutTrigger(t *
 		t.Fatalf("editClear = %#v, want ask-edit confirmation", sender.editClear)
 	}
 }
+
+func TestCompactContinuationStopsForDeployLeaseDoNotSelfForbidDeployRestart(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		ActionProposal: session.ActionProposal{
+			RiskClass: "deploy",
+			AllowedActions: []string{
+				"make_build",
+				"install_user_service",
+				"restart_aphelion_service",
+				"run_verify_deploy",
+			},
+			ForbiddenActions: []string{
+				"deploy_without_handoff",
+				"restart_without_recovery_artifact",
+				"skip_post_deploy_verification",
+				"credentials_or_tokens",
+			},
+		},
+		ContinuationLease: session.ContinuationLease{LeaseClass: session.ContinuationLeaseClassDeployRestart},
+	}
+	stops := compactContinuationStops(state)
+	joined := strings.Join(stops, ", ")
+	if strings.Contains(joined, "deploy/restart") {
+		t.Fatalf("stops = %#v, did not want broad deploy/restart stop for deploy lease", stops)
+	}
+	for _, want := range []string{"release without handoff", "restart without recovery artifact", "credentials/tokens"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("stops = %#v, want %q", stops, want)
+		}
+	}
+}
+
+func TestCompactContinuationStopsForReadOnlyLeaseStillStopBeforeDeployRestart(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		ActionProposal: session.ActionProposal{
+			RiskClass:        "read_only_review",
+			AllowedActions:   []string{"read_only"},
+			ForbiddenActions: []string{"deploy_restart_without_explicit_approval", "credentials_or_tokens"},
+		},
+	}
+	stops := compactContinuationStops(state)
+	joined := strings.Join(stops, ", ")
+	if !strings.Contains(joined, "deploy/restart") {
+		t.Fatalf("stops = %#v, want broad deploy/restart stop for non-deploy lease", stops)
+	}
+}

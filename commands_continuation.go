@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/internal/stoplabels"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -312,98 +313,10 @@ func renderContinuationPlanBudgetDetails(state session.ContinuationState, prefix
 func compactContinuationStops(state session.ContinuationState) []string {
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
 	values := firstNonEmptyContinuationCommandList(proposal.ForbiddenActions, state.ContinuationLease.ForbiddenActions)
-	if len(values) == 0 {
-		return []string{"anything outside scope", "hard gates", "deploy/restart", "policy or permission changes", "mailbox access or mutation"}
-	}
-	out := make([]string, 0, len(values))
-	seen := map[string]struct{}{}
-	for _, value := range values {
-		label := compactContinuationStop(value)
-		if label == "" {
-			continue
-		}
-		if _, ok := seen[label]; ok {
-			continue
-		}
-		seen[label] = struct{}{}
-		out = append(out, label)
-	}
-	out = prioritizeContinuationStops(out)
-	if len(out) > 5 {
-		out = out[:5]
-	}
-	return out
-}
-
-func prioritizeContinuationStops(stops []string) []string {
-	if len(stops) == 0 {
-		return nil
-	}
-	priority := []string{
-		"anything outside scope",
-		"hard gates",
-		"deploy/restart",
-		"policy or permission changes",
-		"mailbox access or mutation",
-		"credentials/tokens",
-		"external account/effect",
-		"spend",
-		"public contact/posting",
-		"unapproved autonomous work",
-	}
-	seen := make(map[string]struct{}, len(stops))
-	for _, stop := range stops {
-		if stop = strings.TrimSpace(stop); stop != "" {
-			seen[stop] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	add := func(stop string) {
-		if _, ok := seen[stop]; !ok {
-			return
-		}
-		out = append(out, stop)
-		delete(seen, stop)
-	}
-	for _, stop := range priority {
-		add(stop)
-	}
-	for _, stop := range stops {
-		add(strings.TrimSpace(stop))
-	}
-	return out
-}
-
-func compactContinuationStop(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "_", " ")
-	value = strings.ReplaceAll(value, "-", " ")
-	switch {
-	case value == "":
-		return ""
-	case strings.Contains(value, "credential") || strings.Contains(value, "token"):
-		return "credentials/tokens"
-	case strings.Contains(value, "mailbox"):
-		return "mailbox access or mutation"
-	case strings.Contains(value, "deploy") || strings.Contains(value, "restart"):
-		return "deploy/restart"
-	case strings.Contains(value, "hard interrupt"):
-		return "hard gates"
-	case strings.Contains(value, "lane") || strings.Contains(value, "outside") || strings.Contains(value, "scope") || strings.Contains(value, "budget"):
-		return "anything outside scope"
-	case strings.Contains(value, "policy") || strings.Contains(value, "grant") || strings.Contains(value, "permission"):
-		return "policy or permission changes"
-	case strings.Contains(value, "external"):
-		return "external account/effect"
-	case strings.Contains(value, "purchase") || strings.Contains(value, "spend"):
-		return "spend"
-	case strings.Contains(value, "public"):
-		return "public contact/posting"
-	case strings.Contains(value, "autonomous"):
-		return "unapproved autonomous work"
-	default:
-		return value
-	}
+	return stoplabels.LabelsForContinuationState(state, values, stoplabels.Options{
+		Defaults: []string{"anything outside scope", "hard gates", "deploy/restart", "policy or permission changes", "mailbox access or mutation"},
+		Limit:    5,
+	})
 }
 
 func actionListContainsMain(values []string, want string) bool {

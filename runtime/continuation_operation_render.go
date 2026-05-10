@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/idolum-ai/aphelion/internal/stoplabels"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -167,39 +168,14 @@ func continuationApprovalPromptIncludedLines(state session.ContinuationState) []
 
 func continuationApprovalPromptStops(state session.ContinuationState) []string {
 	state = session.NormalizeContinuationState(state)
-	seen := map[string]struct{}{}
-	out := make([]string, 0, 4)
-	add := func(value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		value = planBudgetHumanStop(value)
-		if value == "" {
-			return
-		}
-		if _, ok := seen[value]; ok {
-			return
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	for _, value := range state.ActionProposal.ForbiddenActions {
-		add(value)
-	}
+	values := append([]string(nil), state.ActionProposal.ForbiddenActions...)
 	if phase, ok := currentContinuationBundlePhase(state.ApprovalBundle); ok {
-		for _, value := range phase.ForbiddenActions {
-			add(value)
-		}
+		values = append(values, phase.ForbiddenActions...)
 	}
-	if len(out) == 0 {
-		out = []string{"anything outside scope", "hard gates"}
-	}
-	out = prioritizePlanBudgetStops(out)
-	if len(out) > 4 {
-		out = out[:4]
-	}
-	return out
+	return stoplabels.LabelsForContinuationState(state, values, stoplabels.Options{
+		Defaults: []string{"anything outside scope", "hard gates"},
+		Limit:    4,
+	})
 }
 
 func continuationPromptCompactLine(value string, limit int) string {
@@ -319,104 +295,12 @@ func planBudgetHumanAuthority(authority string) string {
 }
 
 func planBudgetStopLines(state session.ContinuationState) []string {
+	state = session.NormalizeContinuationState(state)
 	proposal := session.NormalizeActionProposal(state.ActionProposal)
-	seen := map[string]struct{}{}
-	stops := make([]string, 0, len(proposal.ForbiddenActions))
-	for _, value := range proposal.ForbiddenActions {
-		value = planBudgetHumanStop(value)
-		if value != "" {
-			if _, ok := seen[value]; ok {
-				continue
-			}
-			seen[value] = struct{}{}
-			stops = append(stops, value)
-		}
-	}
-	if len(stops) == 0 {
-		stops = []string{"anything outside scope", "hard gates", "deploy/restart", "policy or permission changes", "mailbox access or mutation"}
-	}
-	stops = prioritizePlanBudgetStops(stops)
-	if len(stops) > 6 {
-		stops = stops[:6]
-	}
-	return stops
-}
-
-func prioritizePlanBudgetStops(stops []string) []string {
-	if len(stops) == 0 {
-		return nil
-	}
-	priority := []string{
-		"anything outside scope",
-		"hard gates",
-		"deploy/restart",
-		"credentials/tokens",
-		"external send/contact",
-		"archive/delete",
-		"policy or permission changes",
-		"mailbox access or mutation",
-		"external account/effect",
-		"spend",
-		"public contact/posting",
-		"unapproved autonomous work",
-	}
-	seen := make(map[string]struct{}, len(stops))
-	for _, stop := range stops {
-		if stop = strings.TrimSpace(stop); stop != "" {
-			seen[stop] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	add := func(stop string) {
-		if _, ok := seen[stop]; !ok {
-			return
-		}
-		out = append(out, stop)
-		delete(seen, stop)
-	}
-	for _, stop := range priority {
-		add(stop)
-	}
-	for _, stop := range stops {
-		add(strings.TrimSpace(stop))
-	}
-	return out
-}
-
-func planBudgetHumanStop(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.ReplaceAll(value, "_", " ")
-	value = strings.ReplaceAll(value, "-", " ")
-	switch {
-	case value == "":
-		return ""
-	case strings.Contains(value, "credential") || strings.Contains(value, "token"):
-		return "credentials/tokens"
-	case strings.Contains(value, "mailbox"):
-		return "mailbox access or mutation"
-	case strings.Contains(value, "deploy") || strings.Contains(value, "restart"):
-		return "deploy/restart"
-	case strings.Contains(value, "archive") || strings.Contains(value, "delete") || strings.Contains(value, "mutate source"):
-		return "archive/delete"
-	case strings.Contains(value, "send") || strings.Contains(value, "contact"):
-		return "external send/contact"
-	case strings.Contains(value, "hard interrupt"):
-		return "hard gates"
-	case strings.Contains(value, "lane") || strings.Contains(value, "outside") || strings.Contains(value, "scope") || strings.Contains(value, "budget"):
-		return "anything outside scope"
-	case strings.Contains(value, "policy") || strings.Contains(value, "grant") || strings.Contains(value, "permission"):
-		return "policy or permission changes"
-	case strings.Contains(value, "external"):
-		return "external account/effect"
-	case strings.Contains(value, "purchase") || strings.Contains(value, "spend"):
-		return "spend"
-	case strings.Contains(value, "public"):
-		return "public contact/posting"
-	case strings.Contains(value, "autonomous"):
-		return "unapproved autonomous work"
-	default:
-		return value
-	}
+	return stoplabels.LabelsForContinuationState(state, proposal.ForbiddenActions, stoplabels.Options{
+		Defaults: []string{"anything outside scope", "hard gates", "deploy/restart", "policy or permission changes", "mailbox access or mutation"},
+		Limit:    6,
+	})
 }
 
 func planBudgetFirstStep(state session.ContinuationState) string {
