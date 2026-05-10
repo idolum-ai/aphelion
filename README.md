@@ -324,6 +324,14 @@ Safe maintenance cleanup:
 make gc
 ```
 
+Inspect and repair durable-child capability grants that are expired or missing
+reviewable child runtime material:
+
+```bash
+./bin/aphelion repair-capability-grants --config ~/.aphelion/aphelion.toml
+./bin/aphelion repair-capability-grants --config ~/.aphelion/aphelion.toml --apply
+```
+
 `make install-user-service`, `make update`, and `make update-release` also run
 `aphelion init` automatically. Missing starter files are created under
 `agent.prompt_root`, but existing files are never overwritten.

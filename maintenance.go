@@ -44,6 +44,8 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return true, runParkRestartCommand(args[1:])
 	case "repair-live-state":
 		return true, runRepairLiveStateCommand(args[1:])
+	case "repair-capability-grants":
+		return true, runRepairCapabilityGrantsCommand(args[1:])
 	case "repair-review-redactions":
 		return true, runRepairReviewRedactionsCommand(args[1:])
 	case "gc":

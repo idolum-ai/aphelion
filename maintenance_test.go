@@ -24,6 +24,7 @@ import (
 	memstore "github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	"github.com/idolum-ai/aphelion/tool"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -947,6 +948,275 @@ func TestRepairReviewRedactionsLeavesConcreteSecretSummaryRedacted(t *testing.T)
 	}
 	if !strings.Contains(updated.Summary, "[REDACTED: summary]") || strings.Contains(updated.MetadataJSON, "sk-testSECRET") {
 		t.Fatalf("updated event = %#v, want concrete secret to remain redacted", updated)
+	}
+}
+
+func TestRepairCapabilityGrantDriftDryRunLeavesMissingRuntimeActive(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 5, 10, 10, 0, 0, 0, time.UTC)
+	grantID := "capg-missing-runtime"
+	if _, err := store.UpsertCapabilityGrant(testRepairCapabilityGrant(grantID, "missing_tool", now)); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	result, err := repairCapabilityGrantDrift(context.Background(), store, nil, capabilityGrantRepairOptions{
+		Limit:  10,
+		DryRun: true,
+		Source: "test",
+		Now:    now,
+	})
+	if err != nil {
+		t.Fatalf("repairCapabilityGrantDrift() err = %v", err)
+	}
+	if result.Inspected != 1 || result.RevokeCandidates != 1 || result.RevokesApplied != 0 || result.Errors != 0 {
+		t.Fatalf("repair result = %#v, want dry-run revoke candidate only", result)
+	}
+	updated, ok, err := store.CapabilityGrant(grantID)
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok || updated.Status != session.CapabilityGrantStatusActive || !updated.RevokedAt.IsZero() {
+		t.Fatalf("updated grant = %#v, want active and not revoked", updated)
+	}
+}
+
+func TestRepairCapabilityGrantDriftRevokesExpiredActiveGrant(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 5, 10, 10, 0, 0, 0, time.UTC)
+	grantID := "capg-expired-runtime"
+	grant := testRepairCapabilityGrant(grantID, "expired_tool", now)
+	grant.ExpiresAt = now.Add(-time.Minute)
+	if _, err := store.UpsertCapabilityGrant(grant); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	result, err := repairCapabilityGrantDrift(context.Background(), store, nil, capabilityGrantRepairOptions{
+		Limit:  10,
+		DryRun: false,
+		Source: "test",
+		Now:    now,
+	})
+	if err != nil {
+		t.Fatalf("repairCapabilityGrantDrift() err = %v", err)
+	}
+	if result.Inspected != 1 || result.RevokeCandidates != 1 || result.RevokesApplied != 1 || result.Errors != 0 {
+		t.Fatalf("repair result = %#v, want one revoked expired grant", result)
+	}
+	updated, ok, err := store.CapabilityGrant(grantID)
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok || updated.Status != session.CapabilityGrantStatusRevoked || updated.RevokedAt.IsZero() {
+		t.Fatalf("updated grant = %#v, want revoked with revoked_at", updated)
+	}
+	if !strings.Contains(updated.StaleReason, "expired") {
+		t.Fatalf("stale reason = %q, want expired reason", updated.StaleReason)
+	}
+}
+
+func TestRepairCapabilityGrantDriftRepairsFromManifest(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 5, 10, 10, 0, 0, 0, time.UTC)
+	grantID := "capg-repair-runtime"
+	grant := testRepairCapabilityGrant(grantID, "repair_tool", now)
+	grant.Constraints = `{"child_runtime":{"executable":"relative/path"},"max_runtime_seconds":10}`
+	if _, err := store.UpsertCapabilityGrant(grant); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	executable := filepath.Join(root, "bin", "repair-tool")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatalf("MkdirAll(bin) err = %v", err)
+	}
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(executable) err = %v", err)
+	}
+	manifestPath := filepath.Join(root, "external-tools", "repair_tool", "manifest.json")
+	manifest := capabilityGrantRepairManifest{
+		Path: manifestPath,
+		Manifest: tool.ExternalToolManifest{
+			Name:  "repair_tool",
+			Owner: "test",
+			Execution: tool.ExternalToolManifestExecution{
+				Mode:  "process",
+				Entry: executable,
+			},
+		},
+	}
+
+	result, err := repairCapabilityGrantDrift(context.Background(), store, []capabilityGrantRepairManifest{manifest}, capabilityGrantRepairOptions{
+		Limit:  10,
+		DryRun: false,
+		Source: "test",
+		Now:    now,
+	})
+	if err != nil {
+		t.Fatalf("repairCapabilityGrantDrift() err = %v", err)
+	}
+	if result.Inspected != 1 || result.RepairCandidates != 1 || result.RepairsApplied != 1 || result.Errors != 0 {
+		t.Fatalf("repair result = %#v, want one repaired grant", result)
+	}
+	updated, ok, err := store.CapabilityGrant(grantID)
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok || updated.Status != session.CapabilityGrantStatusActive {
+		t.Fatalf("updated grant = %#v, want active repaired grant", updated)
+	}
+	material, found, err := core.ExtractChildRuntimeContract(updated.Contract, updated.Constraints)
+	if err != nil {
+		t.Fatalf("ExtractChildRuntimeContract() err = %v", err)
+	}
+	if !found || material.Executable != executable {
+		t.Fatalf("child runtime = %#v found=%t, want executable %s", material, found, executable)
+	}
+	var constraints map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(updated.Constraints), &constraints); err != nil {
+		t.Fatalf("decode updated constraints err = %v", err)
+	}
+	if _, ok := constraints["child_runtime"]; ok {
+		t.Fatalf("updated constraints = %q, want stale child_runtime removed", updated.Constraints)
+	}
+	if _, ok := constraints["max_runtime_seconds"]; !ok {
+		t.Fatalf("updated constraints = %q, want other constraints preserved", updated.Constraints)
+	}
+	if updated.BaselinePolicyHash == "" || updated.BaselinePolicyHash != updated.CurrentPolicyHash || updated.AnchorFingerprint != updated.CurrentPolicyHash {
+		t.Fatalf("policy hashes = baseline %q current %q anchor %q, want repaired hash copied to all", updated.BaselinePolicyHash, updated.CurrentPolicyHash, updated.AnchorFingerprint)
+	}
+}
+
+func TestLoadCapabilityRepairManifestsResolvesNestedRepoRelativeEntry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	manifestDir := filepath.Join(root, "external-tools")
+	executable := filepath.Join(manifestDir, "nested_tool", "bin", "nested-tool")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatalf("MkdirAll(bin) err = %v", err)
+	}
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(executable) err = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(executable), "payload.json"), []byte(`{"not":"a manifest"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(payload) err = %v", err)
+	}
+	manifestPath := filepath.Join(manifestDir, "nested_tool", "manifest.json")
+	raw := `{
+  "name": "nested_tool",
+  "owner": "test",
+  "execution": {
+    "mode": "process",
+    "entry": "external-tools/nested_tool/bin/nested-tool"
+  },
+  "io": {}
+}`
+	if err := os.WriteFile(manifestPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(manifest) err = %v", err)
+	}
+
+	manifests, err := loadCapabilityRepairManifests(manifestDir)
+	if err != nil {
+		t.Fatalf("loadCapabilityRepairManifests() err = %v", err)
+	}
+	if len(manifests) != 1 {
+		t.Fatalf("manifests len = %d, want 1", len(manifests))
+	}
+	material, ok, reason := childRuntimeFromRepairManifest(manifests[0])
+	if !ok {
+		t.Fatalf("childRuntimeFromRepairManifest() ok=false reason=%q", reason)
+	}
+	if material.Executable != executable {
+		t.Fatalf("material executable = %q, want %q", material.Executable, executable)
+	}
+}
+
+func TestRunRepairCapabilityGrantsCommandDefaultsToDryRun(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	now := time.Date(2026, 5, 10, 10, 0, 0, 0, time.UTC)
+	grantID := "capg-command-dry-run"
+	if _, err := store.UpsertCapabilityGrant(testRepairCapabilityGrant(grantID, "command_tool", now)); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	store.Close()
+
+	out, err := captureStdout(t, func() error {
+		return runRepairCapabilityGrantsCommand([]string{"--config", cfgPath, "--limit", "10"})
+	})
+	if err != nil {
+		t.Fatalf("runRepairCapabilityGrantsCommand() err = %v", err)
+	}
+	for _, needle := range []string{"action: repair-capability-grants", "dry_run: true", "revoke_candidates: 1", "revokes_applied: 0"} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("output = %q, want %q", out, needle)
+		}
+	}
+	reopened, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer reopened.Close()
+	updated, ok, err := reopened.CapabilityGrant(grantID)
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok || updated.Status != session.CapabilityGrantStatusActive || !updated.RevokedAt.IsZero() {
+		t.Fatalf("updated grant = %#v, want unchanged active grant after dry-run", updated)
+	}
+}
+
+func TestRunRepairCapabilityGrantsCommandRequiresApplyForMutation(t *testing.T) {
+	err := runRepairCapabilityGrantsCommand([]string{"--dry-run=false"})
+	if err == nil || !strings.Contains(err.Error(), "requires --apply") {
+		t.Fatalf("runRepairCapabilityGrantsCommand() err = %v, want --apply requirement", err)
 	}
 }
 
@@ -2633,6 +2903,25 @@ func writeMaintenanceConfigWithCodexHome(t *testing.T, root string, codexHome st
 		t.Fatalf("append codex_home config err = %v", err)
 	}
 	return cfgPath
+}
+
+func testRepairCapabilityGrant(grantID string, target string, now time.Time) session.CapabilityGrant {
+	return session.CapabilityGrant{
+		GrantID:        grantID,
+		RequestID:      "req-" + grantID,
+		GrantedBy:      "telegram:1",
+		GrantedTo:      core.DurableAgentPrincipal("agent-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: target,
+		AllowedActions: []string{"invoke"},
+		Contract:       "{}",
+		Constraints:    "{}",
+		Status:         session.CapabilityGrantStatusActive,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		GrantedAt:      now,
+		ExpiresAt:      now.Add(time.Hour),
+	}
 }
 
 func writeCodexSessionMaintenanceFixture(t *testing.T, codexHome string, modTime time.Time, userText string) string {
