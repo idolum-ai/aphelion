@@ -294,3 +294,20 @@ func TestAuthorityInterpretationClaimTreatsCompoundCommitAsLocalAuthority(t *tes
 		t.Fatalf("contract = %#v, want local workspace commit authority", contract)
 	}
 }
+
+func TestAuthorityContractMapsExternalAccountStatusCheckAliasToReadOnlyDataAccess(t *testing.T) {
+	contract, ok := AuthorityContractForToken("external_account_status_check")
+	if !ok {
+		t.Fatal("AuthorityContractForToken(external_account_status_check) ok = false, want true")
+	}
+	if contract.LeaseClass != ContinuationLeaseClassDataAccess || contract.WorkAction != AuthorityWorkActionReadOnly {
+		t.Fatalf("contract = %#v, want data-access/read-only", contract)
+	}
+	if got := InferContinuationLeaseClass("external_account_status_check", nil, "status check only"); got != ContinuationLeaseClassDataAccess {
+		t.Fatalf("InferContinuationLeaseClass() = %q, want %q", got, ContinuationLeaseClassDataAccess)
+	}
+	proposal := ApplyAuthorityContractToActionProposal(ActionProposal{RiskClass: "external_account_status_check", Summary: "Check external account status only."})
+	if !actionListMatches(proposal.AllowedActions, AuthorityWorkActionReadOnly) {
+		t.Fatalf("allowed actions = %#v, want read_only", proposal.AllowedActions)
+	}
+}

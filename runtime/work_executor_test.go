@@ -569,6 +569,12 @@ func TestTriggerContinuationBlocksWorkExecutorWhenLeaseForbidsMode(t *testing.T)
 	if got.Status != session.ContinuationStatusRevoked || got.ContinuationLease.Status != session.ContinuationLeaseStatusRevoked {
 		t.Fatalf("continuation = %#v, want revoked after lease action denial", got)
 	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no repair approval prompt for action_forbidden", inlineCount)
+	}
 	events, err := store.ExecutionEventsBySession(key, 0, 50)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
@@ -1645,4 +1651,259 @@ func mustTestScope(t *testing.T, rt *Runtime, p principal.Principal) sandbox.Sco
 		t.Fatalf("scopeForPrincipal() err = %v", err)
 	}
 	return scope
+}
+
+func TestExternalAccountStatusPlanLeaseRunsReadOnlyWorkExecutor(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, &fakeProvider{}, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Hour)
+	key := session.SessionKey{ChatID: 8291, UserID: 0, Scope: telegramDMScopeRef(8291)}
+	actions := []string{"mint_github_app_jwt_in_memory", "mint_installation_token_in_memory", "call_github_actions_read_api", "call_github_release_read_api", "report_release_status"}
+	state := session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "plan-lease-external-status",
+		Objective:      "Verify release workflow status.",
+		StageSummary:   "Use the GitHub App credential to verify Actions/release status.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-plan-lease-external-status",
+			OperationID:    "plan-budget-external-status",
+			Summary:        "Approve plan budget: external status check",
+			BoundedEffect:  "lane phase-auth external_account_status_check 1 turn: verify status_check only",
+			RiskClass:      "plan_lease",
+			AllowedActions: append([]string{"approve_operation_plan_lease"}, actions...),
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:external-status",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-plan-lease-external-status",
+			ProposalID:     "aprop-plan-lease-external-status",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			AllowedActions: append([]string{"approve_operation_plan_lease"}, actions...),
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:external-status",
+		},
+		ApprovalBundle: session.ContinuationApprovalBundle{
+			ID:             "plan-lease-external-status",
+			Status:         session.ContinuationLeaseStatusActive,
+			CurrentPhaseID: "phase-external-status",
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			Phases: []session.ContinuationApprovalBundlePhase{{
+				ID:               "phase-external-status",
+				OperationPhaseID: "phase-auth",
+				AuthorityClass:   "external_account_status_check",
+				AllowedActions:   actions,
+				Status:           session.ContinuationLeaseStatusActive,
+			}},
+		},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{ID: "op-external-status", Objective: "Verify release workflow status.", Status: session.OperationStatusActive}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 8291); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 1 || work.lastReq.Mode != WorkModeReadOnly {
+		t.Fatalf("work calls=%d mode=%q, want one read_only call", work.calls, work.lastReq.Mode)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventContinuationConsumed) || !hasExecutionEvent(events, core.ExecutionEventWorkExecutorStarted) {
+		t.Fatalf("events = %#v, want consumed and work started", events)
+	}
+}
+
+func TestLeaseActionDeniedOffersOneShotRepairProposal(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, &fakeProvider{}, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8292, UserID: 0, Scope: telegramDMScopeRef(8292)}
+	state := session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        "read-only-shape-mismatch",
+		Objective:         "Check status.",
+		StageSummary:      "Run a status_check and report.",
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    session.ActionProposal{ID: "aprop-read-only-shape-mismatch", Summary: "Run a status_check", BoundedEffect: "Inspect status_check only.", RiskClass: "continuation", AllowedActions: []string{"inspect_status"}, Status: session.ProposalStatusApproved, ExpiresAt: expiresAt},
+		ContinuationLease: session.ContinuationLease{ID: "lease-read-only-shape-mismatch", ProposalID: "aprop-read-only-shape-mismatch", Status: session.ContinuationLeaseStatusActive, MaxTurns: 1, RemainingTurns: 1, ApprovedBy: 1001, ApprovedAt: expiresAt.Add(-time.Hour), AllowedActions: []string{"inspect_status"}, ExpiresAt: expiresAt},
+	}
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 8292); err != nil {
+		t.Fatalf("TriggerContinuation() err = %v", err)
+	}
+	if work.calls != 0 {
+		t.Fatalf("work calls = %d, want denied before executor", work.calls)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusPending || !actionListContains(got.ContinuationLease.AllowedActions, "read_only") {
+		t.Fatalf("continuation = %#v, want fresh pending repair lease with read_only", got)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one repair approval prompt", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) || !hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("events = %#v, want repair issued/offered", events)
+	}
+	if !eventsContainLeaseDenialRepairMarker(events) {
+		t.Fatalf("events = %#v, want structured lease_denial_repair marker", events)
+	}
+}
+
+func TestLeaseActionDeniedDoesNotRepairAuthorityWidening(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, &fakeProvider{}, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8293, UserID: 0, Scope: telegramDMScopeRef(8293)}
+	prior := session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        "read-only-no-widening",
+		Objective:         "Inspect status.",
+		StageSummary:      "Run a status_check and report.",
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    session.ActionProposal{ID: "aprop-read-only-no-widening", Summary: "Inspect status", BoundedEffect: "Inspect status only.", RiskClass: "read_only_review", AllowedActions: []string{"inspect_status"}, Status: session.ProposalStatusApproved, ExpiresAt: expiresAt},
+		ContinuationLease: session.ContinuationLease{ID: "lease-read-only-no-widening", ProposalID: "aprop-read-only-no-widening", Status: session.ContinuationLeaseStatusActive, MaxTurns: 1, RemainingTurns: 1, ApprovedBy: 1001, ApprovedAt: expiresAt.Add(-time.Hour), AllowedActions: []string{"inspect_status"}, ExpiresAt: expiresAt},
+	}
+	if err := store.UpdateContinuationState(key, prior); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	rt.offerLeaseActionDeniedRepair(context.Background(), key, 8293, prior, session.ContinuationLeaseAccessDecision{LeaseID: prior.ContinuationLease.ID, Action: string(WorkModeWorkspaceWrite), Reason: "action_not_allowed"}, time.Now().UTC())
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status != session.ContinuationStatusApproved || got.ActionProposal.ID != prior.ActionProposal.ID {
+		t.Fatalf("continuation = %#v, want unchanged approved state", got)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no authority-widening repair prompt", inlineCount)
+	}
+}
+
+func TestLeaseActionDeniedRepairSuppressesRepeatedSameCause(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, &fakeProvider{}, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	work := &fakeWorkExecutor{name: "codex", ready: true}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8294, UserID: 0, Scope: telegramDMScopeRef(8294)}
+	prior := session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        "read-only-repeat-shape-mismatch",
+		Objective:         "Check status.",
+		StageSummary:      "Run a status_check and report.",
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    session.ActionProposal{ID: "aprop-read-only-repeat-shape-mismatch", Summary: "Run a status_check", BoundedEffect: "Inspect status_check only.", RiskClass: "continuation", AllowedActions: []string{"inspect_status"}, Status: session.ProposalStatusApproved, ExpiresAt: expiresAt},
+		ContinuationLease: session.ContinuationLease{ID: "lease-read-only-repeat-shape-mismatch", ProposalID: "aprop-read-only-repeat-shape-mismatch", Status: session.ContinuationLeaseStatusActive, MaxTurns: 1, RemainingTurns: 1, ApprovedBy: 1001, ApprovedAt: expiresAt.Add(-time.Hour), AllowedActions: []string{"inspect_status"}, ExpiresAt: expiresAt},
+	}
+	if err := store.UpdateContinuationState(key, prior); err != nil {
+		t.Fatalf("UpdateContinuationState(first) err = %v", err)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 8294); err != nil {
+		t.Fatalf("TriggerContinuation(first) err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, prior); err != nil {
+		t.Fatalf("UpdateContinuationState(second) err = %v", err)
+	}
+	if err := rt.TriggerContinuation(context.Background(), 8294); err != nil {
+		t.Fatalf("TriggerContinuation(second) err = %v", err)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want exactly one repair approval prompt for repeated same cause", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if got := countEventsByType(events, core.ExecutionEventRecoveryIssued); got != 1 {
+		t.Fatalf("recovery issued count = %d, want one; events=%#v", got, events)
+	}
+	if got := countEventsByType(events, core.ExecutionEventContinuationBlocked); got != 2 {
+		t.Fatalf("blocked count = %d, want two blocked denials; events=%#v", got, events)
+	}
+}
+
+func eventsContainLeaseDenialRepairMarker(events []session.ExecutionEvent) bool {
+	for _, event := range events {
+		marker, ok := leaseDenialRepairMarkerFromPayload(event.PayloadJSON)
+		if ok && marker.Kind == leaseDenialRepairKind && marker.CauseHash != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func countEventsByType(events []session.ExecutionEvent, eventType string) int {
+	count := 0
+	for _, event := range events {
+		if event.EventType == eventType {
+			count++
+		}
+	}
+	return count
 }

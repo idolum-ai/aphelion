@@ -394,6 +394,7 @@ func (r *Runtime) blockContinuationForLeaseAccessDenied(chatID int64, state sess
 	}
 	now := time.Now().UTC()
 	key := session.SessionKey{ChatID: chatID, UserID: 0, Scope: telegramDMScopeRef(chatID)}
+	prior := session.NormalizeContinuationState(state)
 	state = continuationStateWithLeaseRevoked(state, now)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return err
@@ -405,6 +406,7 @@ func (r *Runtime) blockContinuationForLeaseAccessDenied(chatID int64, state sess
 	payload["lease_access_reason"] = strings.TrimSpace(decision.Reason)
 	payload["lease_id"] = strings.TrimSpace(decision.LeaseID)
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "blocked", payload, now)
+	r.offerLeaseActionDeniedRepair(context.Background(), key, chatID, prior, decision, now)
 	return nil
 }
 

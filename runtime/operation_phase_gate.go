@@ -211,7 +211,7 @@ func operationPhaseStructuredGateReasonCode(phase session.OperationPhase) string
 	}
 	for _, code := range operationPhaseStructuredCodes(phase) {
 		switch code {
-		case "external_account_auth_status", "read_only_auth_status_check", "run_gog_cli_auth_status_or_identity_check":
+		case "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "run_gog_cli_auth_status_or_identity_check":
 			return "external_account_auth_status"
 		case "credential_state_check", "credential_state_inspection", "credential_access", "read_credentials_or_tokens", "token_health_check":
 			return "credential_state_check"

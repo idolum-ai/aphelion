@@ -302,7 +302,7 @@ func planBudgetHumanAuthority(authority string) string {
 		return "local commit"
 	case "public_web_read", "public_profile_metadata_read", "public_account_content_read":
 		return "public read"
-	case "external_account_auth_status", "read_only_auth_status_check", "credential_metadata", "token_health_check":
+	case "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_metadata", "token_health_check":
 		return "account status only"
 	case "private_data_intake":
 		return "private data"

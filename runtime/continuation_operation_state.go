@@ -428,11 +428,26 @@ func operationPlanLeaseAllowedActions(lease session.OperationPlanLease) []string
 		"require_separate_capability_grant_for_external_effects",
 		"report_plan_lease_evidence_digest",
 	}
+	actions = append(actions, authorityContractWorkActionForToken(lease.AllowedActions...)...)
 	actions = append(actions, lease.AllowedActions...)
 	for _, lane := range lease.Lanes {
+		actions = append(actions, authorityContractWorkActionForToken(lane.AuthorityClass)...)
+		actions = append(actions, authorityContractWorkActionForToken(lane.AllowedActions...)...)
 		actions = append(actions, lane.AllowedActions...)
 	}
 	return session.NormalizeActionProposal(session.ActionProposal{AllowedActions: actions}).AllowedActions
+}
+
+func authorityContractWorkActionForToken(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		contract, ok := session.AuthorityContractForToken(value)
+		if !ok || strings.TrimSpace(contract.WorkAction) == "" {
+			continue
+		}
+		out = append(out, strings.TrimSpace(contract.WorkAction))
+	}
+	return out
 }
 
 func operationPlanLeaseForbiddenActions(lease session.OperationPlanLease) []string {
