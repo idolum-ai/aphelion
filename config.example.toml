@@ -156,8 +156,8 @@ app_server_address = ""
 # through proposals, leases, approvals, and grants; this section does not grant
 # new authority by itself.
 default_mode = "ask_first"
-ceiling = "ask_first"
-allow_live_overrides = false
+ceiling = "leased"
+allow_live_overrides = true
 max_override_duration = "4h"
 
 [sessions]

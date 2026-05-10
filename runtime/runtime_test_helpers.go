@@ -857,6 +857,12 @@ func buildRuntimeFixtures(t *testing.T) (*config.Config, *session.SQLiteStore, *
 			CompactionRatio:    0.55,
 			CompactionStrategy: "summarize",
 		},
+		Autonomy: config.AutonomyConfig{
+			DefaultMode:         "ask_first",
+			Ceiling:             "leased",
+			AllowLiveOverrides:  true,
+			MaxOverrideDuration: "4h",
+		},
 		Agent: config.AgentConfig{
 			Workspace:              root,
 			PromptRoot:             root,

@@ -16,7 +16,7 @@ import (
 const (
 	operatorAutoApprovalDefaultScope = session.OperatorAutoApprovalScopeAll
 	operatorAutoApprovalMinDuration  = time.Minute
-	operatorAutoApprovalMaxDuration  = 48 * time.Hour
+	operatorAutoApprovalMaxDuration  = 24 * time.Hour
 )
 
 type operatorAutoApprovalRequest struct {
@@ -59,6 +59,9 @@ func (r *Runtime) ConfigureAutoApproval(ctx context.Context, chatID int64, admin
 		)
 		return renderOperatorAutoApprovalRevoked(revoked, now), nil
 	case "enable":
+		if err := r.validateAutonomyLiveOverride("leased", spec.Duration); err != nil {
+			return "", err
+		}
 		lease := session.OperatorAutoApprovalLease{
 			ID:          newOperatorAutoApprovalLeaseID(chatID, adminUserID, now),
 			AdminUserID: adminUserID,

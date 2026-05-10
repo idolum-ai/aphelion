@@ -29,11 +29,13 @@ Current command surface:
   - Supports manual `list`, `show`, `create`, `pin`, `unpin`, `activate`, `pause`, `block`, `complete`, `archive`, `summon`, and admin `health` actions.
   - Self-summon is review-only; Mission Ledger state does not grant self-continuation or new capabilities.
 - `/autonomy`
-  - Admin-only policy report.
+  - Admin-only policy report and live override control.
   - Shows the configured default mode, ceiling, live-override setting, maximum override duration, and active override state.
-  - Does not grant authority by itself; live behavior still follows proposal and approval flows.
+  - Supports `status`, `off`, and `leased <duration> [all|workspace|deploy] [uses=N] [reason]`.
+  - `leased` uses the same bounded approval-lease substrate as `/autoapprove` and cannot exceed the configured ceiling or maximum duration.
 - `/autoapprove`
   - Admin-only short lease for eligible approval prompts.
+  - Also obeys the configured autonomy ceiling and maximum live-override duration.
 - `/stop`
   - Stops active work in the current chat and drops queued follow-up work.
   - When `memory.aggressive.flush_on_session_boundary` is enabled, it also runs a bounded memory flush first.

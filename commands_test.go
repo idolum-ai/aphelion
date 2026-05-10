@@ -218,6 +218,11 @@ type stubCommandRouter struct {
 	autoApproveArgs              string
 	autoApproveReturn            string
 	autoApproveErr               error
+	autonomyChatID               int64
+	autonomySenderID             int64
+	autonomyArgs                 string
+	autonomyReturn               string
+	autonomyErr                  error
 	durableWizardChatID          int64
 	durableWizardSenderID        int64
 	durableWizardAction          string
@@ -317,7 +322,9 @@ func (s stubCommandRouter) StatusSystem(senderID int64) (core.SystemStatusSnapsh
 	return s.statusSystem, nil
 }
 
-func (s stubCommandRouter) AutonomyStatus(senderID int64) (core.AutonomyStatusSnapshot, error) {
+func (s *stubCommandRouter) AutonomyStatus(chatID int64, senderID int64) (core.AutonomyStatusSnapshot, error) {
+	s.autonomyChatID = chatID
+	s.autonomySenderID = senderID
 	_ = senderID
 	if s.autonomyStatusErr != nil {
 		return core.AutonomyStatusSnapshot{}, s.autonomyStatusErr
@@ -327,7 +334,8 @@ func (s stubCommandRouter) AutonomyStatus(senderID int64) (core.AutonomyStatusSn
 	}
 	return core.AutonomyStatusSnapshot{
 		DefaultMode:         "ask_first",
-		Ceiling:             "ask_first",
+		Ceiling:             "leased",
+		AllowLiveOverrides:  true,
 		MaxOverrideDuration: 4 * time.Hour,
 		Source:              "test",
 		AuthorityBehavior:   "existing proposal and approval flows",
@@ -473,6 +481,19 @@ func (s *stubCommandRouter) ConfigureAutoApproval(_ context.Context, chatID int6
 		return s.autoApproveReturn, nil
 	}
 	return "Auto-approval enabled for this chat.", nil
+}
+
+func (s *stubCommandRouter) ConfigureAutonomy(_ context.Context, chatID int64, senderID int64, args string) (string, error) {
+	s.autonomyChatID = chatID
+	s.autonomySenderID = senderID
+	s.autonomyArgs = args
+	if s.autonomyErr != nil {
+		return "", s.autonomyErr
+	}
+	if strings.TrimSpace(s.autonomyReturn) != "" {
+		return s.autonomyReturn, nil
+	}
+	return "Autonomy override enabled for this chat.", nil
 }
 
 func (s *stubCommandRouter) RefreshContinuationProposal(ctx context.Context, chatID int64, reason string) (session.ContinuationState, bool, error) {
@@ -982,10 +1003,63 @@ func TestHandleTelegramCommandAutonomyAdmin(t *testing.T) {
 	if len(sender.msgs) != 1 {
 		t.Fatalf("messages = %#v, want one autonomy response", sender.msgs)
 	}
+	if router.autonomyChatID != 7 || router.autonomySenderID != 1001 {
+		t.Fatalf("autonomy status inputs = chat:%d sender:%d, want 7/1001", router.autonomyChatID, router.autonomySenderID)
+	}
 	for _, want := range []string{"Autonomy policy", "Default: Ask first", "Ceiling: Leased", "Live changes: enabled", "Authority behavior: existing proposal and approval flows."} {
 		if !strings.Contains(sender.msgs[0].Text, want) {
 			t.Fatalf("autonomy response = %q, want %q", sender.msgs[0].Text, want)
 		}
+	}
+}
+
+func TestHandleTelegramCommandAutonomyLeasedAdmin(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{canRestart: true, autonomyReturn: "Autonomy override enabled for this chat."}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/autonomy leased 15m workspace uses=2 focused plan",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.autonomyChatID != 7 || router.autonomySenderID != 1001 || router.autonomyArgs != "leased 15m workspace uses=2 focused plan" {
+		t.Fatalf("autonomy inputs = chat:%d sender:%d args:%q, want leased command", router.autonomyChatID, router.autonomySenderID, router.autonomyArgs)
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "enabled") {
+		t.Fatalf("messages = %#v, want enabled response", sender.msgs)
+	}
+}
+
+func TestHandleTelegramCommandAutonomyValidationErrorRepliesWithoutFatalError(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{canRestart: true, autonomyErr: errors.New("autonomy live override duration is capped at 4h0m0s")}
+	handled, err := handleTelegramCommand(context.Background(), sender, router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 14,
+		Text:      "/autonomy leased 8h all",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v, want nil so poller can advance the update offset", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.autonomyArgs != "leased 8h all" {
+		t.Fatalf("autonomyArgs = %q, want command args recorded", router.autonomyArgs)
+	}
+	if len(sender.msgs) != 1 || !strings.Contains(sender.msgs[0].Text, "not applied") || !strings.Contains(sender.msgs[0].Text, "capped") {
+		t.Fatalf("messages = %#v, want validation reply", sender.msgs)
 	}
 }
 

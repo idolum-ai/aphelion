@@ -483,8 +483,8 @@ func TestRunPathsCommandPrintsAutonomyPolicy(t *testing.T) {
 	}
 	for _, want := range []string{
 		"autonomy_default_mode: ask_first",
-		"autonomy_ceiling: ask_first",
-		"autonomy_live_overrides: false",
+		"autonomy_ceiling: leased",
+		"autonomy_live_overrides: true",
 		"autonomy_max_override_duration: 4h0m0s",
 	} {
 		if !strings.Contains(out, want) {

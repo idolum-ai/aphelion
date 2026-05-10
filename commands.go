@@ -42,7 +42,7 @@ type commandRouter interface {
 	Status(chatID int64) core.SessionStatus
 	StatusChat(chatID int64) (core.ChatStatusSnapshot, error)
 	StatusSystem(senderID int64) (core.SystemStatusSnapshot, error)
-	AutonomyStatus(senderID int64) (core.AutonomyStatusSnapshot, error)
+	AutonomyStatus(chatID int64, senderID int64) (core.AutonomyStatusSnapshot, error)
 	StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error)
 	StatusReadableSummary(ctx context.Context, view string, statusText string) string
 	TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error)
@@ -55,6 +55,7 @@ type commandRouter interface {
 	QueueReinstall(ctx context.Context, msg core.InboundMessage) error
 	QueueDoctor(ctx context.Context, msg core.InboundMessage) error
 	ConfigureAutoApproval(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
+	ConfigureAutonomy(ctx context.Context, chatID int64, senderID int64, args string) (string, error)
 	CurrentEfforts() (persona string, governor string)
 	CurrentPersonaModel() string
 	PersonaModelOptions() []string
@@ -355,7 +356,18 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			text = "Autonomy policy is admin only."
 			break
 		}
-		snapshot, err := router.AutonomyStatus(msg.SenderID)
+		args := telegramCommandArgs(msg.Text)
+		if strings.TrimSpace(args) != "" {
+			configured, err := router.ConfigureAutonomy(ctx, msg.ChatID, msg.SenderID, args)
+			if err != nil {
+				log.Printf("WARN autonomy command rejected chat_id=%d sender_id=%d err=%v", msg.ChatID, msg.SenderID, err)
+				text = renderAutonomyCommandError(err)
+				break
+			}
+			text = configured
+			break
+		}
+		snapshot, err := router.AutonomyStatus(msg.ChatID, msg.SenderID)
 		if err != nil {
 			return true, err
 		}
@@ -431,6 +443,17 @@ func renderAutoApprovalCommandError(err error) string {
 		return "Auto-approval request was not applied."
 	}
 	return "Auto-approval request was not applied: " + msg
+}
+
+func renderAutonomyCommandError(err error) string {
+	if err == nil {
+		return "Autonomy request was not applied."
+	}
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		return "Autonomy request was not applied."
+	}
+	return "Autonomy request was not applied: " + msg
 }
 
 func sendPersonaModelSelector(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {

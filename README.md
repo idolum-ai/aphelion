@@ -150,6 +150,9 @@ and refuses to replace an existing config unless `--force` is passed. Plain
 `quickstart` only writes the config; `--install-service` also runs the deploy
 phase: config check, `init`, user service install/restart, and `verify-deploy`.
 
+The quickstart config leaves normal turns at `ask_first` while allowing admins
+to grant bounded `leased` approval cycling from Telegram for up to four hours.
+
 Config file default:
 
 `~/.aphelion/aphelion.toml`

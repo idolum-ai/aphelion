@@ -78,8 +78,8 @@ external_manifest_dir = "./external-tools"
 	if cfg.Work.Executor != "auto" || !reflect.DeepEqual(cfg.Work.AutoOrder, []string{"native", "codex"}) {
 		t.Fatalf("work executor defaults = %#v, want auto native->codex", cfg.Work)
 	}
-	if cfg.Autonomy.DefaultMode != "ask_first" || cfg.Autonomy.Ceiling != "ask_first" || cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "4h" {
-		t.Fatalf("autonomy defaults = %#v, want ask_first ceiling with live overrides disabled", cfg.Autonomy)
+	if cfg.Autonomy.DefaultMode != "ask_first" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "4h" {
+		t.Fatalf("autonomy defaults = %#v, want ask_first default with leased live override ceiling", cfg.Autonomy)
 	}
 	if cfg.Governor.NativeProvider != "anthropic" || cfg.Providers.Default != "anthropic" {
 		t.Fatalf("provider heuristic = governor:%q default:%q, want anthropic/anthropic", cfg.Governor.NativeProvider, cfg.Providers.Default)

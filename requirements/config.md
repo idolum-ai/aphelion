@@ -36,8 +36,9 @@ Autonomy is a config-owned policy, not a prompt convention. `default_mode` and
 `ceiling` use `off`, `review_only`, `ask_first`, `leased`, or `mission`; the
 configured default must not exceed the ceiling. In the current runtime this
 policy is validated and projected through CLI, `/autonomy`, `/status`, and
-`/doctor` while live authority still follows existing proposal and approval
-flows.
+`/doctor`. `leased` live overrides are implemented through bounded
+operator-auto-approval leases and cannot exceed the configured ceiling or
+maximum duration.
 
 ```toml
 # ─── Identity ───
@@ -303,8 +304,8 @@ admin_user_ids = [123456789]
 
 [autonomy]
 default_mode = "ask_first"
-ceiling = "ask_first"
-allow_live_overrides = false
+ceiling = "leased"
+allow_live_overrides = true
 max_override_duration = "4h"
 
 # Deferred after v0:

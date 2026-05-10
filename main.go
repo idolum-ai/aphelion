@@ -228,7 +228,7 @@ func (c telegramCommandControl) StatusSystem(senderID int64) (core.SystemStatusS
 	return c.rt.SystemStatusSnapshot(routerSnapshot)
 }
 
-func (c telegramCommandControl) AutonomyStatus(senderID int64) (core.AutonomyStatusSnapshot, error) {
+func (c telegramCommandControl) AutonomyStatus(chatID int64, senderID int64) (core.AutonomyStatusSnapshot, error) {
 	if !c.CanRestart(senderID) {
 		return core.AutonomyStatusSnapshot{}, fmt.Errorf("autonomy policy view denied")
 	}
@@ -244,7 +244,14 @@ func (c telegramCommandControl) AutonomyStatus(senderID int64) (core.AutonomySta
 			AuthorityBehavior:   "existing proposal and approval flows",
 		}, nil
 	}
-	return c.rt.AutonomyStatusSnapshot(), nil
+	return c.rt.ChatAutonomyStatusSnapshot(chatID, senderID)
+}
+
+func (c telegramCommandControl) ConfigureAutonomy(ctx context.Context, chatID int64, senderID int64, args string) (string, error) {
+	if c.rt == nil {
+		return "Autonomy controls are unavailable.", nil
+	}
+	return c.rt.ConfigureAutonomy(ctx, chatID, senderID, args)
 }
 
 func (c telegramCommandControl) StatusDurables(senderID int64) (core.DurableAgentsStatusSnapshot, error) {

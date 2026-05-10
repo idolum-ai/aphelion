@@ -128,8 +128,14 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 	activeOverride := "none"
 	if mode := strings.TrimSpace(snapshot.ActiveOverrideMode); mode != "" {
 		activeOverride = autonomyModeLabel(mode)
+		if scope := strings.TrimSpace(snapshot.ActiveOverrideScope); scope != "" {
+			activeOverride += " for " + scope
+		}
 		if !snapshot.ActiveOverrideExpiry.IsZero() {
 			activeOverride += " until " + snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339)
+		}
+		if snapshot.ActiveOverrideMax > 0 {
+			activeOverride += fmt.Sprintf(" (%d/%d used)", snapshot.ActiveOverrideUsed, snapshot.ActiveOverrideMax)
 		}
 	}
 	behavior := strings.TrimSpace(snapshot.AuthorityBehavior)

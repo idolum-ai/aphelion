@@ -566,8 +566,8 @@ func Default() Config {
 		},
 		Autonomy: AutonomyConfig{
 			DefaultMode:         "ask_first",
-			Ceiling:             "ask_first",
-			AllowLiveOverrides:  false,
+			Ceiling:             "leased",
+			AllowLiveOverrides:  true,
 			MaxOverrideDuration: "4h",
 		},
 		Sessions: SessionsConfig{
@@ -1134,8 +1134,8 @@ func AutonomyModeRank(mode string) (int, bool) {
 func EffectiveAutonomyPolicy(cfg *Config) AutonomyPolicy {
 	policy := AutonomyPolicy{
 		DefaultMode:         "ask_first",
-		Ceiling:             "ask_first",
-		AllowLiveOverrides:  false,
+		Ceiling:             "leased",
+		AllowLiveOverrides:  true,
 		MaxOverrideDuration: 4 * time.Hour,
 	}
 	if cfg == nil {

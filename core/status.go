@@ -268,6 +268,9 @@ type AutonomyStatusSnapshot struct {
 	MaxOverrideDuration  time.Duration
 	ActiveOverrideMode   string
 	ActiveOverrideActor  string
+	ActiveOverrideScope  string
+	ActiveOverrideUsed   int
+	ActiveOverrideMax    int
 	ActiveOverrideExpiry time.Time
 	Source               string
 	AuthorityBehavior    string

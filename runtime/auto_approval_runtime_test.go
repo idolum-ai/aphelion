@@ -219,20 +219,115 @@ func TestRuntimeAutoApprovalRejectsZeroUses(t *testing.T) {
 	}
 }
 
-func TestParseOperatorAutoApprovalDurationCapAllowsFortyEightHours(t *testing.T) {
+func TestRuntimeAutoApprovalRespectsAutonomyDurationCap(t *testing.T) {
 	t.Parallel()
 
-	action, spec, err := parseOperatorAutoApprovalCommand("48h all")
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.Ceiling = "leased"
+	cfg.Autonomy.AllowLiveOverrides = true
+	cfg.Autonomy.MaxOverrideDuration = "20m"
+	rt, err := New(cfg, store, provider, nil, sender)
 	if err != nil {
-		t.Fatalf("parseOperatorAutoApprovalCommand(48h) err = %v", err)
+		t.Fatalf("New() err = %v", err)
 	}
-	if action != "enable" || spec.Duration != 48*time.Hour {
-		t.Fatalf("action/spec = %q/%#v, want enable with 48h duration", action, spec)
+	_, err = rt.ConfigureAutoApproval(context.Background(), 99128, 1001, "30m all")
+	if err == nil || !strings.Contains(err.Error(), "autonomy live override duration is capped at 20m0s") {
+		t.Fatalf("ConfigureAutoApproval() err = %v, want autonomy duration cap", err)
+	}
+}
+
+func TestRuntimeAutoApprovalRespectsAutonomyCeiling(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.Ceiling = "ask_first"
+	cfg.Autonomy.AllowLiveOverrides = true
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	_, err = rt.ConfigureAutoApproval(context.Background(), 99129, 1001, "15m all")
+	if err == nil || !strings.Contains(err.Error(), "exceeds configured ceiling ask_first") {
+		t.Fatalf("ConfigureAutoApproval() err = %v, want autonomy ceiling rejection", err)
+	}
+}
+
+func TestRuntimeAutonomyLeasedCommandCreatesBoundedOverride(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.Ceiling = "leased"
+	cfg.Autonomy.AllowLiveOverrides = true
+	cfg.Autonomy.MaxOverrideDuration = "2h"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
 	}
 
-	_, _, err = parseOperatorAutoApprovalCommand("49h all")
-	if err == nil || !strings.Contains(err.Error(), "48h0m0s") {
-		t.Fatalf("parseOperatorAutoApprovalCommand(49h) err = %v, want 48h cap error", err)
+	text, err := rt.ConfigureAutonomy(context.Background(), 99130, 1001, "leased 30m workspace uses=2 focused plan")
+	if err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
+	if !strings.Contains(text, "Autonomy override enabled") || !strings.Contains(text, "Mode: Leased") || !strings.Contains(text, "Scope: workspace prompts") {
+		t.Fatalf("ConfigureAutonomy() text = %q, want leased workspace override", text)
+	}
+	snapshot, err := rt.ChatAutonomyStatusSnapshot(99130, 1001)
+	if err != nil {
+		t.Fatalf("ChatAutonomyStatusSnapshot() err = %v", err)
+	}
+	if snapshot.ActiveOverrideMode != "leased" || snapshot.ActiveOverrideScope != session.OperatorAutoApprovalScopeWorkspace || snapshot.ActiveOverrideMax != 2 {
+		t.Fatalf("Autonomy snapshot = %#v, want active leased workspace override", snapshot)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99130, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].Scope != session.OperatorAutoApprovalScopeWorkspace || leases[0].MaxUses != 2 {
+		t.Fatalf("leases = %#v, want one workspace auto-approval lease", leases)
+	}
+}
+
+func TestRuntimeAutonomyOffRevokesBoundedOverride(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99131, 1001, "leased 15m all"); err != nil {
+		t.Fatalf("ConfigureAutonomy(enable) err = %v", err)
+	}
+	text, err := rt.ConfigureAutonomy(context.Background(), 99131, 1001, "off")
+	if err != nil {
+		t.Fatalf("ConfigureAutonomy(off) err = %v", err)
+	}
+	if !strings.Contains(text, "Autonomy live override is off") || !strings.Contains(text, "Cleared") {
+		t.Fatalf("ConfigureAutonomy(off) text = %q, want cleared override", text)
+	}
+	snapshot, err := rt.ChatAutonomyStatusSnapshot(99131, 1001)
+	if err != nil {
+		t.Fatalf("ChatAutonomyStatusSnapshot() err = %v", err)
+	}
+	if snapshot.ActiveOverrideMode != "" {
+		t.Fatalf("Autonomy snapshot = %#v, want no active override", snapshot)
+	}
+}
+
+func TestParseOperatorAutoApprovalDurationCapAllowsTwentyFourHours(t *testing.T) {
+	t.Parallel()
+
+	action, spec, err := parseOperatorAutoApprovalCommand("24h all")
+	if err != nil {
+		t.Fatalf("parseOperatorAutoApprovalCommand(24h) err = %v", err)
+	}
+	if action != "enable" || spec.Duration != 24*time.Hour {
+		t.Fatalf("action/spec = %q/%#v, want enable with 24h duration", action, spec)
+	}
+
+	_, _, err = parseOperatorAutoApprovalCommand("25h all")
+	if err == nil || !strings.Contains(err.Error(), "24h0m0s") {
+		t.Fatalf("parseOperatorAutoApprovalCommand(25h) err = %v, want 24h cap error", err)
 	}
 }
 
