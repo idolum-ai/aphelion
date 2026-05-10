@@ -65,11 +65,31 @@ func Labels(ctx Context, forbiddenValues []string, opts Options) []string {
 		out = append(out, label)
 	}
 	if len(out) == 0 {
-		out = append([]string(nil), opts.Defaults...)
+		out = defaultLabels(ctx, opts.Defaults)
 	}
 	out = prioritize(out)
 	if opts.Limit > 0 && len(out) > opts.Limit {
 		out = out[:opts.Limit]
+	}
+	return out
+}
+
+func defaultLabels(ctx Context, defaults []string) []string {
+	out := make([]string, 0, len(defaults))
+	deployRestartAllowed := allowsDeployRestart(ctx)
+	for _, value := range defaults {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if deployRestartAllowed && value == "deploy/restart" {
+			out = append(out, "release outside approved scope")
+			continue
+		}
+		out = append(out, value)
+	}
+	if len(out) == 0 && deployRestartAllowed {
+		return []string{"release outside approved scope"}
 	}
 	return out
 }

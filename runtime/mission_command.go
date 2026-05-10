@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -122,14 +123,20 @@ func (r *Runtime) renderMissionCommandHome(key session.SessionKey, owner string)
 		return "", err
 	}
 	var b strings.Builder
-	b.WriteString("Mission Ledger\n")
+	details := make([]string, 0, 3)
 	if strings.TrimSpace(working.Objective) != "" {
-		fmt.Fprintf(&b, "working_objective: %s\n", working.Objective)
+		details = append(details, "Working objective: "+working.Objective)
 	} else {
-		b.WriteString("working_objective: none\n")
+		details = append(details, "Working objective: none")
 	}
-	b.WriteString(renderMissionCommandList("Missions", missions))
-	b.WriteString("\n\nCommands: /mission create <objective>, /mission show <id>, /mission propose <id>, /mission summon [context], /mission pin <id>, /mission archive <id>.")
+	details = append(details, renderMissionCommandListLines(missions)...)
+	b.WriteString(face.RenderOperatorPanel(face.OperatorPanel{
+		Title:   "Mission Ledger",
+		State:   fmt.Sprintf("%d mission(s)", len(missions)),
+		Why:     "Missions organize long-running intent but do not grant self-continuation or new capability by themselves.",
+		Next:    "Use /mission create <objective>, /mission show <id>, /mission propose <id>, /mission summon [context], /mission pin <id>, or /mission archive <id>.",
+		Details: details,
+	}))
 	return strings.TrimSpace(b.String()), nil
 }
 
@@ -170,49 +177,105 @@ func nextMissionToken(raw string) (string, string) {
 }
 
 func renderMissionCommandList(title string, missions []session.MissionState) string {
-	var b strings.Builder
-	b.WriteString(strings.TrimSpace(title))
-	b.WriteString("\n")
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:   strings.TrimSpace(title),
+		State:   fmt.Sprintf("%d mission(s)", len(missions)),
+		Why:     "Mission matches are review context, not automatic authority.",
+		Next:    "Show a mission for details or propose a bounded action.",
+		Details: renderMissionCommandListLines(missions),
+	})
+}
+
+func renderMissionCommandListLines(missions []session.MissionState) []string {
 	if len(missions) == 0 {
-		b.WriteString("- none")
-		return b.String()
+		return []string{"No missions found."}
 	}
+	lines := make([]string, 0, len(missions))
 	for _, mission := range missions {
-		line := fmt.Sprintf("- %s [%s] %s", mission.ID, mission.Status, mission.Title)
+		title := firstNonEmptyRuntime(strings.TrimSpace(mission.Title), strings.TrimSpace(mission.Objective), strings.TrimSpace(mission.ID))
+		line := fmt.Sprintf("%s: %s", mission.ID, title)
+		if status := strings.TrimSpace(string(mission.Status)); status != "" {
+			line += " (" + status + ")"
+		}
+		flags := make([]string, 0, 2)
 		if mission.Pinned {
-			line += " pinned=true"
+			flags = append(flags, "pinned")
 		}
 		if mission.Authority.CanSelfContinue {
-			line += " self_continue=true"
+			flags = append(flags, "self-continuation enabled")
 		}
-		b.WriteString(line + "\n")
+		if len(flags) > 0 {
+			line += "; " + strings.Join(flags, ", ")
+		}
+		lines = append(lines, line)
 	}
-	return strings.TrimSpace(b.String())
+	return lines
 }
 
 func renderMissionCommandShow(mission session.MissionState, events []session.MissionEvent) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Mission %s\n", mission.ID)
-	fmt.Fprintf(&b, "title: %s\n", mission.Title)
-	fmt.Fprintf(&b, "objective: %s\n", mission.Objective)
-	fmt.Fprintf(&b, "status: %s\n", mission.Status)
-	fmt.Fprintf(&b, "pinned: %t\n", mission.Pinned)
-	fmt.Fprintf(&b, "authority: self_summon=%t self_continue=%t requires_review=%t\n", mission.Authority.CanSelfSummon, mission.Authority.CanSelfContinue, mission.Authority.RequiresUserReview)
+	details := []string{
+		"Title: " + firstNonEmptyRuntime(strings.TrimSpace(mission.Title), strings.TrimSpace(mission.ID)),
+		"Objective: " + firstNonEmptyRuntime(strings.TrimSpace(mission.Objective), "-"),
+		"Pinned: " + boolWord(mission.Pinned),
+	}
+	authority := []string{
+		"Self-summon: " + boolWord(mission.Authority.CanSelfSummon),
+		"Self-continuation: " + boolWord(mission.Authority.CanSelfContinue),
+		"Requires review: " + boolWord(mission.Authority.RequiresUserReview),
+	}
 	if mission.BlockedReason != "" {
-		fmt.Fprintf(&b, "blocked_reason: %s\n", mission.BlockedReason)
+		details = append(details, "Blocked: "+mission.BlockedReason)
 	}
 	if len(mission.Tags) > 0 {
-		fmt.Fprintf(&b, "tags: %s\n", strings.Join(mission.Tags, ","))
+		details = append(details, "Tags: "+strings.Join(mission.Tags, ", "))
 	}
+	evidence := make([]string, 0, len(events)+len(authority))
+	evidence = append(evidence, authority...)
 	if len(events) > 0 {
-		b.WriteString("events:\n")
 		for _, event := range events {
-			fmt.Fprintf(&b, "- %s %s %q\n", event.EventType, event.Actor, event.Summary)
+			evidence = append(evidence, strings.TrimSpace(event.EventType)+" by "+strings.TrimSpace(event.Actor)+": "+strings.TrimSpace(event.Summary))
 		}
 	}
-	return strings.TrimSpace(b.String())
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:    "Mission " + strings.TrimSpace(mission.ID),
+		State:    firstNonEmptyRuntime(strings.TrimSpace(string(mission.Status)), "unknown"),
+		Why:      "Mission state is ledger context; action still needs explicit plan, lease, or grant authority.",
+		Next:     "Use /mission propose <id> for a bounded action, or update status with activate, pause, block, complete, or archive.",
+		Details:  details,
+		Evidence: evidence,
+	})
 }
 
 func renderMissionCommandHealth(health session.MissionLedgerHealth) string {
-	return fmt.Sprintf("Mission Ledger health\nactive: %d\npinned: %d\nrecurring: %d\nblocked: %d\nself_continuation_enabled: %d\nstale_candidates: %d\npending_handoffs: %d", health.ActiveCount, health.PinnedCount, health.RecurringCount, health.BlockedCount, health.SelfContinuationEnabledCount, health.StaleCandidateCount, health.PendingHandoffCount)
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title: "Mission Ledger health",
+		State: fmt.Sprintf("%d active, %d blocked", health.ActiveCount, health.BlockedCount),
+		Why:   "Health highlights ledger state that may need review or cleanup.",
+		Next:  "Inspect blocked missions or stale candidates before relying on the ledger.",
+		Evidence: []string{
+			fmt.Sprintf("Active: %d", health.ActiveCount),
+			fmt.Sprintf("Pinned: %d", health.PinnedCount),
+			fmt.Sprintf("Recurring: %d", health.RecurringCount),
+			fmt.Sprintf("Blocked: %d", health.BlockedCount),
+			fmt.Sprintf("Self-continuation enabled: %d", health.SelfContinuationEnabledCount),
+			fmt.Sprintf("Stale candidates: %d", health.StaleCandidateCount),
+			fmt.Sprintf("Pending handoffs: %d", health.PendingHandoffCount),
+		},
+	})
+}
+
+func boolWord(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
+func firstNonEmptyRuntime(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

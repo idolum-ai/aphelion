@@ -649,14 +649,26 @@ func (e *configStartupError) Unwrap() error {
 
 func main() {
 	if err := run(); err != nil {
+		var usageErr *cliUsageError
+		if errors.As(err, &usageErr) {
+			fmt.Fprintln(os.Stderr, usageErr.Error())
+			os.Exit(exitCode(err))
+		}
 		log.Printf("ERROR aphelion exited with error: %v", err)
 		os.Exit(exitCode(err))
 	}
 }
 
 func run() error {
+	if topLevelHelpRequested(os.Args[1:]) {
+		printTopLevelHelp(os.Stdout, "")
+		return nil
+	}
 	handled, err := runMaintenanceCommand(os.Args[1:])
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if handled {
@@ -667,10 +679,13 @@ func run() error {
 	configPathFlag := flags.String("config", "", "path to config.toml")
 	checkConfig := flags.Bool("check-config", false, "validate config and exit")
 	if err := flags.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if extra, ok := firstPositionalArg(flags.Args()); ok {
-		return fmt.Errorf("unknown command %q (known maintenance commands: authority|quickstart|init|paths|park-restart|repair-live-state|repair-capability-grants|repair-review-redactions|gc|forget|reset|import-audit|import-semantic|import-codex-sessions|migrate-memory|verify-deploy|durable-agent|telegram-child-bot|version)", extra)
+		return &cliUsageError{Text: renderUnknownCommandHelp(extra)}
 	}
 
 	configPath, err := config.ResolveConfigPath(*configPathFlag)

@@ -2252,7 +2252,7 @@ func TestHandleTelegramCommandHelpHidesAdminRestartForNonAdmin(t *testing.T) {
 	if len(sender.msgs) != 1 {
 		t.Fatalf("message count = %d, want 1", len(sender.msgs))
 	}
-	if strings.Contains(sender.msgs[0].Text, "\n/restart - ") {
+	if strings.Contains(sender.msgs[0].Text, "/restart - ") {
 		t.Fatalf("help text = %q, want admin-only /restart hidden for non-admins", sender.msgs[0].Text)
 	}
 }
@@ -2280,10 +2280,10 @@ func TestHandleTelegramCommandHelpShowsAdminRestartForAdmin(t *testing.T) {
 	if len(sender.msgs) != 1 {
 		t.Fatalf("message count = %d, want 1", len(sender.msgs))
 	}
-	if !strings.Contains(sender.msgs[0].Text, "\n/restart - ") {
+	if !strings.Contains(sender.msgs[0].Text, "/restart - ") {
 		t.Fatalf("help text = %q, want admin /restart command listed", sender.msgs[0].Text)
 	}
-	if !strings.Contains(sender.msgs[0].Text, "\n/debug - ") {
+	if !strings.Contains(sender.msgs[0].Text, "/debug - ") {
 		t.Fatalf("help text = %q, want /debug command listed", sender.msgs[0].Text)
 	}
 }
@@ -2311,10 +2311,10 @@ func TestHandleTelegramCommandStartHidesAdminRestartForNonAdmin(t *testing.T) {
 	if len(sender.msgs) != 1 {
 		t.Fatalf("message count = %d, want 1", len(sender.msgs))
 	}
-	if strings.Contains(sender.msgs[0].Text, "\n/restart - ") {
+	if strings.Contains(sender.msgs[0].Text, "/restart - ") {
 		t.Fatalf("start text = %q, want admin-only /restart hidden for non-admins", sender.msgs[0].Text)
 	}
-	if !strings.Contains(sender.msgs[0].Text, "\n/debug - ") {
+	if !strings.Contains(sender.msgs[0].Text, "/debug - ") {
 		t.Fatalf("start text = %q, want /debug command listed", sender.msgs[0].Text)
 	}
 }
@@ -4534,5 +4534,43 @@ func TestCompactContinuationStopsForReadOnlyLeaseStillStopBeforeDeployRestart(t 
 	joined := strings.Join(stops, ", ")
 	if !strings.Contains(joined, "deploy/restart") {
 		t.Fatalf("stops = %#v, want broad deploy/restart stop for non-deploy lease", stops)
+	}
+}
+
+func TestOperatorPanelsAvoidRawTelemetryByDefault(t *testing.T) {
+	t.Parallel()
+
+	memoryText, _ := renderMemoryReviewPanel(memoryReviewSnapshot{
+		Source: memoryReviewSourceShared,
+		Query:  "release status",
+		Items: []memoryReviewItem{{
+			ID:      "mem-1",
+			Label:   "Release note",
+			Excerpt: "The latest release check passed.",
+		}},
+	}, core.MemoryFocus{})
+	tailnetText, _ := renderTailnetCommand(core.TailnetStatusSnapshot{
+		Enabled: true,
+		Backend: "cli",
+		Status:  "healthy",
+		Parent:  &core.TailnetParentStatus{Enabled: true, Running: true},
+	})
+	agentsText, _ := renderDurableAgentsCommand([]core.DurableAgentStatusSnapshot{{
+		AgentID:     "ops-child",
+		ChannelKind: "telegram_dm",
+		Status:      "active",
+		Health:      "ok",
+	}})
+	for name, text := range map[string]string{"memory": memoryText, "tailnet": tailnetText, "agents": agentsText} {
+		for _, forbidden := range []string{"source=", "enabled=true", "running=true", "kind=", "owner="} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("%s panel = %q, should not contain raw telemetry %q", name, text, forbidden)
+			}
+		}
+		for _, want := range []string{"Status:", "Why:", "Next:"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s panel = %q, want operator contract field %q", name, text, want)
+			}
+		}
 	}
 }

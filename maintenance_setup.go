@@ -34,6 +34,10 @@ func runInitCommand(args []string) error {
 		return err
 	}
 
+	fmt.Fprintf(os.Stdout, "action: init\n")
+	fmt.Fprintf(os.Stdout, "status: in_progress\n")
+	fmt.Fprintf(os.Stdout, "changed: created_files=%d\n", len(created))
+	fmt.Fprintf(os.Stdout, "evidence:\n")
 	fmt.Fprintf(os.Stdout, "prompt_root: %s\n", cfg.Agent.PromptRoot)
 	fmt.Fprintf(os.Stdout, "created_files: %d\n", len(created))
 	for _, path := range created {
@@ -55,6 +59,8 @@ func runInitCommand(args []string) error {
 		return err
 	}
 	printDurableAgentReconcileResult(os.Stdout, reconcileResult)
+	fmt.Fprintf(os.Stdout, "status: ready\n")
+	fmt.Fprintf(os.Stdout, "next: run --check-config or start the service\n")
 	return nil
 }
 
@@ -75,6 +81,9 @@ func runPathsCommand(args []string) error {
 		return err
 	}
 
+	fmt.Fprintf(os.Stdout, "action: paths\n")
+	fmt.Fprintf(os.Stdout, "status: ready\n")
+	fmt.Fprintf(os.Stdout, "evidence:\n")
 	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
 	fmt.Fprintf(os.Stdout, "prompt_root: %s\n", cfg.Agent.PromptRoot)
 	fmt.Fprintf(os.Stdout, "exec_root: %s\n", cfg.Agent.ExecRoot)
@@ -91,6 +100,7 @@ func runPathsCommand(args []string) error {
 	printPathGroup("loaded_dynamic_files", dynamic)
 	printPathGroup("loaded_idolum_stable_files", idolumStable)
 	printPathGroup("loaded_idolum_dynamic_files", idolumDynamic)
+	fmt.Fprintf(os.Stdout, "next: verify these roots before broadening exec or memory scope\n")
 	return nil
 }
 
@@ -117,6 +127,7 @@ func runParkRestartCommand(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "action: park-restart\n")
+	fmt.Fprintf(os.Stdout, "status: parked\n")
 	fmt.Fprintf(os.Stdout, "config_path: %s\n", configPath)
 	fmt.Fprintf(os.Stdout, "source: %s\n", strings.TrimSpace(*sourceFlag))
 	fmt.Fprintf(os.Stdout, "turn_runs_interrupted: %d\n", result.TurnRunsInterrupted)
@@ -126,6 +137,7 @@ func runParkRestartCommand(args []string) error {
 	fmt.Fprintf(os.Stdout, "expired_approved_continuations: %d\n", result.ExpiredApprovedContinuations)
 	fmt.Fprintf(os.Stdout, "already_parked_continuations: %d\n", result.AlreadyParkedContinuations)
 	fmt.Fprintf(os.Stdout, "skipped_continuations: %d\n", result.SkippedContinuations)
+	fmt.Fprintf(os.Stdout, "next: restart service only after build and config checks pass\n")
 	return nil
 }
 

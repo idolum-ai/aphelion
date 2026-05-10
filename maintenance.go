@@ -4,6 +4,7 @@ package main
 
 import (
 	"embed"
+	"os"
 )
 
 //go:embed defaults/agent/* defaults/agent/memory/*
@@ -34,6 +35,9 @@ func runMaintenanceCommand(args []string) (bool, error) {
 		return false, nil
 	}
 	switch args[0] {
+	case "help":
+		printTopLevelHelp(os.Stdout, "")
+		return true, nil
 	case "authority":
 		return true, runAuthorityCommand(args[1:])
 	case "quickstart":

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -52,17 +53,21 @@ func decodeDurableAgentsCallbackData(data string) (durableAgentsCallbackAction, 
 }
 
 func renderDurableAgentsCommand(agents []core.DurableAgentStatusSnapshot) (string, [][]telegram.InlineButton) {
-	lines := []string{
-		"Durable Agents",
-		"",
-	}
+	details := make([]string, 0, len(agents))
+	evidence := make([]string, 0, len(agents))
 	rows := make([][]telegram.InlineButton, 0, len(agents)+1)
 	if len(agents) == 0 {
-		lines = append(lines, "No durable agents are currently configured.")
+		details = append(details, "No durable agents are currently configured.")
 		rows = append(rows, []telegram.InlineButton{
 			{Text: "Refresh", CallbackData: encodeDurableAgentsRefreshCallbackData()},
 		})
-		return strings.Join(lines, "\n"), rows
+		return face.RenderOperatorPanel(face.OperatorPanel{
+			Title:   "Durable Agents",
+			State:   "none configured",
+			Why:     "Durable children only appear here after they are declared in governed configuration or state.",
+			Next:    "Refresh after adding a child, or use the durable wizard from a normal admin request.",
+			Details: details,
+		}), rows
 	}
 	for _, agent := range agents {
 		agentID := strings.TrimSpace(agent.AgentID)
@@ -76,7 +81,20 @@ func renderDurableAgentsCommand(agents []core.DurableAgentStatusSnapshot) (strin
 		if mode := strings.TrimSpace(agent.TailnetMode); mode != "" {
 			parts = append(parts, "tailnet:"+mode)
 		}
-		lines = append(lines, fmt.Sprintf("- %s (%s)", agentID, strings.Join(parts, " | ")))
+		line := fmt.Sprintf("%s (%s)", agentID, strings.Join(parts, " | "))
+		if reason := strings.TrimSpace(agent.ChildRuntimeBlockedReason); reason != "" {
+			line += "; blocked: " + truncateOperatorLine(reason, 120)
+		}
+		if !agent.LastWakeAt.IsZero() {
+			line += "; last wake " + agent.LastWakeAt.UTC().Format("2006-01-02 15:04Z")
+		}
+		details = append(details, line)
+		if agent.PolicyVersion > 0 {
+			evidence = append(evidence, fmt.Sprintf("%s policy version %d", agentID, agent.PolicyVersion))
+		}
+		if strings.TrimSpace(agent.EnrollmentStatus) != "" {
+			evidence = append(evidence, fmt.Sprintf("%s enrollment: %s", agentID, strings.TrimSpace(agent.EnrollmentStatus)))
+		}
 		rows = append(rows, []telegram.InlineButton{
 			{Text: "Chat", CallbackData: encodeDurableAgentsStartCallbackData(agentID)},
 		})
@@ -84,7 +102,14 @@ func renderDurableAgentsCommand(agents []core.DurableAgentStatusSnapshot) (strin
 	rows = append(rows, []telegram.InlineButton{
 		{Text: "Refresh", CallbackData: encodeDurableAgentsRefreshCallbackData()},
 	})
-	return strings.Join(lines, "\n"), rows
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:    "Durable Agents",
+		State:    fmt.Sprintf("%d configured", len(agents)),
+		Why:      "Each child keeps its own bounded state and can only act through declared grants and policy.",
+		Next:     "Tap Chat for a bounded parent-child check-in, or refresh after policy changes.",
+		Details:  details,
+		Evidence: evidence,
+	}), rows
 }
 
 func handleDurableAgentsCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, action durableAgentsCallbackAction, agentID string) (bool, error) {

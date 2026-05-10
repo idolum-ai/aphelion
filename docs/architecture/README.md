@@ -40,6 +40,7 @@ These invariants are normative for architecture and requirements alignment:
 - [turn-lifecycle.md](turn-lifecycle.md): stage order across interactive, maintenance, and durable-child turns.
 - [action-proposal-continuation-lease.md](action-proposal-continuation-lease.md): typed bounded action proposals and consumable continuation leases.
 - [constitution-and-delivery.md](constitution-and-delivery.md): floor/scene and commit/delivery invariants.
+- [operator-presentation-contract.md](operator-presentation-contract.md): human Telegram/CLI presentation contract for status, rationale, next action, details, and evidence.
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.
 - [transparent-execution-sequence.md](transparent-execution-sequence.md): canonical execution timeline and projection/fallback precedence.

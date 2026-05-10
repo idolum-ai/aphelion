@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
 )
@@ -449,38 +450,40 @@ func modelCommandReason(raw string) string {
 }
 
 func renderModelSlotStatuses(statuses []core.ModelSlotStatus) string {
-	var b strings.Builder
-	b.WriteString("Models\n")
 	if len(statuses) == 0 {
-		b.WriteString("No model slot status available.")
-		return b.String()
+		return face.RenderOperatorPanel(face.OperatorPanel{
+			Title: "Models",
+			State: "unavailable",
+			Why:   "No model slot status was returned by the runtime.",
+			Next:  "Run /doctor or check config if this persists.",
+		})
 	}
+	details := make([]string, 0, len(statuses))
+	evidence := make([]string, 0, len(statuses)*2)
 	for _, status := range statuses {
-		b.WriteString("\n")
-		b.WriteString(modelSlotTitle(status.Slot))
-		b.WriteString(": ")
-		b.WriteString(renderModelSlotConfig(status.Effective))
-		b.WriteString(" (")
-		b.WriteString(status.Source)
+		line := modelSlotTitle(status.Slot) + ": " + renderModelSlotConfig(status.Effective)
+		line += " from " + firstNonEmptyModelUI(status.Source, "default")
 		if !status.ExpiresAt.IsZero() {
-			b.WriteString(", expires ")
-			b.WriteString(status.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
+			line += ", expires " + status.ExpiresAt.UTC().Format("2006-01-02 15:04Z")
 		}
-		b.WriteString(")")
+		details = append(details, line)
 		if !status.Validation.Valid {
-			b.WriteString("\n  Invalid: ")
-			b.WriteString(status.Validation.Error)
+			evidence = append(evidence, modelSlotTitle(status.Slot)+" invalid: "+trimTelegramModelError(status.Validation.Error))
 		} else if status.Validation.ResolvedTransport != "" {
-			b.WriteString("\n  Transport: ")
-			b.WriteString(status.Validation.ResolvedTransport)
+			evidence = append(evidence, "Transport: "+status.Validation.ResolvedTransport)
 		}
 		if len(status.Validation.Warnings) > 0 {
-			b.WriteString("\n  Warning: ")
-			b.WriteString(strings.Join(status.Validation.Warnings, "; "))
+			evidence = append(evidence, modelSlotTitle(status.Slot)+" warning: "+strings.Join(status.Validation.Warnings, "; "))
 		}
 	}
-	b.WriteString("\n\nUse /model set <slot> <provider/model> effort=<low|medium|high|xhigh> ttl=2h")
-	return b.String()
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:    "Models",
+		State:    fmt.Sprintf("%d slot(s) configured", len(statuses)),
+		Why:      "Model slots control which backend handles each kind of runtime work.",
+		Next:     "Open a slot button, or use /model set <slot> <provider/model> effort=<low|medium|high|xhigh> ttl=2h.",
+		Details:  details,
+		Evidence: evidence,
+	})
 }
 
 func renderModelSlotStatusPanel(statuses []core.ModelSlotStatus) (string, [][]telegram.InlineButton) {
@@ -504,36 +507,38 @@ func renderModelStatusRows() [][]telegram.InlineButton {
 }
 
 func renderModelSlotDetail(status core.ModelSlotStatus) string {
-	var b strings.Builder
-	b.WriteString(modelSlotTitle(status.Slot))
-	b.WriteString("\nCurrent: ")
-	b.WriteString(renderModelSlotConfig(status.Effective))
-	b.WriteString("\nSource: ")
-	b.WriteString(firstNonEmptyModelUI(status.Source, "default"))
+	details := []string{
+		"Current: " + renderModelSlotConfig(status.Effective),
+		"Source: " + firstNonEmptyModelUI(status.Source, "default"),
+	}
 	if !status.ExpiresAt.IsZero() {
-		b.WriteString("\nExpires: ")
-		b.WriteString(status.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
+		details = append(details, "Expires: "+status.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
 	}
 	if status.Reason != "" {
-		b.WriteString("\nReason: ")
-		b.WriteString(status.Reason)
+		details = append(details, "Reason: "+status.Reason)
 	}
-	b.WriteString("\nDefault: ")
-	b.WriteString(renderModelSlotConfig(status.Default))
+	details = append(details, "Default: "+renderModelSlotConfig(status.Default))
+	evidence := make([]string, 0, 2)
+	state := "ready"
 	if status.Validation.Valid {
 		if status.Validation.ResolvedTransport != "" {
-			b.WriteString("\nTransport: ")
-			b.WriteString(status.Validation.ResolvedTransport)
+			evidence = append(evidence, "Transport: "+status.Validation.ResolvedTransport)
 		}
 	} else {
-		b.WriteString("\nInvalid: ")
-		b.WriteString(status.Validation.Error)
+		state = "invalid"
+		evidence = append(evidence, "Invalid: "+trimTelegramModelError(status.Validation.Error))
 	}
 	if len(status.Validation.Warnings) > 0 {
-		b.WriteString("\nWarning: ")
-		b.WriteString(strings.Join(status.Validation.Warnings, "; "))
+		evidence = append(evidence, "Warning: "+strings.Join(status.Validation.Warnings, "; "))
 	}
-	return b.String()
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:    modelSlotTitle(status.Slot),
+		State:    state,
+		Why:      "This slot determines the backend used for its runtime role.",
+		Next:     "Choose a preset or effort, inspect history, rollback, or clear the override.",
+		Details:  details,
+		Evidence: evidence,
+	})
 }
 
 func renderModelSlotRows(status core.ModelSlotStatus) [][]telegram.InlineButton {
@@ -598,66 +603,76 @@ func renderModelHistoryRows(slot string) [][]telegram.InlineButton {
 }
 
 func renderModelSlotValidation(validation core.ModelValidation) string {
-	var b strings.Builder
+	state := "valid"
+	details := make([]string, 0, 3)
+	evidence := make([]string, 0, 2)
 	if validation.Valid {
-		b.WriteString("Model config is valid.\n")
-		b.WriteString(renderModelSlotConfig(validation.Config))
+		details = append(details, renderModelSlotConfig(validation.Config))
 		if validation.ResolvedTransport != "" {
-			b.WriteString("\nTransport: ")
-			b.WriteString(validation.ResolvedTransport)
+			evidence = append(evidence, "Transport: "+validation.ResolvedTransport)
 		}
 	} else {
-		b.WriteString("Model config is invalid.\n")
-		b.WriteString(trimTelegramModelError(validation.Error))
+		state = "invalid"
+		evidence = append(evidence, trimTelegramModelError(validation.Error))
 	}
 	if len(validation.Warnings) > 0 {
-		b.WriteString("\nWarning: ")
-		b.WriteString(strings.Join(validation.Warnings, "; "))
+		evidence = append(evidence, "Warning: "+strings.Join(validation.Warnings, "; "))
 	}
-	return b.String()
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:    "Model validation",
+		State:    state,
+		Why:      "Validation checks whether the selected provider, model, effort, and transport can be used.",
+		Next:     "Use /model set with the same values if the config is valid.",
+		Details:  details,
+		Evidence: evidence,
+	})
 }
 
 func renderModelSlotChange(prefix string, status core.ModelSlotStatus) string {
-	var b strings.Builder
-	b.WriteString(prefix)
-	b.WriteString(" ")
-	b.WriteString(modelSlotTitle(status.Slot))
-	b.WriteString(".\n")
-	b.WriteString(renderModelSlotConfig(status.Effective))
-	b.WriteString("\nSource: ")
-	b.WriteString(status.Source)
+	details := []string{
+		"Effective: " + renderModelSlotConfig(status.Effective),
+		"Source: " + firstNonEmptyModelUI(status.Source, "default"),
+	}
 	if !status.ExpiresAt.IsZero() {
-		b.WriteString("\nExpires: ")
-		b.WriteString(status.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
+		details = append(details, "Expires: "+status.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
 	}
+	evidence := make([]string, 0, 1)
 	if status.Validation.ResolvedTransport != "" {
-		b.WriteString("\nTransport: ")
-		b.WriteString(status.Validation.ResolvedTransport)
+		evidence = append(evidence, "Transport: "+status.Validation.ResolvedTransport)
 	}
-	return b.String()
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:    modelSlotTitle(status.Slot),
+		State:    strings.ToLower(strings.TrimSpace(prefix)),
+		Why:      "The runtime will use this effective model slot until the override expires or changes.",
+		Next:     "Use History to inspect changes, Rollback/Clear when shown, or All Slots to return.",
+		Details:  details,
+		Evidence: evidence,
+	})
 }
 
 func renderModelSlotHistory(records []session.ModelSlotOverrideRecord) string {
 	if len(records) == 0 {
-		return "Model override history is empty."
+		return face.RenderOperatorPanel(face.OperatorPanel{
+			Title: "Model history",
+			State: "empty",
+			Next:  "Set or change a slot to create override history.",
+		})
 	}
-	var b strings.Builder
-	b.WriteString("Model history")
+	details := make([]string, 0, len(records))
 	for _, record := range records {
-		b.WriteString("\n")
-		b.WriteString(strconv.FormatInt(record.ID, 10))
-		b.WriteString(" ")
-		b.WriteString(modelSlotTitle(record.Slot))
-		b.WriteString(" ")
-		b.WriteString(record.Status)
-		b.WriteString(": ")
-		b.WriteString(renderModelSlotConfig(record.Config))
+		line := strconv.FormatInt(record.ID, 10) + " " + modelSlotTitle(record.Slot) + " " + record.Status + ": " + renderModelSlotConfig(record.Config)
 		if !record.CreatedAt.IsZero() {
-			b.WriteString(" at ")
-			b.WriteString(record.CreatedAt.UTC().Format("2006-01-02 15:04Z"))
+			line += " at " + record.CreatedAt.UTC().Format("2006-01-02 15:04Z")
 		}
+		details = append(details, line)
 	}
-	return b.String()
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:   "Model history",
+		State:   fmt.Sprintf("%d record(s)", len(records)),
+		Why:     "History shows operator changes to model-slot overrides.",
+		Next:    "Return to the slot or all slots after inspection.",
+		Details: details,
+	})
 }
 
 func renderModelSlotConfig(cfg core.ModelSlotConfig) string {
@@ -681,17 +696,24 @@ func renderModelSlotConfig(cfg core.ModelSlotConfig) string {
 }
 
 func renderModelCommandHelp() string {
-	return strings.Join([]string{
-		"Model controls",
-		"/model status",
-		"/model validate <slot> <provider/model> effort=high transport=auto",
-		"/model set <slot> <provider/model> effort=high ttl=2h reason=why",
-		"/model rollback <slot>",
-		"/model clear <slot>",
-		"/model history [slot] limit=8",
-		"Slots: persona, governor, doctor, child_default",
-		"Providers: openai, anthropic, openrouter, codex",
-	}, "\n")
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title: "Model controls",
+		State: "ready",
+		Why:   "Model slots route runtime roles to configured providers and transports.",
+		Next:  "Use /model status, then open a slot or set a bounded override.",
+		Details: []string{
+			"/model status",
+			"/model validate <slot> <provider/model> effort=high transport=auto",
+			"/model set <slot> <provider/model> effort=high ttl=2h reason=why",
+			"/model rollback <slot>",
+			"/model clear <slot>",
+			"/model history [slot] limit=8",
+		},
+		Evidence: []string{
+			"Slots: persona, governor, doctor, child_default",
+			"Providers: openai, anthropic, openrouter, codex",
+		},
+	})
 }
 
 func modelSlotTitle(slot string) string {

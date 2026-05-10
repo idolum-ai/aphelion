@@ -2,14 +2,29 @@
 
 This document is the user-facing Telegram interface inventory for Aphelion.
 
+## Operator Presentation Contract
+
+Default human-facing panels use the same shape across Telegram and CLI:
+
+- title
+- current status
+- why the state matters
+- next action
+- details and labeled evidence
+
+Raw `key=value` telemetry, long IDs, hashes, and enum-heavy records belong in
+`/debug`, explicit evidence sections, logs, or machine-readable mirrors. Text and
+buttons are projections only; authority still lives in typed leases, grants,
+decisions, and TES records.
+
 ## Slash Commands
 
 Current command surface:
 
 - `/start`
-  - Shows a short intro plus the command list.
+  - Shows a grouped, role-aware intro plus command sections.
 - `/help`
-  - Shows command help.
+  - Shows grouped, role-aware command help.
 - `/status`
   - Opens status output with inline status controls (no command arguments).
 - `/debug`
@@ -18,12 +33,15 @@ Current command surface:
   - Admin users get system and durable-agent sections in the expanded view.
 - `/agents`
   - Admin-only durable-agent launcher.
-  - Lists durable agents with inline `Chat` buttons.
+  - Lists durable agents with compact health cards and inline `Chat` buttons.
   - Starts a background parent-child conversation kickoff for the selected durable agent.
 - `/memory`
-  - Opens memory review with inline controls across session history and semantic memory views.
+  - Opens memory review with current focus, candidate count, source evidence, and inline controls across session history and semantic memory views.
   - Lets the user set an active memory focus from a candidate item (`Focus 1/2/3`).
   - Active focus is injected as bounded turn context on subsequent non-command chat messages until cleared.
+- `/tailnet`
+  - Admin-only Tailnet status and private-surface controls.
+  - Shows node readiness, registered surfaces, issue evidence, and revoke confirmation.
 - `/mission`
   - Shows the current working objective and the caller-owned Mission Ledger entries.
   - Supports manual `list`, `show`, `create`, `pin`, `unpin`, `activate`, `pause`, `block`, `complete`, `archive`, `summon`, and admin `health` actions.

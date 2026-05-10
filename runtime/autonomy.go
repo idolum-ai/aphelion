@@ -11,6 +11,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -232,50 +233,94 @@ func parseOperatorAutonomyCommand(raw string) (string, operatorAutonomyCommandSp
 
 func renderAutonomyCommandStatus(snapshot core.AutonomyStatusSnapshot) string {
 	if strings.TrimSpace(snapshot.ActiveOverrideMode) == "" {
-		return "Autonomy live override is inactive. Default: " + autonomyModeRuntimeLabel(snapshot.DefaultMode) + ". Ceiling: " + autonomyModeRuntimeLabel(snapshot.Ceiling) + "."
+		return face.RenderOperatorPanel(face.OperatorPanel{
+			Title: "Autonomy",
+			State: "no live override",
+			Why:   "The configured default and ceiling control whether approval cycling can be leased.",
+			Next:  "Use /autonomy leased <duration> <scope> to create a bounded override if config allows it.",
+			Details: []string{
+				"Default: " + autonomyModeRuntimeLabel(snapshot.DefaultMode) + ".",
+				"Ceiling: " + autonomyModeRuntimeLabel(snapshot.Ceiling) + ".",
+			},
+		})
 	}
-	lines := []string{
-		"Autonomy live override is active.",
+	details := []string{
 		"Mode: " + autonomyModeRuntimeLabel(snapshot.ActiveOverrideMode) + ".",
 	}
 	if scope := strings.TrimSpace(snapshot.ActiveOverrideScope); scope != "" {
-		lines = append(lines, "Scope: "+operatorAutoApprovalScopeLabel(scope)+".")
+		details = append(details, "Scope: "+operatorAutoApprovalScopeLabel(scope)+".")
 	}
 	if !snapshot.ActiveOverrideExpiry.IsZero() {
-		lines = append(lines, "Expires: "+snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339)+".")
+		details = append(details, "Expires: "+snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339)+".")
 	}
 	if snapshot.ActiveOverrideMax > 0 {
-		lines = append(lines, fmt.Sprintf("Used: %d/%d.", snapshot.ActiveOverrideUsed, snapshot.ActiveOverrideMax))
+		details = append(details, fmt.Sprintf("Used: %d/%d.", snapshot.ActiveOverrideUsed, snapshot.ActiveOverrideMax))
 	} else {
-		lines = append(lines, fmt.Sprintf("Used: %d.", snapshot.ActiveOverrideUsed))
+		details = append(details, fmt.Sprintf("Used: %d.", snapshot.ActiveOverrideUsed))
 	}
-	return strings.Join(lines, "\n")
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:   "Autonomy override enabled",
+		State:   "live override active",
+		Why:     "Eligible approval prompts may use the active leased override.",
+		Next:    "Use /autonomy off to revoke it.",
+		Details: details,
+	})
 }
 
 func renderOperatorAutonomyEnabled(lease session.OperatorAutoApprovalLease, now time.Time) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
-	parts := []string{
-		"Autonomy override enabled for this chat.",
+	details := []string{
 		"Mode: Leased.",
 		"Scope: " + operatorAutoApprovalScopeLabel(lease.Scope) + ".",
 		"Expires: " + lease.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(lease.ExpiresAt.Sub(now)) + ").",
 	}
 	if lease.MaxUses > 0 {
-		parts = append(parts, fmt.Sprintf("Use budget: %d approval(s).", lease.MaxUses))
+		details = append(details, fmt.Sprintf("Use budget: %d approval(s).", lease.MaxUses))
 	}
-	parts = append(parts, "Use /autonomy off to revoke it.")
-	return strings.Join(parts, "\n")
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:   "Autonomy override enabled",
+		State:   "leased override enabled",
+		Why:     "Eligible approval prompts may use this bounded override until it expires or is spent.",
+		Next:    "Use /autonomy off to revoke it.",
+		Details: details,
+	})
 }
 
 func renderOperatorAutonomyRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
 	if len(leases) == 0 {
-		return "Autonomy live override is already off for this chat."
+		return face.RenderOperatorPanel(face.OperatorPanel{
+			Title: "Autonomy",
+			State: "off",
+			Why:   "No live autonomy override is active for this chat.",
+			Next:  "Use /autonomy leased <duration> <scope> if a bounded override is needed.",
+			Details: []string{
+				"Already off for this chat.",
+			},
+		})
 	}
 	active := operatorAutoApprovalActiveLeases(leases, now)
 	if len(active) > 0 {
-		return "Autonomy live override is off for this chat. Cleared: " + operatorAutoApprovalGrantSummary(active) + "."
+		return face.RenderOperatorPanel(face.OperatorPanel{
+			Title: "Autonomy",
+			State: "off",
+			Why:   "No live autonomy override is active for this chat.",
+			Next:  "Use /autonomy leased <duration> <scope> if a bounded override is needed.",
+			Details: []string{
+				"Cleared active override: " + operatorAutoApprovalGrantSummary(active) + ".",
+			},
+			Evidence: []string{fmt.Sprintf("Revoked records: %d", len(leases))},
+		})
 	}
-	return "Autonomy live override is off for this chat. Cleared the old " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + "."
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title: "Autonomy",
+		State: "off",
+		Why:   "No live autonomy override is active for this chat.",
+		Next:  "Use /autonomy leased <duration> <scope> if a bounded override is needed.",
+		Details: []string{
+			"Cleared old " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + ".",
+		},
+		Evidence: []string{fmt.Sprintf("Revoked records: %d", len(leases))},
+	})
 }
 
 func autonomyModeRuntimeLabel(mode string) string {

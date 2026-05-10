@@ -10,6 +10,7 @@ import (
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/session"
 )
 
@@ -391,23 +392,46 @@ func newOperatorAutoApprovalLeaseID(chatID int64, adminUserID int64, now time.Ti
 }
 
 func renderOperatorAutoApprovalRevoked(leases []session.OperatorAutoApprovalLease, now time.Time) string {
+	state := "off"
+	next := "Use /autoapprove <duration> <scope> to create a new bounded grant."
 	if len(leases) == 0 {
-		return "Auto-approval is already off for this chat."
+		return face.RenderOperatorPanel(face.OperatorPanel{
+			Title: "Auto-approval",
+			State: state,
+			Why:   "No active approval prompts will be answered automatically.",
+			Next:  next,
+			Details: []string{
+				"Already off for this chat.",
+			},
+		})
 	}
 	active := operatorAutoApprovalActiveLeases(leases, now)
+	detail := ""
 	if len(active) > 0 {
-		return "Auto-approval is off for this chat. Cleared: " + operatorAutoApprovalGrantSummary(active) + "."
+		detail = "Cleared active grant: " + operatorAutoApprovalGrantSummary(active) + "."
+	} else {
+		latest := session.NormalizeOperatorAutoApprovalLease(leases[0])
+		switch {
+		case !latest.ExpiresAt.IsZero() && !latest.ExpiresAt.After(now.UTC()):
+			detail = "Cleared old expired " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + "."
+		case latest.MaxUses > 0 && latest.UsedCount >= latest.MaxUses:
+			detail = "Cleared old spent " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + "."
+		default:
+			detail = "Cleared old " + operatorAutoApprovalGrantNoun(leases) + operatorAutoApprovalClearedOldGrantDetail(leases) + "."
+		}
 	}
-	latest := session.NormalizeOperatorAutoApprovalLease(leases[0])
-	detail := operatorAutoApprovalClearedOldGrantDetail(leases)
-	switch {
-	case !latest.ExpiresAt.IsZero() && !latest.ExpiresAt.After(now.UTC()):
-		return "Auto-approval was already expired. I cleared the old " + operatorAutoApprovalGrantNoun(leases) + detail + "."
-	case latest.MaxUses > 0 && latest.UsedCount >= latest.MaxUses:
-		return "Auto-approval was already spent. I cleared the old " + operatorAutoApprovalGrantNoun(leases) + detail + "."
-	default:
-		return "Auto-approval is off for this chat. I cleared the old " + operatorAutoApprovalGrantNoun(leases) + detail + "."
-	}
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title: "Auto-approval",
+		State: state,
+		Why:   "No active approval prompts will be answered automatically.",
+		Next:  next,
+		Details: []string{
+			detail,
+		},
+		Evidence: []string{
+			fmt.Sprintf("Revoked records: %d", len(leases)),
+		},
+	})
 }
 
 func operatorAutoApprovalActiveLeases(leases []session.OperatorAutoApprovalLease, now time.Time) []session.OperatorAutoApprovalLease {
@@ -502,33 +526,45 @@ func operatorAutoApprovalRevokedEventPayload(leases []session.OperatorAutoApprov
 
 func renderOperatorAutoApprovalEnabled(lease session.OperatorAutoApprovalLease, now time.Time) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
-	parts := []string{
-		"Auto-approval enabled for this chat.",
-		"Scope: " + lease.Scope + ".",
+	details := []string{
+		"Scope: " + operatorAutoApprovalScopeLabel(lease.Scope) + ".",
 		"Expires: " + lease.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(lease.ExpiresAt.Sub(now)) + ").",
 	}
 	if lease.MaxUses > 0 {
-		parts = append(parts, fmt.Sprintf("Use budget: %d approval(s).", lease.MaxUses))
+		details = append(details, fmt.Sprintf("Use budget: %d approval(s).", lease.MaxUses))
 	}
-	parts = append(parts, "Use /autoapprove off to revoke it.")
-	return strings.Join(parts, "\n")
+	if reason := strings.TrimSpace(lease.Reason); reason != "" {
+		details = append(details, "Reason: "+reason)
+	}
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:   "Auto-approval",
+		State:   "enabled",
+		Why:     "Eligible approval prompts in this chat may be answered automatically until the grant expires or is spent.",
+		Next:    "Use /autoapprove off to revoke it.",
+		Details: details,
+	})
 }
 
 func renderOperatorAutoApprovalStatusActive(lease session.OperatorAutoApprovalLease, now time.Time) string {
 	lease = session.NormalizeOperatorAutoApprovalLease(lease)
-	lines := []string{
-		"Auto-approval is active for this chat.",
-		"Scope: " + lease.Scope + ".",
+	details := []string{
+		"Scope: " + operatorAutoApprovalScopeLabel(lease.Scope) + ".",
 		"Expires: " + lease.ExpiresAt.UTC().Format(time.RFC3339) + " (" + roundDuration(lease.ExpiresAt.Sub(now)) + ").",
 		fmt.Sprintf("Used: %d", lease.UsedCount),
 	}
 	if lease.MaxUses > 0 {
-		lines[len(lines)-1] = fmt.Sprintf("Used: %d/%d", lease.UsedCount, lease.MaxUses)
+		details[len(details)-1] = fmt.Sprintf("Used: %d/%d", lease.UsedCount, lease.MaxUses)
 	}
 	if lease.Reason != "" {
-		lines = append(lines, "Reason: "+lease.Reason)
+		details = append(details, "Reason: "+lease.Reason)
 	}
-	return strings.Join(lines, "\n")
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:   "Auto-approval",
+		State:   "active",
+		Why:     "Eligible approval prompts in this chat can use this bounded grant.",
+		Next:    "Use /autoapprove off to revoke it.",
+		Details: details,
+	})
 }
 
 func renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApprovalLease, now time.Time) string {
@@ -541,7 +577,15 @@ func renderOperatorAutoApprovalStatusInactive(lease session.OperatorAutoApproval
 	} else if lease.ExpiresAt.After(now) {
 		reason = "inactive"
 	}
-	return "Auto-approval is inactive for this chat. Last grant: " + reason + "."
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title: "Auto-approval",
+		State: "inactive",
+		Why:   "No current approval prompt will use this old grant.",
+		Next:  "Use /autoapprove <duration> <scope> to create a new bounded grant.",
+		Details: []string{
+			"Last grant: " + reason + ".",
+		},
+	})
 }
 
 func roundDuration(d time.Duration) string {

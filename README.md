@@ -93,6 +93,7 @@ Telegram transport
 Details:
 
 - [docs/architecture/design-principles.md](docs/architecture/design-principles.md)
+- [docs/architecture/operator-presentation-contract.md](docs/architecture/operator-presentation-contract.md)
 - [docs/architecture/README.md](docs/architecture/README.md)
 - [runtime/README.md](runtime/README.md)
 - [turn/README.md](turn/README.md)
@@ -105,6 +106,9 @@ Execution transparency:
 - Runtime execution truth is recorded in TES (`execution_events`) with ordered, per-session event sequencing.
 - `/status` and `/debug` are TES-first projections with compatibility fallbacks where legacy rows still exist.
 - Final reply and continuation/debug summaries use grounding guards to avoid surfacing claims that are not evidenced by TES.
+- Human-facing Telegram and CLI panels follow one operator contract: current status,
+  why it matters, next action, then labeled details/evidence. Raw telemetry stays
+  in debug, logs, or machine-readable mirrors.
 
 ## Status
 
@@ -217,6 +221,14 @@ Build and run:
 ```bash
 make build
 ./bin/aphelion --config ~/.aphelion/aphelion.toml
+```
+
+CLI help is grouped by operator task:
+
+```bash
+./bin/aphelion --help
+./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
+./bin/aphelion verify-deploy --config ~/.aphelion/aphelion.toml
 ```
 
 Build a proven static binary:

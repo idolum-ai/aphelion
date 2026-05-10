@@ -437,24 +437,34 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 
 func renderAutoApprovalCommandError(err error) string {
 	if err == nil {
-		return "Auto-approval request was not applied."
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto-approval", State: "not applied", Next: "Check the command shape and retry."})
 	}
 	msg := strings.TrimSpace(err.Error())
 	if msg == "" {
-		return "Auto-approval request was not applied."
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Auto-approval", State: "not applied", Next: "Check the command shape and retry."})
 	}
-	return "Auto-approval request was not applied: " + msg
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title: "Auto-approval",
+		State: "not applied",
+		Why:   msg,
+		Next:  "Adjust the duration, scope, or config ceiling and retry.",
+	})
 }
 
 func renderAutonomyCommandError(err error) string {
 	if err == nil {
-		return "Autonomy request was not applied."
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Autonomy", State: "not applied", Next: "Check the command shape and retry."})
 	}
 	msg := strings.TrimSpace(err.Error())
 	if msg == "" {
-		return "Autonomy request was not applied."
+		return face.RenderOperatorPanel(face.OperatorPanel{Title: "Autonomy", State: "not applied", Next: "Check the command shape and retry."})
 	}
-	return "Autonomy request was not applied: " + msg
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title: "Autonomy",
+		State: "not applied",
+		Why:   msg,
+		Next:  "Adjust the duration, mode, scope, or config ceiling and retry.",
+	})
 }
 
 func sendPersonaModelSelector(ctx context.Context, sender commandSender, router commandRouter, msg core.InboundMessage) (bool, error) {

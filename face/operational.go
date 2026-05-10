@@ -49,75 +49,40 @@ type ToolProgressNotice struct {
 }
 
 func RenderTelegramStart(personaEffort, governorEffort string, includeAdminCommands bool) string {
-	lines := []string{
-		"The assistant is ready.",
-		"",
-		"Commands:",
-		"/help - show command help",
-		"/status - show live status and controls",
-		"/debug - show detailed runtime debug snapshot",
-		"/doctor - run an admin runtime diagnosis",
-		"/tailnet - show tailnet status and controls",
-		"/agents - list durable agents and controls",
-		"/memory - review memory candidates and set focus",
-		"/mission - show and manage the Mission Ledger",
-		"/model - show and change model slots",
-		"/stop - stop current work in this chat",
-		"/new - start a fresh chat session context",
-		"/detach - detach this chat from pending work",
-	}
-	if includeAdminCommands {
-		lines = append(lines,
-			"/autonomy - show autonomy policy",
-			"/autoapprove - temporarily auto-approve admin approval prompts",
-			"/restart - force an immediate gateway restart",
-		)
-	}
-	lines = append(lines,
-		"/reinstall - queue a rebuild/reinstall/restart request",
-		"/set_persona_model - choose persona model",
-		"/set_governor_effort - choose system reasoning effort",
-		"",
-		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
-		fmt.Sprintf("Current system effort: %s", strings.TrimSpace(governorEffort)),
-	)
-	return strings.Join(lines, "\n")
+	return renderTelegramCommandSurface("Assistant ready", "ready", "Send a message, or use /status when you need live controls.", personaEffort, governorEffort, includeAdminCommands)
 }
 
 func RenderTelegramHelp(personaEffort, governorEffort string, includeAdminCommands bool) string {
-	lines := []string{
-		"Here is the current command surface.",
-		"",
-		"/start - show intro and command help",
-		"/help - show this help",
-		"/status - show live status and controls",
-		"/debug - show detailed runtime debug snapshot",
-		"/doctor - run an admin runtime diagnosis",
-		"/tailnet - show tailnet status and controls",
-		"/agents - list durable agents and controls",
-		"/memory - review memory candidates and set focus",
-		"/mission - show and manage the Mission Ledger",
-		"/model - show and change model slots",
-		"/stop - stop current work in this chat",
-		"/new - start a fresh chat session context",
-		"/detach - detach this chat from pending work",
+	return renderTelegramCommandSurface("Command help", "ready", "Pick the narrowest command for the job; normal messages still start ordinary work.", personaEffort, governorEffort, includeAdminCommands)
+}
+
+func renderTelegramCommandSurface(title string, state string, next string, personaEffort string, governorEffort string, includeAdminCommands bool) string {
+	details := []string{
+		"Chat control: /status - show live status and controls; /stop - stop current work; /new - start fresh; /detach - detach pending work",
+		"Diagnostics: /debug - show detailed runtime debug snapshot; /doctor - run an admin runtime diagnosis; /tailnet - show tailnet status and controls",
+		"Memory and objectives: /memory - review memory candidates and set focus; /mission - show and manage the Mission Ledger",
+		"Models and agents: /model - show and change model slots; /agents - list durable agents and controls",
 	}
 	if includeAdminCommands {
-		lines = append(lines,
-			"/autonomy - show autonomy policy",
-			"/autoapprove - temporarily auto-approve admin approval prompts",
-			"/restart - force an immediate gateway restart",
+		details = append(details,
+			"Admin operations: /autonomy - show autonomy policy; /autoapprove - temporarily auto-approve admin approval prompts; /restart - force an immediate gateway restart",
 		)
 	}
-	lines = append(lines,
-		"/reinstall - queue a rebuild/reinstall/restart request",
-		"/set_persona_model - choose persona model",
-		"/set_governor_effort - choose system reasoning effort",
-		"",
-		fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
-		fmt.Sprintf("Current system effort: %s", strings.TrimSpace(governorEffort)),
+	details = append(details,
+		"Maintenance requests: /reinstall - queue a rebuild/reinstall/restart request",
+		"Runtime selectors: /set_persona_model - choose persona model; /set_governor_effort - choose system reasoning effort",
 	)
-	return strings.Join(lines, "\n")
+	return RenderOperatorPanel(OperatorPanel{
+		Title:   title,
+		State:   state,
+		Why:     "Telegram is the control link; CLI commands remain the maintenance surface.",
+		Next:    next,
+		Details: details,
+		Evidence: []string{
+			fmt.Sprintf("Current persona effort: %s", strings.TrimSpace(personaEffort)),
+			fmt.Sprintf("Current system effort: %s", strings.TrimSpace(governorEffort)),
+		},
+	})
 }
 
 func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
@@ -142,18 +107,20 @@ func RenderTelegramAutonomyStatus(snapshot core.AutonomyStatusSnapshot) string {
 	if behavior == "" {
 		behavior = "existing proposal and approval flows"
 	}
-	return strings.Join([]string{
-		"Autonomy policy",
-		"",
-		"Default: " + autonomyModeLabel(snapshot.DefaultMode),
-		"Ceiling: " + autonomyModeLabel(snapshot.Ceiling),
-		"Live changes: " + liveChanges,
-		"Maximum live change: " + snapshot.MaxOverrideDuration.Truncate(time.Second).String(),
-		"Active override: " + activeOverride,
-		"",
-		"Authority behavior: " + behavior + ".",
-		"This report does not grant new authority by itself.",
-	}, "\n")
+	return RenderOperatorPanel(OperatorPanel{
+		Title: "Autonomy policy",
+		State: "default " + autonomyModeLabel(snapshot.DefaultMode) + ", ceiling " + autonomyModeLabel(snapshot.Ceiling),
+		Why:   behavior + ". This report does not grant new authority by itself.",
+		Next:  "Use /autonomy leased <duration> <scope> for a bounded live override, or /autonomy off to revoke one.",
+		Details: []string{
+			"Default: " + autonomyModeLabel(snapshot.DefaultMode),
+			"Ceiling: " + autonomyModeLabel(snapshot.Ceiling),
+			"Live changes: " + liveChanges,
+			"Maximum live change: " + snapshot.MaxOverrideDuration.Truncate(time.Second).String(),
+			"Active override: " + activeOverride,
+			"Authority behavior: " + behavior + ".",
+		},
+	})
 }
 
 func autonomyModeLabel(mode string) string {

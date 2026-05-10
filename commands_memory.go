@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/telegram"
 )
 
@@ -110,36 +111,33 @@ func renderMemoryReviewPanel(snapshot memoryReviewSnapshot, focus core.MemoryFoc
 	if snapshot.Source == "" {
 		snapshot.Source = memoryReviewSourceSession
 	}
-	lines := []string{
-		"Memory Review",
-		fmt.Sprintf("Source: %s", strings.TrimSpace(string(snapshot.Source))),
-		fmt.Sprintf("Query Seed: %s", firstNonEmpty(strings.TrimSpace(snapshot.Query), "-")),
-		"",
-	}
+	state := fmt.Sprintf("%d candidate(s)", len(snapshot.Items))
+	next := "Switch source, refresh, or choose a focus candidate."
+	details := make([]string, 0, 4+len(snapshot.Items)*2)
 	if focus.Active() {
-		lines = append(lines,
-			"Active Focus:",
-			fmt.Sprintf("- source=%s", strings.TrimSpace(string(focus.Source))),
-			fmt.Sprintf("- label=%s", firstNonEmpty(strings.TrimSpace(focus.Label), "-")),
-			fmt.Sprintf("- query=%s", firstNonEmpty(strings.TrimSpace(focus.Query), "-")),
-		)
+		state += "; focus active"
+		details = append(details, "Active Focus: "+firstNonEmpty(strings.TrimSpace(focus.Label), "selected item"))
 		if excerpt := strings.TrimSpace(focus.Excerpt); excerpt != "" {
-			lines = append(lines, fmt.Sprintf("- excerpt=%s", excerpt))
+			details = append(details, "Focus excerpt: "+truncateOperatorLine(excerpt, 220))
 		}
-		lines = append(lines, "")
+		next = "Clear focus, refresh candidates, or keep chatting with the current focus injected as bounded context."
 	} else {
-		lines = append(lines, "Active Focus: none", "")
+		details = append(details, "Active Focus: none")
 	}
 	if len(snapshot.Items) == 0 {
-		lines = append(lines, "No memory candidates found for this source yet.")
+		details = append(details, "No memory candidates found for this source yet.")
 	} else {
-		lines = append(lines, "Candidates:")
+		details = append(details, "Candidates:")
 		for idx, item := range snapshot.Items {
-			lines = append(lines, fmt.Sprintf("%d. %s", idx+1, firstNonEmpty(strings.TrimSpace(item.Label), item.ID)))
+			details = append(details, fmt.Sprintf("%d. %s", idx+1, firstNonEmpty(strings.TrimSpace(item.Label), item.ID)))
 			if excerpt := strings.TrimSpace(item.Excerpt); excerpt != "" {
-				lines = append(lines, "   "+excerpt)
+				details = append(details, truncateOperatorLine(excerpt, 220))
 			}
 		}
+	}
+	evidence := []string{
+		"Source: " + memoryReviewSourceDisplay(snapshot.Source),
+		"Query seed: " + firstNonEmpty(strings.TrimSpace(snapshot.Query), "-"),
 	}
 
 	rows := [][]telegram.InlineButton{
@@ -167,7 +165,25 @@ func renderMemoryReviewPanel(snapshot memoryReviewSnapshot, focus core.MemoryFoc
 		{Text: "Clear Focus", CallbackData: encodeMemoryReviewCallbackData(memoryReviewActionClear, snapshot.Source, 0)},
 		{Text: "Refresh", CallbackData: encodeMemoryReviewCallbackData(memoryReviewActionRefresh, snapshot.Source, 0)},
 	})
-	return strings.Join(lines, "\n"), rows
+	return face.RenderOperatorPanel(face.OperatorPanel{
+		Title:    "Memory Review",
+		State:    state,
+		Why:      "A selected focus is injected into later non-command turns as bounded context.",
+		Next:     next,
+		Details:  details,
+		Evidence: evidence,
+	}), rows
+}
+
+func memoryReviewSourceDisplay(source memoryReviewSource) string {
+	switch core.NormalizeMemoryReviewSource(string(source)) {
+	case memoryReviewSourceShared:
+		return "semantic shared memory"
+	case memoryReviewSourceLocal:
+		return "semantic local memory"
+	default:
+		return "recent session"
+	}
 }
 
 func handleMemoryReviewCallback(ctx context.Context, sender commandCallbackSender, router commandRouter, cb telegram.CallbackQuery, action memoryReviewCallbackAction, source memoryReviewSource, index int) (bool, error) {
