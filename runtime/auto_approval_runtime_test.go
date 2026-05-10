@@ -252,6 +252,70 @@ func TestRuntimeAutoApprovalRespectsAutonomyCeiling(t *testing.T) {
 	}
 }
 
+func TestRuntimeAutoApprovalExistingLeaseIsInertWhenAutonomyCeilingTightens(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.Ceiling = "ask_first"
+	cfg.Autonomy.AllowLiveOverrides = true
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "legacy-lease-blocked-by-ceiling",
+		AdminUserID: 1001,
+		ChatID:      99132,
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		CreatedAt:   now.Add(-time.Minute),
+		ExpiresAt:   now.Add(30 * time.Minute),
+		UpdatedAt:   now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-blocked-legacy",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99132,
+			SenderID:      1002,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("AutoResolveDecision() = %#v, want no auto-resolution when ceiling blocks legacy lease", result)
+	}
+	snapshot, err := rt.ChatAutonomyStatusSnapshot(99132, 1001)
+	if err != nil {
+		t.Fatalf("ChatAutonomyStatusSnapshot() err = %v", err)
+	}
+	if snapshot.ActiveOverrideMode != "" {
+		t.Fatalf("Autonomy snapshot = %#v, want legacy lease hidden by ceiling", snapshot)
+	}
+	chatStatus, err := rt.ChatStatusSnapshot(99132, core.RouterStatusSnapshot{})
+	if err != nil {
+		t.Fatalf("ChatStatusSnapshot() err = %v", err)
+	}
+	if chatStatus.AutoApproval != nil {
+		t.Fatalf("ChatStatusSnapshot.AutoApproval = %#v, want hidden inert lease", chatStatus.AutoApproval)
+	}
+	lease, ok, err := store.OperatorAutoApprovalLease("legacy-lease-blocked-by-ceiling")
+	if err != nil {
+		t.Fatalf("OperatorAutoApprovalLease() err = %v", err)
+	}
+	if !ok || lease.UsedCount != 0 {
+		t.Fatalf("legacy lease = %#v ok=%v, want unused lease", lease, ok)
+	}
+}
+
 func TestRuntimeAutonomyLeasedCommandCreatesBoundedOverride(t *testing.T) {
 	t.Parallel()
 

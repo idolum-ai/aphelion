@@ -33,6 +33,7 @@ Current command surface:
   - Shows the configured default mode, ceiling, live-override setting, maximum override duration, and active override state.
   - Supports `status`, `off`, and `leased <duration> [all|workspace|deploy] [uses=N] [reason]`.
   - `leased` uses the same bounded approval-lease substrate as `/autoapprove` and cannot exceed the configured ceiling or maximum duration.
+  - If config is tightened later, old live overrides are ignored and `/doctor` reports the precedence block.
 - `/autoapprove`
   - Admin-only short lease for eligible approval prompts.
   - Also obeys the configured autonomy ceiling and maximum live-override duration.

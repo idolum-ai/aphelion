@@ -136,6 +136,9 @@ func (r *Runtime) activeAutonomyOverrideLease(chatID int64, adminUserID int64, n
 	if r == nil || r.store == nil || chatID == 0 {
 		return session.OperatorAutoApprovalLease{}, false, nil
 	}
+	if err := r.validateAutonomyLiveOverride("leased", 0); err != nil {
+		return session.OperatorAutoApprovalLease{}, false, nil
+	}
 	leases, err := r.store.ActiveOperatorAutoApprovalLeases(chatID, now)
 	if err != nil {
 		return session.OperatorAutoApprovalLease{}, false, err

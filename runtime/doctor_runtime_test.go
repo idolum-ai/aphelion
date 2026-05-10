@@ -473,6 +473,81 @@ func TestDoctorRuntimeConfigReportsAutonomyPolicy(t *testing.T) {
 	}
 }
 
+func TestDoctorAutonomyStatusReportsActiveOverridePrecedenceAndExpiry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.Ceiling = "leased"
+	cfg.Autonomy.AllowLiveOverrides = true
+	cfg.Autonomy.MaxOverrideDuration = "2h"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99140, 1001, "leased 30m workspace uses=2 doctor evidence"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
+
+	var b strings.Builder
+	rt.writeDoctorAutonomyStatus(&b, session.SessionKey{ChatID: 99140, UserID: 0, Scope: telegramDMScopeRef(99140)}, 1001, time.Now().UTC())
+	report := b.String()
+	for _, want := range []string{
+		`autonomy_effective_default_mode="ask_first"`,
+		`autonomy_effective_ceiling="leased"`,
+		`autonomy_raw_active_lease_count="1"`,
+		`autonomy_effective_active_override="true"`,
+		`autonomy_active_override_mode="leased"`,
+		`autonomy_active_override_scope="workspace"`,
+		`autonomy_active_override_max="2"`,
+		`autonomy_precedence_status="active_within_ceiling"`,
+		`autonomy_expiry_status="active_until_expiry"`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("autonomy doctor report missing %s:\n%s", want, report)
+		}
+	}
+}
+
+func TestDoctorAutonomyStatusReportsLegacyLeaseBlockedByConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.Ceiling = "ask_first"
+	cfg.Autonomy.AllowLiveOverrides = true
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "doctor-blocked-legacy",
+		AdminUserID: 1001,
+		ChatID:      99141,
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		CreatedAt:   now.Add(-time.Minute),
+		ExpiresAt:   now.Add(30 * time.Minute),
+		UpdatedAt:   now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease() err = %v", err)
+	}
+
+	var b strings.Builder
+	rt.writeDoctorAutonomyStatus(&b, session.SessionKey{ChatID: 99141, UserID: 0, Scope: telegramDMScopeRef(99141)}, 1001, now)
+	report := b.String()
+	for _, want := range []string{
+		`autonomy_effective_ceiling="ask_first"`,
+		`autonomy_raw_active_lease_count="1"`,
+		`autonomy_effective_active_override="false"`,
+		`autonomy_precedence_status="blocked_by_config"`,
+		`autonomy_precedence_reason="autonomy mode leased exceeds configured ceiling ask_first"`,
+		`autonomy_expiry_status="none"`,
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("autonomy doctor report missing %s:\n%s", want, report)
+		}
+	}
+}
+
 func TestDoctorIssueStatusChecksGenericTelegramChildBotRunnerReadiness(t *testing.T) {
 	t.Parallel()
 

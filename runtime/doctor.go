@@ -694,6 +694,9 @@ func (r *Runtime) buildDoctorDiagnosticPacket(ctx context.Context, input doctorD
 	writeDoctorSection(&b, "Effective Runtime")
 	r.writeDoctorRuntimeConfig(&b, input.Exec, input.Scope)
 
+	writeDoctorSection(&b, "Autonomy")
+	r.writeDoctorAutonomyStatus(&b, input.Key, input.Message.SenderID, now)
+
 	writeDoctorSection(&b, "Current Session")
 	writeDoctorSessionSummary(&b, input.Session)
 	writeDoctorRecentMessages(&b, input.Session, doctorMessageLimit)
@@ -802,6 +805,71 @@ func (r *Runtime) writeDoctorRuntimeConfig(b *strings.Builder, exec pipeline.Tur
 	writeDoctorKV(b, "exec_root", r.cfg.Agent.ExecRoot)
 	writeDoctorKV(b, "shared_memory_root", strings.TrimSpace(scope.SharedMemoryRoot))
 	writeDoctorKV(b, "working_root", strings.TrimSpace(scope.WorkingRoot))
+}
+
+func (r *Runtime) writeDoctorAutonomyStatus(b *strings.Builder, key session.SessionKey, senderID int64, now time.Time) {
+	if r == nil || r.cfg == nil {
+		writeDoctorLine(b, "autonomy_status: unavailable")
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	snapshot := r.autonomyStatusSnapshot(key.ChatID, senderID, now)
+	writeDoctorKV(b, "autonomy_effective_default_mode", strings.TrimSpace(snapshot.DefaultMode))
+	writeDoctorKV(b, "autonomy_effective_ceiling", strings.TrimSpace(snapshot.Ceiling))
+	writeDoctorKV(b, "autonomy_effective_live_overrides", strconv.FormatBool(snapshot.AllowLiveOverrides))
+	writeDoctorKV(b, "autonomy_effective_max_override_duration", snapshot.MaxOverrideDuration.Truncate(time.Second).String())
+
+	rawActiveCount := 0
+	if r.store != nil && key.ChatID != 0 {
+		rawLeases, rawErr := r.store.ActiveOperatorAutoApprovalLeases(key.ChatID, now)
+		if rawErr != nil {
+			writeDoctorLine(b, "autonomy_raw_active_lease_error="+strconv.Quote(rawErr.Error()))
+		} else {
+			rawActiveCount = len(rawLeases)
+		}
+	}
+	writeDoctorKV(b, "autonomy_raw_active_lease_count", strconv.Itoa(rawActiveCount))
+	active := strings.TrimSpace(snapshot.ActiveOverrideMode) != ""
+	writeDoctorKV(b, "autonomy_effective_active_override", strconv.FormatBool(active))
+	if active {
+		writeDoctorKV(b, "autonomy_active_override_mode", strings.TrimSpace(snapshot.ActiveOverrideMode))
+		writeDoctorKV(b, "autonomy_active_override_scope", strings.TrimSpace(snapshot.ActiveOverrideScope))
+		writeDoctorKV(b, "autonomy_active_override_actor", strings.TrimSpace(snapshot.ActiveOverrideActor))
+		writeDoctorKV(b, "autonomy_active_override_used", strconv.Itoa(snapshot.ActiveOverrideUsed))
+		writeDoctorKV(b, "autonomy_active_override_max", strconv.Itoa(snapshot.ActiveOverrideMax))
+		if !snapshot.ActiveOverrideExpiry.IsZero() {
+			writeDoctorKV(b, "autonomy_active_override_expires_at", snapshot.ActiveOverrideExpiry.UTC().Format(time.RFC3339))
+			writeDoctorKV(b, "autonomy_active_override_remaining", roundDuration(snapshot.ActiveOverrideExpiry.Sub(now)))
+		}
+	}
+
+	precedenceStatus := "inactive"
+	precedenceReason := "no active override"
+	if err := r.validateAutonomyLiveOverride("leased", 0); err != nil {
+		precedenceStatus = "blocked_by_config"
+		precedenceReason = err.Error()
+	} else if active {
+		precedenceStatus = "active_within_ceiling"
+		precedenceReason = "leased override is within configured ceiling"
+	} else if rawActiveCount > 0 {
+		precedenceStatus = "blocked_or_filtered"
+		precedenceReason = "raw active lease exists but no effective override was selected"
+	}
+	writeDoctorKV(b, "autonomy_precedence_status", precedenceStatus)
+	writeDoctorKV(b, "autonomy_precedence_reason", precedenceReason)
+
+	expiryStatus := "none"
+	if active {
+		if snapshot.ActiveOverrideExpiry.After(now) {
+			expiryStatus = "active_until_expiry"
+		} else {
+			expiryStatus = "expired"
+		}
+	}
+	writeDoctorKV(b, "autonomy_expiry_status", expiryStatus)
 }
 
 func (r *Runtime) writeDoctorCodexWorkMigrationReview(ctx context.Context, b *strings.Builder, input doctorDiagnosticInput) {

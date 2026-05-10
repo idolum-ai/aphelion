@@ -38,7 +38,9 @@ configured default must not exceed the ceiling. In the current runtime this
 policy is validated and projected through CLI, `/autonomy`, `/status`, and
 `/doctor`. `leased` live overrides are implemented through bounded
 operator-auto-approval leases and cannot exceed the configured ceiling or
-maximum duration.
+maximum duration. If config later tightens below `leased` or disables live
+overrides, existing leases become inert and doctor reports the blocked
+precedence.
 
 ```toml
 # ─── Identity ───

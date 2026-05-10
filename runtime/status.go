@@ -165,6 +165,9 @@ func (r *Runtime) autoApprovalStatusSnapshot(chatID int64, now time.Time) (*core
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
+	if err := r.validateAutonomyLiveOverride("leased", 0); err != nil {
+		return nil, nil
+	}
 	leases, err := r.store.ActiveOperatorAutoApprovalLeases(chatID, now)
 	if err != nil {
 		return nil, err
