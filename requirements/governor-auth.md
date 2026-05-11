@@ -69,6 +69,9 @@ The intended posture is:
 - OpenClaw-style interoperability
 - Hermes-style ownership and refresh resilience
 
+The attribution and departure record for these references lives in
+[`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md).
+
 ## Backend Resolution
 
 ### `governor.backend = "auto"`

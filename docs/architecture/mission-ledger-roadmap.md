@@ -103,6 +103,8 @@ Recurring answers: **is there a scheduled/cadenced review or execution window?**
 
 This avoids the first modeling trap in the Codex-style design: treating one
 thread goal as the whole lifecycle. Aphelion needs a ledger with overlays.
+See [influences-and-departures.md](influences-and-departures.md) for the
+attribution and departure record behind the Codex comparison.
 
 ## State Model
 

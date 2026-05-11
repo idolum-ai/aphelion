@@ -16,6 +16,9 @@ Aphelion should borrow the useful shape from both Hermes and OpenClaw:
 - Hermes: task-focused delegated children with fresh context and restricted toolsets
 - OpenClaw: first-class subagent sessions with lifecycle, capability depth, and control boundaries
 
+See [`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md)
+for the attribution and departure record behind these references.
+
 The result should be:
 
 - real child sessions

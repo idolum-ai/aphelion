@@ -40,6 +40,9 @@ In other words:
 - avoid permanent dependency on legacy runtimes or foreign schemas
 - allow future acceleration without making acceleration the core contract
 
+The attribution and departure record for the OpenClaw/Host comparison lives in
+[`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md).
+
 ## Non-Goals
 
 - making OpenAI or any external vector store the canonical semantic backend
@@ -373,6 +376,8 @@ The importer should:
 - avoid permanent runtime dependency on the foreign DB
 
 The first implementation may target an explicitly observed OpenClaw / Host schema contract rather than pretending to support every historical variation.
+That narrow import stance is part of the departure recorded in
+[`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md).
 
 If Aphelion only supports one observed foreign layout, it should say so plainly in code, logs, and operator output, for example as an import contract label such as `openclaw_observed_v1`.
 

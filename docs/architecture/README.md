@@ -34,6 +34,7 @@ These invariants are normative for architecture and requirements alignment:
 ## Normative Map
 
 - [design-principles.md](design-principles.md): project-level design principles for Aphelion as a minimal governed outpost.
+- [influences-and-departures.md](influences-and-departures.md): attribution ledger for nearby systems, theory, and the points where Aphelion deliberately diverges.
 - [principle-debt.md](principle-debt.md): named implementation gaps against the design principles, with exit gates.
 - [done-done-roadmap.md](done-done-roadmap.md): normative convergence plan for finishing requirements, roadmaps, release discipline, and validation without adding operator surfaces beyond Telegram and CLI.
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.

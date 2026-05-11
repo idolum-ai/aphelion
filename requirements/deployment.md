@@ -13,6 +13,8 @@ The default deployment story should be:
 - straightforward update and rollback flow
 
 This is closer to the practical Codex-style binary distribution model than to a source-only workflow.
+See [`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md)
+for the attribution and departure record behind that comparison.
 
 ## Scope
 

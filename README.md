@@ -66,7 +66,9 @@ Nearby projects such as Codex, Hermes, and OpenClaw are useful references, but
 Aphelion's direction is not to absorb their breadth. Codex is strongest as a
 local coding agent, Hermes as a self-improving skill/routine system, and
 OpenClaw as a local-first multi-channel assistant. Aphelion's concrete edge is
-legible authority over live personal-agent action.
+legible authority over live personal-agent action. The fuller attribution and
+departure record lives in
+[docs/architecture/influences-and-departures.md](docs/architecture/influences-and-departures.md).
 
 The architectural center for this direction is the
 [Agent Authority Ledger](docs/architecture/agent-authority-ledger.md): proposals,

@@ -453,6 +453,8 @@ Aphelion should keep the prompt layers distinct.
 - recalled session context should be injected as an explicit fenced retrieval block, not blended invisibly into normal discourse
 
 This is closer to Hermes' recalled-context fencing than to silently flattening all memory into one prompt body.
+The attribution and departure record for this comparison lives in
+[`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md).
 
 Structured curated files should not all be blindly injected every turn.
 
@@ -688,6 +690,8 @@ OpenAI may be used as an embedding provider for semantic recall over:
 - later transcript collections
 
 This is similar to OpenClaw's use of OpenAI in memory search: OpenAI is part of the retrieval infrastructure, while the underlying corpus remains local and operator-owned.
+See [`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md)
+for the attribution and departure record behind this reference.
 
 ### File storage
 

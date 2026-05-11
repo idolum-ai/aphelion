@@ -6,6 +6,7 @@ cd "$repo_root"
 
 required_docs=(
   "docs/architecture/README.md"
+  "docs/architecture/influences-and-departures.md"
   "docs/architecture/done-done-roadmap.md"
   "docs/architecture/package-ownership.md"
   "docs/architecture/turn-lifecycle.md"
@@ -26,6 +27,27 @@ for file in "${required_docs[@]}"; do
     exit 1
   fi
 done
+
+lineage_doc="docs/architecture/influences-and-departures.md"
+for phrase in "What Aphelion took" "Where Aphelion stops" "Why Aphelion diverges"; do
+  if ! rg -qF "$phrase" "$lineage_doc"; then
+    echo "influence ledger missing required phrase: $phrase" >&2
+    exit 1
+  fi
+done
+
+for phrase in "Codex" "Hermes" "OpenClaw"; do
+  if ! rg -qF "$phrase" "$lineage_doc"; then
+    echo "influence ledger must attribute nearby system: $phrase" >&2
+    exit 1
+  fi
+done
+
+if ! rg -qF "Ralph" "$lineage_doc" &&
+  ! rg -qF "Ralph-style loop vocabulary pending exact citation" "$lineage_doc"; then
+  echo "influence ledger must attribute Ralph loops or explicitly mark Ralph-style vocabulary pending citation" >&2
+  exit 1
+fi
 
 diagram_bases=(
   "01-package-map"

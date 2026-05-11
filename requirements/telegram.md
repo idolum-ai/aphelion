@@ -923,6 +923,8 @@ MarkdownV2 formatting is fragile — a single unescaped character rejects the wh
 3. **Log the failed MarkdownV2** at debug level for diagnosis.
 
 This is the same approach Hermes uses and it's battle-tested.
+See [`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md)
+for the attribution and departure record behind this reference.
 
 ## Message Splitting
 

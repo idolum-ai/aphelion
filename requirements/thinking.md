@@ -12,6 +12,8 @@ The useful pattern here is closer to Codex than to a vague "smart mode":
 - **reasoning summary** controls whether the runtime keeps a compact external artifact of that deeper reasoning
 
 Hermes is a decent reference for staged, practical reasoning controls. Codex adds the more important shape: reasoning effort should be an explicit knob with stable levels, and summary policy should be separate from effort.
+See [`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md)
+for the attribution and departure record behind these comparisons.
 
 ## Scope
 

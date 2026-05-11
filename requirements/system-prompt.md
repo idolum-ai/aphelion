@@ -100,6 +100,8 @@ Examples:
 - streamed vs non-streamed delivery state
 
 This mirrors the useful part of Codex's approach: keep a stable base, add explicit updates for changing machine state.
+The attribution and departure record for this Codex comparison lives in
+[`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md).
 
 ## Face Prompt
 

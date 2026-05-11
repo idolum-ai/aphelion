@@ -2,6 +2,10 @@
 
 Aphelion is licensed under the Apache License, Version 2.0.
 
+This file covers legal notices for vendored or bundled components. Design
+inspiration and project-lineage attribution live in
+[`docs/architecture/influences-and-departures.md`](docs/architecture/influences-and-departures.md).
+
 ## Vendored Components
 
 ### go-sqlite3

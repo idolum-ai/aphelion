@@ -53,6 +53,9 @@ So the intended synthesis is:
 - Hermes-style registry clarity
 - governor/face and principal/isolation boundaries inside the service harness
 
+The canonical attribution and departure record is
+[`docs/architecture/influences-and-departures.md`](../docs/architecture/influences-and-departures.md).
+
 ## Philosophy
 
 1. **Reality in code.** The registry, schemas, sandbox, and permissions live in Go.
